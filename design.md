@@ -4730,13 +4730,37 @@ widen an unadaptable position is an ordinary type mismatch at the use itself,
 carrying the use's own region, rather than a lowering failure with no
 diagnostic channel.
 
+That withholding is by POSITION, not by declaration. A type declaration
+defers every extensionless tag union it writes, at any depth, because the
+declaration cannot know where its references will stand; a reference resolves
+those deferrals by where the reference itself sits. A marker on the referenced
+declaration's own row — reached only through alias backings, and through the
+ERROR argument of a `Try` standing in the signature's direct result — stays
+deferred; a marker reached under any other constructor is closed as written.
+So `Statuses : List([Ok(Str), Err(Str)])` named as a where-method's result
+contributes a closed row, exactly as the same type written inline there does.
+
 Because the relation deliberately declines to unify the two rows, it must
 fail CLOSED: a request that is related this way and then does NOT reach an
 adapter would leave a callee producing one tag layout and a caller reading
 another, which is a wrong value rather than a crash. Every site that declines
 to unify therefore requires that an adapter is reachable for that request;
 where it is not, the site relates exactly instead and the ordinary
-`unifyTagRows` invariant reports the widening.
+`unifyTagRows` invariant reports the widening. A dispatch target that is not a
+procedure template — a lambda-bound local procedure, a structural registry
+result — has no template reservation and so can never reach an adapter.
+
+The relation's answer is also the ONLY answer. It is recorded on the
+specialization request it declined to unify, and template completion mints the
+adapter exactly when that record says so, rather than asking a second time
+whether the declared row is closed. The two questions are not the same
+question: the relation asks it of the live request graph, where an extension
+that is still unresolved means the row is OPEN and the ordinary relation may
+simply unify it, while a published checked type gives every implicitly open
+annotated result row a flexible tail that defaults to the empty tag union.
+Deriving the answer a second time from the published type therefore reports
+"closed" for rows the relation had already unified, minting an adapter over a
+second, narrow specialization of a template that needed neither.
 
 Since a payload's representation is taken from the REQUEST rather than from
 the declared type, a polymorphic implementation's rigid payloads are correct

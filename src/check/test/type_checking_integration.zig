@@ -8922,6 +8922,82 @@ test "check type - polarity - where-method row nested in the result stays closed
     );
 }
 
+test "check type - polarity - alias-referenced row nested in the result stays closed as written" {
+    // The same rule through a declaration REFERENCE. An alias declaration body
+    // defers EVERY extensionless tag union it writes, at any depth, because the
+    // declaration cannot know where its uses will put it. The reference decides
+    // that per position: `Statuses` stands in the signature's direct result, so
+    // only a marker on that result's own row stays deferred, and the one inside
+    // the `List` closes exactly as the inline spelling above closes it.
+    //
+    // Before the reference walk became position-aware, this program CHECKED and
+    // then panicked in `unifyTagRows` during lowering, because the nested row
+    // reopened per use and no adapter can re-tag inside a `List`.
+    const source =
+        \\Statuses : List([Ok(Str), Err(Str)])
+        \\
+        \\describe : a -> List([Ok(Str), Err(Str), Extra]) where [a.statuses : a -> Statuses]
+        \\describe = |x| x.statuses()
+        \\
+        \\closed_statuses : Statuses
+        \\closed_statuses = [Ok("cv")]
+        \\
+        \\Job := [Pending].{
+        \\    statuses : Job -> Statuses
+        \\    statuses = |_| closed_statuses
+        \\}
+    ;
+    // The region is the body use, not the signature and not the obligation; the
+    // method's result is reported by the alias name it was written with.
+    try checkTypesModule(source, .fail_with,
+        \\**Type Mismatch**
+        \\This expression is used in an unexpected way.
+        \\```roc
+        \\describe = |x| x.statuses()
+        \\```
+        \\               ^^^^^^^^^^^^
+        \\
+        \\It has the type:
+        \\
+        \\    Statuses
+        \\
+        \\But the annotation says it should be:
+        \\
+        \\    List([Err(Str), Extra, Ok(Str)])
+        \\
+        \\
+    );
+}
+
+test "check type - polarity - alias-referenced Try error row is still adapter-reachable" {
+    // The positive control for the test above: a reference whose declaration
+    // body IS the adapter-reachable position keeps its marker deferred, so the
+    // body use may widen it. `Res` stands in the signature's direct result and
+    // its body is a `Try`, whose ERROR argument the adapter re-tags — so the
+    // marker on `[NotFound]` survives the reference and `load` may return the
+    // wider row.
+    const source =
+        \\Res : Try(Str, [NotFound])
+        \\
+        \\load : a -> Try(Str, [NotFound, Other]) where [a.fetch : a -> Res]
+        \\load = |x| {
+        \\    s = x.fetch()?
+        \\    Ok(s)
+        \\}
+        \\
+        \\closed_res : Res
+        \\closed_res = Ok("hit")
+        \\
+        \\Src := [S].{
+        \\    fetch : Src -> Res
+        \\    fetch = |_| closed_res
+        \\}
+        \\
+        \\out = load(Src.S)
+    ;
+    try checkTypesModule(source, .{ .pass = .{ .def = "out" } }, "Try(Str, [NotFound, Other])");
+}
+
 test "check type - polarity - nested widening is rejected even against an open implementation" {
     // Deliberate narrowing: before the adapter-reach restriction this checked,
     // because the nested row opened per use and the implementation's row was

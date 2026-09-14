@@ -940,6 +940,56 @@ carries a dispatch plan and structural evidence where the stored restore
 needs a const fn value, a store view, capture lets and a precomputed parser
 plan. Sizing: ~500-800 lines.
 
+**W2b follow-up: sites 1-2 are harder than "they also have an eager view".**
+The two Builder-level restores prepare NO codec calls at all — they lower
+format-method calls through the ordinary unfrozen path. Moving their emission
+behind the freeze therefore REQUIRES giving them
+`prepareStructuralCodecCallsAtNode`, or they hit `Common.invariant("sealed
+structural codec requested an unprepared callable")`. That is new work the
+plan never contemplated, and it is why the honest sizing is ~+810/-500 rather
+than the plan's 500-800.
+
+**The plan's W2b gate is not merely impossible, its GOAL is unachievable.**
+"The sealed body equals the eagerly emitted one" cannot hold literally:
+deferring changes the order draft exprs are allocated, and the Phase-B tail
+REPLACES the reservation with a copy of the lowered expr, orphaning the
+original. Substitute gate: `structuralJsonMonotypeStatsForSource` (an existing
+helper returning functions/definitions/locals/expressions/template_misses/
+nested_misses from raw module source), with the W2a numbers MEASURED BEFORE
+ANY EDIT, asserting equality on functions/definitions/locals, a bounded
+inequality on expressions (Phase-B emission orphans one expr per boundary),
+and `misses <= baseline` (W2a's open-request keying was expected to
+double-specialize; W2b removes the cause, so misses may fall but must never
+rise). Plus `roc build --timings` counters compared across binaries.
+
+**Both risks the plan names for W2b are already retired by existing code.**
+`enterCallableBodyDemandScope` has an explicit frozen branch that swaps in
+`enterSealedCallableBodyScope`, and `constFnEvidence` only walks the evidence
+chain and touches no graph. The real highest-probability blocker is instead
+`ParserPrecomputedPlan`: `buildParserRestoredPrecomputedPlan` takes a sealed
+`shape_ty`, so it must move to Phase B, where it calls `restoreConstNodeAtType`
+for `Str` field-name literals — which can in principle reach
+`constrainTypeToMono`, i.e. relation production, after the freeze.
+
+**Appendix A's path is site 4** (`restoreConstParserRuntimeFnAtNode`), proven
+because the registered `ParserTopLevelStoredParser.roc` fixture is Appendix A
+minus the `bar ?: Str` field and passes today. But WHICH eager view panics is
+still open, and there is a genuine contradiction to resolve: an annotated `?:`
+field pins `.optional` concretely (so its slot is closed, not unresolved), and
+an `.undetermined` field kind is rejected for a compile-time root by
+`checkedFieldTypesAreConcreteCompileTimeRoots` — so BOTH documented mechanisms
+for an unresolved cell are excluded on paper. The unresolved cell is something
+else, most likely inside the generated parser's protocol rows. Settle it by
+running the fixture on the pre-change binary in Debug and reading the frame;
+it does not change the design, since all views at those sites move to Phase B.
+
+Fan-out is 14 points, derived by diffing the two existing deferred lists
+(record, store field, `.empty`, two deinit loops, two discard-after-seal
+points, the discarded-state assertion, the Phase-A fixpoint arm and its
+`.pending_deferred` assertion, and THREE Phase-B emit call sites — the shard
+path, the ordinary spec-job seal, and the coordinator commit — not one).
+Nothing here is serialized, and it must stay that way.
+
 **W8.** `findBestTypoSuggestions` (`report.zig`) is the wrong citation — it
 handles RECORD-FIELD typos; the tag typo hint comes from the snapshot diff
 and arrives automatically once real snapshots are supplied, so the bespoke
@@ -953,6 +1003,41 @@ site is the hard one, having neither the union var nor a reliable region.
 Eleven integration-test sites and exactly one CLI test, both as the plan
 says; ZERO snapshots carry the old title, so that regeneration step is a
 no-op. Sizing: ~150-250 lines.
+
+**W8 follow-up: the alias-marker problem does not exist.** A deeper pass
+refuted both halves of the difficulty recorded above.
+
+- *The region is reliable.* Every call path that can open a marker passes
+  `.{ .explicit = anno_region }` to `recordOpenedMarkerExts`; the
+  `Region.zero()` branch is dead code. Proven behaviourally: the existing
+  test at `type_checking_integration.zig:2797` already renders a caret under
+  the annotated alias through exactly this path.
+- *The union var is obtainable* — one line in `instantiate.zig`'s
+  `stepTagUnion.await_ext` stage, where the marker and its union meet and
+  `listed_tags` is already attached.
+- **But W8 does not need it.** Synthesize the "actual" row as
+  `{ tags = listed_tags, ext = entry.var_ }`. `TypeWriter.gatherTags` and
+  `diff.gatherTagsFromUnion` both flatten ext chains, so this renders exactly
+  the listed tags plus EVERY extra tag — the plan's "all of them, not only
+  the first" — and is identical to what the real union var would render,
+  because that var's content is literally that pair at mint time. This keeps
+  W8 out of `src/types/instantiate.zig` entirely, adds no `ImplicitOpenExt`
+  field, and is strictly safer: `makeMismatchReport` degrades to "the
+  difference is not visible in this display" when both sides format
+  identically, and a synthesized actual carrying `ext = entry.var_` cannot
+  collide, since the audit has already proved that ext carries ≥1 tag.
+
+Two further corrections: the report arm should pass
+`ProblemRegion{ .direct = ctx.region }` rather than
+`regionIdxFrom(actual_var)` — `getRegionSafe` SILENTLY drops the caret when a
+var's index is past the region list, and `.direct` reproduces today's caret
+byte-for-byte while removing all dependence on where synthesized vars land.
+And `snapshot/diff.zig` carries a stale comment claiming the polarity audit
+shares its typo helper; after W8 the audit no longer calls it, so the comment
+must be rewritten while the function stays.
+
+Exactly ONE exhaustive switch over `Context` exists repo-wide (in
+`report.zig`), so the new context variant has a single arm to add.
 
 ### 8.1.4 Second review round (2026-09-14): the structural fix is still owed
 
@@ -992,6 +1077,63 @@ Required for the next round, in priority order:
 4. Tests that EXECUTE, not merely lower.
 5. `annoApplyIsBuiltinTry` gates on `apply.base == .builtin`, not ident text
    (shadowing `Try` is only a warning and the local binding wins).
+
+### 8.1.5 Whole-space sweep (2026-09-14): the design IS salvageable
+
+A systematic enumeration of every relation/unification site against a
+request, every route into template completion, and every route that lowers a
+body around it, answers the question this plan kept re-opening.
+
+**Why four rounds found the same shape.** Three independent recognizers each
+answered "is this a widening?" from a different representation — the checked
+type (`closedResultRowOrNull`), the graph (`resultRowWideningOrNull`), and the
+mono type (`resultRowWideningAdapterSourceType`) — and every relation site had
+to re-derive "can an adapter serve me?" by hand. Any new site, or any
+representation the three disagree on, reproduces the defect. That is
+structural, not bad luck.
+
+**The fix now in the tree is the right one.** Recording the decline once and
+consuming it once makes the decline and the reservation the same fact, and
+`AdapterReachability` means a site that cannot reach completion cannot
+decline. Three leaks remain, in priority order:
+
+1. **One recognizer, not three.** `closedResultRowOrNull` resolves aliases,
+   and the checker treats an alias as transparent for reach — but the GRAPH
+   recognizers refuse aliases (`kind == .nominal` required, `isBareTagRowNode`
+   rejects `.named`, and an alias's def is not `Try`'s). So for
+   `IoResult(a) : Try(a, [IoErr(Str)])` the checker opens per use, lowering
+   declines to recognize, the exact relation fires, and `unifyTagRows` panics.
+   HIGH likelihood on real code — hosted rows are always closed, so `?`
+   through an aliased hosted result is the natural driver. Best fix: have the
+   CHECKER publish the widening per call edge in the checked artifact (it
+   already publishes `hosted_try_adapter`, where-method scheme-use records and
+   the hosted-widening redirect rule), so lowering never recognizes at all.
+2. **No hard-coded `false`.** Three durable-type routes into completion pass
+   `widened_result_row = false` unconditionally. They should assert that no
+   widening source type exists for that request and `compilerBug` otherwise,
+   rather than silently taking the body path.
+3. **The backstop must be loud in EVERY mode.** Every "loud" rejection in the
+   table bottoms out in `Common.invariant`, which is `unreachable` outside
+   Debug. The widening-specific guards were upgraded to `compilerBug`, but the
+   one invariant whose violation actually changes emitted code — the closed-row
+   rejection in `unifyTagRows` / `relateOpaqueTagRows` — was not. Promoting it
+   converts every remaining hole in this section from a wrong tag discriminant
+   into a build stop, in release too. Cheapest and highest-value of the three.
+
+Two further findings, both unpinned:
+
+- **For-clause aliases bypass instantiation.** An `is_for_clause_alias`
+  annotation unifies the app's alias DECLARATION var — whose body carries
+  markers at every depth — directly into the annotation, with no polarity or
+  reach resolution. If that annotation is a where-method signature, the nested
+  markers are then opened per use. Needs a platform test
+  (`requires { Model }`, `Model : { items : [Pending, Done] }`, and a
+  where-method returning `Model`).
+- **A second declining relation exists.** `relateCustomParserErrorInjection`
+  relates only shared labels' payloads and never checks closedness — the same
+  defect shape in the parser-error-injection mechanism, whose adapter is the
+  parser runtime rather than the template adapter. Not audited; out of W6b's
+  scope but it should be recorded as debt rather than forgotten.
 
 ### 8.2 The working agreement Jared set (binding)
 

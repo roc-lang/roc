@@ -8612,6 +8612,129 @@ test "W6b closed impl with rigid payloads is adapted at the requested payloads" 
     try std.testing.expectEqual(@as(usize, 1), checkedGeneratedFnCount(&lowered.mono));
 }
 
+test "W6b direct-result widening adapter re-tags into the requested row at run time" {
+    const allocator = std.testing.allocator;
+    // The executing half of "W6b widened closed where-method impl ...", which
+    // only lowers. `Extra` is chosen because it SORTS BETWEEN the declared
+    // labels: tags are ordered by name, so the declared row numbers
+    // `Err` 0, `Ok` 1 while the requested row numbers `Err` 0, `Extra` 1,
+    // `Ok` 2. An adapter that forwarded the callee's result unchanged, or that
+    // mapped the labels in the wrong order, would therefore read the `Ok`
+    // payload out of a payload-less `Extra` — which only running the program
+    // can catch. (`Err` maps 0 to 0 and proves nothing on its own; it is here
+    // so both constructors travel through the adapter.)
+    const source =
+        \\closed_ok : [Ok(Str), Err(Str)]
+        \\closed_ok = Ok("ok")
+        \\
+        \\closed_err : [Ok(Str), Err(Str)]
+        \\closed_err = Err("bad")
+        \\
+        \\Job := [Pending, Failed].{
+        \\    status : Job -> [Ok(Str), Err(Str)]
+        \\    status = |job| match job { Pending => closed_ok, Failed => closed_err }
+        \\}
+        \\
+        \\describe : a -> [Ok(Str), Err(Str), Extra] where [a.status : a -> [Ok(Str), Err(Str)]]
+        \\describe = |x| x.status()
+        \\
+        \\show : [Ok(Str), Err(Str), Extra] -> Str
+        \\show = |v| match v { Ok(s) => "Ok(${s})", Err(e) => "Err(${e})", Extra => "Extra" }
+        \\
+        \\main : Bool
+        \\main = {
+        \\    pending_ok = show(describe(Job.Pending)) == "Ok(ok)"
+        \\    failed_ok = show(describe(Job.Failed)) == "Err(bad)"
+        \\    pending_ok and failed_ok
+        \\}
+    ;
+
+    // The mechanism witness: the value below is the same either way, so pin
+    // that an adapter really is what produced it.
+    var lowered = try lowerMonotypeModule(allocator, source);
+    defer lowered.deinit(allocator);
+    try std.testing.expectEqual(@as(usize, 1), checkedGeneratedFnCount(&lowered.mono));
+
+    var compiled = try helpers.compileInspectedProgramForTargetWithBuiltin(
+        allocator,
+        std.testing.io,
+        .module,
+        source,
+        &.{},
+        .native,
+        try sharedPrePublishedBuiltin(),
+        null,
+        .lss,
+    );
+    defer compiled.deinit(allocator);
+    try std.testing.expectEqual(@as(usize, 0), compiled.resources.checker.problems.problems.items.len);
+
+    const output = try helpers.lirInterpreterInspectedStr(allocator, &compiled.lowered);
+    defer allocator.free(output);
+    try std.testing.expectEqualStrings("True", output);
+}
+
+test "W6b Try error-row widening adapter re-tags into the requested row at run time" {
+    const allocator = std.testing.allocator;
+    // The `Try` instance, executed. The extra label is `Gone` rather than the
+    // `Other` the lowering-only test uses, because `Other` sorts AFTER
+    // `NotFound` and leaves it at discriminant 0 in both rows — an adapter that
+    // injected nothing at all would still produce the right answer. `Gone`
+    // sorts first, so the declared row numbers `NotFound` 0 while the requested
+    // row numbers `Gone` 0 and `NotFound` 1, and a missing or misordered
+    // injection reports `Gone` where the callee returned `NotFound`.
+    const source =
+        \\closed_hit : Try(Str, [NotFound])
+        \\closed_hit = Ok("hit")
+        \\
+        \\closed_miss : Try(Str, [NotFound])
+        \\closed_miss = Err(NotFound)
+        \\
+        \\Src := [Found, Missing].{
+        \\    fetch : Src -> Try(Str, [NotFound])
+        \\    fetch = |src| match src { Found => closed_hit, Missing => closed_miss }
+        \\}
+        \\
+        \\load : a -> Try(Str, [Gone, NotFound]) where [a.fetch : a -> Try(Str, [NotFound])]
+        \\load = |x| {
+        \\    s = x.fetch()?
+        \\    Ok(s)
+        \\}
+        \\
+        \\show : Try(Str, [Gone, NotFound]) -> Str
+        \\show = |v| match v { Ok(s) => "Ok(${s})", Err(Gone) => "Gone", Err(NotFound) => "NotFound" }
+        \\
+        \\main : Bool
+        \\main = {
+        \\    found_ok = show(load(Src.Found)) == "Ok(hit)"
+        \\    missing_ok = show(load(Src.Missing)) == "NotFound"
+        \\    found_ok and missing_ok
+        \\}
+    ;
+
+    var lowered = try lowerMonotypeModule(allocator, source);
+    defer lowered.deinit(allocator);
+    try std.testing.expectEqual(@as(usize, 1), checkedGeneratedFnCount(&lowered.mono));
+
+    var compiled = try helpers.compileInspectedProgramForTargetWithBuiltin(
+        allocator,
+        std.testing.io,
+        .module,
+        source,
+        &.{},
+        .native,
+        try sharedPrePublishedBuiltin(),
+        null,
+        .lss,
+    );
+    defer compiled.deinit(allocator);
+    try std.testing.expectEqual(@as(usize, 0), compiled.resources.checker.problems.problems.items.len);
+
+    const output = try helpers.lirInterpreterInspectedStr(allocator, &compiled.lowered);
+    defer allocator.free(output);
+    try std.testing.expectEqualStrings("True", output);
+}
+
 test "polarity W3 open-method widening adapter counts" {
     const allocator = std.testing.allocator;
     // `test/cli/OpenMethodWidenedCaller.roc` and `OpenMethodOwnRowCaller.roc`
@@ -8691,15 +8814,27 @@ test "polarity W3 open-method widening adapter counts" {
     });
     defer direct_lowered.deinit(allocator);
 
-    // One adapter, not zero: `wrap`'s own published error row is closed and
-    // `?` requests it wider. `wrapped` is called at its declared row here, so
-    // the adapter can only be `wrap`'s — an ordinary annotated function, not a
-    // where-method. The third program drops `wrap` and widens the method
-    // itself, and mints exactly one adapter of its own.
-    try std.testing.expectEqual(@as(usize, 1), checkedGeneratedFnCount(&widened_lowered.mono));
+    // No adapters in any of the three. Every row `?` widens here belongs to an
+    // ORDINARY ANNOTATED signature — `wrap`'s in the first program, the method
+    // `wrapped`'s own in the third — and an ordinary annotated result row is
+    // implicitly open: its extension is an unresolved flex the request relation
+    // unifies with the wider row like any other. Nothing declined to unify, so
+    // nothing is owed an adapter; each specialization simply lowers at the row
+    // it was requested at. The `W6b ...` tests above hold the positive witness,
+    // where the implementation's published row really is closed.
+    //
+    // The first and third counted 1 before template completion consumed the
+    // relation's own answer. Completion used to re-derive "is this row closed"
+    // from the checked root, where `variableSealsToRowDefault` reports a flex
+    // tail defaulting to the empty tag union as closed — the right answer for a
+    // where-method's per-use marker, the wrong one for an ordinary annotated
+    // row. Each spurious adapter also added a second, narrow specialization of
+    // the same template and pulled it off the parallel body shards onto the
+    // coordinator (`specJobCompletesOnCoordinator`).
+    try std.testing.expectEqual(@as(usize, 0), checkedGeneratedFnCount(&widened_lowered.mono));
     // Nothing is requested wider than it was published, so no adapter exists.
     try std.testing.expectEqual(@as(usize, 0), checkedGeneratedFnCount(&own_row_lowered.mono));
-    try std.testing.expectEqual(@as(usize, 1), checkedGeneratedFnCount(&direct_lowered.mono));
+    try std.testing.expectEqual(@as(usize, 0), checkedGeneratedFnCount(&direct_lowered.mono));
 }
 
 // Repro for https://github.com/roc-lang/roc/issues/10301: a list produced by an
