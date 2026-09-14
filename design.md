@@ -5259,15 +5259,15 @@ the same bytes, and equal string/list contents reuse one blob. A packed list
 view records its scalar encoding or fixed-product width and item count separately
 from its byte view. Fixed products are records, tuples, and nominal wrappers
 composed entirely of scalars and zero-sized products. Their existing checked
-types define canonical field order; bytes concatenate scalar leaves in that
+types define checked field order; bytes concatenate scalar leaves in that
 order without host padding. Lists containing other value shapes retain explicit
 child nodes so their graph edges and sharing stay visible.
 
 Constant writing and target lowering compile a field-copy plan once per explicit
 representation. Plans use committed layout field indexes and offsets, preserve
-canonical scalar bits, and initialize target padding. Compatible contiguous
+stored scalar bits, and initialize target padding. Compatible contiguous
 regions use bulk copies. Packed data remains a literal through specialization;
-list length must not create per-item executable IR, including in static
+list length must not create per-item LIR statements, including in static
 initializers. Literal backings are shared by explicit owner-relative identity
 through IR stages. Boxy consumes its committed representation and descriptor
 plans, including any required storage adaptation, without unrolling the list.

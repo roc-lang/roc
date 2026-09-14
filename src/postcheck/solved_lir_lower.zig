@@ -855,7 +855,7 @@ const Lowerer = struct {
         }
         if (@as(u64, literal.len) * size_align.size != len) Common.invariant("packed literal length disagreed with committed element layout");
         const alignment: u32 = @intCast(@max(size_align.alignment.toByteUnits(), 1));
-        // A canonical view can be unaligned even when its target storage isn't.
+        // A literal byte view can be unaligned even when its target storage isn't.
         if (offset % alignment != 0) {
             backing = backing[offset..][0..len];
             offset = 0;
