@@ -321,7 +321,6 @@ fn debugCheckJumpScopes(store: *LirStore, proc: LIR.LirProcSpecId, fused_id: LIR
     }
 }
 
-
 fn findCandidate(
     store: *LirStore,
     layouts: *const layout_mod.Store,
