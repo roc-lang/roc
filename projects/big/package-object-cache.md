@@ -554,6 +554,41 @@ them.
    seed set produced at compiler build time. Gate: differential across
    backend mixes, and a check that every seed entry is byte-identical to what
    an app build would produce for the same identity.
+   Implementation order for milestones 2 and 3, decided 2026-09-14 after
+   reading the dev backend: the dev backend already keeps every reference
+   between procedures symbolic until a final patch pass (`pending_calls`,
+   `pending_proc_addrs`, `pending_rc_calls`, `pending_rc_addrs`,
+   `pending_message_addrs` in `src/backend/dev/LirCodeGen.zig`, resolved by
+   `patchPendingCalls` and friends after `compileAllProcSpecs`), and every
+   reference outside the code buffer is an indexed relocation against a
+   symbol name. A procedure's entry is therefore its code slice plus those
+   pending references translated to content names (callee identity,
+   refcount helper name, message bytes) plus its indexed relocations and
+   frame metadata, and reassembly is appending the slice and re-registering
+   the references before the same patch passes run. The slices, each its own
+   PR stacked on the previous one:
+
+   1. Procedure artifacts in the dev backend: extract every compiled
+      procedure and refcount helper as an artifact, reassemble a program from
+      artifacts, and gate that a build assembled from its own artifacts is
+      byte-identical to a normal build (fixture apps and a backend unit
+      test). No cache, no store.
+   2. Pack programs: lower one module's closed export set as a program with
+      boundary-conservative passes (tag reachability treats root parameters
+      as fully constructed; ARC signatures solved within the pack and
+      recorded per entry), producing artifacts plus a manifest. Gate: the
+      pack program for each fixture platform and for `Builtin.roc` lowers,
+      its artifacts assemble into an object with no unresolved symbols other
+      than host and builtin externs, and two builds write identical bytes.
+   3. Store and hit: pack files under the cache root, the per-machine index,
+      the Monotype reservation-time hit for closed requests that records an
+      external reference and skips lowering, artifact splicing in the object
+      writer, and the origin-split sweep. Gate: cold-versus-warm differential
+      over the CLI corpus (program output and refcount event logs), plus the
+      byte-identical gate for packs written by two builds.
+   4. Debug info for cached procedures (DWARF line programs stored with the
+      artifact) and the `roc run` host-executable path.
+
 5. **Tier 2 and hot reload.** Lambda Mono hit point, site-and-shape lambda
    identities, package objects in the cached host executable, background
    optimization of tier 2 entries.
