@@ -8046,6 +8046,14 @@ columns, not hash tables keyed by node id. Union-find redirects may change which
 node is a class root, but they never renumber a node; root-owned columns are
 updated explicitly when a union moves that ownership.
 
+Graph-owned generated iterators are indexed by their stable declaration, kind,
+and callable evidence. Candidates in that bucket compare live argument roots,
+so argument unions do not stale the index. Content replacement and root union
+update producer membership explicitly. A monotone provenance counter lets both
+iterator finalizers return immediately for graphs without generated iterators.
+Generated-private containment diagnostics distinguish guard returns from queries
+that reach the containment cache or walker.
+
 Declaration-backed nominal reuse is indexed by declaration identity plus the
 current argument-root tuple. Root unions rekey affected entries, so lookup cost
 must depend only on the current live index: the history of earlier root
@@ -8087,8 +8095,17 @@ looked up. The resulting address is still the exact checked identity of the type
 variable/content in that body specialization. It is not a structural digest,
 source name, runtime layout, object symbol, or generated procedure id. A child
 that needs independent generic cells receives a new scope identity; copying
-cells into that scope is explicit. Nodes begin unresolved. As relations are
-produced, explicit evidence from checked data unifies those nodes:
+cells into that scope is explicit. A checked root under construction has an
+in-progress cache entry. Only a recursive lookup allocates an unresolved
+placeholder; completion joins that placeholder to the built node. Acyclic
+construction caches the built node directly. Checked aliases instantiate their
+parameter cells and cache their explicit backing cell: alias spelling is a
+checked view, never a separate value identity established by a placeholder
+unification. Allocation failure removes active
+entries, and copying completed cells into a child scope skips active entries.
+Graph node identities remain append-only, including recursive placeholders and
+all per-node request evidence. As relations are produced, explicit evidence
+from checked data unifies those nodes:
 
 - the requested root function/value type constrains the checked root type;
 - lambda and closure expected function types constrain the nested function
