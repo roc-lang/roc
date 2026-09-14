@@ -2470,10 +2470,13 @@ dependency. A non-cryptographic hash makes such a pair cheap to construct, and
 because the attacker supplies both halves the relevant bound is a birthday
 collision, so 128 bits (2^64 work) is not enough and 256 bits is required. The
 digests are also persisted in caches and compared across machines, which rules
-out keying them with a secret. Every 64-bit compiler target is built with the
-CPU's SHA-256 instructions enabled (`addSha256Floor` in build.zig) and has no
-software rounds; only 32-bit targets such as wasm32 compute the digest in
-software.
+out keying them with a secret. Nearly every 64-bit compiler target is built with
+the CPU's SHA-256 instructions enabled (`addSha256Floor` in build.zig) and has no
+software rounds; 32-bit targets such as wasm32 and x86_64 macOS compute the
+digest in software, which yields the same digest bytes more slowly. x86_64 macOS
+is the exception because Apple's Intel Macs are Skylake through Comet Lake cores,
+which have no SHA extension to put in that target's baseline
+(`usesSoftwareSha256` in src/target/mod.zig).
 
 All producers for a key domain must agree on the encoding, including child
 digests, length prefixes, identity numbering, and domain tags. The hash

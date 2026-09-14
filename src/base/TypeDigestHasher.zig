@@ -22,11 +22,12 @@
 //! The digests are also persisted in the checked-module and specialization
 //! caches and must compare equal across machines, so they cannot be keyed by a
 //! per-machine secret; a public, deterministic, cryptographic function is the
-//! only construction that satisfies both constraints. Every 64-bit compiler
-//! target is built with the CPU's SHA-256 instructions enabled (see
+//! only construction that satisfies both constraints. Nearly every 64-bit
+//! compiler target is built with the CPU's SHA-256 instructions enabled (see
 //! `getReleaseTargetQuery` in build.zig), so this costs one hardware
-//! compression per 64 bytes; 32-bit targets such as wasm32 use the portable
-//! rounds.
+//! compression per 64 bytes; 32-bit targets such as wasm32 and x86_64 macOS
+//! (see `uses_software_rounds` in sha256_rounds.zig) use the portable rounds,
+//! which produce the same digest bytes more slowly.
 //!
 //! Module identities and artifact cache keys hash with
 //! `std.crypto.hash.sha2.Sha256` directly; this type exists so that every
@@ -41,12 +42,13 @@ const TypeDigestHasher = @This();
 pub const digest_length = 32;
 
 comptime {
-    // Every 64-bit target must carry the SHA-256 instructions: there is no
-    // software path for them, by decision. build.zig adds the feature to the
-    // baseline CPU; a `-Dcpu` that drops it is an unsupported target.
-    if (!rounds.hasHardwareSupport) {
+    // Every 64-bit target must carry the SHA-256 instructions, except the ones
+    // `uses_software_rounds` exempts: there is no software path for them, by
+    // decision. build.zig adds the feature to the baseline CPU; a `-Dcpu` that
+    // drops it is an unsupported target.
+    if (!rounds.hasHardwareSupport and !rounds.uses_software_rounds) {
         switch (rounds.arch_class) {
-            .x86_64 => @compileError("roc requires the x86 SHA extension (`sha`) on x86_64 targets; CPUs without SHA-256 instructions are not supported"),
+            .x86_64 => @compileError("roc requires the x86 SHA extension (`sha`) on x86_64 targets other than macOS; CPUs without SHA-256 instructions are not supported"),
             .aarch64 => @compileError("roc requires the ARMv8 `sha2` extension on aarch64 targets; CPUs without SHA-256 instructions are not supported"),
             .other => if (@sizeOf(usize) == 8) {
                 @compileError("roc requires SHA-256 instructions on 64-bit targets, and has no SHA-256 implementation for this architecture");
