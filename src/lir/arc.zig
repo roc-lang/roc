@@ -1069,8 +1069,6 @@ const JoinSummary = struct {
     loop_keep_id: u32,
     remainder_plan: u32,
     body_plan: u32,
-    arrival_plans: std.ArrayList(u32) = .empty,
-    jump_plans: std.ArrayList(u32) = .empty,
     /// Context the join statement was first reached in; remainder and body
     /// segments derive theirs from it.
     origin_ctx: SolveContext,
@@ -1090,7 +1088,6 @@ const SwitchSummary = struct {
     reached: bool = false,
     resume_ctx: SolveContext,
     continuation_plan: u32,
-    exit_plans: std.ArrayList(u32) = .empty,
     /// Plans inside a join frame that structurally encounter this
     /// continuation before any ordinary branch makes it reachable. They are
     /// initially completed as independent paths; the first contributing
@@ -1352,6 +1349,7 @@ const ArcPlanMetadata = struct {
     version: u32 = 0,
     scheduled: bool = false,
     terminal_state: ?OwnedSet = null,
+    terminal_keep: ?OwnedSet = null,
     stop_switch_index: u32 = no_plan,
     latent_stop_switch_index: u32 = no_plan,
     latent_stop_state: ?OwnedSet = null,
@@ -2242,10 +2240,8 @@ const Inserter = struct {
                 try self.placeSolveJoinParamsInto(summary, &params_only);
                 if (params_only.eql(&summary.body_keep)) continue;
                 assignOwnedSet(&summary.body_keep, &params_only);
-                try self.refreshJumpPlans(summary);
                 const purged = try self.purgeLoopKeepLiveness(summary.loop_keep_id);
                 const entry_changed = try self.recomputeSolveEntryKeep(summary);
-                try self.refreshJoinArrivalPlans(summary);
                 if (purged or entry_changed) {
                     try self.scheduleSolveJoinProcess(&tasks, summary);
                     adjusted = true;
@@ -2261,6 +2257,35 @@ const Inserter = struct {
             if (!self.arc_plans.metadata.items[plan_index].scheduled) continue;
             if (plan.terminal == .none) arcInvariant("ARC fixed point left a scheduled structured plan without a terminal decision");
             if (plan.step_count > plan.steps.items.len) arcInvariant("ARC fixed point left an invalid plan step count");
+            const metadata = &self.arc_plans.metadata.items[plan_index];
+            switch (plan.terminal) {
+                .stop => |*terminal| {
+                    const owned = if (metadata.terminal_state) |*state| state else arcInvariant("ARC switch-stop plan lacked its exact state");
+                    const summary = self.switch_summaries[terminal.switch_index] orelse arcInvariant("ARC switch-stop plan lacked its summary");
+                    try self.collectReleaseDifferenceInto(&terminal.releases, owned, &summary.common);
+                },
+                .jump => |*terminal| {
+                    const owned = if (metadata.terminal_state) |*state| state else arcInvariant("ARC jump plan lacked its exact state");
+                    const summary = self.solveSummaryOf(terminal.join_index);
+                    try self.collectJumpReleaseDifferenceInto(&terminal.releases, terminal.stmt, owned, &summary.body_keep);
+                },
+                .join => |*terminal| {
+                    const owned = if (metadata.terminal_state) |*state| state else arcInvariant("ARC join arrival plan lacked its exact state");
+                    const summary = self.solveSummaryOf(terminal.join_index);
+                    terminal.body_reachable = summary.body_reachable;
+                    try self.collectReleaseDifferenceInto(&terminal.releases, owned, &summary.entry_keep);
+                },
+                .terminal => |*terminal| {
+                    const owned = if (metadata.terminal_state) |*state| state else arcInvariant("ARC terminal plan lacked its exact state");
+                    if (metadata.terminal_keep) |*keep| {
+                        try self.collectReleaseDifferenceInto(&terminal.releases, owned, keep);
+                    } else {
+                        try self.collectReleaseAllInto(&terminal.releases, owned);
+                    }
+                },
+                .none => unreachable,
+                .switch_stmt, .initialized_payload_switch, .str_match, .boxy_tag_match, .str_match_set => {},
+            }
             for (plan.steps.items[0..plan.step_count]) |*step| {
                 if (step.call_callee) |callee| {
                     step.call_target_override = try self.variantForCall(callee, step.call_demanded);
@@ -2700,9 +2725,12 @@ const Inserter = struct {
                 },
                 .set_local => |assign| {
                     const step = try self.nextArcPlanStep(segment.plan_index, segment.cursor);
-                    const old_release = self.releaseDecisionFrom(&segment.owned, assign.target);
+                    const old_release = if (segment.owned.domain.resourceBitOf(assign.target)) |bit|
+                        self.releaseDecisionFrom(bit, segment.owned.entryAt(bit))
+                    else
+                        null;
                     const transfer = try self.transferForSetLocal(&segment.owned, assign.target, assign.value, assign.mode, assign.next, segment.ctx.loop_keep);
-                    step.pre_release = if (transfer.release_old_target) old_release else null;
+                    step.pre_release = if (transfer.release_old_target) old_release orelse arcInvariant("ARC set-local released a non-resource target") else null;
                     step.retain_set_target = transfer.retain_target;
                     const singles = [_]LIR.LocalId{ assign.value, assign.target };
                     try self.finishArcPlanStepDeaths(step, &segment.owned, &singles, null, assign.next, segment.ctx.loop_keep);
@@ -3023,41 +3051,47 @@ const Inserter = struct {
         return .{ .initialized = local };
     }
 
-    fn releaseDecisionFrom(self: *const Inserter, owned: *const OwnedSet, local: LIR.LocalId) ReleaseDecision {
-        if (owned.fullResidualMask(local) != 0) {
-            return .{ .residual = .{ .value = local, .field_mask = owned.residualMask(local) } };
+    fn releaseDecisionFrom(self: *const Inserter, bit: usize, entry: OwnedEntry) ReleaseDecision {
+        const local = self.domain().resourceLocalAt(bit);
+        if (self.domain().fullResidualMaskAt(bit) != 0) {
+            return .{ .residual = .{ .value = local, .field_mask = entry.residual_mask } };
         }
         return self.releaseDecision(local);
     }
 
-    fn collectReleaseDifferenceInto(self: *Inserter, releases: *std.ArrayList(ReleaseDecision), owned: *const OwnedSet, keep: *const OwnedSet) ResourceError!void {
-        owned.requireSameDomain(keep);
-        releases.clearRetainingCapacity();
-        var iter = owned.iterator(.{ .direction = .reverse });
-        while (iter.next()) |bit| {
-            const local = owned.domain.resourceLocalAt(bit);
-            const owned_entry = owned.entryAt(bit);
-            const keep_entry = keep.entryAt(bit);
-            if (!keep_entry.present) {
-                try releases.append(self.solve_allocator, self.releaseDecisionFrom(owned, local));
-                continue;
+    const ReleaseDifference = struct {
+        inserter: *Inserter,
+        releases: *std.ArrayList(ReleaseDecision),
+
+        fn emit(self: ReleaseDifference, bit: u32, owned: OwnedEntry, keep: OwnedEntry) Allocator.Error!void {
+            if (!keep.present) {
+                try self.releases.append(self.inserter.solve_allocator, self.inserter.releaseDecisionFrom(bit, owned));
+                return;
             }
-            const residual_difference = owned_entry.residual_mask & ~keep_entry.residual_mask;
+            const residual_difference = owned.residual_mask & ~keep.residual_mask;
             if (residual_difference != 0) {
-                try releases.append(self.solve_allocator, .{ .residual = .{
-                    .value = local,
+                try self.releases.append(self.inserter.solve_allocator, .{ .residual = .{
+                    .value = self.inserter.domain().resourceLocalAt(bit),
                     .field_mask = residual_difference,
                 } });
             }
         }
+    };
+
+    fn collectReleaseDifferenceInto(self: *Inserter, releases: *std.ArrayList(ReleaseDecision), owned: *const OwnedSet, keep: *const OwnedSet) ResourceError!void {
+        owned.requireSameDomain(keep);
+        releases.clearRetainingCapacity();
+        try owned.entries.differenceWith(&keep.entries, ReleaseDifference{ .inserter = self, .releases = releases }, ReleaseDifference.emit);
+        // Materialization prepends in list order, so preserve reverse resource
+        // order here to emit the same ascending release statements.
+        std.mem.reverse(ReleaseDecision, releases.items);
     }
 
     fn collectReleaseAllInto(self: *Inserter, releases: *std.ArrayList(ReleaseDecision), owned: *const OwnedSet) ResourceError!void {
         releases.clearRetainingCapacity();
         var iter = owned.iterator(.{ .direction = .reverse });
         while (iter.next()) |bit| {
-            const local = owned.domain.resourceLocalAt(bit);
-            try releases.append(self.solve_allocator, self.releaseDecisionFrom(owned, local));
+            try releases.append(self.solve_allocator, self.releaseDecisionFrom(bit, iter.entry));
         }
     }
 
@@ -3075,8 +3109,7 @@ const Inserter = struct {
         var iter = owned.iterator(.{ .direction = .reverse });
         while (iter.next()) |bit| {
             if (result_bit != null and bit == result_bit.?) continue;
-            const local = owned.domain.resourceLocalAt(bit);
-            try releases.append(self.emission_allocator, self.releaseDecisionFrom(owned, local));
+            try releases.append(self.emission_allocator, self.releaseDecisionFrom(bit, iter.entry));
         }
         owned.clear();
         if (result_entry.present) try owned.putEntry(@intCast(result_bit.?), result_entry);
@@ -3149,18 +3182,15 @@ const Inserter = struct {
         const metadata = self.planMetadata(plan_index);
         if (metadata.arrival_join_index == no_plan) {
             metadata.arrival_join_index = summary.index;
-            try summary.arrival_plans.append(self.solve_allocator, plan_index);
         } else if (metadata.arrival_join_index != summary.index) {
             arcInvariant("ARC structured plan arrived at two different joins");
         }
         const plan = self.arcPlan(plan_index);
-        var releases: std.ArrayList(ReleaseDecision) = .empty;
         switch (plan.previous_terminal) {
             .join => |previous| {
                 if (previous.stmt != stmt or previous.join_index != summary.index) {
                     arcInvariant("ARC join plan changed structural identity");
                 }
-                releases = previous.releases;
             },
             .none,
             .stop,
@@ -3173,38 +3203,14 @@ const Inserter = struct {
             .terminal,
             => {},
         }
-        try self.collectReleaseDifferenceInto(&releases, owned, &summary.entry_keep);
         plan.terminal = .{ .join = .{
             .stmt = stmt,
             .join_index = summary.index,
             .remainder_plan = summary.remainder_plan,
             .body_plan = summary.body_plan,
             .body_reachable = summary.body_reachable,
-            .releases = releases,
+            .releases = .empty,
         } };
-    }
-
-    fn refreshJoinArrivalPlans(self: *Inserter, summary: *JoinSummary) ResourceError!void {
-        for (summary.arrival_plans.items) |plan_index| {
-            const metadata = self.planMetadata(plan_index);
-            const owned = if (metadata.terminal_state) |*state| state else arcInvariant("ARC join arrival plan lacked its exact state");
-            const plan = self.arcPlan(plan_index);
-            const terminal = switch (plan.terminal) {
-                .join => |*join| join,
-                .none,
-                .stop,
-                .switch_stmt,
-                .initialized_payload_switch,
-                .str_match,
-                .boxy_tag_match,
-                .str_match_set,
-                .jump,
-                .terminal,
-                => arcInvariant("ARC registered join arrival plan had another terminal"),
-            };
-            terminal.body_reachable = summary.body_reachable;
-            try self.collectReleaseDifferenceInto(&terminal.releases, owned, &summary.entry_keep);
-        }
     }
 
     fn updateJumpPlan(self: *Inserter, summary: *JoinSummary, plan_index: u32, stmt: LIR.CFStmtId, owned: *const OwnedSet) ResourceError!void {
@@ -3212,16 +3218,13 @@ const Inserter = struct {
         const metadata = self.planMetadata(plan_index);
         if (metadata.jump_join_index == no_plan) {
             metadata.jump_join_index = summary.index;
-            try summary.jump_plans.append(self.solve_allocator, plan_index);
         } else if (metadata.jump_join_index != summary.index) {
             arcInvariant("ARC structured plan jumped to two different joins");
         }
         const plan = self.arcPlan(plan_index);
-        var releases: std.ArrayList(ReleaseDecision) = .empty;
         switch (plan.previous_terminal) {
             .jump => |previous| {
                 if (previous.stmt != stmt or previous.join_index != summary.index) arcInvariant("ARC jump plan changed structural identity");
-                releases = previous.releases;
             },
             .none,
             .stop,
@@ -3234,34 +3237,11 @@ const Inserter = struct {
             .terminal,
             => {},
         }
-        try self.collectJumpReleaseDifferenceInto(&releases, stmt, owned, &summary.body_keep);
         plan.terminal = .{ .jump = .{
             .stmt = stmt,
             .join_index = summary.index,
-            .releases = releases,
+            .releases = .empty,
         } };
-    }
-
-    fn refreshJumpPlans(self: *Inserter, summary: *JoinSummary) ResourceError!void {
-        for (summary.jump_plans.items) |plan_index| {
-            const metadata = self.planMetadata(plan_index);
-            const owned = if (metadata.terminal_state) |*state| state else arcInvariant("ARC jump plan lacked its exact state");
-            const plan = self.arcPlan(plan_index);
-            const terminal = switch (plan.terminal) {
-                .jump => |*jump| jump,
-                .none,
-                .stop,
-                .join,
-                .switch_stmt,
-                .initialized_payload_switch,
-                .str_match,
-                .boxy_tag_match,
-                .str_match_set,
-                .terminal,
-                => arcInvariant("ARC registered jump plan had another terminal"),
-            };
-            try self.collectJumpReleaseDifferenceInto(&terminal.releases, terminal.stmt, owned, &summary.body_keep);
-        }
     }
 
     fn updateSwitchStopPlan(self: *Inserter, summary: *SwitchSummary, plan_index: u32, owned: *const OwnedSet) ResourceError!void {
@@ -3269,18 +3249,15 @@ const Inserter = struct {
         const metadata = self.planMetadata(plan_index);
         if (metadata.stop_switch_index == no_plan) {
             metadata.stop_switch_index = summary.index;
-            try summary.exit_plans.append(self.solve_allocator, plan_index);
         } else if (metadata.stop_switch_index != summary.index) {
             arcInvariant("ARC structured plan stopped at two different switch continuations");
         }
         const plan = self.arcPlan(plan_index);
-        var releases: std.ArrayList(ReleaseDecision) = .empty;
         switch (plan.previous_terminal) {
             .stop => |previous| {
                 if (previous.switch_index != summary.index or previous.target_plan != summary.continuation_plan) {
                     arcInvariant("ARC switch-stop plan changed structural identity");
                 }
-                releases = previous.releases;
             },
             .none,
             .join,
@@ -3293,11 +3270,10 @@ const Inserter = struct {
             .terminal,
             => {},
         }
-        try self.collectReleaseDifferenceInto(&releases, owned, &summary.common);
         plan.terminal = .{ .stop = .{
             .switch_index = summary.index,
             .target_plan = summary.continuation_plan,
-            .releases = releases,
+            .releases = .empty,
         } };
     }
 
@@ -3329,28 +3305,6 @@ const Inserter = struct {
             else
                 arcInvariant("ARC latent switch-stop plan lacked its exact state");
             try self.updateSwitchStopPlan(summary, plan_index, owned);
-        }
-    }
-
-    fn refreshSwitchStopPlans(self: *Inserter, summary: *SwitchSummary) ResourceError!void {
-        for (summary.exit_plans.items) |plan_index| {
-            const metadata = self.planMetadata(plan_index);
-            const owned = if (metadata.terminal_state) |*state| state else arcInvariant("ARC switch-stop plan lacked its exact state");
-            const plan = self.arcPlan(plan_index);
-            const terminal = switch (plan.terminal) {
-                .stop => |*stop| stop,
-                .none,
-                .join,
-                .switch_stmt,
-                .initialized_payload_switch,
-                .str_match,
-                .boxy_tag_match,
-                .str_match_set,
-                .jump,
-                .terminal,
-                => arcInvariant("ARC registered switch-stop plan had another terminal"),
-            };
-            try self.collectReleaseDifferenceInto(&terminal.releases, owned, &summary.common);
         }
     }
 
@@ -3392,11 +3346,9 @@ const Inserter = struct {
         retain_value: ?LIR.LocalId,
     ) ResourceError!void {
         const plan = self.arcPlan(plan_index);
-        var releases: std.ArrayList(ReleaseDecision) = .empty;
         switch (plan.previous_terminal) {
             .terminal => |previous| {
                 if (previous.stmt != stmt) arcInvariant("ARC terminal plan changed structural identity");
-                releases = previous.releases;
             },
             .none,
             .stop,
@@ -3409,14 +3361,14 @@ const Inserter = struct {
             .jump,
             => {},
         }
-        if (keep) |kept| {
-            try self.collectReleaseDifferenceInto(&releases, owned, kept);
-        } else {
-            try self.collectReleaseAllInto(&releases, owned);
-        }
+        try self.setPlanTerminalState(plan_index, owned);
+        self.planMetadata(plan_index).terminal_keep = if (keep) |kept|
+            try cloneOwnedSetWith(self.solve_allocator, kept)
+        else
+            null;
         plan.terminal = .{ .terminal = .{
             .stmt = stmt,
-            .releases = releases,
+            .releases = .empty,
             .retain_value = retain_value,
         } };
     }
@@ -3818,7 +3770,6 @@ const Inserter = struct {
         try self.placeSolveJoinParamsInto(summary, &merged);
         if (merged.eql(&summary.body_keep)) return .{ .changed = false, .purged = false };
         assignOwnedSet(&summary.body_keep, &merged);
-        try self.refreshJumpPlans(summary);
         const purged = try self.purgeLoopKeepLiveness(summary.loop_keep_id);
         return .{ .changed = true, .purged = purged };
     }
@@ -3864,7 +3815,6 @@ const Inserter = struct {
         }
 
         _ = try self.recomputeSolveEntryKeep(summary);
-        try self.refreshJoinArrivalPlans(summary);
 
         const remainder_ctx = try self.solveRegionCtx(summary, summary.origin_ctx.body_scope);
         try self.pushSolveSegment(tasks, summary.remainder, &summary.entry_keep, remainder_ctx, summary.remainder_plan);
@@ -3908,11 +3858,8 @@ const Inserter = struct {
             changed = try intersectOwnedSetChanged(&summary.common, owned);
         }
         if (changed and !summary.resume_queued) {
-            try self.refreshSwitchStopPlans(summary);
             summary.resume_queued = true;
             try tasks.append(self.solve_allocator, .{ .switch_resume = summary.index });
-        } else if (changed) {
-            try self.refreshSwitchStopPlans(summary);
         }
     }
 
@@ -4017,7 +3964,6 @@ const Inserter = struct {
         if (!changed and !first_reach) return;
         const common_changed = if (first_reach) blk: {
             summary.body_reachable = true;
-            try self.refreshJoinArrivalPlans(summary);
             assignOwnedSet(&summary.jump_common, site);
             break :blk true;
         } else try intersectOwnedSetChanged(&summary.jump_common, site);
@@ -4736,9 +4682,9 @@ const Inserter = struct {
         // A borrowed operand's lifetime event belongs to its owning leader:
         // the leader dies when no group member has a later use.
         const owner = self.solution.leaderOf(local);
-        if (!owned.contains(owner)) {
-            return;
-        }
+        const bit = owned.domain.resourceBitOf(owner) orelse return;
+        const entry = owned.entryAt(bit);
+        if (!entry.present) return;
         // Join parameters carry their unit into the join body, whose release
         // statements are not visible to use scans.
         if (self.solution.isJoinParam(owner) or self.solution.isJoinParam(local)) {
@@ -4749,9 +4695,9 @@ const Inserter = struct {
             return;
         }
         if (collected) |list| {
-            try list.append(self.emission_allocator, self.releaseDecisionFrom(owned, owner));
+            try list.append(self.emission_allocator, self.releaseDecisionFrom(bit, entry));
         }
-        try owned.unset(owner);
+        try owned.putEntry(@intCast(bit), .{});
     }
 
     fn noteCallResultDeathIfUnused(
@@ -4778,13 +4724,15 @@ const Inserter = struct {
         loop_keep: ?LoopKeep,
         collected: ?*std.ArrayList(ReleaseDecision),
     ) ResourceError!void {
-        if (!owned.contains(local)) return;
+        const bit = owned.domain.resourceBitOf(local) orelse return;
+        const entry = owned.entryAt(bit);
+        if (!entry.present) return;
         if (self.solution.isJoinParam(local)) return;
         if (try self.valueUsedInPath(next, local, loop_keep)) return;
         if (collected) |list| {
-            try list.append(self.emission_allocator, self.releaseDecisionFrom(owned, local));
+            try list.append(self.emission_allocator, self.releaseDecisionFrom(bit, entry));
         }
-        try owned.unset(local);
+        try owned.putEntry(@intCast(bit), .{});
     }
 
     fn retainMaskedArgs(self: *Inserter, span: LIR.LocalSpan, mask: u64, next: LIR.CFStmtId) ResourceError!LIR.CFStmtId {
@@ -7415,39 +7363,21 @@ const OwnedSet = struct {
     fn Iterator(comptime options: std.bit_set.IteratorOptions) type {
         if (options.kind != .set) @compileError("ARC ownership sets iterate only present resources");
         return struct {
-            set: *const OwnedSet,
-            cursor: usize,
+            sparse: ArcSnapshot(OwnedEntry, .{}).Iterator,
+            /// Entry returned by the most recent successful next call.
+            entry: OwnedEntry = .{},
 
             fn next(self: *@This()) ?usize {
-                return switch (options.direction) {
-                    .forward => {
-                        while (self.cursor < self.set.domain.resource_locals.len) {
-                            const bit = self.cursor;
-                            self.cursor += 1;
-                            if (self.set.entryAt(bit).present) return bit;
-                        }
-                        return null;
-                    },
-                    .reverse => {
-                        while (self.cursor > 0) {
-                            self.cursor -= 1;
-                            if (self.set.entryAt(self.cursor).present) return self.cursor;
-                        }
-                        return null;
-                    },
-                };
+                const item = self.sparse.next() orelse return null;
+                std.debug.assert(item.value.present);
+                self.entry = item.value;
+                return item.index;
             }
         };
     }
 
     fn iterator(self: *const OwnedSet, comptime options: std.bit_set.IteratorOptions) Iterator(options) {
-        return .{
-            .set = self,
-            .cursor = switch (options.direction) {
-                .forward => 0,
-                .reverse => self.domain.resource_locals.len,
-            },
-        };
+        return .{ .sparse = self.entries.iteratorDirection(options.direction) };
     }
 
     fn requireSameDomain(self: *const OwnedSet, other: *const OwnedSet) void {
@@ -14932,4 +14862,52 @@ test "RC alias of a parameter consumed in the body solves the parameter owned" {
     try f.expectRc(list, 0, 0, 0);
     try f.expectRc(appended, 0, 0, 0);
     try f.expectRc(call_result, 0, 0, 0);
+}
+
+test "ARC ownership iteration skips absent resources and preserves release order" {
+    var arena = std.heap.ArenaAllocator.init(testing.allocator);
+    defer arena.deinit();
+    const allocator = arena.allocator();
+    const width = 65536;
+    const locals = try allocator.alloc(LIR.LocalId, width);
+    const indices = try allocator.alloc(u32, width);
+    const absent = try allocator.alloc(u32, width);
+    const masks = try allocator.alloc(u64, width);
+    for (locals, indices, 0..) |*local, *index, ordinal| {
+        local.* = @enumFromInt(ordinal);
+        index.* = @intCast(ordinal);
+    }
+    @memset(absent, no_arc_bit);
+    @memset(masks, 0);
+    const domain: ProcArcDomain = .{
+        .global_local_index = indices,
+        .frame_locals = locals,
+        .resource_bit_index = indices,
+        .resource_locals = locals,
+        .resource_full_masks = masks,
+        .refcounted_locals = locals,
+        .group_bit_index = absent,
+        .group_leaders = &.{},
+        .value_use_bit_index = absent,
+        .value_use_locals = &.{},
+    };
+    var owned = try OwnedSet.init(allocator, &domain);
+    const keys = [_]usize{ 7, 512, width - 1 };
+    for (keys) |key| try owned.set(locals[key]);
+    const before = @import("arc_state.zig").iterator_node_visits;
+    var reverse = owned.iterator(.{ .direction = .reverse });
+    for (0..keys.len) |index| try testing.expectEqual(keys[keys.len - 1 - index], reverse.next().?);
+    try testing.expectEqual(null, reverse.next());
+    if (builtin.mode == .Debug) try testing.expect(@import("arc_state.zig").iterator_node_visits - before <= keys.len * 11);
+    // The solver filters a persistent fork by removing each visited resource.
+    var filtered = try cloneOwnedSetWith(allocator, &owned);
+    var forward = filtered.iterator(.{});
+    for (keys) |key| {
+        try testing.expectEqual(key, forward.next().?);
+        try filtered.unset(locals[key]);
+    }
+    try testing.expectEqual(null, forward.next());
+    var empty = filtered.iterator(.{});
+    try testing.expectEqual(null, empty.next());
+    for (keys) |key| try testing.expect(owned.contains(locals[key]));
 }

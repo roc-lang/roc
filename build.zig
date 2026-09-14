@@ -761,13 +761,18 @@ const CheckTypeCheckerPatternsStep = struct {
         .{ .file = "inspected.zig", .start = 3264, .end = 3275 },
         // inspected_run.zig dispatches on a hosted function's ABI symbol, which is
         // matched by name at the host boundary and has no Ident.Idx.
-        .{ .file = "inspected_run.zig", .start = 107, .end = 107 },
+        .{ .file = "inspected_run.zig", .start = 109, .end = 109 },
         // compile_time_finalization.zig resolves comptime-failure provenance by
         // matching the failing LIR statement's source-file entry (text stamped by
         // the declaring module's lowering) against the finalizing module's
         // qualified name—cross-module, so there is no shared ident store to
-        // compare indices in. Error-reporting path, not a type-checker judgment.
-        .{ .file = "compile_time_finalization.zig", .start = 2197, .end = 2207 },
+        // compare indices in. It also compares bare display names solely to
+        // choose an unambiguous human-readable origin. Error-reporting path,
+        // not a type-checker judgment.
+        .{ .file = "compile_time_finalization.zig", .start = 3185, .end = 3191 },
+        // Consumer compatibility excludes observation sinks by Zig field name at
+        // compile time. These are compiler API fields, never Roc identifiers.
+        .{ .file = "compile_time_finalization.zig", .start = 164, .end = 175 },
         // report.zig compares already-formatted diagnostic text only to avoid
         // printing two visually identical types. This is presentation logic,
         // not a type-checking or identifier comparison.
@@ -832,7 +837,8 @@ const CheckTypeCheckerPatternsStep = struct {
                         // - std.mem.Allocator: a type, not a comparison
                         // - std.mem.Alignment: a type, not a comparison
                         // - std.mem.sort: sorting by custom comparator, not string comparison
-                        // - std.mem.asBytes: type punning, not string comparison
+                        // - std.mem.asBytes / bytesAsValue: type punning, not string comparison
+                        // - std.mem.readInt / writeInt: fixed-width binary serialization
                         // - std.mem.reverse: reversing arrays, not string comparison
                         // - std.mem.alignForward: memory alignment arithmetic, not string comparison
                         // - std.mem.order: sort ordering (used by sort comparators), not string comparison
@@ -842,6 +848,9 @@ const CheckTypeCheckerPatternsStep = struct {
                             std.mem.startsWith(u8, after_match, "Alignment") or
                             std.mem.startsWith(u8, after_match, "sort") or
                             std.mem.startsWith(u8, after_match, "asBytes") or
+                            std.mem.startsWith(u8, after_match, "bytesAsValue(") or
+                            std.mem.startsWith(u8, after_match, "readInt(") or
+                            std.mem.startsWith(u8, after_match, "writeInt(") or
                             std.mem.startsWith(u8, after_match, "reverse") or
                             std.mem.startsWith(u8, after_match, "alignForward") or
                             std.mem.startsWith(u8, after_match, "order") or
@@ -6078,6 +6087,7 @@ pub fn build(b: *std.Build) void {
         }),
         .filters = test_filters,
     });
+    lir_inline_test.stack_size = stack_budget.roc_stack_size;
     roc_modules.addAll(lir_inline_test);
     lir_inline_test.root_module.addImport("compiled_builtins", compiled_builtins_module);
     lir_inline_test.step.dependOn(&write_compiled_builtins.step);
@@ -7721,7 +7731,6 @@ fn addMainExe(
                 target.result.os.tag == cross_target.result.os.tag and
                 target.result.abi == cross_target.result.abi) continue;
             const cross_shim = addMachineCodeShimLib(b, roc_modules, cross_target, optimize, strip, omit_frame_pointer, shim_host_abi_module, compiled_builtins_module, write_compiled_builtins);
-            add_tracy(b, roc_modules.build_options, cross_shim, b.graph.host, false, flag_enable_tracy);
             const check_cross = b.addRunArtifact(archive_checker);
             check_cross.addArg(@tagName(cross_target.result.os.tag));
             check_cross.addFileArg(cross_shim.getEmittedBin());
@@ -7796,7 +7805,6 @@ fn addMainExe(
 
     // Add tracy support (required by parse/can/check modules)
     add_tracy(b, roc_modules.build_options, interpreter_shim_lib, b.graph.host, false, flag_enable_tracy);
-    add_tracy(b, roc_modules.build_options, machine_code_shim_lib, b.graph.host, false, flag_enable_tracy);
 
     // Cross-compile builtins objects for all supported targets.
     // These are needed by `roc build --opt=dev --target=X` to link the app object with builtins.

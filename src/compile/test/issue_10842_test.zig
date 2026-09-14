@@ -92,6 +92,7 @@ test "issue 10842: where-clause method arity that no target satisfies reports ty
     try coord.start();
     try coord.discoverAppFromPath(arena, .{ .entry_path = app_path });
     try coord.coordinatorLoop();
+    try coord.finishCheckedProgram(.none);
 
     try std.testing.expect(coord.hasUserErrors());
     var type_mismatch_count: usize = 0;

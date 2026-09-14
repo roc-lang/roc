@@ -106,7 +106,6 @@ fn movedSolvedView(source: *const Solved.Program, moved: *const Ast.Program) Sol
             .names = &moved.names,
             .next_symbol = lifted.next_symbol,
             .types = lifted.types,
-            .imported_fns = lifted.imported_fns,
             .const_fn_evidence = moved.const_fn_evidence.unsafeRawItemsForView(),
             .const_fn_evidence_frames = moved.const_fn_evidence_frames.unsafeRawItemsForView(),
             .fns = lifted.fns,
@@ -630,8 +629,14 @@ const Lowerer = struct {
             .dec_lit => |value| .{ .dec_lit = value },
             .str_lit => |value| .{ .str_lit = value },
             .bytes_lit => |value| .{ .bytes_lit = value },
+            .inline_expects_enabled => .{ .inline_expects_enabled = {} },
+            .comptime_value => |value| .{ .comptime_value = .{
+                .root = value.root,
+                .initializer = try self.lowerExpr(value.initializer),
+            } },
             .static_data_candidate => |candidate| .{ .static_data_candidate = .{
                 .static_data = candidate.static_data,
+                .storage = candidate.storage,
                 .runtime_expr = try self.lowerExpr(candidate.runtime_expr),
             } },
             .typed_boundary => |boundary| .{ .typed_boundary = .{
@@ -672,11 +677,6 @@ const Lowerer = struct {
                     .local => |callee| .{ .direct_call = .{
                         .target = .{ .local = try self.ensureOwnFnSpec(callee, .finite) },
                         .args = try self.lowerDirectCallArgs(callee, call.args, call.captures),
-                        .is_cold = call.is_cold,
-                    } },
-                    .imported => |imported| .{ .direct_call = .{
-                        .target = .{ .imported = imported },
-                        .args = try self.lowerImportedDirectCallArgs(call.args),
                         .is_cold = call.is_cold,
                     } },
                 };
@@ -902,12 +902,6 @@ const Lowerer = struct {
             Common.invariant("direct call carried capture operands for a capture-free callee");
         }
 
-        return try self.program.addExprSpan(args);
-    }
-
-    fn lowerImportedDirectCallArgs(self: *Lowerer, args_span: Lifted.Span(Lifted.ExprId)) Allocator.Error!Ast.Span(Ast.ExprId) {
-        const args = try self.lowerExprSlice(self.solved.lifted.exprSpan(args_span));
-        defer self.allocator.free(args);
         return try self.program.addExprSpan(args);
     }
 
