@@ -2668,7 +2668,7 @@ const SpecJobCommitDomain = struct {
     }
 };
 
-/// Monotype state retained by one physical executor lane. Keeping the source
+/// Monotype state retained by one executor lane. Keeping the source
 /// workspace and its ordered destination copy together makes their cumulative
 /// relocation domains follow the worker rather than a particular coordinator
 /// `Builder`. A new Monotype run reinitializes the same retained entry because
@@ -5723,7 +5723,7 @@ const Builder = struct {
     ///
     /// Deferred preparation executes against the worker's private Builder and
     /// workspace. Representation-sensitive iterator callees lower eagerly into
-    /// this same draft, so callbacks never publish coordinator state.
+    /// this same draft, so callbacks never append coordinator state.
     fn lowerPendingSpecJobToShard(
         self: *Builder,
         worker: *SpecJobWorkerState,
@@ -10411,7 +10411,7 @@ const Builder = struct {
         }
     }
 
-    /// Publish eagerly lowered context-free template bodies after their
+    /// Commit eagerly lowered context-free template bodies after their
     /// function and definition ranges have committed. Duplicate bodies already
     /// map to the winning slot, so only the first new local target creates a
     /// specialization record.

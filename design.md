@@ -7802,8 +7802,8 @@ local, callable-signature, and selected inline-body edges. Visited identity
 sets bound this work by the graph, not a syntax-depth cutoff. A callable's
 encoded variants supply its targets and capture types; preparation never
 substitutes an independently inferred finite specialization. Type closure
-includes storage and value types so typed boundaries and projections can use
-their inherited representations without worker-side interning.
+includes storage and value types so typed boundaries, field reads, tag payload
+reads, and capture slot reads use inherited representations without worker-side interning.
 
 Preflight reserves both direct-call ABIs permitted by a body's erased-return
 destination shape. It cannot use the call expression's own type to select one:
