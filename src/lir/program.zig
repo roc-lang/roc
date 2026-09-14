@@ -446,6 +446,8 @@ pub const SpecProc = struct {
     proc: LIR.LirProcSpecId,
 };
 
+/// Everything one lowering produced: the procedure store, its layouts, the
+/// root and specialization tables, and the static data the program carries.
 pub const Result = struct {
     store: LirStore,
     layouts: layout.Store,
