@@ -8881,6 +8881,84 @@ test "check type - polarity - where-method implementation may not return an unli
     try checkTypesModule(source, .fail_first, "Type Mismatch");
 }
 
+test "check type - polarity - where-method row nested in the result stays closed as written" {
+    // Only the positions the result-row widening adapter can re-tag open per
+    // use (design.md "Result-Row Widening Adapter"): the direct result row and
+    // a `Try` result's rows. A row inside a `List` is generated as written, so
+    // the body use that widens it is an ordinary mismatch at the use rather
+    // than a widening no lowering could express. `Job`'s implementation
+    // publishes the closed row — the case the adapter exists for, which it
+    // cannot reach here.
+    const source =
+        \\describe : a -> List([Ok(Str), Err(Str), Extra]) where [a.statuses : a -> List([Ok(Str), Err(Str)])]
+        \\describe = |x| x.statuses()
+        \\
+        \\closed_statuses : List([Ok(Str), Err(Str)])
+        \\closed_statuses = [Ok("cv")]
+        \\
+        \\Job := [Pending].{
+        \\    statuses : Job -> List([Ok(Str), Err(Str)])
+        \\    statuses = |_| closed_statuses
+        \\}
+    ;
+    // The region is the body use, not the signature and not the obligation.
+    try checkTypesModule(source, .fail_with,
+        \\**Type Mismatch**
+        \\This expression is used in an unexpected way.
+        \\```roc
+        \\describe = |x| x.statuses()
+        \\```
+        \\               ^^^^^^^^^^^^
+        \\
+        \\It has the type:
+        \\
+        \\    List([Err(Str), Ok(Str)])
+        \\
+        \\But the annotation says it should be:
+        \\
+        \\    List([Err(Str), Extra, Ok(Str)])
+        \\
+        \\
+    );
+}
+
+test "check type - polarity - nested widening is rejected even against an open implementation" {
+    // Deliberate narrowing: before the adapter-reach restriction this checked,
+    // because the nested row opened per use and the implementation's row was
+    // open enough to accept the widened request. The restriction is a
+    // generation-time rule about the signature, not a fact about whichever
+    // implementation the obligation resolves to, so the body use is rejected
+    // here too. The set of accepted positions grows with the coercion
+    // generator.
+    const source =
+        \\describe : a -> List([Ok(Str), Err(Str), Extra]) where [a.statuses : a -> List([Ok(Str), Err(Str)])]
+        \\describe = |x| x.statuses()
+        \\
+        \\Job := [Pending].{
+        \\    statuses : Job -> List([Ok(Str), Err(Str)])
+        \\    statuses = |_| [Ok("job")]
+        \\}
+    ;
+    try checkTypesModule(source, .fail_with,
+        \\**Type Mismatch**
+        \\This expression is used in an unexpected way.
+        \\```roc
+        \\describe = |x| x.statuses()
+        \\```
+        \\               ^^^^^^^^^^^^
+        \\
+        \\It has the type:
+        \\
+        \\    List([Err(Str), Ok(Str)])
+        \\
+        \\But the annotation says it should be:
+        \\
+        \\    List([Err(Str), Extra, Ok(Str)])
+        \\
+        \\
+    );
+}
+
 test "check type - polarity - explicit anonymous ext in a function's output position warns redundant" {
     // A function generalizes regardless of the `..`, and its output union is
     // implicitly open, so the `..` adds nothing.

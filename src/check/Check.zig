@@ -14776,6 +14776,14 @@ const GenTypeAnnoCtx = union(enum) {
         /// `provides` defs): the host is not a Roc producer participating in
         /// unification, so those rows keep their written, closed meaning.
         opening: OpeningBehavior,
+        /// Where this position sits relative to the result row the Monotype
+        /// result-row widening adapter can re-tag (design.md "Result-Row
+        /// Widening Adapter"). Only an adapter-reachable position gets
+        /// `.per_use` opening; every other output position of a where-method
+        /// signature keeps its row as written, exactly as a negative position
+        /// does, so a body use that widens one is an ordinary mismatch at the
+        /// use instead of a widening no lowering can express.
+        adapter_reach: AdapterReach = .nested,
 
         pub const OpeningBehavior = enum {
             /// An output-position union gets a fresh flex ext, recorded for
@@ -14789,7 +14797,32 @@ const GenTypeAnnoCtx = union(enum) {
             /// Rows are generated as written (host boundaries).
             as_written,
         };
+
+        pub const AdapterReach = enum {
+            /// The signature's direct result. The adapter re-tags a row
+            /// written here, and descends into a `Try` result's arguments.
+            result,
+            /// A type argument of a `Try` result. The adapter re-tags a row
+            /// written here, but nothing below it.
+            try_row,
+            /// Every other position: inside a `List`, a record field, a
+            /// tuple, a tag payload, a function, or a non-`Try` nominal.
+            nested,
+        };
     };
+
+    /// This context re-aimed at a child position of the annotation walk.
+    fn withReach(self: GenTypeAnnoCtx, reach: AnnotationGenCtx.AdapterReach) GenTypeAnnoCtx {
+        return switch (self) {
+            .annotation => |anno_ctx| .{ .annotation = .{
+                .where = anno_ctx.where,
+                .opening = anno_ctx.opening,
+                .adapter_reach = reach,
+            } },
+            // A declaration body has no use-site result position to reach.
+            .type_decl => self,
+        };
+    }
 
     /// How polarity vars in referenced type declarations should be
     /// instantiated when this ctx generates a lookup/apply of a declaration.
@@ -14799,8 +14832,13 @@ const GenTypeAnnoCtx = union(enum) {
                 .implicit_open => .resolve_by_polarity,
                 // A referenced alias's markers stay deferred inside a
                 // where-method signature: the signature's own instantiation
-                // decides them.
-                .per_use => .defer_open,
+                // decides them — but only where the result-row widening
+                // adapter could re-tag the row. Elsewhere the alias
+                // contributes its row as written, like a negative position.
+                .per_use => switch (anno_ctx.adapter_reach) {
+                    .result, .try_row => .defer_open,
+                    .nested => .close,
+                },
                 .as_written => .close,
             },
             // An alias body keeps the decision deferred (its own use sites
@@ -14986,6 +15024,19 @@ fn annoIsAnonymousOpenExt(self: *const Self, ext_anno_idx: CIR.TypeAnno.Idx) boo
     return ext_anno == .rigid_var and ext_anno.rigid_var.name.eql(self.cir.idents.open_ext);
 }
 
+/// Whether this type application is the builtin `Try(ok, err)`. A `Try`
+/// result's two rows are the only positions below a where-method signature's
+/// direct result that the result-row widening adapter re-tags (design.md
+/// "Result-Row Widening Adapter"), so they are the only nested output
+/// positions that keep per-use opening. Recognized by name, like every other
+/// builtin nominal reached from an annotation; a local type that shadows the
+/// name only keeps today's more permissive opening for its own signature.
+fn annoApplyIsBuiltinTry(self: *const Self, apply: CIR.TypeAnno.Apply) bool {
+    if (self.cir.store.sliceTypeAnnos(apply.args).len != 2) return false;
+    const decl = builtinNominalDeclForIdentInEnv(self.cir, apply.name) orelse return false;
+    return decl == .try_type;
+}
+
 /// Push every constraint one where clause places on `owner_var`. A method
 /// clause declares exactly one, left for `completeOwnedStaticDispatchConstraint`
 /// to type from its annotation; a where alias contributes each constraint it
@@ -15046,6 +15097,12 @@ fn completeOwnedStaticDispatchConstraint(
     // them, bounding an implementation by the listed tags. The signature is
     // walked like any function annotation: its arguments are inputs (closed
     // as written) and its return an output.
+    //
+    // Only the output positions the result-row widening adapter can re-tag
+    // open per use (`AnnotationGenCtx.AdapterReach`). The return starts at
+    // `.result`; every other position of the signature — the receiver, the
+    // arguments, and anything the walk descends into that is not a `Try`
+    // result's rows — keeps its row as written.
     const method_ctx: GenTypeAnnoCtx = switch (ctx) {
         .annotation => |anno_ctx| .{ .annotation = .{
             .where = anno_ctx.where,
@@ -15053,8 +15110,9 @@ fn completeOwnedStaticDispatchConstraint(
                 .implicit_open, .per_use => .per_use,
                 .as_written => .as_written,
             },
+            .adapter_reach = .nested,
         } },
-        .type_decl => ctx,
+        .type_decl => ctx.withReach(.nested),
     };
 
     // The receiver is a rigid var anno; polarity is irrelevant for it.
@@ -15066,7 +15124,7 @@ fn completeOwnedStaticDispatchConstraint(
     }
     const anno_arg_vars: []Var = @ptrCast(args_anno_slice);
 
-    try self.generateAnnoTypeInPlace(method.ret, env, method_ctx, .pos);
+    try self.generateAnnoTypeInPlace(method.ret, env, method_ctx.withReach(.result), .pos);
     const ret_var = ModuleEnv.varFrom(method.ret);
 
     const func_content = if (method.effectful)
@@ -15659,10 +15717,31 @@ fn generateAnnoTypeInPlace(self: *Self, anno_idx: CIR.TypeAnno.Idx, env: *Env, c
 
             // Generate the types for the arguments. Type application args
             // inherit the application's polarity: `Try(U8, [E])` in an output
-            // position puts `[E]` in an output position too.
+            // position puts `[E]` in an output position too. A `Try` written
+            // as the direct result also passes the adapter's reach to its
+            // ERROR row; every other application argument puts its arguments
+            // out of reach.
+            //
+            // The ok row is deliberately NOT reachable. The result-row
+            // widening adapter re-tags only the error row: `closedResultRowOrNull`
+            // reads `nominal.args[1]`, and `hostedTryReturnInjectionExpr`
+            // asserts the ok type is unchanged. Opening the ok row per use
+            // would let a body use widen a position lowering cannot adapt,
+            // which is a wrong tag layout rather than a diagnostic. Keeping
+            // the opened set equal to the adaptable set is the rule stated in
+            // design.md "Result-Row Widening Adapter".
+            const try_error_type_arg_index: usize = 1;
+            const try_error_row_reachable = self.annoApplyIsBuiltinTry(a) and
+                ctx == .annotation and ctx.annotation.adapter_reach == .result;
+            const nested_arg_ctx = ctx.withReach(.nested);
+            const try_error_arg_ctx = ctx.withReach(.try_row);
             const anno_args = self.cir.store.sliceTypeAnnos(a.args);
-            for (anno_args) |anno_arg| {
-                try self.generateAnnoTypeInPlace(anno_arg, env, ctx, polarity);
+            for (anno_args, 0..) |anno_arg, arg_index| {
+                const arg_ctx = if (try_error_row_reachable and arg_index == try_error_type_arg_index)
+                    try_error_arg_ctx
+                else
+                    nested_arg_ctx;
+                try self.generateAnnoTypeInPlace(anno_arg, env, arg_ctx, polarity);
             }
             const anno_arg_vars: []Var = @ptrCast(anno_args);
 
@@ -15908,11 +15987,11 @@ fn generateAnnoTypeInPlace(self: *Self, anno_idx: CIR.TypeAnno.Idx, env: *Env, c
             // position preserves it.
             const args_anno_slice = self.cir.store.sliceTypeAnnos(func.args);
             for (args_anno_slice) |arg_anno_idx| {
-                try self.generateAnnoTypeInPlace(arg_anno_idx, env, ctx, polarity.flip());
+                try self.generateAnnoTypeInPlace(arg_anno_idx, env, ctx.withReach(.nested), polarity.flip());
             }
             const args_var_slice: []Var = @ptrCast(args_anno_slice);
 
-            try self.generateAnnoTypeInPlace(func.ret, env, ctx, polarity);
+            try self.generateAnnoTypeInPlace(func.ret, env, ctx.withReach(.nested), polarity);
 
             const fn_type = inner_blk: {
                 if (func.effectful) {
@@ -15944,7 +16023,7 @@ fn generateAnnoTypeInPlace(self: *Self, anno_idx: CIR.TypeAnno.Idx, env: *Env, c
                 // Generate the types for each tag arg
                 const tag_anno_args_slice = self.cir.store.sliceTypeAnnos(tag.args);
                 for (tag_anno_args_slice) |tag_arg_idx| {
-                    try self.generateAnnoTypeInPlace(tag_arg_idx, env, ctx, polarity);
+                    try self.generateAnnoTypeInPlace(tag_arg_idx, env, ctx.withReach(.nested), polarity);
                 }
                 const tag_vars_slice: []Var = @ptrCast(tag_anno_args_slice);
 
@@ -16001,8 +16080,14 @@ fn generateAnnoTypeInPlace(self: *Self, anno_idx: CIR.TypeAnno.Idx, env: *Env, c
                 null;
             const implicitly_open = output_opening == .implicit_open;
             // A where-method signature's output row: deferred with the
-            // polarity marker, resolved per body use and per obligation.
-            const deferred_open = output_opening == .per_use;
+            // polarity marker, resolved per body use and per obligation — but
+            // only in a position the result-row widening adapter can re-tag
+            // (design.md "Result-Row Widening Adapter"). A row nested anywhere
+            // else is generated as written, so a body use that widens it is an
+            // ordinary mismatch at the use rather than a widening no lowering
+            // can express.
+            const deferred_open = output_opening == .per_use and
+                ctx.annotation.adapter_reach != .nested;
             const ext_var = inner_blk: {
                 if (tag_union.ext) |ext_anno_idx| {
                     if ((implicitly_open or deferred_open) and self.annoIsAnonymousOpenExt(ext_anno_idx)) {
@@ -16022,7 +16107,7 @@ fn generateAnnoTypeInPlace(self: *Self, anno_idx: CIR.TypeAnno.Idx, env: *Env, c
                         });
                         break :inner_blk open_ext_var;
                     }
-                    try self.generateAnnoTypeInPlace(ext_anno_idx, env, ctx, polarity);
+                    try self.generateAnnoTypeInPlace(ext_anno_idx, env, ctx.withReach(.nested), polarity);
                     break :inner_blk ModuleEnv.varFrom(ext_anno_idx);
                 }
 
@@ -16082,7 +16167,7 @@ fn generateAnnoTypeInPlace(self: *Self, anno_idx: CIR.TypeAnno.Idx, env: *Env, c
                 // not real record fields: keep them out of the structural row so
                 // they are never unified, name-resolved, or required at
                 // construction (and so repeated `_` names cannot collide).
-                try self.generateAnnoTypeInPlace(rec_field.ty, env, ctx, polarity);
+                try self.generateAnnoTypeInPlace(rec_field.ty, env, ctx.withReach(.nested), polarity);
                 if (rec_field.is_unnamed) continue;
                 const record_field_var = ModuleEnv.varFrom(rec_field.ty);
 
@@ -16143,7 +16228,7 @@ fn generateAnnoTypeInPlace(self: *Self, anno_idx: CIR.TypeAnno.Idx, env: *Env, c
 
             // Process the ext if it exists. Absence (null) means it's a closed record.
             const ext_var = if (rec.ext) |ext_anno_idx| blk: {
-                try self.generateAnnoTypeInPlace(ext_anno_idx, env, ctx, polarity);
+                try self.generateAnnoTypeInPlace(ext_anno_idx, env, ctx.withReach(.nested), polarity);
                 break :blk ModuleEnv.varFrom(ext_anno_idx);
             } else blk: {
                 break :blk try self.freshFromContent(.{ .structure = .empty_record }, env, anno_region);
@@ -16165,13 +16250,15 @@ fn generateAnnoTypeInPlace(self: *Self, anno_idx: CIR.TypeAnno.Idx, env: *Env, c
 
             const elems_anno_slice = self.cir.store.sliceTypeAnnos(tuple.elems);
             for (elems_anno_slice) |arg_anno_idx| {
-                try self.generateAnnoTypeInPlace(arg_anno_idx, env, ctx, polarity);
+                try self.generateAnnoTypeInPlace(arg_anno_idx, env, ctx.withReach(.nested), polarity);
                 try self.scratch_vars.append(ModuleEnv.varFrom(arg_anno_idx));
             }
             const elems_range = try self.types.appendVars(self.scratch_vars.sliceFromStart(scratch_vars_top));
             try self.unifyWith(anno_var, .{ .structure = .{ .tuple = .{ .elems = elems_range } } }, env);
         },
         .parens => |parens| {
+            // Grouping only: the inner anno keeps this position, adapter
+            // reach included.
             try self.generateAnnoTypeInPlace(parens.anno, env, ctx, polarity);
             _ = try self.unify(anno_var, ModuleEnv.varFrom(parens.anno), env);
         },
