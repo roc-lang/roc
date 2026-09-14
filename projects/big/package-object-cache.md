@@ -531,7 +531,15 @@ them.
    made content-derived before any entry is written: ARC call variants hash
    the raw return-layout index; Boxy procedures use their symbol ordinal; the
    LLVM backend's inline-scope linkage names still come from `lir.Symbol`.
-   Demand classes and the demand-based request digest are not started.
+   Demand classes and the demand-based request digest are deferred: the
+   pipeline has no hole type, every stage after Monotype sees concrete
+   types, and the dev backend asserts layout-index equality at every value
+   location, so sharing one specialization across element types is a
+   cross-cutting change rather than a reservation-time refinement. The full
+   design, with the per-variable demand analysis, the hole type through every
+   stage, and the order of work, is roc-lang/roc#11404. The cache does not
+   depend on it: packs key entries by identity, and demand only refines the
+   key.
 2. **Boundary compilation.** ARC signatures, tag reachability, SpecConstr, and
    inlining restricted to a specialization's closure when it is compiled as a
    cache entry; ABI record; static data and per-layout helpers as weak,
