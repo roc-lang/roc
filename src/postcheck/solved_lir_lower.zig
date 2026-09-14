@@ -170,6 +170,7 @@ pub const ParallelMetrics = struct {
     worker_string_entries_committed: u64 = 0,
     worker_inline_scopes_committed: u64 = 0,
     worker_capturing_tasks_committed: u64 = 0,
+    worker_return_reuse_tasks_committed: u64 = 0,
 };
 
 /// Lower Lambda Solved directly into LIR.
@@ -1260,7 +1261,7 @@ const Lowerer = struct {
 
     fn canLowerFnBodyOnWorker(self: *const Lowerer, fn_id: Type.FnId) bool {
         const spec = self.fn_specs.items[@intFromEnum(fn_id)];
-        if (spec.abi != .finite or spec.return_reuse.enabled()) return false;
+        if (spec.abi != .finite) return false;
         const source_fn = self.solved.lifted.getFn(spec.source);
         const body = switch (source_fn.body) {
             .roc => |body| body,
@@ -1389,13 +1390,19 @@ const Lowerer = struct {
     /// certify that body against the worker's lookup-only lowering boundary.
     fn prepareFnBodyForWorker(self: *Lowerer, fn_id: Type.FnId) Common.LowerError!bool {
         const spec = self.fn_specs.items[@intFromEnum(fn_id)];
-        if (spec.abi != .finite or spec.return_reuse.enabled()) return false;
+        if (spec.abi != .finite) return false;
         const source_fn = self.solved.lifted.getFn(spec.source);
         const body = switch (source_fn.body) {
             .roc => |body| body,
             .hosted => return false,
         };
         if (!self.isWorkerBodyExpr(body, 0)) return false;
+        switch (spec.return_reuse) {
+            .none => {},
+            .erased_callable => |capture_ty| if (capture_ty) |ty| {
+                _ = try self.layoutOfType(ty);
+            },
+        }
         try self.prepareWorkerBodyCalls(body, 0);
         return true;
     }
@@ -1584,8 +1591,36 @@ const Lowerer = struct {
             },
             .return_ => |return_| try self.prepareWorkerBodyCalls(return_.value, next_depth),
             .fn_ref => |fn_ref| {
-                const fn_id = try self.ensureOwnFnSpec(fn_ref.fn_id, .finite);
-                _ = try self.procPlaceholder(fn_id);
+                const fn_symbol = self.solved.lifted.getFn(fn_ref.fn_id).symbol;
+                const content = self.types.get(expr_ty);
+                const variants = switch (content) {
+                    .callable => |callable| self.types.fnVariantSpan(callable),
+                    .erased_fn => |erased| self.types.fnVariantSpan(erased.members),
+                    .primitive,
+                    .erased_capture_ptr,
+                    .zst,
+                    .named,
+                    .box,
+                    .record,
+                    .capture_record,
+                    .tuple,
+                    .tag_union,
+                    .list,
+                    => Common.invariant("certified worker function reference had a non-callable type"),
+                };
+                for (0..variants.len) |variant_index| {
+                    const variant = GuardedList.at(variants, variant_index);
+                    if (variant.source != fn_symbol) continue;
+                    if (variant.capture_ty) |capture_ty| {
+                        _ = try self.layoutOfType(capture_ty);
+                    }
+                    if (content == .erased_fn) {
+                        _ = try self.procPlaceholder(variant.target);
+                    }
+                    break;
+                } else {
+                    Common.invariant("certified worker callable type did not contain its function reference");
+                }
                 for (view.captureOperandSpan(fn_ref.captures)) |capture| {
                     try self.prepareWorkerBodyCalls(capture.value, next_depth);
                 }
@@ -1681,6 +1716,9 @@ const Lowerer = struct {
             metrics.worker_inline_scopes_committed +|= shard.store.bodyOwnedInlineScopeCount();
             if (self.fn_specs.items[@intFromEnum(shard.fn_id)].captures.len != 0) {
                 metrics.worker_capturing_tasks_committed +|= 1;
+            }
+            if (self.fn_specs.items[@intFromEnum(shard.fn_id)].return_reuse.enabled()) {
+                metrics.worker_return_reuse_tasks_committed +|= 1;
             }
         }
         try self.erased_owner_states.ensureUnusedCapacity(self.allocator, body_local_count);
