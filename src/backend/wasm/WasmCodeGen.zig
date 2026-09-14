@@ -17583,11 +17583,11 @@ fn generateBytesLiteral(self: *Self, literal: LIR.ListLiteral) Allocator.Error!v
     const base_local = self.fp_local;
 
     if (bytes.len == 0) {
-        for (0..3) |i| {
+        for ([_]u32{ 0, literal.len, literal.len << 1 }, 0..) |word, i| {
             self.currentCode().append(self.allocator, Op.local_get) catch return error.OutOfMemory;
             WasmModule.leb128WriteU32(self.allocator, self.currentCode(), base_local) catch return error.OutOfMemory;
             self.currentCode().append(self.allocator, Op.i32_const) catch return error.OutOfMemory;
-            WasmModule.leb128WriteI32(self.allocator, self.currentCode(), 0) catch return error.OutOfMemory;
+            WasmModule.leb128WriteI32(self.allocator, self.currentCode(), @bitCast(word)) catch return error.OutOfMemory;
             try self.emitStoreOp(.i32, base_offset + @as(u32, @intCast(i)) * 4);
         }
     } else {

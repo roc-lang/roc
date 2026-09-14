@@ -976,6 +976,9 @@ pub const UpdateMode = enum(u8) {
     InPlace = 1,
 };
 
+/// Explicit seed policy selected by the execution environment.
+pub const DictSeedMode = enum { runtime, comptime_zero };
+
 /// Generates a pseudo-random seed for dictionary hashing.
 /// Uses the memory address of this function as the seed value, with the high
 /// bit set as the internal runtime-seed marker. This:

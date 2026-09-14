@@ -24,7 +24,6 @@ pub fn run(
     owned.names = @import("check").CheckedNames.NameStore.init(allocator);
     var types = owned.types;
     owned.types = @import("../monotype/type.zig").Store.init(allocator);
-    var imported_fns = owned.imported_fns.takeArrayList();
     var const_fn_evidence = owned.const_fn_evidence.takeArrayList();
     var const_fn_evidence_frames = owned.const_fn_evidence_frames.takeArrayList();
     var exprs = owned.exprs.takeArrayList();
@@ -67,7 +66,6 @@ pub fn run(
         allocator,
         name_store,
         types,
-        imported_fns,
         const_fn_evidence,
         const_fn_evidence_frames,
         exprs,
@@ -103,7 +101,6 @@ pub fn run(
     );
     name_store = undefined;
     types = undefined;
-    imported_fns = undefined;
     const_fn_evidence = undefined;
     const_fn_evidence_frames = undefined;
     exprs = undefined;
@@ -162,7 +159,6 @@ fn movedMonoView(source: *const Mono.Program, moved: *const Ast.Program) Mono.Pr
         .names = &moved.names,
         .types = moved.types.view(),
         .specs = source_view.specs,
-        .imported_fns = source_view.imported_fns,
         .fns = source_view.fns,
         .const_fn_evidence = moved_view.const_fn_evidence,
         .const_fn_evidence_frames = moved_view.const_fn_evidence_frames,
@@ -508,7 +504,8 @@ const Lifter = struct {
             },
             .hosted => .hosted,
         };
-        const source = if (def.fn_id) |source_fn_id| self.defSource(source_fn_id, def.fn_def) else null;
+        var source = if (def.fn_id) |source_fn_id| self.defSource(source_fn_id, def.fn_def) else null;
+        if (source) |*template| template.frozen_fn = def.fn_id;
         self.output.setFn(fn_id, .{
             .symbol = def.symbol,
             .source = source,
@@ -527,7 +524,8 @@ const Lifter = struct {
     fn lowerNestedDef(self: *Lifter, fn_id: Ast.FnId, def: Mono.NestedDef) Allocator.Error!void {
         try self.rewriteExpr(def.body);
         const capture_span = try self.output.addTypedLocalSpan(self.fn_captures[@intFromEnum(fn_id)].items);
-        const source = self.nestedSource(def.fn_id, def.fn_def);
+        var source = self.nestedSource(def.fn_id, def.fn_def);
+        source.frozen_fn = def.fn_id;
         self.output.setFn(fn_id, .{
             .symbol = def.symbol,
             .source = source,
@@ -642,6 +640,8 @@ const Lifter = struct {
             },
             .tag => |tag| try self.rewriteExprSpan(tag.payloads),
             .static_data_candidate => |candidate| try self.rewriteExpr(candidate.runtime_expr),
+            .inline_expects_enabled => {},
+            .comptime_value => |candidate| try self.rewriteExpr(candidate.initializer),
             .typed_boundary => |boundary| try self.rewriteExpr(boundary.value),
             .nominal,
             .dbg,
@@ -697,10 +697,6 @@ const Lifter = struct {
                                 else
                                     call.captures,
                             };
-                        },
-                        .imported => |imported| .{
-                            .callee = .{ .func = .{ .imported = imported } },
-                            .captures = call.captures,
                         },
                     },
                     .lifted => |fn_id| .{
@@ -806,7 +802,8 @@ const Lifter = struct {
 
         try self.rewriteExpr(lambda.body);
         const capture_span = try self.output.addTypedLocalSpan(captures.items.items);
-        const source = self.source.fnSource(lambda.fn_id);
+        var source = self.source.fnSource(lambda.fn_id);
+        source.frozen_fn = lambda.fn_id;
         self.output.setFn(fn_id, .{
             .symbol = self.symbols.fresh(),
             .source = source,
@@ -1326,6 +1323,8 @@ const CaptureSet = struct {
                 for (0..payloads.len) |payload_index| try self.collectExpr(GuardedList.at(payloads, payload_index), bound);
             },
             .static_data_candidate => |candidate| try self.collectExpr(candidate.runtime_expr, bound),
+            .inline_expects_enabled => {},
+            .comptime_value => |candidate| try self.collectExpr(candidate.initializer, bound),
             .typed_boundary => |boundary| try self.collectExpr(boundary.value, bound),
             .nominal,
             .dbg,
@@ -1361,7 +1360,6 @@ const CaptureSet = struct {
                             const lifter = self.lifter orelse Common.invariant("post-lift capture recomputation saw a pre-lift function call");
                             try self.collectFnCaptures(lifter.liftedFn(mono_fn_id), bound);
                         },
-                        .imported => {},
                     },
                     .lifted => |fn_id| try self.collectFnCaptures(fn_id, bound),
                 }
@@ -2170,6 +2168,8 @@ const CaptureGraphBuilder = struct {
             },
             .tag => |tag| try self.collectExprSpan(tag.payloads, node),
             .static_data_candidate => |candidate| try self.collectExpr(candidate.runtime_expr, node),
+            .inline_expects_enabled => {},
+            .comptime_value => |candidate| try self.collectExpr(candidate.initializer, node),
             .typed_boundary => |boundary| try self.collectExpr(boundary.value, node),
             .nominal,
             .dbg,
@@ -2205,7 +2205,6 @@ const CaptureGraphBuilder = struct {
                             const lifter = self.graph.lifter orelse Common.invariant("post-lift capture graph saw a pre-lift direct call");
                             break :blk lifter.liftedFn(mono_fn_id);
                         },
-                        .imported => null,
                     },
                     .lifted => |fn_id| fn_id,
                 };
@@ -2339,7 +2338,6 @@ fn initCaptureTestProgram(allocator: Allocator) Ast.Program {
         allocator,
         @import("check").CheckedNames.NameStore.init(allocator),
         MonoType.Store.init(allocator),
-        .empty, // imported_fns
         .empty, // const_fn_evidence
         .empty, // const_fn_evidence_frames
         .empty, // exprs
@@ -2375,50 +2373,12 @@ fn initCaptureTestProgram(allocator: Allocator) Ast.Program {
     );
 }
 
-test "monotype lifting preserves imported direct call slots" {
-    const allocator = std.testing.allocator;
-    var mono = Mono.Program.init(allocator);
-    errdefer mono.deinit();
-
-    const unit_ty = try mono.types.add(.zst);
-    const imported = try mono.addImportedFn(.{
-        .shard = @enumFromInt(1),
-        .fn_id = @enumFromInt(1),
-    });
-    const body = try mono.addExpr(.{ .ty = unit_ty, .data = .{ .call_proc = .{
-        .callee = Mono.importedProcCallee(imported),
-        .args = Mono.Span(Mono.ExprId).empty(),
-    } } });
-    _ = try mono.addDef(.{
-        .symbol = @enumFromInt(1),
-        .args = Mono.Span(Mono.TypedLocal).empty(),
-        .body = .{ .roc = body },
-        .ret = unit_ty,
-    });
-
-    var lifted = try run(allocator, mono);
-    defer lifted.deinit();
-
-    try std.testing.expectEqual(@as(usize, 1), lifted.importedFnCount());
-    const call_data = lifted.getExpr(body).data;
-    if (call_data != .call_proc) return error.TestUnexpectedResult;
-    const call = call_data.call_proc;
-    switch (call.callee) {
-        .func => |slot| switch (slot) {
-            .imported => |actual| try std.testing.expectEqual(imported, actual),
-            .local => return error.TestUnexpectedResult,
-        },
-        .lifted => return error.TestUnexpectedResult,
-    }
-}
-
 test "checkCaptureInvariants accepts a well-formed capture and catches a corrupted operand" {
     const allocator = std.testing.allocator;
     var program = Ast.Program.init(
         allocator,
         @import("check").CheckedNames.NameStore.init(allocator),
         MonoType.Store.init(allocator),
-        .empty, // imported_fns
         .empty, // const_fn_evidence
         .empty, // const_fn_evidence_frames
         .empty, // exprs
@@ -2495,7 +2455,6 @@ test "capture finalization supplies the caller's active binder local" {
         allocator,
         @import("check").CheckedNames.NameStore.init(allocator),
         MonoType.Store.init(allocator),
-        .empty, // imported_fns
         .empty, // const_fn_evidence
         .empty, // const_fn_evidence_frames
         .empty, // exprs

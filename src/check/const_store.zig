@@ -378,7 +378,7 @@ pub const FnDef = union(enum) {
     },
 };
 
-/// A view into immutable bytes shared by strings and packed scalar lists.
+/// A view into immutable bytes shared by strings and packed lists.
 pub const ConstBlob = struct {
     data: ConstBlobDataId,
     offset: u32,
@@ -388,18 +388,26 @@ pub const ConstBlob = struct {
 /// String view into immutable shared backing bytes.
 pub const ConstStr = ConstBlob;
 
-/// Packed scalar list whose bytes use the canonical encoding named by
-/// `element`. `bytes.len == len * element.byteWidth()`.
+/// Packed list with little-endian scalar leaves in semantic field order.
+/// Product bytes omit padding. `bytes.len == len * byteWidth()`.
 pub const ConstPackedList = struct {
     bytes: ConstBlob,
     len: u32,
-    element: ConstPackedScalar,
+    /// Null for products; the stored checked type supplies their field structure.
+    element: ?ConstPackedScalar,
+    /// Sum of scalar leaf widths in checked field order, excluding all padding.
+    product_width: u32 = 0,
+
+    /// Canonical byte width of one item, excluding product padding.
+    pub fn byteWidth(self: ConstPackedList) u32 {
+        return if (self.element) |scalar| scalar.byteWidth() else self.product_width;
+    }
 };
 
-/// List data stored either as child nodes or packed scalar bytes.
+/// List data stored either as child nodes or packed fixed-product bytes.
 pub const ConstList = union(enum) {
     nodes: []const ConstNodeId,
-    scalar_bytes: ConstPackedList,
+    packed_bytes: ConstPackedList,
 };
 
 /// Compile-time constant stored in checked module data.
@@ -434,7 +442,7 @@ const StoredValue = union(enum) {
     str: ConstStr,
     list: union(enum) {
         nodes: ConstRange,
-        scalar_bytes: ConstPackedList,
+        packed_bytes: ConstPackedList,
     },
     box: ConstNodeId,
     tuple: ConstRange,
@@ -817,7 +825,7 @@ pub const ConstStore = struct {
             .fn_value => |f| .{ .fn_value = f },
             .list => |list| .{ .list = switch (list) {
                 .nodes => |items| .{ .nodes = try self.appendNodes(items) },
-                .scalar_bytes => |scalar_bytes| .{ .scalar_bytes = scalar_bytes },
+                .packed_bytes => |packed_list| .{ .packed_bytes = packed_list },
             } },
             .tuple => |items| .{ .tuple = try self.appendNodes(items) },
             .record => |items| .{ .record = try self.appendNodes(items) },
@@ -960,7 +968,7 @@ pub const ConstStore = struct {
             .fn_value => |f| .{ .fn_value = f },
             .list => |list| .{ .list = switch (list) {
                 .nodes => |r| .{ .nodes = self.nodeSlice(r) },
-                .scalar_bytes => |scalar_bytes| .{ .scalar_bytes = scalar_bytes },
+                .packed_bytes => |packed_list| .{ .packed_bytes = packed_list },
             } },
             .tuple => |r| .{ .tuple = self.nodeSlice(r) },
             .record => |r| .{ .record = self.nodeSlice(r) },
@@ -1130,9 +1138,9 @@ pub const ConstStore = struct {
                 .nodes => |children| for (children) |child| {
                     self.verifyGraph(child, value_state, fn_state, value_delayed_depth, fn_delayed_depth, delayed_depth);
                 },
-                .scalar_bytes => |scalar_bytes| {
-                    const bytes = self.blobBytes(scalar_bytes.bytes);
-                    const expected_len = @as(u64, scalar_bytes.len) * scalar_bytes.element.byteWidth();
+                .packed_bytes => |packed_list| {
+                    const bytes = self.blobBytes(packed_list.bytes);
+                    const expected_len = @as(u64, packed_list.len) * packed_list.byteWidth();
                     if (bytes.len != expected_len) {
                         constStoreInvariant("packed list byte length differs from its element encoding");
                     }
@@ -1217,10 +1225,16 @@ test "ConstStore: build, serialize/relocate, and read back values, fns, strings"
     const sd = try store.addBlobData("hello world");
     try std.testing.expectEqual(sd, try store.addBlobData("hello world"));
     const str = try store.append(.{ .str = .{ .data = sd, .offset = 0, .len = 5 } });
-    const packed_list = try store.append(.{ .list = .{ .scalar_bytes = .{
+    const packed_list = try store.append(.{ .list = .{ .packed_bytes = .{
         .bytes = .{ .data = sd, .offset = 0, .len = 11 },
         .len = 11,
         .element = .u8,
+    } } });
+    const product_list = try store.append(.{ .list = .{ .packed_bytes = .{
+        .bytes = .{ .data = sd, .offset = 1, .len = 10 },
+        .len = 2,
+        .element = null,
+        .product_width = 5,
     } } });
     // A function value with a capture (exercises capture_pool).
     const capture_ty = try store.type_store.append(.{ .primitive = .u64 });
@@ -1318,9 +1332,14 @@ test "ConstStore: build, serialize/relocate, and read back values, fns, strings"
     try std.testing.expectEqualSlices(ConstNodeId, &.{a}, loaded_tag.payloads);
     // String backing
     try std.testing.expectEqualStrings("hello", loaded.strBytes(loaded.get(str).str));
-    const loaded_packed = loaded.get(packed_list).list.scalar_bytes;
+    const loaded_packed = loaded.get(packed_list).list.packed_bytes;
     try std.testing.expectEqual(sd, loaded_packed.bytes.data);
     try std.testing.expectEqualStrings("hello world", loaded.blobBytes(loaded_packed.bytes));
+    const loaded_product = loaded.get(product_list).list.packed_bytes;
+    try std.testing.expectEqual(@as(?ConstPackedScalar, null), loaded_product.element);
+    try std.testing.expectEqual(@as(u32, 5), loaded_product.byteWidth());
+    try std.testing.expectEqual(@as(u32, 2), loaded_product.len);
+    try std.testing.expectEqualStrings("ello world", loaded.blobBytes(loaded_product.bytes));
     // Function captures
     const loaded_fn = loaded.getFn(fn_id);
     try std.testing.expectEqual(@as(usize, 2), loaded_fn.captures.len);
