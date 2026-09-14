@@ -16333,6 +16333,7 @@ test "post-check diagnostics preserve labeled Monotype counts" {
     diagnostics.graph.nominal_backing_tombstone_deletions = 203;
     diagnostics.body.instantiation_scopes_created = 303;
     diagnostics.body.checked_node_cache_hits = 301;
+    diagnostics.body.eager_iterator_template_bodies_lowered = 304;
     diagnostics.body.deferred_template_reuses = 305;
     diagnostics.body.nested_closures_prepared = 302;
 
@@ -16355,10 +16356,12 @@ test "post-check diagnostics preserve labeled Monotype counts" {
     try std.testing.expectEqual(@as(u64, 303), body[3].count);
     try std.testing.expectEqualStrings("Checked node cache hits", body[5].name);
     try std.testing.expectEqual(@as(u64, 301), body[5].count);
-    try std.testing.expectEqualStrings("Deferred template reuses", body[12].name);
-    try std.testing.expectEqual(@as(u64, 305), body[12].count);
-    try std.testing.expectEqualStrings("Nested closures prepared", body[21].name);
-    try std.testing.expectEqual(@as(u64, 302), body[21].count);
+    try std.testing.expectEqualStrings("Eager iterator template bodies lowered", body[12].name);
+    try std.testing.expectEqual(@as(u64, 304), body[12].count);
+    try std.testing.expectEqualStrings("Deferred template reuses", body[13].name);
+    try std.testing.expectEqual(@as(u64, 305), body[13].count);
+    try std.testing.expectEqualStrings("Nested closures prepared", body[22].name);
+    try std.testing.expectEqual(@as(u64, 302), body[22].count);
 
     const parallel = monotypeParallelCounters(.{
         .worker_work_ns = 401,
@@ -16375,14 +16378,14 @@ test "post-check diagnostics preserve labeled Monotype counts" {
     try std.testing.expectEqual(@as(u64, 402), parallel[1].count);
     try std.testing.expectEqualStrings("Root tasks submitted", parallel[2].name);
     try std.testing.expectEqual(@as(u64, 403), parallel[2].count);
-    try std.testing.expectEqualStrings("Specialization tasks discarded ready", parallel[8].name);
-    try std.testing.expectEqual(@as(u64, 404), parallel[8].count);
-    try std.testing.expectEqualStrings("Peak worker lanes available", parallel[10].name);
-    try std.testing.expectEqual(@as(u64, 8), parallel[10].count);
-    try std.testing.expectEqualStrings("Peak worker lanes used", parallel[11].name);
-    try std.testing.expectEqual(@as(u64, 4), parallel[11].count);
-    try std.testing.expectEqualStrings("Tasks reusing a lowering lane", parallel[12].name);
-    try std.testing.expectEqual(@as(u64, 405), parallel[12].count);
+    try std.testing.expectEqualStrings("Specialization tasks discarded ready", parallel[6].name);
+    try std.testing.expectEqual(@as(u64, 404), parallel[6].count);
+    try std.testing.expectEqualStrings("Peak worker lanes available", parallel[8].name);
+    try std.testing.expectEqual(@as(u64, 8), parallel[8].count);
+    try std.testing.expectEqualStrings("Peak worker lanes used", parallel[9].name);
+    try std.testing.expectEqual(@as(u64, 4), parallel[9].count);
+    try std.testing.expectEqualStrings("Tasks reusing a lowering lane", parallel[10].name);
+    try std.testing.expectEqual(@as(u64, 405), parallel[10].count);
 }
 
 fn finishFrontEndPhase(reporter: *progress.Reporter, timing: anytype) void {
