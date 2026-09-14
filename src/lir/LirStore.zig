@@ -98,6 +98,8 @@ pub const BodyRelocation = struct {
     pattern_ids: u32,
     inline_scopes: u32,
     string_bytes: u32,
+    join_point_id_base: u32,
+    relocate_join_point_ids: bool,
 
     pub fn local(self: BodyRelocation, prefix: BodyPrefix, id: LocalId) LocalId {
         return relocateBodyValue(LocalId, id, prefix, self);
@@ -279,6 +281,9 @@ fn relocateBodyValue(comptime T: type, value: T, prefix: BodyPrefix, bases: Body
         if (value == InlineScopeId.none) return value;
         return @enumFromInt(movedIndex(@intFromEnum(value), prefix.inline_scopes, bases.inline_scopes));
     }
+    if (T == lir_defs.JoinPointId and bases.relocate_join_point_ids) {
+        return @enumFromInt(bases.join_point_id_base + @intFromEnum(value));
+    }
     if (T == LirPatternId) {
         if (value == LirPatternId.none) return value;
         return @enumFromInt(movedIndex(@intFromEnum(value), prefix.patterns, bases.patterns));
@@ -323,12 +328,15 @@ fn relocateBodyValue(comptime T: type, value: T, prefix: BodyPrefix, bases: Body
 
 /// Deterministically appends one body suffix. All capacity is acquired before
 /// any logical mutation, so allocation failure leaves destination lengths and
-/// contents unchanged.
+/// contents unchanged. `join_point_id_base` rebases procedure-local join
+/// identities; null preserves identities for callers whose shard already uses
+/// the destination domain.
 pub fn appendBodyShard(
     self: *Self,
     shard: BodyShard,
     root: ?CFStmtId,
     frame_locals: LocalSpan,
+    join_point_id_base: ?u32,
 ) AppendBodyError!AppendedBody {
     const source = shard.store;
     const prefix = shard.prefix;
@@ -361,6 +369,8 @@ pub fn appendBodyShard(
         .pattern_ids = @intCast(self.pattern_ids.len()),
         .inline_scopes = @intCast(self.inline_scopes.len()),
         .string_bytes = self.ownStringByteCount(),
+        .join_point_id_base = join_point_id_base orelse 0,
+        .relocate_join_point_ids = join_point_id_base != null,
     };
     const stmt_len = source.cf_stmts.len() - source_prefix.cf_stmts;
     const local_len = source.locals.len() - source_prefix.locals;
@@ -1528,7 +1538,7 @@ test "body shard relocates nonzero local and body suffixes" {
         .parent = body_inline_scope,
     });
 
-    const appended = try coordinator.appendBodyShard(shard, ret, frame);
+    const appended = try coordinator.appendBodyShard(shard, ret, frame, 100);
     try std.testing.expectEqual(@as(u32, 1), @intFromEnum(appended.root.?));
     try std.testing.expectEqual(@as(u32, 2), appended.frame_locals.start);
     const relocated_ret = coordinator.getCFStmt(appended.root.?);
@@ -1555,6 +1565,7 @@ test "body shard relocates nonzero local and body suffixes" {
     try std.testing.expectEqual(appended.relocation.str_match_steps, relocated_arm.steps.start);
     try std.testing.expectEqual(appended.root.?, relocated_arm.on_match);
     const relocated_join = coordinator.getJoinPointSpan(.{ .start = appended.relocation.join_points, .len = join_points.len }).at(0);
+    try std.testing.expectEqual(@as(u32, 107), @intFromEnum(relocated_join.id));
     try std.testing.expectEqual(appended.frame_locals, relocated_join.params);
     try std.testing.expectEqual(appended.root.?, relocated_join.body);
     const relocated_plan = coordinator.erased_call_arg_plans.get(appended.relocation.erased_call_arg_plans);
@@ -1672,7 +1683,7 @@ test "body shard append preserves destination on every reserve-stage allocation 
             });
             destination.allocator = failing_allocator.allocator();
             defer destination.allocator = std.testing.allocator;
-            _ = destination.appendBodyShard(shard, null, .empty()) catch |err| {
+            _ = destination.appendBodyShard(shard, null, .empty(), null) catch |err| {
                 try std.testing.expectEqual(error.OutOfMemory, err);
                 try std.testing.expectEqual(@as(usize, 1), destination.cf_stmts.len());
                 try std.testing.expectEqual(@as(usize, 1), destination.cf_stmt_locs.len());
@@ -1919,7 +1930,7 @@ test "body shard relocates producer tail-call links" {
     const sites = (try builder.finish(&worker)).?;
     worker.tail_call_builder = null;
     _ = try coordinator.addCFStmt(.{ .ret = .{ .value = arg } });
-    const appended = try coordinator.appendBodyShard(try worker.captureBodyShard(prefix), body, frame);
+    const appended = try coordinator.appendBodyShard(try worker.captureBodyShard(prefix), body, frame, null);
     const head = appended.relocation.stmt(prefix, sites.head);
     try std.testing.expectEqual(appended.relocation.stmt(prefix, second), head);
     const link = coordinator.getCFStmt(head).assign_call.tail_call.?.next.?;

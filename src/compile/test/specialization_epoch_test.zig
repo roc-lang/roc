@@ -8,6 +8,8 @@ const expectPreparedFiniteCaptureFreeDirectCallsParallelismDeterministicLir =
     harness.expectPreparedFiniteCaptureFreeDirectCallsParallelismDeterministicLir;
 const expectSolvedLirWorkerMetadataParallelismDeterministicLir =
     harness.expectSolvedLirWorkerMetadataParallelismDeterministicLir;
+const expectSolvedLirCapturingBodyParallelismDeterministicLir =
+    harness.expectSolvedLirCapturingBodyParallelismDeterministicLir;
 const expectSpecializationParallelismDeterministicLir = harness.expectSpecializationParallelismDeterministicLir;
 const expectEagerIteratorSpecializationParallelismDeterministicLir =
     harness.expectEagerIteratorSpecializationParallelismDeterministicLir;
@@ -90,6 +92,10 @@ test "prepared finite capture-free direct calls lower in deterministic discovery
 
 test "Solved-LIR worker metadata relocates deterministically" {
     try expectSolvedLirWorkerMetadataParallelismDeterministicLir();
+}
+
+test "Solved-LIR finite capturing bodies lower deterministically on workers" {
+    try expectSolvedLirCapturingBodyParallelismDeterministicLir();
 }
 
 test "iterator-producing callees complete in worker-owned specialization drafts" {

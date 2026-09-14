@@ -477,6 +477,52 @@ pub fn expectSolvedLirWorkerMetadataParallelismDeterministicLir() LowerToLirHarn
     }
 }
 
+/// Assert that finite capturing function bodies lower on workers without
+/// changing output or commit order.
+pub fn expectSolvedLirCapturingBodyParallelismDeterministicLir() LowerToLirHarnessError!void {
+    const app_body =
+        \\make_a = |captured| |_ignored| captured
+        \\make_b = |captured| |_ignored| captured
+        \\make_c = |captured| |_ignored| captured
+        \\make_d = |captured| |_ignored| captured
+        \\
+        \\main! : List(Str) => Try({}, [Exit(I8), ..])
+        \\main! = |_args| {
+        \\    a = make_a(1.I64)
+        \\    b = make_b(2.I64)
+        \\    c = make_c(3.I64)
+        \\    d = make_d(4.I64)
+        \\    total = a(0) + b(0) + c(0) + d(0)
+        \\    if total == 10 { Ok({}) } else { Err(Exit(1)) }
+        \\}
+    ;
+    const gpa = std.testing.allocator;
+    const cap = 1 << 22;
+    const reference = try gpa.alloc(u8, cap);
+    defer gpa.free(reference);
+    var reference_writer = std.Io.Writer.fixed(reference);
+    try runToLir(app_body, &reference_writer, .{ .specialization_workers = 1 }, null);
+
+    for ([_]usize{ 2, 4 }) |specialization_workers| {
+        for ([_]bool{ false, true }) |reverse_post_check_completions| {
+            const candidate = try gpa.alloc(u8, cap);
+            defer gpa.free(candidate);
+            var candidate_writer = std.Io.Writer.fixed(candidate);
+            var metrics: lir.CheckedPipeline.SolvedLirParallelMetrics = .{};
+            try runToLir(app_body, &candidate_writer, .{
+                .specialization_workers = specialization_workers,
+                .reverse_post_check_completions = reverse_post_check_completions,
+                .solved_lir_parallel_metrics_out = &metrics,
+            }, null);
+
+            try std.testing.expectEqualStrings(reference_writer.buffered(), candidate_writer.buffered());
+            try std.testing.expect(metrics.tasks_submitted > 0);
+            try std.testing.expectEqual(metrics.tasks_submitted, metrics.tasks_committed);
+            try std.testing.expect(metrics.worker_capturing_tasks_committed > 0);
+        }
+    }
+}
+
 fn expectNamedWorkerLocalCommitted(
     store: *const lir.LirStore,
     _: *const layout.Store,

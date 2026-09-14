@@ -169,6 +169,7 @@ pub const ParallelMetrics = struct {
     workspace_reuses: u64 = 0,
     worker_string_entries_committed: u64 = 0,
     worker_inline_scopes_committed: u64 = 0,
+    worker_capturing_tasks_committed: u64 = 0,
 };
 
 /// Lower Lambda Solved directly into LIR.
@@ -360,6 +361,7 @@ const CompletedFnBodyShard = struct {
     frame_locals: LIR.LocalSpan,
     stack_probe: LIR.StackProbe,
     tail_calls: ?LIR.TailCalls,
+    join_point_count: u32,
     discovered_fns: []Type.FnId,
     folded_map_matches: []Lifted.Program.FoldedMatch,
 
@@ -1180,6 +1182,7 @@ const Lowerer = struct {
             .frame_locals = body.frame_locals,
             .stack_probe = body.stack_probe,
             .tail_calls = body.tail_calls,
+            .join_point_count = worker.next_join_point,
             .discovered_fns = discovered_fns,
             .folded_map_matches = folded_map_matches,
         };
@@ -1257,7 +1260,7 @@ const Lowerer = struct {
 
     fn canLowerFnBodyOnWorker(self: *const Lowerer, fn_id: Type.FnId) bool {
         const spec = self.fn_specs.items[@intFromEnum(fn_id)];
-        if (spec.abi != .finite or spec.captures.len != 0 or spec.return_reuse.enabled()) return false;
+        if (spec.abi != .finite or spec.return_reuse.enabled()) return false;
         const source_fn = self.solved.lifted.getFn(spec.source);
         const body = switch (source_fn.body) {
             .roc => |body| body,
@@ -1386,7 +1389,7 @@ const Lowerer = struct {
     /// certify that body against the worker's lookup-only lowering boundary.
     fn prepareFnBodyForWorker(self: *Lowerer, fn_id: Type.FnId) Common.LowerError!bool {
         const spec = self.fn_specs.items[@intFromEnum(fn_id)];
-        if (spec.abi != .finite or spec.captures.len != 0 or spec.return_reuse.enabled()) return false;
+        if (spec.abi != .finite or spec.return_reuse.enabled()) return false;
         const source_fn = self.solved.lifted.getFn(spec.source);
         const body = switch (source_fn.body) {
             .roc => |body| body,
@@ -1455,14 +1458,21 @@ const Lowerer = struct {
                 break :blk self.isWorkerBodyExpr(block.final_expr, next_depth);
             },
             .return_ => |return_| self.isWorkerBodyExpr(return_.value, next_depth),
+            .fn_ref => |fn_ref| for (view.captureOperandSpan(fn_ref.captures)) |capture| {
+                if (!self.isWorkerBodyExpr(capture.value, next_depth)) break false;
+            } else true,
+            .low_level => |call| for (view.exprSpan(call.args)) |arg| {
+                if (!self.isWorkerBodyExpr(arg, next_depth)) break false;
+            } else true,
+            .structural_eq => |eq| self.isWorkerBodyExpr(eq.lhs, next_depth) and
+                self.isWorkerBodyExpr(eq.rhs, next_depth),
+            .structural_hash => |hash| self.isWorkerBodyExpr(hash.value, next_depth) and
+                self.isWorkerBodyExpr(hash.hasher, next_depth),
             .call_proc => |call| blk: {
-                if (call.captures.len != 0) break :blk false;
                 const callee = switch (Lifted.directCallee(call)) {
                     .local => |local| local,
                     .imported => break :blk false,
                 };
-                const callee_fn = self.solved.lifted.getFn(callee);
-                if (self.solved.lifted.typedLocalSpan(callee_fn.captures).len != 0) break :blk false;
                 if (!call.is_cold) {
                     if (self.inline_plan.bodyForFn(callee)) |inline_body| {
                         if (!self.isWorkerBodyExpr(inline_body, next_depth)) break :blk false;
@@ -1471,19 +1481,18 @@ const Lowerer = struct {
                 for (view.exprSpan(call.args)) |arg| {
                     if (!self.isWorkerBodyExpr(arg, next_depth)) break :blk false;
                 }
+                for (view.captureOperandSpan(call.captures)) |capture| {
+                    if (!self.isWorkerBodyExpr(capture.value, next_depth)) break :blk false;
+                }
                 break :blk true;
             },
             .static_data_candidate,
             .lambda,
             .def_ref,
             .fn_def,
-            .fn_ref,
             .call_value,
             .str_lit,
             .bytes_lit,
-            .low_level,
-            .structural_eq,
-            .structural_hash,
             .match_,
             .uninitialized_payload,
             .try_sequence,
@@ -1574,6 +1583,24 @@ const Lowerer = struct {
                 try self.prepareWorkerBodyCalls(block.final_expr, next_depth);
             },
             .return_ => |return_| try self.prepareWorkerBodyCalls(return_.value, next_depth),
+            .fn_ref => |fn_ref| {
+                const fn_id = try self.ensureOwnFnSpec(fn_ref.fn_id, .finite);
+                _ = try self.procPlaceholder(fn_id);
+                for (view.captureOperandSpan(fn_ref.captures)) |capture| {
+                    try self.prepareWorkerBodyCalls(capture.value, next_depth);
+                }
+            },
+            .low_level => |call| for (view.exprSpan(call.args)) |arg| {
+                try self.prepareWorkerBodyCalls(arg, next_depth);
+            },
+            .structural_eq => |eq| {
+                try self.prepareWorkerBodyCalls(eq.lhs, next_depth);
+                try self.prepareWorkerBodyCalls(eq.rhs, next_depth);
+            },
+            .structural_hash => |hash| {
+                try self.prepareWorkerBodyCalls(hash.value, next_depth);
+                try self.prepareWorkerBodyCalls(hash.hasher, next_depth);
+            },
             .call_proc => |call| {
                 const callee = switch (Lifted.directCallee(call)) {
                     .local => |local| local,
@@ -1589,6 +1616,9 @@ const Lowerer = struct {
                 for (view.exprSpan(call.args)) |arg| {
                     try self.prepareWorkerBodyCalls(arg, next_depth);
                 }
+                for (view.captureOperandSpan(call.captures)) |capture| {
+                    try self.prepareWorkerBodyCalls(capture.value, next_depth);
+                }
             },
             .local,
             .unit,
@@ -1603,13 +1633,9 @@ const Lowerer = struct {
             .lambda,
             .def_ref,
             .fn_def,
-            .fn_ref,
             .call_value,
             .str_lit,
             .bytes_lit,
-            .low_level,
-            .structural_eq,
-            .structural_hash,
             .match_,
             .uninitialized_payload,
             .try_sequence,
@@ -1645,15 +1671,24 @@ const Lowerer = struct {
 
     fn commitFnBodyShard(self: *Lowerer, shard: *CompletedFnBodyShard) Common.LowerError!void {
         const body_local_count = shard.store.locals.len();
+        const next_join_point = std.math.add(
+            u32,
+            self.next_join_point,
+            shard.join_point_count,
+        ) catch Common.invariant("Solved-LIR join point identity overflow");
         if (self.parallel_metrics) |metrics| {
             metrics.worker_string_entries_committed +|= shard.store.bodyOwnedStringCount();
             metrics.worker_inline_scopes_committed +|= shard.store.bodyOwnedInlineScopeCount();
+            if (self.fn_specs.items[@intFromEnum(shard.fn_id)].captures.len != 0) {
+                metrics.worker_capturing_tasks_committed +|= 1;
+            }
         }
         try self.erased_owner_states.ensureUnusedCapacity(self.allocator, body_local_count);
         const appended = self.result.store.appendBodyShard(
             .{ .store = &shard.store, .prefix = shard.prefix },
             shard.body,
             shard.frame_locals,
+            self.next_join_point,
         ) catch |err| switch (err) {
             error.OutOfMemory => return error.OutOfMemory,
             error.UnsupportedShardMetadata => Common.invariant("validated Solved-LIR body shard gained unsupported metadata"),
@@ -1671,6 +1706,7 @@ const Lowerer = struct {
             .head = appended.relocation.stmt(shard.prefix, sites.head),
             .loop = sites.loop,
         } else null;
+        self.next_join_point = next_join_point;
         try self.folded_map_matches.appendSlice(self.allocator, shard.folded_map_matches);
         self.fn_written.items[@intFromEnum(shard.fn_id)] = true;
     }
