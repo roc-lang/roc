@@ -222,7 +222,7 @@ test "layout digests do not depend on commit order" {
     try testing.expect(!digestsEqual(try first_digests.get(first_struct), try first_digests.get(first_list)));
 }
 
-fn commitConsList(store: *Store) !Idx {
+fn commitConsList(store: *Store) Allocator.Error!Idx {
     // `Node := [Nil, Cons(Box(Node))]`: one union whose Cons payload boxes the union itself.
     var graph = graph_mod.Graph{};
     defer graph.deinit(std.testing.allocator);
