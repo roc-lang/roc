@@ -4622,7 +4622,15 @@ The representation producer is `generatedIteratorNode` in
 `src/postcheck/monotype/solve.zig`. Construction records the exact public
 source, producer kind, component nodes, callable evidence, and private backing
 in the active instantiation graph. Finalization consumes that complete graph
-before any durable Monotype type is sealed. Together they compute:
+before any durable Monotype type is sealed. A graph-owned exact construction
+index keys generated iterators by declaration, producer kind, callable evidence,
+and ordered item/component classes. Union updates only keys that reference its
+losing class; content replacement updates provenance keys. Equal keys retain
+all permanent candidates without adding an implicit type relation. Monotone
+provenance counts let iterator finalization and private-evidence containment
+return immediately when their graphs have never received the relevant evidence.
+Containment diagnostics distinguish these guard returns from actual queries.
+Together construction and finalization compute:
 
 - `List.iter` as a first-class source representation rather than a public
   recursive `Iter` boundary;
@@ -8013,8 +8021,15 @@ looked up. The resulting address is still the exact checked identity of the type
 variable/content in that body specialization. It is not a structural digest,
 source name, runtime layout, object symbol, or generated procedure id. A child
 that needs independent generic cells receives a new scope identity; copying
-cells into that scope is explicit. Nodes begin unresolved. As relations are
-produced, explicit evidence from checked data unifies those nodes:
+cells into that scope is explicit. Checked-type cache misses record an
+in-progress entry before constructing their content. Only a recursive lookup
+of that entry allocates an unresolved placeholder; an acyclic construction
+retains its built node directly. Checked aliases instantiate their explicit
+backing directly, preserving transparency without a unification side effect.
+A recursive placeholder remains a permanent graph node and joins the built
+node's class. Failed construction removes the
+in-progress entry. As relations are produced, explicit evidence from checked
+data unifies those nodes:
 
 - the requested root function/value type constrains the checked root type;
 - lambda and closure expected function types constrain the nested function
