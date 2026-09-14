@@ -80,6 +80,7 @@ test "issue 10571: repeated failed dispatch on the same receiver reports type mi
     try coord.start();
     try coord.discoverAppFromPath(arena, .{ .entry_path = app_path });
     try coord.coordinatorLoop();
+    try coord.finishCheckedProgram(.none);
 
     try std.testing.expect(coord.hasUserErrors());
     var found_type_mismatch = false;
