@@ -766,8 +766,10 @@ const CheckTypeCheckerPatternsStep = struct {
         // matching the failing LIR statement's source-file entry (text stamped by
         // the declaring module's lowering) against the finalizing module's
         // qualified name—cross-module, so there is no shared ident store to
-        // compare indices in. Error-reporting path, not a type-checker judgment.
-        .{ .file = "compile_time_finalization.zig", .start = 3185, .end = 3188 },
+        // compare indices in. It also compares bare display names solely to
+        // choose an unambiguous human-readable origin. Error-reporting path,
+        // not a type-checker judgment.
+        .{ .file = "compile_time_finalization.zig", .start = 3185, .end = 3191 },
         // Consumer compatibility excludes observation sinks by Zig field name at
         // compile time. These are compiler API fields, never Roc identifiers.
         .{ .file = "compile_time_finalization.zig", .start = 164, .end = 175 },
