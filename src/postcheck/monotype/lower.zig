@@ -10126,7 +10126,10 @@ const Builder = struct {
         );
         for (body_draft.template_specs.items) |spec| {
             const request_ty = try sealer.sealNode(
-                spec.lookup_request_fn_node orelse spec.request_fn_node,
+                if (spec.eager_resolution) |eager|
+                    eager.request_fn_node
+                else
+                    spec.lookup_request_fn_node orelse spec.request_fn_node,
             );
             if (spec.eager_resolution) |eager| {
                 const eager_ty = try sealer.sealType(eager.fn_ty);
@@ -33945,6 +33948,7 @@ const BodyContext = struct {
             .request_fn_node = spec.request_fn_node,
             .fn_ty = request_fn_ty,
         };
+        self.draft.template_specs.items[spec_index].lookup_request_fn_node = spec.request_fn_node;
 
         const completed_ty = try self.activeTypeFromNode(completed_node);
         // Adoption is keyed on the produced result representation, the same
@@ -33957,7 +33961,6 @@ const BodyContext = struct {
         const raw_spec: u32 = @intCast(spec_index);
         _ = try self.adoptCompletedIteratorResult(current_node, completed_node);
         self.draft.fns.items[@intFromEnum(draft_fn)].source.mono_fn_ty = DraftTypeCell.fromGraphNode(completed_node);
-        self.draft.template_specs.items[spec_index].lookup_request_fn_node = current_node;
         self.draft.template_specs.items[spec_index].request_fn_node = completed_node;
         const completed_spec = self.draft.template_specs.items[spec_index];
         const completed_source = self.draft.fns.items[@intFromEnum(draft_fn)].source;
