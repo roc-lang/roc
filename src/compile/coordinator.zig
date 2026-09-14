@@ -1087,6 +1087,9 @@ pub const Coordinator = struct {
 
     /// Prevents nested or concurrent use of the shared worker result channel.
     post_check_batch_active: std.atomic.Value(bool),
+    post_check_pending: usize = 0,
+    post_check_inline_completion: ?post_check_executor.Completion = null,
+    post_check_inline_allocators: ?WorkerAllocators = null,
     /// Set only after the frontend coordinator loop has drained every task and
     /// result. Post-check work shares those channels and cannot start earlier.
     frontend_complete: bool,
@@ -3161,7 +3164,83 @@ pub const Coordinator = struct {
             else
                 1,
             .runFn = runPostCheckTasks,
+            .streaming = .{
+                .beginFn = beginPostCheckStream,
+                .submitFn = submitPostCheckTask,
+                .waitOneFn = waitOnePostCheckTask,
+                .endFn = endPostCheckStream,
+            },
         };
+    }
+
+    fn beginPostCheckStream(context: *anyopaque) void {
+        const self: *Coordinator = @ptrCast(@alignCast(context));
+        if (!self.frontend_complete or self.shutting_down.load(.acquire)) {
+            @panic("post-check stream started outside the completed frontend lifetime");
+        }
+        if (self.post_check_batch_active.cmpxchgStrong(false, true, .acq_rel, .acquire) != null) {
+            @panic("compiler coordinator started overlapping post-check sessions");
+        }
+        std.debug.assert(self.post_check_pending == 0);
+        if (!threads_available or self.mode == .single_threaded or self.workers.items.len == 0) {
+            self.post_check_inline_allocators = WorkerAllocators.init(self.gpa);
+        }
+    }
+
+    fn submitPostCheckTask(context: *anyopaque, task: post_check_executor.Task) Allocator.Error!void {
+        const self: *Coordinator = @ptrCast(@alignCast(context));
+        std.debug.assert(self.post_check_batch_active.load(.acquire));
+        if (self.post_check_inline_allocators) |*allocs| {
+            std.debug.assert(self.post_check_pending == 0);
+            self.post_check_inline_completion = .{
+                .id = task.id,
+                .worker_id = 0,
+                .value = task.run(task.context, .{
+                    .id = 0,
+                    .allocator = allocs.taskAllocators().module,
+                    .scratch = allocs.taskAllocators().scratch,
+                }),
+            };
+            allocs.resetArena();
+        } else {
+            std.debug.assert(self.post_check_pending < self.workers.items.len);
+            try self.enqueueTask(.{ .post_check = task });
+        }
+        self.post_check_pending += 1;
+    }
+
+    fn waitOnePostCheckTask(context: *anyopaque) post_check_executor.Completion {
+        const self: *Coordinator = @ptrCast(@alignCast(context));
+        std.debug.assert(self.post_check_batch_active.load(.acquire));
+        std.debug.assert(self.post_check_pending > 0);
+        self.post_check_pending -= 1;
+        if (self.post_check_inline_allocators != null) {
+            const completion = self.post_check_inline_completion.?;
+            self.post_check_inline_completion = null;
+            return completion;
+        }
+        const result = self.result_channel.recv() orelse
+            @panic("post-check result channel closed while a stream was active");
+        _ = self.inflight.fetchSub(1, .monotonic);
+        return switch (result) {
+            .post_check => |completion| completion,
+            .parsed,
+            .canonicalized,
+            .type_checked,
+            .operation_failed,
+            .cycle_detected,
+            .worker_oom,
+            => unreachable,
+        };
+    }
+
+    fn endPostCheckStream(context: *anyopaque) void {
+        const self: *Coordinator = @ptrCast(@alignCast(context));
+        std.debug.assert(self.post_check_pending == 0);
+        std.debug.assert(self.post_check_batch_active.load(.acquire));
+        if (self.post_check_inline_allocators) |*allocs| allocs.deinit();
+        self.post_check_inline_allocators = null;
+        self.post_check_batch_active.store(false, .release);
     }
 
     fn runPostCheckTasks(
@@ -3171,64 +3250,22 @@ pub const Coordinator = struct {
     ) Allocator.Error!void {
         const self: *Coordinator = @ptrCast(@alignCast(context));
         std.debug.assert(tasks.len == completions.len);
-        if (!self.frontend_complete or self.shutting_down.load(.acquire)) {
-            @panic("post-check batch started outside the completed frontend lifetime");
-        }
-        if (self.post_check_batch_active.cmpxchgStrong(false, true, .acq_rel, .acquire) != null) {
-            @panic("compiler coordinator started overlapping post-check batches");
-        }
-        defer self.post_check_batch_active.store(false, .release);
-        if (tasks.len == 0) return;
-
-        if (!threads_available or self.mode == .single_threaded or self.workers.items.len == 0) {
-            var allocs = WorkerAllocators.init(self.gpa);
-            defer allocs.deinit();
-            const allocator = allocs.taskAllocators().module;
-            for (tasks, completions) |task, *completion| {
-                completion.* = .{
-                    .id = task.id,
-                    .worker_id = 0,
-                    .value = task.run(task.context, .{
-                        .id = 0,
-                        .allocator = allocator,
-                        .scratch = allocs.taskAllocators().scratch,
-                    }),
-                };
-                allocs.resetArena();
-            }
-            return;
-        }
-
+        const executor = self.postCheckExecutor();
+        const session = executor.begin();
+        defer session.end();
         var sent: usize = 0;
         var received: usize = 0;
-        var enqueue_oom = false;
-        const width = self.workers.items.len;
-        while (received < tasks.len and (!enqueue_oom or received < sent)) {
-            while (sent < tasks.len and sent - received < width) : (sent += 1) {
-                self.enqueueTask(.{ .post_check = tasks[sent] }) catch {
-                    enqueue_oom = true;
-                    break;
-                };
+        // A failed enqueue still leaves earlier tasks borrowing caller contexts.
+        errdefer while (received < sent) : (received += 1) {
+            completions[received] = session.waitOne();
+        };
+        while (received < tasks.len) {
+            while (sent < tasks.len and sent - received < executor.worker_count) : (sent += 1) {
+                try session.submit(tasks[sent]);
             }
-            if (received == sent) break;
-            const result = self.result_channel.recv() orelse
-                @panic("post-check result channel closed while a batch was active");
-            _ = self.inflight.fetchSub(1, .monotonic);
-            switch (result) {
-                .post_check => |completion| {
-                    completions[received] = completion;
-                    received += 1;
-                },
-                .parsed,
-                .canonicalized,
-                .type_checked,
-                .operation_failed,
-                .cycle_detected,
-                .worker_oom,
-                => unreachable,
-            }
+            completions[received] = session.waitOne();
+            received += 1;
         }
-        if (enqueue_oom) return error.OutOfMemory;
     }
 
     fn createOwnedSemanticResult(
@@ -7746,12 +7783,17 @@ test "Coordinator shutdown stops spawned workers promptly" {
     try std.testing.expectEqual(@as(usize, 0), coord.workers.items.len);
 }
 
-test "Coordinator post-check executor completes repeated bounded batches" {
+test "Coordinator post-check executor completes repeated bounded batches and streams" {
+    try testPostCheckExecutor(.single_threaded);
+    try testPostCheckExecutor(.multi_threaded);
+}
+
+fn testPostCheckExecutor(mode: Mode) (Allocator.Error || std.Thread.SpawnError || CoordinatorError || error{ SkipZigTest, TestUnexpectedResult, TestExpectedEqual })!void {
     if (is_freestanding) return error.SkipZigTest;
 
     var coord = try Coordinator.init(
         std.testing.allocator,
-        .multi_threaded,
+        mode,
         2,
         roc_target.RocTarget.detectNative(),
         undefined,
@@ -7818,6 +7860,26 @@ test "Coordinator post-check executor completes repeated bounded batches" {
 
     try executor.run(tasks[0..3], completions[0..3]);
     try std.testing.expectEqual(tasks.len + 3, hits.load(.monotonic));
+
+    // Refill while the same exclusive session remains open, then reopen it.
+    for (0..2) |_| {
+        const session = executor.begin();
+        defer session.end();
+        var submitted: usize = 0;
+        var received: usize = 0;
+        @memset(&observed, false);
+        while (received < tasks.len) {
+            while (submitted < tasks.len and submitted - received < executor.worker_count) : (submitted += 1) {
+                try session.submit(tasks[submitted]);
+            }
+            const completion = session.waitOne();
+            try std.testing.expect(!observed[completion.id]);
+            try std.testing.expectEqual(@as(?*anyopaque, @ptrCast(&contexts[completion.id])), completion.value);
+            observed[completion.id] = true;
+            received += 1;
+        }
+    }
+    try std.testing.expectEqual(tasks.len * 3 + 3, hits.load(.monotonic));
 }
 
 test "Coordinator enqueueParseTask flow" {

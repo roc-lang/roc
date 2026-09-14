@@ -287,9 +287,8 @@ pub const Reporter = struct {
         const group = &self.counter_groups[self.counter_group_count];
         group.* = .{ .name = name };
         std.debug.assert(counters.len <= group.counters.len);
-        const len = counters.len;
-        @memcpy(group.counters[0..len], counters);
-        group.len = @intCast(len);
+        @memcpy(group.counters[0..counters.len], counters);
+        group.len = @intCast(counters.len);
         self.counter_group_count += 1;
     }
 
@@ -820,6 +819,26 @@ fn collectStatic(buf: *std.Io.Writer.Allocating, timings_flag: bool) void {
         .{ .name = "Unification requests", .count = 5678 },
     });
     reporter.finish();
+}
+
+test "timing counter groups retain every Monotype graph diagnostic" {
+    var buf: std.Io.Writer.Allocating = .init(testing.allocator);
+    defer buf.deinit();
+    var reporter = Reporter.init(.{
+        .std_io = std.Io.Threaded.global_single_threaded.io(),
+        .writer = &buf.writer,
+        .op_label = "roc build",
+        .timings_flag = true,
+        .is_tty = false,
+    });
+    defer reporter.deinit();
+    reporter.start();
+    var counters = [_]Counter{.{ .name = "Graph diagnostic", .count = 0 }} ** 27;
+    counters[26] = .{ .name = "Generated-private guard returns", .count = 12345 };
+    reporter.recordCounters("Monotype type graph", &counters);
+    reporter.finish();
+    try testing.expect(std.mem.find(u8, buf.written(), "Generated-private guard returns") != null);
+    try testing.expect(std.mem.find(u8, buf.written(), "12345") != null);
 }
 
 test "timings prints all 27 Monotype graph counters" {
