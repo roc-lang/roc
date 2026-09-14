@@ -7977,6 +7977,14 @@ current argument-root tuple. Root unions rekey affected entries, so lookup cost
 must depend only on the current live index: the history of earlier root
 migrations must not lengthen future probe paths.
 
+Generated iterator reuse is indexed by the exact declaration, iterator kind,
+callable evidence, and current argument-root tuple. Reverse argument dependencies
+rekey only entries touched by a union; content replacement updates provenance
+membership explicitly. Equal keys retain independently constructed nodes until
+an explicit relation joins them. Monotone provenance counts let finalization
+skip graphs that have never contained generated iterators, and private-evidence
+containment diagnostics distinguish guard returns from actual containment queries.
+
 A context-free callee body never joins the caller group's graph. Instead
 CheckedModule stores a complete specialization-interface relation table for
 every procedure template. Its records explicitly name checked equalities,
@@ -8013,8 +8021,15 @@ looked up. The resulting address is still the exact checked identity of the type
 variable/content in that body specialization. It is not a structural digest,
 source name, runtime layout, object symbol, or generated procedure id. A child
 that needs independent generic cells receives a new scope identity; copying
-cells into that scope is explicit. Nodes begin unresolved. As relations are
-produced, explicit evidence from checked data unifies those nodes:
+cells into that scope is explicit. A checked-type cache miss records an
+in-progress marker. Only recursive re-entry allocates an unresolved placeholder;
+ordinary construction caches its completed node directly. Checked aliases
+instantiate their explicit backing directly; transparency never depends on a
+placeholder relation. Error exits remove
+the marker, and completed-context copies accept only completed nodes. Nodes and
+per-node evidence retain permanent identities; no node is discarded when a
+recursive placeholder joins its completed content. As relations are produced,
+explicit evidence from checked data unifies those nodes:
 
 - the requested root function/value type constrains the checked root type;
 - lambda and closure expected function types constrain the nested function
