@@ -315,3 +315,25 @@ test "test metadata uses explicit union request positions across equal root orde
     try std.testing.expectEqual(@as(u32, 4), testPlanMetadataForRoot(roots, root, 2).?.module_index);
     try std.testing.expectEqual(@as(u32, 7), testPlanMetadataForRoot(roots, root, 3).?.module_index);
 }
+
+/// What the object cache knows about a specialization it can serve: the
+/// content identity of its compiled procedure and the ownership signature
+/// ARC solved for it, which the program that links the entry adopts as fixed.
+pub const SpecCacheHit = struct {
+    identity: [32]u8,
+    rc_borrowed_params: u64,
+    rc_ret_borrowed: bool,
+    rc_ret_lenders: u64,
+};
+
+/// The object cache's answer for a specialization key, asked when Monotype
+/// reserves the specialization and before its body exists. The consumer that
+/// owns the cache supplies the context and the lookup.
+pub const SpecCacheLookup = struct {
+    context: *anyopaque,
+    find: *const fn (context: *anyopaque, key: [32]u8) ?SpecCacheHit,
+
+    pub fn lookup(self: SpecCacheLookup, key: [32]u8) ?SpecCacheHit {
+        return self.find(self.context, key);
+    }
+};

@@ -946,6 +946,10 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
         code_regions: std.ArrayList(CodeRegion),
         /// Every resolved reference from the code buffer into itself.
         code_refs: std.ArrayList(CodeRef),
+        /// Entry offsets of refcount helpers spliced from object-cache
+        /// entries, by symbol name; a later request for the same helper
+        /// reuses the spliced code instead of compiling it again.
+        spliced_helper_offsets: std.StringHashMap(usize),
 
         /// Map from JoinPointId to list of jumps that target it (for patching)
         join_point_jumps: std.AutoHashMap(u32, std.ArrayList(JumpRecord)),
@@ -1191,6 +1195,9 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
             /// Offset into `message_pool`.
             message: u32,
             boxy_thunk: lir.LIR.LirProcSpecId,
+            /// A target inside spliced object-cache code, known by its
+            /// resolved offset in the buffer.
+            offset: usize,
         };
 
         pub const CodeRefForm = enum { call, addr };
@@ -1214,6 +1221,12 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
             /// Message pool bytes; the payload is the pool offset the run starts at.
             message_pool_run: u32,
             branch_island,
+            /// A procedure spliced from an object-cache entry that this
+            /// program does not declare; only other spliced code reaches it.
+            spliced_proc: lir.ProcIdentity,
+            /// A refcount helper spliced from an object-cache entry,
+            /// registered by name in `spliced_helper_offsets`.
+            spliced_helper,
         };
 
         /// One contiguous range of the code buffer with a known producer.
@@ -1477,6 +1490,7 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
                 .pending_proc_addrs = std.ArrayList(PendingProcAddr).empty,
                 .code_regions = std.ArrayList(CodeRegion).empty,
                 .code_refs = std.ArrayList(CodeRef).empty,
+                .spliced_helper_offsets = std.StringHashMap(usize).init(allocator),
                 .join_point_jumps = std.AutoHashMap(u32, std.ArrayList(JumpRecord)).init(allocator),
                 .join_point_params = std.AutoHashMap(u32, LocalSpan).init(allocator),
                 .internal_call_patches = std.ArrayList(InternalCallPatch).empty,
@@ -1540,6 +1554,11 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
             self.pending_proc_addrs.deinit(self.allocator);
             self.code_regions.deinit(self.allocator);
             self.code_refs.deinit(self.allocator);
+            {
+                var names = self.spliced_helper_offsets.keyIterator();
+                while (names.next()) |name| self.allocator.free(name.*);
+                self.spliced_helper_offsets.deinit();
+            }
             self.pending_message_addrs.deinit(self.allocator);
             self.message_pool_runs.deinit(self.allocator);
             self.message_pool_index.deinit(self.allocator);
@@ -14874,6 +14893,7 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
         fn scheduleRcHelper(self: *Self, helper: RcHelperVariant) Allocator.Error!void {
             const cache_key = helper.encode();
             if (self.compiled_rc_helpers.contains(cache_key)) return;
+            if (try self.splicedRcHelperOffset(cache_key)) |_| return;
             const gop = try self.rc_helper_scheduled.getOrPut(cache_key);
             if (gop.found_existing) return;
             try self.rc_helper_worklist.append(self.allocator, helper);
@@ -15580,6 +15600,9 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
             if (self.compiled_rc_helpers.get(cache_key)) |code_offset| {
                 return code_offset;
             }
+            if (try self.splicedRcHelperOffset(cache_key)) |code_offset| {
+                return code_offset;
+            }
 
             const helper_region_start = self.codegen.currentOffset();
             const skip_jump = try self.codegen.emitJump();
@@ -15763,6 +15786,9 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
         fn compileSingleRcHelper(self: *Self, helper: RcHelperVariant) Allocator.Error!usize {
             const cache_key = helper.encode();
             if (self.compiled_rc_helpers.get(cache_key)) |code_offset| {
+                return code_offset;
+            }
+            if (try self.splicedRcHelperOffset(cache_key)) |code_offset| {
                 return code_offset;
             }
 
@@ -20646,6 +20672,9 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
             self.assertImageOpen();
             for (proc_specs, 0..) |proc, i| {
                 const proc_id: lir.LIR.LirProcSpecId = @enumFromInt(i);
+                // A procedure spliced from an object-cache entry is already
+                // registered with its code.
+                if (self.proc_registry.contains(@intFromEnum(proc_id))) continue;
                 try self.proc_registry.put(@intFromEnum(proc_id), .{
                     .id = proc_id,
                     .code_start = unresolved_proc_code_start,
@@ -20657,6 +20686,15 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
 
             for (proc_specs, 0..) |proc, i| {
                 if (proc.is_static_initializer) continue;
+                if (self.proc_registry.get(@intCast(i))) |registered| {
+                    if (registered.code_start != unresolved_proc_code_start) continue;
+                }
+                if (proc.external) {
+                    if (builtin.mode == .Debug) {
+                        std.debug.panic("Dev/codegen invariant violated: external proc {d} had no object-cache entry spliced before compilation", .{i});
+                    }
+                    unreachable;
+                }
                 if (comptime target.toCpuArch() == .aarch64) {
                     try self.emitBranchIslandIfNeeded();
                     try self.codegen.compactBranchSites();
@@ -25685,7 +25723,7 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
                 },
                 .rc_helper => |key| try self.compiled_rc_helpers.put(key, start + entry),
                 .boxy_thunk => |proc_id| try self.boxy_dict_thunks.put(@intFromEnum(proc_id), start),
-                .entrypoint, .message_pool_run, .branch_island => {},
+                .entrypoint, .message_pool_run, .branch_island, .spliced_proc, .spliced_helper => {},
             }
             if (frame) |frame_info| {
                 try self.recordUnwindFunction(
@@ -25701,6 +25739,39 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
             }
             try self.code_regions.append(self.allocator, .{ .start = start, .end = end, .entry = entry, .kind = kind });
             return start;
+        }
+
+        /// Remember a spliced refcount helper by name so a later request for
+        /// the same helper resolves to it.
+        pub fn registerSplicedHelper(self: *Self, name: []const u8, entry_offset: usize) Allocator.Error!void {
+            const owned = try self.allocator.dupe(u8, name);
+            errdefer self.allocator.free(owned);
+            const gop = try self.spliced_helper_offsets.getOrPut(owned);
+            if (gop.found_existing) {
+                self.allocator.free(owned);
+                return;
+            }
+            gop.value_ptr.* = entry_offset;
+        }
+
+        /// Name of the spliced refcount helper whose entry is at `entry_offset`.
+        pub fn splicedHelperName(self: *const Self, entry_offset: usize) ?[]const u8 {
+            var entries = self.spliced_helper_offsets.iterator();
+            while (entries.next()) |entry| {
+                if (entry.value_ptr.* == entry_offset) return entry.key_ptr.*;
+            }
+            return null;
+        }
+
+        /// A spliced helper already provides the code for `cache_key`, if one
+        /// was registered under the helper's content name.
+        fn splicedRcHelperOffset(self: *Self, cache_key: u64) Allocator.Error!?usize {
+            if (self.spliced_helper_offsets.count() == 0) return null;
+            const name = try compiledRcHelperSymbolName(self.allocator, self.layout_store, cache_key);
+            defer self.allocator.free(name);
+            const offset = self.spliced_helper_offsets.get(name) orelse return null;
+            try self.compiled_rc_helpers.put(cache_key, offset);
+            return offset;
         }
 
         /// Re-resolve one assembled reference to its target's new offset.

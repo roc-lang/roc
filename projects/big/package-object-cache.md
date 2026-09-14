@@ -604,12 +604,32 @@ them.
       module's pack references hosted functions by their declared names
       (`line!`), which the app build resolves through the platform's hosted
       tables; linking a platform pack needs the same resolution.
-   3. Store and hit: pack files under the cache root, the per-machine index,
-      the Monotype reservation-time hit for closed requests that records an
-      external reference and skips lowering, artifact splicing in the object
-      writer, and the origin-split sweep. Gate: cold-versus-warm differential
-      over the CLI corpus (program output and refcount event logs), plus the
-      byte-identical gate for packs written by two builds.
+   3. Store and hit (first slice done): `src/backend/dev/PackFile.zig` is
+      the on-disk pack, a deterministic encoding of an artifact set plus a
+      table from specialization key to root artifact and ownership
+      signature. The key (`Monotype.Ast.specIdentityKey`) digests the
+      callable and every identity digest except the requesting method scope,
+      is stamped on the template of every closed non-hosted request at
+      reservation, and Direct LIR records the procedure lowered for each key
+      (`Result.spec_procs`). A hit at reservation completes the record with
+      no body, exactly like a hosted procedure, and Direct LIR emits a
+      body-less external proc carrying the entry's identity and ownership
+      signature, which ARC treats as pinned. The object compiler splices the
+      entry's closure from the pack before compiling the program's own
+      procedures, registering spliced procedures under the program's proc ids
+      (so every call to them is an ordinary direct call and the program's own
+      compile skips them) and spliced refcount helpers by name (so a later
+      request reuses them). Literal backings are named by content
+      (`roc__static_str_{digest}`) and travel with the artifacts that name
+      them; entries that reach any other static datum are not offered until
+      constants are content-addressed. `ROC_DEV_PACK_HITS=<dir>` serves a
+      build from a directory of packs; the roc-parser app takes 16 hits and
+      splices 9 procedures, links, and behaves identically. Gate: a CLI
+      subcommands case builds cold, builds warm from the cold packs, requires
+      hits, and compares the two programs' behavior. Still to do in this
+      milestone: the store under the cache root with the origin split and
+      sweep policy, loading packs by module key instead of a directory,
+      writing packs on every build, and the refcount event log comparison.
    4. Debug info for cached procedures (DWARF line programs stored with the
       artifact) and the `roc run` host-executable path.
 

@@ -2203,6 +2203,12 @@ const Lowerer = struct {
         if (arg_tys.len != lifted_args.len) Common.invariant("direct Lambda Mono function arity changed after Lambda Solved");
 
         const identity = try self.specIdentity(spec);
+        const cached: ?Common.SpecCacheHit = if (source_fn.source) |template| template.cached else null;
+        if (cached) |hit| {
+            if (!std.mem.eql(u8, &hit.identity, &identity.bytes)) {
+                Common.invariant("object cache entry identity disagrees with the identity lowered for its specialization key");
+            }
+        }
         if (self.procs_by_identity.get(identity)) |existing| {
             // Another specialization already lowered this procedure. Reuse
             // its proc and keep this spec out of the reach queue so the body
@@ -2278,6 +2284,10 @@ const Lowerer = struct {
             .erased_capture_arg = if (spec.abi == .erased) arg_locals[lifted_args.len] else null,
             .abi = if (spec.abi == .erased) .erased_callable else .roc,
             .hosted = try self.hostedProcForSource(source_fn.source),
+            .external = cached != null,
+            .rc_borrowed_params = if (cached) |hit| hit.rc_borrowed_params else 0,
+            .rc_ret_borrowed = if (cached) |hit| hit.rc_ret_borrowed else false,
+            .rc_ret_lenders = if (cached) |hit| hit.rc_ret_lenders else 0,
             .stack_probe = self.stackProbeForProc(args_span, LIR.LocalSpan.empty(), ret_layout),
         });
         if (self.proc_debug_names) {

@@ -72,6 +72,15 @@ pub const Kind = union(enum) {
     branch_island,
 };
 
+/// A readonly datum the artifact's relocations name and its program
+/// defined: carried so a program that lacks it can define it.
+pub const DataItem = struct {
+    name: []const u8,
+    bytes: []const u8,
+    alignment: u32,
+    symbol_offset: u32,
+};
+
 /// One lifted region of machine code.
 pub const Artifact = struct {
     kind: Kind,
@@ -81,6 +90,7 @@ pub const Artifact = struct {
     frame: ?Frame,
     refs: []const Reference,
     relocations: []const NamedRelocation,
+    data: []const DataItem,
 };
 
 /// An ordered set of artifacts covering one code buffer. Order is emission
@@ -114,10 +124,15 @@ pub fn extract(
     codegen: *CG,
     proc_specs: []const lir.LIR.LirProcSpec,
     layout_store: *const layout.Store,
+    string_exports: []const lir.Program.StaticDataExport,
 ) ExtractError!Set {
     var arena = std.heap.ArenaAllocator.init(allocator);
     errdefer arena.deinit();
     const arena_allocator = arena.allocator();
+
+    var strings_by_name = std.StringHashMap(*const lir.Program.StaticDataExport).init(allocator);
+    defer strings_by_name.deinit();
+    for (string_exports) |*string_export| try strings_by_name.put(string_export.symbol_name, string_export);
 
     const code = codegen.getGeneratedCode();
     const regions = try allocator.dupe(CG.CodeRegion, codegen.codeRegions());
@@ -145,6 +160,8 @@ pub fn extract(
             .entrypoint => .entrypoint,
             .message_pool_run => .message_pool_run,
             .branch_island => .branch_island,
+            .spliced_proc => |identity| .{ .proc = identity },
+            .spliced_helper => .{ .rc_helper = try arena_allocator.dupe(u8, codegen.splicedHelperName(region.start + region.entry) orelse return error.DanglingReference) },
         };
 
         var frame: ?Frame = null;
@@ -169,6 +186,7 @@ pub fn extract(
                 .rc_helper => |key| codegen.compiledRcHelperOffset(key) orelse return error.DanglingReference,
                 .message => |message_offset| messageOffsetInCode(CG, regions, message_offset) orelse return error.DanglingReference,
                 .boxy_thunk => |proc_id| codegen.boxyThunkOffset(proc_id) orelse return error.DanglingReference,
+                .offset => |offset| offset,
             };
             const target_index = regionContaining(CG, regions, target_offset) orelse return error.DanglingReference;
             try region_refs.append(arena_allocator, .{
@@ -206,6 +224,22 @@ pub fn extract(
             });
         }
 
+        var region_data = std.ArrayList(DataItem).empty;
+        for (region_relocations.items) |relocation| {
+            const string_export = strings_by_name.get(relocation.name) orelse continue;
+            var already = false;
+            for (region_data.items) |item| {
+                if (std.mem.eql(u8, item.name, relocation.name)) already = true;
+            }
+            if (already) continue;
+            try region_data.append(arena_allocator, .{
+                .name = relocation.name,
+                .bytes = try arena_allocator.dupe(u8, string_export.bytes),
+                .alignment = string_export.alignment,
+                .symbol_offset = string_export.symbol_offset,
+            });
+        }
+
         artifacts[index] = .{
             .kind = kind,
             .code = try arena_allocator.dupe(u8, code[region.start..region.end]),
@@ -213,6 +247,7 @@ pub fn extract(
             .frame = frame,
             .refs = try region_refs.toOwnedSlice(arena_allocator),
             .relocations = try region_relocations.toOwnedSlice(arena_allocator),
+            .data = try region_data.toOwnedSlice(arena_allocator),
         };
     }
 
@@ -253,7 +288,7 @@ fn messageOffsetInCode(comptime CG: type, regions: []const CG.CodeRegion, messag
             .message_pool_run => |pool_from| {
                 if (pool_from <= message_offset) found = region.start + (message_offset - pool_from);
             },
-            .proc, .rc_helper, .boxy_thunk, .entrypoint, .branch_island => {},
+            .proc, .rc_helper, .boxy_thunk, .entrypoint, .branch_island, .spliced_proc, .spliced_helper => {},
         }
     }
     return found;
@@ -351,8 +386,9 @@ pub fn verifyRoundTrip(
     fresh: *CG,
     proc_specs: []const lir.LIR.LirProcSpec,
     layout_store: *const layout.Store,
+    string_exports: []const lir.Program.StaticDataExport,
 ) RoundTripError!void {
-    var set = try extract(CG, allocator, original, proc_specs, layout_store);
+    var set = try extract(CG, allocator, original, proc_specs, layout_store, string_exports);
     defer set.deinit();
 
     var helper_keys = HelperKeys.init(allocator);
@@ -447,4 +483,98 @@ fn unwindMatches(original: anytype, fresh: @TypeOf(original)) bool {
         if (!std.meta.eql(lhs, rhs)) return false;
     }
     return true;
+}
+
+/// Where an artifact from another program's pack lands in this program: on
+/// a procedure this program declares (external or its own), or as code that
+/// only other spliced artifacts reach.
+pub const SpliceError = Allocator.Error;
+
+/// Place the closure of `roots` (every artifact they reach through
+/// references, transitively) from `set` into an open code generator, before
+/// any of the program's own procedures compile. A procedure artifact whose
+/// identity this program declares registers as that procedure, so the
+/// program's own compile skips it and every call to it is an ordinary
+/// direct call; refcount helpers register by name so a later request for the
+/// same helper reuses the spliced code. `placed` remembers which artifacts of
+/// `set` are already in the buffer across calls.
+pub fn splice(
+    comptime CG: type,
+    allocator: Allocator,
+    codegen: *CG,
+    set: *const Set,
+    roots: []const u32,
+    procs_by_identity: *const std.AutoHashMap(lir.ProcIdentity, lir.LIR.LirProcSpecId),
+    placed: *std.AutoHashMap(u32, usize),
+    data_out: *std.ArrayList(DataItem),
+) SpliceError!void {
+    // Closure in first-discovery order: deterministic for a deterministic
+    // root order, and every target is placed before its references resolve.
+    var order = std.ArrayList(u32).empty;
+    defer order.deinit(allocator);
+    var stack = std.ArrayList(u32).empty;
+    defer stack.deinit(allocator);
+    var seen = std.AutoHashMap(u32, void).init(allocator);
+    defer seen.deinit();
+    for (roots) |root| try stack.append(allocator, root);
+    while (stack.pop()) |index| {
+        if (placed.contains(index)) continue;
+        const gop = try seen.getOrPut(index);
+        if (gop.found_existing) continue;
+        try order.append(allocator, index);
+        const refs = set.artifacts[index].refs;
+        var i = refs.len;
+        while (i > 0) {
+            i -= 1;
+            try stack.append(allocator, refs[i].target);
+        }
+    }
+
+    for (order.items) |index| {
+        const artifact = set.artifacts[index];
+        const kind: CG.CodeRegionKind = switch (artifact.kind) {
+            .proc, .boxy_thunk => |identity| if (procs_by_identity.get(identity)) |proc_id| .{ .proc = proc_id } else .{ .spliced_proc = identity },
+            .rc_helper => .spliced_helper,
+            .entrypoint => .entrypoint,
+            .message_pool_run => .{ .message_pool_run = 0 },
+            .branch_island => .branch_island,
+        };
+        const start = try codegen.appendAssembledRegion(artifact.code, kind, artifact.entry, artifact.frame);
+        switch (artifact.kind) {
+            .rc_helper => |name| try codegen.registerSplicedHelper(name, start + artifact.entry),
+            .proc, .boxy_thunk, .entrypoint, .message_pool_run, .branch_island => {},
+        }
+        try placed.putNoClobber(index, start);
+        for (artifact.data) |item| try data_out.append(allocator, item);
+        for (artifact.relocations) |relocation| {
+            const symbol = try codegen.internSymbolName(relocation.name);
+            const offset: u64 = start + relocation.offset;
+            try codegen.appendAssembledRelocation(switch (relocation.kind) {
+                .function => .{ .linked_function = .{ .offset = offset, .symbol = symbol } },
+                .data => |data_kind| .{ .linked_data = .{ .offset = offset, .symbol = symbol, .kind = data_kind } },
+            });
+        }
+    }
+
+    for (order.items) |index| {
+        const artifact = set.artifacts[index];
+        const start = placed.get(index) orelse unreachable;
+        for (artifact.refs) |ref| {
+            const target_start = placed.get(ref.target) orelse unreachable;
+            const target_artifact = set.artifacts[ref.target];
+            const target: CG.CodeRefTarget = switch (target_artifact.kind) {
+                .proc, .boxy_thunk => |identity| if (procs_by_identity.get(identity)) |proc_id| .{ .proc = proc_id } else .{ .offset = target_start + ref.delta },
+                .rc_helper, .entrypoint, .message_pool_run, .branch_island => .{ .offset = target_start + ref.delta },
+            };
+            try codegen.patchAssembledRef(
+                start + ref.site,
+                switch (ref.form) {
+                    .call => .call,
+                    .addr => .addr,
+                },
+                target,
+                target_start + ref.delta,
+            );
+        }
+    }
 }

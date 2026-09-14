@@ -127,6 +127,7 @@ comptime {
     }
 }
 const linker = @import("linker.zig");
+const pack_store = @import("pack_store.zig");
 const builder = @import("builder.zig");
 const llvm_codegen = @import("llvm_codegen");
 
@@ -6865,6 +6866,7 @@ fn lowerLirWithBuildEnv(
         build_env.postCheckExecutor(),
         &spec_timing,
         build_env.runtimeProgramSession(),
+        null,
     );
     errdefer lowered.deinit();
     if (reporter) |r| finishPostCheckLowering(r, &spec_timing, specialization_strategy);
@@ -8523,7 +8525,7 @@ fn writePackObjects(
         defer compile.static_data_exports.deinitStaticData(ctx.gpa, static_data_exports);
 
         var object_compiler = backend.ObjectFileCompiler.initForPack(ctx.gpa);
-        _ = object_compiler.compileToObjectFileAndWrite(
+        var compiled = object_compiler.compileToObjectFile(
             &lowered.lir_result.store,
             &lowered.lir_result.layouts,
             &.{},
@@ -8533,12 +8535,22 @@ fn writePackObjects(
             lowered.lir_result.boxy_erased_arg_desc_params.items,
             lowered.lir_result.boxy_worker_procs.items,
             target,
-            object_path,
-            ctx.coreCtx(),
         ) catch |err| {
             std.log.err("Pack compilation for {s} failed: {}", .{ module_name, err });
             return error.NativeCompilationFailed;
         };
+        defer compiled.deinit();
+        backend.writeFileWindowsAvSafe(ctx.io.std_io, object_path, compiled.object_bytes) catch {
+            return error.NativeCompilationFailed;
+        };
+        if (compiled.artifacts) |*set| {
+            const pack_bytes = try packFileBytes(ctx.gpa, set, &lowered);
+            defer ctx.gpa.free(pack_bytes);
+            const pack_path = try std.fmt.allocPrint(ctx.arena, "{s}.pack.{s}.rpk", .{ final_output_path, file_name });
+            backend.writeFileWindowsAvSafe(ctx.io.std_io, pack_path, pack_bytes) catch {
+                return error.NativeCompilationFailed;
+            };
+        }
 
         const manifest = try lir.PackProgram.manifestBytes(ctx.gpa, &lowered);
         defer ctx.gpa.free(manifest);
@@ -8546,6 +8558,63 @@ fn writePackObjects(
             return error.NativeCompilationFailed;
         };
     }
+}
+
+/// Encode a pack program's artifacts with its spec table: every keyed
+/// specialization whose procedure has an artifact, with the ownership
+/// signature ARC solved for it.
+fn packFileBytes(
+    allocator: Allocator,
+    set: *const backend.dev.ProcArtifact.Set,
+    lowered: *const lir.CheckedPipeline.LoweredProgram,
+) Allocator.Error![]u8 {
+    var artifact_by_identity = std.AutoHashMap(lir.ProcIdentity, u32).init(allocator);
+    defer artifact_by_identity.deinit();
+    for (set.artifacts, 0..) |artifact, index| {
+        switch (artifact.kind) {
+            .proc => |identity| try artifact_by_identity.put(identity, @intCast(index)),
+            .rc_helper, .boxy_thunk, .entrypoint, .message_pool_run, .branch_island => {},
+        }
+    }
+    var specs = std.ArrayList(backend.dev.PackFile.SpecEntry).empty;
+    defer specs.deinit(allocator);
+    const procs = lowered.lir_result.store.getProcSpecs();
+    for (lowered.lir_result.spec_procs.items) |spec_proc| {
+        const proc = procs[@intFromEnum(spec_proc.proc)];
+        const artifact = artifact_by_identity.get(proc.identity) orelse continue;
+        // Constants other than literal backings are still named per program
+        // (`roc__static_const_N`); an entry that reaches one cannot be
+        // linked elsewhere, so it is not offered.
+        if (try artifactClosureNamesProgramLocalData(allocator, set, artifact)) continue;
+        try specs.append(allocator, .{
+            .key = spec_proc.key,
+            .artifact = artifact,
+            .rc_borrowed_params = proc.rc_borrowed_params,
+            .rc_ret_borrowed = proc.rc_ret_borrowed,
+            .rc_ret_lenders = proc.rc_ret_lenders,
+        });
+    }
+    return try backend.dev.PackFile.write(allocator, set, specs.items);
+}
+
+/// Whether any artifact reachable from `root` relocates against static data
+/// that only its own program defines.
+fn artifactClosureNamesProgramLocalData(allocator: Allocator, set: *const backend.dev.ProcArtifact.Set, root: u32) Allocator.Error!bool {
+    var seen = std.AutoHashMap(u32, void).init(allocator);
+    defer seen.deinit();
+    var stack = std.ArrayList(u32).empty;
+    defer stack.deinit(allocator);
+    try stack.append(allocator, root);
+    while (stack.pop()) |index| {
+        const gop = try seen.getOrPut(index);
+        if (gop.found_existing) continue;
+        const artifact = set.artifacts[index];
+        for (artifact.relocations) |relocation| {
+            if (std.mem.startsWith(u8, relocation.name, "roc__static_") and !std.mem.startsWith(u8, relocation.name, "roc__static_str_")) return true;
+        }
+        for (artifact.refs) |ref| try stack.append(allocator, ref.target);
+    }
+    return false;
 }
 
 fn nativeBuildEntrypoints(
@@ -10027,6 +10096,7 @@ fn rocBuildLlvm(ctx: *CliCtx, args: cli_args.BuildArgs) CliMainError!BuildResult
         build_env.postCheckExecutor(),
         &spec_timing,
         build_env.runtimeProgramSession(),
+        null,
     );
     defer lowered.deinit();
     finishPostCheckLowering(&reporter, &spec_timing, specialization_strategy);
@@ -10351,13 +10421,27 @@ fn rocBuildNative(ctx: *CliCtx, args: cli_args.BuildArgs) CliMainError!BuildResu
     };
 
     build_env.setTarget(target);
-    build_env.setRuntimeLowering(checkedRuntimeLoweringConfig(
+    // `ROC_DEV_PACK_HITS` names a directory of pack files to serve closed
+    // specializations from; the object compiler splices their code in. The
+    // lookup is part of the runtime lowering policy the compile-time session
+    // is declared with, so it loads before checking starts.
+    var loaded_packs: ?pack_store.LoadedPacks = null;
+    defer if (loaded_packs) |*packs| packs.deinit();
+    if (std.c.getenv("ROC_DEV_PACK_HITS")) |dir_z| {
+        loaded_packs = pack_store.LoadedPacks.loadDir(ctx.gpa, ctx.io.std_io, std.mem.span(dir_z)) catch |err| {
+            std.log.err("failed to load packs from {s}: {}", .{ std.mem.span(dir_z), err });
+            return error.NativeCompilationFailed;
+        };
+    }
+    var runtime_lowering = checkedRuntimeLoweringConfig(
         .linked_output,
         args.opt,
         currentRuntimeSpecializationStrategy(args.specialization_strategy),
         base.target.TargetUsize.fromPtrBitWidth(target.ptrBitWidth()),
         args.synthetic_default_platform,
-    ));
+    );
+    if (loaded_packs) |*packs| runtime_lowering.target.spec_cache = packs.specCacheLookup();
+    build_env.setRuntimeLowering(runtime_lowering);
     build_env.setValidateTargetFilesForSelectedTarget(true);
     reporter.begin("Type Checking");
     build_env.compileDiscovered() catch |err| {
@@ -10403,9 +10487,17 @@ fn rocBuildNative(ctx: *CliCtx, args: cli_args.BuildArgs) CliMainError!BuildResu
         build_env.postCheckExecutor(),
         &spec_timing,
         build_env.runtimeProgramSession(),
+        if (loaded_packs) |*packs| packs.specCacheLookup() else null,
     );
     defer lowered.deinit();
     finishPostCheckLowering(&reporter, &spec_timing, specialization_strategy);
+    if (loaded_packs) |packs| {
+        var external_procs: usize = 0;
+        for (lowered.lir_result.store.getProcSpecs()) |proc| {
+            if (proc.external) external_procs += 1;
+        }
+        std.debug.print("pack hits: {d} external procs: {d}\n", .{ packs.hits, external_procs });
+    }
 
     const entrypoints = try nativeBuildEntrypoints(ctx, root_artifact, &lowered);
     defer ctx.gpa.free(entrypoints);
@@ -10469,6 +10561,7 @@ fn rocBuildNative(ctx: *CliCtx, args: cli_args.BuildArgs) CliMainError!BuildResu
     var object_compiler = backend.ObjectFileCompiler.init(ctx.gpa);
     var backend_timing = backend.ObjectFileCompiler.Timing.init(ctx.io.std_io);
     object_compiler.timing = &backend_timing;
+    if (loaded_packs) |*packs| object_compiler.splice_source = packs.spliceSource();
 
     const build_scratch_dir = createUniqueTempDir(ctx) catch |err| {
         return ctx.fail(.{ .temp_dir_failed = .{ .err = err } });
@@ -10780,6 +10873,7 @@ fn rocBuildEmbedded(ctx: *CliCtx, args: cli_args.BuildArgs) CliMainError!BuildRe
         build_env.postCheckExecutor(),
         &spec_timing,
         build_env.runtimeProgramSession(),
+        null,
     );
     defer lowered.deinit();
     finishPostCheckLowering(&reporter, &spec_timing, specialization_strategy);
@@ -12056,6 +12150,7 @@ fn lowerCheckedSourceToLir(
     post_check_executor: ?base.post_check_task_executor.Executor,
     timing: ?*lir.CheckedPipeline.Timing,
     session: ?*eval.CompileTimeFinalization.ProgramSession,
+    spec_cache: ?postcheck.Common.SpecCacheLookup,
 ) lir.CheckedPipeline.LowerResourceError!lir.CheckedPipeline.LoweredProgram {
     const selected_roots: []const check.CheckedArtifact.RootRequest = switch (roots) {
         .platform_entrypoints => try lir.CheckedPipeline.selectPlatformEntrypointRoots(gpa, root_artifact.root_requests.runtime_requests),
@@ -12070,6 +12165,7 @@ fn lowerCheckedSourceToLir(
     var config = checkedRuntimeLoweringConfig(roots, opt, specialization_strategy, target_usize, proc_debug_names);
     config.target.post_check_executor = post_check_executor;
     config.target.timing = timing;
+    config.target.spec_cache = spec_cache;
     const requests: lir.CheckedPipeline.RootRequestSet = .{
         .requests = selected_roots,
         .include_provided_data_exports = config.include_provided_data_exports,
