@@ -379,8 +379,10 @@ const CompletedFnBodyShard = struct {
     features: WorkerBodyFeatures,
     discovered_fns: []Type.FnId,
     folded_map_matches: []Lifted.Program.FoldedMatch,
+    erased_arg_layouts: std.ArrayList(layout.Idx),
 
     fn deinit(self: *CompletedFnBodyShard) void {
+        self.erased_arg_layouts.deinit(self.allocator);
         self.allocator.free(self.folded_map_matches);
         self.allocator.free(self.discovered_fns);
         self.store.deinit();
@@ -1167,6 +1169,7 @@ const Lowerer = struct {
         worker.allocator = allocator;
         worker.post_check_executor = null;
         worker.result.store = store;
+        worker.result.boxy_erased_arg_layouts = .empty;
         worker.inline_scope_rebases = workspace.inline_scope_rebases;
         worker.folded_map_matches = .empty;
         worker.captures = workspace.captures;
@@ -1201,6 +1204,7 @@ const Lowerer = struct {
     }
 
     fn deinitFnBodyWorker(self: *Lowerer, workspace: *FnBodyWorkspace, deinit_store: bool) void {
+        self.result.boxy_erased_arg_layouts.deinit(self.allocator);
         self.worker_discovered_fns.deinit(self.allocator);
         self.folded_map_matches.deinit(self.allocator);
         self.inline_scope_rebases.clearRetainingCapacity();
@@ -1299,7 +1303,9 @@ const Lowerer = struct {
             .features = worker.worker_features,
             .discovered_fns = discovered_fns,
             .folded_map_matches = folded_map_matches,
+            .erased_arg_layouts = worker.result.boxy_erased_arg_layouts,
         };
+        worker.result.boxy_erased_arg_layouts = .empty;
         return context;
     }
 
@@ -1907,8 +1913,13 @@ const Lowerer = struct {
             metrics.worker_loop_tasks_committed +|= @intFromBool(shard.features.loop);
         }
         try self.erased_owner_states.ensureUnusedCapacity(self.allocator, body_local_count);
+        try self.result.boxy_erased_arg_layouts.ensureUnusedCapacity(self.allocator, shard.erased_arg_layouts.items.len);
         const appended = self.result.store.appendBodyShard(
-            .{ .store = &shard.store, .prefix = shard.prefix },
+            .{
+                .store = &shard.store,
+                .prefix = shard.prefix,
+                .erased_arg_layout_base = @intCast(self.result.boxy_erased_arg_layouts.items.len),
+            },
             shard.body,
             shard.frame_locals,
             self.next_join_point,
@@ -1917,6 +1928,7 @@ const Lowerer = struct {
             error.UnsupportedShardMetadata => Common.invariant("validated Solved-LIR body shard gained unsupported metadata"),
             error.InvalidBodyPrefix => Common.invariant("validated Solved-LIR body shard lost its frozen prefix"),
         };
+        self.result.boxy_erased_arg_layouts.appendSliceAssumeCapacity(shard.erased_arg_layouts.items);
         for (0..body_local_count) |_| {
             self.erased_owner_states.appendAssumeCapacity(.pending);
         }

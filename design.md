@@ -7965,6 +7965,9 @@ procedure identity never makes it reachable; only emitted references do.
 Each callback reads a frozen coordinator prefix and writes a private LIR store
 suffix. Strings, names, inline scopes, patterns, control-flow tables, erased
 argument plans, loop bindings, and ownership provenance are body-owned.
+Erased-call runtime layout entries are also shard-owned. Ordered commit appends
+those entries to the program's layout table and relocates each call's span to
+that destination; workers never append through a borrowed coordinator array.
 Compile-time observation sites and static-initializer requests remain serial
 barriers; hosted procedures have no Roc body. There is no serial replay of an
 admitted body: a missing prepared identity is a compiler invariant violation.
