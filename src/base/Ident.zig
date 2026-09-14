@@ -354,7 +354,7 @@ pub const Store = struct {
         self.verifyIdx(a);
         self.verifyIdx(b);
         if (self.text_rank) |cache| {
-            if (cache.current(self.interner.bytes.len())) |ranks| return ranks[a.idx] < ranks[b.idx];
+            if (cache.current(@intCast(self.interner.bytes.len()))) |ranks| return ranks[a.idx] < ranks[b.idx];
         }
         return textLessThan(self.getText(a), self.getText(b));
     }
@@ -371,13 +371,13 @@ pub const Store = struct {
                 return index + @as(u32, @intCast(bytes.len)) + 1;
             }
         };
-        return (self.text_rank orelse scratch).ensure(1, self.interner.bytes.len(), self.interner.entry_count, Context{ .store = self });
+        return (self.text_rank orelse scratch).ensure(1, @intCast(self.interner.bytes.len()), self.interner.entry_count, Context{ .store = self });
     }
 
     /// Rank of an identifier after preparing the current text-rank generation.
     pub fn idxTextRank(self: *const Store, idx: Idx) u32 {
         self.verifyIdx(idx);
-        return self.text_rank.?.current(self.interner.bytes.len()).?[idx.idx];
+        return self.text_rank.?.current(@intCast(self.interner.bytes.len())).?[idx.idx];
     }
 
     /// Check if an identifier text already exists in the store.
@@ -889,7 +889,7 @@ test "identifier text ranks preserve byte order and refresh after insertion" {
     };
     const old = store.idxTextRank(ids[1]);
     const first = try store.insert(gpa, Ident.for_text("A"));
-    try std.testing.expect(store.text_rank.?.current(store.interner.bytes.len()) == null);
+    try std.testing.expect(store.text_rank.?.current(@intCast(store.interner.bytes.len())) == null);
     try std.testing.expect(store.idxTextLessThan(first, ids[1]));
     _ = try store.textRanks(&scratch);
     try std.testing.expectEqual(old + 1, store.idxTextRank(ids[1]));
