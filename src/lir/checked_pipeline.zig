@@ -1390,9 +1390,15 @@ test "runtime extraction consumes producer root positions and preserves their or
     try std.testing.expectEqual(lowered.lir_result.root_procs.items[0], lowered.main_proc.?);
 }
 
-/// Temporary specialization census hook (ROC_SPEC_CENSUS=1). Prints one
-/// tab-separated line per Monotype specialization record and per final LIR
-/// procedure to stderr for offline analysis. Not for production builds.
+/// Specialization census diagnostic, enabled by setting `ROC_SPEC_CENSUS` in
+/// the environment. Prints one tab-separated line per checked module, per
+/// Monotype specialization record, and per final LIR procedure to stderr, so
+/// the shape of a program's specialization set can be measured offline. Each
+/// specialization line carries its callable kind, module kind and name,
+/// procedure base and template ordinals, callable name, whether the declared
+/// source type has type variables, whether the request type contains a
+/// function type or an erased callable, and the request and solved type
+/// digests. Never enabled by default; it only reads the finished stores.
 const SpecCensus = if (builtin.os.tag == .freestanding) struct {
     fn enabled() bool {
         return false;
