@@ -84,6 +84,11 @@ pub const io_spec_tests = [_]TestSpec{
         .io_spec = "0<simple test|2>simple test",
         .description = "Stdin to stderr",
     },
+    .{
+        .roc_file = "test/fx/spec_constr_single_pass_blocks.roc",
+        .io_spec = "0<left|1>outer|1>inner|1>after-inner|1>prefix|1>left|1>shared|1>result: 32|0<right|1>outer|1>inner|1>after-inner|1>prefix|1>right|1>shared|1>result: 80|0<stop|1>outer|1>inner|1>after-inner|1>prefix|1>early|1>result: 99",
+        .description = "SpecConstr single-pass blocks retain strict effects, recursive captures, shared branch continuations, and early returns",
+    },
 
     // Match expression tests
     .{

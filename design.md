@@ -5170,6 +5170,16 @@ corresponding arm jump, and keeps continuation bindings in the join body. No
 binding chain is stored in ambient cloner state, and a nested clone cannot
 observe, capture, flush, or move a chain owned by its caller.
 
+Block cloning consumes each source statement once. Encountering a retained
+statement or a branch-built value preserves the already-cloned prefix instead
+of restarting the block through a second lowering path. Ordinary bindings stay
+in an iterative statement walk; a branch-built value gives its untouched source
+suffix to the existing shared-continuation transformation without copying that
+suffix or cloning the producer again. Retained statements keep their tail value
+inside the block, and a terminating block keeps its `unreachable` final marker.
+Discarded intermediate construction must not grow with repeated traversal of
+nested prefixes or become input work for lambda-set solving.
+
 A recursive binding is an explicit finite-graph anchor, not a reason to make
 the whole enclosing value opaque. The clone reserves a fresh runtime binder
 before cloning the initializer, so every recursive occurrence becomes an exact
