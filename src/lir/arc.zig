@@ -415,6 +415,20 @@ pub fn insert(store: *LirStore, layouts: *const layout_mod.Store, options: Inser
     defer dismantles.deinit();
     inserter.dismantles = &dismantles;
 
+    // Committed takes carry field uniqueness to the locals they define;
+    // the solver settled without them, so re-derive against the takes.
+    var take_stmts = try std.bit_set.DynamicBitSetUnmanaged.initEmpty(store.allocator, store.cfStmtCount());
+    defer take_stmts.deinit(store.allocator);
+    var take_iter = dismantles.takes.keyIterator();
+    var any_take = false;
+    while (take_iter.next()) |stmt| {
+        take_stmts.set(@intFromEnum(stmt.*));
+        any_take = true;
+    }
+    if (any_take) {
+        try arc_solve.refineUniquenessWithTakes(store.allocator, store, layouts, borrow_anchor_refcounted, &solution, &take_stmts, options.consume_dead_boxes);
+    }
+
     // Domains are active one proc at a time. This reusable exact map makes
     // global LocalId -> proc-dense index lookup O(1) without allocating and
     // clearing a module-wide table for every proc.
@@ -11946,6 +11960,181 @@ test "uniqueness: join parameter whose source the body reads keeps the check" {
 
     try f.run();
     try testing.expectEqual(@as(u64, 0), f.uniqueArgsFor(appended));
+}
+
+test "uniqueness: fields taken from a dying record inherit their fresh births" {
+    var f = try ArcTest.init(testing.allocator);
+    defer f.deinit();
+    const list = try f.local(f.list_i64);
+    const other = try f.local(f.list_i64);
+    const pair = try f.local(f.pair_list);
+    const first = try f.local(f.list_i64);
+    const second = try f.local(f.list_i64);
+    const elem = try f.local(.i64);
+    const appended_first = try f.local(f.list_i64);
+    const appended_second = try f.local(f.list_i64);
+    const result = try f.local(.i64);
+
+    // elem = 5; list = []; other = []; pair = {list, other};
+    // first = pair[0]; a = checked_op(first, elem); second = pair[1];
+    // b = checked_op(second, elem). Each read is the dying pair's take of
+    // that field, so the field's fresh unit moves into the op.
+    const ret = try f.ret(result);
+    const result_assign = try f.assignI64(result, 1, ret);
+    const append_second = try f.assignLowLevel(appended_second, &.{ second, elem }, LIR.LowLevel.RcEffect.runtimeUniqueness(1), result_assign);
+    const read_second = try f.assignRefField(second, pair, 1, append_second);
+    const append_first = try f.assignLowLevel(appended_first, &.{ first, elem }, LIR.LowLevel.RcEffect.runtimeUniqueness(1), read_second);
+    const read_first = try f.assignRefField(first, pair, 0, append_first);
+    const make_pair = try f.assignStruct(pair, &.{ list, other }, read_first);
+    const other_assign = try f.assignList(other, &.{}, make_pair);
+    const list_assign = try f.assignList(list, &.{}, other_assign);
+    const body = try f.assignI64(elem, 5, list_assign);
+    _ = try f.addProc(&.{}, body, .i64);
+
+    try f.run();
+    try testing.expectEqual(@as(u64, 1), f.uniqueArgsFor(appended_first));
+    try testing.expectEqual(@as(u64, 1), f.uniqueArgsFor(appended_second));
+}
+
+test "uniqueness: a field read after the record was passed to a call keeps the check" {
+    var f = try ArcTest.init(testing.allocator);
+    defer f.deinit();
+    const list = try f.local(f.list_i64);
+    const other = try f.local(f.list_i64);
+    const pair = try f.local(f.pair_list);
+    const call_result = try f.local(.i64);
+    const first = try f.local(f.list_i64);
+    const elem = try f.local(.i64);
+    const appended = try f.local(f.list_i64);
+    const result = try f.local(.i64);
+
+    // The call keeps a copy of the record's fields alive while the record
+    // stays in use, so the field read afterwards names a shared
+    // allocation.
+    const ret = try f.ret(result);
+    const result_assign = try f.assignI64(result, 1, ret);
+    const append = try f.assignLowLevel(appended, &.{ first, elem }, LIR.LowLevel.RcEffect.runtimeUniqueness(1), result_assign);
+    const read_first = try f.assignRefField(first, pair, 0, append);
+    const call = try f.assignCall(call_result, &.{pair}, read_first);
+    const make_pair = try f.assignStruct(pair, &.{ list, other }, call);
+    const other_assign = try f.assignList(other, &.{}, make_pair);
+    const list_assign = try f.assignList(list, &.{}, other_assign);
+    const body = try f.assignI64(elem, 5, list_assign);
+    _ = try f.addProc(&.{}, body, .i64);
+
+    try f.run();
+    try testing.expectEqual(@as(u64, 0), f.uniqueArgsFor(appended));
+}
+
+test "uniqueness: fields taken through a dying Ok payload view inherit their fresh births" {
+    var f = try ArcTest.init(testing.allocator);
+    defer f.deinit();
+    const tag_pair = try f.layouts.putTagUnion(&[_]layout_mod.Idx{
+        try f.layouts.ensureZstLayout(),
+        f.pair_list,
+    });
+    const list = try f.local(f.list_i64);
+    const other = try f.local(f.list_i64);
+    const pair = try f.local(f.pair_list);
+    const tag_value = try f.local(tag_pair);
+    const view = try f.local(f.pair_list);
+    const first = try f.local(f.list_i64);
+    const second = try f.local(f.list_i64);
+    const elem = try f.local(.i64);
+    const appended_first = try f.local(f.list_i64);
+    const appended_second = try f.local(f.list_i64);
+    const result = try f.local(.i64);
+
+    // The shape of a call returning `Try` of a record: the union is bound
+    // once, matched on its discriminant, viewed once through its payload,
+    // and each field is moved out.
+    const discriminant = try f.local(.u16);
+    const default_result = try f.local(.i64);
+    const ret = try f.ret(result);
+    const result_assign = try f.assignI64(result, 1, ret);
+    const append_second = try f.assignLowLevel(appended_second, &.{ second, elem }, LIR.LowLevel.RcEffect.runtimeUniqueness(1), result_assign);
+    const read_second = try f.assignRefField(second, view, 1, append_second);
+    const append_first = try f.assignLowLevel(appended_first, &.{ first, elem }, LIR.LowLevel.RcEffect.runtimeUniqueness(1), read_second);
+    const read_first = try f.assignRefField(first, view, 0, append_first);
+    const project = try f.store.addCFStmt(.{ .assign_ref = .{
+        .target = view,
+        .op = .{ .tag_payload_struct = .{ .source = tag_value, .variant_index = 1, .tag_discriminant = 1 } },
+        .next = read_first,
+    } });
+    const default_ret = try f.ret(default_result);
+    const default_branch = try f.assignI64(default_result, 0, default_ret);
+    const dispatch = try f.switchStmt(discriminant, project, default_branch, null);
+    const read_discriminant = try f.assignDiscriminant(discriminant, tag_value, dispatch);
+    const make_tag = try f.assignTag(tag_value, 1, pair, read_discriminant);
+    const make_pair = try f.assignStruct(pair, &.{ list, other }, make_tag);
+    const other_assign = try f.assignList(other, &.{}, make_pair);
+    const list_assign = try f.assignList(list, &.{}, other_assign);
+    const body = try f.assignI64(elem, 5, list_assign);
+    _ = try f.addProc(&.{}, body, .i64);
+
+    try f.run();
+    try testing.expectEqual(@as(u64, 1), f.uniqueArgsFor(appended_first));
+    try testing.expectEqual(@as(u64, 1), f.uniqueArgsFor(appended_second));
+}
+
+test "uniqueness: a field taken from a callee's Ok record result inherits the callee's fresh birth" {
+    var f = try ArcTest.init(testing.allocator);
+    defer f.deinit();
+    const tag_pair = try f.layouts.putTagUnion(&[_]layout_mod.Idx{
+        try f.layouts.ensureZstLayout(),
+        f.pair_list,
+    });
+
+    // Callee: Ok({[], []}).
+    const list = try f.local(f.list_i64);
+    const other = try f.local(f.list_i64);
+    const pair = try f.local(f.pair_list);
+    const out = try f.local(tag_pair);
+    const callee_ret = try f.ret(out);
+    const make_tag = try f.assignTag(out, 1, pair, callee_ret);
+    const make_pair = try f.assignStruct(pair, &.{ list, other }, make_tag);
+    const other_assign = try f.assignList(other, &.{}, make_pair);
+    const callee_body = try f.assignList(list, &.{}, other_assign);
+    const callee = try f.addProc(&.{}, callee_body, tag_pair);
+
+    // Caller: match the result, take each field, mutate it.
+    const tag_value = try f.local(tag_pair);
+    const discriminant = try f.local(.u16);
+    const view = try f.local(f.pair_list);
+    const first = try f.local(f.list_i64);
+    const second = try f.local(f.list_i64);
+    const elem = try f.local(.i64);
+    const appended_first = try f.local(f.list_i64);
+    const appended_second = try f.local(f.list_i64);
+    const result = try f.local(.i64);
+    const default_result = try f.local(.i64);
+    const ret = try f.ret(result);
+    const result_assign = try f.assignI64(result, 1, ret);
+    const append_second = try f.assignLowLevel(appended_second, &.{ second, elem }, LIR.LowLevel.RcEffect.runtimeUniqueness(1), result_assign);
+    const read_second = try f.assignRefField(second, view, 1, append_second);
+    const append_first = try f.assignLowLevel(appended_first, &.{ first, elem }, LIR.LowLevel.RcEffect.runtimeUniqueness(1), read_second);
+    const read_first = try f.assignRefField(first, view, 0, append_first);
+    const project = try f.store.addCFStmt(.{ .assign_ref = .{
+        .target = view,
+        .op = .{ .tag_payload_struct = .{ .source = tag_value, .variant_index = 1, .tag_discriminant = 1 } },
+        .next = read_first,
+    } });
+    const default_ret = try f.ret(default_result);
+    const default_branch = try f.assignI64(default_result, 0, default_ret);
+    const dispatch = try f.switchStmt(discriminant, project, default_branch, null);
+    const read_discriminant = try f.assignDiscriminant(discriminant, tag_value, dispatch);
+    const elem_assign = try f.assignI64(elem, 5, read_discriminant);
+    const call = try f.store.addCFStmt(.{ .assign_call = .{
+        .target = tag_value,
+        .proc = callee,
+        .args = try f.span(&.{}),
+        .next = elem_assign,
+    } });
+    _ = try f.addProc(&.{}, call, .i64);
+
+    try f.run();
+    try testing.expectEqual(@as(u64, 1), f.uniqueArgsFor(appended_first));
+    try testing.expectEqual(@as(u64, 1), f.uniqueArgsFor(appended_second));
 }
 
 test "uniqueness: list reinterpret alias inherits the fresh birth" {

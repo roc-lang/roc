@@ -12958,6 +12958,24 @@ jumps through the procedure's joins and stopping at a redefinition of the
 local. Reference-counting statements are never uses, so the debug certifier
 re-derives the same verdict from the emitted procedure.
 
+Uniqueness also flows through aggregate fields. Storing a local into a fresh
+struct or tag is the local's consuming use; when the local was unique and the
+store is its last use, the field holds the value's single unit. That field
+uniqueness is a mask per aggregate local (original struct field index, or bit
+0 for a tag's single payload), flows unchanged through pure aliases and the
+tag's payload view, and is settled in the same worklist as alias and join
+edges. A field read inherits the field's uniqueness only when it is the
+committed take that moves the container's stored unit, since any other read
+retains and leaves count 2; and not when a copy holding its own unit can reach
+the take: a consuming use of the container, or a retained read of the same
+field. Takes are decided after the borrow modes, so the solver settles without
+them and emission re-derives uniqueness against the committed takes, settling
+the unique-return bits and the per-field unique-return mask of each signature
+to a fixpoint; a caller taking a field out of a callee's dying `Try` record
+result thus holds the callee's fresh birth, which is what lets loop-carried
+tables handed back from a per-block helper stay born unique. The certifier
+re-derives the same verdict from the `take_kind` stamped on emitted reads.
+
 A checked argument's check is deletable when three conditions hold at the
 call:
 

@@ -72,6 +72,14 @@ pub const RcSig = struct {
     /// the return with no other holder, so the return is the value's single
     /// consuming use. Pinned signatures never claim a unique return.
     ret_unique: bool = false,
+    /// For a returned aggregate, the refcounted fields whose stored
+    /// allocation has count 1 on return: every `ret` returns a value whose
+    /// field was stored from a born-unique local as that local's single
+    /// consuming use. Bit i names original struct field i, or the single
+    /// payload of a tag union at bit 0. A caller that takes such a field out
+    /// of the dying result holds a born-unique value. Pinned signatures
+    /// claim none.
+    ret_unique_fields: u64 = 0,
     /// Bit i set means argument position i is treated as born-unique inside
     /// the proc body: the call site proved its dying argument unique, so
     /// runtime uniqueness checks that consume the parameter go check-free.
