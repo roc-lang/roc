@@ -561,6 +561,9 @@ const Lowerer = struct {
     /// Source-level names recorded by body workers for coordinator interning.
     worker_local_names: std.ArrayList(PendingLocalName),
     source_symbols: std.AutoHashMap(Common.Symbol, Lifted.FnId),
+    /// Type digests shared by every procedure identity rendering; see
+    /// `proc_identity.Memo`.
+    identity_memo: proc_identity.Memo,
     /// Lowered capture record of every capture span seen so far. A capture
     /// record depends only on its captures, so one record serves every
     /// function type that carries the same span.
@@ -803,6 +806,7 @@ const Lowerer = struct {
             .folded_map_matches = .empty,
             .worker_local_names = .empty,
             .source_symbols = std.AutoHashMap(Common.Symbol, Lifted.FnId).init(allocator),
+            .identity_memo = proc_identity.Memo.init(allocator),
             .capture_types = std.AutoHashMap(CaptureSpanKey, Type.TypeId).init(allocator),
             .captures = collections.DenseMap(Lifted.LocalId, CaptureBinding).init(allocator),
             .recursive_value_locals = recursive_value_locals,
@@ -948,6 +952,7 @@ const Lowerer = struct {
         self.captures.deinit();
         self.capture_types.deinit();
         self.source_symbols.deinit();
+        self.identity_memo.deinit();
         self.fn_reach_queue.deinit(self.allocator);
         self.fn_reachable.deinit(self.allocator);
         self.fn_written.deinit(self.allocator);
@@ -1005,6 +1010,7 @@ const Lowerer = struct {
         self.captures.deinit();
         self.capture_types.deinit();
         self.source_symbols.deinit();
+        self.identity_memo.deinit();
         self.fn_reach_queue.deinit(self.allocator);
         self.fn_reachable.deinit(self.allocator);
         self.fn_written.deinit(self.allocator);
@@ -3057,6 +3063,7 @@ const Lowerer = struct {
             .fn_tys = self.solved.fn_tys.items,
             .source_digests = self.source_digests,
             .fn_by_symbol = &self.source_symbols,
+            .memo = &self.identity_memo,
         };
         const return_reuse: []const u8 = switch (spec.return_reuse) {
             .none => "no-return-reuse",
