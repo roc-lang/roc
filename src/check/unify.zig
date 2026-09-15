@@ -107,7 +107,11 @@ pub const AbsorbedRecordDefault = struct {
 pub const GeneralizedDispatchTargetShareCandidate = struct {
     /// Raw receiver on the side whose callable target was omitted.
     omitted_receiver_var: Var,
-    /// Raw receiver on the side that supplied the retained target.
+    /// The retained side's receiver as the checked REPRESENTATIVE of its
+    /// equivalence class at the moment of the merge. `Store.union_` picks that
+    /// representative, so this is not promised to be the caller's own var, and
+    /// after an earlier merge it usually is not. Resolve it
+    /// (`resolveVar(...).var_`) before comparing it with anything.
     retained_receiver_var: Var,
     method_ident: Ident.Idx,
     omitted_fn_var: Var,

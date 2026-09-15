@@ -2259,7 +2259,14 @@ test "unify - declarative static dispatch representative survives repeated merge
     try std.testing.expectEqual(@as(usize, 1), env.scratch.generalized_dispatch_target_share_candidates.len());
     const second_omission = env.scratch.generalized_dispatch_target_share_candidates.items.items[0];
     try std.testing.expectEqual(second_call_receiver, second_omission.omitted_receiver_var);
-    try std.testing.expectEqual(receiver, second_omission.retained_receiver_var);
+    // `retained_receiver_var` is the class's checked REPRESENTATIVE at merge
+    // time, not the caller's spelling: `Store.union_` keeps the b-side var, so
+    // the first merge promoted `first_call_receiver` over `receiver`. Compare
+    // roots, exactly as every production consumer does.
+    try std.testing.expectEqual(
+        env.module_env.types.resolveVar(receiver).var_,
+        env.module_env.types.resolveVar(second_omission.retained_receiver_var).var_,
+    );
     try std.testing.expectEqual(method_name, second_omission.method_ident);
     try std.testing.expectEqual(second_call_fn, second_omission.omitted_fn_var);
     try std.testing.expectEqual(declarative_fn, second_omission.retained_fn_var);
