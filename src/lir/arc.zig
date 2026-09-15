@@ -15172,14 +15172,17 @@ test "ARC ownership iteration skips absent resources and preserves release order
     const indices = try allocator.alloc(u32, width);
     const absent = try allocator.alloc(u32, width);
     const masks = try allocator.alloc(u64, width);
+    var global_local_index = collections.DenseMap(LIR.LocalId, u32).init(allocator);
+    defer global_local_index.deinit();
     for (locals, indices, 0..) |*local, *index, ordinal| {
         local.* = @enumFromInt(ordinal);
         index.* = @intCast(ordinal);
+        try global_local_index.put(local.*, index.*);
     }
     @memset(absent, no_arc_bit);
     @memset(masks, 0);
     const domain: ProcArcDomain = .{
-        .global_local_index = indices,
+        .global_local_index = &global_local_index,
         .frame_locals = locals,
         .resource_bit_index = indices,
         .resource_locals = locals,
