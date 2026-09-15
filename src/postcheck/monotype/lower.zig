@@ -1580,16 +1580,26 @@ fn graphTagByName(
     return null;
 }
 
+/// Graph-side counterpart of `Builder.hostedTryNamedOrNull`: cross transparent
+/// alias layers before matching the capability's def, so an alias-wrapped `Try`
+/// is recognized on both sides of the relation.
 fn graphHostedTryInfoOrNull(
     graph: *InstGraph,
     capability: HostedTryAdapterCapability,
     node: NodeId,
 ) ?GraphHostedTryInfo {
-    const named = switch (graph.content(node)) {
-        .named => |named| named,
-        .redirect, .unresolved, .primitive, .list, .box, .tuple, .func, .tag_union, .record, .empty_tag_union, .empty_record, .erased, .zst => return null,
+    var current = node;
+    const named = while (true) {
+        const probe = switch (graph.content(current)) {
+            .named => |probe| probe,
+            .redirect, .unresolved, .primitive, .list, .box, .tuple, .func, .tag_union, .record, .empty_tag_union, .empty_record, .erased, .zst => return null,
+        };
+        if (sameTypeDef(probe.def, capability.def)) break probe;
+        if (probe.kind != .alias) return null;
+        const backing = probe.backing orelse return null;
+        if (graph.sameClass(backing.node, current)) Common.invariant("transparent alias backing did not advance");
+        current = backing.node;
     };
-    if (!sameTypeDef(named.def, capability.def)) return null;
     if (capability.ok_type_arg_index >= named.args.len or
         capability.err_type_arg_index >= named.args.len)
     {
@@ -5205,6 +5215,13 @@ const Builder = struct {
             defer timing_scope.end();
             break :blk (try self.materializeRootProcedureEvidence(fn_template, evidence_ref)).vector;
         } else &.{};
+        // A root is requested at the template's own declared type, which no
+        // relation ever widened — checked, not assumed.
+        try self.requireRequestDidNotWidenResultRow(
+            template_ref,
+            fn_ty,
+            "root template request widened the template's closed published result row",
+        );
         return try self.lowerTemplateWithMono(
             template_ref,
             view,
@@ -5219,8 +5236,6 @@ const Builder = struct {
             null,
             if (self.comptime_value_reads) .queued else .immediate,
             null,
-            // A root is requested at the template's own declared type, which
-            // no relation ever widened.
             false,
         );
     }
@@ -5755,6 +5770,50 @@ const Builder = struct {
             Common.compilerBug("closed result row did not lower to a tag union");
         if (lowered_tags.len != checkedClosedRowLabelCount(view, declared_row.row)) {
             Common.compilerBug("lowered declared result row disagreed with the checker's published labels");
+        }
+    }
+
+    /// Check a route that states `widened_result_row = false` with no relation
+    /// behind the claim.
+    ///
+    /// `completeTemplateReservation` mints the adapter from the request
+    /// relation's own recorded answer, but three routes reach it without ever
+    /// running that relation and lower the body directly at the requested type
+    /// (`lowerTemplate`'s root, `lowerFnTemplateCallTarget`, and
+    /// `lowerRestoredConstFnTemplate`). Each states that its request is the
+    /// binding's own published type; if one were ever wrong the template would
+    /// be defined at the wide row, which is exactly the miscompile the adapter
+    /// exists to prevent. So the claim is checked against the types here
+    /// instead of being taken on faith: if the adapter pre-step would have
+    /// found a narrowed source type for this request, stop the build.
+    fn requireRequestDidNotWidenResultRow(
+        self: *Builder,
+        template_ref: names.ProcTemplate,
+        requested_fn_ty: Type.TypeId,
+        comptime message: []const u8,
+    ) Allocator.Error!void {
+        const view = self.moduleForDigest(names.procTemplateModuleDigest(template_ref));
+        const template = view.templates.get(template_ref.template);
+        // Only a closed published result row can be widened at all, and this
+        // filter is a checked-type walk while everything below it lowers a
+        // type; keep it first.
+        const declared_row = closedResultRowOrNull(view, template.checked_fn_root) orelse return;
+        // Same destination pin, and for the same reason, as the pre-step this
+        // mirrors: `requested_fn_ty` is a program id.
+        const coordinator_types = ProgramTypeDestination.begin(self);
+        defer coordinator_types.end();
+        const declared_mono_fn_ty = try self.lowerType(view, template.checked_fn_root);
+        const try_capability: ?HostedTryAdapterCapability = if (declared_row.behind_try)
+            (try self.hostedTryAdapterCapability(view, template.hosted_try_adapter)) orelse
+                Common.compilerBug("closed Try result row had no checker-recorded Try capability")
+        else
+            null;
+        if (try self.resultRowWideningAdapterSourceType(
+            try_capability,
+            declared_mono_fn_ty,
+            requested_fn_ty,
+        )) |_| {
+            Common.compilerBug(message);
         }
     }
 
@@ -8931,6 +8990,15 @@ const Builder = struct {
         if (self.active_graph != null) {
             Common.invariant("final function-template lowering was called during an active body draft");
         }
+        // Root and wrapper paths request the binding's own published type; no
+        // request relation ran, so no widening was recorded. `.checked_generated`
+        // accepts an adapter's own `fn_def`, whose `mono_fn_ty` IS the wide
+        // type, so the claim is checked rather than stated.
+        try self.requireRequestDidNotWidenResultRow(
+            template_ref,
+            fn_template.mono_fn_ty,
+            "function-template call target widened the template's closed published result row",
+        );
         const def = try self.lowerTemplateWithMono(
             template_ref,
             method_scope,
@@ -8945,8 +9013,6 @@ const Builder = struct {
             null,
             .immediate,
             null,
-            // Root and wrapper paths request the binding's own published type;
-            // no request relation ran, so no widening was recorded.
             false,
         );
         return .{ .local = self.defFnId(def) };
@@ -9029,6 +9095,16 @@ const Builder = struct {
                     .local_hosted, .imported_hosted => |hosted| hosted.template,
                     .nested, .parser_runtime, .encoder_for_runtime => Common.invariant("non-nested restored function did not reference a procedure template"),
                 };
+                // A restored constant function reproduces a specialization that
+                // was already reserved at this exact type; the identity hit
+                // above carries its recorded answer. If the identity was not
+                // registered locally this lowers the body at the requested
+                // type, so the claim is checked rather than stated.
+                try self.requireRequestDidNotWidenResultRow(
+                    template_ref,
+                    fn_template.mono_fn_ty,
+                    "restored constant function request widened the template's closed published result row",
+                );
                 const def = try self.lowerTemplateWithMono(
                     template_ref,
                     fn_view,
@@ -9043,9 +9119,6 @@ const Builder = struct {
                     retained,
                     .immediate,
                     null,
-                    // A restored constant function reproduces a specialization
-                    // that was already reserved at this exact type; the
-                    // identity hit above carries its recorded answer.
                     false,
                 );
                 return self.defFnId(def);
@@ -12831,12 +12904,37 @@ const Builder = struct {
             Common.invariant("hosted Try capability did not match its Monotype result");
     }
 
+    /// The hosted `Try` nominal a Monotype names, crossing transparent alias
+    /// layers on the way. The checked side already crosses them —
+    /// `closedResultRowOrNull` resolves the result payload through aliases — so
+    /// a template declared `Res : Try(Str, [NotFound])` publishes a capability
+    /// and a recorded row widening. Its lowered return is a `.alias` named node
+    /// whose backing is the `Try` nominal, so matching only the outermost def
+    /// would decline a widening the checker already committed to.
+    ///
+    /// Reads `self.program.types` rather than `activeTypeStore()`: the adapter
+    /// pre-step pins the program store as the destination deliberately.
+    fn hostedTryNamedOrNull(
+        self: *Builder,
+        capability: HostedTryAdapterCapability,
+        try_ty: Type.TypeId,
+    ) ?Type.NamedContent {
+        var current = try_ty;
+        while (true) {
+            const named = switch (self.program.types.get(current)) {
+                .named => |named| named,
+                .primitive, .record, .tuple, .tag_union, .list, .box, .func, .erased, .zst => return null,
+            };
+            if (sameTypeDef(named.def, capability.def)) return named;
+            if (named.kind != .alias) return null;
+            const backing = named.backing orelse return null;
+            if (backing.ty == current) Common.invariant("transparent alias backing did not advance");
+            current = backing.ty;
+        }
+    }
+
     fn hostedTryInfoOrNull(self: *Builder, capability: HostedTryAdapterCapability, try_ty: Type.TypeId) Allocator.Error!?HostedTryInfo {
-        const named = switch (self.program.types.get(try_ty)) {
-            .named => |named| named,
-            .primitive, .record, .tuple, .tag_union, .list, .box, .func, .erased, .zst => return null,
-        };
-        if (!sameTypeDef(named.def, capability.def)) return null;
+        const named = self.hostedTryNamedOrNull(capability, try_ty) orelse return null;
         if (capability.ok_type_arg_index >= self.program.types.span(named.args).len or
             capability.err_type_arg_index >= self.program.types.span(named.args).len)
         {
@@ -12875,13 +12973,12 @@ const Builder = struct {
         ok_ty: Type.TypeId,
         err_ty: Type.TypeId,
     ) Allocator.Error!Type.TypeId {
-        const template = switch (self.program.types.get(template_try_ty)) {
-            .named => |named| named,
-            .primitive, .record, .tuple, .tag_union, .list, .box, .func, .erased, .zst => Common.invariant("Try template type was not named"),
-        };
-        if (!sameTypeDef(template.def, capability.def)) {
+        // Crosses alias layers like `hostedTryInfoOrNull`, so an alias-wrapped
+        // template `Try` is recognized here too. The rebuilt type is the bare
+        // `Try` nominal: this is the adapter's narrowed source row, which is a
+        // different row from the one any crossed alias declares.
+        const template = self.hostedTryNamedOrNull(capability, template_try_ty) orelse
             Common.invariant("hosted Try capability did not match the adapter template nominal");
-        }
         const template_backing = template.backing orelse
             Common.invariant("Try template type had no backing");
         const template_tags = switch (self.shapeContent(template_backing.ty)) {
