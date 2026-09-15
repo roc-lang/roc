@@ -22,6 +22,9 @@ const ForwardingJoinInline = @import("forwarding_join_inline.zig");
 const TagCaseFusion = @import("tag_case_fusion.zig");
 const LoopAppendPromote = @import("loop_append_promote.zig");
 const RangeProve = @import("range_prove.zig");
+
+/// Completed compile-time scalar roots a forked continuation lowers as literals.
+pub const CompletedScalarValues = postcheck.ComptimeScalarValues.CompletedScalarValues;
 const TagReachability = @import("tag_reachability.zig");
 const ReachableProcs = @import("reachable_procs.zig");
 const DebugPrint = @import("debug_print.zig");
@@ -166,6 +169,10 @@ pub const TargetConfig = struct {
     /// solving. Every later post-check stage walks that program in full, so the
     /// count is the size measure a growth regression shows up in.
     lifted_expr_count_out: ?*usize = null,
+    /// Completed compile-time scalar roots for a continuation lowered after
+    /// the host program completed; the lowerer emits them as literals so the
+    /// LIR passes see the constants instead of slot reads.
+    completed_scalar_values: ?*const CompletedScalarValues = null,
     /// Optional timing accumulator for the checked-to-LIR pipeline.
     timing: ?*Timing = null,
 };
@@ -965,27 +972,6 @@ pub fn lowerPreparedMonotypeToLir(prepared: PreparedMonotype) LowerResourceError
 
 /// Consume a solved owner into one target-specific LIR continuation.
 pub fn lowerPreparedSolvedToLir(prepared: PreparedSolved) LowerResourceError!LoweredProgram {
-    var paused = try lowerPreparedSolvedBeforePasses(prepared);
-    errdefer paused.deinit();
-    return try finishPausedLowering(&paused);
-}
-
-/// A runtime continuation lowered to LIR but not yet run through the LIR
-/// passes, so a consumer can attach the completed compile-time values the
-/// passes should see.
-pub const PausedLowering = struct {
-    allocator: Allocator,
-    output: postcheck.SolvedLirLower.Output,
-    root_count: usize,
-    target: TargetConfig,
-
-    pub fn deinit(self: *PausedLowering) void {
-        self.output.deinit();
-    }
-};
-
-/// Lowers a runtime continuation to LIR and stops before the LIR passes.
-pub fn lowerPreparedSolvedBeforePasses(prepared: PreparedSolved) LowerResourceError!PausedLowering {
     const allocator = prepared.allocator;
     const target = prepared.target;
     if (target.work_metrics) |metrics| metrics.lir_continuations += 1;
@@ -996,7 +982,7 @@ pub fn lowerPreparedSolvedBeforePasses(prepared: PreparedSolved) LowerResourceEr
     var lir_gen_timing_scope = PipelineTimingScope.begin(target.timing, .lir_gen);
     defer lir_gen_timing_scope.end();
     const solved_input = prepared.program;
-    const lowered = try postcheck.SolvedLirLower.run(allocator, target.target_usize, solved_input, .{
+    var lowered = try postcheck.SolvedLirLower.run(allocator, target.target_usize, solved_input, .{
         .inline_plan = inline_plan.view(),
         .post_check_executor = target.post_check_executor,
         .inline_expects = target.inline_expects,
@@ -1010,14 +996,12 @@ pub fn lowerPreparedSolvedBeforePasses(prepared: PreparedSolved) LowerResourceEr
         .test_plan_metadata = prepared.test_plan_metadata,
         .debug_materialized_out = target.debug_materialized_out,
         .parallel_metrics = target.solved_lir_parallel_metrics_out,
+        .completed_scalar_values = target.completed_scalar_values,
     });
     lir_gen_timing_scope.end();
-    return .{ .allocator = allocator, .output = lowered, .root_count = prepared.root_count, .target = target };
-}
+    errdefer lowered.deinit();
 
-/// Runs the LIR passes, ARC, and guards over a paused lowering.
-pub fn finishPausedLowering(paused: *PausedLowering) LowerResourceError!LoweredProgram {
-    return finishLoweredOutput(paused.allocator, paused.root_count, paused.target, &paused.output);
+    return finishLoweredOutput(allocator, prepared.root_count, target, &lowered);
 }
 
 fn finishLoweredOutput(

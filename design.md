@@ -829,14 +829,16 @@ local inventory and recomputes its stack-probe requirement. Backends consume
 only these explicit ordinary LIR operations.
 
 A runtime program forked from the completed host program receives the
-completed values in two forms. Before its LIR passes run, every read of a
-completed successful scalar slot becomes the scalar literal decoded from the
-host's frozen image (slots matched by checked root identity, as transcoding
-matches them), so range proving, loop versioning, and overflow elision see
-the constant they would have seen from a literal in source; a table built by
-`List.repeat` with a compile-time length keeps no index check the prover can
-discharge. After the passes, which compact the slot table, the remaining
-aggregate slots are transcoded into the target's frozen image. The LLVM
+completed values in two forms. Its lowering carries the host's completed
+successful scalar roots, decoded from the host's frozen image and keyed by
+checked root identity as transcoding matches slots, and emits each such read
+as the scalar literal rather than a slot read, so range proving, loop
+versioning, and overflow elision see the constant they would have seen from
+a literal in source; a table built by `List.repeat` with a compile-time
+length keeps no index check the prover can discharge, and no slot, failure
+record, or guard exists for the root. After the passes, which compact the
+slot table, the remaining aggregate slots are transcoded into the target's
+frozen image. The LLVM
 backend then defines each slot whose image is a link-time constant—bytes with
 address relocations as symbolic pointer fields—as an internal constant in the
 app module, and the readonly object binds every node globally so those

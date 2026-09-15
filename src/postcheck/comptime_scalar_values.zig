@@ -1,28 +1,93 @@
-//! Completed compile-time scalar values as literals.
+//! Completed compile-time scalar values, ready to lower as literals.
 //!
-//! A runtime program forked from a completed host program reads each
-//! compile-time value through a static-data slot. For a scalar value that
-//! read is a load of bytes the compiler already holds, and the LIR passes
-//! that reason about constants—range proving, loop versioning, overflow
-//! elision—cannot see through it: a table built by `List.repeat` with a
-//! compile-time length keeps every index check the prover would otherwise
-//! discharge. This pass substitutes the decoded literal for every read of a
-//! completed, successful scalar slot before those passes run, taking the
-//! bytes from the host program's frozen image, whose slots are matched by
-//! checked root identity exactly as the later transcoding matches them.
-//! Reads of aggregate slots keep their static-data form and fold in the
-//! backend, and reads of failed roots keep the guard that crashes with the
-//! original failure.
+//! A runtime continuation forked from a completed host program is lowered
+//! after every compile-time root has been evaluated, so a scalar root's
+//! value is known when its read is lowered. Reading it through a
+//! static-data slot instead would hide the constant from the LIR passes that
+//! reason about constants—range proving, loop versioning, overflow
+//! elision—so a table built by `List.repeat` with a compile-time length
+//! would keep every index check the prover otherwise discharges. This table
+//! holds each completed successful scalar root's literal, decoded from the
+//! host's frozen image and keyed by checked root identity exactly as the
+//! later transcoding matches slots, so the lowerer emits the literal
+//! directly and creates no slot, failure record, or guard for it. Aggregate
+//! roots keep their slots and fold in the backend; failed roots keep the
+//! guard that crashes with the original failure.
 const std = @import("std");
+const check = @import("check");
 const core = @import("lir_core");
 const layout = @import("layout");
+const checked = check.CheckedModule;
 const LIR = core.LIR;
 const Program = core.Program;
 const Allocator = std.mem.Allocator;
 
+/// Literals of the completed successful scalar roots of one host program,
+/// keyed by checked root identity.
+pub const CompletedScalarValues = struct {
+    entries: Map,
+
+    const Key = struct {
+        module: checked.ModuleId,
+        root: checked.ComptimeRootId,
+    };
+
+    const Entry = struct {
+        layout_idx: layout.Idx,
+        literal: LIR.LiteralValue,
+    };
+
+    const Context = struct {
+        pub fn hash(_: Context, key: Key) u64 {
+            var hasher = std.hash.Wyhash.init(0);
+            hasher.update(&key.module.bytes);
+            hasher.update(std.mem.asBytes(&key.root));
+            return hasher.final();
+        }
+
+        pub fn eql(_: Context, a: Key, b: Key) bool {
+            return std.meta.eql(a.module, b.module) and a.root == b.root;
+        }
+    };
+
+    const Map = std.HashMapUnmanaged(Key, Entry, Context, std.hash_map.default_max_load_percentage);
+
+    pub const empty: CompletedScalarValues = .{ .entries = .empty };
+
+    /// Collects every completed successful scalar root of `program` from its
+    /// frozen image.
+    pub fn init(allocator: Allocator, program: *const Program.Result, frozen: *const Program.FrozenStaticData) Allocator.Error!CompletedScalarValues {
+        var values = CompletedScalarValues.empty;
+        errdefer values.deinit(allocator);
+        for (program.static_data_values.items, 0..) |entry, index| {
+            const root = entry.compile_time_root orelse continue;
+            if (root.role != .value) continue;
+            const slot: LIR.StaticDataId = @enumFromInt(index);
+            if (!slotSucceeded(program, frozen, slot)) continue;
+            const data_export = exportOf(frozen, slot) orelse continue;
+            if (data_export.relocations.len != 0) continue;
+            const literal = decodeScalar(entry.layout_idx, data_export.bytes[data_export.symbol_offset..]) orelse continue;
+            try values.entries.put(allocator, .{ .module = root.module, .root = root.root }, .{ .layout_idx = entry.layout_idx, .literal = literal });
+        }
+        return values;
+    }
+
+    pub fn deinit(self: *CompletedScalarValues, allocator: Allocator) void {
+        self.entries.deinit(allocator);
+    }
+
+    /// The literal for a root read at `layout_idx`, when the root completed
+    /// successfully with a scalar of that layout.
+    pub fn literalFor(self: *const CompletedScalarValues, module: checked.ModuleId, root: checked.ComptimeRootId, layout_idx: layout.Idx) ?LIR.LiteralValue {
+        const entry = self.entries.get(.{ .module = module, .root = root }) orelse return null;
+        if (entry.layout_idx != layout_idx) return null;
+        return entry.literal;
+    }
+};
+
 /// Whether the completed value in `slot` is a successful root: its failure
 /// record's `failed` byte is zero in the frozen image.
-pub fn slotSucceeded(program: *const Program.Result, frozen: *const Program.FrozenStaticData, slot: LIR.StaticDataId) bool {
+fn slotSucceeded(program: *const Program.Result, frozen: *const Program.FrozenStaticData, slot: LIR.StaticDataId) bool {
     const root = program.static_data_values.items[@intFromEnum(slot)].compile_time_root orelse return false;
     if (root.role != .value) return false;
     const failure_slot = root.role.value.failure_slot;
@@ -34,55 +99,11 @@ pub fn slotSucceeded(program: *const Program.Result, frozen: *const Program.Froz
     return failure_export.bytes[offset] == 0;
 }
 
-/// The source program's value slot with the same checked root identity.
-fn sourceSlotOf(source: *const Program.Result, target_root: anytype) ?LIR.StaticDataId {
-    for (source.static_data_values.items, 0..) |entry, index| {
-        const root = entry.compile_time_root orelse continue;
-        if (root.role != .value) continue;
-        if (std.meta.eql(root.module, target_root.module) and root.root == target_root.root) return @enumFromInt(index);
-    }
-    return null;
-}
-
 fn exportOf(frozen: *const Program.FrozenStaticData, slot: LIR.StaticDataId) ?*const Program.StaticDataExport {
     for (frozen.exports) |*item| {
         if (item.value_id == slot) return item;
     }
     return null;
-}
-
-/// Replace every read of a completed successful scalar slot in `program`
-/// with its literal, decoded from `source`'s frozen image.
-pub fn run(allocator: Allocator, program: *Program.Result, source: *const Program.Result, frozen: *const Program.FrozenStaticData) Allocator.Error!void {
-    const slot_count = program.static_data_values.items.len;
-    if (slot_count == 0) return;
-    const literals = try allocator.alloc(?LIR.LiteralValue, slot_count);
-    defer allocator.free(literals);
-    @memset(literals, null);
-    var any = false;
-    for (program.static_data_values.items, 0..) |entry, index| {
-        const target_root = entry.compile_time_root orelse continue;
-        if (target_root.role != .value) continue;
-        const source_slot = sourceSlotOf(source, target_root) orelse continue;
-        if (!slotSucceeded(source, frozen, source_slot)) continue;
-        const data_export = exportOf(frozen, source_slot) orelse continue;
-        if (data_export.relocations.len != 0) continue;
-        const bytes = data_export.bytes[data_export.symbol_offset..];
-        literals[index] = decodeScalar(entry.layout_idx, bytes) orelse continue;
-        any = true;
-    }
-    if (!any) return;
-
-    const store = &program.store;
-    for (0..store.cfStmtCount()) |stmt_index| {
-        const stmt = store.getCFStmtPtr(@enumFromInt(@as(u32, @intCast(stmt_index))));
-        if (stmt.* != .assign_literal) continue;
-        const assign = &stmt.assign_literal;
-        if (assign.value != .static_data) continue;
-        const raw = @intFromEnum(assign.value.static_data);
-        if (raw >= slot_count) continue;
-        if (literals[raw]) |literal| assign.value = literal;
-    }
 }
 
 /// The literal form of a scalar's target bytes, or null for a layout the
@@ -114,7 +135,7 @@ fn intLiteral(comptime Int: type, layout_idx: layout.Idx, bytes: []const u8) ?LI
     return .{ .i128_literal = .{ .value = @intCast(value), .layout_idx = layout_idx } };
 }
 
-test "completed scalar slot reads become literals and failed or aggregate slots keep their reads" {
+test "completed successful scalar roots decode to literals; failed and aggregate roots do not" {
     const allocator = std.testing.allocator;
     var program = try Program.Result.init(allocator, .u64);
     defer program.deinit();
@@ -125,9 +146,9 @@ test "completed scalar slot reads become literals and failed or aggregate slots 
     const plan: Program.ConstPlanId = @enumFromInt(program.const_plans.items.len);
     try program.const_plans.append(allocator, .scalar);
 
-    // Slots: 0 = failure record of 1, 1 = successful u32 value, 2 = failure
-    // record of 3, 3 = failed u32 value, 4 = failure record of 5 and 6, 5 =
-    // successful i16 value, 6 = a successful string value.
+    // Slots: 0 = failure record of 1, 1 = successful u32 root, 2 = failure
+    // record of 3, 3 = failed u32 root, 4 = failure record of 5 and 6, 5 =
+    // successful i16 root, 6 = successful string root.
     const roles = [_]enum { failure, value, string }{ .failure, .value, .failure, .value, .failure, .value, .string };
     for (roles, 0..) |role, index| {
         try program.static_data_values.append(allocator, .{
@@ -164,19 +185,14 @@ test "completed scalar slot reads become literals and failed or aggregate slots 
     };
     const frozen = Program.FrozenStaticData{ .allocator = allocator, .exports = &exports };
 
-    const reads = [_]u32{ 1, 3, 5, 6 };
-    var stmts: [reads.len]LIR.CFStmtId = undefined;
-    for (reads, 0..) |slot, index| {
-        const target = try program.store.addLocal(.{ .layout_idx = program.static_data_values.items[slot].layout_idx });
-        const ret = try program.store.addCFStmt(.{ .ret = .{ .value = target } });
-        stmts[index] = try program.store.addCFStmt(.{ .assign_literal = .{ .target = target, .value = .{ .static_data = @enumFromInt(slot) }, .next = ret } });
-    }
-    try run(allocator, &program, &program, &frozen);
-
-    const first = program.store.getCFStmt(stmts[0]).assign_literal.value;
+    var values = try CompletedScalarValues.init(allocator, &program, &frozen);
+    defer values.deinit(allocator);
+    const first = values.literalFor(.{}, @enumFromInt(1), .u32) orelse return error.TestUnexpectedResult;
     try std.testing.expectEqual(@as(i128, 12345), first.i128_literal.value);
     try std.testing.expectEqual(layout.Idx.u32, first.i128_literal.layout_idx);
-    try std.testing.expect(program.store.getCFStmt(stmts[1]).assign_literal.value == .static_data);
-    try std.testing.expectEqual(@as(i128, -2), program.store.getCFStmt(stmts[2]).assign_literal.value.i128_literal.value);
-    try std.testing.expect(program.store.getCFStmt(stmts[3]).assign_literal.value == .static_data);
+    try std.testing.expect(values.literalFor(.{}, @enumFromInt(1), .u64) == null);
+    try std.testing.expect(values.literalFor(.{}, @enumFromInt(3), .u32) == null);
+    const third = values.literalFor(.{}, @enumFromInt(5), .i16) orelse return error.TestUnexpectedResult;
+    try std.testing.expectEqual(@as(i128, -2), third.i128_literal.value);
+    try std.testing.expect(values.literalFor(.{}, @enumFromInt(6), .str) == null);
 }

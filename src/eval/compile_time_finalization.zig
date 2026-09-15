@@ -166,7 +166,8 @@ pub const ProgramSession = struct {
                 std.mem.eql(u8, field.name, "post_check_executor") or
                 std.mem.eql(u8, field.name, "debug_materialized_out") or
                 std.mem.eql(u8, field.name, "solved_lir_parallel_metrics_out") or
-                std.mem.eql(u8, field.name, "lifted_expr_count_out"))
+                std.mem.eql(u8, field.name, "lifted_expr_count_out") or
+                std.mem.eql(u8, field.name, "completed_scalar_values"))
             {
                 // A completed host program has already published its outputs.
                 // Reusing it cannot silently redirect those results or count
@@ -210,13 +211,13 @@ pub const ProgramSession = struct {
             }
             const source = if (self.host) |*host| host else finalizationInvariant("target consumer omitted its completed host program");
             const host_frozen = if (source.frozen_static_data) |*frozen| frozen else finalizationInvariant("host program omitted its completed frozen values");
-            // Completed scalar values become literals before the LIR passes
-            // reason about constants; the completed image itself is attached
-            // after the passes, which compact the slot table.
-            var paused = try lir.CheckedPipeline.lowerPreparedSolvedBeforePasses(prepared);
-            errdefer paused.deinit();
-            try lir.ComptimeValueLiterals.run(allocator, &paused.output.lir_result, &source.lir_result, host_frozen);
-            break :block try lir.CheckedPipeline.finishPausedLowering(&paused);
+            // The host program has completed, so its scalar roots lower as
+            // literals here; the completed image itself is attached after
+            // the LIR passes, which compact the slot table.
+            var scalar_values = try lir.CheckedPipeline.CompletedScalarValues.init(allocator, &source.lir_result, host_frozen);
+            defer scalar_values.deinit(allocator);
+            prepared.target.completed_scalar_values = &scalar_values;
+            break :block try lir.CheckedPipeline.lowerPreparedSolvedToLir(prepared);
         } else block: {
             const host = self.host orelse finalizationInvariant("runtime program was already consumed");
             self.host = null;
