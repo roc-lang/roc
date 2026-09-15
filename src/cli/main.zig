@@ -8659,6 +8659,7 @@ fn packFileBytes(
     }
     var specs = std.ArrayList(backend.dev.PackFile.SpecEntry).empty;
     defer specs.deinit(allocator);
+    var withheld: usize = 0;
     const procs = lowered.lir_result.store.getProcSpecs();
     for (lowered.lir_result.spec_procs.items) |spec_proc| {
         const proc = procs[@intFromEnum(spec_proc.proc)];
@@ -8666,7 +8667,10 @@ fn packFileBytes(
         // Constants other than literal backings are still named per program
         // (`roc__static_const_N`); an entry that reaches one cannot be
         // linked elsewhere, so it is not offered.
-        if (try artifactClosureNamesProgramLocalData(allocator, set, artifact)) continue;
+        if (try artifactClosureNamesProgramLocalData(allocator, set, artifact)) {
+            withheld += 1;
+            continue;
+        }
         try specs.append(allocator, .{
             .key = spec_proc.key,
             .artifact = artifact,
@@ -8674,6 +8678,9 @@ fn packFileBytes(
             .rc_ret_borrowed = proc.rc_ret_borrowed,
             .rc_ret_lenders = proc.rc_ret_lenders,
         });
+    }
+    if (std.c.getenv("ROC_PACK_TRACE") != null) {
+        std.debug.print("pack: {d} artifacts, {d} specs offered, {d} withheld (reach program-local constants)\n", .{ set.artifacts.len, specs.items.len, withheld });
     }
     return try backend.dev.PackFile.write(allocator, set, specs.items);
 }
