@@ -64,6 +64,12 @@ pub fn RekeyingHashMap(
             return self.slots.len;
         }
 
+        /// Remove every entry while retaining the allocated probe table.
+        pub fn clearRetainingCapacity(self: *Self) void {
+            @memset(self.slots, null);
+            self.size = 0;
+        }
+
         pub fn ensureTotalCapacity(self: *Self, expected_count: usize) Allocator.Error!void {
             if (expected_count <= usableCount(self.slots.len)) return;
 
@@ -252,6 +258,25 @@ test "rekeying hash map grows and supports adapted lookup" {
         try std.testing.expectEqual(@as(u32, @intCast(key * 2)), map.fetchRemove(@intCast(key)).?.value);
     }
     try std.testing.expectEqual(@as(usize, 0), map.count());
+}
+
+test "rekeying hash map clears entries while retaining capacity" {
+    const Map = RekeyingHashMap(u32, u32, TestContext, 80);
+    var map = Map.init(std.testing.allocator, .{});
+    defer map.deinit();
+
+    for (0..32) |key| try map.putNoClobber(@intCast(key), @intCast(key * 2));
+    const capacity_before_clear = map.capacity();
+
+    map.clearRetainingCapacity();
+
+    try std.testing.expectEqual(@as(usize, 0), map.count());
+    try std.testing.expectEqual(capacity_before_clear, map.capacity());
+    for (0..32) |key| {
+        try std.testing.expectEqual(@as(?u32, null), map.get(@intCast(key)));
+    }
+    try map.putNoClobber(7, 14);
+    try std.testing.expectEqual(@as(u32, 14), map.get(7).?);
 }
 
 test "rekeying hash map matches an oracle through repeated collision churn" {
