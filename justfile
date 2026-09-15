@@ -61,6 +61,7 @@ clean:
     git clean -dfx -e justfile -e .claude
     rm -rf ~/.cache/roc
 
-# rebase this local justfile branch onto upstream main
+# rebase this local justfile branch onto upstream main and push it
 rebase:
     git fetch origin && git rebase origin/main
+    git push --force-with-lease origin local-install
