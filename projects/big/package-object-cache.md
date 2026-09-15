@@ -668,11 +668,29 @@ them.
       roots; the splice resolves an artifact another pack already placed to
       the existing copy. Measured on the roc-parser app: a rebuild or an
       edited rebuild takes 11 hits and splices 10 procedures; real-app
-      numbers are under "Measurement notes". Still to do: the refcount event
-      log comparison, and turning the store on by default once pack-program
-      cost on large platforms is measured.
+      numbers are under "Measurement notes". The refcount gate is the corpus
+      sweep with every fixture sharing one store: each program's exit status,
+      stdout, and stderr must match its cold build's, and the test host
+      reports every allocation the program leaves unfreed on stderr, so a
+      wrong ownership signature shows as a leak report or a crash. The store
+      stays opt-in: on the real apps measured, dev rebuild time is Monotype
+      specialization of open requests and SpecConstr over large procedures,
+      which no closed entry covers, so the cache pays off only where a
+      compile-time program is served from packs (the deflate example's
+      edited rebuild) and costs nothing measurable elsewhere; default-on
+      waits for either lambda-bearing entries (tier 2) or optimized package
+      objects, which are what make dev builds faster or their code faster.
    4. Debug info for cached procedures (DWARF line programs stored with the
       artifact) and the `roc run` host-executable path.
+   5. Optimized package objects for dev builds. The LLVM backend emits
+      procedures under a private packed-buffer convention
+      (`roc_proc_N(ret_ptr, args_ptr)`), so a pack program compiled with
+      LLVM cannot be spliced or linked into a dev-backend program until LLVM
+      gains an emission mode for boundary procedures under the C-ABI
+      classification the dev backend already uses ("ABI of a cached
+      procedure"). That mode, plus a pack file kind that holds a linkable
+      object instead of dev artifacts, is the whole of this slice; the
+      store, keys, and manifests are shared.
 
 5. **Tier 2 and hot reload.** Lambda Mono hit point, site-and-shape lambda
    identities, package objects in the cached host executable, background
