@@ -2348,12 +2348,12 @@ const Lowerer = struct {
                     if (template.spec_key) |key| {
                         if (cache.lookup(key.bytes)) |hit| {
                             if (std.mem.eql(u8, &hit.identity, &identity.bytes)) cached = hit;
-                            if (std.c.getenv("ROC_PACK_TRACE") != null) std.debug.print("lookup direct-lir key={x} {s}\n", .{ key.bytes[0..8], if (cached != null) "hit" else "identity-mismatch" });
-                        } else if (std.c.getenv("ROC_PACK_TRACE") != null) std.debug.print("lookup direct-lir key={x} miss\n", .{key.bytes[0..8]});
+                            if (pack_trace_available and packTraceEnabled()) std.debug.print("lookup direct-lir key={x} {s}\n", .{ key.bytes[0..8], if (cached != null) "hit" else "identity-mismatch" });
+                        } else if (pack_trace_available and packTraceEnabled()) std.debug.print("lookup direct-lir key={x} miss\n", .{key.bytes[0..8]});
                     }
                 }
             }
-        } else if (self.spec_cache != null and std.c.getenv("ROC_PACK_TRACE") != null) {
+        } else if (pack_trace_available and self.spec_cache != null and packTraceEnabled()) {
             if (source_fn.source) |template| if (template.spec_key) |key| std.debug.print("lookup direct-lir key={x} skipped comptime={} plain={} cached={}\n", .{ key.bytes[0..8], self.comptime_phase, plain_spec, cached != null });
         }
         if (self.procs_by_identity.get(identity)) |existing| {
@@ -12458,6 +12458,15 @@ test "direct LIR lower declarations are referenced" {
 }
 
 /// Whether a root's procedure runs in the compile-time evaluator.
+/// Builds without libc (the playground) never read the environment and
+/// compile no trace output.
+const pack_trace_available = @import("builtin").link_libc;
+
+/// `ROC_PACK_TRACE` is set: print every object cache lookup.
+fn packTraceEnabled() bool {
+    return std.c.getenv("ROC_PACK_TRACE") != null;
+}
+
 fn rootRunsAtCompileTime(request: check.CheckedModule.RootRequest) bool {
     return switch (request.kind) {
         .compile_time_constant, .compile_time_callable => true,

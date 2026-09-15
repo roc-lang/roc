@@ -5083,8 +5083,8 @@ const Builder = struct {
                 if (cache.lookup(key.bytes)) |hit| {
                     fn_template.cached = hit;
                     self.count("spec_cache_hits");
-                    if (std.c.getenv("ROC_PACK_TRACE") != null) std.debug.print("lookup monotype key={x} hit\n", .{key.bytes[0..8]});
-                } else if (std.c.getenv("ROC_PACK_TRACE") != null) std.debug.print("lookup monotype key={x} miss\n", .{key.bytes[0..8]});
+                    if (pack_trace_available and packTraceEnabled()) std.debug.print("lookup monotype key={x} hit\n", .{key.bytes[0..8]});
+                } else if (pack_trace_available and packTraceEnabled()) std.debug.print("lookup monotype key={x} miss\n", .{key.bytes[0..8]});
             }
         }
         if (stored_source_topology) |stored_evidence| {
@@ -58320,6 +58320,15 @@ fn dispatchPlanIdForRuntimeExpr(view: ModuleView, expr_id: checked.CheckedExprId
     const plan_raw = @intFromEnum(plan_id);
     if (plan_raw >= view.static_dispatch_plans.plans.len) Common.invariant("stored serialization dispatch plan is outside plan table");
     return plan_id;
+}
+
+/// Builds without libc (the playground) never read the environment and
+/// compile no trace output.
+const pack_trace_available = @import("builtin").link_libc;
+
+/// `ROC_PACK_TRACE` is set: print every object cache lookup.
+fn packTraceEnabled() bool {
+    return std.c.getenv("ROC_PACK_TRACE") != null;
 }
 
 fn moduleDigestFromId(key: checked.ModuleId) names.CheckedModuleDigest {
