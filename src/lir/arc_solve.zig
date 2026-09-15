@@ -5481,8 +5481,7 @@ fn computeUniquenessDetailed(
                         marks.destroy(&destroyed, arg);
                         read_only = false;
                     }
-                    if (read_only) {
-                    }
+                    if (read_only) {}
                 }
             },
             .assign_list => |assign| {
