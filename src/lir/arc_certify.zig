@@ -214,7 +214,7 @@ fn certifyStoreWithWorkStats(
     defer maybe_uninitialized.deinit();
 
     try certifyRcAtomicity(allocator, store, rc_local, roots, diag);
-    try certifyUniqueArgs(allocator, store, rc_local, sigs, diag);
+    try certifyUniqueArgs(allocator, store, layouts, rc_local, sigs, diag);
 
     var certifier = Certifier.initStore(allocator, store, layouts, sigs, rc_local, &maybe_uninitialized, diag, work_stats);
     defer certifier.deinit();
@@ -402,6 +402,7 @@ fn certifyRcAtomicity(
 fn certifyUniqueArgs(
     allocator: Allocator,
     store: *const LirStore,
+    layouts: *const layout_mod.Store,
     rc_local: []const bool,
     sigs: arc_sig.SigTable,
     diag: *Diagnostic,
@@ -456,6 +457,7 @@ fn certifyUniqueArgs(
             proc_stmts.items,
             local_to_dense,
             dense_locals.items.len,
+            layouts,
         );
         defer uniqueness.deinit(allocator);
 
@@ -6328,7 +6330,7 @@ const CertifyTest = struct {
             const lir_local = self.store.getLocal(@enumFromInt(@as(u32, @intCast(index))));
             rc_local[index] = self.layouts.layoutContainsRefcounted(self.layouts.getLayout(lir_local.layout_idx));
         }
-        return certifyUniqueArgs(self.allocator, &self.store, rc_local, arc_sig.SigTable.all_owned, &self.diag);
+        return certifyUniqueArgs(self.allocator, &self.store, &self.layouts, rc_local, arc_sig.SigTable.all_owned, &self.diag);
     }
 
     fn certifyProcAbiMetadataOnly(self: *CertifyTest) CertifyError!void {

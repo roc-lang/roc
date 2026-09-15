@@ -877,6 +877,7 @@ pub fn solve(
     // parameter seeds); the born-unique origin set is re-derived by the
     // certifier.
     dense_uniqueness.born_unique.deinit(allocator);
+    allocator.free(dense_uniqueness.field_masks);
     defer dense_uniqueness.unique.deinit(allocator);
     defer dense_uniqueness.destroyed.deinit(allocator);
 
@@ -889,7 +890,7 @@ pub fn solve(
         if (dense_uniqueness.destroyed.isSet(arc_index)) unique_destroyed.set(local);
     }
     if (builtin.mode == .Debug) {
-        var independently_unique = try computeUniquenessDetailed(allocator, store, rc_local, .{ .sigs = solver.sigs }, null, solver.proc_stmts, null, null, null, solver.consume_dead_boxes);
+        var independently_unique = try computeUniquenessDetailed(allocator, store, rc_local, .{ .sigs = solver.sigs }, null, solver.proc_stmts, null, null, null, solver.consume_dead_boxes, layouts, .none, null);
         defer independently_unique.deinit(allocator);
         if (!unique.eql(independently_unique.unique) or !unique_destroyed.eql(independently_unique.destroyed)) {
             solveInvariant("typed uniqueness facts disagreed with independent LIR analysis");
@@ -3265,7 +3266,7 @@ fn liftSharedStmtFacts(solver: *Solver, current: LIR.CFStmtId) SolveError!void {
                 const field = GuardedList.at(fields, index);
                 try solver.binding_facts.append(allocator, .{ .demand = field });
                 try liftVisibilityLink(solver, assign.target, field);
-                try solver.unique_facts.append(allocator, .{ .destroy = field });
+                try solver.unique_facts.append(allocator, .{ .consume = .{ .local = field, .stmt = current } });
             }
         },
         .assign_tag => |assign| {
@@ -3278,7 +3279,7 @@ fn liftSharedStmtFacts(solver: *Solver, current: LIR.CFStmtId) SolveError!void {
             if (assign.payload) |payload| {
                 try solver.binding_facts.append(allocator, .{ .demand = payload });
                 try liftVisibilityLink(solver, assign.target, payload);
-                try solver.unique_facts.append(allocator, .{ .destroy = payload });
+                try solver.unique_facts.append(allocator, .{ .consume = .{ .local = payload, .stmt = current } });
             }
         },
         .store_struct => |assign| {
@@ -3287,14 +3288,14 @@ fn liftSharedStmtFacts(solver: *Solver, current: LIR.CFStmtId) SolveError!void {
             for (0..GuardedList.borrowLen(fields)) |index| {
                 const field = GuardedList.at(fields, index);
                 try solver.binding_facts.append(allocator, .{ .demand = field });
-                try solver.unique_facts.append(allocator, .{ .destroy = field });
+                try solver.unique_facts.append(allocator, .{ .consume = .{ .local = field, .stmt = current } });
             }
         },
         .store_tag => |assign| {
             try solver.binding_facts.append(allocator, .{ .demand = assign.dest });
             if (assign.payload) |payload| {
                 try solver.binding_facts.append(allocator, .{ .demand = payload });
-                try solver.unique_facts.append(allocator, .{ .destroy = payload });
+                try solver.unique_facts.append(allocator, .{ .consume = .{ .local = payload, .stmt = current } });
             }
         },
         .set_local => |assign| {
@@ -4039,12 +4040,78 @@ pub const Uniqueness = struct {
     /// variant's demand vector seeds born-unique: the seed survives the
     /// body only when this bit is clear.
     destroyed: std.bit_set.DynamicBitSetUnmanaged,
+    /// Per local, the refcounted fields of an aggregate value whose stored
+    /// allocation has count 1 and no other holder: stored from a unique
+    /// local as its single consuming use, and reachable through payload
+    /// views and pure aliases. Bit i names original struct field i, or a
+    /// tag union's single payload at bit 0. Only the independent analysis
+    /// fills these; the typed fact path leaves them zero.
+    field_masks: []u64,
 
-    /// Frees all three bit sets.
     pub fn deinit(self: *Uniqueness, allocator: Allocator) void {
         self.born_unique.deinit(allocator);
         self.unique.deinit(allocator);
         self.destroyed.deinit(allocator);
+        allocator.free(self.field_masks);
+    }
+};
+
+/// Where the independent analysis learns which field reads move a stored
+/// unit. A take is the one field read that consumes a dying container's
+/// unit for that field, so only a take can carry a field's uniqueness to
+/// its result.
+pub const TakeSource = union(enum) {
+    /// No read takes: field reads never inherit.
+    none,
+    /// The `take_kind` emission stamped on each `assign_ref`.
+    stamped,
+    /// The statements of committed unconditional takes, before emission.
+    set: *const std.bit_set.DynamicBitSetUnmanaged,
+};
+
+const FieldStoreEdge = struct { source: u32, container: u32, field: u32, stmt: u32 };
+const MaskAliasEdge = struct { source: u32, target: u32 };
+const FieldReadEdge = struct { container: u32, target: u32, field: u32, stmt: u32, take: bool };
+const SeedMask = struct { local: u32, mask: u64 };
+
+/// Field-level unique origins fed to the settle worklist alongside the
+/// alias and join edges.
+const FieldEdges = struct {
+    stores: []const FieldStoreEdge = &.{},
+    aliases: []const MaskAliasEdge = &.{},
+    reads: []const FieldReadEdge = &.{},
+    seeds: []const SeedMask = &.{},
+};
+
+/// Rows of edge indices grouped by one key local.
+const EdgeRows = struct {
+    offsets: []u32,
+    items: []u32,
+
+    fn build(allocator: Allocator, local_count: usize, keys: []const u32) Allocator.Error!EdgeRows {
+        const offsets = try allocator.alloc(u32, local_count + 1);
+        errdefer allocator.free(offsets);
+        @memset(offsets, 0);
+        for (keys) |key| offsets[key + 1] += 1;
+        for (0..local_count) |index| offsets[index + 1] += offsets[index];
+        const items = try allocator.alloc(u32, keys.len);
+        errdefer allocator.free(items);
+        const fill = try allocator.dupe(u32, offsets[0..local_count]);
+        defer allocator.free(fill);
+        for (keys, 0..) |key, index| {
+            items[fill[key]] = @intCast(index);
+            fill[key] += 1;
+        }
+        return .{ .offsets = offsets, .items = items };
+    }
+
+    fn row(self: EdgeRows, key: u32) []const u32 {
+        return self.items[self.offsets[key]..self.offsets[key + 1]];
+    }
+
+    fn deinit(self: *EdgeRows, allocator: Allocator) void {
+        allocator.free(self.offsets);
+        allocator.free(self.items);
     }
 };
 
@@ -4315,21 +4382,35 @@ const UseOrder = struct {
     defs_of: Rows,
     /// The join statement each jump targets, or `no_local`.
     jump_join: []u32,
-    /// Generation stamps: a statement is visited in the current query when
+    /// Predecessors of each statement over the edges `forEachSuccessor`
+    /// enumerates, so a query marks backward from a local's uses once and
+    /// answers every edge of that local in constant time.
+    preds: Rows,
+    /// Statements whose successors cannot be resolved (loop boundaries and
+    /// jumps outside the inventory); everything after them counts as used.
+    unresolved: std.bit_set.DynamicBitSetUnmanaged,
+    /// Generation stamps: a statement is marked for the current local when
     /// its stamp equals `generation`.
-    visit_gen: []u32,
+    mark_gen: []u32,
     generation: u32,
+    /// The local the current marks describe, and whether they were made
+    /// from its reads (rather than a caller's statement set).
+    marked_local: u32,
+    marked_uses: bool,
     work: std.ArrayList(u32),
 
-    /// CSR rows of statement ids per local, each row sorted.
+    /// CSR rows of statement ids per key, each row sorted.
     const Rows = struct {
         offsets: []u32,
         stmts: []u32,
 
         fn row(self: *const Rows, local: LIR.LocalId) []const u32 {
-            const raw = @intFromEnum(local);
-            if (raw + 1 >= self.offsets.len) return &.{};
-            return self.stmts[self.offsets[raw]..self.offsets[raw + 1]];
+            return self.rowAt(@intFromEnum(local));
+        }
+
+        fn rowAt(self: *const Rows, key: u32) []const u32 {
+            if (key + 1 >= self.offsets.len) return &.{};
+            return self.stmts[self.offsets[key]..self.offsets[key + 1]];
         }
 
         fn deinit(self: *Rows, allocator: Allocator) void {
@@ -4345,9 +4426,9 @@ const UseOrder = struct {
         const jump_join = try allocator.alloc(u32, stmt_count);
         errdefer allocator.free(jump_join);
         @memset(jump_join, no_local);
-        const visit_gen = try allocator.alloc(u32, stmt_count);
-        errdefer allocator.free(visit_gen);
-        @memset(visit_gen, 0);
+        const mark_gen = try allocator.alloc(u32, stmt_count);
+        errdefer allocator.free(mark_gen);
+        @memset(mark_gen, 0);
 
         var joins = collections.DenseMap(LIR.JoinPointId, u32).init(allocator);
         defer joins.deinit();
@@ -4370,14 +4451,23 @@ const UseOrder = struct {
         errdefer reads_of.deinit(allocator);
         var defs_of = try buildRows(allocator, store, lists, .defs);
         errdefer defs_of.deinit(allocator);
+
+        var unresolved = try std.bit_set.DynamicBitSetUnmanaged.initEmpty(allocator, stmt_count);
+        errdefer unresolved.deinit(allocator);
+        var preds = try buildPreds(allocator, store, lists, jump_join, &unresolved);
+        errdefer preds.deinit(allocator);
         return .{
             .allocator = allocator,
             .store = store,
             .reads_of = reads_of,
             .defs_of = defs_of,
             .jump_join = jump_join,
-            .visit_gen = visit_gen,
+            .preds = preds,
+            .unresolved = unresolved,
+            .mark_gen = mark_gen,
             .generation = 0,
+            .marked_local = no_local,
+            .marked_uses = false,
             .work = .empty,
         };
     }
@@ -4500,6 +4590,64 @@ const UseOrder = struct {
         return .{ .offsets = offsets, .stmts = stmts };
     }
 
+    /// Predecessor rows over the successor edges of every statement in the
+    /// inventories, and the set of statements whose successors are unknown.
+    fn buildPreds(
+        allocator: Allocator,
+        store: *const LirStore,
+        lists: []const []const LIR.CFStmtId,
+        jump_join: []const u32,
+        unresolved: *std.bit_set.DynamicBitSetUnmanaged,
+    ) SolveError!Rows {
+        const stmt_count = store.cfStmtCount();
+        var seen = try std.bit_set.DynamicBitSetUnmanaged.initEmpty(allocator, stmt_count);
+        defer seen.deinit(allocator);
+        const offsets = try allocator.alloc(u32, stmt_count + 1);
+        errdefer allocator.free(offsets);
+        @memset(offsets, 0);
+        const Count = struct {
+            offsets: []u32,
+            fn note(self: *@This(), succ: u32) void {
+                self.offsets[succ + 1] += 1;
+            }
+        };
+        var count = Count{ .offsets = offsets };
+        for (lists) |list| {
+            for (list) |stmt_id| {
+                const index = @intFromEnum(stmt_id);
+                if (seen.isSet(index)) continue;
+                seen.set(index);
+                if (forEachSuccessor(store, jump_join, index, &count, Count.note)) unresolved.set(index);
+            }
+        }
+        for (0..stmt_count) |index| offsets[index + 1] += offsets[index];
+        const stmts = try allocator.alloc(u32, offsets[stmt_count]);
+        errdefer allocator.free(stmts);
+        const fill = try allocator.dupe(u32, offsets[0..stmt_count]);
+        defer allocator.free(fill);
+        const Fill = struct {
+            fill: []u32,
+            stmts: []u32,
+            stmt: u32,
+            fn note(self: *@This(), succ: u32) void {
+                self.stmts[self.fill[succ]] = self.stmt;
+                self.fill[succ] += 1;
+            }
+        };
+        var filler = Fill{ .fill = fill, .stmts = stmts, .stmt = 0 };
+        seen.setRangeValue(.{ .start = 0, .end = stmt_count }, false);
+        for (lists) |list| {
+            for (list) |stmt_id| {
+                const index = @intFromEnum(stmt_id);
+                if (seen.isSet(index)) continue;
+                seen.set(index);
+                filler.stmt = @intCast(index);
+                _ = forEachSuccessor(store, jump_join, index, &filler, Fill.note);
+            }
+        }
+        return .{ .offsets = offsets, .stmts = stmts };
+    }
+
     /// Statement inventories walked structurally from each procedure body,
     /// for callers that hold no per-procedure lists of their own.
     fn initFromStore(allocator: Allocator, store: *const LirStore, only_proc: ?LIR.LirProcSpecId) SolveError!UseOrder {
@@ -4516,9 +4664,11 @@ const UseOrder = struct {
             if (only_proc) |proc_id| {
                 if (proc_index != @intFromEnum(proc_id)) continue;
             }
-            const body = store.getProcSpec(@enumFromInt(@as(u32, @intCast(proc_index)))).body orelse continue;
+            const proc = store.getProcSpec(@enumFromInt(@as(u32, @intCast(proc_index))));
+            const body = proc.body orelse continue;
             var list = std.ArrayList(LIR.CFStmtId).empty;
             errdefer list.deinit(allocator);
+            seen.setRangeValue(.{ .start = 0, .end = store.cfStmtCount() }, false);
             stack.clearRetainingCapacity();
             try stack.append(allocator, body);
             while (stack.pop()) |current| {
@@ -4528,7 +4678,6 @@ const UseOrder = struct {
                 try list.append(allocator, current);
                 try appendStructuralSuccessors(allocator, store, &stack, store.getCFStmt(current));
             }
-            for (list.items) |stmt| seen.unset(@intFromEnum(stmt));
             try lists.append(allocator, try list.toOwnedSlice(allocator));
         }
         return init(allocator, store, lists.items);
@@ -4537,8 +4686,10 @@ const UseOrder = struct {
     fn deinit(self: *UseOrder) void {
         self.reads_of.deinit(self.allocator);
         self.defs_of.deinit(self.allocator);
+        self.preds.deinit(self.allocator);
+        self.unresolved.deinit(self.allocator);
         self.allocator.free(self.jump_join);
-        self.allocator.free(self.visit_gen);
+        self.allocator.free(self.mark_gen);
         self.work.deinit(self.allocator);
     }
 
@@ -4562,41 +4713,91 @@ const UseOrder = struct {
     }
 
     /// Whether another use of `local` can execute after the use at `from`
-    /// before `local` is redefined. An edge the walk cannot resolve counts
-    /// as a later use.
-    fn laterUse(self: *UseOrder, from: LIR.CFStmtId, local: LIR.LocalId) SolveError!bool {
-        return self.later(from, local, null);
+    /// before `local` is redefined. Marks from the local's reads once and
+    /// answers every later query about the same local from those marks.
+    fn usesAfter(self: *UseOrder, from: u32, local: LIR.LocalId) SolveError!bool {
+        if (self.marked_local != @intFromEnum(local) or !self.marked_uses) {
+            try self.markFrom(local, self.reads_of.row(local));
+            self.marked_local = @intFromEnum(local);
+            self.marked_uses = true;
+        }
+        return self.after(from, local);
     }
 
-    /// Whether one of the statements in `among` (sorted) can execute after
-    /// the use at `from` before `local` is redefined.
-    fn laterAmong(self: *UseOrder, from: LIR.CFStmtId, local: LIR.LocalId, among: []const u32) SolveError!bool {
-        return self.later(from, local, among);
+    /// Marks the statements from which one of `among` can execute before
+    /// `local` is redefined, for `after` queries about that local.
+    fn markAmong(self: *UseOrder, local: LIR.LocalId, among: []const u32) SolveError!void {
+        try self.markFrom(local, among);
+        self.marked_local = @intFromEnum(local);
+        self.marked_uses = false;
     }
 
-    fn later(self: *UseOrder, from: LIR.CFStmtId, local: LIR.LocalId, among: ?[]const u32) SolveError!bool {
+    /// Whether a marked statement can execute after `stmt`.
+    fn after(self: *const UseOrder, stmt: u32, local: LIR.LocalId) bool {
+        if (self.unresolved.isSet(stmt)) return true;
+        const Probe = struct {
+            order: *const UseOrder,
+            stmt: u32,
+            local: LIR.LocalId,
+            hit: bool,
+            fn note(self_probe: *@This(), succ: u32) void {
+                if (self_probe.order.cutEdge(self_probe.stmt, succ, self_probe.local)) return;
+                if (self_probe.order.mark_gen[succ] == self_probe.order.generation) self_probe.hit = true;
+            }
+        };
+        var probe = Probe{ .order = self, .stmt = stmt, .local = local, .hit = false };
+        _ = forEachSuccessor(self.store, self.jump_join, stmt, &probe, Probe.note);
+        return probe.hit;
+    }
+
+    /// Backward reachability from `initial` and the unresolved statements:
+    /// a statement is marked when executing from it reaches one of them
+    /// before `local` is redefined.
+    fn markFrom(self: *UseOrder, local: LIR.LocalId, initial: []const u32) SolveError!void {
         self.generation +%= 1;
         if (self.generation == 0) {
-            @memset(self.visit_gen, 0);
+            @memset(self.mark_gen, 0);
             self.generation = 1;
         }
         self.work.clearRetainingCapacity();
-        if (try self.pushSuccessors(@intFromEnum(from), local)) return true;
+        for (initial) |stmt| try self.mark(stmt);
+        var unresolved_iter = self.unresolved.iterator(.{});
+        while (unresolved_iter.next()) |stmt| try self.mark(@intCast(stmt));
         while (self.work.pop()) |stmt| {
-            if (self.visit_gen[stmt] == self.generation) continue;
-            self.visit_gen[stmt] = self.generation;
-            const hit = if (among) |row| contains(row, stmt) else self.reads(stmt, local);
-            if (hit) return true;
-            if (self.defines(stmt, local)) continue;
-            if (try self.pushSuccessors(stmt, local)) return true;
+            for (self.preds.rowAt(stmt)) |pred| {
+                if (self.mark_gen[pred] == self.generation) continue;
+                if (self.cutEdge(pred, stmt, local)) continue;
+                if (self.defines(pred, local)) continue;
+                try self.mark(pred);
+            }
+        }
+    }
+
+    fn mark(self: *UseOrder, stmt: u32) SolveError!void {
+        if (self.mark_gen[stmt] == self.generation) return;
+        self.mark_gen[stmt] = self.generation;
+        try self.work.append(self.allocator, stmt);
+    }
+
+    /// A jump into a join that declares `local` as a parameter redefines
+    /// it, so that edge carries no use of the previous value.
+    fn cutEdge(self: *const UseOrder, from: u32, to: u32, local: LIR.LocalId) bool {
+        const node = self.store.getCFStmt(@enumFromInt(from));
+        if (node != .jump) return false;
+        const join_stmt = self.jump_join[from];
+        if (join_stmt == no_local) return false;
+        const join = self.store.getCFStmt(@enumFromInt(join_stmt)).join;
+        if (@intFromEnum(join.body) != to) return false;
+        const params = self.store.getLocalSpan(join.params);
+        for (0..GuardedList.borrowLen(params)) |index| {
+            if (GuardedList.at(params, index) == local) return true;
         }
         return false;
     }
 
-    /// Pushes the control-flow successors of `stmt`; returns true when an
-    /// edge cannot be resolved and the caller must assume a later use.
-    fn pushSuccessors(self: *UseOrder, stmt: u32, local: LIR.LocalId) SolveError!bool {
-        const store = self.store;
+    /// Calls `note(ctx, successor)` for each control-flow successor of
+    /// `stmt`; returns true when an edge cannot be resolved.
+    fn forEachSuccessor(store: *const LirStore, jump_join: []const u32, stmt: u32, ctx: anytype, comptime note: fn (@TypeOf(ctx), u32) void) bool {
         switch (store.getCFStmt(@enumFromInt(stmt))) {
             inline .init_uninitialized,
             .assign_ref,
@@ -4629,46 +4830,41 @@ const UseOrder = struct {
             .decref,
             .decref_if_initialized,
             .free,
-            => |node| try self.work.append(self.allocator, @intFromEnum(node.next)),
+            => |node| note(ctx, @intFromEnum(node.next)),
             .switch_stmt => |node| {
-                if (node.continuation) |continuation| try self.work.append(self.allocator, @intFromEnum(continuation));
-                try self.work.append(self.allocator, @intFromEnum(node.default_branch));
+                if (node.continuation) |continuation| note(ctx, @intFromEnum(continuation));
+                note(ctx, @intFromEnum(node.default_branch));
                 const branches = store.getCFSwitchBranches(node.branches);
                 for (0..GuardedList.borrowLen(branches)) |index| {
-                    try self.work.append(self.allocator, @intFromEnum(GuardedList.at(branches, index).body));
+                    note(ctx, @intFromEnum(GuardedList.at(branches, index).body));
                 }
             },
             .switch_initialized_payload => |node| {
-                try self.work.append(self.allocator, @intFromEnum(node.initialized_branch));
-                try self.work.append(self.allocator, @intFromEnum(node.uninitialized_branch));
+                note(ctx, @intFromEnum(node.initialized_branch));
+                note(ctx, @intFromEnum(node.uninitialized_branch));
             },
             .str_match => |node| {
-                try self.work.append(self.allocator, @intFromEnum(node.on_match));
-                try self.work.append(self.allocator, @intFromEnum(node.on_miss));
+                note(ctx, @intFromEnum(node.on_match));
+                note(ctx, @intFromEnum(node.on_miss));
             },
             .boxy_tag_match => |node| {
-                try self.work.append(self.allocator, @intFromEnum(node.on_match));
-                try self.work.append(self.allocator, @intFromEnum(node.on_miss));
+                note(ctx, @intFromEnum(node.on_match));
+                note(ctx, @intFromEnum(node.on_miss));
             },
             .str_match_set => |node| {
                 const arms = store.getStrMatchArms(node.arms);
                 for (0..GuardedList.borrowLen(arms)) |index| {
-                    try self.work.append(self.allocator, @intFromEnum(GuardedList.at(arms, index).on_match));
+                    note(ctx, @intFromEnum(GuardedList.at(arms, index).on_match));
                 }
-                try self.work.append(self.allocator, @intFromEnum(node.on_miss));
+                note(ctx, @intFromEnum(node.on_miss));
             },
             // A join's body runs only when jumped to; declaring the join
             // continues with its remainder.
-            .join => |node| try self.work.append(self.allocator, @intFromEnum(node.remainder)),
+            .join => |node| note(ctx, @intFromEnum(node.remainder)),
             .jump => {
-                const join_stmt = self.jump_join[stmt];
+                const join_stmt = jump_join[stmt];
                 if (join_stmt == no_local) return true;
-                const join = store.getCFStmt(@enumFromInt(join_stmt)).join;
-                const params = store.getLocalSpan(join.params);
-                for (0..GuardedList.borrowLen(params)) |index| {
-                    if (GuardedList.at(params, index) == local) return false;
-                }
-                try self.work.append(self.allocator, @intFromEnum(join.body));
+                note(ctx, @intFromEnum(store.getCFStmt(@enumFromInt(join_stmt)).join.body));
             },
             .loop_continue, .loop_break => return true,
             .runtime_error,
@@ -4681,6 +4877,22 @@ const UseOrder = struct {
         return false;
     }
 };
+
+/// One transfer edge (alias definition or join-parameter initialization)
+/// whose target is foreign when the source is used again after `stmt`.
+const EdgeCheck = struct { source: LIR.LocalId, stmt: u32, target: u32 };
+
+/// Decides every transfer edge's liveness with one marking per source local.
+fn settleEdgeChecks(order: *UseOrder, checks: []EdgeCheck, ctx: anytype) SolveError!void {
+    std.mem.sort(EdgeCheck, checks, {}, struct {
+        fn lessThan(_: void, a: EdgeCheck, b: EdgeCheck) bool {
+            return @intFromEnum(a.source) < @intFromEnum(b.source);
+        }
+    }.lessThan);
+    for (checks) |check| {
+        if (try order.usesAfter(check.stmt, check.source)) ctx.dead(check.target);
+    }
+}
 
 /// A consuming use takes the value's single unit; a second consume that can
 /// still execute after it finds the unit gone and destroys the local's
@@ -4711,11 +4923,15 @@ fn destroyOrderedConsumes(
         const index = sorted[start].index;
         if (!destroyed.isSet(index)) {
             const among = stmts[start..end];
-            for (among, 0..) |stmt, position| {
-                // One statement consuming the local twice, or a consume
-                // that can run again after another, holds a second unit.
-                const twice = position + 1 < among.len and among[position + 1] == stmt;
-                if (twice or try order.laterAmong(@enumFromInt(stmt), @enumFromInt(index_to_local[index]), among)) {
+            // One statement consuming the local twice, or a consume that
+            // can run again after another, holds a second unit. One walk
+            // from every consume finds any consume that follows another.
+            var twice = false;
+            for (among[1..], among[0 .. among.len - 1]) |stmt, previous| twice = twice or stmt == previous;
+            const local: LIR.LocalId = @enumFromInt(index_to_local[index]);
+            if (!twice) try order.markAmong(local, among);
+            for (among) |stmt| {
+                if (twice or order.after(stmt, local)) {
                     destroyed.set(index);
                     break;
                 }
@@ -4725,13 +4941,6 @@ fn destroyOrderedConsumes(
     }
 }
 
-/// An alias definition or a join-parameter initialization is its source's
-/// consuming use: the unit moves through only when nothing else uses the
-/// source after it. Otherwise the target holds a second reference and has
-/// no unique birth of its own.
-fn deadTransferEdge(order: *UseOrder, stmt: u32, source: LIR.LocalId) SolveError!bool {
-    return order.laterUse(@enumFromInt(stmt), source);
-}
 
 fn settleUniqueOriginDependencies(
     allocator: Allocator,
@@ -4743,8 +4952,29 @@ fn settleUniqueOriginDependencies(
     alias_targets: []const u32,
     join_targets: *const std.bit_set.DynamicBitSetUnmanaged,
     join_incoming: []const UniqueJoinIncoming,
+    field_edges: FieldEdges,
+    masks: []u64,
+    dead_masks: []u64,
 ) SolveError!void {
     const local_count = alias_source.len;
+
+    const store_keys = try allocator.alloc(u32, field_edges.stores.len);
+    defer allocator.free(store_keys);
+    for (field_edges.stores, 0..) |edge, index| store_keys[index] = edge.source;
+    var store_rows = try EdgeRows.build(allocator, local_count, store_keys);
+    defer store_rows.deinit(allocator);
+    const mask_alias_keys = try allocator.alloc(u32, field_edges.aliases.len);
+    defer allocator.free(mask_alias_keys);
+    for (field_edges.aliases, 0..) |edge, index| mask_alias_keys[index] = edge.source;
+    var mask_alias_rows = try EdgeRows.build(allocator, local_count, mask_alias_keys);
+    defer mask_alias_rows.deinit(allocator);
+    const read_keys = try allocator.alloc(u32, field_edges.reads.len);
+    defer allocator.free(read_keys);
+    for (field_edges.reads, 0..) |edge, index| read_keys[index] = edge.container;
+    var read_rows = try EdgeRows.build(allocator, local_count, read_keys);
+    defer read_rows.deinit(allocator);
+    @memset(masks, 0);
+    @memset(dead_masks, 0);
 
     const alias_lens = try allocator.alloc(u32, local_count);
     defer allocator.free(alias_lens);
@@ -4811,10 +5041,61 @@ fn settleUniqueOriginDependencies(
             try enqueue(allocator, &work, &queued, @intCast(source));
         }
     }
-    while (work.pop()) |source| {
+    // Locals whose field masks changed and whose mask aliases and take
+    // reads must be revisited.
+    var mask_work = std.ArrayList(u32).empty;
+    defer mask_work.deinit(allocator);
+    for (field_edges.seeds) |seed| {
+        masks[seed.local] |= seed.mask;
+        try mask_work.append(allocator, seed.local);
+    }
+    while (work.items.len != 0 or mask_work.items.len != 0) {
+        while (mask_work.pop()) |holder| {
+            for (mask_alias_rows.row(holder)) |edge_index| {
+                const target = field_edges.aliases[edge_index].target;
+                const grown = (masks[target] | masks[holder]) != masks[target] or (dead_masks[target] | dead_masks[holder]) != dead_masks[target];
+                if (!grown) continue;
+                masks[target] |= masks[holder];
+                dead_masks[target] |= dead_masks[holder];
+                try mask_work.append(allocator, target);
+            }
+            for (read_rows.row(holder)) |edge_index| {
+                const read = field_edges.reads[edge_index];
+                const bit = @as(u64, 1) << @as(u6, @intCast(read.field));
+                var changed = false;
+                if ((masks[holder] & bit) != 0 and !born.isSet(read.target)) {
+                    born.set(read.target);
+                    changed = true;
+                }
+                if ((dead_masks[holder] & bit) != 0 and !destroyed.isSet(read.target)) {
+                    destroyed.set(read.target);
+                    changed = true;
+                }
+                if (changed) try enqueue(allocator, &work, &queued, read.target);
+            }
+        }
+        const source = work.pop() orelse continue;
         queued.unset(source);
         const newly_born = born.isSet(source) and !born_seen.isSet(source);
         if (newly_born) born_seen.set(source);
+
+        // A field stored from this local holds its unit exactly when the
+        // local was unique; a second holder of the local is a second
+        // holder of the field.
+        for (store_rows.row(source)) |edge_index| {
+            const edge = field_edges.stores[edge_index];
+            const bit = @as(u64, 1) << @as(u6, @intCast(edge.field));
+            var grown = false;
+            if (born.isSet(source) and (masks[edge.container] & bit) == 0) {
+                masks[edge.container] |= bit;
+                grown = true;
+            }
+            if (destroyed.isSet(source) and (dead_masks[edge.container] & bit) == 0) {
+                dead_masks[edge.container] |= bit;
+                grown = true;
+            }
+            if (grown) try mask_work.append(allocator, edge.container);
+        }
 
         for (alias_edges[alias_offsets[source]..alias_offsets[source + 1]]) |target| {
             var changed = false;
@@ -4881,6 +5162,10 @@ fn computeUniquenessFromFacts(
     defer join_incoming.deinit(allocator);
     var join_targets = try std.bit_set.DynamicBitSetUnmanaged.initEmpty(allocator, local_count);
     defer join_targets.deinit(allocator);
+    // Transfer edges whose liveness is decided together, grouped by source
+    // so each source is marked once.
+    var edge_checks = std.ArrayList(EdgeCheck).empty;
+    defer edge_checks.deinit(allocator);
 
     const Marks = struct {
         fn trackDef(
@@ -4914,10 +5199,7 @@ fn computeUniquenessFromFacts(
                 foreign.set(target);
             } else {
                 try consumes.append(allocator, .{ .index = source, .stmt = @intFromEnum(alias.stmt) });
-                if (try deadTransferEdge(order, @intFromEnum(alias.stmt), alias.source)) {
-                    foreign.set(target);
-                    origins.static_foreign.set(target);
-                }
+                try edge_checks.append(allocator, .{ .source = alias.source, .stmt = @intFromEnum(alias.stmt), .target = target });
                 if (alias_source[target] == no_local) {
                     alias_source[target] = source;
                     try alias_targets.append(allocator, target);
@@ -4941,10 +5223,7 @@ fn computeUniquenessFromFacts(
             if (target == source) continue;
             try join_incoming.append(allocator, .{ .target = target, .source = source });
             try consumes.append(allocator, .{ .index = source, .stmt = @intFromEnum(incoming.stmt) });
-            if (try deadTransferEdge(order, @intFromEnum(incoming.stmt), incoming.source)) {
-                foreign.set(target);
-                origins.static_foreign.set(target);
-            }
+            try edge_checks.append(allocator, .{ .source = incoming.source, .stmt = @intFromEnum(incoming.stmt), .target = target });
             try origins.noteJoinIncoming(incoming.target, incoming.source);
         },
         .consume => |consume| if (domain.indexOf(consume.local)) |index| {
@@ -4976,7 +5255,19 @@ fn computeUniquenessFromFacts(
             }
         }
     }
+    try settleEdgeChecks(order, edge_checks.items, struct {
+        foreign: *std.bit_set.DynamicBitSetUnmanaged,
+        origins: *UniqueOriginFacts,
+        fn dead(ctx: @This(), target: u32) void {
+            ctx.foreign.set(target);
+            ctx.origins.static_foreign.set(target);
+        }
+    }{ .foreign = &foreign, .origins = origins });
     try destroyOrderedConsumes(allocator, order, consumes.items, domain.arc_to_local, &destroyed);
+    const field_masks = try allocator.alloc(u64, local_count);
+    errdefer allocator.free(field_masks);
+    const dead_masks = try allocator.alloc(u64, local_count);
+    defer allocator.free(dead_masks);
 
     var foreign_iter = foreign.iterator(.{});
     while (foreign_iter.next()) |index| born.unset(index);
@@ -4997,13 +5288,16 @@ fn computeUniquenessFromFacts(
         alias_targets.items,
         &join_targets,
         join_incoming.items,
+        .{},
+        field_masks,
+        dead_masks,
     );
 
     var unique = try born.clone(allocator);
     errdefer unique.deinit(allocator);
     var destroyed_iter = destroyed.iterator(.{});
     while (destroyed_iter.next()) |index| unique.unset(index);
-    return .{ .born_unique = born, .unique = unique, .destroyed = destroyed };
+    return .{ .born_unique = born, .unique = unique, .destroyed = destroyed, .field_masks = field_masks };
 }
 
 /// Marks every local whose value's outermost allocation provably has count 1
@@ -5035,8 +5329,9 @@ pub fn computeUniqueness(
     store: *const LirStore,
     rc_local: []const bool,
     sigs: arc_sig.SigTable,
+    layouts: *const layout_mod.Store,
 ) SolveError!Uniqueness {
-    return computeUniquenessDetailed(allocator, store, rc_local, sigs, null, null, null, null, null, true);
+    return computeUniquenessDetailed(allocator, store, rc_local, sigs, null, null, null, null, null, true, layouts, .none, null);
 }
 
 const ProcUniquenessDomain = struct {
@@ -5064,6 +5359,7 @@ pub fn computeProcUniqueness(
     stmts: []const LIR.CFStmtId,
     local_to_dense: []const u32,
     dense_local_count: usize,
+    layouts: *const layout_mod.Store,
 ) SolveError!Uniqueness {
     return computeUniquenessDetailed(
         allocator,
@@ -5076,7 +5372,90 @@ pub fn computeProcUniqueness(
         stmts,
         .{ .local_to_dense = local_to_dense, .count = dense_local_count },
         true,
+        layouts,
+        .stamped,
+        null,
     );
+}
+
+/// Re-derives uniqueness for the whole store once the committed field takes
+/// are known, and settles the unique-return and unique-field signature bits
+/// to a fixpoint against them. A take is the one field read that moves a
+/// dying container's stored unit, so it is the only read through which a
+/// field's uniqueness reaches a local; the solver settled without takes and
+/// emission consumes the verdict this pass leaves in the solution.
+pub fn refineUniquenessWithTakes(
+    allocator: Allocator,
+    store: *const LirStore,
+    layouts: *const layout_mod.Store,
+    rc_local: []const bool,
+    solution: *Solution,
+    take_stmts: *const std.bit_set.DynamicBitSetUnmanaged,
+    consume_dead_boxes: bool,
+) SolveError!void {
+    const proc_count = store.procSpecCount();
+    // The locals each proc returns, for the signature bits.
+    var returns = std.ArrayList(std.ArrayList(LIR.LocalId)).empty;
+    defer {
+        for (returns.items) |*list| list.deinit(allocator);
+        returns.deinit(allocator);
+    }
+    var proc_stmts = std.ArrayList(LIR.CFStmtId).empty;
+    defer proc_stmts.deinit(allocator);
+    for (0..proc_count) |proc_index| {
+        var list = std.ArrayList(LIR.LocalId).empty;
+        errdefer list.deinit(allocator);
+        const proc = store.getProcSpec(@enumFromInt(@as(u32, @intCast(proc_index))));
+        if (proc.body) |body| {
+            proc_stmts.clearRetainingCapacity();
+            try collectProcStatements(allocator, store, body, &proc_stmts);
+            for (proc_stmts.items) |stmt| {
+                const node = store.getCFStmt(stmt);
+                if (node == .ret) try list.append(allocator, node.ret.value);
+            }
+        }
+        try returns.append(allocator, list);
+    }
+
+    while (true) {
+        var uniqueness = try computeUniquenessDetailed(allocator, store, rc_local, .{ .sigs = solution.sigs }, null, null, null, null, null, consume_dead_boxes, layouts, .{ .set = take_stmts }, &solution.borrowed);
+        var changed = false;
+        for (returns.items, 0..) |list, proc_index| {
+            if (solution.pinned.isSet(proc_index) or list.items.len == 0) continue;
+            const sig = &solution.sigs[proc_index];
+            var all_unique = true;
+            var fields: u64 = std.math.maxInt(u64);
+            for (list.items) |local| {
+                const raw = @intFromEnum(local);
+                if (raw >= rc_local.len or !rc_local[raw]) {
+                    all_unique = false;
+                    fields = 0;
+                    break;
+                }
+                if (!uniqueness.unique.isSet(raw)) all_unique = false;
+                fields &= uniqueness.field_masks[raw];
+            }
+            if (all_unique and !sig.ret_unique) {
+                sig.ret_unique = true;
+                changed = true;
+            }
+            if ((fields & ~sig.ret_unique_fields) != 0) {
+                sig.ret_unique_fields |= fields;
+                changed = true;
+            }
+        }
+        if (changed) {
+            uniqueness.deinit(allocator);
+            continue;
+        }
+        solution.unique.deinit(allocator);
+        solution.unique_destroyed.deinit(allocator);
+        solution.unique = uniqueness.unique;
+        solution.unique_destroyed = uniqueness.destroyed;
+        uniqueness.born_unique.deinit(allocator);
+        allocator.free(uniqueness.field_masks);
+        return;
+    }
 }
 
 fn computeUniquenessDetailed(
@@ -5090,6 +5469,9 @@ fn computeUniquenessDetailed(
     exact_stmts: ?[]const LIR.CFStmtId,
     proc_domain: ?ProcUniquenessDomain,
     consume_dead_boxes: bool,
+    layouts: *const layout_mod.Store,
+    takes: TakeSource,
+    borrowed: ?*const std.bit_set.DynamicBitSetUnmanaged,
 ) SolveError!Uniqueness {
     const local_count = if (proc_domain) |domain| domain.count else store.localCount();
 
@@ -5144,6 +5526,18 @@ fn computeUniquenessDetailed(
     defer join_incoming_stmts.deinit(allocator);
     var join_targets = try std.bit_set.DynamicBitSetUnmanaged.initEmpty(allocator, local_count);
     defer join_targets.deinit(allocator);
+    var field_stores = std.ArrayList(FieldStoreEdge).empty;
+    defer field_stores.deinit(allocator);
+    var mask_aliases = std.ArrayList(MaskAliasEdge).empty;
+    defer mask_aliases.deinit(allocator);
+    var field_reads = std.ArrayList(FieldReadEdge).empty;
+    defer field_reads.deinit(allocator);
+    var seed_masks = std.ArrayList(SeedMask).empty;
+    defer seed_masks.deinit(allocator);
+    // Locals an emitted `incref` retains: a retained field read holds a
+    // unit of the field's allocation.
+    var retained = try std.bit_set.DynamicBitSetUnmanaged.initEmpty(allocator, local_count);
+    defer retained.deinit(allocator);
 
     const Marks = struct {
         rc: []const bool,
@@ -5280,8 +5674,30 @@ fn computeUniquenessDetailed(
                     .list_reinterpret => |op| try Alias.record(marks, allocator, alias_source, alias_stmt, &alias_targets, &foreign_def, &consumes, assign.target, op.backing_ref, @intCast(stmt_index)),
                     .nominal => |op| try Alias.record(marks, allocator, alias_source, alias_stmt, &alias_targets, &foreign_def, &consumes, assign.target, op.backing_ref, @intCast(stmt_index)),
                     // A payload or discriminant read names an interior
-                    // value of a possibly-shared outer one.
-                    .discriminant, .field, .tag_payload, .tag_payload_struct => marks.destroy(&foreign_def, assign.target),
+                    // value of a possibly-shared outer one; a field read
+                    // inherits only through a take, decided below.
+                    .discriminant => marks.destroy(&foreign_def, assign.target),
+                    .field => |op| {
+                        marks.destroy(&foreign_def, assign.target);
+                        try noteFieldRead(&field_reads, marks, takes, store, allocator, assign.target, op.source, op.field_idx, @intCast(stmt_index));
+                    },
+                    .tag_payload => |op| {
+                        marks.destroy(&foreign_def, assign.target);
+                        try noteFieldRead(&field_reads, marks, takes, store, allocator, assign.target, op.source, op.payload_idx, @intCast(stmt_index));
+                    },
+                    .tag_payload_struct => |op| {
+                        marks.destroy(&foreign_def, assign.target);
+                        if (marks.indexOf(assign.target)) |target| if (marks.indexOf(op.source)) |source| {
+                            try mask_aliases.append(allocator, .{ .source = source, .target = target });
+                        };
+                    },
+                }
+                // A same-value alias of an aggregate views the same stored
+                // fields.
+                if (assign.op == .local) {
+                    if (marks.indexOf(assign.target)) |target| if (marks.indexOf(assign.op.local)) |source| if (target != source) {
+                        try mask_aliases.append(allocator, .{ .source = source, .target = target });
+                    };
                 }
             },
             .assign_literal => |assign| {
@@ -5314,6 +5730,9 @@ fn computeUniquenessDetailed(
                     marks.noteBirth(&born, assign.target);
                 } else {
                     marks.destroy(&foreign_def, assign.target);
+                }
+                if (callee_sig.ret_unique_fields != 0) {
+                    if (marks.indexOf(assign.target)) |target| try seed_masks.append(allocator, .{ .local = target, .mask = callee_sig.ret_unique_fields });
                 }
                 const args = store.getLocalSpan(assign.args);
                 for (0..GuardedList.borrowLen(args)) |position| {
@@ -5499,23 +5918,42 @@ fn computeUniquenessDetailed(
                 const fields = store.getLocalSpan(assign.fields);
                 for (0..GuardedList.borrowLen(fields)) |index| {
                     const field = GuardedList.at(fields, index);
-                    marks.destroy(&destroyed, field);
+                    // Storing into a fresh aggregate is the operand's
+                    // consuming use; the field then holds its unit.
+                    try marks.consumeAt(allocator, &consumes, field, @intCast(stmt_index));
+                    if (index >= 64) continue;
+                    if (marks.indexOf(assign.target)) |container| if (marks.indexOf(field)) |source| {
+                        try field_stores.append(allocator, .{ .source = source, .container = container, .field = @intCast(index), .stmt = @intCast(stmt_index) });
+                    };
                 }
             },
             .assign_tag => |assign| {
                 marks.trackDef(&has_def, &multi_def, assign.target);
                 marks.noteBirth(&born, assign.target);
-                if (assign.payload) |payload| marks.destroy(&destroyed, payload);
+                if (assign.payload) |payload| {
+                    try marks.consumeAt(allocator, &consumes, payload, @intCast(stmt_index));
+                    if (marks.indexOf(assign.target)) |container| if (marks.indexOf(payload)) |source| {
+                        // A struct payload keeps its own field places
+                        // behind the union; any other payload is the
+                        // union's single field.
+                        const payload_layout = layouts.getLayout(store.getLocal(payload).layout_idx);
+                        if (payload_layout.tag == .struct_) {
+                            try mask_aliases.append(allocator, .{ .source = source, .target = container });
+                        } else {
+                            try field_stores.append(allocator, .{ .source = source, .container = container, .field = 0, .stmt = @intCast(stmt_index) });
+                        }
+                    };
+                }
             },
             .store_struct => |assign| {
                 const fields = store.getLocalSpan(assign.fields);
                 for (0..GuardedList.borrowLen(fields)) |index| {
                     const field = GuardedList.at(fields, index);
-                    marks.destroy(&destroyed, field);
+                    try marks.consumeAt(allocator, &consumes, field, @intCast(stmt_index));
                 }
             },
             .store_tag => |assign| {
-                if (assign.payload) |payload| marks.destroy(&destroyed, payload);
+                if (assign.payload) |payload| try marks.consumeAt(allocator, &consumes, payload, @intCast(stmt_index));
             },
             .set_local => |assign| {
                 switch (assign.mode) {
@@ -5540,7 +5978,10 @@ fn computeUniquenessDetailed(
                     },
                 }
             },
-            .incref => |rc| marks.destroy(&destroyed, rc.value),
+            .incref => |rc| {
+                marks.destroy(&destroyed, rc.value);
+                marks.destroy(&retained, rc.value);
+            },
             .join => |join_stmt| {
                 const params = store.getLocalSpan(join_stmt.params);
                 for (0..GuardedList.borrowLen(params)) |param_index| {
@@ -5622,14 +6063,126 @@ fn computeUniquenessDetailed(
         break :blk try UseOrder.initFromStore(allocator, store, only_proc);
     };
     defer order.deinit();
-    for (alias_targets.items) |target| {
-        if (try deadTransferEdge(&order, alias_stmt[target], @enumFromInt(index_to_local[alias_source[target]]))) foreign_def.set(target);
-    }
-    for (join_incoming.items, join_incoming_stmts.items) |incoming, stmt| {
-        if (try deadTransferEdge(&order, stmt, @enumFromInt(index_to_local[incoming.source]))) foreign_def.set(incoming.target);
+    {
+        var checks = std.ArrayList(EdgeCheck).empty;
+        defer checks.deinit(allocator);
+        for (alias_targets.items) |target| {
+            try checks.append(allocator, .{ .source = @enumFromInt(index_to_local[alias_source[target]]), .stmt = alias_stmt[target], .target = target });
+        }
+        for (join_incoming.items, join_incoming_stmts.items) |incoming, stmt| {
+            try checks.append(allocator, .{ .source = @enumFromInt(index_to_local[incoming.source]), .stmt = stmt, .target = incoming.target });
+        }
+        try settleEdgeChecks(&order, checks.items, struct {
+            foreign: *std.bit_set.DynamicBitSetUnmanaged,
+            fn dead(ctx: @This(), target: u32) void {
+                ctx.foreign.set(target);
+            }
+        }{ .foreign = &foreign_def });
     }
     try destroyOrderedConsumes(allocator, &order, consumes.items, index_to_local, &destroyed);
 
+    // A stored field holds the source's unit only when the store is the
+    // source's last use.
+    var live_stores = std.ArrayList(FieldStoreEdge).empty;
+    defer live_stores.deinit(allocator);
+    std.mem.sort(FieldStoreEdge, field_stores.items, {}, struct {
+        fn lessThan(_: void, a: FieldStoreEdge, b: FieldStoreEdge) bool {
+            return a.source < b.source;
+        }
+    }.lessThan);
+    for (field_stores.items) |edge| {
+        if (try order.usesAfter(edge.stmt, @enumFromInt(index_to_local[edge.source]))) continue;
+        try live_stores.append(allocator, edge);
+    }
+    // A take inherits the field's uniqueness unless a copy of the
+    // container or of the field, holding its own unit, can reach it: a
+    // consuming use of the container (which retains every field the
+    // container keeps using), or another read of the same field that was
+    // retained.
+    var eligible_reads = std.ArrayList(FieldReadEdge).empty;
+    defer eligible_reads.deinit(allocator);
+    if (field_reads.items.len != 0) {
+        const consume_keys = try allocator.alloc(u32, consumes.items.len);
+        defer allocator.free(consume_keys);
+        for (consumes.items, 0..) |consume, index| consume_keys[index] = consume.index;
+        var consume_rows = try EdgeRows.build(allocator, local_count, consume_keys);
+        defer consume_rows.deinit(allocator);
+        const read_keys = try allocator.alloc(u32, field_reads.items.len);
+        defer allocator.free(read_keys);
+        for (field_reads.items, 0..) |read, index| read_keys[index] = read.container;
+        var read_rows = try EdgeRows.build(allocator, local_count, read_keys);
+        defer read_rows.deinit(allocator);
+        var killed = try std.bit_set.DynamicBitSetUnmanaged.initEmpty(allocator, field_reads.items.len);
+        defer killed.deinit(allocator);
+        var sources = std.ArrayList(u32).empty;
+        defer sources.deinit(allocator);
+        // One walk per container from its consumes, and one per field from
+        // the field's retained reads, stamps everything they reach.
+        for (0..local_count) |container_index| {
+            const reads = read_rows.row(@intCast(container_index));
+            var any_take = false;
+            for (reads) |read_index| any_take = any_take or field_reads.items[read_index].take;
+            if (!any_take) continue;
+            const container: LIR.LocalId = @enumFromInt(index_to_local[container_index]);
+            // Marks: the container's takes. A consume of the container
+            // from which a take follows kills the container's takes.
+            sources.clearRetainingCapacity();
+            for (reads) |read_index| if (field_reads.items[read_index].take) try sources.append(allocator, field_reads.items[read_index].stmt);
+            try order.markAmong(container, sources.items);
+            var container_killed = false;
+            for (consume_rows.row(@intCast(container_index))) |consume_index| {
+                if (order.after(consumes.items[consume_index].stmt, container)) {
+                    container_killed = true;
+                    break;
+                }
+            }
+            if (container_killed) {
+                for (reads) |read_index| if (field_reads.items[read_index].take) killed.set(read_index);
+                continue;
+            }
+            // Per field: a retained read of the field from which a take of
+            // that field follows kills the field's takes.
+            for (reads) |take_index| {
+                const take = field_reads.items[take_index];
+                if (!take.take or killed.isSet(take_index)) continue;
+                sources.clearRetainingCapacity();
+                for (reads) |read_index| {
+                    const read = field_reads.items[read_index];
+                    if (read.take and read.field == take.field) try sources.append(allocator, read.stmt);
+                }
+                try order.markAmong(container, sources.items);
+                var field_killed = false;
+                for (reads) |other_index| {
+                    const other = field_reads.items[other_index];
+                    if (other.take or other.field != take.field) continue;
+                    const holds_unit = if (borrowed) |modes| !modes.isSet(index_to_local[other.target]) else switch (takes) {
+                        .stamped => retained.isSet(other.target),
+                        .none, .set => true,
+                    };
+                    if (holds_unit and order.after(other.stmt, container)) {
+                        field_killed = true;
+                        break;
+                    }
+                }
+                if (field_killed) {
+                    for (reads) |read_index| {
+                        const read = field_reads.items[read_index];
+                        if (read.take and read.field == take.field) killed.set(read_index);
+                    }
+                }
+            }
+        }
+        for (field_reads.items, 0..) |read, index| {
+            if (!read.take or killed.isSet(index) or multi_def.isSet(read.target) or read.field >= 64) continue;
+            foreign_def.unset(read.target);
+            try eligible_reads.append(allocator, read);
+        }
+    }
+
+    const field_masks = try allocator.alloc(u64, local_count);
+    errdefer allocator.free(field_masks);
+    const dead_masks = try allocator.alloc(u64, local_count);
+    defer allocator.free(dead_masks);
     try settleUniqueOriginDependencies(
         allocator,
         &born,
@@ -5640,14 +6193,46 @@ fn computeUniquenessDetailed(
         alias_targets.items,
         &join_targets,
         join_incoming.items,
+        .{
+            .stores = live_stores.items,
+            .aliases = mask_aliases.items,
+            .reads = eligible_reads.items,
+            .seeds = seed_masks.items,
+        },
+        field_masks,
+        dead_masks,
     );
+    for (field_masks, dead_masks) |*mask, dead| mask.* &= ~dead;
 
     var unique = try born.clone(allocator);
     errdefer unique.deinit(allocator);
     var destroyed_iter = destroyed.iterator(.{});
     while (destroyed_iter.next()) |index| unique.unset(index);
 
-    return .{ .born_unique = born, .unique = unique, .destroyed = destroyed };
+    return .{ .born_unique = born, .unique = unique, .destroyed = destroyed, .field_masks = field_masks };
+}
+
+/// Records a field or payload read for the take-conditioned inheritance
+/// settled after the order is known.
+fn noteFieldRead(
+    reads: *std.ArrayList(FieldReadEdge),
+    marks: anytype,
+    takes: TakeSource,
+    store: *const LirStore,
+    allocator: Allocator,
+    target_local: LIR.LocalId,
+    container_local: LIR.LocalId,
+    field: u32,
+    stmt: u32,
+) SolveError!void {
+    const target = marks.indexOf(target_local) orelse return;
+    const container = marks.indexOf(container_local) orelse return;
+    const take = switch (takes) {
+        .none => false,
+        .stamped => store.getCFStmt(@enumFromInt(stmt)).assign_ref.take_kind == .take,
+        .set => |set| set.isSet(stmt),
+    };
+    try reads.append(allocator, .{ .container = container, .target = target, .field = field, .stmt = stmt, .take = take });
 }
 
 /// Tarjan strongly-connected components over the direct-call graph.
