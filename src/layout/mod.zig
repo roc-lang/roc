@@ -17,6 +17,10 @@ const std = @import("std");
 
 // Re-export the main layout types and functionality
 pub const Layout = @import("layout.zig").Layout;
+pub const rc_helper = @import("rc_helper.zig");
+pub const Digests = @import("digest.zig").Digests;
+pub const LayoutDigest = @import("digest.zig").Digest;
+pub const digestSymbolHex = @import("digest.zig").symbolHex;
 pub const LayoutTag = @import("layout.zig").LayoutTag;
 pub const LayoutData = @import("layout.zig").LayoutData;
 pub const Idx = @import("layout.zig").Idx;
@@ -128,6 +132,7 @@ test "layout tests" {
     std.testing.refAllDecls(@import("layout.zig"));
     std.testing.refAllDecls(@import("graph.zig"));
     std.testing.refAllDecls(@import("rc_helper.zig"));
+    std.testing.refAllDecls(@import("digest.zig"));
     std.testing.refAllDecls(@import("erased_call_abi.zig"));
     std.testing.refAllDecls(@import("store.zig"));
     std.testing.refAllDecls(@import("field_order.zig"));

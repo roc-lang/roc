@@ -171,6 +171,29 @@ fn boxyCaptureDropKey(capture_layout: layout.Idx, desc_field_offset: u32) u64 {
         @as(u64, desc_field_offset);
 }
 
+/// Symbol name of a compiled helper from its helper-cache key. Ordinary
+/// helpers are named by operation, atomicity, and layout content digest so
+/// separately compiled objects share them; a Boxy capture-drop helper is named
+/// by its capture layout's digest and descriptor field offset.
+pub fn compiledRcHelperSymbolName(allocator: std.mem.Allocator, layout_store: *const layout.Store, cache_key: u64) std.mem.Allocator.Error![]u8 {
+    if ((cache_key >> 63) != 0) {
+        const capture_layout: layout.Idx = @enumFromInt(@as(u32, @intCast((cache_key >> 32) & 0x7fff_ffff)));
+        const desc_field_offset: u32 = @truncate(cache_key);
+        var digests = try layout.Digests.init(allocator, layout_store);
+        defer digests.deinit();
+        const hex = layout.digestSymbolHex(try digests.get(capture_layout));
+        return std.fmt.allocPrint(allocator, "roc__rc_boxy_capture_drop_{s}_{d}", .{ &hex, desc_field_offset });
+    }
+    const variant = RcHelperVariant{
+        .key = RcHelperKey.decode(cache_key & 0x3_ffff_ffff),
+        .atomicity = @enumFromInt(@as(u1, @intCast((cache_key >> 34) & 1))),
+    };
+    return layout.rc_helper.symbolName(allocator, layout_store, variant.key, switch (variant.atomicity) {
+        .atomic => .atomic,
+        .single_thread => .single_thread,
+    });
+}
+
 // Control flow statement types (for two-pass compilation)
 const CFStmtId = lir.CFStmtId;
 

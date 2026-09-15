@@ -1677,8 +1677,7 @@ fn addRcHelperFunctionSymbol(
     helper_key: RcHelperKey,
     atomicity: RcAtomicity,
 ) Allocator.Error!SymbolIndex {
-    const cache_key = rcHelperCacheKey(helper_key, atomicity);
-    const name = std.fmt.allocPrint(self.allocator, "roc__rc_helper_{x}", .{cache_key}) catch return error.OutOfMemory;
+    const name = layout.rc_helper.symbolName(self.allocator, self.layout_store, helper_key, if (atomicity == .atomic) .atomic else .single_thread) catch return error.OutOfMemory;
     errdefer self.allocator.free(name);
     try self.function_symbol_names.append(self.allocator, name);
     return try self.addTrackedDefinedFunctionSymbol(

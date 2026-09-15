@@ -3817,7 +3817,7 @@ test "shared frozen erased callables execute on interpreter dev and LLVM" {
     var payload_bytes: [4 * word + @sizeOf(builtins.str.RocStr)]u8 = @splat(0);
     const capture_str = builtins.str.RocStr.fromSliceSmall("capture");
     @memcpy(payload_bytes[4 * word ..], std.mem.asBytes(&capture_str));
-    const drop_name = try static_data_exports.atomicRcHelperSymbolName(allocator, .{ .op = .decref, .layout_idx = .str });
+    const drop_name = try static_data_exports.atomicRcHelperSymbolName(allocator, &program.layouts, .{ .op = .decref, .layout_idx = .str });
     defer allocator.free(drop_name);
     const exports = try static_data_exports.cloneStaticData(allocator, &.{
         .{ .symbol_name = slot_name, .value_id = closure_slot, .bytes = &(@as([word]u8, @splat(0))), .alignment = @alignOf(usize), .relocations = &.{.{ .offset = 0, .target_symbol_name = "closure_payload", .target = .{ .data_symbol = @enumFromInt(1) }, .addend = 2 * word }} },

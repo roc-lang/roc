@@ -362,7 +362,7 @@ const Builder = struct {
             if (on_drop) |helper| {
                 try self.node(result.dest).relocations.append(self.allocator, .{
                     .offset = result.dest.offset + word_size,
-                    .target_symbol_name = try static_data.atomicRcHelperSymbolName(self.allocator, helper),
+                    .target_symbol_name = try static_data.atomicRcHelperSymbolName(self.allocator, &self.program.layouts, helper),
                     .kind = .function_pointer,
                     .rc_helper = helper,
                 });

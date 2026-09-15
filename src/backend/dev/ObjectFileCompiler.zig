@@ -384,7 +384,7 @@ fn compileWithCodeGen(
             }
             unreachable;
         };
-        const symbol_name = static_data_export.atomicRcHelperSymbolName(allocator, helper_key) catch return CompilationError.OutOfMemory;
+        const symbol_name = static_data_export.atomicRcHelperSymbolName(allocator, layout_store, helper_key) catch return CompilationError.OutOfMemory;
         owned_proc_symbol_names.append(allocator, symbol_name) catch {
             allocator.free(symbol_name);
             return CompilationError.OutOfMemory;
@@ -429,7 +429,7 @@ fn compileWithCodeGen(
         for (rc_helpers) |rc_helper| {
             if (published_starts.contains(rc_helper.start_offset)) continue;
             const info = recorded_ranges.get(@intCast(rc_helper.start_offset)) orelse continue;
-            const symbol_name = std.fmt.allocPrint(allocator, "roc__rc_helper_{x}", .{rc_helper.key}) catch return CompilationError.OutOfMemory;
+            const symbol_name = LirCodeGenMod.compiledRcHelperSymbolName(allocator, layout_store, rc_helper.key) catch return CompilationError.OutOfMemory;
             owned_proc_symbol_names.append(allocator, symbol_name) catch {
                 allocator.free(symbol_name);
                 return CompilationError.OutOfMemory;
