@@ -9583,7 +9583,8 @@ test "ARC prepared source liveness survives transient domains and frozen reuse" 
 test "ARC proc domain sparse high global IDs retain only a tiny frame" {
     var f = try ArcTest.init(testing.allocator);
     defer f.deinit();
-    for (0..8192) |_| _ = try f.local(.i64);
+    const non_frame_local = try f.local(.i64);
+    for (1..8192) |_| _ = try f.local(.i64);
     const local = try f.local(.str);
     const body = try f.ret(local);
     const proc = try f.store.addProcSpec(.{
@@ -9610,7 +9611,7 @@ test "ARC proc domain sparse high global IDs retain only a tiny frame" {
     try testing.expectEqual(@as(usize, 1), indices.count());
     try testing.expectEqual(@as(usize, 0), domain.frameIndexOf(local));
     try testing.expect(domain.frameContainsLocal(local));
-    try testing.expect(!domain.frameContainsLocal(@enumFromInt(0)));
+    try testing.expect(!domain.frameContainsLocal(non_frame_local));
     try testing.expect(!domain.frameContainsLocal(@enumFromInt(std.math.maxInt(u32))));
     try testing.expectEqual(@as(usize, 1), domain.resource_locals.len);
     domain.clearGlobalIndices();

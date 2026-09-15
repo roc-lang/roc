@@ -1027,7 +1027,13 @@ test "future field observations agree with per-read traversal across joins rebin
     const other = try store.addLocal(.{ .layout_idx = .str });
     const exit = try store.addCFStmt(.{ .ret = .{ .value = other } });
     const boundary = try store.addCFStmt(.loop_continue);
-    const jump = try store.addCFStmt(.{ .jump = .{ .target = @enumFromInt(0) } });
+    // Reserve the two procedure-local join identities before building their
+    // bodies, which contain forward references to the enclosing joins.
+    var join_ids: [2]LIR.JoinPointId = undefined;
+    for (&join_ids, 0..) |*id, index| id.* = @enumFromInt(index);
+    const outer_id = join_ids[0];
+    const nested_id = join_ids[1];
+    const jump = try store.addCFStmt(.{ .jump = .{ .target = outer_id } });
     const rebind = try store.addCFStmt(.{ .set_local = .{
         .target = local,
         .value = other,
@@ -1047,23 +1053,23 @@ test "future field observations agree with per-read traversal across joins rebin
         }),
         .default_branch = read,
     } });
-    const nested_jump = try store.addCFStmt(.{ .jump = .{ .target = @enumFromInt(1) } });
+    const nested_jump = try store.addCFStmt(.{ .jump = .{ .target = nested_id } });
     const nested = try store.addCFStmt(.{ .join = .{
-        .id = @enumFromInt(1),
+        .id = nested_id,
         .params = .empty(),
         .body = branch,
         .remainder = nested_jump,
     } });
     const outer = try store.addCFStmt(.{ .join = .{
-        .id = @enumFromInt(0),
+        .id = outer_id,
         .params = .empty(),
         .body = nested,
         .remainder = jump,
     } });
     var joins = std.AutoHashMapUnmanaged(u32, LIR.CFStmtId).empty;
     defer joins.deinit(gpa);
-    try joins.put(gpa, 0, nested);
-    try joins.put(gpa, 1, branch);
+    try joins.put(gpa, @intFromEnum(outer_id), nested);
+    try joins.put(gpa, @intFromEnum(nested_id), branch);
     var reads = std.AutoHashMapUnmanaged(LIR.CFStmtId, ReadKind).empty;
     defer reads.deinit(gpa);
     try reads.put(gpa, read, .{ .bit = 1, .consuming = false });
