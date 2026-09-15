@@ -2217,45 +2217,62 @@ const VersionRewriter = struct {
 
 const testing = std.testing;
 
-fn testEdge(source: u32, target: u32) Edge {
-    return .{ .kind = .alias, .stmt = @enumFromInt(0), .source = @enumFromInt(source), .target = @enumFromInt(target) };
+fn testEdge(store: *LirStore, source: LocalId, target: LocalId) Allocator.Error!Edge {
+    const ret = try store.addCFStmt(.{ .ret = .{ .value = target } });
+    const stmt = try store.addCFStmt(.{ .assign_ref = .{
+        .target = target,
+        .op = .{ .local = source },
+        .next = ret,
+    } });
+    return .{ .kind = .alias, .stmt = stmt, .source = source, .target = target };
 }
 
 test "promote carrier index handles empty acyclic and cyclic graphs exactly" {
+    var store = LirStore.init(testing.allocator);
+    defer store.deinit();
+    const root = try store.addLocal(.{ .layout_idx = .u8 });
+    const a = try store.addLocal(.{ .layout_idx = .u8 });
+    const b = try store.addLocal(.{ .layout_idx = .u8 });
+    const c = try store.addLocal(.{ .layout_idx = .u8 });
     const cases = [_]struct { edges: []const Edge, vertices: usize, visits: usize }{
         .{ .edges = &.{}, .vertices = 1, .visits = 0 },
-        .{ .edges = &.{testEdge(1, 2)}, .vertices = 1, .visits = 0 },
-        .{ .edges = &.{testEdge(0, 0)}, .vertices = 1, .visits = 1 },
-        .{ .edges = &.{ testEdge(1, 0), testEdge(0, 1) }, .vertices = 2, .visits = 2 },
-        .{ .edges = &.{ testEdge(1, 3), testEdge(2, 3), testEdge(0, 1), testEdge(0, 2) }, .vertices = 4, .visits = 4 },
+        .{ .edges = &.{try testEdge(&store, a, b)}, .vertices = 1, .visits = 0 },
+        .{ .edges = &.{try testEdge(&store, root, root)}, .vertices = 1, .visits = 1 },
+        .{ .edges = &.{ try testEdge(&store, a, root), try testEdge(&store, root, a) }, .vertices = 2, .visits = 2 },
+        .{ .edges = &.{ try testEdge(&store, a, c), try testEdge(&store, b, c), try testEdge(&store, root, a), try testEdge(&store, root, b) }, .vertices = 4, .visits = 4 },
     };
     for (cases) |case| {
         var index = try EdgeIndex.init(testing.allocator, case.edges);
         defer index.deinit(testing.allocator);
         var carriers = collections.DenseMap(LocalId, void).init(testing.allocator);
         defer carriers.deinit();
-        try testing.expectEqual(case.visits, try index.closure(testing.allocator, case.edges, @enumFromInt(0), &carriers));
+        try testing.expectEqual(case.visits, try index.closure(testing.allocator, case.edges, root, &carriers));
         try testing.expectEqual(case.vertices, carriers.count());
     }
 }
 
 test "promote carrier index visits reverse ordered edges once and excludes unrelated chains" {
     const n = 2048;
+    var store = LirStore.init(testing.allocator);
+    defer store.deinit();
+    const nodes = try testing.allocator.alloc(LocalId, 2 * n + 2);
+    defer testing.allocator.free(nodes);
+    for (nodes) |*node| node.* = try store.addLocal(.{ .layout_idx = .u8 });
     var edges = std.ArrayList(Edge).empty;
     defer edges.deinit(testing.allocator);
     for (0..n) |i| {
-        try edges.append(testing.allocator, testEdge(@intCast(n - i - 1), @intCast(n - i)));
-        try edges.append(testing.allocator, testEdge(@intCast(2 * n - i), @intCast(2 * n - i + 1)));
+        try edges.append(testing.allocator, try testEdge(&store, nodes[n - i - 1], nodes[n - i]));
+        try edges.append(testing.allocator, try testEdge(&store, nodes[2 * n - i], nodes[2 * n - i + 1]));
     }
-    try edges.append(testing.allocator, testEdge(n, 0));
+    try edges.append(testing.allocator, try testEdge(&store, nodes[n], nodes[0]));
     var index = try EdgeIndex.init(testing.allocator, edges.items);
     defer index.deinit(testing.allocator);
     var carriers = collections.DenseMap(LocalId, void).init(testing.allocator);
     defer carriers.deinit();
-    try testing.expectEqual(n + 1, try index.closure(testing.allocator, edges.items, @enumFromInt(0), &carriers));
+    try testing.expectEqual(n + 1, try index.closure(testing.allocator, edges.items, nodes[0], &carriers));
     try testing.expectEqual(n + 1, carriers.count());
-    for (0..n + 1) |i| try testing.expect(carriers.contains(@enumFromInt(i)));
-    try testing.expect(!carriers.contains(@enumFromInt(n + 1)));
+    for (nodes[0 .. n + 1]) |node| try testing.expect(carriers.contains(node));
+    try testing.expect(!carriers.contains(nodes[n + 1]));
 }
 
 /// Compare the once-only scan against the original subtree definition, not
