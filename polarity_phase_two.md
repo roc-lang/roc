@@ -1135,6 +1135,40 @@ Two further findings, both unpinned:
   parser runtime rather than the template adapter. Not audited; out of W6b's
   scope but it should be recorded as debt rather than forgotten.
 
+### 8.1.6 The `unify_test` failure is OURS, from W6a (settled 2026-09-15)
+
+`unify_test` "declarative static dispatch representative survives repeated
+merges" fails with `expected @enumFromInt(5), found @enumFromInt(6)`. Four
+separate agents called it pre-existing. **It is not.** Each only checked its own
+parent commit, and every one of those parents sits above the culprit.
+
+The test NAME exists on `trunk()`, which is why the mistake was easy. But the
+failing assertions were ADDED by `ktlykkxv` (W6a), which is the only commit on
+this branch that touches `src/check/test/unify_test.zig` or `src/check/unify.zig`.
+It was authored and never observed green: W6a's own verification paragraph claims
+focused gates, none of which included this test.
+
+Cause, derived in full rather than guessed. W6a plumbs the receiver operands as
+RESOLVED vars, and the retained side is recorded from the a-side. `publicResolved`
+returns the storage's checked var, and `Store.union_` always keeps B as the
+surviving checked representative. So the first unify records the caller's own var,
+that merge makes the other var the class representative, and the second unify
+records THAT one. Nothing extra is minted; the test simply spells the retained
+receiver with a var that stopped being the representative after the first merge.
+
+**Severity: low.** Every production consumer reads `retained_receiver_var` only
+through `resolveVar(...).var_`, and only to compare it against the omitted
+receiver's root; `recordGeneralizedDispatchTargetShare` is called with the
+OMITTED var, never the retained one. Both vars are in the same equivalence class,
+so recording either is behaviourally identical. The field is a validation witness,
+and its doc comment calling it the "Raw receiver" is the misleading part — it is
+the class's checked representative at merge time, which the store explicitly does
+not promise to be the caller's var.
+
+**Fix:** one line, test-side — compare roots rather than spellings at the second
+assertion, and tighten that doc comment. Do NOT "fix" the production code; there
+is no defect there.
+
 ### 8.2 The working agreement Jared set (binding)
 
 - This session's driver owned jj; subagents never ran state-changing jj
