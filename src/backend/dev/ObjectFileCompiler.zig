@@ -26,6 +26,7 @@ const coff = @import("object/coff.zig");
 
 const ObjectWriter = @import("ObjectWriter.zig");
 const LirCodeGenMod = @import("LirCodeGen.zig");
+const ProcArtifact = @import("ProcArtifact.zig");
 const static_data_export = @import("StaticDataExport.zig");
 const collections = @import("collections");
 const SymbolTable = @import("SymbolTable.zig");
@@ -500,6 +501,36 @@ fn compileWithCodeGen(
     // Get generated code and relocations
     symbol_relocations_started_ns = if (timing) |timings| timings.start() else 0;
     codegen.finishImage() catch return CompilationError.OutOfMemory;
+    // AArch64 calls reach their targets through registered branch sites and
+    // veneers, which artifacts do not carry yet; the round trip covers x86_64.
+    if (artifactRoundTripRequested() and target.toCpuArch() == .x86_64) {
+        var fresh = CodeGen.initWithBoxyMetadata(
+            allocator,
+            lir_store,
+            layout_store,
+            static_strings.view(),
+            erased_arg_desc_offsets,
+            erased_arg_desc_params,
+            boxy_worker_procs,
+            .preserve,
+            target.cpuLevel(),
+        ) catch return CompilationError.OutOfMemory;
+        defer fresh.deinit();
+        fresh.generation_mode = .object_file;
+        fresh.setStaticDataSymbols(static_data_exports) catch return CompilationError.OutOfMemory;
+        fresh.enable_default_platform_runtime = enable_default_platform_runtime;
+        ProcArtifact.verifyRoundTrip(CodeGen, allocator, &codegen, &fresh, proc_specs, layout_store) catch |err| switch (err) {
+            error.OutOfMemory => return CompilationError.OutOfMemory,
+            error.NestedCodeRegion,
+            error.UncoveredCode,
+            error.DanglingReference,
+            error.UnsupportedRelocation,
+            error.UnknownProcIdentity,
+            error.UnknownRcHelper,
+            error.RoundTripMismatch,
+            => std.debug.panic("dev artifact round trip failed: {s}", .{@errorName(err)}),
+        };
+    }
     const code = codegen.getGeneratedCode();
     const relocations = codegen.getRelocations();
 
@@ -821,3 +852,9 @@ test "ObjectFileCompiler initialization" {
 // Note: Full integration tests for compileToObjectFile require complex setup
 // of mono stores and layout stores. These are tested via integration tests
 // in the CLI (roc build --opt=dev).
+
+/// `ROC_DEV_ARTIFACT_ROUNDTRIP` makes every object compile also assemble the
+/// program from its own procedure artifacts and panic if the result differs.
+fn artifactRoundTripRequested() bool {
+    return std.c.getenv("ROC_DEV_ARTIFACT_ROUNDTRIP") != null;
+}
