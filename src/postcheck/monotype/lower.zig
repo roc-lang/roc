@@ -60413,6 +60413,92 @@ test "function context identity excludes draft local allocation ids" {
     try std.testing.expect(!std.mem.eql(u8, &original_key.bytes, &different_binder_key.bytes));
 }
 
+test "issue 11362: checked instantiation allocates placeholders only for recursive lookups" {
+    try testLazyCheckedInstantiationAliases(std.testing.allocator);
+    try std.testing.checkAllAllocationFailures(std.testing.allocator, testLazyCheckedInstantiationAliases, .{});
+}
+
+fn testLazyCheckedInstantiationAliases(gpa: Allocator) (Allocator.Error || error{ TestUnexpectedResult, TestExpectedEqual })!void {
+    var type_store = Type.Store.init(gpa);
+    defer type_store.deinit();
+    var name_store = names.NameStore.init(gpa);
+    defer name_store.deinit();
+    const graph = try InstGraph.create(gpa, &type_store, &name_store);
+    defer graph.destroy();
+    var diagnostics: Diagnostics = .{};
+    graph.setDiagnostics(&diagnostics.graph);
+    var checked_types = checked.CheckedTypeStore{};
+    defer checked_types.deinit(std.testing.allocator);
+    const leaf = try checked_types.reserveSyntheticTypeRoot(std.testing.allocator, .{}, false);
+    try checked_types.fillSyntheticTypeRoot(std.testing.allocator, leaf, .empty_record);
+    const acyclic = try checked_types.appendSyntheticFunctionRoot(std.testing.allocator, .pure, &.{leaf}, leaf);
+    const recursive = try checked_types.reserveSyntheticTypeRoot(std.testing.allocator, .{ .bytes = @splat(1) }, false);
+    try checked_types.fillSyntheticTypeRoot(std.testing.allocator, recursive, .{ .tuple = try std.testing.allocator.dupe(checked.CheckedTypeId, &.{ recursive, recursive, acyclic }) });
+    const open = try checked_types.reserveSyntheticTypeRoot(std.testing.allocator, .{}, true);
+    try checked_types.fillSyntheticTypeRoot(std.testing.allocator, open, .{ .flex = .{} });
+    const alias = try checked_types.reserveSyntheticTypeRoot(std.testing.allocator, .{ .bytes = @splat(2) }, false);
+    try checked_types.fillSyntheticTypeRoot(std.testing.allocator, alias, .{ .alias = .{
+        .name = try name_store.internTypeName("Alias"),
+        .origin_module = try name_store.internModuleIdentity(&([_]u8{0} ** 32)),
+        .owner_module = .{},
+        .backing = acyclic,
+    } });
+    var builder: Builder = undefined;
+    builder.next_instantiation_scope = 0;
+    builder.timing = null;
+    builder.diagnostics = &diagnostics;
+    builder.active_spec_job_diagnostics = null;
+    var ctx: BodyContext = undefined;
+    ctx.allocator = gpa;
+    ctx.builder = &builder;
+    ctx.graph = graph;
+    ctx.view.key = .{ .bytes = @splat(0) };
+    ctx.view.types = checked_types.view();
+    ctx.instantiation = TypeInstantiationContext.init(gpa, builder.allocateInstantiationScope(), ctx.view.key.bytes);
+    defer ctx.instantiation.deinit();
+    errdefer {
+        var entries = ctx.instantiation.node_map.valueIterator();
+        while (entries.next()) |entry| std.debug.assert(entry.* == .node);
+    }
+
+    const fn_node = try ctx.instNode(acyclic);
+    try std.testing.expectEqual(@as(u64, 2), diagnostics.graph.nodes_created);
+    try std.testing.expectEqual(@as(u64, 0), diagnostics.graph.unify_requests);
+    try std.testing.expectEqual(@as(u64, 2), diagnostics.body.checked_node_cache_misses);
+    try std.testing.expectEqual(fn_node, try ctx.instNode(acyclic));
+    const recursive_node = try ctx.instNode(recursive);
+    const items = graph.content(recursive_node).tuple;
+    try std.testing.expect(graph.sameClass(recursive_node, items[0]));
+    try std.testing.expectEqual(items[0], items[1]);
+    try std.testing.expectEqual(fn_node, items[2]);
+    try std.testing.expectEqual(@as(u64, 4), diagnostics.graph.nodes_created);
+    try std.testing.expectEqual(@as(u64, 1), diagnostics.graph.unify_requests);
+    try std.testing.expectEqual(@as(u64, 3), diagnostics.body.checked_node_cache_misses);
+
+    // Alias transparency is explicit: it needs neither an alias graph node
+    // nor the old placeholder-unification side effect to reach its backing.
+    try std.testing.expectEqual(fn_node, try ctx.instNode(alias));
+    try std.testing.expectEqual(@as(u64, 4), diagnostics.graph.nodes_created);
+    try std.testing.expectEqual(@as(u64, 1), diagnostics.graph.unify_requests);
+
+    const fresh = try ctx.freshInstNode(recursive);
+    try std.testing.expect(!graph.sameClass(fresh, recursive_node));
+    try std.testing.expectEqual(recursive_node, try ctx.instNode(recursive));
+
+    var outer = collections.DenseMap(checked.CheckedTypeId, InstantiatingNode).init(gpa);
+    defer outer.deinit();
+    var inner = collections.DenseMap(checked.CheckedTypeId, InstantiatingNode).init(gpa);
+    defer inner.deinit();
+    try ctx.instantiation.decl_scopes.append(gpa, &outer);
+    defer _ = ctx.instantiation.decl_scopes.pop();
+    const outer_node = try ctx.instNode(open);
+    try ctx.instantiation.decl_scopes.append(gpa, &inner);
+    defer _ = ctx.instantiation.decl_scopes.pop();
+    const inner_node = try ctx.instNode(open);
+    try std.testing.expect(!graph.sameClass(outer_node, inner_node));
+    try std.testing.expectEqual(fn_node, try ctx.instNode(acyclic));
+}
+
 fn testLazyCheckedInstantiation(allocator: Allocator, recursive: bool) (Allocator.Error || error{ TestUnexpectedResult, TestExpectedEqual })!void {
     const gpa = std.testing.allocator;
     var checked_types = checked.CheckedTypeStore{};
