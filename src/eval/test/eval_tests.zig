@@ -2958,6 +2958,21 @@ const core_tests = [_]TestCase{
     .{ .name = "inspect: record field large string", .source = "{ foo: \"This is a very long string that definitely exceeds the small string optimization limit\" }.foo", .expected = .{ .inspect_str = "\"This is a very long string that definitely exceeds the small string optimization limit\"" } },
 
     // Equality and mutable record cases
+    .{
+        .name = "issue 11362: lazy instantiation preserves record alias constant equality",
+        .source_kind = .module,
+        .source =
+        \\module [main]
+        \\Pair(a) : { first : a, second : a }
+        \\Value : Pair(Str)
+        \\left : Value
+        \\left = { first: "a", second: "b" }
+        \\right : Value
+        \\right = { first: "a", second: "b" }
+        \\main = (left == right, left == { first: "a", second: "b" }, [left] == [right])
+        ,
+        .expected = .{ .inspect_str = "(True, True, True)" },
+    },
     .{ .name = "inspect: empty record equality", .source = "{} == {}", .expected = .{ .inspect_str = "True" } },
     .{
         .name = "inspect: mutable record equality",
