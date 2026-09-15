@@ -3919,7 +3919,9 @@ codec call selection consumes this producer-written identity directly. It does
 not recursively compare type arguments, open a backing to reconstruct nominal
 identity, or merge the representation-owning main classes. Nominal subject
 comparison is therefore constant-time amortized while preserving both exact
-source identity and backing ownership.
+source identity and backing ownership. Main-class merges preserve recorded
+nominal identities, and subject lookup resolves the current main representative;
+retained codec subjects cannot observe stale identity entries after a redirect.
 
 If a format does not support a shape, checking reports the missing method as a
 static-dispatch error. Unsupported shapes are not represented as runtime parse
@@ -4649,6 +4651,9 @@ The fields have these meanings:
 These fields participate in named-type equality, cross-store equality, and type
 digests. Every type-store translation copies them. A later stage never derives a
 tier, producer kind, or mint depth from lowered type shape.
+The minted-join relation compares this complete producer identity, not just the
+generated digest: different producer kinds or depths still require a
+representation join when they carry equal generated digests.
 
 For a minted iterator, Monotype rewrites the public recursive `rest` type in the
 step result to the minted self type and records concrete adapter components as
