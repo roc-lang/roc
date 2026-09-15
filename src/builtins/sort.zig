@@ -1734,7 +1734,7 @@ fn partial_forward_merge_left_head_2(
 
 // Quad Merge Support
 
-/// Merges an array of of sized blocks of sorted elements with a tail.
+/// Merges an array of sized blocks of sorted elements with a tail.
 /// Returns the block length of sorted runs after the call.
 /// This is needed if the merge ran out of swap space.
 pub fn quad_merge(

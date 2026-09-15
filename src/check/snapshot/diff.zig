@@ -99,7 +99,7 @@ pub const HintList = struct {
         }
     }
 
-    /// The the slice of hints
+    /// The slice of hints
     pub fn slice(self: *const HintList) []const Hint {
         return self.hints[0..self.len];
     }
