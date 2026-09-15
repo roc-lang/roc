@@ -5083,7 +5083,8 @@ const Builder = struct {
                 if (cache.lookup(key.bytes)) |hit| {
                     fn_template.cached = hit;
                     self.count("spec_cache_hits");
-                }
+                    if (std.c.getenv("ROC_PACK_TRACE") != null) std.debug.print("lookup monotype key={x} hit\n", .{key.bytes[0..8]});
+                } else if (std.c.getenv("ROC_PACK_TRACE") != null) std.debug.print("lookup monotype key={x} miss\n", .{key.bytes[0..8]});
             }
         }
         if (stored_source_topology) |stored_evidence| {

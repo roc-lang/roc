@@ -2348,10 +2348,13 @@ const Lowerer = struct {
                     if (template.spec_key) |key| {
                         if (cache.lookup(key.bytes)) |hit| {
                             if (std.mem.eql(u8, &hit.identity, &identity.bytes)) cached = hit;
-                        }
+                            if (std.c.getenv("ROC_PACK_TRACE") != null) std.debug.print("lookup direct-lir key={x} {s}\n", .{ key.bytes[0..8], if (cached != null) "hit" else "identity-mismatch" });
+                        } else if (std.c.getenv("ROC_PACK_TRACE") != null) std.debug.print("lookup direct-lir key={x} miss\n", .{key.bytes[0..8]});
                     }
                 }
             }
+        } else if (self.spec_cache != null and std.c.getenv("ROC_PACK_TRACE") != null) {
+            if (source_fn.source) |template| if (template.spec_key) |key| std.debug.print("lookup direct-lir key={x} skipped comptime={} plain={} cached={}\n", .{ key.bytes[0..8], self.comptime_phase, plain_spec, cached != null });
         }
         if (self.procs_by_identity.get(identity)) |existing| {
             // Another specialization already lowered this procedure. Reuse
