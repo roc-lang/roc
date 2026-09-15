@@ -641,6 +641,10 @@ them.
       LIR for the program shared with the compile-time evaluator, where the
       compile-time roots' closure lowers first and only procedures reached
       afterwards may be served, since the evaluator has no entries to run.
+      Pack roots are the module's exported Roc procedures with closed types;
+      hosted, intrinsic, entry, and compile-time-only templates never lower
+      as procedures of the exporting module, and a module with no such root
+      gets no pack.
       ARC treats an object-cache procedure's recorded signature as its ABI
       and never derives a variant of it. A hit applies only to the record
       Monotype completed without a body: a SpecConstr clone or a second
