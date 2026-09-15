@@ -14,29 +14,35 @@ const harness = @import("lower_to_lir_harness.zig");
 const expectLowersToLir = harness.expectLowersToLir;
 const expectDeterministicLir = harness.expectDeterministicLir;
 
+test "ARC real workers: tail-recursive captured Dict is deterministic" {
+    try harness.expectArcParallelismDeterministicLir(.{ .app_body = captured_dict_fixture }, .{}, false);
+}
+
+const captured_dict_fixture =
+    \\T :: {}.{
+    \\    run : List(U8) -> I64
+    \\    run = |vars| {
+    \\        gains : Dict(U8, I64)
+    \\        gains = Dict.from_list([(1, 3), (2, 4)])
+    \\        recur : List(U8), I64 -> I64
+    \\        recur = |xs, acc| {
+    \\            match xs {
+    \\                [] => acc
+    \\                [x, .. as rest] => recur(rest, acc + (gains.get(x) ?? 0))
+    \\            }
+    \\        }
+    \\        recur(vars, 0)
+    \\    }
+    \\}
+    \\
+    \\main! = |_args| {
+    \\    _ = T.run([1, 2, 1])
+    \\    Ok({})
+    \\}
+;
+
 test "tce capture: tail-recursive closure capturing a Dict lowers to LIR" {
-    try expectLowersToLir(
-        \\T :: {}.{
-        \\    run : List(U8) -> I64
-        \\    run = |vars| {
-        \\        gains : Dict(U8, I64)
-        \\        gains = Dict.from_list([(1, 3), (2, 4)])
-        \\        recur : List(U8), I64 -> I64
-        \\        recur = |xs, acc| {
-        \\            match xs {
-        \\                [] => acc
-        \\                [x, .. as rest] => recur(rest, acc + (gains.get(x) ?? 0))
-        \\            }
-        \\        }
-        \\        recur(vars, 0)
-        \\    }
-        \\}
-        \\
-        \\main! = |_args| {
-        \\    _ = T.run([1, 2, 1])
-        \\    Ok({})
-        \\}
-    );
+    try expectLowersToLir(captured_dict_fixture);
 }
 
 test "tce capture: tail-recursive closure capturing two Dicts lowers to LIR" {

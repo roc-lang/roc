@@ -100,6 +100,8 @@ pub const SolvedLirParallelMetrics = postcheck.SolvedLirLower.ParallelMetrics;
 
 /// Deterministic worker counters for procedure-local LIR optimization phases.
 pub const LirPassParallelMetrics = ProcPasses.ParallelMetrics;
+/// ARC worker task counts and deterministic serial-or-parallel work totals.
+pub const ArcParallelMetrics = Arc.ParallelMetrics;
 /// Procedure-local optimization phases, in pipeline order.
 pub const LirPassPhase = ProcPasses.Phase;
 
@@ -155,6 +157,8 @@ pub const TargetConfig = struct {
     solved_lir_parallel_metrics_out: ?*SolvedLirParallelMetrics = null,
     /// Reset once before the LIR pass pipeline, then accumulated across phases.
     lir_pass_parallel_metrics_out: ?*LirPassParallelMetrics = null,
+    /// Per-run ARC counters; ARC insertion owns resetting this output.
+    arc_parallel_metrics_out: ?*ArcParallelMetrics = null,
     /// Receives the expression count of the lifted program handed to lambda-set
     /// solving. Every later post-check stage walks that program in full, so the
     /// count is the size measure a growth regression shows up in.
@@ -173,6 +177,8 @@ pub const Timing = struct {
     solved_lir_parallel: SolvedLirParallelMetrics = .{},
     lir_pass_parallel_mutex: std.Io.Mutex = .init,
     lir_pass_parallel: LirPassParallelMetrics = .{},
+    arc_parallel_mutex: std.Io.Mutex = .init,
+    arc_parallel: ArcParallelMetrics = .{},
     monotype_ns: TimingCounter = .{},
     monotype_setup_ns: TimingCounter = .{},
     monotype_procedure_specialization_ns: TimingCounter = .{},
@@ -276,6 +282,7 @@ pub const Timing = struct {
             .monotype_diagnostics = diagnostics,
             .solved_lir_parallel = self.solvedLirParallelSnapshot(),
             .lir_pass_parallel = self.lirPassParallelSnapshot(),
+            .arc_parallel = self.arcParallelSnapshot(),
         };
     }
 
@@ -303,6 +310,7 @@ pub const Timing = struct {
         self.addMonotypeParallel(snapshot_value.monotype_parallel);
         self.addSolvedLirParallel(snapshot_value.solved_lir_parallel);
         self.addLirPassParallel(snapshot_value.lir_pass_parallel);
+        self.addArcParallel(snapshot_value.arc_parallel);
         self.boxy_plan_ns.add(snapshot_value.boxy_plan_ns);
         self.boxy_lower_ns.add(snapshot_value.boxy_lower_ns);
         self.lift_ns.add(snapshot_value.lift_ns);
@@ -404,6 +412,19 @@ pub const Timing = struct {
         return self.lir_pass_parallel;
     }
 
+    fn addArcParallel(self: *Timing, parallel: ArcParallelMetrics) void {
+        self.arc_parallel_mutex.lockUncancelable(self.std_io);
+        defer self.arc_parallel_mutex.unlock(self.std_io);
+        self.arc_parallel.add(parallel);
+    }
+
+    fn arcParallelSnapshot(self: *const Timing) ArcParallelMetrics {
+        const mutable = @constCast(self);
+        mutable.arc_parallel_mutex.lockUncancelable(self.std_io);
+        defer mutable.arc_parallel_mutex.unlock(self.std_io);
+        return self.arc_parallel;
+    }
+
     fn addMonotypeDiagnostics(self: *Timing, diagnostics: postcheck.Monotype.Lower.Diagnostics) void {
         self.monotype_diagnostics_mutex.lockUncancelable(self.std_io);
         defer self.monotype_diagnostics_mutex.unlock(self.std_io);
@@ -445,6 +466,7 @@ pub const TimingSnapshot = struct {
     monotype_parallel: postcheck.Monotype.Lower.ParallelMetricsSnapshot = .{},
     solved_lir_parallel: SolvedLirParallelMetrics = .{},
     lir_pass_parallel: LirPassParallelMetrics = .{},
+    arc_parallel: ArcParallelMetrics = .{},
     boxy_plan_ns: u64 = 0,
     boxy_lower_ns: u64 = 0,
     lift_ns: u64 = 0,
@@ -539,6 +561,52 @@ test "pipeline timing preserves explicit Solved-LIR metrics output" {
     try std.testing.expectEqualDeep(explicit, timing.snapshot().solved_lir_parallel);
     try std.testing.expectEqual(@as(u64, 3), explicit.tasks_submitted);
     try std.testing.expectEqualDeep(SolvedLirParallelMetrics{}, local);
+}
+
+test "pipeline timing aggregates ARC counters with saturation and fresh reset" {
+    var timing = Timing.init(std.testing.io);
+    var first: ArcParallelMetrics = .{};
+    inline for (std.meta.fields(ArcParallelMetrics), 0..) |field, i| {
+        @field(first, field.name) = i + 1;
+    }
+    timing.addArcParallel(first);
+    var aggregate = Timing.init(std.testing.io);
+    aggregate.addSnapshot(timing.snapshot());
+    aggregate.addSnapshot(timing.snapshot());
+    const doubled = aggregate.snapshot();
+    inline for (std.meta.fields(ArcParallelMetrics), 0..) |field, i| {
+        try std.testing.expectEqual(@as(u64, 2 * (i + 1)), @field(doubled.arc_parallel, field.name));
+        @field(first, field.name) = std.math.maxInt(u64);
+    }
+    aggregate.addArcParallel(first);
+    const saturated = aggregate.snapshot();
+    inline for (std.meta.fields(ArcParallelMetrics)) |field| {
+        try std.testing.expectEqual(std.math.maxInt(u64), @field(saturated.arc_parallel, field.name));
+    }
+    try std.testing.expectEqual(@as(u64, 0), saturated.arc_ns);
+    aggregate = Timing.init(std.testing.io);
+    try std.testing.expectEqualDeep(ArcParallelMetrics{}, aggregate.snapshot().arc_parallel);
+}
+
+test "pipeline timing preserves explicit ARC metrics output" {
+    var timing = Timing.init(std.testing.io);
+    var local: ArcParallelMetrics = .{};
+    var explicit: ArcParallelMetrics = .{ .source_tasks_submitted = 99 };
+    try std.testing.expect(arcMetricsOutput(.{}, &local) == null);
+    try std.testing.expect(arcMetricsOutput(.{ .timing = &timing }, &local).? == &local);
+    try std.testing.expect(arcMetricsOutput(.{ .arc_parallel_metrics_out = &explicit }, &local).? == &explicit);
+    const output = arcMetricsOutput(.{
+        .timing = &timing,
+        .arc_parallel_metrics_out = &explicit,
+    }, &local).?;
+    try std.testing.expect(output == &explicit);
+    try std.testing.expectEqual(@as(u64, 99), explicit.source_tasks_submitted);
+    // Simulate insertion's sole per-run reset and completed output.
+    output.* = .{ .source_tasks_submitted = 3, .source_tasks_committed = 3, .waves = 1, .variants_reserved = 2 };
+    timing.addArcParallel(output.*);
+    try std.testing.expectEqualDeep(explicit, timing.snapshot().arc_parallel);
+    try std.testing.expectEqual(@as(u64, 3), explicit.source_tasks_submitted);
+    try std.testing.expectEqualDeep(ArcParallelMetrics{}, local);
 }
 
 test "pipeline timing aggregates LIR pass totals and preserves peaks" {
@@ -931,6 +999,12 @@ fn solvedLirMetricsOutput(target: TargetConfig, local: *SolvedLirParallelMetrics
         if (target.timing != null) local else null;
 }
 
+/// ARC insertion alone resets per-run counters, including caller-owned output.
+fn arcMetricsOutput(target: TargetConfig, local: *ArcParallelMetrics) ?*ArcParallelMetrics {
+    return target.arc_parallel_metrics_out orelse
+        if (target.timing != null) local else null;
+}
+
 fn runProcedurePass(
     allocator: Allocator,
     result: *LirProgram.Result,
@@ -993,11 +1067,16 @@ fn finishLoweredOutput(
 
     var arc_timing_scope = PipelineTimingScope.begin(target.timing, .arc);
     defer arc_timing_scope.end();
+    var local_arc_metrics: ArcParallelMetrics = .{};
+    const arc_metrics = arcMetricsOutput(target, &local_arc_metrics);
     try Arc.insert(&lowered.lir_result.store, &lowered.lir_result.layouts, .{
         .roots = lowered.lir_result.root_procs.items,
         .specialize = target.inline_mode != .none,
         .consume_dead_boxes = target.consume_dead_boxes,
+        .post_check_executor = if (target.post_check_executor) |*executor| executor else null,
+        .metrics_out = arc_metrics,
     });
+    if (target.timing) |timing| timing.addArcParallel(arc_metrics.?.*);
     arc_timing_scope.end();
 
     // After the certifier has checked ARC's ledger, so that what it verified

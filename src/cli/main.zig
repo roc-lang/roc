@@ -15985,6 +15985,7 @@ fn finishPostCheckLowering(
         reporter.recordCounters("Solved-LIR parallel execution", &solvedLirParallelCounters(snapshot.solved_lir_parallel));
     }
     reporter.recordCounters("LIR pass parallel execution", &lirPassParallelCounters(snapshot.lir_pass_parallel));
+    reporter.recordCounters("ARC parallel execution", &arcParallelCounters(snapshot.arc_parallel));
 }
 
 fn postCheckLoweringTotalNs(timing: lir.CheckedPipeline.TimingSnapshot) u64 {
@@ -16028,6 +16029,7 @@ fn recordPostCheckLowering(
         reporter.recordCounters("Solved-LIR parallel execution", &solvedLirParallelCounters(snapshot.solved_lir_parallel));
     }
     reporter.recordCounters("LIR pass parallel execution", &lirPassParallelCounters(snapshot.lir_pass_parallel));
+    reporter.recordCounters("ARC parallel execution", &arcParallelCounters(snapshot.arc_parallel));
 }
 
 fn devTestExecutionBreakdown(timing: eval.test_helpers.DevBoolRootTimingSnapshot) [6]progress.SubTiming {
@@ -16167,6 +16169,48 @@ fn solvedLirParallelCounters(parallel: lir.CheckedPipeline.SolvedLirParallelMetr
         .{ .name = "Worker literal tasks committed", .count = parallel.worker_literal_tasks_committed },
         .{ .name = "Worker loop tasks committed", .count = parallel.worker_loop_tasks_committed },
     };
+}
+
+fn arcParallelCounters(parallel: lir.CheckedPipeline.ArcParallelMetrics) [8]progress.Counter {
+    return .{
+        .{ .name = "Source tasks submitted", .count = parallel.source_tasks_submitted },
+        .{ .name = "Source tasks committed", .count = parallel.source_tasks_committed },
+        .{ .name = "Planning tasks submitted", .count = parallel.planning_tasks_submitted },
+        .{ .name = "Planning tasks committed", .count = parallel.planning_tasks_committed },
+        .{ .name = "Emission tasks submitted", .count = parallel.emission_tasks_submitted },
+        .{ .name = "Emission tasks committed", .count = parallel.emission_tasks_committed },
+        .{ .name = "Specialization waves", .count = parallel.waves },
+        .{ .name = "Variants reserved", .count = parallel.variants_reserved },
+    };
+}
+
+test "post-check diagnostics preserve labeled ARC counts" {
+    const rows = arcParallelCounters(.{
+        .source_tasks_submitted = 1,
+        .source_tasks_committed = 2,
+        .planning_tasks_submitted = 3,
+        .planning_tasks_committed = 4,
+        .emission_tasks_submitted = 5,
+        .emission_tasks_committed = 6,
+        .waves = 7,
+        .variants_reserved = 8,
+    });
+    const names = [_][]const u8{
+        "Source tasks submitted",
+        "Source tasks committed",
+        "Planning tasks submitted",
+        "Planning tasks committed",
+        "Emission tasks submitted",
+        "Emission tasks committed",
+        "Specialization waves",
+        "Variants reserved",
+    };
+    try std.testing.expectEqual(std.meta.fields(lir.CheckedPipeline.ArcParallelMetrics).len, rows.len);
+    for (rows, names, 0..) |row, name, index| {
+        try std.testing.expectEqualStrings(name, row.name);
+        try std.testing.expectEqual(@as(u64, index + 1), row.count);
+    }
+    for (arcParallelCounters(.{})) |row| try std.testing.expectEqual(@as(u64, 0), row.count);
 }
 
 fn lirPassParallelCounters(parallel: lir.CheckedPipeline.LirPassParallelMetrics) [15]progress.Counter {

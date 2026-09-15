@@ -309,6 +309,10 @@ pub const BodyRelocation = struct {
     pub fn localSpan(self: BodyRelocation, prefix: BodyPrefix, span: LocalSpan) LocalSpan {
         return relocateBodyValue(LocalSpan, span, prefix, self);
     }
+
+    pub fn joinPointSpan(self: BodyRelocation, prefix: BodyPrefix, span: JoinPointSpan) JoinPointSpan {
+        return relocateBodyValue(JoinPointSpan, span, prefix, self);
+    }
 };
 
 /// Coordinator identities assigned while appending one body shard.
