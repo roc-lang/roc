@@ -703,11 +703,17 @@ and `run-check-snapshots` run after W3, after W6b, and after W2b.
 
 ## 6. Follow-ups, deliberately out of scope
 
-- General row-subsumption coercions (closed values widening into open rows
-  in any position), which would also let a closed body publish an open row.
-  W6b's adapter is their first instance; nested positions extend it (and,
-  under option (d), open the corresponding signature positions) rather
-  than rewrite it.
+- General row-subsumption coercions (closed values widening into open rows in
+  any position), which also let a closed body publish an open row. DECIDED
+  2026-09-15: this is the intended end state, not one option among several.
+  Closing-by-body is a defect: it makes two functions with identical
+  signatures behave differently for their callers, and
+  `test/fx-open/issue_9963_hosted_try_question_mark.roc` is its standing
+  witness. Out of scope for THIS PR only. W6b's adapter is the coercion's
+  first instance and its LOWERING half is permanent; the checker-side
+  `?`-condition redirect is the half subsumption deletes. Nested positions
+  extend the adapter (and, under option (d), open the corresponding signature
+  positions) rather than rewrite it.
 - Cross-module widening of annotated weak values (currently grounded closed
   by `closeWeakValueImplicitOpenExts`, as on `main`). Grounding in the
   checker is the right boundary: a weak value has one representation, its
@@ -1162,10 +1168,12 @@ not promise to be the caller's var.
 assertion, and tighten that doc comment. Do NOT "fix" the production code; there
 is no defect there.
 
-### 8.1.7 Two fx-open failures are OURS, from phase one (settled 2026-09-15)
+### 8.1.7 Two branch test failures are OURS, from phase one (settled 2026-09-15)
 
 Both fail on the branch and both PASS at `kusqzzsn`, measured with a
 marker-checked binary in a comparison workspace. Neither is pre-existing.
+They are not both fx-open: issue_9826 is a `test/cli` fixture registered in
+the `subcommands` suite, and only issue_9963 is under `test/fx-open`.
 
 **issue_9826 — a rejection that stopped happening.** `wyzrkrmn` deleted the
 exact `..` the test exists to reject, in a HOSTED lambda annotation:
@@ -1175,7 +1183,20 @@ left to reject and `roc check` correctly reports no errors. Exactly ONE
 host-boundary position was touched by that commit, and this is it. Note the
 compiler never advised this strip: a hosted annotation records no
 implicit-open ext, so no redundant-open warning fires there. The edit was
-manual over-reach. **Fix is fixture-side: restore the `..`.**
+manual over-reach. The entry does not silently pass with nothing to assert:
+it asserts `.exit = .failure` plus two needles, so a clean check FAILS it, and
+it is one of the branch's baseline failures.
+
+**RESOLVED 2026-09-15 as a two-case split, which is strictly more coverage
+than the original.** `test/cli/issue_9826_open_host_boundary/hosted/` gets its
+`..` back and stays the NEGATIVE case, so its registration line is unchanged.
+A new sibling `hosted_no_ext/` (a copy of the directory as `wyzrkrmn` left
+it) is the POSITIVE case, registered as `"issue 9826: roc check accepts an
+extensionless hosted signature"` with `.exit = .success`. Its value is
+polarity-specific and nothing else covers it: host boundaries opt out of
+implicit opening, so an extensionless hosted row must stay closed; if that
+opt-out ever regressed the row would be implicitly opened, the closed-row
+check would reject it, and this case would fail loudly.
 
 **issue_9963 — a valid program that stopped compiling.** The obvious lead was
 wrong and is recorded here so it is not re-tried: `via_question!` and an app's
@@ -1198,7 +1219,22 @@ the row stayed open.
 The consequence is broader than one fixture: after `kupupkyt` there is no
 longer any way to spell "this output row stays open" on a function whose body
 produces a closed row. design.md claims this pairing "now arises only where
-closed rows still exist"; issue_9963 is a live counterexample.
+closed rows still exist"; issue_9963 is a live counterexample. That design.md
+sentence was corrected on 2026-09-15 in the same change that recorded the
+decision below.
+
+**KNOWN RED, DELIBERATE.** `test/fx-open/issue_9963_hosted_try_question_mark.roc`
+stays failing. It is the standing witness that closing-by-body must be replaced
+by row subsumption (design.md "Polarity"): its platform module holds two
+functions with identical annotations whose callers are treated differently
+because one forwards a closed hosted row with `?` and the other reconstructs it
+with `match`. It is not stale and not pre-existing: it passes at `kusqzzsn`
+and regressed with `kupupkyt`. Do not patch or disable it: every available
+patch is a host-specific special case this design intends to delete. The
+harness offers no expected-failure status; `CliCase.skip = .{ .always = ... }`
+would only silence the two `subcommands` cases, because `SimpleTestSpec` has no
+skip field and the `test/fx-open` platform cases it generates cannot be skipped
+at all. So the test stays simply red, and the PR description carries the reason.
 
 ### 8.1.8 W2b closeout (2026-09-15)
 

@@ -5578,29 +5578,59 @@ Every type annotation is walked with a POLARITY: the root is positive
 all other positions (returns, type application args, record fields, tuple
 elems, tag payloads) preserve it. An extensionless tag union with at least one
 tag in a positive position is IMPLICITLY OPEN: it is generated with a fresh
-flex extension, so `parse : Str -> Try(U8, [InvalidU8])` is instantiated
-fresh at every call and each caller may use the result at a wider union. The
-same union in a negative position stays closed as written. A union with no
+flex extension; `parse : Str -> Try(U8, [InvalidU8])` is one such signature.
+The same union in a negative position stays closed as written. A union with no
 tags (`[]`) is exempt: it asserts uninhabitedness (`Try(a, [])` needs no
 `Err` branch), which opening would destroy. Polarity is walk state only
 (`types.Polarity`); no new content kind exists.
 
+What that opening MEANS depends on what is annotated. One spelling, three
+rules:
+
+| Annotated thing | The opened extension | What a use may do |
+| --- | --- | --- |
+| A FUNCTION signature | A quantified flex in the generalized scheme, instantiated fresh at every call | Each caller may use the result at a wider union, independently of every other caller |
+| A VALUE binding | ONE weak flex shared by every use in the module, grounded to `[]` after the module solves (`Check.closeWeakValueImplicitOpenExts`) | Uses may widen the shared row, and what accumulates is what every later use sees |
+| A HOST-BOUNDARY annotation (a hosted lambda, a `provides` def, a platform `requires` type) | None: the row is generated exactly as written (`AnnotationGenCtx.opening = .as_written`) | Nothing |
+
+A value binding generalizes only when its annotation writes a type variable,
+exactly as before; a host boundary opts out because the host is a fixed ABI
+rather than a Roc producer participating in unification.
+
 The annotation still BOUNDS the definition — widening happens only at
-instantiation sites. Because the extension is a flex during the body check, a
-closed value can flow into the row and close it (a definition returning a
-value from a closed source — an input-position parameter, a nominal field —
-publishes a closed row at that position, exactly as before polarity), and an
-open value shares it; but a tag the annotation does not list is absorbed by
-ordinary unification rather than rejected. `Check.auditImplicitOpenExts`
-therefore runs immediately after the definition's right-hand side is checked,
-over every extension the annotation's generation minted
-(`Check.implicit_open_exts`, sliced per annotation by
-`annotation_implicit_open_exts`), and reports `Tag Not In Annotation` for any
-that resolved to a row carrying tags, marking that extension erroneous
-(diagnostic recovery, like every other reported problem). Row-subsumption
-coercions — letting a closed value WIDEN into the open row instead of closing
-it — are a possible follow-up that needs lowering support; they would only
-accept more programs.
+instantiation sites. A tag the annotation does not list is absorbed by
+ordinary unification rather than rejected, so `Check.auditImplicitOpenExts`
+runs immediately after the definition's right-hand side is checked, over every
+extension the annotation's generation minted (`Check.implicit_open_exts`,
+sliced per annotation by `annotation_implicit_open_exts`), and reports `Tag
+Not In Annotation` for any that resolved to a row carrying tags, marking that
+extension erroneous (diagnostic recovery, like every other reported problem).
+
+A closed value flowing into an implicitly open output row WIDENS into it: the
+row published at that position is the one the annotation declares, whatever
+the body happened to produce. The signature is the whole of what a caller
+reads, so two definitions with identical annotations must be interchangeable
+for every caller, which is precisely what identical signatures already
+promise. The body is bounded by the audit, never by which value a particular
+return path constructed.
+
+NOT YET IMPLEMENTED. Today the extension is an ordinary flex during the body
+check, so a closed value CLOSES the row instead of widening into it: a
+definition returning a value from a closed source (an input-position
+parameter, a nominal field, a hosted result) publishes a closed row, and two
+identically annotated definitions then behave differently for their callers.
+`test/fx-open/issue_9963_hosted_try_question_mark.roc` carries both halves of
+that witness in one platform module. `Fallible.via_match!` and
+`Fallible.via_question!` are annotated `{} => Try(Str, [HostErr(Str)])`
+identically. The first reconstructs the hosted error with a `match`, so the
+`Err(HostErr(msg))` construction mints its own open row, the annotation's flex
+is never bound, and the function publishes open. The second forwards the
+hosted error with `?`, so the host's closed row binds the flex to `[]` and the
+function publishes closed. A caller that unwraps the first with `?` into a
+wider row is accepted; the same call on the second is rejected. That test
+stays RED until row subsumption replaces closing-by-body. It is the rule's
+witness, not a defect to patch, and the only available patches are
+host-specific special cases this design intends to delete.
 
 An anonymous `..` in a positive position of an opening annotation means
 exactly what absence means there and is generated the same way (a recorded
@@ -5608,21 +5638,17 @@ flex), so the two spellings cannot drift. Elsewhere `..` remains the rigid
 `#others` it always was, and a named extension (`..others`) is always a
 rigid.
 
-VALUE bindings: an annotated value's implicitly opened row is one weak flex
-shared by every use in the module — an annotated value generalizes only when
-its annotation writes a type variable, exactly as before. The value's body is
-bounded by the audit; uses may widen the shared row, and what accumulates is
-what every later use sees, so a later annotated use listing fewer tags than
-accumulated is rejected by its own audit. This is precisely how an inferred
-value (`x = Boom`) already behaved; writing `..` on the value opts into a
-quantified row, as it always has. After the module solves, a top-level weak
-value's still-open implicit extensions are grounded to `[]`
-(`Check.closeWeakValueImplicitOpenExts`): nothing in the module can widen
-them further, and the closed row is exactly what the annotation produced
-before polarity, so importers and Monotype's stored constants see the type
-they always did (an extension that meanwhile joined a generalized scheme is
-left alone). Local value bindings are not grounded: their rows behave like
-inferred local rows and are sealed by Monotype's row defaults.
+The VALUE row above is the pre-polarity behaviour of an inferred value
+(`x = Boom`) extended to annotated ones: the value's body is bounded by the
+audit, and a later annotated use listing fewer tags than the shared row has
+accumulated is rejected by its own audit. Writing `..` on the value opts into
+a quantified row, as it always has. Grounding those extensions is safe because
+nothing in the module can widen them further, and the closed row is exactly
+what the annotation produced before polarity, so importers and Monotype's
+stored constants see the type they always did (an extension that meanwhile
+joined a generalized scheme is left alone). Local value bindings are not
+grounded: their rows behave like inferred local rows and are sealed by
+Monotype's row defaults.
 
 An ALIAS of a tag union defers the decision to each use site: the alias
 declaration stores a marker rigid (`types.polarity_var_text`, an ordinary
@@ -5694,10 +5720,16 @@ in Phase A and emit in Phase B like every other codec body, and the row is
 decided once, by final sealing. (The two Builder-level `*Expr` restores, which
 own a private graph, are the exception noted in the Monotype sealing rule.)
 
-Two positions opt out of implicit opening, both genuine non-producers:
-host-boundary annotations (hosted lambdas and `provides` defs) and platform
-`requires` types keep their rows as written, because the host side is a fixed
-ABI rather than a Roc producer participating in unification.
+The HOST-BOUNDARY row above covers two opt-out sites, both genuine
+non-producers: host-boundary annotations (hosted lambdas and `provides` defs,
+collected by `Check.collectHostBoundaryAnnotations`) and platform `requires`
+types. Opting out of opening and rejecting a written `..` are separate rules
+with separate scopes: the closed-row requirement is enforced over every type
+reachable from a hosted lambda or a `provides` def (see Host Symbol ABI), so a
+`..` written in a `requires` type is an error exactly when it reaches a
+`provides` def. It does when the platform provides the app's required function
+unchanged; it does not when the platform's own `provides` annotation narrows
+the row away first.
 
 Derived structural implementations — parsers, encoders, and derived
 `map`/`map!` — are consumers that determine each tag row exactly (and, for
@@ -5725,9 +5757,13 @@ function's return row. When the callee's error row is closed and the
 enclosing annotated return's row is open (a rigid extension), ordinary
 unification rejects the pair, and that mismatch is a type error by design: a
 closed error row is not widened into an open annotated row at use sites
-(issue #9798's program is rejected). Under polarity, a non-hosted callee's
-annotated error row is itself implicitly open, so this pairing now arises
-only where closed rows still exist — chiefly hosted boundary rows.
+(issue #9798's program is rejected). Under polarity a non-hosted callee's
+annotated error row is itself implicitly open, but until row subsumption
+replaces closing-by-body (see Polarity) a body that forwards a closed value
+still publishes the row closed, so the pairing is not confined to host rows.
+At a host boundary it is GUARANTEED: `..` is rejected there by rule, so a host
+error row is closed by declaration rather than by inference, and every hosted
+call whose caller wants a wider row meets it.
 
 The one declared exception is a direct call of a hosted function. A hosted
 function's boundary type is an ABI contract keyed by its declared closed row
@@ -5752,10 +5788,26 @@ producer-side check in Monotype lowering (see Host Symbol ABI), which admits
 only the declared type no matter what a use site's type turned out to be. So
 the rule can be tightened, loosened, or replaced on typing grounds alone.
 
+The rule has two halves with different lifetimes. The LOWERING half (a widened
+request is bridged by a generated adapter that calls the declared-type
+boundary and re-tags its result, never by specializing the boundary at the
+widened layout) is PERMANENT, because the host ABI is fixed by something other
+than typing. W6b already generalized it: Hosted Try Question Widening is the
+instance of Result-Row Widening Adapter in which the declared row is the host
+ABI. The CHECKER half (the use-site redirect that widens the `?` condition) is
+exactly what general row subsumption subsumes, and is the part to delete once
+subsumption lands. The two cannot be deferred together:
+because `..` is rejected at host boundaries, a host error row is closed BY
+RULE rather than by inference, so "a closed row meets a caller who wants it
+wider" arises at every host boundary and the general mechanism cannot be
+half-built.
+
 Both sides are pinned by tests: accepted—
 test/fx-open/issue_9963_hosted_try_question_mark.roc (a direct hosted `?`
 inside an open-row platform function builds and the host's Ok is observed as
-Ok); rejected—test/fx-open/hosted_try_question_not_included.roc (a direct
+Ok), which is currently RED: closing-by-body closes the wrapper's own row
+before any caller reaches it, so the widening never arises (see Polarity);
+rejected—test/fx-open/hosted_try_question_not_included.roc (a direct
 hosted `?` whose enclosing annotation omits the hosted error is a type
 error). The non-hosted side of issue #9798 is superseded by polarity: a
 non-hosted callee's annotated error row is implicitly open, so `?` flows it
@@ -5846,8 +5898,9 @@ Only two positions are adapted: the template's DIRECT result row, and the
 ERROR row of a `Try` result. A `Try`'s ok row is not adapted — the adapter
 asserts the ok type is unchanged — and neither is a row nested inside a
 `List`, a record field, a tuple, a tag payload, or a non-`Try` nominal,
-because re-tagging cannot reach into those positions without a general
-row-subsumption coercion (see the follow-ups this design defers).
+because re-tagging cannot reach into those positions without the general
+row-subsumption coercion this design intends and does not yet implement (see
+Polarity).
 
 The set of positions a use may WIDEN is therefore kept equal to the set
 lowering can ADAPT, and it is kept equal by construction rather than by a
