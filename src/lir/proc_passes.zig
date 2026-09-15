@@ -123,7 +123,12 @@ pub fn run(
             .trmc, .loop_append, .range, .box_reuse => BodyClone.rewritableProcBody(store, proc),
         };
         if (body == null) continue;
-        if (phase == .trmc and store.getProcSpec(proc).tail_calls == null) continue;
+        // Constructor recursion is not an ordinary tail call: TRMC discovers
+        // it inside tag-union producers even when no TCE sites were recorded.
+        if (phase == .trmc) {
+            const spec = store.getProcSpec(proc);
+            if (spec.tail_calls == null and layouts.getLayout(spec.ret_layout).tag != .tag_union) continue;
+        }
         try contexts.append(allocator, .{
             .source = store,
             .layouts = layouts,

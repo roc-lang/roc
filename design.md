@@ -157,7 +157,39 @@ and is released after its last consumer, before compile-time evaluation; error
 exits also release it. Scheme hashing may reuse traversal
 capacity, but every complete digest starts fresh identity and cycle numbering,
 including after allocation failure. Neither this index nor hashing scratch is
-added to the serialized checked module or reused across source-store mutations.
+added to the serialized checked module. The source-scheme index never crosses
+source-store mutations. Type digest writers may retain allocation capacity
+while a source store changes, but no digest, type content, identity slot, or cycle
+slot survives between requests: each request traverses the current graph.
+
+Record and tag row ordering uses exact lexicographic name ranks, rebuilt lazily
+when an append-only interner grows. Large name sets use bytewise radix ordering,
+with an explicit end-of-name bucket; small sets use comparison sorting.
+Row sorting compares those ranks for small rows and uses at most four bytewise
+distribution passes for large rows. Ordered and reversed runs need no scratch.
+Constant digest tags batch their length prefix and text into one hash update;
+the SHA-256 input bytes and persisted key format are unchanged.
+Extension-chain visitation uses the same constant-time indexed stack as
+ancestor and identity tracking. Ranks are transient; frozen name buffers
+remain unchanged, with rank storage owned by the module view or its consumer.
+Identity enumeration and error inspection specialize that same ordered traversal
+without emitting hash bytes. Inspection keeps a request-local visited index,
+so repeated requests for a resolved root do not dispatch its children again;
+it retains first-encounter identity order.
+Digest emission still visits every occurrence required by the encoding. Neither
+inspection results nor visitation marks survive the request or source mutations.
+
+Identity and ancestor stacks own their paged ID-to-position indexes. A slot is
+live exactly when it addresses the current stack and the entry has that ID;
+popping, truncating, and clearing require no sparse-page writes or scans.
+Row normalization and constant-time identity/cycle lookups preserve the digest's
+existing traversal order, slot numbering, and encoded bytes.
+
+CheckedTypeStore.fromModule records identity-variable reachability and cycle reachability
+in a one-byte column indexed by immutable source variable. Each slot records
+unseen, active, or complete, plus those two booleans. The column is allocated
+once for the exact source domain and never crosses source-store mutations;
+recursive visits need no map growth, deletion, or tombstone probing.
 
 Instantiation substitutions, generalization visitation, and per-query function
 effect memos retain sparse storage while clearing and iterating only live
@@ -1582,6 +1614,11 @@ decides whether a source type name is inserted, shadows another type, replaces
 an auto-imported type, redeclares an existing type, or repeats the same external
 type must live in one place. Callers may choose which source operation they are
 performing, but they must not duplicate the type-binding collision matrix.
+
+Local type bindings record their exact declaration kind when introduced,
+including forward placeholders. Completing a placeholder fills its body without
+changing that kind. Scope aliases retain the same statement identity and need
+no scan or rebinding when its body becomes available.
 
 Source binding mutability comes only from an explicit `var` construct. CIR
 represents a mutable binder as `Pattern.var_assign` and an immutable binder as
@@ -4913,20 +4950,31 @@ provenance onto the corresponding procedure. LIR and the backends do not
 identify iterators or reconstruct this decision.
 
 For `.none` plus lambda-set specialization, pre-ARC LIR consumes that explicit
-scope with three exact structural rewrites. First, an internal Roc-ABI procedure
+scope with two exact structural rewrites. First, an internal Roc-ABI procedure
 is inlined only when the reachable call inventory proves one direct call, no
 root or first-class escape, and therefore no reachable code growth. Second, a
 one-use forwarding join sinks its consumer only when reachable incoming-edge
 counts prove exclusivity, the outer join is nonrecursive, and the forwarded
 layout contains no reference-counted storage; moving owning continuations needs
-explicit path-ownership data and is not admitted. Third, literal tag edges may
-bypass a join whose body immediately matches that tag. Complete fusion moves
-all arms; partial fusion retains the original path and clones only arms
-whose locally defined values are ownership-neutral. Join scalarization then
-removes aggregate fixed points when every initializer, field read, and tag
-payload read is explicit. Every mutation plan requires disjoint statement
-roles before it changes the graph. These passes visit only stamped procedures, so ordinary dev
-code pays neither their analysis cost nor their structural changes.
+explicit path-ownership data and is not admitted. These two passes visit only
+stamped procedures, so ordinary dev code pays neither their analysis cost nor
+their structural changes.
+
+A third rewrite, tag-case fusion, runs under lambda-set specialization in every
+inline mode and in every procedure: literal tag edges bypass a join whose body
+immediately matches that tag, so the union is never materialized. The
+substituted checked wrappers of `.wrappers` mode produce exactly this shape at
+every call site (a `Try` built on each arm and matched at once by the caller),
+as does the iterator-fusion clone of `.none`. A producer edge may release
+values it has finished with between building the tag and jumping; those
+releases are carried onto the redirected edge. An arm may release the union
+itself; the fused arm releases that variant's payload instead, or nothing when
+the variant owns nothing. Complete fusion moves all arms; partial fusion
+retains the original path for opaque producers and clones the arms, with
+definitions inside a cloned arm renamed. Join scalarization then removes
+aggregate fixed points when every initializer, field read, and tag payload
+read is explicit. Every mutation plan requires disjoint statement roles before
+it changes the graph.
 
 The clone propagates constructor values through ordinary bindings and solves
 loop fixed points over their leaves. As a result, `.none` mode does not rebuild
@@ -7939,10 +7987,35 @@ function argument may have exposed an overlap in its return row.
 
 Procedure-use roots and ordinary specialization bodies can lower concurrently
 because their results cross the worker boundary as sealed, graph-free drafts.
-Each executor lane owns a private cumulative type/name domain; after a frozen
-batch completes, the coordinator absorbs each immutable suffix and assigns
-program identities strictly in request order. This keeps global identity
-independent of worker scheduling without locking coordinator state. Root kinds
+Each executor lane owns a private cumulative type/name domain. Ordinary bodies
+stream through a bounded executor session: the coordinator accepts completed
+shards strictly in request order and immediately makes discovered requests
+available to free lanes. Running and completed-but-unaccepted tasks share the
+same bounded window. Each immutable lane suffix is absorbed even when its body
+is discarded after an earlier shard committed its reservation, preserving cumulative lane ids.
+All accepted tasks are joined before releasing their contexts, including on OOM.
+
+Workers never borrow the mutable coordinator Program. Their captured input
+contains only committed types, interned names, imported-function references,
+and constant-function evidence. Each job also carries its own immutable
+reservation signature for recursive references. Mutable reservation rows and
+final syntax remain exclusively coordinator-owned contiguous arrays. Snapshot storage copies each newly committed
+input suffix once and grows contiguous backing geometrically, retaining older
+backings for readers. This bounds snapshot storage and copying linearly in
+the largest input prefix without changing downstream IR access. Each task has
+its own lengths and sealed construction state; reads above its boundary are
+invariant violations. A lane retains a stable input-store identity so cumulative
+relocation maps remain valid as its next captured prefix advances.
+
+Cross-job interface summaries are shared through an append-only exact-key hash
+index with atomic links. Fully initialized entries become visible with release
+stores; workers acquire links and filter by their captured entry boundary,
+which matches the type/name snapshot. Patricia branches preserve all prior
+keys when splitting; full keys and existing exact evidence/type comparisons
+resolve collisions. Entries and their evidence remain alive until workers have
+joined. This keeps memo reuse concurrent without exposing mutable hash-table
+storage or making results depend on completion order. Global identities are still
+assigned solely by ordered coordinator commit. Root kinds
 that reserve durable identities or write directly to the final program remain
 serial barriers until they have the same sealed-draft boundary.
 
@@ -7950,9 +8023,10 @@ Post-check timing keeps two distinct measures for this boundary. Monotype wall
 time is the elapsed coordinator interval, including worker waits and ordered
 commit. Aggregate worker work is the sum of executor callback intervals and can
 exceed wall time when callbacks overlap; it is diagnostic work, not another
-sequential phase. Coordinator post-batch work separately measures validation,
-serial fallback, discard, and ordered commit after each executor barrier. Task,
-lane, retry, and discard counts explain the relationship without using
+sequential phase. Coordinator work separately measures validation,
+discard, and ordered commit. `task_waves` counts root batches and specialization streaming
+sessions, not individual dependency waits within a stream. Task,
+lane, and discard counts explain the relationship without using
 scheduling-dependent values for compiler behavior.
 
 Boxy follows a different post-check pipeline and reports its planning and
@@ -8011,6 +8085,26 @@ columns, not hash tables keyed by node id. Union-find redirects may change which
 node is a class root, but they never renumber a node; root-owned columns are
 updated explicitly when a union moves that ownership.
 
+A worker lane may reuse a graph's allocated capacity between specializations,
+but reset invalidates every node identity and all node-indexed state. Nominal
+identity and backing relationships, constructor-evidence requests, and generated
+iterator membership and provenance counts belong only to that graph epoch.
+Only the cumulative immutable type and name stores survive the reset.
+
+Graph-owned generated iterators are indexed by their stable declaration, kind,
+and callable evidence. Candidates in that bucket compare live argument roots,
+so argument unions do not stale the index. Content replacement and root union
+update producer membership explicitly. A monotone provenance counter lets both
+iterator finalizers return immediately for graphs without generated iterators.
+Generated identity hashes a snapshot of the current graph representation after
+joins. An imported request's retained type remains its original witness and
+cannot supply the identity of a graph-owned producer that replaced it.
+Joining distinct iterator representations invalidates current snapshots and
+durable views, including snapshots of parents that reach the joined class.
+The losing representation's cached view cannot become the winner's view.
+Generated-private containment diagnostics distinguish guard returns from queries
+that reach the containment cache or walker.
+
 Declaration-backed nominal reuse is indexed by declaration identity plus the
 current argument-root tuple. Root unions rekey affected entries, so lookup cost
 must depend only on the current live index: the history of earlier root
@@ -8052,8 +8146,17 @@ looked up. The resulting address is still the exact checked identity of the type
 variable/content in that body specialization. It is not a structural digest,
 source name, runtime layout, object symbol, or generated procedure id. A child
 that needs independent generic cells receives a new scope identity; copying
-cells into that scope is explicit. Nodes begin unresolved. As relations are
-produced, explicit evidence from checked data unifies those nodes:
+cells into that scope is explicit. A checked root under construction has an
+in-progress cache entry. Only a recursive lookup allocates an unresolved
+placeholder; completion joins that placeholder to the built node. Acyclic
+construction caches the built node directly. Checked aliases instantiate their
+parameter cells and cache their explicit backing cell: alias spelling is a
+checked view, never a separate value identity established by a placeholder
+unification. Allocation failure removes active
+entries, and copying completed cells into a child scope skips active entries.
+Graph node identities remain append-only, including recursive placeholders and
+all per-node request evidence. As relations are produced, explicit evidence
+from checked data unifies those nodes:
 
 - the requested root function/value type constrains the checked root type;
 - lambda and closure expected function types constrain the nested function
@@ -13006,6 +13109,15 @@ loop versioning; it cannot authorize an unconditional jump to the unique body.
 Shared metadata locals are needed only for merged definitions, and tracked
 edges retain their existing hot path. Debug validation checks that every planned
 definition emitted its metadata.
+
+Versioning (a head that dispatches on the ownership flags to a unique-only
+copy of the loop body) is applied only to leaf loops: promoted loops whose
+body contains neither another promoted loop nor a procedure call. It exists
+to take the per-set flag branch out of a loop the backend can vectorize or
+schedule as one block. A loop that calls a procedure or nests another
+versioned loop is not such a loop, and cloning it would double the emitted
+body for every level of nesting to remove one predictable branch per site;
+it keeps its flag-dispatched sets instead.
 
 `List.map` may overwrite a uniquely owned input list's buffer instead of
 allocating an output list when the input and output item representations are

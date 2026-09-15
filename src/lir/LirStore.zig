@@ -2173,8 +2173,8 @@ test "body shard append preserves destination on every reserve-stage allocation 
     };
     var fail_index: usize = 0;
     while (try Helper.run(fail_index)) : (fail_index += 1) {}
-    // Exercise every reservation, without coupling the test to allocator growth
-    // policy or the number of independent body columns.
+    // Exhaust every allocation failure without depending on allocator growth
+    // policy or on how many independently reserved body tables exist.
     try std.testing.expect(fail_index > 0);
 }
 
@@ -2396,7 +2396,7 @@ test "body shard relocates nonzero producer tail-call loop identity" {
     try testTailCallRelocation(6);
 }
 
-fn testTailCallRelocation(existing_join: ?u32) !void {
+fn testTailCallRelocation(existing_join: ?u32) (AppendBodyError || error{ TestExpectedEqual, TestUnexpectedResult })!void {
     const allocator = std.testing.allocator;
     var coordinator = Self.init(allocator);
     defer coordinator.deinit();

@@ -1956,13 +1956,75 @@ const Pass = struct {
             while (try stmts.next()) |_| size += 1;
             try candidates.append(allocator, .{ .stmt = entry.key_ptr.*, .size = size });
         }
-        // A loop nested in another's body has the smaller body.
-        std.mem.sort(Candidate, candidates.items, {}, struct {
-            fn lessThan(_: void, a: Candidate, b: Candidate) bool {
-                return a.size < b.size;
-            }
-        }.lessThan);
+        // Only leaf loops are versioned: promoted loops that contain neither
+        // another promoted loop nor a procedure call. Versioning exists to
+        // take the per-set flag branch out of a loop the backend could
+        // otherwise vectorize or schedule as one block; a loop that calls a
+        // procedure or nests another versioned loop is not such a loop, and
+        // cloning its body doubles the emitted code for every level of
+        // nesting while removing one predictable branch per site next to a
+        // call. Such a loop keeps its flag-dispatched sets.
+        var leaves = std.ArrayList(Candidate).empty;
+        defer leaves.deinit(allocator);
         for (candidates.items) |candidate| {
+            var leaf = true;
+            var stmts = try body_clone.ReachableStmts.init(self.store, self.store.getCFStmt(candidate.stmt).join.body);
+            defer stmts.deinit();
+            while (try stmts.next()) |stmt_id| {
+                for (candidates.items) |other| {
+                    if (other.stmt != candidate.stmt and other.stmt == stmt_id) leaf = false;
+                }
+                switch (self.store.getCFStmt(stmt_id)) {
+                    .assign_call, .assign_call_erased, .assign_call_dict => leaf = false,
+                    .init_uninitialized,
+                    .assign_ref,
+                    .assign_literal,
+                    .assign_packed_erased_fn,
+                    .assign_low_level,
+                    .assign_list,
+                    .assign_struct,
+                    .assign_tag,
+                    .store_struct,
+                    .store_tag,
+                    .set_local,
+                    .debug,
+                    .expect,
+                    .expect_err,
+                    .runtime_error,
+                    .comptime_exhaustiveness_failed,
+                    .comptime_branch_taken,
+                    .incref,
+                    .decref,
+                    .decref_if_initialized,
+                    .free,
+                    .switch_stmt,
+                    .switch_initialized_payload,
+                    .str_match,
+                    .str_match_set,
+                    .loop_continue,
+                    .loop_break,
+                    .join,
+                    .jump,
+                    .ret,
+                    .crash,
+                    .assign_boxy_desc_ref,
+                    .assign_boxy_dict_ref,
+                    .assign_boxy_box,
+                    .assign_boxy_reuse_box,
+                    .assign_boxy_unbox,
+                    .assign_boxy_adapt,
+                    .assign_boxy_inspect,
+                    .assign_boxy_eq,
+                    .assign_boxy_tag,
+                    .assign_boxy_tag_payload,
+                    .boxy_tag_match,
+                    => {},
+                }
+                if (!leaf) break;
+            }
+            if (leaf) try leaves.append(allocator, candidate);
+        }
+        for (leaves.items) |candidate| {
             try self.versionLoop(proc_body, candidate.stmt, max_join_id, new_locals);
         }
     }
