@@ -351,9 +351,9 @@ fn withSha256Floor(b: *std.Build, target: ResolvedTarget) ResolvedTarget {
 
 /// Raise a 64-bit compiler target's CPU floor to include the SHA-256
 /// instructions. Type digests are cryptographic SHA-256 (see
-/// `src/base/TypeDigestHasher.zig` for why) and every 64-bit target computes
-/// them in hardware with no software rounds, so a 64-bit CPU without these
-/// instructions is not a supported host for the compiler. This is the only
+/// `src/base/TypeDigestHasher.zig` for why) and every target this applies to
+/// computes them in hardware with no software rounds, so a 64-bit CPU without
+/// these instructions is not a supported host for the compiler. This is the only
 /// feature added above the architecture baseline: on x86_64 it is the SHA
 /// extension (every SHA CPU already has the SSSE3 the rounds also use), which
 /// AMD Zen and Intel Ice Lake and later carry but Intel's 2015-2020 Skylake
@@ -362,8 +362,15 @@ fn withSha256Floor(b: *std.Build, target: ResolvedTarget) ResolvedTarget {
 /// Pi 5, absent on the Cortex-A53/A72 in Raspberry Pi 4 and earlier. A
 /// `-Dcpu` that omits the feature fails to compile `TypeDigestHasher` rather
 /// than silently getting a slower binary.
+///
+/// x86_64 macOS gets no floor: its CPUs are the Skylake-through-Comet-Lake
+/// cores named above, so the floor would make the binary die of SIGILL on
+/// nearly every Intel Mac. It computes digests with the portable rounds
+/// instead -- see `roc_target.usesSoftwareSha256`.
 fn addSha256Floor(query: *std.Target.Query) void {
     const arch = query.cpu_arch orelse builtin.target.cpu.arch;
+    const os = query.os_tag orelse builtin.target.os.tag;
+    if (roc_target.usesSoftwareSha256(arch, os)) return;
     switch (roc_target.classifyCpuArch(arch)) {
         .x86_64 => {
             query.cpu_features_add.addFeature(@intFromEnum(std.Target.x86.Feature.sha));
