@@ -763,6 +763,38 @@ test "introduceType API is accessible" {
     try testing.expect(type_lookup.? == stmt_idx);
 }
 
+test "introduceType records every declaration kind before completing its body" {
+    const gpa = testing.allocator;
+    var builtin_ctx = try BuiltinTestContext.init(gpa);
+    defer builtin_ctx.deinit();
+    var env = try ModuleEnv.init(gpa, "");
+    defer env.deinit();
+    try env.initCIRFields("test");
+    const ast = try parse.expr(gpa, &env.common);
+    defer ast.deinit();
+    var can = try Can.initModule(CoreCtx.testing(gpa, gpa), &env, ast, builtin_ctx.canInitContext());
+    defer can.deinit();
+    try can.scopeEnter(gpa, true);
+    inline for (.{ "Alias", "Nominal", "Opaque", "WhereAlias" }, [_]parse.AST.TypeDeclKind{ .alias, .nominal, .@"opaque", .where_alias }) |text, kind| {
+        const name = try env.insertIdent(Ident.for_text(text));
+        const header = try env.addTypeHeader(.{ .name = name, .relative_name = name, .args = CIR.TypeAnno.Span{ .span = base.DataSpan.empty() } }, base.Region.zero());
+        const statement: Statement = switch (kind) {
+            .alias => .{ .s_alias_decl = .{ .header = header, .anno = .placeholder } },
+            .nominal, .@"opaque" => .{ .s_nominal_decl = .{ .header = header, .anno = .placeholder, .is_opaque = kind == .@"opaque" } },
+            .where_alias => .{ .s_where_alias_decl = .{ .header = header, .receiver = .placeholder, .where = CIR.WhereClause.Span.empty } },
+        };
+        const stmt_idx = try env.addStatement(statement, base.Region.zero());
+        try can.introduceType(name, stmt_idx, base.Region.zero());
+        const actual = can.scopes.items[can.scopes.items.len - 1].type_bindings.get(name).?;
+        switch (kind) {
+            .alias => try testing.expect(actual == .local_alias),
+            .nominal, .@"opaque" => try testing.expect(actual == .local_nominal),
+            .where_alias => try testing.expect(actual == .local_where_alias),
+        }
+        try testing.expectEqual(stmt_idx, (try can.scopeLookupTypeDecl(name)).?);
+    }
+}
+
 test "open ext not allowed in type decl" {
     const source =
         \\|_| {
