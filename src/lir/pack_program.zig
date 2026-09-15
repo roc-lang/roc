@@ -183,11 +183,15 @@ pub fn manifestBytes(
     return try bytes.toOwnedSlice(allocator);
 }
 
+fn testTypeId(index: usize) checked.CheckedTypeId {
+    return @enumFromInt(index);
+}
+
 test "closed export types reject records with undetermined field kinds" {
     const allocator = std.testing.allocator;
-    const leaf: checked.CheckedTypeId = @enumFromInt(0);
-    const undetermined: checked.CheckedTypeId = @enumFromInt(1);
-    const required: checked.CheckedTypeId = @enumFromInt(2);
+    const leaf = testTypeId(0);
+    const undetermined = testTypeId(1);
+    const required = testTypeId(2);
     const label: check.CanonicalNames.RecordFieldLabelId = @enumFromInt(7);
     const fields = [_]checked.CheckedRecordField{
         .{ .name = label, .ty = leaf, .kind = .undetermined(leaf) },
