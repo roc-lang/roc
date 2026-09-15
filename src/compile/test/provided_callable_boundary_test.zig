@@ -246,18 +246,15 @@ fn expectParallelRecursiveBoxedCallablesForwardReuse(
 }
 
 test "recursive boxed callable return reuse lowers on workers" {
-    var metrics: lir.CheckedPipeline.SolvedLirParallelMetrics = .{};
-    try harness.runAppPathLirInspection(
-        "test/postcheck/erased_callable_return_forwarding/parallel.roc",
+    try harness.expectRuntimeWorkerParallelismDeterministicLir(
+        .{ .app_path = "test/postcheck/erased_callable_return_forwarding/parallel.roc" },
         .{
             .inline_mode = .wrappers,
             .proc_debug_names = true,
-            .specialization_workers = 4,
-            .solved_lir_parallel_metrics_out = &metrics,
         },
+        &.{ .erased, .indirect_call, .match, .return_reuse },
         expectParallelRecursiveBoxedCallablesForwardReuse,
     );
-    try std.testing.expect(metrics.worker_return_reuse_tasks_committed >= 2);
 }
 
 test "alternative callable producers may share one runtime-selected reuse owner" {
