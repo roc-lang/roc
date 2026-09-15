@@ -10084,6 +10084,53 @@ test "RC complete take keeps the root live for a later RC read through a borrowe
     try testing.expectEqual(@as(usize, 0), f.countRc(second, .incref));
 }
 
+test "RC field takes apply to a record rebuilt on every loop iteration" {
+    var f = try ArcTest.init(testing.allocator);
+    defer f.deinit();
+    const flag = try f.local(.bool);
+    const left = try f.local(f.list_i64);
+    const right = try f.local(f.list_i64);
+    const pair = try f.local(f.pair_list);
+    const taken_left = try f.local(f.list_i64);
+    const taken_right = try f.local(f.list_i64);
+    const left_result = try f.local(.i64);
+    const right_result = try f.local(.i64);
+    const next_flag = try f.local(.bool);
+    const result = try f.local(.i64);
+    const join_id = f.freshJoinPointId();
+
+    // join j(flag) { switch flag { 1 => pair = {left, right}; take both
+    // fields into calls; flag := false; jump j;  _ => ret } }. The pair is a
+    // fresh value each iteration, so each field read is its take even
+    // though the loop back edge reaches the reads again.
+    const ret = try f.ret(result);
+    const default_branch = try f.assignI64(result, 1, ret);
+    const back_jump = try f.store.addCFStmt(.{ .jump = .{ .target = join_id } });
+    const rebind = try f.setLocal(flag, next_flag, .initialize_join_param, back_jump);
+    const next_flag_assign = try f.assignI64(next_flag, 0, rebind);
+    const consume_right = try f.assignCall(right_result, &.{taken_right}, next_flag_assign);
+    const read_right = try f.assignRefField(taken_right, pair, 1, consume_right);
+    const consume_left = try f.assignCall(left_result, &.{taken_left}, read_right);
+    const read_left = try f.assignRefField(taken_left, pair, 0, consume_left);
+    const make_pair = try f.assignStruct(pair, &.{ left, right }, read_left);
+    const make_right = try f.assignList(right, &.{}, make_pair);
+    const loop_body = try f.assignList(left, &.{}, make_right);
+    const dispatch = try f.switchStmt(flag, loop_body, default_branch, null);
+    const initial_jump = try f.store.addCFStmt(.{ .jump = .{ .target = join_id } });
+    const initialize_flag = try f.setLocal(flag, next_flag, .initialize_join_param, initial_jump);
+    const remainder = try f.assignI64(next_flag, 1, initialize_flag);
+    const join = try f.store.addCFStmt(.{ .join = .{
+        .id = join_id,
+        .params = try f.span(&.{flag}),
+        .body = dispatch,
+        .remainder = remainder,
+    } });
+    _ = try f.addProc(&.{}, join, .i64);
+    try f.run();
+    try testing.expectEqual(@as(usize, 0), f.countRc(taken_left, .incref));
+    try testing.expectEqual(@as(usize, 0), f.countRc(taken_right, .incref));
+}
+
 test "RC partial field take keeps a retain when a borrowed read of that field outlives the take" {
     var f = try ArcTest.init(testing.allocator);
     defer f.deinit();

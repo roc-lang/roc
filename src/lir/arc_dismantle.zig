@@ -767,6 +767,7 @@ fn fieldObservedAfter(
     reads: *const std.AutoHashMapUnmanaged(LIR.CFStmtId, ReadKind),
     joins: *const std.AutoHashMapUnmanaged(u32, LIR.CFStmtId),
     receipts: []const FieldRestitution,
+    redefinition: ?LIR.CFStmtId,
 ) Error!bool {
     var seen = collections.DenseMap(LIR.CFStmtId, void).init(gpa);
     defer seen.deinit();
@@ -775,6 +776,9 @@ fn fieldObservedAfter(
     try work.append(gpa, start);
     while (work.pop()) |cursor| {
         if ((try seen.getOrPut(cursor)).found_existing) continue;
+        // Past the container's own single definition, reached through a
+        // loop back edge, every read observes the next iteration's value.
+        if (redefinition) |def_stmt| if (cursor == def_stmt) continue;
         if (reads.get(cursor)) |read| {
             if (read.bit & bit != 0) return true;
         }
@@ -2030,7 +2034,8 @@ pub fn compute(
             const kind = read_kinds.getPtr(read.stmt) orelse continue;
             if (!kind.consuming) continue;
             const definition = store.getCFStmt(read.stmt).assign_ref;
-            if (try fieldObservedAfter(gpa, store, solution, local, kind.bit, definition.next, &read_kinds, &join_bodies, field_restitutions.items)) {
+            const redefinition: ?LIR.CFStmtId = if (candidate.join_starts.items.len == 0) candidate.def_stmt else null;
+            if (try fieldObservedAfter(gpa, store, solution, local, kind.bit, definition.next, &read_kinds, &join_bodies, field_restitutions.items, redefinition)) {
                 kind.consuming = false;
             }
         }
@@ -2060,6 +2065,12 @@ pub fn compute(
                     poison = ~@as(u64, 0);
                     break :flow;
                 }
+                // Reaching the container's single value-producing definition
+                // again, through a loop back edge, starts the next
+                // iteration's fresh value with every field intact; the
+                // previous value is dead past its redefinition exactly as it
+                // is past an explicit join-cell write.
+                if (cursor == candidate.def_stmt and candidate.join_starts.items.len == 0) state = .{ .may = 0, .must = 0 };
                 if (read_kinds.getPtr(cursor)) |kind| {
                     kind.visited = true;
                     if (kind.consuming) {

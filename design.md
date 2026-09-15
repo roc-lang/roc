@@ -12430,7 +12430,12 @@ operand; it does not implicitly use every live ownership place.
 
 Each reachable `initialize_join_param` write defines a fresh container value.
 Dismantle analysis starts field-take flow at every such write's successor,
-with all fields available. A later write first checks its value operand against
+with all fields available. A container's single value-producing definition
+reached again through a loop back edge likewise starts the next iteration's
+fresh value with every field intact: the previous value is dead past its
+redefinition, so a take that the back edge reaches again is not a second take
+of the same unit. Without that, a record rebuilt on every iteration (the
+result a per-position helper returns) would poison all of its fields. A later write first checks its value operand against
 the previous definition's take state, then starts the new definition with all
 fields available. This includes loop back edges: the join cell has no global
 incoming ownership origin, and each explicit write supplies its own intact unit.
