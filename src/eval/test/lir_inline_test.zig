@@ -10483,18 +10483,161 @@ test "stored codec restore emits the same Monotype shape from Phase B" {
     // the numbers that stand in for "the sealed body is the body the eager
     // restore used to emit". Measured on the pre-W2b compiler:
     //   fns=10 defs=11 exprs=535 locals=108 template_misses=14 nested_misses=0
-    // Function and definition counts are exact: deferring generation must not
-    // add or drop a generated procedure. Expression and local counts get a
-    // small window because Phase-B emission replaces the reservation with a
-    // copy of the lowered expression and orphans the original. Specialization
-    // misses may only fall: W2a keyed the callee spec as an open request, and
-    // W2b removes that cause.
+    // Every count is exact, including expressions and locals. The reserve-
+    // and-copy that Phase-B emission ends in is the same reserve-and-copy the
+    // eager restore already performed (it too filled a reservation with a
+    // lowered expression), so deferring orphans no expression the eager path
+    // kept and the predicted delta is zero. A window here would hide exactly
+    // the drift this gate exists to catch. Specialization misses may only
+    // fall: W2a keyed the callee spec as an open request, and W2b removes
+    // that cause.
     const allocator = std.testing.allocator;
     const stats = try structuralJsonMonotypeStatsForSource(allocator, stored_parser_gate_source);
     try std.testing.expectEqual(@as(usize, 10), stats.functions);
     try std.testing.expectEqual(@as(usize, 11), stats.definitions);
-    try std.testing.expect(stats.expressions >= 527 and stats.expressions <= 543);
-    try std.testing.expect(stats.locals >= 104 and stats.locals <= 112);
+    try std.testing.expectEqual(@as(usize, 535), stats.expressions);
+    try std.testing.expectEqual(@as(usize, 108), stats.locals);
     try std.testing.expect(stats.template_misses <= 14);
     try std.testing.expectEqual(@as(u64, 0), stats.nested_misses);
+}
+
+/// `stored_parser_gate_source` over a shape whose field KIND is decided at the
+/// freeze (`bar ?: Str`). This program panicked before W2b
+/// (`polarity_phase_two.md` Appendix A, "resolved Monotype view requested for
+/// an unresolved instantiation node"), so it has no pre-W2b baseline: its
+/// numbers are W2b's own, pinned as a regression gate rather than as an
+/// equivalence gate. It is the case W2b exists for.
+const stored_parser_optional_gate_source =
+    \\Format := [Default].{
+    \\    rename_field : Format, Str -> Str
+    \\    rename_field = |_, name| name
+    \\
+    \\    parse_str : Format, State -> Try({ value : Str, rest : State }, [FormatError])
+    \\    parse_str = |_, state|
+    \\        match state {
+    \\            Present(value) => Ok({ value, rest: Done })
+    \\            Done => Err(FormatError)
+    \\        }
+    \\
+    \\    parse_record_start : Format, State -> Try([Counted({ len : U64, rest : State }), Uncounted(State)], [FormatError])
+    \\    parse_record_start = |_, state| Ok(Uncounted(state))
+    \\
+    \\    parse_record_field : Format,
+    \\    Encoding.FieldName.FieldNames(_shape),
+    \\    State -> Try(
+    \\        [
+    \\            Field({ field : Encoding.FieldName(_shape), rest : State }),
+    \\            TryField({ name : Str, rest : State }),
+    \\            TryFieldCaseless({ name : Str, rest : State }),
+    \\            Continue(State),
+    \\            Done(State),
+    \\        ],
+    \\        [FormatError],
+    \\    )
+    \\    parse_record_field = |_, _, state|
+    \\        match state {
+    \\            Present(_) => Ok(TryField({ name: "foo", rest: state }))
+    \\            Done => Ok(Done(state))
+    \\        }
+    \\
+    \\    parse_record_after_field : Format, State -> Try([Continue(State), Done(State)], [FormatError])
+    \\    parse_record_after_field = |_, state| Ok(Continue(state))
+    \\
+    \\    skip_record_field : Format, State -> Try(State, [FormatError])
+    \\    skip_record_field = |_, _| Ok(Done)
+    \\}
+    \\
+    \\State := [Present(Str), Done]
+    \\
+    \\parse_stored : State -> Try({ value : { foo : Str, bar ?: Str }, rest : State }, [FormatError, MissingRequiredField(Str)])
+    \\parse_stored = {
+    \\    Shape : { foo : Str, bar ?: Str }
+    \\    Shape.parser_for(Format.Default)
+    \\}
+    \\
+    \\main : State -> Try({ value : { foo : Str, bar ?: Str }, rest : State }, [FormatError, MissingRequiredField(Str)])
+    \\main = |state| parse_stored(state)
+;
+
+/// A stored `encoder_for` constant over a shape with an optional field, the
+/// encoder twin of `stored_parser_optional_gate_source`. Mirrors
+/// test/cli/EncoderForTopLevelStoredOptionalField.roc without its module
+/// header. `emitStoredEncoderForRuntimeBody` has no other counter gate.
+const stored_encoder_optional_gate_source =
+    \\Format := [Default].{
+    \\    rename_field : Format, Str -> Str
+    \\    rename_field = |_, name|
+    \\        if Str.is_eq(name, "foo_bar") {
+    \\            "foo-bar"
+    \\        } else {
+    \\            name
+    \\        }
+    \\
+    \\    encode_record : List(Str), U64, (List(Str), (List(Str), Str, (List(Str) -> Try(List(Str), [])) -> Try(List(Str), [])) -> Try(List(Str), [])) -> Try(List(Str), [])
+    \\    encode_record = |state, _, write_fields| {
+    \\        started = List.append(state, "record")
+    \\        finished = write_fields(
+    \\            started,
+    \\            |field_state, name, write_value| write_value(List.append(field_state, name)),
+    \\        )?
+    \\        Ok(List.append(finished, "end"))
+    \\    }
+    \\
+    \\    encode_str : Str, List(Str) -> Try(List(Str), [])
+    \\    encode_str = |value, state| Ok(List.append(state, value))
+    \\
+    \\    encode_u64 : U64, List(Str) -> Try(List(Str), [])
+    \\    encode_u64 = |value, state| Ok(List.append(state, value.to_str()))
+    \\}
+    \\
+    \\Value : { count : U64, foo_bar : Str, note ?: Str }
+    \\
+    \\value : Value
+    \\value = { count: 7, foo_bar: "abc" }
+    \\
+    \\encoder_for_value : value -> (value, List(Str) -> Try(List(Str), []))
+    \\    where [
+    \\        value.encoder_for : Format -> (value, List(Str) -> Try(List(Str), [])),
+    \\    ]
+    \\encoder_for_value = |_| {
+    \\    Shape : value
+    \\    Shape.encoder_for(Format.Default)
+    \\}
+    \\
+    \\encode_stored : Value, List(Str) -> Try(List(Str), [])
+    \\encode_stored = encoder_for_value(value)
+    \\
+    \\main : List(Str) -> Try(List(Str), [])
+    \\main = |state| encode_stored(value, state)
+;
+
+test "stored parser restore lowers a shape with an optional field" {
+    // Not an equivalence gate: this program panicked before W2b
+    // ("resolved Monotype view requested for an unresolved instantiation
+    // node"), so there is no pre-W2b number to compare against. These are
+    // W2b's own, measured 2026-09-15, and they exist so a later change that
+    // silently drops or duplicates part of the generated optional-field
+    // parser is caught. That it lowers at all is the primary assertion.
+    const allocator = std.testing.allocator;
+    const stats = try structuralJsonMonotypeStatsForSource(allocator, stored_parser_optional_gate_source);
+    try std.testing.expectEqual(@as(usize, 10), stats.functions);
+    try std.testing.expectEqual(@as(usize, 11), stats.definitions);
+    try std.testing.expectEqual(@as(usize, 669), stats.expressions);
+    try std.testing.expectEqual(@as(usize, 127), stats.locals);
+    try std.testing.expectEqual(@as(u64, 14), stats.template_misses);
+    try std.testing.expectEqual(@as(u64, 0), stats.nested_misses);
+}
+
+test "stored encoder_for restore lowers a shape with an optional field" {
+    // The encoder twin of the test above, and the only Monotype-level gate on
+    // `emitStoredEncoderForRuntimeBody`. Same status: W2b's own baseline,
+    // measured 2026-09-15, not a pre/post comparison.
+    const allocator = std.testing.allocator;
+    const stats = try structuralJsonMonotypeStatsForSource(allocator, stored_encoder_optional_gate_source);
+    try std.testing.expectEqual(@as(usize, 24), stats.functions);
+    try std.testing.expectEqual(@as(usize, 17), stats.definitions);
+    try std.testing.expectEqual(@as(usize, 213), stats.expressions);
+    try std.testing.expectEqual(@as(usize, 72), stats.locals);
+    try std.testing.expectEqual(@as(u64, 19), stats.template_misses);
+    try std.testing.expectEqual(@as(u64, 1), stats.nested_misses);
 }
