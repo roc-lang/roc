@@ -100,6 +100,18 @@ pub fn update(self: *TypeDigestHasher, bytes: []const u8) void {
     self.total_len += bytes.len;
 }
 
+/// Feed a constant canonical tag with its little-endian u32 byte length.
+/// Combining the prefix and text avoids two updates without changing any bytes.
+pub fn updateTag(self: *TypeDigestHasher, comptime tag: []const u8) void {
+    const encoded = comptime blk: {
+        var bytes: [4 + tag.len]u8 = undefined;
+        std.mem.writeInt(u32, bytes[0..4], tag.len, .little);
+        @memcpy(bytes[4..], tag);
+        break :blk bytes;
+    };
+    self.update(&encoded);
+}
+
 /// Finish the digest. The hasher must not be used afterwards.
 pub fn finalResult(self: *TypeDigestHasher) [digest_length]u8 {
     // Padding: a 1 bit, zeros, then the bit length as a big-endian u64.
@@ -172,4 +184,22 @@ test "portable rounds agree with the target's rounds" {
     var target = rounds.initial_state;
     compress(&target, @as(*const [1]rounds.Block, &block));
     try std.testing.expectEqual(portable, target);
+}
+
+test "constant tags preserve encoding across hash block boundaries" {
+    const prefix = [_]u8{43} ** 128;
+    for (0..prefix.len + 1) |len| {
+        var split = init();
+        var batched = init();
+        split.update(prefix[0..len]);
+        batched.update(prefix[0..len]);
+        inline for (.{ "", "record", "longer tag to cross multiple hash block boundaries abcdefghijklmnopqrstuvwxyz0123456789" }) |tag| {
+            var length: [4]u8 = undefined;
+            std.mem.writeInt(u32, &length, tag.len, .little);
+            split.update(&length);
+            split.update(tag);
+            batched.updateTag(tag);
+        }
+        try std.testing.expectEqual(split.finalResult(), batched.finalResult());
+    }
 }
