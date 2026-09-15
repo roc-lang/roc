@@ -686,13 +686,15 @@ comment to the app's root module. Times are wall-clock seconds of one run.
 
 | app | base rebuild | base edited | cache cold | cache rebuild | cache edited | keys | hits (rebuild) |
 | --- | --- | --- | --- | --- | --- | --- | --- |
-| roc-signals task-board | 19.4 | 20.7 | 31.1 | 18.5 | 20.2 | 219 | 334 (113 external) |
-| roc-signals counter | 1.6 | 1.8 | 5.5 | 1.6 | 1.9 | 23 | 14 (6 external) |
+| roc-signals task-board | 19.4 | 20.7 | 22.4 | 17.7 | 20.2 | 196 | 300 (102 external) |
+| roc-signals counter | 1.6 | 1.8 | 3.5 | 1.5 | 1.9 | 22 | 13 (6 external) |
 | roc-deflate example | 88.2 | 180.7 | 89.5 | 89.1 | 88.1 | 74 | 34 (11 external) |
 
-Three things follow. The cold cost of writing a pack program for every
-module in view is real: 9s on task-board's fifteen platform modules and 4s
-on counter, paid once per module version. Rebuilds of the signals apps gain
+Three things follow. Writing a pack program for every module in view first
+cost 9s on task-board's fifteen platform modules and 2s on counter, until
+pack roots were limited to Roc procedures: twelve of those fifteen packs had
+only hosted exports and offered nothing, and skipping them brought the cold
+build back to the checked-cache baseline. Rebuilds of the signals apps gain
 little because their time is Monotype specialization of lambda-bearing
 requests, which no closed entry covers; the closed entries hit (334 on
 task-board) but were cheap to begin with. The deflate example's edited
