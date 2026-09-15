@@ -1162,6 +1162,146 @@ not promise to be the caller's var.
 assertion, and tighten that doc comment. Do NOT "fix" the production code; there
 is no defect there.
 
+### 8.1.7 Two fx-open failures are OURS, from phase one (settled 2026-09-15)
+
+Both fail on the branch and both PASS at `kusqzzsn`, measured with a
+marker-checked binary in a comparison workspace. Neither is pre-existing.
+
+**issue_9826 — a rejection that stopped happening.** `wyzrkrmn` deleted the
+exact `..` the test exists to reject, in a HOSTED lambda annotation:
+`line! : Str => Try({}, [LineErr(IOErr), ..])`. Hosted annotations are
+`.as_written`, so that `..` was load-bearing; with it gone there is nothing
+left to reject and `roc check` correctly reports no errors. Exactly ONE
+host-boundary position was touched by that commit, and this is it. Note the
+compiler never advised this strip: a hosted annotation records no
+implicit-open ext, so no redundant-open warning fires there. The edit was
+manual over-reach. **Fix is fixture-side: restore the `..`.**
+
+**issue_9963 — a valid program that stopped compiling.** The obvious lead was
+wrong and is recorded here so it is not re-tried: `via_question!` and an app's
+`main!` are NOT host-boundary positions. An app `main!` is not a `provides`
+def, and `via_question!` has a body so it is not a hosted lambda. Measured:
+restoring only `Fallible.roc`'s `..` while leaving `main!` closed gives a
+clean check, so the seven app `main!` strips were genuinely redundant.
+
+The real mechanism is `kupupkyt`, not `wyzrkrmn`. That commit collapsed a
+written `..` and an absent extension into the SAME recorded flex in ordinary
+output positions. `via_question!`'s body is `Ok(host_call!({})?)`, so at the
+`?` the probe `expected=[HostErr(Str), ..flex]` against `actual=[HostErr(Str)]`
+now SUCCEEDS by binding the flex to `[]`. Hosted Try Question Widening
+therefore declines, the binding is performed for real, and `via_question!`
+generalizes with a CLOSED row — after which the caller's `?` is rejected. At
+base the same `..` was the rigid `#others`: the probe failed, the rule fired,
+the row stayed open.
+
+**Restoring `..` does NOT fix this one** — it is now the same flex either way.
+The consequence is broader than one fixture: after `kupupkyt` there is no
+longer any way to spell "this output row stays open" on a function whose body
+produces a closed row. design.md claims this pairing "now arises only where
+closed rows still exist"; issue_9963 is a live counterexample.
+
+### 8.1.8 W2b closeout (2026-09-15)
+
+**What W2b actually achieved: a narrowing from four sites to two, not an
+elimination.** The four `BodyContext`-level stored-codec restores
+(`restoreConstParserRuntimeFn`, `restoreConstParserRuntimeFnAtNode`,
+`restoreConstEncoderForRuntimeFn`, `restoreConstEncoderForRuntimeFnAtNode`)
+now prepare in Phase A and emit in Phase B, from sealed types only. The two
+Builder-level restores (`restoreConstParserRuntimeFnExpr`,
+`restoreConstEncoderForRuntimeFnExpr`) do NOT, and W2b never claimed
+otherwise — they build their body in a private graph they create and destroy
+themselves, seal it with `sealActiveBodyDraft`, and still take eager resolved
+views inside it (`resolvedCheckedTypeView` of the dispatcher). They are the
+last eager codec consumers, and 8.1.3's follow-up note explains why moving
+them is separate work: they prepare no codec calls at all, so deferring them
+requires giving them `prepareStructuralCodecCallsAtNode` first. design.md's
+three over-claiming sites (~4633, ~5976, ~7281) were corrected to say this
+rather than "there is no exception".
+
+**The W2a chokepoint and `groundRowDefaults` are fully deleted.** Both the
+non-frozen branch of `resolvedPreparedCodecCallsForBoundary` (which called
+`InstGraph.groundRowDefaults(prepared.callable_node)`) and the
+`InstGraph.groundRowDefaults` method itself are gone; the whole
+`resolvedPreparedCodecCallsForBoundary` helper is gone with them. `grep -rn
+groundRowDefaults src/` returns nothing. W2a's declared design.md exception
+went with it.
+
+**Three deviations from the plan's W2b text, all deliberate.**
+
+1. *The precomputed-plan builder moved to Phase B, not Phase A.* The plan
+   listed `buildParserRestoredPrecomputedPlan` among the Phase-A steps. It
+   takes a sealed `shape_ty`, and in Phase A the shape is exactly what is not
+   yet decided — asking for it there is the eager view W2b exists to remove.
+   It runs in `emitStoredParserRuntimeBody` on `sealer.sealNode(boundary.shape_node)`.
+   8.1.3 flagged the risk that its `restoreConstNodeAtType` calls for `Str`
+   field-name literals might produce relations after the freeze; measured, they
+   do not.
+2. *`addFn` keeps a graph-node `mono_fn_ty`, not a `.sealed` one.* The plan
+   asked for `.sealed`. The pre-W2b eager restore already passed
+   `DraftTypeCell.fromGraphNode(request_fn_node)`, so the graph-node cell is
+   the faithful preservation and `.sealed` would have been a behaviour change
+   smuggled in under a refactor.
+3. *The gate is a Monotype-footprint comparison, not a snapshot comparison.*
+   The plan's gate ("`run-check-snapshots` must show no lowered-output
+   change") is impossible — no snapshot carries lowered output. 8.1.3
+   proposed `structuralJsonMonotypeStatsForSource` with a window on
+   expressions and locals; the window turned out to be unnecessary and was
+   removed. `stored_parser_gate_source` measures fns=10 defs=11 exprs=535
+   locals=108 misses=14/0 both before and after W2b — an exact match, because
+   the eager path already reserved and filled, so deferring orphans nothing
+   new. Two further gates (`stored_parser_optional_gate_source`,
+   `stored_encoder_optional_gate_source`) pin W2b's OWN numbers; they cannot
+   be equivalence gates because those programs panicked before W2b.
+
+**Residual notes for whoever reads this next.**
+
+- *A second cross-phase `Type.TypeId` survives, and it is safe.*
+  `Builder.RestoredConstSourceCapture.ty` is a Phase-A `Type.TypeId` carried
+  in `boundary.source_captures` into Phase B. Unlike the deleted
+  `expected_ret_ty`, it is never compared against a sealed type: Phase B feeds
+  it to `fn_ctx.draftTypeCell`, i.e. `DraftTypeCell.fromActiveType`, which
+  reconnects it to its graph node when the graph still holds a snapshot for it
+  and otherwise falls back to a sealed cell. It re-enters the graph rather
+  than asserting about it, so a stale pre-freeze view cannot silently pass.
+- *`BodyContext.lowerCallableEvalBindingValue` is dead code.* No caller: the
+  one `self.lowerCallableEvalBindingValue(...)` call site is inside `Builder`
+  and resolves to `Builder`'s own same-named function, and both live call
+  sites use the `AtNode` variant. This predates W2b (it is dead at
+  `b6648d95` too), so it was left alone; `structural_test.zig` pins only the
+  `AtNode` name, so deleting it is safe whenever someone wants to.
+- *Nothing in the repository exercises the two `Type.TypeId`-shaped restores.*
+  Measured 2026-09-15 with a temporary `std.debug.print` in each of the six
+  restores and both Phase-B emitters, over every `.roc` file under `test/`
+  (330 in `test/cli` via `roc test --no-cache`, 561 elsewhere via both
+  `roc test` and `roc build`). Fifteen programs reach a stored-codec restore:
+  twelve `test/cli` fixtures plus `test/http-headers/app.roc`,
+  `test/json-decoder/camel_app.roc` and `camel_direct_app.roc`. EVERY one of
+  them goes through `restoreConstParserRuntimeFnAtNode` or
+  `restoreConstEncoderForRuntimeFnAtNode` and then the matching Phase-B
+  emitter. ZERO reach `restoreConstParserRuntimeFn` /
+  `restoreConstEncoderForRuntimeFn` (the `ty: Type.TypeId` shapes, reached
+  only through `BodyContext.restoreConstFn`), and ZERO reach the Builder-level
+  `restoreConstParserRuntimeFnExpr` / `restoreConstEncoderForRuntimeFnExpr`.
+  So the two restores W2b changed most — the ones that lost `expected_ret_ty`
+  and gained the `sameClass` deferral assertion — are covered by no test, and
+  the two "last eager codec consumers" design.md now documents are not
+  exercised either. The probe was removed before the final build. Two open
+  options, for Jared: build a fixture that forces the `Type.TypeId` path (the
+  W2b review sized a nested stored-codec fixture at 2-4 hours, needing two
+  full format protocols and a nominal whose tag payload is a function), or
+  collapse the `Type.TypeId` shapes into their `AtNode` twins.
+- *Two `Common.invariant`-guarded result-type checks remain in the
+  Builder-level restores* (`lower.zig` ~11355 and ~11482, "stored parser /
+  encoder_for constructor result type differed from restored function type").
+  They are pre-existing on `main` and were left alone. They are the Builder
+  analogue of the `expected_ret_ty` checks W2b deleted, and they are sound
+  there for a different reason: `fn_ctx.sameType` compares two types in the
+  restore's own private graph within one phase, so there is no cross-phase
+  staleness to hide. The two Phase-B retype guards, which DO retype an
+  expression on the strength of the comparison, were changed from
+  `Common.invariant` to `Common.compilerBug` so a release build reports
+  instead of reinterpreting a layout.
+
 ### 8.2 The working agreement Jared set (binding)
 
 - This session's driver owned jj; subagents never ran state-changing jj

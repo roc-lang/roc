@@ -10150,6 +10150,12 @@ const Builder = struct {
         try ctx.installRetainedCodecContract(boundary.codec_contract orelse
             Common.invariant("deferred stored codec restore had no enclosing codec contract"));
 
+        // No `active_codec_contract` here, unlike `prepareDraftStructuralSerialization`:
+        // a stored codec restore has no `SpecStructuralEvidence` — its
+        // constructor came from the ConstStore, not from a structural dispatch
+        // plan — so `checkedGeneratedCodecCallee` correctly finds no contract
+        // and falls back to ordinary method-lookup resolution. The eager
+        // restore this replaced set no contract either.
         return try ctx.prepareStructuralCodecCallsAtNode(
             boundary.expr,
             boundary.kind,
@@ -10355,9 +10361,18 @@ const Builder = struct {
 
             var lowered_expr = body_draft.exprs.items[@intFromEnum(lowered)];
             const reserved_ty = try body_draft.exprs.items[@intFromEnum(boundary.expr)].ty.seal(graph, sealer);
-            const lowered_ty = try lowered_expr.ty.seal(graph, sealer);
-            if (!try ctx.typeStore().typeEql(ctx.nameStore(), reserved_ty, lowered_ty)) {
-                Common.invariant("deferred stored codec restore changed its sealed result type");
+            // The emitter types its result at the request cell, which IS this
+            // reservation's own cell, so comparing their seals would be
+            // `sealNode(n) == sealNode(n)`. Guard the property that has
+            // content instead: that the emitter returned an expression still
+            // typed at the request node. (`toGraphNode` is not used here: on a
+            // `.sealed` cell it calls `importMono`, which panics on a frozen
+            // graph.)
+            switch (lowered_expr.ty) {
+                .graph_node => |node| if (!graph.sameClass(node, boundary.request_fn_node)) {
+                    Common.invariant("deferred stored codec restore emitted a body outside its request cell");
+                },
+                .sealed => Common.invariant("deferred stored codec restore emitted a pre-sealed body"),
             }
             lowered_expr.ty = .{ .sealed = reserved_ty };
             body_draft.exprs.items[@intFromEnum(boundary.expr)] = lowered_expr;
@@ -14622,6 +14637,15 @@ const DraftDeferredCallsiteIntrinsic = struct {
     codec_contract: ?RetainedCodecContract,
 };
 
+/// The generated `#encoding` capture's let, when the stored constant carries
+/// one. An optional pair rather than a sentinel `DraftExprId`, because
+/// expression 0 is a real expression and a sentinel that aliases a live id is
+/// indistinguishable from a present value.
+const DraftStoredCodecEncodingLet = struct {
+    local: DraftLocalId,
+    value: DraftExprId,
+};
+
 /// One stored codec constant (`parser_runtime` / `encoder_for_runtime`)
 /// restored at a use site. The constructor is instantiated against the
 /// request and its generated format-method calls are prepared while the
@@ -14629,9 +14653,11 @@ const DraftDeferredCallsiteIntrinsic = struct {
 /// the freeze, from sealed types only, exactly like every other derived
 /// codec body (design.md, the Phase-A/Phase-B boundary).
 ///
-/// `expected_ret_ty` is present only for the `Type.TypeId`-shaped restore,
-/// whose caller already owns a durable request type; the graph-native
-/// restore proves the same property with `sameClass` at deferral time.
+/// Both restore shapes prove at deferral time that the constructor's result
+/// cell IS the request cell (`graph.sameClass`), so Phase B needs no durable
+/// copy of the caller's request type. A cross-phase `Type.TypeId` could only
+/// be a pre-freeze view of a node the freeze may still decide, and comparing
+/// one to a sealed type is not a comparison this boundary can make.
 const DraftDeferredStoredCodecRestore = struct {
     view: ModuleView,
     method_scope: ModuleView,
@@ -14646,9 +14672,7 @@ const DraftDeferredStoredCodecRestore = struct {
     encoding_node: NodeId,
     shape_node: NodeId,
     encoding_expr: DraftExprId,
-    encoding_let_local: ?DraftLocalId,
-    encoding_let_value: DraftExprId,
-    expected_ret_ty: ?Type.TypeId,
+    encoding_let: ?DraftStoredCodecEncodingLet,
     source_captures: []const Builder.RestoredConstSourceCapture,
     active_const_binding: ?ActiveConstBindingId,
     evidence: EvidenceChain,
@@ -36916,6 +36940,10 @@ const BodyContext = struct {
             .parser_runtime => |runtime| runtime,
             .local_template, .imported_template, .nested, .local_hosted, .imported_hosted, .checked_generated, .encoder_for_runtime => Common.invariant("non-parser function reached sealed parser runtime emission"),
         };
+        // Phase B is the only caller: the four restores now refuse to run
+        // against a frozen graph, so nothing reaches this body outside
+        // `emitDraftDeferredStoredCodecRestores`, which sets this flag.
+        if (!self.frozen_sealed_emission) Common.invariant("stored parser body emitted outside Phase B");
         const request_cell = DraftTypeCell.fromGraphNode(boundary.request_fn_node);
         const encoding_cell = DraftTypeCell.fromGraphNode(boundary.encoding_node);
         const encoding_ty = try sealer.sealNode(boundary.encoding_node);
@@ -36927,13 +36955,6 @@ const BodyContext = struct {
         const ret_cell = DraftTypeCell.fromGraphNode(runtime_fn.ret);
         const state_ty = try sealer.sealNode(runtime_fn.args[0]);
         const ret_ty = try sealer.sealNode(runtime_fn.ret);
-        if (boundary.expected_ret_ty) |expected| {
-            const request_ty = try sealer.sealNode(boundary.request_fn_node);
-            if (!try self.typeStore().typeEql(self.nameStore(), request_ty, expected)) {
-                Common.invariant("stored parser constructor result type differed from restored function type");
-            }
-        }
-
         const state_local = try self.addLocalWithBinderCell(self.builder.symbols.fresh(), state_cell, null);
         const state_expr = try self.addExprWithTypeCell(state_cell, .{ .local = state_local });
 
@@ -36952,7 +36973,7 @@ const BodyContext = struct {
         const parsed = blk: {
             var capture_tys = std.ArrayList(Type.TypeId).empty;
             defer capture_tys.deinit(self.allocator);
-            if (boundary.encoding_let_local != null) try capture_tys.append(self.allocator, encoding_ty);
+            if (boundary.encoding_let != null) try capture_tys.append(self.allocator, encoding_ty);
             for (precomputed_plan.captures.items) |_| try capture_tys.append(self.allocator, str_ty);
             const demand_scope = try self.enterCallableBodyDemandScope(&.{state_ty}, capture_tys.items);
             defer demand_scope.leave();
@@ -36968,7 +36989,12 @@ const BodyContext = struct {
         };
         const parsed_ty = try self.exprTypeCell(parsed).seal(self.graph, sealer);
         if (!try self.typeStore().typeEql(self.nameStore(), parsed_ty, ret_ty)) {
-            Common.invariant("stored parser runtime body differed from its sealed return type");
+            // compilerBug, not invariant: the next statement retypes this
+            // expression to the sealed return cell. `invariant` is
+            // `unreachable` outside Debug, so a real divergence would
+            // silently reinterpret the emitted body's layout in a release
+            // build instead of reporting.
+            Common.compilerBug("stored parser runtime body differed from its sealed return type");
         }
         self.draft.exprs.items[@intFromEnum(parsed)].ty = ret_cell;
 
@@ -37006,11 +37032,11 @@ const BodyContext = struct {
                 request_cell,
             );
         }
-        if (boundary.encoding_let_local) |local| {
+        if (boundary.encoding_let) |let_| {
             parser_expr = try self.wrapLetAtTypeCell(
-                local,
+                let_.local,
                 encoding_cell,
-                boundary.encoding_let_value,
+                let_.value,
                 parser_expr,
                 request_cell,
             );
@@ -37034,6 +37060,10 @@ const BodyContext = struct {
             .encoder_for_runtime => |runtime| runtime,
             .local_template, .imported_template, .nested, .local_hosted, .imported_hosted, .checked_generated, .parser_runtime => Common.invariant("non-encoder_for function reached sealed encoder_for runtime emission"),
         };
+        // Phase B is the only caller: the four restores now refuse to run
+        // against a frozen graph, so nothing reaches this body outside
+        // `emitDraftDeferredStoredCodecRestores`, which sets this flag.
+        if (!self.frozen_sealed_emission) Common.invariant("stored encoder_for body emitted outside Phase B");
         const request_cell = DraftTypeCell.fromGraphNode(boundary.request_fn_node);
         const encoding_cell = DraftTypeCell.fromGraphNode(boundary.encoding_node);
         const encoding_ty = try sealer.sealNode(boundary.encoding_node);
@@ -37047,13 +37077,6 @@ const BodyContext = struct {
         const value_ty = try sealer.sealNode(runtime_fn.args[0]);
         const state_ty = try sealer.sealNode(runtime_fn.args[1]);
         const ret_ty = try sealer.sealNode(runtime_fn.ret);
-        if (boundary.expected_ret_ty) |expected| {
-            const request_ty = try sealer.sealNode(boundary.request_fn_node);
-            if (!try self.typeStore().typeEql(self.nameStore(), request_ty, expected)) {
-                Common.invariant("stored encoder_for constructor result type differed from restored function type");
-            }
-        }
-
         const value_local = try self.addLocalWithBinderCell(self.builder.symbols.fresh(), value_cell, null);
         const value_expr = try self.addExprWithTypeCell(value_cell, .{ .local = value_local });
         const state_local = try self.addLocalWithBinderCell(self.builder.symbols.fresh(), state_cell, null);
@@ -37088,7 +37111,7 @@ const BodyContext = struct {
         const encoded = blk: {
             var capture_tys = std.ArrayList(Type.TypeId).empty;
             defer capture_tys.deinit(self.allocator);
-            if (boundary.encoding_let_local != null) try capture_tys.append(self.allocator, encoding_ty);
+            if (boundary.encoding_let != null) try capture_tys.append(self.allocator, encoding_ty);
             for (precomputed_plan.captures.items) |_| try capture_tys.append(self.allocator, str_ty);
             const demand_scope = try self.enterCallableBodyDemandScope(&.{ value_ty, state_ty }, capture_tys.items);
             defer demand_scope.leave();
@@ -37105,7 +37128,12 @@ const BodyContext = struct {
         };
         const encoded_ty = try self.exprTypeCell(encoded).seal(self.graph, sealer);
         if (!try self.typeStore().typeEql(self.nameStore(), encoded_ty, ret_ty)) {
-            Common.invariant("stored encoder_for runtime body differed from its sealed return type");
+            // compilerBug, not invariant: the next statement retypes this
+            // expression to the sealed return cell. `invariant` is
+            // `unreachable` outside Debug, so a real divergence would
+            // silently reinterpret the emitted body's layout in a release
+            // build instead of reporting.
+            Common.compilerBug("stored encoder_for runtime body differed from its sealed return type");
         }
         self.draft.exprs.items[@intFromEnum(encoded)].ty = ret_cell;
 
@@ -37144,11 +37172,11 @@ const BodyContext = struct {
                 request_cell,
             );
         }
-        if (boundary.encoding_let_local) |local| {
+        if (boundary.encoding_let) |let_| {
             encoder_expr = try self.wrapLetAtTypeCell(
-                local,
+                let_.local,
                 encoding_cell,
-                boundary.encoding_let_value,
+                let_.value,
                 encoder_expr,
                 request_cell,
             );
@@ -37189,11 +37217,15 @@ const BodyContext = struct {
         const callable_node = try fn_ctx.instantiateCallableDispatchPlanCallNodeFromCaller(callable_plan, &fn_ctx, expr.ty, ty);
         const callable = try self.graph.functionNodes(callable_node);
         if (callable.args.len != 1) Common.invariant("stored parser constructor had an unexpected arity");
+        // Mirrors the graph-native restore: the constructor was instantiated
+        // against `ty`, so its result cell must be the request's own node.
+        // Proving that here is what lets Phase B seal the request instead of
+        // carrying a pre-freeze `Type.TypeId` across the boundary.
+        if (!self.graph.sameClass(callable.ret, try fn_ctx.activeNodeFromType(ty))) {
+            Common.invariant("stored parser constructor result cell differed from its restored function type");
+        }
         const encoding_node = callable.args[0];
         const encoding_cell = DraftTypeCell.fromGraphNode(encoding_node);
-        // The constructor was instantiated against `ty`, so its result cell is
-        // the runtime request. Phase B rechecks that against `ty` once the
-        // graph has sealed, instead of forcing a resolved view here.
         const request_fn_node = callable.ret;
 
         const shape_node = try fn_ctx.instNode(plan.dispatcher_ty);
@@ -37203,13 +37235,11 @@ const BodyContext = struct {
             .pending_deferred,
         );
 
-        var encoding_let_local: ?DraftLocalId = null;
-        var encoding_let_value: DraftExprId = @enumFromInt(0);
+        var encoding_let: ?DraftStoredCodecEncodingLet = null;
         const encoding_expr = if (constGeneratedCaptureNode(fn_value, parserEncodingCaptureId())) |node| blk: {
             const local = try fn_ctx.addLocalWithBinderCell(self.builder.symbols.fresh(), encoding_cell, null);
             fn_ctx.setLocalCaptureId(local, parserEncodingCaptureId());
-            encoding_let_local = local;
-            encoding_let_value = if (static_data_const_locator) |const_locator|
+            const let_value = if (static_data_const_locator) |const_locator|
                 try fn_ctx.restoreConstNodeAtNodeWithStaticRoot(
                     store_view,
                     fn_view,
@@ -37219,10 +37249,18 @@ const BodyContext = struct {
                 )
             else
                 try fn_ctx.restoreConstNodeAtNode(store_view, fn_view, node, encoding_node);
+            encoding_let = .{ .local = local, .value = let_value };
             break :blk try fn_ctx.addExprWithTypeCell(encoding_cell, .{ .local = local });
         } else try fn_ctx.lowerDispatchOperandAtNode(plan_args[0], encoding_node);
 
-        var boundary = DraftDeferredStoredCodecRestore{
+        // Mirror of `deferStructuralSerializationAtNode`: the reservation
+        // carries the encoding operand's impossibility proof from deferral
+        // until Phase B replaces it with the emitted body's. Without this the
+        // boundary is proof-less for the whole of Phase A.
+        fn_ctx.draft.expr_impossibility_proofs.items[@intFromEnum(runtime_boundary)] =
+            fn_ctx.exprImpossibilityProof(encoding_expr);
+
+        const boundary = DraftDeferredStoredCodecRestore{
             .view = fn_view,
             .method_scope = fn_ctx.method_scope,
             .owner_template = runtime.owner,
@@ -37236,9 +37274,7 @@ const BodyContext = struct {
             .encoding_node = encoding_node,
             .shape_node = shape_node,
             .encoding_expr = encoding_expr,
-            .encoding_let_local = encoding_let_local,
-            .encoding_let_value = encoding_let_value,
-            .expected_ret_ty = ty,
+            .encoding_let = encoding_let,
             .source_captures = &.{},
             .active_const_binding = fn_ctx.active_const_binding,
             .evidence = fn_ctx.evidence,
@@ -37247,12 +37283,12 @@ const BodyContext = struct {
         };
 
         if (fn_ctx.frozen_sealed_emission) {
-            const sealer = fn_ctx.frozen_type_finals orelse
-                Common.invariant("frozen Monotype emission had no graph type finalizer");
-            boundary.lexical = .{ .view = fn_view.key.bytes, .binders = &.{}, .local_procs = &.{} };
-            const lowered = try fn_ctx.emitStoredParserRuntimeBody(boundary, sealer);
-            fn_ctx.fillExprReservation(runtime_boundary, lowered);
-            return runtime_boundary;
+            // Unreachable by construction: the constructor instantiation above
+            // ends in `freshInstNode` -> `InstGraph.newNode` ->
+            // `requireRelationProduction`, so a frozen graph panics before
+            // control reaches here. `emitDraftDeferredStoredCodecRestores` is
+            // the only emitter of this body.
+            Common.invariant("stored parser restore ran against a frozen instantiation graph");
         }
 
         _ = try fn_ctx.prepareStructuralCodecCallsAtNode(
@@ -37324,13 +37360,11 @@ const BodyContext = struct {
             .pending_deferred,
         );
 
-        var encoding_let_local: ?DraftLocalId = null;
-        var encoding_let_value: DraftExprId = @enumFromInt(0);
+        var encoding_let: ?DraftStoredCodecEncodingLet = null;
         const encoding_expr = if (constGeneratedCaptureNode(fn_value, parserEncodingCaptureId())) |node| blk: {
             const local = try fn_ctx.addLocalWithBinderCell(self.builder.symbols.fresh(), encoding_cell, null);
             fn_ctx.setLocalCaptureId(local, parserEncodingCaptureId());
-            encoding_let_local = local;
-            encoding_let_value = if (static_data_const_locator) |const_locator|
+            const let_value = if (static_data_const_locator) |const_locator|
                 try fn_ctx.restoreConstNodeAtNodeWithStaticRoot(
                     store_view,
                     fn_view,
@@ -37340,8 +37374,16 @@ const BodyContext = struct {
                 )
             else
                 try fn_ctx.restoreConstNodeAtNode(store_view, fn_view, node, encoding_node);
+            encoding_let = .{ .local = local, .value = let_value };
             break :blk try fn_ctx.addExprWithTypeCell(encoding_cell, .{ .local = local });
         } else try fn_ctx.lowerDispatchOperandAtNode(plan_args[0], encoding_node);
+
+        // Mirror of `deferStructuralSerializationAtNode`: the reservation
+        // carries the encoding operand's impossibility proof from deferral
+        // until Phase B replaces it with the emitted body's. Without this the
+        // boundary is proof-less for the whole of Phase A.
+        fn_ctx.draft.expr_impossibility_proofs.items[@intFromEnum(runtime_boundary)] =
+            fn_ctx.exprImpossibilityProof(encoding_expr);
 
         var boundary = DraftDeferredStoredCodecRestore{
             .view = fn_view,
@@ -37357,9 +37399,7 @@ const BodyContext = struct {
             .encoding_node = encoding_node,
             .shape_node = shape_node,
             .encoding_expr = encoding_expr,
-            .encoding_let_local = encoding_let_local,
-            .encoding_let_value = encoding_let_value,
-            .expected_ret_ty = null,
+            .encoding_let = encoding_let,
             .source_captures = source_captures.items,
             .active_const_binding = fn_ctx.active_const_binding,
             .evidence = fn_ctx.evidence,
@@ -37368,16 +37408,12 @@ const BodyContext = struct {
         };
 
         if (fn_ctx.frozen_sealed_emission) {
-            // Restored from inside a Phase-B emission: the graph is already
-            // frozen and this context inherited both the sealer and the
-            // prepared calls, so generate the body here rather than reserving
-            // a boundary no later pass would visit.
-            const sealer = fn_ctx.frozen_type_finals orelse
-                Common.invariant("frozen Monotype emission had no graph type finalizer");
-            boundary.lexical = .{ .view = fn_view.key.bytes, .binders = &.{}, .local_procs = &.{} };
-            const lowered = try fn_ctx.emitStoredParserRuntimeBody(boundary, sealer);
-            fn_ctx.fillExprReservation(runtime_boundary, lowered);
-            return runtime_boundary;
+            // Unreachable by construction: the constructor instantiation above
+            // ends in `freshInstNode` -> `InstGraph.newNode` ->
+            // `requireRelationProduction`, so a frozen graph panics before
+            // control reaches here. `emitDraftDeferredStoredCodecRestores` is
+            // the only emitter of this body.
+            Common.invariant("stored parser restore ran against a frozen instantiation graph");
         }
 
         _ = try fn_ctx.prepareStructuralCodecCallsAtNode(
@@ -37420,11 +37456,15 @@ const BodyContext = struct {
         const callable_node = try fn_ctx.instantiateCallableDispatchPlanCallNodeFromCaller(callable_plan, &fn_ctx, expr.ty, ty);
         const callable = try self.graph.functionNodes(callable_node);
         if (callable.args.len != 1) Common.invariant("stored encoder_for constructor had an unexpected arity");
+        // Mirrors the graph-native restore: the constructor was instantiated
+        // against `ty`, so its result cell must be the request's own node.
+        // Proving that here is what lets Phase B seal the request instead of
+        // carrying a pre-freeze `Type.TypeId` across the boundary.
+        if (!self.graph.sameClass(callable.ret, try fn_ctx.activeNodeFromType(ty))) {
+            Common.invariant("stored encoder_for constructor result cell differed from its restored function type");
+        }
         const encoding_node = callable.args[0];
         const encoding_cell = DraftTypeCell.fromGraphNode(encoding_node);
-        // The constructor was instantiated against `ty`, so its result cell is
-        // the runtime request. Phase B rechecks that against `ty` once the
-        // graph has sealed, instead of forcing a resolved view here.
         const request_fn_node = callable.ret;
 
         const shape_node = try fn_ctx.instNode(plan.dispatcher_ty);
@@ -37434,13 +37474,11 @@ const BodyContext = struct {
             .pending_deferred,
         );
 
-        var encoding_let_local: ?DraftLocalId = null;
-        var encoding_let_value: DraftExprId = @enumFromInt(0);
+        var encoding_let: ?DraftStoredCodecEncodingLet = null;
         const encoding_expr = if (constGeneratedCaptureNode(fn_value, encoderForEncodingCaptureId())) |node| blk: {
             const local = try fn_ctx.addLocalWithBinderCell(self.builder.symbols.fresh(), encoding_cell, null);
             fn_ctx.setLocalCaptureId(local, encoderForEncodingCaptureId());
-            encoding_let_local = local;
-            encoding_let_value = if (static_data_const_locator) |const_locator|
+            const let_value = if (static_data_const_locator) |const_locator|
                 try fn_ctx.restoreConstNodeAtNodeWithStaticRoot(
                     store_view,
                     fn_view,
@@ -37450,10 +37488,18 @@ const BodyContext = struct {
                 )
             else
                 try fn_ctx.restoreConstNodeAtNode(store_view, fn_view, node, encoding_node);
+            encoding_let = .{ .local = local, .value = let_value };
             break :blk try fn_ctx.addExprWithTypeCell(encoding_cell, .{ .local = local });
         } else try fn_ctx.lowerDispatchOperandAtNode(plan_args[0], encoding_node);
 
-        var boundary = DraftDeferredStoredCodecRestore{
+        // Mirror of `deferStructuralSerializationAtNode`: the reservation
+        // carries the encoding operand's impossibility proof from deferral
+        // until Phase B replaces it with the emitted body's. Without this the
+        // boundary is proof-less for the whole of Phase A.
+        fn_ctx.draft.expr_impossibility_proofs.items[@intFromEnum(runtime_boundary)] =
+            fn_ctx.exprImpossibilityProof(encoding_expr);
+
+        const boundary = DraftDeferredStoredCodecRestore{
             .view = fn_view,
             .method_scope = fn_ctx.method_scope,
             .owner_template = runtime.owner,
@@ -37467,9 +37513,7 @@ const BodyContext = struct {
             .encoding_node = encoding_node,
             .shape_node = shape_node,
             .encoding_expr = encoding_expr,
-            .encoding_let_local = encoding_let_local,
-            .encoding_let_value = encoding_let_value,
-            .expected_ret_ty = ty,
+            .encoding_let = encoding_let,
             .source_captures = &.{},
             .active_const_binding = fn_ctx.active_const_binding,
             .evidence = fn_ctx.evidence,
@@ -37478,12 +37522,12 @@ const BodyContext = struct {
         };
 
         if (fn_ctx.frozen_sealed_emission) {
-            const sealer = fn_ctx.frozen_type_finals orelse
-                Common.invariant("frozen Monotype emission had no graph type finalizer");
-            boundary.lexical = .{ .view = fn_view.key.bytes, .binders = &.{}, .local_procs = &.{} };
-            const lowered = try fn_ctx.emitStoredEncoderForRuntimeBody(boundary, sealer);
-            fn_ctx.fillExprReservation(runtime_boundary, lowered);
-            return runtime_boundary;
+            // Unreachable by construction: the constructor instantiation above
+            // ends in `freshInstNode` -> `InstGraph.newNode` ->
+            // `requireRelationProduction`, so a frozen graph panics before
+            // control reaches here. `emitDraftDeferredStoredCodecRestores` is
+            // the only emitter of this body.
+            Common.invariant("stored encoder_for restore ran against a frozen instantiation graph");
         }
 
         _ = try fn_ctx.prepareStructuralCodecCallsAtNode(
@@ -37555,13 +37599,11 @@ const BodyContext = struct {
             .pending_deferred,
         );
 
-        var encoding_let_local: ?DraftLocalId = null;
-        var encoding_let_value: DraftExprId = @enumFromInt(0);
+        var encoding_let: ?DraftStoredCodecEncodingLet = null;
         const encoding_expr = if (constGeneratedCaptureNode(fn_value, encoderForEncodingCaptureId())) |node| blk: {
             const local = try fn_ctx.addLocalWithBinderCell(self.builder.symbols.fresh(), encoding_cell, null);
             fn_ctx.setLocalCaptureId(local, encoderForEncodingCaptureId());
-            encoding_let_local = local;
-            encoding_let_value = if (static_data_const_locator) |const_locator|
+            const let_value = if (static_data_const_locator) |const_locator|
                 try fn_ctx.restoreConstNodeAtNodeWithStaticRoot(
                     store_view,
                     fn_view,
@@ -37571,8 +37613,16 @@ const BodyContext = struct {
                 )
             else
                 try fn_ctx.restoreConstNodeAtNode(store_view, fn_view, node, encoding_node);
+            encoding_let = .{ .local = local, .value = let_value };
             break :blk try fn_ctx.addExprWithTypeCell(encoding_cell, .{ .local = local });
         } else try fn_ctx.lowerDispatchOperandAtNode(plan_args[0], encoding_node);
+
+        // Mirror of `deferStructuralSerializationAtNode`: the reservation
+        // carries the encoding operand's impossibility proof from deferral
+        // until Phase B replaces it with the emitted body's. Without this the
+        // boundary is proof-less for the whole of Phase A.
+        fn_ctx.draft.expr_impossibility_proofs.items[@intFromEnum(runtime_boundary)] =
+            fn_ctx.exprImpossibilityProof(encoding_expr);
 
         var boundary = DraftDeferredStoredCodecRestore{
             .view = fn_view,
@@ -37588,9 +37638,7 @@ const BodyContext = struct {
             .encoding_node = encoding_node,
             .shape_node = shape_node,
             .encoding_expr = encoding_expr,
-            .encoding_let_local = encoding_let_local,
-            .encoding_let_value = encoding_let_value,
-            .expected_ret_ty = null,
+            .encoding_let = encoding_let,
             .source_captures = source_captures.items,
             .active_const_binding = fn_ctx.active_const_binding,
             .evidence = fn_ctx.evidence,
@@ -37599,16 +37647,12 @@ const BodyContext = struct {
         };
 
         if (fn_ctx.frozen_sealed_emission) {
-            // Restored from inside a Phase-B emission: the graph is already
-            // frozen and this context inherited both the sealer and the
-            // prepared calls, so generate the body here rather than reserving
-            // a boundary no later pass would visit.
-            const sealer = fn_ctx.frozen_type_finals orelse
-                Common.invariant("frozen Monotype emission had no graph type finalizer");
-            boundary.lexical = .{ .view = fn_view.key.bytes, .binders = &.{}, .local_procs = &.{} };
-            const lowered = try fn_ctx.emitStoredEncoderForRuntimeBody(boundary, sealer);
-            fn_ctx.fillExprReservation(runtime_boundary, lowered);
-            return runtime_boundary;
+            // Unreachable by construction: the constructor instantiation above
+            // ends in `freshInstNode` -> `InstGraph.newNode` ->
+            // `requireRelationProduction`, so a frozen graph panics before
+            // control reaches here. `emitDraftDeferredStoredCodecRestores` is
+            // the only emitter of this body.
+            Common.invariant("stored encoder_for restore ran against a frozen instantiation graph");
         }
 
         _ = try fn_ctx.prepareStructuralCodecCallsAtNode(

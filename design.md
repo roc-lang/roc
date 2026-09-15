@@ -5691,7 +5691,8 @@ payload of `parse_record_start`, for instance) is now quantified in its
 scheme, so a stored codec restore reaches that row unresolved while the
 specialization graph is still open. Stored codec restores therefore prepare
 in Phase A and emit in Phase B like every other codec body, and the row is
-decided once, by final sealing.
+decided once, by final sealing. (The two Builder-level `*Expr` restores, which
+own a private graph, are the exception noted in the Monotype sealing rule.)
 
 Two positions opt out of implicit opening, both genuine non-producers:
 host-boundary annotations (hosted lambdas and `provides` defs) and platform
@@ -7232,11 +7233,14 @@ at its inline field node and records the finished draft expression
 (`DraftPreparedFieldDefault`); frozen Phase‑B emission consumes exactly
 those prepared values and may not lower another checked expression
 (missing or duplicate demand is an invariant panic). Stored codec
-restores (`parser_runtime` / `encoder_for_runtime` constants) prepare in
-Phase A and emit in Phase B like every other codec body. No leading-batch
-root ordering exists anymore—the former `pending_field_defaults`
-machinery existed only to finalize archived constants before parsers
-could restore them.
+restores reached during body lowering (`restoreConstParserRuntimeFn[AtNode]`
+/ `restoreConstEncoderForRuntimeFn[AtNode]`) prepare in Phase A and emit in
+Phase B like every other codec body; the two Builder-level restores that run
+in a private graph (`restoreConstParserRuntimeFnExpr` and its encoder twin)
+still take eager resolved views inside that graph and are the last eager
+codec consumers. No leading-batch root ordering exists anymore—the former
+`pending_field_defaults` machinery existed only to finalize archived
+constants before parsers could restore them.
 
 Optional-field lowering is COMPLETE (see Field Kinds above): an omitted
 optional field constructs the `#Missing` tag in the same
@@ -8837,8 +8841,17 @@ and subsequent relations still act on the original graph node.
 The only time an unresolved checked variable with an empty-tag-union row
 default may become durable `tag_union []` is final graph sealing, after every
 checked interface relation and specialization demand for that body has been
-applied. There is no exception: every codec body, derived or restored from a
-stored constant, is generated after that point.
+applied. Every codec body reached during specialization-body lowering —
+derived, or restored from a stored constant — is generated after that point.
+One narrow exception remains, and it is not a graph-defaulting exception: the
+two Builder-level stored-codec restores (`restoreConstParserRuntimeFnExpr` and
+`restoreConstEncoderForRuntimeFnExpr`) build their body in a private graph of
+their own and seal it with `sealActiveBodyDraft`. They still take eager
+resolved views inside that private graph (`resolvedTypeViewForNode` of the
+constructor node, `resolvedCheckedTypeView` of the dispatcher) before it
+seals, so a shape whose own cells are still undecided — an optional `?:` field
+slot — panics there. Nothing is defaulted early; the view is simply demanded
+early. They are the last eager codec consumers.
 After sealing, `tag_union []` is closed and uninhabited. Values such as `[]` can
 still be represented as `List(tag_union [])` because they contain no items,
 and code that would need an actual item value must have constrained the
