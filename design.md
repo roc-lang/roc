@@ -12938,12 +12938,25 @@ also lets LLVM optimize across what was an opaque control split.
 A join parameter is an ownership phi, not a foreign definition. Its origin is
 born-unique exactly when it has at least one explicit non-self
 `initialize_join_param` incoming edge and every such edge carries a born-unique
-origin. An incoming edge consumes its source ownership unit; a second consuming
-occurrence or a non-consuming read destroys uniqueness through that edge. Join
-edges, pure same-value aliases, and unique-return call edges settle in one
-monotone dependency graph, so loop back edges preserve a unique circulating
-unit only when an explicit unique birth reaches the cycle. A self-assignment is
-not an incoming ownership transfer and contributes no edge.
+origin. Join edges, pure same-value aliases, and unique-return call edges
+settle in one monotone dependency graph, so loop back edges preserve a unique
+circulating unit only when an explicit unique birth reaches the cycle. A
+self-assignment is not an incoming ownership transfer and contributes no edge.
+
+Uses of a local are ordered along control flow rather than counted. A
+consuming use (an owned argument, a store into an aggregate, an alias
+definition, a join edge) takes the value's single ownership unit with it, so
+it destroys the local's uniqueness only when another consuming use of the
+same local can still execute after it before the local is redefined: two
+consumes on exclusive branches never both run, and a consume whose only
+successors read other locals leaves the value unique. A transfer edge (alias
+or join) carries the unit through to its target only when no use of the
+source at all, read or consume, can execute after it; otherwise the target
+holds a second reference and has no unique birth of its own. The order is
+answered by walking the procedure's successor edges from the use, following
+jumps through the procedure's joins and stopping at a redefinition of the
+local. Reference-counting statements are never uses, so the debug certifier
+re-derives the same verdict from the emitted procedure.
 
 A checked argument's check is deletable when three conditions hold at the
 call:
