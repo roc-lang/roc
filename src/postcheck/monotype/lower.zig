@@ -235,6 +235,8 @@ pub const Options = struct {
     /// Preserve source-level procedure names for consumers that present runtime
     /// diagnostics from lowered code.
     proc_debug_names: bool = false,
+    /// The object cache to ask for closed specializations at reservation.
+    spec_cache: ?Common.SpecCacheLookup = null,
     /// Optional deterministic counters for specialization-shape tests.
     specialization_counters: ?*SpecializationCounters = null,
     /// Optional deterministic workload diagnostics. The checked pipeline
@@ -3032,6 +3034,8 @@ const Builder = struct {
     current_loc: base.SourceLoc,
     current_region: base.Region,
     proc_debug_names: bool,
+    /// The object cache consulted for closed specializations, if any.
+    spec_cache: ?Common.SpecCacheLookup,
     counters: ?*SpecializationCounters,
     diagnostics: ?*Diagnostics,
     /// Result-owned sink while one ordinary specialization shard is lowering or
@@ -3195,6 +3199,7 @@ const Builder = struct {
             .current_loc = program.current_loc,
             .current_region = program.current_region,
             .proc_debug_names = options.proc_debug_names,
+            .spec_cache = options.spec_cache,
             .counters = counters,
             .diagnostics = options.diagnostics,
             .active_spec_job_diagnostics = null,
@@ -4945,7 +4950,18 @@ const Builder = struct {
         // Only a closed request names a specialization the object cache can
         // hold: a function type anywhere in it makes the body depend on the
         // program's lambda sets.
-        if (!try self.monoFnTypeMentionsFunction(lower_fn_ty)) fn_template.spec_key = Ast.specIdentityKey(spec_identity);
+        // A hosted template has no procedure of its own to cache: callers
+        // reach the host directly through its declared ABI.
+        if (template.target != .hosted and !try self.monoFnTypeMentionsFunction(lower_fn_ty)) {
+            const key = Ast.specIdentityKey(spec_identity);
+            fn_template.spec_key = key;
+            if (self.spec_cache) |cache| {
+                if (cache.lookup(key.bytes)) |hit| {
+                    fn_template.cached = hit;
+                    self.count("spec_cache_hits");
+                }
+            }
+        }
         if (stored_source_topology) |stored_evidence| {
             fn_template.const_evidence = try self.program.addConstFnEvidence(stored_evidence.nodes);
             fn_template.const_evidence_frames = try self.program.addConstFnEvidenceFrames(stored_evidence.frames);
@@ -5108,6 +5124,26 @@ const Builder = struct {
     ) Allocator.Error!void {
         const view = self.moduleForDigest(names.procTemplateModuleDigest(template_ref));
         const template = view.templates.get(template_ref.template);
+
+        if (fn_template.cached != null) {
+            // The object cache holds this specialization's compiled
+            // procedure. The definition keeps its declared shape and no body,
+            // exactly like a hosted procedure, and downstream stages emit an
+            // external reference the object writer resolves from the cache.
+            const fn_data = self.programFunctionShape(lower_fn_ty, "cached procedure template root type was not a function");
+            const args = try self.typedLocalsForArgs(self.program.types.span(fn_data.args));
+            self.program.setDef(reservation.def, .{
+                .symbol = reservation.symbol,
+                .fn_def = fn_template,
+                .fn_id = reservation.fn_id,
+                .args = args,
+                .body = .hosted,
+                .ret = fn_data.ret,
+            });
+            self.program.setFnSource(reservation.fn_id, fn_template);
+            try self.markTemplateReady(reservation.fn_id, lower_fn_ty);
+            return;
+        }
 
         switch (template.target) {
             .hosted => {

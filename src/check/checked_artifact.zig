@@ -2441,6 +2441,13 @@ pub fn exportedProcedureRoots(
             .checked_body => {},
             .intrinsic_wrapper, .entry_wrapper, .unimplemented => continue,
         }
+        // Only a Roc procedure has code of its own to cache: a hosted
+        // function's callers reach the host directly, and the other targets
+        // never lower as procedures of the exporting module.
+        switch (checked_template.target) {
+            .roc => {},
+            .hosted, .intrinsic, .entry, .comptime_only => continue,
+        }
         const checked_fn_root = checked_template.checked_fn_root;
         try appendRoot(&requests, allocator, .{
             .module_idx = artifact.module_identity.module_idx,

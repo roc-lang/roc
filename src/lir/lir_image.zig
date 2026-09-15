@@ -53,7 +53,7 @@ pub const MAGIC: u32 = 0x52494c52; // "RLIR" in little-endian bytes.
 ///      self-tail proofs.
 /// v31: frozen static values and explicit callable/data relocations.
 /// v32: procedure specs carry content identities.
-pub const FORMAT_VERSION: u32 = 32;
+pub const FORMAT_VERSION: u32 = 33;
 const StaticDataImage = @import("lir_image_static_data.zig").Schema(@This());
 
 /// Public `ImageError` declaration.

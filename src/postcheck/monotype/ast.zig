@@ -220,6 +220,10 @@ pub const FnTemplate = struct {
     /// before the body exists. Null for functions that are not template
     /// specializations.
     spec_key: ?names.TypeDigest = null,
+    /// Set when the object cache served this specialization: the body is
+    /// never lowered, and Direct LIR emits an external procedure that the
+    /// object writer fills from the cache entry.
+    cached: ?Common.SpecCacheHit = null,
     /// Explicit dispatch selections captured when this specialization was
     /// created, retained for compile-time function values.
     const_evidence: Span(check.ConstStore.ConstFnEvidence) = Span(check.ConstStore.ConstFnEvidence).empty(),
