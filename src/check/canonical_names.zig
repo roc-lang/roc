@@ -303,6 +303,8 @@ pub const CanonicalNameStore = struct {
     method_names: NameInterner = .{},
     record_field_labels: NameInterner = .{},
     tag_labels: NameInterner = .{},
+    record_field_text_rank: ?*base.TextRankCache = null,
+    tag_text_rank: ?*base.TextRankCache = null,
     export_names: NameInterner = .{},
     external_symbol_names: NameInterner = .{},
     /// Serial id -> structured proc-base key. Relocatable (POD elements).
@@ -320,7 +322,7 @@ pub const CanonicalNameStore = struct {
     /// frozen store, so the mixin's `deserialize` resets them (`proc_base_by_key`
     /// via `init(allocator)`, `scratch_key` to its default). Declared so a *data*
     /// field accidentally omitted from `Serialized` is a compile error.
-    pub const serde_transient_fields = [_][]const u8{ "proc_base_by_key", "scratch_key" };
+    pub const serde_transient_fields = [_][]const u8{ "proc_base_by_key", "scratch_key", "record_field_text_rank", "tag_text_rank" };
 
     pub fn init(allocator: Allocator) CanonicalNameStore {
         return .{
@@ -350,6 +352,8 @@ pub const CanonicalNameStore = struct {
     }
 
     pub fn deinit(self: *CanonicalNameStore) void {
+        if (self.record_field_text_rank) |cache| cache.destroy();
+        if (self.tag_text_rank) |cache| cache.destroy();
         if (!self.serialized) {
             // Interners no-op their own free when frozen, but `proc_bases` is a
             // plain SafeList with no frozen flag, so guard the whole owned set.
@@ -628,6 +632,7 @@ pub const CanonicalNameStore = struct {
     }
 
     pub fn internRecordFieldLabel(self: *CanonicalNameStore, text: []const u8) Allocator.Error!RecordFieldLabelId {
+        if (self.record_field_text_rank == null) self.record_field_text_rank = try base.TextRankCache.create(self.allocator);
         return @enumFromInt(try self.record_field_labels.insert(self.allocator, text));
     }
 
@@ -636,6 +641,7 @@ pub const CanonicalNameStore = struct {
     }
 
     pub fn internTagLabel(self: *CanonicalNameStore, text: []const u8) Allocator.Error!TagLabelId {
+        if (self.tag_text_rank == null) self.tag_text_rank = try base.TextRankCache.create(self.allocator);
         return @enumFromInt(try self.tag_labels.insert(self.allocator, text));
     }
 
@@ -750,6 +756,15 @@ pub const CanonicalNameStore = struct {
         return self.method_names.getText(@intFromEnum(id));
     }
 
+    /// Prepare transient lexicographic ranks for this label generation.
+    pub fn recordFieldLabelTextRanks(self: *const CanonicalNameStore, scratch: *base.TextRankCache) Allocator.Error![]const u32 {
+        return labelTextRanks(&self.record_field_labels, self.record_field_text_rank orelse scratch);
+    }
+
+    pub fn recordFieldLabelTextRank(self: *const CanonicalNameStore, id: RecordFieldLabelId) u32 {
+        return self.record_field_text_rank.?.current(self.record_field_labels.count()).?[@intFromEnum(id)];
+    }
+
     pub fn recordFieldLabelText(self: *const CanonicalNameStore, id: RecordFieldLabelId) []const u8 {
         return self.record_field_labels.getText(@intFromEnum(id));
     }
@@ -767,12 +782,26 @@ pub const CanonicalNameStore = struct {
 
     /// Compare two record field label ids by their canonical text.
     pub fn recordFieldLabelTextEql(self: *const CanonicalNameStore, a: RecordFieldLabelId, b: RecordFieldLabelId) bool {
-        return Ident.textEql(self.recordFieldLabelText(a), self.recordFieldLabelText(b));
+        std.debug.assert(@intFromEnum(a) < self.record_field_labels.count());
+        std.debug.assert(@intFromEnum(b) < self.record_field_labels.count());
+        return a == b;
     }
 
     /// Order record field labels by their canonical text.
     pub fn recordFieldLabelTextLessThan(self: *const CanonicalNameStore, a: RecordFieldLabelId, b: RecordFieldLabelId) bool {
+        if (self.record_field_text_rank) |cache| {
+            if (cache.current(self.record_field_labels.count())) |ranks| return ranks[@intFromEnum(a)] < ranks[@intFromEnum(b)];
+        }
         return Ident.textLessThan(self.recordFieldLabelText(a), self.recordFieldLabelText(b));
+    }
+
+    /// Prepare transient lexicographic ranks for this label generation.
+    pub fn tagLabelTextRanks(self: *const CanonicalNameStore, scratch: *base.TextRankCache) Allocator.Error![]const u32 {
+        return labelTextRanks(&self.tag_labels, self.tag_text_rank orelse scratch);
+    }
+
+    pub fn tagLabelTextRank(self: *const CanonicalNameStore, id: TagLabelId) u32 {
+        return self.tag_text_rank.?.current(self.tag_labels.count()).?[@intFromEnum(id)];
     }
 
     pub fn tagLabelText(self: *const CanonicalNameStore, id: TagLabelId) []const u8 {
@@ -785,11 +814,16 @@ pub const CanonicalNameStore = struct {
 
     /// Compare two tag label ids by their canonical text.
     pub fn tagLabelTextEql(self: *const CanonicalNameStore, a: TagLabelId, b: TagLabelId) bool {
-        return Ident.textEql(self.tagLabelText(a), self.tagLabelText(b));
+        std.debug.assert(@intFromEnum(a) < self.tag_labels.count());
+        std.debug.assert(@intFromEnum(b) < self.tag_labels.count());
+        return a == b;
     }
 
     /// Order tag labels by their canonical text.
     pub fn tagLabelTextLessThan(self: *const CanonicalNameStore, a: TagLabelId, b: TagLabelId) bool {
+        if (self.tag_text_rank) |cache| {
+            if (cache.current(self.tag_labels.count())) |ranks| return ranks[@intFromEnum(a)] < ranks[@intFromEnum(b)];
+        }
         return Ident.textLessThan(self.tagLabelText(a), self.tagLabelText(b));
     }
 
@@ -966,6 +1000,19 @@ pub const NameRelocation = struct {
         return self.relocateText(ExternalSymbolNameId, source, id, &self.external_symbol_names);
     }
 };
+
+fn labelTextRanks(interner: *const NameInterner, cache: *base.TextRankCache) Allocator.Error![]const u32 {
+    const Context = struct {
+        interner: *const NameInterner,
+        pub fn text(ctx: @This(), index: u32) []const u8 {
+            return ctx.interner.getText(index);
+        }
+        pub fn next(_: @This(), index: u32, _: []const u8) u32 {
+            return index + 1;
+        }
+    };
+    return cache.ensure(0, interner.count(), interner.count(), Context{ .interner = interner });
+}
 
 fn appendOptionalNestedProcSiteKey(
     scratch: *std.ArrayList(u8),
@@ -1288,4 +1335,34 @@ test "CanonicalNameStore: serialize/deserialize round-trip preserves names, ids,
     try std.testing.expectEqual(m, loaded_pb.module_name);
     try std.testing.expectEqual(@as(?ExportNameId, exp), loaded_pb.export_name);
     try std.testing.expectEqual(@as(u32, 7), loaded_pb.ordinal);
+}
+
+test "checked label text ranks preserve byte order and refresh after insertion" {
+    var names = CanonicalNameStore.init(std.testing.allocator);
+    defer names.deinit();
+    var scratch = base.TextRankCache.init(std.testing.allocator);
+    defer scratch.deinit();
+    const texts = [_][]const u8{ "ab", "a", "é", "z", "あ", "_a", "a!", "\xff" };
+    var fields: [texts.len]RecordFieldLabelId = undefined;
+    var tags: [texts.len]TagLabelId = undefined;
+    for (texts, &fields) |text, *id| id.* = try names.internRecordFieldLabel(text);
+    // Deliberately give the two stores different insertion orders.
+    for (0..texts.len) |i| tags[texts.len - 1 - i] = try names.internTagLabel(texts[texts.len - 1 - i]);
+    _ = try names.recordFieldLabelTextRanks(&scratch);
+    _ = try names.tagLabelTextRanks(&scratch);
+    for (texts, 0..) |a, i| for (texts, 0..) |b, j| {
+        const expected = Ident.textLessThan(a, b);
+        try std.testing.expectEqual(expected, names.recordFieldLabelTextRank(fields[i]) < names.recordFieldLabelTextRank(fields[j]));
+        try std.testing.expectEqual(expected, names.tagLabelTextRank(tags[i]) < names.tagLabelTextRank(tags[j]));
+        try std.testing.expectEqual(expected, names.recordFieldLabelTextLessThan(fields[i], fields[j]));
+        try std.testing.expectEqual(expected, names.tagLabelTextLessThan(tags[i], tags[j]));
+    };
+    const field = try names.internRecordFieldLabel("A");
+    const tag = try names.internTagLabel("A");
+    try std.testing.expect(names.recordFieldLabelTextLessThan(field, fields[0]));
+    try std.testing.expect(names.tagLabelTextLessThan(tag, tags[0]));
+    _ = try names.recordFieldLabelTextRanks(&scratch);
+    _ = try names.tagLabelTextRanks(&scratch);
+    try std.testing.expect(names.recordFieldLabelTextRank(field) < names.recordFieldLabelTextRank(fields[0]));
+    try std.testing.expect(names.tagLabelTextRank(tag) < names.tagLabelTextRank(tags[0]));
 }

@@ -16,6 +16,7 @@ const SmallStringInterner = @import("SmallStringInterner.zig");
 const CompactWriter = collections.CompactWriter;
 
 const Ident = @This();
+const TextRankCache = @import("TextRankCache.zig");
 
 /// Whether to enable debug store tracking. This adds a Debug-only check that
 /// verifies Idx values are only looked up in the store that created them.
@@ -153,6 +154,9 @@ pub const Store = struct {
     interner: SmallStringInterner,
     attributes: collections.SafeList(Attributes) = .{},
     next_unique_name: u32 = 0,
+    /// Owned transient scratch, omitted from both serialized representations.
+    /// Frozen views can own this scratch separately from their backing bytes.
+    text_rank: ?*TextRankCache = null,
 
     /// Debug-only: verify `idx` was produced by this store. An Idx is a byte
     /// offset into this store's interner, so an Idx from a different store points
@@ -203,21 +207,30 @@ pub const Store = struct {
 
     /// Initialize the memory for an `Ident.Store` with a specific capacity.
     pub fn initCapacity(gpa: std.mem.Allocator, capacity: usize) std.mem.Allocator.Error!Store {
+        const text_rank = try TextRankCache.create(gpa);
+        errdefer text_rank.destroy();
         return .{
             .interner = try SmallStringInterner.initCapacity(gpa, capacity),
+            .text_rank = text_rank,
         };
     }
 
     /// Deinitialize the memory for an `Ident.Store`.
     pub fn deinit(self: *Store, gpa: std.mem.Allocator) void {
+        self.deinitTextRanks();
         self.interner.deinit(gpa);
         self.attributes.deinit(gpa);
     }
 
     /// Clone this store into fresh owned memory.
     pub fn clone(self: *const Store, gpa: std.mem.Allocator) std.mem.Allocator.Error!Store {
+        const text_rank = try TextRankCache.create(gpa);
+        errdefer text_rank.destroy();
+        var interner = try self.interner.clone(gpa);
+        errdefer interner.deinit(gpa);
         return .{
-            .interner = try self.interner.clone(gpa),
+            .text_rank = text_rank,
+            .interner = interner,
             .attributes = try self.attributes.clone(gpa),
             .next_unique_name = self.next_unique_name,
         };
@@ -238,7 +251,20 @@ pub const Store = struct {
     /// Enable inserts on a deserialized store by copying its interner data into
     /// growable allocations owned by the provided allocator.
     pub fn enableRuntimeInserts(self: *Store, gpa: std.mem.Allocator) std.mem.Allocator.Error!void {
+        try self.enableTextRanks(gpa);
         try self.interner.enableRuntimeInserts(gpa);
+    }
+
+    /// Give an owned view of frozen names reusable rank scratch without copying
+    /// or modifying its backing bytes. The ranks themselves are still lazy.
+    pub fn enableTextRanks(self: *Store, gpa: Allocator) Allocator.Error!void {
+        if (self.text_rank == null) self.text_rank = try TextRankCache.create(gpa);
+    }
+
+    /// Release transient ranks independently of buffer-owned identifier bytes.
+    pub fn deinitTextRanks(self: *Store) void {
+        if (self.text_rank) |cache| cache.destroy();
+        self.text_rank = null;
     }
 
     /// Look up an identifier in the store without inserting.
@@ -318,12 +344,40 @@ pub const Store = struct {
 
     /// Compare the texts behind two identifiers from this store.
     pub fn idxTextEql(self: *const Store, a: Idx, b: Idx) bool {
-        return textEql(self.getText(a), self.getText(b));
+        self.verifyIdx(a);
+        self.verifyIdx(b);
+        return a.idx == b.idx;
     }
 
     /// Compare the texts behind two identifiers from this store.
     pub fn idxTextLessThan(self: *const Store, a: Idx, b: Idx) bool {
+        self.verifyIdx(a);
+        self.verifyIdx(b);
+        if (self.text_rank) |cache| {
+            if (cache.current(@intCast(self.interner.bytes.len()))) |ranks| return ranks[a.idx] < ranks[b.idx];
+        }
         return textLessThan(self.getText(a), self.getText(b));
+    }
+
+    /// Prepare ranks once per interner generation. Views without owned scratch
+    /// borrow the caller's cache; serialized bytes are never mutated.
+    pub fn textRanks(self: *const Store, scratch: *TextRankCache) Allocator.Error![]const u32 {
+        const Context = struct {
+            store: *const Store,
+            pub fn text(ctx: @This(), index: u32) []const u8 {
+                return ctx.store.interner.getText(@enumFromInt(index));
+            }
+            pub fn next(_: @This(), index: u32, bytes: []const u8) u32 {
+                return index + @as(u32, @intCast(bytes.len)) + 1;
+            }
+        };
+        return (self.text_rank orelse scratch).ensure(1, @intCast(self.interner.bytes.len()), self.interner.entry_count, Context{ .store = self });
+    }
+
+    /// Rank of an identifier after preparing the current text-rank generation.
+    pub fn idxTextRank(self: *const Store, idx: Idx) u32 {
+        self.verifyIdx(idx);
+        return self.text_rank.?.current(@intCast(self.interner.bytes.len())).?[idx.idx];
     }
 
     /// Check if an identifier text already exists in the store.
@@ -816,4 +870,78 @@ test "Ident.Store comprehensive CompactWriter roundtrip" {
 
     // Verify next_unique_name
     try std.testing.expectEqual(@as(u32, 2), deserialized.next_unique_name);
+}
+
+test "identifier text ranks preserve byte order and refresh after insertion" {
+    const gpa = std.testing.allocator;
+    var store = try Store.initCapacity(gpa, 8);
+    defer store.deinit(gpa);
+    var scratch = TextRankCache.init(gpa);
+    defer scratch.deinit();
+    const texts = [_][]const u8{ "ab", "a", "é", "z", "あ", "_a", "a!", "\xff" };
+    var ids: [texts.len]Idx = undefined;
+    for (texts, &ids) |text, *id| id.* = try store.insert(gpa, Ident.for_text(text));
+    _ = try store.textRanks(&scratch);
+    for (ids) |a| for (ids) |b| {
+        const expected = textLessThan(store.getText(a), store.getText(b));
+        try std.testing.expectEqual(expected, store.idxTextRank(a) < store.idxTextRank(b));
+        try std.testing.expectEqual(expected, store.idxTextLessThan(a, b));
+    };
+    const old = store.idxTextRank(ids[1]);
+    const first = try store.insert(gpa, Ident.for_text("A"));
+    try std.testing.expect(store.text_rank.?.current(@intCast(store.interner.bytes.len())) == null);
+    try std.testing.expect(store.idxTextLessThan(first, ids[1]));
+    _ = try store.textRanks(&scratch);
+    try std.testing.expectEqual(old + 1, store.idxTextRank(ids[1]));
+    try std.testing.expect(store.idxTextRank(first) < store.idxTextRank(ids[1]));
+    const generation = store.text_rank.?.generation.load(.acquire);
+    try std.testing.expectEqual(ids[0], try store.insert(gpa, Ident.for_text("ab")));
+    try std.testing.expectEqual(generation, store.interner.bytes.len());
+    const unique = try store.genUnique(gpa);
+    _ = try store.textRanks(&scratch);
+    try std.testing.expect(store.idxTextRank(unique) < store.idxTextRank(first));
+
+    var cloned = try store.clone(gpa);
+    defer cloned.deinit(gpa);
+    _ = try cloned.textRanks(&scratch);
+    try std.testing.expect(cloned.text_rank != store.text_rank);
+    for (ids) |id| try std.testing.expectEqual(store.idxTextRank(id), cloned.idxTextRank(id));
+}
+
+test "identifier ranks are transient across serialization" {
+    const gpa = std.testing.allocator;
+    var store = try Store.initCapacity(gpa, 8);
+    defer store.deinit(gpa);
+    const a = try store.insert(gpa, Ident.for_text("prefix"));
+    const b = try store.insert(gpa, Ident.for_text("pre"));
+    var scratch = TextRankCache.init(gpa);
+    defer scratch.deinit();
+    _ = try store.textRanks(&scratch);
+    var arena = std.heap.ArenaAllocator.init(gpa);
+    defer arena.deinit();
+    var writer = CompactWriter.init();
+    const header = try writer.appendAlloc(arena.allocator(), Store.Serialized);
+    try header.serialize(&store, arena.allocator(), &writer);
+    const buffer = try gpa.alignedAlloc(u8, .@"16", writer.total_bytes);
+    defer gpa.free(buffer);
+    _ = try writer.writeToBuffer(buffer);
+    const serialized: *const Store.Serialized = @ptrCast(@alignCast(buffer.ptr));
+    var loaded = serialized.deserializeInto(@intFromPtr(buffer.ptr));
+    defer loaded.deinitTextRanks();
+    try std.testing.expect(loaded.text_rank == null);
+    const ranks = try loaded.textRanks(&scratch);
+    try std.testing.expect(ranks[b.idx] < ranks[a.idx]);
+    try std.testing.expect(loaded.idxTextLessThan(b, a));
+    try std.testing.expect(loaded.text_rank == null);
+
+    // An owning frozen-module view can share one lazy rank generation across
+    // independent key builders, without reopening the interner for insertion.
+    try loaded.enableTextRanks(gpa);
+    const shared = try loaded.textRanks(&scratch);
+    const cache = loaded.text_rank.?;
+    try loaded.enableTextRanks(gpa);
+    try std.testing.expectEqual(cache, loaded.text_rank.?);
+    try std.testing.expectEqual(shared.ptr, (try loaded.textRanks(&scratch)).ptr);
+    try std.testing.expect(loaded.idxTextRank(b) < loaded.idxTextRank(a));
+    try std.testing.expect(!loaded.interner.supports_inserts);
 }
