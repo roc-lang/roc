@@ -8665,9 +8665,10 @@ fn packFileBytes(
         const proc = procs[@intFromEnum(spec_proc.proc)];
         const artifact = artifact_by_identity.get(proc.identity) orelse continue;
         // Constants other than literal backings are still named per program
-        // (`roc__static_const_N`); an entry that reaches one cannot be
+        // (`roc__static_const_N`), and boxy statements index the program's
+        // own descriptor sidecar; an entry that reaches either cannot be
         // linked elsewhere, so it is not offered.
-        if (try artifactClosureNamesProgramLocalData(allocator, set, artifact)) {
+        if (try artifactClosureNamesProgramLocalSymbols(allocator, set, artifact)) {
             withheld += 1;
             continue;
         }
@@ -8680,14 +8681,14 @@ fn packFileBytes(
         });
     }
     if (std.c.getenv("ROC_PACK_TRACE") != null) {
-        std.debug.print("pack: {d} artifacts, {d} specs offered, {d} withheld (reach program-local constants)\n", .{ set.artifacts.len, specs.items.len, withheld });
+        std.debug.print("pack: {d} artifacts, {d} specs offered, {d} withheld (reach program-local symbols)\n", .{ set.artifacts.len, specs.items.len, withheld });
     }
     return try backend.dev.PackFile.write(allocator, set, specs.items);
 }
 
 /// Whether any artifact reachable from `root` relocates against static data
 /// that only its own program defines.
-fn artifactClosureNamesProgramLocalData(allocator: Allocator, set: *const backend.dev.ProcArtifact.Set, root: u32) Allocator.Error!bool {
+fn artifactClosureNamesProgramLocalSymbols(allocator: Allocator, set: *const backend.dev.ProcArtifact.Set, root: u32) Allocator.Error!bool {
     var seen = std.AutoHashMap(u32, void).init(allocator);
     defer seen.deinit();
     var stack = std.ArrayList(u32).empty;
@@ -8699,6 +8700,7 @@ fn artifactClosureNamesProgramLocalData(allocator: Allocator, set: *const backen
         const artifact = set.artifacts[index];
         for (artifact.relocations) |relocation| {
             if (std.mem.startsWith(u8, relocation.name, "roc__static_") and !std.mem.startsWith(u8, relocation.name, "roc__static_str_")) return true;
+            if (std.mem.startsWith(u8, relocation.name, "roc_boxy_")) return true;
         }
         for (artifact.refs) |ref| try stack.append(allocator, ref.target);
     }

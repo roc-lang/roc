@@ -125,14 +125,25 @@ pub fn extract(
     proc_specs: []const lir.LIR.LirProcSpec,
     layout_store: *const layout.Store,
     string_exports: []const lir.Program.StaticDataExport,
+    spliced_data: []const DataItem,
 ) ExtractError!Set {
     var arena = std.heap.ArenaAllocator.init(allocator);
     errdefer arena.deinit();
     const arena_allocator = arena.allocator();
 
-    var strings_by_name = std.StringHashMap(*const lir.Program.StaticDataExport).init(allocator);
+    // Literal backings the program defined itself and those spliced code
+    // brought along: a spliced region captured into this program's pack
+    // must carry its data too, or a program served from that pack cannot
+    // link it.
+    var strings_by_name = std.StringHashMap(DataItem).init(allocator);
     defer strings_by_name.deinit();
-    for (string_exports) |*string_export| try strings_by_name.put(string_export.symbol_name, string_export);
+    for (string_exports) |string_export| try strings_by_name.put(string_export.symbol_name, .{
+        .name = string_export.symbol_name,
+        .bytes = string_export.bytes,
+        .alignment = string_export.alignment,
+        .symbol_offset = string_export.symbol_offset,
+    });
+    for (spliced_data) |item| try strings_by_name.put(item.name, item);
 
     const code = codegen.getGeneratedCode();
     const regions = try allocator.dupe(CG.CodeRegion, codegen.codeRegions());
@@ -226,7 +237,7 @@ pub fn extract(
 
         var region_data = std.ArrayList(DataItem).empty;
         for (region_relocations.items) |relocation| {
-            const string_export = strings_by_name.get(relocation.name) orelse continue;
+            const string_item = strings_by_name.get(relocation.name) orelse continue;
             var already = false;
             for (region_data.items) |item| {
                 if (std.mem.eql(u8, item.name, relocation.name)) already = true;
@@ -234,9 +245,9 @@ pub fn extract(
             if (already) continue;
             try region_data.append(arena_allocator, .{
                 .name = relocation.name,
-                .bytes = try arena_allocator.dupe(u8, string_export.bytes),
-                .alignment = string_export.alignment,
-                .symbol_offset = string_export.symbol_offset,
+                .bytes = try arena_allocator.dupe(u8, string_item.bytes),
+                .alignment = string_item.alignment,
+                .symbol_offset = string_item.symbol_offset,
             });
         }
 
@@ -388,7 +399,7 @@ pub fn verifyRoundTrip(
     layout_store: *const layout.Store,
     string_exports: []const lir.Program.StaticDataExport,
 ) RoundTripError!void {
-    var set = try extract(CG, allocator, original, proc_specs, layout_store, string_exports);
+    var set = try extract(CG, allocator, original, proc_specs, layout_store, string_exports, &.{});
     defer set.deinit();
 
     var helper_keys = HelperKeys.init(allocator);

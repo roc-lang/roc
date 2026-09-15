@@ -648,7 +648,7 @@ fn compileWithCodeGen(
 
     var artifacts: ?ProcArtifact.Set = null;
     if ((pack_mode or capture_artifacts) and target.toCpuArch() == .x86_64) {
-        artifacts = ProcArtifact.extract(CodeGen, allocator, &codegen, proc_specs, layout_store, static_strings.exports) catch |err| switch (err) {
+        artifacts = ProcArtifact.extract(CodeGen, allocator, &codegen, proc_specs, layout_store, static_strings.exports, spliced_data.items) catch |err| switch (err) {
             error.OutOfMemory => return CompilationError.OutOfMemory,
             error.NestedCodeRegion, error.UncoveredCode, error.DanglingReference, error.UnsupportedRelocation => std.debug.panic("pack artifact extraction failed: {s}", .{@errorName(err)}),
         };
