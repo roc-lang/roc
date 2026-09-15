@@ -1370,6 +1370,7 @@ test "runtime extraction consumes producer root positions and preserves their or
     for (0..3) |index| {
         const proc = try lowered.lir_result.store.addProcSpec(.{
             .name = lowered.lir_result.store.freshSyntheticSymbol(),
+            .identity = LIR.ProcIdentity.forTest(1),
             .args = .empty(),
             .body = ret,
             .ret_layout = .zst,

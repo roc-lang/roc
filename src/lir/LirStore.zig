@@ -1729,6 +1729,7 @@ test "body shard relocates producer tail-call links" {
     const arg = try coordinator.addLocal(.{ .layout_idx = .u64 });
     const proc = try coordinator.addProcSpec(.{
         .name = coordinator.freshSyntheticSymbol(),
+        .identity = lir_defs.ProcIdentity.forTest(0),
         .args = try coordinator.addLocalSpan(&.{arg}),
         .ret_layout = .u64,
     });

@@ -163,7 +163,7 @@ test "shared compile-time failure guards preserve exact success and shared frame
     const load = try program.store.addCFStmt(.{ .assign_literal = .{ .target = target, .value = .{ .static_data = slot }, .next = ret } });
     const frame = try program.store.addLocalSpan(&.{target});
     for (0..2) |i| {
-        _ = try program.store.addProcSpec(.{ .name = .fromRaw(i), .args = .empty(), .frame_locals = frame, .body = load, .ret_layout = .u8 });
+        _ = try program.store.addProcSpec(.{ .name = .fromRaw(i), .identity = LIR.ProcIdentity.forTest(1), .args = .empty(), .frame_locals = frame, .body = load, .ret_layout = .u8 });
     }
     try insert(allocator, &program);
     try std.testing.expectEqual(@as(usize, 1), program.comptime_value_guards.items.len);

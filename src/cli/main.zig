@@ -6435,7 +6435,7 @@ fn writeDevRunImageToSharedMemory(
                 unreachable;
             };
             code_symbols[initialized_code_symbols] = .{
-                .name = try backend.procSymbolName(ctx.gpa, compiled.name),
+                .name = try backend.procSymbolName(ctx.gpa, proc.identity),
                 .code_offset = compiled.code_start,
             };
             initialized_code_symbols += 1;

@@ -335,6 +335,9 @@ fn compileWithCodeGen(
     var dwarf_procs = std.ArrayList(Dwarf.ProcEntry).empty;
     defer dwarf_procs.deinit(allocator);
 
+    var seen_proc_symbol_names = std.StringHashMap(void).init(allocator);
+    defer seen_proc_symbol_names.deinit();
+
     try appendStaticDataExports(allocator, &codegen.codegen.symbols, static_data_exports, &rodata, &rodata_relocations, &symbols);
     try appendStaticDataExports(allocator, &codegen.codegen.symbols, static_strings.exports, &rodata, &rodata_relocations, &symbols);
 
@@ -347,7 +350,11 @@ fn compileWithCodeGen(
             }
             unreachable;
         };
-        const symbol_name = static_data_export.procSymbolName(allocator, proc_symbol.name) catch return CompilationError.OutOfMemory;
+        const symbol_name = static_data_export.procSymbolName(allocator, proc_specs[i].identity) catch return CompilationError.OutOfMemory;
+        if (seen_proc_symbol_names.contains(symbol_name)) {
+            std.debug.panic("ObjectFileCompiler invariant violated: two LIR procs share the symbol {s}", .{symbol_name});
+        }
+        seen_proc_symbol_names.putNoClobber(symbol_name, {}) catch return CompilationError.OutOfMemory;
         owned_proc_symbol_names.append(allocator, symbol_name) catch {
             allocator.free(symbol_name);
             return CompilationError.OutOfMemory;

@@ -611,6 +611,7 @@ test "tag case fusion routes exact constructor edges without materializing tags"
     } });
     const proc = try store.addProcSpec(.{
         .name = LIR.Symbol.fromRaw(1),
+        .identity = LIR.ProcIdentity.forTest(2),
         .args = try store.addLocalSpan(&.{selector}),
         .iterator_fusion_scope = true,
         .body = body,
@@ -722,6 +723,7 @@ test "tag case fusion renames complete arms with a shared suffix" {
     } });
     const proc = try store.addProcSpec(.{
         .name = LIR.Symbol.fromRaw(1),
+        .identity = LIR.ProcIdentity.forTest(1),
         .args = try store.addLocalSpan(&.{selector}),
         .iterator_fusion_scope = true,
         .body = body,

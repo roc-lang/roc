@@ -4075,6 +4075,7 @@ const Builder = struct {
         const def = try self.program.addDef(.{
             .symbol = self.symbols.fresh(),
             .fn_def = null,
+            .root_identity = self.staticDataRequestIdentity(type_view, request, ret_ty),
             .args = Ast.Span(Ast.TypedLocal).empty(),
             .body = .{ .roc = body },
             .ret = ret_ty,
@@ -4339,6 +4340,7 @@ const Builder = struct {
             .symbol = self.symbols.fresh(),
             .fn_def = null,
             .fn_id = null,
+            .identity_seed = .{ .kind = "procedure-use-root", .extra = procedureUseRootIdentity(request, procedure, source_module) },
             .args = try body_draft.addTypedLocalSpan(args),
             .body = .{ .roc = body },
             .ret = ret_cell,
@@ -4455,10 +4457,52 @@ const Builder = struct {
         return try self.program.addDef(.{
             .symbol = self.symbols.fresh(),
             .fn_def = null,
+            .root_identity = self.procedureBindingRootIdentity(view, binding_id, fn_ty),
             .args = try self.program.addTypedLocalSpan(args),
             .body = .{ .roc = body },
             .ret = fn_data.ret,
         });
+    }
+
+    /// Identity of a static-data request thunk: the checked constant it
+    /// restores and the Monotype type it restores it at.
+    fn staticDataRequestIdentity(self: *Builder, view: ModuleView, request: Common.StaticDataRequest, ret_ty: Type.TypeId) names.TypeDigest {
+        var hasher = TypeDigestHasher.init();
+        hasher.update("roc.monotype.static-data-request.v1");
+        hasher.update(&view.key.bytes);
+        hasher.update(&request.const_locator.artifact.bytes);
+        switch (request.const_locator.owner) {
+            .top_level_binding => |owner| {
+                hasher.update("top-level-binding");
+                hashU32(&hasher, @intFromEnum(owner.pattern));
+            },
+            .hoisted_expr => |owner| {
+                hasher.update("hoisted-expr");
+                hashU32(&hasher, @intFromEnum(owner.expr));
+            },
+        }
+        hashU32(&hasher, @intFromEnum(request.const_locator.template));
+        hasher.update(&request.const_locator.source_scheme.bytes);
+        if (request.node) |node| {
+            hasher.update("node");
+            hashU32(&hasher, @intFromEnum(node));
+        } else {
+            hasher.update("root");
+        }
+        hasher.update(&view.types.rootKey(request.checked_type).bytes);
+        hasher.update(&self.program.types.specializationDigest(&self.program.names, ret_ty).bytes);
+        return .{ .bytes = hasher.finalResult() };
+    }
+
+    /// Identity of a procedure-binding root: the checked binding and the
+    /// function type it is exposed at.
+    fn procedureBindingRootIdentity(self: *Builder, view: ModuleView, binding_id: checked.TopLevelProcedureBindingId, fn_ty: Type.TypeId) names.TypeDigest {
+        var hasher = TypeDigestHasher.init();
+        hasher.update("roc.monotype.procedure-binding-root.v1");
+        hasher.update(&view.key.bytes);
+        hashU32(&hasher, @intFromEnum(binding_id));
+        hasher.update(&self.program.types.specializationDigest(&self.program.names, fn_ty).bytes);
+        return .{ .bytes = hasher.finalResult() };
     }
 
     fn lowerProcedureBindingValue(
@@ -12433,10 +12477,51 @@ const DraftDef = struct {
     symbol: Common.Symbol,
     fn_def: ?DraftFnTemplate = null,
     fn_id: ?DraftFnTarget = null,
+    /// Inputs for the content identity of a definition that has no checked
+    /// function template, digested once its types are sealed.
+    identity_seed: ?IdentitySeed = null,
     args: DraftSpan(DraftTypedLocal),
     body: DraftFnBody,
     ret: DraftTypeCell,
 };
+
+/// What identifies a generated definition beyond its argument and return
+/// types: the kind of generated procedure, further types whose sealed
+/// specialization digests join the identity, and bytes that are already
+/// content-derived when the definition is created.
+const IdentitySeed = struct {
+    kind: []const u8,
+    cells: [4]?DraftTypeCell = .{ null, null, null, null },
+    extra: [32]u8 = [_]u8{0} ** 32,
+};
+
+/// Content identity of a sealed generated definition.
+fn sealedDefIdentity(
+    program: *Ast.Program,
+    committed_types: *CommittedGraphTypes,
+    seed: IdentitySeed,
+    args: Ast.Span(Ast.TypedLocal),
+    ret: Type.TypeId,
+) Allocator.Error!names.TypeDigest {
+    var hasher = TypeDigestHasher.init();
+    hasher.update("roc.monotype.generated-def.v1");
+    hashU32(&hasher, @intCast(seed.kind.len));
+    hasher.update(seed.kind);
+    hasher.update(&seed.extra);
+    for (seed.cells) |maybe_cell| {
+        const cell = maybe_cell orelse continue;
+        hasher.update("cell");
+        const ty = try cell.sealCommitted(committed_types);
+        hasher.update(&program.types.specializationDigest(&program.names, ty).bytes);
+    }
+    const locals = program.typedLocalSpan(args);
+    hashU32(&hasher, @intCast(GuardedList.borrowLen(locals)));
+    for (0..GuardedList.borrowLen(locals)) |index| {
+        hasher.update(&program.types.specializationDigest(&program.names, GuardedList.at(locals, index).ty).bytes);
+    }
+    hasher.update(&program.types.specializationDigest(&program.names, ret).bytes);
+    return .{ .bytes = hasher.finalResult() };
+}
 
 const DraftNestedDef = struct {
     symbol: Common.Symbol,
@@ -15364,13 +15449,20 @@ const BodyDraftStore = struct {
                     program.setFnSource(fn_id, template);
                 }
             }
+            const sealed_args = ids.typedLocalSpan(def.args);
+            const sealed_ret = try def.ret.sealCommitted(committed_types);
+            const root_identity: ?names.TypeDigest = if (def.identity_seed) |seed|
+                try sealedDefIdentity(program, committed_types, seed, sealed_args, sealed_ret)
+            else
+                null;
             program.defs.appendAssumeCapacity(.{
                 .symbol = def.symbol,
                 .fn_def = sealed_fn_def,
                 .fn_id = sealed_fn_id,
-                .args = ids.typedLocalSpan(def.args),
+                .root_identity = root_identity,
+                .args = sealed_args,
                 .body = ids.fnBody(def.body),
-                .ret = try def.ret.sealCommitted(committed_types),
+                .ret = sealed_ret,
             });
         }
 
@@ -18547,6 +18639,7 @@ const BodyContext = struct {
         self.draft.setDef(def_id, .{
             .symbol = self.builder.symbols.fresh(),
             .fn_def = null,
+            .identity_seed = .{ .kind = "inspect-helper", .cells = .{ DraftTypeCell.fromSealed(value_ty), DraftTypeCell.fromSealed(str_ty), null, null } },
             .args = args,
             .body = .{ .roc = body },
             .ret = try self.draftTypeCell(str_ty),
@@ -28479,6 +28572,7 @@ const BodyContext = struct {
             .symbol = self.builder.symbols.fresh(),
             .fn_def = null,
             .fn_id = null,
+            .identity_seed = .{ .kind = "parse-shape-helper", .cells = .{ DraftTypeCell.fromSealed(shape_ty), DraftTypeCell.fromSealed(encoding_ty), DraftTypeCell.fromSealed(state_ty), DraftTypeCell.fromSealed(ret_ty) } },
             .args = try self.addTypedLocalSpan(args),
             .body = .{ .roc = body },
             .ret = try self.draftTypeCell(ret_ty),
@@ -43717,6 +43811,7 @@ const BodyContext = struct {
             .symbol = self.builder.symbols.fresh(),
             .fn_def = null,
             .fn_id = null,
+            .identity_seed = .{ .kind = "encode-shape-helper", .cells = .{ DraftTypeCell.fromSealed(value_ty), DraftTypeCell.fromSealed(encoding_ty), DraftTypeCell.fromSealed(state_ty), DraftTypeCell.fromSealed(ret_ty) } },
             .args = try self.addTypedLocalSpan(args),
             .body = .{ .roc = body },
             .ret = try self.draftTypeCell(ret_ty),
@@ -49574,6 +49669,7 @@ const BodyContext = struct {
         self.draft.setDef(def_id, .{
             .symbol = self.builder.symbols.fresh(),
             .fn_def = null,
+            .identity_seed = .{ .kind = @typeName(D), .cells = .{ DraftTypeCell.fromSealed(value_ty), DraftTypeCell.fromSealed(ctx.result_ty), null, null } },
             .args = args,
             .body = .{ .roc = body },
             .ret = try self.draftTypeCell(ctx.result_ty),
@@ -57864,6 +57960,30 @@ fn dispatchPlanIdForRuntimeExpr(view: ModuleView, expr_id: checked.CheckedExprId
 
 fn moduleDigestFromId(key: checked.ModuleId) names.CheckedModuleDigest {
     return .{ .bytes = key.bytes };
+}
+
+/// Content bytes identifying a procedure-use root: the module it was
+/// requested from, the request's kind and checked source site, and the
+/// procedure binding's declared function type key.
+fn procedureUseRootIdentity(request: checked.RootRequest, procedure: checked.ProcedureUseTemplate, source_module: checked.ModuleId) [32]u8 {
+    var hasher = TypeDigestHasher.init();
+    hasher.update("roc.monotype.procedure-use-root.v1");
+    hasher.update(&source_module.bytes);
+    hasher.update(@tagName(request.kind));
+    hasher.update(@tagName(request.source));
+    switch (request.source) {
+        .def => |def| hashU32(&hasher, @intFromEnum(def)),
+        .expr => |expr| hashU32(&hasher, @intFromEnum(expr)),
+        .statement => |statement| hashU32(&hasher, @intFromEnum(statement)),
+        .required_binding => |binding| hashU32(&hasher, binding),
+        .hoisted => {},
+    }
+    if (request.compile_time_root) |root| {
+        hasher.update("compile-time-root");
+        hashU32(&hasher, @intFromEnum(root));
+    }
+    hasher.update(&procedure.source_fn_ty_template.bytes);
+    return hasher.finalResult();
 }
 
 fn hashU32(hasher: *TypeDigestHasher, value: u32) void {

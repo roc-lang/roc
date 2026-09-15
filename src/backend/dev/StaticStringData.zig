@@ -198,7 +198,7 @@ test "build emits demanded literal backing with static refcount headers" {
     _ = try store.addCFStmt(.{ .assign_literal = .{ .target = local, .value = .{ .str_literal = .{ .backing = dead, .offset = 0, .len = @intCast(store.getString(dead).len) } }, .next = end } });
     const tail = try store.addCFStmt(.{ .assign_literal = .{ .target = local, .value = .{ .str_literal = .{ .backing = large, .offset = 0, .len = @intCast(store.getString(large).len) } }, .next = end } });
     const head = try store.addCFStmt(.{ .assign_literal = .{ .target = local, .value = .{ .str_literal = .{ .backing = small, .offset = 0, .len = 5 } }, .next = tail } });
-    _ = try store.addProcSpec(.{ .name = store.freshSyntheticSymbol(), .args = .empty(), .body = head, .ret_layout = .str });
+    _ = try store.addProcSpec(.{ .name = store.freshSyntheticSymbol(), .identity = lir.LIR.ProcIdentity.forTest(1), .args = .empty(), .body = head, .ret_layout = .str });
 
     var table = try build(allocator, &store, .x64linux);
     defer table.deinit();

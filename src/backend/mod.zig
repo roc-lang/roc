@@ -125,6 +125,7 @@ test "issue 10295: dev backend preserves deep structural equality under register
 
     const root = try store.addProcSpec(.{
         .name = store.freshSyntheticSymbol(),
+        .identity = lir.LIR.ProcIdentity.forTest(5),
         .args = lir.LIR.LocalSpan.empty(),
         .body = body,
         .ret_layout = .bool,
@@ -196,6 +197,7 @@ test "issue 10295: nested list equality has bounded register pressure" {
     } });
     const root = try store.addProcSpec(.{
         .name = store.freshSyntheticSymbol(),
+        .identity = lir.LIR.ProcIdentity.forTest(4),
         .args = lir.LIR.LocalSpan.empty(),
         .body = body,
         .ret_layout = .bool,
@@ -262,6 +264,7 @@ test "issue 10993: erased callable ABI writes exactly ret_size bytes through the
             const arg_plan = try s.internErasedCallArgsPlan(ls, &.{});
             return s.addProcSpec(.{
                 .name = s.freshSyntheticSymbol(),
+                .identity = lir.LIR.ProcIdentity.forTest(3),
                 .args = args,
                 .body = body,
                 .ret_layout = ret_layout,
@@ -425,6 +428,7 @@ test "x86_64 Windows hosted U128 return stores all 16 bytes from XMM0" {
     const symbol = try store.insertString("hosted_u128_identity");
     _ = try store.addProcSpec(.{
         .name = store.freshSyntheticSymbol(),
+        .identity = lir.LIR.ProcIdentity.forTest(2),
         .args = lir.LIR.LocalSpan.empty(),
         .ret_layout = .u128,
         .hosted = .{ .symbol = symbol, .dispatch_index = 0 },
@@ -473,6 +477,7 @@ test "x86_64 Windows U128 entrypoint return loads all 16 bytes into XMM0" {
     } });
     const proc = try store.addProcSpec(.{
         .name = store.freshSyntheticSymbol(),
+        .identity = lir.LIR.ProcIdentity.forTest(1),
         .args = lir.LIR.LocalSpan.empty(),
         .body = body,
         .ret_layout = .u128,

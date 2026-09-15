@@ -989,7 +989,7 @@ pub const MonoLlvmCodeGen = struct {
             var allocated_name: ?[]u8 = null;
             defer if (allocated_name) |name| self.allocator.free(name);
             const name = self.store.procDebugName(proc_id) orelse blk: {
-                const symbol_name = try std.fmt.allocPrint(self.allocator, "roc__proc_{x}", .{proc.name.raw()});
+                const symbol_name = try std.fmt.allocPrint(self.allocator, "roc__proc_{s}", .{&proc.identity.symbolHex()});
                 allocated_name = symbol_name;
                 break :blk symbol_name;
             };
@@ -1077,7 +1077,7 @@ pub const MonoLlvmCodeGen = struct {
     ) Error!LlvmBuilder.Metadata.String {
         return switch (self.proc_symbol_mode) {
             .local_index => builder.metadataStringFmt("roc_proc_{d}", .{@intFromEnum(proc_id)}) catch return error.OutOfMemory,
-            .lir_symbol => builder.metadataStringFmt("roc__proc_{x}", .{proc.name.raw()}) catch return error.OutOfMemory,
+            .lir_symbol => builder.metadataStringFmt("roc__proc_{s}", .{&proc.identity.symbolHex()}) catch return error.OutOfMemory,
         };
     }
 
@@ -1767,7 +1767,7 @@ pub const MonoLlvmCodeGen = struct {
         return switch (self.proc_symbol_mode) {
             .local_index => builder.strtabStringFmt("roc_proc_{d}", .{@intFromEnum(proc_id)}) catch return error.OutOfMemory,
             .lir_symbol => blk: {
-                const name = std.fmt.allocPrint(self.allocator, "{s}roc__proc_{x}", .{ self.static_symbol_prefix, proc.name.raw() }) catch return error.OutOfMemory;
+                const name = std.fmt.allocPrint(self.allocator, "{s}roc__proc_{s}", .{ self.static_symbol_prefix, &proc.identity.symbolHex() }) catch return error.OutOfMemory;
                 defer self.allocator.free(name);
                 break :blk try self.exportedFunctionName(builder, name);
             },
@@ -13344,6 +13344,7 @@ test "issue 11132: scratch clearing follows proc inventories and survives module
     for (&procs, 0..) |*proc, i| {
         proc.* = try store.addProcSpec(.{
             .name = lir.LIR.Symbol.fromRaw(i),
+            .identity = lir.LIR.ProcIdentity.forTest(2),
             .args = args,
             .frame_locals = args,
             .body = body,
@@ -13457,8 +13458,8 @@ test "frozen callable procedures and explicit drop helpers are DLL exports on Wi
     defer store.deinit();
     var layouts = try layout.Store.init(allocator, .u64);
     defer layouts.deinit();
-    const proc = try store.addProcSpec(.{ .name = .fromRaw(1), .args = .empty(), .ret_layout = .bool });
-    const private_proc = try store.addProcSpec(.{ .name = .fromRaw(2), .args = .empty(), .ret_layout = .bool });
+    const proc = try store.addProcSpec(.{ .name = .fromRaw(1), .identity = lir.LIR.ProcIdentity.forTest(1), .args = .empty(), .ret_layout = .bool });
+    const private_proc = try store.addProcSpec(.{ .name = .fromRaw(2), .identity = lir.LIR.ProcIdentity.forTest(2), .args = .empty(), .ret_layout = .bool });
     const helper: layout.RcHelperKey = .{ .op = .decref, .layout_idx = .str };
     inline for (.{ std.Target.Os.Tag.windows, .linux }) |os| {
         const target = try std.zig.system.resolveTargetQuery(std.testing.io, .{ .cpu_arch = .x86_64, .os_tag = os });
