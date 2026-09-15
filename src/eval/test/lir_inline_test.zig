@@ -8735,6 +8735,75 @@ test "W6b Try error-row widening adapter re-tags into the requested row at run t
     try std.testing.expectEqualStrings("True", output);
 }
 
+test "W6b alias-wrapped closed Try error row is adapted and re-tagged at run time" {
+    const allocator = std.testing.allocator;
+    // The declared `Try` reached through a transparent alias. The checked side
+    // crosses alias layers when it publishes the `Try` capability and records
+    // the widening, so the mono side has to cross them too: reading
+    // `IoResult(Str)` as-is finds an `.alias` named node whose def is not
+    // `Try`'s, which declined the adapter after the relation had already
+    // committed to it. `test/cli/WidenAliasTryClosedImpl.roc` runs the same
+    // shape end to end on both backends; the count below is what proves an
+    // adapter — not a specialization at the wide row — serves the request.
+    //
+    // `Gone` sorts before `NotFound`, so the declared row numbers `NotFound` 0
+    // while the requested row numbers `Gone` 0 and `NotFound` 1: a missing or
+    // misordered injection reports `Gone` where the callee returned
+    // `NotFound`.
+    const source =
+        \\IoResult(a) : Try(a, [NotFound])
+        \\
+        \\closed_hit : IoResult(Str)
+        \\closed_hit = Ok("hit")
+        \\
+        \\closed_miss : IoResult(Str)
+        \\closed_miss = Err(NotFound)
+        \\
+        \\Src := [Found, Missing].{
+        \\    fetch : Src -> IoResult(Str)
+        \\    fetch = |src| match src { Found => closed_hit, Missing => closed_miss }
+        \\}
+        \\
+        \\load : a -> Try(Str, [Gone, NotFound]) where [a.fetch : a -> IoResult(Str)]
+        \\load = |x| {
+        \\    s = x.fetch()?
+        \\    Ok(s)
+        \\}
+        \\
+        \\show : Try(Str, [Gone, NotFound]) -> Str
+        \\show = |v| match v { Ok(s) => "Ok(${s})", Err(Gone) => "Gone", Err(NotFound) => "NotFound" }
+        \\
+        \\main : Bool
+        \\main = {
+        \\    found_ok = show(load(Src.Found)) == "Ok(hit)"
+        \\    missing_ok = show(load(Src.Missing)) == "NotFound"
+        \\    found_ok and missing_ok
+        \\}
+    ;
+
+    var lowered = try lowerMonotypeModule(allocator, source);
+    defer lowered.deinit(allocator);
+    try std.testing.expectEqual(@as(usize, 1), checkedGeneratedFnCount(&lowered.mono));
+
+    var compiled = try helpers.compileInspectedProgramForTargetWithBuiltin(
+        allocator,
+        std.testing.io,
+        .module,
+        source,
+        &.{},
+        .native,
+        try sharedPrePublishedBuiltin(),
+        null,
+        .lss,
+    );
+    defer compiled.deinit(allocator);
+    try std.testing.expectEqual(@as(usize, 0), compiled.resources.checker.problems.problems.items.len);
+
+    const output = try helpers.lirInterpreterInspectedStr(allocator, &compiled.lowered);
+    defer allocator.free(output);
+    try std.testing.expectEqualStrings("True", output);
+}
+
 test "polarity W3 open-method widening adapter counts" {
     const allocator = std.testing.allocator;
     // `test/cli/OpenMethodWidenedCaller.roc` and `OpenMethodOwnRowCaller.roc`
