@@ -5861,6 +5861,49 @@ fn customNativeBuildPackHits(
     if (!std.meta.eql(cold_run.term, warm_run.term) or !std.mem.eql(u8, cold_run.stdout, warm_run.stdout)) {
         return failureFromRun(allocator, timer, warm_run, "program built from packs behaves differently from the cold build");
     }
+
+    // The same through the store under the case's cache root: the first
+    // build writes its packs there, the second is served from them.
+    var store_env = CaseEnv{
+        .dirs = env.dirs,
+        .env_map = env.env_map.clone(allocator) catch |err|
+            return customInfraFailure(allocator, timer, "failed to clone store environment: {}", .{err}),
+    };
+    defer store_env.env_map.deinit();
+    store_env.env_map.put("ROC_OBJECT_CACHE", "1") catch |err|
+        return customInfraFailure(allocator, timer, "failed to enable the object cache: {}", .{err});
+    const store_exes = [_][]const u8{ "store_a", "store_b" };
+    var store_runs: [store_exes.len]std.process.RunResult = undefined;
+    for (store_exes, 0..) |name, index| {
+        const exe = std.fmt.allocPrint(allocator, "{s}/{s}", .{ warm_dir, name }) catch |err|
+            return customInfraFailure(allocator, timer, "failed to allocate output path: {}", .{err});
+        const out_arg = outputArg(allocator, exe) catch |err|
+            return customInfraFailure(allocator, timer, "failed to allocate output arg: {}", .{err});
+        const build_timeout = childCommandTimeoutMs(timer, timeout_ms) orelse
+            return timeoutFailure(allocator, timer, .run, "case timeout exhausted before a store build");
+        const built = runRocInEnv(io, allocator, &store_env, &.{ "build", "--opt=dev", out_arg }, roc_file, .relative, &.{}, null, build_timeout) catch |err|
+            return customInfraFailure(allocator, timer, "store build spawn error: {}", .{err});
+        if (!processSucceeded(built.term) or std.mem.find(u8, built.stdout, "successfully building") == null or std.mem.find(u8, built.stderr, "panic") != null) {
+            return failureFromRun(allocator, timer, built, "build with the object cache did not succeed");
+        }
+        if (index == store_exes.len - 1) {
+            const at = std.mem.find(u8, built.stderr, hits_marker) orelse
+                return failureFromRun(allocator, timer, built, "build with the object cache did not report pack hits");
+            var store_hits: u64 = 0;
+            for (built.stderr[at + hits_marker.len ..]) |byte| {
+                if (byte < '0' or byte > '9') break;
+                store_hits = store_hits * 10 + (byte - '0');
+            }
+            if (store_hits == 0) return failureFromRun(allocator, timer, built, "second build with the object cache reported no pack hits");
+        }
+        const exe_timeout = childCommandTimeoutMs(timer, timeout_ms) orelse
+            return timeoutFailure(allocator, timer, .run, "case timeout exhausted before running a store build");
+        store_runs[index] = runRawInEnv(io, allocator, env, &.{exe}, env.dirs.work_dir, "", exe_timeout) catch |err|
+            return customInfraFailure(allocator, timer, "store program spawn error: {}", .{err});
+    }
+    if (!std.meta.eql(store_runs[0].term, store_runs[1].term) or !std.mem.eql(u8, store_runs[0].stdout, store_runs[1].stdout)) {
+        return failureFromRun(allocator, timer, store_runs[1], "program served from the object cache behaves differently from the build that filled it");
+    }
     return null;
 }
 

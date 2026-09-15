@@ -8462,8 +8462,6 @@ fn writePackObjects(
     }
     const artifacts = try build_env.collectVisibleArtifacts(ctx.gpa, root_artifact);
     defer ctx.gpa.free(artifacts);
-    const target_usize = base.target.TargetUsize.fromPtrBitWidth(target.ptrBitWidth());
-    const specialization_strategy = currentRuntimeSpecializationStrategy(args.specialization_strategy);
 
     for (artifacts) |artifact| {
         const roots = try lir.PackProgram.closedExportRoots(ctx.gpa, artifact);
@@ -8483,68 +8481,13 @@ fn writePackObjects(
             };
             continue;
         }
-        const own_imports = try build_env.collectImportedArtifactViews(ctx.gpa, artifact);
-        defer ctx.gpa.free(own_imports);
-        // A platform's internal modules bind their hosted functions through
-        // the platform module's hosted section, which names declarations
-        // across every module the platform reaches; the pack lowers with the
-        // program's whole module set in view, exactly as the app does, and
-        // Monotype lowers only what the pack's roots reach.
-        var imports = std.ArrayList(check.CheckedArtifact.ImportedModuleView).empty;
-        defer imports.deinit(ctx.gpa);
-        try imports.appendSlice(ctx.gpa, own_imports);
-        const root_view = check.CheckedArtifact.importedView(root_artifact);
-        for ([_][]const check.CheckedArtifact.ImportedModuleView{ &.{root_view}, app_imports, app_relations }) |views| {
-            for (views) |view| {
-                if (std.meta.eql(view.key, artifact.key)) continue;
-                var present = false;
-                for (imports.items) |existing| {
-                    if (std.meta.eql(existing.key, view.key)) present = true;
-                }
-                if (!present) try imports.append(ctx.gpa, view);
-            }
-        }
-        const relations = try build_env.collectRelationArtifactViews(ctx.gpa, artifact);
-        defer ctx.gpa.free(relations);
-
-        var config = checkedRuntimeLoweringConfig(.linked_output, args.opt, specialization_strategy, target_usize, true);
-        config.target.post_check_executor = build_env.postCheckExecutor();
-        var lowered = try lir.PackProgram.lowerPackProgram(ctx.gpa, artifact, imports.items, relations, roots, config.target);
-        defer lowered.deinit();
-
-        const static_data_exports = try compile.static_data_exports.buildStaticData(
-            ctx.gpa,
-            .{
-                .root = check.CheckedArtifact.loweringViewWithRelations(artifact, relations),
-                .imports = imports.items,
-            },
-            &lowered,
-            target,
-            .{},
-        );
-        defer compile.static_data_exports.deinitStaticData(ctx.gpa, static_data_exports);
-
-        var object_compiler = backend.ObjectFileCompiler.initForPack(ctx.gpa);
-        var compiled = object_compiler.compileToObjectFile(
-            &lowered.lir_result.store,
-            &lowered.lir_result.layouts,
-            &.{},
-            static_data_exports,
-            lowered.lir_result.store.getProcSpecs(),
-            lowered.lir_result.boxy_erased_arg_desc_offsets.items,
-            lowered.lir_result.boxy_erased_arg_desc_params.items,
-            lowered.lir_result.boxy_worker_procs.items,
-            target,
-        ) catch |err| {
-            std.log.err("Pack compilation for {s} failed: {}", .{ module_name, err });
+        var pack = try compileModulePack(ctx, build_env, root_artifact, app_imports, app_relations, artifact, roots, args, target);
+        defer pack.deinit();
+        backend.writeFileWindowsAvSafe(ctx.io.std_io, object_path, pack.compiled.object_bytes) catch {
             return error.NativeCompilationFailed;
         };
-        defer compiled.deinit();
-        backend.writeFileWindowsAvSafe(ctx.io.std_io, object_path, compiled.object_bytes) catch {
-            return error.NativeCompilationFailed;
-        };
-        if (compiled.artifacts) |*set| {
-            const pack_bytes = try packFileBytes(ctx.gpa, set, &lowered);
+        if (pack.compiled.artifacts) |*set| {
+            const pack_bytes = try packFileBytes(ctx.gpa, set, &pack.lowered);
             defer ctx.gpa.free(pack_bytes);
             const pack_path = try std.fmt.allocPrint(ctx.arena, "{s}.pack.{s}.rpk", .{ final_output_path, file_name });
             backend.writeFileWindowsAvSafe(ctx.io.std_io, pack_path, pack_bytes) catch {
@@ -8552,10 +8495,148 @@ fn writePackObjects(
             };
         }
 
-        const manifest = try lir.PackProgram.manifestBytes(ctx.gpa, &lowered);
+        const manifest = try lir.PackProgram.manifestBytes(ctx.gpa, &pack.lowered);
         defer ctx.gpa.free(manifest);
         backend.writeFileWindowsAvSafe(ctx.io.std_io, manifest_path, manifest) catch {
             return error.NativeCompilationFailed;
+        };
+    }
+}
+
+/// A module's pack program lowered and compiled in pack mode.
+const ModulePack = struct {
+    allocator: Allocator,
+    lowered: lir.CheckedPipeline.LoweredProgram,
+    static_data_exports: []compile.static_data_exports.StaticDataExport,
+    compiled: backend.dev.CompilationResult,
+
+    fn deinit(self: *ModulePack) void {
+        self.compiled.deinit();
+        compile.static_data_exports.deinitStaticData(self.allocator, self.static_data_exports);
+        self.lowered.deinit();
+    }
+};
+
+/// Lower `artifact`'s closed exports as a pack program and compile them in
+/// pack mode, with the program's whole module set in view.
+fn compileModulePack(
+    ctx: *CliCtx,
+    build_env: *BuildEnv,
+    root_artifact: *const check.CheckedArtifact.CheckedModuleArtifact,
+    app_imports: []const check.CheckedArtifact.ImportedModuleView,
+    app_relations: []const check.CheckedArtifact.ImportedModuleView,
+    artifact: *const check.CheckedArtifact.CheckedModuleArtifact,
+    roots: []const check.CheckedArtifact.RootRequest,
+    args: cli_args.BuildArgs,
+    target: RocTarget,
+) CliMainError!ModulePack {
+    const target_usize = base.target.TargetUsize.fromPtrBitWidth(target.ptrBitWidth());
+    const specialization_strategy = currentRuntimeSpecializationStrategy(args.specialization_strategy);
+    const module_name = artifact.canonical_names.moduleNameText(artifact.module_identity.module_name);
+    const own_imports = try build_env.collectImportedArtifactViews(ctx.gpa, artifact);
+    defer ctx.gpa.free(own_imports);
+    // A platform's internal modules bind their hosted functions through the
+    // platform module's hosted section, which names declarations across
+    // every module the platform reaches; the pack lowers with the program's
+    // whole module set in view, exactly as the app does, and Monotype lowers
+    // only what the pack's roots reach.
+    var imports = std.ArrayList(check.CheckedArtifact.ImportedModuleView).empty;
+    defer imports.deinit(ctx.gpa);
+    try imports.appendSlice(ctx.gpa, own_imports);
+    const root_view = check.CheckedArtifact.importedView(root_artifact);
+    for ([_][]const check.CheckedArtifact.ImportedModuleView{ &.{root_view}, app_imports, app_relations }) |views| {
+        for (views) |view| {
+            if (std.meta.eql(view.key, artifact.key)) continue;
+            var present = false;
+            for (imports.items) |existing| {
+                if (std.meta.eql(existing.key, view.key)) present = true;
+            }
+            if (!present) try imports.append(ctx.gpa, view);
+        }
+    }
+    const relations = try build_env.collectRelationArtifactViews(ctx.gpa, artifact);
+    defer ctx.gpa.free(relations);
+
+    var config = checkedRuntimeLoweringConfig(.linked_output, args.opt, specialization_strategy, target_usize, true);
+    config.target.post_check_executor = build_env.postCheckExecutor();
+    var lowered = try lir.PackProgram.lowerPackProgram(ctx.gpa, artifact, imports.items, relations, roots, config.target);
+    errdefer lowered.deinit();
+
+    const static_data_exports = try compile.static_data_exports.buildStaticData(
+        ctx.gpa,
+        .{
+            .root = check.CheckedArtifact.loweringViewWithRelations(artifact, relations),
+            .imports = imports.items,
+        },
+        &lowered,
+        target,
+        .{},
+    );
+    errdefer compile.static_data_exports.deinitStaticData(ctx.gpa, static_data_exports);
+
+    var object_compiler = backend.ObjectFileCompiler.initForPack(ctx.gpa);
+    const compiled = object_compiler.compileToObjectFile(
+        &lowered.lir_result.store,
+        &lowered.lir_result.layouts,
+        &.{},
+        static_data_exports,
+        lowered.lir_result.store.getProcSpecs(),
+        lowered.lir_result.boxy_erased_arg_desc_offsets.items,
+        lowered.lir_result.boxy_erased_arg_desc_params.items,
+        lowered.lir_result.boxy_worker_procs.items,
+        target,
+    ) catch |err| {
+        std.log.err("Pack compilation for {s} failed: {}", .{ module_name, err });
+        return error.NativeCompilationFailed;
+    };
+    return .{ .allocator = ctx.gpa, .lowered = lowered, .static_data_exports = static_data_exports, .compiled = compiled };
+}
+
+/// Write this build's packs into the object cache: the root module's pack
+/// from the artifacts of the program just compiled, and a pack program for
+/// every other module in view whose pack is not in the store yet. Packs are
+/// filed by module identity and artifact key, so an unchanged module's pack
+/// is found and left alone.
+fn writePacksToStore(
+    ctx: *CliCtx,
+    build_env: *BuildEnv,
+    store: *const pack_store.Store,
+    root_artifact: *const check.CheckedArtifact.CheckedModuleArtifact,
+    app_imports: []const check.CheckedArtifact.ImportedModuleView,
+    app_relations: []const check.CheckedArtifact.ImportedModuleView,
+    app_lowered: *const lir.CheckedPipeline.LoweredProgram,
+    app_artifacts: ?*const backend.dev.ProcArtifact.Set,
+    args: cli_args.BuildArgs,
+    target: RocTarget,
+) CliMainError!void {
+    if (app_artifacts) |set| {
+        if (build_env.packPlacementForArtifactKey(root_artifact.key)) |placement| {
+            if (!try store.has(placement.origin, placement.identity, root_artifact.key.bytes)) {
+                const bytes = try packFileBytes(ctx.gpa, set, app_lowered);
+                defer ctx.gpa.free(bytes);
+                store.write(placement.origin, placement.identity, root_artifact.key.bytes, bytes) catch |err| {
+                    std.log.warn("object cache could not store the program's pack: {}", .{err});
+                };
+            }
+        }
+    }
+    const artifacts = try build_env.collectVisibleArtifacts(ctx.gpa, root_artifact);
+    defer ctx.gpa.free(artifacts);
+    for (artifacts) |artifact| {
+        const placement = build_env.packPlacementForArtifactKey(artifact.key) orelse continue;
+        const origin = placement.origin;
+        const identity = placement.identity;
+        if (try store.has(origin, identity, artifact.key.bytes)) continue;
+        const roots = try lir.PackProgram.closedExportRoots(ctx.gpa, artifact);
+        defer ctx.gpa.free(roots);
+        if (roots.len == 0) continue;
+        var pack = try compileModulePack(ctx, build_env, root_artifact, app_imports, app_relations, artifact, roots, args, target);
+        defer pack.deinit();
+        const set = &(pack.compiled.artifacts orelse continue);
+        const bytes = try packFileBytes(ctx.gpa, set, &pack.lowered);
+        defer ctx.gpa.free(bytes);
+        store.write(origin, identity, artifact.key.bytes, bytes) catch |err| {
+            std.log.warn("object cache could not store a module's pack: {}", .{err});
         };
     }
 }
@@ -10433,6 +10514,20 @@ fn rocBuildNative(ctx: *CliCtx, args: cli_args.BuildArgs) CliMainError!BuildResu
             return error.NativeCompilationFailed;
         };
     }
+    // `ROC_OBJECT_CACHE` turns on the object cache under the cache root:
+    // this build reads the packs of every module in view and writes its own.
+    const object_cache_enabled = !args.no_cache and std.c.getenv("ROC_OBJECT_CACHE") != null and loaded_packs == null;
+    var object_store: ?pack_store.Store = null;
+    defer if (object_store) |*store| store.deinit();
+    if (object_cache_enabled) {
+        const store_config = CacheConfig{ .enabled = true, .verbose = args.verbose, .roc_ctx = ctx.coreCtx() };
+        object_store = pack_store.Store.init(ctx.gpa, store_config, target, @tagName(args.opt)) catch |err| {
+            std.log.warn("object cache unavailable: {}", .{err});
+            return error.NativeCompilationFailed;
+        };
+        loaded_packs = pack_store.LoadedPacks.init(ctx.gpa);
+        loaded_packs.?.pending = .{ .store = &object_store.?, .io = ctx.io.std_io, .build_env = &build_env };
+    }
     var runtime_lowering = checkedRuntimeLoweringConfig(
         .linked_output,
         args.opt,
@@ -10496,7 +10591,7 @@ fn rocBuildNative(ctx: *CliCtx, args: cli_args.BuildArgs) CliMainError!BuildResu
         for (lowered.lir_result.store.getProcSpecs()) |proc| {
             if (proc.external) external_procs += 1;
         }
-        std.debug.print("pack hits: {d} external procs: {d}\n", .{ packs.hits, external_procs });
+        std.debug.print("pack hits: {d} external procs: {d} packs loaded: {d} keys: {d}\n", .{ packs.hits, external_procs, packs.packs.items.len, packs.specs.count() });
     }
 
     const entrypoints = try nativeBuildEntrypoints(ctx, root_artifact, &lowered);
@@ -10562,6 +10657,8 @@ fn rocBuildNative(ctx: *CliCtx, args: cli_args.BuildArgs) CliMainError!BuildResu
     var backend_timing = backend.ObjectFileCompiler.Timing.init(ctx.io.std_io);
     object_compiler.timing = &backend_timing;
     if (loaded_packs) |*packs| object_compiler.splice_source = packs.spliceSource();
+    object_compiler.capture_artifacts = object_cache_enabled;
+    defer if (object_compiler.captured_artifacts) |*set| set.deinit();
 
     const build_scratch_dir = createUniqueTempDir(ctx) catch |err| {
         return ctx.fail(.{ .temp_dir_failed = .{ .err = err } });
@@ -10592,6 +10689,9 @@ fn rocBuildNative(ctx: *CliCtx, args: cli_args.BuildArgs) CliMainError!BuildResu
     };
     reporter.endWithBreakdown(&devBackendBreakdown(backend_timing.snapshot()));
     try writePackObjects(ctx, &build_env, root_artifact, imported_artifacts, relation_artifacts, &lowered, args, target, final_output_path);
+    if (object_store) |*store| {
+        try writePacksToStore(ctx, &build_env, store, root_artifact, imported_artifacts, relation_artifacts, &lowered, if (object_compiler.captured_artifacts) |*set| set else null, args, target);
+    }
 
     reporter.begin("Linking");
     const link_inputs = try collectPlatformLinkInputs(ctx, platform_dir, resolved_targets_config, target, link_type);

@@ -826,7 +826,11 @@ pub fn prepareCheckedModulesMonotype(
             rootRequests(roots, layout_requests, static_data_requests),
             .{
                 .proc_debug_names = target.proc_debug_names or LirDump.filter() != null or SpecCensus.enabled(),
-                .spec_cache = target.spec_cache,
+                // A program that is also the compile-time evaluator's host
+                // takes its hits in Direct LIR, after the compile-time
+                // closure is known; only a runtime-only program can take
+                // them here.
+                .spec_cache = if (target.checked_module_state == .complete) target.spec_cache else null,
                 .post_check_executor = target.post_check_executor,
                 .static_data_literals = target.checked_module_state == .checking_finalization or roots.include_internal_static_data,
                 .comptime_value_reads = target.comptime_value_reads,
@@ -981,6 +985,7 @@ pub fn lowerPreparedSolvedToLir(prepared: PreparedSolved) LowerResourceError!Low
     defer lir_gen_timing_scope.end();
     const solved_input = prepared.program;
     var lowered = try postcheck.SolvedLirLower.run(allocator, target.target_usize, solved_input, .{
+        .spec_cache = target.spec_cache,
         .inline_plan = inline_plan.view(),
         .post_check_executor = target.post_check_executor,
         .inline_expects = target.inline_expects,

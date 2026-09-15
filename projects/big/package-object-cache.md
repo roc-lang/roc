@@ -626,10 +626,26 @@ them.
       build from a directory of packs; the roc-parser app takes 16 hits and
       splices 9 procedures, links, and behaves identically. Gate: a CLI
       subcommands case builds cold, builds warm from the cold packs, requires
-      hits, and compares the two programs' behavior. Still to do in this
-      milestone: the store under the cache root with the origin split and
-      sweep policy, loading packs by module key instead of a directory,
-      writing packs on every build, and the refcount event log comparison.
+      hits, and compares the two programs' behavior. The store: `ROC_OBJECT_CACHE=1`
+      (opt-in until its cost is measured) files packs under the cache root
+      as `objects/<target>-<opt>/<local|pkg>/<placement>/<artifact key>.rpk`,
+      where the placement digests what survives an edit (a URL package's URL
+      or a local package's root directory, plus the module's path), so an
+      edited module's previous packs stay beside its new one and unchanged
+      specializations keep hitting; the background sweep ages `local/` packs
+      one day and `pkg/` packs thirty, by the later of access and
+      modification time. Every build writes the pack of the program it
+      compiled (from that compile's own artifacts) and a pack program for
+      every other module in view whose pack the store lacks. Hits happen at
+      two points: Monotype reservation for a runtime-only program, and Direct
+      LIR for the program shared with the compile-time evaluator, where the
+      compile-time roots' closure lowers first and only procedures reached
+      afterwards may be served, since the evaluator has no entries to run.
+      ARC treats an object-cache procedure's recorded signature as its ABI
+      and never derives a variant of it. Measured on the roc-parser app: a
+      rebuild or an edited rebuild takes 11 hits and splices 10 procedures.
+      Still to do: the refcount event log comparison, and turning the store
+      on by default once pack-program cost on large platforms is measured.
    4. Debug info for cached procedures (DWARF line programs stored with the
       artifact) and the `roc run` host-executable path.
 

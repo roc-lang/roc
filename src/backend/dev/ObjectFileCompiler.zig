@@ -89,6 +89,11 @@ pub const ObjectFileCompiler = struct {
     pack_mode: bool = false,
     /// Where the artifacts of external (object-cache) procedures come from.
     splice_source: ?SpliceSource = null,
+    /// Lift the compiled program into artifacts and keep them in
+    /// `captured_artifacts` after `compileToObjectFileAndWrite`, so the
+    /// program's own pack can be written from the build that produced it.
+    capture_artifacts: bool = false,
+    captured_artifacts: ?ProcArtifact.Set = null,
 
     pub const TimingSnapshot = struct {
         backend_setup_ns: u64 = 0,
@@ -173,7 +178,7 @@ pub const ObjectFileCompiler = struct {
         boxy_worker_procs: []const lir.LIR.LirProcSpecId,
         target: RocTarget,
     ) CompilationError!CompilationResult {
-        return crossCompileDispatch(self.allocator, lir_store, layout_store, entrypoints, static_data_exports, proc_specs, erased_arg_desc_offsets, erased_arg_desc_params, boxy_worker_procs, target, self.enable_default_platform_runtime, self.timing, self.pack_mode, self.splice_source);
+        return crossCompileDispatch(self.allocator, lir_store, layout_store, entrypoints, static_data_exports, proc_specs, erased_arg_desc_offsets, erased_arg_desc_params, boxy_worker_procs, target, self.enable_default_platform_runtime, self.timing, self.pack_mode, self.splice_source, self.capture_artifacts);
     }
 
     /// Compile to an object file and write it to a path. Returns whether the
@@ -205,6 +210,11 @@ pub const ObjectFileCompiler = struct {
             target,
         );
         defer result.deinit();
+        if (self.capture_artifacts) {
+            if (self.captured_artifacts) |*previous| previous.deinit();
+            self.captured_artifacts = result.artifacts;
+            result.artifacts = null;
+        }
 
         // Write to file. Use the AV-safe wrapper so a transient AccessDenied
         // from a Windows filter driver holding the just-created file open is
@@ -286,6 +296,7 @@ fn compileWithCodeGen(
     timing: ?*ObjectFileCompiler.Timing,
     pack_mode: bool,
     splice_source: ?SpliceSource,
+    capture_artifacts: bool,
 ) CompilationError!CompilationResult {
     if (!pack_mode and entrypoints.len == 0 and static_data_exports.len == 0) {
         return CompilationError.NoEntrypoints;
@@ -636,7 +647,7 @@ fn compileWithCodeGen(
     if (timing) |timings| timings.finish(object_encoding_started_ns, .object_encoding);
 
     var artifacts: ?ProcArtifact.Set = null;
-    if (pack_mode and target.toCpuArch() == .x86_64) {
+    if ((pack_mode or capture_artifacts) and target.toCpuArch() == .x86_64) {
         artifacts = ProcArtifact.extract(CodeGen, allocator, &codegen, proc_specs, layout_store, static_strings.exports) catch |err| switch (err) {
             error.OutOfMemory => return CompilationError.OutOfMemory,
             error.NestedCodeRegion, error.UncoveredCode, error.DanglingReference, error.UnsupportedRelocation => std.debug.panic("pack artifact extraction failed: {s}", .{@errorName(err)}),
@@ -919,6 +930,7 @@ fn crossCompileDispatch(
     timing: ?*ObjectFileCompiler.Timing,
     pack_mode: bool,
     splice_source: ?SpliceSource,
+    capture_artifacts: bool,
 ) CompilationError!CompilationResult {
     const enum_info = @typeInfo(RocTarget).@"enum";
     const default_target = target.defaultCpuTarget();
@@ -944,6 +956,7 @@ fn crossCompileDispatch(
                     timing,
                     pack_mode,
                     splice_source,
+                    capture_artifacts,
                 );
             } else {
                 return CompilationError.UnsupportedTarget;

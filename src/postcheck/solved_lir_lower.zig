@@ -128,6 +128,9 @@ pub const DictSeedMode = enum {
 
 /// Configuration for direct solved-to-LIR lowering.
 pub const Options = struct {
+    /// The object cache asked for closed specializations that no
+    /// compile-time root reaches.
+    spec_cache: ?Common.SpecCacheLookup = null,
     inline_plan: SolvedInline.Plan = .{},
     /// Reuse checking workers for prepared procedure-body lowering.
     post_check_executor: ?base.post_check_task_executor.Executor = null,
@@ -542,6 +545,15 @@ const Lowerer = struct {
     list_in_place_map: bool,
     dict_seed_mode: DictSeedMode,
     proc_debug_names: bool,
+    spec_cache: ?Common.SpecCacheLookup,
+    /// True while the closure of the compile-time roots is being lowered.
+    /// Those procedures run in the compile-time evaluator, which has no
+    /// object-cache entries, so only procedures first reached afterwards may
+    /// be served from the cache.
+    comptime_phase: bool,
+    /// Drain positions, kept across calls so a second drain resumes.
+    fn_queue_index: usize,
+    initializer_queue_index: usize,
     layout_request_const_plans: bool,
     /// Match sites statically resolved by `foldListMapCanReuseMatch`,
     /// recorded (Debug only) so the Lambda Mono verifier replays them.
@@ -780,6 +792,10 @@ const Lowerer = struct {
             .list_in_place_map = options.list_in_place_map,
             .dict_seed_mode = options.dict_seed_mode,
             .proc_debug_names = options.proc_debug_names,
+            .spec_cache = options.spec_cache,
+            .comptime_phase = true,
+            .fn_queue_index = 0,
+            .initializer_queue_index = 0,
             .layout_request_const_plans = options.layout_request_const_plans,
             .debug_materialized_out = options.debug_materialized_out,
             .parallel_metrics = options.parallel_metrics,
@@ -1040,7 +1056,19 @@ const Lowerer = struct {
                 .fn_id = fn_id,
                 .request = root.request,
             });
-            _ = try self.markReachableFn(fn_id);
+        }
+        // The compile-time roots' closure lowers first, so that everything
+        // the evaluator runs is known before any runtime-only procedure can
+        // be served from the object cache.
+        for (self.roots.items) |root| {
+            if (!rootRunsAtCompileTime(root.request)) continue;
+            _ = try self.markReachableFn(root.fn_id);
+        }
+        try self.lowerReachableFns();
+        self.comptime_phase = false;
+        for (self.roots.items) |root| {
+            if (rootRunsAtCompileTime(root.request)) continue;
+            _ = try self.markReachableFn(root.fn_id);
         }
 
         try self.layout_requests.ensureTotalCapacity(self.allocator, self.solved.layout_requests.items.len);
@@ -1329,8 +1357,12 @@ const Lowerer = struct {
     }
 
     fn lowerReachableFns(self: *Lowerer) Common.LowerError!void {
-        var fn_queue_index: usize = 0;
-        var initializer_queue_index: usize = 0;
+        var fn_queue_index = self.fn_queue_index;
+        var initializer_queue_index = self.initializer_queue_index;
+        defer {
+            self.fn_queue_index = fn_queue_index;
+            self.initializer_queue_index = initializer_queue_index;
+        }
         while (fn_queue_index < self.fn_reach_queue.items.len or initializer_queue_index < self.static_initializer_queue.items.len) {
             while (fn_queue_index < self.fn_reach_queue.items.len) {
                 // Prepare the complete currently-reachable epoch before lowering
@@ -1400,6 +1432,11 @@ const Lowerer = struct {
     fn canLowerFnBodyOnWorker(self: *const Lowerer, fn_id: Type.FnId) bool {
         const spec = self.fn_specs.items[@intFromEnum(fn_id)];
         if (spec.abi != .finite or spec.captures.len != 0 or spec.return_reuse.enabled()) return false;
+        // A procedure served from the object cache has no body to lower;
+        // the serial path records that and moves on.
+        if (self.fn_entries.items[@intFromEnum(fn_id)].proc) |proc| {
+            if (self.result.store.getProcSpec(proc).external) return false;
+        }
         const source_fn = self.solved.lifted.getFn(spec.source);
         const body = switch (source_fn.body) {
             .roc => |body| body,
@@ -1888,6 +1925,12 @@ const Lowerer = struct {
         self.aggregate_bindings = &aggregates;
         defer self.aggregate_bindings = saved_aggregates;
         const proc_id = try self.procPlaceholder(fn_id);
+        if (self.result.store.getProcSpec(proc_id).external) {
+            // The object cache provides this procedure's code; its body is
+            // never lowered, and nothing it would reach is reached through it.
+            if (!self.worker_callback) self.fn_written.items[@intFromEnum(fn_id)] = true;
+            return null;
+        }
         const entry = self.fn_entries.items[@intFromEnum(fn_id)];
         const source_fn = self.solved.lifted.getFn(spec.source);
         var lowered_body: ?LoweredFnBody = null;
@@ -2030,7 +2073,8 @@ const Lowerer = struct {
                 }
             },
             .hosted => {
-                if (self.result.store.getProcSpec(proc_id).hosted == null) {
+                const proc = self.result.store.getProcSpec(proc_id);
+                if (proc.hosted == null and !proc.external) {
                     Common.invariant("hosted function reached direct LIR without hosted metadata");
                 }
             },
@@ -2203,10 +2247,21 @@ const Lowerer = struct {
         if (arg_tys.len != lifted_args.len) Common.invariant("direct Lambda Mono function arity changed after Lambda Solved");
 
         const identity = try self.specIdentity(spec);
-        const cached: ?Common.SpecCacheHit = if (source_fn.source) |template| template.cached else null;
+        var cached: ?Common.SpecCacheHit = if (source_fn.source) |template| template.cached else null;
         if (cached) |hit| {
             if (!std.mem.eql(u8, &hit.identity, &identity.bytes)) {
                 Common.invariant("object cache entry identity disagrees with the identity lowered for its specialization key");
+            }
+        }
+        if (cached == null and !self.comptime_phase and spec.abi == .finite and source_fn.spec_constr_pattern == null and self.captureSpan(spec.captures).len == 0 and !spec.return_reuse.enabled()) {
+            if (self.spec_cache) |cache| {
+                if (source_fn.source) |template| {
+                    if (template.spec_key) |key| {
+                        if (cache.lookup(key.bytes)) |hit| {
+                            if (std.mem.eql(u8, &hit.identity, &identity.bytes)) cached = hit;
+                        }
+                    }
+                }
             }
         }
         if (self.procs_by_identity.get(identity)) |existing| {
@@ -12307,4 +12362,12 @@ test "named layout index applies backing metadata by named type policy" {
 
 test "direct LIR lower declarations are referenced" {
     std.testing.refAllDecls(@This());
+}
+
+/// Whether a root's procedure runs in the compile-time evaluator.
+fn rootRunsAtCompileTime(request: check.CheckedModule.RootRequest) bool {
+    return switch (request.kind) {
+        .compile_time_constant, .compile_time_callable => true,
+        .runtime_entrypoint, .provided_export, .platform_required_binding, .hosted_export, .test_expect, .repl_expr, .dev_expr => false,
+    };
 }
