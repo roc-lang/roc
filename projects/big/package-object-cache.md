@@ -10,11 +10,10 @@ whole-program unit: Monotype specialization, closure lifting, SpecConstr,
 lambda-set solving, LIR lowering, the LIR passes, ARC, and codegen all run over
 package and builtin code as if it were app code, and the result is exactly one
 relocatable object per build (`src/backend/dev/ObjectFileCompiler.zig:164`,
-`src/cli/main.zig:10336`). Measured on real apps with a debug compiler, the
-post-check "Specializing" phase is the dominant cost of a warm dev build
-(roc-signals task-board: 17.5s of 21.1s; roc-signals conduit: 26.7s of 61s;
-roc-ray top_down: 1.5s of 2.3s), while type checking is a small share and is
-already cached.
+`src/cli/main.zig:10336`). On real apps the post-check "Specializing" phase
+is the dominant cost of a warm dev build (roc-signals task-board: 83% of the
+build; roc-signals conduit: 44%; roc-ray top_down: 65%), while type checking
+is a small share and is already cached.
 
 The second cost is quality, not time. Dependencies such as roc-deflate rely on
 optimization to be usable at all, but a dev build compiles them with the dev
@@ -676,7 +675,7 @@ them.
       stays opt-in: on the real apps measured, dev rebuild time is Monotype
       specialization of open requests, compile-time evaluation, and
       SpecConstr over large procedures, which no closed entry covers, so the
-      cache gains about 8% on task-board rebuilds and nothing elsewhere
+      cache gains about 15% on task-board rebuilds and nothing elsewhere
       while costing nothing measurable; default-on waits for either
       lambda-bearing entries (tier 2) or optimized package objects, which
       are what make dev builds faster or their code faster.
@@ -709,55 +708,47 @@ lines to 60,039.
 
 ### Real apps under the object cache (2026-09-15)
 
-x86_64 Linux, `roc build --opt=dev`, measured with both a Debug compiler and
-a ReleaseFast one, on `main` (db0282b787) and on this branch with `main`
-merged. Each configuration uses a fresh cache root; `base` is the checked
-artifact cache alone, `cache` adds `ROC_OBJECT_CACHE=1`. "Edited" appends a
-comment to the app's root module (a source the cache root has never seen).
-Times are wall-clock seconds of one run.
+x86_64 Linux, `roc build --opt=dev`, measured with a ReleaseFast compiler
+(`zig build roc -Doptimize=ReleaseFast`), on `main` (db0282b787) and on this
+branch with `main` merged. Each configuration uses a fresh cache root;
+`base` is the checked artifact cache alone, `cache` adds
+`ROC_OBJECT_CACHE=1`. "Edited" appends a comment to the app's root module (a
+source the cache root has never seen). Times are wall-clock seconds of one
+run.
 
 | compiler | app | base cold | base rebuild | base edited | cache cold | cache rebuild | cache edited |
 | --- | --- | --- | --- | --- | --- | --- | --- |
-| Debug, main | task-board | 21.5 | 18.9 | 20.1 | | | |
-| Debug, branch | task-board | 21.2 | 18.2 | 19.5 | 21.7 | 16.7 | 18.0 |
-| Debug, main | counter | 3.3 | 1.5 | 1.7 | | | |
-| Debug, branch | counter | 3.2 | 1.5 | 1.7 | 3.4 | 1.5 | 1.7 |
-| Debug, main | deflate | 185 | 87 | 179 | | | |
-| Debug, branch | deflate | 185 | 89 | 182 | 177 | 87 | 180 |
-| Release, main | task-board | 2.4 | 2.0 | 2.0 | | | |
-| Release, branch | task-board | 2.4 | 1.9 | 2.1 | 2.1 | 1.6 | 1.8 |
-| Release, main | counter | 0.31 | 0.21 | 0.21 | | | |
-| Release, branch | counter | 0.31 | 0.22 | 0.22 | 0.41 | 0.23 | 0.32 |
-| Release, main | deflate | 10.0 | 3.1 | 6.4 | | | |
-| Release, branch | deflate | 9.6 | 3.0 | 6.2 | 6.3 | 3.0 | 6.0 |
+| main | task-board | 2.4 | 2.0 | 2.0 | | | |
+| branch | task-board | 2.4 | 1.9 | 2.1 | 2.1 | 1.6 | 1.8 |
+| main | counter | 0.31 | 0.21 | 0.21 | | | |
+| branch | counter | 0.31 | 0.22 | 0.22 | 0.41 | 0.23 | 0.32 |
+| main | deflate | 10.0 | 3.1 | 6.4 | | | |
+| branch | deflate | 9.6 | 3.0 | 6.2 | 6.3 | 3.0 | 6.0 |
 
 What this says. The branch does not change the compiler's speed without the
-cache: every base column matches `main` within noise. The large absolute
-numbers are the Debug compiler's; a ReleaseFast compiler is roughly ten
-times faster on the signals apps and twenty to thirty times faster on the
-deflate example, whose time is compile-time evaluation and SpecConstr over
-Inflate's largest procedures. With the cache on, task-board's rebuild gains
-about 8% (Debug 18.2s to 16.7s, Release 1.9s to 1.6s), counter and deflate
-do not move, and cold builds pay nothing measurable. An earlier claim that
-the deflate example's edited rebuild halved under the cache was a
-measurement artifact: that run reused one cache root across the base and
-cache phases, so the "edited" source had already been checked and evaluated
-in the base phase and the compile-time program came from the checked
-artifact cache, not from packs. Under a fresh root the edited rebuild is the
-same with and without the store, because the compile-time roots' closure
-covers nearly every procedure the runtime roots reach (64 of 66 keyed
-procedures on the deflate example are first reached during the compile-time
-phase) and those cannot be served while the evaluator needs bodies to run.
-Serving them would require the compile-time image to link cached code, which
-is the same mechanism the `roc run` host executable needs. Task-board
-withheld 48 of 260 entries for reaching program-local constants before
-constants travelled by content name; it now withholds 1 of 237 and offers
-236.
+cache: every base column matches `main` within noise. The deflate example's
+time is compile-time evaluation and SpecConstr over Inflate's largest
+procedures. With the cache on, task-board's rebuild gains about 15% (1.9s
+to 1.6s), counter and deflate do not move, and cold builds pay nothing
+measurable. An earlier claim that the deflate example's edited rebuild
+halved under the cache was a measurement artifact: that run reused one
+cache root across the base and cache phases, so the "edited" source had
+already been checked and evaluated in the base phase and the compile-time
+program came from the checked artifact cache, not from packs. Under a fresh
+root the edited rebuild is the same with and without the store, because the
+compile-time roots' closure covers nearly every procedure the runtime roots
+reach (64 of 66 keyed procedures on the deflate example are first reached
+during the compile-time phase) and those cannot be served while the
+evaluator needs bodies to run. Serving them would require the compile-time
+image to link cached code, which is the same mechanism the `roc run` host
+executable needs. Task-board withheld 48 of 260 entries for reaching
+program-local constants before constants travelled by content name; it now
+withholds 1 of 237 and offers 236.
 
 The identity renderer must never expand shared subtypes as a tree: the
 solved type graph of a closure-heavy program reaches one record type from
 hundreds of lambda-set members, and rendering each path took task-board's
-Direct LIR from 21s to more than fifteen minutes. `proc_identity.zig`
+Direct LIR from seconds to more than fifteen minutes. `proc_identity.zig`
 renders every type as the digest of its own rendering and remembers, across
 all identities of a program, every type whose rendering refers to nothing
 above its own stack frame.
