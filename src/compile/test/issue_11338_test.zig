@@ -120,19 +120,21 @@ const DiscoveryExecutor = struct {
     discovered_while_unfinished: bool = false,
     open: bool = false,
     fail_at_submission: ?usize = null,
+    lanes: [2]executor_api.LaneState = @splat(executor_api.LaneState.init(std.testing.allocator)),
 
-    fn execute(task: executor_api.Task, lane: usize) executor_api.Completion {
+    fn deinit(self: *@This()) void {
+        for (&self.lanes) |*lane| lane.deinit();
+    }
+
+    fn execute(self: *@This(), task: executor_api.Task, lane: usize) executor_api.Completion {
         var scratch = std.heap.ArenaAllocator.init(std.testing.allocator);
         defer scratch.deinit();
         return .{ .id = task.id, .worker_id = lane, .value = task.run(task.context, .{
             .id = lane,
             .allocator = std.testing.allocator,
             .scratch = scratch.allocator(),
+            .lane_state = &self.lanes[lane],
         }) };
-    }
-
-    fn run(_: *anyopaque, tasks: []const executor_api.Task, completions: []executor_api.Completion) std.mem.Allocator.Error!void {
-        for (tasks, completions) |task, *completion| completion.* = execute(task, 0);
     }
 
     fn begin(context: *anyopaque) void {
@@ -162,7 +164,7 @@ const DiscoveryExecutor = struct {
         self.peak_outstanding = @max(self.peak_outstanding, self.outstanding);
     }
 
-    fn waitOne(context: *anyopaque) executor_api.Completion {
+    fn receive(context: *anyopaque) executor_api.Completion {
         const self: *@This() = @ptrCast(@alignCast(context));
         std.debug.assert(self.outstanding > 0);
         self.outstanding -= 1;
@@ -174,11 +176,11 @@ const DiscoveryExecutor = struct {
         if (next) |index| {
             const task = self.pending[index].?;
             self.pending[index] = null;
-            return execute(task.task, 0);
+            return self.execute(task.task, 0);
         }
         const task = self.held.?;
         self.held = null;
-        return execute(task.task, 1);
+        return self.execute(task.task, 1);
     }
 
     fn end(context: *anyopaque) void {
@@ -188,17 +190,20 @@ const DiscoveryExecutor = struct {
     }
 
     fn executor(self: *@This()) executor_api.Executor {
-        return .{ .context = self, .worker_count = 4, .runFn = run, .streaming = .{
+        return .{
+            .context = self,
+            .worker_count = 4,
             .beginFn = begin,
             .submitFn = submit,
-            .waitOneFn = waitOne,
+            .receiveFn = receive,
             .endFn = end,
-        } };
+        };
     }
 };
 
 test "specialization discovery submits a child before an unrelated task finishes" {
     var executor: DiscoveryExecutor = .{};
+    defer executor.deinit();
     try harness.expectLowersToLirWithOptions(chained_discovery_app, .{
         .specialization_workers = 4,
         .post_check_executor_override = executor.executor(),
@@ -213,6 +218,7 @@ test "specialization streaming joins accepted tasks after submission failure" {
     // Failure with a pending sibling, and failure after some ordered commits.
     for ([_]usize{ 2, 7 }) |fail_at| {
         var executor: DiscoveryExecutor = .{ .fail_at_submission = fail_at };
+        defer executor.deinit();
         try std.testing.expectError(error.OutOfMemory, harness.expectLowersToLirWithOptions(chained_discovery_app, .{
             .specialization_workers = 4,
             .post_check_executor_override = executor.executor(),
@@ -251,6 +257,7 @@ test "specialization streaming bounds completed shards behind an unfinished pred
     }
     try app.appendSlice(allocator, "\n    echo!(total.to_str())\n    Ok({})\n}\n");
     var executor: DiscoveryExecutor = .{};
+    defer executor.deinit();
     try harness.expectLowersToLirWithOptions(app.items, .{
         .specialization_workers = 4,
         .post_check_executor_override = executor.executor(),
