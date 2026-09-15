@@ -80,7 +80,12 @@ procedure base and template ordinals inside it are module-local and
 deterministic from the module's own source. Request type digests are content
 identities (the census saw one `List.len` instantiation under a single digest
 in 11 unrelated apps), and structural types such as records and tag unions
-digest by structure alone.
+digest by structure alone. The key takes the request type's equality digest,
+not its identity digest: the identity digest names a nominal type by the
+checked type id of whichever module's store lowered it, so the same
+`Try(List(U8), [CompressBug])` requested from an app and from the package's
+own pack program would carry two identity digests and two keys, and no
+package procedure returning a nominal type would ever hit.
 
 The specialization identity is therefore: callee module artifact key,
 procedure base ordinal, template ordinal, evidence digest, the demand-adjusted
@@ -654,7 +659,26 @@ them.
       Pack roots are the module's exported Roc procedures with closed types;
       hosted, intrinsic, entry, and compile-time-only templates never lower
       as procedures of the exporting module, and a module with no such root
-      gets no pack.
+      gets no pack. The closed-type walk follows a nominal type into its
+      declaration's backing template, which is written over the
+      declaration's formal parameters; those rigid parameters stand for the
+      nominal's arguments, which the walk checks on their own, so they are
+      bound inside the backing rather than free. Treating them as free made
+      every export returning `Try` or any other parameterized nominal open,
+      which left the roc-deflate package with three roots out of sixty-eight
+      exports and no compressor in its pack.
+      The program shared with the compile-time evaluator takes no hits from
+      packs today for a reason of ABI, not of policy: a pack's artifacts are
+      object-file code, which passes no `RocOps` argument and calls host
+      symbols such as `roc_crashed` by name, while the evaluator image is
+      compiled under the native-execution convention that threads `RocOps`
+      as a hidden last argument through every procedure and builtin call.
+      Splicing an object artifact into that image links but crashes at the
+      first call. Serving hits there needs a second artifact flavor per
+      pack, compiled for the host under the evaluator's convention, laid out
+      with the evaluator's code and data, and resolved by the same
+      relocation walk the object splice uses; the pack store, keys, and
+      manifests are shared with it.
       ARC treats an object-cache procedure's recorded signature as its ABI
       and never derives a variant of it. A hit applies only to the record
       Monotype completed without a body: a SpecConstr clone or a second
