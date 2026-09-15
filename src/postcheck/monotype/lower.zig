@@ -13,6 +13,7 @@ const Ast = @import("ast.zig");
 const Type = @import("type.zig");
 const specialize = @import("specialize.zig");
 const solve = @import("solve.zig");
+const WorkerInputs = @import("worker_inputs.zig");
 
 const InstGraph = solve.InstGraph;
 const InstNode = solve.InstNode;
@@ -271,6 +272,7 @@ pub const ParallelMetricsSnapshot = struct {
     specialization_tasks_submitted: u64 = 0,
     specialization_tasks_committed: u64 = 0,
     specialization_tasks_discarded_ready: u64 = 0,
+    /// Root batches plus ordinary-specialization streaming sessions.
     task_waves: u64 = 0,
     /// Largest executor width represented by any aggregated lowering.
     peak_worker_lanes_available: u64 = 0,
@@ -2296,11 +2298,10 @@ const TemplateReservation = struct {
 /// coordinator-owned path.
 const TemplateBodyScheduling = enum { immediate, queued };
 
-/// Keep more ready jobs in each executor run than there are worker lanes.
-/// Dynamic lane reuse smooths procedure-size skew and amortizes each frozen
-/// coordinator barrier without changing dispatch-order commit. Four bounds
-/// the completed shards retained until each batch reaches its commit barrier.
+/// Bound running plus completed-but-unaccepted jobs. Extra slots let free
+/// lanes continue working when an earlier dispatch delays ordered acceptance.
 const parallel_spec_jobs_per_lane: usize = 4;
+const SharedSummaries = WorkerInputs.AppendIndex(InterfaceReplayAddress, InterfaceSummaryEntry);
 
 const SpecJobRunId = enum(u32) { _ };
 var next_spec_job_run_id = std.atomic.Value(u32).init(0);
@@ -2520,6 +2521,9 @@ pub const SpecJobWorkerState = struct {
     workspace: SpecJobWorkspace,
     graph: ?*InstGraph = null,
     builder: ?*Builder = null,
+    /// Stable-address lane view of the captured worker read set.
+    /// It borrows snapshot storage and contains no coordinator output rows.
+    input_program: ?*Ast.Program = null,
     tasks_started: u64 = 0,
     counters: SpecializationCounters = .{},
     diagnostics: Diagnostics = .{},
@@ -2539,6 +2543,7 @@ pub const SpecJobWorkerState = struct {
         }
         if (self.graph) |graph| graph.destroy();
         self.workspace.deinit();
+        if (self.input_program) |program| self.allocator.destroy(program);
         self.* = undefined;
     }
 };
@@ -2695,13 +2700,14 @@ const CompletedProcedureRootShard = struct {
     }
 };
 
-/// Immutable coordinator input shared by one frozen ordinary-specialization batch.
+/// Captured immutable input for a root batch or one streaming specialization.
 const SpecJobWorkerInputs = struct {
     run_id: SpecJobRunId,
     modules: Common.CheckedModules,
-    program: *Ast.Program,
+    snapshot: *const WorkerInputs.Snapshot,
     proc_debug_names: bool,
-    interface_summaries: *const InterfaceSummaryCache,
+    interface_summaries: *const SharedSummaries,
+    interface_summary_end: usize,
     collect_counters: bool,
     collect_diagnostics: bool,
     inline_expects: InlineExpectMode,
@@ -2723,7 +2729,8 @@ const PreparedSpecJob = struct {
 
 /// Caller-owned task storage. Executor callbacks write only their own element.
 const SpecJobTaskContext = struct {
-    inputs: *const SpecJobWorkerInputs,
+    inputs: SpecJobWorkerInputs,
+    snapshot: WorkerInputs.Snapshot,
     prepared: PreparedSpecJob,
     shard: ?CompletedSpecJobShard = null,
     failed: bool = false,
@@ -2733,19 +2740,12 @@ const SpecJobTaskContext = struct {
     first_task_on_lane: bool = false,
 };
 
-/// Reusable caller-owned scheduler storage. Executor runs are synchronous, so
-/// no callback retains these task descriptors after a batch completes.
+/// Fixed ring of caller-owned task contexts, retained through ordered acceptance.
 const SpecJobTaskBuffers = struct {
-    prepared: []PreparedSpecJob = &.{},
     contexts: []SpecJobTaskContext = &.{},
-    tasks: []base.post_check_task_executor.Task = &.{},
-    completions: []base.post_check_task_executor.Completion = &.{},
 
     fn deinit(self: *SpecJobTaskBuffers, allocator: Allocator) void {
-        if (self.completions.len != 0) allocator.free(self.completions);
-        if (self.tasks.len != 0) allocator.free(self.tasks);
-        if (self.contexts.len != 0) allocator.free(self.contexts);
-        if (self.prepared.len != 0) allocator.free(self.prepared);
+        allocator.free(self.contexts);
         self.* = .{};
     }
 };
@@ -3126,8 +3126,11 @@ const Builder = struct {
     /// relocation after worker results stop borrowing the mutable workspace.
     spec_job_commit_domain: ?SpecJobCommitDomain = null,
     spec_job_task_buffers: SpecJobTaskBuffers = .{},
+    worker_inputs: WorkerInputs.ProgramInputs = .{},
+    shared_summaries: ?SharedSummaries = null,
     interface_summaries: InterfaceSummaryCache,
-    coordinator_interface_summaries: ?*const InterfaceSummaryCache = null,
+    coordinator_interface_summaries: ?*const SharedSummaries = null,
+    coordinator_interface_summary_end: usize = 0,
     interface_summary_checks: u32 = 0,
     spec_store: specialize.SpecBuilder,
     lowered_templates: collections.DenseMap(Ast.FnId, LoweredTemplate),
@@ -3279,14 +3282,17 @@ const Builder = struct {
         worker: *SpecJobWorkerState,
         inputs: *const SpecJobWorkerInputs,
     ) Allocator.Error!*Builder {
+        if (worker.input_program == null) worker.input_program = try worker.allocator.create(Ast.Program);
+        worker.input_program.?.* = inputs.snapshot.workerProgram(worker.allocator);
         if (worker.builder) |builder| {
             builder.coordinator_interface_summaries = inputs.interface_summaries;
+            builder.coordinator_interface_summary_end = inputs.interface_summary_end;
             return builder;
         }
 
         const builder = try worker.allocator.create(Builder);
         errdefer worker.allocator.destroy(builder);
-        builder.* = Builder.init(worker.allocator, inputs.modules, inputs.program, .{
+        builder.* = Builder.init(worker.allocator, inputs.modules, worker.input_program.?, .{
             .proc_debug_names = inputs.proc_debug_names,
             .specialization_counters = if (inputs.collect_counters) &worker.counters else null,
             .diagnostics = if (inputs.collect_diagnostics) &worker.diagnostics else null,
@@ -3302,6 +3308,7 @@ const Builder = struct {
         builder.current_loc = inputs.current_loc;
         builder.current_region = inputs.current_region;
         builder.coordinator_interface_summaries = inputs.interface_summaries;
+        builder.coordinator_interface_summary_end = inputs.interface_summary_end;
         worker.builder = builder;
         return builder;
     }
@@ -3368,6 +3375,8 @@ const Builder = struct {
         self.nested_site_cache.deinit();
         self.lowered_nested_by_fn.deinit();
         self.lowered_templates.deinit();
+        if (self.shared_summaries) |*summaries| summaries.deinit();
+        self.worker_inputs.deinit(self.allocator);
         self.interface_summaries.deinit();
         self.spec_store.deinit();
         self.pending_spec_jobs.deinit(self.allocator);
@@ -3956,6 +3965,15 @@ const Builder = struct {
         }
     }
 
+    fn captureSpecJobInputs(self: *Builder) Allocator.Error!WorkerInputs.Snapshot {
+        if (self.shared_summaries == null) self.shared_summaries = SharedSummaries.init(self.allocator);
+        const summaries = &self.shared_summaries.?;
+        for (self.interface_summaries.entries.items[summaries.count..]) |entry| {
+            try summaries.insert(entry.address, entry);
+        }
+        return self.worker_inputs.capture(self.allocator, self.program);
+    }
+
     fn rootSourceModule(self: *Builder, source_modules: []const checked.ModuleId, index: usize) checked.ModuleId {
         return if (source_modules.len == 0) self.root_view.key else source_modules[index];
     }
@@ -3974,12 +3992,14 @@ const Builder = struct {
         defer self.allocator.free(tasks);
         const completions = try self.allocator.alloc(base.post_check_task_executor.Completion, requests.len);
         defer self.allocator.free(completions);
+        const snapshot = try self.captureSpecJobInputs();
         const inputs = SpecJobWorkerInputs{
             .run_id = self.spec_job_run_id,
             .modules = self.modules,
-            .program = self.program,
+            .snapshot = &snapshot,
             .proc_debug_names = self.proc_debug_names,
-            .interface_summaries = &self.interface_summaries,
+            .interface_summaries = &self.shared_summaries.?,
+            .interface_summary_end = self.shared_summaries.?.count,
             .collect_counters = self.counters != null,
             .collect_diagnostics = self.diagnostics != null,
             .inline_expects = self.inline_expects,
@@ -5209,189 +5229,174 @@ const Builder = struct {
     /// drains. Bodies executed here may enqueue further requests; those join
     /// the same FIFO and are reached by this same loop, in enqueue order.
     fn drainPendingSpecJobs(self: *Builder) Allocator.Error!void {
-        const executor = self.post_check_executor orelse {
-            return self.drainPendingSpecJobsSerial();
-        };
-        if (executor.worker_count <= 1) {
-            return self.drainPendingSpecJobsSerial();
+        const executor = self.post_check_executor orelse return self.drainPendingSpecJobsSerial();
+        if (executor.worker_count <= 1) return self.drainPendingSpecJobsSerial();
+        if (self.pending_spec_jobs_head == self.pending_spec_jobs.items.len) {
+            self.pending_spec_jobs.clearRetainingCapacity();
+            self.pending_spec_jobs_head = 0;
+            self.requirePendingSpecJobsDrained();
+            return;
         }
 
-        const batch_capacity = executor.worker_count *| parallel_spec_jobs_per_lane;
-        const buffers = try self.ensureSpecJobTaskBuffers(batch_capacity);
-        const prepared = buffers.prepared;
+        const capacity = executor.worker_count *| parallel_spec_jobs_per_lane;
+        const buffers = try self.ensureSpecJobTaskBuffers(capacity);
         const contexts = buffers.contexts;
-        const tasks = buffers.tasks;
-        const completions = buffers.completions;
-
-        const inputs = SpecJobWorkerInputs{
-            .run_id = self.spec_job_run_id,
-            .modules = self.modules,
-            .program = self.program,
-            .proc_debug_names = self.proc_debug_names,
-            .interface_summaries = &self.interface_summaries,
-            .collect_counters = self.counters != null,
-            .collect_diagnostics = self.diagnostics != null,
-            .inline_expects = self.inline_expects,
-            .static_data_literals = self.static_data_literals,
-            .comptime_value_reads = self.comptime_value_reads,
-            .declared_comptime_root_functions = self.borrowed_comptime_root_functions orelse &self.declared_comptime_root_functions,
-            .hosted_catalog = self.hosted_catalog,
-            .current_loc = self.current_loc,
-            .current_region = self.current_region,
-            .timing_std_io = if (self.timing) |timing| timing.std_io else null,
-        };
-
-        while (self.pending_spec_jobs_head < self.pending_spec_jobs.items.len) {
-            const frontier = self.pending_spec_jobs.items[self.pending_spec_jobs_head];
-            self.requireNextSpecAcceptance(frontier.dispatch_index);
-            if (self.spec_store.recordStatus(frontier.spec) == .ready) {
-                self.pending_spec_jobs_head += 1;
-                try self.executePendingSpecJob(frontier);
-                continue;
+        var session = executor.begin();
+        defer session.end();
+        var submitted: usize = 0;
+        var accepted: usize = 0;
+        var running: usize = 0;
+        // Slots and snapshots outlive every accepted task even on OOM. Completed
+        // shards own their epochs independently of the reusable worker workspace.
+        defer {
+            while (running > 0) : (running -= 1) {
+                const completion = session.receive();
+                self.receiveSpecJobCompletion(contexts, completion, accepted, submitted);
             }
-
-            const frontier_view = self.moduleForDigest(names.procTemplateModuleDigest(frontier.template_ref));
-            const frontier_template = frontier_view.templates.get(frontier.template_ref.template);
-            if (frontier_template.target == .hosted) {
-                self.pending_spec_jobs_head += 1;
-                try self.executePendingSpecJob(frontier);
-                continue;
+            while (accepted < submitted) : (accepted += 1) {
+                const context = &contexts[accepted % capacity];
+                if (context.shard) |*shard| shard.deinit();
+                context.shard = null;
             }
-
-            var batch_len: usize = 0;
-            while (batch_len < batch_capacity and
+        }
+        if (self.timing) |timing| {
+            timing.parallel.task_waves +%= 1;
+            timing.parallel.peak_worker_lanes_available = @max(timing.parallel.peak_worker_lanes_available, @as(u64, @intCast(executor.worker_count)));
+        }
+        while (self.pending_spec_jobs_head < self.pending_spec_jobs.items.len or accepted < submitted) {
+            if (running < executor.worker_count and submitted - accepted < capacity and
                 self.pending_spec_jobs_head < self.pending_spec_jobs.items.len)
             {
                 const job = self.pending_spec_jobs.items[self.pending_spec_jobs_head];
-                const expected_dispatch = self.next_spec_accept_index + batch_len;
-                if (job.dispatch_index != expected_dispatch) {
-                    Common.compilerBug("Monotype specialization batch was not contiguous in dispatch order");
+                if (job.dispatch_index != self.next_spec_accept_index + submitted - accepted) {
+                    Common.compilerBug("Monotype streaming dispatch was not contiguous");
                 }
-                if (self.spec_store.recordStatus(job.spec) != .reserved) break;
                 const view = self.moduleForDigest(names.procTemplateModuleDigest(job.template_ref));
                 const template = view.templates.get(job.template_ref.template);
-                if (template.target == .hosted) break;
-
-                prepared[batch_len] = .{
-                    .job = job,
-                    .view = view,
-                    .method_scope = self.moduleForId(job.method_scope),
-                    .template = template,
-                };
-                self.pending_spec_jobs_head += 1;
-                batch_len += 1;
-            }
-            if (batch_len == 0) {
-                Common.compilerBug("parallel Monotype specialization drain made no progress");
-            }
-
-            for (0..batch_len) |index| {
-                contexts[index] = .{
-                    .inputs = &inputs,
-                    .prepared = prepared[index],
-                };
-                tasks[index] = .{
-                    .id = index,
-                    .context = &contexts[index],
-                    .run = runSpecJobTask,
-                };
-            }
-
-            var initialized_contexts = batch_len;
-            defer {
-                for (contexts[0..initialized_contexts]) |*context| {
-                    if (context.shard) |*shard| shard.deinit();
-                    context.shard = null;
-                }
-            }
-            if (self.timing) |timing| {
-                timing.parallel.specialization_tasks_submitted +%= @intCast(batch_len);
-                timing.parallel.task_waves +%= 1;
-                timing.parallel.peak_worker_lanes_available = @max(
-                    timing.parallel.peak_worker_lanes_available,
-                    @as(u64, @intCast(executor.worker_count)),
-                );
-            }
-            var run_error: ?Allocator.Error = null;
-            {
-                var wait_timing_scope = ProcedureTimingScope.begin(self.timing, .parallel_wait);
-                defer wait_timing_scope.end();
-                executor.run(tasks[0..batch_len], completions[0..batch_len]) catch |err| {
-                    run_error = err;
-                };
-            }
-            self.recordParallelWorkerWork(contexts[0..batch_len]);
-            self.recordRetainedSpecShardPeak(contexts[0..batch_len]);
-            if (run_error) |err| return err;
-
-            var commit_timing_scope = ParallelCoordinatorTimingScope.begin(self.timing);
-            defer commit_timing_scope.end();
-            for (completions[0..batch_len]) |completion| {
-                if (completion.id >= batch_len) {
-                    Common.compilerBug("post-check executor returned an unknown specialization task");
-                }
-                const context = &contexts[completion.id];
-                if (context.completed) {
-                    Common.compilerBug("post-check executor completed a specialization task more than once");
-                }
-                if (completion.value != @as(?*anyopaque, @ptrCast(context))) {
-                    Common.compilerBug("post-check executor returned the wrong specialization task context");
-                }
-                context.completed = true;
-                if (context.shard) |*shard| {
-                    if (@intFromEnum(shard.worker_id) != completion.worker_id) {
-                        Common.compilerBug("post-check executor changed specialization worker ownership");
-                    }
-                }
-            }
-            for (contexts[0..batch_len]) |*context| {
-                if (!context.completed) {
-                    Common.compilerBug("post-check executor omitted a specialization completion");
-                }
-                if (context.failed) return error.OutOfMemory;
-                switch (self.spec_store.recordStatus(context.prepared.job.spec)) {
-                    .ready => {
-                        // An earlier-dispatched shard may have eagerly committed
-                        // this same iterator producer. Accept the ready entry and
-                        // discard its independently lowered body. The worker's
-                        // cumulative type/name suffix must still be absorbed so
-                        // later epochs from that worker retain exact ids.
-                        if (context.shard) |*shard| {
-                            const commit_domain = shard.commit_domain;
-                            try commit_domain.absorb(&shard.store_epoch);
-                            shard.store_epoch_absorbed = true;
-                            var committed_types = CommittedGraphTypes.relocatedStore(
-                                &commit_domain.types,
-                                &commit_domain.name_store,
-                                &self.program.types,
-                                &self.program.names,
-                                commit_domain.committedTypeRelocation(self.program),
-                            );
-                            try self.commitInterfaceSummaries(shard.interface_summaries, &committed_types);
-                            shard.deinit();
-                            if (self.timing) |timing| timing.parallel.specialization_tasks_discarded_ready +%= 1;
-                        }
-                        context.shard = null;
-                        try self.executePendingSpecJob(context.prepared.job);
+                if (self.spec_store.recordStatus(job.spec) == .ready or template.target == .hosted) {
+                    // Coordinator-only entries still wait their exact acceptance
+                    // turn, but need not wait for any later worker task.
+                    if (accepted == submitted) {
+                        self.pending_spec_jobs_head += 1;
+                        try self.executePendingSpecJob(job);
+                        self.compactAcceptedPendingSpecJobs();
                         continue;
-                    },
-                    .reserved => {},
-                    .lowering => Common.invariant("parallel Monotype specialization was already lowering at commit"),
+                    }
+                } else {
+                    const slot = submitted % capacity;
+                    const context = &contexts[slot];
+                    const snapshot = try self.captureSpecJobInputs();
+                    context.* = .{
+                        .snapshot = snapshot,
+                        .inputs = .{
+                            .run_id = self.spec_job_run_id,
+                            .modules = self.modules,
+                            .snapshot = &context.snapshot,
+                            .proc_debug_names = self.proc_debug_names,
+                            .interface_summaries = &self.shared_summaries.?,
+                            .interface_summary_end = self.shared_summaries.?.count,
+                            .collect_counters = self.counters != null,
+                            .collect_diagnostics = self.diagnostics != null,
+                            .inline_expects = self.inline_expects,
+                            .static_data_literals = self.static_data_literals,
+                            .comptime_value_reads = self.comptime_value_reads,
+                            .declared_comptime_root_functions = self.borrowed_comptime_root_functions orelse &self.declared_comptime_root_functions,
+                            .hosted_catalog = self.hosted_catalog,
+                            .current_loc = self.current_loc,
+                            .current_region = self.current_region,
+                            .timing_std_io = if (self.timing) |timing| timing.std_io else null,
+                        },
+                        .prepared = .{ .job = job, .view = view, .method_scope = self.moduleForId(job.method_scope), .template = template },
+                    };
+                    try session.submit(.{ .id = slot, .context = context, .run = runSpecJobTask });
+                    self.pending_spec_jobs_head += 1;
+                    submitted += 1;
+                    running += 1;
+                    if (self.timing) |timing| timing.parallel.specialization_tasks_submitted +%= 1;
+                    continue;
                 }
-                self.countCoordinatorBodyDiagnostic("spec_jobs_executed");
-                self.spec_store.markLowering(context.prepared.job.spec);
-                const shard = &context.shard.?;
-                try self.commitCompletedSpecJobShard(shard);
-                if (self.timing) |timing| timing.parallel.specialization_tasks_committed +%= 1;
-                shard.deinit();
-                context.shard = null;
             }
-            initialized_contexts = 0;
-            self.compactAcceptedPendingSpecJobs();
+            // Accept one deterministic entry, then give free lanes the newly
+            // discovered work before accepting another buffered successor.
+            if (accepted < submitted and contexts[accepted % capacity].completed) {
+                const context = &contexts[accepted % capacity];
+                var commit_scope = ParallelCoordinatorTimingScope.begin(self.timing);
+                defer commit_scope.end();
+                try self.acceptCompletedSpecJob(context);
+                accepted += 1;
+                self.compactAcceptedPendingSpecJobs();
+                continue;
+            }
+            if (running == 0) Common.compilerBug("Monotype streaming drain made no progress");
+            const completion = blk: {
+                var wait_scope = ProcedureTimingScope.begin(self.timing, .parallel_wait);
+                defer wait_scope.end();
+                break :blk session.receive();
+            };
+            running -= 1;
+            self.receiveSpecJobCompletion(contexts, completion, accepted, submitted);
         }
         self.pending_spec_jobs.clearRetainingCapacity();
         self.pending_spec_jobs_head = 0;
         self.requirePendingSpecJobsDrained();
+    }
+
+    fn receiveSpecJobCompletion(self: *Builder, contexts: []SpecJobTaskContext, completion: base.post_check_task_executor.Completion, accepted: usize, submitted: usize) void {
+        var scope = ParallelCoordinatorTimingScope.begin(self.timing);
+        defer scope.end();
+        if (completion.id >= contexts.len) Common.compilerBug("post-check executor returned an unknown specialization task");
+        const offset = (completion.id + contexts.len - accepted % contexts.len) % contexts.len;
+        if (offset >= submitted - accepted) Common.compilerBug("post-check executor completed an inactive specialization slot");
+        const context = &contexts[completion.id];
+        if (context.completed or completion.value != @as(?*anyopaque, @ptrCast(context))) {
+            Common.compilerBug("post-check executor returned an invalid specialization completion");
+        }
+        context.completed = true;
+        if (context.shard) |*shard| {
+            if (@intFromEnum(shard.worker_id) != completion.worker_id) Common.compilerBug("post-check executor changed specialization worker ownership");
+        }
+        self.recordParallelWorkerWork(contexts[completion.id..][0..1]);
+        self.recordRetainedSpecShardPeak(contexts, accepted, submitted);
+    }
+
+    fn acceptCompletedSpecJob(self: *Builder, context: *SpecJobTaskContext) Allocator.Error!void {
+        if (context.failed) return error.OutOfMemory;
+        switch (self.spec_store.recordStatus(context.prepared.job.spec)) {
+            .ready => {
+                // A preceding shard may have eagerly committed an iterator
+                // producer's queued reservation. Accept the ready entry and
+                // discard its independently lowered body. The worker's
+                // cumulative type/name suffix must still be absorbed so
+                // later epochs from that worker retain exact ids.
+                if (context.shard) |*shard| {
+                    const commit_domain = shard.commit_domain;
+                    try commit_domain.absorb(&shard.store_epoch);
+                    shard.store_epoch_absorbed = true;
+                    var committed_types = CommittedGraphTypes.relocatedStore(
+                        &commit_domain.types,
+                        &commit_domain.name_store,
+                        &self.program.types,
+                        &self.program.names,
+                        commit_domain.committedTypeRelocation(self.program),
+                    );
+                    try self.commitInterfaceSummaries(shard.interface_summaries, &committed_types);
+                    shard.deinit();
+                    if (self.timing) |timing| timing.parallel.specialization_tasks_discarded_ready +%= 1;
+                }
+                context.shard = null;
+                try self.executePendingSpecJob(context.prepared.job);
+                return;
+            },
+            .reserved => {},
+            .lowering => Common.invariant("parallel Monotype specialization was already lowering at commit"),
+        }
+        self.countCoordinatorBodyDiagnostic("spec_jobs_executed");
+        self.spec_store.markLowering(context.prepared.job.spec);
+        const shard = &context.shard.?;
+        try self.commitCompletedSpecJobShard(shard);
+        if (self.timing) |timing| timing.parallel.specialization_tasks_committed +%= 1;
+        shard.deinit();
+        context.shard = null;
     }
 
     fn drainPendingSpecJobsSerial(self: *Builder) Allocator.Error!void {
@@ -5418,7 +5423,7 @@ const Builder = struct {
         if (executor_worker.id >= std.math.maxInt(u32)) {
             Common.compilerBug("post-check executor returned an invalid specialization worker id");
         }
-        const lane = Builder.ensureSpecJobLaneState(executor_worker, context.inputs) catch {
+        const lane = Builder.ensureSpecJobLaneState(executor_worker, &context.inputs) catch {
             context.failed = true;
             return context;
         };
@@ -5428,7 +5433,7 @@ const Builder = struct {
         if (context.inputs.timing_std_io != null) worker.tasks_started +%= 1;
         worker.counters = .{};
         worker.diagnostics = .{};
-        const builder = Builder.ensureSpecJobWorkerBuilder(worker, context.inputs) catch {
+        const builder = Builder.ensureSpecJobWorkerBuilder(worker, &context.inputs) catch {
             context.failed = true;
             return context;
         };
@@ -5632,11 +5637,12 @@ const Builder = struct {
         );
     }
 
-    fn recordRetainedSpecShardPeak(self: *Builder, contexts: []const SpecJobTaskContext) void {
+    fn recordRetainedSpecShardPeak(self: *Builder, contexts: []const SpecJobTaskContext, accepted: usize, submitted: usize) void {
         const timing = self.timing orelse return;
         var retained: u64 = 0;
-        for (contexts) |context| {
-            if (context.shard != null) retained += 1;
+        for (accepted..submitted) |index| {
+            const context = &contexts[index % contexts.len];
+            if (context.completed and context.shard != null) retained += 1;
         }
         timing.parallel.peak_specialization_shards_retained = @max(
             timing.parallel.peak_specialization_shards_retained,
@@ -5657,35 +5663,13 @@ const Builder = struct {
         self.pending_spec_jobs_head = 0;
     }
 
-    fn ensureSpecJobTaskBuffers(
-        self: *Builder,
-        batch_capacity: usize,
-    ) Allocator.Error!*SpecJobTaskBuffers {
+    fn ensureSpecJobTaskBuffers(self: *Builder, capacity: usize) Allocator.Error!*SpecJobTaskBuffers {
         const buffers = &self.spec_job_task_buffers;
-        if (buffers.prepared.len != 0) {
-            if (buffers.prepared.len != batch_capacity or
-                buffers.contexts.len != batch_capacity or
-                buffers.tasks.len != batch_capacity or
-                buffers.completions.len != batch_capacity)
-            {
-                Common.compilerBug("Monotype specialization task buffer capacity changed");
-            }
-            return buffers;
+        if (buffers.contexts.len == 0) {
+            buffers.contexts = try self.allocator.alloc(SpecJobTaskContext, capacity);
+        } else if (buffers.contexts.len != capacity) {
+            Common.compilerBug("Monotype specialization task buffer capacity changed");
         }
-        if (buffers.contexts.len != 0 or
-            buffers.tasks.len != 0 or
-            buffers.completions.len != 0)
-        {
-            Common.compilerBug("Monotype specialization task buffers were only partially initialized");
-        }
-
-        var initialized: SpecJobTaskBuffers = .{};
-        errdefer initialized.deinit(self.allocator);
-        initialized.prepared = try self.allocator.alloc(PreparedSpecJob, batch_capacity);
-        initialized.contexts = try self.allocator.alloc(SpecJobTaskContext, batch_capacity);
-        initialized.tasks = try self.allocator.alloc(base.post_check_task_executor.Task, batch_capacity);
-        initialized.completions = try self.allocator.alloc(base.post_check_task_executor.Completion, batch_capacity);
-        buffers.* = initialized;
         return buffers;
     }
 
@@ -5995,6 +5979,7 @@ const Builder = struct {
             .initial_request_arg_classes = try graph.snapshotFunctionArgumentClasses(root_node),
             .codec_contract = draft_codec_contract,
             .fn_id = reservation.fn_id,
+            .reserved_fn_ty = fn_template.mono_fn_ty,
             .signature_relation = signature_relation,
         };
         const root_owner = try body_draft.enterOwner(.{ .reserved_fn = reservation.fn_id });
@@ -12945,6 +12930,9 @@ const ActiveTemplateRoot = struct {
     initial_request_arg_classes: []const ArgumentClassSnapshot,
     codec_contract: ?DraftCodecContractContext,
     fn_id: Ast.FnId,
+    /// Immutable reservation signature supplied by the job. Workers never
+    /// read the coordinator's mutable function row for recursive references.
+    reserved_fn_ty: Type.TypeId,
     signature_relation: Ast.SignatureRelation,
 };
 
@@ -16699,6 +16687,32 @@ const InstantiatedFieldKind = struct {
     value: NodeId,
 };
 
+/// A checked root reserves graph identity only when construction re-enters it.
+const InstantiatingNode = union(enum) {
+    node: NodeId,
+    building: ?NodeId,
+
+    fn get(self: *InstantiatingNode, graph: *InstGraph) Allocator.Error!NodeId {
+        return switch (self.*) {
+            .node => |node| node,
+            .building => |reserved| reserved orelse blk: {
+                const node = try graph.newNode(.{ .unresolved = InstVariable.placeholder() });
+                self.* = .{ .building = node };
+                break :blk node;
+            },
+        };
+    }
+
+    fn finish(self: *InstantiatingNode, graph: *InstGraph, built: NodeId) Allocator.Error!NodeId {
+        const node = if (self.building) |placeholder| blk: {
+            try graph.unify(placeholder, built);
+            break :blk placeholder;
+        } else built;
+        self.* = .{ .node = node };
+        return node;
+    }
+};
+
 /// The complete mutable state for one checked-type instantiation scope. Body
 /// lowering state remains on `BodyContext`; operations that only need a fresh
 /// type instantiation can swap this small state without constructing another
@@ -16707,11 +16721,11 @@ const TypeInstantiationContext = struct {
     allocator: Allocator,
     id: InstantiationScopeId,
     module_bytes: [32]u8,
-    node_map: collections.DenseMap(checked.CheckedTypeId, NodeId),
+    node_map: collections.DenseMap(checked.CheckedTypeId, InstantiatingNode),
     field_kind_map: collections.DenseMap(checked.CheckedTypeId, InstantiatedFieldKind),
     /// Innermost-last stack of nominal-instance instantiation scopes; see
     /// instNominalBackingNode.
-    decl_scopes: std.ArrayList(*collections.DenseMap(checked.CheckedTypeId, NodeId)) = .empty,
+    decl_scopes: std.ArrayList(*collections.DenseMap(checked.CheckedTypeId, InstantiatingNode)) = .empty,
     field_kind_decl_scopes: std.ArrayList(*collections.DenseMap(checked.CheckedTypeId, InstantiatedFieldKind)) = .empty,
 
     fn init(
@@ -16723,7 +16737,7 @@ const TypeInstantiationContext = struct {
             .allocator = allocator,
             .id = id,
             .module_bytes = module_bytes,
-            .node_map = collections.DenseMap(checked.CheckedTypeId, NodeId).init(allocator),
+            .node_map = collections.DenseMap(checked.CheckedTypeId, InstantiatingNode).init(allocator),
             .field_kind_map = collections.DenseMap(checked.CheckedTypeId, InstantiatedFieldKind).init(allocator),
         };
     }
@@ -17315,7 +17329,15 @@ const BodyContext = struct {
     /// Crossing from a committed function signature into the active graph is
     /// centralized here so a private graph can import it at this boundary.
     fn programFnSourceTypeNode(self: *BodyContext, final_fn: Ast.FnId) Allocator.Error!NodeId {
-        const ty = try self.importProgramType(self.builder.program.fnSource(final_fn).mono_fn_ty);
+        const source_ty = if (self.builder.spec_job_parallel_callback) blk: {
+            const root = self.builder.active_template_root orelse
+                Common.invariant("worker final function reference had no reserved root");
+            if (root.fn_id != final_fn) {
+                Common.invariant("worker final function reference escaped its reserved root");
+            }
+            break :blk root.reserved_fn_ty;
+        } else self.builder.program.fnSource(final_fn).mono_fn_ty;
+        const ty = try self.importProgramType(source_ty);
         return self.activeNodeFromType(ty);
     }
 
@@ -19364,7 +19386,10 @@ const BodyContext = struct {
         if (copy_type_cells) {
             var node_iter = self.instantiation.node_map.iterator();
             while (node_iter.next()) |entry| {
-                try child.instantiation.node_map.put(entry.key_ptr.*, entry.value_ptr.*);
+                switch (entry.value_ptr.*) {
+                    .node => try child.instantiation.node_map.put(entry.key_ptr.*, entry.value_ptr.*),
+                    .building => continue,
+                }
             }
         }
 
@@ -20503,16 +20528,20 @@ const BodyContext = struct {
         defer timing_scope.end();
         self.builder.countBodyDiagnostic("checked_node_requests");
         const scoped_ty = self.scopedCheckedType(checked_ty);
-        if (self.scopedNode(scoped_ty)) |existing| {
+        if (try self.scopedNode(scoped_ty)) |existing| {
             self.builder.countBodyDiagnostic("checked_node_cache_hits");
             return existing;
         }
         self.builder.countBodyDiagnostic("checked_node_cache_misses");
-        const placeholder = try self.graph.newNode(.{ .unresolved = InstVariable.placeholder() });
-        try self.putScopedNode(scoped_ty, placeholder);
+        const map = self.scopedNodeMap(scoped_ty);
+        try map.put(scoped_ty, .{ .building = null });
+        errdefer {
+            const removed = map.remove(scoped_ty);
+            std.debug.assert(removed);
+        }
         const built = try self.instNodeContent(checked_ty);
-        try self.graph.unify(placeholder, built);
-        return placeholder;
+        // Nested instantiation can grow the dense map, so reacquire its entry.
+        return try map.getPtr(scoped_ty).?.finish(self.graph, built);
     }
 
     fn freshInstNode(self: *BodyContext, checked_ty: checked.CheckedTypeId) Allocator.Error!NodeId {
@@ -20537,21 +20566,21 @@ const BodyContext = struct {
     /// lookup: the same open checked type mentioned at two nesting levels of
     /// a recursive declaration expansion binds the formals differently, and
     /// an outer answer would collapse those distinct types into one node.
-    fn scopedNode(self: *BodyContext, checked_ty: checked.CheckedTypeId) ?NodeId {
+    fn scopedNodeMap(self: *BodyContext, checked_ty: checked.CheckedTypeId) *collections.DenseMap(checked.CheckedTypeId, InstantiatingNode) {
         const scopes = self.instantiation.decl_scopes.items;
         if (scopes.len == 0 or self.checkedTypeIsClosed(checked_ty)) {
-            return self.instantiation.node_map.get(checked_ty);
+            return &self.instantiation.node_map;
         }
-        return scopes[scopes.len - 1].get(checked_ty);
+        return scopes[scopes.len - 1];
+    }
+
+    fn scopedNode(self: *BodyContext, checked_ty: checked.CheckedTypeId) Allocator.Error!?NodeId {
+        const entry = self.scopedNodeMap(checked_ty).getPtr(checked_ty) orelse return null;
+        return try entry.get(self.graph);
     }
 
     fn putScopedNode(self: *BodyContext, checked_ty: checked.CheckedTypeId, node: NodeId) Allocator.Error!void {
-        const scopes = self.instantiation.decl_scopes.items;
-        if (scopes.len == 0 or self.checkedTypeIsClosed(checked_ty)) {
-            try self.instantiation.node_map.put(checked_ty, node);
-            return;
-        }
-        try scopes[scopes.len - 1].put(checked_ty, node);
+        try self.scopedNodeMap(checked_ty).put(checked_ty, .{ .node = node });
     }
 
     /// Field-kind memoization scopes exactly like `scopedNode`. A kind cell
@@ -20598,17 +20627,13 @@ const BodyContext = struct {
             ) }),
             .empty_record => try self.graph.newNode(.empty_record),
             .empty_tag_union => try self.graph.newNode(.empty_tag_union),
-            .alias => |alias| try self.graph.newNode(.{ .named = .{
-                .named_type = .{ .module = self.builder.declaredModuleForAlias(self.view, alias), .ty = checked_ty },
-                .def = try self.typeDef(self.view, alias.origin_module, alias.name, alias.source_decl),
-                .kind = .alias,
-                .builtin_owner = null,
-                .args = try self.instNodeSlice(alias.args),
-                .backing = .{
-                    .node = try self.instNode(alias.backing),
-                    .use = .inspectable,
-                },
-            } }),
+            .alias => |alias| blk: {
+                // Aliases are checked views, not value identities. Instantiate
+                // their parameter cells in this scope, then use the explicit
+                // backing cell, just as alias-transparent unification does.
+                for (alias.args) |arg| _ = try self.instNode(arg);
+                break :blk try self.instNode(alias.backing);
+            },
             .record_unbound => |fields| try self.graph.newNode(.{ .record = .{
                 .fields = try self.instFields(fields),
                 .ext = try self.graph.newNode(.{ .unresolved = InstVariable.row(.empty_record) }),
@@ -20879,12 +20904,12 @@ const BodyContext = struct {
         if (formal_args.len != args.len) {
             Common.invariant("checked nominal declaration arity differed from nominal type use");
         }
-        var scope = collections.DenseMap(checked.CheckedTypeId, NodeId).init(self.allocator);
+        var scope = collections.DenseMap(checked.CheckedTypeId, InstantiatingNode).init(self.allocator);
         defer scope.deinit();
         var field_kind_scope = collections.DenseMap(checked.CheckedTypeId, InstantiatedFieldKind).init(self.allocator);
         defer field_kind_scope.deinit();
         for (formal_args, args) |formal, arg| {
-            try scope.put(self.scopedCheckedType(formal), arg);
+            try scope.put(self.scopedCheckedType(formal), .{ .node = arg });
         }
         try self.instantiation.decl_scopes.append(self.allocator, &scope);
         defer _ = self.instantiation.decl_scopes.pop();
@@ -21229,7 +21254,24 @@ const BodyContext = struct {
                 try self.typeStore().typeEql(self.nameStore(), entry.provisional_ty, provisional_ty))
                 return .{ .ty = entry.summary_ty, .coordinator = false };
         };
-        const coordinator = self.builder.coordinator_interface_summaries orelse &self.builder.interface_summaries;
+        if (self.builder.coordinator_interface_summaries) |published| {
+            var candidates = published.get(address, self.builder.coordinator_interface_summary_end);
+            while (candidates.next()) |entry| {
+                if (!storedConstFnEvidenceEql(entry.evidence, evidence)) continue;
+                const request = try self.importProgramType(entry.provisional_ty);
+                if (!try self.typeStore().typeEql(self.nameStore(), request, provisional_ty)) continue;
+                const summary = try self.importProgramType(entry.summary_ty);
+                try local.insert(self.typeStore(), self.nameStore(), .{
+                    .address = address,
+                    .evidence = evidence,
+                    .provisional_ty = request,
+                    .summary_ty = summary,
+                });
+                return .{ .ty = summary, .coordinator = true };
+            }
+            return null;
+        }
+        const coordinator = &self.builder.interface_summaries;
         if (coordinator == local) return null;
         if (coordinator.buckets.get(address)) |candidates| for (candidates.items) |index| {
             const entry = coordinator.entries.items[index];
@@ -22730,7 +22772,7 @@ const BodyContext = struct {
                 // default. Openness inside a custom target is not evidence
                 // that the target itself should default to a builtin.
                 if (self.graph.content(expr_node) == .unresolved) {
-                    self.graph.materializeLiteralDefault(expr_node);
+                    try self.graph.materializeLiteralDefault(expr_node);
                 }
                 const expr_ty = try self.resolvedTypeViewForNode(expr_node);
                 return try self.lowerExprWithType(expr_id, expr_ty);
@@ -41448,7 +41490,7 @@ const BodyContext = struct {
                 .checked_error => continue,
             };
             const scoped_ty = self.scopedCheckedType(scheme_var);
-            if (self.scopedNode(scoped_ty)) |existing| {
+            if (try self.scopedNode(scoped_ty)) |existing| {
                 if (!self.graph.sameClass(existing, node)) try self.graph.unify(existing, node);
                 continue;
             }
@@ -46315,7 +46357,7 @@ const BodyContext = struct {
         node: NodeId,
     ) Allocator.Error!void {
         const scoped_ty = contract_ctx.scopedCheckedType(checked_ty);
-        if (contract_ctx.scopedNode(scoped_ty)) |existing| {
+        if (try contract_ctx.scopedNode(scoped_ty)) |existing| {
             try relateRequestComponent(self.graph, existing, node);
         } else {
             try contract_ctx.putScopedNode(scoped_ty, node);
@@ -60175,6 +60217,119 @@ test "checked string literal cache is shared only within one draft owner" {
     try std.testing.expectEqual(@as(usize, 3), draft.string_literals.items.len);
 }
 
+test "issue 11362: checked instantiation reserves only recursive node identities" {
+    const gpa = std.testing.allocator;
+    var name_store = names.NameStore.init(gpa);
+    defer name_store.deinit();
+    var type_store = Type.Store.init(gpa);
+    defer type_store.deinit();
+    const graph = try InstGraph.create(gpa, &type_store, &name_store);
+    defer graph.destroy();
+    var diagnostics: Diagnostics = .{};
+    graph.setDiagnostics(&diagnostics.graph);
+    var checked_types = checked.CheckedTypeStore{};
+    defer checked_types.deinit(gpa);
+    const variable = try checked_types.reserveSyntheticTypeRoot(gpa, .{}, true);
+    try checked_types.fillSyntheticTypeRoot(gpa, variable, .{ .flex = .{} });
+    const function = try checked_types.appendSyntheticFunctionRoot(gpa, .pure, &.{variable}, variable);
+    const alias = try checked_types.reserveSyntheticTypeRoot(gpa, .{ .bytes = @splat(2) }, true);
+    try checked_types.fillSyntheticTypeRoot(gpa, alias, .{ .alias = .{
+        .name = try name_store.internTypeName("Callback"),
+        .origin_module = try name_store.internModuleIdentity(&([_]u8{2} ** 32)),
+        .owner_module = .{},
+        .args = try gpa.dupe(checked.CheckedTypeId, &.{variable}),
+        .backing = function,
+    } });
+    const recursive = try checked_types.reserveSyntheticTypeRoot(gpa, .{ .bytes = @splat(1) }, false);
+    try checked_types.fillSyntheticTypeRoot(gpa, recursive, .{ .tuple = try gpa.dupe(checked.CheckedTypeId, &.{ recursive, recursive }) });
+
+    var builder: Builder = undefined;
+    builder.next_instantiation_scope = 0;
+    builder.timing = null;
+    builder.diagnostics = &diagnostics;
+    builder.active_spec_job_diagnostics = null;
+    var ctx: BodyContext = undefined;
+    ctx.allocator = gpa;
+    ctx.builder = &builder;
+    ctx.graph = graph;
+    ctx.view.key = .{ .bytes = @splat(0) };
+    ctx.view.types = checked_types.view();
+    ctx.instantiation = TypeInstantiationContext.init(gpa, builder.allocateInstantiationScope(), ctx.view.key.bytes);
+    defer ctx.instantiation.deinit();
+
+    const function_node = try ctx.instNode(function);
+    try std.testing.expectEqual(@as(u64, 2), diagnostics.graph.nodes_created);
+    try std.testing.expectEqual(@as(u64, 0), diagnostics.graph.unify_requests);
+    // Alias transparency belongs to instantiation, not to an incidental
+    // placeholder unification. Its value and callable identity are the backing.
+    try std.testing.expectEqual(function_node, try ctx.instNode(alias));
+    try std.testing.expectEqual(@as(u64, 2), diagnostics.graph.nodes_created);
+    try std.testing.expectEqual(@as(u64, 0), diagnostics.graph.unify_requests);
+    try std.testing.expectEqual(function_node, try ctx.instNode(function));
+    const fresh = try ctx.freshInstNode(function);
+    try std.testing.expect(!graph.sameClass(function_node, fresh));
+    try std.testing.expectEqual(function_node, try ctx.instNode(function));
+
+    // An inner open lookup must not reuse the outer declaration's binding.
+    var outer = collections.DenseMap(checked.CheckedTypeId, InstantiatingNode).init(gpa);
+    defer outer.deinit();
+    var inner = collections.DenseMap(checked.CheckedTypeId, InstantiatingNode).init(gpa);
+    defer inner.deinit();
+    try outer.put(variable, .{ .node = function_node });
+    try ctx.instantiation.decl_scopes.append(gpa, &outer);
+    try ctx.instantiation.decl_scopes.append(gpa, &inner);
+    const inner_node = try ctx.instNode(variable);
+    try std.testing.expect(inner_node != function_node);
+    _ = ctx.instantiation.decl_scopes.pop();
+    try std.testing.expectEqual(function_node, try ctx.instNode(variable));
+    _ = ctx.instantiation.decl_scopes.pop();
+
+    const before = diagnostics.graph.nodes_created;
+    const cycle = try ctx.instNode(recursive);
+    try std.testing.expectEqual(before + 2, diagnostics.graph.nodes_created);
+    try std.testing.expectEqual(@as(u64, 1), diagnostics.graph.unify_requests);
+    for (graph.content(cycle).tuple) |child| try std.testing.expect(graph.sameClass(cycle, child));
+    try std.testing.expectEqual(cycle, try ctx.instNode(recursive));
+    var entries = ctx.instantiation.node_map.valueIterator();
+    while (entries.next()) |entry| try std.testing.expect(entry.* == .node);
+}
+
+test "issue 11362: allocation failure removes active checked instantiation markers" {
+    const Scenario = struct {
+        fn run(allocator: Allocator) (Allocator.Error || error{TestUnexpectedResult})!void {
+            const gpa = std.testing.allocator;
+            var name_store = names.NameStore.init(gpa);
+            defer name_store.deinit();
+            var type_store = Type.Store.init(gpa);
+            defer type_store.deinit();
+            const graph = try InstGraph.create(allocator, &type_store, &name_store);
+            defer graph.destroy();
+            var checked_types = checked.CheckedTypeStore{};
+            defer checked_types.deinit(gpa);
+            const recursive = try checked_types.reserveSyntheticTypeRoot(gpa, .{ .bytes = @splat(1) }, false);
+            try checked_types.fillSyntheticTypeRoot(gpa, recursive, .{ .tuple = try gpa.dupe(checked.CheckedTypeId, &.{recursive}) });
+            var builder: Builder = undefined;
+            builder.next_instantiation_scope = 0;
+            builder.timing = null;
+            builder.diagnostics = null;
+            builder.active_spec_job_diagnostics = null;
+            var ctx: BodyContext = undefined;
+            ctx.allocator = allocator;
+            ctx.builder = &builder;
+            ctx.graph = graph;
+            ctx.view.key = .{ .bytes = @splat(0) };
+            ctx.view.types = checked_types.view();
+            ctx.instantiation = TypeInstantiationContext.init(allocator, builder.allocateInstantiationScope(), ctx.view.key.bytes);
+            defer ctx.instantiation.deinit();
+            _ = ctx.instNode(recursive) catch |err| {
+                try std.testing.expect(!ctx.instantiation.node_map.contains(recursive));
+                return err;
+            };
+        }
+    };
+    try std.testing.checkAllAllocationFailures(std.testing.allocator, Scenario.run, .{});
+}
+
 test "checked type instantiation scopes have exact isolated identities" {
     var diagnostics: Diagnostics = .{};
     var builder: Builder = undefined;
@@ -60191,9 +60346,9 @@ test "checked type instantiation scopes have exact isolated identities" {
     try std.testing.expect(first.id != second.id);
     const checked_ty: checked.CheckedTypeId = @enumFromInt(11);
     const node: NodeId = @enumFromInt(13);
-    try first.node_map.put(checked_ty, node);
-    try std.testing.expectEqual(@as(?NodeId, node), first.node_map.get(checked_ty));
-    try std.testing.expectEqual(@as(?NodeId, null), second.node_map.get(checked_ty));
+    try first.node_map.put(checked_ty, .{ .node = node });
+    try std.testing.expectEqual(node, first.node_map.get(checked_ty).?.node);
+    try std.testing.expectEqual(@as(?InstantiatingNode, null), second.node_map.get(checked_ty));
     try std.testing.expectEqual(@as(u64, 2), diagnostics.body.instantiation_scopes_created);
 }
 

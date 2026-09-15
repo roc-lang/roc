@@ -3,6 +3,7 @@ const std = @import("std");
 const builtin = @import("builtin");
 
 pub const SExprTree = @import("SExprTree.zig");
+pub const TextRankCache = @import("TextRankCache.zig");
 pub const Ident = @import("Ident.zig");
 pub const Region = @import("Region.zig");
 pub const StringLiteral = @import("StringLiteral.zig");
@@ -75,6 +76,7 @@ test {
     const ident = @import("Ident.zig");
     const module_path_mod = @import("module_path.zig");
     std.testing.refAllDecls(ident);
+    std.testing.refAllDecls(TextRankCache);
     std.testing.refAllDecls(TypeDigestHasher);
     std.testing.refAllDecls(module_path_mod);
     std.testing.refAllDecls(@import("roc_version.zig"));

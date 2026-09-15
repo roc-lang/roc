@@ -48,7 +48,7 @@ const max_subphases: usize = 25;
 // four entries; retain headroom so later explicit diagnostics are not silently
 // dropped merely because their recording order changes.
 const max_counter_groups: usize = 8;
-const max_counters_per_group: usize = 24;
+const max_counters_per_group: usize = 32;
 
 /// Wide enough for at least seven digits, their grouping underscores, and the ms suffix.
 /// This accommodates durations up to tens of minutes (5_999_000ms is just under 100 minutes).
@@ -286,9 +286,9 @@ pub const Reporter = struct {
 
         const group = &self.counter_groups[self.counter_group_count];
         group.* = .{ .name = name };
-        const len = @min(counters.len, group.counters.len);
-        @memcpy(group.counters[0..len], counters[0..len]);
-        group.len = @intCast(len);
+        std.debug.assert(counters.len <= group.counters.len);
+        @memcpy(group.counters[0..counters.len], counters);
+        group.len = @intCast(counters.len);
         self.counter_group_count += 1;
     }
 
@@ -819,6 +819,26 @@ fn collectStatic(buf: *std.Io.Writer.Allocating, timings_flag: bool) void {
         .{ .name = "Unification requests", .count = 5678 },
     });
     reporter.finish();
+}
+
+test "timing counter groups retain every Monotype graph diagnostic" {
+    var buf: std.Io.Writer.Allocating = .init(testing.allocator);
+    defer buf.deinit();
+    var reporter = Reporter.init(.{
+        .std_io = std.Io.Threaded.global_single_threaded.io(),
+        .writer = &buf.writer,
+        .op_label = "roc build",
+        .timings_flag = true,
+        .is_tty = false,
+    });
+    defer reporter.deinit();
+    reporter.start();
+    var counters = [_]Counter{.{ .name = "Graph diagnostic", .count = 0 }} ** 27;
+    counters[26] = .{ .name = "Generated-private guard returns", .count = 12345 };
+    reporter.recordCounters("Monotype type graph", &counters);
+    reporter.finish();
+    try testing.expect(std.mem.find(u8, buf.written(), "Generated-private guard returns") != null);
+    try testing.expect(std.mem.find(u8, buf.written(), "12345") != null);
 }
 
 test "static breakdown lists every phase with the timings flag" {

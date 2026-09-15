@@ -395,6 +395,8 @@ local_binding_roots: std.ArrayListUnmanaged(CIR.Pattern.Idx) = .empty,
 enclosing_func_name: ?Ident.Idx,
 /// Type writer for formatting types at snapshot time
 type_writer: types_mod.TypeWriter,
+/// Reuse traversal capacity across canonical digests of this mutable store.
+canonical_key_writer: canonical_type_keys.TypeWriter,
 /// --- Dependency-ordered driver state ---
 ///
 /// Type checking processes top-level defs as binding groups: the SCC
@@ -2620,6 +2622,7 @@ fn initAssumePrepared(
         .type_scheme_by_var = rehydrated_type_scheme_by_var,
         // Initialize with null import_mapping - caller should call fixupTypeWriter() after storing Check
         .type_writer = try types_mod.TypeWriter.initFromParts(gpa, types, cir.getIdentStore(), null),
+        .canonical_key_writer = canonical_type_keys.TypeWriter.init(gpa, types, cir),
         .binding_scheme_nodes = binding_scheme_nodes,
         .synthetic_binding_schemes = synthetic_binding_schemes,
         .value_lookup_tracking = .empty,
@@ -2704,6 +2707,7 @@ pub fn fixupTypeWriter(self: *Self) void {
 
 /// Deinit owned fields
 pub fn deinit(self: *Self) void {
+    self.canonical_key_writer.deinit();
     self.owner_envs_by_identity.deinit(self.gpa);
     self.regions.deinit(self.gpa);
     self.problems.deinit(self.gpa);
@@ -8623,29 +8627,14 @@ fn finalizePlatformRequirementSolutions(self: *Self) Allocator.Error!void {
             self.erroneous_value_patterns.contains(def.pattern);
 
         if (!checked_error) {
-            checked_error = try canonical_type_keys.containsError(
-                self.gpa,
-                self.types,
-                self.cir,
-                ModuleEnv.varFrom(def.expr),
-            );
+            checked_error = try self.canonical_key_writer.containsError(ModuleEnv.varFrom(def.expr));
         }
         if (!checked_error) {
-            checked_error = try canonical_type_keys.containsError(
-                self.gpa,
-                self.types,
-                self.cir,
-                solution.solved_var,
-            );
+            checked_error = try self.canonical_key_writer.containsError(solution.solved_var);
         }
         if (!checked_error) {
             for (solution.identity_vars) |identity_var| {
-                if (try canonical_type_keys.containsError(
-                    self.gpa,
-                    self.types,
-                    self.cir,
-                    identity_var,
-                )) {
+                if (try self.canonical_key_writer.containsError(identity_var)) {
                     checked_error = true;
                     break;
                 }
@@ -8933,8 +8922,8 @@ fn hoistedRootIsIntrinsicallyKept(
                 // type, failed checking has no value to evaluate. The binder
                 // is erroneous from here on so that every use of the name is
                 // poisoned like a use of an erroneous plain def.
-                const has_error = try canonical_type_keys.containsError(self.gpa, self.types, self.cir, type_var) or
-                    try canonical_type_keys.containsError(self.gpa, self.types, self.cir, ModuleEnv.varFrom(root.expr));
+                const has_error = try self.canonical_key_writer.containsError(type_var) or
+                    try self.canonical_key_writer.containsError(ModuleEnv.varFrom(root.expr));
                 if (has_error) {
                     if (root.pattern) |pattern| try self.erroneous_value_patterns.put(self.gpa, pattern, {});
                 }
@@ -12722,12 +12711,7 @@ pub fn platformRequirementSolutions(self: *const Self) []const requirement_solut
 /// canonical key.
 pub fn requiresTypesContainError(self: *Self) std.mem.Allocator.Error!bool {
     for (self.cir.requires_types.items.items) |required_type| {
-        if (try canonical_type_keys.containsError(
-            self.gpa,
-            self.types,
-            self.cir,
-            ModuleEnv.varFrom(required_type.type_anno),
-        )) {
+        if (try self.canonical_key_writer.containsError(ModuleEnv.varFrom(required_type.type_anno))) {
             return true;
         }
     }
@@ -13592,12 +13576,7 @@ fn ensurePredeclaredIdentityCorrespondence(
     if (entry.found_existing) return;
     errdefer _ = self.predeclared_identity_correspondence_by_def.remove(def_idx);
 
-    const identity_vars = try canonical_type_keys.identityVarsFromVar(
-        self.gpa,
-        self.types,
-        self.cir,
-        scheme_var,
-    );
+    const identity_vars = try self.canonical_key_writer.identityVarsFromVar(scheme_var);
     defer self.gpa.free(identity_vars);
     const pairs_start: u32 = @intCast(self.predeclared_annotation_pairs.items.len);
     for (identity_vars) |identity_var| {
@@ -13625,12 +13604,7 @@ fn recordPredeclaredBodyAnnotationPairs(
     const correspondence = self.predeclared_identity_correspondence_by_def.getPtr(def_idx) orelse return;
     if (correspondence.body_recorded) return;
     const range = correspondence.pairs;
-    const body_identity_vars = try canonical_type_keys.identityVarsFromVar(
-        self.gpa,
-        self.types,
-        self.cir,
-        ModuleEnv.varFrom(annotation_idx),
-    );
+    const body_identity_vars = try self.canonical_key_writer.identityVarsFromVar(ModuleEnv.varFrom(annotation_idx));
     defer self.gpa.free(body_identity_vars);
     if (body_identity_vars.len != range.len) return;
     for (body_identity_vars, range.mutableSlice(self.predeclared_annotation_pairs.items)) |body_var, *pair| {
@@ -27734,10 +27708,7 @@ fn generalizedCallableShape(
     const fn_root = self.types.resolveVar(fn_var).var_;
     if (cache.get(fn_root)) |shape| return shape;
 
-    const shape = (try canonical_type_keys.fromVarWithAnchoredIdentities(
-        self.gpa,
-        self.types,
-        self.cir,
+    const shape = (try self.canonical_key_writer.fromVarWithAnchoredIdentities(
         fn_root,
         anchors,
     )).bytes;
@@ -27776,12 +27747,7 @@ fn deduplicateGeneralizedDispatchRequirements(
     scheme_var: Var,
     env: *Env,
 ) Allocator.Error!void {
-    const identity_vars = try canonical_type_keys.identityVarsFromVarIgnoringConstraints(
-        self.gpa,
-        self.types,
-        self.cir,
-        scheme_var,
-    );
+    const identity_vars = try self.canonical_key_writer.identityVarsFromVarIgnoringConstraints(scheme_var);
     defer self.gpa.free(identity_vars);
 
     var anchors = std.AutoHashMap(Var, void).init(self.gpa);
@@ -27834,10 +27800,7 @@ fn deduplicateGeneralizedDispatchRequirements(
                 continue;
             }
             if (try self.unifyEquivalentGeneralizedCallables(entry.value_ptr.*, constraint.fn_var, env)) {
-                try canonical_type_keys.appendIdentityVarsFromVar(
-                    self.gpa,
-                    self.types,
-                    self.cir,
+                try self.canonical_key_writer.appendIdentityVarsFromVar(
                     entry.value_ptr.*,
                     &pending_receivers,
                 );
@@ -30265,8 +30228,8 @@ fn dispatchStateTypeKey(
     dispatcher_var: Var,
     constraint_fn_var: Var,
 ) Allocator.Error![32]u8 {
-    const receiver_key = try canonical_type_keys.fromVarErrSensitive(self.gpa, self.types, self.cir, dispatcher_var);
-    const callable_key = try canonical_type_keys.fromVarErrSensitive(self.gpa, self.types, self.cir, constraint_fn_var);
+    const receiver_key = try self.canonical_key_writer.fromVarErrSensitive(dispatcher_var);
+    const callable_key = try self.canonical_key_writer.fromVarErrSensitive(constraint_fn_var);
     var hasher = TypeDigestHasher.init();
     hasher.update(&receiver_key.bytes);
     hasher.update(&callable_key.bytes);
