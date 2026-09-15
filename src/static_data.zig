@@ -1094,12 +1094,11 @@ const StaticDataBuilder = struct {
         if (self.lowered.frozen_static_data) |frozen| {
             const cloned = try cloneStaticData(self.allocator, frozen.exports);
             errdefer deinitStaticData(self.allocator, cloned);
-            // LIR value slots are referenced from the independently emitted
-            // code object. Their symbols have global linker binding even when
-            // the value is private to the Roc program's host ABI.
-            for (cloned) |*item| if (item.value_id != null) {
-                item.is_global = true;
-            };
+            // The independently emitted code object references LIR value
+            // slots by symbol, and the nodes their images point at through
+            // relocated constants. Every symbol has global linker binding
+            // even when the value is private to the Roc program's host ABI.
+            for (cloned) |*item| item.is_global = true;
             try self.nodes.appendSlice(self.allocator, cloned);
             self.allocator.free(cloned);
         }

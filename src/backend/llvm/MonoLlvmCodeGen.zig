@@ -329,6 +329,18 @@ pub const MonoLlvmCodeGen = struct {
     /// In-process consumers supply a relocated image that outlives execution.
     /// Object emission leaves this null and uses linker-visible data symbols.
     static_data_addresses: ?[]const usize = null,
+    /// The frozen exports the separately emitted readonly object defines,
+    /// with the export row of each internal value slot. A slot whose image
+    /// is expressible as a link-time constant is also defined in this
+    /// module as an internal constant: LLVM folds loads from a constant it
+    /// can see, so a compile-time value reaches the optimizer as the
+    /// immediates and relocatable addresses it is made of rather than as an
+    /// opaque copy from a linker symbol.
+    static_data_exports: []const lir.Program.StaticDataExport = &.{},
+    static_data_export_rows: std.AutoHashMap(u32, u32),
+    /// External declarations of readonly-object symbols, by name, so a
+    /// symbol referenced from several constants is declared once.
+    static_data_symbols: std.StringHashMap(LlvmBuilder.Constant),
     /// Distinguishes callable exports from independent modules in one JIT library.
     static_symbol_prefix: []const u8 = "",
     runtime_error_func: ?LlvmBuilder.Function.Index = null,
@@ -536,6 +548,8 @@ pub const MonoLlvmCodeGen = struct {
             .static_bytes = std.StringHashMap(LlvmBuilder.Value).init(allocator),
             .static_refcounted_backings = std.AutoHashMap(u32, LlvmBuilder.Value).init(allocator),
             .static_data_globals = std.AutoHashMap(u32, LlvmBuilder.Value).init(allocator),
+            .static_data_export_rows = std.AutoHashMap(u32, u32).init(allocator),
+            .static_data_symbols = std.StringHashMap(LlvmBuilder.Constant).init(allocator),
             .rc_helpers = std.AutoHashMap(u64, RcHelperEntry).init(allocator),
             .boxy_capture_drop_helpers = std.AutoHashMap(u64, BoxyCaptureDropHelper).init(allocator),
             .boxy_dict_thunks = std.AutoHashMap(u32, LlvmBuilder.Function.Index).init(allocator),
@@ -604,6 +618,9 @@ pub const MonoLlvmCodeGen = struct {
         self.static_bytes.deinit();
         self.static_refcounted_backings.deinit();
         self.static_data_globals.deinit();
+        self.static_data_export_rows.deinit();
+        self.clearStaticDataSymbols();
+        self.static_data_symbols.deinit();
         self.rc_helpers.deinit();
         self.boxy_capture_drop_helpers.deinit();
         self.boxy_dict_thunks.deinit();
@@ -624,6 +641,7 @@ pub const MonoLlvmCodeGen = struct {
         self.clearStaticBytes();
         self.static_refcounted_backings.clearRetainingCapacity();
         self.static_data_globals.clearRetainingCapacity();
+        self.clearStaticDataSymbols();
         self.rc_helpers.clearRetainingCapacity();
         self.boxy_capture_drop_helpers.clearRetainingCapacity();
         self.boxy_dict_thunks.clearRetainingCapacity();
@@ -645,6 +663,12 @@ pub const MonoLlvmCodeGen = struct {
         self.debug_inline_callsites.clearRetainingCapacity();
         self.debug_types.clearRetainingCapacity();
         self.boxy_runtime_used = false;
+    }
+
+    fn clearStaticDataSymbols(self: *MonoLlvmCodeGen) void {
+        var it = self.static_data_symbols.keyIterator();
+        while (it.next()) |key| self.allocator.free(key.*);
+        self.static_data_symbols.clearRetainingCapacity();
     }
 
     fn clearStaticBytes(self: *MonoLlvmCodeGen) void {
@@ -8346,6 +8370,17 @@ pub const MonoLlvmCodeGen = struct {
         try self.copyBytes(out.ptr, try self.staticDataGlobal(id, out.size), out.size, out.alignment);
     }
 
+    /// Records the readonly object's exports so relocation-free value slots
+    /// can be defined as constants in this module.
+    pub fn setStaticDataExports(self: *MonoLlvmCodeGen, exports: []const lir.Program.StaticDataExport) Error!void {
+        self.static_data_exports = exports;
+        self.static_data_export_rows.clearRetainingCapacity();
+        for (exports, 0..) |data_export, row| {
+            const value_id = data_export.value_id orelse continue;
+            try self.static_data_export_rows.put(@intFromEnum(value_id), @intCast(row));
+        }
+    }
+
     fn staticDataGlobal(self: *MonoLlvmCodeGen, id: lir.LIR.StaticDataId, size: u32) Error!LlvmBuilder.Value {
         const raw_id: u32 = @intFromEnum(id);
         if (self.static_data_addresses) |addresses| {
@@ -8357,16 +8392,92 @@ pub const MonoLlvmCodeGen = struct {
         if (self.static_data_globals.get(raw_id)) |value| return value;
 
         const builder = self.builder orelse return error.CompilationFailed;
+        if (self.static_data_export_rows.get(raw_id)) |row| {
+            const data_export = self.static_data_exports[row];
+            if (data_export.symbol_offset == 0 and data_export.bytes.len >= size) {
+                if (try self.frozenExportConstant(data_export)) |initializer| {
+                    const name = builder.strtabStringFmt(".roc.static_data.{d}", .{raw_id}) catch return error.OutOfMemory;
+                    const variable = builder.addVariable(name, initializer.typeOf(builder), .default) catch return error.OutOfMemory;
+                    variable.ptrConst(builder).global.setLinkage(.internal, builder);
+                    variable.setMutability(.constant, builder);
+                    variable.setInitializer(initializer, builder) catch return error.OutOfMemory;
+                    variable.setAlignment(LlvmBuilder.Alignment.fromByteUnits(data_export.alignment), builder);
+                    const value = variable.toValue(builder);
+                    try self.static_data_globals.put(raw_id, value);
+                    return value;
+                }
+            }
+        }
+
         const symbol_name = try lir.Program.staticDataSymbolName(self.allocator, id);
         defer self.allocator.free(symbol_name);
-
-        const arr_ty = builder.arrayType(@max(size, 1), .i8) catch return error.OutOfMemory;
-        const variable = builder.addVariable(builder.strtabString(symbol_name) catch return error.OutOfMemory, arr_ty, .default) catch return error.OutOfMemory;
-        variable.ptrConst(builder).global.setLinkage(.external, builder);
-
-        const value = variable.toValue(builder);
+        const value = (try self.staticDataSymbol(symbol_name)).toValue();
         try self.static_data_globals.put(raw_id, value);
         return value;
+    }
+
+    /// The image of a frozen export as a constant: its bytes, with each
+    /// address relocation replaced by the target symbol's address plus the
+    /// addend. Null when a relocation has no constant expression here: a
+    /// function pointer, or a pointer field the target's word alignment
+    /// cannot place in a packed struct.
+    fn frozenExportConstant(self: *MonoLlvmCodeGen, data_export: lir.Program.StaticDataExport) Error!?LlvmBuilder.Constant {
+        const builder = self.builder orelse return error.CompilationFailed;
+        if (data_export.relocations.len == 0) {
+            return builder.stringConst(builder.string(data_export.bytes) catch return error.OutOfMemory) catch return error.OutOfMemory;
+        }
+        const word: u64 = self.targetWordSize();
+        for (data_export.relocations) |relocation| {
+            if (relocation.kind != .address or relocation.rc_helper != null) return null;
+            if (relocation.offset % word != 0 or relocation.offset + word > data_export.bytes.len) return null;
+        }
+        const sorted = self.allocator.dupe(lir.Program.StaticDataRelocation, data_export.relocations) catch return error.OutOfMemory;
+        defer self.allocator.free(sorted);
+        std.mem.sort(lir.Program.StaticDataRelocation, sorted, {}, struct {
+            fn lessThan(_: void, a: lir.Program.StaticDataRelocation, b: lir.Program.StaticDataRelocation) bool {
+                return a.offset < b.offset;
+            }
+        }.lessThan);
+
+        var field_types = std.ArrayList(LlvmBuilder.Type).empty;
+        defer field_types.deinit(self.allocator);
+        var field_values = std.ArrayList(LlvmBuilder.Constant).empty;
+        defer field_values.deinit(self.allocator);
+        var cursor: u64 = 0;
+        for (sorted) |relocation| {
+            if (relocation.offset < cursor) return null;
+            if (relocation.offset > cursor) {
+                const chunk = builder.stringConst(builder.string(data_export.bytes[cursor..relocation.offset]) catch return error.OutOfMemory) catch return error.OutOfMemory;
+                try field_types.append(self.allocator, chunk.typeOf(builder));
+                try field_values.append(self.allocator, chunk);
+            }
+            const target = try self.staticDataSymbol(relocation.target_symbol_name);
+            const addend = builder.intConst(.i64, relocation.addend) catch return error.OutOfMemory;
+            const address = builder.gepConst(.normal, .i8, target, null, &.{addend}) catch return error.OutOfMemory;
+            try field_types.append(self.allocator, try self.ptrType());
+            try field_values.append(self.allocator, address);
+            cursor = relocation.offset + word;
+        }
+        if (cursor < data_export.bytes.len) {
+            const tail = builder.stringConst(builder.string(data_export.bytes[cursor..]) catch return error.OutOfMemory) catch return error.OutOfMemory;
+            try field_types.append(self.allocator, tail.typeOf(builder));
+            try field_values.append(self.allocator, tail);
+        }
+        const struct_ty = builder.structType(.@"packed", field_types.items) catch return error.OutOfMemory;
+        return builder.structConst(struct_ty, field_values.items) catch return error.OutOfMemory;
+    }
+
+    /// Declares a readonly-object symbol once and returns its address.
+    fn staticDataSymbol(self: *MonoLlvmCodeGen, symbol_name: []const u8) Error!LlvmBuilder.Constant {
+        if (self.static_data_symbols.get(symbol_name)) |existing| return existing;
+        const builder = self.builder orelse return error.CompilationFailed;
+        const key = self.allocator.dupe(u8, symbol_name) catch return error.OutOfMemory;
+        errdefer self.allocator.free(key);
+        const variable = builder.addVariable(builder.strtabString(symbol_name) catch return error.OutOfMemory, .i8, .default) catch return error.OutOfMemory;
+        variable.ptrConst(builder).global.setLinkage(.external, builder);
+        const address = variable.toConst(builder);
+        try self.static_data_symbols.put(key, address);
+        return address;
     }
 
     fn emitBytesLiteral(self: *MonoLlvmCodeGen, out: LlvmBuilder.Value, literal: lir.LIR.ListLiteral) Error!void {
@@ -13448,6 +13559,53 @@ test "issue 11132: installed and propagated deferred captures are counted and cl
     try codegen.installDeferredStrCapture(second, capture);
     try std.testing.expectEqual(@as(usize, 1), codegen.deferred_str_capture_count);
     codegen.clearDeferredStrCaptures();
+}
+
+test "static-data slots with constant images are internal constants and function-pointer slots stay external" {
+    const allocator = std.testing.allocator;
+    var store = lir.LirStore.init(allocator);
+    defer store.deinit();
+    var layouts = try layout.Store.init(allocator, .u64);
+    defer layouts.deinit();
+    const target = try std.zig.system.resolveTargetQuery(std.testing.io, .{ .cpu_arch = .aarch64, .os_tag = .macos });
+    var codegen = MonoLlvmCodeGen.initForLinkedObject(allocator, &store, &.{}, &.{}, &.{}, target);
+    defer codegen.deinit();
+    codegen.layout_store = &layouts;
+    const address = [_]lir.Program.StaticDataRelocation{.{ .offset = 8, .target_symbol_name = "roc__ctfe_1_1", .addend = 16 }};
+    const function = [_]lir.Program.StaticDataRelocation{.{ .offset = 0, .target_symbol_name = "roc__proc_1", .kind = .function_pointer }};
+    const exports = [_]lir.Program.StaticDataExport{
+        .{ .symbol_name = "roc__static_const_value_0", .value_id = @enumFromInt(0), .bytes = &.{ 1, 0, 0, 0, 0, 0, 0, 0 }, .alignment = 8 },
+        .{ .symbol_name = "roc__static_const_value_1", .value_id = @enumFromInt(1), .bytes = &([_]u8{0} ** 24), .alignment = 8, .relocations = &address },
+        .{ .symbol_name = "roc__static_const_value_2", .value_id = @enumFromInt(2), .bytes = &([_]u8{0} ** 8), .alignment = 8, .relocations = &function },
+    };
+    try codegen.setStaticDataExports(&exports);
+    var builder = try codegen.createBuilder("static_data_constants");
+    defer builder.deinit();
+    codegen.builder = &builder;
+    defer codegen.builder = null;
+
+    _ = try codegen.staticDataGlobal(@enumFromInt(0), 8);
+    const folded = builder.variables.items[builder.variables.items.len - 1];
+    try std.testing.expectEqual(.internal, folded.global.ptrConst(&builder).linkage);
+    try std.testing.expectEqual(.constant, folded.mutability);
+    try std.testing.expect(folded.init != .no_init);
+    try std.testing.expectEqual(LlvmBuilder.Alignment.fromByteUnits(8), folded.alignment);
+
+    _ = try codegen.staticDataGlobal(@enumFromInt(1), 24);
+    const relocated = builder.variables.items[builder.variables.items.len - 1];
+    try std.testing.expectEqual(.internal, relocated.global.ptrConst(&builder).linkage);
+    try std.testing.expectEqual(.constant, relocated.mutability);
+    try std.testing.expect(relocated.init != .no_init);
+    // The relocation target was declared just before the constant, as an
+    // external symbol.
+    const declared = builder.variables.items[builder.variables.items.len - 2];
+    try std.testing.expectEqual(.external, declared.global.ptrConst(&builder).linkage);
+    try std.testing.expect(codegen.static_data_symbols.contains("roc__ctfe_1_1"));
+
+    _ = try codegen.staticDataGlobal(@enumFromInt(2), 8);
+    const callable = builder.variables.items[builder.variables.items.len - 1];
+    try std.testing.expectEqual(.external, callable.global.ptrConst(&builder).linkage);
+    try std.testing.expect(callable.init == .no_init);
 }
 
 test "frozen callable procedures and explicit drop helpers are DLL exports on Windows" {
