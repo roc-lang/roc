@@ -60413,6 +60413,102 @@ test "function context identity excludes draft local allocation ids" {
     try std.testing.expect(!std.mem.eql(u8, &original_key.bytes, &different_binder_key.bytes));
 }
 
+test "issue 11362: checked instantiation allocates placeholders only for recursion" {
+    const gpa = std.testing.allocator;
+    var name_store = names.NameStore.init(gpa);
+    defer name_store.deinit();
+    var type_store = Type.Store.init(gpa);
+    defer type_store.deinit();
+    const graph = try InstGraph.create(gpa, &type_store, &name_store);
+    defer graph.destroy();
+    var diagnostics: @import("solve.zig").GraphDiagnostics = .{};
+    graph.setDiagnostics(&diagnostics);
+    var checked_types = checked.CheckedTypeStore{};
+    defer checked_types.deinit(gpa);
+    const leaf = try checked_types.appendSyntheticPayloadRoot(gpa, &name_store, .empty_record);
+    const pair = try checked_types.appendSyntheticPayloadRoot(gpa, &name_store, .{ .tuple = try gpa.dupe(checked.CheckedTypeId, &.{ leaf, leaf }) });
+    const alias = try checked_types.appendSyntheticPayloadRoot(gpa, &name_store, .{ .alias = .{
+        .name = try name_store.internTypeName("Pair"),
+        .origin_module = try name_store.internModuleIdentity(&([_]u8{0x62} ** 32)),
+        .owner_module = .{},
+        .backing = pair,
+    } });
+    const recursive = try checked_types.reserveSyntheticTypeRoot(gpa, .{}, false);
+    try checked_types.fillSyntheticTypeRoot(gpa, recursive, .{ .tuple = try gpa.dupe(checked.CheckedTypeId, &.{ recursive, recursive }) });
+
+    var builder: Builder = undefined;
+    builder.next_instantiation_scope = 0;
+    builder.timing = null;
+    builder.diagnostics = null;
+    builder.active_spec_job_diagnostics = null;
+    var ctx: BodyContext = undefined;
+    ctx.allocator = gpa;
+    ctx.builder = &builder;
+    ctx.graph = graph;
+    ctx.view.key = .{ .bytes = @splat(0) };
+    ctx.view.types = checked_types.view();
+    ctx.instantiation = TypeInstantiationContext.init(gpa, builder.allocateInstantiationScope(), ctx.view.key.bytes);
+    defer ctx.instantiation.deinit();
+
+    const pair_node = try ctx.instNode(pair);
+    try std.testing.expectEqual(@as(u64, 2), diagnostics.nodes_created);
+    try std.testing.expectEqual(@as(u64, 0), diagnostics.unify_requests);
+    try std.testing.expectEqual(pair_node, try ctx.instNode(pair));
+    try std.testing.expectEqual(pair_node, try ctx.instNode(alias));
+    try std.testing.expectEqual(@as(u64, 2), diagnostics.nodes_created);
+    try std.testing.expectEqual(@as(u64, 0), diagnostics.unify_requests);
+    const recursive_node = try ctx.instNode(recursive);
+    try std.testing.expectEqual(@as(u64, 4), diagnostics.nodes_created);
+    try std.testing.expectEqual(@as(u64, 1), diagnostics.unify_requests);
+    for (graph.content(recursive_node).tuple) |child| try std.testing.expect(graph.sameClass(child, recursive_node));
+    try std.testing.expectEqual(recursive_node, try ctx.instNode(recursive));
+    // Evidence remains attached to permanent nodes even when a placeholder
+    // redirects. Fresh contexts allocate independent cells in this same graph.
+    graph.registerConstructorEvidenceRequest(recursive_node);
+    try std.testing.expect(graph.requestPropagatesConstructorEvidence(recursive_node));
+    const fresh = try ctx.freshInstNode(pair);
+    try std.testing.expect(!graph.sameClass(pair_node, fresh));
+    try std.testing.expectEqual(pair_node, try ctx.instNode(pair));
+    try std.testing.expectEqual(@as(u64, 6), diagnostics.nodes_created);
+}
+
+test "issue 11362: allocation failure removes checked instantiation markers" {
+    const gpa = std.testing.allocator;
+    var checked_types = checked.CheckedTypeStore{};
+    defer checked_types.deinit(gpa);
+    const recursive = try checked_types.reserveSyntheticTypeRoot(gpa, .{}, false);
+    try checked_types.fillSyntheticTypeRoot(gpa, recursive, .{ .tuple = try gpa.dupe(checked.CheckedTypeId, &.{ recursive, recursive }) });
+    const Helper = struct {
+        fn run(allocator: Allocator, view: checked.CheckedTypeStoreView, root: checked.CheckedTypeId) Allocator.Error!void {
+            var name_store = names.NameStore.init(allocator);
+            defer name_store.deinit();
+            var type_store = Type.Store.init(allocator);
+            defer type_store.deinit();
+            const graph = try InstGraph.create(allocator, &type_store, &name_store);
+            defer graph.destroy();
+            var builder: Builder = undefined;
+            builder.next_instantiation_scope = 0;
+            builder.timing = null;
+            builder.diagnostics = null;
+            builder.active_spec_job_diagnostics = null;
+            var ctx: BodyContext = undefined;
+            ctx.allocator = allocator;
+            ctx.builder = &builder;
+            ctx.graph = graph;
+            ctx.view.key = .{ .bytes = @splat(0) };
+            ctx.view.types = view;
+            ctx.instantiation = TypeInstantiationContext.init(allocator, builder.allocateInstantiationScope(), ctx.view.key.bytes);
+            defer ctx.instantiation.deinit();
+            _ = ctx.instNode(root) catch |err| {
+                std.debug.assert(ctx.instantiation.node_map.get(root) == null);
+                return err;
+            };
+            std.debug.assert(ctx.instantiation.node_map.get(root).? == .node);
+        }
+    };
+    try std.testing.checkAllAllocationFailures(std.testing.allocator, Helper.run, .{ checked_types.view(), recursive });
+}
+
 fn testLazyCheckedInstantiation(allocator: Allocator, recursive: bool) (Allocator.Error || error{ TestUnexpectedResult, TestExpectedEqual })!void {
     const gpa = std.testing.allocator;
     var checked_types = checked.CheckedTypeStore{};
