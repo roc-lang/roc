@@ -16393,6 +16393,26 @@ test "post-check diagnostics preserve labeled Monotype counts" {
     try std.testing.expectEqual(@as(u64, 405), parallel[10].count);
 }
 
+test "timings display every Monotype graph counter" {
+    var buf: std.Io.Writer.Allocating = .init(std.testing.allocator);
+    defer buf.deinit();
+    var reporter = progress.Reporter.init(.{
+        .std_io = std.testing.io,
+        .writer = &buf.writer,
+        .op_label = "roc build",
+        .timings_flag = true,
+        .is_tty = false,
+    });
+    defer reporter.deinit();
+    const counters = monotypeGraphCounters(.{});
+    reporter.start();
+    reporter.recordCounters("Monotype type graph", &counters);
+    reporter.finish();
+    for (counters) |counter| {
+        try std.testing.expect(std.mem.find(u8, buf.written(), counter.name) != null);
+    }
+}
+
 fn finishFrontEndPhase(reporter: *progress.Reporter, timing: anytype) void {
     reporter.endWithBreakdown(&frontEndBreakdown(timing));
     const compile_time = timing.compile_time_evaluation;
