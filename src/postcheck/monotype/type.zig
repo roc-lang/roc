@@ -549,6 +549,13 @@ pub const Store = struct {
         return self.types.unsafeRawItemsForView()[@intFromEnum(ty)];
     }
 
+    /// Number of types this store holds. A structural walk that follows stored
+    /// links bounds itself by this count, which no chain of distinct types can
+    /// exceed.
+    pub fn typeCount(self: *const Store) usize {
+        return self.types.len();
+    }
+
     /// Whether an immutable Monotype contains the public iterator interface at
     /// any structural depth. Closed-call lowering uses this directly so an
     /// ordinary return type never has to be imported into a live graph merely

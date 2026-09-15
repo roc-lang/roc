@@ -1581,15 +1581,28 @@ fn graphTagByName(
 }
 
 /// Graph-side counterpart of `Builder.hostedTryNamedOrNull`: cross transparent
-/// alias layers before matching the capability's def, so an alias-wrapped `Try`
-/// is recognized on both sides of the relation.
+/// alias layers before matching the capability's def.
+///
+/// This crossing is symmetry with the Monotype side rather than a path a
+/// fixture reaches. `test/fx-open/hosted_alias_try_question.roc` declares its
+/// hosted result through an alias and still arrives here as the bare `Try`
+/// nominal: instantiating the checked root into the graph resolves the alias,
+/// while `lowerType` keeps it. It is kept so the two sides cannot answer
+/// differently if that ever stops holding.
 fn graphHostedTryInfoOrNull(
     graph: *InstGraph,
     capability: HostedTryAdapterCapability,
     node: NodeId,
 ) ?GraphHostedTryInfo {
     var current = node;
-    const named = while (true) {
+    // Bounded by the graph's node count, the bound `InstGraph`'s own chain
+    // walks use. A one-step self-check would still spin on a backing cycle
+    // through two or more nodes, and a hang is the worst outcome for a guard
+    // whose only job is termination. `compilerBug`, not `invariant`: an
+    // `unreachable` outside Debug turns the hang into undefined behavior
+    // instead of a diagnostic.
+    var remaining = graph.nodes.items.len;
+    const named = while (remaining > 0) : (remaining -= 1) {
         const probe = switch (graph.content(current)) {
             .named => |probe| probe,
             .redirect, .unresolved, .primitive, .list, .box, .tuple, .func, .tag_union, .record, .empty_tag_union, .empty_record, .erased, .zst => return null,
@@ -1597,9 +1610,8 @@ fn graphHostedTryInfoOrNull(
         if (sameTypeDef(probe.def, capability.def)) break probe;
         if (probe.kind != .alias) return null;
         const backing = probe.backing orelse return null;
-        if (graph.sameClass(backing.node, current)) Common.invariant("transparent alias backing did not advance");
         current = backing.node;
-    };
+    } else Common.compilerBug("transparent alias backing chain was cyclic");
     if (capability.ok_type_arg_index >= named.args.len or
         capability.err_type_arg_index >= named.args.len)
     {
@@ -5809,6 +5821,13 @@ const Builder = struct {
                 Common.compilerBug("closed Try result row had no checker-recorded Try capability")
         else
             null;
+        // The same guard the pre-step applies before reading declared labels
+        // out of the lowered type, and for the same reason: a row
+        // `lowerCheckedTypeVariable` sealed to the empty tag union lists fewer
+        // labels than the checker published, which would make an ordinary
+        // request look wider than the declared row and report a lowering
+        // collapse as a widening that never happened.
+        try self.requireLoweredDeclaredRowLabels(view, declared_row, try_capability, declared_mono_fn_ty);
         if (try self.resultRowWideningAdapterSourceType(
             try_capability,
             declared_mono_fn_ty,
@@ -8992,14 +9011,22 @@ const Builder = struct {
             Common.invariant("final function-template lowering was called during an active body draft");
         }
         // Root and wrapper paths request the binding's own published type; no
-        // request relation ran, so no widening was recorded. `.checked_generated`
-        // accepts an adapter's own `fn_def`, whose `mono_fn_ty` IS the wide
-        // type, so the claim is checked rather than stated.
-        try self.requireRequestDidNotWidenResultRow(
-            template_ref,
-            fn_template.mono_fn_ty,
-            "function-template call target widened the template's closed published result row",
-        );
+        // request relation ran, so no widening was recorded — checked here
+        // rather than stated.
+        //
+        // `.checked_generated` is excluded because its `template_ref` is not
+        // the template this type specializes: the widening adapter stores the
+        // ADAPTED template there beside its deliberately WIDE `mono_fn_ty`
+        // (the check would be guaranteed to fire), and a generated step lambda
+        // stores merely the template it was generated inside (whose arity need
+        // not even match). Neither states the claim this checks.
+        if (fn_template.fn_def != .checked_generated) {
+            try self.requireRequestDidNotWidenResultRow(
+                template_ref,
+                fn_template.mono_fn_ty,
+                "function-template call target widened the template's closed published result row",
+            );
+        }
         const def = try self.lowerTemplateWithMono(
             template_ref,
             method_scope,
@@ -9100,12 +9127,16 @@ const Builder = struct {
                 // was already reserved at this exact type; the identity hit
                 // above carries its recorded answer. If the identity was not
                 // registered locally this lowers the body at the requested
-                // type, so the claim is checked rather than stated.
-                try self.requireRequestDidNotWidenResultRow(
-                    template_ref,
-                    fn_template.mono_fn_ty,
-                    "restored constant function request widened the template's closed published result row",
-                );
+                // type, so the claim is checked rather than stated —
+                // `.checked_generated` excluded for the reason given at the
+                // call-target site above.
+                if (fn_template.fn_def != .checked_generated) {
+                    try self.requireRequestDidNotWidenResultRow(
+                        template_ref,
+                        fn_template.mono_fn_ty,
+                        "restored constant function request widened the template's closed published result row",
+                    );
+                }
                 const def = try self.lowerTemplateWithMono(
                     template_ref,
                     fn_view,
@@ -13050,7 +13081,11 @@ const Builder = struct {
         try_ty: Type.TypeId,
     ) ?Type.NamedContent {
         var current = try_ty;
-        while (true) {
+        // Bounded like the graph-side walk above, and for the same reason: a
+        // backing cycle through two or more types hangs the compiler, which no
+        // `unreachable` would report in a release build.
+        var remaining = self.program.types.typeCount();
+        while (remaining > 0) : (remaining -= 1) {
             const named = switch (self.program.types.get(current)) {
                 .named => |named| named,
                 .primitive, .record, .tuple, .tag_union, .list, .box, .func, .erased, .zst => return null,
@@ -13058,9 +13093,9 @@ const Builder = struct {
             if (sameTypeDef(named.def, capability.def)) return named;
             if (named.kind != .alias) return null;
             const backing = named.backing orelse return null;
-            if (backing.ty == current) Common.invariant("transparent alias backing did not advance");
             current = backing.ty;
         }
+        Common.compilerBug("transparent alias backing chain was cyclic");
     }
 
     fn hostedTryInfoOrNull(self: *Builder, capability: HostedTryAdapterCapability, try_ty: Type.TypeId) Allocator.Error!?HostedTryInfo {
@@ -60126,6 +60161,95 @@ test "hosted Try info accepts alias-wrapped nominal arguments over unwrapped bac
     const source_err_tags = builder.tagUnionTags(source_try.err_ty);
     try std.testing.expectEqual(@as(usize, 1), source_err_tags.len);
     try std.testing.expectEqual(host_err, GuardedList.at(source_err_tags, 0).name);
+}
+
+test "hosted Try graph walk crosses transparent alias layers to the Try nominal" {
+    // `graphHostedTryInfoOrNull` is the relation side of the same recognition
+    // `Builder.hostedTryNamedOrNull` performs while lowering, and the two must
+    // agree. No end-to-end fixture reaches the crossing — instantiating a
+    // checked root resolves alias layers, so even a hosted result declared as
+    // `IoResult(Str)` arrives as the bare `Try` nominal
+    // (test/fx-open/hosted_alias_try_question.roc) — so the alias chain is
+    // built here directly, including a two-layer chain no single-step guard
+    // would walk.
+    const gpa = std.testing.allocator;
+
+    var type_store = Type.Store.init(gpa);
+    defer type_store.deinit();
+
+    var name_store = names.NameStore.init(gpa);
+    defer name_store.deinit();
+
+    const graph = try InstGraph.create(gpa, &type_store, &name_store);
+    defer graph.destroy();
+
+    const module_identity = try name_store.internModuleIdentity(&([_]u8{0xC4} ** 32));
+    const try_def: Type.TypeDef = .{ .module = module_identity, .type_name = try name_store.internTypeName("Try") };
+    const alias_def: Type.TypeDef = .{ .module = module_identity, .type_name = try name_store.internTypeName("IoResult") };
+    const outer_alias_def: Type.TypeDef = .{ .module = module_identity, .type_name = try name_store.internTypeName("OuterResult") };
+    const impostor_def: Type.TypeDef = .{ .module = module_identity, .type_name = try name_store.internTypeName("UserResult") };
+    const try_named: Type.NamedType = .{ .module = .{}, .ty = @enumFromInt(1) };
+    const alias_named: Type.NamedType = .{ .module = .{}, .ty = @enumFromInt(2) };
+    const outer_alias_named: Type.NamedType = .{ .module = .{}, .ty = @enumFromInt(3) };
+
+    const ok_node = try graph.newNode(.{ .primitive = .str });
+    const err_node = try graph.newNode(.empty_tag_union);
+    const try_node = try graph.newNode(.{ .named = .{
+        .named_type = try_named,
+        .def = try_def,
+        .kind = .nominal,
+        .builtin_owner = null,
+        .args = try graph.arena().dupe(NodeId, &.{ ok_node, err_node }),
+        .backing = .{ .node = try graph.newNode(.empty_tag_union), .use = .inspectable },
+    } });
+    const alias_node = try graph.newNode(.{ .named = .{
+        .named_type = alias_named,
+        .def = alias_def,
+        .kind = .alias,
+        .builtin_owner = null,
+        .args = try graph.arena().alloc(NodeId, 0),
+        .backing = .{ .node = try_node, .use = .inspectable },
+    } });
+    const outer_alias_node = try graph.newNode(.{ .named = .{
+        .named_type = outer_alias_named,
+        .def = outer_alias_def,
+        .kind = .alias,
+        .builtin_owner = null,
+        .args = try graph.arena().alloc(NodeId, 0),
+        .backing = .{ .node = alias_node, .use = .inspectable },
+    } });
+
+    const capability = HostedTryAdapterCapability{
+        .def = try_def,
+        .ok_tag = try name_store.internTagLabel("Ok"),
+        .err_tag = try name_store.internTagLabel("Err"),
+        .ok_type_arg_index = 0,
+        .err_type_arg_index = try_error_type_arg_index,
+    };
+
+    const direct = graphHostedTryInfoOrNull(graph, capability, try_node) orelse return error.TestExpectedEqual;
+    try std.testing.expectEqual(ok_node, direct.ok);
+    try std.testing.expectEqual(err_node, direct.err);
+
+    const one_layer = graphHostedTryInfoOrNull(graph, capability, alias_node) orelse return error.TestExpectedEqual;
+    try std.testing.expectEqual(ok_node, one_layer.ok);
+    try std.testing.expectEqual(err_node, one_layer.err);
+
+    const two_layers = graphHostedTryInfoOrNull(graph, capability, outer_alias_node) orelse return error.TestExpectedEqual;
+    try std.testing.expectEqual(ok_node, two_layers.ok);
+    try std.testing.expectEqual(err_node, two_layers.err);
+
+    // A nominal that is not the capability's `Try` is not crossed into: only a
+    // transparent alias layer is followed.
+    const impostor_node = try graph.newNode(.{ .named = .{
+        .named_type = alias_named,
+        .def = impostor_def,
+        .kind = .nominal,
+        .builtin_owner = null,
+        .args = try graph.arena().dupe(NodeId, &.{ ok_node, err_node }),
+        .backing = .{ .node = try_node, .use = .inspectable },
+    } });
+    try std.testing.expect(graphHostedTryInfoOrNull(graph, capability, impostor_node) == null);
 }
 
 test "hosted extern boundary admits only the declared host ABI type" {
