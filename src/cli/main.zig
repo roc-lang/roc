@@ -10528,9 +10528,11 @@ fn rocBuildNative(ctx: *CliCtx, args: cli_args.BuildArgs) CliMainError!BuildResu
             return error.NativeCompilationFailed;
         };
     }
-    // `ROC_OBJECT_CACHE` turns on the object cache under the cache root:
-    // this build reads the packs of every module in view and writes its own.
-    const object_cache_enabled = !args.no_cache and std.c.getenv("ROC_OBJECT_CACHE") != null and loaded_packs == null;
+    // The object cache lives under the cache root and follows `--no-cache`
+    // like the rest of the cache: this build reads the packs of every module
+    // in view and writes its own. A directory of packs given for a test
+    // (`ROC_DEV_PACK_HITS`) replaces the store.
+    const object_cache_enabled = !args.no_cache and loaded_packs == null;
     var object_store: ?pack_store.Store = null;
     defer if (object_store) |*store| store.deinit();
     if (object_cache_enabled) {

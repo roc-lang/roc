@@ -636,8 +636,8 @@ them.
       build from a directory of packs; the roc-parser app takes 16 hits and
       splices 9 procedures, links, and behaves identically. Gate: a CLI
       subcommands case builds cold, builds warm from the cold packs, requires
-      hits, and compares the two programs' behavior. The store: `ROC_OBJECT_CACHE=1`
-      (opt-in until its cost is measured) files packs under the cache root
+      hits, and compares the two programs' behavior. The store is on for every
+      `roc build --opt=dev` that does not pass `--no-cache` and files packs under the cache root
       as `objects/<target>-<opt>/<local|pkg>/<placement>/<artifact key>.rpk`,
       where the placement digests what survives an edit (a URL package's URL
       or a local package's root directory, plus the module's path), so an
@@ -672,12 +672,13 @@ them.
       stdout, and stderr must match its cold build's, and the test host
       reports every allocation the program leaves unfreed on stderr, so a
       wrong ownership signature shows as a leak report or a crash. The store
-      stays opt-in: on the real apps measured, dev rebuild time is Monotype
+      is always on: on the real apps measured, dev rebuild time is Monotype
       specialization of open requests, compile-time evaluation, and
       SpecConstr over large procedures, which no closed entry covers, so the
       cache gains about 15% on task-board rebuilds and nothing elsewhere
-      while costing nothing measurable; default-on waits for either
-      lambda-bearing entries (tier 2) or optimized package objects, which
+      while costing nothing measurable. The store is on for every dev build
+      that does not pass `--no-cache`; the wins beyond that come from
+      lambda-bearing entries (tier 2) and optimized package objects, which
       are what make dev builds faster or their code faster.
    4. Debug info for cached procedures (DWARF line programs stored with the
       artifact) and the `roc run` host-executable path.
@@ -712,7 +713,7 @@ x86_64 Linux, `roc build --opt=dev`, measured with a ReleaseFast compiler
 (`zig build roc -Doptimize=ReleaseFast`), on `main` (db0282b787) and on this
 branch with `main` merged. Each configuration uses a fresh cache root;
 `base` is the checked artifact cache alone, `cache` adds
-`ROC_OBJECT_CACHE=1`. "Edited" appends a comment to the app's root module (a
+the object store. "Edited" appends a comment to the app's root module (a
 source the cache root has never seen). Times are wall-clock seconds of one
 run.
 
