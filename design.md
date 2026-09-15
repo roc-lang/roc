@@ -7977,6 +7977,12 @@ body-local reference, including join identities. This keeps procedure and store
 identity independent of worker count and completion order without concurrent
 mutation of coordinator state.
 
+Before a Solved-to-LIR worker batch starts, direct-call preparation interns
+both ordinary procedures and the return-reuse variants permitted by the
+caller's explicit destination shape. Lowering selects the call ABI from its
+actual destination demand; preparing a variant does not make it reachable.
+Workers consume those prepared identities without interning new procedures.
+
 A typed boundary is worker-admissible exactly when its child is
 worker-admissible. Its source and destination types and layouts belong to the
 frozen coordinator prefix, and the ordinary typed assignment it emits belongs
