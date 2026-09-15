@@ -1415,6 +1415,7 @@ pub fn deinitCachedModule(self: *Self) void {
     // that needs to be freed. The interner.deinit checks supports_inserts internally
     // and will only free if memory was actually allocated (not for pure cached data).
     self.common.idents.interner.deinit(self.gpa);
+    self.common.idents.deinitTextRanks();
 
     // Same pattern for the module identity table: frozen (buffer-aliased) data is
     // a no-op to deinit; runtime-grown data is freed.
