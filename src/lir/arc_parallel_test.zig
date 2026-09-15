@@ -12,7 +12,7 @@ const Fixture = struct {
     store: core.LirStore,
     layouts: layout.Store,
 
-    fn init(count: usize) !Fixture {
+    fn init(count: usize) std.mem.Allocator.Error!Fixture {
         var self: Fixture = .{
             .store = core.LirStore.init(testing.allocator),
             .layouts = try layout.Store.init(testing.allocator, .u64),
@@ -39,7 +39,7 @@ const Fixture = struct {
         self.layouts.deinit();
     }
 
-    fn run(self: *Fixture, runner: ?*const executor.Executor, metrics: *arc.ParallelMetrics) !void {
+    fn run(self: *Fixture, runner: ?*const executor.Executor, metrics: *arc.ParallelMetrics) arc.ResourceError!void {
         var roots: [40]core.LIR.LirProcSpecId = undefined;
         const count = self.store.procSpecCount();
         for (roots[0..count], 0..) |*root, index| root.* = @enumFromInt(index);
@@ -52,7 +52,7 @@ const Fixture = struct {
         });
     }
 
-    fn dump(self: *Fixture, writer: *std.Io.Writer) !void {
+    fn dump(self: *Fixture, writer: *std.Io.Writer) debug_print.Error!void {
         for (0..self.store.procSpecCount()) |index| {
             try debug_print.writeProc(testing.allocator, &self.store, &self.layouts, @enumFromInt(index), writer);
         }
@@ -130,7 +130,7 @@ const ReverseExecutor = struct {
         };
     }
 
-    fn expectDrained(self: *ReverseExecutor) !void {
+    fn expectDrained(self: *ReverseExecutor) error{ TestExpectedEqual, TestUnexpectedResult }!void {
         try testing.expectEqual(self.sessions, self.ended);
         try testing.expectEqual(self.accepted, self.received);
         try testing.expectEqual(@as(usize, 0), self.pending_len);
@@ -140,7 +140,7 @@ const ReverseExecutor = struct {
     }
 };
 
-fn expectSame(expected: *Fixture, actual: *Fixture) !void {
+fn expectSame(expected: *Fixture, actual: *Fixture) (debug_print.Error || error{TestExpectedEqual})!void {
     var left = std.Io.Writer.Allocating.init(testing.allocator);
     defer left.deinit();
     var right = std.Io.Writer.Allocating.init(testing.allocator);
@@ -269,7 +269,7 @@ const OutcomeFixture = struct {
     fixture: Fixture,
     input: core.LIR.LocalId,
 
-    fn init() !OutcomeFixture {
+    fn init() std.mem.Allocator.Error!OutcomeFixture {
         var f = try Fixture.init(0);
         errdefer f.deinit();
         const list = try f.layouts.insertList(.str);
@@ -365,7 +365,7 @@ const OutcomeFixture = struct {
         return .{ .fixture = f, .input = input };
     }
 
-    fn switchStmt(s: *core.LirStore, cond: core.LIR.LocalId, yes: core.LIR.CFStmtId, no: core.LIR.CFStmtId) !core.LIR.CFStmtId {
+    fn switchStmt(s: *core.LirStore, cond: core.LIR.LocalId, yes: core.LIR.CFStmtId, no: core.LIR.CFStmtId) std.mem.Allocator.Error!core.LIR.CFStmtId {
         return s.addCFStmt(.{ .switch_stmt = .{
             .cond = cond,
             .branches = try s.addCFSwitchBranches(&.{.{ .value = 1, .body = yes }}),
@@ -374,7 +374,7 @@ const OutcomeFixture = struct {
         } });
     }
 
-    fn run(self: *OutcomeFixture, runner: ?*const executor.Executor, metrics: *arc.ParallelMetrics) !void {
+    fn run(self: *OutcomeFixture, runner: ?*const executor.Executor, metrics: *arc.ParallelMetrics) arc.ResourceError!void {
         try arc.insert(&self.fixture.store, &self.fixture.layouts, .{
             .specialize = true,
             .post_check_executor = runner,
@@ -382,7 +382,7 @@ const OutcomeFixture = struct {
         });
     }
 
-    fn expectOutcome(self: *OutcomeFixture) !void {
+    fn expectOutcome(self: *OutcomeFixture) error{ TestExpectedEqual, TestUnexpectedResult, UnexpectedFixtureStatement }!void {
         const s = &self.fixture.store;
         try testing.expectEqual(@as(usize, 3), s.procSpecCount());
         for ([_]u32{ 0, 2 }) |proc| {
@@ -411,7 +411,7 @@ const OutcomeFixture = struct {
         }
     }
 
-    fn linearNext(stmt: core.LIR.CFStmt) !core.LIR.CFStmtId {
+    fn linearNext(stmt: core.LIR.CFStmt) error{UnexpectedFixtureStatement}!core.LIR.CFStmtId {
         inline for (.{ "assign_literal", "assign_list", "assign_ref", "incref", "decref", "free" }) |tag| {
             if (stmt == @field(std.meta.Tag(core.LIR.CFStmt), tag)) return @field(stmt, tag).next;
         }
