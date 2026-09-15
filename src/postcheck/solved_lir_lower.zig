@@ -1937,15 +1937,10 @@ const Lowerer = struct {
             Common.invariant("Solved-LIR committed a Roc procedure without a body");
         proc.frame_locals = appended.frame_locals;
         proc.stack_probe = shard.stack_probe;
-        proc.tail_calls = if (shard.tail_calls) |sites| .{
-            .head = appended.relocation.stmt(shard.prefix, sites.head),
-            // This is the builder's first identity above the emitted joins.
-            // With no joins, its fresh per-procedure identity stays zero.
-            .loop = if (@intFromEnum(sites.loop) == 0)
-                sites.loop
-            else
-                @enumFromInt(appended.relocation.join_point_id_base + @intFromEnum(sites.loop)),
-        } else null;
+        proc.tail_calls = if (shard.tail_calls) |sites|
+            appended.relocation.tailCalls(shard.prefix, sites)
+        else
+            null;
         self.next_join_point = next_join_point;
         try self.folded_map_matches.appendSlice(self.allocator, shard.folded_map_matches);
         self.fn_written.items[@intFromEnum(shard.fn_id)] = true;

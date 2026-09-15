@@ -317,6 +317,11 @@ pub const BodyRelocation = struct {
     pub fn joinPointSpan(self: BodyRelocation, prefix: BodyPrefix, span: JoinPointSpan) JoinPointSpan {
         return relocateBodyValue(JoinPointSpan, span, prefix, self);
     }
+
+    /// Procedure metadata must use the same identity domain as its body.
+    pub fn tailCalls(self: BodyRelocation, prefix: BodyPrefix, sites: lir_defs.TailCalls) lir_defs.TailCalls {
+        return relocateBodyValue(lir_defs.TailCalls, sites, prefix, self);
+    }
 };
 
 /// Coordinator identities assigned while appending one body shard.
@@ -2388,6 +2393,14 @@ test "body shard relocates erased-call layouts into the program table" {
 }
 
 test "body shard relocates producer tail-call links" {
+    try testTailCallRelocation(null);
+}
+
+test "body shard relocates nonzero producer tail-call loop identity" {
+    try testTailCallRelocation(6);
+}
+
+fn testTailCallRelocation(existing_join: ?u32) !void {
     const allocator = std.testing.allocator;
     var coordinator = Self.init(allocator);
     defer coordinator.deinit();
@@ -2422,12 +2435,28 @@ test "body shard relocates producer tail-call links" {
         .branches = try worker.addCFSwitchBranches(&.{.{ .value = 0, .body = first }}),
         .default_branch = second,
     } });
+    const root = if (existing_join) |id|
+        try worker.addCFStmt(.{ .join = .{
+            .id = @enumFromInt(id),
+            .params = .empty(),
+            .body = body,
+            .remainder = ret,
+        } })
+    else
+        body;
     const frame = try worker.addLocalSpan(&.{ arg, result });
     const sites = (try builder.finish(&worker)).?;
     worker.tail_call_builder = null;
+    const loop_id = if (existing_join) |id| id + 1 else 0;
+    try std.testing.expectEqual(loop_id, @intFromEnum(sites.loop));
     _ = try coordinator.addCFStmt(.{ .ret = .{ .value = arg } });
-    const appended = try coordinator.appendBodyShard(try worker.captureBodyShard(prefix), body, frame, null);
-    const head = appended.relocation.stmt(prefix, sites.head);
+    const appended = try coordinator.appendBodyShard(try worker.captureBodyShard(prefix), root, frame, 100);
+    const relocated_sites = appended.relocation.tailCalls(prefix, sites);
+    const head = relocated_sites.head;
+    try std.testing.expectEqual(100 + loop_id, @intFromEnum(relocated_sites.loop));
+    if (existing_join) |id| {
+        try std.testing.expectEqual(100 + id, @intFromEnum(coordinator.getCFStmt(appended.root.?).join.id));
+    }
     try std.testing.expectEqual(appended.relocation.stmt(prefix, second), head);
     const link = coordinator.getCFStmt(head).assign_call.tail_call.?.next.?;
     try std.testing.expectEqual(appended.relocation.stmt(prefix, first), link);
