@@ -350,6 +350,9 @@ const FnEntry = struct {
     ret: Type.TypeId,
     capture_arg_ty: ?Type.TypeId,
     proc: ?LIR.LirProcSpecId,
+    /// The plain specialization this erased-ABI specialization forwards to
+    /// when the object cache holds the procedure; see `finalizeFnProc`.
+    forwards_to: ?Type.FnId = null,
 };
 
 const LoweredFnBody = struct {
@@ -561,6 +564,9 @@ const Lowerer = struct {
     /// Source-level names recorded by body workers for coordinator interning.
     worker_local_names: std.ArrayList(PendingLocalName),
     source_symbols: std.AutoHashMap(Common.Symbol, Lifted.FnId),
+    /// Type digests shared by every procedure identity rendering; see
+    /// `proc_identity.Memo`.
+    identity_memo: proc_identity.Memo,
     /// Lowered capture record of every capture span seen so far. A capture
     /// record depends only on its captures, so one record serves every
     /// function type that carries the same span.
@@ -803,6 +809,7 @@ const Lowerer = struct {
             .folded_map_matches = .empty,
             .worker_local_names = .empty,
             .source_symbols = std.AutoHashMap(Common.Symbol, Lifted.FnId).init(allocator),
+            .identity_memo = proc_identity.Memo.init(allocator),
             .capture_types = std.AutoHashMap(CaptureSpanKey, Type.TypeId).init(allocator),
             .captures = collections.DenseMap(Lifted.LocalId, CaptureBinding).init(allocator),
             .recursive_value_locals = recursive_value_locals,
@@ -948,6 +955,7 @@ const Lowerer = struct {
         self.captures.deinit();
         self.capture_types.deinit();
         self.source_symbols.deinit();
+        self.identity_memo.deinit();
         self.fn_reach_queue.deinit(self.allocator);
         self.fn_reachable.deinit(self.allocator);
         self.fn_written.deinit(self.allocator);
@@ -1005,6 +1013,7 @@ const Lowerer = struct {
         self.captures.deinit();
         self.capture_types.deinit();
         self.source_symbols.deinit();
+        self.identity_memo.deinit();
         self.fn_reach_queue.deinit(self.allocator);
         self.fn_reachable.deinit(self.allocator);
         self.fn_written.deinit(self.allocator);
@@ -1987,6 +1996,19 @@ const Lowerer = struct {
             },
         }
 
+        if (entry.forwards_to) |plain_fn| {
+            lowered_body = try self.lowerCachedProcForwarder(proc_id, fn_id, entry.ret, plain_fn, proc_args[0..lifted_args.len]);
+            if (!self.worker_callback) {
+                const proc_ptr = self.result.store.getProcSpecPtr(proc_id);
+                proc_ptr.body = lowered_body.?.body;
+                proc_ptr.frame_locals = lowered_body.?.frame_locals;
+                proc_ptr.stack_probe = lowered_body.?.stack_probe;
+                proc_ptr.tail_calls = lowered_body.?.tail_calls;
+                self.fn_written.items[@intFromEnum(fn_id)] = true;
+            }
+            return lowered_body;
+        }
+
         switch (source_fn.body) {
             .roc => |body_expr| {
                 const tail_calls = &self.tail_call_scratch;
@@ -2084,6 +2106,56 @@ const Lowerer = struct {
             self.fn_written.items[@intFromEnum(fn_id)] = true;
         }
         return lowered_body;
+    }
+
+    /// Body of an erased-ABI specialization of a procedure the object cache
+    /// holds: the cached procedure takes the plain arguments, so this body
+    /// forwards them and returns the result. The erased capture and result
+    /// arguments are unused, exactly as in a capture-free closure's own
+    /// erased entry.
+    fn lowerCachedProcForwarder(
+        self: *Lowerer,
+        proc_id: LIR.LirProcSpecId,
+        fn_id: Type.FnId,
+        ret_ty: Type.TypeId,
+        plain_fn: Type.FnId,
+        plain_args: []const LIR.LocalId,
+    ) Common.LowerError!LoweredFnBody {
+        const saved_ret_ty = self.current_ret_ty;
+        const saved_proc_locals = self.current_proc_locals;
+        const saved_current_fn = self.current_fn;
+        const saved_current_proc = self.current_proc;
+        var proc_locals: ProcLocalSet = .{};
+        defer proc_locals.deinit(self.allocator);
+        self.current_proc_locals = &proc_locals;
+        self.current_ret_ty = ret_ty;
+        self.current_fn = fn_id;
+        self.current_proc = proc_id;
+        defer {
+            self.current_ret_ty = saved_ret_ty;
+            self.current_proc_locals = saved_proc_locals;
+            self.current_fn = saved_current_fn;
+            self.current_proc = saved_current_proc;
+        }
+        try self.noteLocalSpan(self.result.store.getProcSpec(proc_id).args);
+        const ret_layout = self.result.store.getProcSpec(proc_id).ret_layout;
+        const ret_local = try self.addLocalForLayout(ret_layout);
+        const ret_stmt = try self.result.store.addCFStmt(.{ .ret = .{ .value = ret_local } });
+        const body = try self.result.store.addCFStmt(.{ .assign_call = .{
+            .target = ret_local,
+            .proc = try self.markReachableFn(plain_fn),
+            .args = try self.result.store.addLocalSpan(plain_args),
+            .is_cold = false,
+            .next = ret_stmt,
+        } });
+        const frame_locals = try self.writeFrameLocals(&proc_locals);
+        const proc = self.result.store.getProcSpec(proc_id);
+        return .{
+            .body = body,
+            .frame_locals = frame_locals,
+            .stack_probe = self.stackProbeForProc(proc.args, frame_locals, proc.ret_layout),
+            .tail_calls = null,
+        };
     }
 
     fn hostedProcForSource(self: *Lowerer, source: ?Mono.FnTemplate) Common.LowerError!?LIR.HostedProc {
@@ -2247,13 +2319,30 @@ const Lowerer = struct {
         if (arg_tys.len != lifted_args.len) Common.invariant("direct Lambda Mono function arity changed after Lambda Solved");
 
         const identity = try self.specIdentity(spec);
-        var cached: ?Common.SpecCacheHit = if (source_fn.source) |template| template.cached else null;
-        if (cached) |hit| {
-            if (!std.mem.eql(u8, &hit.identity, &identity.bytes)) {
-                Common.invariant("object cache entry identity disagrees with the identity lowered for its specialization key");
+        const plain_spec = spec.abi == .finite and source_fn.spec_constr_pattern == null and self.captureSpan(spec.captures).len == 0 and !spec.return_reuse.enabled();
+        var cached: ?Common.SpecCacheHit = null;
+        // Monotype completed a cached template's record without a body. That
+        // record is the cached procedure only for its own lifted function:
+        // a SpecConstr clone or a second lowering of the same template has a
+        // body and lowers normally.
+        if (source_fn.body == .hosted) if (source_fn.source) |template| if (template.cached) |hit| {
+            if (plain_spec) {
+                if (!std.mem.eql(u8, &hit.identity, &identity.bytes)) {
+                    Common.invariant("object cache entry identity disagrees with the identity lowered for its specialization key");
+                }
+                cached = hit;
+            } else {
+                // A closed procedure has no captures and no erased result, so
+                // the only other specialization is the erased-callable ABI.
+                // Its body forwards the plain arguments to the cached
+                // procedure.
+                if (spec.abi != .erased or source_fn.spec_constr_pattern != null or self.captureSpan(spec.captures).len != 0 or spec.return_reuse.enabled()) {
+                    Common.invariant("cached closed procedure was specialized with captures or an erased result");
+                }
+                entry.forwards_to = try self.ensureOwnFnSpec(spec.source, .finite);
             }
-        }
-        if (cached == null and !self.comptime_phase and spec.abi == .finite and source_fn.spec_constr_pattern == null and self.captureSpan(spec.captures).len == 0 and !spec.return_reuse.enabled()) {
+        };
+        if (cached == null and !self.comptime_phase and plain_spec) {
             if (self.spec_cache) |cache| {
                 if (source_fn.source) |template| {
                     if (template.spec_key) |key| {
@@ -2353,7 +2442,7 @@ const Lowerer = struct {
         try self.procs_by_identity.putNoClobber(identity, proc);
         if (source_fn.source) |template| {
             if (template.spec_key) |key| {
-                if (spec.abi == .finite and source_fn.spec_constr_pattern == null and self.captureSpan(spec.captures).len == 0 and !spec.return_reuse.enabled()) {
+                if (plain_spec) {
                     try self.result.spec_procs.append(self.allocator, .{ .key = key.bytes, .proc = proc });
                 }
             }
@@ -3057,6 +3146,7 @@ const Lowerer = struct {
             .fn_tys = self.solved.fn_tys.items,
             .source_digests = self.source_digests,
             .fn_by_symbol = &self.source_symbols,
+            .memo = &self.identity_memo,
         };
         const return_reuse: []const u8 = switch (spec.return_reuse) {
             .none => "no-return-reuse",

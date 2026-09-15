@@ -642,10 +642,20 @@ them.
       compile-time roots' closure lowers first and only procedures reached
       afterwards may be served, since the evaluator has no entries to run.
       ARC treats an object-cache procedure's recorded signature as its ABI
-      and never derives a variant of it. Measured on the roc-parser app: a
-      rebuild or an edited rebuild takes 11 hits and splices 10 procedures.
-      Still to do: the refcount event log comparison, and turning the store
-      on by default once pack-program cost on large platforms is measured.
+      and never derives a variant of it. A hit applies only to the record
+      Monotype completed without a body: a SpecConstr clone or a second
+      lowering of the same template has a body and an identity of its own
+      and lowers normally. A closed procedure requested with the
+      erased-callable ABI (passed as a value) has no body once the cache
+      holds it, so Direct LIR gives that specialization a body that forwards
+      the plain arguments to the cached procedure. Two packs can both hold a
+      procedure or refcount helper, since each carries the closure of its own
+      roots; the splice resolves an artifact another pack already placed to
+      the existing copy. Measured on the roc-parser app: a rebuild or an
+      edited rebuild takes 11 hits and splices 10 procedures; real-app
+      numbers are under "Measurement notes". Still to do: the refcount event
+      log comparison, and turning the store on by default once pack-program
+      cost on large platforms is measured.
    4. Debug info for cached procedures (DWARF line programs stored with the
       artifact) and the `roc run` host-executable path.
 
@@ -663,3 +673,37 @@ procedures declared inside type blocks. The roc-deflate example is a poor
 timing benchmark because CTFE folds its compression of a string literal; with
 the folded buffers made runtime-dependent, its final LIR drops from 492,853
 lines to 60,039.
+
+### Real apps under the object cache (2026-09-15)
+
+Debug compiler, x86_64 Linux, `roc build --opt=dev`; `base` is the checked
+artifact cache alone, `cache` adds `ROC_OBJECT_CACHE=1`. "Edited" appends a
+comment to the app's root module. Times are wall-clock seconds of one run.
+
+| app | base rebuild | base edited | cache cold | cache rebuild | cache edited | keys | hits (rebuild) |
+| --- | --- | --- | --- | --- | --- | --- | --- |
+| roc-signals task-board | 19.4 | 20.7 | 31.1 | 18.5 | 20.2 | 219 | 334 (113 external) |
+| roc-signals counter | 1.6 | 1.8 | 5.5 | 1.6 | 1.9 | 23 | 14 (6 external) |
+| roc-deflate example | 88.2 | 180.7 | 89.5 | 89.1 | 88.1 | 74 | 34 (11 external) |
+
+Three things follow. The cold cost of writing a pack program for every
+module in view is real: 9s on task-board's fifteen platform modules and 4s
+on counter, paid once per module version. Rebuilds of the signals apps gain
+little because their time is Monotype specialization of lambda-bearing
+requests, which no closed entry covers; the closed entries hit (334 on
+task-board) but were cheap to begin with. The deflate example's edited
+rebuild halves, from 181s to 88s, because the compile-time program that
+folds `Deflate.compress` of a literal is served from the package's pack in
+Direct LIR instead of being lowered again; its unedited rebuild does not
+move because the remaining 88s is SpecConstr over the runtime program's
+constant-folded procedures (roc-lang/roc#11376), which are not closed
+entries. Task-board withholds 48 of 260 entries for reaching program-local
+constants, the case content-addressed constants will open.
+
+The identity renderer must never expand shared subtypes as a tree: the
+solved type graph of a closure-heavy program reaches one record type from
+hundreds of lambda-set members, and rendering each path took task-board's
+Direct LIR from 21s to more than fifteen minutes. `proc_identity.zig`
+renders every type as the digest of its own rendering and remembers, across
+all identities of a program, every type whose rendering refers to nothing
+above its own stack frame.

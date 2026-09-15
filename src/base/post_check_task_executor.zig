@@ -26,11 +26,50 @@ pub const Completion = struct {
     value: ?*anyopaque,
 };
 
-/// Synchronous bounded-batch executor borrowed from a compilation coordinator.
+/// Streaming execution uses the same exclusive lanes as batch execution.
+/// A session owns the executor until every accepted task has been received.
+pub const Streaming = struct {
+    beginFn: *const fn (*anyopaque) void,
+    submitFn: *const fn (*anyopaque, Task) std.mem.Allocator.Error!void,
+    waitOneFn: *const fn (*anyopaque) Completion,
+    endFn: *const fn (*anyopaque) void,
+};
+
+/// Explicit lifetime for one stream. The caller bounds unreceived submissions by
+/// `Executor.worker_count`, retains task contexts, and drains even on error.
+pub const Session = struct {
+    context: *anyopaque,
+    functions: Streaming,
+
+    /// Enqueue without waiting for another task. Inline executors run immediately.
+    pub fn submit(self: Session, task: Task) std.mem.Allocator.Error!void {
+        return self.functions.submitFn(self.context, task);
+    }
+
+    /// Receive any one accepted task, transferring result ownership to the caller.
+    pub fn waitOne(self: Session) Completion {
+        return self.functions.waitOneFn(self.context);
+    }
+
+    /// Close after receiving every accepted task, including on allocation failure.
+    pub fn end(self: Session) void {
+        self.functions.endFn(self.context);
+    }
+};
+
+/// Bounded task execution borrowed from a compilation coordinator.
 pub const Executor = struct {
     context: *anyopaque,
     worker_count: usize,
     runFn: *const fn (*anyopaque, []const Task, []Completion) std.mem.Allocator.Error!void,
+    streaming: Streaming,
+
+    /// Open an exclusive stream.
+    pub fn begin(self: Executor) Session {
+        const functions = self.streaming;
+        functions.beginFn(self.context);
+        return .{ .context = self.context, .functions = functions };
+    }
 
     /// Run one bounded batch. `completions` must have exactly `tasks.len` entries.
     ///

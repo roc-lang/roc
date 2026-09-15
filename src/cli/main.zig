@@ -8659,6 +8659,7 @@ fn packFileBytes(
     }
     var specs = std.ArrayList(backend.dev.PackFile.SpecEntry).empty;
     defer specs.deinit(allocator);
+    var withheld: usize = 0;
     const procs = lowered.lir_result.store.getProcSpecs();
     for (lowered.lir_result.spec_procs.items) |spec_proc| {
         const proc = procs[@intFromEnum(spec_proc.proc)];
@@ -8666,7 +8667,10 @@ fn packFileBytes(
         // Constants other than literal backings are still named per program
         // (`roc__static_const_N`); an entry that reaches one cannot be
         // linked elsewhere, so it is not offered.
-        if (try artifactClosureNamesProgramLocalData(allocator, set, artifact)) continue;
+        if (try artifactClosureNamesProgramLocalData(allocator, set, artifact)) {
+            withheld += 1;
+            continue;
+        }
         try specs.append(allocator, .{
             .key = spec_proc.key,
             .artifact = artifact,
@@ -8674,6 +8678,9 @@ fn packFileBytes(
             .rc_ret_borrowed = proc.rc_ret_borrowed,
             .rc_ret_lenders = proc.rc_ret_lenders,
         });
+    }
+    if (std.c.getenv("ROC_PACK_TRACE") != null) {
+        std.debug.print("pack: {d} artifacts, {d} specs offered, {d} withheld (reach program-local constants)\n", .{ set.artifacts.len, specs.items.len, withheld });
     }
     return try backend.dev.PackFile.write(allocator, set, specs.items);
 }
@@ -16477,7 +16484,7 @@ fn monotypeSpecializationCounters(diagnostics: postcheck.Monotype.Lower.Diagnost
     };
 }
 
-fn monotypeGraphCounters(diagnostics: postcheck.Monotype.Lower.Diagnostics) [26]progress.Counter {
+fn monotypeGraphCounters(diagnostics: postcheck.Monotype.Lower.Diagnostics) [27]progress.Counter {
     const graph = diagnostics.graph;
     return .{
         .{ .name = "Graphs created", .count = diagnostics.body.graphs_created },
@@ -16495,7 +16502,7 @@ fn monotypeGraphCounters(diagnostics: postcheck.Monotype.Lower.Diagnostics) [26]
         .{ .name = "Monotype import requests", .count = graph.mono_import_requests },
         .{ .name = "Monotype import hits", .count = graph.mono_import_hits },
         .{ .name = "Monotype import misses", .count = graph.mono_import_misses },
-        .{ .name = "Generated-private scans", .count = graph.generated_private_scans },
+        .{ .name = "Generated-private containment queries", .count = graph.generated_private_scans },
         .{ .name = "Generated-private cache hits", .count = graph.generated_private_cache_hits },
         .{ .name = "Generated-private nodes visited", .count = graph.generated_private_nodes_visited },
         .{ .name = "Finished-Monotype scans", .count = graph.finished_mono_scans },
@@ -16506,6 +16513,7 @@ fn monotypeGraphCounters(diagnostics: postcheck.Monotype.Lower.Diagnostics) [26]
         .{ .name = "Union-find resolutions", .count = graph.union_find_resolutions },
         .{ .name = "Argument class snapshot nodes", .count = graph.argument_class_members_snapshotted },
         .{ .name = "Structural backing visited slots", .count = graph.structural_backing_scan_slots },
+        .{ .name = "Generated-private guard returns", .count = graph.generated_private_guard_returns },
     };
 }
 
@@ -16643,6 +16651,7 @@ test "post-check diagnostics preserve labeled Monotype counts" {
     diagnostics.specialization.nested_misses = 102;
     diagnostics.graph.nodes_created = 201;
     diagnostics.graph.generated_private_nodes_visited = 202;
+    diagnostics.graph.generated_private_guard_returns = 204;
     diagnostics.graph.nominal_backing_tombstone_deletions = 203;
     diagnostics.body.instantiation_scopes_created = 303;
     diagnostics.body.checked_node_cache_hits = 301;
@@ -16662,6 +16671,9 @@ test "post-check diagnostics preserve labeled Monotype counts" {
     try std.testing.expectEqual(@as(u64, 202), graph[17].count);
     try std.testing.expectEqualStrings("Nominal backing tombstone deletions", graph[22].name);
     try std.testing.expectEqual(@as(u64, 203), graph[22].count);
+    try std.testing.expectEqualStrings("Generated-private containment queries", graph[15].name);
+    try std.testing.expectEqualStrings("Generated-private guard returns", graph[26].name);
+    try std.testing.expectEqual(@as(u64, 204), graph[26].count);
 
     const body = monotypeBodyCounters(diagnostics);
     try std.testing.expectEqualStrings("Type instantiation scopes", body[3].name);
@@ -16696,6 +16708,26 @@ test "post-check diagnostics preserve labeled Monotype counts" {
     try std.testing.expectEqual(@as(u64, 4), parallel[11].count);
     try std.testing.expectEqualStrings("Tasks reusing a lowering lane", parallel[12].name);
     try std.testing.expectEqual(@as(u64, 405), parallel[12].count);
+}
+
+test "timings display every Monotype graph counter" {
+    var buf: std.Io.Writer.Allocating = .init(std.testing.allocator);
+    defer buf.deinit();
+    var reporter = progress.Reporter.init(.{
+        .std_io = std.testing.io,
+        .writer = &buf.writer,
+        .op_label = "roc build",
+        .timings_flag = true,
+        .is_tty = false,
+    });
+    defer reporter.deinit();
+    const counters = monotypeGraphCounters(.{});
+    reporter.start();
+    reporter.recordCounters("Monotype type graph", &counters);
+    reporter.finish();
+    for (counters) |counter| {
+        try std.testing.expect(std.mem.find(u8, buf.written(), counter.name) != null);
+    }
 }
 
 fn finishFrontEndPhase(reporter: *progress.Reporter, timing: anytype) void {

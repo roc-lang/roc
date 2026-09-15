@@ -5863,7 +5863,33 @@ fn customNativeBuildPackHits(
     }
 
     // The same through the store under the case's cache root: the first
-    // build writes its packs there, the second is served from them.
+    // build writes its packs there, the second is served from them. The
+    // second program reaches closed module functions as values too, so its
+    // rebuild goes through the entries that forward to cached procedures.
+    const store_apps = [_]struct { roc_file: []const u8, prefix: []const u8 }{
+        .{ .roc_file = roc_file, .prefix = "store" },
+        .{ .roc_file = "test/cli/pack_values/PackValues.roc", .prefix = "values" },
+    };
+    for (store_apps) |app| {
+        if (storeBuildsBehaveIdentically(io, allocator, env, timer, timeout_ms, app.roc_file, warm_dir, app.prefix)) |failure| return failure;
+    }
+    return null;
+}
+
+/// Builds `roc_file` twice with the object cache on under the case's cache
+/// root, requires the second build to report pack hits, and requires both
+/// programs to behave identically.
+fn storeBuildsBehaveIdentically(
+    io: std.Io,
+    allocator: Allocator,
+    env: *const CaseEnv,
+    timer: *harness.Timer,
+    timeout_ms: u64,
+    roc_file: []const u8,
+    out_dir: []const u8,
+    prefix: []const u8,
+) ?TestResult {
+    const hits_marker = "pack hits: ";
     var store_env = CaseEnv{
         .dirs = env.dirs,
         .env_map = env.env_map.clone(allocator) catch |err|
@@ -5872,10 +5898,10 @@ fn customNativeBuildPackHits(
     defer store_env.env_map.deinit();
     store_env.env_map.put("ROC_OBJECT_CACHE", "1") catch |err|
         return customInfraFailure(allocator, timer, "failed to enable the object cache: {}", .{err});
-    const store_exes = [_][]const u8{ "store_a", "store_b" };
+    const store_exes = [_][]const u8{ "a", "b" };
     var store_runs: [store_exes.len]std.process.RunResult = undefined;
     for (store_exes, 0..) |name, index| {
-        const exe = std.fmt.allocPrint(allocator, "{s}/{s}", .{ warm_dir, name }) catch |err|
+        const exe = std.fmt.allocPrint(allocator, "{s}/{s}_{s}", .{ out_dir, prefix, name }) catch |err|
             return customInfraFailure(allocator, timer, "failed to allocate output path: {}", .{err});
         const out_arg = outputArg(allocator, exe) catch |err|
             return customInfraFailure(allocator, timer, "failed to allocate output arg: {}", .{err});

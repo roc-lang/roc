@@ -950,6 +950,9 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
         /// entries, by symbol name; a later request for the same helper
         /// reuses the spliced code instead of compiling it again.
         spliced_helper_offsets: std.StringHashMap(usize),
+        /// Region starts of procedures spliced from object-cache entries, by
+        /// identity; a second pack holding the same procedure splices nothing.
+        spliced_proc_starts: std.AutoHashMap(lir.ProcIdentity, usize),
 
         /// Map from JoinPointId to list of jumps that target it (for patching)
         join_point_jumps: std.AutoHashMap(u32, std.ArrayList(JumpRecord)),
@@ -1491,6 +1494,7 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
                 .code_regions = std.ArrayList(CodeRegion).empty,
                 .code_refs = std.ArrayList(CodeRef).empty,
                 .spliced_helper_offsets = std.StringHashMap(usize).init(allocator),
+                .spliced_proc_starts = std.AutoHashMap(lir.ProcIdentity, usize).init(allocator),
                 .join_point_jumps = std.AutoHashMap(u32, std.ArrayList(JumpRecord)).init(allocator),
                 .join_point_params = std.AutoHashMap(u32, LocalSpan).init(allocator),
                 .internal_call_patches = std.ArrayList(InternalCallPatch).empty,
@@ -1559,6 +1563,7 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
                 while (names.next()) |name| self.allocator.free(name.*);
                 self.spliced_helper_offsets.deinit();
             }
+            self.spliced_proc_starts.deinit();
             self.pending_message_addrs.deinit(self.allocator);
             self.message_pool_runs.deinit(self.allocator);
             self.message_pool_index.deinit(self.allocator);
@@ -25752,6 +25757,23 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
                 return;
             }
             gop.value_ptr.* = entry_offset;
+        }
+
+        /// Entry offset of the spliced refcount helper named `name`, if one
+        /// is already in the buffer.
+        pub fn splicedHelperEntry(self: *const Self, name: []const u8) ?usize {
+            return self.spliced_helper_offsets.get(name);
+        }
+
+        /// Remember where the spliced procedure with `identity` starts.
+        pub fn registerSplicedProc(self: *Self, identity: lir.ProcIdentity, start: usize) Allocator.Error!void {
+            try self.spliced_proc_starts.putNoClobber(identity, start);
+        }
+
+        /// Region start of the spliced procedure with `identity`, if one is
+        /// already in the buffer.
+        pub fn splicedProcStart(self: *const Self, identity: lir.ProcIdentity) ?usize {
+            return self.spliced_proc_starts.get(identity);
         }
 
         /// Name of the spliced refcount helper whose entry is at `entry_offset`.
