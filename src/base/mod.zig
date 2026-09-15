@@ -163,6 +163,7 @@ test "base tests" {
     std.testing.refAllDecls(@import("module_identity.zig"));
     std.testing.refAllDecls(@import("PackedDataSpan.zig"));
     std.testing.refAllDecls(@import("parallel.zig"));
+    std.testing.refAllDecls(post_check_task_executor);
     std.testing.refAllDecls(@import("Region.zig"));
     std.testing.refAllDecls(@import("RegionInfo.zig"));
     std.testing.refAllDecls(@import("rc_effect_rules.zig"));

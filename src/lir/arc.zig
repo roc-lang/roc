@@ -15161,3 +15161,51 @@ test "RC alias of a parameter consumed in the body solves the parameter owned" {
     try f.expectRc(appended, 0, 0, 0);
     try f.expectRc(call_result, 0, 0, 0);
 }
+
+test "ARC ownership iteration skips absent resources and preserves release order" {
+    var arena = std.heap.ArenaAllocator.init(testing.allocator);
+    defer arena.deinit();
+    const allocator = arena.allocator();
+    const width = 65536;
+    const locals = try allocator.alloc(LIR.LocalId, width);
+    const indices = try allocator.alloc(u32, width);
+    const absent = try allocator.alloc(u32, width);
+    const masks = try allocator.alloc(u64, width);
+    for (locals, indices, 0..) |*local, *index, ordinal| {
+        local.* = @enumFromInt(ordinal);
+        index.* = @intCast(ordinal);
+    }
+    @memset(absent, no_arc_bit);
+    @memset(masks, 0);
+    const domain: ProcArcDomain = .{
+        .global_local_index = indices,
+        .frame_locals = locals,
+        .resource_bit_index = indices,
+        .resource_locals = locals,
+        .resource_full_masks = masks,
+        .refcounted_locals = locals,
+        .group_bit_index = absent,
+        .group_leaders = &.{},
+        .value_use_bit_index = absent,
+        .value_use_locals = &.{},
+    };
+    var owned = try OwnedSet.init(allocator, &domain);
+    const keys = [_]usize{ 7, 512, width - 1 };
+    for (keys) |key| try owned.set(locals[key]);
+    const before = @import("arc_state.zig").iterator_node_visits;
+    var reverse = owned.iterator(.{ .direction = .reverse });
+    for (0..keys.len) |index| try testing.expectEqual(keys[keys.len - 1 - index], reverse.next().?);
+    try testing.expectEqual(null, reverse.next());
+    if (builtin.mode == .Debug) try testing.expect(@import("arc_state.zig").iterator_node_visits - before <= keys.len * 11);
+    // The solver filters a persistent fork by removing each visited resource.
+    var filtered = try cloneOwnedSetWith(allocator, &owned);
+    var forward = filtered.iterator(.{});
+    for (keys) |key| {
+        try testing.expectEqual(key, forward.next().?);
+        try filtered.unset(locals[key]);
+    }
+    try testing.expectEqual(null, forward.next());
+    var empty = filtered.iterator(.{});
+    try testing.expectEqual(null, empty.next());
+    for (keys) |key| try testing.expect(owned.contains(locals[key]));
+}

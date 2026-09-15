@@ -330,6 +330,25 @@ pub const CanonicalNameStore = struct {
         };
     }
 
+    /// Copy all serial identities into an independently owned interning store.
+    pub fn clone(self: *const CanonicalNameStore, allocator: Allocator) Allocator.Error!CanonicalNameStore {
+        var result = CanonicalNameStore.init(allocator);
+        errdefer result.deinit();
+        inline for (.{ "module_names", "module_identities", "type_names", "method_names", "record_field_labels", "tag_labels", "export_names", "external_symbol_names" }) |field| {
+            const source = &@field(self, field);
+            const destination = &@field(result, field);
+            for (0..source.count()) |index| {
+                const id = try destination.insert(allocator, source.getText(@intCast(index)));
+                std.debug.assert(id == index);
+            }
+        }
+        for (self.proc_bases.items.items, 0..) |key, index| {
+            const id = try result.internProcBase(key);
+            std.debug.assert(@intFromEnum(id) == index);
+        }
+        return result;
+    }
+
     pub fn deinit(self: *CanonicalNameStore) void {
         if (!self.serialized) {
             // Interners no-op their own free when frozen, but `proc_bases` is a

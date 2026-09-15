@@ -203,6 +203,46 @@ const issue10703DualAliasSource =
 /// Public value `tests`.
 pub const tests = [_]TestCase{
     .{
+        .name = "issue 11376: packed record constants preserve field order and mixed widths",
+        .source_kind = .module,
+        .source =
+        \\xs = List.repeat({ a: 3.U8, b: 287454020.U32, c: (-7.I16, 2.5.F32) }, 2)
+        \\main = xs
+        ,
+        .expected = .{ .inspect_str = "[{ a: 3, b: 287454020, c: (-7, 2.5) }, { a: 3, b: 287454020, c: (-7, 2.5) }]" },
+    },
+    .{
+        .name = "issue 11376: packed nominal constants preserve copy-on-write sharing",
+        .source_kind = .module,
+        .source =
+        \\Pair := { a: U8, z: U64 }
+        \\xs = List.repeat(Pair.{ a: 3, z: 42 }, 2)
+        \\ys = xs.set(0, Pair.{ a: 9, z: 77 }) ?? []
+        \\main = (xs.map(|p| (p.a, p.z)), ys.map(|p| (p.a, p.z)))
+        ,
+        .expected = .{ .inspect_str = "([(3, 42), (3, 42)], [(9, 77), (3, 42)])" },
+    },
+    .{
+        .name = "issue 11376: packed empty and zero-sized product lists retain item counts",
+        .source_kind = .module,
+        .source =
+        \\empty = List.repeat({ a: 3.U8, b: 9.U64 }, 0)
+        \\units = List.repeat({ a: {}, b: ({}, {}) }, 7)
+        \\main = (empty.len(), units.len(), units.get(6))
+        ,
+        .expected = .{ .inspect_str = "(0, 7, Ok({ a: {}, b: ({}, {}) }))" },
+    },
+    .{
+        .name = "issue 11376: packed nominal products omit declared padding",
+        .source_kind = .module,
+        .source =
+        \\Padded := { z : U16, _ : Str, a : U8, b : U32 }
+        \\xs = List.repeat(Padded.{ z: 513, a: 7, b: 287454020 }, 2)
+        \\main = xs.map(|x| (x.a, x.b, x.z))
+        ,
+        .expected = .{ .inspect_str = "[(7, 287454020, 513), (7, 287454020, 513)]" },
+    },
+    .{
         // https://github.com/roc-lang/roc/issues/11317
         // Each alternative supplies the arm's captured local.
         .name = "issue 11317: closure captures an or-pattern binding",

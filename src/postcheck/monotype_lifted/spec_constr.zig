@@ -1102,6 +1102,8 @@ const Pass = struct {
         const arena = self.arena.allocator();
         const expr = self.program.getExpr(expr_id);
         const value: Value = switch (expr.data) {
+            .inline_expects_enabled => .{ .expr = expr_id },
+            .comptime_value => .{ .expr = expr_id },
             .static_data_candidate => |candidate| .{ .static_data_candidate = .{
                 .ty = expr.ty,
                 .static_data = candidate.static_data,
@@ -1550,6 +1552,8 @@ const Pass = struct {
             .str_lit,
             .bytes_lit,
             .static_data_candidate,
+            .inline_expects_enabled,
+            .comptime_value,
             .list,
             .tuple,
             .record,
@@ -1843,6 +1847,8 @@ const Pass = struct {
                 for (0..payloads.len) |index| try self.markArgUsesInExpr(fn_id, GuardedList.at(payloads, index), changed);
             },
             .static_data_candidate => |candidate| try self.markArgUsesInExpr(fn_id, candidate.runtime_expr, changed),
+            .inline_expects_enabled => {},
+            .comptime_value => {},
             .typed_boundary => |boundary| try self.markArgUsesInExpr(fn_id, boundary.value, changed),
             .nominal,
             .dbg,
@@ -2034,6 +2040,8 @@ const Pass = struct {
             },
             .tag => |tag| try self.collectCallPatternsInExprSpan(owner, tag.payloads),
             .static_data_candidate => |candidate| try self.collectCallPatternsInExpr(owner, candidate.runtime_expr),
+            .inline_expects_enabled => {},
+            .comptime_value => {},
             .typed_boundary => |boundary| try self.collectCallPatternsInExpr(owner, boundary.value),
             .nominal,
             .dbg,
@@ -2934,6 +2942,8 @@ const Pass = struct {
             .field_access => |field| self.exprIsStructurallyWorkFree(field.receiver, budget),
             .tuple_access => |access| self.exprIsStructurallyWorkFree(access.tuple, budget),
             .static_data_candidate => |candidate| self.exprIsStructurallyWorkFree(candidate.runtime_expr, budget),
+            .inline_expects_enabled => .proven,
+            .comptime_value => .proven,
             .typed_boundary => |boundary| self.exprIsStructurallyWorkFree(boundary.value, budget),
             .block => |block| if (self.program.stmtSpan(block.statements).len == 0)
                 self.exprIsStructurallyWorkFree(block.final_expr, budget)
@@ -3476,6 +3486,8 @@ const Pass = struct {
             .str_lit,
             .bytes_lit,
             .static_data_candidate,
+            .inline_expects_enabled,
+            .comptime_value,
             .typed_boundary,
             .list,
             .tuple,
@@ -3558,6 +3570,8 @@ const Pass = struct {
                 .payloads = (try self.cloneExprSpanFresh(tag.payloads, renames)) orelse return null,
             } },
             .static_data_candidate => return expr_id,
+            .inline_expects_enabled => return expr_id,
+            .comptime_value => return expr_id,
             .typed_boundary => |boundary| .{ .typed_boundary = .{
                 .value = (try self.cloneExprFresh(boundary.value, renames)) orelse return null,
             } },
@@ -3953,6 +3967,8 @@ const Pass = struct {
             },
             .tag => |tag| try self.rewriteCallsInExprSpan(tag.payloads, done),
             .static_data_candidate => {}, // Its closed source initializer is shared and immutable.
+            .inline_expects_enabled => {},
+            .comptime_value => {}, // Its producer witness is closed and immutable.
             .typed_boundary => |boundary| try self.rewriteCallsInExpr(boundary.value, done),
             .nominal,
             .dbg,
@@ -4334,6 +4350,8 @@ const Pass = struct {
             .str_lit,
             .bytes_lit,
             .static_data_candidate,
+            .inline_expects_enabled,
+            .comptime_value,
             .list,
             .let_,
             .lambda,
@@ -5081,6 +5099,8 @@ const Cloner = struct {
             },
             .tag => |tag| try self.collectCallPatternsInExprSpan(owner, tag.payloads),
             .static_data_candidate => |candidate| try self.collectCallPatternsInExpr(owner, candidate.runtime_expr),
+            .inline_expects_enabled => {},
+            .comptime_value => {},
             .typed_boundary => |boundary| try self.collectCallPatternsInExpr(owner, boundary.value),
             .nominal,
             .dbg,
@@ -5531,6 +5551,8 @@ const Cloner = struct {
             },
             .fn_ref => |fn_ref| return try self.callableValueFromRef(expr.ty, fn_ref, bindings),
             .static_data_candidate => return (try self.pass.staticDataStructure(expr_id)).*,
+            .inline_expects_enabled => return .{ .expr = expr_id },
+            .comptime_value => return .{ .expr = expr_id },
             .typed_boundary => |boundary| {
                 const structure = try self.cloneExprValueDemandingShapeInto(boundary.value, bindings);
                 const source = try self.materialize(structure);
@@ -5877,6 +5899,8 @@ const Cloner = struct {
             .str_lit,
             .bytes_lit,
             .static_data_candidate,
+            .inline_expects_enabled,
+            .comptime_value,
             .list,
             .tuple,
             .record,
@@ -5976,6 +6000,8 @@ const Cloner = struct {
                 break :blk shapeProofIsProven(try self.pass.shapeFromValue(value));
             },
             .static_data_candidate => |candidate| try self.exprHasKnownShape(candidate.runtime_expr),
+            .inline_expects_enabled => false,
+            .comptime_value => false,
             .typed_boundary => |boundary| try self.exprHasKnownShape(boundary.value),
             .comptime_branch_taken => |taken| try self.exprHasKnownShape(taken.body),
             .comptime_exhaustiveness_failed => false,
@@ -6103,6 +6129,8 @@ const Cloner = struct {
             => true,
             .fn_ref => |fn_ref| self.captureOperandSpanCanSubstitute(fn_ref.captures),
             .static_data_candidate => true,
+            .inline_expects_enabled => true,
+            .comptime_value => true,
             .typed_boundary => false,
             .field_access => |field| self.exprCanSubstitute(field.receiver),
             .tuple_access => |access| self.exprCanSubstitute(access.tuple),
@@ -6229,6 +6257,8 @@ const Cloner = struct {
                 .record_update,
                 .tag,
                 .static_data_candidate,
+                .inline_expects_enabled,
+                .comptime_value,
                 .typed_boundary,
                 .nominal,
                 .let_,
@@ -6289,6 +6319,8 @@ const Cloner = struct {
                 .payloads = try self.cloneExprSpan(tag.payloads),
             } },
             .static_data_candidate => return expr_id,
+            .inline_expects_enabled => return expr_id,
+            .comptime_value => return expr_id,
             .typed_boundary => |boundary| .{ .typed_boundary = .{
                 .value = try self.cloneExpr(boundary.value),
             } },
@@ -6546,6 +6578,8 @@ const Cloner = struct {
             .record,
             .tag,
             .static_data_candidate,
+            .inline_expects_enabled,
+            .comptime_value,
             .typed_boundary,
             .nominal,
             .let_,
@@ -7086,6 +7120,8 @@ const Cloner = struct {
             .str_lit,
             .bytes_lit,
             .static_data_candidate,
+            .inline_expects_enabled,
+            .comptime_value,
             .list,
             .tuple,
             .record,
@@ -7231,6 +7267,8 @@ const Cloner = struct {
             .str_lit,
             .bytes_lit,
             .static_data_candidate,
+            .inline_expects_enabled,
+            .comptime_value,
             .list,
             .tuple,
             .record,
@@ -7478,6 +7516,8 @@ const Cloner = struct {
                     .str_lit,
                     .bytes_lit,
                     .static_data_candidate,
+                    .inline_expects_enabled,
+                    .comptime_value,
                     .typed_boundary,
                     .list,
                     .tuple,
@@ -7561,6 +7601,8 @@ const Cloner = struct {
             .str_lit,
             .bytes_lit,
             .static_data_candidate,
+            .inline_expects_enabled,
+            .comptime_value,
             .typed_boundary,
             .list,
             .tuple,
@@ -7643,6 +7685,8 @@ const Cloner = struct {
             .str_lit,
             .bytes_lit,
             .static_data_candidate,
+            .inline_expects_enabled,
+            .comptime_value,
             .typed_boundary,
             .list,
             .tuple,
@@ -9341,6 +9385,8 @@ const Cloner = struct {
                 break :blk itemFromValue(receiver, access.elem_index);
             },
             .static_data_candidate => |candidate| self.peekKnownValue(candidate.runtime_expr),
+            .inline_expects_enabled => null,
+            .comptime_value => null,
             .typed_boundary => |boundary| self.peekKnownValue(boundary.value),
             .unit,
             .@"unreachable",
@@ -9604,6 +9650,8 @@ const Cloner = struct {
             .str_lit,
             .bytes_lit,
             .static_data_candidate,
+            .inline_expects_enabled,
+            .comptime_value,
             .typed_boundary,
             .list,
             .tuple,
@@ -9730,6 +9778,8 @@ const Cloner = struct {
             .str_lit,
             .bytes_lit,
             .static_data_candidate,
+            .inline_expects_enabled,
+            .comptime_value,
             .list,
             .tuple,
             .record,
@@ -11423,9 +11473,11 @@ const Cloner = struct {
         // therefore reuse this exact function id, and cloning can never start
         // from a worker produced by an earlier materialization.
         const symbol = self.pass.symbols.fresh();
+        var worker_source = source_fn.source orelse Common.invariant("callable worker lacks frozen source authority");
+        worker_source.frozen_worker = worker_key.template.bytes ++ worker_key.callable_abi.bytes ++ worker_key.capture_abi.bytes;
         const worker_fn_id = try self.pass.program.addFn(.{
             .symbol = symbol,
-            .source = source_fn.source,
+            .source = worker_source,
             .signature = null,
             .args = args_span,
             .captures = captures_span,
@@ -11836,6 +11888,8 @@ const BodyLocalScope = struct {
             },
             .tag => |tag| try self.walkExprSpan(tag.payloads),
             .static_data_candidate => |candidate| try self.walkExpr(candidate.runtime_expr),
+            .inline_expects_enabled => {},
+            .comptime_value => |candidate| try self.walkExpr(candidate.initializer),
             .typed_boundary => |boundary| try self.walkExpr(boundary.value),
             .nominal,
             .dbg,
@@ -12072,6 +12126,8 @@ const BodySizeCounter = struct {
             },
             .tag => |tag| self.countExprSpan(tag.payloads),
             .static_data_candidate => |candidate| self.countExpr(candidate.runtime_expr),
+            .inline_expects_enabled => {},
+            .comptime_value => |candidate| self.countExpr(candidate.initializer),
             .typed_boundary => |boundary| self.countExpr(boundary.value),
             .nominal,
             .dbg,
@@ -12254,6 +12310,8 @@ fn collectAllFnUsesInExpr(
         },
         .tag => |tag| collectAllFnUsesInExprSpan(program, tag.payloads, owner, uses),
         .static_data_candidate => |candidate| collectAllFnUsesInExpr(program, candidate.runtime_expr, owner, uses),
+        .inline_expects_enabled => {},
+        .comptime_value => |candidate| collectAllFnUsesInExpr(program, candidate.initializer, owner, uses),
         .typed_boundary => |boundary| collectAllFnUsesInExpr(program, boundary.value, owner, uses),
         .nominal,
         .dbg,
@@ -12475,6 +12533,8 @@ fn tailSelfCallSummary(program: *const Ast.Program, expr_id: Ast.ExprId, target:
         .str_lit,
         .bytes_lit,
         .static_data_candidate,
+        .inline_expects_enabled,
+        .comptime_value,
         .list,
         .tuple,
         .record,
@@ -12533,6 +12593,8 @@ fn exprContainsIteratorProducer(program: *const Ast.Program, expr_id: Ast.ExprId
         },
         .tag => |tag| exprSpanContainsIteratorProducer(program, tag.payloads),
         .static_data_candidate => |candidate| exprContainsIteratorProducer(program, candidate.runtime_expr),
+        .inline_expects_enabled => false,
+        .comptime_value => false,
         .typed_boundary => |boundary| exprContainsIteratorProducer(program, boundary.value),
         .nominal, .dbg, .expect => |child| exprContainsIteratorProducer(program, child),
         .return_ => |ret| exprContainsIteratorProducer(program, ret.value),
@@ -12647,6 +12709,8 @@ fn exprCallsFn(program: *const Ast.Program, expr_id: Ast.ExprId, fn_id: Ast.FnId
         },
         .tag => |tag| exprSpanCallsFn(program, tag.payloads, fn_id),
         .static_data_candidate => |candidate| exprCallsFn(program, candidate.runtime_expr, fn_id),
+        .inline_expects_enabled => false,
+        .comptime_value => false,
         .typed_boundary => |boundary| exprCallsFn(program, boundary.value, fn_id),
         .nominal, .dbg, .expect => |child| exprCallsFn(program, child, fn_id),
         .return_ => |ret| exprCallsFn(program, ret.value, fn_id),
@@ -12778,6 +12842,8 @@ fn exprContainsReturn(program: *const Ast.Program, expr_id: Ast.ExprId) bool {
         },
         .tag => |tag| exprSpanContainsReturn(program, tag.payloads),
         .static_data_candidate => |candidate| exprContainsReturn(program, candidate.runtime_expr),
+        .inline_expects_enabled => false,
+        .comptime_value => false,
         .typed_boundary => |boundary| exprContainsReturn(program, boundary.value),
         .nominal,
         .dbg,
@@ -12919,6 +12985,8 @@ fn exprReferencesLocal(program: *const Ast.Program, expr_id: Ast.ExprId, local: 
         },
         .tag => |tag| exprSpanReferencesLocal(program, tag.payloads, local),
         .static_data_candidate => |candidate| exprReferencesLocal(program, candidate.runtime_expr, local),
+        .inline_expects_enabled => false,
+        .comptime_value => false,
         .typed_boundary => |boundary| exprReferencesLocal(program, boundary.value, local),
         .nominal,
         .dbg,
@@ -13070,6 +13138,8 @@ fn exprContainsFreeLoopControl(program: *const Ast.Program, expr_id: Ast.ExprId,
         },
         .tag => |tag| exprSpanContainsFreeLoopControl(program, tag.payloads, loop_depth),
         .static_data_candidate => |candidate| exprContainsFreeLoopControl(program, candidate.runtime_expr, loop_depth),
+        .inline_expects_enabled => false,
+        .comptime_value => false,
         .typed_boundary => |boundary| exprContainsFreeLoopControl(program, boundary.value, loop_depth),
         .nominal,
         .dbg,
@@ -13192,6 +13262,8 @@ fn collectTupleLocalDemandInExpr(
         .uninitialized,
         .uninitialized_payload,
         .static_data_candidate,
+        .inline_expects_enabled,
+        .comptime_value,
         .lambda,
         .def_ref,
         .fn_def,
@@ -13395,6 +13467,8 @@ fn localUseCountInExpr(program: *const Ast.Program, local: Ast.LocalId, expr_id:
         },
         .tag => |tag| localUseCountInExprSpan(program, local, tag.payloads),
         .static_data_candidate => |candidate| localUseCountInExpr(program, local, candidate.runtime_expr),
+        .inline_expects_enabled => 0,
+        .comptime_value => 0,
         .typed_boundary => |boundary| localUseCountInExpr(program, local, boundary.value),
         .nominal,
         .dbg,
@@ -13934,7 +14008,6 @@ fn emptyLiftedProgramForTest(allocator: Allocator) Ast.Program {
         allocator,
         names.NameStore.init(allocator),
         Type.Store.init(allocator),
-        .empty, // imported_fns
         .empty, // const_fn_evidence
         .empty, // const_fn_evidence_frames
         .empty, // exprs
@@ -13991,6 +14064,45 @@ fn addStaticDataIdentityForTest(program: *Ast.Program) Allocator.Error!Common.St
     return id;
 }
 
+test "compile-time root reads remain opaque through specialization and cloning" {
+    const allocator = std.testing.allocator;
+    var program = emptyLiftedProgramForTest(allocator);
+    defer program.deinit();
+    const item_ty = try program.types.add(.{ .primitive = .u8 });
+    const tuple_ty = try program.types.add(.{ .tuple = try program.types.addSpan(&.{item_ty}) });
+    const item = try program.addExpr(.{ .ty = item_ty, .data = .{ .int_lit = .{ .bytes = @bitCast(@as(u128, 7)), .kind = .u128 } } });
+    const initializer = try program.addExpr(.{ .ty = tuple_ty, .data = .{ .tuple = try program.addExprSpan(&.{item}) } });
+    const read = try program.addExpr(.{ .ty = tuple_ty, .data = .{ .comptime_value = .{
+        .root = .{
+            .module = .{},
+            .root = @enumFromInt(1),
+            .const_locator = .{
+                .artifact = .{},
+                .owner = .{ .hoisted_expr = .{ .module_idx = 0, .expr = @enumFromInt(1) } },
+                .template = @enumFromInt(1),
+                .source_scheme = .{},
+            },
+        },
+        .initializer = initializer,
+    } } });
+    var pass = try Pass.init(allocator, &program);
+    defer pass.deinit();
+    var cloner = Cloner.initForRewrite(&pass);
+    defer cloner.deinit();
+    const value = try cloner.cloneExprValueDemandingShape(read);
+    try std.testing.expect(value.bindings.isEmpty());
+    try std.testing.expect(value.value == .expr);
+    try std.testing.expectEqual(read, value.value.expr);
+    try std.testing.expectEqual(read, try cloner.cloneExprPlain(read));
+    try std.testing.expect(!try cloner.exprHasKnownShape(read));
+    try std.testing.expect(cloner.peekKnownValue(read) == null);
+    try std.testing.expect((try pass.staticDataStructure(read)).* == .expr);
+    var renames = collections.DenseMap(Ast.LocalId, Ast.LocalId).init(allocator);
+    defer renames.deinit();
+    try std.testing.expectEqual(read, (try pass.cloneExprFresh(read, &renames)).?);
+    try std.testing.expectEqual(initializer, program.getExpr(read).data.comptime_value.initializer);
+}
+
 test "static candidate clones share closed initializers without emitting caller work" {
     const allocator = std.testing.allocator;
     var program = emptyLiftedProgramForTest(allocator);
@@ -14000,6 +14112,7 @@ test "static candidate clones share closed initializers without emitting caller 
     const item = try program.addExpr(.{ .ty = item_ty, .data = .{ .int_lit = .{ .bytes = @bitCast(@as(u128, 7)), .kind = .u128 } } });
     const list = try program.addExpr(.{ .ty = list_ty, .data = .{ .list = try program.addExprSpan(&.{item}) } });
     const candidate = try program.addExpr(.{ .ty = list_ty, .data = .{ .static_data_candidate = .{
+        .storage = .aggregate,
         .static_data = try addStaticDataIdentityForTest(&program),
         .runtime_expr = list,
     } } });
@@ -14037,6 +14150,7 @@ test "static candidate constructor views are linear in shared source graph size"
         expr = try program.addExpr(.{ .ty = ty, .data = .{ .tuple = try program.addExprSpan(&.{ expr, expr }) } });
     }
     const candidate = try program.addExpr(.{ .ty = ty, .data = .{ .static_data_candidate = .{
+        .storage = .aggregate,
         .static_data = try addStaticDataIdentityForTest(&program),
         .runtime_expr = expr,
     } } });
@@ -14069,6 +14183,7 @@ test "static candidate match rebinding preserves the initializer and its private
     const tuple_ty = try program.types.add(.{ .tuple = try program.types.addSpan(&.{ty}) });
     const tuple = try program.addExpr(.{ .ty = tuple_ty, .data = .{ .tuple = try program.addExprSpan(&.{private}) } });
     const candidate = try program.addExpr(.{ .ty = tuple_ty, .data = .{ .static_data_candidate = .{
+        .storage = .aggregate,
         .static_data = try addStaticDataIdentityForTest(&program),
         .runtime_expr = tuple,
     } } });
@@ -15308,44 +15423,6 @@ test "expression traversal visits both operands of structural_hash" {
     try std.testing.expect(exprContainsReturn(&program, hash_expr));
     try std.testing.expectEqual(@as(usize, 1), localUseCountInExpr(&program, value_local, hash_expr));
     try std.testing.expectEqual(@as(usize, 1), localUseCountInExpr(&program, hasher_local, hash_expr));
-}
-
-test "call-pattern specialization preserves imported direct calls" {
-    const allocator = std.testing.allocator;
-    var mono = Mono.Program.init(allocator);
-    errdefer mono.deinit();
-
-    const unit_ty = try mono.types.add(.zst);
-    const imported = try mono.addImportedFn(.{
-        .shard = @enumFromInt(1),
-        .fn_id = @enumFromInt(1),
-    });
-    const body = try mono.addExpr(.{ .ty = unit_ty, .data = .{ .call_proc = .{
-        .callee = Mono.importedProcCallee(imported),
-        .args = Mono.Span(Mono.ExprId).empty(),
-    } } });
-    try mono.defs.append(allocator, .{
-        .symbol = @enumFromInt(1),
-        .args = Mono.Span(Mono.TypedLocal).empty(),
-        .body = .{ .roc = body },
-        .ret = unit_ty,
-    });
-
-    var lifted = try @import("lift.zig").run(allocator, mono);
-    defer lifted.deinit();
-
-    try run(allocator, &lifted, .all_calls);
-
-    const body_data = lifted.getExpr(body).data;
-    if (body_data != .call_proc) return error.TestUnexpectedResult;
-    const call = body_data.call_proc;
-    switch (call.callee) {
-        .func => |slot| switch (slot) {
-            .imported => |actual| try std.testing.expectEqual(imported, actual),
-            .local => return error.TestUnexpectedResult,
-        },
-        .lifted => return error.TestUnexpectedResult,
-    }
 }
 
 test "static match verdicts separate definite no-match from statically undecidable" {
