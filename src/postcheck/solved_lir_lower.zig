@@ -13,6 +13,7 @@ const check = @import("check");
 const collections = @import("collections");
 const layout = @import("layout");
 const Common = @import("common.zig");
+const ComptimeScalarValues = @import("comptime_scalar_values.zig");
 const match_tree = @import("match_tree.zig");
 const Mono = @import("monotype/ast.zig");
 const Lifted = @import("monotype_lifted/ast.zig");
@@ -149,6 +150,10 @@ pub const Options = struct {
     layout_request_const_plans: bool = true,
     /// Optional command-level test-plan metadata keyed by checked root order.
     test_plan_metadata: []const Common.RootTestPlanMetadata = &.{},
+    /// Completed compile-time scalar roots, lowered as literals instead of
+    /// slot reads so the LIR passes see the constants. Only a continuation
+    /// lowered after the host program completed can supply them.
+    completed_scalar_values: ?*const ComptimeScalarValues.CompletedScalarValues = null,
     /// Debug-only destination for the materialized Lambda Mono verifier input.
     debug_materialized_out: ?*?LambdaMono.Program = null,
     /// Optional deterministic task counts for parallel solved-LIR lowering.
@@ -521,6 +526,7 @@ const Lowerer = struct {
     observe_expects: bool,
     list_in_place_map: bool,
     dict_seed_mode: DictSeedMode,
+    completed_scalar_values: ?*const ComptimeScalarValues.CompletedScalarValues,
     proc_debug_names: bool,
     layout_request_const_plans: bool,
     /// Match sites statically resolved by `foldListMapCanReuseMatch`,
@@ -756,6 +762,7 @@ const Lowerer = struct {
             .observe_expects = options.test_plan_metadata.len != 0,
             .list_in_place_map = options.list_in_place_map,
             .dict_seed_mode = options.dict_seed_mode,
+            .completed_scalar_values = options.completed_scalar_values,
             .proc_debug_names = options.proc_debug_names,
             .layout_request_const_plans = options.layout_request_const_plans,
             .debug_materialized_out = options.debug_materialized_out,
@@ -3817,6 +3824,15 @@ const Lowerer = struct {
         next: LIR.CFStmtId,
     ) Common.LowerError!LIR.CFStmtId {
         const layout_idx = self.result.store.getLocal(target).layout_idx;
+        if (self.completed_scalar_values) |values| {
+            if (values.literalFor(value.root.module, value.root.root, layout_idx)) |literal| {
+                return try self.result.store.addCFStmt(.{ .assign_literal = .{
+                    .target = target,
+                    .value = literal,
+                    .next = next,
+                } });
+            }
+        }
         const request = ComptimeValueRequest{
             .module = value.root.module,
             .root = value.root.root,

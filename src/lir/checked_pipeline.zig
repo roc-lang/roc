@@ -22,6 +22,9 @@ const ForwardingJoinInline = @import("forwarding_join_inline.zig");
 const TagCaseFusion = @import("tag_case_fusion.zig");
 const LoopAppendPromote = @import("loop_append_promote.zig");
 const RangeProve = @import("range_prove.zig");
+
+/// Completed compile-time scalar roots a forked continuation lowers as literals.
+pub const CompletedScalarValues = postcheck.ComptimeScalarValues.CompletedScalarValues;
 const TagReachability = @import("tag_reachability.zig");
 const ReachableProcs = @import("reachable_procs.zig");
 const DebugPrint = @import("debug_print.zig");
@@ -166,6 +169,10 @@ pub const TargetConfig = struct {
     /// solving. Every later post-check stage walks that program in full, so the
     /// count is the size measure a growth regression shows up in.
     lifted_expr_count_out: ?*usize = null,
+    /// Completed compile-time scalar roots for a continuation lowered after
+    /// the host program completed; the lowerer emits them as literals so the
+    /// LIR passes see the constants instead of slot reads.
+    completed_scalar_values: ?*const CompletedScalarValues = null,
     /// Optional timing accumulator for the checked-to-LIR pipeline.
     timing: ?*Timing = null,
 };
@@ -989,6 +996,7 @@ pub fn lowerPreparedSolvedToLir(prepared: PreparedSolved) LowerResourceError!Low
         .test_plan_metadata = prepared.test_plan_metadata,
         .debug_materialized_out = target.debug_materialized_out,
         .parallel_metrics = target.solved_lir_parallel_metrics_out,
+        .completed_scalar_values = target.completed_scalar_values,
     });
     lir_gen_timing_scope.end();
     errdefer lowered.deinit();
