@@ -161,7 +161,7 @@ pub const LoweredInspectFn = *const fn (
 
 /// Options controlling how the harness lowers an app to LIR.
 pub const LirLoweringOptions = struct {
-    /// Inspect both target continuations from one shared specialization result.
+    /// Inspect target-independent specialization before consumer lowering.
     prepared_inspect: ?*const fn (*const lir.CheckedPipeline.PreparedMonotype) LowerToLirHarnessError!void = null,
     shared_comptime_reads: bool = false,
 
