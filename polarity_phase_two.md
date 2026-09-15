@@ -1759,3 +1759,136 @@ Src := [S].{
 
 expect match load(Src.S) { Ok(s) => s == "hit", Err(_) => False }
 ```
+
+## 9. Deferred: row subsumption, and what it does to host widening
+
+Decided with Jared on 2026-09-15, at the end of phase two. Nothing here is
+implemented. It is written down because the discussion that produced it cost
+several passes to reconstruct from three paragraphs of `design.md` that were
+far apart, and because `test/fx-open/issue_9963_hosted_try_question_mark.roc`
+is left deliberately RED as its standing witness.
+
+### 9.1 The decision
+
+**Closing-by-body is not the intended end state.** A closed value flowing into
+an implicitly open output row should WIDEN into it — row subsumption — rather
+than bind its extension shut. The row published at a position is the one the
+annotation declares, whatever the body happened to construct.
+
+The argument is interchangeability. A signature is the whole of what a caller
+reads, so two definitions with identical annotations must be usable
+identically. Today they are not, and the witness holds both halves in one
+platform module:
+
+```roc
+via_question! : {} => Try(Str, [HostErr(Str)])
+via_question! = |{}| Ok(FallibleHost.str_ok!({})?)          # publishes CLOSED
+
+via_match!    : {} => Try(Str, [HostErr(Str)])
+via_match!    = |{}|
+    match FallibleHost.str_ok!({}) {
+        Ok(value)         => Ok(value)
+        Err(HostErr(msg)) => Err(HostErr(msg))               # publishes OPEN
+    }
+```
+
+`via_match!` CONSTRUCTS its error, and a tag constructor mints its own open
+row, so the annotation's flex is never bound. `via_question!` FORWARDS the
+host's closed row through `?`, which binds the flex to `[]`. A caller that
+unwraps the first into a wider row is accepted; the same call on the second is
+rejected. The bodies differ; the signatures do not.
+
+To get a genuinely closed output row under the intended rule you would have to
+write the closure explicitly — something in the shape of `[MyErr, ..[]]` — so
+that closedness is a thing the author states rather than a thing the body
+leaks. That spelling does not exist today and is not designed.
+
+### 9.2 Why this is not a bug to patch now
+
+Every available patch is host-specific, and the host-specific machinery is
+what subsumption is expected to DELETE. Patching it means writing, reviewing
+and then removing the same code. Two shapes were considered and rejected for
+this PR:
+
+- Make the existing use-site redirect fire here. It is a checker special case
+  fighting polarity rather than expressing it.
+- Desugar `?` on a direct hosted call into the reconstruct-by-`match` form that
+  `via_match!` uses. This is the nicer of the two — the reconstruction yields an
+  open row naturally and IS the re-tag at lowering, so no adapter is needed on
+  that path — but it is still host-specific.
+
+### 9.3 Hosted Try widening splits in two, with different lifetimes
+
+This is the part that resolved the discussion, and it is easy to get wrong.
+
+**The LOWERING half is permanent.** A widened request at a host boundary must
+always be bridged by a generated adapter that calls the declared-type boundary
+and re-tags, never by specializing the boundary at the widened layout. That is
+not a typing decision — the host ABI is fixed by something outside the type
+system. W6b already generalized it: hosted is the instance of the Result-Row
+Widening Adapter in which the declared row is the host ABI.
+
+**The CHECKER half is what subsumption subsumes.** The use-site redirect that
+widens a `?` condition is exactly the special case general row subsumption
+makes unnecessary, and is the part to delete once subsumption lands.
+
+**They cannot be deferred together.** An explicit open extension is REJECTED at
+host boundaries by rule, so a host error row is closed BY DECLARATION rather
+than by inference. "A closed row meets a caller who wants it wider" therefore
+arises at every host boundary, not in rare corners — which means the general
+mechanism cannot be half-built, and also means it will be exercised constantly
+once it exists.
+
+### 9.4 The confusion that made this hard to see
+
+One annotation spelling means three different things depending on what is
+annotated, and `design.md` described them in three widely separated
+paragraphs. They are now a single table there, added by this PR. Restated
+here because it is the key to reading everything above:
+
+| Annotated thing | The opened extension | What a use may do |
+|---|---|---|
+| a FUNCTION signature | quantified flex, instantiated fresh per call | each caller may widen independently |
+| a VALUE binding | ONE weak flex shared module-wide, grounded to `[]` after the module solves | uses share and accumulate; later uses see what accumulated |
+| a HOST BOUNDARY (hosted lambda, `provides` def, platform `requires` type) | none — the row is generated exactly as written | nothing; an explicit `..` reaching the boundary is an error |
+
+Note the two host rules have different scopes: the opt-out from opening covers
+all three host positions, but the rejection of a written `..` is enforced only
+over types reachable from a hosted lambda or a `provides` def. A `requires`
+clause carrying `..` is accepted when the `provides` definition narrows the row
+away before the boundary.
+
+### 9.5 What implementing it involves
+
+Smaller than it first appears, because W6b built the lowering.
+
+1. **Checker.** At the unification where a closed row meets an implicitly open
+   annotated output row, coerce rather than bind. Two cases: an incoming row
+   whose tags are a subset of the listed tags coerces and leaves the extension
+   open; an incoming row carrying unlisted tags binds as today, and
+   `auditImplicitOpenExts` reports it.
+2. **Lowering.** W6b's result-row widening adapter is the coercion's first
+   instance. It is wired to template completion for dispatch plans, so the open
+   question is whether a value coerced inside an ordinary body needs a re-tag
+   that the adapter does not currently reach.
+3. **Deletion.** The checker-side hosted redirect comes out.
+
+**The open question, which is answerable by measurement rather than argument:**
+does stopping the bind SUFFICE? Make the checker not bind the marker at that
+site, rebuild, and run the witness. Three outcomes — it passes (the pieces
+already fit), it fails in LOWERING (an inner coercion is genuinely needed), or
+it fails elsewhere in CHECK (something else depends on closing). That one
+experiment scopes the whole item.
+
+### 9.6 Consequences to re-check when it is done
+
+- `auditImplicitOpenExts` fires on an extension that resolved to a row carrying
+  tags. If coercion changes when that happens, re-check it. W8's synthesized
+  report rows are only sound because the audit has ALREADY proved the extension
+  carries tags before reporting.
+- `closeWeakValueImplicitOpenExts` grounds a top-level weak value's still-open
+  extensions to `[]`. Cross-module widening of annotated weak values is a
+  separate deferred decision (section 6) and should be settled in the same pass,
+  since both concern what a closed row means at a module boundary.
+- `test/fx-open/issue_9963_hosted_try_question_mark.roc` should go green with no
+  fixture edit. If it needs one, the implementation diverged from this design.
