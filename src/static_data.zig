@@ -75,7 +75,7 @@ pub fn collectReferencedProcs(
 
 /// Deterministic object-file symbol name for an internal LIR procedure.
 pub fn procSymbolName(allocator: Allocator, identity: lir.ProcIdentity) Allocator.Error![]u8 {
-    return try std.fmt.allocPrint(allocator, "roc__proc_{s}", .{&identity.symbolHex()});
+    return identity.symbolName(allocator);
 }
 
 /// Checked modules whose constants can become target static data.

@@ -80,6 +80,9 @@ pub const ObjectFileCompiler = struct {
     allocator: Allocator,
     enable_default_platform_runtime: bool = false,
     timing: ?*Timing = null,
+    /// Emit every procedure as a global symbol and emit the object even
+    /// without host entrypoints: the object is a module pack, not an app.
+    pack_mode: bool = false,
 
     pub const TimingSnapshot = struct {
         backend_setup_ns: u64 = 0,
@@ -139,6 +142,12 @@ pub const ObjectFileCompiler = struct {
         return .{ .allocator = allocator };
     }
 
+    /// Compile a pack program: every procedure is a global symbol and the
+    /// object is emitted even though no host entrypoint requests it.
+    pub fn initForPack(allocator: Allocator) ObjectFileCompiler {
+        return .{ .allocator = allocator, .pack_mode = true };
+    }
+
     /// Compile LIR to a native object file for the given RocTarget.
     ///
     /// Dispatches at runtime to the correct compile-time LirCodeGen
@@ -158,7 +167,7 @@ pub const ObjectFileCompiler = struct {
         boxy_worker_procs: []const lir.LIR.LirProcSpecId,
         target: RocTarget,
     ) CompilationError!CompilationResult {
-        return crossCompileDispatch(self.allocator, lir_store, layout_store, entrypoints, static_data_exports, proc_specs, erased_arg_desc_offsets, erased_arg_desc_params, boxy_worker_procs, target, self.enable_default_platform_runtime, self.timing);
+        return crossCompileDispatch(self.allocator, lir_store, layout_store, entrypoints, static_data_exports, proc_specs, erased_arg_desc_offsets, erased_arg_desc_params, boxy_worker_procs, target, self.enable_default_platform_runtime, self.timing, self.pack_mode);
     }
 
     /// Compile to an object file and write it to a path. Returns whether the
@@ -269,8 +278,9 @@ fn compileWithCodeGen(
     target: RocTarget,
     enable_default_platform_runtime: bool,
     timing: ?*ObjectFileCompiler.Timing,
+    pack_mode: bool,
 ) CompilationError!CompilationResult {
-    if (entrypoints.len == 0 and static_data_exports.len == 0) {
+    if (!pack_mode and entrypoints.len == 0 and static_data_exports.len == 0) {
         return CompilationError.NoEntrypoints;
     }
 
@@ -364,7 +374,7 @@ fn compileWithCodeGen(
             .name = symbol_name,
             .offset = proc_symbol.code_start,
             .size = proc_symbol.code_end - proc_symbol.code_start,
-            .is_global = false,
+            .is_global = pack_mode,
             .is_function = true,
             .is_external = false,
             .section = .text,
@@ -809,6 +819,7 @@ fn crossCompileDispatch(
     target: RocTarget,
     enable_default_platform_runtime: bool,
     timing: ?*ObjectFileCompiler.Timing,
+    pack_mode: bool,
 ) CompilationError!CompilationResult {
     const enum_info = @typeInfo(RocTarget).@"enum";
     const default_target = target.defaultCpuTarget();
@@ -832,6 +843,7 @@ fn crossCompileDispatch(
                     target,
                     enable_default_platform_runtime,
                     timing,
+                    pack_mode,
                 );
             } else {
                 return CompilationError.UnsupportedTarget;

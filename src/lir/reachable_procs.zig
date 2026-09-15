@@ -616,6 +616,14 @@ const Pass = struct {
         for (self.result.root_procs.items) |*proc| {
             proc.* = self.remapProc(proc.*);
         }
+        // A specialization whose procedure was unreachable leaves the table.
+        var kept: usize = 0;
+        for (self.result.spec_procs.items) |spec_proc| {
+            const new_proc = self.old_to_new[@intFromEnum(spec_proc.proc)] orelse continue;
+            self.result.spec_procs.items[kept] = .{ .key = spec_proc.key, .proc = new_proc };
+            kept += 1;
+        }
+        self.result.spec_procs.shrinkRetainingCapacity(kept);
     }
 
     fn remapConstRoots(self: *Pass) void {
