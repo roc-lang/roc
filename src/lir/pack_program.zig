@@ -49,10 +49,11 @@ pub fn closedExportRoots(
     return try roots.toOwnedSlice(allocator);
 }
 
-/// Whether a checked type mentions no type variable and no function type
-/// anywhere, including through aliases, nominal arguments, and nominal
-/// backings. A closed procedure type instantiates identically in every
-/// program, which is what lets its specialization be shared.
+/// Whether a checked type mentions no type variable, no function type, and
+/// no record field of undetermined kind anywhere, including through aliases,
+/// nominal arguments, and nominal backings. A closed procedure type
+/// instantiates identically in every program, which is what lets its
+/// specialization be shared.
 pub fn checkedTypeIsClosed(
     allocator: Allocator,
     types: checked.CheckedTypeStoreView,
@@ -94,7 +95,14 @@ pub fn checkedTypeIsClosed(
                 try stack.appendSlice(allocator, alias.args);
             },
             .record => |record| {
-                for (record.fields) |field| try stack.append(allocator, field.ty);
+                for (record.fields) |field| {
+                    // A field whose kind each use decides is not one type.
+                    switch (field.kind.tag) {
+                        .required, .optional, .defaulted => {},
+                        .undetermined, .err => return false,
+                    }
+                    try stack.append(allocator, field.ty);
+                }
                 try stack.append(allocator, record.ext);
             },
             .tuple => |elems| try stack.appendSlice(allocator, elems),
@@ -173,4 +181,28 @@ pub fn manifestBytes(
         try bytes.appendSlice(allocator, line);
     }
     return try bytes.toOwnedSlice(allocator);
+}
+
+test "closed export types reject records with undetermined field kinds" {
+    const allocator = std.testing.allocator;
+    const leaf: checked.CheckedTypeId = @enumFromInt(0);
+    const undetermined: checked.CheckedTypeId = @enumFromInt(1);
+    const required: checked.CheckedTypeId = @enumFromInt(2);
+    const label: check.CanonicalNames.RecordFieldLabelId = @enumFromInt(7);
+    const fields = [_]checked.CheckedRecordField{
+        .{ .name = label, .ty = leaf, .kind = .undetermined(leaf) },
+        .{ .name = label, .ty = leaf, .kind = .required },
+    };
+    const payloads = [_]checked.StoredCheckedTypePayload{
+        .empty_record,
+        .{ .record = .{ .fields = .{ .start = 0, .len = 1 }, .ext = leaf } },
+        .{ .record = .{ .fields = .{ .start = 1, .len = 1 }, .ext = leaf } },
+    };
+    const types = checked.CheckedTypeStoreView{
+        .stored_payloads = &payloads,
+        .record_field_pool = &fields,
+    };
+
+    try std.testing.expect(!try checkedTypeIsClosed(allocator, types, undetermined));
+    try std.testing.expect(try checkedTypeIsClosed(allocator, types, required));
 }
