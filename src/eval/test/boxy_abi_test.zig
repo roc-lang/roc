@@ -329,6 +329,7 @@ test "issue 11170 boxy record inspect reborrows descriptor refs after a custom m
     for (&descs, &refs, &slots, 0..) |*desc, *ref, *slot, index| {
         const proc = try setup.store.addProcSpec(.{
             .name = setup.store.freshSyntheticSymbol(),
+            .identity = LIR.ProcIdentity.forTest(2),
             .args = LIR.LocalSpan.empty(),
             .ret_layout = .str,
         });
@@ -456,6 +457,7 @@ test "boxy tag inspect preserves variant metadata across a custom method" {
     for (&descs, &refs, &slots, 0..) |*desc, *ref, *slot, index| {
         const proc = try setup.store.addProcSpec(.{
             .name = setup.store.freshSyntheticSymbol(),
+            .identity = LIR.ProcIdentity.forTest(1),
             .args = LIR.LocalSpan.empty(),
             .ret_layout = .str,
         });

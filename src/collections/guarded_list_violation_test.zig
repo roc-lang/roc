@@ -365,6 +365,7 @@ fn emptyLiftedProgram(allocator: Allocator) Lifted.Ast.Program {
 
 fn dummyProcSpec(raw: u64) LIR.LirProcSpec {
     return .{
+        .identity = LIR.ProcIdentity.forTest(@intCast(raw)),
         .name = LIR.Symbol.fromRaw(raw),
         .args = LIR.LocalSpan.empty(),
         .ret_layout = layout.Idx.u8,

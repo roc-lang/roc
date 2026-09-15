@@ -363,6 +363,7 @@ test "forwarding join inline sinks the sole consumer without duplicating it" {
     } });
     const proc = try store.addProcSpec(.{
         .name = LIR.Symbol.fromRaw(1),
+        .identity = LIR.ProcIdentity.forTest(4),
         .args = LIR.LocalSpan.empty(),
         .iterator_fusion_scope = true,
         .body = outer_stmt,
@@ -453,6 +454,7 @@ test "forwarding join inline freshens definitions only in a shared tail" {
     } });
     const proc = try store.addProcSpec(.{
         .name = LIR.Symbol.fromRaw(1),
+        .identity = LIR.ProcIdentity.forTest(3),
         .args = LIR.LocalSpan.empty(),
         .iterator_fusion_scope = true,
         .body = outer_stmt,
@@ -531,6 +533,7 @@ test "forwarding join inline preserves recursive outer join declarations" {
     } });
     const proc = try store.addProcSpec(.{
         .name = LIR.Symbol.fromRaw(1),
+        .identity = LIR.ProcIdentity.forTest(2),
         .args = LIR.LocalSpan.empty(),
         .iterator_fusion_scope = true,
         .body = outer_stmt,
@@ -589,6 +592,7 @@ test "forwarding join inline preserves owning continuation parameters" {
     } });
     const proc = try store.addProcSpec(.{
         .name = LIR.Symbol.fromRaw(1),
+        .identity = LIR.ProcIdentity.forTest(1),
         .args = try store.addLocalSpan(&.{source}),
         .iterator_fusion_scope = true,
         .body = outer_stmt,

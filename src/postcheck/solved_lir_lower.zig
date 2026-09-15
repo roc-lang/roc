@@ -17,6 +17,7 @@ const match_tree = @import("match_tree.zig");
 const Mono = @import("monotype/ast.zig");
 const Lifted = @import("monotype_lifted/ast.zig");
 const SolvedInline = @import("solved_inline.zig");
+const proc_identity = @import("proc_identity.zig");
 const Solved = @import("lambda_solved/ast.zig");
 const SolvedType = @import("lambda_solved/type.zig");
 const LambdaMono = @import("lambda_mono/ast.zig");
@@ -183,8 +184,15 @@ pub fn run(
     var owned = solved;
     errdefer owned.deinit();
 
+    const source_digests = try allocator.alloc(?proc_identity.Identity, owned.lifted.fnCount());
+    defer allocator.free(source_digests);
+    for (source_digests, 0..) |*digest, index| {
+        digest.* = owned.lifted.fnSourceDigest(@enumFromInt(@as(u32, @intCast(index))));
+    }
+
     var lowerer = try Lowerer.init(allocator, target_usize, &owned, options);
     errdefer lowerer.deinit();
+    lowerer.source_digests = source_digests;
 
     try lowerer.result.store.setSourceFiles(owned.lifted.sourceFiles());
     try lowerer.prepareExpectSites();
@@ -503,6 +511,9 @@ const Lowerer = struct {
     allocator: std.mem.Allocator,
     solved: *const Solved.Program,
     solved_types: SolvedType.Store.View,
+    /// Checked source digest per lifted function, borrowed for the whole
+    /// lowering; see `proc_identity.Renderer`.
+    source_digests: []const ?proc_identity.Identity = &.{},
     post_check_executor: ?base.post_check_task_executor.Executor,
     types: Type.Store,
     result: LirProgram.Result,
@@ -511,6 +522,10 @@ const Lowerer = struct {
     fn_specs: std.ArrayList(FnSpec),
     fn_entries: std.ArrayList(FnEntry),
     fn_spec_map: std.HashMap(FnSpec, Type.FnId, FnSpecContext, std.hash_map.default_max_load_percentage),
+    /// The LIR proc lowered for each procedure identity. Distinct Lambda Mono
+    /// specializations that render the same identity are the same procedure
+    /// and share one proc.
+    procs_by_identity: std.AutoHashMap(LIR.ProcIdentity, LIR.LirProcSpecId),
     fn_written: std.ArrayList(bool),
     fn_reachable: std.ArrayList(bool),
     fn_reach_queue: std.ArrayList(Type.FnId),
@@ -528,6 +543,9 @@ const Lowerer = struct {
     folded_map_matches: std.ArrayList(Lifted.Program.FoldedMatch),
     /// Source functions indexed by their stage-stable symbols.
     source_symbols: std.AutoHashMap(Common.Symbol, Lifted.FnId),
+    /// Type digests shared by every procedure identity rendering; see
+    /// `proc_identity.Memo`.
+    identity_memo: proc_identity.Memo,
     /// Lowered capture record of every capture span seen so far. A capture
     /// record depends only on its captures, so one record serves every
     /// function type that carries the same span.
@@ -747,6 +765,7 @@ const Lowerer = struct {
             .fn_specs = .empty,
             .fn_entries = .empty,
             .fn_spec_map = std.HashMap(FnSpec, Type.FnId, FnSpecContext, std.hash_map.default_max_load_percentage).initContext(allocator, .{}),
+            .procs_by_identity = std.AutoHashMap(LIR.ProcIdentity, LIR.LirProcSpecId).init(allocator),
             .fn_written = .empty,
             .fn_reachable = .empty,
             .fn_reach_queue = .empty,
@@ -763,6 +782,7 @@ const Lowerer = struct {
             .root_requests = .{ .test_plan_metadata = options.test_plan_metadata },
             .folded_map_matches = .empty,
             .source_symbols = std.AutoHashMap(Common.Symbol, Lifted.FnId).init(allocator),
+            .identity_memo = proc_identity.Memo.init(allocator),
             .capture_types = std.AutoHashMap(CaptureSpanKey, Type.TypeId).init(allocator),
             .captures = collections.DenseMap(Lifted.LocalId, CaptureBinding).init(allocator),
             .recursive_value_locals = recursive_value_locals,
@@ -907,10 +927,12 @@ const Lowerer = struct {
         self.captures.deinit();
         self.capture_types.deinit();
         self.source_symbols.deinit();
+        self.identity_memo.deinit();
         self.fn_reach_queue.deinit(self.allocator);
         self.fn_reachable.deinit(self.allocator);
         self.fn_written.deinit(self.allocator);
         self.fn_spec_map.deinit();
+        self.procs_by_identity.deinit();
         self.fn_entries.deinit(self.allocator);
         self.fn_specs.deinit(self.allocator);
         self.type_map.deinit();
@@ -962,10 +984,12 @@ const Lowerer = struct {
         self.captures.deinit();
         self.capture_types.deinit();
         self.source_symbols.deinit();
+        self.identity_memo.deinit();
         self.fn_reach_queue.deinit(self.allocator);
         self.fn_reachable.deinit(self.allocator);
         self.fn_written.deinit(self.allocator);
         self.fn_spec_map.deinit();
+        self.procs_by_identity.deinit();
         self.fn_entries.deinit(self.allocator);
         self.fn_specs.deinit(self.allocator);
         self.type_map.deinit();
@@ -2186,6 +2210,17 @@ const Lowerer = struct {
         const lifted_args = self.solved.lifted.typedLocalSpan(source_fn.args);
         if (arg_tys.len != lifted_args.len) Common.invariant("direct Lambda Mono function arity changed after Lambda Solved");
 
+        const identity = try self.specIdentity(spec);
+        if (self.procs_by_identity.get(identity)) |existing| {
+            // Another specialization already lowered this procedure. Reuse
+            // its proc and keep this spec out of the reach queue so the body
+            // is lowered once.
+            entry.proc = existing;
+            self.fn_entries.items[index] = entry;
+            self.fn_reachable.items[index] = true;
+            return existing;
+        }
+
         const arg_count = lifted_args.len + switch (spec.abi) {
             .finite => (if (entry.capture_arg_ty == null) @as(usize, 0) else 1) +
                 @as(usize, @intFromBool(spec.return_reuse.enabled())),
@@ -2237,6 +2272,7 @@ const Lowerer = struct {
         };
         const proc = try self.result.store.addProcSpec(.{
             .name = lirSymbol(entry.symbol),
+            .identity = identity,
             .args = args_span,
             .iterator_fusion_scope = source_fn.iterator_fusion_scope,
             .erased_reuse_arg = erased_reuse_arg,
@@ -2255,6 +2291,14 @@ const Lowerer = struct {
         if (self.proc_debug_names) {
             if (self.solved.lifted.procDebugName(source_fn.symbol)) |name| {
                 try self.result.store.setProcDebugName(proc, self.solved.lifted.names.exportNameText(name));
+            }
+        }
+        try self.procs_by_identity.putNoClobber(identity, proc);
+        if (source_fn.source) |template| {
+            if (template.spec_key) |key| {
+                if (spec.abi == .finite and source_fn.spec_constr_pattern == null and self.captureSpan(spec.captures).len == 0 and !spec.return_reuse.enabled()) {
+                    try self.result.spec_procs.append(self.allocator, .{ .key = key.bytes, .proc = proc });
+                }
             }
         }
         entry.proc = proc;
@@ -2952,6 +2996,40 @@ const Lowerer = struct {
         return id;
     }
 
+    /// Identity of a specialization procedure, from its lifted source and the
+    /// solved function type it was specialized at.
+    fn specIdentity(self: *Lowerer, spec: FnSpec) std.mem.Allocator.Error!LIR.ProcIdentity {
+        const renderer = proc_identity.Renderer{
+            .allocator = self.allocator,
+            .types = self.solved_types,
+            .names = &self.solved.lifted.names,
+            .fn_tys = self.solved.fn_tys.items,
+            .source_digests = self.source_digests,
+            .fn_by_symbol = &self.source_symbols,
+            .memo = &self.identity_memo,
+        };
+        const return_reuse: []const u8 = switch (spec.return_reuse) {
+            .none => "no-return-reuse",
+            .erased_callable => "erased-return-reuse",
+        };
+        return .{ .bytes = try renderer.specIdentity(spec.source, spec.solved_fn_ty, self.captureSpan(spec.captures), @tagName(spec.abi), return_reuse) };
+    }
+
+    /// Identity of a static-initializer procedure. These procedures exist only
+    /// so target static-data materialization can run a value's construction;
+    /// they are never emitted by a runtime backend, so their identity names
+    /// the value's layout and static-data slot within this program.
+    fn staticInitializerIdentity(self: *Lowerer, request: StaticInitializerRequest) std.mem.Allocator.Error!LIR.ProcIdentity {
+        var digests = try layout.Digests.init(self.allocator, &self.result.layouts);
+        defer digests.deinit();
+        var hasher = base.TypeDigestHasher.init();
+        hasher.update("roc.proc.static-initializer.v1");
+        hasher.update(&try digests.get(request.layout_idx));
+        const slot: u32 = @intFromEnum(request.static_data);
+        hasher.update(&[_]u8{ @truncate(slot), @truncate(slot >> 8), @truncate(slot >> 16), @truncate(slot >> 24) });
+        return .{ .bytes = hasher.finalResult() };
+    }
+
     fn lirStaticDataFor(
         self: *Lowerer,
         candidate: Mono.StaticDataCandidate,
@@ -2971,6 +3049,7 @@ const Lowerer = struct {
 
         const proc = try self.result.store.addProcSpec(.{
             .name = lirSymbol(self.symbols.fresh()),
+            .identity = try self.staticInitializerIdentity(request),
             .args = LIR.LocalSpan.empty(),
             .body = null,
             .ret_layout = layout_idx,
