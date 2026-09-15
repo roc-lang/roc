@@ -10844,6 +10844,125 @@ test "issue 11362: generated iterator index follows root unions and producer rep
     try std.testing.expect(graph.generated_iterator_nodes > 0);
 }
 
+test "iterator finalization guards perform no graph walks without provenance" {
+    const gpa = std.testing.allocator;
+    var types = Type.Store.init(gpa);
+    defer types.deinit();
+    var name_store = names.NameStore.init(gpa);
+    defer name_store.deinit();
+    const graph = try InstGraph.create(gpa, &types, &name_store);
+    defer graph.destroy();
+    var diagnostics: GraphDiagnostics = .{};
+    graph.setDiagnostics(&diagnostics);
+    for (0..100) |_| _ = try graph.newNode(.empty_record);
+    try graph.finalizeGeneratedIteratorRepresentations();
+    try graph.finalizeGeneratedIteratorIdentities();
+    try std.testing.expectEqual(@as(u64, 0), diagnostics.union_find_resolutions);
+}
+
+test "generated iterator index preserves evidence, argument classes, unions and replacements" {
+    const Scenario = struct {
+        fn run(allocator: Allocator) (Allocator.Error || error{ TestUnexpectedResult, TestExpectedEqual })!void {
+            var types = Type.Store.init(allocator);
+            defer types.deinit();
+            var name_store = names.NameStore.init(allocator);
+            defer name_store.deinit();
+            const graph = try InstGraph.create(allocator, &types, &name_store);
+            defer graph.destroy();
+            const module = try name_store.internModuleIdentity(&([_]u8{0x62} ** 32));
+            const type_name = try name_store.internTypeName("Iter");
+            const item = try graph.newNode(.{ .primitive = .bool });
+            const component = try graph.newNode(.empty_record);
+            const other_component = try graph.newNode(.empty_record);
+            const public_source: InstIteratorPublicSource = .{
+                .named_type = .{ .module = .{}, .ty = testCheckedTypeId(1) },
+                .def = .{ .module = module, .type_name = type_name },
+                .kind = .@"opaque",
+                .builtin_owner = .iter,
+                .backing = .{ .node = component, .use = .runtime_layout_only },
+                .declared_order = &.{},
+            };
+            const public = try graph.newNode(.{ .named = .{
+                .named_type = public_source.named_type,
+                .def = public_source.def,
+                .kind = public_source.kind,
+                .builtin_owner = .iter,
+                .args = try graph.arena().dupe(NodeId, &.{item}),
+                .backing = public_source.backing,
+            } });
+            var generated = graph.content(public).named;
+            generated.def.iterator_kind = .list;
+            generated.def.iterator_representation = .minted;
+            generated.def.iterator_depth = 1;
+            generated.args = try graph.arena().dupe(NodeId, &.{ item, component });
+            generated.backing.?.authority = .generated_private;
+            generated.generated_iterator = .{ .callable_evidence = null, .public_source = public_source };
+            var without_provenance = generated;
+            without_provenance.generated_iterator = null;
+            const first = try graph.newNode(.{ .named = without_provenance });
+            try std.testing.expectEqual(@as(u32, 0), graph.generated_iterator_nodes);
+            try graph.setContent(first, .{ .named = generated });
+            try std.testing.expectEqual(@as(u32, 1), graph.generated_iterator_nodes);
+            const second = try graph.newNode(.{ .named = generated });
+            try std.testing.expectEqual(first, graph.findGeneratedIterator(public, .list, &.{component}, null).?);
+            try std.testing.expect(graph.findGeneratedIterator(public, .map, &.{component}, null) == null);
+            try std.testing.expect(graph.findGeneratedIterator(public, .list, &.{other_component}, null) == null);
+            const evidence: names.TypeDigest = .{ .bytes = @splat(7) };
+            try std.testing.expect(graph.findGeneratedIterator(public, .list, &.{component}, evidence) == null);
+            generated.generated_iterator.?.callable_evidence = evidence;
+            const with_evidence = try graph.newNode(.{ .named = generated });
+            try std.testing.expectEqual(with_evidence, graph.findGeneratedIterator(public, .list, &.{component}, evidence).?);
+            generated.def.source_decl = 17;
+            const other_decl = try graph.newNode(.{ .named = generated });
+            try std.testing.expectEqual(other_decl, graph.findGeneratedIterator(other_decl, .list, &.{component}, evidence).?);
+            try std.testing.expectEqual(with_evidence, graph.findGeneratedIterator(public, .list, &.{component}, evidence).?);
+
+            var rekeyed = graph.content(first).named;
+            rekeyed.generated_iterator.?.callable_evidence = evidence;
+            try graph.setContent(first, .{ .named = rekeyed });
+            try std.testing.expectEqual(first, graph.findGeneratedIterator(public, .list, &.{component}, evidence).?);
+            rekeyed.generated_iterator.?.callable_evidence = null;
+            try graph.setContent(first, .{ .named = rekeyed });
+            try std.testing.expectEqual(first, graph.findGeneratedIterator(public, .list, &.{component}, null).?);
+            try std.testing.expectEqual(with_evidence, graph.findGeneratedIterator(public, .list, &.{component}, evidence).?);
+
+            try graph.unify(other_component, component);
+            try std.testing.expectEqual(first, graph.findGeneratedIterator(public, .list, &.{other_component}, null).?);
+            const request = try graph.newNode(.{ .func = .{
+                .args = try graph.arena().dupe(NodeId, &.{first}),
+                .ret = item,
+            } });
+            const source = try graph.newNode(.{ .func = .{
+                .args = try graph.arena().dupe(NodeId, &.{public}),
+                .ret = item,
+            } });
+            try graph.registerRequestSourceInterface(request, source);
+            graph.registerConstructorEvidenceRequest(request);
+            try graph.union_(second, first);
+            try std.testing.expectEqual(source, graph.requestSourceInterface(request).?);
+            try std.testing.expect(graph.requestPropagatesConstructorEvidence(request));
+            try std.testing.expectEqual(second, graph.findGeneratedIterator(public, .list, &.{component}, null).?);
+
+            var dynamic = graph.content(second).named;
+            dynamic.def.iterator_kind = .forced_dynamic;
+            dynamic.def.iterator_representation = .forced_dynamic;
+            dynamic.def.iterator_depth = 0;
+            dynamic.args = try graph.arena().dupe(NodeId, &.{item});
+            graph.setContent(second, .{ .named = dynamic }) catch |err| {
+                // Failed index growth must preserve both old content and key.
+                try std.testing.expectEqual(second, graph.findGeneratedIterator(public, .list, &.{component}, null).?);
+                return err;
+            };
+            try std.testing.expect(graph.findGeneratedIterator(public, .list, &.{component}, null) == null);
+            try std.testing.expectEqual(second, graph.findGeneratedIterator(public, .forced_dynamic, &.{}, null).?);
+            try graph.setContent(second, .zst);
+            try std.testing.expect(graph.findGeneratedIterator(public, .forced_dynamic, &.{}, null) == null);
+            try std.testing.expectEqual(@as(u32, 2), graph.generated_iterator_index.count());
+        }
+    };
+    try std.testing.checkAllAllocationFailures(std.testing.allocator, Scenario.run, .{});
+}
+
 test "iterator-free finalization performs no graph resolutions" {
     var types = Type.Store.init(std.testing.allocator);
     defer types.deinit();
