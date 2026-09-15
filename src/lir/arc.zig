@@ -507,7 +507,7 @@ pub fn insert(store: *LirStore, layouts: *const layout_mod.Store, options: Inser
     }
     var base_index: usize = 0;
     var variant_index: usize = 0;
-    // The wave width is a storage bound, not a worker-count heuristic. Identity
+    // The wave width is a storage bound independent of worker count. Identity
     // reservation and commit order are identical for inline and pooled runs.
     while (base_index < base_proc_count or variant_index < variants.queue.items.len) {
         const owners = try store.allocator.alloc(EmissionOwner, emission_wave_size);

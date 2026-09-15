@@ -12143,11 +12143,11 @@ domain and liveness data; variants share that source data, never a previously
 emitted ARC body. Mutable residual masks, ownership overrides, plans, and
 materialization scratch belong to one emission.
 
-Planning produces semantic variant requests without allocating procedure
+Planning produces ownership-demand variant requests without allocating procedure
 identities. A coordinator reserves those identities in FIFO procedure/request
 order, then materialization consumes the fixed call targets and appends only
 to private body shards. Ordered commit relocates generated locals, statements,
-and join spans before publishing each procedure's metadata. Bounded waves use
+and join spans before committing each procedure's metadata. Bounded waves use
 the same schedule with or without workers, so worker count and completion order
 cannot change variant symbols or emitted LIR. Submission or callback failure
 drains accepted work before freeing its owners; insertion failure discards the
