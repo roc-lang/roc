@@ -7,6 +7,8 @@ const expectLowersToLirWithOptions = harness.expectLowersToLirWithOptions;
 const expectPreparedFiniteCaptureFreeDirectCallsParallelismDeterministicLir =
     harness.expectPreparedFiniteCaptureFreeDirectCallsParallelismDeterministicLir;
 const expectSpecializationParallelismDeterministicLir = harness.expectSpecializationParallelismDeterministicLir;
+const expectEagerIteratorSpecializationParallelismDeterministicLir =
+    harness.expectEagerIteratorSpecializationParallelismDeterministicLir;
 const expectProcedureRootParallelismDeterministicLir = harness.expectProcedureRootParallelismDeterministicLir;
 
 test "solved-LIR parallel metrics reset and report retry-free batch accounting" {
@@ -86,6 +88,39 @@ test "multiple ordinary specialization epochs lower deterministically in paralle
 
 test "prepared finite capture-free direct calls lower in deterministic discovery waves" {
     try expectPreparedFiniteCaptureFreeDirectCallsParallelismDeterministicLir();
+}
+
+test "iterator-producing callees complete in worker-owned specialization drafts" {
+    try expectEagerIteratorSpecializationParallelismDeterministicLir(
+        \\make_iter : List(U64) -> [Ready(Iter(U64))]
+        \\make_iter = |items| Ready(items.iter().map(|item| item + 1))
+        \\
+        \\consume_a = |items| match make_iter(items) {
+        \\    Ready(iter) => {
+        \\        var $sum = 0.U64
+        \\        for x in iter {
+        \\            $sum = $sum + x
+        \\        }
+        \\        $sum
+        \\    }
+        \\}
+        \\
+        \\consume_b = |items| match make_iter(items) {
+        \\    Ready(iter) => {
+        \\        var $sum = 0.U64
+        \\        for x in iter {
+        \\            $sum = $sum + x
+        \\        }
+        \\        $sum
+        \\    }
+        \\}
+        \\
+        \\main! : List(Str) => Try({}, [Exit(I8), ..])
+        \\main! = |_args| {
+        \\    total = consume_a([1, 2, 3]) + consume_b([1, 2, 3])
+        \\    if total == 18 { Ok({}) } else { Err(Exit(1)) }
+        \\}
+    );
 }
 
 test "self-tail proofs survive deterministic parallel body handoff" {
