@@ -11239,3 +11239,83 @@ test "issue 11376: packed products survive Boxy boundaries and copy-on-write" {
         try runtime_env.checkForLeaks();
     }
 }
+
+/// A stored parser constant (`parse_stored = { Shape.parser_for(...) }`),
+/// mirroring test/cli/ParserTopLevelStoredParser.roc without its module
+/// header. `polarity_phase_two.md` W2b moved this body's emission behind the
+/// graph freeze; no snapshot anywhere carries lowered output, so the
+/// Monotype footprint below is the gate that the deferred body is the same
+/// body the eager restore used to emit.
+const stored_parser_gate_source =
+    \\Format := [Default].{
+    \\    rename_field : Format, Str -> Str
+    \\    rename_field = |_, name| name
+    \\
+    \\    parse_str : Format, State -> Try({ value : Str, rest : State }, [FormatError])
+    \\    parse_str = |_, state|
+    \\        match state {
+    \\            Present(value) => Ok({ value, rest: Done })
+    \\            Done => Err(FormatError)
+    \\        }
+    \\
+    \\    parse_record_start : Format, State -> Try([Counted({ len : U64, rest : State }), Uncounted(State)], [FormatError])
+    \\    parse_record_start = |_, state| Ok(Uncounted(state))
+    \\
+    \\    parse_record_field : Format,
+    \\    Encoding.FieldName.FieldNames(_shape),
+    \\    State -> Try(
+    \\        [
+    \\            Field({ field : Encoding.FieldName(_shape), rest : State }),
+    \\            TryField({ name : Str, rest : State }),
+    \\            TryFieldCaseless({ name : Str, rest : State }),
+    \\            Continue(State),
+    \\            Done(State),
+    \\        ],
+    \\        [FormatError],
+    \\    )
+    \\    parse_record_field = |_, _, state|
+    \\        match state {
+    \\            Present(_) => Ok(TryField({ name: "foo", rest: state }))
+    \\            Done => Ok(Done(state))
+    \\        }
+    \\
+    \\    parse_record_after_field : Format, State -> Try([Continue(State), Done(State)], [FormatError])
+    \\    parse_record_after_field = |_, state| Ok(Continue(state))
+    \\
+    \\    skip_record_field : Format, State -> Try(State, [FormatError])
+    \\    skip_record_field = |_, _| Ok(Done)
+    \\}
+    \\
+    \\State := [Present(Str), Done]
+    \\
+    \\parse_stored : State -> Try({ value : { foo : Str }, rest : State }, [FormatError, MissingRequiredField(Str)])
+    \\parse_stored = {
+    \\    Shape : { foo : Str }
+    \\    Shape.parser_for(Format.Default)
+    \\}
+    \\
+    \\main : State -> Try({ value : { foo : Str }, rest : State }, [FormatError, MissingRequiredField(Str)])
+    \\main = |state| parse_stored(state)
+;
+
+test "stored codec restore emits the same Monotype shape from Phase B" {
+    // `polarity_phase_two.md` W2b moved this body's generation behind the
+    // graph freeze. No snapshot anywhere carries lowered output, so these are
+    // the numbers that stand in for "the sealed body is the body the eager
+    // restore used to emit". Measured on the pre-W2b compiler:
+    //   fns=10 defs=11 exprs=535 locals=108 template_misses=14 nested_misses=0
+    // Function and definition counts are exact: deferring generation must not
+    // add or drop a generated procedure. Expression and local counts get a
+    // small window because Phase-B emission replaces the reservation with a
+    // copy of the lowered expression and orphans the original. Specialization
+    // misses may only fall: W2a keyed the callee spec as an open request, and
+    // W2b removes that cause.
+    const allocator = std.testing.allocator;
+    const stats = try structuralJsonMonotypeStatsForSource(allocator, stored_parser_gate_source);
+    try std.testing.expectEqual(@as(usize, 10), stats.functions);
+    try std.testing.expectEqual(@as(usize, 11), stats.definitions);
+    try std.testing.expect(stats.expressions >= 527 and stats.expressions <= 543);
+    try std.testing.expect(stats.locals >= 104 and stats.locals <= 112);
+    try std.testing.expect(stats.template_misses <= 14);
+    try std.testing.expectEqual(@as(u64, 0), stats.nested_misses);
+}

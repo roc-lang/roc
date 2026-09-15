@@ -5688,12 +5688,10 @@ the rejection by structural path would have required a serialized
 cross-module position table for a rule strictly narrower than the
 adapter's own lowerability test.) A second lowering consequence: a Builtin format method's protocol result row (the ok
 payload of `parse_record_start`, for instance) is now quantified in its
-scheme, so a stored codec restore, which emits its generated bodies from
-resolved views before the specialization graph freezes, reaches that row
-unresolved; transitionally it commits such rows' defaults through
-`InstGraph.groundRowDefaults` (the one declared exception to "defaults apply
-only at final sealing" in the Monotype section) until `polarity_phase_two.md`
-W2b moves that emission into Phase B.
+scheme, so a stored codec restore reaches that row unresolved while the
+specialization graph is still open. Stored codec restores therefore prepare
+in Phase A and emit in Phase B like every other codec body, and the row is
+decided once, by final sealing.
 
 Two positions opt out of implicit opening, both genuine non-producers:
 host-boundary annotations (hosted lambdas and `provides` defs) and platform
@@ -7233,7 +7231,9 @@ specialization graph still accepts relations, codec preparation
 at its inline field node and records the finished draft expression
 (`DraftPreparedFieldDefault`); frozen Phase‑B emission consumes exactly
 those prepared values and may not lower another checked expression
-(missing or duplicate demand is an invariant panic). No leading-batch
+(missing or duplicate demand is an invariant panic). Stored codec
+restores (`parser_runtime` / `encoder_for_runtime` constants) prepare in
+Phase A and emit in Phase B like every other codec body. No leading-batch
 root ordering exists anymore—the former `pending_field_defaults`
 machinery existed only to finalize archived constants before parsers
 could restore them.
@@ -8837,18 +8837,8 @@ and subsequent relations still act on the original graph node.
 The only time an unresolved checked variable with an empty-tag-union row
 default may become durable `tag_union []` is final graph sealing, after every
 checked interface relation and specialization demand for that body has been
-applied. One declared exception exists and is transitional (removed by
-`polarity_phase_two.md` W2b, which moves the stored-codec restore's emission
-into Phase B): a stored codec restore prepares its generated format-method
-calls before the graph freezes and must emit their bodies from resolved
-views. Immediately before those views are taken, `InstGraph.groundRowDefaults`
-commits the row defaults of every cell reachable from a prepared call's
-callable node to the content final sealing would materialize (a prepared
-call's shape node is a sub-node of the root shape the restore has already
-viewed resolved, so it needs none). Numeric defaults are never committed
-there. A derived codec determines each
-protocol row exactly, so no later relation can widen a grounded row; the
-`unifyTagRows` invariant enforces that.
+applied. There is no exception: every codec body, derived or restored from a
+stored constant, is generated after that point.
 After sealing, `tag_union []` is closed and uninhabited. Values such as `[]` can
 still be represented as `List(tag_union [])` because they contain no items,
 and code that would need an actual item value must have constrained the

@@ -4904,6 +4904,7 @@ const Builder = struct {
         const root_ty = seal: {
             var phase_b_sealer = GraphTypeFinals.init(graph);
             defer phase_b_sealer.deinit();
+            try self.emitDraftDeferredStoredCodecRestores(&body_draft, graph, &phase_b_sealer);
             try self.emitDraftDeferredStructuralSerializations(&body_draft, graph, &phase_b_sealer);
             try self.emitDraftDeferredCallsiteIntrinsics(&body_draft, graph, &phase_b_sealer);
             try self.emitDraftDeferredStructuralEqs(&body_draft, graph, &phase_b_sealer);
@@ -9759,6 +9760,15 @@ const Builder = struct {
                 )) added_codec_call = true;
             }
 
+            var restore_index: usize = 0;
+            while (restore_index < body_draft.deferred_stored_codec_restores.items.len) : (restore_index += 1) {
+                if (try self.prepareDraftStoredCodecRestore(
+                    body_draft,
+                    graph,
+                    body_draft.deferred_stored_codec_restores.items[restore_index],
+                )) added_codec_call = true;
+            }
+
             var added_intrinsic_call = false;
             var intrinsic_index: usize = 0;
             while (intrinsic_index < body_draft.deferred_callsite_intrinsics.items.len) : (intrinsic_index += 1) {
@@ -9787,6 +9797,11 @@ const Builder = struct {
         for (body_draft.deferred_structural_serializations.items) |boundary| {
             if (body_draft.exprs.items[@intFromEnum(boundary.expr)].data != .pending_deferred) {
                 Common.invariant("deferred structural serialization reservation was filled before final graph sealing");
+            }
+        }
+        for (body_draft.deferred_stored_codec_restores.items) |boundary| {
+            if (body_draft.exprs.items[@intFromEnum(boundary.expr)].data != .pending_deferred) {
+                Common.invariant("deferred stored codec restore reservation was filled before final graph sealing");
             }
         }
         for (body_draft.deferred_callsite_intrinsics.items) |boundary| {
@@ -10074,6 +10089,44 @@ const Builder = struct {
         );
     }
 
+    /// Relation production for a deferred stored codec restore. The restore
+    /// prepared this boundary's calls once at deferral time; rerunning to
+    /// fixpoint here matches the structural path, because preparing one nested
+    /// codec call can expose another reachable shape.
+    fn prepareDraftStoredCodecRestore(
+        self: *Builder,
+        body_draft: *BodyDraftStore,
+        graph: *InstGraph,
+        boundary: DraftDeferredStoredCodecRestore,
+    ) Allocator.Error!bool {
+        const owner_scope = try body_draft.enterOwner(boundary.owner);
+        defer owner_scope.leave();
+
+        var ctx = try BodyContext.initWithMethodScope(
+            self.allocator,
+            self,
+            boundary.view,
+            boundary.method_scope,
+            boundary.owner_template,
+            graph,
+            body_draft,
+        );
+        defer ctx.deinit();
+        ctx.evidence = boundary.evidence;
+        ctx.current_fn_key = boundary.current_fn_key;
+        try ctx.inheritActiveConstBindingId(boundary.active_const_binding);
+        try ctx.restoreCodecLexicalContext(boundary.lexical);
+        try ctx.installRetainedCodecContract(boundary.codec_contract orelse
+            Common.invariant("deferred stored codec restore had no enclosing codec contract"));
+
+        return try ctx.prepareStructuralCodecCallsAtNode(
+            boundary.expr,
+            boundary.kind,
+            boundary.shape_node,
+            boundary.callable_node,
+        );
+    }
+
     /// Relation production for a deferred call-site intrinsic. Only
     /// `parse_tag_union` generates parser bodies whose format method calls
     /// and error-row tags must exist as graph relations before the freeze;
@@ -10212,6 +10265,81 @@ const Builder = struct {
         }
         if (body_draft.runtime_value_demands.items.len != runtime_demand_count) {
             Common.invariant("sealed structural serialization emission produced a new checked runtime-value demand");
+        }
+    }
+
+    /// Phase B for a stored codec constant. The restore instantiated its
+    /// constructor against the request and prepared every generated
+    /// format-method call while relations were still open; the body itself is
+    /// generated here from the one final snapshot, so a protocol row or a
+    /// field kind that only the freeze decides is already decided.
+    fn emitDraftDeferredStoredCodecRestores(
+        self: *Builder,
+        body_draft: *BodyDraftStore,
+        graph: *InstGraph,
+        sealer: *GraphTypeFinals,
+    ) Allocator.Error!void {
+        const runtime_demand_count = body_draft.runtime_value_demands.items.len;
+        for (body_draft.deferred_stored_codec_restores.items) |boundary| {
+            const owner_scope = try body_draft.enterOwner(boundary.owner);
+            defer owner_scope.leave();
+
+            const saved_loc = self.current_loc;
+            defer self.current_loc = saved_loc;
+            const saved_region = self.current_region;
+            defer self.current_region = saved_region;
+            self.current_loc = body_draft.expr_locs.items[@intFromEnum(boundary.expr)];
+            self.current_region = body_draft.expr_regions.items[@intFromEnum(boundary.expr)];
+
+            var ctx = try BodyContext.initWithMethodScope(
+                self.allocator,
+                self,
+                boundary.view,
+                boundary.method_scope,
+                boundary.owner_template,
+                graph,
+                body_draft,
+            );
+            defer ctx.deinit();
+            ctx.evidence = boundary.evidence;
+            ctx.current_fn_key = boundary.current_fn_key;
+            try ctx.inheritActiveConstBindingId(boundary.active_const_binding);
+            try ctx.restoreCodecLexicalContext(boundary.lexical);
+            try ctx.installRetainedCodecContract(boundary.codec_contract orelse
+                Common.invariant("deferred stored codec restore had no enclosing codec contract"));
+            ctx.frozen_sealed_emission = true;
+            ctx.frozen_type_finals = sealer;
+
+            var frozen_codec_calls = try ctx.sealedPreparedCodecCallsForBoundary(boundary.expr, sealer);
+            defer frozen_codec_calls.deinit(self.allocator);
+            ctx.frozen_codec_calls = &frozen_codec_calls;
+            var frozen_field_defaults = try ctx.sealedPreparedFieldDefaultsForBoundary(boundary.expr, sealer);
+            defer frozen_field_defaults.deinit(self.allocator);
+            ctx.frozen_field_defaults = &frozen_field_defaults;
+
+            const lowered = switch (boundary.kind) {
+                .parser => try ctx.emitStoredParserRuntimeBody(boundary, sealer),
+                .encoder => try ctx.emitStoredEncoderForRuntimeBody(boundary, sealer),
+            };
+
+            var lowered_expr = body_draft.exprs.items[@intFromEnum(lowered)];
+            const reserved_ty = try body_draft.exprs.items[@intFromEnum(boundary.expr)].ty.seal(graph, sealer);
+            const lowered_ty = try lowered_expr.ty.seal(graph, sealer);
+            if (!try ctx.typeStore().typeEql(ctx.nameStore(), reserved_ty, lowered_ty)) {
+                Common.invariant("deferred stored codec restore changed its sealed result type");
+            }
+            lowered_expr.ty = .{ .sealed = reserved_ty };
+            body_draft.exprs.items[@intFromEnum(boundary.expr)] = lowered_expr;
+            body_draft.expr_impossibility_proofs.items[@intFromEnum(boundary.expr)] =
+                body_draft.expr_impossibility_proofs.items[@intFromEnum(lowered)];
+        }
+        for (body_draft.deferred_stored_codec_restores.items) |boundary| {
+            if (body_draft.exprs.items[@intFromEnum(boundary.expr)].data == .pending_deferred) {
+                Common.invariant("deferred stored codec restore did not fill its reservation");
+            }
+        }
+        if (body_draft.runtime_value_demands.items.len != runtime_demand_count) {
+            Common.invariant("sealed stored codec restore emission produced a new checked runtime-value demand");
         }
     }
 
@@ -11062,6 +11190,7 @@ const Builder = struct {
         var phase_b_sealer = GraphTypeFinals.init(graph);
         defer phase_b_sealer.deinit();
 
+        try self.emitDraftDeferredStoredCodecRestores(body_draft, graph, &phase_b_sealer);
         try self.emitDraftDeferredStructuralSerializations(body_draft, graph, &phase_b_sealer);
         try self.emitDraftDeferredCallsiteIntrinsics(body_draft, graph, &phase_b_sealer);
         try self.emitDraftDeferredStructuralEqs(body_draft, graph, &phase_b_sealer);
@@ -11113,6 +11242,7 @@ const Builder = struct {
 
         var sealer = GraphTypeFinals.init(graph);
         defer sealer.deinit();
+        try self.emitDraftDeferredStoredCodecRestores(body_draft, graph, &sealer);
         try self.emitDraftDeferredStructuralSerializations(body_draft, graph, &sealer);
         try self.emitDraftDeferredCallsiteIntrinsics(body_draft, graph, &sealer);
         try self.emitDraftDeferredStructuralEqs(body_draft, graph, &sealer);
@@ -14457,6 +14587,44 @@ const DraftDeferredCallsiteIntrinsic = struct {
     codec_contract: ?RetainedCodecContract,
 };
 
+/// One stored codec constant (`parser_runtime` / `encoder_for_runtime`)
+/// restored at a use site. The constructor is instantiated against the
+/// request and its generated format-method calls are prepared while the
+/// graph still accepts relations; the generated body itself is emitted after
+/// the freeze, from sealed types only, exactly like every other derived
+/// codec body (design.md, the Phase-A/Phase-B boundary).
+///
+/// `expected_ret_ty` is present only for the `Type.TypeId`-shaped restore,
+/// whose caller already owns a durable request type; the graph-native
+/// restore proves the same property with `sameClass` at deferral time.
+const DraftDeferredStoredCodecRestore = struct {
+    view: ModuleView,
+    method_scope: ModuleView,
+    owner_template: names.ProcTemplate,
+    owner: DraftOwner,
+    expr: DraftExprId,
+    kind: CodecKind,
+    store_view: ModuleView,
+    fn_value: check.ConstStore.ConstFn,
+    request_fn_node: NodeId,
+    callable_node: NodeId,
+    encoding_node: NodeId,
+    shape_node: NodeId,
+    encoding_expr: DraftExprId,
+    encoding_let_local: ?DraftLocalId,
+    encoding_let_value: DraftExprId,
+    expected_ret_ty: ?Type.TypeId,
+    source_captures: []const Builder.RestoredConstSourceCapture,
+    active_const_binding: ?ActiveConstBindingId,
+    evidence: EvidenceChain,
+    current_fn_key: names.TypeDigest,
+    lexical: DraftCodecLexicalContext,
+    /// The generated codec contract active when the restore was deferred;
+    /// Phase-B emission runs in a fresh context and reinstalls it before it
+    /// prepares the generated body's structural codec calls.
+    codec_contract: ?RetainedCodecContract = null,
+};
+
 const DraftCodecLocalProcContext = struct {
     declaration: DraftLocalProcAddress,
     context: DraftLocalProcContextId,
@@ -15271,6 +15439,7 @@ const BodyDraftStore = struct {
     deferred_const_uses: std.ArrayList(DraftDeferredConstUse),
     deferred_structural_eqs: std.ArrayList(DraftDeferredStructuralEq),
     deferred_structural_serializations: std.ArrayList(DraftDeferredStructuralSerialization),
+    deferred_stored_codec_restores: std.ArrayList(DraftDeferredStoredCodecRestore),
     deferred_callsite_intrinsics: std.ArrayList(DraftDeferredCallsiteIntrinsic),
     prepared_codec_calls: std.ArrayList(DraftPreparedCodecCall),
     prepared_field_defaults: std.ArrayList(DraftPreparedFieldDefault),
@@ -15385,6 +15554,7 @@ const BodyDraftStore = struct {
             .deferred_const_uses = .empty,
             .deferred_structural_eqs = .empty,
             .deferred_structural_serializations = .empty,
+            .deferred_stored_codec_restores = .empty,
             .deferred_callsite_intrinsics = .empty,
             .prepared_codec_calls = .empty,
             .prepared_field_defaults = .empty,
@@ -15564,6 +15734,12 @@ const BodyDraftStore = struct {
             self.allocator.free(boundary.lexical.binders);
             self.allocator.free(boundary.lexical.local_procs);
         }
+        for (self.deferred_stored_codec_restores.items) |boundary| {
+            self.allocator.free(boundary.lexical.binders);
+            self.allocator.free(boundary.lexical.local_procs);
+            self.allocator.free(boundary.source_captures);
+            if (boundary.codec_contract) |contract| contract.deinit(self.allocator);
+        }
         for (self.local_proc_contexts.items) |context| self.allocator.free(context.entries);
         self.local_proc_contexts.deinit(self.allocator);
         self.template_spec_lookup.deinit();
@@ -15607,6 +15783,7 @@ const BodyDraftStore = struct {
         self.prepared_inspect_methods.deinit(self.allocator);
         self.deferred_inspects.deinit(self.allocator);
         self.deferred_structural_serializations.deinit(self.allocator);
+        self.deferred_stored_codec_restores.deinit(self.allocator);
         self.deferred_callsite_intrinsics.deinit(self.allocator);
         self.prepared_codec_calls.deinit(self.allocator);
         self.prepared_field_defaults.deinit(self.allocator);
@@ -16246,6 +16423,12 @@ const BodyDraftStore = struct {
             self.allocator.free(boundary.lexical.binders);
             self.allocator.free(boundary.lexical.local_procs);
         }
+        for (self.deferred_stored_codec_restores.items) |boundary| {
+            self.allocator.free(boundary.lexical.binders);
+            self.allocator.free(boundary.lexical.local_procs);
+            self.allocator.free(boundary.source_captures);
+            if (boundary.codec_contract) |contract| contract.deinit(self.allocator);
+        }
         for (self.local_proc_contexts.items) |context| self.allocator.free(context.entries);
         self.deferred_const_uses.deinit(self.allocator);
         self.deferred_const_uses = .empty;
@@ -16253,6 +16436,8 @@ const BodyDraftStore = struct {
         self.deferred_structural_eqs = .empty;
         self.deferred_structural_serializations.deinit(self.allocator);
         self.deferred_structural_serializations = .empty;
+        self.deferred_stored_codec_restores.deinit(self.allocator);
+        self.deferred_stored_codec_restores = .empty;
         self.deferred_callsite_intrinsics.deinit(self.allocator);
         self.deferred_callsite_intrinsics = .empty;
         self.deferred_inspects.deinit(self.allocator);
@@ -16328,6 +16513,7 @@ const BodyDraftStore = struct {
         if (self.deferred_const_uses.items.len != 0 or
             self.deferred_structural_eqs.items.len != 0 or
             self.deferred_structural_serializations.items.len != 0 or
+            self.deferred_stored_codec_restores.items.len != 0 or
             self.deferred_callsite_intrinsics.items.len != 0 or
             self.deferred_inspects.items.len != 0 or
             self.prepared_codec_calls.items.len != 0 or
@@ -17886,15 +18072,7 @@ const BodyContext = struct {
     /// exact prepared call identities instead of reconstructing checked requests.
     frozen_sealed_emission: bool = false,
     /// The one finalizer that owns Phase-B materialization for this frozen
-    /// graph. Checked defaults are applied here, never by an eager consumer,
-    /// with one declared exception that is transitional (removed by
-    /// `polarity_phase_two.md` W2b): a stored codec restore prepares its
-    /// generated format-method calls before the graph freezes and must emit
-    /// their bodies from resolved views. Immediately before those views are
-    /// taken, `resolvedPreparedCodecCallsForBoundary` commits the row
-    /// defaults of every cell reachable from a prepared call's callable node
-    /// through `InstGraph.groundRowDefaults`; numeric defaults are never
-    /// committed there.
+    /// graph. Checked defaults are applied here, never by an eager consumer.
     frozen_type_finals: ?*GraphTypeFinals = null,
     /// Source region to use while inlining a compile-time const eval template.
     /// The template body can be lowered from a lookup site, but diagnostics
@@ -19682,8 +19860,17 @@ const BodyContext = struct {
         return self.draft.expr_regions.items[@intFromEnum(id)];
     }
 
+    /// Frozen Phase-B emission reads a draft expression's type through the one
+    /// final sealer, exactly as `localType` does: a graph-node cell has no
+    /// active view once relation production has ended.
     fn exprType(self: *BodyContext, id: DraftExprId) Allocator.Error!Type.TypeId {
-        return try self.activeTypeFromCell(self.draft.exprs.items[@intFromEnum(id)].ty);
+        const cell = self.draft.exprs.items[@intFromEnum(id)].ty;
+        if (self.frozen_sealed_emission) {
+            const finals = self.frozen_type_finals orelse
+                Common.invariant("frozen Monotype emission had no graph type finalizer");
+            return try cell.seal(self.graph, finals);
+        }
+        return try self.activeTypeFromCell(cell);
     }
 
     fn exprTypeCell(self: *BodyContext, id: DraftExprId) DraftTypeCell {
@@ -36662,6 +36849,283 @@ const BodyContext = struct {
         );
     }
 
+    /// Hand one prepared stored codec restore to Phase B. Every relation the
+    /// generated body needs has already been produced; what remains is
+    /// generation from sealed types, which only the final snapshot supplies.
+    fn deferStoredCodecRestore(
+        self: *BodyContext,
+        boundary: DraftDeferredStoredCodecRestore,
+    ) Allocator.Error!void {
+        var owned = boundary;
+        owned.lexical = try self.captureCodecLexicalContext();
+        var lexical_needs_cleanup = true;
+        errdefer if (lexical_needs_cleanup) {
+            self.allocator.free(owned.lexical.binders);
+            self.allocator.free(owned.lexical.local_procs);
+        };
+        owned.codec_contract = try self.retainActiveCodecContract();
+        errdefer if (lexical_needs_cleanup) owned.codec_contract.?.deinit(self.allocator);
+        try self.draft.deferred_stored_codec_restores.append(self.allocator, owned);
+        lexical_needs_cleanup = false;
+    }
+
+    /// Phase-B body generation for a stored `parser_for` constant. Mirrors the
+    /// eager restore statement for statement; every type it consumes comes
+    /// from the final sealer instead of a pre-freeze resolved view.
+    fn emitStoredParserRuntimeBody(
+        self: *BodyContext,
+        boundary: DraftDeferredStoredCodecRestore,
+        sealer: *GraphTypeFinals,
+    ) Allocator.Error!DraftExprId {
+        const runtime = switch (boundary.fn_value.fn_def) {
+            .parser_runtime => |runtime| runtime,
+            .local_template, .imported_template, .nested, .local_hosted, .imported_hosted, .checked_generated, .encoder_for_runtime => Common.invariant("non-parser function reached sealed parser runtime emission"),
+        };
+        const request_cell = DraftTypeCell.fromGraphNode(boundary.request_fn_node);
+        const encoding_cell = DraftTypeCell.fromGraphNode(boundary.encoding_node);
+        const encoding_ty = try sealer.sealNode(boundary.encoding_node);
+        const shape_ty = try sealer.sealNode(boundary.shape_node);
+
+        const runtime_fn = try self.graph.functionNodes(boundary.request_fn_node);
+        if (runtime_fn.args.len != 1) Common.invariant("stored parser runtime function had an unexpected arity");
+        const state_cell = DraftTypeCell.fromGraphNode(runtime_fn.args[0]);
+        const ret_cell = DraftTypeCell.fromGraphNode(runtime_fn.ret);
+        const state_ty = try sealer.sealNode(runtime_fn.args[0]);
+        const ret_ty = try sealer.sealNode(runtime_fn.ret);
+        if (boundary.expected_ret_ty) |expected| {
+            const request_ty = try sealer.sealNode(boundary.request_fn_node);
+            if (!try self.typeStore().typeEql(self.nameStore(), request_ty, expected)) {
+                Common.invariant("stored parser constructor result type differed from restored function type");
+            }
+        }
+
+        const state_local = try self.addLocalWithBinderCell(self.builder.symbols.fresh(), state_cell, null);
+        const state_expr = try self.addExprWithTypeCell(state_cell, .{ .local = state_local });
+
+        const str_ty = try self.primitiveType(.str);
+        var precomputed_plan = BodyContext.ParserPrecomputedPlan.init(self.allocator);
+        defer precomputed_plan.deinit();
+        try self.buildParserRestoredPrecomputedPlan(
+            &precomputed_plan,
+            boundary.fn_value,
+            boundary.store_view,
+            boundary.view,
+            shape_ty,
+            str_ty,
+        );
+
+        const parsed = blk: {
+            var capture_tys = std.ArrayList(Type.TypeId).empty;
+            defer capture_tys.deinit(self.allocator);
+            if (boundary.encoding_let_local != null) try capture_tys.append(self.allocator, encoding_ty);
+            for (precomputed_plan.captures.items) |_| try capture_tys.append(self.allocator, str_ty);
+            const demand_scope = try self.enterCallableBodyDemandScope(&.{state_ty}, capture_tys.items);
+            defer demand_scope.leave();
+            break :blk try self.lowerParseResultFromState(
+                shape_ty,
+                boundary.encoding_expr,
+                encoding_ty,
+                state_expr,
+                state_ty,
+                ret_ty,
+                &precomputed_plan,
+            );
+        };
+        const parsed_ty = try self.exprTypeCell(parsed).seal(self.graph, sealer);
+        if (!try self.typeStore().typeEql(self.nameStore(), parsed_ty, ret_ty)) {
+            Common.invariant("stored parser runtime body differed from its sealed return type");
+        }
+        self.draft.exprs.items[@intFromEnum(parsed)].ty = ret_cell;
+
+        const stored_evidence = try self.builder.constFnEvidence(self.evidence);
+        const evidence_digest = Ast.fnEvidenceDigest(stored_evidence.nodes, stored_evidence.frames, stored_evidence.head);
+        const runtime_fn_id = try self.draft.addFn(.{ .source = .{
+            .fn_def = .{ .parser_runtime = .{
+                .owner = runtime.owner,
+                .expr = runtime.expr,
+            } },
+            .source_fn_ty = boundary.fn_value.source_fn_ty,
+            .source_fn_key = boundary.fn_value.source_fn_key,
+            .mono_fn_ty = request_cell,
+            .const_evidence = try self.draft.addConstFnEvidence(stored_evidence.nodes),
+            .const_evidence_frames = try self.draft.addConstFnEvidenceFrames(stored_evidence.frames),
+            .const_evidence_frame_head = stored_evidence.head,
+            .evidence_digest = evidence_digest,
+        } });
+        var parser_expr = try self.addExprWithTypeCell(request_cell, .{ .lambda = .{
+            .fn_id = .{ .draft = runtime_fn_id },
+            .args = try self.draft.addTypedLocalSpan(&.{
+                .{ .local = state_local, .ty = state_cell },
+            }),
+            .body = parsed,
+        } });
+        var capture_index = precomputed_plan.captures.items.len;
+        while (capture_index > 0) {
+            capture_index -= 1;
+            const capture = precomputed_plan.captures.items[capture_index];
+            parser_expr = try self.wrapLetAtTypeCell(
+                capture.local,
+                try self.draftTypeCell(str_ty),
+                capture.value,
+                parser_expr,
+                request_cell,
+            );
+        }
+        if (boundary.encoding_let_local) |local| {
+            parser_expr = try self.wrapLetAtTypeCell(
+                local,
+                encoding_cell,
+                boundary.encoding_let_value,
+                parser_expr,
+                request_cell,
+            );
+        }
+        return try self.builder.wrapConstSourceCaptureLetsAtTypeCell(
+            self,
+            boundary.source_captures,
+            parser_expr,
+            request_cell,
+        );
+    }
+
+    /// Phase-B body generation for a stored `encoder_for` constant, the
+    /// encoder twin of `emitStoredParserRuntimeBody`.
+    fn emitStoredEncoderForRuntimeBody(
+        self: *BodyContext,
+        boundary: DraftDeferredStoredCodecRestore,
+        sealer: *GraphTypeFinals,
+    ) Allocator.Error!DraftExprId {
+        const runtime = switch (boundary.fn_value.fn_def) {
+            .encoder_for_runtime => |runtime| runtime,
+            .local_template, .imported_template, .nested, .local_hosted, .imported_hosted, .checked_generated, .parser_runtime => Common.invariant("non-encoder_for function reached sealed encoder_for runtime emission"),
+        };
+        const request_cell = DraftTypeCell.fromGraphNode(boundary.request_fn_node);
+        const encoding_cell = DraftTypeCell.fromGraphNode(boundary.encoding_node);
+        const encoding_ty = try sealer.sealNode(boundary.encoding_node);
+        const shape_ty = try sealer.sealNode(boundary.shape_node);
+
+        const runtime_fn = try self.graph.functionNodes(boundary.request_fn_node);
+        if (runtime_fn.args.len != 2) Common.invariant("stored encoder_for runtime function had an unexpected arity");
+        const value_cell = DraftTypeCell.fromGraphNode(runtime_fn.args[0]);
+        const state_cell = DraftTypeCell.fromGraphNode(runtime_fn.args[1]);
+        const ret_cell = DraftTypeCell.fromGraphNode(runtime_fn.ret);
+        const value_ty = try sealer.sealNode(runtime_fn.args[0]);
+        const state_ty = try sealer.sealNode(runtime_fn.args[1]);
+        const ret_ty = try sealer.sealNode(runtime_fn.ret);
+        if (boundary.expected_ret_ty) |expected| {
+            const request_ty = try sealer.sealNode(boundary.request_fn_node);
+            if (!try self.typeStore().typeEql(self.nameStore(), request_ty, expected)) {
+                Common.invariant("stored encoder_for constructor result type differed from restored function type");
+            }
+        }
+
+        const value_local = try self.addLocalWithBinderCell(self.builder.symbols.fresh(), value_cell, null);
+        const value_expr = try self.addExprWithTypeCell(value_cell, .{ .local = value_local });
+        const state_local = try self.addLocalWithBinderCell(self.builder.symbols.fresh(), state_cell, null);
+        const state_expr = try self.addExprWithTypeCell(state_cell, .{ .local = state_local });
+
+        const str_ty = try self.primitiveType(.str);
+        var precomputed_plan = BodyContext.ParserPrecomputedPlan.init(self.allocator);
+        defer precomputed_plan.deinit();
+        precomputed_plan.next_capture_id = encoderForFirstFieldCaptureId();
+        try self.buildEncodeRestoredPrecomputedPlan(
+            &precomputed_plan,
+            boundary.fn_value,
+            boundary.store_view,
+            boundary.view,
+            shape_ty,
+            encoding_ty,
+            str_ty,
+        );
+
+        const saved_encoder_source_fn_ty = self.generated_encoder_source_fn_ty;
+        const saved_encoder_source_expr = self.generated_encoder_source_expr;
+        const saved_encoder_lambda_index = self.generated_encoder_lambda_index;
+        self.generated_encoder_source_fn_ty = boundary.fn_value.source_fn_ty;
+        self.generated_encoder_source_expr = runtime.expr;
+        self.generated_encoder_lambda_index = 0;
+        defer {
+            self.generated_encoder_source_fn_ty = saved_encoder_source_fn_ty;
+            self.generated_encoder_source_expr = saved_encoder_source_expr;
+            self.generated_encoder_lambda_index = saved_encoder_lambda_index;
+        }
+
+        const encoded = blk: {
+            var capture_tys = std.ArrayList(Type.TypeId).empty;
+            defer capture_tys.deinit(self.allocator);
+            if (boundary.encoding_let_local != null) try capture_tys.append(self.allocator, encoding_ty);
+            for (precomputed_plan.captures.items) |_| try capture_tys.append(self.allocator, str_ty);
+            const demand_scope = try self.enterCallableBodyDemandScope(&.{ value_ty, state_ty }, capture_tys.items);
+            defer demand_scope.leave();
+            break :blk try self.lowerEncodeShapeToState(
+                shape_ty,
+                value_expr,
+                boundary.encoding_expr,
+                encoding_ty,
+                state_expr,
+                state_ty,
+                ret_ty,
+                &precomputed_plan,
+            );
+        };
+        const encoded_ty = try self.exprTypeCell(encoded).seal(self.graph, sealer);
+        if (!try self.typeStore().typeEql(self.nameStore(), encoded_ty, ret_ty)) {
+            Common.invariant("stored encoder_for runtime body differed from its sealed return type");
+        }
+        self.draft.exprs.items[@intFromEnum(encoded)].ty = ret_cell;
+
+        const stored_evidence = try self.builder.constFnEvidence(self.evidence);
+        const evidence_digest = Ast.fnEvidenceDigest(stored_evidence.nodes, stored_evidence.frames, stored_evidence.head);
+        const runtime_fn_id = try self.draft.addFn(.{ .source = .{
+            .fn_def = .{ .encoder_for_runtime = .{
+                .owner = runtime.owner,
+                .expr = runtime.expr,
+            } },
+            .source_fn_ty = boundary.fn_value.source_fn_ty,
+            .source_fn_key = boundary.fn_value.source_fn_key,
+            .mono_fn_ty = request_cell,
+            .const_evidence = try self.draft.addConstFnEvidence(stored_evidence.nodes),
+            .const_evidence_frames = try self.draft.addConstFnEvidenceFrames(stored_evidence.frames),
+            .const_evidence_frame_head = stored_evidence.head,
+            .evidence_digest = evidence_digest,
+        } });
+        var encoder_expr = try self.addExprWithTypeCell(request_cell, .{ .lambda = .{
+            .fn_id = .{ .draft = runtime_fn_id },
+            .args = try self.draft.addTypedLocalSpan(&.{
+                .{ .local = value_local, .ty = value_cell },
+                .{ .local = state_local, .ty = state_cell },
+            }),
+            .body = encoded,
+        } });
+        var capture_index = precomputed_plan.captures.items.len;
+        while (capture_index > 0) {
+            capture_index -= 1;
+            const capture = precomputed_plan.captures.items[capture_index];
+            encoder_expr = try self.wrapLetAtTypeCell(
+                capture.local,
+                try self.draftTypeCell(str_ty),
+                capture.value,
+                encoder_expr,
+                request_cell,
+            );
+        }
+        if (boundary.encoding_let_local) |local| {
+            encoder_expr = try self.wrapLetAtTypeCell(
+                local,
+                encoding_cell,
+                boundary.encoding_let_value,
+                encoder_expr,
+                request_cell,
+            );
+        }
+        return try self.builder.wrapConstSourceCaptureLetsAtTypeCell(
+            self,
+            boundary.source_captures,
+            encoder_expr,
+            request_cell,
+        );
+    }
+
     fn restoreConstParserRuntimeFn(
         self: *BodyContext,
         store_view: ModuleView,
@@ -36688,111 +37152,81 @@ const BodyContext = struct {
         const callable_plan = fn_ctx.requireStoredRuntimeCallableDispatchPlan(plan);
         const plan_args = callable_plan.operands;
         const callable_node = try fn_ctx.instantiateCallableDispatchPlanCallNodeFromCaller(callable_plan, &fn_ctx, expr.ty, ty);
-        const callable_mono_ty = try fn_ctx.resolvedTypeViewForNode(callable_node);
-        const fn_data = self.functionShape(callable_mono_ty, "stored parser constructor had a non-function type");
-        const arg_tys = try GuardedList.dupe(self.allocator, Type.TypeId, self.typeStore().span(fn_data.args));
-        defer self.allocator.free(arg_tys);
-        if (arg_tys.len != 1) Common.invariant("stored parser constructor had an unexpected arity");
-        if (!fn_ctx.sameType(fn_data.ret, ty)) Common.invariant("stored parser constructor result type differed from restored function type");
-
-        const runtime_fn = self.functionShape(ty, "stored parser runtime value had a non-function type");
-        const runtime_arg_tys = try GuardedList.dupe(self.allocator, Type.TypeId, self.typeStore().span(runtime_fn.args));
-        defer self.allocator.free(runtime_arg_tys);
-        if (runtime_arg_tys.len != 1) Common.invariant("stored parser runtime function had an unexpected arity");
+        const callable = try self.graph.functionNodes(callable_node);
+        if (callable.args.len != 1) Common.invariant("stored parser constructor had an unexpected arity");
+        const encoding_node = callable.args[0];
+        const encoding_cell = DraftTypeCell.fromGraphNode(encoding_node);
+        // The constructor was instantiated against `ty`, so its result cell is
+        // the runtime request. Phase B rechecks that against `ty` once the
+        // graph has sealed, instead of forcing a resolved view here.
+        const request_fn_node = callable.ret;
 
         const shape_node = try fn_ctx.instNode(plan.dispatcher_ty);
         try fn_ctx.activateCodecContractForPlan(plan, callable_node, shape_node);
-        const shape_ty = try fn_ctx.resolvedTypeViewForNode(shape_node);
-        const runtime_node = (try self.graph.functionNodes(callable_node)).ret;
         const runtime_boundary = try fn_ctx.addExprWithTypeCell(
-            DraftTypeCell.fromGraphNode(runtime_node),
+            DraftTypeCell.fromGraphNode(request_fn_node),
             .pending_deferred,
         );
-        const previous_codec_calls = fn_ctx.frozen_codec_calls;
-        var runtime_codec_calls: ?FrozenPreparedCodecCalls = null;
-        if (!fn_ctx.frozen_sealed_emission) {
-            _ = try fn_ctx.prepareStructuralCodecCallsAtNode(
-                runtime_boundary,
-                .parser,
-                shape_node,
-                callable_node,
-            );
-            runtime_codec_calls = try fn_ctx.resolvedPreparedCodecCallsForBoundary(runtime_boundary);
-            fn_ctx.frozen_codec_calls = if (runtime_codec_calls) |*calls| calls else unreachable;
-        }
-        defer {
-            fn_ctx.frozen_codec_calls = previous_codec_calls;
-            if (runtime_codec_calls) |*calls| calls.deinit(self.allocator);
-        }
-        const state_local = try fn_ctx.addLocal(self.builder.symbols.fresh(), runtime_arg_tys[0]);
-        const state_expr = try fn_ctx.localExpr(state_local, runtime_arg_tys[0]);
 
-        var encoding_let: ?struct {
-            local: DraftLocalId,
-            value: DraftExprId,
-        } = null;
+        var encoding_let_local: ?DraftLocalId = null;
+        var encoding_let_value: DraftExprId = @enumFromInt(0);
         const encoding_expr = if (constGeneratedCaptureNode(fn_value, parserEncodingCaptureId())) |node| blk: {
-            const local = try fn_ctx.addLocal(self.builder.symbols.fresh(), arg_tys[0]);
+            const local = try fn_ctx.addLocalWithBinderCell(self.builder.symbols.fresh(), encoding_cell, null);
             fn_ctx.setLocalCaptureId(local, parserEncodingCaptureId());
-            encoding_let = .{
-                .local = local,
-                .value = if (static_data_const_locator) |const_locator|
-                    try fn_ctx.restoreConstNodeAtTypeWithStaticRoot(store_view, fn_view, node, arg_tys[0], const_locator)
-                else
-                    try fn_ctx.restoreConstNodeAtType(store_view, fn_view, node, arg_tys[0]),
-            };
-            break :blk try fn_ctx.localExpr(local, arg_tys[0]);
-        } else try fn_ctx.lowerDispatchOperandAtType(plan_args[0], arg_tys[0]);
+            encoding_let_local = local;
+            encoding_let_value = if (static_data_const_locator) |const_locator|
+                try fn_ctx.restoreConstNodeAtNodeWithStaticRoot(
+                    store_view,
+                    fn_view,
+                    node,
+                    encoding_node,
+                    const_locator,
+                )
+            else
+                try fn_ctx.restoreConstNodeAtNode(store_view, fn_view, node, encoding_node);
+            break :blk try fn_ctx.addExprWithTypeCell(encoding_cell, .{ .local = local });
+        } else try fn_ctx.lowerDispatchOperandAtNode(plan_args[0], encoding_node);
 
-        const str_ty = try self.primitiveType(.str);
-        var precomputed_plan = BodyContext.ParserPrecomputedPlan.init(self.allocator);
-        defer precomputed_plan.deinit();
-        try fn_ctx.buildParserRestoredPrecomputedPlan(&precomputed_plan, fn_value, store_view, fn_view, shape_ty, str_ty);
-
-        const parsed = blk: {
-            var capture_tys = std.ArrayList(Type.TypeId).empty;
-            defer capture_tys.deinit(self.allocator);
-            if (encoding_let != null) try capture_tys.append(self.allocator, arg_tys[0]);
-            for (precomputed_plan.captures.items) |_| try capture_tys.append(self.allocator, str_ty);
-            const demand_scope = try fn_ctx.enterCallableBodyDemandScope(&.{runtime_arg_tys[0]}, capture_tys.items);
-            defer demand_scope.leave();
-            break :blk try fn_ctx.lowerParseResultFromState(
-                shape_ty,
-                encoding_expr,
-                arg_tys[0],
-                state_expr,
-                runtime_arg_tys[0],
-                runtime_fn.ret,
-                &precomputed_plan,
-            );
+        var boundary = DraftDeferredStoredCodecRestore{
+            .view = fn_view,
+            .method_scope = fn_ctx.method_scope,
+            .owner_template = runtime.owner,
+            .owner = fn_ctx.draft.current_owner,
+            .expr = runtime_boundary,
+            .kind = .parser,
+            .store_view = store_view,
+            .fn_value = fn_value,
+            .request_fn_node = request_fn_node,
+            .callable_node = callable_node,
+            .encoding_node = encoding_node,
+            .shape_node = shape_node,
+            .encoding_expr = encoding_expr,
+            .encoding_let_local = encoding_let_local,
+            .encoding_let_value = encoding_let_value,
+            .expected_ret_ty = ty,
+            .source_captures = &.{},
+            .active_const_binding = fn_ctx.active_const_binding,
+            .evidence = fn_ctx.evidence,
+            .current_fn_key = fn_ctx.current_fn_key,
+            .lexical = undefined,
         };
-        const runtime_fn_id = try fn_ctx.addFn(.{
-            .fn_def = .{ .parser_runtime = .{
-                .owner = runtime.owner,
-                .expr = runtime.expr,
-            } },
-            .source_fn_ty = fn_value.source_fn_ty,
-            .source_fn_key = fn_value.source_fn_key,
-            .mono_fn_ty = ty,
-            .evidence_digest = Ast.fnEvidenceDigest(&.{}, &.{}, null),
-        });
-        var parser_expr = try fn_ctx.addExpr(.{ .ty = ty, .data = .{ .lambda = .{
-            .fn_id = .{ .draft = runtime_fn_id },
-            .args = try fn_ctx.addTypedLocalSpan(&.{
-                .{ .local = state_local, .ty = runtime_arg_tys[0] },
-            }),
-            .body = parsed,
-        } } });
-        var capture_index = precomputed_plan.captures.items.len;
-        while (capture_index > 0) {
-            capture_index -= 1;
-            const capture = precomputed_plan.captures.items[capture_index];
-            parser_expr = try fn_ctx.wrapLet(capture.local, str_ty, capture.value, parser_expr, ty);
+
+        if (fn_ctx.frozen_sealed_emission) {
+            const sealer = fn_ctx.frozen_type_finals orelse
+                Common.invariant("frozen Monotype emission had no graph type finalizer");
+            boundary.lexical = .{ .view = fn_view.key.bytes, .binders = &.{}, .local_procs = &.{} };
+            const lowered = try fn_ctx.emitStoredParserRuntimeBody(boundary, sealer);
+            fn_ctx.fillExprReservation(runtime_boundary, lowered);
+            return runtime_boundary;
         }
-        if (encoding_let) |let_| {
-            parser_expr = try fn_ctx.wrapLet(let_.local, arg_tys[0], let_.value, parser_expr, ty);
-        }
-        fn_ctx.fillExprReservation(runtime_boundary, parser_expr);
+
+        _ = try fn_ctx.prepareStructuralCodecCallsAtNode(
+            runtime_boundary,
+            .parser,
+            shape_node,
+            callable_node,
+        );
+        try fn_ctx.deferStoredCodecRestore(boundary);
         return runtime_boundary;
     }
 
@@ -36844,142 +37278,82 @@ const BodyContext = struct {
         }
         const encoding_node = callable.args[0];
         const encoding_cell = DraftTypeCell.fromGraphNode(encoding_node);
-        const encoding_ty = try fn_ctx.resolvedTypeViewForNode(encoding_node);
 
         const runtime_fn = try self.graph.functionNodes(request_fn_node);
         if (runtime_fn.args.len != 1) Common.invariant("stored parser runtime function had an unexpected arity");
-        const state_cell = DraftTypeCell.fromGraphNode(runtime_fn.args[0]);
-        const ret_cell = DraftTypeCell.fromGraphNode(runtime_fn.ret);
-        const state_ty = try fn_ctx.resolvedTypeViewForNode(runtime_fn.args[0]);
-        const ret_ty = try fn_ctx.resolvedTypeViewForNode(runtime_fn.ret);
 
         const shape_node = try fn_ctx.instNode(plan.dispatcher_ty);
         try fn_ctx.activateCodecContractForPlan(plan, callable_node, shape_node);
-        const shape_ty = try fn_ctx.resolvedTypeViewForNode(shape_node);
         const runtime_boundary = try fn_ctx.addExprWithTypeCell(
             DraftTypeCell.fromGraphNode(request_fn_node),
             .pending_deferred,
         );
-        const previous_codec_calls = fn_ctx.frozen_codec_calls;
-        var runtime_codec_calls: ?FrozenPreparedCodecCalls = null;
-        if (!fn_ctx.frozen_sealed_emission) {
-            _ = try fn_ctx.prepareStructuralCodecCallsAtNode(
-                runtime_boundary,
-                .parser,
-                shape_node,
-                callable_node,
-            );
-            runtime_codec_calls = try fn_ctx.resolvedPreparedCodecCallsForBoundary(runtime_boundary);
-            fn_ctx.frozen_codec_calls = if (runtime_codec_calls) |*calls| calls else unreachable;
-        }
-        defer {
-            fn_ctx.frozen_codec_calls = previous_codec_calls;
-            if (runtime_codec_calls) |*calls| calls.deinit(self.allocator);
-        }
-        const state_local = try fn_ctx.addLocalWithBinderCell(self.builder.symbols.fresh(), state_cell, null);
-        const state_expr = try fn_ctx.addExprWithTypeCell(state_cell, .{ .local = state_local });
 
-        var encoding_let: ?struct {
-            local: DraftLocalId,
-            value: DraftExprId,
-        } = null;
+        var encoding_let_local: ?DraftLocalId = null;
+        var encoding_let_value: DraftExprId = @enumFromInt(0);
         const encoding_expr = if (constGeneratedCaptureNode(fn_value, parserEncodingCaptureId())) |node| blk: {
             const local = try fn_ctx.addLocalWithBinderCell(self.builder.symbols.fresh(), encoding_cell, null);
             fn_ctx.setLocalCaptureId(local, parserEncodingCaptureId());
-            encoding_let = .{
-                .local = local,
-                .value = if (static_data_const_locator) |const_locator|
-                    try fn_ctx.restoreConstNodeAtNodeWithStaticRoot(
-                        store_view,
-                        fn_view,
-                        node,
-                        encoding_node,
-                        const_locator,
-                    )
-                else
-                    try fn_ctx.restoreConstNodeAtNode(store_view, fn_view, node, encoding_node),
-            };
+            encoding_let_local = local;
+            encoding_let_value = if (static_data_const_locator) |const_locator|
+                try fn_ctx.restoreConstNodeAtNodeWithStaticRoot(
+                    store_view,
+                    fn_view,
+                    node,
+                    encoding_node,
+                    const_locator,
+                )
+            else
+                try fn_ctx.restoreConstNodeAtNode(store_view, fn_view, node, encoding_node);
             break :blk try fn_ctx.addExprWithTypeCell(encoding_cell, .{ .local = local });
         } else try fn_ctx.lowerDispatchOperandAtNode(plan_args[0], encoding_node);
 
-        const str_ty = try self.primitiveType(.str);
-        var precomputed_plan = BodyContext.ParserPrecomputedPlan.init(self.allocator);
-        defer precomputed_plan.deinit();
-        try fn_ctx.buildParserRestoredPrecomputedPlan(&precomputed_plan, fn_value, store_view, fn_view, shape_ty, str_ty);
-
-        const parsed = blk: {
-            var capture_tys = std.ArrayList(Type.TypeId).empty;
-            defer capture_tys.deinit(self.allocator);
-            if (encoding_let != null) try capture_tys.append(self.allocator, encoding_ty);
-            for (precomputed_plan.captures.items) |_| try capture_tys.append(self.allocator, str_ty);
-            const demand_scope = try fn_ctx.enterCallableBodyDemandScope(&.{state_ty}, capture_tys.items);
-            defer demand_scope.leave();
-            break :blk try fn_ctx.lowerParseResultFromState(
-                shape_ty,
-                encoding_expr,
-                encoding_ty,
-                state_expr,
-                state_ty,
-                ret_ty,
-                &precomputed_plan,
-            );
+        var boundary = DraftDeferredStoredCodecRestore{
+            .view = fn_view,
+            .method_scope = fn_ctx.method_scope,
+            .owner_template = runtime.owner,
+            .owner = fn_ctx.draft.current_owner,
+            .expr = runtime_boundary,
+            .kind = .parser,
+            .store_view = store_view,
+            .fn_value = fn_value,
+            .request_fn_node = request_fn_node,
+            .callable_node = callable_node,
+            .encoding_node = encoding_node,
+            .shape_node = shape_node,
+            .encoding_expr = encoding_expr,
+            .encoding_let_local = encoding_let_local,
+            .encoding_let_value = encoding_let_value,
+            .expected_ret_ty = null,
+            .source_captures = source_captures.items,
+            .active_const_binding = fn_ctx.active_const_binding,
+            .evidence = fn_ctx.evidence,
+            .current_fn_key = fn_ctx.current_fn_key,
+            .lexical = undefined,
         };
-        const parsed_node = try fn_ctx.exprTypeCell(parsed).toGraphNode(self.graph);
-        if (!self.graph.sameClass(parsed_node, runtime_fn.ret)) {
-            Common.invariant("stored parser runtime body differed from its graph-native return cell");
-        }
-        fn_ctx.draft.exprs.items[@intFromEnum(parsed)].ty = ret_cell;
 
-        const stored_evidence = try self.builder.constFnEvidence(fn_ctx.evidence);
-        const evidence_digest = Ast.fnEvidenceDigest(stored_evidence.nodes, stored_evidence.frames, stored_evidence.head);
-        const runtime_fn_id = try fn_ctx.draft.addFn(.{ .source = .{
-            .fn_def = .{ .parser_runtime = .{
-                .owner = runtime.owner,
-                .expr = runtime.expr,
-            } },
-            .source_fn_ty = fn_value.source_fn_ty,
-            .source_fn_key = fn_value.source_fn_key,
-            .mono_fn_ty = DraftTypeCell.fromGraphNode(request_fn_node),
-            .const_evidence = try fn_ctx.draft.addConstFnEvidence(stored_evidence.nodes),
-            .const_evidence_frames = try fn_ctx.draft.addConstFnEvidenceFrames(stored_evidence.frames),
-            .const_evidence_frame_head = stored_evidence.head,
-            .evidence_digest = evidence_digest,
-        } });
-        var parser_expr = try fn_ctx.addExprWithTypeCell(DraftTypeCell.fromGraphNode(request_fn_node), .{ .lambda = .{
-            .fn_id = .{ .draft = runtime_fn_id },
-            .args = try fn_ctx.draft.addTypedLocalSpan(&.{
-                .{ .local = state_local, .ty = state_cell },
-            }),
-            .body = parsed,
-        } });
-        var capture_index = precomputed_plan.captures.items.len;
-        while (capture_index > 0) {
-            capture_index -= 1;
-            const capture = precomputed_plan.captures.items[capture_index];
-            parser_expr = try fn_ctx.wrapLetAtTypeCell(
-                capture.local,
-                try fn_ctx.draftTypeCell(str_ty),
-                capture.value,
-                parser_expr,
-                DraftTypeCell.fromGraphNode(request_fn_node),
-            );
+        if (fn_ctx.frozen_sealed_emission) {
+            // Restored from inside a Phase-B emission: the graph is already
+            // frozen and this context inherited both the sealer and the
+            // prepared calls, so generate the body here rather than reserving
+            // a boundary no later pass would visit.
+            const sealer = fn_ctx.frozen_type_finals orelse
+                Common.invariant("frozen Monotype emission had no graph type finalizer");
+            boundary.lexical = .{ .view = fn_view.key.bytes, .binders = &.{}, .local_procs = &.{} };
+            const lowered = try fn_ctx.emitStoredParserRuntimeBody(boundary, sealer);
+            fn_ctx.fillExprReservation(runtime_boundary, lowered);
+            return runtime_boundary;
         }
-        if (encoding_let) |let_| {
-            parser_expr = try fn_ctx.wrapLetAtTypeCell(
-                let_.local,
-                encoding_cell,
-                let_.value,
-                parser_expr,
-                DraftTypeCell.fromGraphNode(request_fn_node),
-            );
-        }
-        parser_expr = try self.builder.wrapConstSourceCaptureLetsAtTypeCell(
-            &fn_ctx,
-            source_captures.items,
-            parser_expr,
-            DraftTypeCell.fromGraphNode(request_fn_node),
+
+        _ = try fn_ctx.prepareStructuralCodecCallsAtNode(
+            runtime_boundary,
+            .parser,
+            shape_node,
+            callable_node,
         );
-        fn_ctx.fillExprReservation(runtime_boundary, parser_expr);
+        boundary.source_captures = try self.allocator.dupe(Builder.RestoredConstSourceCapture, source_captures.items);
+        errdefer self.allocator.free(boundary.source_captures);
+        try fn_ctx.deferStoredCodecRestore(boundary);
         return runtime_boundary;
     }
 
@@ -37009,128 +37383,81 @@ const BodyContext = struct {
         const callable_plan = fn_ctx.requireStoredRuntimeCallableDispatchPlan(plan);
         const plan_args = callable_plan.operands;
         const callable_node = try fn_ctx.instantiateCallableDispatchPlanCallNodeFromCaller(callable_plan, &fn_ctx, expr.ty, ty);
-        const callable_mono_ty = try fn_ctx.resolvedTypeViewForNode(callable_node);
-        const fn_data = self.functionShape(callable_mono_ty, "stored encoder_for constructor had a non-function type");
-        const arg_tys = try GuardedList.dupe(self.allocator, Type.TypeId, self.typeStore().span(fn_data.args));
-        defer self.allocator.free(arg_tys);
-        if (arg_tys.len != 1) Common.invariant("stored encoder_for constructor had an unexpected arity");
-        if (!fn_ctx.sameType(fn_data.ret, ty)) Common.invariant("stored encoder_for constructor result type differed from restored function type");
-
-        const runtime_fn = self.functionShape(ty, "stored encoder_for runtime value had a non-function type");
-        const runtime_arg_tys = try GuardedList.dupe(self.allocator, Type.TypeId, self.typeStore().span(runtime_fn.args));
-        defer self.allocator.free(runtime_arg_tys);
-        if (runtime_arg_tys.len != 2) Common.invariant("stored encoder_for runtime function had an unexpected arity");
+        const callable = try self.graph.functionNodes(callable_node);
+        if (callable.args.len != 1) Common.invariant("stored encoder_for constructor had an unexpected arity");
+        const encoding_node = callable.args[0];
+        const encoding_cell = DraftTypeCell.fromGraphNode(encoding_node);
+        // The constructor was instantiated against `ty`, so its result cell is
+        // the runtime request. Phase B rechecks that against `ty` once the
+        // graph has sealed, instead of forcing a resolved view here.
+        const request_fn_node = callable.ret;
 
         const shape_node = try fn_ctx.instNode(plan.dispatcher_ty);
         try fn_ctx.activateCodecContractForPlan(plan, callable_node, shape_node);
-        const shape_ty = try fn_ctx.resolvedTypeViewForNode(shape_node);
-        const runtime_node = (try self.graph.functionNodes(callable_node)).ret;
         const runtime_boundary = try fn_ctx.addExprWithTypeCell(
-            DraftTypeCell.fromGraphNode(runtime_node),
+            DraftTypeCell.fromGraphNode(request_fn_node),
             .pending_deferred,
         );
-        const previous_codec_calls = fn_ctx.frozen_codec_calls;
-        var runtime_codec_calls: ?FrozenPreparedCodecCalls = null;
-        if (!fn_ctx.frozen_sealed_emission) {
-            _ = try fn_ctx.prepareStructuralCodecCallsAtNode(
-                runtime_boundary,
-                .encoder,
-                shape_node,
-                callable_node,
-            );
-            runtime_codec_calls = try fn_ctx.resolvedPreparedCodecCallsForBoundary(runtime_boundary);
-            fn_ctx.frozen_codec_calls = if (runtime_codec_calls) |*calls| calls else unreachable;
-        }
-        defer {
-            fn_ctx.frozen_codec_calls = previous_codec_calls;
-            if (runtime_codec_calls) |*calls| calls.deinit(self.allocator);
-        }
-        const value_local = try fn_ctx.addLocal(self.builder.symbols.fresh(), runtime_arg_tys[0]);
-        const value_expr = try fn_ctx.localExpr(value_local, runtime_arg_tys[0]);
-        const state_local = try fn_ctx.addLocal(self.builder.symbols.fresh(), runtime_arg_tys[1]);
-        const state_expr = try fn_ctx.localExpr(state_local, runtime_arg_tys[1]);
 
-        var encoding_let: ?struct {
-            local: DraftLocalId,
-            value: DraftExprId,
-        } = null;
+        var encoding_let_local: ?DraftLocalId = null;
+        var encoding_let_value: DraftExprId = @enumFromInt(0);
         const encoding_expr = if (constGeneratedCaptureNode(fn_value, encoderForEncodingCaptureId())) |node| blk: {
-            const local = try fn_ctx.addLocal(self.builder.symbols.fresh(), arg_tys[0]);
+            const local = try fn_ctx.addLocalWithBinderCell(self.builder.symbols.fresh(), encoding_cell, null);
             fn_ctx.setLocalCaptureId(local, encoderForEncodingCaptureId());
-            encoding_let = .{
-                .local = local,
-                .value = if (static_data_const_locator) |const_locator|
-                    try fn_ctx.restoreConstNodeAtTypeWithStaticRoot(store_view, fn_view, node, arg_tys[0], const_locator)
-                else
-                    try fn_ctx.restoreConstNodeAtType(store_view, fn_view, node, arg_tys[0]),
-            };
-            break :blk try fn_ctx.localExpr(local, arg_tys[0]);
-        } else try fn_ctx.lowerDispatchOperandAtType(plan_args[0], arg_tys[0]);
+            encoding_let_local = local;
+            encoding_let_value = if (static_data_const_locator) |const_locator|
+                try fn_ctx.restoreConstNodeAtNodeWithStaticRoot(
+                    store_view,
+                    fn_view,
+                    node,
+                    encoding_node,
+                    const_locator,
+                )
+            else
+                try fn_ctx.restoreConstNodeAtNode(store_view, fn_view, node, encoding_node);
+            break :blk try fn_ctx.addExprWithTypeCell(encoding_cell, .{ .local = local });
+        } else try fn_ctx.lowerDispatchOperandAtNode(plan_args[0], encoding_node);
 
-        const str_ty = try self.primitiveType(.str);
-        var precomputed_plan = BodyContext.ParserPrecomputedPlan.init(self.allocator);
-        defer precomputed_plan.deinit();
-        precomputed_plan.next_capture_id = encoderForFirstFieldCaptureId();
-        try fn_ctx.buildEncodeRestoredPrecomputedPlan(&precomputed_plan, fn_value, store_view, fn_view, shape_ty, arg_tys[0], str_ty);
-
-        const saved_encoder_source_fn_ty = fn_ctx.generated_encoder_source_fn_ty;
-        const saved_encoder_source_expr = fn_ctx.generated_encoder_source_expr;
-        const saved_encoder_lambda_index = fn_ctx.generated_encoder_lambda_index;
-        fn_ctx.generated_encoder_source_fn_ty = fn_value.source_fn_ty;
-        fn_ctx.generated_encoder_source_expr = runtime.expr;
-        fn_ctx.generated_encoder_lambda_index = 0;
-        defer {
-            fn_ctx.generated_encoder_source_fn_ty = saved_encoder_source_fn_ty;
-            fn_ctx.generated_encoder_source_expr = saved_encoder_source_expr;
-            fn_ctx.generated_encoder_lambda_index = saved_encoder_lambda_index;
-        }
-
-        const encoded = blk: {
-            var capture_tys = std.ArrayList(Type.TypeId).empty;
-            defer capture_tys.deinit(self.allocator);
-            if (encoding_let != null) try capture_tys.append(self.allocator, arg_tys[0]);
-            for (precomputed_plan.captures.items) |_| try capture_tys.append(self.allocator, str_ty);
-            const demand_scope = try fn_ctx.enterCallableBodyDemandScope(runtime_arg_tys, capture_tys.items);
-            defer demand_scope.leave();
-            break :blk try fn_ctx.lowerEncodeShapeToState(
-                shape_ty,
-                value_expr,
-                encoding_expr,
-                arg_tys[0],
-                state_expr,
-                runtime_arg_tys[1],
-                runtime_fn.ret,
-                &precomputed_plan,
-            );
+        var boundary = DraftDeferredStoredCodecRestore{
+            .view = fn_view,
+            .method_scope = fn_ctx.method_scope,
+            .owner_template = runtime.owner,
+            .owner = fn_ctx.draft.current_owner,
+            .expr = runtime_boundary,
+            .kind = .encoder,
+            .store_view = store_view,
+            .fn_value = fn_value,
+            .request_fn_node = request_fn_node,
+            .callable_node = callable_node,
+            .encoding_node = encoding_node,
+            .shape_node = shape_node,
+            .encoding_expr = encoding_expr,
+            .encoding_let_local = encoding_let_local,
+            .encoding_let_value = encoding_let_value,
+            .expected_ret_ty = ty,
+            .source_captures = &.{},
+            .active_const_binding = fn_ctx.active_const_binding,
+            .evidence = fn_ctx.evidence,
+            .current_fn_key = fn_ctx.current_fn_key,
+            .lexical = undefined,
         };
-        const runtime_fn_id = try fn_ctx.addFn(.{
-            .fn_def = .{ .encoder_for_runtime = .{
-                .owner = runtime.owner,
-                .expr = runtime.expr,
-            } },
-            .source_fn_ty = fn_value.source_fn_ty,
-            .source_fn_key = fn_value.source_fn_key,
-            .mono_fn_ty = ty,
-            .evidence_digest = Ast.fnEvidenceDigest(&.{}, &.{}, null),
-        });
-        var encoder_expr = try fn_ctx.addExpr(.{ .ty = ty, .data = .{ .lambda = .{
-            .fn_id = .{ .draft = runtime_fn_id },
-            .args = try fn_ctx.addTypedLocalSpan(&.{
-                .{ .local = value_local, .ty = runtime_arg_tys[0] },
-                .{ .local = state_local, .ty = runtime_arg_tys[1] },
-            }),
-            .body = encoded,
-        } } });
-        var capture_index = precomputed_plan.captures.items.len;
-        while (capture_index > 0) {
-            capture_index -= 1;
-            const capture = precomputed_plan.captures.items[capture_index];
-            encoder_expr = try fn_ctx.wrapLet(capture.local, str_ty, capture.value, encoder_expr, ty);
+
+        if (fn_ctx.frozen_sealed_emission) {
+            const sealer = fn_ctx.frozen_type_finals orelse
+                Common.invariant("frozen Monotype emission had no graph type finalizer");
+            boundary.lexical = .{ .view = fn_view.key.bytes, .binders = &.{}, .local_procs = &.{} };
+            const lowered = try fn_ctx.emitStoredEncoderForRuntimeBody(boundary, sealer);
+            fn_ctx.fillExprReservation(runtime_boundary, lowered);
+            return runtime_boundary;
         }
-        if (encoding_let) |let_| {
-            encoder_expr = try fn_ctx.wrapLet(let_.local, arg_tys[0], let_.value, encoder_expr, ty);
-        }
-        fn_ctx.fillExprReservation(runtime_boundary, encoder_expr);
+
+        _ = try fn_ctx.prepareStructuralCodecCallsAtNode(
+            runtime_boundary,
+            .encoder,
+            shape_node,
+            callable_node,
+        );
+        try fn_ctx.deferStoredCodecRestore(boundary);
         return runtime_boundary;
     }
 
@@ -37182,169 +37509,82 @@ const BodyContext = struct {
         }
         const encoding_node = callable.args[0];
         const encoding_cell = DraftTypeCell.fromGraphNode(encoding_node);
-        const encoding_ty = try fn_ctx.resolvedTypeViewForNode(encoding_node);
 
         const runtime_fn = try self.graph.functionNodes(request_fn_node);
         if (runtime_fn.args.len != 2) Common.invariant("stored encoder_for runtime function had an unexpected arity");
-        const value_cell = DraftTypeCell.fromGraphNode(runtime_fn.args[0]);
-        const state_cell = DraftTypeCell.fromGraphNode(runtime_fn.args[1]);
-        const ret_cell = DraftTypeCell.fromGraphNode(runtime_fn.ret);
-        const value_ty = try fn_ctx.resolvedTypeViewForNode(runtime_fn.args[0]);
-        const state_ty = try fn_ctx.resolvedTypeViewForNode(runtime_fn.args[1]);
-        const ret_ty = try fn_ctx.resolvedTypeViewForNode(runtime_fn.ret);
 
         const shape_node = try fn_ctx.instNode(plan.dispatcher_ty);
         try fn_ctx.activateCodecContractForPlan(plan, callable_node, shape_node);
-        const shape_ty = try fn_ctx.resolvedTypeViewForNode(shape_node);
         const runtime_boundary = try fn_ctx.addExprWithTypeCell(
             DraftTypeCell.fromGraphNode(request_fn_node),
             .pending_deferred,
         );
-        const previous_codec_calls = fn_ctx.frozen_codec_calls;
-        var runtime_codec_calls: ?FrozenPreparedCodecCalls = null;
-        if (!fn_ctx.frozen_sealed_emission) {
-            _ = try fn_ctx.prepareStructuralCodecCallsAtNode(
-                runtime_boundary,
-                .encoder,
-                shape_node,
-                callable_node,
-            );
-            runtime_codec_calls = try fn_ctx.resolvedPreparedCodecCallsForBoundary(runtime_boundary);
-            fn_ctx.frozen_codec_calls = if (runtime_codec_calls) |*calls| calls else unreachable;
-        }
-        defer {
-            fn_ctx.frozen_codec_calls = previous_codec_calls;
-            if (runtime_codec_calls) |*calls| calls.deinit(self.allocator);
-        }
-        const value_local = try fn_ctx.addLocalWithBinderCell(self.builder.symbols.fresh(), value_cell, null);
-        const value_expr = try fn_ctx.addExprWithTypeCell(value_cell, .{ .local = value_local });
-        const state_local = try fn_ctx.addLocalWithBinderCell(self.builder.symbols.fresh(), state_cell, null);
-        const state_expr = try fn_ctx.addExprWithTypeCell(state_cell, .{ .local = state_local });
 
-        var encoding_let: ?struct {
-            local: DraftLocalId,
-            value: DraftExprId,
-        } = null;
+        var encoding_let_local: ?DraftLocalId = null;
+        var encoding_let_value: DraftExprId = @enumFromInt(0);
         const encoding_expr = if (constGeneratedCaptureNode(fn_value, encoderForEncodingCaptureId())) |node| blk: {
             const local = try fn_ctx.addLocalWithBinderCell(self.builder.symbols.fresh(), encoding_cell, null);
             fn_ctx.setLocalCaptureId(local, encoderForEncodingCaptureId());
-            encoding_let = .{
-                .local = local,
-                .value = if (static_data_const_locator) |const_locator|
-                    try fn_ctx.restoreConstNodeAtNodeWithStaticRoot(
-                        store_view,
-                        fn_view,
-                        node,
-                        encoding_node,
-                        const_locator,
-                    )
-                else
-                    try fn_ctx.restoreConstNodeAtNode(store_view, fn_view, node, encoding_node),
-            };
+            encoding_let_local = local;
+            encoding_let_value = if (static_data_const_locator) |const_locator|
+                try fn_ctx.restoreConstNodeAtNodeWithStaticRoot(
+                    store_view,
+                    fn_view,
+                    node,
+                    encoding_node,
+                    const_locator,
+                )
+            else
+                try fn_ctx.restoreConstNodeAtNode(store_view, fn_view, node, encoding_node);
             break :blk try fn_ctx.addExprWithTypeCell(encoding_cell, .{ .local = local });
         } else try fn_ctx.lowerDispatchOperandAtNode(plan_args[0], encoding_node);
 
-        const str_ty = try self.primitiveType(.str);
-        var precomputed_plan = BodyContext.ParserPrecomputedPlan.init(self.allocator);
-        defer precomputed_plan.deinit();
-        precomputed_plan.next_capture_id = encoderForFirstFieldCaptureId();
-        try fn_ctx.buildEncodeRestoredPrecomputedPlan(
-            &precomputed_plan,
-            fn_value,
-            store_view,
-            fn_view,
-            shape_ty,
-            encoding_ty,
-            str_ty,
-        );
-
-        const saved_encoder_source_fn_ty = fn_ctx.generated_encoder_source_fn_ty;
-        const saved_encoder_source_expr = fn_ctx.generated_encoder_source_expr;
-        const saved_encoder_lambda_index = fn_ctx.generated_encoder_lambda_index;
-        fn_ctx.generated_encoder_source_fn_ty = fn_value.source_fn_ty;
-        fn_ctx.generated_encoder_source_expr = runtime.expr;
-        fn_ctx.generated_encoder_lambda_index = 0;
-        defer {
-            fn_ctx.generated_encoder_source_fn_ty = saved_encoder_source_fn_ty;
-            fn_ctx.generated_encoder_source_expr = saved_encoder_source_expr;
-            fn_ctx.generated_encoder_lambda_index = saved_encoder_lambda_index;
-        }
-
-        const encoded = blk: {
-            var capture_tys = std.ArrayList(Type.TypeId).empty;
-            defer capture_tys.deinit(self.allocator);
-            if (encoding_let != null) try capture_tys.append(self.allocator, encoding_ty);
-            for (precomputed_plan.captures.items) |_| try capture_tys.append(self.allocator, str_ty);
-            const demand_scope = try fn_ctx.enterCallableBodyDemandScope(&.{ value_ty, state_ty }, capture_tys.items);
-            defer demand_scope.leave();
-            break :blk try fn_ctx.lowerEncodeShapeToState(
-                shape_ty,
-                value_expr,
-                encoding_expr,
-                encoding_ty,
-                state_expr,
-                state_ty,
-                ret_ty,
-                &precomputed_plan,
-            );
+        var boundary = DraftDeferredStoredCodecRestore{
+            .view = fn_view,
+            .method_scope = fn_ctx.method_scope,
+            .owner_template = runtime.owner,
+            .owner = fn_ctx.draft.current_owner,
+            .expr = runtime_boundary,
+            .kind = .encoder,
+            .store_view = store_view,
+            .fn_value = fn_value,
+            .request_fn_node = request_fn_node,
+            .callable_node = callable_node,
+            .encoding_node = encoding_node,
+            .shape_node = shape_node,
+            .encoding_expr = encoding_expr,
+            .encoding_let_local = encoding_let_local,
+            .encoding_let_value = encoding_let_value,
+            .expected_ret_ty = null,
+            .source_captures = source_captures.items,
+            .active_const_binding = fn_ctx.active_const_binding,
+            .evidence = fn_ctx.evidence,
+            .current_fn_key = fn_ctx.current_fn_key,
+            .lexical = undefined,
         };
-        const encoded_node = try fn_ctx.exprTypeCell(encoded).toGraphNode(self.graph);
-        if (!self.graph.sameClass(encoded_node, runtime_fn.ret)) {
-            Common.invariant("stored encoder_for runtime body differed from its graph-native return cell");
-        }
-        fn_ctx.draft.exprs.items[@intFromEnum(encoded)].ty = ret_cell;
 
-        const stored_evidence = try self.builder.constFnEvidence(fn_ctx.evidence);
-        const evidence_digest = Ast.fnEvidenceDigest(stored_evidence.nodes, stored_evidence.frames, stored_evidence.head);
-        const runtime_fn_id = try fn_ctx.draft.addFn(.{ .source = .{
-            .fn_def = .{ .encoder_for_runtime = .{
-                .owner = runtime.owner,
-                .expr = runtime.expr,
-            } },
-            .source_fn_ty = fn_value.source_fn_ty,
-            .source_fn_key = fn_value.source_fn_key,
-            .mono_fn_ty = DraftTypeCell.fromGraphNode(request_fn_node),
-            .const_evidence = try fn_ctx.draft.addConstFnEvidence(stored_evidence.nodes),
-            .const_evidence_frames = try fn_ctx.draft.addConstFnEvidenceFrames(stored_evidence.frames),
-            .const_evidence_frame_head = stored_evidence.head,
-            .evidence_digest = evidence_digest,
-        } });
-        var encoder_expr = try fn_ctx.addExprWithTypeCell(DraftTypeCell.fromGraphNode(request_fn_node), .{ .lambda = .{
-            .fn_id = .{ .draft = runtime_fn_id },
-            .args = try fn_ctx.draft.addTypedLocalSpan(&.{
-                .{ .local = value_local, .ty = value_cell },
-                .{ .local = state_local, .ty = state_cell },
-            }),
-            .body = encoded,
-        } });
-        var capture_index = precomputed_plan.captures.items.len;
-        while (capture_index > 0) {
-            capture_index -= 1;
-            const capture = precomputed_plan.captures.items[capture_index];
-            encoder_expr = try fn_ctx.wrapLetAtTypeCell(
-                capture.local,
-                try fn_ctx.draftTypeCell(str_ty),
-                capture.value,
-                encoder_expr,
-                DraftTypeCell.fromGraphNode(request_fn_node),
-            );
+        if (fn_ctx.frozen_sealed_emission) {
+            // Restored from inside a Phase-B emission: the graph is already
+            // frozen and this context inherited both the sealer and the
+            // prepared calls, so generate the body here rather than reserving
+            // a boundary no later pass would visit.
+            const sealer = fn_ctx.frozen_type_finals orelse
+                Common.invariant("frozen Monotype emission had no graph type finalizer");
+            boundary.lexical = .{ .view = fn_view.key.bytes, .binders = &.{}, .local_procs = &.{} };
+            const lowered = try fn_ctx.emitStoredEncoderForRuntimeBody(boundary, sealer);
+            fn_ctx.fillExprReservation(runtime_boundary, lowered);
+            return runtime_boundary;
         }
-        if (encoding_let) |let_| {
-            encoder_expr = try fn_ctx.wrapLetAtTypeCell(
-                let_.local,
-                encoding_cell,
-                let_.value,
-                encoder_expr,
-                DraftTypeCell.fromGraphNode(request_fn_node),
-            );
-        }
-        encoder_expr = try self.builder.wrapConstSourceCaptureLetsAtTypeCell(
-            &fn_ctx,
-            source_captures.items,
-            encoder_expr,
-            DraftTypeCell.fromGraphNode(request_fn_node),
+
+        _ = try fn_ctx.prepareStructuralCodecCallsAtNode(
+            runtime_boundary,
+            .encoder,
+            shape_node,
+            callable_node,
         );
-        fn_ctx.fillExprReservation(runtime_boundary, encoder_expr);
+        boundary.source_captures = try self.allocator.dupe(Builder.RestoredConstSourceCapture, source_captures.items);
+        errdefer self.allocator.free(boundary.source_captures);
+        try fn_ctx.deferStoredCodecRestore(boundary);
         return runtime_boundary;
     }
 
@@ -47484,50 +47724,6 @@ const BodyContext = struct {
             });
         }
         return .{ .entries = try out.toOwnedSlice(self.allocator) };
-    }
-
-    fn resolvedPreparedCodecCallsForBoundary(
-        self: *BodyContext,
-        boundary_expr: DraftExprId,
-    ) Allocator.Error!FrozenPreparedCodecCalls {
-        var out = std.ArrayList(FrozenPreparedCodecCall).empty;
-        errdefer out.deinit(self.allocator);
-        for (self.draft.prepared_codec_calls.items) |prepared| {
-            if (prepared.boundary_expr != boundary_expr) continue;
-            if (!self.frozen_sealed_emission) {
-                // Transitional (`polarity_phase_two.md` W2a, removed by W2b):
-                // the eager stored-codec restore emits its generated bodies
-                // from resolved views before the graph freezes, so commit the
-                // row defaults final sealing would apply to every cell the
-                // callable view reaches. Every preparation relation for this
-                // boundary has already run, and a derived codec determines
-                // each protocol row exactly, so no later relation widens a
-                // grounded row. Numeric defaults are never committed here.
-                // The shape node needs no grounding: every prepared shape is
-                // a sub-node of the restore's root shape, which the restore
-                // viewed resolved before preparing any call.
-                try self.graph.groundRowDefaults(prepared.callable_node);
-            }
-            try out.append(self.allocator, .{
-                .kind = prepared.kind,
-                .purpose = prepared.purpose,
-                .method_name = prepared.method_name,
-                .method_role = prepared.method_role,
-                .subject_bearing = prepared.subject_bearing,
-                .contract_view = prepared.contract_view,
-                .contract_derivation = prepared.contract_derivation,
-                .shape_ty = try self.currentPhaseTypeForNode(prepared.shape_node),
-                .lookup = prepared.lookup,
-                .callable_ty = try self.currentPhaseTypeForNode(prepared.callable_node),
-                .callee = prepared.callee,
-            });
-        }
-        return try FrozenPreparedCodecCalls.init(
-            self.allocator,
-            self.typeStore(),
-            self.nameStore(),
-            try out.toOwnedSlice(self.allocator),
-        );
     }
 
     fn instantiateCodecContract(
