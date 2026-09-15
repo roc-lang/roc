@@ -116,6 +116,11 @@ pub const BodyRelocation = struct {
     pub fn localSpan(self: BodyRelocation, prefix: BodyPrefix, span: LocalSpan) LocalSpan {
         return relocateBodyValue(LocalSpan, span, prefix, self);
     }
+
+    /// Procedure metadata must use the same identity domain as its body.
+    pub fn tailCalls(self: BodyRelocation, prefix: BodyPrefix, sites: lir_defs.TailCalls) lir_defs.TailCalls {
+        return relocateBodyValue(lir_defs.TailCalls, sites, prefix, self);
+    }
 };
 
 /// Coordinator identities assigned while appending one body shard.
@@ -1586,7 +1591,7 @@ test "body shard relocates nonzero local and body suffixes" {
         coordinator.getU64Span(.{ .start = appended.relocation.u64s, .len = masks.len }).at(0),
     );
     const relocated_pattern_ids = coordinator.getPatternSpan(.{ .start = appended.relocation.pattern_ids + 1, .len = pattern_ids.len });
-    try std.testing.expectEqual(@as(u32, 3), @intFromEnum(relocated_pattern_ids.at(0)));
+    try std.testing.expectEqual(@as(u32, 4), @intFromEnum(relocated_pattern_ids.at(0)));
     try std.testing.expectEqual(@as(u32, 2), @intFromEnum(relocated_pattern_ids.at(1)));
     try std.testing.expectEqualStrings(
         "body_local",
@@ -1722,7 +1727,7 @@ test "body shard append preserves destination on every reserve-stage allocation 
     };
     var fail_index: usize = 0;
     while (try Helper.run(fail_index)) : (fail_index += 1) {}
-    try std.testing.expectEqual(@as(usize, 8), fail_index);
+    try std.testing.expectEqual(@as(usize, 9), fail_index);
 }
 
 test "body shard reads coordinator prefix without copying it" {
@@ -1974,8 +1979,10 @@ test "body shard relocates producer tail-call links" {
     const sites = (try builder.finish(&worker)).?;
     worker.tail_call_builder = null;
     _ = try coordinator.addCFStmt(.{ .ret = .{ .value = arg } });
-    const appended = try coordinator.appendBodyShard(try worker.captureBodyShard(prefix), body, frame, null);
-    const head = appended.relocation.stmt(prefix, sites.head);
+    const appended = try coordinator.appendBodyShard(try worker.captureBodyShard(prefix), body, frame, 100);
+    const relocated_sites = appended.relocation.tailCalls(prefix, sites);
+    const head = relocated_sites.head;
+    try std.testing.expectEqual(@as(u32, 100), @intFromEnum(relocated_sites.loop));
     try std.testing.expectEqual(appended.relocation.stmt(prefix, second), head);
     const link = coordinator.getCFStmt(head).assign_call.tail_call.?.next.?;
     try std.testing.expectEqual(appended.relocation.stmt(prefix, first), link);
