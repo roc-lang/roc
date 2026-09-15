@@ -126,50 +126,7 @@ test "ptr_alloca slot is zeroed and ptr_store/ptr_load round trip" {
 }
 
 test "box_alloc_zeroed cell is zeroed, writable through ptr_cast, and freed by decref" {
-    const allocator = std.testing.allocator;
-    var store = LirStore.init(allocator);
-    defer store.deinit();
-    var layouts = try layout.Store.init(allocator, base.target.TargetUsize.native);
-    defer layouts.deinit();
-    var runtime_env = RuntimeHostEnv.init(allocator);
-    defer runtime_env.deinit();
-
-    const box_u64 = try layouts.insertBox(.u64);
-    const ptr_u64 = try layouts.insertPtr(.u64);
-
-    var b = ProcBuilder.init(&store);
-    defer b.deinit(allocator);
-    const cell = try b.addLocal(allocator, box_u64);
-    const p = try b.addLocal(allocator, ptr_u64);
-    const pre = try b.addLocal(allocator, .u64);
-    const v = try b.addLocal(allocator, .u64);
-    const st = try b.addLocal(allocator, .zst);
-    const post = try b.addLocal(allocator, .u64);
-    const sum = try b.addLocal(allocator, .u64);
-
-    const ret = try store.addCFStmt(.{ .ret = .{ .value = sum } });
-    const drop_cell = try store.addCFStmt(.{ .decref = .{
-        .value = cell,
-        .rc = .{ .concrete = .{ .op = .decref, .layout_idx = box_u64 } },
-        .next = ret,
-    } });
-    const add = try lowLevelStmt(&store, sum, .num_int_add_wrap, &.{ pre, post }, drop_cell);
-    const load_post = try lowLevelStmt(&store, post, .ptr_load, &.{p}, add);
-    const store_v = try lowLevelStmt(&store, st, .ptr_store, &.{ p, v }, load_post);
-    const v_lit = try store.addCFStmt(.{ .assign_literal = .{
-        .target = v,
-        .value = .{ .i64_literal = .{ .value = 7, .layout_idx = .u64 } },
-        .next = store_v,
-    } });
-    // Loading before any store proves the heap cell payload was zero-filled.
-    const load_pre = try lowLevelStmt(&store, pre, .ptr_load, &.{p}, v_lit);
-    const cast = try lowLevelStmt(&store, p, .ptr_cast, &.{cell}, load_pre);
-    const alloc = try lowLevelStmt(&store, cell, .box_alloc_zeroed, &.{}, cast);
-    const proc = try b.finishProc(&.{}, alloc, .u64);
-
-    try std.testing.expectEqual(@as(u64, 7), try runProcU64(allocator, &store, &layouts, proc, &runtime_env));
-    try std.testing.expectEqual(@as(u32, 1), runtime_env.allocationCallCount());
-    try runtime_env.checkForLeaks();
+    try @import("zeroed_box_fixture.zig").run(std.testing.allocator);
 }
 
 test "box_prepare_update reuses a statically unique box" {
