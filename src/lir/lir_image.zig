@@ -172,6 +172,7 @@ pub const LirStoreImage = extern struct {
 
     fn fromStore(base_ptr: [*]align(1) const u8, image_size: usize, store: *const LirStore) ImageError!LirStoreImage {
         std.debug.assert(store.tail_call_builder == null);
+        std.debug.assert(store.proc_rewrite == null and store.body_coordinator == null);
         return .{
             .cf_stmts = try arrayRef(base_ptr, image_size, store.cf_stmts.unsafeRawItemsForView()),
             .cf_switch_branches = try arrayRef(base_ptr, image_size, store.cf_switch_branches.unsafeRawItemsForView()),
@@ -208,6 +209,7 @@ pub const LirStoreImage = extern struct {
         store: *const LirStore,
     ) CopyError!LirStoreImage {
         std.debug.assert(store.tail_call_builder == null);
+        std.debug.assert(store.proc_rewrite == null and store.body_coordinator == null);
         return .{
             .cf_stmts = try copyArrayRef(allocator, base_ptr, image_capacity, store.cf_stmts.unsafeRawItemsForView()),
             .cf_switch_branches = try copyArrayRef(allocator, base_ptr, image_capacity, store.cf_switch_branches.unsafeRawItemsForView()),
@@ -892,9 +894,9 @@ comptime {
     // the "LIR image round-trips every populated store field" test at the
     // bottom of this file, then update the expected field count below. A
     // same-build omission is otherwise silent, since `FORMAT_VERSION` only
-    // guards cross-version mismatches. `tail_call_builder` is a transient
-    // producer scope and deliberately defaults to null in an image view.
-    std.debug.assert(@typeInfo(LirStore).@"struct".fields.len == 36);
+    // guards cross-version mismatches. `tail_call_builder` and `proc_rewrite`
+    // are transient worker state, not serialized, and default to null in views.
+    std.debug.assert(@typeInfo(LirStore).@"struct".fields.len == 37);
     std.debug.assert(@typeInfo(layout_mod.Store).@"struct".fields.len == 12);
     std.debug.assert(@typeInfo(base.StringLiteral.Store).@"struct".fields.len == 1);
 }
@@ -1457,6 +1459,92 @@ const serialized_guarded_fields = [_][]const u8{
     "local_names",
 };
 
+test "LIR image round-trips ordered procedure rewrites with relocated suffixes" {
+    const gpa = std.testing.allocator;
+    var lowered = try Program.Result.init(gpa, .u64);
+    defer lowered.deinit();
+    const store = &lowered.store;
+    const pointer_layout = try lowered.layouts.insertPtr(.str);
+    const original = try store.addLocal(.{ .layout_idx = pointer_layout });
+    _ = try store.insertString("frozen prefix");
+    var roots: [2]LIR.CFStmtId = undefined;
+    var procs: [2]LIR.LirProcSpecId = undefined;
+    for (&roots, &procs) |*root, *proc| {
+        root.* = try store.addCFStmt(.{ .ret = .{ .value = original } });
+        proc.* = try store.addProcSpec(.{
+            .name = store.freshSyntheticSymbol(),
+            .args = .empty(),
+            .body = root.*,
+            .ret_layout = pointer_layout,
+        });
+    }
+    const prefix = store.captureBodyPrefix();
+    var first = try store.cloneForProcRewrite(gpa, procs[0]);
+    defer first.deinit();
+    var second = try store.cloneForProcRewrite(gpa, procs[1]);
+    defer second.deinit();
+    // Both shards start with the same suffix identities. The second commit
+    // must relocate them before the image can forget all worker overlay state.
+    for ([_]*LirStore{ &first, &second }, roots, [_][]const u8{ "first", "second" }) |worker, root, name| {
+        const local = try worker.addLocal(.{ .layout_idx = pointer_layout });
+        try worker.setLocalName(local, name);
+        const string = try worker.insertString(name);
+        worker.current_loc = .{ .file = 1, .line = 2, .column = 3 };
+        worker.current_inline_scope = try worker.addInlineScope(.{
+            .source_symbol = store.getProcSpec(procs[0]).name,
+            .source_name = string,
+            .source_loc = worker.current_loc,
+            .call_site = .{ .file = 1, .line = 4, .column = 5 },
+            .parent = .none,
+        });
+        const ret = try worker.addCFStmt(.{ .ret = .{ .value = local } });
+        worker.getCFStmtPtr(root).* = .{ .assign_ref = .{
+            .target = local,
+            .op = .{ .local = original },
+            .next = ret,
+        } };
+    }
+    try store.commitProcRewrite(&first);
+    try store.commitProcRewrite(&second);
+    try std.testing.expectEqual(prefix.locals + 2, store.captureBodyPrefix().locals);
+    try std.testing.expectEqual(prefix.cf_stmts + 2, store.captureBodyPrefix().cf_stmts);
+    for (roots, 0..) |root, index| {
+        const assign = store.getCFStmt(root).assign_ref;
+        try std.testing.expectEqual(prefix.locals + index, @intFromEnum(assign.target));
+        try std.testing.expectEqual(prefix.cf_stmts + index, @intFromEnum(assign.next));
+        try std.testing.expectEqual(assign.target, store.getCFStmt(assign.next).ret.value);
+    }
+
+    const buffer = try gpa.alignedAlloc(u8, .@"16", 1 << 20);
+    defer gpa.free(buffer);
+    var fba = std.heap.FixedBufferAllocator.init(buffer);
+    const header = try fba.allocator().create(Header);
+    const copied = try copyProgramIntoBuffer(fba.allocator(), buffer.ptr, buffer.len, &lowered, &.{});
+    try copied.fillHeader(header, fba.end_index);
+    var view = try viewMappedImageWithAllocator(header, buffer.ptr, buffer.len, .u64, gpa);
+    defer view.deinit();
+    try std.testing.expect(view.store.proc_rewrite == null);
+    try std.testing.expect(view.store.body_coordinator == null);
+    try std.testing.expectEqual(std.mem.zeroes(LirStore.BodyPrefix), view.store.body_prefix);
+    inline for (serialized_guarded_fields) |field| {
+        const source = @field(store, field).unsafeRawItemsForView();
+        const mapped = @field(view.store, field).unsafeRawItemsForView();
+        try std.testing.expectEqualSlices(u8, std.mem.sliceAsBytes(source), std.mem.sliceAsBytes(mapped));
+    }
+    try std.testing.expectEqualSlices(u8, store.strings.buffer.items.items, view.store.strings.buffer.items.items);
+    try std.testing.expectEqual(store.next_synthetic_symbol, view.store.next_synthetic_symbol);
+    try std.testing.expectEqual(lowered.layouts.layoutCount(), view.layouts.layoutCount());
+    try std.testing.expectEqualSlices(u8, std.mem.sliceAsBytes(lowered.layouts.layouts.items.items), std.mem.sliceAsBytes(view.layouts.layouts.items.items));
+    for (roots, [_][]const u8{ "first", "second" }) |root, name| {
+        const assign = view.store.getCFStmt(root).assign_ref;
+        try std.testing.expectEqual(pointer_layout, view.store.getLocal(assign.target).layout_idx);
+        try std.testing.expectEqualDeep(lowered.layouts.getLayout(pointer_layout), view.layouts.getLayout(pointer_layout));
+        const scope = view.store.inlineScope(view.store.stmtInlineScope(assign.next));
+        try std.testing.expectEqualStrings(name, view.store.getString(scope.source_name));
+        try std.testing.expectEqual(first.current_loc, view.store.stmtLoc(assign.next));
+    }
+}
+
 test "LIR image copies and round-trips every populated store field" {
     const gpa = std.testing.allocator;
 
@@ -1617,6 +1705,7 @@ test "LIR image copies and round-trips every populated store field" {
     try std.testing.expectEqual(base.Region.zero(), view.store.current_region);
     try std.testing.expectEqual(LIR.InlineScopeId.none, view.store.current_inline_scope);
     try std.testing.expectEqual(@as(?*const LirStore, null), view.store.body_coordinator);
+    try std.testing.expect(view.store.proc_rewrite == null);
     try std.testing.expectEqual(std.mem.zeroes(LirStore.BodyPrefix), view.store.body_prefix);
     // A viewed image is read-only, so string insertion is disabled.
     try std.testing.expectEqual(false, view.store.strings_insertable);

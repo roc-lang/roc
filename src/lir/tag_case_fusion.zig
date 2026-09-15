@@ -184,7 +184,7 @@ const BranchRewriter = struct {
             const payload = assign.op.tag_payload_struct;
             if (payload.source != self.param) return null;
             std.debug.assert(payload.variant_index == self.variant_index);
-            cloner.local_map[@intFromEnum(assign.target)] = self.payload;
+            try cloner.local_map.put(assign.target, self.payload);
             return try cloner.cloneStmt(assign.next);
         }
         if (assign.op != .tag_payload) return null;
@@ -461,7 +461,7 @@ fn findCandidate(
             for (builds.items) |build| {
                 var current = store.getCFStmt(build.stmt).assign_tag.next;
                 while (true) {
-                    if (predecessors.counts[@intFromEnum(current)] != 1) shared_edge = true;
+                    if ((predecessors.get(current) orelse 0) != 1) shared_edge = true;
                     if (current == build.edge_jump) break;
                     current = switch (store.getCFStmt(current)) {
                         .decref => |release| release.next,
@@ -624,10 +624,9 @@ fn producerEdgeJump(
 /// Count, per statement, how many statements in the subtree under `root`
 /// continue into it structurally. Jumps do not count: they name joins, and a
 /// join reached only by jumps has one structural predecessor, its declarer.
-fn countStructuralPredecessors(store: *LirStore, root: LIR.CFStmtId) ResourceError!body_clone.ReadCounts {
-    const counts = try store.allocator.alloc(u32, store.cfStmtCount());
-    errdefer store.allocator.free(counts);
-    @memset(counts, 0);
+fn countStructuralPredecessors(store: *LirStore, root: LIR.CFStmtId) ResourceError!collections.DenseMap(LIR.CFStmtId, u32) {
+    var counts = collections.DenseMap(LIR.CFStmtId, u32).init(store.allocator);
+    errdefer counts.deinit();
     var successors = std.ArrayList(LIR.CFStmtId).empty;
     defer successors.deinit(store.allocator);
     var walk = try body_clone.ReachableStmts.init(store, root);
@@ -635,9 +634,9 @@ fn countStructuralPredecessors(store: *LirStore, root: LIR.CFStmtId) ResourceErr
     while (try walk.next()) |stmt_id| {
         successors.clearRetainingCapacity();
         try body_clone.appendSuccessors(store, &successors, stmt_id);
-        for (successors.items) |next| counts[@intFromEnum(next)] += 1;
+        for (successors.items) |next| try counts.put(next, (counts.get(next) orelse 0) + 1);
     }
-    return .{ .allocator = store.allocator, .counts = counts };
+    return counts;
 }
 
 /// Count, per local, the reachable releases of the locals naming the joined
@@ -649,9 +648,8 @@ fn countReleaseReads(
     body: LIR.CFStmtId,
     union_locals: []const LIR.LocalId,
 ) ResourceError!body_clone.ReadCounts {
-    const counts = try store.allocator.alloc(u32, store.localCount());
-    errdefer store.allocator.free(counts);
-    @memset(counts, 0);
+    var counts = collections.DenseMap(LIR.LocalId, u32).init(store.allocator);
+    errdefer counts.deinit();
     var walk = try body_clone.ReachableStmts.init(store, body);
     defer walk.deinit();
     while (try walk.next()) |stmt_id| {
@@ -705,10 +703,10 @@ fn countReleaseReads(
         };
         const local = released orelse continue;
         for (union_locals) |candidate| {
-            if (candidate == local) counts[@intFromEnum(local)] += 1;
+            if (candidate == local) try counts.put(local, (counts.get(local) orelse 0) + 1);
         }
     }
-    return .{ .allocator = store.allocator, .counts = counts };
+    return .{ .counts = counts };
 }
 
 /// Prove that every use of the joined tag is the match itself or a valid
@@ -886,8 +884,8 @@ fn applyCandidate(
         try join_params.record(store.getCFStmt(join_stmt).join);
 
         const branch = switchTarget(store, switch_stmt, build.discriminant);
-        const branch_defs = try body_clone.collectReachableDefinitions(store, branch);
-        defer store.allocator.free(branch_defs);
+        var branch_defs = try body_clone.collectReachableDefinitions(store, branch);
+        defer branch_defs.deinit();
         var cloner = try body_clone.BodyCloner(BranchRewriter).initWithFreshDeclaredJoins(store, .{
             .param = candidate.matched_value,
             .variant_index = build.variant_index,
@@ -901,7 +899,7 @@ fn applyCandidate(
         const frame = store.getLocalSpan(store.getProcSpec(candidate.proc).frame_locals);
         for (0..frame.len) |index| {
             const local = GuardedList.at(frame, index);
-            if (!branch_defs[@intFromEnum(local)]) cloner.local_map[@intFromEnum(local)] = local;
+            if (branch_defs.get(local) == 0) try cloner.local_map.put(local, local);
         }
         const body = try cloner.cloneStmt(branch);
         try cloned_locals.appendSlice(store.allocator, cloner.new_locals.items);

@@ -7,6 +7,8 @@
 //! not vary between them: the generic `BodyCloner(Rewriter)`, the reachable
 //! successor walk, the alias-forwarding walk, the operand read counter used to
 //! prove rewrite soundness, and the frame-local deduplication helpers.
+//! Scratch is indexed only by encountered identities and can be owned by a
+//! procedure task independently of the store receiving its cloned output.
 
 const std = @import("std");
 const collections = @import("collections");
@@ -33,6 +35,7 @@ pub const ForwardedAlias = struct {
 /// without rescanning the procedure for every cloned branch.
 pub const JoinParamIndex = struct {
     params: collections.DenseMap(LIR.JoinPointId, LIR.LocalSpan),
+    next_join_point: u32 = 0,
 
     pub fn init(allocator: Allocator) JoinParamIndex {
         return .{ .params = collections.DenseMap(LIR.JoinPointId, LIR.LocalSpan).init(allocator) };
@@ -44,10 +47,20 @@ pub const JoinParamIndex = struct {
 
     pub fn record(self: *JoinParamIndex, join: @FieldType(LIR.CFStmt, "join")) Allocator.Error!void {
         try self.params.put(join.id, join.params);
+        const raw = @intFromEnum(join.id);
+        if (raw == std.math.maxInt(u32)) @panic("join-point id space exhausted");
+        self.next_join_point = @max(self.next_join_point, raw + 1);
+    }
+
+    fn freshJoinPoint(self: *JoinParamIndex) LIR.JoinPointId {
+        if (self.next_join_point == std.math.maxInt(u32)) @panic("join-point id space exhausted");
+        const id: LIR.JoinPointId = @enumFromInt(self.next_join_point);
+        self.next_join_point += 1;
+        return id;
     }
 
     pub fn indexReachable(self: *JoinParamIndex, store: *LirStore, body: CFStmtId) Allocator.Error!void {
-        var walk = try ReachableStmts.init(store, body);
+        var walk = try ReachableStmts.initWithAllocator(store, body, self.params.allocator);
         defer walk.deinit();
         while (try walk.next()) |stmt_id| {
             const stmt = store.getCFStmt(stmt_id);
@@ -117,6 +130,16 @@ pub fn appendSuccessors(
     work: *std.ArrayList(CFStmtId),
     stmt_id: CFStmtId,
 ) Allocator.Error!void {
+    return appendSuccessorsWithAllocator(store, work, stmt_id, store.allocator);
+}
+
+/// Like `appendSuccessors`, using the walk owner's scratch allocator.
+pub fn appendSuccessorsWithAllocator(
+    store: *const LirStore,
+    work: *std.ArrayList(CFStmtId),
+    stmt_id: CFStmtId,
+    allocator: Allocator,
+) Allocator.Error!void {
     switch (store.getCFStmt(stmt_id)) {
         inline .assign_ref,
         .assign_literal,
@@ -149,38 +172,38 @@ pub fn appendSuccessors(
         .decref,
         .decref_if_initialized,
         .free,
-        => |s| try work.append(store.allocator, s.next),
+        => |s| try work.append(allocator, s.next),
 
         .switch_stmt => |s| {
-            if (s.continuation) |continuation| try work.append(store.allocator, continuation);
-            try work.append(store.allocator, s.default_branch);
+            if (s.continuation) |continuation| try work.append(allocator, continuation);
+            try work.append(allocator, s.default_branch);
             const branches = store.getCFSwitchBranches(s.branches);
             for (0..branches.len) |index| {
-                try work.append(store.allocator, GuardedList.at(branches, index).body);
+                try work.append(allocator, GuardedList.at(branches, index).body);
             }
         },
         .switch_initialized_payload => |s| {
-            try work.append(store.allocator, s.initialized_branch);
-            try work.append(store.allocator, s.uninitialized_branch);
+            try work.append(allocator, s.initialized_branch);
+            try work.append(allocator, s.uninitialized_branch);
         },
         .str_match => |s| {
-            try work.append(store.allocator, s.on_match);
-            try work.append(store.allocator, s.on_miss);
+            try work.append(allocator, s.on_match);
+            try work.append(allocator, s.on_miss);
         },
         .boxy_tag_match => |s| {
-            try work.append(store.allocator, s.on_match);
-            try work.append(store.allocator, s.on_miss);
+            try work.append(allocator, s.on_match);
+            try work.append(allocator, s.on_miss);
         },
         .str_match_set => |s| {
             const arms = store.getStrMatchArms(s.arms);
             for (0..arms.len) |index| {
-                try work.append(store.allocator, GuardedList.at(arms, index).on_match);
+                try work.append(allocator, GuardedList.at(arms, index).on_match);
             }
-            try work.append(store.allocator, s.on_miss);
+            try work.append(allocator, s.on_miss);
         },
         .join => |s| {
-            try work.append(store.allocator, s.body);
-            try work.append(store.allocator, s.remainder);
+            try work.append(allocator, s.body);
+            try work.append(allocator, s.remainder);
         },
         .runtime_error,
         .comptime_exhaustiveness_failed,
@@ -199,17 +222,19 @@ pub fn appendSuccessors(
 /// producer's result local; these counts let a pass require that no other
 /// statement still reads that local before it commits the fusion.
 pub const ReadCounts = struct {
-    allocator: Allocator,
-    counts: []u32,
+    counts: collections.DenseMap(LocalId, u32),
+    // Operand enumeration is also used by allocation-free dense callers.
+    // Defer a sparse insertion failure until the end of that statement.
+    failure: ?Allocator.Error = null,
 
     /// Release the backing count storage.
     pub fn deinit(self: *ReadCounts) void {
-        self.allocator.free(self.counts);
+        self.counts.deinit();
     }
 
-    /// How many reachable statements read `local` as an operand.
+    /// Number of counted operand occurrences (or definitions) of `local`.
     pub fn get(self: *const ReadCounts, local: LocalId) u32 {
-        return self.counts[@intFromEnum(local)];
+        return self.counts.get(local) orelse 0;
     }
 };
 
@@ -217,30 +242,21 @@ pub const ReadCounts = struct {
 /// successor edges. Definitions (statement targets and join parameters) are not
 /// reads; only operand positions count.
 pub fn countReachableReads(store: *LirStore, body: CFStmtId) Allocator.Error!ReadCounts {
-    const counts = try store.allocator.alloc(u32, store.localCount());
-    errdefer store.allocator.free(counts);
-    @memset(counts, 0);
+    return countReachableReadsWithAllocator(store, body, store.allocator);
+}
 
-    var work = std.ArrayList(CFStmtId).empty;
-    defer work.deinit(store.allocator);
-    var visited = collections.DenseMap(CFStmtId, void).init(store.allocator);
-    defer visited.deinit();
-
-    try work.append(store.allocator, body);
-    while (work.pop()) |stmt_id| {
-        const entry = try visited.getOrPut(stmt_id);
-        if (entry.found_existing) continue;
-
-        countStmtReads(store, counts, store.getCFStmt(stmt_id));
-        try appendSuccessors(store, &work, stmt_id);
-    }
-
-    return .{ .allocator = store.allocator, .counts = counts };
+/// Count only reachable operands, allocating scratch independently of output.
+pub fn countReachableReadsWithAllocator(store: *LirStore, body: CFStmtId, allocator: Allocator) Allocator.Error!ReadCounts {
+    return countReachable(store, body, allocator, .reads);
 }
 
 /// Add this statement's operand reads to an existing per-local count row.
 /// Definitions are deliberately excluded, matching `countReachableReads`.
 pub fn countStmtReads(store: *const LirStore, counts: []u32, stmt: LIR.CFStmt) void {
+    visitStmtReads(store, counts, stmt);
+}
+
+fn visitStmtReads(store: *const LirStore, counts: anytype, stmt: LIR.CFStmt) void {
     switch (stmt) {
         .assign_ref => |s| switch (s.op) {
             .local => |source| noteRead(counts, source),
@@ -381,30 +397,37 @@ pub fn countStmtReads(store: *const LirStore, counts: []u32, stmt: LIR.CFStmt) v
 /// successor edges: statement targets, join parameters, descriptor outputs,
 /// and pattern-match captures. Operand reads are not definitions.
 pub fn countReachableDefs(store: *LirStore, body: CFStmtId) Allocator.Error!ReadCounts {
-    const counts = try store.allocator.alloc(u32, store.localCount());
-    errdefer store.allocator.free(counts);
-    @memset(counts, 0);
+    return countReachableDefsWithAllocator(store, body, store.allocator);
+}
 
-    var work = std.ArrayList(CFStmtId).empty;
-    defer work.deinit(store.allocator);
-    var visited = collections.DenseMap(CFStmtId, void).init(store.allocator);
-    defer visited.deinit();
+/// Like `countReachableDefs`, using the procedure task's scratch allocator.
+pub fn countReachableDefsWithAllocator(store: *LirStore, body: CFStmtId, allocator: Allocator) Allocator.Error!ReadCounts {
+    return countReachable(store, body, allocator, .defs);
+}
 
-    try work.append(store.allocator, body);
-    while (work.pop()) |stmt_id| {
-        const entry = try visited.getOrPut(stmt_id);
-        if (entry.found_existing) continue;
+fn countReachable(store: *LirStore, body: CFStmtId, allocator: Allocator, comptime kind: enum { reads, defs }) Allocator.Error!ReadCounts {
+    var counts: ReadCounts = .{ .counts = collections.DenseMap(LocalId, u32).init(allocator) };
+    errdefer counts.deinit();
+    var walk = try ReachableStmts.initWithAllocator(store, body, allocator);
+    defer walk.deinit();
 
-        countStmtDefs(store, counts, store.getCFStmt(stmt_id));
-        try appendSuccessors(store, &work, stmt_id);
+    while (try walk.next()) |stmt_id| {
+        switch (kind) {
+            .reads => visitStmtReads(store, &counts, store.getCFStmt(stmt_id)),
+            .defs => visitStmtDefs(store, &counts, store.getCFStmt(stmt_id)),
+        }
+        if (counts.failure) |err| return err;
     }
-
-    return .{ .allocator = store.allocator, .counts = counts };
+    return counts;
 }
 
 /// Add this statement's definitions to an existing per-local count row.
 /// Operand reads are deliberately excluded, matching `countReachableDefs`.
 pub fn countStmtDefs(store: *const LirStore, counts: []u32, stmt: LIR.CFStmt) void {
+    visitStmtDefs(store, counts, stmt);
+}
+
+fn visitStmtDefs(store: *const LirStore, counts: anytype, stmt: LIR.CFStmt) void {
     switch (stmt) {
         inline .init_uninitialized,
         .assign_ref,
@@ -468,7 +491,7 @@ pub fn countStmtDefs(store: *const LirStore, counts: []u32, stmt: LIR.CFStmt) vo
     }
 }
 
-fn noteStepCaptures(store: *const LirStore, counts: []u32, span: LIR.StrMatchStepSpan) void {
+fn noteStepCaptures(store: *const LirStore, counts: anytype, span: LIR.StrMatchStepSpan) void {
     const steps = store.getStrMatchSteps(span);
     for (0..steps.len) |index| switch (GuardedList.at(steps, index).capture) {
         .discard => {},
@@ -476,20 +499,30 @@ fn noteStepCaptures(store: *const LirStore, counts: []u32, span: LIR.StrMatchSte
     };
 }
 
-fn noteRead(counts: []u32, local: LocalId) void {
-    counts[@intFromEnum(local)] += 1;
+fn noteRead(counts: anytype, local: LocalId) void {
+    if (@TypeOf(counts) == *ReadCounts) {
+        if (counts.failure != null) return;
+        const entry = counts.counts.getOrPut(local) catch |err| {
+            counts.failure = err;
+            return;
+        };
+        if (!entry.found_existing) entry.value_ptr.* = 0;
+        entry.value_ptr.* += 1;
+    } else {
+        counts[@intFromEnum(local)] += 1;
+    }
 }
 
-fn noteSpanReads(store: *const LirStore, counts: []u32, span: LIR.LocalSpan) void {
+fn noteSpanReads(store: *const LirStore, counts: anytype, span: LIR.LocalSpan) void {
     const locals = store.getLocalSpan(span);
     for (0..locals.len) |index| noteRead(counts, GuardedList.at(locals, index));
 }
 
-fn noteDescRead(counts: []u32, desc: LIR.BoxyDescRef) void {
+fn noteDescRead(counts: anytype, desc: LIR.BoxyDescRef) void {
     if (desc.localOrNull()) |local| noteRead(counts, local);
 }
 
-fn noteDictRead(counts: []u32, dict: LIR.BoxyDictRef) void {
+fn noteDictRead(counts: anytype, dict: LIR.BoxyDictRef) void {
     if (dict.localOrNull()) |local| noteRead(counts, local);
 }
 
@@ -523,24 +556,30 @@ pub fn rewritableProcBody(store: *const LirStore, proc_id: LIR.LirProcSpecId) ?C
 /// join targets are reached through whichever predecessor arrives first.
 pub const ReachableStmts = struct {
     store: *LirStore,
+    allocator: Allocator,
     work: std.ArrayList(CFStmtId),
     visited: collections.DenseMap(CFStmtId, void),
 
     /// Start a walk rooted at `body`.
     pub fn init(store: *LirStore, body: CFStmtId) Allocator.Error!ReachableStmts {
+        return initWithAllocator(store, body, store.allocator);
+    }
+
+    pub fn initWithAllocator(store: *LirStore, body: CFStmtId, allocator: Allocator) Allocator.Error!ReachableStmts {
         var work = std.ArrayList(CFStmtId).empty;
-        errdefer work.deinit(store.allocator);
-        try work.append(store.allocator, body);
+        errdefer work.deinit(allocator);
+        try work.append(allocator, body);
         return .{
             .store = store,
+            .allocator = allocator,
             .work = work,
-            .visited = collections.DenseMap(CFStmtId, void).init(store.allocator),
+            .visited = collections.DenseMap(CFStmtId, void).init(allocator),
         };
     }
 
     /// Release the walk's scratch storage.
     pub fn deinit(self: *ReachableStmts) void {
-        self.work.deinit(self.store.allocator);
+        self.work.deinit(self.allocator);
         self.visited.deinit();
     }
 
@@ -549,29 +588,47 @@ pub const ReachableStmts = struct {
         while (self.work.pop()) |stmt_id| {
             const entry = try self.visited.getOrPut(stmt_id);
             if (entry.found_existing) continue;
-            try appendSuccessors(self.store, &self.work, stmt_id);
+            try appendSuccessorsWithAllocator(self.store, &self.work, stmt_id, self.allocator);
             return stmt_id;
         }
         return null;
     }
 };
 
-/// Return one flag per store local identifying definitions reachable from
-/// `body`. Clone passes use this to give definitions fresh identities while
-/// retaining read-only external inputs.
-pub fn collectReachableDefinitions(store: *LirStore, body: CFStmtId) Allocator.Error![]bool {
-    const defined = try store.allocator.alloc(bool, store.localCount());
-    errdefer store.allocator.free(defined);
-    @memset(defined, false);
+/// Return only binders reachable from `body`. Clone passes give these fresh
+/// identities while retaining read-only external inputs. Unlike write counts,
+/// this excludes `set_local` and includes maybe-uninitialized join binders.
+pub fn collectReachableDefinitions(store: *LirStore, body: CFStmtId) Allocator.Error!ReadCounts {
+    return collectReachableDefinitionsWithAllocator(store, body, store.allocator);
+}
 
-    var walk = try ReachableStmts.init(store, body);
+/// Like `collectReachableDefinitions`, with independently owned scratch.
+pub fn collectReachableDefinitionsWithAllocator(store: *LirStore, body: CFStmtId, allocator: Allocator) Allocator.Error!ReadCounts {
+    var defined: ReadCounts = .{ .counts = collections.DenseMap(LocalId, u32).init(allocator) };
+    errdefer defined.deinit();
+    var walk = try ReachableStmts.initWithAllocator(store, body, allocator);
     defer walk.deinit();
-    while (try walk.next()) |stmt_id| markStmtDefinitions(store, defined, stmt_id);
+    while (try walk.next()) |stmt_id| {
+        visitStmtDefinitions(store, &defined, stmt_id);
+        if (defined.failure) |err| return err;
+    }
     return defined;
 }
 
 /// Add every local defined by `stmt_id` to an existing definition set.
 pub fn markStmtDefinitions(store: *const LirStore, defined: []bool, stmt_id: CFStmtId) void {
+    visitStmtDefinitions(store, defined, stmt_id);
+}
+
+fn noteDefinition(defined: anytype, local: LocalId) void {
+    if (@TypeOf(defined) == *ReadCounts) {
+        noteRead(defined, local);
+    } else {
+        defined[@intFromEnum(local)] = true;
+    }
+}
+
+fn visitStmtDefinitions(store: *const LirStore, defined: anytype, stmt_id: CFStmtId) void {
     switch (store.getCFStmt(stmt_id)) {
         inline .init_uninitialized,
         .assign_ref,
@@ -591,24 +648,24 @@ pub fn markStmtDefinitions(store: *const LirStore, defined: []bool, stmt_id: CFS
         .assign_list,
         .assign_struct,
         .assign_tag,
-        => |stmt| defined[@intFromEnum(stmt.target)] = true,
+        => |stmt| noteDefinition(defined, stmt.target),
         .assign_call => |stmt| {
-            defined[@intFromEnum(stmt.target)] = true;
-            if (stmt.out_desc) |out_desc| defined[@intFromEnum(out_desc)] = true;
+            noteDefinition(defined, stmt.target);
+            if (stmt.out_desc) |out_desc| noteDefinition(defined, out_desc);
         },
         .assign_call_erased => |stmt| {
-            defined[@intFromEnum(stmt.target)] = true;
-            if (stmt.out_desc) |out_desc| defined[@intFromEnum(out_desc)] = true;
+            noteDefinition(defined, stmt.target);
+            if (stmt.out_desc) |out_desc| noteDefinition(defined, out_desc);
         },
         .assign_boxy_tag_payload => |stmt| {
-            defined[@intFromEnum(stmt.target)] = true;
-            if (stmt.target_desc) |target_desc| defined[@intFromEnum(target_desc)] = true;
+            noteDefinition(defined, stmt.target);
+            if (stmt.target_desc) |target_desc| noteDefinition(defined, target_desc);
         },
         .join => |join| {
             const params = store.getLocalSpan(join.params);
-            for (0..params.len) |index| defined[@intFromEnum(GuardedList.at(params, index))] = true;
+            for (0..params.len) |index| noteDefinition(defined, GuardedList.at(params, index));
             const maybe_uninitialized = store.getLocalSpan(join.maybe_uninitialized_params);
-            for (0..maybe_uninitialized.len) |index| defined[@intFromEnum(GuardedList.at(maybe_uninitialized, index))] = true;
+            for (0..maybe_uninitialized.len) |index| noteDefinition(defined, GuardedList.at(maybe_uninitialized, index));
         },
         .str_match => |str_match| markStrMatchDefinitions(store, defined, str_match.steps),
         .str_match_set => |str_match_set| {
@@ -642,11 +699,11 @@ pub fn markStmtDefinitions(store: *const LirStore, defined: []bool, stmt_id: CFS
     }
 }
 
-fn markStrMatchDefinitions(store: *const LirStore, defined: []bool, span: LIR.StrMatchStepSpan) void {
+fn markStrMatchDefinitions(store: *const LirStore, defined: anytype, span: LIR.StrMatchStepSpan) void {
     const steps = store.getStrMatchSteps(span);
     for (0..steps.len) |index| switch (GuardedList.at(steps, index).capture) {
         .discard => {},
-        .view => |local| defined[@intFromEnum(local)] = true,
+        .view => |local| noteDefinition(defined, local),
     };
 }
 
@@ -712,7 +769,7 @@ pub fn cloneCallVariant(
 
     for (0..source_args.len) |index| {
         const source_arg = GuardedList.at(source_args, index);
-        cloner.local_map[@intFromEnum(source_arg)] = variant_args.items[index + spec.leading_args.len];
+        try cloner.local_map.put(source_arg, variant_args.items[index + spec.leading_args.len]);
     }
 
     try cloner.new_locals.appendSlice(store.allocator, variant_args.items);
@@ -762,6 +819,10 @@ pub fn cloneCallVariant(
 ///     clone, letting the pass fuse a direct constructor/concat return into
 ///     the tail or rewrite statements it identified up front, or `null` to
 ///     fall through to the ordinary clone.
+///   * `preserveLocal(self: *Rewriter, old: LocalId) bool`—optional.
+///     Retains an uncached local's original identity instead of allocating a
+///     clone. This lets subtree rewrites preserve external inputs by default
+///     without seeding a map over the entire store.
 ///
 /// Both hooks receive the cloner and use its `mapLocal`, `mapLocalSpan`,
 /// `addTemp`, `directReturnOf`, and `store` surface to build their statements.
@@ -771,16 +832,18 @@ pub fn BodyCloner(comptime Rewriter: type) type {
 
         /// The store the clone is written into.
         store: *LirStore,
+        /// Task-local storage, separate from the store-owned clone output.
+        allocator: Allocator,
         /// Pass-specific return rewriter and its destination state.
         rewriter: Rewriter,
-        /// Old-local index to cloned-local, `null` until first mapped.
-        local_map: []?LocalId,
+        /// Only locals encountered by this clone have entries.
+        local_map: collections.DenseMap(LocalId, LocalId),
         stmt_map: collections.DenseMap(CFStmtId, CFStmtId),
         /// Every local created by this clone, in creation order.
         new_locals: std.ArrayList(LocalId),
         /// Optional virtual frame under which cloned source scopes are rebased.
         inline_scope_outer: LIR.InlineScopeId,
-        inline_scope_map: []?LIR.InlineScopeId,
+        inline_scope_map: collections.DenseMap(LIR.InlineScopeId, LIR.InlineScopeId),
         /// Which join identities must be alpha-renamed. Whole-procedure
         /// inlining owns every jump target and remaps all of them. A cloned
         /// subtree remaps only declarations structurally contained in that
@@ -791,20 +854,46 @@ pub fn BodyCloner(comptime Rewriter: type) type {
         join_map: collections.DenseMap(LIR.JoinPointId, LIR.JoinPointId),
         next_join_point: u32,
 
-        /// Allocate the clone state sized for the store's current locals.
+        /// Initialize clone state without allocating for unrelated procedures.
+        /// Join identities are retained; use a destination-aware constructor
+        /// when cloning into an existing join domain rather than a new proc.
         pub fn init(store: *LirStore, rewriter: Rewriter) Allocator.Error!Self {
-            return initInternal(store, rewriter, LIR.InlineScopeId.none, .none, null);
+            return initWithAllocator(store, rewriter, store.allocator);
+        }
+
+        /// Use task-owned scratch while emitting clone output into `store`.
+        pub fn initWithAllocator(store: *LirStore, rewriter: Rewriter, allocator: Allocator) Allocator.Error!Self {
+            return initInternal(store, rewriter, LIR.InlineScopeId.none, .none, null, allocator);
         }
 
         /// Allocate clone state and rebase every cloned source location below
         /// `outer`. Procedure variants pass `.none`; true call-site inlining
-        /// supplies the virtual frame representing the removed call.
+        /// supplies the virtual frame representing the removed call. The
+        /// destination body defines the existing join identity domain.
         pub fn initWithInlineScopeOuter(
             store: *LirStore,
             rewriter: Rewriter,
             outer: LIR.InlineScopeId,
+            destination_body: CFStmtId,
         ) Allocator.Error!Self {
-            return initInternal(store, rewriter, outer, .all, null);
+            return initWithInlineScopeOuterAndAllocator(store, rewriter, outer, destination_body, store.allocator);
+        }
+
+        /// Inline into an existing destination using task-owned scratch.
+        pub fn initWithInlineScopeOuterAndAllocator(
+            store: *LirStore,
+            rewriter: Rewriter,
+            outer: LIR.InlineScopeId,
+            destination_body: CFStmtId,
+            allocator: Allocator,
+        ) Allocator.Error!Self {
+            var self = try initInternal(store, rewriter, outer, .all, null, allocator);
+            errdefer self.deinit();
+            var index = JoinParamIndex.init(self.allocator);
+            defer index.deinit();
+            try index.indexReachable(store, destination_body);
+            self.next_join_point = index.next_join_point;
+            return self;
         }
 
         /// Clone a control-flow subtree within its current procedure. Join
@@ -816,9 +905,20 @@ pub fn BodyCloner(comptime Rewriter: type) type {
             body: CFStmtId,
             join_params: *JoinParamIndex,
         ) Allocator.Error!Self {
-            var self = try initInternal(store, rewriter, LIR.InlineScopeId.none, .declared, join_params);
+            return initWithFreshDeclaredJoinsAndAllocator(store, rewriter, body, join_params, store.allocator);
+        }
+
+        /// Clone a subtree with task-owned scratch and a destination join index.
+        pub fn initWithFreshDeclaredJoinsAndAllocator(
+            store: *LirStore,
+            rewriter: Rewriter,
+            body: CFStmtId,
+            join_params: *JoinParamIndex,
+            allocator: Allocator,
+        ) Allocator.Error!Self {
+            var self = try initInternal(store, rewriter, LIR.InlineScopeId.none, .declared, join_params, allocator);
             errdefer self.deinit();
-            var walk = try ReachableStmts.init(store, body);
+            var walk = try ReachableStmts.initWithAllocator(store, body, allocator);
             defer walk.deinit();
             while (try walk.next()) |stmt_id| {
                 const stmt = store.getCFStmt(stmt_id);
@@ -833,36 +933,33 @@ pub fn BodyCloner(comptime Rewriter: type) type {
             outer: LIR.InlineScopeId,
             join_remap: @FieldType(Self, "join_remap"),
             join_params: ?*JoinParamIndex,
+            allocator: Allocator,
         ) Allocator.Error!Self {
-            const local_map = try store.allocator.alloc(?LocalId, store.localCount());
-            errdefer store.allocator.free(local_map);
-            @memset(local_map, null);
-            const inline_scope_map = try store.allocator.alloc(?LIR.InlineScopeId, store.inlineScopeCount());
-            @memset(inline_scope_map, null);
             return .{
                 .store = store,
+                .allocator = allocator,
                 .rewriter = rewriter,
-                .local_map = local_map,
-                .stmt_map = collections.DenseMap(CFStmtId, CFStmtId).init(store.allocator),
+                .local_map = collections.DenseMap(LocalId, LocalId).init(allocator),
+                .stmt_map = collections.DenseMap(CFStmtId, CFStmtId).init(allocator),
                 .new_locals = .empty,
                 .inline_scope_outer = outer,
-                .inline_scope_map = inline_scope_map,
+                .inline_scope_map = collections.DenseMap(LIR.InlineScopeId, LIR.InlineScopeId).init(allocator),
                 .join_remap = join_remap,
-                .declared_joins = collections.DenseMap(LIR.JoinPointId, void).init(store.allocator),
+                .declared_joins = collections.DenseMap(LIR.JoinPointId, void).init(allocator),
                 .join_params = join_params,
-                .join_map = collections.DenseMap(LIR.JoinPointId, LIR.JoinPointId).init(store.allocator),
-                .next_join_point = if (join_remap != .none) nextJoinPointRaw(store) else 0,
+                .join_map = collections.DenseMap(LIR.JoinPointId, LIR.JoinPointId).init(allocator),
+                .next_join_point = 0,
             };
         }
 
         /// Release the clone's scratch storage.
         pub fn deinit(self: *Self) void {
-            self.new_locals.deinit(self.store.allocator);
+            self.new_locals.deinit(self.allocator);
             self.stmt_map.deinit();
             self.join_map.deinit();
             self.declared_joins.deinit();
-            self.store.allocator.free(self.inline_scope_map);
-            self.store.allocator.free(self.local_map);
+            self.inline_scope_map.deinit();
+            self.local_map.deinit();
         }
 
         /// Clone `old_id` and everything reachable from it, memoizing by
@@ -1207,8 +1304,8 @@ pub fn BodyCloner(comptime Rewriter: type) type {
             while (index > 0) {
                 index -= 1;
                 const param = GuardedList.at(params, index);
-                const mapped = self.local_map[@intFromEnum(param)] orelse {
-                    self.local_map[@intFromEnum(param)] = param;
+                const mapped = self.local_map.get(param) orelse {
+                    try self.local_map.put(param, param);
                     continue;
                 };
                 if (mapped == param) continue;
@@ -1234,13 +1331,13 @@ pub fn BodyCloner(comptime Rewriter: type) type {
             // invalidate a guarded borrow of this same backing list. Own the
             // source descriptors before cloning any branch body.
             const old_branches = try GuardedList.dupe(
-                self.store.allocator,
+                self.allocator,
                 LIR.CFSwitchBranch,
                 self.store.getCFSwitchBranches(s.branches),
             );
-            defer self.store.allocator.free(old_branches);
-            const branches = try self.store.allocator.alloc(LIR.CFSwitchBranch, old_branches.len);
-            defer self.store.allocator.free(branches);
+            defer self.allocator.free(old_branches);
+            const branches = try self.allocator.alloc(LIR.CFSwitchBranch, old_branches.len);
+            defer self.allocator.free(branches);
             for (0..old_branches.len) |index| {
                 const old = old_branches[index];
                 const new = &branches[index];
@@ -1262,13 +1359,13 @@ pub fn BodyCloner(comptime Rewriter: type) type {
             // Cloning an arm can append nested string-match arms. Snapshot the
             // source descriptors so those appends cannot invalidate the input.
             const old_arms = try GuardedList.dupe(
-                self.store.allocator,
+                self.allocator,
                 LIR.StrMatchArm,
                 self.store.getStrMatchArms(s.arms),
             );
-            defer self.store.allocator.free(old_arms);
-            const arms = try self.store.allocator.alloc(LIR.StrMatchArm, old_arms.len);
-            defer self.store.allocator.free(arms);
+            defer self.allocator.free(old_arms);
+            const arms = try self.allocator.alloc(LIR.StrMatchArm, old_arms.len);
+            defer self.allocator.free(arms);
             for (0..old_arms.len) |index| {
                 const old = old_arms[index];
                 const new = &arms[index];
@@ -1288,8 +1385,8 @@ pub fn BodyCloner(comptime Rewriter: type) type {
 
         fn mapStrMatchSteps(self: *Self, span: LIR.StrMatchStepSpan) Allocator.Error!LIR.StrMatchStepSpan {
             const old_steps = self.store.getStrMatchSteps(span);
-            const steps = try self.store.allocator.alloc(LIR.StrMatchStep, old_steps.len);
-            defer self.store.allocator.free(steps);
+            const steps = try self.allocator.alloc(LIR.StrMatchStep, old_steps.len);
+            defer self.allocator.free(steps);
             for (0..old_steps.len) |index| {
                 const old = GuardedList.at(old_steps, index);
                 const new = &steps[index];
@@ -1329,8 +1426,8 @@ pub fn BodyCloner(comptime Rewriter: type) type {
         /// Clone a local-id span, remapping each element.
         pub fn mapLocalSpan(self: *Self, span: LIR.LocalSpan) Allocator.Error!LIR.LocalSpan {
             const old_locals = self.store.getLocalSpan(span);
-            const locals = try self.store.allocator.alloc(LocalId, old_locals.len);
-            defer self.store.allocator.free(locals);
+            const locals = try self.allocator.alloc(LocalId, old_locals.len);
+            defer self.allocator.free(locals);
             for (0..old_locals.len) |index| {
                 locals[index] = try self.mapLocal(GuardedList.at(old_locals, index));
             }
@@ -1366,23 +1463,27 @@ pub fn BodyCloner(comptime Rewriter: type) type {
         /// Map an old local to its clone, allocating a fresh same-layout local
         /// on first encounter.
         pub fn mapLocal(self: *Self, old: LocalId) Allocator.Error!LocalId {
-            const index = @intFromEnum(old);
-            if (index >= self.local_map.len) unreachable;
-            if (self.local_map[index]) |existing| return existing;
+            if (self.local_map.get(old)) |existing| return existing;
+            if (@hasDecl(Rewriter, "preserveLocal")) {
+                if (self.rewriter.preserveLocal(old)) {
+                    try self.local_map.put(old, old);
+                    return old;
+                }
+            }
 
             const old_local = self.store.getLocal(old);
             const fresh = try self.store.addLocal(.{ .layout_idx = old_local.layout_idx });
-            self.local_map[index] = fresh;
+            try self.local_map.put(old, fresh);
             const boxy_desc = try self.mapMaybeBoxyDescRef(old_local.boxy_desc);
             if (boxy_desc) |desc| self.store.setLocalBoxyDesc(fresh, desc);
-            try self.new_locals.append(self.store.allocator, fresh);
+            try self.new_locals.append(self.allocator, fresh);
             return fresh;
         }
 
         /// Allocate a fresh local of `layout_idx` owned by the clone.
         pub fn addTemp(self: *Self, layout_idx: layout_mod.Idx) Allocator.Error!LocalId {
             const local = try self.store.addLocal(.{ .layout_idx = layout_idx });
-            try self.new_locals.append(self.store.allocator, local);
+            try self.new_locals.append(self.allocator, local);
             return local;
         }
 
@@ -1390,9 +1491,7 @@ pub fn BodyCloner(comptime Rewriter: type) type {
             if (self.inline_scope_outer == LIR.InlineScopeId.none) return old;
             if (old == LIR.InlineScopeId.none) return self.inline_scope_outer;
 
-            const index = @intFromEnum(old);
-            if (index >= self.inline_scope_map.len) unreachable;
-            if (self.inline_scope_map[index]) |existing| return existing;
+            if (self.inline_scope_map.get(old)) |existing| return existing;
 
             const source = self.store.inlineScope(old);
             const mapped = try self.store.addInlineScope(.{
@@ -1402,7 +1501,7 @@ pub fn BodyCloner(comptime Rewriter: type) type {
                 .call_site = source.call_site,
                 .parent = try self.mapInlineScope(source.parent),
             });
-            self.inline_scope_map[index] = mapped;
+            try self.inline_scope_map.put(old, mapped);
             return mapped;
         }
 
@@ -1414,24 +1513,17 @@ pub fn BodyCloner(comptime Rewriter: type) type {
             }
             const entry = try self.join_map.getOrPut(old);
             if (!entry.found_existing) {
-                if (self.next_join_point == std.math.maxInt(u32)) @panic("join-point id space exhausted");
-                entry.value_ptr.* = @enumFromInt(self.next_join_point);
-                self.next_join_point += 1;
+                if (self.join_params) |params| {
+                    entry.value_ptr.* = params.freshJoinPoint();
+                } else {
+                    if (self.next_join_point == std.math.maxInt(u32)) @panic("join-point id space exhausted");
+                    entry.value_ptr.* = @enumFromInt(self.next_join_point);
+                    self.next_join_point += 1;
+                }
             }
             return entry.value_ptr.*;
         }
     };
-}
-
-fn nextJoinPointRaw(store: *const LirStore) u32 {
-    var next: u32 = 0;
-    for (store.getCFStmts()) |stmt| {
-        if (stmt != .join) continue;
-        const raw = @intFromEnum(stmt.join.id);
-        if (raw == std.math.maxInt(u32)) @panic("join-point id space exhausted");
-        next = @max(next, raw + 1);
-    }
-    return next;
 }
 
 const TestRetRewriter = struct {
@@ -1590,4 +1682,189 @@ test "call-result fusion machinery has one definition" {
     for (shared) |decl| {
         try std.testing.expect(std.mem.find(u8, own, decl) != null);
     }
+}
+
+test "body_clone scratch is bounded by reachable locals and scopes" {
+    const testing = std.testing;
+    var store = LirStore.init(testing.allocator);
+    defer store.deinit();
+    const scope: LIR.InlineScope = .{
+        .source_symbol = store.freshSyntheticSymbol(),
+        .source_name = .none,
+        .source_loc = .none,
+        .call_site = .none,
+        .parent = .none,
+    };
+    for (0..65536) |_| {
+        _ = try store.addLocal(.{ .layout_idx = .u64 });
+        _ = try store.addCFStmt(.runtime_error);
+        _ = try store.addInlineScope(scope);
+    }
+    const desc = try store.addLocal(.{ .layout_idx = .u64 });
+    const value = try store.addLocal(.{ .layout_idx = .u64, .boxy_desc = .{ .local = desc } });
+    const alias = try store.addLocal(.{ .layout_idx = .u64 });
+    const parent_scope = try store.addInlineScope(scope);
+    var child_scope = scope;
+    child_scope.parent = parent_scope;
+    const source_scope = try store.addInlineScope(child_scope);
+    store.current_inline_scope = source_scope;
+    const ret = try store.addCFStmt(.{ .ret = .{ .value = alias } });
+    const copy = try store.addCFStmt(.{ .assign_ref = .{
+        .target = alias,
+        .op = .{ .local = value },
+        .next = ret,
+    } });
+    const body = try store.addCFStmt(.{ .assign_boxy_desc_ref = .{
+        .target = desc,
+        .desc = .{ .local = value },
+        .captures = try store.addLocalSpan(&.{ value, value }),
+        .next = copy,
+    } });
+    var scratch: [32768]u8 = undefined;
+    var fba = std.heap.FixedBufferAllocator.init(&scratch);
+    const allocator = fba.allocator();
+    var reads = try countReachableReadsWithAllocator(&store, body, allocator);
+    defer reads.deinit();
+    var defs = try countReachableDefsWithAllocator(&store, body, allocator);
+    defer defs.deinit();
+    var flags = try collectReachableDefinitionsWithAllocator(&store, body, allocator);
+    defer flags.deinit();
+    try testing.expectEqual(@as(usize, 2), reads.counts.count());
+    try testing.expectEqual(@as(u32, 4), reads.get(value));
+    try testing.expectEqual(@as(u32, 1), reads.get(alias));
+    try testing.expectEqual(@as(u32, 0), reads.get(desc));
+    try testing.expectEqual(@as(u32, 1), defs.get(desc));
+    try testing.expectEqual(@as(u32, 1), flags.get(alias));
+
+    const dense = try testing.allocator.alloc(u32, store.localCount());
+    defer testing.allocator.free(dense);
+    @memset(dense, 0);
+    for ([_]CFStmtId{ body, copy, ret }) |stmt| countStmtReads(&store, dense, store.getCFStmt(stmt));
+    for (dense, 0..) |count, index| try testing.expectEqual(count, reads.get(@enumFromInt(index)));
+    @memset(dense, 0);
+    for ([_]CFStmtId{ body, copy, ret }) |stmt| countStmtDefs(&store, dense, store.getCFStmt(stmt));
+    for (dense, 0..) |count, index| try testing.expectEqual(count, defs.get(@enumFromInt(index)));
+
+    var cloner = try BodyCloner(TestRetRewriter).initWithAllocator(&store, .{}, allocator);
+    defer cloner.deinit();
+    cloner.inline_scope_outer = try store.addInlineScope(scope);
+    const cloned = try cloner.cloneStmt(body);
+    try testing.expectEqual(cloned, try cloner.cloneStmt(body));
+    try testing.expectEqual(@as(usize, 3), cloner.local_map.count());
+    try testing.expectEqual(@as(usize, 2), cloner.inline_scope_map.count());
+    try testing.expectEqual(cloner.local_map.get(desc).?, store.getLocal(cloner.local_map.get(value).?).boxy_desc.?.local);
+    const cloned_scope = store.stmtInlineScope(cloned);
+    const cloned_parent = store.inlineScope(cloned_scope).parent;
+    try testing.expectEqual(cloner.inline_scope_outer, store.inlineScope(cloned_parent).parent);
+    try testing.expect(cloned_scope != source_scope);
+}
+
+test "body_clone sparse maps preserve loop back jumps and local reuse" {
+    const testing = std.testing;
+    var store = LirStore.init(testing.allocator);
+    defer store.deinit();
+    const param = try store.addLocal(.{ .layout_idx = .u64 });
+    const id: LIR.JoinPointId = @enumFromInt(9);
+    const jump = try store.addCFStmt(.{ .jump = .{ .target = id } });
+    const write = try store.addCFStmt(.{ .set_local = .{ .target = param, .value = param, .mode = .initialize_join_param, .next = jump } });
+    const body = try store.addCFStmt(.{ .join = .{
+        .id = id,
+        .params = try store.addLocalSpan(&.{param}),
+        .body = write,
+        .remainder = write,
+    } });
+    var cloner = try BodyCloner(TestRetRewriter).init(&store, .{});
+    defer cloner.deinit();
+    const cloned = store.getCFStmt(try cloner.cloneStmt(body)).join;
+    try testing.expectEqual(cloned.body, cloned.remainder);
+    const cloned_write = store.getCFStmt(cloned.body).set_local;
+    try testing.expectEqual(cloned_write.target, cloned_write.value);
+    try testing.expectEqual(cloned_write.target, GuardedList.at(store.getLocalSpan(cloned.params), 0));
+    try testing.expectEqual(cloned.id, store.getCFStmt(cloned_write.next).jump.target);
+    try testing.expectEqual(@as(usize, 1), cloner.local_map.count());
+}
+
+test "body_clone join allocation belongs to the destination procedure" {
+    const testing = std.testing;
+    var store = LirStore.init(testing.allocator);
+    defer store.deinit();
+    const end = try store.addCFStmt(.runtime_error);
+    _ = try store.addCFStmt(.{ .join = .{
+        .id = @enumFromInt(9000),
+        .params = LIR.LocalSpan.empty(),
+        .body = end,
+        .remainder = end,
+    } });
+    const destination = try store.addCFStmt(.{ .join = .{
+        .id = @enumFromInt(40),
+        .params = LIR.LocalSpan.empty(),
+        .body = end,
+        .remainder = end,
+    } });
+    const jump = try store.addCFStmt(.{ .jump = .{ .target = @enumFromInt(2) } });
+    const source = try store.addCFStmt(.{ .join = .{
+        .id = @enumFromInt(2),
+        .params = LIR.LocalSpan.empty(),
+        .body = jump,
+        .remainder = jump,
+    } });
+    var inliner = try BodyCloner(TestRetRewriter).initWithInlineScopeOuter(&store, .{}, .none, destination);
+    defer inliner.deinit();
+    const cloned = store.getCFStmt(try inliner.cloneStmt(source)).join;
+    try testing.expectEqual(@as(u32, 41), @intFromEnum(cloned.id));
+    try testing.expectEqual(cloned.id, store.getCFStmt(cloned.body).jump.target);
+
+    var index = JoinParamIndex.init(testing.allocator);
+    defer index.deinit();
+    try index.indexReachable(&store, destination);
+    for (41..43) |expected| {
+        var subtree = try BodyCloner(TestRetRewriter).initWithFreshDeclaredJoins(&store, .{}, source, &index);
+        defer subtree.deinit();
+        const clone = store.getCFStmt(try subtree.cloneStmt(source)).join;
+        try testing.expectEqual(@as(u32, @intCast(expected)), @intFromEnum(clone.id));
+    }
+}
+
+fn testSparseCountAllocations(allocator: Allocator, store: *LirStore, body: CFStmtId) Allocator.Error!void {
+    var reads = try countReachableReadsWithAllocator(store, body, allocator);
+    defer reads.deinit();
+    var defs = try countReachableDefsWithAllocator(store, body, allocator);
+    defer defs.deinit();
+    var binders = try collectReachableDefinitionsWithAllocator(store, body, allocator);
+    defer binders.deinit();
+}
+
+test "body_clone sparse counting propagates allocation failures" {
+    var store = LirStore.init(std.testing.allocator);
+    defer store.deinit();
+    const local = try store.addLocal(.{ .layout_idx = .u64 });
+    const ret = try store.addCFStmt(.{ .ret = .{ .value = local } });
+    const body = try store.addCFStmt(.{ .assign_ref = .{
+        .target = local,
+        .op = .{ .local = local },
+        .next = ret,
+    } });
+    try std.testing.checkAllAllocationFailures(std.testing.allocator, testSparseCountAllocations, .{ &store, body });
+}
+
+test "body_clone preserves external locals without preseeded map entries" {
+    const Rewriter = struct {
+        renamed: LocalId,
+
+        pub fn preserveLocal(self: *@This(), local: LocalId) bool {
+            return local != self.renamed;
+        }
+    };
+    var store = LirStore.init(std.testing.allocator);
+    defer store.deinit();
+    const desc = try store.addLocal(.{ .layout_idx = .u64 });
+    const value = try store.addLocal(.{ .layout_idx = .u64, .boxy_desc = .{ .local = desc } });
+    var cloner = try BodyCloner(Rewriter).init(&store, .{ .renamed = value });
+    defer cloner.deinit();
+    const cloned = try cloner.mapLocal(value);
+    try std.testing.expect(cloned != value);
+    try std.testing.expectEqual(desc, store.getLocal(cloned).boxy_desc.?.local);
+    try std.testing.expectEqual(cloned, try cloner.mapLocal(value));
+    try std.testing.expectEqual(@as(usize, 1), cloner.new_locals.items.len);
+    try std.testing.expectEqual(@as(usize, 2), cloner.local_map.count());
 }
