@@ -5866,9 +5866,12 @@ fn customNativeBuildPackHits(
     // build writes its packs there, the second is served from them. The
     // second program reaches closed module functions as values too, so its
     // rebuild goes through the entries that forward to cached procedures.
+    // The third reaches module functions whose results are constants, so
+    // its cached entries carry the constants they point at.
     const store_apps = [_]struct { roc_file: []const u8, prefix: []const u8 }{
         .{ .roc_file = roc_file, .prefix = "store" },
         .{ .roc_file = "test/cli/pack_values/PackValues.roc", .prefix = "values" },
+        .{ .roc_file = "test/cli/pack_constants/PackConstants.roc", .prefix = "constants" },
     };
     for (store_apps) |app| {
         if (storeBuildsBehaveIdentically(io, allocator, env, timer, timeout_ms, app.roc_file, warm_dir, app.prefix)) |failure| return failure;

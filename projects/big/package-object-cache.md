@@ -621,8 +621,19 @@ them.
       compile skips them) and spliced refcount helpers by name (so a later
       request reuses them). Literal backings are named by content
       (`roc__static_str_{digest}`) and travel with the artifacts that name
-      them; entries that reach any other static datum are not offered until
-      constants are content-addressed. `ROC_DEV_PACK_HITS=<dir>` serves a
+      them. Constants travel the same way: every backend and the compile-time
+      evaluator still find a constant by its per-program name
+      (`roc__static_const_value_N`), so the pack layer alone names it by
+      content (`roc__static_data_{digest}`, the digest of its bytes,
+      alignment, symbol offset, and relocations, with data targets by digest
+      through cycles and code targets by content name), renames the
+      relocations it lifts, and carries the constant graph an entry reaches
+      with its relocations; splicing defines what the program did not. An
+      entry reaching a constant that holds a code pointer, or the boxy
+      runtime, is still withheld. A pack program keeps every keyed
+      specialization as a procedure through inlining and compaction, since
+      an export wrapper that inlined its only call would otherwise leave the
+      module's own exports out of its pack. `ROC_DEV_PACK_HITS=<dir>` serves a
       build from a directory of packs; the roc-parser app takes 16 hits and
       splices 9 procedures, links, and behaves identically. Gate: a CLI
       subcommands case builds cold, builds warm from the cold packs, requires
@@ -703,8 +714,9 @@ folds `Deflate.compress` of a literal is served from the package's pack in
 Direct LIR instead of being lowered again; its unedited rebuild does not
 move because the remaining 88s is SpecConstr over the runtime program's
 constant-folded procedures (roc-lang/roc#11376), which are not closed
-entries. Task-board withholds 48 of 260 entries for reaching program-local
-constants, the case content-addressed constants will open.
+entries. Task-board withheld 48 of 260 entries for reaching program-local
+constants before constants travelled by content name; it now withholds 1
+of 237 and offers 236.
 
 The identity renderer must never expand shared subtypes as a tree: the
 solved type graph of a closure-heavy program reaches one record type from

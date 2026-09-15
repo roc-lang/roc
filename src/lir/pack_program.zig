@@ -133,6 +133,8 @@ pub fn lowerPackProgram(
     roots: []const checked.RootRequest,
     target: CheckedPipeline.TargetConfig,
 ) CheckedPipeline.LowerResourceError!CheckedPipeline.LoweredProgram {
+    var pack_target = target;
+    pack_target.keep_specialization_procs = true;
     return CheckedPipeline.lowerCheckedModulesToLir(
         allocator,
         .{
@@ -143,7 +145,7 @@ pub fn lowerPackProgram(
             .requests = roots,
             .include_internal_static_data = true,
         },
-        target,
+        pack_target,
     );
 }
 

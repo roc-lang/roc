@@ -142,6 +142,10 @@ pub const TargetConfig = struct {
     proc_debug_names: bool = false,
     /// The object cache Monotype asks for closed specializations.
     spec_cache: ?postcheck.Common.SpecCacheLookup = null,
+    /// Keep every keyed specialization procedure through compaction; a pack
+    /// program offers them from its manifest whether or not its export
+    /// wrappers inlined their calls.
+    keep_specialization_procs: bool = false,
     /// Thread slack counters through loop-carried append-only lists so the
     /// per-element ownership and capacity checks amortize. On by default;
     /// shape-comparison tests turn it off because promotion intentionally
@@ -910,7 +914,7 @@ pub fn prepareMonotypeToSolved(prepared: PreparedMonotype) Allocator.Error!Prepa
         .inline_plan,
     );
     defer inline_plan_timing_scope.end();
-    const inline_plan = try postcheck.SolvedInline.analyze(allocator, target.inline_mode, procedure_usage.view(), &solved);
+    const inline_plan = try postcheck.SolvedInline.analyze(allocator, target.inline_mode, procedure_usage.view(), &solved, target.keep_specialization_procs);
     inline_plan_timing_scope.end();
 
     return .{
@@ -1045,7 +1049,11 @@ fn finishLoweredOutput(
     if (target.tag_reachability) {
         try TagReachability.run(&lowered.lir_result);
     }
-    try ReachableProcs.run(&lowered.lir_result);
+    if (target.keep_specialization_procs) {
+        try ReachableProcs.runKeepingSpecializations(&lowered.lir_result);
+    } else {
+        try ReachableProcs.run(&lowered.lir_result);
+    }
     lir_passes_timing_scope.end();
 
     var arc_timing_scope = PipelineTimingScope.begin(target.timing, .arc);

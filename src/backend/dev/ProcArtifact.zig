@@ -79,7 +79,23 @@ pub const DataItem = struct {
     bytes: []const u8,
     alignment: u32,
     symbol_offset: u32,
+    /// Pointers inside `bytes` to other symbols: constants named by content
+    /// (`roc__static_data_*`), literal backings, procedures, or refcount
+    /// helpers.
+    relocations: []const DataRelocation = &.{},
 };
+
+/// One pointer-sized relocation inside a data item.
+pub const DataRelocation = struct {
+    offset: u32,
+    name: []const u8,
+    addend: i64,
+    /// The target is code (a procedure or refcount helper) rather than data.
+    function: bool,
+};
+
+/// Prefix of the symbol that names a constant by content wherever it lands.
+pub const content_data_prefix = "roc__static_data_";
 
 /// One lifted region of machine code.
 pub const Artifact = struct {
@@ -117,6 +133,178 @@ pub const ExtractError = Allocator.Error || error{
     UnsupportedRelocation,
 };
 
+/// Content names and carried data items for a program's constants. A
+/// constant is a node in a graph of readonly data: its bytes plus pointer
+/// relocations to other constants, literal backings, procedures, or refcount
+/// helpers. Two programs that hold the same constant must name it the same
+/// way, so an internal constant (`roc__static_*const*`, never a host-visible
+/// export) is named by the digest of its own rendering: bytes, alignment,
+/// symbol offset, and relocations with data targets by digest and code
+/// targets by content name. A constant can point back at itself through a
+/// cycle; the walk writes a back-reference by relative stack depth, as the
+/// procedure identity renderer does, and remembers every node whose
+/// rendering refers to nothing above its own frame.
+const ContentNames = struct {
+    allocator: Allocator,
+    arena_allocator: Allocator,
+    exports: []const lir.Program.StaticDataExport,
+    /// Content name of each internal constant; null keeps the export's own
+    /// symbol name.
+    names: []?[]const u8,
+    digests: []?[32]u8,
+    active: std.AutoHashMap(u32, u32),
+    depth: u32,
+
+    const domain = "roc.static.data.v1";
+    const no_reference: u32 = std.math.maxInt(u32);
+
+    fn init(allocator: Allocator, arena_allocator: Allocator, exports: []const lir.Program.StaticDataExport) Allocator.Error!ContentNames {
+        const names = try allocator.alloc(?[]const u8, exports.len);
+        errdefer allocator.free(names);
+        @memset(names, null);
+        const digests = try allocator.alloc(?[32]u8, exports.len);
+        errdefer allocator.free(digests);
+        @memset(digests, null);
+        var self = ContentNames{
+            .allocator = allocator,
+            .arena_allocator = arena_allocator,
+            .exports = exports,
+            .names = names,
+            .digests = digests,
+            .active = std.AutoHashMap(u32, u32).init(allocator),
+            .depth = 0,
+        };
+        errdefer self.active.deinit();
+        for (exports, 0..) |data_export, index| {
+            if (!isInternalConstant(data_export)) continue;
+            var hasher = std.crypto.hash.sha2.Sha256.init(.{});
+            _ = try self.write(&hasher, @intCast(index));
+            const digest = self.digests[index] orelse unreachable;
+            names[index] = try std.fmt.allocPrint(arena_allocator, content_data_prefix ++ "{s}", .{&std.fmt.bytesToHex(digest[0..16].*, .lower)});
+        }
+        return self;
+    }
+
+    fn deinit(self: *ContentNames) void {
+        self.active.deinit();
+        self.allocator.free(self.names);
+        self.allocator.free(self.digests);
+    }
+
+    fn isInternalConstant(data_export: lir.Program.StaticDataExport) bool {
+        return !data_export.is_exported and std.mem.startsWith(u8, data_export.symbol_name, "roc__static_");
+    }
+
+    /// Writes the digest of constant `index`'s rendering and returns the
+    /// shallowest stack depth that rendering referred back to.
+    fn write(self: *ContentNames, hasher: *std.crypto.hash.sha2.Sha256, index: u32) Allocator.Error!u32 {
+        if (self.active.get(index)) |depth| {
+            hasher.update("cycle");
+            writeWord(hasher, self.depth - depth);
+            return depth;
+        }
+        if (self.digests[index]) |digest| {
+            hasher.update("data");
+            hasher.update(&digest);
+            return no_reference;
+        }
+        const depth = self.depth;
+        try self.active.putNoClobber(index, depth);
+        self.depth += 1;
+        defer {
+            _ = self.active.remove(index);
+            self.depth -= 1;
+        }
+
+        const data_export = self.exports[index];
+        var sub = std.crypto.hash.sha2.Sha256.init(.{});
+        sub.update(domain);
+        writeWord(&sub, @intCast(data_export.bytes.len));
+        sub.update(data_export.bytes);
+        writeWord(&sub, data_export.alignment);
+        writeWord(&sub, data_export.symbol_offset);
+        var low: u32 = no_reference;
+        const relocations = try self.allocator.dupe(lir.Program.StaticDataRelocation, data_export.relocations);
+        defer self.allocator.free(relocations);
+        std.mem.sort(lir.Program.StaticDataRelocation, relocations, {}, relocationOffsetBefore);
+        writeWord(&sub, @intCast(relocations.len));
+        for (relocations) |relocation| {
+            writeWord(&sub, @intCast(relocation.offset));
+            writeWide(&sub, @bitCast(relocation.addend));
+            sub.update(@tagName(relocation.kind));
+            writeWord(&sub, relocation.callable_capture_offset orelse std.math.maxInt(u32));
+            switch (relocation.target) {
+                .data_symbol => |target| {
+                    const target_index: u32 = @intFromEnum(target);
+                    if (isInternalConstant(self.exports[target_index])) {
+                        low = @min(low, try self.write(&sub, target_index));
+                    } else {
+                        sub.update("named");
+                        sub.update(self.exports[target_index].symbol_name);
+                    }
+                },
+                .named => {
+                    sub.update("named");
+                    sub.update(relocation.target_symbol_name);
+                },
+            }
+        }
+        const digest = sub.finalResult();
+        hasher.update("data");
+        hasher.update(&digest);
+        if (low >= depth) {
+            self.digests[index] = digest;
+            return no_reference;
+        }
+        return low;
+    }
+
+    fn relocationOffsetBefore(_: void, a: lir.Program.StaticDataRelocation, b: lir.Program.StaticDataRelocation) bool {
+        return a.offset < b.offset;
+    }
+
+    fn writeWord(hasher: *std.crypto.hash.sha2.Sha256, value: u32) void {
+        var buffer: [4]u8 = undefined;
+        std.mem.writeInt(u32, &buffer, value, .little);
+        hasher.update(&buffer);
+    }
+
+    fn writeWide(hasher: *std.crypto.hash.sha2.Sha256, value: u64) void {
+        var buffer: [8]u8 = undefined;
+        std.mem.writeInt(u64, &buffer, value, .little);
+        hasher.update(&buffer);
+    }
+
+    /// The carried data item of constant `index`, with every relocation
+    /// renamed to its target's content name.
+    fn item(self: *const ContentNames, index: u32) Allocator.Error!DataItem {
+        const data_export = self.exports[index];
+        const relocations = try self.arena_allocator.alloc(DataRelocation, data_export.relocations.len);
+        for (data_export.relocations, relocations) |relocation, *out| {
+            const name = switch (relocation.target) {
+                .data_symbol => |target| self.names[@intFromEnum(target)] orelse self.exports[@intFromEnum(target)].symbol_name,
+                .named => relocation.target_symbol_name,
+            };
+            out.* = .{
+                .offset = @intCast(relocation.offset),
+                .name = try self.arena_allocator.dupe(u8, name),
+                .addend = relocation.addend,
+                .function = switch (relocation.kind) {
+                    .address => false,
+                    .function_pointer => true,
+                },
+            };
+        }
+        return .{
+            .name = self.names[index] orelse try self.arena_allocator.dupe(u8, data_export.symbol_name),
+            .bytes = try self.arena_allocator.dupe(u8, data_export.bytes),
+            .alignment = data_export.alignment,
+            .symbol_offset = data_export.symbol_offset,
+            .relocations = relocations,
+        };
+    }
+};
+
 /// Lift every region of a finished code generator's buffer into an artifact set.
 pub fn extract(
     comptime CG: type,
@@ -125,25 +313,38 @@ pub fn extract(
     proc_specs: []const lir.LIR.LirProcSpec,
     layout_store: *const layout.Store,
     string_exports: []const lir.Program.StaticDataExport,
+    constant_exports: []const lir.Program.StaticDataExport,
     spliced_data: []const DataItem,
 ) ExtractError!Set {
     var arena = std.heap.ArenaAllocator.init(allocator);
     errdefer arena.deinit();
     const arena_allocator = arena.allocator();
 
-    // Literal backings the program defined itself and those spliced code
-    // brought along: a spliced region captured into this program's pack
-    // must carry its data too, or a program served from that pack cannot
-    // link it.
-    var strings_by_name = std.StringHashMap(DataItem).init(allocator);
-    defer strings_by_name.deinit();
-    for (string_exports) |string_export| try strings_by_name.put(string_export.symbol_name, .{
-        .name = string_export.symbol_name,
-        .bytes = string_export.bytes,
+    // Data a region may name, by the symbol the program's own code uses:
+    // literal backings the program defined itself, its constants renamed by
+    // content, and the data spliced code brought along. A spliced region
+    // captured into this program's pack must carry its data too, or a
+    // program served from that pack cannot link it.
+    var data_by_name = std.StringHashMap(DataItem).init(allocator);
+    defer data_by_name.deinit();
+    for (string_exports) |string_export| try data_by_name.put(string_export.symbol_name, .{
+        .name = try arena_allocator.dupe(u8, string_export.symbol_name),
+        .bytes = try arena_allocator.dupe(u8, string_export.bytes),
         .alignment = string_export.alignment,
         .symbol_offset = string_export.symbol_offset,
     });
-    for (spliced_data) |item| try strings_by_name.put(item.name, item);
+    {
+        var constants = try ContentNames.init(allocator, arena_allocator, constant_exports);
+        defer constants.deinit();
+        for (constant_exports, 0..) |constant, index| {
+            const item = try constants.item(@intCast(index));
+            // Reachable both by the name the program's code uses and by the
+            // content name other carried data points at.
+            try data_by_name.put(try arena_allocator.dupe(u8, constant.symbol_name), item);
+            try data_by_name.put(item.name, item);
+        }
+    }
+    for (spliced_data) |item| try data_by_name.put(item.name, item);
 
     const code = codegen.getGeneratedCode();
     const regions = try allocator.dupe(CG.CodeRegion, codegen.codeRegions());
@@ -235,20 +436,29 @@ pub fn extract(
             });
         }
 
+        // Every data item the region names, then every item those name, so
+        // an artifact carries the whole constant graph it points into. A
+        // relocation to a constant is renamed to the constant's content name.
         var region_data = std.ArrayList(DataItem).empty;
-        for (region_relocations.items) |relocation| {
-            const string_item = strings_by_name.get(relocation.name) orelse continue;
+        var pending = std.ArrayList([]const u8).empty;
+        defer pending.deinit(allocator);
+        for (region_relocations.items) |*relocation| {
+            const item = data_by_name.get(relocation.name) orelse continue;
+            relocation.name = item.name;
+            try pending.append(allocator, relocation.name);
+        }
+        while (pending.pop()) |name| {
             var already = false;
             for (region_data.items) |item| {
-                if (std.mem.eql(u8, item.name, relocation.name)) already = true;
+                if (std.mem.eql(u8, item.name, name)) already = true;
             }
             if (already) continue;
-            try region_data.append(arena_allocator, .{
-                .name = relocation.name,
-                .bytes = try arena_allocator.dupe(u8, string_item.bytes),
-                .alignment = string_item.alignment,
-                .symbol_offset = string_item.symbol_offset,
-            });
+            const item = data_by_name.get(name) orelse return error.DanglingReference;
+            try region_data.append(arena_allocator, item);
+            for (item.relocations) |data_relocation| {
+                if (data_relocation.function) continue;
+                try pending.append(allocator, data_relocation.name);
+            }
         }
 
         artifacts[index] = .{
@@ -399,7 +609,7 @@ pub fn verifyRoundTrip(
     layout_store: *const layout.Store,
     string_exports: []const lir.Program.StaticDataExport,
 ) RoundTripError!void {
-    var set = try extract(CG, allocator, original, proc_specs, layout_store, string_exports, &.{});
+    var set = try extract(CG, allocator, original, proc_specs, layout_store, string_exports, &.{}, &.{});
     defer set.deinit();
 
     var helper_keys = HelperKeys.init(allocator);
@@ -601,4 +811,92 @@ pub fn splice(
             );
         }
     }
+}
+
+fn testDataSymbol(index: usize) lir.Program.StaticDataSymbolId {
+    return @enumFromInt(index);
+}
+
+fn testExport(name: []const u8, bytes: []const u8, relocations: []const lir.Program.StaticDataRelocation, is_exported: bool) lir.Program.StaticDataExport {
+    return .{
+        .symbol_name = name,
+        .bytes = bytes,
+        .alignment = 8,
+        .is_global = false,
+        .is_exported = is_exported,
+        .relocations = relocations,
+    };
+}
+
+test "constants are named by content across programs, through cycles, and never when host-visible" {
+    const testing = std.testing;
+    var arena = std.heap.ArenaAllocator.init(testing.allocator);
+    defer arena.deinit();
+    const a = arena.allocator();
+
+    // Program one: a cycle between the first two constants, a leaf, and a
+    // host-visible export that points at the leaf.
+    const one = [_]lir.Program.StaticDataExport{
+        testExport("roc__static_const_value_0", "\x00" ** 16, &.{
+            .{ .offset = 8, .target_symbol_name = "roc__static_const_1", .target = .{ .data_symbol = testDataSymbol(1) } },
+        }, false),
+        testExport("roc__static_const_1", "\x00" ** 16, &.{
+            .{ .offset = 0, .target_symbol_name = "roc__static_const_value_0", .target = .{ .data_symbol = testDataSymbol(0) } },
+            .{ .offset = 8, .target_symbol_name = "roc__static_const_2", .target = .{ .data_symbol = testDataSymbol(2) }, .addend = 4 },
+        }, false),
+        testExport("roc__static_const_2", "leaf", &.{}, false),
+        testExport("roc__answer", "\x00" ** 8, &.{
+            .{ .offset = 0, .target_symbol_name = "roc__static_const_2", .target = .{ .data_symbol = testDataSymbol(2) } },
+        }, true),
+    };
+    // Program two: the same graph under other names and another order.
+    const two = [_]lir.Program.StaticDataExport{
+        testExport("roc__static_const_9", "leaf", &.{}, false),
+        testExport("roc__static_const_value_7", "\x00" ** 16, &.{
+            .{ .offset = 8, .target_symbol_name = "roc__static_const_8", .target = .{ .data_symbol = testDataSymbol(2) } },
+        }, false),
+        testExport("roc__static_const_8", "\x00" ** 16, &.{
+            .{ .offset = 0, .target_symbol_name = "roc__static_const_value_7", .target = .{ .data_symbol = testDataSymbol(1) } },
+            .{ .offset = 8, .target_symbol_name = "roc__static_const_9", .target = .{ .data_symbol = testDataSymbol(0) }, .addend = 4 },
+        }, false),
+    };
+
+    var names_one = try ContentNames.init(testing.allocator, a, &one);
+    defer names_one.deinit();
+    var names_two = try ContentNames.init(testing.allocator, a, &two);
+    defer names_two.deinit();
+
+    try testing.expect(names_one.names[3] == null);
+    try testing.expect(std.mem.startsWith(u8, names_one.names[0].?, content_data_prefix));
+    try testing.expectEqualStrings(names_one.names[0].?, names_two.names[1].?);
+    try testing.expectEqualStrings(names_one.names[1].?, names_two.names[2].?);
+    try testing.expectEqualStrings(names_one.names[2].?, names_two.names[0].?);
+    try testing.expect(!std.mem.eql(u8, names_one.names[0].?, names_one.names[1].?));
+
+    // Carried items point at content names, and a host-visible target keeps
+    // its own name.
+    const item = try names_one.item(1);
+    try testing.expectEqualStrings(names_one.names[1].?, item.name);
+    try testing.expectEqualStrings(names_one.names[0].?, item.relocations[0].name);
+    try testing.expectEqualStrings(names_one.names[2].?, item.relocations[1].name);
+    try testing.expectEqual(@as(i64, 4), item.relocations[1].addend);
+    try testing.expect(!item.relocations[0].function);
+    const visible = try names_one.item(3);
+    try testing.expectEqualStrings("roc__answer", visible.name);
+
+    // A different leaf changes every name that reaches it.
+    const three = [_]lir.Program.StaticDataExport{
+        testExport("roc__static_const_value_0", "\x00" ** 16, &.{
+            .{ .offset = 8, .target_symbol_name = "roc__static_const_1", .target = .{ .data_symbol = testDataSymbol(1) } },
+        }, false),
+        testExport("roc__static_const_1", "\x00" ** 16, &.{
+            .{ .offset = 0, .target_symbol_name = "roc__static_const_value_0", .target = .{ .data_symbol = testDataSymbol(0) } },
+            .{ .offset = 8, .target_symbol_name = "roc__static_const_2", .target = .{ .data_symbol = testDataSymbol(2) }, .addend = 4 },
+        }, false),
+        testExport("roc__static_const_2", "LEAF", &.{}, false),
+    };
+    var names_three = try ContentNames.init(testing.allocator, a, &three);
+    defer names_three.deinit();
+    try testing.expect(!std.mem.eql(u8, names_one.names[0].?, names_three.names[0].?));
+    try testing.expect(!std.mem.eql(u8, names_one.names[2].?, names_three.names[2].?));
 }
