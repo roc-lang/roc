@@ -20,7 +20,6 @@ const unifier = @import("unify.zig");
 const occurs = @import("occurs.zig");
 const problem = @import("problem.zig");
 const snapshot_mod = @import("snapshot.zig");
-const type_diff = @import("snapshot/diff.zig");
 const exhaustive = @import("exhaustive.zig");
 const ExhaustivenessContext = @import("exhaustiveness_context.zig");
 const hoist_roots = @import("hoist_roots.zig");
@@ -13725,7 +13724,7 @@ fn checkDef(self: *Self, def_idx: CIR.Def.Idx, env: *Env) std.mem.Allocator.Erro
         // quantified row.
         const is_value_alias = def_expr == .e_lookup_local or def_expr == .e_lookup_external;
         const generalizes_regardless = def_is_function or def_expr == .e_anno_only or is_value_alias;
-        try self.auditImplicitOpenExts(annotation_idx, generalizes_regardless);
+        try self.auditImplicitOpenExts(annotation_idx, generalizes_regardless, env);
 
         // A top-level value binding that does not generalize (not a function,
         // not a pure signature, not a value alias, and no written type
@@ -15591,7 +15590,7 @@ const ImplicitOpenExtRange = struct {
 /// `..` (a function, a pure signature, a value alias), so an explicit
 /// anonymous `..` in an output position adds nothing and warns. On a value
 /// binding `..` is the opt-in to a quantified row, so it never warns there.
-fn auditImplicitOpenExts(self: *Self, annotation_idx: CIR.Annotation.Idx, redundant_open_warns: bool) std.mem.Allocator.Error!void {
+fn auditImplicitOpenExts(self: *Self, annotation_idx: CIR.Annotation.Idx, redundant_open_warns: bool, env: *Env) std.mem.Allocator.Error!void {
     const range = self.annotation_implicit_open_exts.get(annotation_idx) orelse return;
     for (self.implicit_open_exts.items[range.start..][0..range.len]) |entry| {
         if (redundant_open_warns) {
@@ -15607,20 +15606,48 @@ fn auditImplicitOpenExts(self: *Self, annotation_idx: CIR.Annotation.Idx, redund
         const extension = resolved.desc.content.structure.tag_union;
         if (extension.tags.count == 0) continue;
         const first_tag = self.types.tags.get(extension.tags.start);
-        // The same close-match judgment as the Type Mismatch tag-typo hint,
-        // over the tags the annotation actually lists.
-        const suggestion: ?Ident.Idx = if (entry.listed_tags) |listed_tags|
-            type_diff.findBestTypoSuggestion(
-                first_tag.name,
-                self.types.getTagsSlice(listed_tags).items(.name),
-                self.cir.getIdentStoreConst(),
-            )
-        else
-            null;
-        _ = try self.problems.appendProblem(self.gpa, .{ .tag_union_extended_beyond_annotation = .{
-            .region = entry.region,
-            .tag_name = first_tag.name,
-            .suggestion = suggestion,
+        // Report this as an ordinary Type Mismatch carrying two rows, so the
+        // reader sees both types and the tag-typo hint comes from the shared
+        // snapshot diff. Neither row is a var the solver owns: the annotated
+        // union's own var shares the widened row by now, so it would display
+        // the body's tags on both sides.
+        //
+        // The ACTUAL row is the listed tags extended by the opened ext. Both
+        // tag gatherers (`TypeWriter.gatherTags`, `diff.gatherTagsFromUnion`)
+        // flatten extension chains, so this renders the listed tags plus every
+        // tag the body added — which is literally what the annotated union's
+        // var held when it was minted. The ext cannot collide with the tags:
+        // the checks above proved it resolved to a row carrying at least one.
+        const listed_tags = entry.listed_tags orelse types_mod.Tag.SafeMultiList.Range{
+            .start = @enumFromInt(0),
+            .count = 0,
+        };
+        const actual_var = try self.freshFromContent(.{ .structure = .{ .tag_union = .{
+            .tags = listed_tags,
+            .ext = entry.var_,
+        } } }, env, entry.region);
+        // The EXPECTED row is the union as the annotation wrote it: the same
+        // listed tags, closed.
+        const expected_ext_var = try self.freshFromContent(.{ .structure = .empty_tag_union }, env, entry.region);
+        const expected_var = try self.freshFromContent(.{ .structure = .{ .tag_union = .{
+            .tags = listed_tags,
+            .ext = expected_ext_var,
+        } } }, env, entry.region);
+        // Both snapshots must be taken before `markErroneous` below overwrites
+        // the extension's content with `.err`.
+        const actual_snapshot = try self.snapshots.snapshotVarForError(self.types, &self.type_writer, actual_var);
+        const expected_snapshot = try self.snapshots.snapshotVarForError(self.types, &self.type_writer, expected_var);
+        _ = try self.problems.appendProblem(self.gpa, .{ .type_mismatch = .{
+            .types = .{
+                .expected_var = expected_var,
+                .expected_snapshot = expected_snapshot,
+                .actual_var = actual_var,
+                .actual_snapshot = actual_snapshot,
+            },
+            .context = .{ .tag_not_in_annotation = .{
+                .region = entry.region,
+                .tag_name = first_tag.name,
+            } },
         } });
         try self.markErroneous(entry.var_);
     }
@@ -22407,7 +22434,7 @@ fn checkBlockStatements(self: *Self, statements: CIR.Statement.Span, env: *Env, 
                 const decl_expr_does_fx = try self.checkExpr(decl_stmt.expr, env, expectation);
                 // The annotation bounds the definition (see `checkDef`).
                 if (decl_stmt.anno) |annotation_idx| {
-                    try self.auditImplicitOpenExts(annotation_idx, decl_is_fn);
+                    try self.auditImplicitOpenExts(annotation_idx, decl_is_fn, env);
                 }
                 does_fx = decl_expr_does_fx or does_fx;
                 statement_blocks_later_hoists = self.checkedExprBlocksLaterHoists(decl_stmt.expr, decl_expr_does_fx);

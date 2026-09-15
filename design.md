@@ -5602,9 +5602,11 @@ instantiation sites. A tag the annotation does not list is absorbed by
 ordinary unification rather than rejected, so `Check.auditImplicitOpenExts`
 runs immediately after the definition's right-hand side is checked, over every
 extension the annotation's generation minted (`Check.implicit_open_exts`,
-sliced per annotation by `annotation_implicit_open_exts`), and reports `Tag
-Not In Annotation` for any that resolved to a row carrying tags, marking that
-extension erroneous (diagnostic recovery, like every other reported problem).
+sliced per annotation by `annotation_implicit_open_exts`), and reports a Type
+Mismatch in the annotation context for any that resolved to a row carrying
+tags — showing the row the body produced against the union the annotation
+wrote — marking that extension erroneous (diagnostic recovery, like every
+other reported problem).
 
 A closed value flowing into an implicitly open output row WIDENS into it: the
 row published at that position is the one the annotation declares, whatever

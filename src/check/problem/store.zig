@@ -260,7 +260,6 @@ pub const Store = struct {
                     .comptime_unused_branch,
                     .comptime_condition,
                     .associated_item_not_found,
-                    .tag_union_extended_beyond_annotation,
                     .redundant_open_tag_union,
                     => unreachable,
                 }

@@ -180,10 +180,9 @@ fn isLikelyTypo(typo_len: usize, correct_len: usize, dist: u32) bool {
 
 /// Find the best typo suggestion from a slice of identifier indices.
 ///
-/// Shared with the checker's polarity audit (`Check.auditImplicitOpenExts`),
-/// so the `Tag Not In Annotation` hint and the Type Mismatch tag-typo hint
-/// agree on what counts as a close match.
-pub fn findBestTypoSuggestion(
+/// Used by the tag-union and record-field diffs below, so every typo hint a
+/// Type Mismatch renders agrees on what counts as a close match.
+fn findBestTypoSuggestion(
     typo: Ident.Idx,
     candidates: []const Ident.Idx,
     ident_store: *const Ident.Store,

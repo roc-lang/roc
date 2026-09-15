@@ -2794,15 +2794,22 @@ test "check type - tag union - tag typo" {
         \\color = Greeen
     ;
     try checkTypesModule(source, .fail_with,
-        \\**Tag Not In Annotation**
+        \\**Type Mismatch**
         \\This definition can produce the tag `Greeen` but the annotated tag union does not list it.
         \\```roc
         \\color : Color
         \\```
         \\        ^^^^^
         \\
-        \\A tag union in an output position is open for the callers of this definition, which may use the result at a wider union, but the annotation still bounds the definition itself: it may only produce the tags the annotation lists. Add `Greeen` to the tag union in the annotation.
+        \\It has the type:
         \\
+        \\    [Blue, Greeen, Green, Red]
+        \\
+        \\But the annotation says it should be:
+        \\
+        \\    [Blue, Green, Red]
+        \\
+        \\A tag union in an output position is open for the callers of this definition, which may use the result at a wider union, but the annotation still bounds the definition itself: it may only produce the tags the annotation lists.
         \\**Hint:** Maybe `Greeen` should be `Green`?
         \\
         \\
@@ -2817,15 +2824,22 @@ test "check type - tag union - tag typo hint on an inline output union" {
         \\to_color = |_| Greeen
     ;
     try checkTypesModule(source, .fail_with,
-        \\**Tag Not In Annotation**
+        \\**Type Mismatch**
         \\This definition can produce the tag `Greeen` but the annotated tag union does not list it.
         \\```roc
         \\to_color : Str -> [Red, Green, Blue]
         \\```
         \\                  ^^^^^^^^^^^^^^^^^^
         \\
-        \\A tag union in an output position is open for the callers of this definition, which may use the result at a wider union, but the annotation still bounds the definition itself: it may only produce the tags the annotation lists. Add `Greeen` to the tag union in the annotation.
+        \\It has the type:
         \\
+        \\    [Blue, Greeen, Green, Red]
+        \\
+        \\But the annotation says it should be:
+        \\
+        \\    [Blue, Green, Red]
+        \\
+        \\A tag union in an output position is open for the callers of this definition, which may use the result at a wider union, but the annotation still bounds the definition itself: it may only produce the tags the annotation lists.
         \\**Hint:** Maybe `Greeen` should be `Green`?
         \\
         \\
@@ -2841,15 +2855,22 @@ test "check type - tag union - tag typo hint on an explicit open ext" {
         \\color = Greeen
     ;
     try checkTypesModule(source, .fail_with,
-        \\**Tag Not In Annotation**
+        \\**Type Mismatch**
         \\This definition can produce the tag `Greeen` but the annotated tag union does not list it.
         \\```roc
         \\color : [Red, Green, Blue, ..]
         \\```
         \\        ^^^^^^^^^^^^^^^^^^^^^^
         \\
-        \\A tag union in an output position is open for the callers of this definition, which may use the result at a wider union, but the annotation still bounds the definition itself: it may only produce the tags the annotation lists. Add `Greeen` to the tag union in the annotation.
+        \\It has the type:
         \\
+        \\    [Blue, Greeen, Green, Red]
+        \\
+        \\But the annotation says it should be:
+        \\
+        \\    [Blue, Green, Red]
+        \\
+        \\A tag union in an output position is open for the callers of this definition, which may use the result at a wider union, but the annotation still bounds the definition itself: it may only produce the tags the annotation lists.
         \\**Hint:** Maybe `Greeen` should be `Green`?
         \\
         \\
@@ -2868,14 +2889,22 @@ test "check type - tag union - no tag typo hint without a close match" {
         \\color = Purple
     ;
     try checkTypesModule(source, .fail_with,
-        \\**Tag Not In Annotation**
+        \\**Type Mismatch**
         \\This definition can produce the tag `Purple` but the annotated tag union does not list it.
         \\```roc
         \\color : Color
         \\```
         \\        ^^^^^
         \\
-        \\A tag union in an output position is open for the callers of this definition, which may use the result at a wider union, but the annotation still bounds the definition itself: it may only produce the tags the annotation lists. Add `Purple` to the tag union in the annotation.
+        \\It has the type:
+        \\
+        \\    [Blue, Green, Purple, Red]
+        \\
+        \\But the annotation says it should be:
+        \\
+        \\    [Blue, Green, Red]
+        \\
+        \\A tag union in an output position is open for the callers of this definition, which may use the result at a wider union, but the annotation still bounds the definition itself: it may only produce the tags the annotation lists.
         \\
         \\
     );
@@ -2928,7 +2957,7 @@ test "check type - tag - ext - typo" {
         \\color : Color([Green])
         \\color = Greeen
     ;
-    try checkTypesModule(source, .fail_first, "Tag Not In Annotation");
+    try checkTypesModule(source, .fail_first, "Type Mismatch");
 }
 
 test "check type - large open tag union annotation preserves all tags" {
@@ -6974,7 +7003,26 @@ test "check type - polarity - try may not flow an unlisted error into the annota
         \\    Err(OuterErr)
         \\}
     ;
-    try checkTypesModule(source, .fail_first, "Tag Not In Annotation");
+    try checkTypesModule(source, .fail_with,
+        \\**Type Mismatch**
+        \\This definition can produce the tag `InnerErr` but the annotated tag union does not list it.
+        \\```roc
+        \\outer : {} -> Try({}, [OuterErr])
+        \\```
+        \\                      ^^^^^^^^^^
+        \\
+        \\It has the type:
+        \\
+        \\    [InnerErr, OuterErr]
+        \\
+        \\But the annotation says it should be:
+        \\
+        \\    [OuterErr]
+        \\
+        \\A tag union in an output position is open for the callers of this definition, which may use the result at a wider union, but the annotation still bounds the definition itself: it may only produce the tags the annotation lists.
+        \\
+        \\
+    );
 }
 
 // record extension in type annotations //
@@ -8704,7 +8752,26 @@ test "check type - polarity - body may not extend the annotated output union" {
         \\parse : Str -> [Fail]
         \\parse = |input| if Str.is_empty(input) Empty else Fail
     ;
-    try checkTypesModule(source, .fail_first, "Tag Not In Annotation");
+    try checkTypesModule(source, .fail_with,
+        \\**Type Mismatch**
+        \\This definition can produce the tag `Empty` but the annotated tag union does not list it.
+        \\```roc
+        \\parse : Str -> [Fail]
+        \\```
+        \\               ^^^^^^
+        \\
+        \\It has the type:
+        \\
+        \\    [Empty, Fail]
+        \\
+        \\But the annotation says it should be:
+        \\
+        \\    [Fail]
+        \\
+        \\A tag union in an output position is open for the callers of this definition, which may use the result at a wider union, but the annotation still bounds the definition itself: it may only produce the tags the annotation lists.
+        \\
+        \\
+    );
 }
 
 test "check type - polarity - body may produce a subset of the annotated output union" {
@@ -8725,7 +8792,7 @@ test "check type - polarity - body may not widen through a callee either" {
         \\wrap : Str -> [Fail]
         \\wrap = |s| helper(s)
     ;
-    try checkTypesModule(source, .fail_first, "Tag Not In Annotation");
+    try checkTypesModule(source, .fail_first, "Type Mismatch");
 }
 
 test "check type - polarity - closed value closes the output row" {
@@ -8825,7 +8892,7 @@ test "check type - polarity - alias in output position still bounds the body" {
         \\produce : Str -> Errs
         \\produce = |_| E3
     ;
-    try checkTypesModule(source, .fail_first, "Tag Not In Annotation");
+    try checkTypesModule(source, .fail_first, "Type Mismatch");
 }
 
 test "check type - polarity - empty tag union stays closed in output position" {
@@ -8843,7 +8910,7 @@ test "check type - polarity - annotated value body is bounded" {
         \\e : [Boom]
         \\e = Bang
     ;
-    try checkTypesModule(source, .fail_first, "Tag Not In Annotation");
+    try checkTypesModule(source, .fail_first, "Type Mismatch");
 }
 
 test "check type - polarity - annotated value shares one weak row across uses" {
@@ -8863,7 +8930,7 @@ test "check type - polarity - annotated value shares one weak row across uses" {
         \\use_b : Str -> [B, Boom]
         \\use_b = |_| e
     ;
-    try checkTypesModule(source, .fail_first, "Tag Not In Annotation");
+    try checkTypesModule(source, .fail_first, "Type Mismatch");
 }
 
 test "check type - polarity - value with explicit open ext generalizes" {

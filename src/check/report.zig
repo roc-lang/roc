@@ -91,7 +91,6 @@ const EffectfulTopLevel = problem_mod.EffectfulTopLevel;
 const EffectfulComptimeExpression = problem_mod.EffectfulComptimeExpression;
 const EffectfulExpect = problem_mod.EffectfulExpect;
 const EffectfulFunctionName = problem_mod.EffectfulFunctionName;
-const TagUnionExtendedBeyondAnnotation = problem_mod.TagUnionExtendedBeyondAnnotation;
 const RedundantOpenTagUnion = problem_mod.RedundantOpenTagUnion;
 
 // Comptime errors
@@ -963,6 +962,19 @@ pub const ReportBuilder = struct {
                         mismatch.types.expected_snapshot,
                         &.{},
                     ),
+                    .tag_not_in_annotation => |ctx| return try self.makeMismatchReport(
+                        ProblemRegion{ .direct = ctx.region },
+                        &.{
+                            D.bytes("This definition can produce the tag"),
+                            D.ident(ctx.tag_name).withAnnotation(.inline_code),
+                            D.bytes("but the annotated tag union does not list it."),
+                        },
+                        &.{D.bytes("It has the type:")},
+                        mismatch.types.actual_snapshot,
+                        &.{D.bytes("But the annotation says it should be:")},
+                        mismatch.types.expected_snapshot,
+                        &.{&.{D.bytes("A tag union in an output position is open for the callers of this definition, which may use the result at a wider union, but the annotation still bounds the definition itself: it may only produce the tags the annotation lists.")}},
+                    ),
                     .record_destructure => return try self.buildRecordDestructureMismatch(mismatch.types),
                     .none => return try self.buildGenericMismatch(mismatch.types),
                 };
@@ -1083,7 +1095,6 @@ pub const ReportBuilder = struct {
             .non_exhaustive_match => |data| return self.buildNonExhaustiveMatchReport(data),
             .non_exhaustive_destructure => |data| return self.buildNonExhaustiveDestructureReport(data),
             .redundant_pattern => |data| return self.buildRedundantPatternReport(data),
-            .tag_union_extended_beyond_annotation => |data| return self.buildTagUnionExtendedBeyondAnnotationReport(data),
             .redundant_open_tag_union => |data| return self.buildRedundantOpenTagUnionReport(data),
             .unmatchable_pattern => |data| return self.buildUnmatchablePatternReport(data),
             .unreachable_code => |data| return self.buildUnreachableCodeReport(data),
@@ -2390,48 +2401,6 @@ pub const ReportBuilder = struct {
             D.bytes("..others").withAnnotation(.inline_code),
             D.bytes("if you want to refer to the extension elsewhere."),
         }, self, &report);
-        return report;
-    }
-
-    fn buildTagUnionExtendedBeyondAnnotationReport(self: *Self, data: TagUnionExtendedBeyondAnnotation) Allocator.Error!Report {
-        var report = try Report.init(self.gpa, "Tag Not In Annotation", "", .runtime_error);
-        errdefer report.deinit();
-        try D.renderSliceInto(&.{
-            D.bytes("This definition can produce the tag"),
-            D.ident(data.tag_name).withAnnotation(.inline_code),
-            D.bytes("but the annotated tag union does not list it."),
-        }, self, &report, &report.headline);
-
-        const region_info = self.module_env.calcRegionInfo(data.region);
-        try report.document.addSourceRegion(
-            region_info,
-            .error_highlight,
-            self.filename,
-            self.source,
-            self.module_env.getLineStarts(),
-        );
-        try report.document.addLineBreak();
-
-        try D.renderSlice(&.{
-            D.bytes("A tag union in an output position is open for the callers of this definition, which may use the result at a wider union, but the annotation still bounds the definition itself: it may only produce the tags the annotation lists. Add"),
-            D.ident(data.tag_name).withAnnotation(.inline_code),
-            D.bytes("to the tag union in the annotation."),
-        }, self, &report);
-
-        // The same hint the Type Mismatch report gives for a tag typo.
-        if (data.suggestion) |suggestion| {
-            try report.document.addLineBreak();
-            try report.document.addLineBreak();
-            try D.renderSlice(&.{
-                D.bytes("Hint:").withAnnotation(.emphasized),
-                D.bytes("Maybe"),
-                D.ident(data.tag_name).withAnnotation(.inline_code),
-                D.bytes("should be"),
-                D.ident(suggestion).withAnnotation(.inline_code),
-                D.bytes("?").withNoPrecedingSpace(),
-            }, self, &report);
-        }
-
         return report;
     }
 
