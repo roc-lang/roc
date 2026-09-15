@@ -208,7 +208,15 @@ pub const ProgramSession = struct {
             inline for (.{ "timing", "work_metrics", "post_check_executor", "debug_materialized_out", "solved_lir_parallel_metrics_out", "lifted_expr_count_out" }) |field| {
                 @field(prepared.target, field) = @field(target, field);
             }
-            break :block try lir.CheckedPipeline.lowerPreparedSolvedToLir(prepared);
+            const source = if (self.host) |*host| host else finalizationInvariant("target consumer omitted its completed host program");
+            const host_frozen = if (source.frozen_static_data) |*frozen| frozen else finalizationInvariant("host program omitted its completed frozen values");
+            // Completed scalar values become literals before the LIR passes
+            // reason about constants; the completed image itself is attached
+            // after the passes, which compact the slot table.
+            var paused = try lir.CheckedPipeline.lowerPreparedSolvedBeforePasses(prepared);
+            errdefer paused.deinit();
+            try lir.ComptimeValueLiterals.run(allocator, &paused.output.lir_result, &source.lir_result, host_frozen);
+            break :block try lir.CheckedPipeline.finishPausedLowering(&paused);
         } else block: {
             const host = self.host orelse finalizationInvariant("runtime program was already consumed");
             self.host = null;

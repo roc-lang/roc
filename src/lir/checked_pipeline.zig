@@ -965,6 +965,27 @@ pub fn lowerPreparedMonotypeToLir(prepared: PreparedMonotype) LowerResourceError
 
 /// Consume a solved owner into one target-specific LIR continuation.
 pub fn lowerPreparedSolvedToLir(prepared: PreparedSolved) LowerResourceError!LoweredProgram {
+    var paused = try lowerPreparedSolvedBeforePasses(prepared);
+    errdefer paused.deinit();
+    return try finishPausedLowering(&paused);
+}
+
+/// A runtime continuation lowered to LIR but not yet run through the LIR
+/// passes, so a consumer can attach the completed compile-time values the
+/// passes should see.
+pub const PausedLowering = struct {
+    allocator: Allocator,
+    output: postcheck.SolvedLirLower.Output,
+    root_count: usize,
+    target: TargetConfig,
+
+    pub fn deinit(self: *PausedLowering) void {
+        self.output.deinit();
+    }
+};
+
+/// Lowers a runtime continuation to LIR and stops before the LIR passes.
+pub fn lowerPreparedSolvedBeforePasses(prepared: PreparedSolved) LowerResourceError!PausedLowering {
     const allocator = prepared.allocator;
     const target = prepared.target;
     if (target.work_metrics) |metrics| metrics.lir_continuations += 1;
@@ -975,7 +996,7 @@ pub fn lowerPreparedSolvedToLir(prepared: PreparedSolved) LowerResourceError!Low
     var lir_gen_timing_scope = PipelineTimingScope.begin(target.timing, .lir_gen);
     defer lir_gen_timing_scope.end();
     const solved_input = prepared.program;
-    var lowered = try postcheck.SolvedLirLower.run(allocator, target.target_usize, solved_input, .{
+    const lowered = try postcheck.SolvedLirLower.run(allocator, target.target_usize, solved_input, .{
         .inline_plan = inline_plan.view(),
         .post_check_executor = target.post_check_executor,
         .inline_expects = target.inline_expects,
@@ -991,9 +1012,12 @@ pub fn lowerPreparedSolvedToLir(prepared: PreparedSolved) LowerResourceError!Low
         .parallel_metrics = target.solved_lir_parallel_metrics_out,
     });
     lir_gen_timing_scope.end();
-    errdefer lowered.deinit();
+    return .{ .allocator = allocator, .output = lowered, .root_count = prepared.root_count, .target = target };
+}
 
-    return finishLoweredOutput(allocator, prepared.root_count, target, &lowered);
+/// Runs the LIR passes, ARC, and guards over a paused lowering.
+pub fn finishPausedLowering(paused: *PausedLowering) LowerResourceError!LoweredProgram {
+    return finishLoweredOutput(paused.allocator, paused.root_count, paused.target, &paused.output);
 }
 
 fn finishLoweredOutput(

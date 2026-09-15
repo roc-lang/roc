@@ -828,6 +828,22 @@ no ownership transfers. The pass extends each affected procedure's sorted frame
 local inventory and recomputes its stack-probe requirement. Backends consume
 only these explicit ordinary LIR operations.
 
+A runtime program forked from the completed host program receives the
+completed values in two forms. Before its LIR passes run, every read of a
+completed successful scalar slot becomes the scalar literal decoded from the
+host's frozen image (slots matched by checked root identity, as transcoding
+matches them), so range proving, loop versioning, and overflow elision see
+the constant they would have seen from a literal in source; a table built by
+`List.repeat` with a compile-time length keeps no index check the prover can
+discharge. After the passes, which compact the slot table, the remaining
+aggregate slots are transcoded into the target's frozen image. The LLVM
+backend then defines each slot whose image is a link-time constant—bytes with
+address relocations as symbolic pointer fields—as an internal constant in the
+app module, and the readonly object binds every node globally so those
+references resolve; only slots with function-pointer relocations stay
+external declarations. Slot reads therefore fold to immediates and
+relocatable addresses instead of loads from a linker symbol.
+
 The guard pass also records each guard's crash statement identity. Failed root
 completion associates those statements with the original evaluated failure's
 source location and region. Recorded origins remain stable. A suspended
