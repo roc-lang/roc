@@ -521,6 +521,18 @@ pub fn splice(
         if (placed.contains(index)) continue;
         const gop = try seen.getOrPut(index);
         if (gop.found_existing) continue;
+        // Another pack already spliced this artifact: content names make
+        // the code the same, so references resolve to the existing copy.
+        const artifact = set.artifacts[index];
+        const existing: ?usize = switch (artifact.kind) {
+            .proc, .boxy_thunk => |identity| codegen.splicedProcStart(identity),
+            .rc_helper => |name| if (codegen.splicedHelperEntry(name)) |entry| entry - artifact.entry else null,
+            .entrypoint, .message_pool_run, .branch_island => null,
+        };
+        if (existing) |start| {
+            try placed.putNoClobber(index, start);
+            continue;
+        }
         try order.append(allocator, index);
         const refs = set.artifacts[index].refs;
         var i = refs.len;
@@ -542,7 +554,8 @@ pub fn splice(
         const start = try codegen.appendAssembledRegion(artifact.code, kind, artifact.entry, artifact.frame);
         switch (artifact.kind) {
             .rc_helper => |name| try codegen.registerSplicedHelper(name, start + artifact.entry),
-            .proc, .boxy_thunk, .entrypoint, .message_pool_run, .branch_island => {},
+            .proc, .boxy_thunk => |identity| try codegen.registerSplicedProc(identity, start),
+            .entrypoint, .message_pool_run, .branch_island => {},
         }
         try placed.putNoClobber(index, start);
         for (artifact.data) |item| try data_out.append(allocator, item);
