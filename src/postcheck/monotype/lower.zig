@@ -5077,8 +5077,13 @@ const Builder = struct {
         // A hosted template has no procedure of its own to cache: callers
         // reach the host directly through its declared ABI.
         if (template.target != .hosted and !try self.monoFnTypeMentionsFunction(lower_fn_ty)) {
-            const key = Ast.specIdentityKey(spec_identity);
+            const key = Ast.specIdentityKey(spec_identity, self.program.types.equalityDigest(&self.program.names, spec_identity.request_fn_ty));
             fn_template.spec_key = key;
+            if (@import("builtin").link_libc and std.c.getenv("ROC_SPEC_CENSUS") != null) {
+                const proc_base = view.names.procBase(template_ref.proc_base);
+                const name: []const u8 = if (proc_base.export_name) |e| view.names.exportNameText(e) else "?";
+                std.debug.print("CENSUS_KEY\t{s}\t{x}\tsrc={x}\tev={x}\tcodec={x}\treq={x}\tcallable={s}\n", .{ name, key.bytes[0..8], spec_identity.source_fn_ty_digest.bytes[0..6], spec_identity.evidence_digest.bytes[0..6], spec_identity.codec_contract_digest.bytes[0..6], spec_identity.request_fn_ty_digest.bytes[0..6], @tagName(spec_identity.callable) });
+            }
             if (self.spec_cache) |cache| {
                 if (cache.lookup(key.bytes)) |hit| {
                     fn_template.cached = hit;
