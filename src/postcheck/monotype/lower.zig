@@ -60413,6 +60413,96 @@ test "function context identity excludes draft local allocation ids" {
     try std.testing.expect(!std.mem.eql(u8, &original_key.bytes, &different_binder_key.bytes));
 }
 
+fn testLazyCheckedInstantiation(allocator: Allocator, recursive: bool) (Allocator.Error || error{ TestUnexpectedResult, TestExpectedEqual })!void {
+    const gpa = std.testing.allocator;
+    var checked_types = checked.CheckedTypeStore{};
+    defer checked_types.deinit(gpa);
+    const closed = try checked_types.reserveSyntheticTypeRoot(gpa, .{}, false);
+    try checked_types.fillSyntheticTypeRoot(gpa, closed, .empty_record);
+    const leaf = try checked_types.reserveSyntheticTypeRoot(gpa, .{}, true);
+    try checked_types.fillSyntheticTypeRoot(gpa, leaf, .{ .flex = .{} });
+    const tuple = try checked_types.reserveSyntheticTypeRoot(gpa, .{}, true);
+    try checked_types.fillSyntheticTypeRoot(gpa, tuple, .{
+        .tuple = try gpa.dupe(checked.CheckedTypeId, if (recursive) &.{ tuple, tuple, leaf } else &.{ leaf, leaf }),
+    });
+    const function = try checked_types.appendSyntheticFunctionRoot(gpa, .pure, &.{tuple}, leaf);
+    var name_store = names.NameStore.init(allocator);
+    defer name_store.deinit();
+    var type_store = Type.Store.init(allocator);
+    defer type_store.deinit();
+    const graph = try InstGraph.create(allocator, &type_store, &name_store);
+    defer graph.destroy();
+    var diagnostics: Diagnostics = .{};
+    graph.setDiagnostics(&diagnostics.graph);
+    var builder: Builder = undefined;
+    builder.next_instantiation_scope = 0;
+    builder.timing = null;
+    builder.diagnostics = &diagnostics;
+    builder.active_spec_job_diagnostics = null;
+    var ctx: BodyContext = undefined;
+    ctx.allocator = allocator;
+    ctx.builder = &builder;
+    ctx.graph = graph;
+    ctx.view.key = .{ .bytes = @splat(0) };
+    ctx.view.types = checked_types.view();
+    ctx.instantiation = TypeInstantiationContext.init(allocator, builder.allocateInstantiationScope(), ctx.view.key.bytes);
+    defer ctx.instantiation.deinit();
+    errdefer {
+        var entries = ctx.instantiation.node_map.valueIterator();
+        while (entries.next()) |entry| std.debug.assert(entry.* == .node);
+        std.debug.assert(graph.nodes.items.len == graph.request_source_interfaces.items.len);
+        std.debug.assert(graph.nodes.items.len == graph.constructor_evidence_requests.items.len);
+    }
+
+    const node = try ctx.instNode(function);
+    try std.testing.expectEqual(node, try ctx.instNode(function));
+    try std.testing.expectEqual(@as(u64, 3), diagnostics.body.checked_node_cache_misses);
+    try std.testing.expectEqual(@as(u64, if (recursive) 4 else 3), diagnostics.graph.nodes_created);
+    try std.testing.expectEqual(@as(u64, if (recursive) 1 else 0), diagnostics.graph.unify_requests);
+    const tuple_node = (try graph.functionNodes(node)).args[0];
+    const items = graph.content(tuple_node).tuple;
+    if (recursive) {
+        try std.testing.expect(graph.sameClass(tuple_node, items[0]));
+        try std.testing.expectEqual(items[0], items[1]);
+    } else {
+        try std.testing.expectEqual(items[0], items[1]);
+    }
+    graph.registerConstructorEvidenceRequest(node);
+    try std.testing.expect(graph.requestPropagatesConstructorEvidence(node));
+    const fresh = try ctx.freshInstNode(function);
+    try std.testing.expect(!graph.sameClass(node, fresh));
+    try std.testing.expect(!graph.requestPropagatesConstructorEvidence(fresh));
+    try std.testing.expectEqual(node, try ctx.instNode(function));
+
+    const closed_node = try ctx.instNode(closed);
+
+    // An open type consults only the innermost declaration's bindings.
+    var outer = collections.DenseMap(checked.CheckedTypeId, InstantiatingNode).init(allocator);
+    defer outer.deinit();
+    var inner = collections.DenseMap(checked.CheckedTypeId, InstantiatingNode).init(allocator);
+    defer inner.deinit();
+    try outer.put(leaf, .{ .node = node });
+    try ctx.instantiation.decl_scopes.append(allocator, &outer);
+    defer _ = ctx.instantiation.decl_scopes.pop();
+    try std.testing.expectEqual(node, (try ctx.scopedNode(leaf)).?);
+    try ctx.instantiation.decl_scopes.append(allocator, &inner);
+    defer _ = ctx.instantiation.decl_scopes.pop();
+    try std.testing.expect(try ctx.scopedNode(leaf) == null);
+    const inner_node = try ctx.instNode(leaf);
+    try std.testing.expect(inner_node != node);
+    try std.testing.expectEqual(closed_node, try ctx.instNode(closed));
+    try std.testing.expect(inner.get(closed) == null);
+    try std.testing.expectEqual(node, outer.get(leaf).?.node);
+}
+
+test "lazy checked instantiation allocates no acyclic placeholders and preserves fresh scopes" {
+    try testLazyCheckedInstantiation(std.testing.allocator, false);
+}
+
+test "lazy checked instantiation shares recursive placeholders and cleans failed construction" {
+    try std.testing.checkAllAllocationFailures(std.testing.allocator, testLazyCheckedInstantiation, .{true});
+}
+
 test "lazy checked instantiation allocates only recursive placeholders and clears failed builds" {
     const Test = struct {
         fn run(gpa: Allocator) (Allocator.Error || error{ TestUnexpectedResult, TestExpectedEqual })!void {

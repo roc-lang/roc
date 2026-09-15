@@ -841,6 +841,26 @@ test "timing counter groups retain every Monotype graph diagnostic" {
     try testing.expect(std.mem.find(u8, buf.written(), "12345") != null);
 }
 
+test "timings prints all 27 Monotype graph counters" {
+    var buf: std.Io.Writer.Allocating = .init(testing.allocator);
+    defer buf.deinit();
+    var reporter = Reporter.init(.{
+        .std_io = std.Io.Threaded.global_single_threaded.io(),
+        .writer = &buf.writer,
+        .op_label = "roc build",
+        .timings_flag = true,
+        .is_tty = false,
+    });
+    defer reporter.deinit();
+    var counters: [27]Counter = @splat(.{ .name = "Counter", .count = 1 });
+    counters[counters.len - 1] = .{ .name = "Final counter", .count = 987654321 };
+    reporter.start();
+    reporter.recordCounters("Graph counters", &counters);
+    reporter.finish();
+    try testing.expect(std.mem.find(u8, buf.written(), "Final counter") != null);
+    try testing.expect(std.mem.find(u8, buf.written(), "987654321") != null);
+}
+
 test "static breakdown lists every phase with the timings flag" {
     var buf: std.Io.Writer.Allocating = .init(testing.allocator);
     defer buf.deinit();
