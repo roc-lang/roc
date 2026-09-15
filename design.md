@@ -2507,10 +2507,13 @@ dependency. A non-cryptographic hash makes such a pair cheap to construct, and
 because the attacker supplies both halves the relevant bound is a birthday
 collision, so 128 bits (2^64 work) is not enough and 256 bits is required. The
 digests are also persisted in caches and compared across machines, which rules
-out keying them with a secret. Every 64-bit compiler target is built with the
-CPU's SHA-256 instructions enabled (`addSha256Floor` in build.zig) and has no
-software rounds; only 32-bit targets such as wasm32 compute the digest in
-software.
+out keying them with a secret. Nearly every 64-bit compiler target is built with
+the CPU's SHA-256 instructions enabled (`addSha256Floor` in build.zig) and has no
+software rounds; 32-bit targets such as wasm32 and x86_64 macOS compute the
+digest in software, which yields the same digest bytes more slowly. x86_64 macOS
+is the exception because Apple's Intel Macs are Skylake through Comet Lake cores,
+which have no SHA extension to put in that target's baseline
+(`usesSoftwareSha256` in src/target/mod.zig).
 
 All producers for a key domain must agree on the encoding, including child
 digests, length prefixes, identity numbering, and domain tags. The hash
@@ -7977,7 +7980,7 @@ stream through a bounded executor session: the coordinator accepts completed
 shards strictly in request order and immediately makes discovered requests
 available to free lanes. Running and completed-but-unaccepted tasks share the
 same bounded window. Each immutable lane suffix is absorbed even when its body
-is discarded after an earlier serial claim, preserving cumulative lane ids.
+is discarded after an earlier shard committed its reservation, preserving cumulative lane ids.
 All accepted tasks are joined before releasing their contexts, including on OOM.
 
 Workers never borrow the mutable coordinator Program. Their captured input
@@ -8008,10 +8011,10 @@ Post-check timing keeps two distinct measures for this boundary. Monotype wall
 time is the elapsed coordinator interval, including worker waits and ordered
 commit. Aggregate worker work is the sum of executor callback intervals and can
 exceed wall time when callbacks overlap; it is diagnostic work, not another
-sequential phase. Coordinator work separately measures validation, serial retry,
+sequential phase. Coordinator work separately measures validation,
 discard, and ordered commit. `task_waves` counts root batches and specialization streaming
 sessions, not individual dependency waits within a stream. Task,
-lane, retry, and discard counts explain the relationship without using
+lane, and discard counts explain the relationship without using
 scheduling-dependent values for compiler behavior.
 
 Boxy follows a different post-check pipeline and reports its planning and
@@ -8046,11 +8049,23 @@ columns, not hash tables keyed by node id. Union-find redirects may change which
 node is a class root, but they never renumber a node; root-owned columns are
 updated explicitly when a union moves that ownership.
 
+A worker lane may reuse a graph's allocated capacity between specializations,
+but reset invalidates every node identity and all node-indexed state. Nominal
+identity and backing relationships, constructor-evidence requests, and generated
+iterator membership and provenance counts belong only to that graph epoch.
+Only the cumulative immutable type and name stores survive the reset.
+
 Graph-owned generated iterators are indexed by their stable declaration, kind,
 and callable evidence. Candidates in that bucket compare live argument roots,
 so argument unions do not stale the index. Content replacement and root union
 update producer membership explicitly. A monotone provenance counter lets both
 iterator finalizers return immediately for graphs without generated iterators.
+Generated identity hashes a snapshot of the current graph representation after
+joins. An imported request's retained type remains its original witness and
+cannot supply the identity of a graph-owned producer that replaced it.
+Joining distinct iterator representations invalidates current snapshots and
+durable views, including snapshots of parents that reach the joined class.
+The losing representation's cached view cannot become the winner's view.
 Generated-private containment diagnostics distinguish guard returns from queries
 that reach the containment cache or walker.
 

@@ -5866,9 +5866,12 @@ fn customNativeBuildPackHits(
     // build writes its packs there, the second is served from them. The
     // second program reaches closed module functions as values too, so its
     // rebuild goes through the entries that forward to cached procedures.
+    // The third reaches module functions whose results are constants, so
+    // its cached entries carry the constants they point at.
     const store_apps = [_]struct { roc_file: []const u8, prefix: []const u8 }{
         .{ .roc_file = roc_file, .prefix = "store" },
         .{ .roc_file = "test/cli/pack_values/PackValues.roc", .prefix = "values" },
+        .{ .roc_file = "test/cli/pack_constants/PackConstants.roc", .prefix = "constants" },
     };
     for (store_apps) |app| {
         if (storeBuildsBehaveIdentically(io, allocator, env, timer, timeout_ms, app.roc_file, warm_dir, app.prefix)) |failure| return failure;
@@ -5890,14 +5893,6 @@ fn storeBuildsBehaveIdentically(
     prefix: []const u8,
 ) ?TestResult {
     const hits_marker = "pack hits: ";
-    var store_env = CaseEnv{
-        .dirs = env.dirs,
-        .env_map = env.env_map.clone(allocator) catch |err|
-            return customInfraFailure(allocator, timer, "failed to clone store environment: {}", .{err}),
-    };
-    defer store_env.env_map.deinit();
-    store_env.env_map.put("ROC_OBJECT_CACHE", "1") catch |err|
-        return customInfraFailure(allocator, timer, "failed to enable the object cache: {}", .{err});
     const store_exes = [_][]const u8{ "a", "b" };
     var store_runs: [store_exes.len]std.process.RunResult = undefined;
     for (store_exes, 0..) |name, index| {
@@ -5907,7 +5902,7 @@ fn storeBuildsBehaveIdentically(
             return customInfraFailure(allocator, timer, "failed to allocate output arg: {}", .{err});
         const build_timeout = childCommandTimeoutMs(timer, timeout_ms) orelse
             return timeoutFailure(allocator, timer, .run, "case timeout exhausted before a store build");
-        const built = runRocInEnv(io, allocator, &store_env, &.{ "build", "--opt=dev", out_arg }, roc_file, .relative, &.{}, null, build_timeout) catch |err|
+        const built = runRocInEnv(io, allocator, env, &.{ "build", "--opt=dev", out_arg }, roc_file, .relative, &.{}, null, build_timeout) catch |err|
             return customInfraFailure(allocator, timer, "store build spawn error: {}", .{err});
         if (!processSucceeded(built.term) or std.mem.find(u8, built.stdout, "successfully building") == null or std.mem.find(u8, built.stderr, "panic") != null) {
             return failureFromRun(allocator, timer, built, "build with the object cache did not succeed");

@@ -142,6 +142,10 @@ pub const TargetConfig = struct {
     proc_debug_names: bool = false,
     /// The object cache Monotype asks for closed specializations.
     spec_cache: ?postcheck.Common.SpecCacheLookup = null,
+    /// Keep every keyed specialization procedure through compaction; a pack
+    /// program offers them from its manifest whether or not its export
+    /// wrappers inlined their calls.
+    keep_specialization_procs: bool = false,
     /// Thread slack counters through loop-carried append-only lists so the
     /// per-element ownership and capacity checks amortize. On by default;
     /// shape-comparison tests turn it off because promotion intentionally
@@ -203,15 +207,15 @@ pub const Timing = struct {
     monotype_parallel_coordinator_post_batch_work_ns: TimingCounter = .{},
     monotype_parallel_root_tasks_submitted: TimingCounter = .{},
     monotype_parallel_root_tasks_committed: TimingCounter = .{},
-    monotype_parallel_root_tasks_retried_serial: TimingCounter = .{},
     monotype_parallel_specialization_tasks_submitted: TimingCounter = .{},
     monotype_parallel_specialization_tasks_committed: TimingCounter = .{},
-    monotype_parallel_specialization_tasks_retried_serial: TimingCounter = .{},
     monotype_parallel_specialization_tasks_discarded_ready: TimingCounter = .{},
     monotype_parallel_task_waves: TimingCounter = .{},
     monotype_parallel_peak_worker_lanes_available: TimingCounter = .{},
     monotype_parallel_peak_worker_lanes_used: TimingCounter = .{},
     monotype_parallel_within_lowering_lane_reuse_tasks: TimingCounter = .{},
+    monotype_parallel_peak_specialization_jobs_pending: TimingCounter = .{},
+    monotype_parallel_peak_specialization_shards_retained: TimingCounter = .{},
     boxy_plan_ns: TimingCounter = .{},
     boxy_lower_ns: TimingCounter = .{},
     lift_ns: TimingCounter = .{},
@@ -260,15 +264,15 @@ pub const Timing = struct {
                 .coordinator_post_batch_work_ns = self.monotype_parallel_coordinator_post_batch_work_ns.load(),
                 .root_tasks_submitted = self.monotype_parallel_root_tasks_submitted.load(),
                 .root_tasks_committed = self.monotype_parallel_root_tasks_committed.load(),
-                .root_tasks_retried_serial = self.monotype_parallel_root_tasks_retried_serial.load(),
                 .specialization_tasks_submitted = self.monotype_parallel_specialization_tasks_submitted.load(),
                 .specialization_tasks_committed = self.monotype_parallel_specialization_tasks_committed.load(),
-                .specialization_tasks_retried_serial = self.monotype_parallel_specialization_tasks_retried_serial.load(),
                 .specialization_tasks_discarded_ready = self.monotype_parallel_specialization_tasks_discarded_ready.load(),
                 .task_waves = self.monotype_parallel_task_waves.load(),
                 .peak_worker_lanes_available = self.monotype_parallel_peak_worker_lanes_available.load(),
                 .peak_worker_lanes_used = self.monotype_parallel_peak_worker_lanes_used.load(),
                 .within_lowering_lane_reuse_tasks = self.monotype_parallel_within_lowering_lane_reuse_tasks.load(),
+                .peak_specialization_jobs_pending = self.monotype_parallel_peak_specialization_jobs_pending.load(),
+                .peak_specialization_shards_retained = self.monotype_parallel_peak_specialization_shards_retained.load(),
             },
             .boxy_plan_ns = self.boxy_plan_ns.load(),
             .boxy_lower_ns = self.boxy_lower_ns.load(),
@@ -366,15 +370,15 @@ pub const Timing = struct {
         self.monotype_parallel_coordinator_post_batch_work_ns.add(parallel.coordinator_post_batch_work_ns);
         self.monotype_parallel_root_tasks_submitted.add(parallel.root_tasks_submitted);
         self.monotype_parallel_root_tasks_committed.add(parallel.root_tasks_committed);
-        self.monotype_parallel_root_tasks_retried_serial.add(parallel.root_tasks_retried_serial);
         self.monotype_parallel_specialization_tasks_submitted.add(parallel.specialization_tasks_submitted);
         self.monotype_parallel_specialization_tasks_committed.add(parallel.specialization_tasks_committed);
-        self.monotype_parallel_specialization_tasks_retried_serial.add(parallel.specialization_tasks_retried_serial);
         self.monotype_parallel_specialization_tasks_discarded_ready.add(parallel.specialization_tasks_discarded_ready);
         self.monotype_parallel_task_waves.add(parallel.task_waves);
         self.monotype_parallel_peak_worker_lanes_available.max(parallel.peak_worker_lanes_available);
         self.monotype_parallel_peak_worker_lanes_used.max(parallel.peak_worker_lanes_used);
         self.monotype_parallel_within_lowering_lane_reuse_tasks.add(parallel.within_lowering_lane_reuse_tasks);
+        self.monotype_parallel_peak_specialization_jobs_pending.max(parallel.peak_specialization_jobs_pending);
+        self.monotype_parallel_peak_specialization_shards_retained.max(parallel.peak_specialization_shards_retained);
     }
 
     fn addMonotypeDiagnostics(self: *Timing, diagnostics: postcheck.Monotype.Lower.Diagnostics) void {
@@ -494,30 +498,30 @@ test "pipeline timing keeps aggregate Monotype worker work separate from wall ti
         .coordinator_post_batch_work_ns = 12,
         .root_tasks_submitted = 13,
         .root_tasks_committed = 14,
-        .root_tasks_retried_serial = 15,
         .specialization_tasks_submitted = 16,
         .specialization_tasks_committed = 17,
-        .specialization_tasks_retried_serial = 18,
         .specialization_tasks_discarded_ready = 19,
         .task_waves = 20,
         .peak_worker_lanes_available = 4,
         .peak_worker_lanes_used = 3,
         .within_lowering_lane_reuse_tasks = 21,
+        .peak_specialization_jobs_pending = 22,
+        .peak_specialization_shards_retained = 23,
     });
     timing.addMonotypeParallel(.{
         .worker_work_ns = 31,
         .coordinator_post_batch_work_ns = 32,
         .root_tasks_submitted = 33,
         .root_tasks_committed = 34,
-        .root_tasks_retried_serial = 35,
         .specialization_tasks_submitted = 36,
         .specialization_tasks_committed = 37,
-        .specialization_tasks_retried_serial = 38,
         .specialization_tasks_discarded_ready = 39,
         .task_waves = 40,
         .peak_worker_lanes_available = 8,
         .peak_worker_lanes_used = 5,
         .within_lowering_lane_reuse_tasks = 41,
+        .peak_specialization_jobs_pending = 42,
+        .peak_specialization_shards_retained = 43,
     });
     timing.addSnapshot(.{ .boxy_plan_ns = 43, .boxy_lower_ns = 47 });
 
@@ -528,15 +532,15 @@ test "pipeline timing keeps aggregate Monotype worker work separate from wall ti
     try std.testing.expectEqual(@as(u64, 44), parallel.coordinator_post_batch_work_ns);
     try std.testing.expectEqual(@as(u64, 46), parallel.root_tasks_submitted);
     try std.testing.expectEqual(@as(u64, 48), parallel.root_tasks_committed);
-    try std.testing.expectEqual(@as(u64, 50), parallel.root_tasks_retried_serial);
     try std.testing.expectEqual(@as(u64, 52), parallel.specialization_tasks_submitted);
     try std.testing.expectEqual(@as(u64, 54), parallel.specialization_tasks_committed);
-    try std.testing.expectEqual(@as(u64, 56), parallel.specialization_tasks_retried_serial);
     try std.testing.expectEqual(@as(u64, 58), parallel.specialization_tasks_discarded_ready);
     try std.testing.expectEqual(@as(u64, 60), parallel.task_waves);
     try std.testing.expectEqual(@as(u64, 8), parallel.peak_worker_lanes_available);
     try std.testing.expectEqual(@as(u64, 5), parallel.peak_worker_lanes_used);
     try std.testing.expectEqual(@as(u64, 62), parallel.within_lowering_lane_reuse_tasks);
+    try std.testing.expectEqual(@as(u64, 42), parallel.peak_specialization_jobs_pending);
+    try std.testing.expectEqual(@as(u64, 43), parallel.peak_specialization_shards_retained);
     try std.testing.expectEqual(@as(u64, 43), snapshot_value.boxy_plan_ns);
     try std.testing.expectEqual(@as(u64, 47), snapshot_value.boxy_lower_ns);
 }
@@ -910,7 +914,7 @@ pub fn prepareMonotypeToSolved(prepared: PreparedMonotype) Allocator.Error!Prepa
         .inline_plan,
     );
     defer inline_plan_timing_scope.end();
-    const inline_plan = try postcheck.SolvedInline.analyze(allocator, target.inline_mode, procedure_usage.view(), &solved);
+    const inline_plan = try postcheck.SolvedInline.analyze(allocator, target.inline_mode, procedure_usage.view(), &solved, target.keep_specialization_procs);
     inline_plan_timing_scope.end();
 
     return .{
@@ -1045,7 +1049,11 @@ fn finishLoweredOutput(
     if (target.tag_reachability) {
         try TagReachability.run(&lowered.lir_result);
     }
-    try ReachableProcs.run(&lowered.lir_result);
+    if (target.keep_specialization_procs) {
+        try ReachableProcs.runKeepingSpecializations(&lowered.lir_result);
+    } else {
+        try ReachableProcs.run(&lowered.lir_result);
+    }
     lir_passes_timing_scope.end();
 
     var arc_timing_scope = PipelineTimingScope.begin(target.timing, .arc);

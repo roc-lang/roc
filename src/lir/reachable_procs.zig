@@ -25,6 +25,16 @@ pub fn run(result: *LirProgram.Result) Allocator.Error!void {
     try pass.run();
 }
 
+/// Compact as `run` does, but keep every keyed specialization procedure as
+/// well: a pack program offers those from its manifest even when the only
+/// call to one was inlined into its export wrapper.
+pub fn runKeepingSpecializations(result: *LirProgram.Result) Allocator.Error!void {
+    var pass = try Pass.init(result, null);
+    defer pass.deinit();
+    for (result.spec_procs.items) |spec_proc| try pass.markProc(spec_proc.proc);
+    try pass.run();
+}
+
 /// Compact a completed runtime program together with the explicit frozen
 /// procedure and data-symbol references retained from compile-time execution.
 pub fn runWithFrozen(result: *LirProgram.Result, frozen: *LirProgram.FrozenStaticData) Allocator.Error!void {

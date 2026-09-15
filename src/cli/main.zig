@@ -8664,10 +8664,10 @@ fn packFileBytes(
     for (lowered.lir_result.spec_procs.items) |spec_proc| {
         const proc = procs[@intFromEnum(spec_proc.proc)];
         const artifact = artifact_by_identity.get(proc.identity) orelse continue;
-        // Constants other than literal backings are still named per program
-        // (`roc__static_const_N`), and boxy statements index the program's
-        // own descriptor sidecar; an entry that reaches either cannot be
-        // linked elsewhere, so it is not offered.
+        // Boxy statements index the program's own descriptor sidecar, and a
+        // constant holding a code pointer names code the pack may not carry;
+        // an entry that reaches either cannot be linked elsewhere, so it is
+        // not offered.
         if (try artifactClosureNamesProgramLocalSymbols(allocator, set, artifact)) {
             withheld += 1;
             continue;
@@ -8699,8 +8699,13 @@ fn artifactClosureNamesProgramLocalSymbols(allocator: Allocator, set: *const bac
         if (gop.found_existing) continue;
         const artifact = set.artifacts[index];
         for (artifact.relocations) |relocation| {
-            if (std.mem.startsWith(u8, relocation.name, "roc__static_") and !std.mem.startsWith(u8, relocation.name, "roc__static_str_")) return true;
+            if (std.mem.startsWith(u8, relocation.name, "roc__static_") and
+                !std.mem.startsWith(u8, relocation.name, "roc__static_str_") and
+                !std.mem.startsWith(u8, relocation.name, backend.dev.ProcArtifact.content_data_prefix)) return true;
             if (std.mem.startsWith(u8, relocation.name, "roc_boxy_")) return true;
+        }
+        for (artifact.data) |item| {
+            for (item.relocations) |relocation| if (relocation.function) return true;
         }
         for (artifact.refs) |ref| try stack.append(allocator, ref.target);
     }
@@ -10523,9 +10528,11 @@ fn rocBuildNative(ctx: *CliCtx, args: cli_args.BuildArgs) CliMainError!BuildResu
             return error.NativeCompilationFailed;
         };
     }
-    // `ROC_OBJECT_CACHE` turns on the object cache under the cache root:
-    // this build reads the packs of every module in view and writes its own.
-    const object_cache_enabled = !args.no_cache and std.c.getenv("ROC_OBJECT_CACHE") != null and loaded_packs == null;
+    // The object cache lives under the cache root and follows `--no-cache`
+    // like the rest of the cache: this build reads the packs of every module
+    // in view and writes its own. A directory of packs given for a test
+    // (`ROC_DEV_PACK_HITS`) replaces the store.
+    const object_cache_enabled = !args.no_cache and loaded_packs == null;
     var object_store: ?pack_store.Store = null;
     defer if (object_store) |*store| store.deinit();
     if (object_cache_enabled) {
@@ -16519,7 +16526,7 @@ fn monotypeGraphCounters(diagnostics: postcheck.Monotype.Lower.Diagnostics) [27]
     };
 }
 
-fn monotypeBodyCounters(diagnostics: postcheck.Monotype.Lower.Diagnostics) [25]progress.Counter {
+fn monotypeBodyCounters(diagnostics: postcheck.Monotype.Lower.Diagnostics) [26]progress.Counter {
     const body = diagnostics.body;
     return .{
         .{ .name = "Interface summary hits", .count = diagnostics.specialization.interface_summary_hits },
@@ -16534,6 +16541,7 @@ fn monotypeBodyCounters(diagnostics: postcheck.Monotype.Lower.Diagnostics) [25]p
         .{ .name = "Dispatch expressions", .count = body.dispatch_expressions },
         .{ .name = "Deferred template requests", .count = body.deferred_template_requests },
         .{ .name = "Caller-owned template bodies lowered", .count = body.caller_owned_template_bodies_lowered },
+        .{ .name = "Eager iterator template bodies lowered", .count = body.eager_iterator_template_bodies_lowered },
         .{ .name = "Deferred template reuses", .count = body.deferred_template_reuses },
         .{ .name = "Deferred template bodies lowered", .count = body.deferred_template_bodies_lowered },
         .{ .name = "Lowered template bodies discarded", .count = body.lowered_template_bodies_discarded },
@@ -16556,15 +16564,15 @@ fn monotypeParallelCounters(parallel: postcheck.Monotype.Lower.ParallelMetricsSn
         .{ .name = "Coordinator post-batch work (ns)", .count = parallel.coordinator_post_batch_work_ns },
         .{ .name = "Root tasks submitted", .count = parallel.root_tasks_submitted },
         .{ .name = "Root tasks committed", .count = parallel.root_tasks_committed },
-        .{ .name = "Root tasks retried serially", .count = parallel.root_tasks_retried_serial },
         .{ .name = "Specialization tasks submitted", .count = parallel.specialization_tasks_submitted },
         .{ .name = "Specialization tasks committed", .count = parallel.specialization_tasks_committed },
-        .{ .name = "Specialization tasks retried serially", .count = parallel.specialization_tasks_retried_serial },
         .{ .name = "Specialization tasks discarded ready", .count = parallel.specialization_tasks_discarded_ready },
         .{ .name = "Parallel task waves", .count = parallel.task_waves },
         .{ .name = "Peak worker lanes available", .count = parallel.peak_worker_lanes_available },
         .{ .name = "Peak worker lanes used", .count = parallel.peak_worker_lanes_used },
         .{ .name = "Tasks reusing a lowering lane", .count = parallel.within_lowering_lane_reuse_tasks },
+        .{ .name = "Peak specialization jobs pending", .count = parallel.peak_specialization_jobs_pending },
+        .{ .name = "Peak specialization shards retained", .count = parallel.peak_specialization_shards_retained },
     };
 }
 
@@ -16657,6 +16665,7 @@ test "post-check diagnostics preserve labeled Monotype counts" {
     diagnostics.graph.nominal_backing_tombstone_deletions = 203;
     diagnostics.body.instantiation_scopes_created = 303;
     diagnostics.body.checked_node_cache_hits = 301;
+    diagnostics.body.eager_iterator_template_bodies_lowered = 304;
     diagnostics.body.deferred_template_reuses = 305;
     diagnostics.body.nested_closures_prepared = 302;
 
@@ -16682,10 +16691,12 @@ test "post-check diagnostics preserve labeled Monotype counts" {
     try std.testing.expectEqual(@as(u64, 303), body[3].count);
     try std.testing.expectEqualStrings("Checked node cache hits", body[5].name);
     try std.testing.expectEqual(@as(u64, 301), body[5].count);
-    try std.testing.expectEqualStrings("Deferred template reuses", body[12].name);
-    try std.testing.expectEqual(@as(u64, 305), body[12].count);
-    try std.testing.expectEqualStrings("Nested closures prepared", body[21].name);
-    try std.testing.expectEqual(@as(u64, 302), body[21].count);
+    try std.testing.expectEqualStrings("Eager iterator template bodies lowered", body[12].name);
+    try std.testing.expectEqual(@as(u64, 304), body[12].count);
+    try std.testing.expectEqualStrings("Deferred template reuses", body[13].name);
+    try std.testing.expectEqual(@as(u64, 305), body[13].count);
+    try std.testing.expectEqualStrings("Nested closures prepared", body[22].name);
+    try std.testing.expectEqual(@as(u64, 302), body[22].count);
 
     const parallel = monotypeParallelCounters(.{
         .worker_work_ns = 401,
@@ -16702,14 +16713,14 @@ test "post-check diagnostics preserve labeled Monotype counts" {
     try std.testing.expectEqual(@as(u64, 402), parallel[1].count);
     try std.testing.expectEqualStrings("Root tasks submitted", parallel[2].name);
     try std.testing.expectEqual(@as(u64, 403), parallel[2].count);
-    try std.testing.expectEqualStrings("Specialization tasks discarded ready", parallel[8].name);
-    try std.testing.expectEqual(@as(u64, 404), parallel[8].count);
-    try std.testing.expectEqualStrings("Peak worker lanes available", parallel[10].name);
-    try std.testing.expectEqual(@as(u64, 8), parallel[10].count);
-    try std.testing.expectEqualStrings("Peak worker lanes used", parallel[11].name);
-    try std.testing.expectEqual(@as(u64, 4), parallel[11].count);
-    try std.testing.expectEqualStrings("Tasks reusing a lowering lane", parallel[12].name);
-    try std.testing.expectEqual(@as(u64, 405), parallel[12].count);
+    try std.testing.expectEqualStrings("Specialization tasks discarded ready", parallel[6].name);
+    try std.testing.expectEqual(@as(u64, 404), parallel[6].count);
+    try std.testing.expectEqualStrings("Peak worker lanes available", parallel[8].name);
+    try std.testing.expectEqual(@as(u64, 8), parallel[8].count);
+    try std.testing.expectEqualStrings("Peak worker lanes used", parallel[9].name);
+    try std.testing.expectEqual(@as(u64, 4), parallel[9].count);
+    try std.testing.expectEqualStrings("Tasks reusing a lowering lane", parallel[10].name);
+    try std.testing.expectEqual(@as(u64, 405), parallel[10].count);
 }
 
 test "timings display every Monotype graph counter" {

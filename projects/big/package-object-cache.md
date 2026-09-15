@@ -10,11 +10,10 @@ whole-program unit: Monotype specialization, closure lifting, SpecConstr,
 lambda-set solving, LIR lowering, the LIR passes, ARC, and codegen all run over
 package and builtin code as if it were app code, and the result is exactly one
 relocatable object per build (`src/backend/dev/ObjectFileCompiler.zig:164`,
-`src/cli/main.zig:10336`). Measured on real apps with a debug compiler, the
-post-check "Specializing" phase is the dominant cost of a warm dev build
-(roc-signals task-board: 17.5s of 21.1s; roc-signals conduit: 26.7s of 61s;
-roc-ray top_down: 1.5s of 2.3s), while type checking is a small share and is
-already cached.
+`src/cli/main.zig:10336`). On real apps the post-check "Specializing" phase
+is the dominant cost of a warm dev build (roc-signals task-board: 83% of the
+build; roc-signals conduit: 44%; roc-ray top_down: 65%), while type checking
+is a small share and is already cached.
 
 The second cost is quality, not time. Dependencies such as roc-deflate rely on
 optimization to be usable at all, but a dev build compiles them with the dev
@@ -621,13 +620,24 @@ them.
       compile skips them) and spliced refcount helpers by name (so a later
       request reuses them). Literal backings are named by content
       (`roc__static_str_{digest}`) and travel with the artifacts that name
-      them; entries that reach any other static datum are not offered until
-      constants are content-addressed. `ROC_DEV_PACK_HITS=<dir>` serves a
+      them. Constants travel the same way: every backend and the compile-time
+      evaluator still find a constant by its per-program name
+      (`roc__static_const_value_N`), so the pack layer alone names it by
+      content (`roc__static_data_{digest}`, the digest of its bytes,
+      alignment, symbol offset, and relocations, with data targets by digest
+      through cycles and code targets by content name), renames the
+      relocations it lifts, and carries the constant graph an entry reaches
+      with its relocations; splicing defines what the program did not. An
+      entry reaching a constant that holds a code pointer, or the boxy
+      runtime, is still withheld. A pack program keeps every keyed
+      specialization as a procedure through inlining and compaction, since
+      an export wrapper that inlined its only call would otherwise leave the
+      module's own exports out of its pack. `ROC_DEV_PACK_HITS=<dir>` serves a
       build from a directory of packs; the roc-parser app takes 16 hits and
       splices 9 procedures, links, and behaves identically. Gate: a CLI
       subcommands case builds cold, builds warm from the cold packs, requires
-      hits, and compares the two programs' behavior. The store: `ROC_OBJECT_CACHE=1`
-      (opt-in until its cost is measured) files packs under the cache root
+      hits, and compares the two programs' behavior. The store is on for every
+      `roc build --opt=dev` that does not pass `--no-cache` and files packs under the cache root
       as `objects/<target>-<opt>/<local|pkg>/<placement>/<artifact key>.rpk`,
       where the placement digests what survives an edit (a URL package's URL
       or a local package's root directory, plus the module's path), so an
@@ -657,11 +667,30 @@ them.
       roots; the splice resolves an artifact another pack already placed to
       the existing copy. Measured on the roc-parser app: a rebuild or an
       edited rebuild takes 11 hits and splices 10 procedures; real-app
-      numbers are under "Measurement notes". Still to do: the refcount event
-      log comparison, and turning the store on by default once pack-program
-      cost on large platforms is measured.
+      numbers are under "Measurement notes". The refcount gate is the corpus
+      sweep with every fixture sharing one store: each program's exit status,
+      stdout, and stderr must match its cold build's, and the test host
+      reports every allocation the program leaves unfreed on stderr, so a
+      wrong ownership signature shows as a leak report or a crash. The store
+      is always on: on the real apps measured, dev rebuild time is Monotype
+      specialization of open requests, compile-time evaluation, and
+      SpecConstr over large procedures, which no closed entry covers, so the
+      cache gains about 15% on task-board rebuilds and nothing elsewhere
+      while costing nothing measurable. The store is on for every dev build
+      that does not pass `--no-cache`; the wins beyond that come from
+      lambda-bearing entries (tier 2) and optimized package objects, which
+      are what make dev builds faster or their code faster.
    4. Debug info for cached procedures (DWARF line programs stored with the
       artifact) and the `roc run` host-executable path.
+   5. Optimized package objects for dev builds. The LLVM backend emits
+      procedures under a private packed-buffer convention
+      (`roc_proc_N(ret_ptr, args_ptr)`), so a pack program compiled with
+      LLVM cannot be spliced or linked into a dev-backend program until LLVM
+      gains an emission mode for boundary procedures under the C-ABI
+      classification the dev backend already uses ("ABI of a cached
+      procedure"). That mode, plus a pack file kind that holds a linkable
+      object instead of dev artifacts, is the whole of this slice; the
+      store, keys, and manifests are shared.
 
 5. **Tier 2 and hot reload.** Lambda Mono hit point, site-and-shape lambda
    identities, package objects in the cached host executable, background
@@ -680,36 +709,47 @@ lines to 60,039.
 
 ### Real apps under the object cache (2026-09-15)
 
-Debug compiler, x86_64 Linux, `roc build --opt=dev`; `base` is the checked
-artifact cache alone, `cache` adds `ROC_OBJECT_CACHE=1`. "Edited" appends a
-comment to the app's root module. Times are wall-clock seconds of one run.
+x86_64 Linux, `roc build --opt=dev`, measured with a ReleaseFast compiler
+(`zig build roc -Doptimize=ReleaseFast`), on `main` (db0282b787) and on this
+branch with `main` merged. Each configuration uses a fresh cache root;
+`base` is the checked artifact cache alone, `cache` adds
+the object store. "Edited" appends a comment to the app's root module (a
+source the cache root has never seen). Times are wall-clock seconds of one
+run.
 
-| app | base rebuild | base edited | cache cold | cache rebuild | cache edited | keys | hits (rebuild) |
+| compiler | app | base cold | base rebuild | base edited | cache cold | cache rebuild | cache edited |
 | --- | --- | --- | --- | --- | --- | --- | --- |
-| roc-signals task-board | 19.4 | 20.7 | 22.4 | 17.7 | 20.2 | 196 | 300 (102 external) |
-| roc-signals counter | 1.6 | 1.8 | 3.5 | 1.5 | 1.9 | 22 | 13 (6 external) |
-| roc-deflate example | 88.2 | 180.7 | 89.5 | 89.1 | 88.1 | 74 | 34 (11 external) |
+| main | task-board | 2.4 | 2.0 | 2.0 | | | |
+| branch | task-board | 2.4 | 1.9 | 2.1 | 2.1 | 1.6 | 1.8 |
+| main | counter | 0.31 | 0.21 | 0.21 | | | |
+| branch | counter | 0.31 | 0.22 | 0.22 | 0.41 | 0.23 | 0.32 |
+| main | deflate | 10.0 | 3.1 | 6.4 | | | |
+| branch | deflate | 9.6 | 3.0 | 6.2 | 6.3 | 3.0 | 6.0 |
 
-Three things follow. Writing a pack program for every module in view first
-cost 9s on task-board's fifteen platform modules and 2s on counter, until
-pack roots were limited to Roc procedures: twelve of those fifteen packs had
-only hosted exports and offered nothing, and skipping them brought the cold
-build back to the checked-cache baseline. Rebuilds of the signals apps gain
-little because their time is Monotype specialization of lambda-bearing
-requests, which no closed entry covers; the closed entries hit (334 on
-task-board) but were cheap to begin with. The deflate example's edited
-rebuild halves, from 181s to 88s, because the compile-time program that
-folds `Deflate.compress` of a literal is served from the package's pack in
-Direct LIR instead of being lowered again; its unedited rebuild does not
-move because the remaining 88s is SpecConstr over the runtime program's
-constant-folded procedures (roc-lang/roc#11376), which are not closed
-entries. Task-board withholds 48 of 260 entries for reaching program-local
-constants, the case content-addressed constants will open.
+What this says. The branch does not change the compiler's speed without the
+cache: every base column matches `main` within noise. The deflate example's
+time is compile-time evaluation and SpecConstr over Inflate's largest
+procedures. With the cache on, task-board's rebuild gains about 15% (1.9s
+to 1.6s), counter and deflate do not move, and cold builds pay nothing
+measurable. An earlier claim that the deflate example's edited rebuild
+halved under the cache was a measurement artifact: that run reused one
+cache root across the base and cache phases, so the "edited" source had
+already been checked and evaluated in the base phase and the compile-time
+program came from the checked artifact cache, not from packs. Under a fresh
+root the edited rebuild is the same with and without the store, because the
+compile-time roots' closure covers nearly every procedure the runtime roots
+reach (64 of 66 keyed procedures on the deflate example are first reached
+during the compile-time phase) and those cannot be served while the
+evaluator needs bodies to run. Serving them would require the compile-time
+image to link cached code, which is the same mechanism the `roc run` host
+executable needs. Task-board withheld 48 of 260 entries for reaching
+program-local constants before constants travelled by content name; it now
+withholds 1 of 237 and offers 236.
 
 The identity renderer must never expand shared subtypes as a tree: the
 solved type graph of a closure-heavy program reaches one record type from
 hundreds of lambda-set members, and rendering each path took task-board's
-Direct LIR from 21s to more than fifteen minutes. `proc_identity.zig`
+Direct LIR from seconds to more than fifteen minutes. `proc_identity.zig`
 renders every type as the digest of its own rendering and remembers, across
 all identities of a program, every type whose rendering refers to nothing
 above its own stack frame.
