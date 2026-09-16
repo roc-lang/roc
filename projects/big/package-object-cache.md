@@ -474,7 +474,16 @@ once per package version.
 ## Optimized objects
 
 A closed tier 1 entry can be compiled with LLVM at package download time with
-no app involvement. Tier 2 entries can be LLVM-compiled only after an app
+no app involvement. "Download time" is the end of version resolution, not
+the moment a tarball lands: resolution can download a package version that
+some intermediate constraint asked for and then move past it when a later
+package wants a newer one, and such a version is never built. So `roc fetch`
+(and any build that has to fetch) first resolves every version, then runs
+the optimized pack build for each package version that this resolution
+downloaded for the first time, with `--opt=speed` for native targets and
+`--opt=size` for wasm32. A build whose store lacks a package's optimized
+pack, because the cache was deleted or the pack was never built, rebuilds
+it there and then, so the store is always recoverable from the sources. Tier 2 entries can be LLVM-compiled only after an app
 requests them; the first build emits them with the dev backend and a detached
 background job produces the optimized object for the next build, both under
 the same identity but distinct option sets in the key. `roc check` never
