@@ -16,6 +16,7 @@ const Common = @import("common.zig");
 const ComptimeScalarValues = @import("comptime_scalar_values.zig");
 const match_tree = @import("match_tree.zig");
 const Mono = @import("monotype/ast.zig");
+const postcheck_values = @import("comptime_scalar_values.zig");
 const Lifted = @import("monotype_lifted/ast.zig");
 const SolvedInline = @import("solved_inline.zig");
 const proc_identity = @import("proc_identity.zig");
@@ -2823,6 +2824,77 @@ const Lowerer = struct {
         };
     }
 
+    /// Builds a completed compile-time value from its construction, or
+    /// returns null when a part exceeds what a literal can carry, in which
+    /// case the root keeps its slot.
+    fn lowerConstructionInto(self: *Lowerer, target: LIR.LocalId, construction: postcheck_values.Construction, next: LIR.CFStmtId) Common.LowerError!?LIR.CFStmtId {
+        const store = &self.result.store;
+        switch (construction) {
+            .literal => |literal| return try store.addCFStmt(.{ .assign_literal = .{ .target = target, .value = literal, .next = next } }),
+            .zst => return try self.assignZst(target, next),
+            .empty_str => return try store.addCFStmt(.{ .assign_literal = .{
+                .target = target,
+                .value = .{ .str_literal = try store.insertStringView("", 0, 0) },
+                .next = next,
+            } }),
+            .empty_list => |capacity| {
+                if (capacity > std.math.maxInt(i64)) return null;
+                return try self.lowerListWithCapacityInto(target, @intCast(capacity), next);
+            },
+            .uniform_list => |uniform| {
+                if (uniform.count > std.math.maxInt(i64)) return null;
+                const element_local = try store.addLocal(.{ .layout_idx = uniform.element_layout });
+                const loop = try self.lowerRepeatInto(target, element_local, @intCast(uniform.count), next);
+                return try self.lowerConstructionInto(element_local, uniform.element.*, loop);
+            },
+            .record => |fields| {
+                const layout_idx = store.getLocal(target).layout_idx;
+                const physical = self.result.layouts.getLayout(layout_idx);
+                if (physical.tag != .struct_) return null;
+                const struct_idx = physical.getStruct().idx;
+                const field_locals = try self.allocator.alloc(LIR.LocalId, fields.len);
+                defer self.allocator.free(field_locals);
+                for (field_locals, 0..) |*local, original_index| {
+                    local.* = try store.addLocal(.{ .layout_idx = self.result.layouts.getStructFieldLayoutByOriginalIndex(struct_idx, @intCast(original_index)) });
+                }
+                var current = try store.addCFStmt(.{ .assign_struct = .{
+                    .target = target,
+                    .fields = try store.addLocalSpan(field_locals),
+                    .next = next,
+                } });
+                var index = fields.len;
+                while (index > 0) {
+                    index -= 1;
+                    current = try self.lowerConstructionInto(field_locals[index], fields[index], current) orelse return null;
+                }
+                return current;
+            },
+            .tag => |tag| {
+                const layout_idx = store.getLocal(target).layout_idx;
+                const physical = self.result.layouts.getLayout(layout_idx);
+                if (physical.tag != .tag_union) return null;
+                const info = self.result.layouts.getTagUnionInfo(physical);
+                if (tag.variant_index >= info.variants.len) return null;
+                var payload_local: ?LIR.LocalId = null;
+                if (tag.payload) |payload| {
+                    _ = payload;
+                    payload_local = try store.addLocal(.{ .layout_idx = info.variants.get(tag.variant_index).payload_layout });
+                }
+                const build = try store.addCFStmt(.{ .assign_tag = .{
+                    .target = target,
+                    .variant_index = tag.variant_index,
+                    .discriminant = tag.discriminant,
+                    .payload = payload_local,
+                    .next = next,
+                } });
+                if (tag.payload) |payload| {
+                    return try self.lowerConstructionInto(payload_local.?, payload.*, build);
+                }
+                return build;
+            },
+        }
+    }
+
     /// `target = list_with_capacity(capacity)`, the runtime form of a completed
     /// empty list root.
     fn lowerListWithCapacityInto(self: *Lowerer, target: LIR.LocalId, capacity: i64, next: LIR.CFStmtId) Common.LowerError!LIR.CFStmtId {
@@ -2844,10 +2916,9 @@ const Lowerer = struct {
     /// The repeat loop a completed uniform list root came from: reserve
     /// `count` elements, then append the element `count` times unchecked.
     /// The later passes treat it as they do any source loop.
-    fn lowerRepeatInto(self: *Lowerer, target: LIR.LocalId, element: LIR.LiteralValue, element_layout: layout.Idx, count: i64, next: LIR.CFStmtId) Common.LowerError!LIR.CFStmtId {
+    fn lowerRepeatInto(self: *Lowerer, target: LIR.LocalId, element_local: LIR.LocalId, count: i64, next: LIR.CFStmtId) Common.LowerError!LIR.CFStmtId {
         const store = &self.result.store;
         const list_layout = store.getLocal(target).layout_idx;
-        const element_local = try store.addLocal(.{ .layout_idx = element_layout });
         const count_local = try store.addLocal(.{ .layout_idx = .u64 });
         const reserved = try store.addLocal(.{ .layout_idx = list_layout });
         const zero = try store.addLocal(.{ .layout_idx = .u64 });
@@ -2907,12 +2978,11 @@ const Lowerer = struct {
             .next = zero_literal,
         } });
         const count_literal = try store.addCFStmt(.{ .assign_literal = .{ .target = count_local, .value = .{ .i64_literal = .{ .value = count, .layout_idx = .u64 } }, .next = reserve } });
-        const element_literal = try store.addCFStmt(.{ .assign_literal = .{ .target = element_local, .value = element, .next = count_literal } });
         return try store.addCFStmt(.{ .join = .{
             .id = join_id,
             .params = try store.addLocalSpan(&[_]LIR.LocalId{ list_param, index_param }),
             .body = body,
-            .remainder = element_literal,
+            .remainder = count_literal,
         } });
     }
 
@@ -4310,19 +4380,9 @@ const Lowerer = struct {
     ) Common.LowerError!LIR.CFStmtId {
         const layout_idx = self.result.store.getLocal(target).layout_idx;
         if (self.completed_scalar_values) |values| {
-            if (values.constructionFor(value.root.module, value.root.root, layout_idx)) |construction| switch (construction) {
-                .literal => |literal| return try self.result.store.addCFStmt(.{ .assign_literal = .{
-                    .target = target,
-                    .value = literal,
-                    .next = next,
-                } }),
-                .empty_list => |capacity| if (capacity <= std.math.maxInt(i64)) {
-                    return try self.lowerListWithCapacityInto(target, @intCast(capacity), next);
-                },
-                .uniform_list => |uniform| if (uniform.count <= std.math.maxInt(i64)) {
-                    return try self.lowerRepeatInto(target, uniform.element, uniform.element_layout, @intCast(uniform.count), next);
-                },
-            };
+            if (values.constructionFor(value.root.module, value.root.root, layout_idx)) |construction| {
+                if (try self.lowerConstructionInto(target, construction, next)) |built| return built;
+            }
         }
         const request = ComptimeValueRequest{
             .module = value.root.module,

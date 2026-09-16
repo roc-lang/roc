@@ -34,16 +34,28 @@ const LIR = core.LIR;
 const Program = core.Program;
 const Allocator = std.mem.Allocator;
 
-/// How a completed root lowers in place of its slot.
+/// How a completed value, or a part of one, lowers in place of its slot:
+/// a scalar's literal, or the constructor of an empty or uniform value.
 pub const Construction = union(enum) {
     literal: LIR.LiteralValue,
+    zst,
+    /// The empty string.
+    empty_str,
     /// An empty list, rebuilt with the capacity it was evaluated with.
     empty_list: u64,
-    /// `count` copies of one scalar, rebuilt by the repeat loop.
+    /// `count` copies of one element, rebuilt by the repeat loop.
     uniform_list: struct {
-        element: LIR.LiteralValue,
+        element: *const Construction,
         element_layout: layout.Idx,
         count: u64,
+    },
+    /// A record, one construction per field in original order.
+    record: []const Construction,
+    /// A tag with its payload, when it has one.
+    tag: struct {
+        variant_index: u16,
+        discriminant: u16,
+        payload: ?*const Construction,
     },
 };
 
@@ -51,6 +63,8 @@ pub const Construction = union(enum) {
 /// lower without a slot, keyed by checked root identity.
 pub const CompletedScalarValues = struct {
     entries: Map,
+    /// Owns the nested constructions the entries point into.
+    arena: std.heap.ArenaAllocator,
 
     const Key = struct {
         module: checked.ModuleId,
@@ -77,20 +91,19 @@ pub const CompletedScalarValues = struct {
 
     const Map = std.HashMapUnmanaged(Key, Entry, Context, std.hash_map.default_max_load_percentage);
 
-    pub const empty: CompletedScalarValues = .{ .entries = .empty };
-
-    /// Collects every completed successful scalar root of `program` from its
-    /// frozen image.
+    /// Collects every completed successful root of `program` whose frozen
+    /// image decodes to a construction.
     pub fn init(allocator: Allocator, program: *const Program.Result, frozen: *const Program.FrozenStaticData) Allocator.Error!CompletedScalarValues {
-        var values = CompletedScalarValues.empty;
+        var values = CompletedScalarValues{ .entries = .empty, .arena = std.heap.ArenaAllocator.init(allocator) };
         errdefer values.deinit(allocator);
+        var decoder = Decoder{ .program = program, .frozen = frozen, .arena = values.arena.allocator() };
         for (program.static_data_values.items, 0..) |entry, index| {
             const root = entry.compile_time_root orelse continue;
             if (root.role != .value) continue;
             const slot: LIR.StaticDataId = @enumFromInt(index);
             if (!slotSucceeded(program, frozen, slot)) continue;
             const data_export = exportOf(frozen, slot) orelse continue;
-            const construction = decodeConstruction(program, frozen, entry.layout_idx, data_export) orelse continue;
+            const construction = try decoder.decode(data_export, data_export.symbol_offset, root.role.value.plan, entry.layout_idx) orelse continue;
             try values.entries.put(allocator, .{ .module = root.module, .root = root.root }, .{ .layout_idx = entry.layout_idx, .construction = construction });
         }
         return values;
@@ -98,6 +111,7 @@ pub const CompletedScalarValues = struct {
 
     pub fn deinit(self: *CompletedScalarValues, allocator: Allocator) void {
         self.entries.deinit(allocator);
+        self.arena.deinit();
     }
 
     /// The construction for a root read at `layout_idx`, when the root
@@ -114,47 +128,140 @@ pub const CompletedScalarValues = struct {
         const construction = self.constructionFor(module, root, layout_idx) orelse return null;
         return switch (construction) {
             .literal => |literal| literal,
-            .empty_list, .uniform_list => null,
+            .zst, .empty_str, .empty_list, .uniform_list, .record, .tag => null,
         };
     }
 };
 
-/// The construction of a completed root from its frozen export: a scalar's
-/// literal, or a list's constructor when the list is empty or uniform.
-fn decodeConstruction(program: *const Program.Result, frozen: *const Program.FrozenStaticData, layout_idx: layout.Idx, data_export: *const Program.StaticDataExport) ?Construction {
-    const bytes = data_export.bytes[data_export.symbol_offset..];
-    const physical = program.layouts.getLayout(layout_idx);
-    if (physical.tag != .list) {
-        if (data_export.relocations.len != 0) return null;
-        const literal = decodeScalar(layout_idx, bytes) orelse return null;
-        return .{ .literal = literal };
+/// Decodes a frozen value into its construction by walking the same const
+/// plan the freezer walked, at the same byte offsets. Any part that is not
+/// a scalar, the empty string, an empty or uniform list, a record, or a tag
+/// leaves the whole root on its slot.
+const Decoder = struct {
+    program: *const Program.Result,
+    frozen: *const Program.FrozenStaticData,
+    arena: Allocator,
+
+    fn decode(self: *Decoder, data_export: *const Program.StaticDataExport, offset: usize, plan: Program.ConstPlanId, layout_idx: layout.Idx) Allocator.Error!?Construction {
+        const physical = self.program.layouts.getLayout(layout_idx);
+        if (physical.tag == .zst) return .zst;
+        const bytes = data_export.bytes[offset..];
+        return switch (self.program.const_plans.items[@intFromEnum(plan)]) {
+            .zst => .zst,
+            .scalar => if (decodeScalar(layout_idx, bytes)) |literal| .{ .literal = literal } else null,
+            .str => if (self.stringIsEmpty(bytes)) .empty_str else null,
+            .list => |element_plan| try self.decodeList(data_export, offset, element_plan, physical),
+            .named => |named| try self.decode(data_export, offset, named.backing, layout_idx),
+            .tuple, .record => |child_plans| try self.decodeRecord(data_export, offset, child_plans, physical),
+            .tag_union => |variants| try self.decodeTag(data_export, offset, variants, physical),
+            .pending, .layout_only, .box, .fn_value, .erased_fn => null,
+        };
     }
-    const word = program.layouts.targetUsize().size();
-    if (bytes.len < 3 * word) return null;
-    const len: u64 = switch (word) {
-        4 => std.mem.readInt(u32, bytes[4..8], .little),
-        8 => std.mem.readInt(u64, bytes[8..16], .little),
-        else => return null,
-    };
-    if (len == 0) {
-        if (data_export.relocations.len != 0) return null;
-        return .{ .empty_list = data_export.empty_list_capacity };
+
+    fn word(self: *const Decoder) usize {
+        return self.program.layouts.targetUsize().size();
     }
-    if (data_export.relocations.len != 1) return null;
-    const backing = exportNamed(frozen, data_export.relocations[0].target_symbol_name) orelse return null;
-    if (backing.relocations.len != 0) return null;
-    const element_layout = physical.getIdx();
-    const element_size = program.layouts.layoutSize(program.layouts.getLayout(element_layout));
-    if (element_size == 0) return null;
-    const elements = backing.bytes[backing.symbol_offset..];
-    if (elements.len < len * element_size) return null;
-    const first = elements[0..element_size];
-    var index: u64 = 1;
-    while (index < len) : (index += 1) {
-        if (!std.mem.eql(u8, first, elements[index * element_size ..][0..element_size])) return null;
+
+    fn readWord(self: *const Decoder, bytes: []const u8, index: usize) ?u64 {
+        const size = self.word();
+        if (bytes.len < (index + 1) * size) return null;
+        const start = index * size;
+        return switch (size) {
+            4 => std.mem.readInt(u32, bytes[start..][0..4], .little),
+            8 => std.mem.readInt(u64, bytes[start..][0..8], .little),
+            else => null,
+        };
     }
-    const element = decodeScalar(element_layout, first) orelse return null;
-    return .{ .uniform_list = .{ .element = element, .element_layout = element_layout, .count = len } };
+
+    /// A string descriptor is three words, the last being its length; a
+    /// small string sets that word's top bit and keeps its length in the
+    /// low seven bits of the descriptor's final byte.
+    fn stringIsEmpty(self: *const Decoder, bytes: []const u8) bool {
+        const size = self.word();
+        if (bytes.len < 3 * size) return false;
+        const length_word = self.readWord(bytes, 2) orelse return false;
+        const small = switch (size) {
+            4 => @as(i32, @bitCast(@as(u32, @intCast(length_word)))) < 0,
+            8 => @as(i64, @bitCast(length_word)) < 0,
+            else => return false,
+        };
+        const len: u64 = if (small) bytes[3 * size - 1] & 0x7f else length_word;
+        return len == 0;
+    }
+
+    fn decodeList(self: *Decoder, data_export: *const Program.StaticDataExport, offset: usize, element_plan: Program.ConstPlanId, physical: layout.Layout) Allocator.Error!?Construction {
+        if (physical.tag != .list) return null;
+        const bytes = data_export.bytes[offset..];
+        const len = self.readWord(bytes, 1) orelse return null;
+        if (len == 0) {
+            var capacity: u64 = 0;
+            for (data_export.empty_list_capacities) |item| {
+                if (item.offset == offset) capacity = item.capacity;
+            }
+            return .{ .empty_list = capacity };
+        }
+        const relocation = relocationAt(data_export, offset) orelse return null;
+        const backing = exportNamed(self.frozen, relocation.target_symbol_name) orelse return null;
+        const element_layout = physical.getIdx();
+        const element_size = self.program.layouts.layoutSize(self.program.layouts.getLayout(element_layout));
+        if (element_size == 0) return null;
+        const elements = backing.bytes[backing.symbol_offset..];
+        if (elements.len < len * element_size) return null;
+        const first = elements[0..element_size];
+        var index: u64 = 1;
+        while (index < len) : (index += 1) {
+            if (!std.mem.eql(u8, first, elements[index * element_size ..][0..element_size])) return null;
+        }
+        const element = try self.decode(backing, backing.symbol_offset, element_plan, element_layout) orelse return null;
+        const stored = try self.arena.create(Construction);
+        stored.* = element;
+        return .{ .uniform_list = .{ .element = stored, .element_layout = element_layout, .count = len } };
+    }
+
+    fn decodeRecord(self: *Decoder, data_export: *const Program.StaticDataExport, offset: usize, child_plans: []const Program.ConstPlanId, physical: layout.Layout) Allocator.Error!?Construction {
+        if (physical.tag != .struct_) return null;
+        const struct_idx = physical.getStruct().idx;
+        const fields = try self.arena.alloc(Construction, child_plans.len);
+        for (child_plans, 0..) |child_plan, original_index| {
+            const field_layout = self.program.layouts.getStructFieldLayoutByOriginalIndex(struct_idx, @intCast(original_index));
+            const field_offset = self.program.layouts.getStructFieldOffsetByOriginalIndex(struct_idx, @intCast(original_index));
+            fields[original_index] = try self.decode(data_export, offset + field_offset, child_plan, field_layout) orelse return null;
+        }
+        return .{ .record = fields };
+    }
+
+    fn decodeTag(self: *Decoder, data_export: *const Program.StaticDataExport, offset: usize, variants: []const Program.ConstTagVariant, physical: layout.Layout) Allocator.Error!?Construction {
+        if (physical.tag != .tag_union) return null;
+        const bytes = data_export.bytes[offset..];
+        const data = self.program.layouts.getTagUnionData(physical.getTagUnion().idx);
+        if (bytes.len < data.size.get(self.program.layouts.targetUsize())) return null;
+        const discriminant = data.readDiscriminant(bytes.ptr, self.program.layouts.targetUsize());
+        const layout_variants = self.program.layouts.getTagUnionVariants(data);
+        if (discriminant >= layout_variants.len) return null;
+        const payload_layout = layout_variants.get(discriminant).payload_layout;
+        for (variants) |variant| {
+            if (variant.discriminant != discriminant) continue;
+            var payload: ?*const Construction = null;
+            if (variant.payloads.len == 1) {
+                const stored = try self.arena.create(Construction);
+                stored.* = try self.decode(data_export, offset, variant.payloads[0], payload_layout) orelse return null;
+                payload = stored;
+            } else if (variant.payloads.len > 1) {
+                const stored = try self.arena.create(Construction);
+                stored.* = try self.decodeRecord(data_export, offset, variant.payloads, self.program.layouts.getLayout(payload_layout)) orelse return null;
+                payload = stored;
+            }
+            return .{ .tag = .{ .variant_index = @intCast(discriminant), .discriminant = @intCast(discriminant), .payload = payload } };
+        }
+        return null;
+    }
+};
+
+fn relocationAt(data_export: *const Program.StaticDataExport, offset: usize) ?Program.StaticDataRelocation {
+    for (data_export.relocations) |relocation| {
+        if (relocation.offset == offset) return relocation;
+    }
+    return null;
 }
 
 fn exportNamed(frozen: *const Program.FrozenStaticData, name: []const u8) ?*const Program.StaticDataExport {
@@ -202,7 +309,8 @@ fn decodeScalar(layout_idx: layout.Idx, bytes: []const u8) ?LIR.LiteralValue {
         .f32 => if (bytes.len >= 4) .{ .f32_literal = @bitCast(std.mem.readInt(u32, bytes[0..4], .little)) } else null,
         .f64 => if (bytes.len >= 8) .{ .f64_literal = @bitCast(std.mem.readInt(u64, bytes[0..8], .little)) } else null,
         .dec => if (bytes.len >= 16) .{ .dec_literal = std.mem.readInt(i128, bytes[0..16], .little) } else null,
-        .bool, .str, .opaque_ptr, .zst, .u8x16, .i8x16, .u16x8, .i16x8, .u32x4, .i32x4, .u64x2, .i64x2 => null,
+        .bool => intLiteral(u8, layout_idx, bytes),
+        .str, .opaque_ptr, .zst, .u8x16, .i8x16, .u16x8, .i16x8, .u32x4, .i32x4, .u64x2, .i64x2 => null,
         _ => null,
     };
 }
@@ -308,8 +416,10 @@ test "completed empty and uniform list roots decode to their constructions" {
     const failed_offset = program.layouts.getStructFieldOffsetByOriginalIndex(struct_idx, 0);
     const message_offset = program.layouts.getStructFieldOffsetByOriginalIndex(struct_idx, 1);
     const list_layout = try program.layouts.insertList(.u32);
-    const plan: Program.ConstPlanId = @enumFromInt(program.const_plans.items.len);
+    const scalar_plan: Program.ConstPlanId = @enumFromInt(program.const_plans.items.len);
     try program.const_plans.append(allocator, .scalar);
+    const plan: Program.ConstPlanId = @enumFromInt(program.const_plans.items.len);
+    try program.const_plans.append(allocator, .{ .list = scalar_plan });
     // Slots: 0 = failure record of 1, 2 and 3; 1 = empty list evaluated with
     // capacity 16; 2 = three copies of 7; 3 = the list [1, 2, 3].
     for (0..4) |index| {
@@ -337,7 +447,7 @@ test "completed empty and uniform list roots decode to their constructions" {
     const varied_relocation = [_]Program.StaticDataRelocation{.{ .offset = 0, .target_symbol_name = "varied_backing" }};
     var exports = [_]Program.StaticDataExport{
         .{ .symbol_name = "s0", .bytes = &ok_record, .alignment = 8 },
-        .{ .symbol_name = "s1", .bytes = &empty_descriptor, .alignment = 8, .empty_list_capacity = 16 },
+        .{ .symbol_name = "s1", .bytes = &empty_descriptor, .alignment = 8, .empty_list_capacities = &.{.{ .offset = 0, .capacity = 16 }} },
         .{ .symbol_name = "s2", .bytes = &uniform_descriptor, .alignment = 8, .relocations = &uniform_relocation },
         .{ .symbol_name = "s3", .bytes = &varied_descriptor, .alignment = 8, .relocations = &varied_relocation },
         .{ .symbol_name = "uniform_backing", .bytes = &.{ 7, 0, 0, 0, 7, 0, 0, 0, 7, 0, 0, 0 }, .alignment = 4 },
@@ -355,7 +465,79 @@ test "completed empty and uniform list roots decode to their constructions" {
     const uniform = values.constructionFor(.{}, @enumFromInt(2), list_layout) orelse return error.TestUnexpectedResult;
     try std.testing.expectEqual(@as(u64, 3), uniform.uniform_list.count);
     try std.testing.expectEqual(layout.Idx.u32, uniform.uniform_list.element_layout);
-    try std.testing.expectEqual(@as(i128, 7), uniform.uniform_list.element.i128_literal.value);
+    try std.testing.expectEqual(@as(i128, 7), uniform.uniform_list.element.literal.i128_literal.value);
     try std.testing.expectEqual(@as(?LIR.LiteralValue, null), values.literalFor(.{}, @enumFromInt(2), list_layout));
     try std.testing.expectEqual(@as(?Construction, null), values.constructionFor(.{}, @enumFromInt(3), list_layout));
+}
+
+test "an empty string root and a record of an empty list and a scalar decode to constructions" {
+    const allocator = std.testing.allocator;
+    var program = try Program.Result.init(allocator, .u64);
+    defer program.deinit();
+    const failure_layout = try program.layouts.putStructFields(&.{ .{ .index = 0, .layout = .u8 }, .{ .index = 1, .layout = .str } });
+    const failure_idx = program.layouts.getLayout(failure_layout).getStruct().idx;
+    const failed_offset = program.layouts.getStructFieldOffsetByOriginalIndex(failure_idx, 0);
+    const message_offset = program.layouts.getStructFieldOffsetByOriginalIndex(failure_idx, 1);
+    const list_layout = try program.layouts.insertList(.u32);
+    const record_layout = try program.layouts.putStructFields(&.{ .{ .index = 0, .layout = list_layout }, .{ .index = 1, .layout = .u64 } });
+    const record_idx = program.layouts.getLayout(record_layout).getStruct().idx;
+    const list_field_offset = program.layouts.getStructFieldOffsetByOriginalIndex(record_idx, 0);
+    const count_field_offset = program.layouts.getStructFieldOffsetByOriginalIndex(record_idx, 1);
+    const scalar_plan: Program.ConstPlanId = @enumFromInt(program.const_plans.items.len);
+    try program.const_plans.append(allocator, .scalar);
+    const str_plan: Program.ConstPlanId = @enumFromInt(program.const_plans.items.len);
+    try program.const_plans.append(allocator, .str);
+    const list_plan: Program.ConstPlanId = @enumFromInt(program.const_plans.items.len);
+    try program.const_plans.append(allocator, .{ .list = scalar_plan });
+    const record_plan: Program.ConstPlanId = @enumFromInt(program.const_plans.items.len);
+    // The program frees a record plan's children on deinit.
+    try program.const_plans.append(allocator, .{ .record = try allocator.dupe(Program.ConstPlanId, &.{ list_plan, scalar_plan }) });
+    // Slots: 0 = failure record of the rest; 1 = the empty string; 2 = the
+    // record { empty list with capacity 4, 9 }; 3 = the small string "ab".
+    const layouts_by_slot = [_]layout.Idx{ failure_layout, .str, record_layout, .str };
+    const plans_by_slot = [_]Program.ConstPlanId{ scalar_plan, str_plan, record_plan, str_plan };
+    for (layouts_by_slot, plans_by_slot, 0..) |slot_layout, slot_plan, index| {
+        try program.static_data_values.append(allocator, .{
+            .initializer = null,
+            .layout_idx = slot_layout,
+            .compile_time_root = .{
+                .module = .{},
+                .root = @enumFromInt(index),
+                .const_locator = null,
+                .role = if (index == 0)
+                    .{ .failure_message = .{ .failed_field = 0, .message_field = 1, .failed_offset = failed_offset, .message_offset = message_offset } }
+                else
+                    .{ .value = .{ .failure_slot = @enumFromInt(0), .plan = slot_plan } },
+            },
+        });
+    }
+    var ok_record = [_]u8{0} ** 32;
+    // Small strings set the top bit of the final byte and keep their
+    // length in its low seven bits.
+    var empty_string = [_]u8{0} ** 24;
+    empty_string[23] = 0x80;
+    var short_string = [_]u8{0} ** 24;
+    short_string[0] = 'a';
+    short_string[1] = 'b';
+    short_string[23] = 0x82;
+    var record_bytes = [_]u8{0} ** 32;
+    std.mem.writeInt(u64, record_bytes[count_field_offset..][0..8], 9, .little);
+    var exports = [_]Program.StaticDataExport{
+        .{ .symbol_name = "s0", .bytes = &ok_record, .alignment = 8 },
+        .{ .symbol_name = "s1", .bytes = &empty_string, .alignment = 8 },
+        .{ .symbol_name = "s2", .bytes = &record_bytes, .alignment = 8, .empty_list_capacities = &.{.{ .offset = list_field_offset, .capacity = 4 }} },
+        .{ .symbol_name = "s3", .bytes = &short_string, .alignment = 8 },
+    };
+    for (&exports, 0..) |*item, index| item.value_id = @enumFromInt(index);
+    const frozen = Program.FrozenStaticData{ .allocator = allocator, .exports = &exports };
+    var values = try CompletedScalarValues.init(allocator, &program, &frozen);
+    defer values.deinit(allocator);
+
+    const string = values.constructionFor(.{}, @enumFromInt(1), .str) orelse return error.TestUnexpectedResult;
+    try std.testing.expect(string == .empty_str);
+    const record = values.constructionFor(.{}, @enumFromInt(2), record_layout) orelse return error.TestUnexpectedResult;
+    try std.testing.expectEqual(@as(usize, 2), record.record.len);
+    try std.testing.expectEqual(@as(u64, 4), record.record[0].empty_list);
+    try std.testing.expectEqual(@as(i128, 9), record.record[1].literal.i128_literal.value);
+    try std.testing.expect(values.constructionFor(.{}, @enumFromInt(3), .str) == null);
 }

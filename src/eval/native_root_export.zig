@@ -91,8 +91,8 @@ const Node = struct {
     bytes: []u8,
     alignment: u32,
     relocations: std.ArrayList(static_data.StaticDataRelocation) = .empty,
-    /// The evaluated capacity of the root when it is an empty list.
-    empty_list_capacity: u64 = 0,
+    /// The evaluated capacities of the empty lists inside the root value.
+    empty_list_capacities: std.ArrayList(static_data.EmptyListCapacity) = .empty,
 };
 
 /// A typed view is explicit in the producer's plan. Reserving its destination
@@ -272,8 +272,8 @@ const Builder = struct {
             // The descriptor cannot carry the capacity the value was
             // evaluated with; keep it on the root so the runtime can
             // rebuild the list as the `with_capacity` it came from.
-            if (@intFromEnum(job.dest.symbol) == 0 and job.dest.offset == 0 and physical.tag == .list) {
-                self.nodes.items[0].empty_list_capacity = list_value.getCapacity();
+            if (@intFromEnum(job.dest.symbol) == 0 and physical.tag == .list and list_value.getCapacity() != 0) {
+                try self.nodes.items[0].empty_list_capacities.append(self.allocator, .{ .offset = job.dest.offset, .capacity = list_value.getCapacity() });
             }
             return;
         }
@@ -404,6 +404,9 @@ const Builder = struct {
             const owned_bytes = try allocator.dupe(u8, source.bytes);
             errdefer allocator.free(owned_bytes);
             const relocations = try allocator.dupe(static_data.StaticDataRelocation, source.relocations.items);
+            errdefer allocator.free(relocations);
+            const capacities = try allocator.dupe(static_data.EmptyListCapacity, source.empty_list_capacities.items);
+            errdefer allocator.free(capacities);
             // All names are assigned in a separate pass once every symbol exists.
             for (relocations) |*relocation| relocation.owns_target_symbol_name = false;
             dest.* = .{
@@ -414,7 +417,7 @@ const Builder = struct {
                 .is_global = false,
                 .is_exported = false,
                 .relocations = relocations,
-                .empty_list_capacity = source.empty_list_capacity,
+                .empty_list_capacities = capacities,
             };
             done += 1;
         }
@@ -488,7 +491,9 @@ test "native root export keeps an empty list root's evaluated capacity" {
     const exports = try freezeRoot(allocator, &program, slot, testRoot(list_plan, list_layout), .{ .ptr = @ptrCast(&list_value) }, .{});
     defer static_data.deinitStaticData(allocator, exports);
     try std.testing.expectEqual(@as(usize, 1), exports.len);
-    try std.testing.expectEqual(@as(u64, 16), exports[0].empty_list_capacity);
+    try std.testing.expectEqual(@as(usize, 1), exports[0].empty_list_capacities.len);
+    try std.testing.expectEqual(@as(u64, 0), exports[0].empty_list_capacities[0].offset);
+    try std.testing.expectEqual(@as(u64, 16), exports[0].empty_list_capacities[0].capacity);
     try std.testing.expectEqual(@as(usize, 0), exports[0].relocations.len);
 }
 

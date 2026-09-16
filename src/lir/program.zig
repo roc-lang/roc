@@ -37,11 +37,17 @@ pub const StaticDataExport = struct {
     is_exported: bool = true,
     /// Pointer relocations from this symbol's bytes to other symbols.
     relocations: []const StaticDataRelocation = &.{},
-    /// The capacity an empty list root was evaluated with. A frozen list's
-    /// capacity word is its length, so the request would otherwise be lost;
-    /// a runtime consumer rebuilds such a root with it instead of reading
-    /// the slot.
-    empty_list_capacity: u64 = 0,
+    /// The capacities the empty lists inside this value were evaluated
+    /// with, by byte offset of each list's descriptor in `bytes`. A frozen
+    /// list's capacity word is its length, so the requests would otherwise
+    /// be lost; a runtime consumer rebuilding the value uses them.
+    empty_list_capacities: []const EmptyListCapacity = &.{},
+};
+
+/// The evaluated capacity of one empty list inside a frozen value.
+pub const EmptyListCapacity = struct {
+    offset: u64,
+    capacity: u64,
 };
 
 /// One explicit pointer relocation inside a readonly static-data symbol.
@@ -93,6 +99,7 @@ pub const FrozenStaticData = struct {
                 if (relocation.owns_target_symbol_name) self.allocator.free(relocation.target_symbol_name);
             }
             self.allocator.free(item.relocations);
+            self.allocator.free(item.empty_list_capacities);
         }
         self.allocator.free(self.exports);
         self.* = undefined;
