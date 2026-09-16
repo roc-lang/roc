@@ -18,6 +18,8 @@ pub const Hosted = core.Hosted;
 pub const Program = core.Program;
 /// Public checked-module-to-LIR lowering entrypoint.
 pub const CheckedPipeline = @import("checked_pipeline.zig");
+/// One module's closed exports lowered as a program of their own.
+pub const PackProgram = @import("pack_program.zig");
 /// Direct boxed update wrapper rewrite before ARC.
 pub const BoxReuse = @import("box_reuse.zig");
 /// Internal aggregate return-slot variants before ARC.
@@ -73,6 +75,8 @@ pub const ComptimeValueGuards = @import("comptime_value_guards.zig");
 
 /// Symbol identifiers used throughout statement-only LIR.
 pub const Symbol = LIR.Symbol;
+/// Content identity carried by every procedure spec; names the procedure symbol.
+pub const ProcIdentity = LIR.ProcIdentity;
 /// Explicit local metadata used throughout statement-only LIR.
 pub const Local = LIR.Local;
 /// Identifier of one LIR local.

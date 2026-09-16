@@ -612,6 +612,8 @@ fn buildLinkArgs(ctx: *CliCtx, config: LinkConfig) LinkError!std.array_list.Mana
             // Roc objects carry DWARF (not CodeView); this keeps the .debug_*
             // sections in the PE for gdb/lldb instead of dropping them.
             try args.append("/debug:dwarf");
+            // Derive PE timestamps from content so build time cannot change bytes.
+            try args.append("/Brepro");
 
             // Add machine type based on target architecture
             if (target_arch == .x86) {

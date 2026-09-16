@@ -2534,7 +2534,9 @@ pub const InstGraph = struct {
 
     /// Whether the main type relation or a backed-nominal relation proved
     /// that two named application cells have the same source-level identity.
-    pub fn sameRelatedNamedInstance(self: *InstGraph, left: NodeId, right: NodeId) bool {
+    pub fn sameRelatedNamedInstance(self: *InstGraph, raw_left: NodeId, raw_right: NodeId) bool {
+        const left = self.find(raw_left);
+        const right = self.find(raw_right);
         const left_named = switch (self.content(left)) {
             .named => |named| named,
             .redirect, .unresolved, .primitive, .list, .box, .tuple, .func, .tag_union, .record, .empty_tag_union, .empty_record, .erased, .zst => return false,
@@ -4300,6 +4302,13 @@ pub const InstGraph = struct {
         var iterator_migration = try self.prepareGeneratedIteratorMigration(loser, winner);
         defer iterator_migration.deinit(self.allocator);
         try self.migrateNominalBackingRoot(loser, winner);
+        // Nominal identity is attached to a type class, not whichever raw cell
+        // happened to represent it when a checked/request relation was recorded.
+        if (self.related_named_instances.contains(winner) or self.related_named_instances.contains(loser)) {
+            try self.ensureRelatedNamedInstanceNode(winner);
+            try self.ensureRelatedNamedInstanceNode(loser);
+            self.unionRelatedNamedInstanceNodes(winner, loser);
+        }
         iterator_migration.commit(self, loser, winner);
         self.unregisterGeneratedIterator(loser);
         const winner_tail = self.class_member_tail.items[@intFromEnum(winner)];
@@ -10611,6 +10620,20 @@ test "related named instances reuse exact backing witnesses" {
     try std.testing.expect(graph.sameRelatedNamedInstance(same_request, checked_node));
     try std.testing.expect(!graph.sameRelatedNamedInstance(unrelated, checked_node));
     try std.testing.expect(!graph.sameRelatedNamedInstance(other_definition, checked_node));
+
+    // A raw subject may retain its old side-table entry after its main class
+    // redirects. Both the old entry and the new representative must retain the
+    // identity proved above, whichever class wins the merge.
+    try graph.relateNamedInstances(unrelated, unrelated);
+    try graph.union_(unrelated, checked_node);
+    try std.testing.expect(graph.sameRelatedNamedInstance(request, checked_node));
+    try std.testing.expect(graph.sameRelatedNamedInstance(request, unrelated));
+    try std.testing.expect(!graph.sameRelatedNamedInstance(other_definition, unrelated));
+
+    const fresh = try graph.newNode(graph.content(unrelated));
+    try graph.union_(fresh, unrelated);
+    try std.testing.expect(graph.sameRelatedNamedInstance(request, fresh));
+    try std.testing.expect(graph.sameRelatedNamedInstance(request, checked_node));
 }
 
 test "issue 9647: same nominal backing wrapper resolves to structural backing once" {
