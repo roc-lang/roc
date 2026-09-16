@@ -5679,6 +5679,10 @@ fn computeUniquenessDetailed(
                                 try join_incoming.append(allocator, .{ .target = target.?, .source = source.? });
                                 try join_incoming_stmts.append(allocator, @intCast(stmt_index));
                                 try marks.consumeAt(allocator, &consumes, assign.value, @intCast(stmt_index));
+                                // The parameter receives the value with its
+                                // stored fields; a record handed through a
+                                // join keeps its per-field origins.
+                                try mask_aliases.append(allocator, .{ .source = source.?, .target = target.? });
                             }
                         } else {
                             marks.destroy(&foreign_def, assign.target);

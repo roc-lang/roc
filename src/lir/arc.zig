@@ -12752,6 +12752,67 @@ test "uniqueness: the owned flag of a fresh list is check-free" {
     try testing.expectEqual(@as(u64, 1), f.uniqueArgsFor(appended));
 }
 
+test "uniqueness: a record handed through a result join keeps its field births" {
+    var f = try ArcTest.init(testing.allocator);
+    defer f.deinit();
+
+    // Callee: switch flag { 1 => cell := {[], []}; _ => cell := {[], []} };
+    // join j(cell) { ret cell }. Both arms build a fresh record and hand it
+    // to the result cell, so the returned record's fields are born.
+    const flag = try f.local(.bool);
+    const left_a = try f.local(f.list_i64);
+    const right_a = try f.local(f.list_i64);
+    const pair_a = try f.local(f.pair_list);
+    const left_b = try f.local(f.list_i64);
+    const right_b = try f.local(f.list_i64);
+    const pair_b = try f.local(f.pair_list);
+    const cell = try f.local(f.pair_list);
+    const join_id = f.freshJoinPointId();
+    const callee_ret = try f.ret(cell);
+    const jump_a = try f.store.addCFStmt(.{ .jump = .{ .target = join_id } });
+    const init_a = try f.setLocal(cell, pair_a, .initialize_join_param, jump_a);
+    const make_a = try f.assignStruct(pair_a, &.{ left_a, right_a }, init_a);
+    const right_a_assign = try f.assignList(right_a, &.{}, make_a);
+    const arm_a = try f.assignList(left_a, &.{}, right_a_assign);
+    const jump_b = try f.store.addCFStmt(.{ .jump = .{ .target = join_id } });
+    const init_b = try f.setLocal(cell, pair_b, .initialize_join_param, jump_b);
+    const make_b = try f.assignStruct(pair_b, &.{ left_b, right_b }, init_b);
+    const right_b_assign = try f.assignList(right_b, &.{}, make_b);
+    const arm_b = try f.assignList(left_b, &.{}, right_b_assign);
+    const dispatch = try f.switchStmt(flag, arm_a, arm_b, null);
+    const join = try f.store.addCFStmt(.{ .join = .{
+        .id = join_id,
+        .params = try f.span(&.{cell}),
+        .body = callee_ret,
+        .remainder = dispatch,
+    } });
+    const callee = try f.addProc(&.{flag}, join, f.pair_list);
+
+    // Caller: take the first field out of the dying result and mutate it.
+    const caller_flag = try f.local(.bool);
+    const got = try f.local(f.pair_list);
+    const first = try f.local(f.list_i64);
+    const elem = try f.local(.i64);
+    const appended = try f.local(f.list_i64);
+    const result = try f.local(.i64);
+    const ret = try f.ret(result);
+    const result_assign = try f.assignI64(result, 1, ret);
+    const append = try f.assignLowLevel(appended, &.{ first, elem }, LIR.LowLevel.RcEffect.runtimeUniqueness(1), result_assign);
+    const read_first = try f.assignRefField(first, got, 0, append);
+    const call = try f.store.addCFStmt(.{ .assign_call = .{
+        .target = got,
+        .proc = callee,
+        .args = try f.span(&.{caller_flag}),
+        .next = read_first,
+    } });
+    const elem_assign = try f.assignI64(elem, 5, call);
+    const caller_body = try f.assignI64(caller_flag, 1, elem_assign);
+    _ = try f.addProc(&.{}, caller_body, .i64);
+
+    try f.run();
+    try testing.expectEqual(@as(u64, 1), f.uniqueArgsFor(appended));
+}
+
 test "uniqueness: list reinterpret alias inherits the fresh birth" {
     var f = try ArcTest.init(testing.allocator);
     defer f.deinit();
