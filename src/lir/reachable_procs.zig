@@ -878,7 +878,9 @@ const Pass = struct {
         }
         for (0..self.store.procSpecCount()) |proc_index| {
             const proc = self.store.getProcSpec(@enumFromInt(@as(u32, @intCast(proc_index))));
-            if (proc.body) |body| self.verifyStmtRef(body, stmt_count);
+            if (proc.body) |body| self.verifyStmtRef(body, stmt_count) else if (proc.hosted == null and !proc.external) {
+                reachableProcInvariant("retained Roc proc has no body");
+            }
             const join_points = self.store.getJoinPointSpan(proc.join_points);
             for (0..join_points.len) |index| {
                 const join_point = GuardedList.at(join_points, index);

@@ -20632,7 +20632,10 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
 
         fn patchCallTarget(self: *Self, call_site: usize, target_offset: usize) Allocator.Error!void {
             if (comptime target.toCpuArch() == .aarch64) {
+                // A far target gets a veneer appended at the emission point.
+                const island_start = self.codegen.currentOffset();
                 try self.codegen.patchCall(call_site, target_offset);
+                try self.logBranchIsland(island_start);
             } else {
                 const rel_offset: i32 = @intCast(@as(i64, @intCast(target_offset)) - @as(i64, @intCast(call_site)));
                 const call_rel = rel_offset - 5;
@@ -25652,14 +25655,7 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
         fn emitBranchIslandIfNeeded(self: *Self) Allocator.Error!void {
             const island_start = self.codegen.currentOffset();
             try self.codegen.maybeEmitBranchIsland();
-            const island_end = self.codegen.currentOffset();
-            if (island_end == island_start) return;
-            try self.code_regions.append(self.allocator, .{
-                .start = island_start,
-                .end = island_end,
-                .entry = 0,
-                .kind = .branch_island,
-            });
+            try self.logBranchIsland(island_start);
         }
 
         /// Every range of the code buffer with its producer, in emission order.
@@ -25799,15 +25795,36 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
         /// Re-resolve one assembled reference to its target's new offset.
         pub fn patchAssembledRef(self: *Self, site: usize, form: CodeRefForm, ref_target: CodeRefTarget, target_offset: usize) Allocator.Error!void {
             switch (form) {
-                .call => try self.patchCallTarget(site, target_offset),
+                .call => if (comptime target.toCpuArch() == .aarch64) {
+                    // A BL in assembled bytes becomes an open call site so
+                    // it can reach a far target through a veneer; the
+                    // PC-relative sequence form always reaches directly.
+                    if (self.codegen.isBlAt(site)) {
+                        try self.codegen.registerAssembledCallSite(site);
+                        try self.patchCallTarget(site, target_offset);
+                    } else {
+                        self.codegen.patchDirectCall(site, target_offset);
+                    }
+                } else {
+                    try self.patchCallTarget(site, target_offset);
+                },
                 .addr => self.patchInternalCodeAddress(site, target_offset),
             }
             try self.code_refs.append(self.allocator, .{ .site = site, .form = form, .target = ref_target });
         }
 
-        /// Record a relocation carried by an assembled region.
+        /// Record a relocation carried by an assembled region. On AArch64 a
+        /// linked-function relocation at a BL is also an extern call site,
+        /// so a far image can redirect it to a stub.
         pub fn appendAssembledRelocation(self: *Self, relocation: Relocation) Allocator.Error!void {
+            const reloc_index: u32 = @intCast(self.codegen.relocations.items.len);
             try self.codegen.relocations.append(self.allocator, relocation);
+            if (comptime target.toCpuArch() == .aarch64) {
+                if (relocation == .linked_function) {
+                    const loc: usize = @intCast(relocation.linked_function.offset);
+                    if (self.codegen.isBlAt(loc)) try self.codegen.registerAssembledExternCall(loc, reloc_index);
+                }
+            }
         }
 
         /// Borrow the name column owning the generated relocation IDs.
@@ -25826,8 +25843,26 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
         pub fn finishImage(self: *Self) Allocator.Error!void {
             if (self.image_finished) return;
             try self.placeMessagePool();
-            if (comptime target.toCpuArch() == .aarch64) try self.codegen.finishImage();
+            if (comptime target.toCpuArch() == .aarch64) {
+                const island_start = self.codegen.currentOffset();
+                try self.codegen.finishImage();
+                try self.logBranchIsland(island_start);
+            }
             self.image_finished = true;
+        }
+
+        /// Log bytes appended past `island_start` (veneers, extern stubs) as
+        /// their own region. They belong to this placement of the code, not
+        /// to any procedure.
+        fn logBranchIsland(self: *Self, island_start: usize) Allocator.Error!void {
+            const island_end = self.codegen.currentOffset();
+            if (island_end == island_start) return;
+            try self.code_regions.append(self.allocator, .{
+                .start = island_start,
+                .end = island_end,
+                .entry = 0,
+                .kind = .branch_island,
+            });
         }
 
         fn assertImageFinished(self: *const Self) void {
