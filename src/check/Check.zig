@@ -23238,13 +23238,63 @@ fn widenTryConditionForExpectedReturn(
 }
 
 fn tryErrorRowNeedsUseSiteWidening(self: *Self, actual_err: Var, expected_err: Var) std.mem.Allocator.Error!bool {
-    if (try self.probeCanUseAs(expected_err, actual_err)) {
+    // The shortcut below declines the rule when ordinary unification already
+    // relates the pair. That is sound only when taking it is observationally
+    // the same as applying the rule, and it is not when the relation is bought
+    // by GROUNDING the expected row's still-open extension: rolling the probe
+    // back and then performing that same binding for real publishes a CLOSED
+    // row from an annotation that reads open, so two definitions with
+    // byte-identical annotations stop being interchangeable for their callers
+    // (design.md "Polarity"). So when the expected row still ends open, the
+    // declared condition—every visible error in the callee's row is included
+    // in the expected row—decides on its own. Widening then targets the
+    // annotated row itself, which leaves the extension unbound and hands
+    // lowering the same adapter request an annotation listing strictly more
+    // tags already produces.
+    if (!self.tryErrorRowEndsOpen(expected_err) and
+        try self.probeCanUseAs(expected_err, actual_err))
+    {
         return false;
     }
 
     var visited_actual = std.AutoHashMap(Var, void).init(self.gpa);
     defer visited_actual.deinit();
     return try self.actualTagRowIsIncludedInExpected(actual_err, expected_err, &visited_actual);
+}
+
+/// Whether an error row's extension chain still ends in an unbound extension.
+/// The expected row here is always an annotated return's error row
+/// (`expected_result` is set only for an annotated lambda), so an unbound tail
+/// is the annotation's implicitly opened extension (design.md "Polarity") and
+/// unifying a closed row into it would ground it rather than flow through it.
+/// A rigid tail (a written `..others`) and an already-closed row are both
+/// bound, so both read as not-open. This walks explicit row topology produced
+/// by checking; it inspects no source syntax.
+fn tryErrorRowEndsOpen(self: *Self, err_var: Var) bool {
+    var current = err_var;
+    var guard = types_mod.debug.IterationGuard.init("tryErrorRowEndsOpen");
+    while (true) {
+        guard.tick();
+        const resolved = self.types.resolveVar(current);
+        switch (resolved.desc.content) {
+            .alias => |alias| current = self.types.getAliasBackingVar(alias),
+            .structure => |flat| switch (flat) {
+                .tag_union => |tag_union| current = tag_union.ext,
+                .empty_tag_union => return false,
+                .record,
+                .record_unbound,
+                .tuple,
+                .nominal_type,
+                .fn_pure,
+                .fn_effectful,
+                .fn_unbound,
+                .empty_record,
+                => return false,
+            },
+            .flex => return true,
+            .rigid, .field_presence, .err => return false,
+        }
+    }
 }
 
 fn probeCanUseAs(self: *Self, expected_var: Var, actual_var: Var) std.mem.Allocator.Error!bool {
