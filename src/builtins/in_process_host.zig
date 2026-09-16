@@ -41,6 +41,9 @@ pub const ExpectErrRegion = struct {
     end: u32,
 };
 
+/// Records the `?` expression's source region before the expect crashes.
+pub const ExpectErrRegionRecorder = *const fn (u32, u32) callconv(.c) void;
+
 threadlocal var current_ops: ?*RocOps = null;
 threadlocal var current_expect_observer: ?ExpectObserver = null;
 threadlocal var last_expect_err_region: ?ExpectErrRegion = null;
@@ -90,6 +93,13 @@ pub fn takeExpectErrRegion() ?ExpectErrRegion {
     const region = last_expect_err_region;
     last_expect_err_region = null;
     return region;
+}
+
+/// The in-process recorder compiled code calls with a `?` region. A platform
+/// never reads the region back, so it has no recorder.
+pub fn expectErrRegionRecorder() ?ExpectErrRegionRecorder {
+    if (host_abi.host_role == .platform) return null;
+    return &rocExpectErrRegion;
 }
 
 fn requireOps() *RocOps {

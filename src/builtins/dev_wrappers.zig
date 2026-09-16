@@ -612,18 +612,19 @@ pub fn roc_builtins_dbg_str(str_ptr: *const RocStr) callconv(.c) void {
     roc_ops.dbg(str_ptr.asSlice());
 }
 
-const ExpectErrRegionRecorder = *const fn (u32, u32) callconv(.c) void;
+const ExpectErrRegionRecorder = in_process_host.ExpectErrRegionRecorder;
 
-/// The in-process host's `?` region recorder. Only the compiler's own process
-/// defines it; a platform executable resolves the weak reference to null and
-/// records nothing. The wasm32 builtins object has no weak imports, since a
-/// wasm host instantiates it with an exact import list; the LLVM bitcode
-/// flavor is compiled as wasm64 and retargeted, so it keeps the reference.
-/// The address is only known at link time, so the null check happens at
-/// runtime, and the empty asm keeps the optimizer from assuming the weak
-/// reference is defined.
+/// The recorder for a `?` region. The compiler's own process records it
+/// directly. The LLVM bitcode flavor is compiled as wasm64 and retargeted, so
+/// it references the recorder by name: an in-process LLVM library resolves the
+/// name through its host table, and a platform executable resolves the weak
+/// reference to null. That address is only known at link time, so the null
+/// check happens at runtime, and the empty asm keeps the optimizer from
+/// assuming the weak reference is defined. Every other platform-role object
+/// has no recorder, since only the compiler's process reads the region back.
 inline fn expectErrRegionRecorder() ?ExpectErrRegionRecorder {
-    if (comptime builtin.target.cpu.arch == .wasm32) return null;
+    if (in_process_host.expectErrRegionRecorder()) |recorder| return recorder;
+    if (comptime builtin.target.cpu.arch != .wasm64) return null;
     const recorder = @extern(ExpectErrRegionRecorder, .{ .name = in_process_host.roc_expect_err_region, .linkage = .weak });
     var address: usize = if (recorder) |pointer| @intFromPtr(pointer) else 0;
     asm volatile (""
