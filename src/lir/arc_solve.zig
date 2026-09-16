@@ -4475,7 +4475,6 @@ fn destroyOrderedConsumes(
     }
 }
 
-
 /// Settles unique origins, their parameter conditions, per-field origins,
 /// and holder-adding deadness over the alias, join, field, and call edges
 /// as one greatest fixpoint.
@@ -5599,8 +5598,7 @@ fn computeUniquenessDetailed(
                         marks.destroy(&destroyed, arg);
                         read_only = false;
                     }
-                    if (read_only) {
-                    }
+                    if (read_only) {}
                 }
             },
             .assign_list => |assign| {
