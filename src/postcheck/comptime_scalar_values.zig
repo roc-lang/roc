@@ -190,12 +190,12 @@ test "completed successful scalar roots decode to literals; failed and aggregate
 
     var values = try CompletedScalarValues.init(allocator, &program, &frozen);
     defer values.deinit(allocator);
-    const first = values.literalFor(.{}, exports[1].value_id.?, .u32) orelse return error.TestUnexpectedResult;
+    const first = values.literalFor(.{}, @enumFromInt(1), .u32) orelse return error.TestUnexpectedResult;
     try std.testing.expectEqual(@as(i128, 12345), first.i128_literal.value);
     try std.testing.expectEqual(layout.Idx.u32, first.i128_literal.layout_idx);
-    try std.testing.expect(values.literalFor(.{}, exports[1].value_id.?, .u64) == null);
-    try std.testing.expect(values.literalFor(.{}, exports[3].value_id.?, .u32) == null);
-    const third = values.literalFor(.{}, exports[5].value_id.?, .i16) orelse return error.TestUnexpectedResult;
+    try std.testing.expect(values.literalFor(.{}, @enumFromInt(1), .u64) == null);
+    try std.testing.expect(values.literalFor(.{}, @enumFromInt(3), .u32) == null);
+    const third = values.literalFor(.{}, @enumFromInt(5), .i16) orelse return error.TestUnexpectedResult;
     try std.testing.expectEqual(@as(i128, -2), third.i128_literal.value);
-    try std.testing.expect(values.literalFor(.{}, exports[6].value_id.?, .str) == null);
+    try std.testing.expect(values.literalFor(.{}, @enumFromInt(6), .str) == null);
 }
