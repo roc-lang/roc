@@ -717,6 +717,27 @@ pub fn CodeGen(comptime target: RocTarget) type {
             return patch_loc;
         }
 
+        /// Whether the word at `loc` is a BL, as opposed to the PC-relative
+        /// address sequence `emitDirectCall` uses for a far target.
+        pub fn isBlAt(self: *Self, loc: usize) bool {
+            return isBlInst(self.readInst(loc));
+        }
+
+        /// Register a BL inside assembled artifact bytes as an open call site,
+        /// so re-resolving it can route through a veneer exactly as a call
+        /// emitted here would.
+        pub fn registerAssembledCallSite(self: *Self, loc: usize) Allocator.Error!void {
+            if (self.branch_site_index.contains(loc)) return;
+            try self.registerBranchSite(.{ .loc = loc, .kind = .call });
+        }
+
+        /// Register a BL to a linked symbol inside assembled artifact bytes,
+        /// so a far image redirects it to a stub exactly as `emitExternCall`
+        /// sites are.
+        pub fn registerAssembledExternCall(self: *Self, loc: usize, reloc_index: u32) Allocator.Error!void {
+            try self.registerBranchSite(.{ .loc = loc, .kind = .extern_call, .reloc_index = reloc_index });
+        }
+
         /// Emit a BL whose target is not known yet (returns the patch location
         /// for `patchCall`).
         pub fn emitCallPlaceholder(self: *Self) Allocator.Error!usize {

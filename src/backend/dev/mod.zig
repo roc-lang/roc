@@ -50,6 +50,14 @@ pub const host_lir_codegen_available = LirCodeGenMod.host_lir_codegen_available;
 /// Supports cross-compilation to any RocTarget.
 /// Only available on non-freestanding targets (uses std.fs)
 pub const ObjectFileCompiler = if (builtin.os.tag == .freestanding) void else @import("ObjectFileCompiler.zig").ObjectFileCompiler;
+/// Per-region machine-code artifacts and their reassembly.
+pub const ProcArtifact = @import("ProcArtifact.zig");
+/// An artifact located in a loaded pack.
+pub const LocatedArtifact = if (builtin.os.tag == .freestanding) void else @import("ObjectFileCompiler.zig").LocatedArtifact;
+/// Where the object compiler splices object-cache procedures from.
+pub const SpliceSource = if (builtin.os.tag == .freestanding) void else @import("ObjectFileCompiler.zig").SpliceSource;
+/// On-disk form of one module's pack of artifacts.
+pub const PackFile = @import("PackFile.zig");
 pub const Entrypoint = if (builtin.os.tag == .freestanding) void else @import("ObjectFileCompiler.zig").Entrypoint;
 pub const StaticDataExport = @import("StaticDataExport.zig").StaticDataExport;
 pub const StaticDataRelocation = @import("StaticDataExport.zig").StaticDataRelocation;

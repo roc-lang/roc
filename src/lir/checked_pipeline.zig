@@ -143,6 +143,12 @@ pub const TargetConfig = struct {
     list_in_place_map: bool = false,
     /// Preserve source-level procedure names in LIR for runtime diagnostics.
     proc_debug_names: bool = false,
+    /// The object cache Monotype asks for closed specializations.
+    spec_cache: ?postcheck.Common.SpecCacheLookup = null,
+    /// Keep every keyed specialization procedure through compaction; a pack
+    /// program offers them from its manifest whether or not its export
+    /// wrappers inlined their calls.
+    keep_specialization_procs: bool = false,
     /// Thread slack counters through loop-carried append-only lists so the
     /// per-element ownership and capacity checks amortize. On by default;
     /// shape-comparison tests turn it off because promotion intentionally
@@ -898,6 +904,11 @@ pub fn prepareCheckedModulesMonotype(
             rootRequests(roots, layout_requests, static_data_requests),
             .{
                 .proc_debug_names = target.proc_debug_names or LirDump.filter() != null or SpecCensus.enabled(),
+                // A program that is also the compile-time evaluator's host
+                // takes its hits in Direct LIR, after the compile-time
+                // closure is known; only a runtime-only program can take
+                // them here.
+                .spec_cache = if (target.checked_module_state == .complete) target.spec_cache else null,
                 .post_check_executor = target.post_check_executor,
                 .static_data_literals = target.checked_module_state == .checking_finalization or roots.include_internal_static_data,
                 .comptime_value_reads = target.comptime_value_reads,
@@ -977,7 +988,7 @@ pub fn prepareMonotypeToSolved(prepared: PreparedMonotype) Allocator.Error!Prepa
         .inline_plan,
     );
     defer inline_plan_timing_scope.end();
-    const inline_plan = try postcheck.SolvedInline.analyze(allocator, target.inline_mode, procedure_usage.view(), &solved);
+    const inline_plan = try postcheck.SolvedInline.analyze(allocator, target.inline_mode, procedure_usage.view(), &solved, target.keep_specialization_procs);
     inline_plan_timing_scope.end();
 
     return .{
@@ -1054,6 +1065,7 @@ pub fn lowerPreparedSolvedToLir(prepared: PreparedSolved) LowerResourceError!Low
     var local_parallel_metrics: SolvedLirParallelMetrics = .{};
     const parallel_metrics = solvedLirMetricsOutput(target, &local_parallel_metrics);
     var lowered = try postcheck.SolvedLirLower.run(allocator, target.target_usize, solved_input, .{
+        .spec_cache = target.spec_cache,
         .inline_plan = inline_plan.view(),
         .post_check_executor = target.post_check_executor,
         .inline_expects = target.inline_expects,
@@ -1122,7 +1134,11 @@ fn finishLoweredOutput(
     if (target.tag_reachability) {
         try TagReachability.run(&lowered.lir_result);
     }
-    try ReachableProcs.run(&lowered.lir_result);
+    if (target.keep_specialization_procs) {
+        try ReachableProcs.runKeepingSpecializations(&lowered.lir_result);
+    } else {
+        try ReachableProcs.run(&lowered.lir_result);
+    }
     lir_passes_timing_scope.end();
 
     var arc_timing_scope = PipelineTimingScope.begin(target.timing, .arc);
