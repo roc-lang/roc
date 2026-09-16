@@ -54,6 +54,35 @@ pub const OutcomeSpan = extern struct {
     }
 };
 
+/// One conditionally unique part of a proc's returned value.
+///
+/// The part is the whole return when `field` is `whole_value`, otherwise
+/// original struct field `field` of a returned aggregate (or bit 0 for a tag
+/// union's single payload). Its allocation has count 1 on return whenever
+/// every argument position in `params` was passed a unique value as its
+/// caller's last use, because the proc returns those parameters' allocations
+/// there without adding a holder. A part whose uniqueness holds
+/// unconditionally is stated by `RcSig.ret_unique` or
+/// `RcSig.ret_unique_fields` instead and never has a row.
+pub const RetCondition = struct {
+    field: u8,
+    params: ParamMask,
+
+    pub const whole_value: u8 = 255;
+};
+
+/// Span of `RetCondition` rows in `SigTable.ret_conditions`.
+pub const RetConditionSpan = extern struct {
+    start: u32 = 0,
+    len: u32 = 0,
+
+    pub const empty: RetConditionSpan = .{};
+
+    pub fn isEmpty(self: RetConditionSpan) bool {
+        return self.len == 0;
+    }
+};
+
 /// Solved ownership signature of one proc.
 ///
 /// Argument positions are indexed by position in the proc's `args` span.
@@ -80,6 +109,10 @@ pub const RcSig = struct {
     /// of the dying result holds a born-unique value. Pinned signatures
     /// claim none.
     ret_unique_fields: u64 = 0,
+    /// Parts of the returned value that are unique on the condition that
+    /// particular argument positions were passed unique dying values.
+    /// Pinned signatures claim none.
+    ret_conditions: RetConditionSpan = .empty,
     /// Bit i set means argument position i is treated as born-unique inside
     /// the proc body: the call site proved its dying argument unique, so
     /// runtime uniqueness checks that consume the parameter go check-free.
@@ -111,6 +144,7 @@ pub const RcSig = struct {
 pub const SigTable = struct {
     sigs: []const RcSig = &.{},
     outcomes: []const Outcome = &.{},
+    ret_conditions: []const RetCondition = &.{},
 
     pub const all_owned: SigTable = .{};
 
@@ -134,6 +168,18 @@ pub const SigTable = struct {
 
     pub fn outcomesForProc(self: SigTable, proc: LIR.LirProcSpecId) []const Outcome {
         return self.outcomesOf(self.get(proc));
+    }
+
+    pub fn retConditionsOf(self: SigTable, sig: RcSig) []const RetCondition {
+        const start: usize = @intCast(sig.ret_conditions.start);
+        const len: usize = @intCast(sig.ret_conditions.len);
+        if (start > self.ret_conditions.len or len > self.ret_conditions.len - start) {
+            if (@import("builtin").mode == .Debug) {
+                std.debug.panic("ARC signature return-condition span exceeded its table", .{});
+            }
+            unreachable;
+        }
+        return self.ret_conditions[start..][0..len];
     }
 };
 
@@ -181,4 +227,18 @@ test "outcome spans expose exact restitution rows" {
     try std.testing.expectEqual(@as(u16, 0), rows[0].discriminant);
     try std.testing.expectEqual(@as(ParamMask, 1), rows[0].restituted_params);
     try std.testing.expectEqual(@as(u16, 1), rows[1].discriminant);
+}
+
+test "return-condition spans expose their rows" {
+    const sigs = [_]RcSig{.{ .ret_conditions = .{ .start = 1, .len = 1 } }};
+    const rows = [_]RetCondition{
+        .{ .field = RetCondition.whole_value, .params = 0b10 },
+        .{ .field = 0, .params = 0b1 },
+    };
+    const table = SigTable{ .sigs = &sigs, .ret_conditions = &rows };
+    const conditions = table.retConditionsOf(sigs[0]);
+    try std.testing.expectEqual(@as(usize, 1), conditions.len);
+    try std.testing.expectEqual(@as(u8, 0), conditions[0].field);
+    try std.testing.expectEqual(@as(ParamMask, 1), conditions[0].params);
+    try std.testing.expectEqual(@as(usize, 0), SigTable.all_owned.retConditionsOf(RcSig.all_owned).len);
 }

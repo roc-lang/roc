@@ -12943,10 +12943,35 @@ also lets LLVM optimize across what was an opaque control split.
 A join parameter is an ownership phi, not a foreign definition. Its origin is
 born-unique exactly when it has at least one explicit non-self
 `initialize_join_param` incoming edge and every such edge carries a born-unique
-origin. Join edges, pure same-value aliases, and unique-return call edges
-settle in one monotone dependency graph, so loop back edges preserve a unique
-circulating unit only when an explicit unique birth reaches the cycle. A
-self-assignment is not an incoming ownership transfer and contributes no edge.
+origin. Join edges, pure same-value aliases, field stores and takes, and call
+edges settle in one dependency graph as a greatest fixpoint: every derived
+local starts born and is lowered until nothing contradicts the rest. A loop
+that hands one unit around—a table passed to a helper that returns it, taken
+back out of the result and jumped to the loop head—therefore keeps the birth
+its entry edge brings, which is the inductive fact the runtime obeys: the
+entry value has count 1, and every edge on the cycle moves that single unit
+without adding a holder. Deadness (some occurrence adds a holder) is a
+separate fact that only grows along the same edges, and uniqueness is birth
+without deadness. A self-assignment is not an incoming ownership transfer and
+contributes no edge.
+
+Births carry a condition. A tracked parameter is born on the condition that
+its own position is seeded, which a call site does by demanding a variant
+after proving its dying argument unique; the condition is the union of the
+conditions along every transfer, so an alias, join parameter, field, or
+returned part derived from parameters names exactly the positions whose
+seeds it needs, and one analysis answers for every emission of a proc:
+emission and the certifier test a local's condition against the
+`unique_params` of the variant at hand. A returned value or field whose
+condition is empty sets the signature's unconditional unique-return bit; one
+whose condition names parameters becomes a conditional-return row, and a
+call site turns each row into an edge from the arguments the row names to
+that part of its result, live only when the call is each argument's last
+use (otherwise the callee holds a retained copy). The signature bits and
+rows settle to a fixpoint with the analysis, since a new row only adds
+edges. Positions whose seed would let a runtime check in the body go
+check-free form the proc's seed mask, which is what makes a call site
+demand the seeded variant.
 
 Uses of a local are ordered along control flow rather than counted. A
 consuming use (an owned argument, a store into an aggregate, an alias
@@ -12977,9 +13002,10 @@ field. Takes are decided after the borrow modes, so the solver settles without
 them and emission re-derives uniqueness against the committed takes, settling
 the unique-return bits and the per-field unique-return mask of each signature
 to a fixpoint; a caller taking a field out of a callee's dying `Try` record
-result thus holds the callee's fresh birth, which is what lets loop-carried
-tables handed back from a per-block helper stay born unique. The certifier
-re-derives the same verdict from the `take_kind` stamped on emitted reads.
+result thus holds the callee's fresh birth, and a caller taking back a
+field the callee built from its own parameter holds the argument's birth
+under the argument's condition. The certifier re-derives the same verdict
+from the `take_kind` stamped on emitted reads.
 
 A checked argument's check is deletable when three conditions hold at the
 call:

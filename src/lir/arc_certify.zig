@@ -481,29 +481,17 @@ fn certifyUniqueArgs(
                 if ((assign.unique_args & bit) == 0) continue;
                 const raw = @intFromEnum(arg);
                 const dense = if (raw < local_to_dense.len) local_to_dense[raw] else no_dense;
-                if (dense != no_dense and uniqueness.born_unique.isSet(dense)) continue;
-                if (paramSeededUnique(sig, params, arg)) continue;
+                // The birth must hold under the parameter positions this
+                // emission's signature seeds born-unique.
+                if (dense != no_dense and uniqueness.born_unique.isSet(dense) and
+                    (uniqueness.conds[dense] & ~sig.unique_params) == 0) continue;
                 diag.context_proc = proc_id;
                 diag.context_stmt = current;
-                diag.set("stmt={d}: check-free uniqueness claim on argument {d} (local {d}) without a unique birth", .{ stmt_index, position, raw });
+                diag.set("stmt={d}: check-free uniqueness claim on argument {d} (local {d}) without a unique birth under the seeded parameters", .{ stmt_index, position, raw });
                 return error.Certification;
             }
         }
     }
-}
-
-/// True when the local is a parameter of the proc and the proc's signature
-/// seeds it born-unique (a mode-specialized variant whose caller proved the
-/// dying argument unique).
-fn paramSeededUnique(sig: arc_sig.RcSig, params: anytype, local: LIR.LocalId) bool {
-    if (sig.unique_params == 0) return false;
-    for (0..GuardedList.borrowLen(params)) |position| {
-        const param = GuardedList.at(params, position);
-        const bit = arc_sig.paramBit(position) orelse break;
-        if (param != local) continue;
-        return (sig.unique_params & bit) != 0;
-    }
-    return false;
 }
 
 /// Like `certifyStore`, but panics with a rendered failure context instead
