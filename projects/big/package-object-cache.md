@@ -760,40 +760,36 @@ lines to 60,039.
 
 x86_64 Linux, `roc build --opt=dev`, measured with a ReleaseFast compiler
 (`zig build roc -Doptimize=ReleaseFast`), on `main` (db0282b787) and on this
-branch with `main` merged. Each configuration uses a fresh cache root;
-`base` is the checked artifact cache alone, `cache` adds
-the object store. "Edited" appends a comment to the app's root module (a
-source the cache root has never seen). Times are wall-clock seconds of one
-run.
+branch with `main` merged (79150f5c0e). Each configuration uses a fresh
+cache root; `main` has no object store, so its columns are the checked
+artifact cache alone, and the branch columns add the store, which is on by
+default. "Edited" appends a comment to the app's root module (a source the
+cache root has never seen). Times are wall-clock seconds, the better of two
+runs.
 
-| compiler | app | base cold | base rebuild | base edited | cache cold | cache rebuild | cache edited |
-| --- | --- | --- | --- | --- | --- | --- | --- |
-| main | task-board | 2.4 | 2.0 | 2.0 | | | |
-| branch | task-board | 2.4 | 1.9 | 2.1 | 2.1 | 1.6 | 1.8 |
-| main | counter | 0.31 | 0.21 | 0.21 | | | |
-| branch | counter | 0.31 | 0.22 | 0.22 | 0.41 | 0.23 | 0.32 |
-| main | deflate | 10.0 | 3.1 | 6.4 | | | |
-| branch | deflate | 9.6 | 3.0 | 6.2 | 6.3 | 3.0 | 6.0 |
+| compiler | app | cold | rebuild | edited |
+| --- | --- | --- | --- | --- |
+| main | task-board | 2.1 | 1.9 | 2.1 |
+| branch | task-board | 2.0 | 1.7 | 1.7 |
+| main | counter | 0.31 | 0.21 | 0.21 |
+| branch | counter | 0.41 | 0.23 | 0.22 |
+| main | deflate | 6.3 | 3.0 | 6.1 |
+| branch | deflate | 12.8 | 0.23 | 6.0 |
 
-What this says. The branch does not change the compiler's speed without the
-cache: every base column matches `main` within noise. The deflate example's
-time is compile-time evaluation and SpecConstr over Inflate's largest
-procedures. With the cache on, task-board's rebuild gains about 15% (1.9s
-to 1.6s), counter and deflate do not move, and cold builds pay nothing
-measurable. An earlier claim that the deflate example's edited rebuild
-halved under the cache was a measurement artifact: that run reused one
-cache root across the base and cache phases, so the "edited" source had
-already been checked and evaluated in the base phase and the compile-time
-program came from the checked artifact cache, not from packs. Under a fresh
-root the edited rebuild is the same with and without the store, because the
-compile-time roots' closure covers nearly every procedure the runtime roots
-reach (64 of 66 keyed procedures on the deflate example are first reached
-during the compile-time phase) and those cannot be served while the
-evaluator needs bodies to run. Serving them would require the compile-time
-image to link cached code, which is the same mechanism the `roc run` host
-executable needs. Task-board withheld 48 of 260 entries for reaching
-program-local constants before constants travelled by content name; it now
-withholds 1 of 237 and offers 236.
+What this says. The deflate example's plain rebuild is now one hit at the
+top of the call graph (`Deflate.decompress`) and nothing lowered beneath
+it: Monotype completes that record without a body, so the compressor's
+five million lifted expressions, SpecConstr, and lambda solving never run,
+and the rebuild goes from 3.0s to 0.23s. Task-board's rebuild takes 154
+hits and gains about 10%; its remaining time is Monotype specialization of
+open requests and the evaluator's shared program. Counter is too small to
+move. Two costs remain. A cold deflate build is twice as slow as on main
+because it now writes a real pack for every one of the package's modules
+(fifty-one packs, most of which previously had no closed root); that work
+belongs at package download time, which is the optimized-objects slice.
+And an edited rebuild is unchanged everywhere, because the program shared
+with the compile-time evaluator cannot take hits until packs carry an
+artifact flavor under the evaluator's calling convention.
 
 The identity renderer must never expand shared subtypes as a tree: the
 solved type graph of a closure-heavy program reaches one record type from
