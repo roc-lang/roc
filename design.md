@@ -836,9 +836,19 @@ as the scalar literal rather than a slot read, so range proving, loop
 versioning, and overflow elision see the constant they would have seen from
 a literal in source; a table built by `List.repeat` with a compile-time
 length keeps no index check the prover can discharge, and no slot, failure
-record, or guard exists for the root. After the passes, which compact the
-slot table, the remaining aggregate slots are transcoded into the target's
-frozen image. The LLVM
+record, or guard exists for the root. Two list shapes lower the same way,
+as the construction they came from rather than as bytes, because static
+data is the wrong home for them. An empty list lowers to the
+`with_capacity` it was evaluated with: a frozen descriptor's capacity word
+is its length, so the freezer keeps the evaluated capacity on the root's
+export and the runtime rebuilds the request, and the first append goes in
+place. A list of copies of one scalar, which is what `List.repeat` and any
+constant fill loop produce, lowers to that repeat loop again: a table of
+zeros is a few instructions at runtime and would otherwise be that many
+bytes in the binary, and a static list can never be born unique, which
+would lose the in-place writes of every loop the table is carried
+through. After the passes, which compact the slot table, the remaining
+aggregate slots are transcoded into the target's frozen image. The LLVM
 backend then defines each slot whose image is a link-time constant—bytes with
 address relocations as symbolic pointer fields—as an internal constant in the
 app module, and the readonly object binds every node globally so those

@@ -1,4 +1,5 @@
-//! Completed compile-time scalar values, ready to lower as literals.
+//! Completed compile-time values that lower as literals or as the runtime
+//! construction they came from, instead of as static-data slots.
 //!
 //! A runtime continuation forked from a completed host program is lowered
 //! after every compile-time root has been evaluated, so a scalar root's
@@ -10,9 +11,20 @@
 //! holds each completed successful scalar root's literal, decoded from the
 //! host's frozen image and keyed by checked root identity exactly as the
 //! later transcoding matches slots, so the lowerer emits the literal
-//! directly and creates no slot, failure record, or guard for it. Aggregate
-//! roots keep their slots and fold in the backend; failed roots keep the
-//! guard that crashes with the original failure.
+//! directly and creates no slot, failure record, or guard for it.
+//!
+//! Two list shapes get the same treatment, because static data is the wrong
+//! home for them: a value's constructor is cheaper than its bytes. An empty
+//! list lowers to the `with_capacity` it was evaluated with, so the request
+//! survives the freeze (a frozen descriptor cannot carry capacity) and the
+//! first append goes in place. A list of copies of one scalar, which is
+//! what `List.repeat` and every constant fill loop produce, lowers to that
+//! repeat loop again: a table of zeros is a few instructions at runtime and
+//! would otherwise be that many bytes of zeros in the binary, and a static
+//! list can never be born unique, which loses the in-place writes of every
+//! loop the table is carried through. Other aggregate roots keep their
+//! slots and fold in the backend; failed roots keep the guard that crashes
+//! with the original failure.
 const std = @import("std");
 const check = @import("check");
 const core = @import("lir_core");
@@ -22,8 +34,21 @@ const LIR = core.LIR;
 const Program = core.Program;
 const Allocator = std.mem.Allocator;
 
-/// Literals of the completed successful scalar roots of one host program,
-/// keyed by checked root identity.
+/// How a completed root lowers in place of its slot.
+pub const Construction = union(enum) {
+    literal: LIR.LiteralValue,
+    /// An empty list, rebuilt with the capacity it was evaluated with.
+    empty_list: u64,
+    /// `count` copies of one scalar, rebuilt by the repeat loop.
+    uniform_list: struct {
+        element: LIR.LiteralValue,
+        element_layout: layout.Idx,
+        count: u64,
+    },
+};
+
+/// Constructions of the completed successful roots of one host program that
+/// lower without a slot, keyed by checked root identity.
 pub const CompletedScalarValues = struct {
     entries: Map,
 
@@ -34,7 +59,7 @@ pub const CompletedScalarValues = struct {
 
     const Entry = struct {
         layout_idx: layout.Idx,
-        literal: LIR.LiteralValue,
+        construction: Construction,
     };
 
     const Context = struct {
@@ -65,9 +90,8 @@ pub const CompletedScalarValues = struct {
             const slot: LIR.StaticDataId = @enumFromInt(index);
             if (!slotSucceeded(program, frozen, slot)) continue;
             const data_export = exportOf(frozen, slot) orelse continue;
-            if (data_export.relocations.len != 0) continue;
-            const literal = decodeScalar(entry.layout_idx, data_export.bytes[data_export.symbol_offset..]) orelse continue;
-            try values.entries.put(allocator, .{ .module = root.module, .root = root.root }, .{ .layout_idx = entry.layout_idx, .literal = literal });
+            const construction = decodeConstruction(program, frozen, entry.layout_idx, data_export) orelse continue;
+            try values.entries.put(allocator, .{ .module = root.module, .root = root.root }, .{ .layout_idx = entry.layout_idx, .construction = construction });
         }
         return values;
     }
@@ -76,14 +100,69 @@ pub const CompletedScalarValues = struct {
         self.entries.deinit(allocator);
     }
 
+    /// The construction for a root read at `layout_idx`, when the root
+    /// completed successfully in a shape that lowers without a slot.
+    pub fn constructionFor(self: *const CompletedScalarValues, module: checked.ModuleId, root: checked.ComptimeRootId, layout_idx: layout.Idx) ?Construction {
+        const entry = self.entries.get(.{ .module = module, .root = root }) orelse return null;
+        if (entry.layout_idx != layout_idx) return null;
+        return entry.construction;
+    }
+
     /// The literal for a root read at `layout_idx`, when the root completed
     /// successfully with a scalar of that layout.
     pub fn literalFor(self: *const CompletedScalarValues, module: checked.ModuleId, root: checked.ComptimeRootId, layout_idx: layout.Idx) ?LIR.LiteralValue {
-        const entry = self.entries.get(.{ .module = module, .root = root }) orelse return null;
-        if (entry.layout_idx != layout_idx) return null;
-        return entry.literal;
+        const construction = self.constructionFor(module, root, layout_idx) orelse return null;
+        return switch (construction) {
+            .literal => |literal| literal,
+            .empty_list, .uniform_list => null,
+        };
     }
 };
+
+/// The construction of a completed root from its frozen export: a scalar's
+/// literal, or a list's constructor when the list is empty or uniform.
+fn decodeConstruction(program: *const Program.Result, frozen: *const Program.FrozenStaticData, layout_idx: layout.Idx, data_export: *const Program.StaticDataExport) ?Construction {
+    const bytes = data_export.bytes[data_export.symbol_offset..];
+    const physical = program.layouts.getLayout(layout_idx);
+    if (physical.tag != .list) {
+        if (data_export.relocations.len != 0) return null;
+        const literal = decodeScalar(layout_idx, bytes) orelse return null;
+        return .{ .literal = literal };
+    }
+    const word = program.layouts.targetUsize().size();
+    if (bytes.len < 3 * word) return null;
+    const len: u64 = switch (word) {
+        4 => std.mem.readInt(u32, bytes[4..8], .little),
+        8 => std.mem.readInt(u64, bytes[8..16], .little),
+        else => return null,
+    };
+    if (len == 0) {
+        if (data_export.relocations.len != 0) return null;
+        return .{ .empty_list = data_export.empty_list_capacity };
+    }
+    if (data_export.relocations.len != 1) return null;
+    const backing = exportNamed(frozen, data_export.relocations[0].target_symbol_name) orelse return null;
+    if (backing.relocations.len != 0) return null;
+    const element_layout = physical.getIdx();
+    const element_size = program.layouts.layoutSize(program.layouts.getLayout(element_layout));
+    if (element_size == 0) return null;
+    const elements = backing.bytes[backing.symbol_offset..];
+    if (elements.len < len * element_size) return null;
+    const first = elements[0..element_size];
+    var index: u64 = 1;
+    while (index < len) : (index += 1) {
+        if (!std.mem.eql(u8, first, elements[index * element_size ..][0..element_size])) return null;
+    }
+    const element = decodeScalar(element_layout, first) orelse return null;
+    return .{ .uniform_list = .{ .element = element, .element_layout = element_layout, .count = len } };
+}
+
+fn exportNamed(frozen: *const Program.FrozenStaticData, name: []const u8) ?*const Program.StaticDataExport {
+    for (frozen.exports) |*item| {
+        if (std.mem.eql(u8, item.symbol_name, name)) return item;
+    }
+    return null;
+}
 
 /// Whether the completed value in `slot` is a successful root: its failure
 /// record's `failed` byte is zero in the frozen image.
@@ -218,4 +297,65 @@ test "completed successful scalar roots decode to literals; failed and aggregate
     const third = values.literalFor(.{}, @enumFromInt(5), .i16) orelse return error.TestUnexpectedResult;
     try std.testing.expectEqual(@as(i128, -2), third.i128_literal.value);
     try std.testing.expect(values.literalFor(.{}, @enumFromInt(6), .str) == null);
+}
+
+test "completed empty and uniform list roots decode to their constructions" {
+    const allocator = std.testing.allocator;
+    var program = try Program.Result.init(allocator, .u64);
+    defer program.deinit();
+    const record_layout = try program.layouts.putStructFields(&.{ .{ .index = 0, .layout = .u8 }, .{ .index = 1, .layout = .str } });
+    const struct_idx = program.layouts.getLayout(record_layout).getStruct().idx;
+    const failed_offset = program.layouts.getStructFieldOffsetByOriginalIndex(struct_idx, 0);
+    const message_offset = program.layouts.getStructFieldOffsetByOriginalIndex(struct_idx, 1);
+    const list_layout = try program.layouts.insertList(.u32);
+    const plan: Program.ConstPlanId = @enumFromInt(program.const_plans.items.len);
+    try program.const_plans.append(allocator, .scalar);
+    // Slots: 0 = failure record of 1, 2 and 3; 1 = empty list evaluated with
+    // capacity 16; 2 = three copies of 7; 3 = the list [1, 2, 3].
+    for (0..4) |index| {
+        try program.static_data_values.append(allocator, .{
+            .initializer = null,
+            .layout_idx = if (index == 0) record_layout else list_layout,
+            .compile_time_root = .{
+                .module = .{},
+                .root = @enumFromInt(index),
+                .const_locator = null,
+                .role = if (index == 0)
+                    .{ .failure_message = .{ .failed_field = 0, .message_field = 1, .failed_offset = failed_offset, .message_offset = message_offset } }
+                else
+                    .{ .value = .{ .failure_slot = @enumFromInt(0), .plan = plan } },
+            },
+        });
+    }
+    var ok_record = [_]u8{0} ** 32;
+    var empty_descriptor = [_]u8{0} ** 24;
+    var uniform_descriptor = [_]u8{0} ** 24;
+    std.mem.writeInt(u64, uniform_descriptor[8..16], 3, .little);
+    var varied_descriptor = [_]u8{0} ** 24;
+    std.mem.writeInt(u64, varied_descriptor[8..16], 3, .little);
+    const uniform_relocation = [_]Program.StaticDataRelocation{.{ .offset = 0, .target_symbol_name = "uniform_backing" }};
+    const varied_relocation = [_]Program.StaticDataRelocation{.{ .offset = 0, .target_symbol_name = "varied_backing" }};
+    var exports = [_]Program.StaticDataExport{
+        .{ .symbol_name = "s0", .bytes = &ok_record, .alignment = 8 },
+        .{ .symbol_name = "s1", .bytes = &empty_descriptor, .alignment = 8, .empty_list_capacity = 16 },
+        .{ .symbol_name = "s2", .bytes = &uniform_descriptor, .alignment = 8, .relocations = &uniform_relocation },
+        .{ .symbol_name = "s3", .bytes = &varied_descriptor, .alignment = 8, .relocations = &varied_relocation },
+        .{ .symbol_name = "uniform_backing", .bytes = &.{ 7, 0, 0, 0, 7, 0, 0, 0, 7, 0, 0, 0 }, .alignment = 4 },
+        .{ .symbol_name = "varied_backing", .bytes = &.{ 1, 0, 0, 0, 2, 0, 0, 0, 3, 0, 0, 0 }, .alignment = 4 },
+    };
+    for (&exports, 0..) |*item, index| {
+        if (index < 4) item.value_id = @enumFromInt(index);
+    }
+    const frozen = Program.FrozenStaticData{ .allocator = allocator, .exports = &exports };
+    var values = try CompletedScalarValues.init(allocator, &program, &frozen);
+    defer values.deinit(allocator);
+
+    const empty = values.constructionFor(.{}, @enumFromInt(1), list_layout) orelse return error.TestUnexpectedResult;
+    try std.testing.expectEqual(@as(u64, 16), empty.empty_list);
+    const uniform = values.constructionFor(.{}, @enumFromInt(2), list_layout) orelse return error.TestUnexpectedResult;
+    try std.testing.expectEqual(@as(u64, 3), uniform.uniform_list.count);
+    try std.testing.expectEqual(layout.Idx.u32, uniform.uniform_list.element_layout);
+    try std.testing.expectEqual(@as(i128, 7), uniform.uniform_list.element.i128_literal.value);
+    try std.testing.expectEqual(@as(?LIR.LiteralValue, null), values.literalFor(.{}, @enumFromInt(2), list_layout));
+    try std.testing.expectEqual(@as(?Construction, null), values.constructionFor(.{}, @enumFromInt(3), list_layout));
 }

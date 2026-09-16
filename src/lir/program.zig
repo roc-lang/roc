@@ -37,6 +37,11 @@ pub const StaticDataExport = struct {
     is_exported: bool = true,
     /// Pointer relocations from this symbol's bytes to other symbols.
     relocations: []const StaticDataRelocation = &.{},
+    /// The capacity an empty list root was evaluated with. A frozen list's
+    /// capacity word is its length, so the request would otherwise be lost;
+    /// a runtime consumer rebuilds such a root with it instead of reading
+    /// the slot.
+    empty_list_capacity: u64 = 0,
 };
 
 /// One explicit pointer relocation inside a readonly static-data symbol.

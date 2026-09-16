@@ -91,6 +91,8 @@ const Node = struct {
     bytes: []u8,
     alignment: u32,
     relocations: std.ArrayList(static_data.StaticDataRelocation) = .empty,
+    /// The evaluated capacity of the root when it is an empty list.
+    empty_list_capacity: u64 = 0,
 };
 
 /// A typed view is explicit in the producer's plan. Reserving its destination
@@ -266,7 +268,16 @@ const Builder = struct {
         const list_value = job.source.read(builtins.list.RocList);
         self.writeWord(job.dest.offsetBy(word_size), list_value.len());
         self.writeWord(job.dest.offsetBy(2 * word_size), builtins.list.RocList.encodeCapacity(list_value.len()));
-        if (physical.tag == .list_of_zst or list_value.len() == 0) return;
+        if (list_value.len() == 0) {
+            // The descriptor cannot carry the capacity the value was
+            // evaluated with; keep it on the root so the runtime can
+            // rebuild the list as the `with_capacity` it came from.
+            if (@intFromEnum(job.dest.symbol) == 0 and job.dest.offset == 0 and physical.tag == .list) {
+                self.nodes.items[0].empty_list_capacity = list_value.getCapacity();
+            }
+            return;
+        }
+        if (physical.tag == .list_of_zst) return;
         const ptr = list_value.bytes orelse invariant("nonempty native list had a null pointer");
         const element_layout = physical.getIdx();
         const element_size = self.size(element_layout);
@@ -403,6 +414,7 @@ const Builder = struct {
                 .is_global = false,
                 .is_exported = false,
                 .relocations = relocations,
+                .empty_list_capacity = source.empty_list_capacity,
             };
             done += 1;
         }
@@ -455,6 +467,29 @@ fn testRoot(plan: Program.ConstPlanId, ret_layout: layout.Idx) Program.ConstRoot
         .ret_type = undefined,
         .plan = plan,
     };
+}
+
+test "native root export keeps an empty list root's evaluated capacity" {
+    const allocator = std.testing.allocator;
+    var program = try Program.Result.init(allocator, @import("base").target.TargetUsize.native);
+    defer program.deinit();
+    const elem_plan: Program.ConstPlanId = @enumFromInt(program.const_plans.items.len);
+    try program.const_plans.append(allocator, .scalar);
+    const list_plan: Program.ConstPlanId = @enumFromInt(program.const_plans.items.len);
+    try program.const_plans.append(allocator, .{ .list = elem_plan });
+    const list_layout = try program.layouts.insertList(.u32);
+    var backing: [16]u32 = undefined;
+    var list_value = builtins.list.RocList{
+        .bytes = @ptrCast(&backing),
+        .length = 0,
+        .capacity_or_alloc_ptr = builtins.list.RocList.encodeCapacity(backing.len),
+    };
+    const slot = try testSlot(&program, list_layout);
+    const exports = try freezeRoot(allocator, &program, slot, testRoot(list_plan, list_layout), .{ .ptr = @ptrCast(&list_value) }, .{});
+    defer static_data.deinitStaticData(allocator, exports);
+    try std.testing.expectEqual(@as(usize, 1), exports.len);
+    try std.testing.expectEqual(@as(u64, 16), exports[0].empty_list_capacity);
+    try std.testing.expectEqual(@as(usize, 0), exports[0].relocations.len);
 }
 
 test "native root export owns list strings and preserves shared typed pointers" {
