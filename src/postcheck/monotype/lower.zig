@@ -146,6 +146,12 @@ const CommittedGraphTypes = struct {
         return imported.roots[0];
     }
 
+    /// Commit an export name interned in the source domain's name store.
+    fn commitExportName(self: *CommittedGraphTypes, name: names.ExportNameId) Allocator.Error!names.ExportNameId {
+        const destination = self.destination orelse return name;
+        return destination.names.internExportName(self.source_names.exportNameText(name));
+    }
+
     fn sealNode(self: *CommittedGraphTypes, node: NodeId) Allocator.Error!Type.TypeId {
         const sealer = self.sealer orelse
             Common.compilerBug("graph-free Monotype coordinator commit attempted to seal a graph node");
@@ -15870,7 +15876,7 @@ const BodyDraftStore = struct {
 
         for (self.proc_debug_names.items, 0..) |debug_name, index| {
             if (!ids.retained(.proc_debug_names, index)) continue;
-            try program.setProcDebugName(debug_name.symbol, debug_name.name);
+            try program.setProcDebugName(debug_name.symbol, try committed_types.commitExportName(debug_name.name));
         }
 
         try program.roots.ensureUnusedCapacity(program.allocator, self.roots.items.len);
@@ -60202,8 +60208,10 @@ test "body draft commit relocates core type and name fields out of private store
     _ = try program.names.internTagLabel("Unrelated");
     _ = try program.names.internTypeName("Unrelated");
     _ = try program.names.internModuleIdentity(&([_]u8{0xFF} ** 32));
+    _ = try program.names.internExportName("unrelated");
 
     var sealed_list: Type.TypeId = undefined;
+    var debug_symbol: Common.Symbol = undefined;
     {
         var private_names = names.NameStore.init(allocator);
         defer private_names.deinit();
@@ -60244,6 +60252,11 @@ test "body draft commit relocates core type and name fields out of private store
         _ = try draft.addPat(.{ .ty = list_cell, .data = .{ .record = destructs } });
         _ = try draft.addTypedLocalSpan(&.{.{ .local = local, .ty = list_cell }});
         _ = try draft.addStmt(.{ .return_ = .{ .value = expr, .target = unit_cell } });
+        debug_symbol = symbol_gen.fresh();
+        try draft.proc_debug_names.append(allocator, .{
+            .symbol = debug_symbol,
+            .name = try private_names.internExportName("helper"),
+        });
         const module_bytes = [_]u8{0xAB} ** 32;
         const module = try private_names.internModuleIdentity(&module_bytes);
         const type_name = try private_names.internTypeName("Model");
@@ -60311,6 +60324,7 @@ test "body draft commit relocates core type and name fields out of private store
         "value",
         program.names.recordFieldLabelText(GuardedList.at(program.recordDestructSpan(program.getPatAt(2).data.record), 0).name),
     );
+    try std.testing.expectEqualStrings("helper", program.names.exportNameText(program.procDebugName(debug_symbol).?));
     try std.testing.expectEqual(@as(usize, 1), program.runtimeSchemaRequestsView().len);
     const schema = program.runtimeSchemaRequestsView()[0];
     try std.testing.expectEqualSlices(u8, &([_]u8{0xAB} ** 32), program.names.moduleIdentityBytes(schema.def.module));
