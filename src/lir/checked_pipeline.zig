@@ -179,6 +179,8 @@ pub const Timing = struct {
     detailed_monotype_body: bool = false,
     monotype_diagnostics_mutex: std.Io.Mutex = .init,
     monotype_diagnostics: postcheck.Monotype.Lower.Diagnostics = .{},
+    solved_lir_parallel_mutex: std.Io.Mutex = .init,
+    solved_lir_parallel: SolvedLirParallelMetrics = .{},
     monotype_ns: TimingCounter = .{},
     monotype_setup_ns: TimingCounter = .{},
     monotype_procedure_specialization_ns: TimingCounter = .{},
@@ -203,15 +205,15 @@ pub const Timing = struct {
     monotype_parallel_coordinator_post_batch_work_ns: TimingCounter = .{},
     monotype_parallel_root_tasks_submitted: TimingCounter = .{},
     monotype_parallel_root_tasks_committed: TimingCounter = .{},
-    monotype_parallel_root_tasks_retried_serial: TimingCounter = .{},
     monotype_parallel_specialization_tasks_submitted: TimingCounter = .{},
     monotype_parallel_specialization_tasks_committed: TimingCounter = .{},
-    monotype_parallel_specialization_tasks_retried_serial: TimingCounter = .{},
     monotype_parallel_specialization_tasks_discarded_ready: TimingCounter = .{},
     monotype_parallel_task_waves: TimingCounter = .{},
     monotype_parallel_peak_worker_lanes_available: TimingCounter = .{},
     monotype_parallel_peak_worker_lanes_used: TimingCounter = .{},
     monotype_parallel_within_lowering_lane_reuse_tasks: TimingCounter = .{},
+    monotype_parallel_peak_specialization_jobs_pending: TimingCounter = .{},
+    monotype_parallel_peak_specialization_shards_retained: TimingCounter = .{},
     boxy_plan_ns: TimingCounter = .{},
     boxy_lower_ns: TimingCounter = .{},
     lift_ns: TimingCounter = .{},
@@ -260,15 +262,15 @@ pub const Timing = struct {
                 .coordinator_post_batch_work_ns = self.monotype_parallel_coordinator_post_batch_work_ns.load(),
                 .root_tasks_submitted = self.monotype_parallel_root_tasks_submitted.load(),
                 .root_tasks_committed = self.monotype_parallel_root_tasks_committed.load(),
-                .root_tasks_retried_serial = self.monotype_parallel_root_tasks_retried_serial.load(),
                 .specialization_tasks_submitted = self.monotype_parallel_specialization_tasks_submitted.load(),
                 .specialization_tasks_committed = self.monotype_parallel_specialization_tasks_committed.load(),
-                .specialization_tasks_retried_serial = self.monotype_parallel_specialization_tasks_retried_serial.load(),
                 .specialization_tasks_discarded_ready = self.monotype_parallel_specialization_tasks_discarded_ready.load(),
                 .task_waves = self.monotype_parallel_task_waves.load(),
                 .peak_worker_lanes_available = self.monotype_parallel_peak_worker_lanes_available.load(),
                 .peak_worker_lanes_used = self.monotype_parallel_peak_worker_lanes_used.load(),
                 .within_lowering_lane_reuse_tasks = self.monotype_parallel_within_lowering_lane_reuse_tasks.load(),
+                .peak_specialization_jobs_pending = self.monotype_parallel_peak_specialization_jobs_pending.load(),
+                .peak_specialization_shards_retained = self.monotype_parallel_peak_specialization_shards_retained.load(),
             },
             .boxy_plan_ns = self.boxy_plan_ns.load(),
             .boxy_lower_ns = self.boxy_lower_ns.load(),
@@ -280,6 +282,7 @@ pub const Timing = struct {
             .lir_passes_ns = self.lir_passes_ns.load(),
             .arc_ns = self.arc_ns.load(),
             .monotype_diagnostics = diagnostics,
+            .solved_lir_parallel = self.solvedLirParallelSnapshot(),
         };
     }
 
@@ -305,6 +308,7 @@ pub const Timing = struct {
         self.monotype_static_data_requests_ns.add(snapshot_value.monotype_static_data_requests_ns);
         self.monotype_finalization_ns.add(snapshot_value.monotype_finalization_ns);
         self.addMonotypeParallel(snapshot_value.monotype_parallel);
+        self.addSolvedLirParallel(snapshot_value.solved_lir_parallel);
         self.boxy_plan_ns.add(snapshot_value.boxy_plan_ns);
         self.boxy_lower_ns.add(snapshot_value.boxy_lower_ns);
         self.lift_ns.add(snapshot_value.lift_ns);
@@ -366,15 +370,31 @@ pub const Timing = struct {
         self.monotype_parallel_coordinator_post_batch_work_ns.add(parallel.coordinator_post_batch_work_ns);
         self.monotype_parallel_root_tasks_submitted.add(parallel.root_tasks_submitted);
         self.monotype_parallel_root_tasks_committed.add(parallel.root_tasks_committed);
-        self.monotype_parallel_root_tasks_retried_serial.add(parallel.root_tasks_retried_serial);
         self.monotype_parallel_specialization_tasks_submitted.add(parallel.specialization_tasks_submitted);
         self.monotype_parallel_specialization_tasks_committed.add(parallel.specialization_tasks_committed);
-        self.monotype_parallel_specialization_tasks_retried_serial.add(parallel.specialization_tasks_retried_serial);
         self.monotype_parallel_specialization_tasks_discarded_ready.add(parallel.specialization_tasks_discarded_ready);
         self.monotype_parallel_task_waves.add(parallel.task_waves);
         self.monotype_parallel_peak_worker_lanes_available.max(parallel.peak_worker_lanes_available);
         self.monotype_parallel_peak_worker_lanes_used.max(parallel.peak_worker_lanes_used);
         self.monotype_parallel_within_lowering_lane_reuse_tasks.add(parallel.within_lowering_lane_reuse_tasks);
+        self.monotype_parallel_peak_specialization_jobs_pending.max(parallel.peak_specialization_jobs_pending);
+        self.monotype_parallel_peak_specialization_shards_retained.max(parallel.peak_specialization_shards_retained);
+    }
+
+    fn addSolvedLirParallel(self: *Timing, parallel: SolvedLirParallelMetrics) void {
+        self.solved_lir_parallel_mutex.lockUncancelable(self.std_io);
+        defer self.solved_lir_parallel_mutex.unlock(self.std_io);
+        // All Solved-LIR metrics count completed work, not peaks or durations.
+        inline for (std.meta.fields(SolvedLirParallelMetrics)) |field| {
+            @field(self.solved_lir_parallel, field.name) +|= @field(parallel, field.name);
+        }
+    }
+
+    fn solvedLirParallelSnapshot(self: *const Timing) SolvedLirParallelMetrics {
+        const mutable = @constCast(self);
+        mutable.solved_lir_parallel_mutex.lockUncancelable(self.std_io);
+        defer mutable.solved_lir_parallel_mutex.unlock(self.std_io);
+        return self.solved_lir_parallel;
     }
 
     fn addMonotypeDiagnostics(self: *Timing, diagnostics: postcheck.Monotype.Lower.Diagnostics) void {
@@ -416,6 +436,7 @@ pub const TimingSnapshot = struct {
     monotype_static_data_requests_ns: u64 = 0,
     monotype_finalization_ns: u64 = 0,
     monotype_parallel: postcheck.Monotype.Lower.ParallelMetricsSnapshot = .{},
+    solved_lir_parallel: SolvedLirParallelMetrics = .{},
     boxy_plan_ns: u64 = 0,
     boxy_lower_ns: u64 = 0,
     lift_ns: u64 = 0,
@@ -466,6 +487,52 @@ fn timingNowNs(std_io: std.Io) i64 {
     return @intCast(@max(0, std.Io.Timestamp.now(std_io, .awake).nanoseconds));
 }
 
+test "pipeline timing aggregates Solved-LIR counters with saturation and fresh reset" {
+    var timing = Timing.init(std.testing.io);
+    var first: SolvedLirParallelMetrics = .{};
+    inline for (std.meta.fields(SolvedLirParallelMetrics), 0..) |field, i| {
+        @field(first, field.name) = i + 1;
+    }
+    timing.addSolvedLirParallel(first);
+    var aggregate = Timing.init(std.testing.io);
+    aggregate.addSnapshot(timing.snapshot());
+    aggregate.addSnapshot(timing.snapshot());
+    const doubled = aggregate.snapshot();
+    inline for (std.meta.fields(SolvedLirParallelMetrics), 0..) |field, i| {
+        try std.testing.expectEqual(@as(u64, 2 * (i + 1)), @field(doubled.solved_lir_parallel, field.name));
+        @field(first, field.name) = std.math.maxInt(u64);
+    }
+    aggregate.addSolvedLirParallel(first);
+    const saturated = aggregate.snapshot();
+    inline for (std.meta.fields(SolvedLirParallelMetrics)) |field| {
+        try std.testing.expectEqual(std.math.maxInt(u64), @field(saturated.solved_lir_parallel, field.name));
+    }
+    try std.testing.expectEqual(@as(u64, 0), saturated.lir_gen_ns);
+    aggregate = Timing.init(std.testing.io);
+    try std.testing.expectEqualDeep(SolvedLirParallelMetrics{}, aggregate.snapshot().solved_lir_parallel);
+}
+
+test "pipeline timing preserves explicit Solved-LIR metrics output" {
+    var timing = Timing.init(std.testing.io);
+    var local: SolvedLirParallelMetrics = .{};
+    var explicit: SolvedLirParallelMetrics = .{ .tasks_submitted = 99 };
+    try std.testing.expect(solvedLirMetricsOutput(.{}, &local) == null);
+    try std.testing.expect(solvedLirMetricsOutput(.{ .timing = &timing }, &local).? == &local);
+    try std.testing.expect(solvedLirMetricsOutput(.{ .solved_lir_parallel_metrics_out = &explicit }, &local).? == &explicit);
+    const output = solvedLirMetricsOutput(.{
+        .timing = &timing,
+        .solved_lir_parallel_metrics_out = &explicit,
+    }, &local).?;
+    try std.testing.expect(output == &explicit);
+    try std.testing.expectEqual(@as(u64, 99), explicit.tasks_submitted);
+    // Simulate the lowerer's per-run reset and completed output.
+    output.* = .{ .tasks_submitted = 3, .tasks_committed = 3 };
+    timing.addSolvedLirParallel(output.*);
+    try std.testing.expectEqualDeep(explicit, timing.snapshot().solved_lir_parallel);
+    try std.testing.expectEqual(@as(u64, 3), explicit.tasks_submitted);
+    try std.testing.expectEqualDeep(SolvedLirParallelMetrics{}, local);
+}
+
 test "pipeline timing aggregates Monotype diagnostics" {
     var timing = Timing.init(std.testing.io);
     var first: postcheck.Monotype.Lower.Diagnostics = .{};
@@ -494,30 +561,30 @@ test "pipeline timing keeps aggregate Monotype worker work separate from wall ti
         .coordinator_post_batch_work_ns = 12,
         .root_tasks_submitted = 13,
         .root_tasks_committed = 14,
-        .root_tasks_retried_serial = 15,
         .specialization_tasks_submitted = 16,
         .specialization_tasks_committed = 17,
-        .specialization_tasks_retried_serial = 18,
         .specialization_tasks_discarded_ready = 19,
         .task_waves = 20,
         .peak_worker_lanes_available = 4,
         .peak_worker_lanes_used = 3,
         .within_lowering_lane_reuse_tasks = 21,
+        .peak_specialization_jobs_pending = 22,
+        .peak_specialization_shards_retained = 23,
     });
     timing.addMonotypeParallel(.{
         .worker_work_ns = 31,
         .coordinator_post_batch_work_ns = 32,
         .root_tasks_submitted = 33,
         .root_tasks_committed = 34,
-        .root_tasks_retried_serial = 35,
         .specialization_tasks_submitted = 36,
         .specialization_tasks_committed = 37,
-        .specialization_tasks_retried_serial = 38,
         .specialization_tasks_discarded_ready = 39,
         .task_waves = 40,
         .peak_worker_lanes_available = 8,
         .peak_worker_lanes_used = 5,
         .within_lowering_lane_reuse_tasks = 41,
+        .peak_specialization_jobs_pending = 42,
+        .peak_specialization_shards_retained = 43,
     });
     timing.addSnapshot(.{ .boxy_plan_ns = 43, .boxy_lower_ns = 47 });
 
@@ -528,15 +595,15 @@ test "pipeline timing keeps aggregate Monotype worker work separate from wall ti
     try std.testing.expectEqual(@as(u64, 44), parallel.coordinator_post_batch_work_ns);
     try std.testing.expectEqual(@as(u64, 46), parallel.root_tasks_submitted);
     try std.testing.expectEqual(@as(u64, 48), parallel.root_tasks_committed);
-    try std.testing.expectEqual(@as(u64, 50), parallel.root_tasks_retried_serial);
     try std.testing.expectEqual(@as(u64, 52), parallel.specialization_tasks_submitted);
     try std.testing.expectEqual(@as(u64, 54), parallel.specialization_tasks_committed);
-    try std.testing.expectEqual(@as(u64, 56), parallel.specialization_tasks_retried_serial);
     try std.testing.expectEqual(@as(u64, 58), parallel.specialization_tasks_discarded_ready);
     try std.testing.expectEqual(@as(u64, 60), parallel.task_waves);
     try std.testing.expectEqual(@as(u64, 8), parallel.peak_worker_lanes_available);
     try std.testing.expectEqual(@as(u64, 5), parallel.peak_worker_lanes_used);
     try std.testing.expectEqual(@as(u64, 62), parallel.within_lowering_lane_reuse_tasks);
+    try std.testing.expectEqual(@as(u64, 42), parallel.peak_specialization_jobs_pending);
+    try std.testing.expectEqual(@as(u64, 43), parallel.peak_specialization_shards_retained);
     try std.testing.expectEqual(@as(u64, 43), snapshot_value.boxy_plan_ns);
     try std.testing.expectEqual(@as(u64, 47), snapshot_value.boxy_lower_ns);
 }
@@ -984,6 +1051,8 @@ pub fn lowerPreparedSolvedToLir(prepared: PreparedSolved) LowerResourceError!Low
     var lir_gen_timing_scope = PipelineTimingScope.begin(target.timing, .lir_gen);
     defer lir_gen_timing_scope.end();
     const solved_input = prepared.program;
+    var local_parallel_metrics: SolvedLirParallelMetrics = .{};
+    const parallel_metrics = solvedLirMetricsOutput(target, &local_parallel_metrics);
     var lowered = try postcheck.SolvedLirLower.run(allocator, target.target_usize, solved_input, .{
         .spec_cache = target.spec_cache,
         .inline_plan = inline_plan.view(),
@@ -998,12 +1067,20 @@ pub fn lowerPreparedSolvedToLir(prepared: PreparedSolved) LowerResourceError!Low
         .layout_request_const_plans = target.layout_request_const_plans,
         .test_plan_metadata = prepared.test_plan_metadata,
         .debug_materialized_out = target.debug_materialized_out,
-        .parallel_metrics = target.solved_lir_parallel_metrics_out,
+        .parallel_metrics = parallel_metrics,
     });
+    if (target.timing) |timing| timing.addSolvedLirParallel(parallel_metrics.?.*);
     lir_gen_timing_scope.end();
     errdefer lowered.deinit();
 
     return finishLoweredOutput(allocator, prepared.root_count, target, &lowered);
+}
+
+/// The lowerer owns resetting its per-run output. Prefer the caller's slot so
+/// collecting aggregate timings neither resets nor overwrites it a second time.
+fn solvedLirMetricsOutput(target: TargetConfig, local: *SolvedLirParallelMetrics) ?*SolvedLirParallelMetrics {
+    return target.solved_lir_parallel_metrics_out orelse
+        if (target.timing != null) local else null;
 }
 
 fn finishLoweredOutput(

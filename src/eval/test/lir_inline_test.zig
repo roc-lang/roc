@@ -2247,59 +2247,58 @@ test "interface summaries relocate across bodies and executor lanes" {
         allocator: Allocator,
         next_lane: usize,
         pending: [2]TaskExecutor.Completion = undefined,
-        count: usize = 0,
-        open: bool = false,
+        pending_len: usize = 0,
+        lane_states: [2]TaskExecutor.LaneState = .{
+            TaskExecutor.LaneState.init(std.testing.allocator),
+            TaskExecutor.LaneState.init(std.testing.allocator),
+        },
+
+        fn deinit(self: *@This()) void {
+            for (&self.lane_states) |*state| state.deinit();
+        }
 
         fn begin(context: *anyopaque) void {
             const self: *@This() = @ptrCast(@alignCast(context));
-            std.debug.assert(!self.open and self.count == 0);
-            self.open = true;
+            std.debug.assert(self.pending_len == 0);
         }
 
         fn submit(context: *anyopaque, task: TaskExecutor.Task) Allocator.Error!void {
             const self: *@This() = @ptrCast(@alignCast(context));
-            std.debug.assert(self.open and self.count < self.pending.len);
-            try run(context, &.{task}, self.pending[self.count..][0..1]);
-            self.count += 1;
+            const lane = self.next_lane;
+            self.next_lane = (lane + 1) % 2;
+            self.pending[self.pending_len] = .{
+                .id = task.id,
+                .worker_id = lane,
+                .value = task.run(task.context, .{
+                    .id = lane,
+                    .allocator = self.allocator,
+                    .scratch = self.allocator,
+                    .lane_state = &self.lane_states[lane],
+                }),
+            };
+            self.pending_len += 1;
         }
 
-        fn waitOne(context: *anyopaque) TaskExecutor.Completion {
+        fn receive(context: *anyopaque) TaskExecutor.Completion {
             const self: *@This() = @ptrCast(@alignCast(context));
-            std.debug.assert(self.open and self.count > 0);
-            self.count -= 1;
-            return self.pending[self.count];
+            self.pending_len -= 1;
+            return self.pending[self.pending_len];
         }
 
         fn end(context: *anyopaque) void {
             const self: *@This() = @ptrCast(@alignCast(context));
-            std.debug.assert(self.open and self.count == 0);
-            self.open = false;
-        }
-
-        fn run(context: *anyopaque, tasks: []const TaskExecutor.Task, completions: []TaskExecutor.Completion) Allocator.Error!void {
-            const self: *@This() = @ptrCast(@alignCast(context));
-            for (tasks, 0..) |task, index| {
-                const lane = self.next_lane;
-                self.next_lane = (lane + 1) % 2;
-                completions[tasks.len - 1 - index] = .{
-                    .id = task.id,
-                    .worker_id = lane,
-                    .value = task.run(task.context, .{
-                        .id = lane,
-                        .allocator = self.allocator,
-                        .scratch = self.allocator,
-                    }),
-                };
-            }
+            std.debug.assert(self.pending_len == 0);
         }
 
         fn executor(self: *@This()) TaskExecutor.Executor {
-            return .{ .context = self, .worker_count = 2, .runFn = run, .streaming = .{
+            return .{
+                .context = self,
+                .worker_count = 2,
                 .beginFn = begin,
                 .submitFn = submit,
-                .waitOneFn = waitOne,
+                .receiveFn = receive,
                 .endFn = end,
-            } };
+            };
         }
     };
     const source =
@@ -2313,7 +2312,9 @@ test "interface summaries relocate across bodies and executor lanes" {
         \\main = |s| (left(s), right(s))
     ;
     var first_executor = Executor{ .allocator = allocator, .next_lane = 0 };
+    defer first_executor.deinit();
     var second_executor = Executor{ .allocator = allocator, .next_lane = 1 };
+    defer second_executor.deinit();
     var first_diagnostics: MonoLower.Diagnostics = .{};
     var second_diagnostics: MonoLower.Diagnostics = .{};
     var first = try lowerMonotypeModuleWithOptions(allocator, source, .{
