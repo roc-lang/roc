@@ -1,14 +1,17 @@
 //! SHA-256 block compression for `TypeDigestHasher`.
 //!
 //! Two hardware implementations (x86 SHA extensions and the ARMv8 `sha2`
-//! extension) and one portable implementation. Almost every 64-bit compiler
-//! target requires the hardware instructions -- build.zig adds them to the
-//! baseline CPU, and `TypeDigestHasher` refuses to compile for such a target
-//! without them -- so the portable rounds are for 32-bit targets such as
-//! wasm32 and for x86_64 macOS, the one 64-bit target whose CPUs cannot be
-//! assumed to have the instructions (see `uses_software_rounds`). All three
-//! produce identical state transitions; the tests in `TypeDigestHasher.zig`
-//! compare them against `std.crypto.hash.sha2.Sha256`.
+//! extension) and one portable implementation, selected by `compress`. aarch64
+//! compiler targets require the hardware instructions -- build.zig adds them to
+//! the baseline CPU, and `TypeDigestHasher` refuses to compile for such a target
+//! without them. x86_64 targets other than macOS carry both implementations and
+//! pick one with CPUID the first time a process compresses a block (see
+//! `dispatches_at_runtime`), because Intel's 2015-2020 Skylake through Comet
+//! Lake cores have no SHA extension. The portable rounds alone serve 32-bit
+//! targets such as wasm32, x86_64 macOS (see `uses_software_rounds`), and
+//! self-hosted-backend x86_64 builds for a CPU without the extension. All
+//! three produce identical state transitions; the tests in
+//! `TypeDigestHasher.zig` compare them against `std.crypto.hash.sha2.Sha256`.
 
 const std = @import("std");
 const builtin = @import("builtin");
@@ -104,15 +107,97 @@ pub const hasHardwareSupport = switch (arch_class) {
     .other => false,
 };
 
-/// Whether this target computes digests with the portable rounds instead of
-/// requiring the CPU's SHA-256 instructions. x86_64 macOS is the only 64-bit
-/// target that does: Apple's Intel Macs are Skylake through Comet Lake, whose
-/// cores have no SHA extension, so their baseline cannot carry one. Mirrors
-/// `usesSoftwareSha256` in src/target/mod.zig, which build.zig applies to the
-/// release target and minici to the machine it runs on. An Intel Mac that does
-/// have the extension still uses the hardware rounds when the build names its
-/// CPU (`-Dcpu=native`), because that sets `hasHardwareSupport`.
+/// Whether this target computes digests with the portable rounds only, never
+/// asking the CPU for its SHA-256 instructions. x86_64 macOS is the only
+/// 64-bit target that does: Apple's Intel Macs are Skylake through Comet Lake,
+/// whose cores have no SHA extension (only the 2020 Ice Lake MacBook Air
+/// does), so a macos_x86_64 build with the extension in its baseline dies of
+/// SIGILL on nearly every Intel Mac -- including the Coffee Lake i7-8700B that
+/// GitHub's macos-15-intel runner builds the nightly on. Digest bytes are
+/// identical either way; only the speed differs. An Intel Mac that does have
+/// the extension still uses the hardware rounds when the build names its CPU
+/// (`-Dcpu=native`), because that sets `hasHardwareSupport`.
 pub const uses_software_rounds = arch_class == .x86_64 and builtin.os.tag == .macos;
+
+/// Whether this build chooses between the hardware and portable rounds at
+/// runtime. That is every x86_64 target whose compilation CPU lacks the SHA
+/// extension, other than macOS: the build keeps x86_64 at the architecture
+/// baseline so that one released binary runs on every x86-64 CPU, and the
+/// SHA extension is missing from Intel's Skylake through Comet Lake cores,
+/// which are still common on Linux and Windows machines. A build that names a
+/// CPU with the extension (`-Dcpu=native` on such a CPU, or any `-Dcpu` at or
+/// above Ice Lake / Zen) takes `hasHardwareSupport` instead and pays no
+/// dispatch.
+///
+/// Only LLVM assembles `roundX86Sha` for a CPU without the extension: its
+/// assembler accepts any x86 instruction, whereas Zig's self-hosted x86_64
+/// backend (the Debug backend) encodes only instructions in the target CPU's
+/// feature set and rejects the SHA and SSSE3 ones otherwise. So a self-hosted
+/// build without the feature has no hardware rounds to dispatch to and uses
+/// the portable rounds; build.zig keeps Debug builds on a machine with the
+/// extension at `hasHardwareSupport` (see `withSha256Floor` there).
+pub const dispatches_at_runtime = arch_class == .x86_64 and !hasHardwareSupport and !uses_software_rounds and builtin.zig_backend == .stage2_llvm;
+
+const CompressFn = *const fn (*State, []const Block) void;
+
+/// `compress` for a build that dispatches at runtime: the function the next
+/// call goes through. It starts as `compressDetecting`, which asks CPUID once
+/// and then replaces it with the answer, so every later call is one load and
+/// one indirect call. Every value the slot ever holds is a valid function to
+/// call, and every store writes the same answer for the CPU this process runs
+/// on, so racing first calls all agree and no ordering beyond the atomic
+/// accesses is needed: the targets are code, not data the resolver publishes.
+var runtime_compress: CompressFn = &compressDetecting;
+
+fn compressDetecting(state: *State, blocks: []const Block) void {
+    const chosen: CompressFn = if (x86HasShaExtension()) &compressHardware else &compressPortable;
+    @atomicStore(CompressFn, &runtime_compress, chosen, .monotonic);
+    chosen(state, blocks);
+}
+
+/// Whether the CPU running this process reports the x86 SHA extension, along
+/// with the SSSE3 that `roundX86Sha` also uses for `palignr`. Only meaningful
+/// on x86_64.
+pub fn x86HasShaExtension() bool {
+    if (comptime arch_class != .x86_64) return false;
+    // Leaf 0 reports the highest basic leaf; the SHA bit lives in leaf 7.
+    if (cpuid(0, 0).eax < 7) return false;
+    const ssse3 = (cpuid(1, 0).ecx & (1 << 9)) != 0;
+    const sha = (cpuid(7, 0).ebx & (1 << 29)) != 0;
+    return ssse3 and sha;
+}
+
+const CpuidRegisters = struct { eax: u32, ebx: u32, ecx: u32, edx: u32 };
+
+fn cpuid(leaf: u32, sub_leaf: u32) CpuidRegisters {
+    var eax: u32 = undefined;
+    var ebx: u32 = undefined;
+    var ecx: u32 = undefined;
+    var edx: u32 = undefined;
+    asm volatile ("cpuid"
+        : [_] "={eax}" (eax),
+          [_] "={ebx}" (ebx),
+          [_] "={ecx}" (ecx),
+          [_] "={edx}" (edx),
+        : [_] "{eax}" (leaf),
+          [_] "{ecx}" (sub_leaf),
+    );
+    return .{ .eax = eax, .ebx = ebx, .ecx = ecx, .edx = edx };
+}
+
+/// Compress every block into `state` with the rounds this build uses: the
+/// hardware instructions when the compilation CPU has them, whichever of the
+/// two `runtime_compress` resolved to for the CPU running this process when
+/// the build dispatches, and otherwise the portable rounds.
+pub fn compress(state: *State, blocks: []const Block) void {
+    if (comptime hasHardwareSupport) {
+        compressHardware(state, blocks);
+    } else if (comptime dispatches_at_runtime) {
+        @atomicLoad(CompressFn, &runtime_compress, .monotonic)(state, blocks);
+    } else {
+        compressPortable(state, blocks);
+    }
+}
 
 const K = [64]u32{
     0x428A2F98, 0x71374491, 0xB5C0FBCF, 0xE9B5DBA5, 0x3956C25B, 0x59F111F1, 0x923F82A4, 0xAB1C5ED5,
@@ -125,8 +210,9 @@ const K = [64]u32{
     0x748F82EE, 0x78A5636F, 0x84C87814, 0x8CC70208, 0x90BEFFFA, 0xA4506CEB, 0xBEF9A3F7, 0xC67178F2,
 };
 
-/// Compress every block into `state` using the hardware instructions of the
-/// compilation target. Only callable when `hasHardwareSupport` is true.
+/// Compress every block into `state` using the SHA-256 instructions. Only
+/// callable when `hasHardwareSupport` is true or, on a target that
+/// `dispatches_at_runtime`, when `x86HasShaExtension` reports them.
 pub fn compressHardware(state: *State, blocks: []const Block) void {
     switch (arch_class) {
         .aarch64 => for (blocks) |*block| roundAarch64Sha2(state, block),

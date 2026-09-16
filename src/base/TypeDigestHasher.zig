@@ -22,12 +22,15 @@
 //! The digests are also persisted in the checked-module and specialization
 //! caches and must compare equal across machines, so they cannot be keyed by a
 //! per-machine secret; a public, deterministic, cryptographic function is the
-//! only construction that satisfies both constraints. Nearly every 64-bit
-//! compiler target is built with the CPU's SHA-256 instructions enabled (see
-//! `getReleaseTargetQuery` in build.zig), so this costs one hardware
-//! compression per 64 bytes; 32-bit targets such as wasm32 and x86_64 macOS
-//! (see `uses_software_rounds` in sha256_rounds.zig) use the portable rounds,
-//! which produce the same digest bytes more slowly.
+//! only construction that satisfies both constraints. aarch64 compiler targets
+//! are built with the CPU's SHA-256 instructions enabled (see
+//! `getReleaseTargetQuery` in build.zig) and released x86_64 compilers for
+//! anything but macOS detect them once per process (see
+//! `dispatches_at_runtime` in sha256_rounds.zig), so this costs one hardware
+//! compression per 64 bytes nearly everywhere; 32-bit targets such as wasm32,
+//! x86_64 macOS (see `uses_software_rounds` there) and x86-64 CPUs without the
+//! SHA extension use the portable rounds, which produce the same digest bytes
+//! more slowly.
 //!
 //! Module identities and artifact cache keys hash with
 //! `std.crypto.hash.sha2.Sha256` directly; this type exists so that every
@@ -42,18 +45,20 @@ const TypeDigestHasher = @This();
 pub const digest_length = 32;
 
 comptime {
-    // Every 64-bit target must carry the SHA-256 instructions, except the ones
-    // `uses_software_rounds` exempts: there is no software path for them, by
-    // decision. build.zig adds the feature to the baseline CPU; a `-Dcpu` that
-    // drops it is an unsupported target.
-    if (!rounds.hasHardwareSupport and !rounds.uses_software_rounds) {
-        switch (rounds.arch_class) {
-            .x86_64 => @compileError("roc requires the x86 SHA extension (`sha`) on x86_64 targets other than macOS; CPUs without SHA-256 instructions are not supported"),
-            .aarch64 => @compileError("roc requires the ARMv8 `sha2` extension on aarch64 targets; CPUs without SHA-256 instructions are not supported"),
-            .other => if (@sizeOf(usize) == 8) {
-                @compileError("roc requires SHA-256 instructions on 64-bit targets, and has no SHA-256 implementation for this architecture");
-            },
-        }
+    // Every 64-bit target other than x86_64 must carry the SHA-256
+    // instructions: there is no software path for them, by decision. build.zig
+    // adds the feature to the baseline CPU; a `-Dcpu` that drops it is an
+    // unsupported target. x86_64 always has a path: the hardware rounds,
+    // runtime dispatch, or the portable rounds (see `dispatches_at_runtime`
+    // and `uses_software_rounds` in sha256_rounds.zig).
+    switch (rounds.arch_class) {
+        .x86_64 => {},
+        .aarch64 => if (!rounds.hasHardwareSupport) {
+            @compileError("roc requires the ARMv8 `sha2` extension on aarch64 targets; CPUs without SHA-256 instructions are not supported");
+        },
+        .other => if (@sizeOf(usize) == 8) {
+            @compileError("roc requires SHA-256 instructions on 64-bit targets, and has no SHA-256 implementation for this architecture");
+        },
     }
 }
 
@@ -66,13 +71,7 @@ pub fn init() TypeDigestHasher {
     return .{};
 }
 
-fn compress(state: *rounds.State, blocks: []const rounds.Block) void {
-    if (comptime rounds.hasHardwareSupport) {
-        rounds.compressHardware(state, blocks);
-    } else {
-        rounds.compressPortable(state, blocks);
-    }
-}
+const compress = rounds.compress;
 
 /// Feed part of one canonical encoding.
 pub fn update(self: *TypeDigestHasher, bytes: []const u8) void {
@@ -186,6 +185,31 @@ test "portable rounds agree with the target's rounds" {
     var target = rounds.initial_state;
     compress(&target, @as(*const [1]rounds.Block, &block));
     try std.testing.expectEqual(portable, target);
+}
+
+test "runtime dispatch resolves to rounds that agree with the portable rounds" {
+    // On a build that dispatches, the first call through `compress` runs
+    // CPUID and every later call goes through the resolved implementation;
+    // both must produce the portable state.
+    var block: rounds.Block = undefined;
+    for (&block, 0..) |*byte, i| byte.* = @truncate(i *% 0x7d +% 0x31);
+    var portable = rounds.initial_state;
+    rounds.compressPortable(&portable, @as(*const [1]rounds.Block, &block));
+    for (0..3) |_| {
+        var dispatched = rounds.initial_state;
+        compress(&dispatched, @as(*const [1]rounds.Block, &block));
+        try std.testing.expectEqual(portable, dispatched);
+    }
+    // The hardware rounds must agree even in a baseline build, where only the
+    // dispatch reaches them. Only a build that can assemble them may name
+    // them: the self-hosted x86_64 backend rejects them without the feature.
+    if (comptime rounds.hasHardwareSupport or rounds.dispatches_at_runtime) {
+        if (rounds.hasHardwareSupport or rounds.x86HasShaExtension()) {
+            var hardware = rounds.initial_state;
+            rounds.compressHardware(&hardware, @as(*const [1]rounds.Block, &block));
+            try std.testing.expectEqual(portable, hardware);
+        }
+    }
 }
 
 test "constant tags preserve encoding across hash block boundaries" {

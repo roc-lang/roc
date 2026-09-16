@@ -336,48 +336,72 @@ fn getReleaseTargetQuery(b: *std.Build, target: ResolvedTarget) std.Target.Query
     return query;
 }
 
-/// `addSha256Floor` applied to an already-resolved target, unless the query
-/// named a CPU model explicitly (`-Dcpu`), in which case the caller's choice
-/// stands and `TypeDigestHasher` reports a missing feature at compile time.
-fn withSha256Floor(b: *std.Build, target: ResolvedTarget) ResolvedTarget {
+/// `addSha256Floor` applied to the target `zig build` compiles for, unless the
+/// query named a CPU model explicitly (`-Dcpu`), in which case the caller's
+/// choice stands and `TypeDigestHasher` reports a missing feature at compile
+/// time.
+///
+/// A Debug build for this machine's own x86_64 architecture and OS also gets
+/// the SHA extension (with the SSSE3 the rounds use) when this machine has
+/// it. Debug uses Zig's self-hosted x86_64 backend, which encodes only
+/// instructions in the target CPU's feature set, so without the feature such
+/// a build has no hardware rounds at all and computes every digest with the
+/// portable rounds (see `dispatches_at_runtime` in
+/// src/base/sha256_rounds.zig). The floor keeps Debug builds and test suites
+/// on hardware rounds where the CPU allows it; a machine without the
+/// extension gets the portable rounds, and every LLVM build stays at the
+/// architecture baseline and dispatches at runtime, like a released binary.
+fn withSha256Floor(b: *std.Build, target: ResolvedTarget, optimize: std.builtin.OptimizeMode) ResolvedTarget {
     var query = target.query;
     switch (query.cpu_model) {
         .determined_by_arch_os, .baseline => {},
         .native, .explicit => return target,
     }
     addSha256Floor(&query);
+    if (optimize == .Debug and hostBuildsDebugWithSha(target)) {
+        query.cpu_features_add.addFeature(@intFromEnum(std.Target.x86.Feature.sha));
+        query.cpu_features_add.addFeature(@intFromEnum(std.Target.x86.Feature.ssse3));
+    }
     return b.resolveTargetQuery(query);
 }
 
-/// Raise a 64-bit compiler target's CPU floor to include the SHA-256
+/// Whether `target` is this machine's own x86_64 architecture and OS and this
+/// machine's CPU has the SHA extension and SSSE3. `builtin.cpu` here is the
+/// CPU the build runner was compiled for, which Zig detects from the machine.
+/// x86_64 macOS never takes the floor: it computes digests with the portable
+/// rounds unless `-Dcpu` names its CPU (see `uses_software_rounds` in
+/// src/base/sha256_rounds.zig).
+fn hostBuildsDebugWithSha(target: ResolvedTarget) bool {
+    if (builtin.target.cpu.arch != .x86_64) return false;
+    if (target.result.cpu.arch != .x86_64 or target.result.os.tag != builtin.target.os.tag) return false;
+    if (target.result.os.tag == .macos) return false;
+    return builtin.cpu.hasAll(.x86, &.{ .sha, .ssse3 });
+}
+
+/// Raise an aarch64 compiler target's CPU floor to include the SHA-256
 /// instructions. Type digests are cryptographic SHA-256 (see
-/// `src/base/TypeDigestHasher.zig` for why) and every target this applies to
-/// computes them in hardware with no software rounds, so a 64-bit CPU without
-/// these instructions is not a supported host for the compiler. This is the only
-/// feature added above the architecture baseline: on x86_64 it is the SHA
-/// extension (every SHA CPU already has the SSSE3 the rounds also use), which
-/// AMD Zen and Intel Ice Lake and later carry but Intel's 2015-2020 Skylake
-/// through Comet Lake cores do not; on aarch64 it is the `sha2` crypto
-/// extension, present on all Apple Silicon, Graviton, Ampere and Raspberry
-/// Pi 5, absent on the Cortex-A53/A72 in Raspberry Pi 4 and earlier. A
-/// `-Dcpu` that omits the feature fails to compile `TypeDigestHasher` rather
-/// than silently getting a slower binary.
+/// `src/base/TypeDigestHasher.zig` for why) and aarch64 computes them in
+/// hardware with no software rounds, so an aarch64 CPU without these
+/// instructions is not a supported host for the compiler. This is the only
+/// feature added above the architecture baseline: the `sha2` crypto extension,
+/// present on all Apple Silicon, Graviton, Ampere and Raspberry Pi 5, absent on
+/// the Cortex-A53/A72 in Raspberry Pi 4 and earlier. A `-Dcpu` that omits the
+/// feature fails to compile `TypeDigestHasher` rather than silently getting a
+/// slower binary.
 ///
-/// x86_64 macOS gets no floor: its CPUs are the Skylake-through-Comet-Lake
-/// cores named above, so the floor would make the binary die of SIGILL on
-/// nearly every Intel Mac. It computes digests with the portable rounds
-/// instead -- see `roc_target.usesSoftwareSha256`.
+/// x86_64 gets no floor here. Its SHA extension is missing from Intel's
+/// 2015-2020 Skylake through Comet Lake cores, which are every Intel Mac and
+/// still a common Linux and Windows machine, so the binary stays at the
+/// architecture baseline and the rounds are chosen for the CPU it runs on: at
+/// runtime by CPUID on every x86_64 target except macOS (see
+/// `dispatches_at_runtime` in src/base/sha256_rounds.zig), and always the
+/// portable rounds on x86_64 macOS (see `uses_software_rounds` there). Debug
+/// builds for this machine are the one exception, in `withSha256Floor`.
 fn addSha256Floor(query: *std.Target.Query) void {
     const arch = query.cpu_arch orelse builtin.target.cpu.arch;
-    const os = query.os_tag orelse builtin.target.os.tag;
-    if (roc_target.usesSoftwareSha256(arch, os)) return;
     switch (roc_target.classifyCpuArch(arch)) {
-        .x86_64 => {
-            query.cpu_features_add.addFeature(@intFromEnum(std.Target.x86.Feature.sha));
-            query.cpu_features_add.addFeature(@intFromEnum(std.Target.x86.Feature.ssse3));
-        },
         .aarch64 => query.cpu_features_add.addFeature(@intFromEnum(std.Target.aarch64.Feature.sha2)),
-        .aarch64_be, .arm, .wasm32, .other => {},
+        .x86_64, .aarch64_be, .arm, .wasm32, .other => {},
     }
 }
 
@@ -3035,6 +3059,7 @@ pub fn build(b: *std.Build) void {
     const build_release_step = b.step("build-release", "Build optimized release binary for distribution");
 
     // general configuration
+    const optimize = b.standardOptimizeOption(.{});
     const target = blk: {
         var default_target_query: std.Target.Query = .{
             .abi = if (builtin.target.os.tag == .linux) .musl else null,
@@ -3049,9 +3074,8 @@ pub fn build(b: *std.Build) void {
             default_target_query.cpu_model = .baseline;
         }
 
-        break :blk withSha256Floor(b, b.standardTargetOptions(.{ .default_target = default_target_query }));
+        break :blk withSha256Floor(b, b.standardTargetOptions(.{ .default_target = default_target_query }), optimize);
     };
-    const optimize = b.standardOptimizeOption(.{});
     const strip_flag = b.option(bool, "strip", "Omit debug information");
     const no_bin = b.option(bool, "no-bin", "Skip emitting binaries (important for fast incremental compilation)") orelse false;
     const trace_eval = b.option(bool, "trace-eval", "Enable detailed evaluation tracing for debugging") orelse false;
