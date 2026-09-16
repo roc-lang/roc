@@ -28924,7 +28924,14 @@ fn unifyEquivalentGeneralizedCallables(self: *Self, retained_fn_var: Var, duplic
     if (self.types.resolveVar(retained_fn_var).var_ == self.types.resolveVar(duplicate_fn_var).var_) return false;
     var probe = try self.beginCommitProbe(env);
     const result = try probe.unify(retained_fn_var, duplicate_fn_var);
-    if (!result.isProblem()) {
+    // `isEstablished`, not `!isProblem`: `.suppressed_by_error` means an
+    // existing `.err` stopped unification BEFORE the relation was established
+    // (src/check/unify.zig:130-132), and is accepted for diagnostic recovery
+    // only. Committing on it would make two callables one relation on the
+    // strength of a unification that never happened, and the checked-artifact
+    // side treats this probe's class as the equality authority
+    // (`where_method_use_by_fn_root`, src/check/checked_artifact.zig:17985).
+    if (result.isEstablished()) {
         probe.commit();
         return true;
     }
