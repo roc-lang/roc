@@ -314,6 +314,10 @@ pub const BodyRelocation = struct {
         return relocateBodyValue(LocalSpan, span, prefix, self);
     }
 
+    pub fn joinPointSpan(self: BodyRelocation, prefix: BodyPrefix, span: JoinPointSpan) JoinPointSpan {
+        return relocateBodyValue(JoinPointSpan, span, prefix, self);
+    }
+
     /// Procedure metadata must use the same identity domain as its body.
     pub fn tailCalls(self: BodyRelocation, prefix: BodyPrefix, sites: lir_defs.TailCalls) lir_defs.TailCalls {
         return relocateBodyValue(lir_defs.TailCalls, sites, prefix, self);

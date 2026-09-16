@@ -1,8 +1,9 @@
 //! Per-op conformance sweep for the `RcEffect` table.
 //!
 //! Every low-level op whose `rcEffect()` is not `none()` makes a claim about
-//! refcounts that nothing else checks. This sweep runs Roc programs through the
-//! interpreter with the observer in `eval/rc_conformance.zig` watching, so each
+//! refcounts that nothing else checks. This sweep runs Roc programs and a
+//! compiler-internal LIR fixture through the interpreter with the observer in
+//! `eval/rc_conformance.zig` watching, so each
 //! executed op is judged against its row, and then fails for any op with a
 //! nontrivial row that no case drove—a new builtin cannot ship an unverified
 //! row.
@@ -16,6 +17,7 @@
 const std = @import("std");
 const base = @import("base");
 const eval = @import("eval");
+const zeroed_box_fixture = @import("zeroed_box_fixture.zig");
 
 const helpers = eval.test_helpers;
 const rc_conformance = eval.rc_conformance;
@@ -483,10 +485,7 @@ const cases = [_]Case{
         ,
     },
     .{
-        // The TRMC pass rewrites this recursion into a loop that writes each
-        // cell through a pointer, which is where `ptr_alloca`,
-        // `box_alloc_zeroed`, and `ptr_store` come from.
-        .name = "tail-recursion modulo cons builds cells through pointer stores",
+        .name = "recursive cells carry shared string payloads",
         .source_kind = .module,
         .source =
         \\StrList := [Nil, Cons(Str, StrList)]
@@ -848,6 +847,21 @@ test "rc effect conformance: every executed op matches its row" {
         };
         covered.setUnion(rc_conformance.covered());
         failures += reportFindings(case.name);
+    }
+
+    // `box_alloc_zeroed` is compiler-internal: TRMC emits it for constructor
+    // sites, but source lowering is not required to select that optimization.
+    // Observe the same executed fixture as the pointer-op unit test instead
+    // of claiming coverage from a source program that still uses `box_box`.
+    {
+        rc_conformance.begin();
+        defer rc_conformance.end();
+        zeroed_box_fixture.run(allocator) catch |err| {
+            std.debug.print("rc conformance: [zeroed box cell] run failed: {s}\n", .{@errorName(err)});
+            failures += 1;
+        };
+        covered.setUnion(rc_conformance.covered());
+        failures += reportFindings("zeroed box cell");
     }
 
     var gaps = rc_conformance.OpSet.initEmpty();

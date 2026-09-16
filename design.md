@@ -12133,7 +12133,13 @@ machine word are stored inline; wider sets use exact allocated words. This is a
 representation choice made solely from the producer-authored domain width, not
 a heuristic. The ownership-neutral liveness graph is immutable and built once
 per source proc, then shared by every ownership variant emitted from that
-source. It uses a reusable dense statement-to-node table, so successors,
+source. Ordinary and complete-outcome conventions share graph topology and
+ordinal metadata but have separate immutable liveness rows: restitution-only
+boundary reads must never widen the ordinary convention's read contract.
+Preparation freezes both contracts before workers select rows by their emitted
+signature. Temporary traversal and SCC storage does not outlive preparation;
+persistent snapshot subtrees remain source-owned.
+The graph uses a reusable dense statement-to-node table, so successors,
 predecessors, and worklist edges are direct node indices rather than statement
 hash lookups. Its strongly-connected-component condensation is solved in
 reverse dependency order: an acyclic singleton is evaluated once, and
@@ -12274,6 +12280,22 @@ Variant bodies are cloned with the existing statement-cloning machinery and
 added with `LirStore.addProcSpec`. Root procs are never specialized; their
 vectors are pinned. The variant count is bounded by realized demand vectors,
 not by the theoretical vector space.
+
+Ownership solving and field-take analysis finish before parallel emission
+begins. Source preparation freezes each ownership-neutral procedure's frame
+domain and liveness data; variants share that source data, never a previously
+emitted ARC body. Mutable residual masks, ownership overrides, plans, and
+materialization scratch belong to one emission.
+
+Planning produces ownership-demand variant requests without allocating procedure
+identities. A coordinator reserves those identities in FIFO procedure/request
+order, then materialization consumes the fixed call targets and appends only
+to private body shards. Ordered commit relocates generated locals, statements,
+and join spans before committing each procedure's metadata. Bounded waves use
+the same schedule with or without workers, so worker count and completion order
+cannot change variant symbols or emitted LIR. Submission or callback failure
+drains accepted work before freeing its owners; insertion failure discards the
+entire result rather than replaying work against a partially emitted store.
 
 A build without optional mode specialization suppresses general cost-only
 demand vectors, but it does not force every call to the solved base `RcSig`.
@@ -12761,6 +12783,14 @@ It allocates per-candidate tables only: a container that cannot benefit --
 wrong layout shape, borrowed, or non-operand whole uses -- contributes
 nothing beyond its visit in one linear statement scan, preserving the rule
 that ARC memory scales with ownership work actually demanded.
+
+All candidates share the frozen reachable-join inventory. Within one candidate,
+future field observations are a backward may-dataflow over the union of its
+consuming reads' successor regions. Each field bit propagates through an edge
+at most once; reinitialization and outcome restitution end exactly the old
+field lifetime on that edge. This answers every consuming-read query without
+repeatedly traversing shared continuations, while preserving the same loop,
+branch, and observation rules as a separate traversal from each read.
 
 The certifier verifies takes from the emitted LIR alone, with no side tables,
 by deferred claims. A field or payload read still binds its result at balance
