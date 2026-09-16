@@ -575,9 +575,12 @@ them.
       and panic on any difference in code bytes, relocations, or unwind
       records. Gated by a CLI subcommands case over the fixture apps; the
       full fixture corpus and the whole subcommands suite pass under the
-      flag. Not yet artifacts: aarch64 procedures, whose calls reach their targets
-      through registered branch sites and veneer islands that the artifact
-      references do not carry, so the round trip is x86_64 only for now; Boxy capture-drop helpers
+      flag. On aarch64 a call reaches a far target through a registered
+      branch site and a veneer island, so an assembled BL re-registers as a
+      call site (and a linked-function BL as an extern-call site) before it
+      is re-resolved, and islands are logged as their own regions and left
+      out of the artifact set: each placement lays out its own. Not yet
+      artifacts: Boxy capture-drop helpers, which
       are emitted inside their caller's bytes and are rejected as nested
       regions (Boxy programs never use the cache). No cache, no store.
    2. Pack programs (done): `src/lir/pack_program.zig` lowers one module's

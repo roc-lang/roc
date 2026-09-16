@@ -558,9 +558,7 @@ fn compileWithCodeGen(
     // Get generated code and relocations
     symbol_relocations_started_ns = if (timing) |timings| timings.start() else 0;
     codegen.finishImage() catch return CompilationError.OutOfMemory;
-    // AArch64 calls reach their targets through registered branch sites and
-    // veneers, which artifacts do not carry yet; the round trip covers x86_64.
-    if (artifactRoundTripRequested() and target.toCpuArch() == .x86_64) {
+    if (artifactRoundTripRequested()) {
         var fresh = CodeGen.initWithBoxyMetadata(
             allocator,
             lir_store,
@@ -647,7 +645,7 @@ fn compileWithCodeGen(
     if (timing) |timings| timings.finish(object_encoding_started_ns, .object_encoding);
 
     var artifacts: ?ProcArtifact.Set = null;
-    if ((pack_mode or capture_artifacts) and target.toCpuArch() == .x86_64) {
+    if (pack_mode or capture_artifacts) {
         artifacts = ProcArtifact.extract(CodeGen, allocator, &codegen, proc_specs, layout_store, static_strings.exports, spliced_data.items) catch |err| switch (err) {
             error.OutOfMemory => return CompilationError.OutOfMemory,
             error.NestedCodeRegion, error.UncoveredCode, error.DanglingReference, error.UnsupportedRelocation => std.debug.panic("pack artifact extraction failed: {s}", .{@errorName(err)}),
