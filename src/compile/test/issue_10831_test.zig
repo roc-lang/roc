@@ -1,30 +1,28 @@
 //! Regression test for issue #10831.
 
 const std = @import("std");
-const layout = @import("layout");
 const lir = @import("lir");
 
 const harness = @import("lower_to_lir_harness.zig");
 
 fn expectSingleSourceRefreshSpecialization(
-    store: *const lir.LirStore,
-    _: *const layout.Store,
+    prepared: *const lir.CheckedPipeline.PreparedMonotype,
 ) harness.LowerToLirHarnessError!void {
+    const program = prepared.program.view();
     var refresh_count: usize = 0;
-    for (0..store.procSpecCount()) |index| {
-        const proc: lir.LIR.LirProcSpecId = @enumFromInt(@as(u32, @intCast(index)));
-        const name = store.procDebugName(proc) orelse continue;
-        if (std.mem.eql(u8, name, "refresh")) refresh_count += 1;
+    for (program.defs) |def| {
+        const name = program.procDebugName(def.symbol) orelse continue;
+        if (std.mem.eql(u8, program.names.exportNameText(name), "refresh")) refresh_count += 1;
     }
 
-    // One source-level specialization lowers to two LIR procedures. Both
-    // calls have the same closed type, so they must stay at that baseline.
-    try std.testing.expectEqual(@as(usize, 2), refresh_count);
+    // Both calls have the same closed type. Count at Monotype's boundary:
+    // later closure lifting and ARC may legitimately add same-named procedures.
+    try std.testing.expectEqual(@as(usize, 1), refresh_count);
 }
 
 test "issue 10831: repeated annotated calls reuse one specialization" {
     // Repro for https://github.com/roc-lang/roc/issues/10831.
-    try harness.expectLirInspectionWithOptions(
+    try harness.expectLowersToLirWithOptions(
         \\Item : { value : F64, summary : Str }
         \\
         \\Store : { items : List(Item) }
@@ -56,9 +54,7 @@ test "issue 10831: repeated annotated calls reuse one specialization" {
         \\}
     , .{
         .proc_debug_names = true,
-        // Iterator-result evidence still requires synchronous completion. The
-        // parallel specialization executor must fall this body back to the
-        // coordinator without publishing partial worker state.
         .specialization_workers = 4,
-    }, expectSingleSourceRefreshSpecialization);
+        .prepared_inspect = expectSingleSourceRefreshSpecialization,
+    });
 }

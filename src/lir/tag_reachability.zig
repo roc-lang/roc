@@ -804,6 +804,7 @@ test "tag reachability bypasses call result and direct payload switches" {
     } });
     const callee = try store.addProcSpec(.{
         .name = LIR.Symbol.fromRaw(1),
+        .identity = LIR.ProcIdentity.forTest(8),
         .args = LIR.LocalSpan.empty(),
         .body = callee_body,
         .ret_layout = f.outer_layout,
@@ -855,6 +856,7 @@ test "tag reachability bypasses call result and direct payload switches" {
     } });
     const caller = try store.addProcSpec(.{
         .name = LIR.Symbol.fromRaw(2),
+        .identity = LIR.ProcIdentity.forTest(3),
         .args = try store.addLocalSpan(&[_]LIR.LocalId{caller_ret}),
         .body = caller_body,
         .ret_layout = f.inner_layout,
@@ -915,6 +917,7 @@ test "tag reachability tracks per-payload tags through payload structs" {
     } });
     const callee = try store.addProcSpec(.{
         .name = LIR.Symbol.fromRaw(4),
+        .identity = LIR.ProcIdentity.forTest(7),
         .args = LIR.LocalSpan.empty(),
         .body = callee_body,
         .ret_layout = outer_layout,
@@ -953,6 +956,7 @@ test "tag reachability tracks per-payload tags through payload structs" {
     } });
     const caller = try store.addProcSpec(.{
         .name = LIR.Symbol.fromRaw(5),
+        .identity = LIR.ProcIdentity.forTest(2),
         .args = LIR.LocalSpan.empty(),
         .body = caller_body,
         .ret_layout = f.inner_layout,
@@ -1077,6 +1081,7 @@ test "tag reachability preserves nested tag variants extracted across a loop joi
     } });
     const proc = try store.addProcSpec(.{
         .name = LIR.Symbol.fromRaw(11),
+        .identity = LIR.ProcIdentity.forTest(6),
         .args = LIR.LocalSpan.empty(),
         .body = body,
         .ret_layout = f.inner_layout,
@@ -1129,6 +1134,7 @@ test "tag reachability removes impossible explicit branches from multi-value set
     } });
     const proc = try store.addProcSpec(.{
         .name = LIR.Symbol.fromRaw(3),
+        .identity = LIR.ProcIdentity.forTest(5),
         .args = LIR.LocalSpan.empty(),
         .body = body,
         .ret_layout = f.inner_layout,
@@ -1186,6 +1192,7 @@ test "tag reachability keeps unrelated live discriminant reads" {
     } });
     const proc = try store.addProcSpec(.{
         .name = LIR.Symbol.fromRaw(6),
+        .identity = LIR.ProcIdentity.forTest(4),
         .args = LIR.LocalSpan.empty(),
         .body = body,
         .ret_layout = .u16,
@@ -1227,6 +1234,7 @@ test "tag reachability retains branches for arg-derived tags" {
     } });
     const proc = try store.addProcSpec(.{
         .name = LIR.Symbol.fromRaw(7),
+        .identity = LIR.ProcIdentity.forTest(3),
         .args = try store.addLocalSpan(&[_]LIR.LocalId{arg}),
         .body = body,
         .ret_layout = f.outer_layout,
@@ -1250,6 +1258,7 @@ test "tag reachability retains branches for hosted call results" {
 
     const hosted = try store.addProcSpec(.{
         .name = LIR.Symbol.fromRaw(8),
+        .identity = LIR.ProcIdentity.forTest(2),
         .args = LIR.LocalSpan.empty(),
         .body = null,
         .ret_layout = f.outer_layout,
@@ -1282,6 +1291,7 @@ test "tag reachability retains branches for hosted call results" {
     } });
     const proc = try store.addProcSpec(.{
         .name = LIR.Symbol.fromRaw(9),
+        .identity = LIR.ProcIdentity.forTest(1),
         .args = LIR.LocalSpan.empty(),
         .body = body,
         .ret_layout = f.outer_layout,
@@ -1328,6 +1338,7 @@ test "tag reachability retains branches for erased call results" {
     } });
     const proc = try store.addProcSpec(.{
         .name = LIR.Symbol.fromRaw(10),
+        .identity = LIR.ProcIdentity.forTest(1),
         .args = try store.addLocalSpan(&[_]LIR.LocalId{closure}),
         .body = body,
         .ret_layout = f.outer_layout,

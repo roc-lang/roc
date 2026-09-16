@@ -19,57 +19,73 @@ const CoreCtx = @import("ctx").CoreCtx;
 
 const ReverseCompletionExecutor = struct {
     inner: base.post_check_task_executor.Executor,
-    session: ?base.post_check_task_executor.Session = null,
-    buffered: [64]base.post_check_task_executor.Completion = undefined,
-    buffered_count: usize = 0,
-    inflight: usize = 0,
+    completion_buffer: []base.post_check_task_executor.Completion,
+    inner_session: ?base.post_check_task_executor.Session = null,
+    inner_outstanding: usize = 0,
+    buffered_len: usize = 0,
 
     fn begin(context: *anyopaque) void {
         const self: *ReverseCompletionExecutor = @ptrCast(@alignCast(context));
-        std.debug.assert(self.inner.worker_count <= self.buffered.len);
-        std.debug.assert(self.buffered_count == 0 and self.inflight == 0);
-        self.session = self.inner.begin();
+        std.debug.assert(self.inner_session == null);
+        std.debug.assert(self.completion_buffer.len >= self.inner.worker_count);
+        self.inner_session = self.inner.begin();
+        self.inner_outstanding = 0;
+        self.buffered_len = 0;
     }
 
-    fn submit(context: *anyopaque, task: base.post_check_task_executor.Task) std.mem.Allocator.Error!void {
+    fn submit(
+        context: *anyopaque,
+        task: base.post_check_task_executor.Task,
+    ) std.mem.Allocator.Error!void {
         const self: *ReverseCompletionExecutor = @ptrCast(@alignCast(context));
-        try self.session.?.submit(task);
-        self.inflight += 1;
-    }
-
-    fn waitOne(context: *anyopaque) base.post_check_task_executor.Completion {
-        const self: *ReverseCompletionExecutor = @ptrCast(@alignCast(context));
-        while (self.inflight > 0) : (self.inflight -= 1) {
-            self.buffered[self.buffered_count] = self.session.?.waitOne();
-            self.buffered_count += 1;
+        if (self.inner_session) |*session| {
+            try session.submit(task);
+            self.inner_outstanding += 1;
+        } else {
+            @panic("reverse post-check executor submitted outside a session");
         }
-        self.buffered_count -= 1;
-        return self.buffered[self.buffered_count];
+    }
+
+    fn receive(context: *anyopaque) base.post_check_task_executor.Completion {
+        const self: *ReverseCompletionExecutor = @ptrCast(@alignCast(context));
+        if (self.buffered_len == 0) {
+            if (self.inner_session) |*session| {
+                std.debug.assert(self.inner_outstanding > 0);
+                std.debug.assert(self.inner_outstanding <= self.completion_buffer.len);
+                while (self.inner_outstanding > 0) {
+                    self.completion_buffer[self.buffered_len] = session.receive();
+                    self.buffered_len += 1;
+                    self.inner_outstanding -= 1;
+                }
+            } else {
+                @panic("reverse post-check executor received outside a session");
+            }
+        }
+
+        self.buffered_len -= 1;
+        return self.completion_buffer[self.buffered_len];
     }
 
     fn end(context: *anyopaque) void {
         const self: *ReverseCompletionExecutor = @ptrCast(@alignCast(context));
-        std.debug.assert(self.inflight == 0 and self.buffered_count == 0);
-        self.session.?.end();
-        self.session = null;
-    }
-
-    fn run(
-        context: *anyopaque,
-        tasks: []const base.post_check_task_executor.Task,
-        completions: []base.post_check_task_executor.Completion,
-    ) std.mem.Allocator.Error!void {
-        const self: *ReverseCompletionExecutor = @ptrCast(@alignCast(context));
-        try self.inner.run(tasks, completions);
-        std.mem.reverse(base.post_check_task_executor.Completion, completions);
+        std.debug.assert(self.buffered_len == 0);
+        std.debug.assert(self.inner_outstanding == 0);
+        if (self.inner_session) |*session| {
+            session.end();
+        } else {
+            @panic("reverse post-check executor ended outside a session");
+        }
+        self.inner_session = null;
     }
 
     fn executor(self: *ReverseCompletionExecutor) base.post_check_task_executor.Executor {
         return .{
             .context = self,
             .worker_count = self.inner.worker_count,
-            .runFn = ReverseCompletionExecutor.run,
-            .streaming = .{ .beginFn = begin, .submitFn = submit, .waitOneFn = waitOne, .endFn = end },
+            .beginFn = ReverseCompletionExecutor.begin,
+            .submitFn = ReverseCompletionExecutor.submit,
+            .receiveFn = ReverseCompletionExecutor.receive,
+            .endFn = ReverseCompletionExecutor.end,
         };
     }
 };
@@ -145,7 +161,7 @@ pub const LoweredInspectFn = *const fn (
 
 /// Options controlling how the harness lowers an app to LIR.
 pub const LirLoweringOptions = struct {
-    /// Inspect both target continuations from one shared specialization result.
+    /// Inspect target-independent specialization before consumer lowering.
     prepared_inspect: ?*const fn (*const lir.CheckedPipeline.PreparedMonotype) LowerToLirHarnessError!void = null,
     shared_comptime_reads: bool = false,
 
@@ -177,9 +193,11 @@ pub const LirLoweringOptions = struct {
     lifted_expr_count_out: ?*usize = null,
     /// Receives the complete checked-to-LIR timing snapshot after lowering.
     timing_out: ?*lir.CheckedPipeline.TimingSnapshot = null,
+    /// Collect deterministic Monotype body diagnostics with the timing snapshot.
+    detailed_monotype_diagnostics: bool = false,
     /// Receives deterministic solved-LIR body-shard task counts.
     solved_lir_parallel_metrics_out: ?*lir.CheckedPipeline.SolvedLirParallelMetrics = null,
-    /// Deliver post-check completions in reverse order after callbacks finish.
+    /// Drain each active post-check group and report it in reverse arrival order.
     reverse_post_check_completions: bool = false,
     /// Stop after Monotype lowering. Focused postcheck regressions use this
     /// boundary when later LIR passes are outside the behavior under test.
@@ -283,13 +301,87 @@ pub fn expectDeterministicLir(app_body: []const u8) LowerToLirHarnessError!void 
 /// configuration twice so this checks both worker-count independence and
 /// repeated scheduling independence without relying on timing.
 pub fn expectSpecializationParallelismDeterministicLir(app_body: []const u8) LowerToLirHarnessError!void {
-    try expectPostCheckParallelismDeterministicLir(app_body, false);
+    try expectPostCheckParallelismDeterministicLir(app_body, false, false);
+}
+
+/// Assert deterministic serial/parallel output for a fixture whose worker-local
+/// specialization must eagerly lower an iterator-producing callee.
+pub fn expectEagerIteratorSpecializationParallelismDeterministicLir(app_body: []const u8) LowerToLirHarnessError!void {
+    try expectPostCheckParallelismDeterministicLir(app_body, false, true);
 }
 
 /// Lower an app with two independent platform-required procedure roots and
 /// compare complete LIR output across one, two, and four post-check workers.
 pub fn expectProcedureRootParallelismDeterministicLir(app_body: []const u8) LowerToLirHarnessError!void {
-    try expectPostCheckParallelismDeterministicLir(app_body, true);
+    try expectPostCheckParallelismDeterministicLir(app_body, true, false);
+}
+
+/// Forms whose admission must be demonstrated by worker commits, not serial fallback.
+pub const RuntimeWorkerFeature = enum {
+    erased,
+    capturing,
+    indirect_call,
+    match,
+    literal,
+    loop,
+    return_reuse,
+};
+
+/// Accept real platform fixtures as well as the synthetic echo-platform body.
+pub const RuntimeWorkerFixture = union(enum) {
+    app_path: []const u8,
+    app_body: []const u8,
+};
+
+/// Compare complete LIR across serial, two/four workers, and reversed completion
+/// delivery. Every parallel run must actually commit each requested body form.
+pub fn expectRuntimeWorkerParallelismDeterministicLir(
+    fixture: RuntimeWorkerFixture,
+    options: LirLoweringOptions,
+    comptime features: []const RuntimeWorkerFeature,
+    inspect: ?LirInspectFn,
+) LowerToLirHarnessError!void {
+    const gpa = std.testing.allocator;
+    var reference = std.Io.Writer.Allocating.init(gpa);
+    defer reference.deinit();
+    var serial_metrics: lir.CheckedPipeline.SolvedLirParallelMetrics = .{};
+    var opts = options;
+    opts.specialization_workers = 1;
+    opts.reverse_post_check_completions = false;
+    opts.solved_lir_parallel_metrics_out = &serial_metrics;
+    switch (fixture) {
+        .app_path => |path| try lowerAppPathToLir(gpa, path, &reference.writer, opts, inspect, null),
+        .app_body => |body| try runToLir(body, &reference.writer, opts, inspect),
+    }
+    try std.testing.expectEqual(@as(u64, 0), serial_metrics.tasks_submitted);
+    try std.testing.expectEqual(@as(u64, 0), serial_metrics.tasks_committed);
+
+    for ([_]usize{ 2, 4 }) |workers| {
+        for ([_]bool{ false, true }) |reverse| {
+            var candidate = std.Io.Writer.Allocating.init(gpa);
+            defer candidate.deinit();
+            var metrics: lir.CheckedPipeline.SolvedLirParallelMetrics = .{};
+            opts.specialization_workers = workers;
+            opts.reverse_post_check_completions = reverse;
+            opts.solved_lir_parallel_metrics_out = &metrics;
+            switch (fixture) {
+                .app_path => |path| try lowerAppPathToLir(gpa, path, &candidate.writer, opts, inspect, null),
+                .app_body => |body| try runToLir(body, &candidate.writer, opts, inspect),
+            }
+            try std.testing.expectEqualStrings(reference.written(), candidate.written());
+            try std.testing.expect(metrics.tasks_submitted > 0);
+            try std.testing.expectEqual(metrics.tasks_submitted, metrics.tasks_committed);
+            inline for (features) |feature| {
+                const field = "worker_" ++ @tagName(feature) ++ "_tasks_committed";
+                if (@field(metrics, field) == 0) {
+                    std.debug.print("No {s} worker commits with {d} workers (reversed: {})\n", .{
+                        @tagName(feature), workers, reverse,
+                    });
+                }
+                try std.testing.expect(@field(metrics, field) > 0);
+            }
+        }
+    }
 }
 
 /// Four independent, finite capture-free direct calls. Each required procedure
@@ -323,12 +415,12 @@ pub const prepared_finite_capture_free_direct_call_fixture =
 
 /// Assert that prepared finite capture-free direct calls lower identically
 /// serially, in two and four worker lanes, and when worker completions are
-/// committed in reverse order. The direct callees discovered by the first
-/// eligible epoch form a later epoch; every submitted shard commits without a
-/// retry.
+/// reported in reversed groups. The direct callees discovered by the first
+/// eligible epoch form later work; every submitted shard commits without a retry.
 pub fn expectPreparedFiniteCaptureFreeDirectCallsParallelismDeterministicLir() LowerToLirHarnessError!void {
     const gpa = std.testing.allocator;
     const cap = 1 << 22;
+    const max_retained_specialization_shards_per_lane = 4;
     const reference = try gpa.alloc(u8, cap);
     defer gpa.free(reference);
     var reference_writer = std.Io.Writer.fixed(reference);
@@ -336,7 +428,6 @@ pub fn expectPreparedFiniteCaptureFreeDirectCallsParallelismDeterministicLir() L
         .task_waves = 11,
         .tasks_submitted = 22,
         .tasks_committed = 33,
-        .tasks_retried_serial = 44,
     };
     var serial_timing: lir.CheckedPipeline.TimingSnapshot = .{};
     try runToLir(prepared_finite_capture_free_direct_call_fixture, &reference_writer, .{
@@ -348,7 +439,6 @@ pub fn expectPreparedFiniteCaptureFreeDirectCallsParallelismDeterministicLir() L
     try std.testing.expectEqual(@as(u64, 0), serial_metrics.task_waves);
     try std.testing.expectEqual(@as(u64, 0), serial_metrics.tasks_submitted);
     try std.testing.expectEqual(@as(u64, 0), serial_metrics.tasks_committed);
-    try std.testing.expectEqual(@as(u64, 0), serial_metrics.tasks_retried_serial);
     try std.testing.expectEqual(@as(u64, 0), serial_metrics.workspace_initializations);
     try std.testing.expectEqual(@as(u64, 0), serial_metrics.workspace_reuses);
     const serial_parallel = serial_timing.monotype_parallel;
@@ -364,8 +454,8 @@ pub fn expectPreparedFiniteCaptureFreeDirectCallsParallelismDeterministicLir() L
         solved_lir_task_waves: u64,
         monotype_task_waves: u64,
     }{
-        .{ .specialization_workers = 2, .solved_lir_task_waves = 7, .monotype_task_waves = 4 },
-        .{ .specialization_workers = 4, .solved_lir_task_waves = 4, .monotype_task_waves = 3 },
+        .{ .specialization_workers = 2, .solved_lir_task_waves = 8, .monotype_task_waves = 4 },
+        .{ .specialization_workers = 4, .solved_lir_task_waves = 5, .monotype_task_waves = 3 },
     }) |case| {
         for ([_]bool{ false, true }) |reverse_post_check_completions| {
             const candidate = try gpa.alloc(u8, cap);
@@ -383,9 +473,8 @@ pub fn expectPreparedFiniteCaptureFreeDirectCallsParallelismDeterministicLir() L
 
             try std.testing.expectEqualStrings(reference_writer.buffered(), candidate_writer.buffered());
             try std.testing.expectEqual(case.solved_lir_task_waves, metrics.task_waves);
-            try std.testing.expectEqual(@as(u64, 14), metrics.tasks_submitted);
-            try std.testing.expectEqual(@as(u64, 14), metrics.tasks_committed);
-            try std.testing.expectEqual(@as(u64, 0), metrics.tasks_retried_serial);
+            try std.testing.expectEqual(@as(u64, 16), metrics.tasks_submitted);
+            try std.testing.expectEqual(@as(u64, 16), metrics.tasks_committed);
             try std.testing.expectEqual(
                 metrics.tasks_submitted,
                 metrics.workspace_initializations + metrics.workspace_reuses,
@@ -396,7 +485,6 @@ pub fn expectPreparedFiniteCaptureFreeDirectCallsParallelismDeterministicLir() L
             const parallel = timing.monotype_parallel;
             try std.testing.expectEqual(@as(u64, 5), parallel.root_tasks_submitted);
             try std.testing.expectEqual(parallel.root_tasks_submitted, parallel.root_tasks_committed);
-            try std.testing.expectEqual(@as(u64, 0), parallel.root_tasks_retried_serial);
             try std.testing.expectEqual(@as(u64, 10), parallel.specialization_tasks_submitted);
             try std.testing.expect(
                 parallel.specialization_tasks_submitted > parallel.peak_worker_lanes_available,
@@ -405,12 +493,106 @@ pub fn expectPreparedFiniteCaptureFreeDirectCallsParallelismDeterministicLir() L
                 parallel.specialization_tasks_submitted,
                 parallel.specialization_tasks_committed,
             );
-            try std.testing.expectEqual(@as(u64, 0), parallel.specialization_tasks_retried_serial);
             try std.testing.expectEqual(@as(u64, 0), parallel.specialization_tasks_discarded_ready);
             // Ten specializations drain in one stream after the fixed root
             // batches, independently of available lane count.
             try std.testing.expectEqual(case.monotype_task_waves, parallel.task_waves);
             try std.testing.expect(parallel.within_lowering_lane_reuse_tasks > 0);
+            try std.testing.expect(parallel.peak_specialization_jobs_pending > 0);
+            try std.testing.expect(parallel.peak_specialization_shards_retained > 0);
+            try std.testing.expect(
+                parallel.peak_specialization_shards_retained <=
+                    max_retained_specialization_shards_per_lane * case.specialization_workers,
+            );
+            try std.testing.expect(
+                parallel.peak_specialization_shards_retained <=
+                    parallel.peak_specialization_jobs_pending,
+            );
+        }
+    }
+}
+
+/// Assert that worker-created string and inline-scope metadata commits in
+/// deterministic order without replaying a Solved-LIR body serially.
+pub fn expectSolvedLirWorkerMetadataParallelismDeterministicLir() LowerToLirHarnessError!void {
+    const gpa = std.testing.allocator;
+    const cap = 1 << 22;
+    const reference = try gpa.alloc(u8, cap);
+    defer gpa.free(reference);
+    var reference_writer = std.Io.Writer.fixed(reference);
+    try runToLir(prepared_finite_capture_free_direct_call_fixture, &reference_writer, .{
+        .specialization_workers = 1,
+        .prepared_direct_call_root_fixture = true,
+        .inline_mode = .wrappers,
+        .proc_debug_names = true,
+    }, null);
+
+    for ([_]usize{ 2, 4 }) |specialization_workers| {
+        for ([_]bool{ false, true }) |reverse_post_check_completions| {
+            const candidate = try gpa.alloc(u8, cap);
+            defer gpa.free(candidate);
+            var candidate_writer = std.Io.Writer.fixed(candidate);
+            var metrics: lir.CheckedPipeline.SolvedLirParallelMetrics = .{};
+            try runToLir(prepared_finite_capture_free_direct_call_fixture, &candidate_writer, .{
+                .specialization_workers = specialization_workers,
+                .prepared_direct_call_root_fixture = true,
+                .inline_mode = .wrappers,
+                .proc_debug_names = true,
+                .reverse_post_check_completions = reverse_post_check_completions,
+                .solved_lir_parallel_metrics_out = &metrics,
+            }, null);
+
+            try std.testing.expectEqualStrings(reference_writer.buffered(), candidate_writer.buffered());
+            try std.testing.expect(metrics.tasks_submitted > 0);
+            try std.testing.expectEqual(metrics.tasks_submitted, metrics.tasks_committed);
+            try std.testing.expect(metrics.worker_string_entries_committed > 0);
+            try std.testing.expect(metrics.worker_inline_scopes_committed > 0);
+        }
+    }
+}
+
+/// Assert that finite capturing function bodies lower on workers without
+/// changing output or commit order.
+pub fn expectSolvedLirCapturingBodyParallelismDeterministicLir() LowerToLirHarnessError!void {
+    const app_body =
+        \\make_a = |captured| |_ignored| captured
+        \\make_b = |captured| |_ignored| captured
+        \\make_c = |captured| |_ignored| captured
+        \\make_d = |captured| |_ignored| captured
+        \\
+        \\main! : List(Str) => Try({}, [Exit(I8), ..])
+        \\main! = |_args| {
+        \\    a = make_a(1.I64)
+        \\    b = make_b(2.I64)
+        \\    c = make_c(3.I64)
+        \\    d = make_d(4.I64)
+        \\    total = a(0) + b(0) + c(0) + d(0)
+        \\    if total == 10 { Ok({}) } else { Err(Exit(1)) }
+        \\}
+    ;
+    const gpa = std.testing.allocator;
+    const cap = 1 << 22;
+    const reference = try gpa.alloc(u8, cap);
+    defer gpa.free(reference);
+    var reference_writer = std.Io.Writer.fixed(reference);
+    try runToLir(app_body, &reference_writer, .{ .specialization_workers = 1 }, null);
+
+    for ([_]usize{ 2, 4 }) |specialization_workers| {
+        for ([_]bool{ false, true }) |reverse_post_check_completions| {
+            const candidate = try gpa.alloc(u8, cap);
+            defer gpa.free(candidate);
+            var candidate_writer = std.Io.Writer.fixed(candidate);
+            var metrics: lir.CheckedPipeline.SolvedLirParallelMetrics = .{};
+            try runToLir(app_body, &candidate_writer, .{
+                .specialization_workers = specialization_workers,
+                .reverse_post_check_completions = reverse_post_check_completions,
+                .solved_lir_parallel_metrics_out = &metrics,
+            }, null);
+
+            try std.testing.expectEqualStrings(reference_writer.buffered(), candidate_writer.buffered());
+            try std.testing.expect(metrics.tasks_submitted > 0);
+            try std.testing.expectEqual(metrics.tasks_submitted, metrics.tasks_committed);
+            try std.testing.expect(metrics.worker_capturing_tasks_committed > 0);
         }
     }
 }
@@ -430,6 +612,7 @@ fn expectNamedWorkerLocalCommitted(
 fn expectPostCheckParallelismDeterministicLir(
     app_body: []const u8,
     parallel_procedure_root_fixture: bool,
+    require_eager_iterator_specialization: bool,
 ) LowerToLirHarnessError!void {
     const gpa = std.testing.allocator;
     const cap = 1 << 22;
@@ -452,15 +635,24 @@ fn expectPostCheckParallelismDeterministicLir(
                 .specialization_workers = specialization_workers,
                 .parallel_procedure_root_fixture = parallel_procedure_root_fixture,
                 .timing_out = &timing,
+                .detailed_monotype_diagnostics = require_eager_iterator_specialization,
                 .solved_lir_parallel_metrics_out = &solved_lir_parallel,
                 .reverse_post_check_completions = attempt == 1,
             }, if (parallel_procedure_root_fixture) expectNamedWorkerLocalCommitted else null);
             try std.testing.expectEqualStrings(reference_writer.buffered(), candidate_writer.buffered());
+            if (require_eager_iterator_specialization) {
+                try std.testing.expect(timing.monotype_parallel.specialization_tasks_submitted > 0);
+                try std.testing.expect(
+                    timing.monotype_diagnostics.body.eager_iterator_template_bodies_lowered > 0,
+                );
+                try std.testing.expect(
+                    timing.monotype_diagnostics.body.lowered_template_bodies_discarded > 0,
+                );
+            }
             if (parallel_procedure_root_fixture) {
                 const parallel = timing.monotype_parallel;
                 try std.testing.expectEqual(@as(u64, 2), parallel.root_tasks_submitted);
                 try std.testing.expectEqual(@as(u64, 2), parallel.root_tasks_committed);
-                try std.testing.expectEqual(@as(u64, 0), parallel.root_tasks_retried_serial);
                 try std.testing.expectEqual(
                     @as(u64, @intCast(specialization_workers)),
                     parallel.peak_worker_lanes_available,
@@ -472,7 +664,7 @@ fn expectPostCheckParallelismDeterministicLir(
                 try std.testing.expect(solved_lir_parallel.tasks_committed > 0);
                 try std.testing.expectEqual(
                     solved_lir_parallel.tasks_submitted,
-                    solved_lir_parallel.tasks_committed + solved_lir_parallel.tasks_retried_serial,
+                    solved_lir_parallel.tasks_committed,
                 );
             }
         }
@@ -726,12 +918,21 @@ fn lowerAppPathToLir(
     }
 
     var timing = lir.CheckedPipeline.Timing.init(std.testing.io);
+    if (opts.detailed_monotype_diagnostics) timing.enableDetailedMonotypeBody();
     const coordinator_executor = if (opts.specialization_workers > 1)
         coord.postCheckExecutor()
     else
         null;
+    const reverse_completion_buffer: []base.post_check_task_executor.Completion = if (coordinator_executor != null and opts.reverse_post_check_completions)
+        try gpa.alloc(base.post_check_task_executor.Completion, coordinator_executor.?.worker_count)
+    else
+        &.{};
+    defer if (reverse_completion_buffer.len != 0) gpa.free(reverse_completion_buffer);
     var reverse_executor = if (coordinator_executor) |executor|
-        ReverseCompletionExecutor{ .inner = executor }
+        ReverseCompletionExecutor{
+            .inner = executor,
+            .completion_buffer = reverse_completion_buffer,
+        }
     else
         undefined;
     const post_check_executor = if (opts.post_check_executor_override) |executor| executor else if (coordinator_executor) |executor|

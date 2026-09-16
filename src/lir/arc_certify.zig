@@ -6290,6 +6290,7 @@ const CertifyTest = struct {
         }
         return try self.store.addProcSpec(.{
             .name = self.store.freshSyntheticSymbol(),
+            .identity = LIR.ProcIdentity.forTest(99),
             .args = try self.store.addLocalSpan(args),
             .frame_locals = try self.store.addLocalSpan(frame_locals.items),
             .body = body,
@@ -6339,6 +6340,7 @@ test "certify accepts consistent erased-callable proc ABI metadata" {
         const arg_plan = try f.store.internErasedCallArgsPlan(&f.layouts, &.{});
         _ = try f.store.addProcSpec(.{
             .name = f.store.freshSyntheticSymbol(),
+            .identity = LIR.ProcIdentity.forTest(5),
             .args = try f.store.addLocalSpan(&.{ capture, reuse }),
             .erased_reuse_arg = reuse,
             .erased_call_args = arg_plan,
@@ -6361,6 +6363,7 @@ test "certify accepts consistent erased-callable proc ABI metadata" {
         const arg_plan = try f.store.internErasedCallArgsPlan(&f.layouts, &.{});
         _ = try f.store.addProcSpec(.{
             .name = f.store.freshSyntheticSymbol(),
+            .identity = LIR.ProcIdentity.forTest(2),
             .args = try f.store.addLocalSpan(&.{ capture, reuse }),
             .erased_reuse_arg = reuse,
             .erased_call_args = arg_plan,
@@ -6382,6 +6385,7 @@ test "certify rejects erased-callable proc ABI metadata mismatches" {
         const body = try f.ret(result);
         _ = try f.store.addProcSpec(.{
             .name = f.store.freshSyntheticSymbol(),
+            .identity = LIR.ProcIdentity.forTest(4),
             .args = LIR.LocalSpan.empty(),
             .body = body,
             .ret_layout = .i64,
@@ -6403,6 +6407,7 @@ test "certify rejects erased-callable proc ABI metadata mismatches" {
         const body = try f.ret(result);
         _ = try f.store.addProcSpec(.{
             .name = f.store.freshSyntheticSymbol(),
+            .identity = LIR.ProcIdentity.forTest(1),
             .args = try f.store.addLocalSpan(&.{ capture, reuse }),
             .erased_reuse_arg = reuse,
             .body = body,
@@ -6425,6 +6430,7 @@ test "certify rejects erased-callable proc ABI metadata mismatches" {
         const body = try f.ret(marked_reuse);
         _ = try f.store.addProcSpec(.{
             .name = f.store.freshSyntheticSymbol(),
+            .identity = LIR.ProcIdentity.forTest(1),
             .args = try f.store.addLocalSpan(&.{ capture, marked_reuse, final_reuse }),
             .erased_reuse_arg = marked_reuse,
             .body = body,
@@ -6446,6 +6452,7 @@ test "certify rejects erased-callable proc ABI metadata mismatches" {
         const body = try f.ret(result);
         _ = try f.store.addProcSpec(.{
             .name = f.store.freshSyntheticSymbol(),
+            .identity = LIR.ProcIdentity.forTest(1),
             .args = try f.store.addLocalSpan(&.{ capture, reuse }),
             .erased_reuse_arg = reuse,
             .body = body,
@@ -6467,6 +6474,7 @@ test "certify rejects erased-callable proc ABI metadata mismatches" {
         const body = try f.ret(reuse);
         _ = try f.store.addProcSpec(.{
             .name = f.store.freshSyntheticSymbol(),
+            .identity = LIR.ProcIdentity.forTest(1),
             .args = try f.store.addLocalSpan(&.{ capture, reuse }),
             .body = body,
             .ret_layout = erased_callable,
@@ -6492,6 +6500,7 @@ test "certify rejects an erased-call argument plan that differs from the signatu
     const wrong_plan = try f.store.internErasedCallArgsPlan(&f.layouts, &.{ .u8, .u8 });
     _ = try f.store.addProcSpec(.{
         .name = f.store.freshSyntheticSymbol(),
+        .identity = LIR.ProcIdentity.forTest(3),
         .args = try f.store.addLocalSpan(&.{ first, second, capture, reuse }),
         .erased_reuse_arg = reuse,
         .erased_call_args = wrong_plan,
@@ -7025,6 +7034,7 @@ test "certify flags an unreleased owned argument consumed twice" {
     const target = try f.local(.i64);
     const callee = try f.store.addProcSpec(.{
         .name = f.store.freshSyntheticSymbol(),
+        .identity = LIR.ProcIdentity.forTest(2),
         .args = LIR.LocalSpan.empty(),
         .body = null,
         .ret_layout = .i64,
@@ -7049,6 +7059,7 @@ test "certify accepts a doubly-consumed argument with one incref" {
     const target = try f.local(.i64);
     const callee = try f.store.addProcSpec(.{
         .name = f.store.freshSyntheticSymbol(),
+        .identity = LIR.ProcIdentity.forTest(1),
         .args = LIR.LocalSpan.empty(),
         .body = null,
         .ret_layout = .i64,

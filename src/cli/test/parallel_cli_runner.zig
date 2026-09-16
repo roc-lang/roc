@@ -390,6 +390,10 @@ const CustomCase = enum {
     default_platform_build_x64openbsd_rejected,
     default_platform_build_wasm32,
     default_platform_wasm32_archive_reproducible,
+    native_build_thread_count_reproducible,
+    native_build_artifact_round_trip,
+    native_build_pack_objects,
+    native_build_pack_hits,
     issue_10733_wasm_boxy_dev_sealed_object,
     issue_10827_private_compiler_support,
     issue_11134_wasm_post_llvm_pipeline,
@@ -1498,6 +1502,10 @@ const subcommand_cases = [_]CliCase{
     .{ .id = 0, .suite = .subcommands, .name = "issue 10598: roc build default platform x64openbsd explains unsupported cross-link", .body = .{ .custom = .default_platform_build_x64openbsd_rejected } },
     .{ .id = 0, .suite = .subcommands, .name = "roc build default platform wasm32 archive succeeds", .body = .{ .custom = .default_platform_build_wasm32 } },
     .{ .id = 0, .suite = .subcommands, .name = "roc build default platform wasm32 archive output is reproducible", .body = .{ .custom = .default_platform_wasm32_archive_reproducible } },
+    .{ .id = 0, .suite = .subcommands, .name = "roc build native dev output is identical across thread counts and repeated builds", .timeout_ms = 600_000, .body = .{ .custom = .native_build_thread_count_reproducible } },
+    .{ .id = 0, .suite = .subcommands, .name = "roc build native dev output assembled from its own procedure artifacts is identical", .timeout_ms = 600_000, .body = .{ .custom = .native_build_artifact_round_trip } },
+    .{ .id = 0, .suite = .subcommands, .name = "roc build native dev pack programs are deterministic and round-trip through artifacts", .timeout_ms = 600_000, .body = .{ .custom = .native_build_pack_objects } },
+    .{ .id = 0, .suite = .subcommands, .name = "roc build native dev serves closed specializations from a previous build's packs", .timeout_ms = 600_000, .body = .{ .custom = .native_build_pack_hits } },
     .{ .id = 0, .suite = .subcommands, .name = "roc build macOS output basename does not affect bytes", .body = .{ .custom = .macos_output_basename_reproducible } },
     .{ .id = 0, .suite = .subcommands, .name = "default platform crash prints debug backtrace on x64musl", .body = .{ .custom = .default_platform_crash_x64musl } },
     .{ .id = 0, .suite = .subcommands, .name = "default platform crash prints debug backtrace on arm64musl", .body = .{ .custom = .default_platform_crash_arm64musl } },
@@ -3069,6 +3077,10 @@ fn runCustomCase(
         .default_platform_build_x64openbsd_rejected => customDefaultPlatformOpenBsdRejected(io, allocator, &env, &timer, timeout_ms),
         .default_platform_build_wasm32 => customDefaultPlatformBuild(io, allocator, &env, &timer, timeout_ms, .wasm32),
         .default_platform_wasm32_archive_reproducible => customDefaultPlatformWasm32ArchiveReproducible(io, allocator, &env, &timer, timeout_ms),
+        .native_build_thread_count_reproducible => customNativeBuildThreadCountReproducible(io, allocator, &env, &timer, timeout_ms),
+        .native_build_artifact_round_trip => customNativeBuildArtifactRoundTrip(io, allocator, &env, &timer, timeout_ms),
+        .native_build_pack_objects => customNativeBuildPackObjects(io, allocator, &env, &timer, timeout_ms),
+        .native_build_pack_hits => customNativeBuildPackHits(io, allocator, &env, &timer, timeout_ms),
         .issue_10733_wasm_boxy_dev_sealed_object => customIssue10733WasmBoxyDevSealedObject(io, allocator, &env, &timer, timeout_ms),
         .issue_10827_private_compiler_support => customIssue10827PrivateCompilerSupport(io, allocator, &env, &timer, timeout_ms),
         .issue_11134_wasm_post_llvm_pipeline => customWasmPostLlvmPipeline(io, allocator, &env, &timer, timeout_ms),
@@ -5613,6 +5625,306 @@ fn customDefaultPlatformWasm32ArchiveReproducible(
         }
     }
 
+    return null;
+}
+
+/// Fixture apps whose native dev builds must be byte-identical whether the
+/// compiler runs on one worker lane or many, and across repeated builds.
+/// Object bytes are the unit the package object cache stores under a
+/// content-derived key, so any dependence on scheduling is a cache defect
+/// even when it is confined to debug information.
+const thread_count_reproducible_apps = [_][]const u8{
+    "test/int/app.roc",
+    "test/str/app.roc",
+    "test/str/app_diamond.roc",
+    "test/fx/hello_world.roc",
+    "test/fx/arc_certifier_large_tree.roc",
+    "test/fx-open/app.roc",
+};
+
+fn customNativeBuildThreadCountReproducible(
+    io: std.Io,
+    allocator: Allocator,
+    env: *const CaseEnv,
+    timer: *harness.Timer,
+    timeout_ms: u64,
+) ?TestResult {
+    for (thread_count_reproducible_apps, 0..) |roc_file, app_index| {
+        const variants = [_]struct { suffix: []const u8, jobs: ?[]const u8 }{
+            .{ .suffix = "jobs1", .jobs = "--jobs=1" },
+            .{ .suffix = "default_a", .jobs = null },
+            .{ .suffix = "default_b", .jobs = null },
+        };
+        var outputs: [variants.len][]const u8 = undefined;
+        for (variants, 0..) |variant, variant_index| {
+            const output_path = std.fmt.allocPrint(allocator, "{s}/thread_repro_{d}_{s}", .{ env.dirs.work_dir, app_index, variant.suffix }) catch |err|
+                return customInfraFailure(allocator, timer, "failed to allocate output path: {}", .{err});
+            const out_arg = outputArg(allocator, output_path) catch |err|
+                return customInfraFailure(allocator, timer, "failed to allocate output arg: {}", .{err});
+            const args: []const []const u8 = if (variant.jobs) |jobs|
+                &.{ "build", "--no-cache", "--opt=dev", jobs, out_arg }
+            else
+                &.{ "build", "--no-cache", "--opt=dev", out_arg };
+            if (runRocAndCheck(io, allocator, env, timer, timeout_ms, .{
+                .args = args,
+                .roc_file = roc_file,
+                .contains = &.{.{ .stream = .stdout, .text = "successfully building" }},
+            })) |failure| return failure;
+            outputs[variant_index] = std.Io.Dir.cwd().readFileAlloc(io, output_path, allocator, .limited(64 * 1024 * 1024)) catch |err|
+                return customInfraFailure(allocator, timer, "failed to read build output {s}: {}", .{ output_path, err });
+        }
+        defer for (outputs) |bytes| allocator.free(bytes);
+
+        if (!std.mem.eql(u8, outputs[0], outputs[1])) {
+            return customFailure(allocator, timer, "{s}: native dev build bytes differ between --jobs=1 and the default worker count", .{roc_file});
+        }
+        if (!std.mem.eql(u8, outputs[1], outputs[2])) {
+            return customFailure(allocator, timer, "{s}: native dev build bytes differ between two builds with the default worker count", .{roc_file});
+        }
+    }
+    return null;
+}
+
+/// Every dev object compile under `ROC_DEV_ARTIFACT_ROUNDTRIP` also assembles
+/// the program from its own procedure artifacts and panics on any difference
+/// in code bytes, relocations, or unwind records (`ProcArtifact.verifyRoundTrip`
+/// in `src/backend/dev/ProcArtifact.zig`). A build that panics fails the
+/// "successfully building" check.
+fn customNativeBuildArtifactRoundTrip(
+    io: std.Io,
+    allocator: Allocator,
+    env: *const CaseEnv,
+    timer: *harness.Timer,
+    timeout_ms: u64,
+) ?TestResult {
+    var round_trip_env = CaseEnv{
+        .dirs = env.dirs,
+        .env_map = env.env_map.clone(allocator) catch |err|
+            return customInfraFailure(allocator, timer, "failed to clone artifact round-trip environment: {}", .{err}),
+    };
+    defer round_trip_env.env_map.deinit();
+    round_trip_env.env_map.put("ROC_DEV_ARTIFACT_ROUNDTRIP", "1") catch |err|
+        return customInfraFailure(allocator, timer, "failed to enable the artifact round trip: {}", .{err});
+
+    for (thread_count_reproducible_apps, 0..) |roc_file, app_index| {
+        const output_path = std.fmt.allocPrint(allocator, "{s}/artifact_round_trip_{d}", .{ env.dirs.work_dir, app_index }) catch |err|
+            return customInfraFailure(allocator, timer, "failed to allocate output path: {}", .{err});
+        const out_arg = outputArg(allocator, output_path) catch |err|
+            return customInfraFailure(allocator, timer, "failed to allocate output arg: {}", .{err});
+        if (runRocAndCheck(io, allocator, &round_trip_env, timer, timeout_ms, .{
+            .args = &.{ "build", "--no-cache", "--opt=dev", out_arg },
+            .roc_file = roc_file,
+            .contains = &.{.{ .stream = .stdout, .text = "successfully building" }},
+            .not_contains = &.{ .{ .stream = .stderr, .text = "round trip failed" }, .{ .stream = .stderr, .text = "panic" } },
+        })) |failure| return failure;
+    }
+    return null;
+}
+
+/// `ROC_DEV_PACK_OBJECTS` makes a native dev build also lower every visible
+/// module's closed exports as a pack program and write one object and one
+/// manifest per module next to the output (`writePackObjects` in
+/// `src/cli/main.zig`). Two builds must write identical pack files, the
+/// platform and app packs must have roots, and with the artifact round trip
+/// enabled every pack object must assemble from its own artifacts.
+fn customNativeBuildPackObjects(
+    io: std.Io,
+    allocator: Allocator,
+    env: *const CaseEnv,
+    timer: *harness.Timer,
+    timeout_ms: u64,
+) ?TestResult {
+    var pack_env = CaseEnv{
+        .dirs = env.dirs,
+        .env_map = env.env_map.clone(allocator) catch |err|
+            return customInfraFailure(allocator, timer, "failed to clone pack environment: {}", .{err}),
+    };
+    defer pack_env.env_map.deinit();
+    pack_env.env_map.put("ROC_DEV_PACK_OBJECTS", "1") catch |err|
+        return customInfraFailure(allocator, timer, "failed to enable pack objects: {}", .{err});
+    pack_env.env_map.put("ROC_DEV_ARTIFACT_ROUNDTRIP", "1") catch |err|
+        return customInfraFailure(allocator, timer, "failed to enable the artifact round trip: {}", .{err});
+
+    const roc_file = "test/fx/hello_world.roc";
+    const suffixes = [_][]const u8{ "pack_a", "pack_b" };
+    var outputs: [suffixes.len][]const u8 = undefined;
+    for (suffixes, 0..) |suffix, index| {
+        outputs[index] = std.fmt.allocPrint(allocator, "{s}/{s}", .{ env.dirs.work_dir, suffix }) catch |err|
+            return customInfraFailure(allocator, timer, "failed to allocate output path: {}", .{err});
+        const out_arg = outputArg(allocator, outputs[index]) catch |err|
+            return customInfraFailure(allocator, timer, "failed to allocate output arg: {}", .{err});
+        if (runRocAndCheck(io, allocator, &pack_env, timer, timeout_ms, .{
+            .args = &.{ "build", "--no-cache", "--opt=dev", out_arg },
+            .roc_file = roc_file,
+            .contains = &.{.{ .stream = .stdout, .text = "successfully building" }},
+            .not_contains = &.{ .{ .stream = .stderr, .text = "round trip failed" }, .{ .stream = .stderr, .text = "panic" } },
+        })) |failure| return failure;
+    }
+
+    const pack_files = [_][]const u8{ "pack.Builder.o", "pack.Builder.manifest", "pack.Builder.rpk", "pack.hello_world.o", "pack.hello_world.manifest", "pack.hello_world.rpk" };
+    for (pack_files) |pack_file| {
+        var contents: [suffixes.len][]const u8 = undefined;
+        for (outputs, 0..) |output, index| {
+            const path = std.fmt.allocPrint(allocator, "{s}.{s}", .{ output, pack_file }) catch |err|
+                return customInfraFailure(allocator, timer, "failed to allocate pack path: {}", .{err});
+            contents[index] = std.Io.Dir.cwd().readFileAlloc(io, path, allocator, .limited(64 * 1024 * 1024)) catch |err|
+                return customFailure(allocator, timer, "pack file {s} was not written: {}", .{ path, err });
+        }
+        defer for (contents) |bytes| allocator.free(bytes);
+        if (!std.mem.eql(u8, contents[0], contents[1])) {
+            return customFailure(allocator, timer, "{s}: pack bytes differ between two builds", .{pack_file});
+        }
+        if (std.mem.endsWith(u8, pack_file, ".manifest") and std.mem.find(u8, contents[0], "root roc__proc_") == null) {
+            return customFailure(allocator, timer, "{s}: pack manifest names no root procedure", .{pack_file});
+        }
+    }
+    return null;
+}
+
+/// A cold build writes packs (`ROC_DEV_PACK_OBJECTS`); a warm build served
+/// from them (`ROC_DEV_PACK_HITS`) must report hits, splice the entries in
+/// place of lowering them, link, and produce a program that behaves exactly
+/// like the cold one. The roc-parser app keeps enough closed procedures out
+/// of the inliner for the warm build to hit.
+fn customNativeBuildPackHits(
+    io: std.Io,
+    allocator: Allocator,
+    env: *const CaseEnv,
+    timer: *harness.Timer,
+    timeout_ms: u64,
+) ?TestResult {
+    const roc_file = "test/cli/issue_9889_roc_parser/Issue10167BoxedParserConst.roc";
+    const cold_dir = std.fmt.allocPrint(allocator, "{s}/pack_hits_cold", .{env.dirs.work_dir}) catch |err|
+        return customInfraFailure(allocator, timer, "failed to allocate cold dir: {}", .{err});
+    const warm_dir = std.fmt.allocPrint(allocator, "{s}/pack_hits_warm", .{env.dirs.work_dir}) catch |err|
+        return customInfraFailure(allocator, timer, "failed to allocate warm dir: {}", .{err});
+    for ([_][]const u8{ cold_dir, warm_dir }) |dir| {
+        std.Io.Dir.cwd().createDirPath(io, dir) catch |err|
+            return customInfraFailure(allocator, timer, "failed to create {s}: {}", .{ dir, err });
+    }
+    const cold_exe = std.fmt.allocPrint(allocator, "{s}/app", .{cold_dir}) catch |err|
+        return customInfraFailure(allocator, timer, "failed to allocate output path: {}", .{err});
+    const warm_exe = std.fmt.allocPrint(allocator, "{s}/app", .{warm_dir}) catch |err|
+        return customInfraFailure(allocator, timer, "failed to allocate output path: {}", .{err});
+
+    var cold_env = CaseEnv{
+        .dirs = env.dirs,
+        .env_map = env.env_map.clone(allocator) catch |err|
+            return customInfraFailure(allocator, timer, "failed to clone cold environment: {}", .{err}),
+    };
+    defer cold_env.env_map.deinit();
+    cold_env.env_map.put("ROC_DEV_PACK_OBJECTS", "1") catch |err|
+        return customInfraFailure(allocator, timer, "failed to enable pack objects: {}", .{err});
+    const cold_out_arg = outputArg(allocator, cold_exe) catch |err|
+        return customInfraFailure(allocator, timer, "failed to allocate output arg: {}", .{err});
+    if (runRocAndCheck(io, allocator, &cold_env, timer, timeout_ms, .{
+        .args = &.{ "build", "--no-cache", "--opt=dev", cold_out_arg },
+        .roc_file = roc_file,
+        .contains = &.{.{ .stream = .stdout, .text = "successfully building" }},
+        .not_contains = &.{.{ .stream = .stderr, .text = "panic" }},
+    })) |failure| return failure;
+
+    var warm_env = CaseEnv{
+        .dirs = env.dirs,
+        .env_map = env.env_map.clone(allocator) catch |err|
+            return customInfraFailure(allocator, timer, "failed to clone warm environment: {}", .{err}),
+    };
+    defer warm_env.env_map.deinit();
+    warm_env.env_map.put("ROC_DEV_PACK_HITS", cold_dir) catch |err|
+        return customInfraFailure(allocator, timer, "failed to enable pack hits: {}", .{err});
+    const warm_out_arg = outputArg(allocator, warm_exe) catch |err|
+        return customInfraFailure(allocator, timer, "failed to allocate output arg: {}", .{err});
+    const warm_timeout = childCommandTimeoutMs(timer, timeout_ms) orelse
+        return timeoutFailure(allocator, timer, .run, "case timeout exhausted before the warm build");
+    const warm = runRocInEnv(io, allocator, &warm_env, &.{ "build", "--no-cache", "--opt=dev", warm_out_arg }, roc_file, .relative, &.{}, null, warm_timeout) catch |err|
+        return customInfraFailure(allocator, timer, "warm build spawn error: {}", .{err});
+    if (!processSucceeded(warm.term) or std.mem.find(u8, warm.stdout, "successfully building") == null or std.mem.find(u8, warm.stderr, "panic") != null) {
+        return failureFromRun(allocator, timer, warm, "warm build served from packs did not succeed");
+    }
+    const hits_marker = "pack hits: ";
+    const hits_at = std.mem.find(u8, warm.stderr, hits_marker) orelse
+        return failureFromRun(allocator, timer, warm, "warm build did not report pack hits");
+    const hits_text = warm.stderr[hits_at + hits_marker.len ..];
+    var hits: u64 = 0;
+    for (hits_text) |byte| {
+        if (byte < '0' or byte > '9') break;
+        hits = hits * 10 + (byte - '0');
+    }
+    if (hits == 0) return failureFromRun(allocator, timer, warm, "warm build reported no pack hits");
+
+    const run_timeout = childCommandTimeoutMs(timer, timeout_ms) orelse
+        return timeoutFailure(allocator, timer, .run, "case timeout exhausted before running the programs");
+    const cold_run = runRawInEnv(io, allocator, env, &.{cold_exe}, env.dirs.work_dir, "", run_timeout) catch |err|
+        return customInfraFailure(allocator, timer, "cold program spawn error: {}", .{err});
+    const warm_run = runRawInEnv(io, allocator, env, &.{warm_exe}, env.dirs.work_dir, "", run_timeout) catch |err|
+        return customInfraFailure(allocator, timer, "warm program spawn error: {}", .{err});
+    if (!std.meta.eql(cold_run.term, warm_run.term) or !std.mem.eql(u8, cold_run.stdout, warm_run.stdout)) {
+        return failureFromRun(allocator, timer, warm_run, "program built from packs behaves differently from the cold build");
+    }
+
+    // The same through the store under the case's cache root: the first
+    // build writes its packs there, the second is served from them. The
+    // second program reaches closed module functions as values too, so its
+    // rebuild goes through the entries that forward to cached procedures.
+    // The third reaches module functions whose results are constants, so
+    // its cached entries carry the constants they point at.
+    const store_apps = [_]struct { roc_file: []const u8, prefix: []const u8 }{
+        .{ .roc_file = roc_file, .prefix = "store" },
+        .{ .roc_file = "test/cli/pack_values/PackValues.roc", .prefix = "values" },
+        .{ .roc_file = "test/cli/pack_constants/PackConstants.roc", .prefix = "constants" },
+    };
+    for (store_apps) |app| {
+        if (storeBuildsBehaveIdentically(io, allocator, env, timer, timeout_ms, app.roc_file, warm_dir, app.prefix)) |failure| return failure;
+    }
+    return null;
+}
+
+/// Builds `roc_file` twice with the object cache on under the case's cache
+/// root, requires the second build to report pack hits, and requires both
+/// programs to behave identically.
+fn storeBuildsBehaveIdentically(
+    io: std.Io,
+    allocator: Allocator,
+    env: *const CaseEnv,
+    timer: *harness.Timer,
+    timeout_ms: u64,
+    roc_file: []const u8,
+    out_dir: []const u8,
+    prefix: []const u8,
+) ?TestResult {
+    const hits_marker = "pack hits: ";
+    const store_exes = [_][]const u8{ "a", "b" };
+    var store_runs: [store_exes.len]std.process.RunResult = undefined;
+    for (store_exes, 0..) |name, index| {
+        const exe = std.fmt.allocPrint(allocator, "{s}/{s}_{s}", .{ out_dir, prefix, name }) catch |err|
+            return customInfraFailure(allocator, timer, "failed to allocate output path: {}", .{err});
+        const out_arg = outputArg(allocator, exe) catch |err|
+            return customInfraFailure(allocator, timer, "failed to allocate output arg: {}", .{err});
+        const build_timeout = childCommandTimeoutMs(timer, timeout_ms) orelse
+            return timeoutFailure(allocator, timer, .run, "case timeout exhausted before a store build");
+        const built = runRocInEnv(io, allocator, env, &.{ "build", "--opt=dev", out_arg }, roc_file, .relative, &.{}, null, build_timeout) catch |err|
+            return customInfraFailure(allocator, timer, "store build spawn error: {}", .{err});
+        if (!processSucceeded(built.term) or std.mem.find(u8, built.stdout, "successfully building") == null or std.mem.find(u8, built.stderr, "panic") != null) {
+            return failureFromRun(allocator, timer, built, "build with the object cache did not succeed");
+        }
+        if (index == store_exes.len - 1) {
+            const at = std.mem.find(u8, built.stderr, hits_marker) orelse
+                return failureFromRun(allocator, timer, built, "build with the object cache did not report pack hits");
+            var store_hits: u64 = 0;
+            for (built.stderr[at + hits_marker.len ..]) |byte| {
+                if (byte < '0' or byte > '9') break;
+                store_hits = store_hits * 10 + (byte - '0');
+            }
+            if (store_hits == 0) return failureFromRun(allocator, timer, built, "second build with the object cache reported no pack hits");
+        }
+        const exe_timeout = childCommandTimeoutMs(timer, timeout_ms) orelse
+            return timeoutFailure(allocator, timer, .run, "case timeout exhausted before running a store build");
+        store_runs[index] = runRawInEnv(io, allocator, env, &.{exe}, env.dirs.work_dir, "", exe_timeout) catch |err|
+            return customInfraFailure(allocator, timer, "store program spawn error: {}", .{err});
+    }
+    if (!std.meta.eql(store_runs[0].term, store_runs[1].term) or !std.mem.eql(u8, store_runs[0].stdout, store_runs[1].stdout)) {
+        return failureFromRun(allocator, timer, store_runs[1], "program served from the object cache behaves differently from the build that filled it");
+    }
     return null;
 }
 

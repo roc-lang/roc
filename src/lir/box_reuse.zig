@@ -730,6 +730,7 @@ test "box reuse rewrites the direct unbox call rebox return chain" {
     const callee_arg = try testLocal(&store, .u64);
     const callee = try store.addProcSpec(.{
         .name = store.freshSyntheticSymbol(),
+        .identity = LIR.ProcIdentity.forTest(1),
         .args = try store.addLocalSpan(&.{callee_arg}),
         .frame_locals = try store.addLocalSpan(&.{callee_arg}),
         .ret_layout = .u64,
@@ -751,6 +752,7 @@ test "box reuse rewrites the direct unbox call rebox return chain" {
     const unbox = try testLowLevel(&store, old_payload, .box_unbox, &.{boxed_arg}, call);
     const caller = try store.addProcSpec(.{
         .name = store.freshSyntheticSymbol(),
+        .identity = LIR.ProcIdentity.forTest(2),
         .args = try store.addLocalSpan(&.{boxed_arg}),
         .frame_locals = try store.addLocalSpan(&.{ boxed_arg, old_payload, new_payload, result_box }),
         .body = unbox,
@@ -812,6 +814,7 @@ test "box reuse rewrites an inlined straight-line payload producer" {
     const unbox = try testLowLevel(&store, old_payload, .box_unbox, &.{boxed_arg}, literal);
     _ = try store.addProcSpec(.{
         .name = store.freshSyntheticSymbol(),
+        .identity = LIR.ProcIdentity.forTest(3),
         .args = try store.addLocalSpan(&.{boxed_arg}),
         .frame_locals = try store.addLocalSpan(&.{ boxed_arg, old_payload, one, new_payload, result_box }),
         .body = unbox,
@@ -856,6 +859,7 @@ test "box reuse rejects a straight-line region with another input-box consumer" 
     const unbox = try testLowLevel(&store, old_payload, .box_unbox, &.{boxed_arg}, extra_consumer);
     _ = try store.addProcSpec(.{
         .name = store.freshSyntheticSymbol(),
+        .identity = LIR.ProcIdentity.forTest(4),
         .args = try store.addLocalSpan(&.{boxed_arg}),
         .frame_locals = try store.addLocalSpan(&.{ boxed_arg, boxed_copy, old_payload, result_box }),
         .body = unbox,
@@ -881,6 +885,7 @@ test "box reuse rewrites joined update wrappers" {
     const callee_delta = try testLocal(&store, .u64);
     const callee = try store.addProcSpec(.{
         .name = store.freshSyntheticSymbol(),
+        .identity = LIR.ProcIdentity.forTest(5),
         .args = try store.addLocalSpan(&.{ callee_old, callee_delta }),
         .frame_locals = try store.addLocalSpan(&.{ callee_old, callee_delta }),
         .ret_layout = .u64,
@@ -927,6 +932,7 @@ test "box reuse rewrites joined update wrappers" {
     const unbox = try testLowLevel(&store, old_payload, .box_unbox, &.{boxed_arg}, old_payload_ref);
     const caller = try store.addProcSpec(.{
         .name = store.freshSyntheticSymbol(),
+        .identity = LIR.ProcIdentity.forTest(6),
         .args = try store.addLocalSpan(&.{ boxed_arg, delta_arg }),
         .frame_locals = try store.addLocalSpan(&.{
             boxed_arg,
@@ -986,6 +992,7 @@ test "box reuse rewrites platform-style join remainder update wrappers" {
     const callee_old = try testLocal(&store, .u64);
     const callee = try store.addProcSpec(.{
         .name = store.freshSyntheticSymbol(),
+        .identity = LIR.ProcIdentity.forTest(7),
         .args = try store.addLocalSpan(&.{callee_old}),
         .frame_locals = try store.addLocalSpan(&.{callee_old}),
         .ret_layout = .u64,
@@ -1029,6 +1036,7 @@ test "box reuse rewrites platform-style join remainder update wrappers" {
     const proc_zst_stmt = try testZst(&store, proc_zst, join);
     const caller = try store.addProcSpec(.{
         .name = store.freshSyntheticSymbol(),
+        .identity = LIR.ProcIdentity.forTest(8),
         .args = try store.addLocalSpan(&.{boxed_arg}),
         .frame_locals = try store.addLocalSpan(&.{
             boxed_arg,
@@ -1097,12 +1105,14 @@ test "erased callable reuse rewrites adjacent same-shape repack" {
 
     const old_proc = try store.addProcSpec(.{
         .name = store.freshSyntheticSymbol(),
+        .identity = LIR.ProcIdentity.forTest(9),
         .args = try store.addLocalSpan(&.{callee_arg}),
         .frame_locals = try store.addLocalSpan(&.{callee_arg}),
         .ret_layout = .u64,
     });
     const new_proc = try store.addProcSpec(.{
         .name = store.freshSyntheticSymbol(),
+        .identity = LIR.ProcIdentity.forTest(10),
         .args = try store.addLocalSpan(&.{callee_arg}),
         .frame_locals = try store.addLocalSpan(&.{callee_arg}),
         .ret_layout = .u64,
@@ -1127,6 +1137,7 @@ test "erased callable reuse rewrites adjacent same-shape repack" {
     } });
     const caller = try store.addProcSpec(.{
         .name = store.freshSyntheticSymbol(),
+        .identity = LIR.ProcIdentity.forTest(11),
         .args = try store.addLocalSpan(&.{}),
         .frame_locals = try store.addLocalSpan(&.{ old_capture, new_capture, old_callable, new_callable }),
         .body = old_pack,
@@ -1162,12 +1173,14 @@ test "erased callable reuse forwards through aliases between the packs" {
 
     const old_proc = try store.addProcSpec(.{
         .name = store.freshSyntheticSymbol(),
+        .identity = LIR.ProcIdentity.forTest(12),
         .args = try store.addLocalSpan(&.{callee_arg}),
         .frame_locals = try store.addLocalSpan(&.{callee_arg}),
         .ret_layout = .u64,
     });
     const new_proc = try store.addProcSpec(.{
         .name = store.freshSyntheticSymbol(),
+        .identity = LIR.ProcIdentity.forTest(13),
         .args = try store.addLocalSpan(&.{callee_arg}),
         .frame_locals = try store.addLocalSpan(&.{callee_arg}),
         .ret_layout = .u64,
@@ -1183,6 +1196,7 @@ test "erased callable reuse forwards through aliases between the packs" {
     const old_pack = try testPackedErased(&store, old_callable, old_proc, old_capture, .u64, alias_a);
     _ = try store.addProcSpec(.{
         .name = store.freshSyntheticSymbol(),
+        .identity = LIR.ProcIdentity.forTest(14),
         .args = try store.addLocalSpan(&.{}),
         .frame_locals = try store.addLocalSpan(&.{
             old_capture,
@@ -1222,12 +1236,14 @@ test "erased callable reuse declines when an alias of the old pack is read elsew
 
     const old_proc = try store.addProcSpec(.{
         .name = store.freshSyntheticSymbol(),
+        .identity = LIR.ProcIdentity.forTest(15),
         .args = try store.addLocalSpan(&.{callee_arg}),
         .frame_locals = try store.addLocalSpan(&.{callee_arg}),
         .ret_layout = .u64,
     });
     const new_proc = try store.addProcSpec(.{
         .name = store.freshSyntheticSymbol(),
+        .identity = LIR.ProcIdentity.forTest(16),
         .args = try store.addLocalSpan(&.{callee_arg}),
         .frame_locals = try store.addLocalSpan(&.{callee_arg}),
         .ret_layout = .u64,
@@ -1243,6 +1259,7 @@ test "erased callable reuse declines when an alias of the old pack is read elsew
     const old_pack = try testPackedErased(&store, old_callable, old_proc, old_capture, .u64, alias1);
     _ = try store.addProcSpec(.{
         .name = store.freshSyntheticSymbol(),
+        .identity = LIR.ProcIdentity.forTest(17),
         .args = try store.addLocalSpan(&.{}),
         .frame_locals = try store.addLocalSpan(&.{
             old_capture,
@@ -1280,12 +1297,14 @@ test "erased callable reuse forwards through the aliased return path" {
 
     const old_proc = try store.addProcSpec(.{
         .name = store.freshSyntheticSymbol(),
+        .identity = LIR.ProcIdentity.forTest(18),
         .args = try store.addLocalSpan(&.{callee_arg}),
         .frame_locals = try store.addLocalSpan(&.{callee_arg}),
         .ret_layout = .u64,
     });
     const new_proc = try store.addProcSpec(.{
         .name = store.freshSyntheticSymbol(),
+        .identity = LIR.ProcIdentity.forTest(19),
         .args = try store.addLocalSpan(&.{callee_arg}),
         .frame_locals = try store.addLocalSpan(&.{callee_arg}),
         .ret_layout = .u64,
@@ -1298,6 +1317,7 @@ test "erased callable reuse forwards through the aliased return path" {
     const old_pack = try testPackedErased(&store, old_callable, old_proc, old_capture, .u64, new_pack);
     _ = try store.addProcSpec(.{
         .name = store.freshSyntheticSymbol(),
+        .identity = LIR.ProcIdentity.forTest(20),
         .args = try store.addLocalSpan(&.{}),
         .frame_locals = try store.addLocalSpan(&.{
             old_capture,

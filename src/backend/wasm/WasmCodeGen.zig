@@ -1677,8 +1677,7 @@ fn addRcHelperFunctionSymbol(
     helper_key: RcHelperKey,
     atomicity: RcAtomicity,
 ) Allocator.Error!SymbolIndex {
-    const cache_key = rcHelperCacheKey(helper_key, atomicity);
-    const name = std.fmt.allocPrint(self.allocator, "roc__rc_helper_{x}", .{cache_key}) catch return error.OutOfMemory;
+    const name = layout.rc_helper.symbolName(self.allocator, self.layout_store, helper_key, if (atomicity == .atomic) .atomic else .single_thread) catch return error.OutOfMemory;
     errdefer self.allocator.free(name);
     try self.function_symbol_names.append(self.allocator, name);
     return try self.addTrackedDefinedFunctionSymbol(
@@ -1691,9 +1690,9 @@ fn addRcHelperFunctionSymbol(
 fn addLirProcFunctionSymbol(
     self: *Self,
     defined: index_types.DefinedFunction,
-    symbol: LIR.Symbol,
+    identity: LIR.ProcIdentity,
 ) Allocator.Error!SymbolIndex {
-    const name = std.fmt.allocPrint(self.allocator, "roc__proc_{x}", .{symbol.raw()}) catch return error.OutOfMemory;
+    const name = std.fmt.allocPrint(self.allocator, "roc__proc_{s}", .{&identity.symbolHex()}) catch return error.OutOfMemory;
     errdefer self.allocator.free(name);
     try self.function_symbol_names.append(self.allocator, name);
     return try self.addTrackedDefinedFunctionSymbol(
@@ -8814,7 +8813,7 @@ fn registerProcSpec(self: *Self, proc_id: LIR.LirProcSpecId, proc: LirProcSpec) 
         const type_idx = try self.internFuncType(&.{ .i32, .i32, .i32, .i32, .i32, .i32 }, &.{});
         const defined = self.module.addDefinedFunction(type_idx) catch return error.OutOfMemory;
         const func_idx = defined.function.raw();
-        _ = try self.addLirProcFunctionSymbol(defined, proc.name);
+        _ = try self.addLirProcFunctionSymbol(defined, proc.identity);
         const table_idx = self.module.addTableElement(func_idx) catch return error.OutOfMemory;
 
         self.registered_procs.put(key, func_idx) catch return error.OutOfMemory;
@@ -8845,7 +8844,7 @@ fn registerProcSpec(self: *Self, proc_id: LIR.LirProcSpecId, proc: LirProcSpec) 
     const type_idx = try self.internFuncType(param_types.items, &.{ret_vt});
     const defined = self.module.addDefinedFunction(type_idx) catch return error.OutOfMemory;
     const func_idx = defined.function.raw();
-    _ = try self.addLirProcFunctionSymbol(defined, proc.name);
+    _ = try self.addLirProcFunctionSymbol(defined, proc.identity);
     const table_idx = self.module.addTableElement(func_idx) catch return error.OutOfMemory;
 
     self.registered_procs.put(key, func_idx) catch return error.OutOfMemory;
@@ -22165,6 +22164,7 @@ test "wasm backend fuses overflow predicate with matching wrapping result" {
     } });
     _ = try store.addProcSpec(.{
         .name = store.freshSyntheticSymbol(),
+        .identity = LIR.ProcIdentity.forTest(1),
         .args = LIR.LocalSpan.empty(),
         .body = lhs_literal,
         .ret_layout = .u64,

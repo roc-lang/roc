@@ -33,6 +33,8 @@ const names = check.CheckedNames;
 
 /// Deterministic counters used by specialization-shape tests.
 pub const Counters = struct {
+    /// Closed specializations the object cache served at reservation.
+    spec_cache_hits: u64 = 0,
     template_requests: u64 = 0,
     template_hits: u64 = 0,
     template_misses: u64 = 0,

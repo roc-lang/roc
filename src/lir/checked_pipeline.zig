@@ -5,6 +5,7 @@
 //! It returns LIR or resource failure.
 
 const std = @import("std");
+const collections = @import("collections");
 const builtin = @import("builtin");
 const base = @import("base");
 const check = @import("check");
@@ -139,6 +140,12 @@ pub const TargetConfig = struct {
     list_in_place_map: bool = false,
     /// Preserve source-level procedure names in LIR for runtime diagnostics.
     proc_debug_names: bool = false,
+    /// The object cache Monotype asks for closed specializations.
+    spec_cache: ?postcheck.Common.SpecCacheLookup = null,
+    /// Keep every keyed specialization procedure through compaction; a pack
+    /// program offers them from its manifest whether or not its export
+    /// wrappers inlined their calls.
+    keep_specialization_procs: bool = false,
     /// Thread slack counters through loop-carried append-only lists so the
     /// per-element ownership and capacity checks amortize. On by default;
     /// shape-comparison tests turn it off because promotion intentionally
@@ -176,6 +183,8 @@ pub const Timing = struct {
     detailed_monotype_body: bool = false,
     monotype_diagnostics_mutex: std.Io.Mutex = .init,
     monotype_diagnostics: postcheck.Monotype.Lower.Diagnostics = .{},
+    solved_lir_parallel_mutex: std.Io.Mutex = .init,
+    solved_lir_parallel: SolvedLirParallelMetrics = .{},
     monotype_ns: TimingCounter = .{},
     monotype_setup_ns: TimingCounter = .{},
     monotype_procedure_specialization_ns: TimingCounter = .{},
@@ -200,15 +209,15 @@ pub const Timing = struct {
     monotype_parallel_coordinator_post_batch_work_ns: TimingCounter = .{},
     monotype_parallel_root_tasks_submitted: TimingCounter = .{},
     monotype_parallel_root_tasks_committed: TimingCounter = .{},
-    monotype_parallel_root_tasks_retried_serial: TimingCounter = .{},
     monotype_parallel_specialization_tasks_submitted: TimingCounter = .{},
     monotype_parallel_specialization_tasks_committed: TimingCounter = .{},
-    monotype_parallel_specialization_tasks_retried_serial: TimingCounter = .{},
     monotype_parallel_specialization_tasks_discarded_ready: TimingCounter = .{},
     monotype_parallel_task_waves: TimingCounter = .{},
     monotype_parallel_peak_worker_lanes_available: TimingCounter = .{},
     monotype_parallel_peak_worker_lanes_used: TimingCounter = .{},
     monotype_parallel_within_lowering_lane_reuse_tasks: TimingCounter = .{},
+    monotype_parallel_peak_specialization_jobs_pending: TimingCounter = .{},
+    monotype_parallel_peak_specialization_shards_retained: TimingCounter = .{},
     boxy_plan_ns: TimingCounter = .{},
     boxy_lower_ns: TimingCounter = .{},
     lift_ns: TimingCounter = .{},
@@ -257,15 +266,15 @@ pub const Timing = struct {
                 .coordinator_post_batch_work_ns = self.monotype_parallel_coordinator_post_batch_work_ns.load(),
                 .root_tasks_submitted = self.monotype_parallel_root_tasks_submitted.load(),
                 .root_tasks_committed = self.monotype_parallel_root_tasks_committed.load(),
-                .root_tasks_retried_serial = self.monotype_parallel_root_tasks_retried_serial.load(),
                 .specialization_tasks_submitted = self.monotype_parallel_specialization_tasks_submitted.load(),
                 .specialization_tasks_committed = self.monotype_parallel_specialization_tasks_committed.load(),
-                .specialization_tasks_retried_serial = self.monotype_parallel_specialization_tasks_retried_serial.load(),
                 .specialization_tasks_discarded_ready = self.monotype_parallel_specialization_tasks_discarded_ready.load(),
                 .task_waves = self.monotype_parallel_task_waves.load(),
                 .peak_worker_lanes_available = self.monotype_parallel_peak_worker_lanes_available.load(),
                 .peak_worker_lanes_used = self.monotype_parallel_peak_worker_lanes_used.load(),
                 .within_lowering_lane_reuse_tasks = self.monotype_parallel_within_lowering_lane_reuse_tasks.load(),
+                .peak_specialization_jobs_pending = self.monotype_parallel_peak_specialization_jobs_pending.load(),
+                .peak_specialization_shards_retained = self.monotype_parallel_peak_specialization_shards_retained.load(),
             },
             .boxy_plan_ns = self.boxy_plan_ns.load(),
             .boxy_lower_ns = self.boxy_lower_ns.load(),
@@ -277,6 +286,7 @@ pub const Timing = struct {
             .lir_passes_ns = self.lir_passes_ns.load(),
             .arc_ns = self.arc_ns.load(),
             .monotype_diagnostics = diagnostics,
+            .solved_lir_parallel = self.solvedLirParallelSnapshot(),
         };
     }
 
@@ -302,6 +312,7 @@ pub const Timing = struct {
         self.monotype_static_data_requests_ns.add(snapshot_value.monotype_static_data_requests_ns);
         self.monotype_finalization_ns.add(snapshot_value.monotype_finalization_ns);
         self.addMonotypeParallel(snapshot_value.monotype_parallel);
+        self.addSolvedLirParallel(snapshot_value.solved_lir_parallel);
         self.boxy_plan_ns.add(snapshot_value.boxy_plan_ns);
         self.boxy_lower_ns.add(snapshot_value.boxy_lower_ns);
         self.lift_ns.add(snapshot_value.lift_ns);
@@ -363,15 +374,31 @@ pub const Timing = struct {
         self.monotype_parallel_coordinator_post_batch_work_ns.add(parallel.coordinator_post_batch_work_ns);
         self.monotype_parallel_root_tasks_submitted.add(parallel.root_tasks_submitted);
         self.monotype_parallel_root_tasks_committed.add(parallel.root_tasks_committed);
-        self.monotype_parallel_root_tasks_retried_serial.add(parallel.root_tasks_retried_serial);
         self.monotype_parallel_specialization_tasks_submitted.add(parallel.specialization_tasks_submitted);
         self.monotype_parallel_specialization_tasks_committed.add(parallel.specialization_tasks_committed);
-        self.monotype_parallel_specialization_tasks_retried_serial.add(parallel.specialization_tasks_retried_serial);
         self.monotype_parallel_specialization_tasks_discarded_ready.add(parallel.specialization_tasks_discarded_ready);
         self.monotype_parallel_task_waves.add(parallel.task_waves);
         self.monotype_parallel_peak_worker_lanes_available.max(parallel.peak_worker_lanes_available);
         self.monotype_parallel_peak_worker_lanes_used.max(parallel.peak_worker_lanes_used);
         self.monotype_parallel_within_lowering_lane_reuse_tasks.add(parallel.within_lowering_lane_reuse_tasks);
+        self.monotype_parallel_peak_specialization_jobs_pending.max(parallel.peak_specialization_jobs_pending);
+        self.monotype_parallel_peak_specialization_shards_retained.max(parallel.peak_specialization_shards_retained);
+    }
+
+    fn addSolvedLirParallel(self: *Timing, parallel: SolvedLirParallelMetrics) void {
+        self.solved_lir_parallel_mutex.lockUncancelable(self.std_io);
+        defer self.solved_lir_parallel_mutex.unlock(self.std_io);
+        // All Solved-LIR metrics count completed work, not peaks or durations.
+        inline for (std.meta.fields(SolvedLirParallelMetrics)) |field| {
+            @field(self.solved_lir_parallel, field.name) +|= @field(parallel, field.name);
+        }
+    }
+
+    fn solvedLirParallelSnapshot(self: *const Timing) SolvedLirParallelMetrics {
+        const mutable = @constCast(self);
+        mutable.solved_lir_parallel_mutex.lockUncancelable(self.std_io);
+        defer mutable.solved_lir_parallel_mutex.unlock(self.std_io);
+        return self.solved_lir_parallel;
     }
 
     fn addMonotypeDiagnostics(self: *Timing, diagnostics: postcheck.Monotype.Lower.Diagnostics) void {
@@ -413,6 +440,7 @@ pub const TimingSnapshot = struct {
     monotype_static_data_requests_ns: u64 = 0,
     monotype_finalization_ns: u64 = 0,
     monotype_parallel: postcheck.Monotype.Lower.ParallelMetricsSnapshot = .{},
+    solved_lir_parallel: SolvedLirParallelMetrics = .{},
     boxy_plan_ns: u64 = 0,
     boxy_lower_ns: u64 = 0,
     lift_ns: u64 = 0,
@@ -463,6 +491,52 @@ fn timingNowNs(std_io: std.Io) i64 {
     return @intCast(@max(0, std.Io.Timestamp.now(std_io, .awake).nanoseconds));
 }
 
+test "pipeline timing aggregates Solved-LIR counters with saturation and fresh reset" {
+    var timing = Timing.init(std.testing.io);
+    var first: SolvedLirParallelMetrics = .{};
+    inline for (std.meta.fields(SolvedLirParallelMetrics), 0..) |field, i| {
+        @field(first, field.name) = i + 1;
+    }
+    timing.addSolvedLirParallel(first);
+    var aggregate = Timing.init(std.testing.io);
+    aggregate.addSnapshot(timing.snapshot());
+    aggregate.addSnapshot(timing.snapshot());
+    const doubled = aggregate.snapshot();
+    inline for (std.meta.fields(SolvedLirParallelMetrics), 0..) |field, i| {
+        try std.testing.expectEqual(@as(u64, 2 * (i + 1)), @field(doubled.solved_lir_parallel, field.name));
+        @field(first, field.name) = std.math.maxInt(u64);
+    }
+    aggregate.addSolvedLirParallel(first);
+    const saturated = aggregate.snapshot();
+    inline for (std.meta.fields(SolvedLirParallelMetrics)) |field| {
+        try std.testing.expectEqual(std.math.maxInt(u64), @field(saturated.solved_lir_parallel, field.name));
+    }
+    try std.testing.expectEqual(@as(u64, 0), saturated.lir_gen_ns);
+    aggregate = Timing.init(std.testing.io);
+    try std.testing.expectEqualDeep(SolvedLirParallelMetrics{}, aggregate.snapshot().solved_lir_parallel);
+}
+
+test "pipeline timing preserves explicit Solved-LIR metrics output" {
+    var timing = Timing.init(std.testing.io);
+    var local: SolvedLirParallelMetrics = .{};
+    var explicit: SolvedLirParallelMetrics = .{ .tasks_submitted = 99 };
+    try std.testing.expect(solvedLirMetricsOutput(.{}, &local) == null);
+    try std.testing.expect(solvedLirMetricsOutput(.{ .timing = &timing }, &local).? == &local);
+    try std.testing.expect(solvedLirMetricsOutput(.{ .solved_lir_parallel_metrics_out = &explicit }, &local).? == &explicit);
+    const output = solvedLirMetricsOutput(.{
+        .timing = &timing,
+        .solved_lir_parallel_metrics_out = &explicit,
+    }, &local).?;
+    try std.testing.expect(output == &explicit);
+    try std.testing.expectEqual(@as(u64, 99), explicit.tasks_submitted);
+    // Simulate the lowerer's per-run reset and completed output.
+    output.* = .{ .tasks_submitted = 3, .tasks_committed = 3 };
+    timing.addSolvedLirParallel(output.*);
+    try std.testing.expectEqualDeep(explicit, timing.snapshot().solved_lir_parallel);
+    try std.testing.expectEqual(@as(u64, 3), explicit.tasks_submitted);
+    try std.testing.expectEqualDeep(SolvedLirParallelMetrics{}, local);
+}
+
 test "pipeline timing aggregates Monotype diagnostics" {
     var timing = Timing.init(std.testing.io);
     var first: postcheck.Monotype.Lower.Diagnostics = .{};
@@ -491,30 +565,30 @@ test "pipeline timing keeps aggregate Monotype worker work separate from wall ti
         .coordinator_post_batch_work_ns = 12,
         .root_tasks_submitted = 13,
         .root_tasks_committed = 14,
-        .root_tasks_retried_serial = 15,
         .specialization_tasks_submitted = 16,
         .specialization_tasks_committed = 17,
-        .specialization_tasks_retried_serial = 18,
         .specialization_tasks_discarded_ready = 19,
         .task_waves = 20,
         .peak_worker_lanes_available = 4,
         .peak_worker_lanes_used = 3,
         .within_lowering_lane_reuse_tasks = 21,
+        .peak_specialization_jobs_pending = 22,
+        .peak_specialization_shards_retained = 23,
     });
     timing.addMonotypeParallel(.{
         .worker_work_ns = 31,
         .coordinator_post_batch_work_ns = 32,
         .root_tasks_submitted = 33,
         .root_tasks_committed = 34,
-        .root_tasks_retried_serial = 35,
         .specialization_tasks_submitted = 36,
         .specialization_tasks_committed = 37,
-        .specialization_tasks_retried_serial = 38,
         .specialization_tasks_discarded_ready = 39,
         .task_waves = 40,
         .peak_worker_lanes_available = 8,
         .peak_worker_lanes_used = 5,
         .within_lowering_lane_reuse_tasks = 41,
+        .peak_specialization_jobs_pending = 42,
+        .peak_specialization_shards_retained = 43,
     });
     timing.addSnapshot(.{ .boxy_plan_ns = 43, .boxy_lower_ns = 47 });
 
@@ -525,15 +599,15 @@ test "pipeline timing keeps aggregate Monotype worker work separate from wall ti
     try std.testing.expectEqual(@as(u64, 44), parallel.coordinator_post_batch_work_ns);
     try std.testing.expectEqual(@as(u64, 46), parallel.root_tasks_submitted);
     try std.testing.expectEqual(@as(u64, 48), parallel.root_tasks_committed);
-    try std.testing.expectEqual(@as(u64, 50), parallel.root_tasks_retried_serial);
     try std.testing.expectEqual(@as(u64, 52), parallel.specialization_tasks_submitted);
     try std.testing.expectEqual(@as(u64, 54), parallel.specialization_tasks_committed);
-    try std.testing.expectEqual(@as(u64, 56), parallel.specialization_tasks_retried_serial);
     try std.testing.expectEqual(@as(u64, 58), parallel.specialization_tasks_discarded_ready);
     try std.testing.expectEqual(@as(u64, 60), parallel.task_waves);
     try std.testing.expectEqual(@as(u64, 8), parallel.peak_worker_lanes_available);
     try std.testing.expectEqual(@as(u64, 5), parallel.peak_worker_lanes_used);
     try std.testing.expectEqual(@as(u64, 62), parallel.within_lowering_lane_reuse_tasks);
+    try std.testing.expectEqual(@as(u64, 42), parallel.peak_specialization_jobs_pending);
+    try std.testing.expectEqual(@as(u64, 43), parallel.peak_specialization_shards_retained);
     try std.testing.expectEqual(@as(u64, 43), snapshot_value.boxy_plan_ns);
     try std.testing.expectEqual(@as(u64, 47), snapshot_value.boxy_lower_ns);
 }
@@ -822,7 +896,12 @@ pub fn prepareCheckedModulesMonotype(
             checkedModules(modules),
             rootRequests(roots, layout_requests, static_data_requests),
             .{
-                .proc_debug_names = target.proc_debug_names or LirDump.filter() != null,
+                .proc_debug_names = target.proc_debug_names or LirDump.filter() != null or SpecCensus.enabled(),
+                // A program that is also the compile-time evaluator's host
+                // takes its hits in Direct LIR, after the compile-time
+                // closure is known; only a runtime-only program can take
+                // them here.
+                .spec_cache = if (target.checked_module_state == .complete) target.spec_cache else null,
                 .post_check_executor = target.post_check_executor,
                 .static_data_literals = target.checked_module_state == .checking_finalization or roots.include_internal_static_data,
                 .comptime_value_reads = target.comptime_value_reads,
@@ -836,6 +915,7 @@ pub fn prepareCheckedModulesMonotype(
             },
         );
     };
+    if (SpecCensus.enabled()) try SpecCensus.runMonotype(allocator, modules, &mono);
     return .{
         .allocator = allocator,
         .program = mono,
@@ -901,7 +981,7 @@ pub fn prepareMonotypeToSolved(prepared: PreparedMonotype) Allocator.Error!Prepa
         .inline_plan,
     );
     defer inline_plan_timing_scope.end();
-    const inline_plan = try postcheck.SolvedInline.analyze(allocator, target.inline_mode, procedure_usage.view(), &solved);
+    const inline_plan = try postcheck.SolvedInline.analyze(allocator, target.inline_mode, procedure_usage.view(), &solved, target.keep_specialization_procs);
     inline_plan_timing_scope.end();
 
     return .{
@@ -975,7 +1055,10 @@ pub fn lowerPreparedSolvedToLir(prepared: PreparedSolved) LowerResourceError!Low
     var lir_gen_timing_scope = PipelineTimingScope.begin(target.timing, .lir_gen);
     defer lir_gen_timing_scope.end();
     const solved_input = prepared.program;
+    var local_parallel_metrics: SolvedLirParallelMetrics = .{};
+    const parallel_metrics = solvedLirMetricsOutput(target, &local_parallel_metrics);
     var lowered = try postcheck.SolvedLirLower.run(allocator, target.target_usize, solved_input, .{
+        .spec_cache = target.spec_cache,
         .inline_plan = inline_plan.view(),
         .post_check_executor = target.post_check_executor,
         .inline_expects = target.inline_expects,
@@ -984,16 +1067,24 @@ pub fn lowerPreparedSolvedToLir(prepared: PreparedSolved) LowerResourceError!Low
             .complete => .runtime,
             .checking_finalization => .comptime_zero,
         },
-        .proc_debug_names = target.proc_debug_names or LirDump.filter() != null,
+        .proc_debug_names = target.proc_debug_names or LirDump.filter() != null or SpecCensus.enabled(),
         .layout_request_const_plans = target.layout_request_const_plans,
         .test_plan_metadata = prepared.test_plan_metadata,
         .debug_materialized_out = target.debug_materialized_out,
-        .parallel_metrics = target.solved_lir_parallel_metrics_out,
+        .parallel_metrics = parallel_metrics,
     });
+    if (target.timing) |timing| timing.addSolvedLirParallel(parallel_metrics.?.*);
     lir_gen_timing_scope.end();
     errdefer lowered.deinit();
 
     return finishLoweredOutput(allocator, prepared.root_count, target, &lowered);
+}
+
+/// The lowerer owns resetting its per-run output. Prefer the caller's slot so
+/// collecting aggregate timings neither resets nor overwrites it a second time.
+fn solvedLirMetricsOutput(target: TargetConfig, local: *SolvedLirParallelMetrics) ?*SolvedLirParallelMetrics {
+    return target.solved_lir_parallel_metrics_out orelse
+        if (target.timing != null) local else null;
 }
 
 fn finishLoweredOutput(
@@ -1035,7 +1126,11 @@ fn finishLoweredOutput(
     if (target.tag_reachability) {
         try TagReachability.run(&lowered.lir_result);
     }
-    try ReachableProcs.run(&lowered.lir_result);
+    if (target.keep_specialization_procs) {
+        try ReachableProcs.runKeepingSpecializations(&lowered.lir_result);
+    } else {
+        try ReachableProcs.run(&lowered.lir_result);
+    }
     lir_passes_timing_scope.end();
 
     var arc_timing_scope = PipelineTimingScope.begin(target.timing, .arc);
@@ -1054,6 +1149,7 @@ fn finishLoweredOutput(
     try @import("comptime_value_guards.zig").insert(allocator, &lowered.lir_result);
 
     try LirDump.run(&lowered.lir_result);
+    if (SpecCensus.enabled()) try SpecCensus.runLir(allocator, &lowered.lir_result);
 
     if (root_count != 0 and lowered.lir_result.root_procs.items.len == 0) {
         checkedPipelineInvariant("explicit root set produced no LIR roots");
@@ -1373,6 +1469,7 @@ test "runtime extraction consumes producer root positions and preserves their or
     for (0..3) |index| {
         const proc = try lowered.lir_result.store.addProcSpec(.{
             .name = lowered.lir_result.store.freshSyntheticSymbol(),
+            .identity = LIR.ProcIdentity.forTest(1),
             .args = .empty(),
             .body = ret,
             .ret_layout = .zst,
@@ -1393,3 +1490,303 @@ test "runtime extraction consumes producer root positions and preserves their or
     try std.testing.expectEqual(@as(u32, 0), @intFromEnum(lowered.lir_result.root_procs.items[1]));
     try std.testing.expectEqual(lowered.lir_result.root_procs.items[0], lowered.main_proc.?);
 }
+
+/// Specialization census diagnostic, enabled by setting `ROC_SPEC_CENSUS` in
+/// the environment. Prints one tab-separated line per checked module, per
+/// Monotype specialization record, and per final LIR procedure to stderr, so
+/// the shape of a program's specialization set can be measured offline. Each
+/// specialization line carries its callable kind, module kind and name,
+/// procedure base and template ordinals, callable name, whether the declared
+/// source type has type variables, whether the request type contains a
+/// function type or an erased callable, and the request and solved type
+/// digests. Never enabled by default; it only reads the finished stores.
+const SpecCensus = if (builtin.os.tag == .freestanding) struct {
+    fn enabled() bool {
+        return false;
+    }
+    fn runMonotype(_: Allocator, _: CheckedModuleSet, _: *const postcheck.Monotype.Ast.Program) Allocator.Error!void {}
+    fn runLir(_: Allocator, _: *const LirProgram.Result) Allocator.Error!void {}
+} else struct {
+    const MonoAst = postcheck.Monotype.Ast;
+    const MonoType = postcheck.Monotype.Type;
+
+    fn enabled() bool {
+        return std.c.getenv("ROC_SPEC_CENSUS") != null;
+    }
+
+    const ModuleEnvPtr = @TypeOf(@as(*const checked.CheckedModuleArtifact, undefined).moduleEnvConst());
+
+    const ModuleInfo = struct {
+        key: [32]u8,
+        name: []const u8,
+        kind: []const u8,
+        names: *const check.CheckedNames.NameStore,
+        types: checked.CheckedTypeStoreView,
+        templates: *const checked.CheckedProcedureTemplateTable,
+        env: ModuleEnvPtr,
+    };
+
+    fn defName(info: *const ModuleInfo, proc_base: u32) []const u8 {
+        const key = info.names.procBase(@enumFromInt(proc_base));
+        if (key.export_name) |export_name| return info.names.exportNameText(export_name);
+        const def_idx = key.source_def_idx orelse return "?";
+        const def = info.env.store.getDef(@enumFromInt(def_idx));
+        return switch (info.env.store.getPattern(def.pattern)) {
+            .assign => |assign| info.env.getIdent(assign.ident),
+            .var_assign => |assign| info.env.getIdent(assign.ident),
+            .as,
+            .applied_tag,
+            .nominal,
+            .nominal_external,
+            .record_destructure,
+            .list,
+            .tuple,
+            .num_literal,
+            .small_dec_literal,
+            .dec_literal,
+            .frac_f32_literal,
+            .frac_f64_literal,
+            .num_from_numeral_literal,
+            .str_literal,
+            .str_interpolation,
+            .underscore,
+            .runtime_error,
+            => "?pat",
+        };
+    }
+
+    fn collectModules(allocator: Allocator, modules: CheckedModuleSet) Allocator.Error![]ModuleInfo {
+        var list = std.ArrayList(ModuleInfo).empty;
+        errdefer list.deinit(allocator);
+        const root = modules.root.module;
+        try list.append(allocator, .{
+            .key = root.key.bytes,
+            .name = root.canonical_names.moduleNameText(root.module_identity.display_module_name),
+            .kind = @tagName(root.module_identity.kind),
+            .names = &root.canonical_names,
+            .types = root.checked_types.view(),
+            .templates = &root.checked_procedure_templates,
+            .env = root.moduleEnvConst(),
+        });
+        for (modules.imports) |imported| {
+            try list.append(allocator, .{
+                .key = imported.key.bytes,
+                .name = imported.canonical_names.moduleNameText(imported.module_identity.display_module_name),
+                .kind = @tagName(imported.module_identity.kind),
+                .names = imported.canonical_names,
+                .types = imported.checked_types,
+                .templates = imported.checked_procedure_templates,
+                .env = imported.module_env,
+            });
+        }
+        for (modules.root.relation_modules) |relation| {
+            try list.append(allocator, .{
+                .key = relation.key.bytes,
+                .name = relation.canonical_names.moduleNameText(relation.module_identity.display_module_name),
+                .kind = @tagName(relation.module_identity.kind),
+                .names = relation.canonical_names,
+                .types = relation.checked_types,
+                .templates = relation.checked_procedure_templates,
+                .env = relation.module_env,
+            });
+        }
+        return list.toOwnedSlice(allocator);
+    }
+
+    fn findModule(infos: []const ModuleInfo, key: [32]u8) ?*const ModuleInfo {
+        for (infos) |*info| {
+            if (std.mem.eql(u8, &info.key, &key)) return info;
+        }
+        return null;
+    }
+
+    fn checkedTypeHasVariable(allocator: Allocator, types: checked.CheckedTypeStoreView, root: checked.CheckedTypeId) Allocator.Error!bool {
+        var visited = collections.DenseMap(checked.CheckedTypeId, void).init(allocator);
+        defer visited.deinit();
+        var stack = std.ArrayList(checked.CheckedTypeId).empty;
+        defer stack.deinit(allocator);
+        try stack.append(allocator, root);
+        while (stack.pop()) |ty| {
+            const gop = try visited.getOrPut(ty);
+            if (gop.found_existing) continue;
+            switch (types.payload(ty)) {
+                .pending, .err, .empty_record, .empty_tag_union => {},
+                .flex, .rigid, .record_unbound => return true,
+                .alias => |alias| {
+                    try stack.append(allocator, alias.backing);
+                    try stack.appendSlice(allocator, alias.args);
+                },
+                .record => |record| {
+                    for (record.fields) |field| try stack.append(allocator, field.ty);
+                    try stack.append(allocator, record.ext);
+                },
+                .tuple => |elems| try stack.appendSlice(allocator, elems),
+                .nominal => |nominal| try stack.appendSlice(allocator, nominal.args),
+                .function => |func| {
+                    try stack.appendSlice(allocator, func.args);
+                    try stack.append(allocator, func.ret);
+                },
+                .tag_union => |tag_union| {
+                    for (tag_union.tags) |tag| try stack.appendSlice(allocator, tag.argsSlice(types));
+                    try stack.append(allocator, tag_union.ext);
+                },
+            }
+        }
+        return false;
+    }
+
+    const RequestShape = struct {
+        has_fn: bool = false,
+        has_erased: bool = false,
+    };
+
+    fn requestShape(allocator: Allocator, types: MonoType.Store.View, root: MonoType.TypeId) Allocator.Error!RequestShape {
+        var shape: RequestShape = .{};
+        var visited = collections.DenseMap(MonoType.TypeId, void).init(allocator);
+        defer visited.deinit();
+        var stack = std.ArrayList(MonoType.TypeId).empty;
+        defer stack.deinit(allocator);
+        switch (types.get(root)) {
+            .func => |func| {
+                try stack.appendSlice(allocator, types.span(func.args));
+                try stack.append(allocator, func.ret);
+            },
+            .primitive,
+            .zst,
+            .erased,
+            .named,
+            .record,
+            .tuple,
+            .tag_union,
+            .list,
+            .box,
+            => try stack.append(allocator, root),
+        }
+        while (stack.pop()) |ty| {
+            const gop = try visited.getOrPut(ty);
+            if (gop.found_existing) continue;
+            switch (types.get(ty)) {
+                .primitive, .zst => {},
+                .erased => shape.has_erased = true,
+                .func => |func| {
+                    shape.has_fn = true;
+                    try stack.appendSlice(allocator, types.span(func.args));
+                    try stack.append(allocator, func.ret);
+                },
+                .named => |named| {
+                    try stack.appendSlice(allocator, types.span(named.args));
+                    if (named.backing) |backing| try stack.append(allocator, backing.ty);
+                },
+                .record => |span| for (types.fieldSpan(span)) |field| try stack.append(allocator, field.ty),
+                .tuple => |span| try stack.appendSlice(allocator, types.span(span)),
+                .tag_union => |span| for (types.tagSpan(span)) |tag| try stack.appendSlice(allocator, types.span(tag.payloads)),
+                .list, .box => |elem| try stack.append(allocator, elem),
+            }
+        }
+        return shape;
+    }
+
+    fn runMonotype(allocator: Allocator, modules: CheckedModuleSet, mono: *const MonoAst.Program) Allocator.Error!void {
+        const infos = try collectModules(allocator, modules);
+        defer allocator.free(infos);
+        for (infos) |info| {
+            std.debug.print("CENSUS_MODULE\t{s}\t{s}\t{s}\n", .{ info.kind, info.name, std.fmt.bytesToHex(info.key, .lower)[0..16] });
+        }
+        const view = mono.view();
+        for (view.specs, 0..) |spec, index| {
+            var callable_kind: []const u8 = "generated";
+            var callable_kind_is_template = false;
+            var module_key: ?[32]u8 = null;
+            var proc_base: u32 = 0;
+            var sub: u32 = 0;
+            switch (spec.identity.callable) {
+                .proc_template => |template| {
+                    callable_kind = "template";
+                    callable_kind_is_template = true;
+                    module_key = template.module.bytes;
+                    proc_base = template.proc_base;
+                    sub = template.template;
+                },
+                .nested_site => |nested| {
+                    callable_kind = "nested";
+                    module_key = nested.module.bytes;
+                    proc_base = nested.owner_proc_base;
+                    sub = nested.site;
+                },
+                .hosted => callable_kind = "hosted",
+                .generated => callable_kind = "generated",
+            }
+            var module_kind: []const u8 = "?";
+            var module_name: []const u8 = "?";
+            var callable_name: []const u8 = "?";
+            var poly: u8 = 2;
+            if (module_key) |key| {
+                if (findModule(infos, key)) |info| {
+                    module_kind = info.kind;
+                    module_name = info.name;
+                    callable_name = defName(info, proc_base);
+                    if (callable_kind_is_template and sub < info.templates.templates.items.len) {
+                        const source_fn_ty = info.templates.templates.items[sub].checked_fn_root;
+                        if (@intFromEnum(source_fn_ty) < info.types.stored_payloads.len) {
+                            poly = if (try checkedTypeHasVariable(allocator, info.types, source_fn_ty)) 1 else 0;
+                        }
+                    }
+                }
+            }
+            const shape = try requestShape(allocator, view.types, spec.identity.request_fn_ty);
+            const req_hex = std.fmt.bytesToHex(spec.identity.request_fn_ty_digest.bytes, .lower);
+            const solved_hex = std.fmt.bytesToHex(spec.solved_fn_ty_digest.bytes, .lower);
+            std.debug.print("CENSUS_SPEC\t{d}\t{s}\t{s}\t{s}\t{d}\t{d}\t{s}\t{d}\t{d}\t{d}\t{s}\t{s}\t{s}\n", .{
+                index,
+                callable_kind,
+                module_kind,
+                module_name,
+                proc_base,
+                sub,
+                callable_name,
+                poly,
+                @intFromBool(shape.has_fn),
+                @intFromBool(shape.has_erased),
+                req_hex[0..16],
+                solved_hex[0..16],
+                @tagName(spec.status),
+            });
+        }
+    }
+
+    fn runLir(allocator: Allocator, result: *const LirProgram.Result) Allocator.Error!void {
+        const store = &result.store;
+        for (0..store.procSpecCount()) |index| {
+            const proc_id: LIR.LirProcSpecId = @enumFromInt(@as(u32, @intCast(index)));
+            const spec = store.getProcSpec(proc_id);
+            const name = store.procDebugName(proc_id) orelse "?";
+            if (spec.body == null) {
+                std.debug.print("CENSUS_PROC\t{d}\t{s}\t0\t0\tnobody\n", .{ index, name });
+                continue;
+            }
+            var buffer: std.Io.Writer.Allocating = .init(allocator);
+            defer buffer.deinit();
+            DebugPrint.writeProc(allocator, store, &result.layouts, proc_id, &buffer.writer) catch |err| switch (err) {
+                error.OutOfMemory, error.WriteFailed => return error.OutOfMemory,
+            };
+            const text = buffer.written();
+            var lines: usize = 0;
+            for (text) |c| {
+                if (c == '\n') lines += 1;
+            }
+            std.debug.print("CENSUS_PROC\t{d}\t{s}\t{d}\t{d}\tbody\n", .{ index, name, text.len, lines });
+            if (lines > 20000) {
+                var shown: usize = 0;
+                var start: usize = 0;
+                for (text, 0..) |c, i| {
+                    if (c == '\n') {
+                        std.debug.print("CENSUS_HEAD\t{d}\t{s}\n", .{ index, text[start..i] });
+                        start = i + 1;
+                        shown += 1;
+                        if (shown >= 80) break;
+                    }
+                }
+            }
+        }
+    }
+};

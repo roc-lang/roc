@@ -1,12 +1,14 @@
 //! SHA-256 block compression for `TypeDigestHasher`.
 //!
 //! Two hardware implementations (x86 SHA extensions and the ARMv8 `sha2`
-//! extension) and one portable implementation. Every 64-bit compiler target
-//! requires the hardware instructions -- build.zig adds them to the baseline
-//! CPU, and `TypeDigestHasher` refuses to compile for a 64-bit target without
-//! them -- so the portable rounds exist only for 32-bit targets such as wasm32.
-//! All three produce identical state transitions; the tests in
-//! `TypeDigestHasher.zig` compare them against `std.crypto.hash.sha2.Sha256`.
+//! extension) and one portable implementation. Almost every 64-bit compiler
+//! target requires the hardware instructions -- build.zig adds them to the
+//! baseline CPU, and `TypeDigestHasher` refuses to compile for such a target
+//! without them -- so the portable rounds are for 32-bit targets such as
+//! wasm32 and for x86_64 macOS, the one 64-bit target whose CPUs cannot be
+//! assumed to have the instructions (see `uses_software_rounds`). All three
+//! produce identical state transitions; the tests in `TypeDigestHasher.zig`
+//! compare them against `std.crypto.hash.sha2.Sha256`.
 
 const std = @import("std");
 const builtin = @import("builtin");
@@ -101,6 +103,16 @@ pub const hasHardwareSupport = switch (arch_class) {
     .x86_64 => builtin.zig_backend != .stage2_c and builtin.cpu.hasAll(.x86, &.{ .sha, .ssse3 }),
     .other => false,
 };
+
+/// Whether this target computes digests with the portable rounds instead of
+/// requiring the CPU's SHA-256 instructions. x86_64 macOS is the only 64-bit
+/// target that does: Apple's Intel Macs are Skylake through Comet Lake, whose
+/// cores have no SHA extension, so their baseline cannot carry one. Mirrors
+/// `usesSoftwareSha256` in src/target/mod.zig, which build.zig applies to the
+/// release target and minici to the machine it runs on. An Intel Mac that does
+/// have the extension still uses the hardware rounds when the build names its
+/// CPU (`-Dcpu=native`), because that sets `hasHardwareSupport`.
+pub const uses_software_rounds = arch_class == .x86_64 and builtin.os.tag == .macos;
 
 const K = [64]u32{
     0x428A2F98, 0x71374491, 0xB5C0FBCF, 0xE9B5DBA5, 0x3956C25B, 0x59F111F1, 0x923F82A4, 0xAB1C5ED5,
