@@ -5146,6 +5146,20 @@ pub fn build(b: *std.Build) void {
         build_wasm_issue_10836_app.step.dependOn(build_test_hosts_step);
         build_test_wasm_static_lib_runner_step.dependOn(&build_wasm_issue_10836_app.step);
 
+        // A constant record whose pointer fields are laid out in the opposite
+        // order to their field order: its relocations must still reach the
+        // object in offset order, or wasm-ld refuses it (#11419).
+        const build_wasm_issue_11419_app = b.addRunArtifact(roc_exe);
+        build_wasm_issue_11419_app.addArgs(&.{
+            "build",
+            "test/wasm/issue_11419_static_record_reloc_order_static_lib_app.roc",
+            "--opt=dev",
+            "--target=wasm32",
+            "--output=test/wasm/issue_11419_static_record_reloc_order_static_lib_app.wasm",
+        });
+        build_wasm_issue_11419_app.step.dependOn(build_test_hosts_step);
+        build_test_wasm_static_lib_runner_step.dependOn(&build_wasm_issue_11419_app.step);
+
         const wasm_test_exe = b.addExecutable(.{
             .name = "wasm_static_lib_test",
             .root_module = b.createModule(.{
@@ -5418,6 +5432,16 @@ pub fn build(b: *std.Build) void {
             });
             run_wasm_issue_10836_test.step.dependOn(build_test_wasm_static_lib_runner_step);
             run_test_wasm_static_lib_step.dependOn(&run_wasm_issue_10836_test.step);
+
+            const run_wasm_issue_11419_test = b.addRunArtifact(wasm_test_exe);
+            run_wasm_issue_11419_test.addArgs(&.{
+                "--wasm-path",
+                "test/wasm/issue_11419_static_record_reloc_order_static_lib_app.wasm",
+                "--expected",
+                "id=txt",
+            });
+            run_wasm_issue_11419_test.step.dependOn(build_test_wasm_static_lib_runner_step);
+            run_test_wasm_static_lib_step.dependOn(&run_wasm_issue_11419_test.step);
         }
         run_wasm_test.step.dependOn(build_test_wasm_static_lib_runner_step);
         run_test_wasm_static_lib_step.dependOn(&run_wasm_test.step);
