@@ -4685,7 +4685,15 @@ The representation producer is `generatedIteratorNode` in
 `src/postcheck/monotype/solve.zig`. Construction records the exact public
 source, producer kind, component nodes, callable evidence, and private backing
 in the active instantiation graph. Finalization consumes that complete graph
-before any durable Monotype type is sealed. Together they compute:
+before any durable Monotype type is sealed. A graph-owned exact construction
+index keys generated iterators by declaration, producer kind, callable evidence,
+and ordered item/component classes. Union updates only keys that reference its
+losing class; content replacement updates provenance keys. Equal keys retain
+all permanent candidates without adding an implicit type relation. Monotone
+provenance counts let iterator finalization and private-evidence containment
+return immediately when their graphs have never received the relevant evidence.
+Containment diagnostics distinguish these guard returns from actual queries.
+Together construction and finalization compute:
 
 - `List.iter` as a first-class source representation rather than a public
   recursive `Iter` boundary;
@@ -8106,14 +8114,13 @@ identity and backing relationships, constructor-evidence requests, and generated
 iterator membership and provenance counts belong only to that graph epoch.
 Only the cumulative immutable type and name stores survive the reset.
 
-Generated iterator reuse is indexed by the exact declaration, iterator kind,
-callable evidence, and current argument-root tuple. Reverse argument dependencies
-rekey only entries touched by a union; content replacement updates provenance
-membership explicitly. Equal keys retain independently constructed nodes until
-an explicit relation joins them. Monotone provenance counts let finalization
-skip graphs that have never contained generated iterators, and private-evidence
-containment diagnostics distinguish guard returns from actual containment queries.
-
+Graph-owned generated iterators are indexed by their stable declaration, kind,
+callable evidence, and current argument roots. Root unions rekey only affected
+entries, so lookups avoid scanning unrelated candidates. Content replacement and
+root union update producer membership explicitly. Equal keys retain
+independently constructed nodes until an explicit relation joins them. A
+monotone provenance counter lets both iterator finalizers return immediately for
+graphs without generated iterators.
 Generated identity hashes a snapshot of the current graph representation after
 joins. An imported request's retained type remains its original witness and
 cannot supply the identity of a graph-owned producer that replaced it.
