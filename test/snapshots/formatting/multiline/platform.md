@@ -25,8 +25,8 @@ platform "pf"
 # EXPECTED
 EXPOSED BUT NOT DEFINED - platform.md:14:3:14:29
 EXPOSED BUT NOT DEFINED - platform.md:15:3:15:29
-EXPOSED BUT NOT DEFINED - platform.md:6:3:6:5
 EXPOSED BUT NOT DEFINED - platform.md:7:3:7:5
+EXPOSED BUT NOT DEFINED - platform.md:6:3:6:5
 INVALID HOSTED SECTION - :0:0:0:0
 # PROBLEMS
 ~~~clojure
@@ -60,19 +60,6 @@ INVALID HOSTED SECTION - :0:0:0:0
 	(report
 		(severity runtime_error)
 		(title "Exposed But Not Defined")
-		(region (start 6 3) (end 6 5))
-		(headline
-			(reflow "The mod header says that ")
-			(annotated symbol-unqualified "E1")
-			(reflow " is exposed, but it is not defined anywhere in this mod."))
-		(document
-			(source-region (file "platform.md") (start 6 3) (end 6 5) (annotation error) (line-text "\t\tE1,"))
-			(reflow "You can fix this by either defining ")
-			(annotated symbol-unqualified "E1")
-			(reflow " in this mod, or by removing it from the list of exposed values.")))
-	(report
-		(severity runtime_error)
-		(title "Exposed But Not Defined")
 		(region (start 7 3) (end 7 5))
 		(headline
 			(reflow "The mod header says that ")
@@ -82,6 +69,19 @@ INVALID HOSTED SECTION - :0:0:0:0
 			(source-region (file "platform.md") (start 7 3) (end 7 5) (annotation error) (line-text "\t\tE2,"))
 			(reflow "You can fix this by either defining ")
 			(annotated symbol-unqualified "E2")
+			(reflow " in this mod, or by removing it from the list of exposed values.")))
+	(report
+		(severity runtime_error)
+		(title "Exposed But Not Defined")
+		(region (start 6 3) (end 6 5))
+		(headline
+			(reflow "The mod header says that ")
+			(annotated symbol-unqualified "E1")
+			(reflow " is exposed, but it is not defined anywhere in this mod."))
+		(document
+			(source-region (file "platform.md") (start 6 3) (end 6 5) (annotation error) (line-text "\t\tE1,"))
+			(reflow "You can fix this by either defining ")
+			(annotated symbol-unqualified "E1")
 			(reflow " in this mod, or by removing it from the list of exposed values.")))
 	(report
 		(severity runtime_error)

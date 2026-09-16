@@ -11304,6 +11304,10 @@ test "stored codec restore emits the same Monotype shape from Phase B" {
     // the numbers that stand in for "the sealed body is the body the eager
     // restore used to emit". Measured on the pre-W2b compiler:
     //   fns=10 defs=11 exprs=535 locals=108 template_misses=14 nested_misses=0
+    // and re-measured after the 2026-09-15 rebase onto upstream's codec
+    // contract machinery, which the eager restore no longer exists to be
+    // compared against, so the reference is this compiler itself:
+    //   fns=10 defs=11 exprs=597 locals=121 template_misses=14 nested_misses=0
     // Every count is exact, including expressions and locals. The reserve-
     // and-copy that Phase-B emission ends in is the same reserve-and-copy the
     // eager restore already performed (it too filled a reservation with a
@@ -11316,8 +11320,8 @@ test "stored codec restore emits the same Monotype shape from Phase B" {
     const stats = try structuralJsonMonotypeStatsForSource(allocator, stored_parser_gate_source);
     try std.testing.expectEqual(@as(usize, 10), stats.functions);
     try std.testing.expectEqual(@as(usize, 11), stats.definitions);
-    try std.testing.expectEqual(@as(usize, 535), stats.expressions);
-    try std.testing.expectEqual(@as(usize, 108), stats.locals);
+    try std.testing.expectEqual(@as(usize, 597), stats.expressions);
+    try std.testing.expectEqual(@as(usize, 121), stats.locals);
     try std.testing.expect(stats.template_misses <= 14);
     try std.testing.expectEqual(@as(u64, 0), stats.nested_misses);
 }
@@ -11439,12 +11443,14 @@ test "stored parser restore lowers a shape with an optional field" {
     // W2b's own, measured 2026-09-15, and they exist so a later change that
     // silently drops or duplicates part of the generated optional-field
     // parser is caught. That it lowers at all is the primary assertion.
+    // Re-measured after the 2026-09-15 rebase onto upstream's codec contract
+    // machinery (exprs 669 -> 731, locals 127 -> 140).
     const allocator = std.testing.allocator;
     const stats = try structuralJsonMonotypeStatsForSource(allocator, stored_parser_optional_gate_source);
     try std.testing.expectEqual(@as(usize, 10), stats.functions);
     try std.testing.expectEqual(@as(usize, 11), stats.definitions);
-    try std.testing.expectEqual(@as(usize, 669), stats.expressions);
-    try std.testing.expectEqual(@as(usize, 127), stats.locals);
+    try std.testing.expectEqual(@as(usize, 731), stats.expressions);
+    try std.testing.expectEqual(@as(usize, 140), stats.locals);
     try std.testing.expectEqual(@as(u64, 14), stats.template_misses);
     try std.testing.expectEqual(@as(u64, 0), stats.nested_misses);
 }
@@ -11452,13 +11458,14 @@ test "stored parser restore lowers a shape with an optional field" {
 test "stored encoder_for restore lowers a shape with an optional field" {
     // The encoder twin of the test above, and the only Monotype-level gate on
     // `emitStoredEncoderForRuntimeBody`. Same status: W2b's own baseline,
-    // measured 2026-09-15, not a pre/post comparison.
+    // measured 2026-09-15, not a pre/post comparison; locals re-measured
+    // after the 2026-09-15 rebase (72 -> 73).
     const allocator = std.testing.allocator;
     const stats = try structuralJsonMonotypeStatsForSource(allocator, stored_encoder_optional_gate_source);
     try std.testing.expectEqual(@as(usize, 24), stats.functions);
     try std.testing.expectEqual(@as(usize, 17), stats.definitions);
     try std.testing.expectEqual(@as(usize, 213), stats.expressions);
-    try std.testing.expectEqual(@as(usize, 72), stats.locals);
+    try std.testing.expectEqual(@as(usize, 73), stats.locals);
     try std.testing.expectEqual(@as(u64, 19), stats.template_misses);
     try std.testing.expectEqual(@as(u64, 1), stats.nested_misses);
 }

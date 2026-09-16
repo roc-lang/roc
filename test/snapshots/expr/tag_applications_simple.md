@@ -45,7 +45,7 @@ MISSING METHOD - tag_applications_simple.md:2:10:2:12
 			(line-break)
 			(annotation-start code-block)
 			(indent 1)
-			(text "[Ok([Just(a), ..]), ..]")
+			(text "[Ok([Just(a)])]")
 			(line-break)
 			(indent 1)
 			(text "  where [a.from_numeral : Numeral -> Try(a, [InvalidNumeral(Str)])]")
@@ -165,5 +165,5 @@ EndOfFile,
 ~~~
 # TYPES
 ~~~clojure
-(expr (type "List([Err(Str), Just(Dec), Left(Dec), None, Nothing, Ok(Str), Right(Dec), Some([Ok([Just(Dec), ..]), ..]), Try([Ok([Some([True, ..]), ..]), ..]), ..])"))
+(expr (type "List([Err(Str), Just(Dec), Left(Dec), None, Nothing, Ok(Str), Right(Dec), Some([Ok([Just(Dec)])]), Try([Ok([Some([True])])])])"))
 ~~~

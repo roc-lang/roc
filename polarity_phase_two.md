@@ -1168,6 +1168,9 @@ not promise to be the caller's var.
 assertion, and tighten that doc comment. Do NOT "fix" the production code; there
 is no defect there.
 
+(Moot after the 2026-09-15 rebase: the unifier candidate, its test, and
+`recordGeneralizedDispatchTargetShare` were deleted with the share table.)
+
 ### 8.1.7 Two branch test failures are OURS, from phase one (settled 2026-09-15)
 
 Both fail on the branch and both PASS at `kusqzzsn`, measured with a

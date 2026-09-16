@@ -557,7 +557,7 @@ MISSING METHOD - record_different_fields_error.md:7:19:7:30
 			(line-break)
 			(annotation-start code-block)
 			(indent 1)
-			(text "[PascalCase, ..]")
+			(text "[PascalCase]")
 			(annotation-end)
 			(line-break)
 			(line-break)

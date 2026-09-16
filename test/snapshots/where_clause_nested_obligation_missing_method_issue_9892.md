@@ -18,6 +18,10 @@ main = run(Wrap.W(42.U8))
 ~~~
 # EXPECTED
 MISSING METHOD - where_clause_nested_obligation_missing_method_issue_9892.md:10:8:10:26
+%%%%%%% diff from: qpzrzksn 5753b626 "W8: report an unlisted tag as an ordinary Type Mismatch" (parents of rebased revision)
+\\\\\\\        to: qvpuwyko 629ce053 "Regenerate goldens and snapshots after rebasing onto main" (rebased revision)
+-MISSING METHOD - where_clause_nested_obligation_missing_method_issue_9892.md:3:28:3:38
++MISSING METHOD - where_clause_nested_obligation_missing_method_issue_9892.md:2:51:2:59
 # PROBLEMS
 ~~~clojure
 (reports
@@ -25,6 +29,10 @@ MISSING METHOD - where_clause_nested_obligation_missing_method_issue_9892.md:10:
 		(severity runtime_error)
 		(title "Missing Method")
 		(region (start 10 8) (end 10 26))
+%%%%%%% diff from: qpzrzksn 5753b626 "W8: report an unlisted tag as an ordinary Type Mismatch" (parents of rebased revision)
+\\\\\\\        to: qvpuwyko 629ce053 "Regenerate goldens and snapshots after rebasing onto main" (rebased revision)
+-		(region (start 3 28) (end 3 38))
++		(region (start 2 51) (end 2 59))
 		(headline
 			(reflow "A")
 			(reflow " ")
@@ -36,7 +44,7 @@ MISSING METHOD - where_clause_nested_obligation_missing_method_issue_9892.md:10:
 			(reflow " ")
 			(reflow "method here, but the type being used doesn't have that method."))
 		(document
-			(source-region (file "where_clause_nested_obligation_missing_method_issue_9892.md") (start 10 8) (end 10 26) (annotation error) (line-text "main = run(Wrap.W(42.U8))"))
+			(source-region (file "where_clause_nested_obligation_missing_method_issue_9892.md") (start 2 51) (end 2 59) (annotation error) (line-text "    unwrap : Wrap(a) -> Str where [a.frobnicate : a -> Str]"))
 			(line-break)
 			(reflow "The value's type, which does not have a method named ")
 			(annotated code "frobnicate")
@@ -177,7 +185,7 @@ main = run(Wrap.W(42.U8))
 		(e-lambda
 			(args
 				(p-assign (ident "v")))
-			(e-dispatch-call (method "unwrap") (constraint-fn-var 294)
+			(e-dispatch-call (method "unwrap") (constraint-fn-var 296)
 				(receiver
 					(e-lookup-local
 						(p-assign (ident "v"))))
