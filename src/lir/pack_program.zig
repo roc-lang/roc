@@ -54,6 +54,11 @@ pub fn closedExportRoots(
 /// nominal arguments, and nominal backings. A closed procedure type
 /// instantiates identically in every program, which is what lets its
 /// specialization be shared.
+///
+/// A nominal's backing is its declaration's template, written over the
+/// declaration's formal parameters. Those parameters stand for the nominal's
+/// arguments, which the walk checks on their own, so a formal parameter met
+/// inside a backing is bound rather than free.
 pub fn checkedTypeIsClosed(
     allocator: Allocator,
     types: checked.CheckedTypeStoreView,
@@ -61,6 +66,8 @@ pub fn checkedTypeIsClosed(
 ) Allocator.Error!bool {
     var visited = collections.DenseMap(checked.CheckedTypeId, void).init(allocator);
     defer visited.deinit();
+    var bound_formals = collections.DenseMap(checked.CheckedTypeId, void).init(allocator);
+    defer bound_formals.deinit();
     var stack = std.ArrayList(checked.CheckedTypeId).empty;
     defer stack.deinit(allocator);
     // The root is the procedure's own function type; only function types
@@ -89,7 +96,8 @@ pub fn checkedTypeIsClosed(
         if (gop.found_existing) continue;
         switch (types.payload(ty)) {
             .pending, .err, .empty_record, .empty_tag_union => {},
-            .flex, .rigid, .record_unbound, .function => return false,
+            .flex, .record_unbound, .function => return false,
+            .rigid => if (!bound_formals.contains(ty)) return false,
             .alias => |alias| {
                 try stack.append(allocator, alias.backing);
                 try stack.appendSlice(allocator, alias.args);
@@ -111,7 +119,12 @@ pub fn checkedTypeIsClosed(
                 // Declared fields name backing record fields or index into
                 // `padding_field_types`; the backing below covers the named ones.
                 try stack.appendSlice(allocator, nominal.padding_field_types);
-                if (types.nominalBackingTemplateForPayload(nominal)) |backing| try stack.append(allocator, backing);
+                if (types.nominalBackingTemplateForPayload(nominal)) |backing| {
+                    // A backing template exists only for a declared nominal.
+                    const declaration = types.nominalDeclarationForPayload(nominal) orelse unreachable;
+                    for (declaration.formalArgs(types)) |formal| try bound_formals.put(formal, {});
+                    try stack.append(allocator, backing);
+                }
             },
             .tag_union => |tag_union| {
                 for (tag_union.tags) |tag| try stack.appendSlice(allocator, tag.argsSlice(types));
@@ -211,4 +224,75 @@ test "closed export types reject records with undetermined field kinds" {
 
     try std.testing.expect(!try checkedTypeIsClosed(allocator, types, undetermined));
     try std.testing.expect(try checkedTypeIsClosed(allocator, types, required));
+}
+
+fn testNominalDeclarationId(index: usize) checked.CheckedNominalDeclarationId {
+    return @enumFromInt(index);
+}
+
+fn testModuleIdentity(index: usize) check.CanonicalNames.ModuleIdentityId {
+    return @enumFromInt(index);
+}
+
+fn testTypeName(index: usize) check.CanonicalNames.TypeNameId {
+    return @enumFromInt(index);
+}
+
+fn testTagLabel(index: usize) check.CanonicalNames.TagLabelId {
+    return @enumFromInt(index);
+}
+
+test "closed export types bind a nominal backing's formal parameters to its arguments" {
+    const allocator = std.testing.allocator;
+    // `Wrap(a) := [Some(a)]` declared over the rigid formal `a`, applied to
+    // `U8`-like leaf `unit` in one type and to a free rigid `b` in the other.
+    const unit = testTypeId(0);
+    const formal = testTypeId(1);
+    const backing = testTypeId(2);
+    const wrap_unit = testTypeId(3);
+    const free_rigid = testTypeId(4);
+    const wrap_free = testTypeId(5);
+    const declaration_id = testNominalDeclarationId(0);
+    const nominal_key = check.CanonicalNames.NominalTypeKey{ .module = testModuleIdentity(0), .type_name = testTypeName(0) };
+    const stored_nominal = checked.StoredNominal{
+        .name = nominal_key.type_name,
+        .origin_module = nominal_key.module,
+        .owner_module = .{},
+        .is_opaque = false,
+        .representation = .{ .local_declaration = declaration_id },
+        .args = .{ .start = 1, .len = 1 },
+    };
+    var stored_nominal_free = stored_nominal;
+    stored_nominal_free.args = .{ .start = 2, .len = 1 };
+    const payloads = [_]checked.StoredCheckedTypePayload{
+        .empty_record,
+        .{ .rigid = .{} },
+        .{ .tag_union = .{ .tags = .{ .start = 0, .len = 1 }, .ext = unit } },
+        .{ .nominal = stored_nominal },
+        .{ .rigid = .{} },
+        .{ .nominal = stored_nominal_free },
+    };
+    // Pool slots: [0] the formal as the tag's argument and the declaration's
+    // formal list, [1] `unit` as the closed argument, [2] the free rigid.
+    const type_id_pool = [_]checked.CheckedTypeId{ formal, unit, free_rigid };
+    const tags = [_]checked.CheckedTag{.{ .name = testTagLabel(0), .args_start = 0, .args_len = 1 }};
+    const declarations = [_]checked.CheckedNominalDeclaration{.{
+        .id = declaration_id,
+        .nominal = nominal_key,
+        .source_statement = 0,
+        .declaration_root = wrap_unit,
+        .backing = backing,
+        .fa_start = 0,
+        .fa_len = 1,
+    }};
+    const types = checked.CheckedTypeStoreView{
+        .stored_payloads = &payloads,
+        .nominal_declarations = &declarations,
+        .type_id_pool = &type_id_pool,
+        .tag_pool = &tags,
+    };
+
+    try std.testing.expect(try checkedTypeIsClosed(allocator, types, wrap_unit));
+    try std.testing.expect(!try checkedTypeIsClosed(allocator, types, wrap_free));
+    try std.testing.expect(!try checkedTypeIsClosed(allocator, types, backing));
 }

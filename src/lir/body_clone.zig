@@ -253,133 +253,140 @@ pub fn countReachableReadsWithAllocator(store: *LirStore, body: CFStmtId, alloca
 /// Add this statement's operand reads to an existing per-local count row.
 /// Definitions are deliberately excluded, matching `countReachableReads`.
 pub fn countStmtReads(store: *const LirStore, counts: []u32, stmt: LIR.CFStmt) void {
-    visitStmtReads(store, counts, stmt);
+    forEachStmtRead(store, stmt, counts, noteRead);
 }
 
-fn visitStmtReads(store: *const LirStore, counts: anytype, stmt: LIR.CFStmt) void {
+/// Call `note(ctx, local)` for every operand this statement reads, in the
+/// one inventory every reader of operands shares; definitions are excluded.
+pub fn forEachStmtRead(
+    store: *const LirStore,
+    stmt: LIR.CFStmt,
+    ctx: anytype,
+    comptime note: fn (@TypeOf(ctx), LocalId) void,
+) void {
     switch (stmt) {
         .assign_ref => |s| switch (s.op) {
-            .local => |source| noteRead(counts, source),
-            .discriminant => |ref| noteRead(counts, ref.source),
-            .field => |ref| noteRead(counts, ref.source),
-            .tag_payload => |ref| noteRead(counts, ref.source),
-            .tag_payload_struct => |ref| noteRead(counts, ref.source),
-            .list_reinterpret => |ref| noteRead(counts, ref.backing_ref),
-            .nominal => |ref| noteRead(counts, ref.backing_ref),
+            .local => |source| note(ctx, source),
+            .discriminant => |ref| note(ctx, ref.source),
+            .field => |ref| note(ctx, ref.source),
+            .tag_payload => |ref| note(ctx, ref.source),
+            .tag_payload_struct => |ref| note(ctx, ref.source),
+            .list_reinterpret => |ref| note(ctx, ref.backing_ref),
+            .nominal => |ref| note(ctx, ref.backing_ref),
         },
         .assign_call => |s| {
-            if (s.result_desc) |desc| noteDescRead(counts, desc);
+            if (s.result_desc) |desc| emitDesc(ctx, note, desc);
             const args = store.getLocalSpan(s.args);
-            for (0..args.len) |index| noteRead(counts, GuardedList.at(args, index));
+            for (0..args.len) |index| note(ctx, GuardedList.at(args, index));
         },
         .assign_call_erased => |s| {
-            noteRead(counts, s.closure);
-            noteSpanReads(store, counts, s.args);
-            noteSpanReads(store, counts, s.arg_descs);
-            if (s.result_desc) |desc| noteDescRead(counts, desc);
-            if (s.reuse_source) |reuse_source| noteRead(counts, reuse_source);
+            note(ctx, s.closure);
+            emitSpan(store, ctx, note, s.args);
+            emitSpan(store, ctx, note, s.arg_descs);
+            if (s.result_desc) |desc| emitDesc(ctx, note, desc);
+            if (s.reuse_source) |reuse_source| note(ctx, reuse_source);
         },
         .assign_packed_erased_fn => |s| {
-            if (s.capture) |capture| noteRead(counts, capture);
-            if (s.result_desc) |desc| noteDescRead(counts, desc);
-            if (s.reuse) |reuse| noteRead(counts, reuse);
+            if (s.capture) |capture| note(ctx, capture);
+            if (s.result_desc) |desc| emitDesc(ctx, note, desc);
+            if (s.reuse) |reuse| note(ctx, reuse);
         },
         .assign_boxy_desc_ref => |s| {
-            noteDescRead(counts, s.desc);
-            if (s.tag_residual_for) |desc| noteDescRead(counts, desc);
-            noteSpanReads(store, counts, s.captures);
+            emitDesc(ctx, note, s.desc);
+            if (s.tag_residual_for) |desc| emitDesc(ctx, note, desc);
+            emitSpan(store, ctx, note, s.captures);
         },
-        .assign_boxy_dict_ref => |s| noteDictRead(counts, s.dict),
+        .assign_boxy_dict_ref => |s| emitDict(ctx, note, s.dict),
         .assign_boxy_box => |s| {
-            noteRead(counts, s.payload);
-            if (s.source_desc) |desc| noteDescRead(counts, desc);
-            if (s.payload_desc) |desc| noteDescRead(counts, desc);
+            note(ctx, s.payload);
+            if (s.source_desc) |desc| emitDesc(ctx, note, desc);
+            if (s.payload_desc) |desc| emitDesc(ctx, note, desc);
         },
         .assign_boxy_reuse_box => |s| {
-            noteRead(counts, s.source);
-            noteDescRead(counts, s.desc);
+            note(ctx, s.source);
+            emitDesc(ctx, note, s.desc);
         },
         .assign_boxy_unbox => |s| {
-            noteRead(counts, s.source);
-            noteDescRead(counts, s.source_desc);
-            if (s.target_desc) |desc| noteDescRead(counts, desc);
+            note(ctx, s.source);
+            emitDesc(ctx, note, s.source_desc);
+            if (s.target_desc) |desc| emitDesc(ctx, note, desc);
         },
         .assign_boxy_adapt => |s| {
-            noteRead(counts, s.source);
-            if (s.source_desc) |desc| noteDescRead(counts, desc);
-            if (s.target_desc) |desc| noteDescRead(counts, desc);
+            note(ctx, s.source);
+            if (s.source_desc) |desc| emitDesc(ctx, note, desc);
+            if (s.target_desc) |desc| emitDesc(ctx, note, desc);
         },
         .assign_boxy_inspect => |s| {
-            noteRead(counts, s.source);
-            noteDescRead(counts, s.source_desc);
+            note(ctx, s.source);
+            emitDesc(ctx, note, s.source_desc);
         },
         .assign_boxy_eq => |s| {
-            noteRead(counts, s.lhs);
-            noteRead(counts, s.rhs);
-            noteDescRead(counts, s.source_desc);
+            note(ctx, s.lhs);
+            note(ctx, s.rhs);
+            emitDesc(ctx, note, s.source_desc);
         },
         .assign_boxy_tag => |s| {
-            noteDescRead(counts, s.target_desc);
-            if (s.payload) |payload| noteRead(counts, payload);
-            if (s.payload_desc) |desc| noteDescRead(counts, desc);
+            emitDesc(ctx, note, s.target_desc);
+            if (s.payload) |payload| note(ctx, payload);
+            if (s.payload_desc) |desc| emitDesc(ctx, note, desc);
         },
         .assign_boxy_tag_payload => |s| {
-            noteRead(counts, s.source);
-            noteDescRead(counts, s.source_desc);
+            note(ctx, s.source);
+            emitDesc(ctx, note, s.source_desc);
         },
         .boxy_tag_match => |s| {
-            noteRead(counts, s.source);
-            noteDescRead(counts, s.source_desc);
+            note(ctx, s.source);
+            emitDesc(ctx, note, s.source_desc);
         },
         .assign_call_dict => |s| {
-            noteDictRead(counts, s.dict);
-            noteSpanReads(store, counts, s.args);
-            noteSpanReads(store, counts, s.arg_descs);
-            noteSpanReads(store, counts, s.hidden_args);
-            if (s.result_desc) |desc| noteDescRead(counts, desc);
+            emitDict(ctx, note, s.dict);
+            emitSpan(store, ctx, note, s.args);
+            emitSpan(store, ctx, note, s.arg_descs);
+            emitSpan(store, ctx, note, s.hidden_args);
+            if (s.result_desc) |desc| emitDesc(ctx, note, desc);
         },
         .assign_low_level => |s| {
             const args = store.getLocalSpan(s.args);
-            for (0..args.len) |index| noteRead(counts, GuardedList.at(args, index));
+            for (0..args.len) |index| note(ctx, GuardedList.at(args, index));
         },
         .assign_list => |s| {
             const elems = store.getLocalSpan(s.elems);
-            for (0..elems.len) |index| noteRead(counts, GuardedList.at(elems, index));
+            for (0..elems.len) |index| note(ctx, GuardedList.at(elems, index));
         },
         .assign_struct => |s| {
             const fields = store.getLocalSpan(s.fields);
-            for (0..fields.len) |index| noteRead(counts, GuardedList.at(fields, index));
+            for (0..fields.len) |index| note(ctx, GuardedList.at(fields, index));
         },
-        .assign_tag => |s| if (s.payload) |payload| noteRead(counts, payload),
+        .assign_tag => |s| if (s.payload) |payload| note(ctx, payload),
         .store_struct => |s| {
-            noteRead(counts, s.dest);
+            note(ctx, s.dest);
             const fields = store.getLocalSpan(s.fields);
-            for (0..fields.len) |index| noteRead(counts, GuardedList.at(fields, index));
+            for (0..fields.len) |index| note(ctx, GuardedList.at(fields, index));
         },
         .store_tag => |s| {
-            noteRead(counts, s.dest);
-            if (s.payload) |payload| noteRead(counts, payload);
+            note(ctx, s.dest);
+            if (s.payload) |payload| note(ctx, payload);
         },
-        .set_local => |s| noteRead(counts, s.value),
-        .debug => |s| noteRead(counts, s.message),
-        .expect => |s| noteRead(counts, s.condition),
-        .expect_err => |s| noteRead(counts, s.message),
-        .switch_stmt => |s| noteRead(counts, s.cond),
+        .set_local => |s| note(ctx, s.value),
+        .debug => |s| note(ctx, s.message),
+        .expect => |s| note(ctx, s.condition),
+        .expect_err => |s| note(ctx, s.message),
+        .switch_stmt => |s| note(ctx, s.cond),
         .switch_initialized_payload => |s| {
-            noteRead(counts, s.cond);
-            noteRead(counts, s.payload);
+            note(ctx, s.cond);
+            note(ctx, s.payload);
         },
-        .str_match => |s| noteRead(counts, s.source),
-        .str_match_set => |s| noteRead(counts, s.source),
-        .ret => |s| noteRead(counts, s.value),
-        .crash => |s| if (s.msg.localId()) |message| noteRead(counts, message),
-        .incref => |s| noteRead(counts, s.value),
-        .decref => |s| noteRead(counts, s.value),
+        .str_match => |s| note(ctx, s.source),
+        .str_match_set => |s| note(ctx, s.source),
+        .ret => |s| note(ctx, s.value),
+        .crash => |s| if (s.msg.localId()) |message| note(ctx, message),
+        .incref => |s| note(ctx, s.value),
+        .decref => |s| note(ctx, s.value),
         .decref_if_initialized => |s| {
-            noteRead(counts, s.cond);
-            noteRead(counts, s.value);
+            note(ctx, s.cond);
+            note(ctx, s.value);
         },
-        .free => |s| noteRead(counts, s.value),
+        .free => |s| note(ctx, s.value),
         .init_uninitialized,
         .assign_literal,
         .comptime_branch_taken,
@@ -413,8 +420,8 @@ fn countReachable(store: *LirStore, body: CFStmtId, allocator: Allocator, compti
 
     while (try walk.next()) |stmt_id| {
         switch (kind) {
-            .reads => visitStmtReads(store, &counts, store.getCFStmt(stmt_id)),
-            .defs => visitStmtDefs(store, &counts, store.getCFStmt(stmt_id)),
+            .reads => forEachStmtRead(store, store.getCFStmt(stmt_id), &counts, noteRead),
+            .defs => forEachStmtDef(store, store.getCFStmt(stmt_id), &counts, noteRead),
         }
         if (counts.failure) |err| return err;
     }
@@ -424,10 +431,18 @@ fn countReachable(store: *LirStore, body: CFStmtId, allocator: Allocator, compti
 /// Add this statement's definitions to an existing per-local count row.
 /// Operand reads are deliberately excluded, matching `countReachableDefs`.
 pub fn countStmtDefs(store: *const LirStore, counts: []u32, stmt: LIR.CFStmt) void {
-    visitStmtDefs(store, counts, stmt);
+    forEachStmtDef(store, stmt, counts, noteRead);
 }
 
-fn visitStmtDefs(store: *const LirStore, counts: anytype, stmt: LIR.CFStmt) void {
+/// Call `note(ctx, local)` for every local this statement defines, in the
+/// one inventory every reader of definitions shares; operand reads are
+/// excluded.
+pub fn forEachStmtDef(
+    store: *const LirStore,
+    stmt: LIR.CFStmt,
+    ctx: anytype,
+    comptime note: fn (@TypeOf(ctx), LocalId) void,
+) void {
     switch (stmt) {
         inline .init_uninitialized,
         .assign_ref,
@@ -448,24 +463,24 @@ fn visitStmtDefs(store: *const LirStore, counts: anytype, stmt: LIR.CFStmt) void
         .assign_struct,
         .assign_tag,
         .set_local,
-        => |s| noteRead(counts, s.target),
+        => |s| note(ctx, s.target),
         .assign_call => |s| {
-            noteRead(counts, s.target);
-            if (s.out_desc) |out_desc| noteRead(counts, out_desc);
+            note(ctx, s.target);
+            if (s.out_desc) |out_desc| note(ctx, out_desc);
         },
         .assign_call_erased => |s| {
-            noteRead(counts, s.target);
-            if (s.out_desc) |out_desc| noteRead(counts, out_desc);
+            note(ctx, s.target);
+            if (s.out_desc) |out_desc| note(ctx, out_desc);
         },
         .assign_boxy_tag_payload => |s| {
-            noteRead(counts, s.target);
-            if (s.target_desc) |target_desc| noteRead(counts, target_desc);
+            note(ctx, s.target);
+            if (s.target_desc) |target_desc| note(ctx, target_desc);
         },
-        .join => |s| noteSpanReads(store, counts, s.params),
-        .str_match => |s| noteStepCaptures(store, counts, s.steps),
+        .join => |s| emitSpan(store, ctx, note, s.params),
+        .str_match => |s| emitStepCaptures(store, ctx, note, s.steps),
         .str_match_set => |s| {
             const arms = store.getStrMatchArms(s.arms);
-            for (0..arms.len) |index| noteStepCaptures(store, counts, GuardedList.at(arms, index).steps);
+            for (0..arms.len) |index| emitStepCaptures(store, ctx, note, GuardedList.at(arms, index).steps);
         },
         .store_struct,
         .store_tag,
@@ -491,11 +506,11 @@ fn visitStmtDefs(store: *const LirStore, counts: anytype, stmt: LIR.CFStmt) void
     }
 }
 
-fn noteStepCaptures(store: *const LirStore, counts: anytype, span: LIR.StrMatchStepSpan) void {
+fn emitStepCaptures(store: *const LirStore, ctx: anytype, comptime note: fn (@TypeOf(ctx), LocalId) void, span: LIR.StrMatchStepSpan) void {
     const steps = store.getStrMatchSteps(span);
     for (0..steps.len) |index| switch (GuardedList.at(steps, index).capture) {
         .discard => {},
-        .view => |local| noteRead(counts, local),
+        .view => |local| note(ctx, local),
     };
 }
 
@@ -513,17 +528,17 @@ fn noteRead(counts: anytype, local: LocalId) void {
     }
 }
 
-fn noteSpanReads(store: *const LirStore, counts: anytype, span: LIR.LocalSpan) void {
+fn emitSpan(store: *const LirStore, ctx: anytype, comptime note: fn (@TypeOf(ctx), LocalId) void, span: LIR.LocalSpan) void {
     const locals = store.getLocalSpan(span);
-    for (0..locals.len) |index| noteRead(counts, GuardedList.at(locals, index));
+    for (0..locals.len) |index| note(ctx, GuardedList.at(locals, index));
 }
 
-fn noteDescRead(counts: anytype, desc: LIR.BoxyDescRef) void {
-    if (desc.localOrNull()) |local| noteRead(counts, local);
+fn emitDesc(ctx: anytype, comptime note: fn (@TypeOf(ctx), LocalId) void, desc: LIR.BoxyDescRef) void {
+    if (desc.localOrNull()) |local| note(ctx, local);
 }
 
-fn noteDictRead(counts: anytype, dict: LIR.BoxyDictRef) void {
-    if (dict.localOrNull()) |local| noteRead(counts, local);
+fn emitDict(ctx: anytype, comptime note: fn (@TypeOf(ctx), LocalId) void, dict: LIR.BoxyDictRef) void {
+    if (dict.localOrNull()) |local| note(ctx, local);
 }
 
 /// Compact a sorted slice of local ids in place, returning the length of the

@@ -828,6 +828,24 @@ no ownership transfers. The pass extends each affected procedure's sorted frame
 local inventory and recomputes its stack-probe requirement. Backends consume
 only these explicit ordinary LIR operations.
 
+A runtime program forked from the completed host program receives the
+completed values in two forms. Its lowering carries the host's completed
+successful scalar roots, decoded from the host's frozen image and keyed by
+checked root identity as transcoding matches slots, and emits each such read
+as the scalar literal rather than a slot read, so range proving, loop
+versioning, and overflow elision see the constant they would have seen from
+a literal in source; a table built by `List.repeat` with a compile-time
+length keeps no index check the prover can discharge, and no slot, failure
+record, or guard exists for the root. After the passes, which compact the
+slot table, the remaining aggregate slots are transcoded into the target's
+frozen image. The LLVM
+backend then defines each slot whose image is a link-time constant—bytes with
+address relocations as symbolic pointer fields—as an internal constant in the
+app module, and the readonly object binds every node globally so those
+references resolve; only slots with function-pointer relocations stay
+external declarations. Slot reads therefore fold to immediates and
+relocatable addresses instead of loads from a linker symbol.
+
 The guard pass also records each guard's crash statement identity. Failed root
 completion associates those statements with the original evaluated failure's
 source location and region. Recorded origins remain stable. A suspended
@@ -13044,12 +13062,29 @@ also lets LLVM optimize across what was an opaque control split.
 A join parameter is an ownership phi, not a foreign definition. Its origin is
 born-unique exactly when it has at least one explicit non-self
 `initialize_join_param` incoming edge and every such edge carries a born-unique
-origin. An incoming edge consumes its source ownership unit; a second consuming
-occurrence or a non-consuming read destroys uniqueness through that edge. Join
-edges, pure same-value aliases, and unique-return call edges settle in one
-monotone dependency graph, so loop back edges preserve a unique circulating
-unit only when an explicit unique birth reaches the cycle. A self-assignment is
-not an incoming ownership transfer and contributes no edge.
+origin. Join edges, pure same-value aliases, and unique-return call edges
+settle in one monotone dependency graph, so loop back edges preserve a unique
+circulating unit only when an explicit unique birth reaches the cycle. A
+self-assignment is not an incoming ownership transfer and contributes no edge.
+
+Uses of a local are ordered along control flow rather than counted. A
+consuming use (an owned argument, a store into an aggregate, an alias
+definition, a join edge) takes the value's single ownership unit with it, so
+it destroys the local's uniqueness only when another consuming use of the
+same local can still execute after it before the local is redefined: two
+consumes on exclusive branches never both run, and a consume whose only
+successors read other locals leaves the value unique. A transfer edge (alias
+or join) carries the unit through to its target only when no use of the
+source at all, read or consume, can execute after it; otherwise the target
+holds a second reference and has no unique birth of its own. The order is
+answered as liveness over the procedure's successor edges, following jumps
+through the procedure's joins and killed at a redefinition of the local: one
+backward fixpoint per procedure per 64 queried locals answers every consume
+and transfer at once, so the cost is linear in the procedure rather than one
+walk per use, and certifying a single emitted procedure numbers only that
+procedure's statements and locals. Reference-counting statements are never
+uses, so the debug certifier re-derives the same verdict from the emitted
+procedure.
 
 A checked argument's check is deletable when three conditions hold at the
 call:

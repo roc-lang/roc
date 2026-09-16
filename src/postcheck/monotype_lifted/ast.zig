@@ -959,7 +959,11 @@ pub const Program = struct {
             writeFnDefDigest(&hasher, &self.names, template.fn_def);
             hasher.update(&template.source_fn_key.bytes);
             hasher.update(&template.evidence_digest.bytes);
-            const mono_digest = self.types.specializationDigest(&self.names, template.mono_fn_ty);
+            // The equality digest, not the stored-identity digest: the latter
+            // names a nominal type by the checked type id of whichever
+            // module's store lowered it, and the same specialization lowered
+            // by two programs must have one identity.
+            const mono_digest = self.types.equalityDigest(&self.names, template.mono_fn_ty);
             hasher.update(&mono_digest.bytes);
         } else {
             const root = fn_.root_identity orelse return null;

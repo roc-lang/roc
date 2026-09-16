@@ -38,6 +38,7 @@ pub const LambdaMono = struct {
 pub const MatchTree = @import("match_tree.zig");
 pub const SolvedInline = @import("solved_inline.zig");
 pub const SolvedLirLower = @import("solved_lir_lower.zig");
+pub const ComptimeScalarValues = @import("comptime_scalar_values.zig");
 /// Boxy checked-to-LIR planning and lowering components.
 pub const Boxy = @import("boxy/mod.zig");
 pub const StructuralTest = @import("structural_test.zig");
