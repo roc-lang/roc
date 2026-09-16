@@ -8061,6 +8061,10 @@ destination shape. It cannot use the call expression's own type to select one:
 lowering may receive a different expected destination type. The existing affine
 destination-demand proof alone selects reuse during emission. Preparing a
 procedure identity never makes it reachable; only emitted references do.
+Specializations that render to one procedure identity share one procedure,
+and the specialization that interned it owns the body lowering: the first
+emitted reference to any of them queues the owner exactly once, so a prepared
+placeholder never survives as a reachable procedure without a body.
 
 Each callback reads a frozen coordinator prefix and writes a private LIR store
 suffix. Strings, names, inline scopes, patterns, control-flow tables, erased
