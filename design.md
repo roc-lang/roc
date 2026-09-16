@@ -8088,19 +8088,20 @@ identity and backing relationships, constructor-evidence requests, and generated
 iterator membership and provenance counts belong only to that graph epoch.
 Only the cumulative immutable type and name stores survive the reset.
 
-Graph-owned generated iterators are indexed by their stable declaration, kind,
-and callable evidence. Candidates in that bucket compare live argument roots,
-so argument unions do not stale the index. Content replacement and root union
-update producer membership explicitly. A monotone provenance counter lets both
-iterator finalizers return immediately for graphs without generated iterators.
+Generated iterator reuse is indexed by the exact declaration, iterator kind,
+callable evidence, and current argument-root tuple. Reverse argument dependencies
+rekey only entries touched by a union; content replacement updates provenance
+membership explicitly. Equal keys retain independently constructed nodes until
+an explicit relation joins them. Monotone provenance counts let finalization
+skip graphs that have never contained generated iterators, and private-evidence
+containment diagnostics distinguish guard returns from actual containment queries.
+
 Generated identity hashes a snapshot of the current graph representation after
 joins. An imported request's retained type remains its original witness and
 cannot supply the identity of a graph-owned producer that replaced it.
 Joining distinct iterator representations invalidates current snapshots and
 durable views, including snapshots of parents that reach the joined class.
 The losing representation's cached view cannot become the winner's view.
-Generated-private containment diagnostics distinguish guard returns from queries
-that reach the containment cache or walker.
 
 Declaration-backed nominal reuse is indexed by declaration identity plus the
 current argument-root tuple. Root unions rekey affected entries, so lookup cost
