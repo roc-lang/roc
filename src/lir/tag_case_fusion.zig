@@ -1134,6 +1134,7 @@ test "tag case fusion routes exact constructor edges without materializing tags"
     } });
     const proc = try store.addProcSpec(.{
         .name = LIR.Symbol.fromRaw(1),
+        .identity = LIR.ProcIdentity.forTest(2),
         .args = try store.addLocalSpan(&.{selector}),
         .iterator_fusion_scope = true,
         .body = body,
@@ -1245,6 +1246,7 @@ test "tag case fusion renames complete arms with a shared suffix" {
     } });
     const proc = try store.addProcSpec(.{
         .name = LIR.Symbol.fromRaw(1),
+        .identity = LIR.ProcIdentity.forTest(1),
         .args = try store.addLocalSpan(&.{selector}),
         .iterator_fusion_scope = true,
         .body = body,
@@ -1346,6 +1348,7 @@ test "tag case fusion carries releases on a producer edge" {
     } });
     const proc = try store.addProcSpec(.{
         .name = LIR.Symbol.fromRaw(1),
+        .identity = LIR.ProcIdentity.forTest(1),
         .args = try store.addLocalSpan(&.{ selector, finished }),
         .body = body,
         .frame_locals = try store.addLocalSpan(&.{ param, disc, selector, finished, zero, one }),
@@ -1446,6 +1449,7 @@ test "tag case fusion releases the payload where an arm released the union" {
     } });
     const proc = try store.addProcSpec(.{
         .name = LIR.Symbol.fromRaw(1),
+        .identity = LIR.ProcIdentity.forTest(1),
         .args = try store.addLocalSpan(&.{ selector, text }),
         .body = body,
         .frame_locals = try store.addLocalSpan(&.{ param, disc, selector, text, taken, zero, one }),
@@ -1549,6 +1553,7 @@ test "tag case fusion keeps the match's continuation join enclosing the fused ar
     } });
     const proc = try store.addProcSpec(.{
         .name = LIR.Symbol.fromRaw(1),
+        .identity = LIR.ProcIdentity.forTest(1),
         .args = try store.addLocalSpan(&.{selector}),
         .body = body,
         .frame_locals = try store.addLocalSpan(&.{ param, disc, selector, out, zero, one }),
@@ -1650,6 +1655,7 @@ test "tag case fusion keeps the join when a producer edge is shared with another
     } });
     const proc = try store.addProcSpec(.{
         .name = LIR.Symbol.fromRaw(1),
+        .identity = LIR.ProcIdentity.forTest(1),
         .args = try store.addLocalSpan(&.{selector}),
         .body = body,
         .frame_locals = try store.addLocalSpan(&.{ param, disc, selector, zero, one }),

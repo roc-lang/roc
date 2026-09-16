@@ -264,6 +264,7 @@ fn testAggregateCallee(store: *LirStore, result_layout: layout_mod.Idx) Resource
     } });
     return try store.addProcSpec(.{
         .name = store.freshSyntheticSymbol(),
+        .identity = LIR.ProcIdentity.forTest(6),
         .args = try store.addLocalSpan(&.{arg}),
         .frame_locals = try store.addLocalSpan(&.{ arg, result }),
         .body = assign,
@@ -288,6 +289,7 @@ fn testTagCallee(store: *LirStore, result_layout: layout_mod.Idx) ResourceError!
     } });
     return try store.addProcSpec(.{
         .name = store.freshSyntheticSymbol(),
+        .identity = LIR.ProcIdentity.forTest(5),
         .args = try store.addLocalSpan(&.{arg}),
         .frame_locals = try store.addLocalSpan(&.{ arg, result }),
         .body = assign,
@@ -327,6 +329,7 @@ test "return slot creates an explicit ptr-result variant for aggregate call stor
     } });
     const caller = try store.addProcSpec(.{
         .name = store.freshSyntheticSymbol(),
+        .identity = LIR.ProcIdentity.forTest(4),
         .args = try store.addLocalSpan(&.{ destination, arg }),
         .frame_locals = try store.addLocalSpan(&.{ destination, arg, temporary, temporary_alias, store_unit }),
         .body = call,
@@ -392,6 +395,7 @@ test "return slot lowers direct tag return into destination store" {
     } });
     _ = try store.addProcSpec(.{
         .name = store.freshSyntheticSymbol(),
+        .identity = LIR.ProcIdentity.forTest(3),
         .args = try store.addLocalSpan(&.{ destination, arg }),
         .frame_locals = try store.addLocalSpan(&.{ destination, arg, temporary, store_unit }),
         .body = call,
@@ -450,6 +454,7 @@ test "return slot shares one variant for identical proc and layout demands" {
     } });
     _ = try store.addProcSpec(.{
         .name = store.freshSyntheticSymbol(),
+        .identity = LIR.ProcIdentity.forTest(2),
         .args = try store.addLocalSpan(&.{ destination_a, destination_b, arg }),
         .frame_locals = try store.addLocalSpan(&.{ destination_a, destination_b, arg, temporary_a, temporary_b, store_unit_a, store_unit_b }),
         .body = call_a,
@@ -494,6 +499,7 @@ test "return slot does not fuse a multi-use stored call result" {
     } });
     _ = try store.addProcSpec(.{
         .name = store.freshSyntheticSymbol(),
+        .identity = LIR.ProcIdentity.forTest(1),
         .args = try store.addLocalSpan(&.{ destination_a, destination_b, arg }),
         .frame_locals = try store.addLocalSpan(&.{ destination_a, destination_b, arg, temporary, store_unit_a, store_unit_b }),
         .body = call,

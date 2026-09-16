@@ -1777,6 +1777,8 @@ const Pass = struct {
                 const fn_id = try self.program.addFn(.{
                     .symbol = symbol,
                     .source = source_fn.source,
+                    .root_identity = source_fn.root_identity,
+                    .spec_constr_pattern = patternDigest(self.program, spec.pattern),
                     .args = .empty(),
                     .captures = source_fn.captures,
                     .body = .hosted,
@@ -2283,6 +2285,8 @@ const Pass = struct {
         const fn_id_reserved = try self.program.addFn(.{
             .symbol = symbol,
             .source = source_fn.source,
+            .root_identity = source_fn.root_identity,
+            .spec_constr_pattern = patternDigest(self.program, pattern),
             .signature = null,
             .args = .empty(),
             .captures = source_fn.captures,
@@ -2351,6 +2355,8 @@ const Pass = struct {
         self.program.setFn(spec_fn_id, .{
             .symbol = symbol,
             .source = source_fn.source,
+            .root_identity = source_fn.root_identity,
+            .spec_constr_pattern = patternDigest(self.program, spec.pattern),
             .signature = null,
             .args = args,
             .captures = source_fn.captures,
@@ -3848,6 +3854,8 @@ const Pass = struct {
         self.program.setFn(fn_id, .{
             .symbol = fn_.symbol,
             .source = fn_.source,
+            .spec_constr_pattern = fn_.spec_constr_pattern,
+            .root_identity = fn_.root_identity,
             .signature = fn_.signature,
             .iterator_fusion_scope = fn_.iterator_fusion_scope,
             .args = fn_.args,
@@ -3888,6 +3896,8 @@ const Pass = struct {
         self.program.setFn(fn_id, .{
             .symbol = fn_.symbol,
             .source = fn_.source,
+            .spec_constr_pattern = fn_.spec_constr_pattern,
+            .root_identity = fn_.root_identity,
             .signature = fn_.signature,
             .iterator_fusion_scope = true,
             .args = fn_.args,
@@ -3923,6 +3933,8 @@ const Pass = struct {
             self.program.setFn(fn_id, .{
                 .symbol = fn_.symbol,
                 .source = fn_.source,
+                .spec_constr_pattern = fn_.spec_constr_pattern,
+                .root_identity = fn_.root_identity,
                 .signature = fn_.signature,
                 .args = fn_.args,
                 .captures = fn_.captures,
@@ -13694,6 +13706,74 @@ fn typeTagByName(
         if (tag.name == name) return tag;
     }
     return null;
+}
+
+/// Content digest of a call pattern, rendered the way `patternEql` compares:
+/// types by their Monotype digest, labels by text, callable targets by the
+/// target function's checked source identity.
+fn patternDigest(program: *Ast.Program, pattern: CallPattern) names.TypeDigest {
+    var hasher = TypeDigestHasher.init();
+    writePatternBytes(&hasher, "roc.spec-constr.call-pattern.v1");
+    writePatternU32(&hasher, @intCast(pattern.args.len));
+    for (pattern.args) |shape| writeShapeDigest(program, &hasher, shape);
+    return .{ .bytes = hasher.finalResult() };
+}
+
+fn writeShapeDigest(program: *Ast.Program, hasher: *TypeDigestHasher, shape: Shape) void {
+    writePatternBytes(hasher, @tagName(shape));
+    switch (shape) {
+        .any => |ty| writePatternType(program, hasher, ty),
+        .tag => |tag| {
+            writePatternType(program, hasher, tag.ty);
+            writePatternBytes(hasher, program.names.tagLabelText(tag.name));
+            writePatternU32(hasher, @intCast(tag.payloads.len));
+            for (tag.payloads) |payload| writeShapeDigest(program, hasher, payload);
+        },
+        .record => |record| {
+            writePatternType(program, hasher, record.ty);
+            writePatternU32(hasher, @intCast(record.fields.len));
+            for (record.fields) |field| {
+                writePatternBytes(hasher, program.names.recordFieldLabelText(field.name));
+                writeShapeDigest(program, hasher, field.shape);
+            }
+        },
+        .tuple => |tuple| {
+            writePatternType(program, hasher, tuple.ty);
+            writePatternU32(hasher, @intCast(tuple.items.len));
+            for (tuple.items) |item| writeShapeDigest(program, hasher, item);
+        },
+        .nominal => |nominal| {
+            writePatternType(program, hasher, nominal.ty);
+            writeShapeDigest(program, hasher, nominal.backing.*);
+        },
+        .callable => |callable| {
+            writePatternType(program, hasher, callable.ty);
+            const target = program.fnSourceDigest(callable.fn_id) orelse
+                Common.invariant("call-pattern callable target has no checked source identity");
+            hasher.update(&target);
+            writePatternU32(hasher, @intCast(callable.captures.len));
+            for (callable.captures) |capture| writeShapeDigest(program, hasher, capture);
+        },
+    }
+}
+
+fn writePatternType(program: *Ast.Program, hasher: *TypeDigestHasher, ty: Type.TypeId) void {
+    const digest = program.types.typeDigestCached(&program.names, ty, null);
+    hasher.update(&digest.bytes);
+}
+
+fn writePatternBytes(hasher: *TypeDigestHasher, bytes: []const u8) void {
+    writePatternU32(hasher, @intCast(bytes.len));
+    hasher.update(bytes);
+}
+
+fn writePatternU32(hasher: *TypeDigestHasher, value: u32) void {
+    var buffer: [4]u8 = undefined;
+    buffer[0] = @truncate(value);
+    buffer[1] = @truncate(value >> 8);
+    buffer[2] = @truncate(value >> 16);
+    buffer[3] = @truncate(value >> 24);
+    hasher.update(&buffer);
 }
 
 fn patternEql(program: *Ast.Program, lhs: CallPattern, rhs: CallPattern) bool {
