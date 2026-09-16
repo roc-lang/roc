@@ -1246,12 +1246,22 @@ pub const Instantiator = struct {
                 // A `Try` written as the direct result passes the adapter's
                 // reach to its ERROR row. The ok row is deliberately NOT
                 // reachable: the adapter asserts the ok type is unchanged.
-                self.current_reach = if (frame.is_try and
-                    frame.saved_reach == .result and
-                    arrived == try_error_type_arg_index)
-                    .try_row
-                else
-                    .nested;
+                const try_error_row_reachable = frame.is_try and
+                    arrived == try_error_type_arg_index and
+                    switch (frame.saved_reach) {
+                        // The signature's direct result: the adapter re-tags
+                        // this `Try`'s error row.
+                        .result => true,
+                        // A `Try` standing IN another `Try`'s error row. The
+                        // relation re-tags that row and relates everything
+                        // below it EXACTLY (`resultRowWideningOrNull`,
+                        // src/postcheck/monotype/lower.zig:1806-1812), so a
+                        // second descent would open a row lowering will not
+                        // adapt.
+                        .try_row => false,
+                        .nested => false,
+                    };
+                self.current_reach = if (try_error_row_reachable) .try_row else .nested;
                 if (!try self.requestVar(arg_var, false)) return false;
                 continue;
             }

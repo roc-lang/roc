@@ -16505,8 +16505,23 @@ fn generateAnnoTypeInPlace(self: *Self, anno_idx: CIR.TypeAnno.Idx, env: *Env, c
             // the opened set equal to the adaptable set is the rule stated in
             // design.md "Result-Row Widening Adapter".
             const try_error_type_arg_index: usize = 1;
-            const try_error_row_reachable = self.annoApplyIsBuiltinTry(a) and
-                ctx == .annotation and ctx.annotation.adapter_reach == .result;
+            // Exhaustive by construction: adding an `AdapterReach` variant is a
+            // compile error here rather than a silent `false`.
+            const reach_admits_try_error_row = switch (ctx) {
+                .annotation => |anno_ctx| switch (anno_ctx.adapter_reach) {
+                    // The signature's direct result is the only position whose
+                    // `Try` the adapter re-tags.
+                    .result => true,
+                    // In practice a where-method signature is a function, so
+                    // the `.@"fn"` arm re-aims `.signature` to `.result`
+                    // before any apply is reached; answering `false` here is
+                    // what the old `== .result` did either way. `.try_row`
+                    // reaches nothing below itself. `.nested` is out of reach.
+                    .signature, .try_row, .nested => false,
+                },
+                .type_decl => false,
+            };
+            const try_error_row_reachable = self.annoApplyIsBuiltinTry(a) and reach_admits_try_error_row;
             const nested_arg_ctx = ctx.withReach(.nested);
             const try_error_arg_ctx = ctx.withReach(.try_row);
             const anno_args = self.cir.store.sliceTypeAnnos(a.args);
@@ -16770,7 +16785,19 @@ fn generateAnnoTypeInPlace(self: *Self, anno_idx: CIR.TypeAnno.Idx, env: *Env, c
             // The where-method signature's own function puts its direct
             // result within the adapter's reach; any function nested deeper
             // is out of reach.
-            const ret_ctx = if (ctx == .annotation and ctx.annotation.adapter_reach == .signature) ctx.withReach(.result) else ctx.withReach(.nested);
+            const ret_ctx = switch (ctx) {
+                .annotation => |anno_ctx| switch (anno_ctx.adapter_reach) {
+                    // The where-method signature's OWN function: its direct
+                    // result is the row the adapter re-tags.
+                    .signature => ctx.withReach(.result),
+                    // A function nested inside a result row, inside a `Try`
+                    // row, or anywhere else is out of the adapter's reach.
+                    .result, .try_row, .nested => ctx.withReach(.nested),
+                },
+                // A declaration body has no use-site result position to reach;
+                // `withReach` is a no-op on `.type_decl` (see `withReach`).
+                .type_decl => ctx.withReach(.nested),
+            };
             try self.generateAnnoTypeInPlace(func.ret, env, ret_ctx, polarity);
 
             const fn_type = inner_blk: {
@@ -16866,8 +16893,15 @@ fn generateAnnoTypeInPlace(self: *Self, anno_idx: CIR.TypeAnno.Idx, env: *Env, c
             // else is generated as written, so a body use that widens it is an
             // ordinary mismatch at the use rather than a widening no lowering
             // can express.
-            const deferred_open = output_opening == .per_use and
-                ctx.annotation.adapter_reach != .nested;
+            const deferred_open = output_opening == .per_use and switch (ctx.annotation.adapter_reach) {
+                // Adapter-reachable: the row defers its open/closed decision to
+                // the use site (a polarity marker).
+                .signature, .result, .try_row => true,
+                // Out of reach: generated as written, so a body use that widens
+                // it is an ordinary mismatch instead of a widening no lowering
+                // can express.
+                .nested => false,
+            };
             const ext_var = inner_blk: {
                 if (tag_union.ext) |ext_anno_idx| {
                     if ((implicitly_open or deferred_open) and self.annoIsAnonymousOpenExt(ext_anno_idx)) {
