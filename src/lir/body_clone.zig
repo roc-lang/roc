@@ -678,6 +678,18 @@ pub const CallVariantSpec = struct {
     ret_layout: layout_mod.Idx,
 };
 
+/// Identity of a call variant of `source`. The variant is determined by the
+/// source procedure and the shape of the variant specification; the return
+/// layout index is program-local, so a fused variant's identity is stable
+/// only within one program until fusion output carries content identities.
+fn callVariantIdentity(source: LIR.ProcIdentity, spec: CallVariantSpec) LIR.ProcIdentity {
+    var key: [12]u8 = undefined;
+    std.mem.writeInt(u32, key[0..4], @intCast(spec.leading_args.len), .little);
+    std.mem.writeInt(u32, key[4..8], @intCast(spec.extra_frame_locals.len), .little);
+    std.mem.writeInt(u32, key[8..12], @intFromEnum(spec.ret_layout), .little);
+    return source.derived("call-variant", &key);
+}
+
 /// Clone `source` into an internal variant whose returns are rewritten by
 /// `rewriter` and whose arguments are `spec.leading_args` followed by the
 /// source's own. The source proc is left untouched; callers cache the result
@@ -737,6 +749,7 @@ pub fn cloneCallVariant(
 
     const variant = try store.addProcSpec(.{
         .name = store.freshSyntheticSymbol(),
+        .identity = callVariantIdentity(source_spec.identity, spec),
         .args = try store.addLocalSpan(variant_args.items),
         .erased_reuse_arg = erased_reuse_arg,
         .frame_locals = try store.addLocalSpan(frame_locals.items[0..unique_len]),
@@ -1538,6 +1551,7 @@ test "rewritableProcBody refuses procs whose body is not the compiler's to clone
 
     const roc_proc = try store.addProcSpec(.{
         .name = store.freshSyntheticSymbol(),
+        .identity = LIR.ProcIdentity.forTest(1),
         .args = try store.addLocalSpan(&.{}),
         .frame_locals = try store.addLocalSpan(&.{unit}),
         .body = body,
@@ -1548,6 +1562,7 @@ test "rewritableProcBody refuses procs whose body is not the compiler's to clone
 
     const bodyless = try store.addProcSpec(.{
         .name = store.freshSyntheticSymbol(),
+        .identity = LIR.ProcIdentity.forTest(2),
         .args = try store.addLocalSpan(&.{}),
         .frame_locals = try store.addLocalSpan(&.{}),
         .body = null,
@@ -1558,6 +1573,7 @@ test "rewritableProcBody refuses procs whose body is not the compiler's to clone
 
     const erased = try store.addProcSpec(.{
         .name = store.freshSyntheticSymbol(),
+        .identity = LIR.ProcIdentity.forTest(3),
         .args = try store.addLocalSpan(&.{}),
         .frame_locals = try store.addLocalSpan(&.{unit}),
         .body = body,

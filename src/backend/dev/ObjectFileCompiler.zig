@@ -26,6 +26,7 @@ const coff = @import("object/coff.zig");
 
 const ObjectWriter = @import("ObjectWriter.zig");
 const LirCodeGenMod = @import("LirCodeGen.zig");
+const ProcArtifact = @import("ProcArtifact.zig");
 const static_data_export = @import("StaticDataExport.zig");
 const collections = @import("collections");
 const SymbolTable = @import("SymbolTable.zig");
@@ -79,6 +80,9 @@ pub const ObjectFileCompiler = struct {
     allocator: Allocator,
     enable_default_platform_runtime: bool = false,
     timing: ?*Timing = null,
+    /// Emit every procedure as a global symbol and emit the object even
+    /// without host entrypoints: the object is a module pack, not an app.
+    pack_mode: bool = false,
 
     pub const TimingSnapshot = struct {
         backend_setup_ns: u64 = 0,
@@ -138,6 +142,12 @@ pub const ObjectFileCompiler = struct {
         return .{ .allocator = allocator };
     }
 
+    /// Compile a pack program: every procedure is a global symbol and the
+    /// object is emitted even though no host entrypoint requests it.
+    pub fn initForPack(allocator: Allocator) ObjectFileCompiler {
+        return .{ .allocator = allocator, .pack_mode = true };
+    }
+
     /// Compile LIR to a native object file for the given RocTarget.
     ///
     /// Dispatches at runtime to the correct compile-time LirCodeGen
@@ -157,7 +167,7 @@ pub const ObjectFileCompiler = struct {
         boxy_worker_procs: []const lir.LIR.LirProcSpecId,
         target: RocTarget,
     ) CompilationError!CompilationResult {
-        return crossCompileDispatch(self.allocator, lir_store, layout_store, entrypoints, static_data_exports, proc_specs, erased_arg_desc_offsets, erased_arg_desc_params, boxy_worker_procs, target, self.enable_default_platform_runtime, self.timing);
+        return crossCompileDispatch(self.allocator, lir_store, layout_store, entrypoints, static_data_exports, proc_specs, erased_arg_desc_offsets, erased_arg_desc_params, boxy_worker_procs, target, self.enable_default_platform_runtime, self.timing, self.pack_mode);
     }
 
     /// Compile to an object file and write it to a path. Returns whether the
@@ -268,8 +278,9 @@ fn compileWithCodeGen(
     target: RocTarget,
     enable_default_platform_runtime: bool,
     timing: ?*ObjectFileCompiler.Timing,
+    pack_mode: bool,
 ) CompilationError!CompilationResult {
-    if (entrypoints.len == 0 and static_data_exports.len == 0) {
+    if (!pack_mode and entrypoints.len == 0 and static_data_exports.len == 0) {
         return CompilationError.NoEntrypoints;
     }
 
@@ -335,6 +346,9 @@ fn compileWithCodeGen(
     var dwarf_procs = std.ArrayList(Dwarf.ProcEntry).empty;
     defer dwarf_procs.deinit(allocator);
 
+    var seen_proc_symbol_names = std.StringHashMap(void).init(allocator);
+    defer seen_proc_symbol_names.deinit();
+
     try appendStaticDataExports(allocator, &codegen.codegen.symbols, static_data_exports, &rodata, &rodata_relocations, &symbols);
     try appendStaticDataExports(allocator, &codegen.codegen.symbols, static_strings.exports, &rodata, &rodata_relocations, &symbols);
 
@@ -347,7 +361,11 @@ fn compileWithCodeGen(
             }
             unreachable;
         };
-        const symbol_name = static_data_export.procSymbolName(allocator, proc_symbol.name) catch return CompilationError.OutOfMemory;
+        const symbol_name = static_data_export.procSymbolName(allocator, proc_specs[i].identity) catch return CompilationError.OutOfMemory;
+        if (seen_proc_symbol_names.contains(symbol_name)) {
+            std.debug.panic("ObjectFileCompiler invariant violated: two LIR procs share the symbol {s}", .{symbol_name});
+        }
+        seen_proc_symbol_names.putNoClobber(symbol_name, {}) catch return CompilationError.OutOfMemory;
         owned_proc_symbol_names.append(allocator, symbol_name) catch {
             allocator.free(symbol_name);
             return CompilationError.OutOfMemory;
@@ -356,7 +374,7 @@ fn compileWithCodeGen(
             .name = symbol_name,
             .offset = proc_symbol.code_start,
             .size = proc_symbol.code_end - proc_symbol.code_start,
-            .is_global = false,
+            .is_global = pack_mode,
             .is_function = true,
             .is_external = false,
             .section = .text,
@@ -384,7 +402,7 @@ fn compileWithCodeGen(
             }
             unreachable;
         };
-        const symbol_name = static_data_export.atomicRcHelperSymbolName(allocator, helper_key) catch return CompilationError.OutOfMemory;
+        const symbol_name = static_data_export.atomicRcHelperSymbolName(allocator, layout_store, helper_key) catch return CompilationError.OutOfMemory;
         owned_proc_symbol_names.append(allocator, symbol_name) catch {
             allocator.free(symbol_name);
             return CompilationError.OutOfMemory;
@@ -429,7 +447,7 @@ fn compileWithCodeGen(
         for (rc_helpers) |rc_helper| {
             if (published_starts.contains(rc_helper.start_offset)) continue;
             const info = recorded_ranges.get(@intCast(rc_helper.start_offset)) orelse continue;
-            const symbol_name = std.fmt.allocPrint(allocator, "roc__rc_helper_{x}", .{rc_helper.key}) catch return CompilationError.OutOfMemory;
+            const symbol_name = LirCodeGenMod.compiledRcHelperSymbolName(allocator, layout_store, rc_helper.key) catch return CompilationError.OutOfMemory;
             owned_proc_symbol_names.append(allocator, symbol_name) catch {
                 allocator.free(symbol_name);
                 return CompilationError.OutOfMemory;
@@ -493,6 +511,36 @@ fn compileWithCodeGen(
     // Get generated code and relocations
     symbol_relocations_started_ns = if (timing) |timings| timings.start() else 0;
     codegen.finishImage() catch return CompilationError.OutOfMemory;
+    // AArch64 calls reach their targets through registered branch sites and
+    // veneers, which artifacts do not carry yet; the round trip covers x86_64.
+    if (artifactRoundTripRequested() and target.toCpuArch() == .x86_64) {
+        var fresh = CodeGen.initWithBoxyMetadata(
+            allocator,
+            lir_store,
+            layout_store,
+            static_strings.view(),
+            erased_arg_desc_offsets,
+            erased_arg_desc_params,
+            boxy_worker_procs,
+            .preserve,
+            target.cpuLevel(),
+        ) catch return CompilationError.OutOfMemory;
+        defer fresh.deinit();
+        fresh.generation_mode = .object_file;
+        fresh.setStaticDataSymbols(static_data_exports) catch return CompilationError.OutOfMemory;
+        fresh.enable_default_platform_runtime = enable_default_platform_runtime;
+        ProcArtifact.verifyRoundTrip(CodeGen, allocator, &codegen, &fresh, proc_specs, layout_store) catch |err| switch (err) {
+            error.OutOfMemory => return CompilationError.OutOfMemory,
+            error.NestedCodeRegion,
+            error.UncoveredCode,
+            error.DanglingReference,
+            error.UnsupportedRelocation,
+            error.UnknownProcIdentity,
+            error.UnknownRcHelper,
+            error.RoundTripMismatch,
+            => std.debug.panic("dev artifact round trip failed: {s}", .{@errorName(err)}),
+        };
+    }
     const code = codegen.getGeneratedCode();
     const relocations = codegen.getRelocations();
 
@@ -771,6 +819,7 @@ fn crossCompileDispatch(
     target: RocTarget,
     enable_default_platform_runtime: bool,
     timing: ?*ObjectFileCompiler.Timing,
+    pack_mode: bool,
 ) CompilationError!CompilationResult {
     const enum_info = @typeInfo(RocTarget).@"enum";
     const default_target = target.defaultCpuTarget();
@@ -794,6 +843,7 @@ fn crossCompileDispatch(
                     target,
                     enable_default_platform_runtime,
                     timing,
+                    pack_mode,
                 );
             } else {
                 return CompilationError.UnsupportedTarget;
@@ -814,3 +864,9 @@ test "ObjectFileCompiler initialization" {
 // Note: Full integration tests for compileToObjectFile require complex setup
 // of mono stores and layout stores. These are tested via integration tests
 // in the CLI (roc build --opt=dev).
+
+/// `ROC_DEV_ARTIFACT_ROUNDTRIP` makes every object compile also assemble the
+/// program from its own procedure artifacts and panic if the result differs.
+fn artifactRoundTripRequested() bool {
+    return std.c.getenv("ROC_DEV_ARTIFACT_ROUNDTRIP") != null;
+}

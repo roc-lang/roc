@@ -346,7 +346,7 @@ const Builder = struct {
             }, builtins.erased_callable.payloadSize(self.size(entry.capture_layout)), builtins.erased_callable.payload_alignment, builtins.erased_callable.allocation_has_refcounted_children, null);
             try self.relocate(job.dest, result.dest);
             if (!result.fresh) return;
-            const proc_name = try static_data.procSymbolName(self.allocator, self.program.store.getProcSpec(resolved.proc).name);
+            const proc_name = try static_data.procSymbolName(self.allocator, self.program.store.getProcSpec(resolved.proc).identity);
             try self.node(result.dest).relocations.append(self.allocator, .{
                 .offset = result.dest.offset,
                 .target_symbol_name = proc_name,
@@ -362,7 +362,7 @@ const Builder = struct {
             if (on_drop) |helper| {
                 try self.node(result.dest).relocations.append(self.allocator, .{
                     .offset = result.dest.offset + word_size,
-                    .target_symbol_name = try static_data.atomicRcHelperSymbolName(self.allocator, helper),
+                    .target_symbol_name = try static_data.atomicRcHelperSymbolName(self.allocator, &self.program.layouts, helper),
                     .kind = .function_pointer,
                     .rc_helper = helper,
                 });
@@ -615,7 +615,7 @@ test "native root export preserves erased callable procedure and drop helper ide
     const allocator = std.testing.allocator;
     var program = try Program.Result.init(allocator, @import("base").target.TargetUsize.native);
     defer program.deinit();
-    const proc = try program.store.addProcSpec(.{ .name = lir.Symbol.fromRaw(42), .args = .empty(), .ret_layout = .zst });
+    const proc = try program.store.addProcSpec(.{ .name = lir.Symbol.fromRaw(42), .identity = lir.LIR.ProcIdentity.forTest(1), .args = .empty(), .ret_layout = .zst });
     const str_plan: Program.ConstPlanId = @enumFromInt(program.const_plans.items.len);
     const fn_layout = try program.layouts.insertErasedCallable();
     try program.const_plans.append(allocator, .str);

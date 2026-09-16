@@ -2525,10 +2525,13 @@ dependency. A non-cryptographic hash makes such a pair cheap to construct, and
 because the attacker supplies both halves the relevant bound is a birthday
 collision, so 128 bits (2^64 work) is not enough and 256 bits is required. The
 digests are also persisted in caches and compared across machines, which rules
-out keying them with a secret. Every 64-bit compiler target is built with the
-CPU's SHA-256 instructions enabled (`addSha256Floor` in build.zig) and has no
-software rounds; only 32-bit targets such as wasm32 compute the digest in
-software.
+out keying them with a secret. Nearly every 64-bit compiler target is built with
+the CPU's SHA-256 instructions enabled (`addSha256Floor` in build.zig) and has no
+software rounds; 32-bit targets such as wasm32 and x86_64 macOS compute the
+digest in software, which yields the same digest bytes more slowly. x86_64 macOS
+is the exception because Apple's Intel Macs are Skylake through Comet Lake cores,
+which have no SHA extension to put in that target's baseline
+(`usesSoftwareSha256` in src/target/mod.zig).
 
 All producers for a key domain must agree on the encoding, including child
 digests, length prefixes, identity numbering, and domain tags. The hash
@@ -3934,7 +3937,9 @@ codec call selection consumes this producer-written identity directly. It does
 not recursively compare type arguments, open a backing to reconstruct nominal
 identity, or merge the representation-owning main classes. Nominal subject
 comparison is therefore constant-time amortized while preserving both exact
-source identity and backing ownership.
+source identity and backing ownership. Main-class merges preserve recorded
+nominal identities, and subject lookup resolves the current main representative;
+retained codec subjects cannot observe stale identity entries after a redirect.
 
 If a format does not support a shape, checking reports the missing method as a
 static-dispatch error. Unsupported shapes are not represented as runtime parse
@@ -4664,6 +4669,9 @@ The fields have these meanings:
 These fields participate in named-type equality, cross-store equality, and type
 digests. Every type-store translation copies them. A later stage never derives a
 tier, producer kind, or mint depth from lowered type shape.
+The minted-join relation compares this complete producer identity, not just the
+generated digest: different producer kinds or depths still require a
+representation join when they carry equal generated digests.
 
 For a minted iterator, Monotype rewrites the public recursive `rest` type in the
 step result to the minted self type and records concrete adapter components as
@@ -7995,7 +8003,7 @@ stream through a bounded executor session: the coordinator accepts completed
 shards strictly in request order and immediately makes discovered requests
 available to free lanes. Running and completed-but-unaccepted tasks share the
 same bounded window. Each immutable lane suffix is absorbed even when its body
-is discarded after an earlier serial claim, preserving cumulative lane ids.
+is discarded after an earlier shard committed its reservation, preserving cumulative lane ids.
 All accepted tasks are joined before releasing their contexts, including on OOM.
 
 Workers never borrow the mutable coordinator Program. Their captured input
@@ -8026,10 +8034,10 @@ Post-check timing keeps two distinct measures for this boundary. Monotype wall
 time is the elapsed coordinator interval, including worker waits and ordered
 commit. Aggregate worker work is the sum of executor callback intervals and can
 exceed wall time when callbacks overlap; it is diagnostic work, not another
-sequential phase. Coordinator work separately measures validation, serial retry,
+sequential phase. Coordinator work separately measures validation,
 discard, and ordered commit. `task_waves` counts root batches and specialization streaming
 sessions, not individual dependency waits within a stream. Task,
-lane, retry, and discard counts explain the relationship without using
+lane, and discard counts explain the relationship without using
 scheduling-dependent values for compiler behavior.
 
 Boxy follows a different post-check pipeline and reports its planning and
@@ -8037,19 +8045,43 @@ lowering wall phases directly rather than projecting Monotype categories onto
 work it does not perform.
 
 Solved-to-LIR lowering uses the same ownership rule at a narrower boundary.
-Only closed procedure bodies whose syntax is proven body-local enter an
-executor batch. Each callback reads a frozen coordinator prefix and writes a
-private LIR store suffix; calls, captures, compile-time sites, static data,
-dynamic inline scopes, and other globally interned state remain serial
-barriers. Source local names are returned with the suffix and interned by the
-coordinator, preserving serial string identity without making the string store
-concurrent. After the full batch returns, the coordinator appends the suffixes
-in function-worklist order and relocates every body-local statement, local,
-span, branch, join, pattern, and metadata reference. This keeps procedure and
-store identity independent of completion order while allowing the supported
-body traversal itself to run without locks. Widening the parallel subset
-requires a corresponding immutable or shard-owned boundary for each newly
-admitted global side table, not ad hoc worker mutation.
+Runtime procedure bodies, including finite and erased callable ABIs, enter
+an executor batch after coordinator preflight closes their representation
+dependencies. Preparation follows explicit expression, statement, pattern,
+local, callable-signature, and selected inline-body edges. Visited identity
+sets bound this work by the graph, not a syntax-depth cutoff. A callable's
+encoded variants supply its targets and capture types; preparation never
+substitutes an independently inferred finite specialization. Type closure
+includes storage and value types so typed boundaries, field reads, tag payload
+reads, and capture slot reads use their inherited representations without
+worker-side interning.
+
+Preflight reserves both direct-call ABIs permitted by a body's erased-return
+destination shape. It cannot use the call expression's own type to select one:
+lowering may receive a different expected destination type. The existing affine
+destination-demand proof alone selects reuse during emission. Preparing a
+procedure identity never makes it reachable; only emitted references do.
+
+Each callback reads a frozen coordinator prefix and writes a private LIR store
+suffix. Strings, names, inline scopes, patterns, control-flow tables, erased
+argument plans, loop bindings, and ownership provenance are body-owned.
+Erased-call runtime layout entries are also shard-owned. Ordered commit appends
+those entries to the program's layout table and relocates each call's span to
+that destination; workers never append through a borrowed coordinator array.
+Compile-time observation sites and static-initializer requests remain serial
+barriers; hosted procedures have no Roc body. There is no serial replay of an
+admitted body: a missing prepared identity is a compiler invariant violation.
+After the full batch returns, the coordinator appends suffixes and applies
+their reachability discoveries in function-worklist order, relocating every
+body-local reference, including join identities. This keeps procedure and store
+identity independent of worker count and completion order without concurrent
+mutation of coordinator state.
+
+Before a Solved-to-LIR worker batch starts, direct-call preparation interns
+both ordinary procedures and the return-reuse variants permitted by the
+caller's explicit destination shape. Lowering selects the call ABI from its
+actual destination demand; preparing a variant does not make it reachable.
+Workers consume those prepared identities without interning new procedures.
 
 A typed boundary is worker-admissible exactly when its child is
 worker-admissible. Its source and destination types and layouts belong to the
@@ -8064,11 +8096,23 @@ columns, not hash tables keyed by node id. Union-find redirects may change which
 node is a class root, but they never renumber a node; root-owned columns are
 updated explicitly when a union moves that ownership.
 
+A worker lane may reuse a graph's allocated capacity between specializations,
+but reset invalidates every node identity and all node-indexed state. Nominal
+identity and backing relationships, constructor-evidence requests, and generated
+iterator membership and provenance counts belong only to that graph epoch.
+Only the cumulative immutable type and name stores survive the reset.
+
 Graph-owned generated iterators are indexed by their stable declaration, kind,
 and callable evidence. Candidates in that bucket compare live argument roots,
 so argument unions do not stale the index. Content replacement and root union
 update producer membership explicitly. A monotone provenance counter lets both
 iterator finalizers return immediately for graphs without generated iterators.
+Generated identity hashes a snapshot of the current graph representation after
+joins. An imported request's retained type remains its original witness and
+cannot supply the identity of a graph-owned producer that replaced it.
+Joining distinct iterator representations invalidates current snapshots and
+durable views, including snapshots of parents that reach the joined class.
+The losing representation's cached view cannot become the winner's view.
 Generated-private containment diagnostics distinguish guard returns from queries
 that reach the containment cache or walker.
 

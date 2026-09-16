@@ -215,6 +215,11 @@ pub const FnTemplate = struct {
     source_fn_key: names.TypeDigest,
     mono_fn_ty: Type.TypeId,
     evidence_digest: EvidenceDigest = .{},
+    /// `specIdentityKey` of the specialization this template was reserved
+    /// for: the key an object-cache lookup can compute at reservation time,
+    /// before the body exists. Null for functions that are not template
+    /// specializations.
+    spec_key: ?names.TypeDigest = null,
     /// Explicit dispatch selections captured when this specialization was
     /// created, retained for compile-time function values.
     const_evidence: Span(check.ConstStore.ConstFnEvidence) = Span(check.ConstStore.ConstFnEvidence).empty(),
@@ -287,6 +292,52 @@ pub const SpecIdentity = struct {
     request_fn_ty: Type.TypeId,
 };
 
+/// Content key of a specialization identity: the callable rendered by tag
+/// and content plus every digest field except the requesting method scope.
+/// The scope only decides how dispatch evidence was derived, and the evidence
+/// digest already names the result, so two modules requesting the same
+/// specialization get one key. Identical for the same request in every
+/// program, and computable the moment the request is reserved.
+pub fn specIdentityKey(identity: SpecIdentity) names.TypeDigest {
+    var hasher = TypeDigestHasher.init();
+    hasher.update("roc.monotype.spec-key.v1");
+    switch (identity.callable) {
+        .proc_template => |template| {
+            hasher.update("proc_template");
+            hasher.update(&template.module.bytes);
+            writeU32(&hasher, template.proc_base);
+            writeU32(&hasher, template.template);
+        },
+        .nested_site => |site| {
+            hasher.update("nested_site");
+            hasher.update(&site.module.bytes);
+            writeU32(&hasher, site.owner_proc_base);
+            writeU32(&hasher, site.owner_template);
+            hasher.update(&site.owner_fn_digest.bytes);
+            writeU32(&hasher, site.site);
+            if (site.default_root_module) |module| {
+                hasher.update("default_root");
+                hasher.update(&module.bytes);
+            } else {
+                hasher.update("no_default_root");
+            }
+        },
+        .hosted => |hosted| {
+            hasher.update("hosted");
+            writeU32(&hasher, @intFromEnum(hosted));
+        },
+        .generated => |generated| {
+            hasher.update("generated");
+            writeU32(&hasher, @intFromEnum(generated));
+        },
+    }
+    hasher.update(&identity.source_fn_ty_digest.bytes);
+    hasher.update(&identity.evidence_digest.bytes);
+    hasher.update(&identity.codec_contract_digest.bytes);
+    hasher.update(&identity.request_fn_ty_digest.bytes);
+    return .{ .bytes = hasher.finalResult() };
+}
+
 /// Lifecycle state for a specialization record.
 pub const SpecStatus = enum(u8) {
     reserved,
@@ -324,7 +375,7 @@ pub fn fnTemplateIdentityEql(lhs: FnTemplate, rhs: FnTemplate) bool {
 /// mutable because type digests are computed through the store's cache.
 pub fn fnTemplateDigest(template: FnTemplate, types: *Type.Store, name_store: *const names.NameStore) names.TypeDigest {
     var hasher = TypeDigestHasher.init();
-    writeFnDef(&hasher, template.fn_def);
+    writeFnDef(&hasher, name_store, template.fn_def);
     writeBytes(&hasher, &template.source_fn_key.bytes);
     writeBytes(&hasher, &template.evidence_digest.bytes);
     const mono_digest = types.specializationDigest(name_store, template.mono_fn_ty);
@@ -572,14 +623,17 @@ test "function evidence identity uses checked callable type keys" {
     ));
 }
 
-fn writeFnDef(hasher: *TypeDigestHasher, fn_def: FnDef) void {
+fn writeFnDef(hasher: *TypeDigestHasher, name_store: *const names.NameStore, fn_def: FnDef) void {
+    // Whether a template was requested from its own module or from an
+    // importer changes nothing about the code it lowers to, so both spellings
+    // digest alike.
     switch (fn_def) {
         .local_template => |template| {
-            writeBytes(hasher, "local_template");
+            writeBytes(hasher, "template");
             writeProcTemplate(hasher, template);
         },
         .imported_template => |template| {
-            writeBytes(hasher, "imported_template");
+            writeBytes(hasher, "template");
             writeProcTemplate(hasher, template);
         },
         .nested => |nested| {
@@ -601,12 +655,12 @@ fn writeFnDef(hasher: *TypeDigestHasher, fn_def: FnDef) void {
             }
         },
         .local_hosted => |hosted| {
-            writeBytes(hasher, "local_hosted");
-            writeHostedFn(hasher, hosted);
+            writeBytes(hasher, "hosted");
+            writeHostedFn(hasher, name_store, hosted);
         },
         .imported_hosted => |hosted| {
-            writeBytes(hasher, "imported_hosted");
-            writeHostedFn(hasher, hosted);
+            writeBytes(hasher, "hosted");
+            writeHostedFn(hasher, name_store, hosted);
         },
         .checked_generated => |template| {
             writeBytes(hasher, "checked_generated");
@@ -625,10 +679,11 @@ fn writeFnDef(hasher: *TypeDigestHasher, fn_def: FnDef) void {
     }
 }
 
-fn writeHostedFn(hasher: *TypeDigestHasher, hosted: HostedFn) void {
+fn writeHostedFn(hasher: *TypeDigestHasher, name_store: *const names.NameStore, hosted: HostedFn) void {
+    // The dispatch slot is assigned per program and is not part of the code
+    // the hosted function names.
     writeProcTemplate(hasher, hosted.template);
-    writeU32(hasher, @intFromEnum(hosted.external_symbol_name));
-    writeU32(hasher, hosted.dispatch_index);
+    writeBytes(hasher, name_store.externalSymbolNameText(hosted.external_symbol_name));
 }
 
 fn writeProcTemplate(hasher: *TypeDigestHasher, template: names.ProcTemplate) void {
@@ -1155,6 +1210,10 @@ pub const Def = struct {
     symbol: Common.Symbol,
     fn_def: ?FnTemplate = null,
     fn_id: ?FnId = null,
+    /// Content identity of a definition that has no function template: a
+    /// static-data request thunk or a procedure-binding root, identified by
+    /// the checked request that produced it. Null when `fn_def` is present.
+    root_identity: ?names.TypeDigest = null,
     args: Span(TypedLocal),
     body: FnBody,
     ret: Type.TypeId,

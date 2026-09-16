@@ -5671,6 +5671,23 @@ const Inserter = struct {
     /// Resolves the proc a call site targets: the original callee when the
     /// demanded vector matches its solved signature, or a mode-specialized
     /// variant emitted for the demanded vector.
+    /// Identity of the ownership variant of a procedure: its source identity
+    /// plus the demanded parameter modes, return mode, unique-parameter mask,
+    /// and outcome rows, which are exactly what selects the variant.
+    fn variantIdentity(self: *Inserter, source: LIR.ProcIdentity, demanded: arc_sig.RcSig) ResourceError!LIR.ProcIdentity {
+        const outcomes = self.solution.sigTable().outcomesOf(demanded);
+        var key = try std.ArrayList(u8).initCapacity(self.store.allocator, 8 + outcomes.len * 4);
+        defer key.deinit(self.store.allocator);
+        key.appendSliceAssumeCapacity(std.mem.asBytes(&std.mem.nativeToLittle(u16, demanded.borrowed_params)));
+        key.appendAssumeCapacity(@intFromEnum(demanded.ret_mode));
+        key.appendSliceAssumeCapacity(std.mem.asBytes(&std.mem.nativeToLittle(u16, demanded.unique_params)));
+        for (outcomes) |outcome| {
+            key.appendSliceAssumeCapacity(std.mem.asBytes(&std.mem.nativeToLittle(u16, outcome.discriminant)));
+            key.appendSliceAssumeCapacity(std.mem.asBytes(&std.mem.nativeToLittle(u16, outcome.restituted_params)));
+        }
+        return source.derived("arc-variant", key.items);
+    }
+
     fn variantForCall(
         self: *Inserter,
         callee: LIR.LirProcSpecId,
@@ -5697,6 +5714,7 @@ const Inserter = struct {
         const source_spec = self.store.getProcSpec(callee);
         const variant = try self.store.addProcSpec(.{
             .name = self.store.freshSyntheticSymbol(),
+            .identity = try self.variantIdentity(source_spec.identity, demanded),
             .args = source_spec.args,
             .erased_reuse_arg = source_spec.erased_reuse_arg,
             .erased_call_args = source_spec.erased_call_args,
@@ -7737,6 +7755,7 @@ const ArcTest = struct {
         for (frame_locals, 0..) |*frame_local, index| frame_local.* = @enumFromInt(@as(u32, @intCast(index)));
         return try self.store.addProcSpec(.{
             .name = self.store.freshSyntheticSymbol(),
+            .identity = LIR.ProcIdentity.forTest(1),
             .args = try self.span(args),
             .body = body,
             .frame_locals = try self.span(frame_locals),
@@ -7747,6 +7766,7 @@ const ArcTest = struct {
     fn addBodylessProc(self: *ArcTest, ret_layout: layout_mod.Idx) Allocator.Error!LIR.LirProcSpecId {
         return try self.store.addProcSpec(.{
             .name = self.store.freshSyntheticSymbol(),
+            .identity = LIR.ProcIdentity.forTest(2),
             .args = LIR.LocalSpan.empty(),
             .body = null,
             .ret_layout = ret_layout,
@@ -7756,6 +7776,7 @@ const ArcTest = struct {
     fn addHostedProc(self: *ArcTest, args: []const LIR.LocalId, ret_layout: layout_mod.Idx) Allocator.Error!LIR.LirProcSpecId {
         return try self.store.addProcSpec(.{
             .name = self.store.freshSyntheticSymbol(),
+            .identity = LIR.ProcIdentity.forTest(3),
             .args = try self.span(args),
             .body = null,
             .ret_layout = ret_layout,
@@ -8555,6 +8576,7 @@ test "ARC preserves erased callable repack reuse" {
 
     const callback = try f.store.addProcSpec(.{
         .name = f.store.freshSyntheticSymbol(),
+        .identity = LIR.ProcIdentity.forTest(4),
         .args = try f.span(&.{callee_arg}),
         .frame_locals = try f.span(&.{callee_arg}),
         .body = null,
@@ -8726,6 +8748,7 @@ test "ARC runtime-checks erased callable repack from an ordinary parameter" {
 
     const callback = try f.store.addProcSpec(.{
         .name = f.store.freshSyntheticSymbol(),
+        .identity = LIR.ProcIdentity.forTest(5),
         .args = try f.span(&.{callee_arg}),
         .frame_locals = try f.span(&.{callee_arg}),
         .body = null,
@@ -9017,6 +9040,7 @@ test "ARC retains an erased callable whose repack input is used later" {
 
     const callback = try f.store.addProcSpec(.{
         .name = f.store.freshSyntheticSymbol(),
+        .identity = LIR.ProcIdentity.forTest(6),
         .args = try f.span(&.{callee_arg}),
         .frame_locals = try f.span(&.{callee_arg}),
         .body = null,
@@ -9172,6 +9196,7 @@ test "ARC proc domain excludes scalar and other-proc locals" {
     const resource_body = try f.assignStr(resource, "resource", resource_ret);
     const resource_proc = try f.store.addProcSpec(.{
         .name = f.store.freshSyntheticSymbol(),
+        .identity = LIR.ProcIdentity.forTest(7),
         .args = LIR.LocalSpan.empty(),
         .body = resource_body,
         .frame_locals = try f.span(&.{ resource, scalar }),
@@ -9181,6 +9206,7 @@ test "ARC proc domain excludes scalar and other-proc locals" {
     const other_body = try f.assignStr(other_proc_resource, "other", other_ret);
     const other_proc = try f.store.addProcSpec(.{
         .name = f.store.freshSyntheticSymbol(),
+        .identity = LIR.ProcIdentity.forTest(8),
         .args = LIR.LocalSpan.empty(),
         .body = other_body,
         .frame_locals = try f.span(&.{other_proc_resource}),
@@ -9244,6 +9270,7 @@ test "ARC proc domain filters module-wide borrow groups to its frame" {
     const local_body = try f.assignStr(leader, "local", alias_bind);
     const local_proc = try f.store.addProcSpec(.{
         .name = f.store.freshSyntheticSymbol(),
+        .identity = LIR.ProcIdentity.forTest(9),
         .args = LIR.LocalSpan.empty(),
         .body = local_body,
         .frame_locals = try f.span(&.{ leader, local_alias }),
@@ -9255,6 +9282,7 @@ test "ARC proc domain filters module-wide borrow groups to its frame" {
     const external_body = try f.assignStr(external_member, "external", external_ret);
     _ = try f.store.addProcSpec(.{
         .name = f.store.freshSyntheticSymbol(),
+        .identity = LIR.ProcIdentity.forTest(10),
         .args = LIR.LocalSpan.empty(),
         .body = external_body,
         .frame_locals = try f.span(&.{external_member}),
@@ -11374,6 +11402,7 @@ test "RC atomicity: bodyless callee arguments keep atomic counts" {
 
     const hosted = try f.store.addProcSpec(.{
         .name = f.store.freshSyntheticSymbol(),
+        .identity = LIR.ProcIdentity.forTest(11),
         .args = try f.span(&.{}),
         .body = null,
         .ret_layout = .i64,
@@ -13327,6 +13356,7 @@ fn outcomeScratchWork(proc_count: usize) (Allocator.Error || error{TestExpectedE
         // Explicit disjoint frames, unlike ArcTest's all-locals convenience.
         _ = try f.store.addProcSpec(.{
             .name = f.store.freshSyntheticSymbol(),
+            .identity = LIR.ProcIdentity.forTest(12),
             .args = try f.span(&.{ param, choose }),
             .body = body,
             .frame_locals = try f.span(&.{ param, choose, changed, result }),
@@ -14626,6 +14656,7 @@ test "RC descriptor updates scan only the current proc frame" {
     const unrelated_body = try f.assignStr(unrelated, "other proc", unrelated_ret);
     _ = try f.store.addProcSpec(.{
         .name = f.store.freshSyntheticSymbol(),
+        .identity = LIR.ProcIdentity.forTest(13),
         .args = LIR.LocalSpan.empty(),
         .body = unrelated_body,
         .frame_locals = try f.span(&.{unrelated}),
@@ -14647,6 +14678,7 @@ test "RC descriptor updates scan only the current proc frame" {
     } });
     _ = try f.store.addProcSpec(.{
         .name = f.store.freshSyntheticSymbol(),
+        .identity = LIR.ProcIdentity.forTest(14),
         .args = LIR.LocalSpan.empty(),
         .body = init_desc,
         .frame_locals = try f.span(&.{ desc, current, result }),

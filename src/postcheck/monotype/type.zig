@@ -133,7 +133,10 @@ pub fn iteratorRelation(left: anytype, right: anytype) IteratorRelation {
     }
     if (left_representation == .minted and
         right_representation == .minted and
-        !optionalDigestEql(left.def.generated, right.def.generated))
+        (!optionalDigestEql(left.def.generated, right.def.generated) or
+            left.def.iterator_kind != right.def.iterator_kind or
+            left.def.iterator_depth != right.def.iterator_depth or
+            !std.meta.eql(left.def.iterator_topology, right.def.iterator_topology)))
     {
         return .minted_join;
     }
@@ -3751,6 +3754,46 @@ fn optionalDigestEql(lhs: ?names.TypeDigest, rhs: ?names.TypeDigest) bool {
 
 test "monotype type declarations are referenced" {
     std.testing.refAllDecls(@This());
+}
+
+test "monotype iterator relation uses complete minted producer identity" {
+    var name_store = names.NameStore.init(std.testing.allocator);
+    defer name_store.deinit();
+    const Iterator = struct {
+        def: TypeDef,
+        kind: NamedKind = .@"opaque",
+        builtin_owner: ?static_dispatch.BuiltinOwner = .iter,
+    };
+    const list = Iterator{ .def = .{
+        .module = try name_store.internModuleIdentity(&([_]u8{21} ** 32)),
+        .type_name = try name_store.internTypeName("Iter"),
+        .source_decl = 62,
+        .generated = .{ .bytes = [_]u8{7} ** 32 },
+        .iterator_representation = .minted,
+        .iterator_kind = .list,
+        .iterator_depth = 1,
+    } };
+    try std.testing.expectEqual(IteratorRelation.ordinary, iteratorRelation(list, list));
+
+    var other = list;
+    other.def.iterator_kind = .range;
+    try std.testing.expectEqual(IteratorRelation.minted_join, iteratorRelation(list, other));
+    try std.testing.expectEqual(IteratorRelation.minted_join, iteratorRelation(other, list));
+    other = list;
+    other.def.iterator_depth += 1;
+    try std.testing.expectEqual(IteratorRelation.minted_join, iteratorRelation(list, other));
+    other = list;
+    other.def.generated = .{ .bytes = [_]u8{8} ** 32 };
+    try std.testing.expectEqual(IteratorRelation.minted_join, iteratorRelation(list, other));
+
+    other.def.source_decl = 63;
+    try std.testing.expectEqual(IteratorRelation.ordinary, iteratorRelation(list, other));
+    other = list;
+    other.kind = .alias;
+    try std.testing.expectEqual(IteratorRelation.ordinary, iteratorRelation(list, other));
+    other = list;
+    other.builtin_owner = .stream;
+    try std.testing.expectEqual(IteratorRelation.ordinary, iteratorRelation(list, other));
 }
 
 test "monotype type epoch deltas own consecutive suffixes" {

@@ -6435,7 +6435,7 @@ fn writeDevRunImageToSharedMemory(
                 unreachable;
             };
             code_symbols[initialized_code_symbols] = .{
-                .name = try backend.procSymbolName(ctx.gpa, compiled.name),
+                .name = try backend.procSymbolName(ctx.gpa, proc.identity),
                 .code_offset = compiled.code_start,
             };
             initialized_code_symbols += 1;
@@ -6451,7 +6451,7 @@ fn writeDevRunImageToSharedMemory(
                 unreachable;
             };
             code_symbols[initialized_code_symbols] = .{
-                .name = try backend.atomicRcHelperSymbolName(ctx.gpa, helper_key),
+                .name = try backend.atomicRcHelperSymbolName(ctx.gpa, layouts, helper_key),
                 .code_offset = code_offset,
             };
             initialized_code_symbols += 1;
@@ -8431,6 +8431,123 @@ fn defaultBuildTarget(args: cli_args.BuildArgs) RocTarget {
 
 /// Build using the dev backend to generate native machine code.
 /// This produces truly compiled executables without an interpreter.
+/// `ROC_DEV_PACK_OBJECTS` makes a native dev build also lower every visible
+/// module's closed exports as a pack program and write one object and one
+/// manifest per module next to the output (`<output>.pack.<module>.o` and
+/// `.manifest`). This is the pack-program gate for the object cache
+/// (`projects/big/package-object-cache.md`); no build reads these files.
+fn writePackObjects(
+    ctx: *CliCtx,
+    build_env: *BuildEnv,
+    root_artifact: *const check.CheckedArtifact.CheckedModuleArtifact,
+    app_imports: []const check.CheckedArtifact.ImportedModuleView,
+    app_relations: []const check.CheckedArtifact.ImportedModuleView,
+    app_lowered: *const lir.CheckedPipeline.LoweredProgram,
+    args: cli_args.BuildArgs,
+    target: RocTarget,
+    final_output_path: []const u8,
+) CliMainError!void {
+    if (std.c.getenv("ROC_DEV_PACK_OBJECTS") == null) return;
+    {
+        // The app program's own procedures, in the same shape as a pack
+        // manifest, so identities can be compared across the two lowerings.
+        const app_manifest = try lir.PackProgram.manifestBytes(ctx.gpa, app_lowered);
+        defer ctx.gpa.free(app_manifest);
+        const app_manifest_path = try std.fmt.allocPrint(ctx.arena, "{s}.app.manifest", .{final_output_path});
+        backend.writeFileWindowsAvSafe(ctx.io.std_io, app_manifest_path, app_manifest) catch {
+            return error.NativeCompilationFailed;
+        };
+    }
+    const artifacts = try build_env.collectVisibleArtifacts(ctx.gpa, root_artifact);
+    defer ctx.gpa.free(artifacts);
+    const target_usize = base.target.TargetUsize.fromPtrBitWidth(target.ptrBitWidth());
+    const specialization_strategy = currentRuntimeSpecializationStrategy(args.specialization_strategy);
+
+    for (artifacts) |artifact| {
+        const roots = try lir.PackProgram.closedExportRoots(ctx.gpa, artifact);
+        defer ctx.gpa.free(roots);
+        const module_name = artifact.canonical_names.moduleNameText(artifact.module_identity.module_name);
+        const file_name = try ctx.arena.dupe(u8, module_name);
+        for (file_name) |*byte| {
+            if (!std.ascii.isAlphanumeric(byte.*)) byte.* = '_';
+        }
+        const object_path = try std.fmt.allocPrint(ctx.arena, "{s}.pack.{s}.o", .{ final_output_path, file_name });
+        const manifest_path = try std.fmt.allocPrint(ctx.arena, "{s}.pack.{s}.manifest", .{ final_output_path, file_name });
+        if (roots.len == 0) {
+            // A module with no closed exports has an empty pack; the manifest
+            // still records that it was considered.
+            backend.writeFileWindowsAvSafe(ctx.io.std_io, manifest_path, "") catch {
+                return error.NativeCompilationFailed;
+            };
+            continue;
+        }
+        const own_imports = try build_env.collectImportedArtifactViews(ctx.gpa, artifact);
+        defer ctx.gpa.free(own_imports);
+        // A platform's internal modules bind their hosted functions through
+        // the platform module's hosted section, which names declarations
+        // across every module the platform reaches; the pack lowers with the
+        // program's whole module set in view, exactly as the app does, and
+        // Monotype lowers only what the pack's roots reach.
+        var imports = std.ArrayList(check.CheckedArtifact.ImportedModuleView).empty;
+        defer imports.deinit(ctx.gpa);
+        try imports.appendSlice(ctx.gpa, own_imports);
+        const root_view = check.CheckedArtifact.importedView(root_artifact);
+        for ([_][]const check.CheckedArtifact.ImportedModuleView{ &.{root_view}, app_imports, app_relations }) |views| {
+            for (views) |view| {
+                if (std.meta.eql(view.key, artifact.key)) continue;
+                var present = false;
+                for (imports.items) |existing| {
+                    if (std.meta.eql(existing.key, view.key)) present = true;
+                }
+                if (!present) try imports.append(ctx.gpa, view);
+            }
+        }
+        const relations = try build_env.collectRelationArtifactViews(ctx.gpa, artifact);
+        defer ctx.gpa.free(relations);
+
+        var config = checkedRuntimeLoweringConfig(.linked_output, args.opt, specialization_strategy, target_usize, true);
+        config.target.post_check_executor = build_env.postCheckExecutor();
+        var lowered = try lir.PackProgram.lowerPackProgram(ctx.gpa, artifact, imports.items, relations, roots, config.target);
+        defer lowered.deinit();
+
+        const static_data_exports = try compile.static_data_exports.buildStaticData(
+            ctx.gpa,
+            .{
+                .root = check.CheckedArtifact.loweringViewWithRelations(artifact, relations),
+                .imports = imports.items,
+            },
+            &lowered,
+            target,
+            .{},
+        );
+        defer compile.static_data_exports.deinitStaticData(ctx.gpa, static_data_exports);
+
+        var object_compiler = backend.ObjectFileCompiler.initForPack(ctx.gpa);
+        _ = object_compiler.compileToObjectFileAndWrite(
+            &lowered.lir_result.store,
+            &lowered.lir_result.layouts,
+            &.{},
+            static_data_exports,
+            lowered.lir_result.store.getProcSpecs(),
+            lowered.lir_result.boxy_erased_arg_desc_offsets.items,
+            lowered.lir_result.boxy_erased_arg_desc_params.items,
+            lowered.lir_result.boxy_worker_procs.items,
+            target,
+            object_path,
+            ctx.coreCtx(),
+        ) catch |err| {
+            std.log.err("Pack compilation for {s} failed: {}", .{ module_name, err });
+            return error.NativeCompilationFailed;
+        };
+
+        const manifest = try lir.PackProgram.manifestBytes(ctx.gpa, &lowered);
+        defer ctx.gpa.free(manifest);
+        backend.writeFileWindowsAvSafe(ctx.io.std_io, manifest_path, manifest) catch {
+            return error.NativeCompilationFailed;
+        };
+    }
+}
+
 fn nativeBuildEntrypoints(
     ctx: *CliCtx,
     root_artifact: *const check.CheckedArtifact.CheckedModuleArtifact,
@@ -10382,6 +10499,7 @@ fn rocBuildNative(ctx: *CliCtx, args: cli_args.BuildArgs) CliMainError!BuildResu
         return error.NativeCompilationFailed;
     };
     reporter.endWithBreakdown(&devBackendBreakdown(backend_timing.snapshot()));
+    try writePackObjects(ctx, &build_env, root_artifact, imported_artifacts, relation_artifacts, &lowered, args, target, final_output_path);
 
     reporter.begin("Linking");
     const link_inputs = try collectPlatformLinkInputs(ctx, platform_dir, resolved_targets_config, target, link_type);
@@ -16064,6 +16182,7 @@ fn finishPostCheckLowering(
         reporter.recordCounters("Monotype type graph", &monotypeGraphCounters(snapshot.monotype_diagnostics));
         reporter.recordCounters("Monotype body + dispatch", &monotypeBodyCounters(snapshot.monotype_diagnostics));
         reporter.recordCounters("Monotype parallel execution", &monotypeParallelCounters(snapshot.monotype_parallel));
+        reporter.recordCounters("Solved-LIR parallel execution", &solvedLirParallelCounters(snapshot.solved_lir_parallel));
     }
 }
 
@@ -16105,6 +16224,7 @@ fn recordPostCheckLowering(
         reporter.recordCounters("Monotype type graph", &monotypeGraphCounters(snapshot.monotype_diagnostics));
         reporter.recordCounters("Monotype body + dispatch", &monotypeBodyCounters(snapshot.monotype_diagnostics));
         reporter.recordCounters("Monotype parallel execution", &monotypeParallelCounters(snapshot.monotype_parallel));
+        reporter.recordCounters("Solved-LIR parallel execution", &solvedLirParallelCounters(snapshot.solved_lir_parallel));
     }
 }
 
@@ -16197,7 +16317,7 @@ fn monotypeGraphCounters(diagnostics: postcheck.Monotype.Lower.Diagnostics) [27]
     };
 }
 
-fn monotypeBodyCounters(diagnostics: postcheck.Monotype.Lower.Diagnostics) [25]progress.Counter {
+fn monotypeBodyCounters(diagnostics: postcheck.Monotype.Lower.Diagnostics) [26]progress.Counter {
     const body = diagnostics.body;
     return .{
         .{ .name = "Interface summary hits", .count = diagnostics.specialization.interface_summary_hits },
@@ -16212,6 +16332,7 @@ fn monotypeBodyCounters(diagnostics: postcheck.Monotype.Lower.Diagnostics) [25]p
         .{ .name = "Dispatch expressions", .count = body.dispatch_expressions },
         .{ .name = "Deferred template requests", .count = body.deferred_template_requests },
         .{ .name = "Caller-owned template bodies lowered", .count = body.caller_owned_template_bodies_lowered },
+        .{ .name = "Eager iterator template bodies lowered", .count = body.eager_iterator_template_bodies_lowered },
         .{ .name = "Deferred template reuses", .count = body.deferred_template_reuses },
         .{ .name = "Deferred template bodies lowered", .count = body.deferred_template_bodies_lowered },
         .{ .name = "Lowered template bodies discarded", .count = body.lowered_template_bodies_discarded },
@@ -16228,21 +16349,40 @@ fn monotypeBodyCounters(diagnostics: postcheck.Monotype.Lower.Diagnostics) [25]p
     };
 }
 
+fn solvedLirParallelCounters(parallel: lir.CheckedPipeline.SolvedLirParallelMetrics) [14]progress.Counter {
+    return .{
+        .{ .name = "Tasks submitted", .count = parallel.tasks_submitted },
+        .{ .name = "Tasks committed", .count = parallel.tasks_committed },
+        .{ .name = "Parallel task waves", .count = parallel.task_waves },
+        .{ .name = "Lowering lanes initialized", .count = parallel.workspace_initializations },
+        .{ .name = "Tasks reusing a lowering lane", .count = parallel.workspace_reuses },
+        .{ .name = "Worker string entries committed", .count = parallel.worker_string_entries_committed },
+        .{ .name = "Worker inline scopes committed", .count = parallel.worker_inline_scopes_committed },
+        .{ .name = "Worker capturing tasks committed", .count = parallel.worker_capturing_tasks_committed },
+        .{ .name = "Worker return-reuse tasks committed", .count = parallel.worker_return_reuse_tasks_committed },
+        .{ .name = "Worker erased tasks committed", .count = parallel.worker_erased_tasks_committed },
+        .{ .name = "Worker indirect-call tasks committed", .count = parallel.worker_indirect_call_tasks_committed },
+        .{ .name = "Worker match tasks committed", .count = parallel.worker_match_tasks_committed },
+        .{ .name = "Worker literal tasks committed", .count = parallel.worker_literal_tasks_committed },
+        .{ .name = "Worker loop tasks committed", .count = parallel.worker_loop_tasks_committed },
+    };
+}
+
 fn monotypeParallelCounters(parallel: postcheck.Monotype.Lower.ParallelMetricsSnapshot) [13]progress.Counter {
     return .{
         .{ .name = "Aggregate worker work (ns)", .count = parallel.worker_work_ns },
         .{ .name = "Coordinator post-batch work (ns)", .count = parallel.coordinator_post_batch_work_ns },
         .{ .name = "Root tasks submitted", .count = parallel.root_tasks_submitted },
         .{ .name = "Root tasks committed", .count = parallel.root_tasks_committed },
-        .{ .name = "Root tasks retried serially", .count = parallel.root_tasks_retried_serial },
         .{ .name = "Specialization tasks submitted", .count = parallel.specialization_tasks_submitted },
         .{ .name = "Specialization tasks committed", .count = parallel.specialization_tasks_committed },
-        .{ .name = "Specialization tasks retried serially", .count = parallel.specialization_tasks_retried_serial },
         .{ .name = "Specialization tasks discarded ready", .count = parallel.specialization_tasks_discarded_ready },
         .{ .name = "Parallel task waves", .count = parallel.task_waves },
         .{ .name = "Peak worker lanes available", .count = parallel.peak_worker_lanes_available },
         .{ .name = "Peak worker lanes used", .count = parallel.peak_worker_lanes_used },
         .{ .name = "Tasks reusing a lowering lane", .count = parallel.within_lowering_lane_reuse_tasks },
+        .{ .name = "Peak specialization jobs pending", .count = parallel.peak_specialization_jobs_pending },
+        .{ .name = "Peak specialization shards retained", .count = parallel.peak_specialization_shards_retained },
     };
 }
 
@@ -16325,6 +16465,49 @@ test "post-check Boxy timing uses a strategy-specific breakdown" {
     }));
 }
 
+test "post-check diagnostics preserve labeled Solved-LIR counts" {
+    const rows = solvedLirParallelCounters(.{
+        .tasks_submitted = 1,
+        .tasks_committed = 2,
+        .task_waves = 3,
+        .workspace_initializations = 4,
+        .workspace_reuses = 5,
+        .worker_string_entries_committed = 6,
+        .worker_inline_scopes_committed = 7,
+        .worker_capturing_tasks_committed = 8,
+        .worker_return_reuse_tasks_committed = 9,
+        .worker_erased_tasks_committed = 10,
+        .worker_indirect_call_tasks_committed = 11,
+        .worker_match_tasks_committed = 12,
+        .worker_literal_tasks_committed = 13,
+        .worker_loop_tasks_committed = 14,
+    });
+    const names = [_][]const u8{
+        "Tasks submitted",
+        "Tasks committed",
+        "Parallel task waves",
+        "Lowering lanes initialized",
+        "Tasks reusing a lowering lane",
+        "Worker string entries committed",
+        "Worker inline scopes committed",
+        "Worker capturing tasks committed",
+        "Worker return-reuse tasks committed",
+        "Worker erased tasks committed",
+        "Worker indirect-call tasks committed",
+        "Worker match tasks committed",
+        "Worker literal tasks committed",
+        "Worker loop tasks committed",
+    };
+    try std.testing.expectEqual(std.meta.fields(lir.CheckedPipeline.SolvedLirParallelMetrics).len, rows.len);
+    for (rows, names, 1..) |row, name, count| {
+        try std.testing.expectEqualStrings(name, row.name);
+        try std.testing.expectEqual(@as(u64, @intCast(count)), row.count);
+    }
+    for (solvedLirParallelCounters(.{})) |row| {
+        try std.testing.expectEqual(@as(u64, 0), row.count);
+    }
+}
+
 test "post-check diagnostics preserve labeled Monotype counts" {
     var diagnostics: postcheck.Monotype.Lower.Diagnostics = .{};
     diagnostics.specialization.template_requests = 101;
@@ -16335,6 +16518,7 @@ test "post-check diagnostics preserve labeled Monotype counts" {
     diagnostics.graph.nominal_backing_tombstone_deletions = 203;
     diagnostics.body.instantiation_scopes_created = 303;
     diagnostics.body.checked_node_cache_hits = 301;
+    diagnostics.body.eager_iterator_template_bodies_lowered = 304;
     diagnostics.body.deferred_template_reuses = 305;
     diagnostics.body.nested_closures_prepared = 302;
 
@@ -16360,10 +16544,12 @@ test "post-check diagnostics preserve labeled Monotype counts" {
     try std.testing.expectEqual(@as(u64, 303), body[3].count);
     try std.testing.expectEqualStrings("Checked node cache hits", body[5].name);
     try std.testing.expectEqual(@as(u64, 301), body[5].count);
-    try std.testing.expectEqualStrings("Deferred template reuses", body[12].name);
-    try std.testing.expectEqual(@as(u64, 305), body[12].count);
-    try std.testing.expectEqualStrings("Nested closures prepared", body[21].name);
-    try std.testing.expectEqual(@as(u64, 302), body[21].count);
+    try std.testing.expectEqualStrings("Eager iterator template bodies lowered", body[12].name);
+    try std.testing.expectEqual(@as(u64, 304), body[12].count);
+    try std.testing.expectEqualStrings("Deferred template reuses", body[13].name);
+    try std.testing.expectEqual(@as(u64, 305), body[13].count);
+    try std.testing.expectEqualStrings("Nested closures prepared", body[22].name);
+    try std.testing.expectEqual(@as(u64, 302), body[22].count);
 
     const parallel = monotypeParallelCounters(.{
         .worker_work_ns = 401,
@@ -16380,14 +16566,34 @@ test "post-check diagnostics preserve labeled Monotype counts" {
     try std.testing.expectEqual(@as(u64, 402), parallel[1].count);
     try std.testing.expectEqualStrings("Root tasks submitted", parallel[2].name);
     try std.testing.expectEqual(@as(u64, 403), parallel[2].count);
-    try std.testing.expectEqualStrings("Specialization tasks discarded ready", parallel[8].name);
-    try std.testing.expectEqual(@as(u64, 404), parallel[8].count);
-    try std.testing.expectEqualStrings("Peak worker lanes available", parallel[10].name);
-    try std.testing.expectEqual(@as(u64, 8), parallel[10].count);
-    try std.testing.expectEqualStrings("Peak worker lanes used", parallel[11].name);
-    try std.testing.expectEqual(@as(u64, 4), parallel[11].count);
-    try std.testing.expectEqualStrings("Tasks reusing a lowering lane", parallel[12].name);
-    try std.testing.expectEqual(@as(u64, 405), parallel[12].count);
+    try std.testing.expectEqualStrings("Specialization tasks discarded ready", parallel[6].name);
+    try std.testing.expectEqual(@as(u64, 404), parallel[6].count);
+    try std.testing.expectEqualStrings("Peak worker lanes available", parallel[8].name);
+    try std.testing.expectEqual(@as(u64, 8), parallel[8].count);
+    try std.testing.expectEqualStrings("Peak worker lanes used", parallel[9].name);
+    try std.testing.expectEqual(@as(u64, 4), parallel[9].count);
+    try std.testing.expectEqualStrings("Tasks reusing a lowering lane", parallel[10].name);
+    try std.testing.expectEqual(@as(u64, 405), parallel[10].count);
+}
+
+test "timings display every Monotype graph counter" {
+    var buf: std.Io.Writer.Allocating = .init(std.testing.allocator);
+    defer buf.deinit();
+    var reporter = progress.Reporter.init(.{
+        .std_io = std.testing.io,
+        .writer = &buf.writer,
+        .op_label = "roc build",
+        .timings_flag = true,
+        .is_tty = false,
+    });
+    defer reporter.deinit();
+    const counters = monotypeGraphCounters(.{});
+    reporter.start();
+    reporter.recordCounters("Monotype type graph", &counters);
+    reporter.finish();
+    for (counters) |counter| {
+        try std.testing.expect(std.mem.find(u8, buf.written(), counter.name) != null);
+    }
 }
 
 fn finishFrontEndPhase(reporter: *progress.Reporter, timing: anytype) void {
