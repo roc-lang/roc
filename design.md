@@ -12973,6 +12973,25 @@ edges. Positions whose seed would let a runtime check in the body go
 check-free form the proc's seed mask, which is what makes a call site
 demand the seeded variant.
 
+Several definitions do not by themselves lose a value's origin. A join
+result cell—the parameter a conditional's arms assign directly before
+jumping to the join, often declared by several nested joins—keeps a
+tracked origin when every definition is a birth, a join declaration, or an
+alias, each alias being one of the cell's incoming edges alongside its
+explicit initializations; whichever arm ran, the cell's value is accounted
+for, and the use order stops at each redefinition. A solved-borrowed alias
+is a view of its source rather than a holder: a view that is only read is a
+read of the source, and a view that some statement consumes is retained
+there and hands the retained unit on, so it follows the alias rule. A
+low-level op that neither allocates nor checks and whose result is its one
+consumed argument's own unit passes the value through and is an alias of
+that argument. A tag birth without a refcounted payload has every payload
+field vacuously unique, so an error-path return never vetoes the fields the
+success path carries. A borrowed argument position the callee only reads
+(`read_only_params`: no consuming use, no holder-adding occurrence) adds no
+holder to the caller's argument; every other borrowed position is treated
+as a holder that may outlive the call.
+
 Uses of a local are ordered along control flow rather than counted. A
 consuming use (an owned argument, a store into an aggregate, an alias
 definition, a join edge) takes the value's single ownership unit with it, so

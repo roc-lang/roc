@@ -6574,7 +6574,7 @@ test "unique-argument certification isolates shared locals between procedures" {
     try f.certifyUniqueArgsOnly();
 }
 
-test "unique-argument certification rejects multiple births in one procedure" {
+test "unique-argument certification rejects a multiply-defined local with a foreign definition" {
     var f = try CertifyTest.init(testing.allocator);
     defer f.deinit();
 
@@ -6601,17 +6601,16 @@ test "unique-argument certification rejects multiple births in one procedure" {
         .args = args,
         .next = checked,
     } });
-    const second_birth = try f.store.addCFStmt(.{ .assign_low_level = .{
+    // The other arm binds the parameter's value, which is no birth at all.
+    const second_def = try f.store.addCFStmt(.{ .assign_ref = .{
         .target = fresh,
-        .op = .str_concat,
-        .rc_effect = LIR.LowLevel.str_concat.rcEffect(),
-        .args = args,
+        .op = .{ .local = left },
         .next = checked,
     } });
     const body = try f.store.addCFStmt(.{ .switch_stmt = .{
         .cond = cond,
         .branches = try f.store.addCFSwitchBranches(&.{.{ .value = 1, .body = first_birth }}),
-        .default_branch = second_birth,
+        .default_branch = second_def,
         .continuation = checked,
     } });
     _ = try f.addProc(&.{ cond, left, right }, body, .str);

@@ -113,6 +113,11 @@ pub const RcSig = struct {
     /// particular argument positions were passed unique dying values.
     /// Pinned signatures claim none.
     ret_conditions: RetConditionSpan = .empty,
+    /// Bit i set means borrowed argument position i is only read by the
+    /// proc: no consuming use and no holder-adding occurrence, so a call
+    /// leaves the caller's argument with exactly the holders it had.
+    /// Pinned signatures claim none.
+    read_only_params: ParamMask = 0,
     /// Bit i set means argument position i is treated as born-unique inside
     /// the proc body: the call site proved its dying argument unique, so
     /// runtime uniqueness checks that consume the parameter go check-free.

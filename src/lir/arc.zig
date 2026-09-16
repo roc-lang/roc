@@ -11620,7 +11620,7 @@ test "uniqueness: call result of a fresh-list callee elides the check" {
     try testing.expectEqual(@as(u64, 1), f.uniqueArgsFor(appended));
 }
 
-test "uniqueness: multiply-defined unique call result keeps the check" {
+test "uniqueness: multiply-defined unique call result is born from every definition" {
     var f = try ArcTest.init(testing.allocator);
     defer f.deinit();
 
@@ -11629,9 +11629,9 @@ test "uniqueness: multiply-defined unique call result keeps the check" {
     const callee_body = try f.assignList(fresh, &.{}, callee_ret);
     const callee = try f.addProc(&.{}, callee_body, f.list_i64);
 
-    // Either branch calls the same unique-returning callee, but the shared
-    // result local has two definitions. The flow-insensitive proof must not
-    // pick one runtime birth and claim that local is statically unique.
+    // Either branch calls the same unique-returning callee into the shared
+    // result local; whichever ran, the local holds a fresh value, and the
+    // use order stops at each redefinition.
     const cond = try f.local(.bool);
     const list = try f.local(f.list_i64);
     const elem = try f.local(.i64);
@@ -11657,7 +11657,7 @@ test "uniqueness: multiply-defined unique call result keeps the check" {
     _ = try f.addProc(&.{cond}, body, .i64);
 
     try f.run();
-    try testing.expectEqual(@as(u64, 0), f.uniqueArgsFor(appended));
+    try testing.expectEqual(@as(u64, 1), f.uniqueArgsFor(appended));
 }
 
 test "uniqueness: pass-through callee result keeps the caller's check" {
@@ -12347,6 +12347,343 @@ test "uniqueness: a seeded parameter's alias is check-free in the specialized va
     try testing.expectEqual(@as(u64, 0), try f.uniqueArgsInProc(callee, appended));
     const variant: LIR.LirProcSpecId = @enumFromInt(@as(u32, @intCast(base_proc_count)));
     try testing.expectEqual(@as(u64, 1), try f.uniqueArgsInProc(variant, appended));
+}
+
+test "uniqueness: a join result cell assigned a fresh list in every arm is born" {
+    var f = try ArcTest.init(testing.allocator);
+    defer f.deinit();
+    const flag = try f.local(.bool);
+    const cell = try f.local(f.list_i64);
+    const elem = try f.local(.i64);
+    const appended = try f.local(f.list_i64);
+    const result = try f.local(.i64);
+    const join_id = f.freshJoinPointId();
+
+    // switch flag { 1 => cell = []; jump j; _ => cell = []; jump j }
+    // join j(cell) { appended = checked_op(cell, elem) }: whichever arm
+    // ran, the cell holds a fresh list.
+    const ret = try f.ret(result);
+    const result_assign = try f.assignI64(result, 1, ret);
+    const body = try f.assignLowLevel(appended, &.{ cell, elem }, LIR.LowLevel.RcEffect.runtimeUniqueness(1), result_assign);
+    const jump_a = try f.store.addCFStmt(.{ .jump = .{ .target = join_id } });
+    const arm_a = try f.assignList(cell, &.{}, jump_a);
+    const jump_b = try f.store.addCFStmt(.{ .jump = .{ .target = join_id } });
+    const arm_b = try f.assignList(cell, &.{}, jump_b);
+    const dispatch = try f.switchStmt(flag, arm_a, arm_b, null);
+    const remainder = try f.assignI64(elem, 5, dispatch);
+    const flag_assign = try f.assignI64(flag, 1, remainder);
+    const join = try f.store.addCFStmt(.{ .join = .{
+        .id = join_id,
+        .params = try f.span(&.{cell}),
+        .body = body,
+        .remainder = flag_assign,
+    } });
+    _ = try f.addProc(&.{}, join, .i64);
+
+    try f.run();
+    try testing.expectEqual(@as(u64, 1), f.uniqueArgsFor(appended));
+}
+
+test "uniqueness: a join result cell with one foreign arm keeps the check" {
+    var f = try ArcTest.init(testing.allocator);
+    defer f.deinit();
+    const param = try f.local(f.list_i64);
+    const flag = try f.local(.bool);
+    const cell = try f.local(f.list_i64);
+    const elem = try f.local(.i64);
+    const appended = try f.local(f.list_i64);
+    const result = try f.local(.i64);
+    const join_id = f.freshJoinPointId();
+
+    // One arm binds the cell to the parameter's value.
+    const ret = try f.ret(result);
+    const result_assign = try f.assignI64(result, 1, ret);
+    const body = try f.assignLowLevel(appended, &.{ cell, elem }, LIR.LowLevel.RcEffect.runtimeUniqueness(1), result_assign);
+    const jump_a = try f.store.addCFStmt(.{ .jump = .{ .target = join_id } });
+    const arm_a = try f.assignList(cell, &.{}, jump_a);
+    const jump_b = try f.store.addCFStmt(.{ .jump = .{ .target = join_id } });
+    const arm_b = try f.assignRefLocal(cell, param, jump_b);
+    const dispatch = try f.switchStmt(flag, arm_a, arm_b, null);
+    const remainder = try f.assignI64(elem, 5, dispatch);
+    const flag_assign = try f.assignI64(flag, 1, remainder);
+    const join = try f.store.addCFStmt(.{ .join = .{
+        .id = join_id,
+        .params = try f.span(&.{cell}),
+        .body = body,
+        .remainder = flag_assign,
+    } });
+    _ = try f.addProc(&.{param}, join, .i64);
+
+    try f.run();
+    try testing.expectEqual(@as(u64, 0), f.uniqueArgsFor(appended));
+}
+
+test "uniqueness: a pass-through op result inherits its consumed argument's birth" {
+    var f = try ArcTest.init(testing.allocator);
+    defer f.deinit();
+    const list = try f.local(f.list_i64);
+    const passed = try f.local(f.list_i64);
+    const elem = try f.local(.i64);
+    const appended = try f.local(f.list_i64);
+    const result = try f.local(.i64);
+
+    // passed = pass_through(list) moves the fresh list's unit into
+    // `passed` without a new allocation, so the checked op on it is
+    // check-free.
+    const ret = try f.ret(result);
+    const result_assign = try f.assignI64(result, 1, ret);
+    const append = try f.assignLowLevel(appended, &.{ passed, elem }, LIR.LowLevel.RcEffect.runtimeUniqueness(1), result_assign);
+    const pass = try f.assignLowLevel(passed, &.{list}, LIR.LowLevel.RcEffect.consumesArgsReturningConsumedArgs(1), append);
+    const elem_assign = try f.assignI64(elem, 5, pass);
+    const body = try f.assignList(list, &.{}, elem_assign);
+    _ = try f.addProc(&.{}, body, .i64);
+
+    try f.run();
+    try testing.expectEqual(@as(u64, 1), f.uniqueArgsFor(appended));
+}
+
+test "uniqueness: a join result cell assigned aliases of fresh lists in every arm is born" {
+    var f = try ArcTest.init(testing.allocator);
+    defer f.deinit();
+    const flag = try f.local(.bool);
+    const left = try f.local(f.list_i64);
+    const right = try f.local(f.list_i64);
+    const cell = try f.local(f.list_i64);
+    const elem = try f.local(.i64);
+    const appended = try f.local(f.list_i64);
+    const result = try f.local(.i64);
+    const join_id = f.freshJoinPointId();
+
+    // left = []; right = []; switch flag { 1 => cell = left; jump j;
+    // _ => cell = right; jump j }; join j(cell) { checked_op(cell) }: each
+    // arm's alias is one incoming edge of the cell.
+    const ret = try f.ret(result);
+    const result_assign = try f.assignI64(result, 1, ret);
+    const body = try f.assignLowLevel(appended, &.{ cell, elem }, LIR.LowLevel.RcEffect.runtimeUniqueness(1), result_assign);
+    const jump_a = try f.store.addCFStmt(.{ .jump = .{ .target = join_id } });
+    const arm_a = try f.assignRefLocal(cell, left, jump_a);
+    const jump_b = try f.store.addCFStmt(.{ .jump = .{ .target = join_id } });
+    const arm_b = try f.assignRefLocal(cell, right, jump_b);
+    const dispatch = try f.switchStmt(flag, arm_a, arm_b, null);
+    const right_assign = try f.assignList(right, &.{}, dispatch);
+    const left_assign = try f.assignList(left, &.{}, right_assign);
+    const remainder = try f.assignI64(elem, 5, left_assign);
+    const flag_assign = try f.assignI64(flag, 1, remainder);
+    const join = try f.store.addCFStmt(.{ .join = .{
+        .id = join_id,
+        .params = try f.span(&.{cell}),
+        .body = body,
+        .remainder = flag_assign,
+    } });
+    _ = try f.addProc(&.{}, join, .i64);
+
+    try f.run();
+    try testing.expectEqual(@as(u64, 1), f.uniqueArgsFor(appended));
+}
+
+test "uniqueness: a join result cell whose arm aliases a parameter keeps the check" {
+    var f = try ArcTest.init(testing.allocator);
+    defer f.deinit();
+    const param = try f.local(f.list_i64);
+    const flag = try f.local(.bool);
+    const left = try f.local(f.list_i64);
+    const cell = try f.local(f.list_i64);
+    const elem = try f.local(.i64);
+    const appended = try f.local(f.list_i64);
+    const result = try f.local(.i64);
+    const join_id = f.freshJoinPointId();
+
+    const ret = try f.ret(result);
+    const result_assign = try f.assignI64(result, 1, ret);
+    const body = try f.assignLowLevel(appended, &.{ cell, elem }, LIR.LowLevel.RcEffect.runtimeUniqueness(1), result_assign);
+    const jump_a = try f.store.addCFStmt(.{ .jump = .{ .target = join_id } });
+    const arm_a = try f.assignRefLocal(cell, left, jump_a);
+    const jump_b = try f.store.addCFStmt(.{ .jump = .{ .target = join_id } });
+    const arm_b = try f.assignRefLocal(cell, param, jump_b);
+    const dispatch = try f.switchStmt(flag, arm_a, arm_b, null);
+    const left_assign = try f.assignList(left, &.{}, dispatch);
+    const remainder = try f.assignI64(elem, 5, left_assign);
+    const flag_assign = try f.assignI64(flag, 1, remainder);
+    const join = try f.store.addCFStmt(.{ .join = .{
+        .id = join_id,
+        .params = try f.span(&.{cell}),
+        .body = body,
+        .remainder = flag_assign,
+    } });
+    _ = try f.addProc(&.{param}, join, .i64);
+
+    try f.run();
+    try testing.expectEqual(@as(u64, 0), f.uniqueArgsFor(appended));
+}
+
+test "uniqueness: a borrowed view of a list does not consume it" {
+    var f = try ArcTest.init(testing.allocator);
+    defer f.deinit();
+    const list = try f.local(f.list_i64);
+    const view = try f.local(f.list_i64);
+    const len = try f.local(.u64);
+    const elem = try f.local(.i64);
+    const appended = try f.local(f.list_i64);
+    const result = try f.local(.i64);
+
+    // list = []; view = list; len = list_len(view); appended = checked_op(list).
+    // The view only feeds a read, so it solves borrowed and leaves the
+    // list's single unit with the list.
+    const ret = try f.ret(result);
+    const result_assign = try f.assignI64(result, 1, ret);
+    const append = try f.assignLowLevel(appended, &.{ list, elem }, LIR.LowLevel.RcEffect.runtimeUniqueness(1), result_assign);
+    const read_len = try f.store.addCFStmt(.{ .assign_low_level = .{
+        .target = len,
+        .op = .list_len,
+        .rc_effect = LIR.LowLevel.list_len.rcEffect(),
+        .args = try f.span(&.{view}),
+        .next = append,
+    } });
+    const make_view = try f.assignRefLocal(view, list, read_len);
+    const elem_assign = try f.assignI64(elem, 5, make_view);
+    const body = try f.assignList(list, &.{}, elem_assign);
+    _ = try f.addProc(&.{}, body, .i64);
+
+    try f.run();
+    try testing.expectEqual(@as(u64, 1), f.uniqueArgsFor(appended));
+}
+
+test "uniqueness: an error-path return without payload does not veto a record field's uniqueness" {
+    var f = try ArcTest.init(testing.allocator);
+    defer f.deinit();
+    const tag_pair = try f.layouts.putTagUnion(&[_]layout_mod.Idx{
+        try f.layouts.ensureZstLayout(),
+        f.pair_list,
+    });
+
+    // Callee: switch flag { 1 => ret Ok({param, []}); _ => ret Err }.
+    const param = try f.local(f.list_i64);
+    const flag = try f.local(.bool);
+    const other = try f.local(f.list_i64);
+    const pair = try f.local(f.pair_list);
+    const ok_out = try f.local(tag_pair);
+    const err_out = try f.local(tag_pair);
+    const ok_ret = try f.ret(ok_out);
+    const make_ok = try f.assignTag(ok_out, 1, pair, ok_ret);
+    const make_pair = try f.assignStruct(pair, &.{ param, other }, make_ok);
+    const ok_arm = try f.assignList(other, &.{}, make_pair);
+    const err_ret = try f.ret(err_out);
+    const err_arm = try f.assignTag(err_out, 0, null, err_ret);
+    const callee_body = try f.switchStmt(flag, ok_arm, err_arm, null);
+    const callee = try f.addProc(&.{ param, flag }, callee_body, tag_pair);
+
+    // Caller: pass a fresh dying list, match Ok, take the field, mutate it.
+    const list = try f.local(f.list_i64);
+    const caller_flag = try f.local(.bool);
+    const tag_value = try f.local(tag_pair);
+    const discriminant = try f.local(.u16);
+    const view = try f.local(f.pair_list);
+    const first = try f.local(f.list_i64);
+    const elem = try f.local(.i64);
+    const appended = try f.local(f.list_i64);
+    const result = try f.local(.i64);
+    const default_result = try f.local(.i64);
+    const ret = try f.ret(result);
+    const result_assign = try f.assignI64(result, 1, ret);
+    const append = try f.assignLowLevel(appended, &.{ first, elem }, LIR.LowLevel.RcEffect.runtimeUniqueness(1), result_assign);
+    const read_first = try f.assignRefField(first, view, 0, append);
+    const project = try f.store.addCFStmt(.{ .assign_ref = .{
+        .target = view,
+        .op = .{ .tag_payload_struct = .{ .source = tag_value, .variant_index = 1, .tag_discriminant = 1 } },
+        .next = read_first,
+    } });
+    const default_ret = try f.ret(default_result);
+    const default_branch = try f.assignI64(default_result, 0, default_ret);
+    const dispatch = try f.switchStmt(discriminant, project, default_branch, null);
+    const read_discriminant = try f.assignDiscriminant(discriminant, tag_value, dispatch);
+    const elem_assign = try f.assignI64(elem, 5, read_discriminant);
+    const call = try f.store.addCFStmt(.{ .assign_call = .{
+        .target = tag_value,
+        .proc = callee,
+        .args = try f.span(&.{ list, caller_flag }),
+        .next = elem_assign,
+    } });
+    const flag_assign = try f.assignI64(caller_flag, 1, call);
+    const caller_body = try f.assignList(list, &.{}, flag_assign);
+    _ = try f.addProc(&.{}, caller_body, .i64);
+
+    try f.run();
+    try testing.expectEqual(@as(u64, 1), f.uniqueArgsFor(appended));
+}
+
+test "uniqueness: passing a list to a callee that only reads it keeps it unique" {
+    var f = try ArcTest.init(testing.allocator);
+    defer f.deinit();
+
+    // Callee: len = list_len(param); ret len. The parameter solves
+    // borrowed and is never consumed.
+    const param = try f.local(f.list_i64);
+    const len = try f.local(.u64);
+    const callee_ret = try f.ret(len);
+    const callee_body = try f.store.addCFStmt(.{ .assign_low_level = .{
+        .target = len,
+        .op = .list_len,
+        .rc_effect = LIR.LowLevel.list_len.rcEffect(),
+        .args = try f.span(&.{param}),
+        .next = callee_ret,
+    } });
+    const callee = try f.addProc(&.{param}, callee_body, .u64);
+
+    // Caller: list = []; got = callee(list); appended = checked_op(list).
+    const list = try f.local(f.list_i64);
+    const got = try f.local(.u64);
+    const elem = try f.local(.i64);
+    const appended = try f.local(f.list_i64);
+    const result = try f.local(.i64);
+    const ret = try f.ret(result);
+    const result_assign = try f.assignI64(result, 1, ret);
+    const append = try f.assignLowLevel(appended, &.{ list, elem }, LIR.LowLevel.RcEffect.runtimeUniqueness(1), result_assign);
+    const call = try f.store.addCFStmt(.{ .assign_call = .{
+        .target = got,
+        .proc = callee,
+        .args = try f.span(&.{list}),
+        .next = append,
+    } });
+    const elem_assign = try f.assignI64(elem, 5, call);
+    const caller_body = try f.assignList(list, &.{}, elem_assign);
+    _ = try f.addProc(&.{}, caller_body, .i64);
+
+    try f.run();
+    try testing.expectEqual(@as(u64, 1), f.uniqueArgsFor(appended));
+}
+
+test "uniqueness: passing a list to a callee that returns its borrowed parameter keeps the check" {
+    var f = try ArcTest.init(testing.allocator);
+    defer f.deinit();
+
+    // Callee: ret param. The parameter solves borrowed with a borrowed
+    // return, and the return is a consuming use of it.
+    const param = try f.local(f.list_i64);
+    const callee_ret = try f.ret(param);
+    const callee = try f.addProc(&.{param}, callee_ret, f.list_i64);
+
+    // Caller keeps the result alive past its own checked op on the list.
+    const list = try f.local(f.list_i64);
+    const got = try f.local(f.list_i64);
+    const elem = try f.local(.i64);
+    const appended = try f.local(f.list_i64);
+    const result = try f.local(.i64);
+    const ret = try f.ret(result);
+    const result_assign = try f.assignI64(result, 1, ret);
+    const use_got = try f.expectStmt(got, result_assign);
+    const append = try f.assignLowLevel(appended, &.{ list, elem }, LIR.LowLevel.RcEffect.runtimeUniqueness(1), use_got);
+    const call = try f.store.addCFStmt(.{ .assign_call = .{
+        .target = got,
+        .proc = callee,
+        .args = try f.span(&.{list}),
+        .next = append,
+    } });
+    const elem_assign = try f.assignI64(elem, 5, call);
+    const caller_body = try f.assignList(list, &.{}, elem_assign);
+    _ = try f.addProc(&.{}, caller_body, .i64);
+
+    try f.run();
+    try testing.expectEqual(@as(u64, 0), f.uniqueArgsFor(appended));
 }
 
 test "uniqueness: list reinterpret alias inherits the fresh birth" {
