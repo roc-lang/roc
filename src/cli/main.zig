@@ -9797,6 +9797,7 @@ fn compileLlvmAppObject(
         const static_data_procs = try backend.collectReferencedProcs(ctx.gpa, static_data_exports);
         defer ctx.gpa.free(static_data_procs);
         codegen.static_data_procs = static_data_procs;
+        try codegen.setStaticDataExports(static_data_exports);
 
         const llvm_entrypoints = try ctx.arena.alloc(llvm_codegen.MonoLlvmCodeGen.Entrypoint, entrypoints.len);
         for (entrypoints, 0..) |entrypoint, i| {

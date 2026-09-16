@@ -776,10 +776,10 @@ const CheckTypeCheckerPatternsStep = struct {
         // compare indices in. It also compares bare display names solely to
         // choose an unambiguous human-readable origin. Error-reporting path,
         // not a type-checker judgment.
-        .{ .file = "compile_time_finalization.zig", .start = 3185, .end = 3191 },
+        .{ .file = "compile_time_finalization.zig", .start = 3194, .end = 3200 },
         // Consumer compatibility excludes observation sinks by Zig field name at
         // compile time. These are compiler API fields, never Roc identifiers.
-        .{ .file = "compile_time_finalization.zig", .start = 164, .end = 175 },
+        .{ .file = "compile_time_finalization.zig", .start = 164, .end = 176 },
         // report.zig compares already-formatted diagnostic text only to avoid
         // printing two visually identical types. This is presentation logic,
         // not a type-checking or identifier comparison.
