@@ -1474,6 +1474,7 @@ test "LIR image round-trips ordered procedure rewrites with relocated suffixes" 
     for (&roots, &procs) |*root, *proc| {
         root.* = try store.addCFStmt(.{ .ret = .{ .value = original } });
         proc.* = try store.addProcSpec(.{
+            .identity = LIR.ProcIdentity.forTest(@intCast(store.procSpecCount())),
             .name = store.freshSyntheticSymbol(),
             .args = .empty(),
             .body = root.*,

@@ -2028,6 +2028,7 @@ fn testLiteralInitializedStruct(procedure_local: bool) (Allocator.Error || error
     const noop_arg = try store.addLocal(.{ .layout_idx = .i64 });
     const noop_body = try store.addCFStmt(.{ .ret = .{ .value = noop_arg } });
     const noop = try store.addProcSpec(.{
+        .identity = LIR.ProcIdentity.forTest(@intCast(store.procSpecCount())),
         .name = store.freshSyntheticSymbol(),
         .args = try store.addLocalSpan(&.{noop_arg}),
         .body = noop_body,

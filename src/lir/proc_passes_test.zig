@@ -41,6 +41,7 @@ const Fixture = struct {
                 .next = read,
             } });
             _ = try self.store.addProcSpec(.{
+                .identity = core.LIR.ProcIdentity.forTest(@intCast(self.store.procSpecCount())),
                 .name = self.store.freshSyntheticSymbol(),
                 .args = try self.store.addLocalSpan(&.{ number, text }),
                 .body = body,
@@ -123,6 +124,7 @@ const Fixture = struct {
                 .remainder = set,
             } });
             _ = try self.store.addProcSpec(.{
+                .identity = core.LIR.ProcIdentity.forTest(@intCast(self.store.procSpecCount())),
                 .name = self.store.freshSyntheticSymbol(),
                 .args = try self.store.addLocalSpan(&.{input}),
                 .body = body,

@@ -194,6 +194,7 @@ test "trmc per-proc and serial TCE preserve metadata and no-op procs" {
         const args = try store.addLocalSpan(&.{arg});
         const frame = try store.addLocalSpan(&.{ arg, result });
         const proc_id = try store.addProcSpec(.{
+            .identity = LIR.ProcIdentity.forTest(@intCast(store.procSpecCount())),
             .name = store.freshSyntheticSymbol(),
             .args = args,
             .frame_locals = frame,
@@ -214,6 +215,7 @@ test "trmc per-proc and serial TCE preserve metadata and no-op procs" {
         store.getProcSpecPtr(proc_id).tail_calls = sites;
         store.tail_call_builder = null;
         const untouched = try store.addProcSpec(.{
+            .identity = LIR.ProcIdentity.forTest(@intCast(store.procSpecCount())),
             .name = store.freshSyntheticSymbol(),
             .args = args,
             .frame_locals = frame,

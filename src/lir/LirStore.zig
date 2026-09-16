@@ -1705,6 +1705,7 @@ test "procedure rewrite shards preserve frozen prefixes and relocate ordered com
         .body = ret,
     }});
     const first = try coordinator.addProcSpec(.{
+        .identity = lir_defs.ProcIdentity.forTest(@intCast(coordinator.procSpecCount())),
         .name = coordinator.freshSyntheticSymbol(),
         .args = .empty(),
         .ret_layout = .u64,
@@ -1713,6 +1714,7 @@ test "procedure rewrite shards preserve frozen prefixes and relocate ordered com
     });
     const other_ret = try coordinator.addCFStmt(.{ .ret = .{ .value = old_local } });
     const second = try coordinator.addProcSpec(.{
+        .identity = lir_defs.ProcIdentity.forTest(@intCast(coordinator.procSpecCount())),
         .name = coordinator.freshSyntheticSymbol(),
         .args = .empty(),
         .ret_layout = .u64,
@@ -1791,6 +1793,7 @@ test "procedure rewrite prepares tail chains and overlapping arm spans" {
     const local = try coordinator.addLocal(.{ .layout_idx = .str });
     const ret = try coordinator.addCFStmt(.{ .ret = .{ .value = local } });
     const proc = try coordinator.addProcSpec(.{
+        .identity = lir_defs.ProcIdentity.forTest(@intCast(coordinator.procSpecCount())),
         .name = coordinator.freshSyntheticSymbol(),
         .args = .empty(),
         .ret_layout = .str,
@@ -1855,6 +1858,7 @@ test "procedure rewrite allocation failures leave coordinator unchanged" {
             const local = try coordinator.addLocal(.{ .layout_idx = .u64 });
             const ret = try coordinator.addCFStmt(.{ .ret = .{ .value = local } });
             const proc = try coordinator.addProcSpec(.{
+                .identity = lir_defs.ProcIdentity.forTest(@intCast(coordinator.procSpecCount())),
                 .name = coordinator.freshSyntheticSymbol(),
                 .args = .empty(),
                 .ret_layout = .u64,

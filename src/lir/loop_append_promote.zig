@@ -2516,6 +2516,7 @@ test "promote prepared summaries are frozen across long forward helper chains an
     var wrappers: [4096]LIR.LirProcSpecId = undefined;
     for (&wrappers) |*proc| {
         proc.* = try store.addProcSpec(.{
+            .identity = LIR.ProcIdentity.forTest(@intCast(store.procSpecCount())),
             .name = store.freshSyntheticSymbol(),
             .args = LIR.LocalSpan.empty(),
             .body = null,
@@ -2613,6 +2614,7 @@ test "promote summaries reject discarded operations before checked append" {
             } })
         else blk: {
             const unknown = try f.store.addProcSpec(.{
+                .identity = LIR.ProcIdentity.forTest(@intCast(f.store.procSpecCount())),
                 .name = f.store.freshSyntheticSymbol(),
                 .args = args,
                 .body = null,
@@ -2659,6 +2661,7 @@ test "promote summaries preserve direct reserve and unsafe append wrappers" {
             .next = ret,
         } });
         const wrapper = try f.store.addProcSpec(.{
+            .identity = LIR.ProcIdentity.forTest(@intCast(f.store.procSpecCount())),
             .name = f.store.freshSyntheticSymbol(),
             .args = args,
             .body = wrapper_body,
