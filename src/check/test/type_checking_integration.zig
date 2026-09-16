@@ -8933,6 +8933,40 @@ test "check type - polarity - annotated value shares one weak row across uses" {
     try checkTypesModule(source, .fail_first, "Type Mismatch");
 }
 
+test "check type - polarity - a defaulted field use may widen a weak value row" {
+    // A defaulted record field's default expression is an ordinary USE SITE,
+    // so it may widen the weak row of the value it names — exactly like the
+    // accepted first use in the test above. It is checked later than every
+    // other use (`checkPendingDefaults` is the first pass of `finalizeTypes`,
+    // after the whole def pass), and the late implicit-open-ext replay
+    // (`Check.runLateImplicitOpenExtAudit`) used to read the row after that
+    // widening and blame `e` for producing `A`, which `e = Boom` cannot.
+    const source =
+        \\e : [Boom]
+        \\e = Boom
+        \\
+        \\Cfg := { mode : [A, Boom] ?? e }
+    ;
+    var test_env = try TestEnv.init("Test", source);
+    defer test_env.deinit();
+    try test_env.assertNoErrors();
+}
+
+test "check type - polarity - a defaulted field use at the annotated width is clean" {
+    // Control for the test above: the same program with nothing to widen.
+    // Proves the report it guards against was about the use-site widening and
+    // not about defaulted fields as such.
+    const source =
+        \\e : [A, Boom]
+        \\e = Boom
+        \\
+        \\Cfg := { mode : [A, Boom] ?? e }
+    ;
+    var test_env = try TestEnv.init("Test", source);
+    defer test_env.deinit();
+    try test_env.assertNoErrors();
+}
+
 test "check type - polarity - value with explicit open ext generalizes" {
     // `..` on a value annotation is the opt-in to a quantified row (as on
     // main): each use instantiates it fresh.

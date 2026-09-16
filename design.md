@@ -5617,7 +5617,11 @@ Every extension the post-body pass cleared is carried forward; just before
 `finalizeTypes` the list is narrowed to those still carrying no tags
 (`Check.dropSettledLateImplicitOpenExtAudits`), because one that gained a tag
 while the rest of the module was checked was widened by a CALLER, which is
-exactly what an output-position row is open for; and what survives is
+exactly what an output-position row is open for. The narrowing is applied a
+second time inside `finalizeTypes`, immediately after `checkPendingDefaults`:
+that is the one finalize pass that still runs `checkExpr` over user source, and
+a defaulted record field's default expression is a use site like any other, so
+a row it widens was widened by a caller too. What survives is
 re-examined after finalize by `Check.runLateImplicitOpenExtAudit`, before
 `closeWeakValueImplicitOpenExts` grounds the leftovers to `[]` (a grounded
 extension carries no tags, so the audit would skip it). The rejected-parent-row

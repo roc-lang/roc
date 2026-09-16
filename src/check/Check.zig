@@ -15650,7 +15650,10 @@ fn implicitOpenExtCarriesTags(self: *const Self, entry: ImplicitOpenExt) bool {
 
 /// Forget every extension that has picked up a tag since its binding's
 /// post-body audit cleared it. Run after every definition and top-level
-/// statement is checked, and BEFORE `finalizeTypes`.
+/// statement is checked, and BEFORE `finalizeTypes`; then again inside
+/// `finalizeTypes` after `checkPendingDefaults`, the one finalize pass that
+/// still runs `checkExpr` over user source and so can widen a row from a use
+/// site.
 ///
 /// A tag that lands in this window came from a CALLER: an output-position row
 /// is implicitly open precisely so a caller may use the result at a wider
@@ -27908,6 +27911,19 @@ fn finalizeTypes(self: *Self, env: *Env, scope: FinalizeScope) std.mem.Allocator
     // the defaulting rounds and constraint validation below (design.md
     // "Defaulted Fields").
     try self.checkPendingDefaults(env);
+    // `checkPendingDefaults` is the last pass to run `checkExpr` over user
+    // source. A default expression is an ordinary USE SITE, so a tag it adds
+    // to a binding's implicitly opened row is caller widening — exactly like
+    // every use checked before `dropSettledLateImplicitOpenExtAudits` ran at
+    // the module call site, and legal there. Narrow again so the
+    // post-finalize replay (`runLateImplicitOpenExtAudit`) cannot mistake it
+    // for the definition extending its own row. Any later pass that starts
+    // checking user expressions must re-narrow the same way.
+    //
+    // 11246's own widening is unaffected: it lands in
+    // `finalizeGeneratedCodecConstraintsToQuiescence`, which runs after this
+    // point, so that entry is still in the list when the replay reads it.
+    self.dropSettledLateImplicitOpenExtAudits();
     try self.judgeFieldKindsAtBoundary(env);
 
     try self.checkAllConstraints(env);
