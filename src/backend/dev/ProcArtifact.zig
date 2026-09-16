@@ -69,6 +69,8 @@ pub const Kind = union(enum) {
     boxy_thunk: lir.ProcIdentity,
     entrypoint,
     message_pool_run,
+    /// Never lifted from a code buffer: islands belong to a placement. The
+    /// tag stays so the pack format keeps its numbering.
     branch_island,
 };
 
@@ -363,15 +365,28 @@ pub fn extract(
     const relocations = codegen.getRelocations();
     const refs = codegen.codeRefs();
 
-    const artifacts = try arena_allocator.alloc(Artifact, regions.len);
+    // Branch islands (veneers and extern stubs) belong to this placement of
+    // the code, not to any artifact: every reference records its logical
+    // target, and placing the artifacts elsewhere routes far references
+    // through that placement's own islands.
+    const artifact_of_region = try allocator.alloc(?u32, regions.len);
+    defer allocator.free(artifact_of_region);
+    var artifact_count: u32 = 0;
     for (regions, 0..) |region, index| {
+        artifact_of_region[index] = if (region.kind == .branch_island) null else artifact_count;
+        if (region.kind != .branch_island) artifact_count += 1;
+    }
+
+    const artifacts = try arena_allocator.alloc(Artifact, artifact_count);
+    for (regions, 0..) |region, region_index| {
+        const index = artifact_of_region[region_index] orelse continue;
         const kind: Kind = switch (region.kind) {
             .proc => |proc_id| .{ .proc = proc_specs[@intFromEnum(proc_id)].identity },
             .rc_helper => |key| .{ .rc_helper = try LirCodeGenMod.compiledRcHelperSymbolName(arena_allocator, layout_store, key) },
             .boxy_thunk => |proc_id| .{ .boxy_thunk = proc_specs[@intFromEnum(proc_id)].identity },
             .entrypoint => .entrypoint,
             .message_pool_run => .message_pool_run,
-            .branch_island => .branch_island,
+            .branch_island => unreachable,
             .spliced_proc => |identity| .{ .proc = identity },
             .spliced_helper => .{ .rc_helper = try arena_allocator.dupe(u8, codegen.splicedHelperName(region.start + region.entry) orelse return error.DanglingReference) },
         };
@@ -400,15 +415,16 @@ pub fn extract(
                 .boxy_thunk => |proc_id| codegen.boxyThunkOffset(proc_id) orelse return error.DanglingReference,
                 .offset => |offset| offset,
             };
-            const target_index = regionContaining(CG, regions, target_offset) orelse return error.DanglingReference;
+            const target_region = regionContaining(CG, regions, target_offset) orelse return error.DanglingReference;
+            const target_index = artifact_of_region[target_region] orelse return error.DanglingReference;
             try region_refs.append(arena_allocator, .{
                 .site = @intCast(ref.site - region.start),
                 .form = switch (ref.form) {
                     .call => .call,
                     .addr => .addr,
                 },
-                .target = @intCast(target_index),
-                .delta = @intCast(target_offset - regions[target_index].start),
+                .target = target_index,
+                .delta = @intCast(target_offset - regions[target_region].start),
             });
         }
 
@@ -662,10 +678,18 @@ pub fn verifyRoundTrip(
         std.debug.print("ROUNDTRIP unwind mismatch: original {d}, fresh {d}\n", .{ original.getUnwindFunctions().len, fresh.getUnwindFunctions().len });
         return error.RoundTripMismatch;
     }
-    if (original.codeRegions().len != fresh.codeRegions().len) {
+    if (artifactRegionCount(CG, original.codeRegions()) != artifactRegionCount(CG, fresh.codeRegions())) {
         std.debug.print("ROUNDTRIP region count mismatch: original {d}, fresh {d}\n", .{ original.codeRegions().len, fresh.codeRegions().len });
         return error.RoundTripMismatch;
     }
+}
+
+/// Regions that become artifacts: everything but branch islands, which each
+/// placement lays out for itself.
+fn artifactRegionCount(comptime CG: type, regions: []const CG.CodeRegion) usize {
+    var count: usize = 0;
+    for (regions) |region| count += @intFromBool(region.kind != .branch_island);
+    return count;
 }
 
 fn relocationsMatch(comptime CG: type, original: *CG, fresh: *CG) bool {

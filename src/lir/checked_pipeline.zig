@@ -183,6 +183,8 @@ pub const Timing = struct {
     detailed_monotype_body: bool = false,
     monotype_diagnostics_mutex: std.Io.Mutex = .init,
     monotype_diagnostics: postcheck.Monotype.Lower.Diagnostics = .{},
+    solved_lir_parallel_mutex: std.Io.Mutex = .init,
+    solved_lir_parallel: SolvedLirParallelMetrics = .{},
     monotype_ns: TimingCounter = .{},
     monotype_setup_ns: TimingCounter = .{},
     monotype_procedure_specialization_ns: TimingCounter = .{},
@@ -284,6 +286,7 @@ pub const Timing = struct {
             .lir_passes_ns = self.lir_passes_ns.load(),
             .arc_ns = self.arc_ns.load(),
             .monotype_diagnostics = diagnostics,
+            .solved_lir_parallel = self.solvedLirParallelSnapshot(),
         };
     }
 
@@ -309,6 +312,7 @@ pub const Timing = struct {
         self.monotype_static_data_requests_ns.add(snapshot_value.monotype_static_data_requests_ns);
         self.monotype_finalization_ns.add(snapshot_value.monotype_finalization_ns);
         self.addMonotypeParallel(snapshot_value.monotype_parallel);
+        self.addSolvedLirParallel(snapshot_value.solved_lir_parallel);
         self.boxy_plan_ns.add(snapshot_value.boxy_plan_ns);
         self.boxy_lower_ns.add(snapshot_value.boxy_lower_ns);
         self.lift_ns.add(snapshot_value.lift_ns);
@@ -381,6 +385,22 @@ pub const Timing = struct {
         self.monotype_parallel_peak_specialization_shards_retained.max(parallel.peak_specialization_shards_retained);
     }
 
+    fn addSolvedLirParallel(self: *Timing, parallel: SolvedLirParallelMetrics) void {
+        self.solved_lir_parallel_mutex.lockUncancelable(self.std_io);
+        defer self.solved_lir_parallel_mutex.unlock(self.std_io);
+        // All Solved-LIR metrics count completed work, not peaks or durations.
+        inline for (std.meta.fields(SolvedLirParallelMetrics)) |field| {
+            @field(self.solved_lir_parallel, field.name) +|= @field(parallel, field.name);
+        }
+    }
+
+    fn solvedLirParallelSnapshot(self: *const Timing) SolvedLirParallelMetrics {
+        const mutable = @constCast(self);
+        mutable.solved_lir_parallel_mutex.lockUncancelable(self.std_io);
+        defer mutable.solved_lir_parallel_mutex.unlock(self.std_io);
+        return self.solved_lir_parallel;
+    }
+
     fn addMonotypeDiagnostics(self: *Timing, diagnostics: postcheck.Monotype.Lower.Diagnostics) void {
         self.monotype_diagnostics_mutex.lockUncancelable(self.std_io);
         defer self.monotype_diagnostics_mutex.unlock(self.std_io);
@@ -420,6 +440,7 @@ pub const TimingSnapshot = struct {
     monotype_static_data_requests_ns: u64 = 0,
     monotype_finalization_ns: u64 = 0,
     monotype_parallel: postcheck.Monotype.Lower.ParallelMetricsSnapshot = .{},
+    solved_lir_parallel: SolvedLirParallelMetrics = .{},
     boxy_plan_ns: u64 = 0,
     boxy_lower_ns: u64 = 0,
     lift_ns: u64 = 0,
@@ -468,6 +489,52 @@ const PipelineTimingScope = struct {
 
 fn timingNowNs(std_io: std.Io) i64 {
     return @intCast(@max(0, std.Io.Timestamp.now(std_io, .awake).nanoseconds));
+}
+
+test "pipeline timing aggregates Solved-LIR counters with saturation and fresh reset" {
+    var timing = Timing.init(std.testing.io);
+    var first: SolvedLirParallelMetrics = .{};
+    inline for (std.meta.fields(SolvedLirParallelMetrics), 0..) |field, i| {
+        @field(first, field.name) = i + 1;
+    }
+    timing.addSolvedLirParallel(first);
+    var aggregate = Timing.init(std.testing.io);
+    aggregate.addSnapshot(timing.snapshot());
+    aggregate.addSnapshot(timing.snapshot());
+    const doubled = aggregate.snapshot();
+    inline for (std.meta.fields(SolvedLirParallelMetrics), 0..) |field, i| {
+        try std.testing.expectEqual(@as(u64, 2 * (i + 1)), @field(doubled.solved_lir_parallel, field.name));
+        @field(first, field.name) = std.math.maxInt(u64);
+    }
+    aggregate.addSolvedLirParallel(first);
+    const saturated = aggregate.snapshot();
+    inline for (std.meta.fields(SolvedLirParallelMetrics)) |field| {
+        try std.testing.expectEqual(std.math.maxInt(u64), @field(saturated.solved_lir_parallel, field.name));
+    }
+    try std.testing.expectEqual(@as(u64, 0), saturated.lir_gen_ns);
+    aggregate = Timing.init(std.testing.io);
+    try std.testing.expectEqualDeep(SolvedLirParallelMetrics{}, aggregate.snapshot().solved_lir_parallel);
+}
+
+test "pipeline timing preserves explicit Solved-LIR metrics output" {
+    var timing = Timing.init(std.testing.io);
+    var local: SolvedLirParallelMetrics = .{};
+    var explicit: SolvedLirParallelMetrics = .{ .tasks_submitted = 99 };
+    try std.testing.expect(solvedLirMetricsOutput(.{}, &local) == null);
+    try std.testing.expect(solvedLirMetricsOutput(.{ .timing = &timing }, &local).? == &local);
+    try std.testing.expect(solvedLirMetricsOutput(.{ .solved_lir_parallel_metrics_out = &explicit }, &local).? == &explicit);
+    const output = solvedLirMetricsOutput(.{
+        .timing = &timing,
+        .solved_lir_parallel_metrics_out = &explicit,
+    }, &local).?;
+    try std.testing.expect(output == &explicit);
+    try std.testing.expectEqual(@as(u64, 99), explicit.tasks_submitted);
+    // Simulate the lowerer's per-run reset and completed output.
+    output.* = .{ .tasks_submitted = 3, .tasks_committed = 3 };
+    timing.addSolvedLirParallel(output.*);
+    try std.testing.expectEqualDeep(explicit, timing.snapshot().solved_lir_parallel);
+    try std.testing.expectEqual(@as(u64, 3), explicit.tasks_submitted);
+    try std.testing.expectEqualDeep(SolvedLirParallelMetrics{}, local);
 }
 
 test "pipeline timing aggregates Monotype diagnostics" {
@@ -989,6 +1056,8 @@ pub fn lowerPreparedSolvedToLir(prepared: PreparedSolved) LowerResourceError!Low
     var lir_gen_timing_scope = PipelineTimingScope.begin(target.timing, .lir_gen);
     defer lir_gen_timing_scope.end();
     const solved_input = prepared.program;
+    var local_parallel_metrics: SolvedLirParallelMetrics = .{};
+    const parallel_metrics = solvedLirMetricsOutput(target, &local_parallel_metrics);
     var lowered = try postcheck.SolvedLirLower.run(allocator, target.target_usize, solved_input, .{
         .spec_cache = target.spec_cache,
         .inline_plan = inline_plan.view(),
@@ -1003,12 +1072,20 @@ pub fn lowerPreparedSolvedToLir(prepared: PreparedSolved) LowerResourceError!Low
         .layout_request_const_plans = target.layout_request_const_plans,
         .test_plan_metadata = prepared.test_plan_metadata,
         .debug_materialized_out = target.debug_materialized_out,
-        .parallel_metrics = target.solved_lir_parallel_metrics_out,
+        .parallel_metrics = parallel_metrics,
     });
+    if (target.timing) |timing| timing.addSolvedLirParallel(parallel_metrics.?.*);
     lir_gen_timing_scope.end();
     errdefer lowered.deinit();
 
     return finishLoweredOutput(allocator, prepared.root_count, target, &lowered);
+}
+
+/// The lowerer owns resetting its per-run output. Prefer the caller's slot so
+/// collecting aggregate timings neither resets nor overwrites it a second time.
+fn solvedLirMetricsOutput(target: TargetConfig, local: *SolvedLirParallelMetrics) ?*SolvedLirParallelMetrics {
+    return target.solved_lir_parallel_metrics_out orelse
+        if (target.timing != null) local else null;
 }
 
 fn finishLoweredOutput(

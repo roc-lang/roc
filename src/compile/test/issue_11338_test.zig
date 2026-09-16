@@ -204,12 +204,23 @@ const DiscoveryExecutor = struct {
 test "specialization discovery submits a child before an unrelated task finishes" {
     var executor: DiscoveryExecutor = .{};
     defer executor.deinit();
+    var timing: lir.CheckedPipeline.TimingSnapshot = .{};
+    var solved_lir: lir.CheckedPipeline.SolvedLirParallelMetrics = .{};
     try harness.expectLowersToLirWithOptions(chained_discovery_app, .{
         .specialization_workers = 4,
         .post_check_executor_override = executor.executor(),
+        .timing_out = &timing,
+        .solved_lir_parallel_metrics_out = &solved_lir,
     });
     try std.testing.expect(executor.discovered_while_unfinished);
-    try std.testing.expectEqual(@as(usize, 12), executor.submitted);
+    // The controlled overlap occurs in Monotype's first session. Subsequent
+    // solved-LIR batches reuse this executor, but are not new specializations.
+    const monotype = timing.monotype_parallel;
+    try std.testing.expectEqual(@as(u64, 0), monotype.root_tasks_submitted);
+    try std.testing.expectEqual(@as(u64, 12), monotype.specialization_tasks_submitted);
+    try std.testing.expectEqual(monotype.specialization_tasks_submitted, monotype.specialization_tasks_committed);
+    try std.testing.expectEqual(solved_lir.tasks_submitted, solved_lir.tasks_committed);
+    try std.testing.expectEqual(monotype.specialization_tasks_submitted + solved_lir.tasks_submitted, executor.submitted);
     try std.testing.expect(executor.peak_outstanding <= 4);
     try std.testing.expect(!executor.open);
 }

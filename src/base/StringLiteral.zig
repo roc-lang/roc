@@ -43,6 +43,7 @@ pub const Store = struct {
     const entry_header_size = len_size + alignment_size;
 
     pub const Entry = struct {
+        encoded_start: u32,
         idx: Idx,
         bytes: []const u8,
         alignment: u32,
@@ -66,6 +67,7 @@ pub const Store = struct {
 
                 self.pos = content_end;
                 return .{
+                    .encoded_start = @intCast(content_start - entry_header_size),
                     .idx = @enumFromInt(@as(u32, @intCast(content_start))),
                     .bytes = buffer_items[content_start..content_end],
                     .alignment = entry_alignment,
@@ -231,6 +233,42 @@ pub const Store = struct {
         return .{ .store = self };
     }
 
+    /// Number of bytes in the encoded entry buffer.
+    pub fn byteCount(self: *const Store) u32 {
+        return checkedU32(self.buffer.len(), "string literal store byte count");
+    }
+
+    /// Whether `offset` is between complete encoded entries.
+    pub fn isEntryBoundary(self: *const Store, offset: u32) bool {
+        if (offset == 0) return true;
+        var iterator_ = self.iterator();
+        while (iterator_.next() != null) {
+            if (iterator_.pos == offset) return true;
+            if (iterator_.pos > offset) return false;
+        }
+        return false;
+    }
+
+    /// Encoded entries beginning at a previously captured boundary.
+    pub fn encodedBytesFrom(self: *const Store, offset: u32) []const u8 {
+        std.debug.assert(self.isEntryBoundary(offset));
+        return self.buffer.items.items[offset..];
+    }
+
+    /// Reserve encoded storage without changing the logical store.
+    pub fn ensureUnusedEncodedCapacity(
+        self: *Store,
+        gpa: std.mem.Allocator,
+        additional: usize,
+    ) std.mem.Allocator.Error!void {
+        try self.buffer.items.ensureUnusedCapacity(gpa, additional);
+    }
+
+    /// Append complete encoded entries after capacity has been reserved.
+    pub fn appendEncodedAssumeCapacity(self: *Store, bytes: []const u8) void {
+        self.buffer.items.appendSliceAssumeCapacity(bytes);
+    }
+
     /// Deinitialize a `Store`'s memory.
     pub fn deinit(self: *Store, gpa: std.mem.Allocator) void {
         self.buffer.deinit(gpa);
@@ -372,6 +410,37 @@ pub const BuilderState = struct {
         const id = try self.index.insert(&owner, gpa, string);
         store.requireAlignment(id, alignment);
         return id;
+    }
+
+    /// Reserve the transient index before externally appended encoded entries
+    /// become visible in `store`.
+    pub fn ensureAdditionalCapacity(
+        self: *BuilderState,
+        store: *Store,
+        gpa: std.mem.Allocator,
+        additional: usize,
+    ) std.mem.Allocator.Error!void {
+        var owner = BuilderOwner{ .store = store };
+        const total_count = std.math.add(
+            usize,
+            @as(usize, self.index.count()),
+            additional,
+        ) catch return error.OutOfMemory;
+        try self.index.ensureTotalCapacity(
+            &owner,
+            gpa,
+            total_count,
+        );
+    }
+
+    /// Register one already-appended entry without allocating.
+    pub fn registerExistingAssumeCapacity(
+        self: *BuilderState,
+        store: *Store,
+        id: Idx,
+    ) void {
+        var owner = BuilderOwner{ .store = store };
+        self.index.insertExistingAssumeCapacity(&owner, store.get(id), id);
     }
 };
 
