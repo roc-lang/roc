@@ -12504,7 +12504,12 @@ operand; it does not implicitly use every live ownership place.
 
 Each reachable `initialize_join_param` write defines a fresh container value.
 Dismantle analysis starts field-take flow at every such write's successor,
-with all fields available. A later write first checks its value operand against
+with all fields available. A container's single value-producing definition
+reached again through a loop back edge likewise starts the next iteration's
+fresh value with every field intact: the previous value is dead past its
+redefinition, so a take that the back edge reaches again is not a second take
+of the same unit. Without that, a record rebuilt on every iteration (the
+result a per-position helper returns) would poison all of its fields. A later write first checks its value operand against
 the previous definition's take state, then starts the new definition with all
 fields available. This includes loop back edges: the join cell has no global
 incoming ownership origin, and each explicit write supplies its own intact unit.
@@ -13012,10 +13017,58 @@ also lets LLVM optimize across what was an opaque control split.
 A join parameter is an ownership phi, not a foreign definition. Its origin is
 born-unique exactly when it has at least one explicit non-self
 `initialize_join_param` incoming edge and every such edge carries a born-unique
-origin. Join edges, pure same-value aliases, and unique-return call edges
-settle in one monotone dependency graph, so loop back edges preserve a unique
-circulating unit only when an explicit unique birth reaches the cycle. A
-self-assignment is not an incoming ownership transfer and contributes no edge.
+origin. Join edges, pure same-value aliases, field stores and takes, and call
+edges settle in one dependency graph as a greatest fixpoint: every derived
+local starts born and is lowered until nothing contradicts the rest. A loop
+that hands one unit around—a table passed to a helper that returns it, taken
+back out of the result and jumped to the loop head—therefore keeps the birth
+its entry edge brings, which is the inductive invariant the runtime obeys: the
+entry value has count 1, and every edge on the cycle moves that single unit
+without adding a holder. Deadness (some occurrence adds a holder) is a
+separate property that only grows along the same edges, and uniqueness is birth
+without deadness. A self-assignment is not an incoming ownership transfer and
+contributes no edge.
+
+Births carry a condition. A tracked parameter is born on the condition that
+its own position is seeded, which a call site does by demanding a variant
+after proving its dying argument unique; the condition is the union of the
+conditions along every transfer, so an alias, join parameter, field, or
+returned part derived from parameters names exactly the positions whose
+seeds it needs, and one analysis answers for every emission of a proc:
+emission and the certifier test a local's condition against the
+`unique_params` of the variant at hand. A returned value or field whose
+condition is empty sets the signature's unconditional unique-return bit; one
+whose condition names parameters becomes a conditional-return row, and a
+call site turns each row into an edge from the arguments the row names to
+that part of its result, live only when the call is each argument's last
+use (otherwise the callee holds a retained copy). The signature bits and
+rows settle to a fixpoint with the analysis, since a new row only adds
+edges. Positions whose seed would let a runtime check in the body go
+check-free form the proc's seed mask, which is what makes a call site
+demand the seeded variant. The owned flag a versioned loop measures once and
+dispatches on every iteration (`list_owned_unique`) is a check that consumes
+nothing; on a list proven unique and owned at the read it is stamped like
+any other check, and every backend then answers it with a constant, which
+lets the loop's copy version fall away.
+
+Several definitions do not by themselves lose a value's origin. A join
+result cell—the parameter a conditional's arms assign directly before
+jumping to the join, often declared by several nested joins—keeps a
+tracked origin when every definition is a birth, a join declaration, or an
+alias, each alias being one of the cell's incoming edges alongside its
+explicit initializations; whichever arm ran, the cell's value is accounted
+for, and the use order stops at each redefinition. A solved-borrowed alias
+is a view of its source rather than a holder: a view that is only read is a
+read of the source, and a view that some statement consumes is retained
+there and hands the retained unit on, so it follows the alias rule. A
+low-level op that neither allocates nor checks and whose result is its one
+consumed argument's own unit passes the value through and is an alias of
+that argument. A tag birth without a refcounted payload has every payload
+field vacuously unique, so an error-path return never vetoes the fields the
+success path carries. A borrowed argument position the callee only reads
+(`read_only_params`: no consuming use, no holder-adding occurrence) adds no
+holder to the caller's argument; every other borrowed position is treated
+as a holder that may outlive the call.
 
 Uses of a local are ordered along control flow rather than counted. A
 consuming use (an owned argument, a store into an aggregate, an alias
@@ -13027,14 +13080,31 @@ successors read other locals leaves the value unique. A transfer edge (alias
 or join) carries the unit through to its target only when no use of the
 source at all, read or consume, can execute after it; otherwise the target
 holds a second reference and has no unique birth of its own. The order is
-answered as liveness over the procedure's successor edges, following jumps
-through the procedure's joins and killed at a redefinition of the local: one
-backward fixpoint per procedure per 64 queried locals answers every consume
-and transfer at once, so the cost is linear in the procedure rather than one
-walk per use, and certifying a single emitted procedure numbers only that
-procedure's statements and locals. Reference-counting statements are never
-uses, so the debug certifier re-derives the same verdict from the emitted
-procedure.
+answered over the procedure's predecessor edges, following jumps through the
+procedure's joins and stopping at a redefinition of the local: the oracle
+marks backward once per local from that local's uses and answers every edge
+of that local from the marks, so the cost is one pass per local rather than
+one walk per use. Reference-counting statements are never uses, so the debug
+certifier re-derives the same verdict from the emitted procedure.
+
+Uniqueness also flows through aggregate fields. Storing a local into a fresh
+struct or tag is the local's consuming use; when the local was unique and the
+store is its last use, the field holds the value's single unit. That field
+uniqueness is a mask per aggregate local (original struct field index, or bit
+0 for a tag's single payload), flows unchanged through pure aliases and the
+tag's payload view, and is settled in the same worklist as alias and join
+edges. A field read inherits the field's uniqueness only when it is the
+committed take that moves the container's stored unit, since any other read
+retains and leaves count 2; and not when a copy holding its own unit can reach
+the take: a consuming use of the container, or a retained read of the same
+field. Takes are decided after the borrow modes, so the solver settles without
+them and emission re-derives uniqueness against the committed takes, settling
+the unique-return bits and the per-field unique-return mask of each signature
+to a fixpoint; a caller taking a field out of a callee's dying `Try` record
+result thus holds the callee's fresh birth, and a caller taking back a
+field the callee built from its own parameter holds the argument's birth
+under the argument's condition. The certifier re-derives the same verdict
+from the `take_kind` stamped on emitted reads.
 
 A checked argument's check is deletable when three conditions hold at the
 call:

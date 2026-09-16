@@ -31,6 +31,17 @@ const LowLevel = @import("LowLevel.zig").LowLevel;
 
 const RcEffect = LowLevel.RcEffect;
 
+/// A row that only reads an argument's count and reports it, such as the
+/// owned flag a versioned loop dispatches on: `may_runtime_uniqueness_check_args`
+/// names what it reads, and it consumes, retains, and allocates nothing.
+/// The mutate-or-copy rules do not apply to it, because it has no in-place
+/// path; a proven-unique argument merely makes its answer a constant.
+pub fn isCountQuery(effect: RcEffect) bool {
+    return effect.may_runtime_uniqueness_check_args != 0 and effect.consume_args == 0 and
+        !effect.may_allocate and !effect.may_retain_or_release and
+        effect.result_aliases_consumed_args == 0 and !effect.result_unique;
+}
+
 /// A structural contradiction between the fields of one `RcEffect` row.
 pub const Rule = enum {
     retain_args_without_rc_flag,
@@ -90,11 +101,13 @@ pub fn violation(effect: RcEffect) ?Rule {
     if ((effect.result_aliases_consumed_args & ~effect.consume_args) != 0) {
         return .alias_of_unconsumed_arg;
     }
-    if ((effect.may_runtime_uniqueness_check_args & ~effect.consume_args) != 0) {
-        return .runtime_check_of_unconsumed_arg;
-    }
-    if (effect.may_runtime_uniqueness_check_args != 0 and !effect.may_allocate) {
-        return .runtime_check_without_allocate;
+    if (!isCountQuery(effect)) {
+        if ((effect.may_runtime_uniqueness_check_args & ~effect.consume_args) != 0) {
+            return .runtime_check_of_unconsumed_arg;
+        }
+        if (effect.may_runtime_uniqueness_check_args != 0 and !effect.may_allocate) {
+            return .runtime_check_without_allocate;
+        }
     }
     if ((effect.result_borrows_args & effect.consume_args) != 0) {
         return .borrow_of_consumed_arg;
@@ -265,4 +278,12 @@ test "argument positions above the real argument count are rejected" {
     try std.testing.expectEqual(@as(?u6, 2), maskExceedsArgCount(names_arg_two, 2));
     try std.testing.expectEqual(@as(?u6, null), maskExceedsArgCount(names_arg_two, 3));
     try std.testing.expectEqual(@as(?u6, null), maskExceedsArgCount(RcEffect.none(), 0));
+}
+
+test "a count query is exempt from the mutate-or-copy rules" {
+    const query = RcEffect{ .may_runtime_uniqueness_check_args = 1 };
+    try std.testing.expect(isCountQuery(query));
+    try std.testing.expectEqual(@as(?Rule, null), violation(query));
+    const consuming = RcEffect{ .may_runtime_uniqueness_check_args = 1, .consume_args = 1 };
+    try std.testing.expect(!isCountQuery(consuming));
 }

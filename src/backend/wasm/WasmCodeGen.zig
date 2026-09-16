@@ -13758,7 +13758,7 @@ fn generateLowLevel(self: *Self, ll: anytype) Allocator.Error!void {
         .list_owned_unique => {
             // list_owned_unique(list) -> U64, same host-import reasoning as
             // list_slack_unique: never owned there, so sets stay checked.
-            try self.generateLLListOwnedUnique(args);
+            try self.generateLLListOwnedUnique(args, ll.unique_args);
         },
         .list_append_le_bytes => {
             // list_append_le_bytes(list, value, count) -> extended list
@@ -20883,7 +20883,13 @@ fn generateLLListSlackUnique(self: *Self, args: anytype) Allocator.Error!void {
 }
 
 /// Generate LowLevel list_owned_unique: whether in-place overwrites are safe.
-fn generateLLListOwnedUnique(self: *Self, args: anytype) Allocator.Error!void {
+/// A list ARC proved unique and owned here answers true without reading its
+/// count.
+fn generateLLListOwnedUnique(self: *Self, args: anytype, unique_args: u64) Allocator.Error!void {
+    if ((unique_args & 1) != 0) {
+        try self.emitI64Const(1);
+        return;
+    }
     switch (self.external_calls) {
         .host_imports => {
             try self.emitI64Const(0);

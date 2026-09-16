@@ -4617,7 +4617,7 @@ pub const MonoLlvmCodeGen = struct {
             .list_append_sublist => try self.emitListAppendSublist(target, arg_locals, unique_args),
             .list_append_le_bytes => try self.emitListAppendLeBytes(target, arg_locals, unique_args),
             .list_slack_unique => try self.emitListSlackUnique(target, arg_locals),
-            .list_owned_unique => try self.emitListOwnedUnique(target, arg_locals),
+            .list_owned_unique => try self.emitListOwnedUnique(target, arg_locals, unique_args),
             .list_prepend => try self.emitListPrepend(target, arg_locals, unique_args),
             .list_sublist, .list_sublist_borrowed, .list_drop_first, .list_drop_last, .list_take_first, .list_take_last => try self.emitListSublist(target, op, arg_locals, unique_args),
             .list_drop_at => try self.emitListDropAt(target, arg_locals, unique_args),
@@ -10102,15 +10102,67 @@ pub const MonoLlvmCodeGen = struct {
 
     fn emitListAppendLeBytes(self: *MonoLlvmCodeGen, target: LocalId, args: anytype, unique_args: u64) Error!void {
         const builder = self.builder orelse return error.CompilationFailed;
-        var call_args = try self.rocListArgs1(GuardedList.at(args, 0));
+        const wip = self.wip orelse return error.CompilationFailed;
+        const list_local = GuardedList.at(args, 0);
+        const value = try self.coerceScalar(try self.loadScalar(self.slot(GuardedList.at(args, 1)).ptr, self.localLayout(GuardedList.at(args, 1))), .i64, false);
+        const count = try self.coerceScalar(try self.loadScalar(self.slot(GuardedList.at(args, 2)).ptr, self.localLayout(GuardedList.at(args, 2))), .i64, false);
+
+        // A list ARC proved unique and owned here, with a full word of spare
+        // capacity, takes one unaligned little-endian store of the whole
+        // value and a length bump: the low `count` bytes are the appended
+        // data and the rest lands in capacity slack nothing can observe.
+        // This is the builtin's own first path; emitting it here keeps a
+        // bit writer's per-symbol flush out of a call, whose frame traffic
+        // was most of the cost. A seamless slice (low bit of the capacity
+        // word) and a list without the slack take the builtin.
+        var done: ?LlvmBuilder.Function.Block.Index = null;
+        if ((unique_args & 1) != 0) {
+            const list_ptr = self.slot(list_local).ptr;
+            const bytes = try self.loadPointer(list_ptr);
+            const len = try self.loadUsize(try self.offsetPtr(list_ptr, self.rocListLenOffset()));
+            const cap = try self.loadUsize(try self.offsetPtr(list_ptr, self.rocListCapacityOffset()));
+            const word = self.ptrSizedIntType();
+            const one = builder.intValue(word, 1) catch return error.OutOfMemory;
+            const zero = builder.intValue(word, 0) catch return error.OutOfMemory;
+            const eight = builder.intValue(word, 8) catch return error.OutOfMemory;
+            const tag = wip.bin(.@"and", cap, one, "") catch return error.OutOfMemory;
+            const is_plain = wip.icmp(.eq, tag, zero, "") catch return error.OutOfMemory;
+            const needed = wip.bin(.add, len, eight, "") catch return error.OutOfMemory;
+            const fits = wip.icmp(.uge, cap, needed, "") catch return error.OutOfMemory;
+            const take_fast = wip.bin(.@"and", is_plain, fits, "") catch return error.OutOfMemory;
+            const fast = wip.block(0, "append_le_bytes_fast") catch return error.OutOfMemory;
+            const slow = wip.block(0, "append_le_bytes_slow") catch return error.OutOfMemory;
+            const join = wip.block(0, "append_le_bytes_done") catch return error.OutOfMemory;
+            _ = wip.brCond(take_fast, fast, slow, .then_likely) catch return error.OutOfMemory;
+
+            wip.cursor = .{ .block = fast };
+            const dst = try self.offsetPtrValue(bytes, len);
+            _ = wip.store(.normal, value, dst, LlvmBuilder.Alignment.fromByteUnits(1)) catch return error.OutOfMemory;
+            const count_word = try self.coerceScalar(count, word, false);
+            const new_len = wip.bin(.add, len, count_word, "") catch return error.OutOfMemory;
+            const out_ptr = self.slot(target).ptr;
+            try self.storePointer(out_ptr, bytes);
+            try self.storeListLen(out_ptr, new_len);
+            try self.storeListCapacity(out_ptr, cap);
+            _ = wip.br(join) catch return error.OutOfMemory;
+
+            wip.cursor = .{ .block = slow };
+            done = join;
+        }
+
+        var call_args = try self.rocListArgs1(list_local);
         defer call_args.deinit(self.allocator);
         try call_args.prepend(self.allocator, try self.ptrType(), self.slot(target).ptr);
-        try call_args.append(self.allocator, .i64, try self.coerceScalar(try self.loadScalar(self.slot(GuardedList.at(args, 1)).ptr, self.localLayout(GuardedList.at(args, 1))), .i64, false));
-        try call_args.append(self.allocator, .i64, try self.coerceScalar(try self.loadScalar(self.slot(GuardedList.at(args, 2)).ptr, self.localLayout(GuardedList.at(args, 2))), .i64, false));
+        try call_args.append(self.allocator, .i64, value);
+        try call_args.append(self.allocator, .i64, count);
         try call_args.append(self.allocator, .i32, builder.intValue(.i32, 1) catch return error.OutOfMemory);
         try self.appendUpdateModeArg(&call_args, unique_args);
         try call_args.append(self.allocator, try self.ptrType(), self.rocOps());
         try self.callBuiltinOut(builtinSymbol(LowLevelBuiltins.listOp(.list_append_le_bytes)), call_args.types.items, call_args.values.items);
+        if (done) |join| {
+            _ = wip.br(join) catch return error.OutOfMemory;
+            wip.cursor = .{ .block = join };
+        }
     }
 
     fn emitListAppendSublist(self: *MonoLlvmCodeGen, target: LocalId, args: anytype, unique_args: u64) Error!void {
@@ -10455,7 +10507,15 @@ pub const MonoLlvmCodeGen = struct {
         try self.storeIntToLayout(self.slot(target).ptr, slack, self.localLayout(target));
     }
 
-    fn emitListOwnedUnique(self: *MonoLlvmCodeGen, target: LocalId, args: anytype) Error!void {
+    fn emitListOwnedUnique(self: *MonoLlvmCodeGen, target: LocalId, args: anytype, unique_args: u64) Error!void {
+        // A list ARC proved unique and owned here answers true without
+        // reading its count.
+        if ((unique_args & 1) != 0) {
+            const builder = self.builder orelse return error.CompilationFailed;
+            const one = builder.intValue(.i64, 1) catch return error.OutOfMemory;
+            try self.storeIntToLayout(self.slot(target).ptr, one, self.localLayout(target));
+            return;
+        }
         var call_args = try self.rocListArgs1(GuardedList.at(args, 0));
         defer call_args.deinit(self.allocator);
         try call_args.append(self.allocator, try self.ptrType(), self.rocOps());
