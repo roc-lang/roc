@@ -1252,6 +1252,11 @@ const Lowerer = struct {
         worker.tail_call_scratch = workspace.tail_call_scratch;
         worker.return_forwarding_ambiguous = false;
         worker.return_forwarding_repeatable_depth = 0;
+        // Packed literal ids name string views in the body shard's own store,
+        // which ordered commit relocates. A worker therefore derives its own
+        // and never reads or grows the coordinator's cache.
+        worker.packed_plans = collections.DenseMap(layout.Idx, lir_core.PackedData.Plan).init(allocator);
+        worker.packed_literals = std.AutoHashMap(PackedLiteralKey, LIR.ListLiteral).init(allocator);
         worker.erased_owner_state_prefix = coordinator.erased_owner_states.items;
         worker.erased_owner_states = workspace.erased_owner_states;
         worker.erased_call_owner_uses = workspace.erased_call_owner_uses;
@@ -1263,6 +1268,7 @@ const Lowerer = struct {
     }
 
     fn deinitFnBodyWorker(self: *Lowerer, workspace: *FnBodyWorkspace, deinit_store: bool) void {
+        self.deinitPackedPlans();
         self.result.boxy_erased_arg_layouts.deinit(self.allocator);
         self.worker_discovered_fns.deinit(self.allocator);
         self.folded_map_matches.deinit(self.allocator);
@@ -2502,10 +2508,13 @@ const Lowerer = struct {
                     if (template.spec_key) |key| {
                         if (cache.lookup(key.bytes)) |hit| {
                             if (std.mem.eql(u8, &hit.identity, &identity.bytes)) cached = hit;
-                        }
+                            if (pack_trace_available and packTraceEnabled()) std.debug.print("lookup direct-lir key={x} {s}\n", .{ key.bytes[0..8], if (cached != null) "hit" else "identity-mismatch" });
+                        } else if (pack_trace_available and packTraceEnabled()) std.debug.print("lookup direct-lir key={x} miss\n", .{key.bytes[0..8]});
                     }
                 }
             }
+        } else if (pack_trace_available and self.spec_cache != null and packTraceEnabled()) {
+            if (source_fn.source) |template| if (template.spec_key) |key| std.debug.print("lookup direct-lir key={x} skipped comptime={} plain={} cached={}\n", .{ key.bytes[0..8], self.comptime_phase, plain_spec, cached != null });
         }
         if (self.procs_by_identity.get(identity)) |owner| {
             // Another specialization interned this procedure. Share its proc;
@@ -12626,6 +12635,15 @@ test "direct LIR lower declarations are referenced" {
 }
 
 /// Whether a root's procedure runs in the compile-time evaluator.
+/// Builds without libc (the playground) never read the environment and
+/// compile no trace output.
+const pack_trace_available = @import("builtin").link_libc;
+
+/// `ROC_PACK_TRACE` is set: print every object cache lookup.
+fn packTraceEnabled() bool {
+    return std.c.getenv("ROC_PACK_TRACE") != null;
+}
+
 fn rootRunsAtCompileTime(request: check.CheckedModule.RootRequest) bool {
     return switch (request.kind) {
         .compile_time_constant, .compile_time_callable => true,

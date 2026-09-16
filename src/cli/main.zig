@@ -8664,10 +8664,10 @@ fn packFileBytes(
     for (lowered.lir_result.spec_procs.items) |spec_proc| {
         const proc = procs[@intFromEnum(spec_proc.proc)];
         const artifact = artifact_by_identity.get(proc.identity) orelse continue;
-        // Constants other than literal backings are still named per program
-        // (`roc__static_const_N`), and boxy statements index the program's
-        // own descriptor sidecar; an entry that reaches either cannot be
-        // linked elsewhere, so it is not offered.
+        // Boxy statements index the program's own descriptor sidecar, and a
+        // constant holding a code pointer names code the pack may not carry;
+        // an entry that reaches either cannot be linked elsewhere, so it is
+        // not offered.
         if (try artifactClosureNamesProgramLocalSymbols(allocator, set, artifact)) {
             withheld += 1;
             continue;
@@ -8699,8 +8699,13 @@ fn artifactClosureNamesProgramLocalSymbols(allocator: Allocator, set: *const bac
         if (gop.found_existing) continue;
         const artifact = set.artifacts[index];
         for (artifact.relocations) |relocation| {
-            if (std.mem.startsWith(u8, relocation.name, "roc__static_") and !std.mem.startsWith(u8, relocation.name, "roc__static_str_")) return true;
+            if (std.mem.startsWith(u8, relocation.name, "roc__static_") and
+                !std.mem.startsWith(u8, relocation.name, "roc__static_str_") and
+                !std.mem.startsWith(u8, relocation.name, backend.dev.ProcArtifact.content_data_prefix)) return true;
             if (std.mem.startsWith(u8, relocation.name, "roc_boxy_")) return true;
+        }
+        for (artifact.data) |item| {
+            for (item.relocations) |relocation| if (relocation.function) return true;
         }
         for (artifact.refs) |ref| try stack.append(allocator, ref.target);
     }
@@ -10523,9 +10528,11 @@ fn rocBuildNative(ctx: *CliCtx, args: cli_args.BuildArgs) CliMainError!BuildResu
             return error.NativeCompilationFailed;
         };
     }
-    // `ROC_OBJECT_CACHE` turns on the object cache under the cache root:
-    // this build reads the packs of every module in view and writes its own.
-    const object_cache_enabled = !args.no_cache and std.c.getenv("ROC_OBJECT_CACHE") != null and loaded_packs == null;
+    // The object cache lives under the cache root and follows `--no-cache`
+    // like the rest of the cache: this build reads the packs of every module
+    // in view and writes its own. A directory of packs given for a test
+    // (`ROC_DEV_PACK_HITS`) replaces the store.
+    const object_cache_enabled = !args.no_cache and loaded_packs == null;
     var object_store: ?pack_store.Store = null;
     defer if (object_store) |*store| store.deinit();
     if (object_cache_enabled) {

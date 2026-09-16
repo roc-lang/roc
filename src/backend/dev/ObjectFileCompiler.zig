@@ -383,9 +383,26 @@ fn compileWithCodeGen(
         for (static_strings.exports) |data_export| defined.put(data_export.symbol_name, {}) catch return CompilationError.OutOfMemory;
         var extra = std.ArrayList(static_data_export.StaticDataExport).empty;
         defer extra.deinit(allocator);
+        var extra_relocations = std.ArrayList([]static_data_export.StaticDataRelocation).empty;
+        defer {
+            for (extra_relocations.items) |relocations| allocator.free(relocations);
+            extra_relocations.deinit(allocator);
+        }
         for (spliced_data.items) |item| {
             const gop = defined.getOrPut(item.name) catch return CompilationError.OutOfMemory;
             if (gop.found_existing) continue;
+            const relocations = allocator.alloc(static_data_export.StaticDataRelocation, item.relocations.len) catch return CompilationError.OutOfMemory;
+            extra_relocations.append(allocator, relocations) catch {
+                allocator.free(relocations);
+                return CompilationError.OutOfMemory;
+            };
+            for (item.relocations, relocations) |relocation, *out| out.* = .{
+                .offset = relocation.offset,
+                .target_symbol_name = relocation.name,
+                .target = .named,
+                .addend = relocation.addend,
+                .kind = if (relocation.function) .function_pointer else .address,
+            };
             extra.append(allocator, .{
                 .symbol_name = item.name,
                 .bytes = item.bytes,
@@ -393,7 +410,7 @@ fn compileWithCodeGen(
                 .alignment = item.alignment,
                 .is_global = false,
                 .is_exported = false,
-                .relocations = &.{},
+                .relocations = relocations,
             }) catch return CompilationError.OutOfMemory;
         }
         try appendStaticDataExports(allocator, &codegen.codegen.symbols, extra.items, &rodata, &rodata_relocations, &symbols);
@@ -646,7 +663,7 @@ fn compileWithCodeGen(
 
     var artifacts: ?ProcArtifact.Set = null;
     if (pack_mode or capture_artifacts) {
-        artifacts = ProcArtifact.extract(CodeGen, allocator, &codegen, proc_specs, layout_store, static_strings.exports, spliced_data.items) catch |err| switch (err) {
+        artifacts = ProcArtifact.extract(CodeGen, allocator, &codegen, proc_specs, layout_store, static_strings.exports, static_data_exports, spliced_data.items) catch |err| switch (err) {
             error.OutOfMemory => return CompilationError.OutOfMemory,
             error.NestedCodeRegion, error.UncoveredCode, error.DanglingReference, error.UnsupportedRelocation => std.debug.panic("pack artifact extraction failed: {s}", .{@errorName(err)}),
         };

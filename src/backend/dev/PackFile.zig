@@ -117,6 +117,13 @@ pub fn write(allocator: Allocator, set: *const ProcArtifact.Set, specs: []const 
             try writer.str(item.bytes);
             try writer.word(item.alignment);
             try writer.word(item.symbol_offset);
+            try writer.word(@intCast(item.relocations.len));
+            for (item.relocations) |relocation| {
+                try writer.word(relocation.offset);
+                try writer.wide(@bitCast(relocation.addend));
+                try writer.byte(@intFromBool(relocation.function));
+                try writer.str(relocation.name);
+            }
         }
     }
 
@@ -204,11 +211,32 @@ pub fn read(allocator: Allocator, bytes: []const u8) ReadError!Pack {
         }
         const data = try arena_allocator.alloc(ProcArtifact.DataItem, try reader.word());
         for (data) |*item| {
+            const name = try reader.strOwned(arena_allocator);
+            const item_bytes = try reader.strOwned(arena_allocator);
+            const alignment = try reader.word();
+            const symbol_offset = try reader.word();
+            const data_relocations = try arena_allocator.alloc(ProcArtifact.DataRelocation, try reader.word());
+            for (data_relocations) |*relocation| {
+                const offset = try reader.word();
+                const addend: i64 = @bitCast(try reader.wide());
+                const function = switch (try reader.byte()) {
+                    0 => false,
+                    1 => true,
+                    else => return error.MalformedPack,
+                };
+                relocation.* = .{
+                    .offset = offset,
+                    .name = try reader.strOwned(arena_allocator),
+                    .addend = addend,
+                    .function = function,
+                };
+            }
             item.* = .{
-                .name = try reader.strOwned(arena_allocator),
-                .bytes = try reader.strOwned(arena_allocator),
-                .alignment = try reader.word(),
-                .symbol_offset = try reader.word(),
+                .name = name,
+                .bytes = item_bytes,
+                .alignment = alignment,
+                .symbol_offset = symbol_offset,
+                .relocations = data_relocations,
             };
         }
         artifact.* = .{
@@ -327,7 +355,19 @@ test "pack bytes round-trip every artifact field and spec entry" {
             .frame = .{ .prologue_size = 4, .stack_alloc = 16, .frame_size = 16, .callee_saved_mask = 0x1000, .epilogue_offset = 4, .uses_frame_pointer = true },
             .refs = refs,
             .relocations = relocations,
-            .data = try a.dupe(ProcArtifact.DataItem, &.{.{ .name = try a.dupe(u8, "roc__static_str_ab"), .bytes = try a.dupe(u8, "\x00\x00hi"), .alignment = 8, .symbol_offset = 2 }}),
+            .data = try a.dupe(ProcArtifact.DataItem, &.{
+                .{ .name = try a.dupe(u8, "roc__static_str_ab"), .bytes = try a.dupe(u8, "\x00\x00hi"), .alignment = 8, .symbol_offset = 2 },
+                .{
+                    .name = try a.dupe(u8, "roc__static_data_cd"),
+                    .bytes = try a.dupe(u8, "\x00" ** 16),
+                    .alignment = 8,
+                    .symbol_offset = 0,
+                    .relocations = try a.dupe(ProcArtifact.DataRelocation, &.{
+                        .{ .offset = 0, .name = try a.dupe(u8, "roc__static_str_ab"), .addend = 2, .function = false },
+                        .{ .offset = 8, .name = try a.dupe(u8, "roc__rc_decref_abc"), .addend = -1, .function = true },
+                    }),
+                },
+            }),
         },
         .{
             .kind = .{ .rc_helper = try a.dupe(u8, "roc__rc_decref_abc") },
@@ -368,9 +408,18 @@ test "pack bytes round-trip every artifact field and spec entry" {
     try testing.expectEqualStrings("roc__static_1", proc.relocations[1].name);
     try testing.expectEqual(RelocationMod.DataRelocationKind.rel32, proc.relocations[1].kind.data);
     try testing.expectEqual(@as(u32, 0x1000), proc.frame.?.callee_saved_mask);
-    try testing.expectEqual(@as(usize, 1), proc.data.len);
+    try testing.expectEqual(@as(usize, 2), proc.data.len);
     try testing.expectEqualStrings("roc__static_str_ab", proc.data[0].name);
     try testing.expectEqual(@as(u32, 2), proc.data[0].symbol_offset);
+    try testing.expectEqual(@as(usize, 0), proc.data[0].relocations.len);
+    try testing.expectEqualStrings("roc__static_data_cd", proc.data[1].name);
+    try testing.expectEqual(@as(usize, 2), proc.data[1].relocations.len);
+    try testing.expectEqual(@as(u32, 8), proc.data[1].relocations[1].offset);
+    try testing.expectEqual(@as(i64, -1), proc.data[1].relocations[1].addend);
+    try testing.expect(proc.data[1].relocations[1].function);
+    try testing.expectEqualStrings("roc__rc_decref_abc", proc.data[1].relocations[1].name);
+    try testing.expect(!proc.data[1].relocations[0].function);
+    try testing.expectEqual(@as(i64, 2), proc.data[1].relocations[0].addend);
     try testing.expectEqualStrings("roc__rc_decref_abc", pack.set.artifacts[1].kind.rc_helper);
     try testing.expectEqual(@as(u32, 2), pack.set.artifacts[1].entry);
     try testing.expect(pack.set.artifacts[1].frame == null);
