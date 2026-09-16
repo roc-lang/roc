@@ -15817,6 +15817,138 @@ fn annoApplyIsBuiltinTry(self: *const Self, apply: CIR.TypeAnno.Apply) bool {
     };
 }
 
+/// The largest declaration arity the alias walk below tracks. A reference with
+/// more type arguments than this returns null, which keeps the pre-walk
+/// `.nested` behaviour; the bound exists so the walk needs no allocation.
+const max_tracked_alias_formals: usize = 8;
+
+/// Which of `apply`'s OWN argument indices lands in the builtin `Try`'s ERROR
+/// argument, crossing transparent alias declarations.
+///
+/// `annoApplyIsBuiltinTry` answers only for a `Try` written directly, so an
+/// alias over `Try` whose FORMAL is the error row (`Res(e) : Try(Str, e)`) had
+/// every argument of `Res([IoErr])` generated out of reach - while lowering
+/// crosses the same alias and WOULD re-tag that row: `closedResultRowOrNull`
+/// reads the return through `resolvedPayload`, which walks alias backings, and
+/// `hostedTryNamedOrNull` (src/postcheck/monotype/lower.zig:13046) crosses them
+/// by design. The opened set was therefore strictly smaller than the adaptable
+/// set, which is under-opening: safe (an ordinary mismatch) but wrong, since
+/// keeping the opened set equal to the adaptable set is the rule this whole
+/// axis exists to hold.
+///
+/// Fail-closed everywhere: any shape not recognized exactly returns null, which
+/// is the `.nested` answer this walk replaced.
+fn applyTryErrorArgIndex(self: *const Self, apply: CIR.TypeAnno.Apply) ?usize {
+    // Type-argument index of `Builtin.Try`'s error row. Deliberately the same
+    // constant as the Monotype relation's
+    // (`src/postcheck/monotype/lower.zig:1727`) and the instantiator's
+    // (`src/types/instantiate.zig:36`).
+    const try_error_type_arg_index: usize = 1;
+    if (self.annoApplyIsBuiltinTry(apply)) return try_error_type_arg_index;
+
+    // `origin[i]` is the index, among the ORIGINAL reference's arguments, that
+    // the current layer's argument `i` came from.
+    var origin: [max_tracked_alias_formals]usize = undefined;
+    var origin_len = self.cir.store.sliceTypeAnnos(apply.args).len;
+    if (origin_len > max_tracked_alias_formals) return null;
+    for (0..origin_len) |index| origin[index] = index;
+
+    var current = apply;
+    // Bounded like the Monotype-side alias walks, and for the same reason: a
+    // declaration chain that closes on itself must terminate here, and a hang
+    // is the worst outcome for a guard whose only job is to answer. Exhaustion
+    // returns null rather than raising: a cyclic alias is already reported as
+    // `recursive_alias` by the caller's `ensureTypeDeclGenerated`, and null is
+    // the fail-closed answer.
+    var remaining: usize = @intCast(self.cir.store.nodes.len());
+    while (remaining > 0) : (remaining -= 1) {
+        // Cross-module aliases are deliberately out of scope: the declaration's
+        // CIR lives in another module. Fail-closed, so it is a limitation
+        // rather than a wrong answer.
+        const base_ref = switch (current.base) {
+            .local => |local_ref| local_ref,
+            .builtin, .external, .pending => return null,
+        };
+        const alias_decl = switch (self.cir.store.getStatement(base_ref.decl_idx)) {
+            .s_alias_decl => |decl| decl,
+            else => return null,
+        };
+        const formals = self.cir.store.sliceTypeAnnos(self.cir.store.getTypeHeader(alias_decl.header).args);
+        // The reference's arguments are substituted for the header's formals
+        // positionally; any other arity is a canonicalization error already
+        // reported elsewhere.
+        if (formals.len != origin_len) return null;
+
+        const body = switch (self.cir.store.getTypeAnno(self.annoSkipParens(alias_decl.anno))) {
+            .apply => |body_apply| body_apply,
+            else => return null,
+        };
+        const body_args = self.cir.store.sliceTypeAnnos(body.args);
+
+        if (self.annoApplyIsBuiltinTry(body)) {
+            if (body_args.len <= try_error_type_arg_index) return null;
+            const formal_index = self.annoFormalIndex(body_args[try_error_type_arg_index], formals) orelse return null;
+            return origin[formal_index];
+        }
+
+        // An alias over an alias: keep walking only while every argument is
+        // passed straight through as one of this declaration's own formals. A
+        // computed argument (`Outer(e) : Inner(List(e))`) puts the row
+        // somewhere no adapter reaches, so it stops the walk.
+        if (body_args.len > max_tracked_alias_formals) return null;
+        var next_origin: [max_tracked_alias_formals]usize = undefined;
+        for (body_args, 0..) |body_arg, body_index| {
+            const formal_index = self.annoFormalIndex(body_arg, formals) orelse return null;
+            next_origin[body_index] = origin[formal_index];
+        }
+        origin = next_origin;
+        origin_len = body_args.len;
+        current = body;
+    }
+    return null;
+}
+
+/// The index within `formals` of the declaration formal `anno_idx` names, or
+/// null when `anno_idx` is not a bare reference to one of them.
+fn annoFormalIndex(self: *const Self, anno_idx: CIR.TypeAnno.Idx, formals: []const CIR.TypeAnno.Idx) ?usize {
+    const name = self.annoRigidVarName(anno_idx) orelse return null;
+    for (formals, 0..) |formal_idx, index| {
+        const formal_name = self.annoRigidVarName(formal_idx) orelse continue;
+        if (formal_name.eql(name)) return index;
+    }
+    return null;
+}
+
+/// The type-variable name `anno_idx` is, looking through parentheses and
+/// through a `.rigid_var_lookup` to the `.rigid_var` that introduced it. Null
+/// for every other shape.
+fn annoRigidVarName(self: *const Self, anno_idx: CIR.TypeAnno.Idx) ?Ident.Idx {
+    var current = anno_idx;
+    var remaining: usize = @intCast(self.cir.store.nodes.len());
+    while (remaining > 0) : (remaining -= 1) {
+        switch (self.cir.store.getTypeAnno(current)) {
+            .rigid_var => |rigid| return rigid.name,
+            .rigid_var_lookup => |lookup| current = lookup.ref,
+            .parens => |parens| current = parens.anno,
+            else => return null,
+        }
+    }
+    return null;
+}
+
+/// `anno_idx` with every layer of parentheses removed.
+fn annoSkipParens(self: *const Self, anno_idx: CIR.TypeAnno.Idx) CIR.TypeAnno.Idx {
+    var current = anno_idx;
+    var remaining: usize = @intCast(self.cir.store.nodes.len());
+    while (remaining > 0) : (remaining -= 1) {
+        switch (self.cir.store.getTypeAnno(current)) {
+            .parens => |parens| current = parens.anno,
+            else => return current,
+        }
+    }
+    return current;
+}
+
 /// Push every constraint one where clause places on `owner_var`. A method
 /// clause declares exactly one, left for `completeOwnedStaticDispatchConstraint`
 /// to type from its annotation; a where alias contributes each constraint it
@@ -16504,7 +16636,6 @@ fn generateAnnoTypeInPlace(self: *Self, anno_idx: CIR.TypeAnno.Idx, env: *Env, c
             // which is a wrong tag layout rather than a diagnostic. Keeping
             // the opened set equal to the adaptable set is the rule stated in
             // design.md "Result-Row Widening Adapter".
-            const try_error_type_arg_index: usize = 1;
             // Exhaustive by construction: adding an `AdapterReach` variant is a
             // compile error here rather than a silent `false`.
             const reach_admits_try_error_row = switch (ctx) {
@@ -16521,12 +16652,17 @@ fn generateAnnoTypeInPlace(self: *Self, anno_idx: CIR.TypeAnno.Idx, env: *Env, c
                 },
                 .type_decl => false,
             };
-            const try_error_row_reachable = self.annoApplyIsBuiltinTry(a) and reach_admits_try_error_row;
+            // `applyTryErrorArgIndex`, not `annoApplyIsBuiltinTry`: the error
+            // cell is found across transparent alias layers, the same ones
+            // lowering crosses, so an alias whose FORMAL is the error row opens
+            // exactly like a `Try` written directly.
+            const try_error_arg_index = self.applyTryErrorArgIndex(a);
+            const try_error_row_reachable = try_error_arg_index != null and reach_admits_try_error_row;
             const nested_arg_ctx = ctx.withReach(.nested);
             const try_error_arg_ctx = ctx.withReach(.try_row);
             const anno_args = self.cir.store.sliceTypeAnnos(a.args);
             for (anno_args, 0..) |anno_arg, arg_index| {
-                const arg_ctx = if (try_error_row_reachable and arg_index == try_error_type_arg_index)
+                const arg_ctx = if (try_error_row_reachable and arg_index == try_error_arg_index.?)
                     try_error_arg_ctx
                 else
                     nested_arg_ctx;
