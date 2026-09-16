@@ -13006,10 +13006,14 @@ successors read other locals leaves the value unique. A transfer edge (alias
 or join) carries the unit through to its target only when no use of the
 source at all, read or consume, can execute after it; otherwise the target
 holds a second reference and has no unique birth of its own. The order is
-answered by walking the procedure's successor edges from the use, following
-jumps through the procedure's joins and stopping at a redefinition of the
-local. Reference-counting statements are never uses, so the debug certifier
-re-derives the same verdict from the emitted procedure.
+answered as liveness over the procedure's successor edges, following jumps
+through the procedure's joins and killed at a redefinition of the local: one
+backward fixpoint per procedure per 64 queried locals answers every consume
+and transfer at once, so the cost is linear in the procedure rather than one
+walk per use, and certifying a single emitted procedure numbers only that
+procedure's statements and locals. Reference-counting statements are never
+uses, so the debug certifier re-derives the same verdict from the emitted
+procedure.
 
 Uniqueness also flows through aggregate fields. Storing a local into a fresh
 struct or tag is the local's consuming use; when the local was unique and the
