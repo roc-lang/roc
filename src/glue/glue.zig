@@ -649,8 +649,9 @@ fn runGlueSpecDylib(
     };
     defer lib.close();
 
-    const GlueEntryFn = *const fn (*builtins.host_abi.RocOps, [*]u8, ?*anyopaque, *const eval_mod.boxy_abi.BoxyNativeFnTable) callconv(.c) void;
+    const GlueEntryFn = *const fn ([*]u8, ?*anyopaque) callconv(.c) void;
     const entry = lib.lookup(GlueEntryFn, builtins.shim_symbols.roc_make_glue) orelse return error.GlueDylibUnavailable;
+    eval_mod.Inspected.fillInProcessHostTable(&lib) catch return error.GlueDylibUnavailable;
 
     runtime_env.resetObservation();
     if (builtin.target.cpu.arch == .aarch64 and builtin.target.os.tag == .linux) {
@@ -678,15 +679,14 @@ fn runGlueSpecDylib(
     defer if (boxy_runtime != null) {
         _ = eval_mod.boxy_abi.swapActiveRuntime(previous_boxy_runtime);
     };
-    const boxy_fns = eval_mod.boxy_abi.nativeFnTable();
+    const entered = builtins.in_process_host.enter(runtime_env.get_ops(), null);
+    defer builtins.in_process_host.leave(entered);
 
     const sj = crash_boundary.set();
     if (sj == 0) {
         entry(
-            @ptrCast(runtime_env.get_ops()),
             @ptrCast(result_ptr),
             @ptrCast(types_list),
-            &boxy_fns,
         );
     }
 

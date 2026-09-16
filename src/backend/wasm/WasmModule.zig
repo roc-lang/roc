@@ -5,6 +5,7 @@
 //! for surgical linking.
 
 const std = @import("std");
+const builtin = @import("builtin");
 const shim_symbols = @import("builtins").shim_symbols;
 const Allocator = std.mem.Allocator;
 const roc_base = @import("base");
@@ -511,56 +512,6 @@ pub const TableImport = struct {
 /// Wasm reference type for funcref tables
 const funcref: u8 = 0x70;
 
-/// WASM32 layout of the RocOps struct in linear memory.
-///
-/// On native 64-bit targets, RocOps is 72 bytes with 8-byte pointers and function
-/// pointers. On wasm32, function pointers don't exist in linear memory—instead,
-/// functions are referenced by u32 table indices for use with `call_indirect`.
-/// This makes the WASM layout 36 bytes with all fields being i32.
-///
-/// Two distinct `call_indirect` type signatures are used:
-/// - RocOps callbacks (roc_alloc, etc.): 2-arg `(i32 args_struct_ptr, i32 env_ptr) → void`
-/// - Hosted functions (RocCall ABI):     3-arg `(i32 roc_ops_ptr, i32 ret_ptr, i32 args_ptr) → void`
-pub const WasmRocOps = struct {
-    /// Host environment pointer (passed as second arg to all RocOps callbacks).
-    pub const env_ptr: u32 = 0;
-    /// Table index for roc_alloc: (args_ptr, env_ptr) → void.
-    pub const roc_alloc_table_idx: u32 = 4;
-    /// Table index for roc_dealloc: (args_ptr, env_ptr) → void.
-    pub const roc_dealloc_table_idx: u32 = 8;
-    /// Table index for roc_realloc: (args_ptr, env_ptr) → void.
-    pub const roc_realloc_table_idx: u32 = 12;
-    /// Table index for roc_dbg: (args_ptr, env_ptr) → void.
-    pub const roc_dbg_table_idx: u32 = 16;
-    /// Table index for roc_expect_failed: (args_ptr, env_ptr) → void.
-    pub const roc_expect_failed_table_idx: u32 = 20;
-    /// Table index for roc_crashed: (args_ptr, env_ptr) → void.
-    pub const roc_crashed_table_idx: u32 = 24;
-    /// Number of hosted functions provided by the platform.
-    pub const hosted_fns_count: u32 = 28;
-    /// Pointer to array of u32 table indices for hosted functions in linear memory.
-    pub const hosted_fns_ptr: u32 = 32;
-    /// Total size of the WasmRocOps struct in bytes.
-    pub const total_size: u32 = 36;
-
-    comptime {
-        // Verify layout: 9 consecutive i32 fields at 4-byte stride = 36 bytes total.
-        std.debug.assert(total_size == 36);
-        std.debug.assert(hosted_fns_ptr + 4 == total_size);
-
-        // All offsets must be 4-byte aligned and sequential.
-        std.debug.assert(env_ptr == 0);
-        std.debug.assert(roc_alloc_table_idx == env_ptr + 4);
-        std.debug.assert(roc_dealloc_table_idx == roc_alloc_table_idx + 4);
-        std.debug.assert(roc_realloc_table_idx == roc_dealloc_table_idx + 4);
-        std.debug.assert(roc_dbg_table_idx == roc_realloc_table_idx + 4);
-        std.debug.assert(roc_expect_failed_table_idx == roc_dbg_table_idx + 4);
-        std.debug.assert(roc_crashed_table_idx == roc_expect_failed_table_idx + 4);
-        std.debug.assert(hosted_fns_count == roc_crashed_table_idx + 4);
-        std.debug.assert(hosted_fns_ptr == hosted_fns_count + 4);
-    }
-};
-
 /// Module state
 allocator: Allocator,
 func_types: std.ArrayList(FuncType),
@@ -849,6 +800,14 @@ pub fn funcTypeMatches(self: *const Self, type_idx: u32, params: []const ValType
         actual_result == results[0];
 }
 
+/// Return whether two type-table entries have the same structural signature.
+pub fn funcTypesEqual(self: *const Self, a: u32, b: u32) bool {
+    if (a == b) return true;
+    if (b >= self.func_types.items.len) return false;
+    const b_result = self.func_type_results.items[b];
+    return self.funcTypeMatches(a, self.func_types.items[b].params, if (b_result) |r| &.{r} else &.{});
+}
+
 /// Find an existing type-table entry with exactly the requested signature.
 pub fn findFuncType(self: *const Self, params: []const ValType, results: []const ValType) ?u32 {
     for (0..self.func_types.items.len) |type_idx| {
@@ -956,7 +915,10 @@ fn resolveUndefinedFunctionSymbols(
     for (self.linking.symbol_table.items, 0..) |sym, i| {
         if (!self.isUndefinedFunctionNamed(sym, name)) continue;
         if (sym.index >= self.imports.items.len) return error.InvalidSection;
-        if (self.imports.items[sym.index].type_idx != defined_type) return error.FunctionTypeMismatch;
+        if (self.imports.items[sym.index].type_idx != defined_type) {
+            if (builtin.mode == .Debug) std.debug.print("WASM merge: import '{s}' has type {d}, but its definition has type {d}\n", .{ name, self.imports.items[sym.index].type_idx, defined_type });
+            return error.FunctionTypeMismatch;
+        }
         if (first_match == null) first_match = @intCast(i);
     }
 
@@ -1732,7 +1694,10 @@ pub fn mergeModuleMode(self: *Self, source: *const Self, mode: MergeMode) MergeE
             if (fn_idx < old_import_count) return error.InvalidSection;
             const local_idx = fn_idx - old_import_count;
             if (local_idx >= self.func_type_indices.items.len) return error.InvalidSection;
-            if (self.func_type_indices.items[local_idx] != remapped_type) return error.FunctionTypeMismatch;
+            if (!self.funcTypesEqual(self.func_type_indices.items[local_idx], remapped_type)) {
+                if (builtin.mode == .Debug) std.debug.print("WASM merge: '{s}' is defined with type {d}, but the merged module imports it with type {d}\n", .{ src_imp.field_name, self.func_type_indices.items[local_idx], remapped_type });
+                return error.FunctionTypeMismatch;
+            }
             func_remap[src_idx] = fn_idx;
             source_import_resolved_to_defined[src_idx] = true;
             continue;
@@ -1742,7 +1707,10 @@ pub fn mergeModuleMode(self: *Self, source: *const Self, mode: MergeMode) MergeE
         var matched: ?u32 = null;
         for (self.imports.items, 0..) |self_imp, self_idx| {
             if (std.mem.eql(u8, self_imp.field_name, src_imp.field_name)) {
-                if (self_imp.type_idx != remapped_type) return error.FunctionTypeMismatch;
+                if (!self.funcTypesEqual(self_imp.type_idx, remapped_type)) {
+                    if (builtin.mode == .Debug) std.debug.print("WASM merge: both modules import '{s}', with types {d} and {d}\n", .{ src_imp.field_name, self_imp.type_idx, remapped_type });
+                    return error.FunctionTypeMismatch;
+                }
                 matched = @intCast(self_idx);
                 break;
             }
@@ -5882,23 +5850,7 @@ test "phase5—real host module: full setup and finalization produces valid WASM
     try std.testing.expect(found_memory_export);
 }
 
-// --- Phase 6 tests: WASM Function Pointer Representation & RocOps Layout ---
-
-test "RocOps struct—correct field offsets for wasm32 (36 bytes total)" {
-    const W = Self.WasmRocOps;
-    try std.testing.expectEqual(@as(u32, 0), W.env_ptr);
-    try std.testing.expectEqual(@as(u32, 4), W.roc_alloc_table_idx);
-    try std.testing.expectEqual(@as(u32, 8), W.roc_dealloc_table_idx);
-    try std.testing.expectEqual(@as(u32, 12), W.roc_realloc_table_idx);
-    try std.testing.expectEqual(@as(u32, 16), W.roc_dbg_table_idx);
-    try std.testing.expectEqual(@as(u32, 20), W.roc_expect_failed_table_idx);
-    try std.testing.expectEqual(@as(u32, 24), W.roc_crashed_table_idx);
-    try std.testing.expectEqual(@as(u32, 28), W.hosted_fns_count);
-    try std.testing.expectEqual(@as(u32, 32), W.hosted_fns_ptr);
-    try std.testing.expectEqual(@as(u32, 36), W.total_size);
-    // Each field is 4 bytes (i32 on wasm32), 9 fields total
-    try std.testing.expectEqual(@as(u32, 9 * 4), W.total_size);
-}
+// --- Phase 6 tests: WASM Function Pointer Representation ---
 
 test "call_indirect—roc_alloc uses 2-arg callback type, not RocCall type" {
     const allocator = std.testing.allocator;
@@ -8245,12 +8197,18 @@ test "preload + merge + encode roundtrip with real builtins" {
     var builtins_module = try preload(allocator, wasm32_builtins.bytes, .executable);
     defer builtins_module.deinit();
 
-    // Create an app module with standard RocOps imports
+    // Create an app module with the host's runtime symbol imports
     var app_module = Self.init(allocator);
 
-    const roc_ops_type_idx = try app_module.addFuncType(&.{ .i32, .i32 }, &.{});
-    for ([_][]const u8{ shim_symbols.roc_alloc, shim_symbols.roc_dealloc, shim_symbols.roc_realloc, shim_symbols.roc_dbg, shim_symbols.roc_expect_failed, shim_symbols.roc_crashed }) |name| {
-        _ = try app_module.addImport("env", name, roc_ops_type_idx);
+    const alloc_type_idx = try app_module.addFuncType(&.{ .i32, .i32 }, &.{.i32});
+    const dealloc_type_idx = try app_module.addFuncType(&.{ .i32, .i32 }, &.{});
+    const realloc_type_idx = try app_module.addFuncType(&.{ .i32, .i32, .i32 }, &.{.i32});
+    const message_type_idx = try app_module.addFuncType(&.{ .i32, .i32 }, &.{});
+    _ = try app_module.addImport("env", shim_symbols.roc_alloc, alloc_type_idx);
+    _ = try app_module.addImport("env", shim_symbols.roc_dealloc, dealloc_type_idx);
+    _ = try app_module.addImport("env", shim_symbols.roc_realloc, realloc_type_idx);
+    for ([_][]const u8{ shim_symbols.roc_dbg, shim_symbols.roc_expect_failed, shim_symbols.roc_crashed }) |name| {
+        _ = try app_module.addImport("env", name, message_type_idx);
     }
 
     // Merge builtins into app module

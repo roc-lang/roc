@@ -4,14 +4,21 @@ const std = @import("std");
 const builtins = @import("builtins");
 const shim_symbols = builtins.shim_symbols;
 
+/// This host defines the runtime symbols itself.
+pub const roc_host_role: builtins.host_abi.HostRole = .platform;
+
 const empty_hosted_fns = [_]builtins.host_abi.HostedFn{};
+
+const empty_hosted_names = [_]?[*:0]const u8{};
 
 const hosted_count: usize = 0;
 const hosted_fns: [*]const builtins.host_abi.HostedFn = &empty_hosted_fns;
+const hosted_names: [*]const ?[*:0]const u8 = &empty_hosted_names;
 
 comptime {
     @export(&hosted_count, .{ .name = shim_symbols.roc_shim_hosted_count });
     @export(&hosted_fns, .{ .name = shim_symbols.roc_shim_hosted_fns });
+    @export(&hosted_names, .{ .name = shim_symbols.roc_shim_hosted_names });
     @export(&rocAlloc, .{ .name = shim_symbols.roc_alloc });
     @export(&rocDealloc, .{ .name = shim_symbols.roc_dealloc });
     @export(&rocRealloc, .{ .name = shim_symbols.roc_realloc });

@@ -2502,15 +2502,16 @@ fn devRootWorker(_: Allocator, context: *DevRunContext, item_id: usize) void {
     if (context.progress_reporter) |progress| progress.rootStarted();
 
     var crash_boundary = job.host.enterCrashBoundary();
+    const entered = builtins.in_process_host.enter(job.host.ops(), null);
     const sj = crash_boundary.set();
     if (sj == 0) {
         context.executable.callRocABIAt(
             job.entry_offset,
-            @ptrCast(job.host.ops()),
             @ptrCast(job.ret_buf.ptr),
             null,
         );
     }
+    builtins.in_process_host.leave(entered);
     crash_boundary.deinit();
 
     job.result = switch (job.host.termination) {
@@ -3733,7 +3734,9 @@ fn testNativeSlotDemand(lowered: *lir.CheckedPipeline.LoweredProgram, slots: *St
             defer child.deinit();
             var bytes: [@sizeOf(builtins.str.RocStr)]u8 align(16) = @splat(0);
             var boundary = child.enterCrashBoundary();
-            if (boundary.set() == 0) self.executable.callRocABIAt(self.source_offset, @ptrCast(child.ops()), @ptrCast(&bytes), null);
+            const entered = builtins.in_process_host.enter(child.ops(), null);
+            if (boundary.set() == 0) self.executable.callRocABIAt(self.source_offset, @ptrCast(&bytes), null);
+            builtins.in_process_host.leave(entered);
             boundary.deinit();
             if (child.termination != .returned) return error.Unexpected;
             try self.slots.publishRoot(self.lowered, .{}, self.root_id, .{
@@ -3754,7 +3757,9 @@ fn testNativeSlotDemand(lowered: *lir.CheckedPipeline.LoweredProgram, slots: *St
         host.resetForRun();
         var bytes: [@sizeOf(builtins.str.RocStr)]u8 align(16) = @splat(0);
         var boundary = host.enterCrashBoundary();
-        if (boundary.set() == 0) executable.callRocABIAt(consumer_entry.offset, @ptrCast(host.ops()), @ptrCast(&bytes), null);
+        const entered = builtins.in_process_host.enter(host.ops(), null);
+        if (boundary.set() == 0) executable.callRocABIAt(consumer_entry.offset, @ptrCast(&bytes), null);
+        builtins.in_process_host.leave(entered);
         boundary.deinit();
         try std.testing.expectEqual(CompileTimeHost.Termination.returned, host.termination);
         const str: *const builtins.str.RocStr = @ptrCast(&bytes);

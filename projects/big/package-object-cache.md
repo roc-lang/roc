@@ -704,18 +704,17 @@ them.
       to its coarsest bisimulation partition and rendered once as a group
       with rank references, and each position's one-step unfolding is
       remembered so a rolled-out copy of a position folds to its digest.
-      The program shared with the compile-time evaluator takes no hits from
-      packs today for a reason of ABI, not of policy: a pack's artifacts are
-      object-file code, which passes no `RocOps` argument and calls host
-      symbols such as `roc_crashed` by name, while the evaluator image is
-      compiled under the native-execution convention that threads `RocOps`
-      as a hidden last argument through every procedure and builtin call.
-      Splicing an object artifact into that image links but crashes at the
-      first call. Serving hits there needs a second artifact flavor per
-      pack, compiled for the host under the evaluator's convention, laid out
-      with the evaluator's code and data, and resolved by the same
-      relocation walk the object splice uses; the pack store, keys, and
-      manifests are shared with it.
+      Every host, including the compiler's own in-process evaluator, now
+      follows the platform convention: compiled code reaches its host
+      through the fixed runtime symbols (`roc_alloc`, `roc_crashed`, and the
+      rest of `shim_symbols.runtime_set`) and hosted-function symbols, and
+      carries no host pointer. The compiler defines those symbols once
+      (`builtins/in_process_host.zig`) as forwarders to the `RocOps` the
+      current thread has entered, so a pack's object artifact and the
+      evaluator's image are the same kind of code. Serving hits inside the
+      program shared with the compile-time evaluator is therefore a splice
+      of object artifacts into that image, resolved by the same relocation
+      walk the object splice uses; no second artifact flavor exists.
       ARC treats an object-cache procedure's recorded signature as its ABI
       and never derives a variant of it. A hit applies only to the record
       Monotype completed without a body: a SpecConstr clone or a second
@@ -800,8 +799,9 @@ because it now writes a real pack for every one of the package's modules
 (fifty-one packs, most of which previously had no closed root); that work
 belongs at package download time, which is the optimized-objects slice.
 And an edited rebuild is unchanged everywhere, because the program shared
-with the compile-time evaluator cannot take hits until packs carry an
-artifact flavor under the evaluator's calling convention.
+with the compile-time evaluator does not yet splice pack artifacts into its
+image; since every host now shares one calling convention, that splice is
+the only missing piece.
 
 The identity renderer must never expand shared subtypes as a tree: the
 solved type graph of a closure-heavy program reaches one record type from

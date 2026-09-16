@@ -16,6 +16,7 @@ const build_options = @import("build_options");
 const Allocator = std.mem.Allocator;
 const posix = std.posix;
 const eval = @import("eval");
+const builtins = @import("builtins");
 const base = @import("base");
 const harness = @import("test_harness");
 
@@ -441,10 +442,11 @@ fn runDev(allocator: std.mem.Allocator, lowered: *const LoweredProgram) BackendE
 
         var crash_boundary = runtime_env.enterCrashBoundary();
         defer crash_boundary.deinit();
+        const entered = builtins.in_process_host.enter(runtime_env.get_ops(), null);
+        defer builtins.in_process_host.leave(entered);
         const sj = crash_boundary.set();
         if (sj == 0) {
             exec_mem.callRocABI(
-                @ptrCast(runtime_env.get_ops()),
                 @ptrCast(ret_buf.ptr),
                 if (arg_buffer) |buf| @ptrCast(buf.ptr) else null,
             );

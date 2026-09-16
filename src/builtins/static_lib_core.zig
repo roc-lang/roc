@@ -7,6 +7,9 @@
 const std = @import("std");
 const shim_io = @import("shim_io");
 
+/// This archive links against the host's runtime symbol definitions.
+pub const roc_host_role: @import("host_abi.zig").HostRole = .platform;
+
 /// Builtin payloads must not pull in Zig's panic formatting machinery.
 pub const panic = std.debug.no_panic;
 

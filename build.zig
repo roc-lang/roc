@@ -4365,6 +4365,7 @@ pub fn build(b: *std.Build) void {
     });
     configureBackend(eval_host_effects_exe, target);
     roc_modules.addAll(eval_host_effects_exe);
+    eval_host_effects_exe.root_module.addImport("builtins", roc_modules.builtins);
     eval_host_effects_exe.root_module.addImport("compiled_builtins", compiled_builtins_module);
     eval_host_effects_exe.root_module.addImport("bytebox", bytebox.module("bytebox"));
     eval_host_effects_exe.root_module.addImport("test_harness", createTestHarnessModule(b, roc_modules));

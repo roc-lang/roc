@@ -488,8 +488,9 @@ fn runDev(allocator: Allocator, program: Program) DevError!Result {
         const sj = crash_boundary.set();
         if (sj != 0) return crashResult(allocator, &runtime_env, null);
 
+        const entered = builtins.in_process_host.enter(runtime_env.get_ops(), null);
+        defer builtins.in_process_host.leave(entered);
         exec_mem.callRocABI(
-            @ptrCast(runtime_env.get_ops()),
             @ptrCast(ret_buf.ptr),
             if (arg_buffer) |buf| @ptrCast(buf.ptr) else null,
         );
@@ -556,8 +557,6 @@ fn runWasm(allocator: Allocator, program: Program) WasmError!Result {
         .allocation_count = result.allocation_count,
     };
 }
-
-const InProcessContext = boxy_abi.InProcessContext;
 
 const OwnedLlvmCompileOptions = struct {
     options: @import("llvm_compile").CompileOptions,
@@ -684,8 +683,9 @@ fn runLlvm(allocator: Allocator, program: Program) LlvmError!Result {
         else => return error.Internal,
     };
 
-    const EntryFn = *const fn (*builtins.host_abi.RocOps, *InProcessContext, [*]u8, ?*anyopaque) callconv(.c) void;
+    const EntryFn = *const fn ([*]u8, ?*anyopaque) callconv(.c) void;
     const entry = lib.lookup(EntryFn, "roc_eval_main") orelse return error.LlvmBackendUnavailable;
+    try @import("inspected.zig").fillInProcessHostTable(&lib);
 
     var runtime_env = RuntimeHostEnv.init(allocator);
     defer runtime_env.deinit();
@@ -707,14 +707,12 @@ fn runLlvm(allocator: Allocator, program: Program) LlvmError!Result {
 
     var crash_boundary = runtime_env.enterCrashBoundary();
     defer crash_boundary.deinit();
+    const entered = builtins.in_process_host.enter(runtime_env.get_ops(), null);
+    defer builtins.in_process_host.leave(entered);
     const sj = crash_boundary.set();
     if (sj != 0) return crashResult(allocator, &runtime_env, null);
 
-    const native_fns = boxy_abi.nativeFnTable();
-    var in_process_context: InProcessContext = .{ .boxy_fn_table = &native_fns };
     entry(
-        runtime_env.get_ops(),
-        &in_process_context,
         ret_buf.ptr,
         if (arg_buffer) |buf| @ptrCast(buf.ptr) else null,
     );

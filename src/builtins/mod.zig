@@ -6,6 +6,7 @@ pub const compiler_rt_128 = @import("compiler_rt_128.zig");
 pub const decimal_parse = @import("decimal_parse.zig");
 pub const native_runtime_libcalls = @import("native_runtime_libcalls.zig");
 pub const host_abi = @import("host_abi.zig");
+pub const in_process_host = @import("in_process_host.zig");
 pub const shim_symbols = @import("shim_symbols.zig");
 pub const dec = @import("dec.zig");
 pub const crypto = @import("crypto.zig");

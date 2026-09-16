@@ -34,30 +34,30 @@ const shim_symbols = @import("shim_symbols.zig");
 /// into its return value or longer-lived storage. If the host keeps both the call argument
 /// and a stored copy, it must incref the stored copy so each live reference has one
 /// ownership.
-/// How builtins and compiled Roc code reach the host's runtime operations.
-pub const HostCallMode = enum {
-    /// Through the RocOps vtable parameter (the interpreter, compiler-internal
-    /// evaluation, and any host that constructs a RocOps).
-    vtable,
-    /// Through linker-resolved extern symbols (compiled output). The *RocOps
-    /// parameters threaded through builtins are inert in this mode; the
-    /// methods below ignore them and call the extern symbols directly.
-    extern_symbols,
+/// Who defines the fixed runtime symbols in the binary a builtins build is
+/// linked into.
+pub const HostRole = enum {
+    /// The compiler or one of its test runners: `in_process_host` defines
+    /// the symbols as forwarders to the `RocOps` the current thread entered.
+    in_process,
+    /// A platform archive, shim, or in-process library: the host that links
+    /// it defines the symbols, and nothing here may.
+    platform,
 };
 
 /// Selected by the root module (like std_options): declaring
-/// `pub const roc_host_call_mode: host_abi.HostCallMode = .extern_symbols;`
-/// at the root switches builtins to direct extern host calls.
-pub const host_call_mode: HostCallMode = if (@hasDecl(@import("root"), "roc_host_call_mode"))
-    @import("root").roc_host_call_mode
+/// `pub const roc_host_role: host_abi.HostRole = .platform;` at the root
+/// keeps the in-process host's symbol definitions out of the build.
+pub const host_role: HostRole = if (@hasDecl(@import("root"), "roc_host_role"))
+    @import("root").roc_host_role
 else
-    .vtable;
+    .in_process;
 
 /// The fixed runtime symbols every host defines under the symbol ABI.
 ///
 /// These are the same operations as the `RocOps` vtable methods below, but
-/// without the leading `*RocOps` parameter: compiled output resolves them as
-/// linker symbols instead of calling through the vtable. The shim host
+/// without the leading `*RocOps` parameter: compiled code resolves them as
+/// linker symbols, and a host's `RocOps` vtable forwards to them. The shim host
 /// (`src/shim_host_abi.zig`) reuses this declaration rather than restating it,
 /// so the extern symbol ABI is written down in exactly one place. The names are
 /// held in lockstep with `shim_symbols.runtime_set` by the comptime check
@@ -181,10 +181,7 @@ pub const RocOps = extern struct {
         const trace = tracy.trace(@src());
         defer trace.end();
 
-        switch (comptime host_call_mode) {
-            .vtable => self.roc_crashed(self, msg.ptr, msg.len),
-            .extern_symbols => extern_host.roc_crashed(msg.ptr, msg.len),
-        }
+        self.roc_crashed(self, msg.ptr, msg.len);
     }
 
     /// Helper to send debug output to the host.
@@ -192,10 +189,7 @@ pub const RocOps = extern struct {
         const trace = tracy.trace(@src());
         defer trace.end();
 
-        switch (comptime host_call_mode) {
-            .vtable => self.roc_dbg(self, msg.ptr, msg.len),
-            .extern_symbols => extern_host.roc_dbg(msg.ptr, msg.len),
-        }
+        self.roc_dbg(self, msg.ptr, msg.len);
     }
 
     /// Helper to report a failed `expect` to the host.
@@ -203,10 +197,7 @@ pub const RocOps = extern struct {
         const trace = tracy.trace(@src());
         defer trace.end();
 
-        switch (comptime host_call_mode) {
-            .vtable => self.roc_expect_failed(self, msg.ptr, msg.len),
-            .extern_symbols => extern_host.roc_expect_failed(msg.ptr, msg.len),
-        }
+        self.roc_expect_failed(self, msg.ptr, msg.len);
     }
 
     pub fn alloc(self: *RocOps, alignment: usize, length: usize) *anyopaque {
@@ -224,18 +215,12 @@ pub const RocOps = extern struct {
 
     /// Allocate, returning null on OOM exactly as the host reported it.
     pub fn tryAlloc(self: *RocOps, length: usize, alignment: usize) ?*anyopaque {
-        return switch (comptime host_call_mode) {
-            .vtable => self.roc_alloc(self, length, alignment),
-            .extern_symbols => extern_host.roc_alloc(length, alignment),
-        };
+        return self.roc_alloc(self, length, alignment);
     }
 
     /// Reallocate, returning null on OOM exactly as the host reported it.
     pub fn tryRealloc(self: *RocOps, ptr: *anyopaque, new_length: usize, alignment: usize) ?*anyopaque {
-        return switch (comptime host_call_mode) {
-            .vtable => self.roc_realloc(self, ptr, new_length, alignment),
-            .extern_symbols => extern_host.roc_realloc(ptr, new_length, alignment),
-        };
+        return self.roc_realloc(self, ptr, new_length, alignment);
     }
 
     pub fn dealloc(self: *RocOps, ptr: *anyopaque, alignment: usize) void {
@@ -246,9 +231,6 @@ pub const RocOps = extern struct {
             tracy.free(@ptrCast(ptr));
         }
 
-        switch (comptime host_call_mode) {
-            .vtable => self.roc_dealloc(self, ptr, alignment),
-            .extern_symbols => extern_host.roc_dealloc(ptr, alignment),
-        }
+        self.roc_dealloc(self, ptr, alignment);
     }
 };

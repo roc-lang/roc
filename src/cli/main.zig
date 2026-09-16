@@ -9439,10 +9439,9 @@ fn writeDevWasmObject(
     codegen.configureTableReloc(table_symbol);
     codegen.configureRelocatableObject();
 
-    // Register the symbol-ABI imports while the module has no defined
-    // functions yet; a function import added later would shift every defined
-    // function index.
-    codegen.configureSymbolAbi();
+    // Register the runtime and hosted symbol imports while the module has no
+    // defined functions yet; a function import added later would shift every
+    // defined function index.
     try codegen.registerHostedSymbolTargets(lowered.lir_result.store.getProcSpecs());
     if (lirResultNeedsBoxyRuntime(&lowered.lir_result)) try codegen.registerBoxySymbolTargets();
 
