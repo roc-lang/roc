@@ -106,7 +106,7 @@ pub fn run(
         .scalarize, .loop_append, .range => {},
     }
     var callees = if (phase == .loop_append)
-        try LoopAppendPromote.prepareCallees(store, layouts, allocator)
+        try LoopAppendPromote.prepareCallees(store, allocator)
     else
         null;
     defer if (callees) |*prepared| prepared.deinit();
