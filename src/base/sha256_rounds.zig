@@ -1,7 +1,7 @@
 //! SHA-256 block compression for `TypeDigestHasher`.
 //!
 //! Two hardware implementations (x86 SHA extensions and the ARMv8 `sha2`
-//! extension) and one portable implementation, selected by `compress`. aarch64
+//! extension) and one portable implementation. aarch64
 //! compiler targets require the hardware instructions -- build.zig adds them to
 //! the baseline CPU, and `TypeDigestHasher` refuses to compile for such a target
 //! without them. x86_64 targets other than macOS carry both implementations and
@@ -140,8 +140,7 @@ pub const dispatches_at_runtime = arch_class == .x86_64 and !hasHardwareSupport 
 
 const CompressFn = *const fn (*State, []const Block) void;
 
-/// `compress` for a build that dispatches at runtime: the function the next
-/// call goes through. It starts as `compressDetecting`, which asks CPUID once
+/// The function `compressDispatched` goes through next. It starts as `compressDetecting`, which asks CPUID once
 /// and then replaces it with the answer, so every later call is one load and
 /// one indirect call. Every value the slot ever holds is a valid function to
 /// call, and every store writes the same answer for the CPU this process runs
@@ -185,18 +184,11 @@ fn cpuid(leaf: u32, sub_leaf: u32) CpuidRegisters {
     return .{ .eax = eax, .ebx = ebx, .ecx = ecx, .edx = edx };
 }
 
-/// Compress every block into `state` with the rounds this build uses: the
-/// hardware instructions when the compilation CPU has them, whichever of the
-/// two `runtime_compress` resolved to for the CPU running this process when
-/// the build dispatches, and otherwise the portable rounds.
-pub fn compress(state: *State, blocks: []const Block) void {
-    if (comptime hasHardwareSupport) {
-        compressHardware(state, blocks);
-    } else if (comptime dispatches_at_runtime) {
-        @atomicLoad(CompressFn, &runtime_compress, .monotonic)(state, blocks);
-    } else {
-        compressPortable(state, blocks);
-    }
+/// Compress every block into `state` with whichever rounds `runtime_compress`
+/// resolved to for the CPU running this process. Only callable when
+/// `dispatches_at_runtime` is true.
+pub fn compressDispatched(state: *State, blocks: []const Block) void {
+    @atomicLoad(CompressFn, &runtime_compress, .monotonic)(state, blocks);
 }
 
 const K = [64]u32{

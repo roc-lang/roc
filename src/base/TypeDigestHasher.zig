@@ -71,7 +71,15 @@ pub fn init() TypeDigestHasher {
     return .{};
 }
 
-const compress = rounds.compress;
+fn compress(state: *rounds.State, blocks: []const rounds.Block) void {
+    if (comptime rounds.hasHardwareSupport) {
+        rounds.compressHardware(state, blocks);
+    } else if (comptime rounds.dispatches_at_runtime) {
+        rounds.compressDispatched(state, blocks);
+    } else {
+        rounds.compressPortable(state, blocks);
+    }
+}
 
 /// Feed part of one canonical encoding.
 pub fn update(self: *TypeDigestHasher, bytes: []const u8) void {
