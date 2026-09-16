@@ -12971,7 +12971,11 @@ use (otherwise the callee holds a retained copy). The signature bits and
 rows settle to a fixpoint with the analysis, since a new row only adds
 edges. Positions whose seed would let a runtime check in the body go
 check-free form the proc's seed mask, which is what makes a call site
-demand the seeded variant.
+demand the seeded variant. The owned flag a versioned loop measures once and
+dispatches on every iteration (`list_owned_unique`) is a check that consumes
+nothing; on a list proven unique and owned at the read it is stamped like
+any other check, and every backend then answers it with a constant, which
+lets the loop's copy version fall away.
 
 Several definitions do not by themselves lose a value's origin. A join
 result cell—the parameter a conditional's arms assign directly before

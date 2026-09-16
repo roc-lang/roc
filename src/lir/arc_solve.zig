@@ -5026,7 +5026,7 @@ pub fn settleUniqueness(
                     assign.op.arcBorrowedResultVariant().?.rcEffect()
                 else
                     assign.op.arcInferenceRcEffect(assign.rc_effect);
-                const check_mask = rc_effect.may_runtime_uniqueness_check_args & rc_effect.consume_args;
+                const check_mask = rc_effect.may_runtime_uniqueness_check_args;
                 if (check_mask == 0) continue;
                 const args = store.getLocalSpan(assign.args);
                 for (0..@min(GuardedList.borrowLen(args), 64)) |position| {

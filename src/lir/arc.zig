@@ -4812,10 +4812,12 @@ const Inserter = struct {
     /// the current emission view (born with count 1—by a fresh
     /// allocation, a direct call to a unique-returning callee, or a variant
     /// parameter seed—and never given another holder), its single
-    /// ownership unit moves into this op (owned here, and not in the
-    /// preserve mask, whose positions pay a retain before the op that holds
-    /// the count above 1), and no borrow of it is live at the op. Any doubt
-    /// leaves a bit zero; the runtime check is always sound.
+    /// ownership unit is owned here and, when the op consumes the position,
+    /// moves into this op (not in the preserve mask, whose positions pay a
+    /// retain before the op that holds the count above 1), and no borrow of
+    /// it is live at the op. A check that only reads the count needs the
+    /// same owned unit and nothing moved. Any doubt leaves a bit zero; the
+    /// runtime check is always sound.
     fn uniqueArgsMask(
         self: *Inserter,
         span: LIR.LocalSpan,
@@ -4836,8 +4838,7 @@ const Inserter = struct {
             if (local == target) continue;
             if (!self.localContainsRefcounted(local)) continue;
             if (!self.isLocalUniqueHere(local)) continue;
-            if ((rc_effect.consume_args & bit) == 0) continue;
-            if ((preserve_consumed_args & bit) != 0) continue;
+            if ((rc_effect.consume_args & bit) != 0 and (preserve_consumed_args & bit) != 0) continue;
             if (!owned.contains(local)) continue;
             // The preserve scan proved the argument's borrow group dead
             // after this statement; a group member appearing as another
@@ -12684,6 +12685,35 @@ test "uniqueness: passing a list to a callee that returns its borrowed parameter
 
     try f.run();
     try testing.expectEqual(@as(u64, 0), f.uniqueArgsFor(appended));
+}
+
+test "uniqueness: the owned flag of a fresh list is check-free" {
+    var f = try ArcTest.init(testing.allocator);
+    defer f.deinit();
+    const list = try f.local(f.list_i64);
+    const flag = try f.local(.u64);
+    const elem = try f.local(.i64);
+    const appended = try f.local(f.list_i64);
+    const result = try f.local(.i64);
+
+    // list = []; flag = list_owned_unique(list); appended = checked_op(list).
+    const ret = try f.ret(result);
+    const result_assign = try f.assignI64(result, 1, ret);
+    const append = try f.assignLowLevel(appended, &.{ list, elem }, LIR.LowLevel.RcEffect.runtimeUniqueness(1), result_assign);
+    const measure = try f.store.addCFStmt(.{ .assign_low_level = .{
+        .target = flag,
+        .op = .list_owned_unique,
+        .rc_effect = LIR.LowLevel.list_owned_unique.rcEffect(),
+        .args = try f.span(&.{list}),
+        .next = append,
+    } });
+    const elem_assign = try f.assignI64(elem, 5, measure);
+    const body = try f.assignList(list, &.{}, elem_assign);
+    _ = try f.addProc(&.{}, body, .i64);
+
+    try f.run();
+    try testing.expectEqual(@as(u64, 1), f.uniqueArgsFor(flag));
+    try testing.expectEqual(@as(u64, 1), f.uniqueArgsFor(appended));
 }
 
 test "uniqueness: list reinterpret alias inherits the fresh birth" {

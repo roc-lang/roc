@@ -4593,7 +4593,7 @@ pub const MonoLlvmCodeGen = struct {
             .list_append_sublist => try self.emitListAppendSublist(target, arg_locals, unique_args),
             .list_append_le_bytes => try self.emitListAppendLeBytes(target, arg_locals, unique_args),
             .list_slack_unique => try self.emitListSlackUnique(target, arg_locals),
-            .list_owned_unique => try self.emitListOwnedUnique(target, arg_locals),
+            .list_owned_unique => try self.emitListOwnedUnique(target, arg_locals, unique_args),
             .list_prepend => try self.emitListPrepend(target, arg_locals, unique_args),
             .list_sublist, .list_sublist_borrowed, .list_drop_first, .list_drop_last, .list_take_first, .list_take_last => try self.emitListSublist(target, op, arg_locals, unique_args),
             .list_drop_at => try self.emitListDropAt(target, arg_locals, unique_args),
@@ -10344,7 +10344,15 @@ pub const MonoLlvmCodeGen = struct {
         try self.storeIntToLayout(self.slot(target).ptr, slack, self.localLayout(target));
     }
 
-    fn emitListOwnedUnique(self: *MonoLlvmCodeGen, target: LocalId, args: anytype) Error!void {
+    fn emitListOwnedUnique(self: *MonoLlvmCodeGen, target: LocalId, args: anytype, unique_args: u64) Error!void {
+        // A list ARC proved unique and owned here answers true without
+        // reading its count.
+        if ((unique_args & 1) != 0) {
+            const builder = self.builder orelse return error.CompilationFailed;
+            const one = builder.intValue(.i64, 1) catch return error.OutOfMemory;
+            try self.storeIntToLayout(self.slot(target).ptr, one, self.localLayout(target));
+            return;
+        }
         var call_args = try self.rocListArgs1(GuardedList.at(args, 0));
         defer call_args.deinit(self.allocator);
         try call_args.append(self.allocator, try self.ptrType(), self.rocOps());
