@@ -13,6 +13,7 @@ const Common = @import("../common.zig");
 const Mono = @import("../monotype/ast.zig");
 const Type = @import("../monotype/type.zig");
 const names = check.CheckedNames;
+const TypeDigestHasher = base.TypeDigestHasher;
 const GuardedList = collections.GuardedList;
 
 /// Guarded growable list for mutable Monotype Lifted program storage.
@@ -117,6 +118,15 @@ pub const Fn = struct {
     /// this provenance directly instead of rediscovering iterator intent from
     /// procedure names or body shape.
     iterator_fusion_scope: bool = false,
+    /// Digest of the SpecConstr call pattern this function was cloned for, or
+    /// null for a function that is not a call-pattern clone. Clones share
+    /// their source's checked template, so this is what keeps two clones of
+    /// one function at different argument shapes distinct.
+    spec_constr_pattern: ?names.TypeDigest = null,
+    /// Content identity of a function lifted from a Monotype definition that
+    /// has no function template (`Mono.Def.root_identity`). Null when
+    /// `source` is present.
+    root_identity: ?names.TypeDigest = null,
     args: Span(TypedLocal),
     captures: Span(TypedLocal),
     body: FnBody,
@@ -934,6 +944,38 @@ pub const Program = struct {
         return self.fns.unsafeRawItemsForView()[@intFromEnum(id)];
     }
 
+    /// Content digest of a lifted function's checked source identity: which
+    /// checked callable it came from, its checked source type, its dispatch
+    /// evidence, the Monotype type it was requested at, and for a SpecConstr
+    /// clone the call pattern it was cloned for. Nothing here depends on
+    /// per-program numbering, so the same specialization digests identically
+    /// in every program. Null for a function with no checked source.
+    pub fn fnSourceDigest(self: *Program, fn_id: FnId) ?[TypeDigestHasher.digest_length]u8 {
+        const fn_ = self.getFn(fn_id);
+        var hasher = TypeDigestHasher.init();
+        writeIdentityBytes(&hasher, "roc.lifted.fn-source.v1");
+        if (fn_.source) |template| {
+            writeIdentityBytes(&hasher, "template");
+            writeFnDefDigest(&hasher, &self.names, template.fn_def);
+            hasher.update(&template.source_fn_key.bytes);
+            hasher.update(&template.evidence_digest.bytes);
+            const mono_digest = self.types.specializationDigest(&self.names, template.mono_fn_ty);
+            hasher.update(&mono_digest.bytes);
+        } else {
+            const root = fn_.root_identity orelse return null;
+            writeIdentityBytes(&hasher, "root");
+            hasher.update(&root.bytes);
+        }
+        if (fn_.spec_constr_pattern) |pattern| {
+            writeIdentityBytes(&hasher, "spec-constr-clone");
+            hasher.update(&pattern.bytes);
+        } else {
+            writeIdentityBytes(&hasher, "source");
+        }
+        writeIdentityBytes(&hasher, if (fn_.iterator_fusion_scope) "iterator-fusion" else "plain");
+        return hasher.finalResult();
+    }
+
     pub fn getFnAt(self: *const Program, index: usize) Fn {
         return self.fns.get(index);
     }
@@ -1395,4 +1437,73 @@ pub fn forEachBoundLocal(program: *const Program, pat_id: PatId, binder: anytype
 
 test "monotype lifted declarations are referenced" {
     std.testing.refAllDecls(@This());
+}
+
+fn writeFnDefDigest(hasher: *TypeDigestHasher, name_store: *const names.NameStore, fn_def: Mono.FnDef) void {
+    // Whether a template was requested from its own module or from an
+    // importer changes nothing about the code it lowers to, so both spellings
+    // digest alike; otherwise a package's pack and the apps that import it
+    // would name the same specialization differently.
+    writeIdentityBytes(hasher, switch (fn_def) {
+        .local_template, .imported_template => "template",
+        .local_hosted, .imported_hosted => "hosted",
+        .nested => "nested",
+        .checked_generated => "checked_generated",
+        .parser_runtime => "parser_runtime",
+        .encoder_for_runtime => "encoder_for_runtime",
+    });
+    switch (fn_def) {
+        .local_template, .imported_template, .checked_generated => |template| writeProcTemplateDigest(hasher, template),
+        .nested => |nested| {
+            writeProcTemplateDigest(hasher, nested.owner);
+            writeIdentityU32(hasher, @intFromEnum(nested.site));
+            if (nested.default_root) |root| {
+                writeIdentityBytes(hasher, "default-root");
+                hasher.update(&root.bytes);
+            } else {
+                writeIdentityBytes(hasher, "template-site");
+            }
+            hasher.update(&nested.context_fn_key.bytes);
+            if (nested.local_proc_context_digest) |digest| {
+                writeIdentityBytes(hasher, "local-proc-context");
+                hasher.update(&digest.bytes);
+            } else {
+                writeIdentityBytes(hasher, "no-local-proc-context");
+            }
+        },
+        // A hosted function is named by its external symbol; its dispatch
+        // slot is assigned per program and is not part of the code it names.
+        .local_hosted, .imported_hosted => |hosted_fn| {
+            writeProcTemplateDigest(hasher, hosted_fn.template);
+            writeIdentityBytes(hasher, name_store.externalSymbolNameText(hosted_fn.external_symbol_name));
+        },
+        .parser_runtime => |runtime| {
+            writeProcTemplateDigest(hasher, runtime.owner);
+            writeIdentityU32(hasher, @intFromEnum(runtime.expr));
+        },
+        .encoder_for_runtime => |runtime| {
+            writeProcTemplateDigest(hasher, runtime.owner);
+            writeIdentityU32(hasher, @intFromEnum(runtime.expr));
+        },
+    }
+}
+
+fn writeProcTemplateDigest(hasher: *TypeDigestHasher, template: names.ProcTemplate) void {
+    hasher.update(&template.artifact.bytes);
+    writeIdentityU32(hasher, @intFromEnum(template.proc_base));
+    writeIdentityU32(hasher, @intFromEnum(template.template));
+}
+
+fn writeIdentityBytes(hasher: *TypeDigestHasher, bytes: []const u8) void {
+    writeIdentityU32(hasher, @intCast(bytes.len));
+    hasher.update(bytes);
+}
+
+fn writeIdentityU32(hasher: *TypeDigestHasher, value: u32) void {
+    var buffer: [4]u8 = undefined;
+    buffer[0] = @truncate(value);
+    buffer[1] = @truncate(value >> 8);
+    buffer[2] = @truncate(value >> 16);
+    buffer[3] = @truncate(value >> 24);
+    hasher.update(&buffer);
 }

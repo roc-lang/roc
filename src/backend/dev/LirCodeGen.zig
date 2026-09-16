@@ -171,6 +171,29 @@ fn boxyCaptureDropKey(capture_layout: layout.Idx, desc_field_offset: u32) u64 {
         @as(u64, desc_field_offset);
 }
 
+/// Symbol name of a compiled helper from its helper-cache key. Ordinary
+/// helpers are named by operation, atomicity, and layout content digest so
+/// separately compiled objects share them; a Boxy capture-drop helper is named
+/// by its capture layout's digest and descriptor field offset.
+pub fn compiledRcHelperSymbolName(allocator: std.mem.Allocator, layout_store: *const layout.Store, cache_key: u64) std.mem.Allocator.Error![]u8 {
+    if ((cache_key >> 63) != 0) {
+        const capture_layout: layout.Idx = @enumFromInt(@as(u32, @intCast((cache_key >> 32) & 0x7fff_ffff)));
+        const desc_field_offset: u32 = @truncate(cache_key);
+        var digests = try layout.Digests.init(allocator, layout_store);
+        defer digests.deinit();
+        const hex = layout.digestSymbolHex(try digests.get(capture_layout));
+        return std.fmt.allocPrint(allocator, "roc__rc_boxy_capture_drop_{s}_{d}", .{ &hex, desc_field_offset });
+    }
+    const variant = RcHelperVariant{
+        .key = RcHelperKey.decode(cache_key & 0x3_ffff_ffff),
+        .atomicity = @enumFromInt(@as(u1, @intCast((cache_key >> 34) & 1))),
+    };
+    return layout.rc_helper.symbolName(allocator, layout_store, variant.key, switch (variant.atomicity) {
+        .atomic => .atomic,
+        .single_thread => .single_thread,
+    });
+}
+
 // Control flow statement types (for two-pass compilation)
 const CFStmtId = lir.CFStmtId;
 
@@ -919,6 +942,18 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
         /// Pending proc-address literals that need to be patched after all procedures are compiled.
         pending_proc_addrs: std.ArrayList(PendingProcAddr),
 
+        /// Every range of the code buffer with its producer, in emission order.
+        code_regions: std.ArrayList(CodeRegion),
+        /// Every resolved reference from the code buffer into itself.
+        code_refs: std.ArrayList(CodeRef),
+        /// Entry offsets of refcount helpers spliced from object-cache
+        /// entries, by symbol name; a later request for the same helper
+        /// reuses the spliced code instead of compiling it again.
+        spliced_helper_offsets: std.StringHashMap(usize),
+        /// Region starts of procedures spliced from object-cache entries, by
+        /// identity; a second pack holding the same procedure splices nothing.
+        spliced_proc_starts: std.AutoHashMap(lir.ProcIdentity, usize),
+
         /// Map from JoinPointId to list of jumps that target it (for patching)
         join_point_jumps: std.AutoHashMap(u32, std.ArrayList(JumpRecord)),
 
@@ -1150,6 +1185,65 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
             /// Encoded RC helper key whose compiled offset this reference targets.
             target_key: u64,
         };
+
+        /// What a reference from generated code into the code buffer names.
+        /// Every call or address literal that targets the buffer itself is
+        /// logged with one of these, so a procedure's bytes can be lifted out
+        /// of the buffer and placed in another one with its references
+        /// re-resolved (see `ProcArtifact.zig`).
+        pub const CodeRefTarget = union(enum) {
+            proc: lir.LIR.LirProcSpecId,
+            /// Encoded RC helper key (`RcHelperVariant.encode`).
+            rc_helper: u64,
+            /// Offset into `message_pool`.
+            message: u32,
+            boxy_thunk: lir.LIR.LirProcSpecId,
+            /// A target inside spliced object-cache code, known by its
+            /// resolved offset in the buffer.
+            offset: usize,
+        };
+
+        pub const CodeRefForm = enum { call, addr };
+
+        /// One resolved reference from the code buffer into itself.
+        pub const CodeRef = struct {
+            /// Offset of the CALL/BL or ADR/LEA instruction.
+            site: usize,
+            form: CodeRefForm,
+            target: CodeRefTarget,
+        };
+
+        /// What a contiguous range of the code buffer holds.
+        pub const CodeRegionKind = union(enum) {
+            proc: lir.LIR.LirProcSpecId,
+            /// Encoded RC helper key. The region starts with the jump that
+            /// skips the helper body; `CodeRegion.entry` locates the body.
+            rc_helper: u64,
+            boxy_thunk: lir.LIR.LirProcSpecId,
+            entrypoint,
+            /// Message pool bytes; the payload is the pool offset the run starts at.
+            message_pool_run: u32,
+            branch_island,
+            /// A procedure spliced from an object-cache entry that this
+            /// program does not declare; only other spliced code reaches it.
+            spliced_proc: lir.ProcIdentity,
+            /// A refcount helper spliced from an object-cache entry,
+            /// registered by name in `spliced_helper_offsets`.
+            spliced_helper,
+        };
+
+        /// One contiguous range of the code buffer with a known producer.
+        pub const CodeRegion = struct {
+            start: usize,
+            end: usize,
+            /// Offset from `start` that references to this region resolve to.
+            entry: usize,
+            kind: CodeRegionKind,
+        };
+
+        /// Frame metadata carried with an assembled region so its unwind
+        /// record can be re-recorded where it lands.
+        pub const AssembledFrame = @import("ProcArtifact.zig").Frame;
 
         /// Tracks position of a BL/CALL to a compiled lambda proc.
         /// Used to re-patch relative offsets after deferred-prologue body shifts.
@@ -1397,6 +1491,10 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
                 .compiling_rc_helpers = false,
                 .pending_calls = std.ArrayList(PendingCall).empty,
                 .pending_proc_addrs = std.ArrayList(PendingProcAddr).empty,
+                .code_regions = std.ArrayList(CodeRegion).empty,
+                .code_refs = std.ArrayList(CodeRef).empty,
+                .spliced_helper_offsets = std.StringHashMap(usize).init(allocator),
+                .spliced_proc_starts = std.AutoHashMap(lir.ProcIdentity, usize).init(allocator),
                 .join_point_jumps = std.AutoHashMap(u32, std.ArrayList(JumpRecord)).init(allocator),
                 .join_point_params = std.AutoHashMap(u32, LocalSpan).init(allocator),
                 .internal_call_patches = std.ArrayList(InternalCallPatch).empty,
@@ -1458,6 +1556,14 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
             self.pending_rc_calls.deinit(self.allocator);
             self.pending_calls.deinit(self.allocator);
             self.pending_proc_addrs.deinit(self.allocator);
+            self.code_regions.deinit(self.allocator);
+            self.code_refs.deinit(self.allocator);
+            {
+                var names = self.spliced_helper_offsets.keyIterator();
+                while (names.next()) |name| self.allocator.free(name.*);
+                self.spliced_helper_offsets.deinit();
+            }
+            self.spliced_proc_starts.deinit();
             self.pending_message_addrs.deinit(self.allocator);
             self.message_pool_runs.deinit(self.allocator);
             self.message_pool_index.deinit(self.allocator);
@@ -1501,6 +1607,8 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
             self.compiling_rc_helpers = false;
             self.pending_calls.clearRetainingCapacity();
             self.pending_proc_addrs.clearRetainingCapacity();
+            self.code_regions.clearRetainingCapacity();
+            self.code_refs.clearRetainingCapacity();
             self.pending_message_addrs.clearRetainingCapacity();
             self.message_pool_runs.clearRetainingCapacity();
             self.message_pool_index.clearRetainingCapacity();
@@ -14562,7 +14670,7 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
         /// Emit a call instruction to a specific code offset.
         /// Records the call position so it can be re-patched if the surrounding
         /// code is shifted by deferred-prologue proc compilation.
-        fn emitCallToOffset(self: *Self, target_offset: usize) Allocator.Error!void {
+        fn emitCallToOffset(self: *Self, ref_target: CodeRefTarget, target_offset: usize) Allocator.Error!void {
             const current = self.codegen.currentOffset();
 
             // Record this call so we can re-patch it after body shifts
@@ -14570,6 +14678,7 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
                 .call_offset = current,
                 .target_offset = target_offset,
             });
+            try self.code_refs.append(self.allocator, .{ .site = current, .form = .call, .target = ref_target });
 
             if (comptime target.toCpuArch() == .aarch64) {
                 try self.codegen.emitDirectCall(target_offset);
@@ -14598,6 +14707,10 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
             current_entry_start: usize,
         ) void {
             const buf = self.codegen.emit.buf.items;
+            // Logged references move with the body they were emitted in.
+            for (self.code_refs.items) |*ref| {
+                if (ref.site >= body_start and ref.site < body_end) ref.site += prologue_size;
+            }
             for (self.internal_call_patches.items) |*patch| {
                 // Only adjust patches that were within the shifted body range
                 if (patch.call_offset >= body_start and patch.call_offset < body_end) {
@@ -14715,7 +14828,7 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
             }
         }
 
-        fn emitInternalCodeAddress(self: *Self, target_offset: usize, dst_reg: GeneralReg) Allocator.Error!void {
+        fn emitInternalCodeAddress(self: *Self, ref_target: CodeRefTarget, target_offset: usize, dst_reg: GeneralReg) Allocator.Error!void {
             if (comptime target.toCpuArch() == .aarch64) {
                 // The scratch register must be allocated before the anchor offset
                 // is read: allocation may emit spill code, and the anchor must be
@@ -14728,6 +14841,7 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
                     .instr_offset = current,
                     .target_offset = target_offset,
                 });
+                try self.code_refs.append(self.allocator, .{ .site = current, .form = .addr, .target = ref_target });
                 return;
             }
             const current = self.codegen.currentOffset();
@@ -14740,6 +14854,7 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
                 .instr_offset = current,
                 .target_offset = target_offset,
             });
+            try self.code_refs.append(self.allocator, .{ .site = current, .form = .addr, .target = ref_target });
         }
 
         /// Emit the 4-instruction PC-relative address sequence on aarch64 (see
@@ -14783,6 +14898,7 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
         fn scheduleRcHelper(self: *Self, helper: RcHelperVariant) Allocator.Error!void {
             const cache_key = helper.encode();
             if (self.compiled_rc_helpers.contains(cache_key)) return;
+            if (try self.splicedRcHelperOffset(cache_key)) |_| return;
             const gop = try self.rc_helper_scheduled.getOrPut(cache_key);
             if (gop.found_existing) return;
             try self.rc_helper_worklist.append(self.allocator, helper);
@@ -14839,7 +14955,7 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
             defer self.compiling_rc_helpers = false;
 
             while (self.rc_helper_worklist.pop()) |helper| {
-                if (comptime target.toCpuArch() == .aarch64) try self.codegen.maybeEmitBranchIsland();
+                if (comptime target.toCpuArch() == .aarch64) try self.emitBranchIslandIfNeeded();
                 _ = try self.compileSingleRcHelper(helper);
             }
 
@@ -14847,11 +14963,13 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
                 const offset = self.compiled_rc_helpers.get(ref.target_key) orelse unreachable;
                 try self.patchCallTarget(ref.instr_offset, offset);
                 try self.internal_call_patches.append(self.allocator, .{ .call_offset = ref.instr_offset, .target_offset = offset });
+                try self.code_refs.append(self.allocator, .{ .site = ref.instr_offset, .form = .call, .target = .{ .rc_helper = ref.target_key } });
             }
             for (self.pending_rc_addrs.items) |ref| {
                 const offset = self.compiled_rc_helpers.get(ref.target_key) orelse unreachable;
                 self.patchInternalCodeAddress(ref.instr_offset, offset);
                 try self.internal_addr_patches.append(self.allocator, .{ .instr_offset = ref.instr_offset, .target_offset = offset });
+                try self.code_refs.append(self.allocator, .{ .site = ref.instr_offset, .form = .addr, .target = .{ .rc_helper = ref.target_key } });
             }
             self.pending_rc_calls.clearRetainingCapacity();
             self.pending_rc_addrs.clearRetainingCapacity();
@@ -15487,7 +15605,11 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
             if (self.compiled_rc_helpers.get(cache_key)) |code_offset| {
                 return code_offset;
             }
+            if (try self.splicedRcHelperOffset(cache_key)) |code_offset| {
+                return code_offset;
+            }
 
+            const helper_region_start = self.codegen.currentOffset();
             const skip_jump = try self.codegen.emitJump();
 
             const saved_stack_offset = self.codegen.stack_offset;
@@ -15657,12 +15779,21 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
             self.uses_caller_stack_arg_base = saved_uses_caller_stack_arg_base;
 
             try self.codegen.patchJump(skip_jump, self.codegen.currentOffset());
+            try self.code_regions.append(self.allocator, .{
+                .start = helper_region_start,
+                .end = self.codegen.currentOffset(),
+                .entry = final_offset - helper_region_start,
+                .kind = .{ .rc_helper = cache_key },
+            });
             return final_offset;
         }
 
         fn compileSingleRcHelper(self: *Self, helper: RcHelperVariant) Allocator.Error!usize {
             const cache_key = helper.encode();
             if (self.compiled_rc_helpers.get(cache_key)) |code_offset| {
+                return code_offset;
+            }
+            if (try self.splicedRcHelperOffset(cache_key)) |code_offset| {
                 return code_offset;
             }
 
@@ -15674,6 +15805,7 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
                 unreachable;
             }
 
+            const helper_region_start = self.codegen.currentOffset();
             const skip_jump = try self.codegen.emitJump();
 
             const saved_stack_offset = self.codegen.stack_offset;
@@ -15859,6 +15991,12 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
             self.uses_caller_stack_arg_base = saved_uses_caller_stack_arg_base;
 
             try self.codegen.patchJump(skip_jump, self.codegen.currentOffset());
+            try self.code_regions.append(self.allocator, .{
+                .start = helper_region_start,
+                .end = self.codegen.currentOffset(),
+                .entry = final_offset - helper_region_start,
+                .kind = .{ .rc_helper = cache_key },
+            });
             return final_offset;
         }
 
@@ -16928,7 +17066,7 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
                     if (proc.code_start == unresolved_proc_code_start)
                         try self.emitPendingProcAddress(proc_id, proc_addr)
                     else
-                        try self.emitInternalCodeAddress(proc.code_start, proc_addr);
+                        try self.emitInternalCodeAddress(.{ .proc = proc.id }, proc.code_start, proc_addr);
                     try self.emitStore(.w64, frame_ptr, proc_addr_slot, proc_addr);
                     self.codegen.freeGeneral(proc_addr);
                 }
@@ -17007,7 +17145,7 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
             if (proc.code_start == unresolved_proc_code_start)
                 try self.emitPendingProcAddress(proc_id, proc_addr)
             else
-                try self.emitInternalCodeAddress(proc.code_start, proc_addr);
+                try self.emitInternalCodeAddress(.{ .proc = proc.id }, proc.code_start, proc_addr);
             try self.emitStore(.w64, heap_ptr, 0, proc_addr);
             self.codegen.freeGeneral(proc_addr);
 
@@ -17090,7 +17228,7 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
                 if (proc.code_start == unresolved_proc_code_start)
                     try self.emitPendingProcAddress(proc_id, addr_reg)
                 else
-                    try self.emitInternalCodeAddress(proc.code_start, addr_reg);
+                    try self.emitInternalCodeAddress(.{ .proc = proc.id }, proc.code_start, addr_reg);
                 var builder = try Builder.init(&self.codegen.emit, &self.codegen.stack_offset);
                 try builder.addRegArg(addr_reg);
                 try builder.addImmArg(@intFromEnum(proc_id));
@@ -17133,7 +17271,7 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
                 },
                 .boxy_capture => |drop| {
                     const helper_offset = try self.compileSingleBoxyCaptureDropHelper(drop.capture_layout, drop.desc_field_offset);
-                    try self.emitInternalCodeAddress(helper_offset, on_drop_reg);
+                    try self.emitInternalCodeAddress(.{ .rc_helper = boxyCaptureDropKey(drop.capture_layout, drop.desc_field_offset) }, helper_offset, on_drop_reg);
                 },
                 .interpreter_context_drop => {
                     if (builtin.mode == .Debug) {
@@ -17577,7 +17715,7 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
             if (proc.code_start == unresolved_proc_code_start) {
                 try self.emitPendingCallToProc(proc.id);
             } else {
-                try self.emitCallToOffset(proc.code_start);
+                try self.emitCallToOffset(.{ .proc = proc.id }, proc.code_start);
             }
 
             if (placed_call.stack_spill_size > 0) {
@@ -20478,6 +20616,7 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
             for (self.pending_calls.items) |pending| {
                 const proc = self.proc_registry.get(@intFromEnum(pending.target_proc)) orelse unreachable;
                 try self.patchCallTarget(pending.call_site, proc.code_start);
+                try self.code_refs.append(self.allocator, .{ .site = pending.call_site, .form = .call, .target = .{ .proc = pending.target_proc } });
             }
             self.pending_calls.clearRetainingCapacity();
         }
@@ -20486,13 +20625,17 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
             for (self.pending_proc_addrs.items) |pending| {
                 const proc = self.proc_registry.get(@intFromEnum(pending.target_proc)) orelse unreachable;
                 self.patchInternalCodeAddress(pending.instr_offset, proc.code_start);
+                try self.code_refs.append(self.allocator, .{ .site = pending.instr_offset, .form = .addr, .target = .{ .proc = pending.target_proc } });
             }
             self.pending_proc_addrs.clearRetainingCapacity();
         }
 
         fn patchCallTarget(self: *Self, call_site: usize, target_offset: usize) Allocator.Error!void {
             if (comptime target.toCpuArch() == .aarch64) {
+                // A far target gets a veneer appended at the emission point.
+                const island_start = self.codegen.currentOffset();
                 try self.codegen.patchCall(call_site, target_offset);
+                try self.logBranchIsland(island_start);
             } else {
                 const rel_offset: i32 = @intCast(@as(i64, @intCast(target_offset)) - @as(i64, @intCast(call_site)));
                 const call_rel = rel_offset - 5;
@@ -20537,6 +20680,9 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
             self.assertImageOpen();
             for (proc_specs, 0..) |proc, i| {
                 const proc_id: lir.LIR.LirProcSpecId = @enumFromInt(i);
+                // A procedure spliced from an object-cache entry is already
+                // registered with its code.
+                if (self.proc_registry.contains(@intFromEnum(proc_id))) continue;
                 try self.proc_registry.put(@intFromEnum(proc_id), .{
                     .id = proc_id,
                     .code_start = unresolved_proc_code_start,
@@ -20548,8 +20694,17 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
 
             for (proc_specs, 0..) |proc, i| {
                 if (proc.is_static_initializer) continue;
+                if (self.proc_registry.get(@intCast(i))) |registered| {
+                    if (registered.code_start != unresolved_proc_code_start) continue;
+                }
+                if (proc.external) {
+                    if (builtin.mode == .Debug) {
+                        std.debug.panic("Dev/codegen invariant violated: external proc {d} had no object-cache entry spliced before compilation", .{i});
+                    }
+                    unreachable;
+                }
                 if (comptime target.toCpuArch() == .aarch64) {
-                    try self.codegen.maybeEmitBranchIsland();
+                    try self.emitBranchIslandIfNeeded();
                     try self.codegen.compactBranchSites();
                 }
                 try self.compileProcSpec(@enumFromInt(i), proc);
@@ -20583,7 +20738,7 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
             }
             for (demand) |proc_id| {
                 if (comptime target.toCpuArch() == .aarch64) {
-                    try self.codegen.maybeEmitBranchIsland();
+                    try self.emitBranchIslandIfNeeded();
                     try self.codegen.compactBranchSites();
                 }
                 try self.compileProcSpec(proc_id, self.store.getProcSpec(proc_id));
@@ -20966,6 +21121,12 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
                     entry.callee_saved_mask = self.codegen.callee_saved_used;
                     entry.epilogue_offset = @intCast(final_epilogue - prologue_start);
                     entry.uses_frame_pointer = true;
+                    try self.code_regions.append(self.allocator, .{
+                        .start = entry.code_start,
+                        .end = entry.code_end,
+                        .entry = 0,
+                        .kind = .{ .proc = proc_id },
+                    });
                 }
                 try self.recordUnwindFunction(
                     prologue_start,
@@ -21042,6 +21203,12 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
                     entry.callee_saved_mask = self.codegen.callee_saved_used;
                     entry.epilogue_offset = @intCast(final_epilogue - prologue_start);
                     entry.uses_frame_pointer = true;
+                    try self.code_regions.append(self.allocator, .{
+                        .start = entry.code_start,
+                        .end = entry.code_end,
+                        .entry = 0,
+                        .kind = .{ .proc = proc_id },
+                    });
                 }
                 try self.recordUnwindFunction(
                     prologue_start,
@@ -22634,7 +22801,7 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
 
             while (work.pop()) |item| switch (item) {
                 .node => |stmt_id| {
-                    if (comptime target.toCpuArch() == .aarch64) try self.codegen.maybeEmitBranchIsland();
+                    if (comptime target.toCpuArch() == .aarch64) try self.emitBranchIslandIfNeeded();
                     const stmt_key = @intFromEnum(stmt_id);
                     if (self.stmt_locations.get(stmt_key)) |stmt_location| {
                         const patch = try self.codegen.emitJump();
@@ -22689,7 +22856,7 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
                                     if (proc.code_start == unresolved_proc_code_start)
                                         try self.emitPendingProcAddress(proc_id, reg)
                                     else
-                                        try self.emitInternalCodeAddress(proc.code_start, reg);
+                                        try self.emitInternalCodeAddress(.{ .proc = proc.id }, proc.code_start, reg);
                                     break :blk .{ .general_reg = reg };
                                 },
                             };
@@ -24130,6 +24297,12 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
                 try self.message_pool_runs.append(self.allocator, .{ .pool_from = self.message_pool_placed_len, .code_start = code_start });
                 try self.codegen.emit.buf.appendSlice(self.allocator, self.message_pool.items[self.message_pool_placed_len..]);
                 while (self.codegen.currentOffset() % 4 != 0) try self.codegen.emit.buf.append(self.allocator, 0);
+                try self.code_regions.append(self.allocator, .{
+                    .start = code_start,
+                    .end = self.codegen.currentOffset(),
+                    .entry = 0,
+                    .kind = .{ .message_pool_run = self.message_pool_placed_len },
+                });
                 self.message_pool_placed_len = pool_len;
             }
             for (self.pending_message_addrs.items) |pending| {
@@ -24138,6 +24311,7 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
                     if (candidate.pool_from <= pending.message_offset) run = candidate;
                 }
                 self.patchInternalCodeAddress(pending.instr_offset, run.code_start + (pending.message_offset - run.pool_from));
+                try self.code_refs.append(self.allocator, .{ .site = pending.instr_offset, .form = .addr, .target = .{ .message = pending.message_offset } });
             }
             self.pending_message_addrs.clearRetainingCapacity();
         }
@@ -24504,6 +24678,12 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
                 epilogue_offset,
                 true,
             );
+            try self.code_regions.append(self.allocator, .{
+                .start = func_start,
+                .end = func_end,
+                .entry = 0,
+                .kind = .entrypoint,
+            });
             try self.maybeDrainRcHelpers();
 
             return ExportedSymbol{
@@ -24663,6 +24843,12 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
                 self.roc_ops_reg = saved_roc_ops_reg;
             }
 
+            try self.code_regions.append(self.allocator, .{
+                .start = func_start,
+                .end = self.codegen.currentOffset(),
+                .entry = 0,
+                .kind = .{ .boxy_thunk = proc_id },
+            });
             return func_start;
         }
 
@@ -24841,7 +25027,7 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
                 const ret_layout = self.runtimeRepresentationLayoutIdx(proc.ret_layout);
 
                 const addr_reg = try self.allocTempGeneral();
-                try self.emitInternalCodeAddress(thunk_offset, addr_reg);
+                try self.emitInternalCodeAddress(.{ .boxy_thunk = proc_id }, thunk_offset, addr_reg);
                 var builder = try Builder.init(&self.codegen.emit, &self.codegen.stack_offset);
                 try builder.addImmArg(@intCast(proc_index));
                 try builder.addRegArg(addr_reg);
@@ -25011,7 +25197,7 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
                 .pass_by_ptr = pbp_plan.slice,
                 .emit_roc_ops = emit_roc_ops,
             });
-            try self.emitCallToOffset(compiled.code_start);
+            try self.emitCallToOffset(.{ .proc = compiled.id }, compiled.code_start);
 
             if (placed_call.stack_spill_size > 0) {
                 try self.emitAddStackPtr(placed_call.stack_spill_size);
@@ -25464,6 +25650,183 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
             return self.unwind_functions.items;
         }
 
+        /// Emit a branch island when the open branch sites need one, and log
+        /// the bytes it occupies as their own region.
+        fn emitBranchIslandIfNeeded(self: *Self) Allocator.Error!void {
+            const island_start = self.codegen.currentOffset();
+            try self.codegen.maybeEmitBranchIsland();
+            try self.logBranchIsland(island_start);
+        }
+
+        /// Every range of the code buffer with its producer, in emission order.
+        pub fn codeRegions(self: *const Self) []const CodeRegion {
+            return self.code_regions.items;
+        }
+
+        /// Every resolved reference from the code buffer into itself.
+        pub fn codeRefs(self: *const Self) []const CodeRef {
+            return self.code_refs.items;
+        }
+
+        /// Code offset of a compiled RC helper by its encoded key.
+        pub fn compiledRcHelperOffset(self: *const Self, key: u64) ?usize {
+            return self.compiled_rc_helpers.get(key);
+        }
+
+        /// Code offset of a Boxy dictionary thunk by the proc it dispatches to.
+        pub fn boxyThunkOffset(self: *const Self, proc_id: lir.LIR.LirProcSpecId) ?usize {
+            return self.boxy_dict_thunks.get(@intFromEnum(proc_id));
+        }
+
+        /// Name of an interned symbol.
+        pub fn symbolName(self: *const Self, id: SymbolTable.Id) []const u8 {
+            return self.codegen.symbols.names.items[@intFromEnum(id)];
+        }
+
+        /// Intern a symbol name for an assembled relocation.
+        pub fn internSymbolName(self: *Self, name: []const u8) Allocator.Error!SymbolTable.Id {
+            return self.codegen.symbols.intern(self.allocator, name);
+        }
+
+        /// Append a previously compiled region's bytes and register it exactly
+        /// as compiling it here would have: registry entry, RC helper offset,
+        /// thunk offset, unwind record, and region log. Returns the region's
+        /// start offset. References inside the bytes still point at their old
+        /// targets until `patchAssembledRef` re-resolves them.
+        pub fn appendAssembledRegion(
+            self: *Self,
+            bytes: []const u8,
+            kind: CodeRegionKind,
+            entry: usize,
+            frame: ?AssembledFrame,
+        ) Allocator.Error!usize {
+            self.assertImageOpen();
+            const start = self.codegen.currentOffset();
+            try self.codegen.emit.buf.appendSlice(self.allocator, bytes);
+            const end = self.codegen.currentOffset();
+            switch (kind) {
+                .proc => |proc_id| {
+                    const proc = self.store.getProcSpec(proc_id);
+                    const frame_info = frame orelse unreachable;
+                    try self.proc_registry.put(@intFromEnum(proc_id), .{
+                        .id = proc_id,
+                        .code_start = start,
+                        .code_end = end,
+                        .name = proc.name,
+                        .args = proc.args,
+                        .prologue_size = frame_info.prologue_size,
+                        .stack_alloc = frame_info.stack_alloc,
+                        .frame_size = frame_info.frame_size,
+                        .callee_saved_mask = frame_info.callee_saved_mask,
+                        .epilogue_offset = frame_info.epilogue_offset,
+                        .uses_frame_pointer = frame_info.uses_frame_pointer,
+                    });
+                },
+                .rc_helper => |key| try self.compiled_rc_helpers.put(key, start + entry),
+                .boxy_thunk => |proc_id| try self.boxy_dict_thunks.put(@intFromEnum(proc_id), start),
+                .entrypoint, .message_pool_run, .branch_island, .spliced_proc, .spliced_helper => {},
+            }
+            if (frame) |frame_info| {
+                try self.recordUnwindFunction(
+                    start + entry,
+                    end,
+                    frame_info.prologue_size,
+                    frame_info.stack_alloc,
+                    frame_info.frame_size,
+                    frame_info.callee_saved_mask,
+                    frame_info.epilogue_offset,
+                    frame_info.uses_frame_pointer,
+                );
+            }
+            try self.code_regions.append(self.allocator, .{ .start = start, .end = end, .entry = entry, .kind = kind });
+            return start;
+        }
+
+        /// Remember a spliced refcount helper by name so a later request for
+        /// the same helper resolves to it.
+        pub fn registerSplicedHelper(self: *Self, name: []const u8, entry_offset: usize) Allocator.Error!void {
+            const owned = try self.allocator.dupe(u8, name);
+            errdefer self.allocator.free(owned);
+            const gop = try self.spliced_helper_offsets.getOrPut(owned);
+            if (gop.found_existing) {
+                self.allocator.free(owned);
+                return;
+            }
+            gop.value_ptr.* = entry_offset;
+        }
+
+        /// Entry offset of the spliced refcount helper named `name`, if one
+        /// is already in the buffer.
+        pub fn splicedHelperEntry(self: *const Self, name: []const u8) ?usize {
+            return self.spliced_helper_offsets.get(name);
+        }
+
+        /// Remember where the spliced procedure with `identity` starts.
+        pub fn registerSplicedProc(self: *Self, identity: lir.ProcIdentity, start: usize) Allocator.Error!void {
+            try self.spliced_proc_starts.putNoClobber(identity, start);
+        }
+
+        /// Region start of the spliced procedure with `identity`, if one is
+        /// already in the buffer.
+        pub fn splicedProcStart(self: *const Self, identity: lir.ProcIdentity) ?usize {
+            return self.spliced_proc_starts.get(identity);
+        }
+
+        /// Name of the spliced refcount helper whose entry is at `entry_offset`.
+        pub fn splicedHelperName(self: *const Self, entry_offset: usize) ?[]const u8 {
+            var entries = self.spliced_helper_offsets.iterator();
+            while (entries.next()) |entry| {
+                if (entry.value_ptr.* == entry_offset) return entry.key_ptr.*;
+            }
+            return null;
+        }
+
+        /// A spliced helper already provides the code for `cache_key`, if one
+        /// was registered under the helper's content name.
+        fn splicedRcHelperOffset(self: *Self, cache_key: u64) Allocator.Error!?usize {
+            if (self.spliced_helper_offsets.count() == 0) return null;
+            const name = try compiledRcHelperSymbolName(self.allocator, self.layout_store, cache_key);
+            defer self.allocator.free(name);
+            const offset = self.spliced_helper_offsets.get(name) orelse return null;
+            try self.compiled_rc_helpers.put(cache_key, offset);
+            return offset;
+        }
+
+        /// Re-resolve one assembled reference to its target's new offset.
+        pub fn patchAssembledRef(self: *Self, site: usize, form: CodeRefForm, ref_target: CodeRefTarget, target_offset: usize) Allocator.Error!void {
+            switch (form) {
+                .call => if (comptime target.toCpuArch() == .aarch64) {
+                    // A BL in assembled bytes becomes an open call site so
+                    // it can reach a far target through a veneer; the
+                    // PC-relative sequence form always reaches directly.
+                    if (self.codegen.isBlAt(site)) {
+                        try self.codegen.registerAssembledCallSite(site);
+                        try self.patchCallTarget(site, target_offset);
+                    } else {
+                        self.codegen.patchDirectCall(site, target_offset);
+                    }
+                } else {
+                    try self.patchCallTarget(site, target_offset);
+                },
+                .addr => self.patchInternalCodeAddress(site, target_offset),
+            }
+            try self.code_refs.append(self.allocator, .{ .site = site, .form = form, .target = ref_target });
+        }
+
+        /// Record a relocation carried by an assembled region. On AArch64 a
+        /// linked-function relocation at a BL is also an extern call site,
+        /// so a far image can redirect it to a stub.
+        pub fn appendAssembledRelocation(self: *Self, relocation: Relocation) Allocator.Error!void {
+            const reloc_index: u32 = @intCast(self.codegen.relocations.items.len);
+            try self.codegen.relocations.append(self.allocator, relocation);
+            if (comptime target.toCpuArch() == .aarch64) {
+                if (relocation == .linked_function) {
+                    const loc: usize = @intCast(relocation.linked_function.offset);
+                    if (self.codegen.isBlAt(loc)) try self.codegen.registerAssembledExternCall(loc, reloc_index);
+                }
+            }
+        }
+
         /// Borrow the name column owning the generated relocation IDs.
         pub fn getSymbolNames(self: *const Self) []const []const u8 {
             return self.codegen.symbols.names.items;
@@ -25480,8 +25843,26 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
         pub fn finishImage(self: *Self) Allocator.Error!void {
             if (self.image_finished) return;
             try self.placeMessagePool();
-            if (comptime target.toCpuArch() == .aarch64) try self.codegen.finishImage();
+            if (comptime target.toCpuArch() == .aarch64) {
+                const island_start = self.codegen.currentOffset();
+                try self.codegen.finishImage();
+                try self.logBranchIsland(island_start);
+            }
             self.image_finished = true;
+        }
+
+        /// Log bytes appended past `island_start` (veneers, extern stubs) as
+        /// their own region. They belong to this placement of the code, not
+        /// to any procedure.
+        fn logBranchIsland(self: *Self, island_start: usize) Allocator.Error!void {
+            const island_end = self.codegen.currentOffset();
+            if (island_end == island_start) return;
+            try self.code_regions.append(self.allocator, .{
+                .start = island_start,
+                .end = island_end,
+                .entry = 0,
+                .kind = .branch_island,
+            });
         }
 
         fn assertImageFinished(self: *const Self) void {
@@ -25696,6 +26077,7 @@ fn addLocal(store: *LirStore, layout_idx: layout.Idx) Allocator.Error!LocalId {
 fn addNoArgProc(store: *LirStore, body: CFStmtId, ret_layout: layout.Idx) Allocator.Error!lir.LIR.LirProcSpecId {
     return try store.addProcSpec(.{
         .name = store.freshSyntheticSymbol(),
+        .identity = lir.LIR.ProcIdentity.forTest(1),
         .args = LocalSpan.empty(),
         .body = body,
         .ret_layout = ret_layout,
@@ -25705,6 +26087,7 @@ fn addNoArgProc(store: *LirStore, body: CFStmtId, ret_layout: layout.Idx) Alloca
 fn addProc(store: *LirStore, args: []const LocalId, body: CFStmtId, ret_layout: layout.Idx) Allocator.Error!lir.LIR.LirProcSpecId {
     return try store.addProcSpec(.{
         .name = store.freshSyntheticSymbol(),
+        .identity = lir.LIR.ProcIdentity.forTest(2),
         .args = try store.addLocalSpan(args),
         .body = body,
         .ret_layout = ret_layout,
@@ -26399,6 +26782,7 @@ test "Windows erased callable ABI reads reuse pointer from caller stack" {
 
     const proc = lir.LIR.LirProcSpec{
         .name = store.freshSyntheticSymbol(),
+        .identity = lir.LIR.ProcIdentity.forTest(3),
         .args = args,
         .erased_reuse_arg = reuse_arg,
         .erased_call_args = arg_plan,
@@ -27549,6 +27933,7 @@ fn addHostedCallRoot(
 
     const hosted_proc = try store.addProcSpec(.{
         .name = store.freshSyntheticSymbol(),
+        .identity = lir.LIR.ProcIdentity.forTest(4),
         .args = try store.addLocalSpan(params),
         .ret_layout = .i64,
         .hosted = .{ .symbol = try store.insertString(symbol_name), .dispatch_index = 0 },
@@ -27653,7 +28038,7 @@ test "symbol producer caches reuse identities and reset with generated code" {
     const local = try store.addLocal(.{ .layout_idx = .str });
     const end = try store.addCFStmt(.{ .ret = .{ .value = local } });
     const body = try store.addCFStmt(.{ .assign_literal = .{ .target = local, .value = .{ .str_literal = .{ .backing = literal, .offset = 0, .len = @intCast(store.getString(literal).len) } }, .next = end } });
-    _ = try store.addProcSpec(.{ .name = store.freshSyntheticSymbol(), .args = .empty(), .body = body, .ret_layout = .str });
+    _ = try store.addProcSpec(.{ .name = store.freshSyntheticSymbol(), .identity = lir.LIR.ProcIdentity.forTest(11), .args = .empty(), .body = body, .ret_layout = .str });
     var test_state = try TestLayoutState.init(allocator);
     defer test_state.deinit();
     inline for (.{ RocTarget.x64linux, RocTarget.arm64linux }) |target| {

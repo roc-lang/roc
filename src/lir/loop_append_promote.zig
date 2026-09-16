@@ -2501,6 +2501,7 @@ const PromoteTest = struct {
         } });
         return try store.addProcSpec(.{
             .name = store.freshSyntheticSymbol(),
+            .identity = LIR.ProcIdentity.forTest(99),
             .args = try store.addLocalSpan(&.{ list_arg, elem_arg }),
             .body = spare_lit,
             .ret_layout = self.list,
@@ -2515,6 +2516,7 @@ test "promote prepared summaries are frozen across long forward helper chains an
     var wrappers: [4096]LIR.LirProcSpecId = undefined;
     for (&wrappers) |*proc| {
         proc.* = try store.addProcSpec(.{
+            .identity = LIR.ProcIdentity.forTest(@intCast(store.procSpecCount())),
             .name = store.freshSyntheticSymbol(),
             .args = LIR.LocalSpan.empty(),
             .body = null,
@@ -2612,6 +2614,7 @@ test "promote summaries reject discarded operations before checked append" {
             } })
         else blk: {
             const unknown = try f.store.addProcSpec(.{
+                .identity = LIR.ProcIdentity.forTest(@intCast(f.store.procSpecCount())),
                 .name = f.store.freshSyntheticSymbol(),
                 .args = args,
                 .body = null,
@@ -2658,6 +2661,7 @@ test "promote summaries preserve direct reserve and unsafe append wrappers" {
             .next = ret,
         } });
         const wrapper = try f.store.addProcSpec(.{
+            .identity = LIR.ProcIdentity.forTest(@intCast(f.store.procSpecCount())),
             .name = f.store.freshSyntheticSymbol(),
             .args = args,
             .body = wrapper_body,
@@ -2774,6 +2778,7 @@ test "promote threads slack through an append-only loop" {
     } });
     const proc_id = try store.addProcSpec(.{
         .name = store.freshSyntheticSymbol(),
+        .identity = LIR.ProcIdentity.forTest(6),
         .args = LIR.LocalSpan.empty(),
         .body = loop,
         .ret_layout = f.list,
@@ -3025,6 +3030,7 @@ test "promote leaves a tainted chain alone" {
     } });
     _ = try store.addProcSpec(.{
         .name = store.freshSyntheticSymbol(),
+        .identity = LIR.ProcIdentity.forTest(5),
         .args = LIR.LocalSpan.empty(),
         .body = loop,
         .ret_layout = f.list,
@@ -3081,6 +3087,7 @@ test "promote ignores a join without a back edge" {
     } });
     _ = try store.addProcSpec(.{
         .name = store.freshSyntheticSymbol(),
+        .identity = LIR.ProcIdentity.forTest(4),
         .args = LIR.LocalSpan.empty(),
         .body = loop,
         .ret_layout = f.list,
@@ -3240,6 +3247,7 @@ test "promote versions a set loop into a dispatching head and a unique-only copy
     } });
     _ = try store.addProcSpec(.{
         .name = store.freshSyntheticSymbol(),
+        .identity = LIR.ProcIdentity.forTest(3),
         .args = LIR.LocalSpan.empty(),
         .body = loop,
         .ret_layout = f.list,
@@ -3357,6 +3365,7 @@ test "promote keeps a foreign back edge on the head inside the copy" {
     } });
     _ = try store.addProcSpec(.{
         .name = store.freshSyntheticSymbol(),
+        .identity = LIR.ProcIdentity.forTest(2),
         .args = try store.addLocalSpan(&.{other}),
         .body = loop,
         .ret_layout = f.list,
@@ -3440,6 +3449,7 @@ test "promote initializes merged metadata on every incoming definition" {
     } });
     _ = try store.addProcSpec(.{
         .name = store.freshSyntheticSymbol(),
+        .identity = LIR.ProcIdentity.forTest(1),
         .args = try store.addLocalSpan(&.{ initial, other, condition }),
         .body = loop,
         .ret_layout = f.list,

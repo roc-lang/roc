@@ -2019,6 +2019,7 @@ fn testLiteralInitializedStruct(procedure_local: bool) (Allocator.Error || error
     } });
     _ = try store.addProcSpec(.{
         .name = store.freshSyntheticSymbol(),
+        .identity = LIR.ProcIdentity.forTest(12),
         .args = LIR.LocalSpan.empty(),
         .body = join,
         .ret_layout = .i64,
@@ -2027,6 +2028,7 @@ fn testLiteralInitializedStruct(procedure_local: bool) (Allocator.Error || error
     const noop_arg = try store.addLocal(.{ .layout_idx = .i64 });
     const noop_body = try store.addCFStmt(.{ .ret = .{ .value = noop_arg } });
     const noop = try store.addProcSpec(.{
+        .identity = LIR.ProcIdentity.forTest(@intCast(store.procSpecCount())),
         .name = store.freshSyntheticSymbol(),
         .args = try store.addLocalSpan(&.{noop_arg}),
         .body = noop_body,
@@ -2129,6 +2131,7 @@ test "scalarize keeps descriptor-bearing struct join parameters" {
     } });
     _ = try store.addProcSpec(.{
         .name = store.freshSyntheticSymbol(),
+        .identity = LIR.ProcIdentity.forTest(11),
         .args = try store.addLocalSpan(&.{state_desc}),
         .body = join,
         .ret_layout = .i64,
@@ -2199,6 +2202,7 @@ test "scalarize keeps parameters with whole-value uses" {
     } });
     _ = try store.addProcSpec(.{
         .name = store.freshSyntheticSymbol(),
+        .identity = LIR.ProcIdentity.forTest(10),
         .args = LIR.LocalSpan.empty(),
         .body = join,
         .ret_layout = .i64,
@@ -2264,6 +2268,7 @@ test "scalarize splits a parameter built directly by a struct literal" {
     } });
     _ = try store.addProcSpec(.{
         .name = store.freshSyntheticSymbol(),
+        .identity = LIR.ProcIdentity.forTest(9),
         .args = LIR.LocalSpan.empty(),
         .body = join,
         .ret_layout = .i64,
@@ -2364,6 +2369,7 @@ test "scalarize sees through pure aliases to field reads" {
     } });
     const proc = try store.addProcSpec(.{
         .name = store.freshSyntheticSymbol(),
+        .identity = LIR.ProcIdentity.forTest(8),
         .args = LIR.LocalSpan.empty(),
         .body = join,
         .ret_layout = .i64,
@@ -2442,6 +2448,7 @@ test "scalarize keeps parameters whose alias escapes whole" {
     } });
     _ = try store.addProcSpec(.{
         .name = store.freshSyntheticSymbol(),
+        .identity = LIR.ProcIdentity.forTest(7),
         .args = LIR.LocalSpan.empty(),
         .body = join,
         .ret_layout = f.pair,
@@ -2505,6 +2512,7 @@ test "scalarize seeds field parameters from a non-literal initializer" {
     } });
     _ = try store.addProcSpec(.{
         .name = store.freshSyntheticSymbol(),
+        .identity = LIR.ProcIdentity.forTest(6),
         .args = LIR.LocalSpan.empty(),
         .body = join,
         .ret_layout = .i64,
@@ -2606,6 +2614,7 @@ test "scalarize splits a parameter shared by two joins" {
     } });
     _ = try store.addProcSpec(.{
         .name = store.freshSyntheticSymbol(),
+        .identity = LIR.ProcIdentity.forTest(5),
         .args = LIR.LocalSpan.empty(),
         .body = outer,
         .ret_layout = .i64,
@@ -2665,6 +2674,7 @@ test "scalarize batches independent constructors without recollecting each one" 
     }
     _ = try store.addProcSpec(.{
         .name = store.freshSyntheticSymbol(),
+        .identity = LIR.ProcIdentity.forTest(4),
         .args = try store.addLocalSpan(&.{ number, text }),
         .body = body,
         .ret_layout = .i64,
@@ -2692,6 +2702,7 @@ test "scalarize propagates escaping alias chains in linear work" {
     }
     _ = try store.addProcSpec(.{
         .name = store.freshSyntheticSymbol(),
+        .identity = LIR.ProcIdentity.forTest(3),
         .args = try store.addLocalSpan(aliases[0..1]),
         .body = body,
         .ret_layout = fixture.pair,
@@ -2735,6 +2746,7 @@ test "scalarize keeps a constructor with an alias definition and its source" {
     } });
     const proc = try store.addProcSpec(.{
         .name = store.freshSyntheticSymbol(),
+        .identity = LIR.ProcIdentity.forTest(2),
         .args = try store.addLocalSpan(&.{ first, second, text }),
         .body = original,
         .ret_layout = .i64,
@@ -2770,7 +2782,7 @@ test "scalarize propagates an escaping whole value through a long alias chain" {
     }
     body = try store.addCFStmt(.{ .assign_ref = .{ .target = field, .op = .{ .field = .{ .source = record, .field_idx = 0 } }, .next = body } });
     const build = try store.addCFStmt(.{ .assign_struct = .{ .target = record, .fields = try store.addLocalSpan(&.{ num, text }), .next = body } });
-    const proc_id = try store.addProcSpec(.{ .name = store.freshSyntheticSymbol(), .args = try store.addLocalSpan(&.{ num, text }), .body = build, .ret_layout = f.pair });
+    const proc_id = try store.addProcSpec(.{ .name = store.freshSyntheticSymbol(), .identity = LIR.ProcIdentity.forTest(1), .args = try store.addLocalSpan(&.{ num, text }), .body = build, .ret_layout = f.pair });
     try run(store, &f.layouts);
     // The field read does not justify deleting the constructor: the last
     // alias returns the entire record, so that use must reach its producer.

@@ -51,15 +51,20 @@ pub const OwnedPlan = struct {
 };
 
 /// Analyze a Lambda Solved program and produce explicit inline decisions.
+/// With `keep_keyed_specializations`, a function that is a keyed template
+/// specialization is never inlined away: a pack program offers those
+/// procedures from its manifest, so each must survive as a procedure even
+/// when its only caller is the export wrapper.
 pub fn analyze(
     allocator: std.mem.Allocator,
     mode: Mode,
     procedure_usage: SpecConstr.ProcedureUsage,
     solved: *const Solved.Program,
+    keep_keyed_specializations: bool,
 ) std.mem.Allocator.Error!OwnedPlan {
     return switch (mode) {
         .none => OwnedPlan.empty(allocator),
-        .wrappers => try InlineAnalyzer.run(allocator, procedure_usage, solved),
+        .wrappers => try InlineAnalyzer.run(allocator, procedure_usage, solved, keep_keyed_specializations),
     };
 }
 
@@ -89,11 +94,13 @@ const InlineAnalyzer = struct {
     solved_types: SolvedType.Store.View,
     decisions: []Decision,
     stack: std.ArrayList(Lifted.FnId),
+    keep_keyed_specializations: bool,
 
     fn run(
         allocator: std.mem.Allocator,
         procedure_usage: SpecConstr.ProcedureUsage,
         solved: *const Solved.Program,
+        keep_keyed_specializations: bool,
     ) std.mem.Allocator.Error!OwnedPlan {
         if (procedure_usage.items.len != solved.lifted.fnCount()) {
             Common.invariant("optimized inline analysis requires exact use information for every lifted function");
@@ -109,6 +116,7 @@ const InlineAnalyzer = struct {
             .solved_types = solved.types.view(),
             .decisions = decisions,
             .stack = .empty,
+            .keep_keyed_specializations = keep_keyed_specializations,
         };
         defer analyzer.stack.deinit(allocator);
 
@@ -193,6 +201,11 @@ const InlineAnalyzer = struct {
     }
 
     fn inlineCandidate(self: *const InlineAnalyzer, fn_id: Lifted.FnId) ?Candidate {
+        if (self.keep_keyed_specializations) {
+            if (self.solved.lifted.getFn(fn_id).source) |template| {
+                if (template.spec_key != null) return null;
+            }
+        }
         if (self.wrapperCandidate(fn_id)) |body| return .{ .body = body, .kind = .wrapper };
         if (self.singleUseCandidate(fn_id)) |body| return .{ .body = body, .kind = .single_use };
         return null;

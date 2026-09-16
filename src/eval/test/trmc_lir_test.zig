@@ -48,6 +48,7 @@ const ProcBuilder = struct {
     fn finishProc(self: *ProcBuilder, args: []const LocalId, body: CFStmtId, ret_layout: layout.Idx) TrmcLirTestError!LIR.LirProcSpecId {
         return try self.store.addProcSpec(.{
             .name = self.store.freshSyntheticSymbol(),
+            .identity = LIR.ProcIdentity.programLocal("test", self.store.next_synthetic_symbol),
             .args = try self.store.addLocalSpan(args),
             .frame_locals = try self.store.addLocalSpan(self.locals.items),
             .body = body,
@@ -367,6 +368,7 @@ fn buildRepeatProc(
     const a_n = try b.addLocal(allocator, .u64);
     const proc = try store.addProcSpec(.{
         .name = store.freshSyntheticSymbol(),
+        .identity = LIR.ProcIdentity.forTest(1),
         .args = try store.addLocalSpan(&.{a_n}),
         .ret_layout = peano.u,
     });
@@ -658,6 +660,7 @@ test "trmc'd repeat is leak-free and allocation-exact when consumed" {
     } });
     const root = try store.addProcSpec(.{
         .name = store.freshSyntheticSymbol(),
+        .identity = LIR.ProcIdentity.forTest(10),
         .args = try store.addLocalSpan(&.{root_n}),
         .body = call_repeat,
         .ret_layout = .u64,
@@ -683,6 +686,7 @@ fn buildCountdownProc(allocator: Allocator, b: *ProcBuilder, store: *LirStore) T
     const a_acc = try b.addLocal(allocator, .u64);
     const proc = try store.addProcSpec(.{
         .name = store.freshSyntheticSymbol(),
+        .identity = LIR.ProcIdentity.forTest(2),
         .args = try store.addLocalSpan(&.{ a_n, a_acc }),
         .ret_layout = .u64,
     });
@@ -778,6 +782,7 @@ test "tce loop-back copies swapped params through temps" {
     const a_n = try b.addLocal(allocator, .u64);
     const proc = try store.addProcSpec(.{
         .name = store.freshSyntheticSymbol(),
+        .identity = LIR.ProcIdentity.forTest(9),
         .args = try store.addLocalSpan(&.{ a_a, a_b, a_n }),
         .ret_layout = .u64,
     });
@@ -853,6 +858,7 @@ test "mixed construct and plain-tail branches both become jumps" {
     const a_n = try b.addLocal(allocator, .u64);
     const proc = try store.addProcSpec(.{
         .name = store.freshSyntheticSymbol(),
+        .identity = LIR.ProcIdentity.forTest(8),
         .args = try store.addLocalSpan(&.{a_n}),
         .ret_layout = peano.u,
     });
@@ -1097,6 +1103,7 @@ test "tail eligibility distinguishes result uses and mutual recursion from share
         const a_n = try b.addLocal(allocator, .u64);
         const proc = try store.addProcSpec(.{
             .name = store.freshSyntheticSymbol(),
+            .identity = LIR.ProcIdentity.forTest(7),
             .args = try store.addLocalSpan(&.{a_n}),
             .ret_layout = peano.u,
         });
@@ -1122,6 +1129,7 @@ test "tail eligibility distinguishes result uses and mutual recursion from share
         const a_n = try b.addLocal(allocator, .u64);
         const proc = try store.addProcSpec(.{
             .name = store.freshSyntheticSymbol(),
+            .identity = LIR.ProcIdentity.forTest(3),
             .args = try store.addLocalSpan(&.{a_n}),
             .ret_layout = peano.u,
         });
@@ -1147,6 +1155,7 @@ test "tail eligibility distinguishes result uses and mutual recursion from share
         const a_n = try b.addLocal(allocator, .u64);
         const proc = try store.addProcSpec(.{
             .name = store.freshSyntheticSymbol(),
+            .identity = LIR.ProcIdentity.forTest(1),
             .args = try store.addLocalSpan(&.{a_n}),
             .ret_layout = .u64,
         });
@@ -1166,8 +1175,8 @@ test "tail eligibility distinguishes result uses and mutual recursion from share
     };
 
     // (4) Mutual recursion: tail calls, but never to self.
-    const mutual_a = try store.addProcSpec(.{ .name = store.freshSyntheticSymbol(), .args = LIR.LocalSpan.empty(), .ret_layout = .u64 });
-    const mutual_b = try store.addProcSpec(.{ .name = store.freshSyntheticSymbol(), .args = LIR.LocalSpan.empty(), .ret_layout = .u64 });
+    const mutual_a = try store.addProcSpec(.{ .name = store.freshSyntheticSymbol(), .identity = LIR.ProcIdentity.forTest(11), .args = LIR.LocalSpan.empty(), .ret_layout = .u64 });
+    const mutual_b = try store.addProcSpec(.{ .name = store.freshSyntheticSymbol(), .identity = LIR.ProcIdentity.forTest(12), .args = LIR.LocalSpan.empty(), .ret_layout = .u64 });
     {
         const ra = try b.addLocal(allocator, .u64);
         const ret_ra = try store.addCFStmt(.{ .ret = .{ .value = ra } });
@@ -1190,6 +1199,7 @@ test "tail eligibility distinguishes result uses and mutual recursion from share
         const a_n = try b.addLocal(allocator, .u64);
         const proc = try store.addProcSpec(.{
             .name = store.freshSyntheticSymbol(),
+            .identity = LIR.ProcIdentity.forTest(2),
             .args = try store.addLocalSpan(&.{a_n}),
             .ret_layout = .u64,
         });
@@ -1245,6 +1255,7 @@ test "tce has no site or forwarding-depth cap and preserves a shared base return
     const n = try b.addLocal(allocator, .u64);
     const proc = try store.addProcSpec(.{
         .name = store.freshSyntheticSymbol(),
+        .identity = LIR.ProcIdentity.forTest(6),
         .args = try store.addLocalSpan(&.{n}),
         .ret_layout = .u64,
     });
@@ -1332,6 +1343,7 @@ test "tail-call proof rejects an intervening effect and a forwarding cycle" {
         const result = try b.addLocal(allocator, .u64);
         const proc = try store.addProcSpec(.{
             .name = store.freshSyntheticSymbol(),
+            .identity = LIR.ProcIdentity.forTest(5),
             .args = try store.addLocalSpan(&.{cond}),
             .ret_layout = .u64,
         });
@@ -1381,6 +1393,7 @@ test "tail-call proof consumes the explicit boxy adapter operation" {
         const forwarded = try b.addLocal(allocator, .u64);
         const proc = try store.addProcSpec(.{
             .name = store.freshSyntheticSymbol(),
+            .identity = LIR.ProcIdentity.forTest(4),
             .args = try store.addLocalSpan(&.{arg}),
             .ret_layout = .u64,
         });
@@ -1439,6 +1452,7 @@ test "tce parallel transfers preserve every small source graph" {
         for (&args) |*arg| arg.* = try b.addLocal(allocator, .u64);
         const proc = try store.addProcSpec(.{
             .name = store.freshSyntheticSymbol(),
+            .identity = LIR.ProcIdentity.forTest(3),
             .args = try store.addLocalSpan(&args),
             .ret_layout = .u64,
         });
@@ -1552,6 +1566,7 @@ test "tce reuses scratch across shrinking and growing procedure frames" {
         for (args) |*arg| arg.* = try b.addLocal(allocator, .u64);
         proc.* = try store.addProcSpec(.{
             .name = store.freshSyntheticSymbol(),
+            .identity = LIR.ProcIdentity.forTest(2),
             .args = try store.addLocalSpan(args),
             .ret_layout = .u64,
             // An explicit requirement must survive even when the pass adds
@@ -1629,6 +1644,7 @@ test "tce emits an identity loop directly into the original call" {
     const result = try b.addLocal(allocator, .u64);
     const proc = try store.addProcSpec(.{
         .name = store.freshSyntheticSymbol(),
+        .identity = LIR.ProcIdentity.forTest(1),
         .args = try store.addLocalSpan(&.{arg}),
         .frame_locals = try store.addLocalSpan(b.locals.items),
         .ret_layout = .u64,

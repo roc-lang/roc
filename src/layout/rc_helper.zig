@@ -1,6 +1,7 @@
 //! Canonical deep-RC helper plans derived from canonical layout identities.
 
 const std = @import("std");
+const digest_mod = @import("digest.zig");
 const builtins = @import("builtins");
 
 const layout_mod = @import("./layout.zig");
@@ -37,7 +38,39 @@ pub const HelperKey = struct {
         const layout_raw: u32 = @intCast(@intFromEnum(self.layout_idx));
         return (@as(u64, op_raw) << 32) | layout_raw;
     }
+
+    pub fn decode(raw: u64) HelperKey {
+        return .{
+            .op = @enumFromInt(@as(u2, @intCast(raw >> 32))),
+            .layout_idx = @enumFromInt(@as(u32, @truncate(raw))),
+        };
+    }
 };
+
+/// Whether a generated helper performs atomic refcount operations.
+pub const Atomicity = enum {
+    atomic,
+    single_thread,
+};
+
+/// Symbol name of a generated refcount helper. It depends only on the
+/// operation, the atomicity, and the content digest of the layout, never on a
+/// program-local layout index, so objects compiled separately name and share
+/// the same helper.
+pub fn symbolName(allocator: std.mem.Allocator, store: *const Store, key: HelperKey, atomicity: Atomicity) std.mem.Allocator.Error![]u8 {
+    var digests = try digest_mod.Digests.init(allocator, store);
+    defer digests.deinit();
+    return symbolNameForDigest(allocator, key.op, try digests.get(key.layout_idx), atomicity);
+}
+
+/// `symbolName` for a layout whose digest is already known.
+pub fn symbolNameForDigest(allocator: std.mem.Allocator, op: RcOp, layout_digest: digest_mod.Digest, atomicity: Atomicity) std.mem.Allocator.Error![]u8 {
+    const hex = digest_mod.symbolHex(layout_digest);
+    return switch (atomicity) {
+        .atomic => std.fmt.allocPrint(allocator, "roc__rc_{s}_{s}", .{ @tagName(op), &hex }),
+        .single_thread => std.fmt.allocPrint(allocator, "roc__rc_{s}_single_{s}", .{ @tagName(op), &hex }),
+    };
+}
 
 /// RC plan for a struct-like layout whose children all use the same nested op.
 pub const StructPlan = struct {

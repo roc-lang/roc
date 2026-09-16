@@ -235,6 +235,8 @@ pub const Options = struct {
     /// Preserve source-level procedure names for consumers that present runtime
     /// diagnostics from lowered code.
     proc_debug_names: bool = false,
+    /// The object cache to ask for closed specializations at reservation.
+    spec_cache: ?Common.SpecCacheLookup = null,
     /// Optional deterministic counters for specialization-shape tests.
     specialization_counters: ?*SpecializationCounters = null,
     /// Optional deterministic workload diagnostics. The checked pipeline
@@ -650,6 +652,7 @@ pub fn run(
 
     var builder = Builder.init(allocator, modules, &program, options);
     defer builder.deinit();
+    try builder.seedProgramSourceFiles();
     var digest_stats: Type.Store.DigestStats = .{};
     program.types.digest_stats = if (builder.counters != null) &digest_stats else null;
     defer {
@@ -3087,10 +3090,17 @@ const Builder = struct {
     spec_job_run_id: SpecJobRunId,
     modules: Common.CheckedModules,
     root_view: checked.ImportedModuleView,
+    /// Program source-file id of every checked module in the lowering input,
+    /// keyed by module index. The table is seeded once in module-name and content-identity order
+    /// before any body is lowered, so the ids written into source locations
+    /// are final and independent of specialization scheduling.
+    source_file_ids: std.AutoHashMap(u32, u32),
     program: *Ast.Program,
     current_loc: base.SourceLoc,
     current_region: base.Region,
     proc_debug_names: bool,
+    /// The object cache consulted for closed specializations, if any.
+    spec_cache: ?Common.SpecCacheLookup,
     counters: ?*SpecializationCounters,
     diagnostics: ?*Diagnostics,
     /// Result-owned sink while one ordinary specialization shard is lowering or
@@ -3248,10 +3258,12 @@ const Builder = struct {
             .spec_job_run_id = @enumFromInt(raw_spec_job_run_id),
             .modules = modules,
             .root_view = checked.importedView(modules.root.module),
+            .source_file_ids = std.AutoHashMap(u32, u32).init(allocator),
             .program = program,
             .current_loc = program.current_loc,
             .current_region = program.current_region,
             .proc_debug_names = options.proc_debug_names,
+            .spec_cache = options.spec_cache,
             .counters = counters,
             .diagnostics = options.diagnostics,
             .active_spec_job_diagnostics = null,
@@ -3276,6 +3288,98 @@ const Builder = struct {
             .hash_defs = std.AutoHashMap(GeneratedHelperDefAddress, GeneratedHelperDefEntry).init(allocator),
             .evidence_arena = std.heap.ArenaAllocator.init(allocator),
         };
+    }
+
+    const SourceFileSeed = struct {
+        module_idx: u32,
+        name: []const u8,
+        qualified_name: []const u8,
+        identity: [32]u8,
+
+        fn lessThan(_: void, left: SourceFileSeed, right: SourceFileSeed) bool {
+            switch (std.mem.order(u8, left.qualified_name, right.qualified_name)) {
+                .lt => return true,
+                .gt => return false,
+                .eq => {},
+            }
+            switch (std.mem.order(u8, &left.identity, &right.identity)) {
+                .lt => return true,
+                .gt => return false,
+                .eq => {},
+            }
+            return left.module_idx < right.module_idx;
+        }
+    };
+
+    /// Every checked module in the lowering input, ordered by qualified module
+    /// name and then content identity. Module indices are assigned in
+    /// discovery order and specialization bodies are lowered on parallel
+    /// lanes, so neither may decide the order of the program's source-file
+    /// table; this order depends only on the modules themselves.
+    fn canonicalSourceFiles(self: *Builder) Allocator.Error![]SourceFileSeed {
+        var seeds = std.ArrayList(SourceFileSeed).empty;
+        errdefer seeds.deinit(self.allocator);
+        var seen = std.AutoHashMap(u32, void).init(self.allocator);
+        defer seen.deinit();
+        try appendSourceFileSeed(self.allocator, &seeds, &seen, moduleView(self.root_view));
+        for (self.modules.imports) |imported| {
+            try appendSourceFileSeed(self.allocator, &seeds, &seen, moduleView(imported));
+        }
+        for (self.modules.root.relation_modules) |relation| {
+            try appendSourceFileSeed(self.allocator, &seeds, &seen, moduleView(relation));
+        }
+        std.mem.sort(SourceFileSeed, seeds.items, {}, SourceFileSeed.lessThan);
+        return seeds.toOwnedSlice(self.allocator);
+    }
+
+    fn appendSourceFileSeed(
+        allocator: Allocator,
+        seeds: *std.ArrayList(SourceFileSeed),
+        seen: *std.AutoHashMap(u32, void),
+        view: ModuleView,
+    ) Allocator.Error!void {
+        const gop = try seen.getOrPut(view.module_identity.module_idx);
+        if (gop.found_existing) return;
+        try seeds.append(allocator, .{
+            .module_idx = view.module_identity.module_idx,
+            .name = view.module_env.module_name,
+            .qualified_name = view.module_env.qualifiedModuleName(),
+            .identity = view.module_identity.stable_hash,
+        });
+    }
+
+    /// Coordinator only: seed the ordered source-file table in the
+    /// program before any body is lowered. Worker builders share that program
+    /// read-only and derive the same ids with `initSourceFileIds`.
+    fn seedProgramSourceFiles(self: *Builder) Allocator.Error!void {
+        if (self.program.sourceFileCount() != 0) {
+            Common.invariant("Monotype program source files were seeded after lowering began");
+        }
+        const seeds = try self.canonicalSourceFiles();
+        defer self.allocator.free(seeds);
+        try self.source_file_ids.ensureTotalCapacity(@intCast(seeds.len));
+        for (seeds, 0..) |seed, index| {
+            const id = try self.program.addSourceFile(.{ .name = seed.name, .qualified_name = seed.qualified_name });
+            if (id != index) Common.invariant("Monotype program source file id did not match its sorted position");
+            self.source_file_ids.putAssumeCapacity(seed.module_idx, id);
+        }
+    }
+
+    /// Assign the sorted source-file ids in the worker lookup table;
+    /// the ids equal the positions assigned by `seedProgramSourceFiles`.
+    fn initSourceFileIds(self: *Builder) Allocator.Error!void {
+        const seeds = try self.canonicalSourceFiles();
+        defer self.allocator.free(seeds);
+        try self.source_file_ids.ensureTotalCapacity(@intCast(seeds.len));
+        for (seeds, 0..) |seed, index| {
+            self.source_file_ids.putAssumeCapacity(seed.module_idx, @intCast(index));
+        }
+    }
+
+    /// Final program source-file id of a checked module's source locations.
+    fn sourceFileId(self: *const Builder, view: ModuleView) u32 {
+        return self.source_file_ids.get(view.module_identity.module_idx) orelse
+            Common.invariant("checked module reached body lowering without an assigned source file id");
     }
 
     fn ensureSpecJobWorkerBuilder(
@@ -3303,6 +3407,7 @@ const Builder = struct {
             .timing = null,
         });
         errdefer builder.deinit();
+        try builder.initSourceFileIds();
         builder.borrowed_comptime_root_functions = inputs.declared_comptime_root_functions;
         builder.hosted_catalog = try worker.allocator.dupe(HostedCatalogEntry, inputs.hosted_catalog);
         builder.current_loc = inputs.current_loc;
@@ -3359,6 +3464,7 @@ const Builder = struct {
     }
 
     fn deinit(self: *Builder) void {
+        self.source_file_ids.deinit();
         self.declared_comptime_root_functions.deinit();
         self.spec_job_task_buffers.deinit(self.allocator);
         if (self.spec_job_commit_domain) |*domain| domain.deinit();
@@ -4117,6 +4223,7 @@ const Builder = struct {
         const def = try self.program.addDef(.{
             .symbol = self.symbols.fresh(),
             .fn_def = null,
+            .root_identity = self.staticDataRequestIdentity(type_view, request, ret_ty),
             .args = Ast.Span(Ast.TypedLocal).empty(),
             .body = .{ .roc = body },
             .ret = ret_ty,
@@ -4382,6 +4489,7 @@ const Builder = struct {
             .symbol = self.symbols.fresh(),
             .fn_def = null,
             .fn_id = null,
+            .identity_seed = .{ .kind = "procedure-use-root", .extra = procedureUseRootIdentity(request, procedure, source_module) },
             .args = try body_draft.addTypedLocalSpan(args),
             .body = .{ .roc = body },
             .ret = ret_cell,
@@ -4498,10 +4606,52 @@ const Builder = struct {
         return try self.program.addDef(.{
             .symbol = self.symbols.fresh(),
             .fn_def = null,
+            .root_identity = self.procedureBindingRootIdentity(view, binding_id, fn_ty),
             .args = try self.program.addTypedLocalSpan(args),
             .body = .{ .roc = body },
             .ret = fn_data.ret,
         });
+    }
+
+    /// Identity of a static-data request thunk: the checked constant it
+    /// restores and the Monotype type it restores it at.
+    fn staticDataRequestIdentity(self: *Builder, view: ModuleView, request: Common.StaticDataRequest, ret_ty: Type.TypeId) names.TypeDigest {
+        var hasher = TypeDigestHasher.init();
+        hasher.update("roc.monotype.static-data-request.v1");
+        hasher.update(&view.key.bytes);
+        hasher.update(&request.const_locator.artifact.bytes);
+        switch (request.const_locator.owner) {
+            .top_level_binding => |owner| {
+                hasher.update("top-level-binding");
+                hashU32(&hasher, @intFromEnum(owner.pattern));
+            },
+            .hoisted_expr => |owner| {
+                hasher.update("hoisted-expr");
+                hashU32(&hasher, @intFromEnum(owner.expr));
+            },
+        }
+        hashU32(&hasher, @intFromEnum(request.const_locator.template));
+        hasher.update(&request.const_locator.source_scheme.bytes);
+        if (request.node) |node| {
+            hasher.update("node");
+            hashU32(&hasher, @intFromEnum(node));
+        } else {
+            hasher.update("root");
+        }
+        hasher.update(&view.types.rootKey(request.checked_type).bytes);
+        hasher.update(&self.program.types.specializationDigest(&self.program.names, ret_ty).bytes);
+        return .{ .bytes = hasher.finalResult() };
+    }
+
+    /// Identity of a procedure-binding root: the checked binding and the
+    /// function type it is exposed at.
+    fn procedureBindingRootIdentity(self: *Builder, view: ModuleView, binding_id: checked.TopLevelProcedureBindingId, fn_ty: Type.TypeId) names.TypeDigest {
+        var hasher = TypeDigestHasher.init();
+        hasher.update("roc.monotype.procedure-binding-root.v1");
+        hasher.update(&view.key.bytes);
+        hashU32(&hasher, @intFromEnum(binding_id));
+        hasher.update(&self.program.types.specializationDigest(&self.program.names, fn_ty).bytes);
+        return .{ .bytes = hasher.finalResult() };
     }
 
     fn lowerProcedureBindingValue(
@@ -4851,18 +5001,16 @@ const Builder = struct {
         const evidence_digest = Ast.fnEvidenceDigest(identity_evidence.nodes, identity_evidence.frames, identity_evidence.head);
         const stored_source_topology = if (source_topology != null) identity_evidence else null;
         const request_digest = precomputed_request_digest orelse self.specializationTypeDigest(fn_ty);
-        if (try self.spec_store.findLocal(
-            templateSpecIdentity(
-                template_ref,
-                method_scope.key,
-                source_fn_key,
-                evidence_digest,
-                self.codecContractIdentity(codec_contract),
-                fn_ty,
-                request_digest,
-            ),
-            specializationEvidenceView(identity_evidence),
-        )) |hit| {
+        const spec_identity = templateSpecIdentity(
+            template_ref,
+            method_scope.key,
+            source_fn_key,
+            evidence_digest,
+            self.codecContractIdentity(codec_contract),
+            fn_ty,
+            request_digest,
+        );
+        if (try self.spec_store.findLocal(spec_identity, specializationEvidenceView(identity_evidence))) |hit| {
             if (request_accounting == .count) self.count("template_hits");
             const existing = self.lowered_templates.get(hit.fn_id) orelse
                 Common.invariant("Monotype specialization index found a local template missing from lowering state");
@@ -4923,6 +5071,22 @@ const Builder = struct {
 
         var fn_template = self.fnDefForTemplate(view, template_ref, source_fn_ty, source_fn_key, lower_fn_ty);
         fn_template.evidence_digest = evidence_digest;
+        // Only a closed request names a specialization the object cache can
+        // hold: a function type anywhere in it makes the body depend on the
+        // program's lambda sets.
+        // A hosted template has no procedure of its own to cache: callers
+        // reach the host directly through its declared ABI.
+        if (template.target != .hosted and !try self.monoFnTypeMentionsFunction(lower_fn_ty)) {
+            const key = Ast.specIdentityKey(spec_identity);
+            fn_template.spec_key = key;
+            if (self.spec_cache) |cache| {
+                if (cache.lookup(key.bytes)) |hit| {
+                    fn_template.cached = hit;
+                    self.count("spec_cache_hits");
+                    if (pack_trace_available and packTraceEnabled()) std.debug.print("lookup monotype key={x} hit\n", .{key.bytes[0..8]});
+                } else if (pack_trace_available and packTraceEnabled()) std.debug.print("lookup monotype key={x} miss\n", .{key.bytes[0..8]});
+            }
+        }
         if (stored_source_topology) |stored_evidence| {
             fn_template.const_evidence = try self.program.addConstFnEvidence(stored_evidence.nodes);
             fn_template.const_evidence_frames = try self.program.addConstFnEvidenceFrames(stored_evidence.frames);
@@ -5035,6 +5199,40 @@ const Builder = struct {
     /// identity, ids, and seed are already reserved. Runs immediately for
     /// direct callers and from the scheduler's wave drain for queued symbolic
     /// requests.
+    /// Whether a function type's arguments or result mention a function or
+    /// erased callable anywhere, nominal backings included.
+    fn monoFnTypeMentionsFunction(self: *Builder, fn_ty: Type.TypeId) Allocator.Error!bool {
+        const types = self.program.types.view();
+        var visited = collections.DenseMap(Type.TypeId, void).init(self.allocator);
+        defer visited.deinit();
+        var stack = std.ArrayList(Type.TypeId).empty;
+        defer stack.deinit(self.allocator);
+        switch (types.get(fn_ty)) {
+            .func => |func| {
+                try stack.appendSlice(self.allocator, types.span(func.args));
+                try stack.append(self.allocator, func.ret);
+            },
+            .primitive, .zst, .erased, .named, .record, .tuple, .tag_union, .list, .box => try stack.append(self.allocator, fn_ty),
+        }
+        while (stack.pop()) |ty| {
+            const gop = try visited.getOrPut(ty);
+            if (gop.found_existing) continue;
+            switch (types.get(ty)) {
+                .primitive, .zst => {},
+                .erased, .func => return true,
+                .named => |named| {
+                    try stack.appendSlice(self.allocator, types.span(named.args));
+                    if (named.backing) |backing| try stack.append(self.allocator, backing.ty);
+                },
+                .record => |span| for (types.fieldSpan(span)) |field| try stack.append(self.allocator, field.ty),
+                .tuple => |span| try stack.appendSlice(self.allocator, types.span(span)),
+                .tag_union => |span| for (types.tagSpan(span)) |tag| try stack.appendSlice(self.allocator, types.span(tag.payloads)),
+                .list, .box => |elem| try stack.append(self.allocator, elem),
+            }
+        }
+        return false;
+    }
+
     fn completeTemplateReservation(
         self: *Builder,
         reservation: TemplateReservation,
@@ -5052,6 +5250,26 @@ const Builder = struct {
     ) Allocator.Error!void {
         const view = self.moduleForDigest(names.procTemplateModuleDigest(template_ref));
         const template = view.templates.get(template_ref.template);
+
+        if (fn_template.cached != null) {
+            // The object cache holds this specialization's compiled
+            // procedure. The definition keeps its declared shape and no body,
+            // exactly like a hosted procedure, and downstream stages emit an
+            // external reference the object writer resolves from the cache.
+            const fn_data = self.programFunctionShape(lower_fn_ty, "cached procedure template root type was not a function");
+            const args = try self.typedLocalsForArgs(self.program.types.span(fn_data.args));
+            self.program.setDef(reservation.def, .{
+                .symbol = reservation.symbol,
+                .fn_def = fn_template,
+                .fn_id = reservation.fn_id,
+                .args = args,
+                .body = .hosted,
+                .ret = fn_data.ret,
+            });
+            self.program.setFnSource(reservation.fn_id, fn_template);
+            try self.markTemplateReady(reservation.fn_id, lower_fn_ty);
+            return;
+        }
 
         switch (template.target) {
             .hosted => {
@@ -8697,7 +8915,6 @@ const Builder = struct {
 
     fn draftCoreBases(self: *Builder) DraftCoreLengths {
         var bases: DraftCoreLengths = @splat(0);
-        bases[@intFromEnum(DraftCoreKind.source_files)] = @intCast(self.program.sourceFileCount());
         bases[@intFromEnum(DraftCoreKind.string_literals)] = @intCast(self.program.stringLiteralCount());
         bases[@intFromEnum(DraftCoreKind.comptime_sites)] = @intCast(self.program.comptimeSiteCount());
         bases[@intFromEnum(DraftCoreKind.expr_ids)] = @intCast(self.program.exprIdCount());
@@ -8738,11 +8955,8 @@ const Builder = struct {
 
         var next = self.draftCoreBases();
         for (body_draft.owner_runs.items) |owner_run| {
-            const retain = draftOwnerRetained(owner_run.owner, emit_fns);
+            if (!draftOwnerRetained(owner_run.owner, emit_fns)) continue;
             for (0..draft_core_kind_count) |raw_kind| {
-                const kind: DraftCoreKind = @enumFromInt(raw_kind);
-                const retain_kind = retain or kind == .source_files;
-                if (!retain_kind) continue;
                 var index = owner_run.starts[raw_kind];
                 while (index < owner_run.ends[raw_kind]) : (index += 1) {
                     maps.values[raw_kind][index] = next[raw_kind];
@@ -12663,10 +12877,51 @@ const DraftDef = struct {
     symbol: Common.Symbol,
     fn_def: ?DraftFnTemplate = null,
     fn_id: ?DraftFnTarget = null,
+    /// Inputs for the content identity of a definition that has no checked
+    /// function template, digested once its types are sealed.
+    identity_seed: ?IdentitySeed = null,
     args: DraftSpan(DraftTypedLocal),
     body: DraftFnBody,
     ret: DraftTypeCell,
 };
+
+/// What identifies a generated definition beyond its argument and return
+/// types: the kind of generated procedure, further types whose sealed
+/// specialization digests join the identity, and bytes that are already
+/// content-derived when the definition is created.
+const IdentitySeed = struct {
+    kind: []const u8,
+    cells: [4]?DraftTypeCell = .{ null, null, null, null },
+    extra: [32]u8 = [_]u8{0} ** 32,
+};
+
+/// Content identity of a sealed generated definition.
+fn sealedDefIdentity(
+    program: *Ast.Program,
+    committed_types: *CommittedGraphTypes,
+    seed: IdentitySeed,
+    args: Ast.Span(Ast.TypedLocal),
+    ret: Type.TypeId,
+) Allocator.Error!names.TypeDigest {
+    var hasher = TypeDigestHasher.init();
+    hasher.update("roc.monotype.generated-def.v1");
+    hashU32(&hasher, @intCast(seed.kind.len));
+    hasher.update(seed.kind);
+    hasher.update(&seed.extra);
+    for (seed.cells) |maybe_cell| {
+        const cell = maybe_cell orelse continue;
+        hasher.update("cell");
+        const ty = try cell.sealCommitted(committed_types);
+        hasher.update(&program.types.specializationDigest(&program.names, ty).bytes);
+    }
+    const locals = program.typedLocalSpan(args);
+    hashU32(&hasher, @intCast(GuardedList.borrowLen(locals)));
+    for (0..GuardedList.borrowLen(locals)) |index| {
+        hasher.update(&program.types.specializationDigest(&program.names, GuardedList.at(locals, index).ty).bytes);
+    }
+    hasher.update(&program.types.specializationDigest(&program.names, ret).bytes);
+    return .{ .bytes = hasher.finalResult() };
+}
 
 const DraftNestedDef = struct {
     symbol: Common.Symbol,
@@ -14110,11 +14365,6 @@ const DraftStringLiteral = struct {
 /// Draft-side source file table entry: module display name plus the
 /// coordinator's package-qualified module identity (see
 /// `base.SourceFileEntry`).
-const DraftSourceFile = struct {
-    name: DraftSpan(u8),
-    qualified_name: DraftSpan(u8),
-};
-
 const DraftPackedListLiteral = struct {
     literal: DraftStringLiteralId,
     len: u32,
@@ -14136,7 +14386,6 @@ fn draftOwnerRetained(owner: DraftOwner, emit_fns: []const bool) bool {
 }
 
 const DraftCoreKind = enum(u8) {
-    source_files,
     string_literals,
     comptime_sites,
     branch_regions,
@@ -14274,8 +14523,6 @@ const BodyDraftStore = struct {
     runtime_schema_requests: std.ArrayList(DraftRuntimeSchemaRequest),
     comptime_sites: std.ArrayList(DraftComptimeSite),
     branch_regions: std.ArrayList(base.Region),
-    source_files: std.ArrayList(DraftSourceFile),
-    source_file_ids: std.AutoHashMap(u32, u32),
     local_names: std.ArrayList(DraftSpan(u8)),
     source_text_bytes: std.ArrayList(u8),
     expr_locs: std.ArrayList(base.SourceLoc),
@@ -14386,8 +14633,6 @@ const BodyDraftStore = struct {
             .runtime_schema_requests = .empty,
             .comptime_sites = .empty,
             .branch_regions = .empty,
-            .source_files = .empty,
-            .source_file_ids = std.AutoHashMap(u32, u32).init(allocator),
             .local_names = .empty,
             .source_text_bytes = .empty,
             .expr_locs = .empty,
@@ -14551,8 +14796,6 @@ const BodyDraftStore = struct {
         self.expr_locs.deinit(self.allocator);
         self.source_text_bytes.deinit(self.allocator);
         self.local_names.deinit(self.allocator);
-        self.source_file_ids.deinit();
-        self.source_files.deinit(self.allocator);
         self.branch_regions.deinit(self.allocator);
         self.comptime_sites.deinit(self.allocator);
         self.runtime_schema_requests.deinit(self.allocator);
@@ -14651,7 +14894,6 @@ const BodyDraftStore = struct {
 
     fn coreLengths(self: *const BodyDraftStore) DraftCoreLengths {
         var lengths: DraftCoreLengths = undefined;
-        lengths[@intFromEnum(DraftCoreKind.source_files)] = @intCast(self.source_files.items.len);
         lengths[@intFromEnum(DraftCoreKind.string_literals)] = @intCast(self.string_literals.items.len);
         lengths[@intFromEnum(DraftCoreKind.comptime_sites)] = @intCast(self.comptime_sites.items.len);
         lengths[@intFromEnum(DraftCoreKind.branch_regions)] = @intCast(self.branch_regions.items.len);
@@ -15042,28 +15284,6 @@ const BodyDraftStore = struct {
         return .{ .start = start, .len = @intCast(text.len) };
     }
 
-    fn addSourceFile(self: *BodyDraftStore, name: []const u8, qualified_name: []const u8) Allocator.Error!u32 {
-        const id: u32 = @intCast(self.source_files.items.len);
-        const text = try self.addSourceText(name);
-        const qualified_text = try self.addSourceText(qualified_name);
-        try self.source_files.append(self.allocator, .{
-            .name = text,
-            .qualified_name = qualified_text,
-        });
-        return id;
-    }
-
-    fn sourceFileIdFor(self: *BodyDraftStore, view: ModuleView) Allocator.Error!u32 {
-        const gop = try self.source_file_ids.getOrPut(view.module_identity.module_idx);
-        if (!gop.found_existing) {
-            gop.value_ptr.* = try self.addSourceFile(
-                view.module_env.module_name,
-                view.module_env.qualifiedModuleName(),
-            );
-        }
-        return gop.value_ptr.*;
-    }
-
     fn setLocalName(self: *BodyDraftStore, id: DraftLocalId, name: []const u8) Allocator.Error!void {
         if (name.len == 0) return;
         self.local_names.items[@intFromEnum(id)] = try self.addSourceText(name);
@@ -15354,7 +15574,6 @@ const BodyDraftStore = struct {
             .str_pattern_step_start = @intCast(program.strPatternStepCount()),
             .branch_start = @intCast(program.branchCount()),
             .if_branch_start = @intCast(program.ifBranchCount()),
-            .source_file_start = @intCast(program.sourceFileCount()),
             .core_id_mode = .identity,
         };
     }
@@ -15389,14 +15608,6 @@ const BodyDraftStore = struct {
     ) Allocator.Error!void {
         const evidence_span = try program.addConstFnEvidence(self.const_fn_evidence.items);
         const evidence_frames_span = try program.addConstFnEvidenceFrames(self.const_fn_evidence_frames.items);
-
-        for (self.source_files.items, 0..) |file, index| {
-            if (!ids.retained(.source_files, index)) continue;
-            _ = try program.addSourceFile(.{
-                .name = self.sourceText(file.name),
-                .qualified_name = self.sourceText(file.qualified_name),
-            });
-        }
 
         for (self.string_literals.items, 0..) |literal, index| {
             if (!ids.retained(.string_literals, index)) continue;
@@ -15618,13 +15829,20 @@ const BodyDraftStore = struct {
                     program.setFnSource(fn_id, template);
                 }
             }
+            const sealed_args = ids.typedLocalSpan(def.args);
+            const sealed_ret = try def.ret.sealCommitted(committed_types);
+            const root_identity: ?names.TypeDigest = if (def.identity_seed) |seed|
+                try sealedDefIdentity(program, committed_types, seed, sealed_args, sealed_ret)
+            else
+                null;
             program.defs.appendAssumeCapacity(.{
                 .symbol = def.symbol,
                 .fn_def = sealed_fn_def,
                 .fn_id = sealed_fn_id,
-                .args = ids.typedLocalSpan(def.args),
+                .root_identity = root_identity,
+                .args = sealed_args,
                 .body = ids.fnBody(def.body),
-                .ret = try def.ret.sealCommitted(committed_types),
+                .ret = sealed_ret,
             });
         }
 
@@ -16229,7 +16447,6 @@ const FinalIdOffsets = struct {
     str_pattern_step_start: u32,
     branch_start: u32,
     if_branch_start: u32,
-    source_file_start: u32,
     fn_slots: []const ?Ast.FnSlot = &.{},
     def_ids: []const ?Ast.DefId = &.{},
     core_id_mode: CoreIdMode,
@@ -16394,13 +16611,11 @@ const FinalIdOffsets = struct {
         };
     }
 
-    fn sourceLoc(self: FinalIdOffsets, loc: base.SourceLoc) base.SourceLoc {
-        if (loc.file == base.SourceLoc.no_file) return loc;
-        return .{
-            .file = self.core(.source_files, loc.file, self.source_file_start),
-            .line = loc.line,
-            .column = loc.column,
-        };
+    /// Source locations already carry final program file ids (the program's
+    /// source-file table is seeded before any body is lowered), so sealing
+    /// leaves them unchanged.
+    fn sourceLoc(_: FinalIdOffsets, loc: base.SourceLoc) base.SourceLoc {
+        return loc;
     }
 };
 
@@ -17741,7 +17956,7 @@ const BodyContext = struct {
         var ctx = try initBodyState(allocator, builder, view, owner_template, graph, draft);
         errdefer ctx.deinit();
         ctx.method_scope = method_scope;
-        ctx.source_file_id = try draft.sourceFileIdFor(view);
+        ctx.source_file_id = builder.sourceFileId(view);
         return ctx;
     }
 
@@ -18815,6 +19030,7 @@ const BodyContext = struct {
         self.draft.setDef(def_id, .{
             .symbol = self.builder.symbols.fresh(),
             .fn_def = null,
+            .identity_seed = .{ .kind = "inspect-helper", .cells = .{ DraftTypeCell.fromSealed(value_ty), DraftTypeCell.fromSealed(str_ty), null, null } },
             .args = args,
             .body = .{ .roc = body },
             .ret = try self.draftTypeCell(str_ty),
@@ -28767,6 +28983,7 @@ const BodyContext = struct {
             .symbol = self.builder.symbols.fresh(),
             .fn_def = null,
             .fn_id = null,
+            .identity_seed = .{ .kind = "parse-shape-helper", .cells = .{ DraftTypeCell.fromSealed(shape_ty), DraftTypeCell.fromSealed(encoding_ty), DraftTypeCell.fromSealed(state_ty), DraftTypeCell.fromSealed(ret_ty) } },
             .args = try self.addTypedLocalSpan(args),
             .body = .{ .roc = body },
             .ret = try self.draftTypeCell(ret_ty),
@@ -32860,7 +33077,7 @@ const BodyContext = struct {
         );
         const previous_view = self.view;
         const previous_source_file_id = self.source_file_id;
-        const local_source_file_id = try self.draft.sourceFileIdFor(local_view);
+        const local_source_file_id = self.builder.sourceFileId(local_view);
         self.view = local_view;
         self.source_file_id = local_source_file_id;
         defer {
@@ -37708,7 +37925,7 @@ const BodyContext = struct {
         const previous_source_file_id = self.source_file_id;
         const previous_instantiation = self.instantiation;
         self.view = declaring_view;
-        self.source_file_id = try self.draft.sourceFileIdFor(declaring_view);
+        self.source_file_id = self.builder.sourceFileId(declaring_view);
         // Checked-type lookups validate instantiation-context ownership, so
         // the foreign expression gets its own context, exactly like a
         // foreign nominal backing instantiation.
@@ -43958,6 +44175,7 @@ const BodyContext = struct {
             .symbol = self.builder.symbols.fresh(),
             .fn_def = null,
             .fn_id = null,
+            .identity_seed = .{ .kind = "encode-shape-helper", .cells = .{ DraftTypeCell.fromSealed(value_ty), DraftTypeCell.fromSealed(encoding_ty), DraftTypeCell.fromSealed(state_ty), DraftTypeCell.fromSealed(ret_ty) } },
             .args = try self.addTypedLocalSpan(args),
             .body = .{ .roc = body },
             .ret = try self.draftTypeCell(ret_ty),
@@ -46862,7 +47080,7 @@ const BodyContext = struct {
             Common.invariant("generated codec call materialized through a different active contract");
         }
         self.view = call.view;
-        self.source_file_id = try self.draft.sourceFileIdFor(call.view);
+        self.source_file_id = self.builder.sourceFileId(call.view);
         self.evidence = active.evidence;
         defer {
             self.view = previous_view;
@@ -49815,6 +50033,7 @@ const BodyContext = struct {
         self.draft.setDef(def_id, .{
             .symbol = self.builder.symbols.fresh(),
             .fn_def = null,
+            .identity_seed = .{ .kind = @typeName(D), .cells = .{ DraftTypeCell.fromSealed(value_ty), DraftTypeCell.fromSealed(ctx.result_ty), null, null } },
             .args = args,
             .body = .{ .roc = body },
             .ret = try self.draftTypeCell(ctx.result_ty),
@@ -58103,8 +58322,41 @@ fn dispatchPlanIdForRuntimeExpr(view: ModuleView, expr_id: checked.CheckedExprId
     return plan_id;
 }
 
+/// Builds without libc (the playground) never read the environment and
+/// compile no trace output.
+const pack_trace_available = @import("builtin").link_libc;
+
+/// `ROC_PACK_TRACE` is set: print every object cache lookup.
+fn packTraceEnabled() bool {
+    return std.c.getenv("ROC_PACK_TRACE") != null;
+}
+
 fn moduleDigestFromId(key: checked.ModuleId) names.CheckedModuleDigest {
     return .{ .bytes = key.bytes };
+}
+
+/// Content bytes identifying a procedure-use root: the module it was
+/// requested from, the request's kind and checked source site, and the
+/// procedure binding's declared function type key.
+fn procedureUseRootIdentity(request: checked.RootRequest, procedure: checked.ProcedureUseTemplate, source_module: checked.ModuleId) [32]u8 {
+    var hasher = TypeDigestHasher.init();
+    hasher.update("roc.monotype.procedure-use-root.v1");
+    hasher.update(&source_module.bytes);
+    hasher.update(@tagName(request.kind));
+    hasher.update(@tagName(request.source));
+    switch (request.source) {
+        .def => |def| hashU32(&hasher, @intFromEnum(def)),
+        .expr => |expr| hashU32(&hasher, @intFromEnum(expr)),
+        .statement => |statement| hashU32(&hasher, @intFromEnum(statement)),
+        .required_binding => |binding| hashU32(&hasher, binding),
+        .hoisted => {},
+    }
+    if (request.compile_time_root) |root| {
+        hasher.update("compile-time-root");
+        hashU32(&hasher, @intFromEnum(root));
+    }
+    hasher.update(&procedure.source_fn_ty_template.bytes);
+    return hasher.finalResult();
 }
 
 fn hashU32(hasher: *TypeDigestHasher, value: u32) void {
@@ -59312,7 +59564,7 @@ test "body draft store appends draft-local ids spans and type cells" {
         .{ .padding = ty },
     });
     const site = try draft.addComptimeSite(.if_, base.Region.zero(), null, &.{base.Region.zero()});
-    const source_file = try draft.addSourceFile("module.roc", "test.module.roc");
+    const source_file = try program.addSourceFile(.{ .name = "module.roc", .qualified_name = "test.module.roc" });
     try draft.setLocalName(local, "value");
     const record_pat = try draft.addPat(.{ .ty = ty, .data = .{ .record = destruct_span } });
     const str_pat = try draft.addPat(.{ .ty = ty, .data = .{ .str_pattern = .{
@@ -59372,7 +59624,6 @@ test "body draft store appends draft-local ids spans and type cells" {
     try std.testing.expectEqual(@as(usize, 1), draft.string_literals.items.len);
     try std.testing.expectEqual(@as(usize, 1), draft.comptime_sites.items.len);
     try std.testing.expectEqual(@as(u32, 0), source_file);
-    try std.testing.expectEqual(@as(usize, 1), draft.source_files.items.len);
     try std.testing.expectEqual(@as(usize, 1), draft.local_names.items.len);
     try std.testing.expect(draft.local_names.items[@intFromEnum(local)].len != 0);
 
@@ -60411,6 +60662,192 @@ test "function context identity excludes draft local allocation ids" {
     restored[0].binder += 1;
     const different_binder_key = BodyContext.lexicalContextKeyFromEntries(base_key, &restored);
     try std.testing.expect(!std.mem.eql(u8, &original_key.bytes, &different_binder_key.bytes));
+}
+
+test "issue 11362: checked instantiation allocates placeholders only for recursion" {
+    const gpa = std.testing.allocator;
+    var name_store = names.NameStore.init(gpa);
+    defer name_store.deinit();
+    var type_store = Type.Store.init(gpa);
+    defer type_store.deinit();
+    const graph = try InstGraph.create(gpa, &type_store, &name_store);
+    defer graph.destroy();
+    var diagnostics: @import("solve.zig").GraphDiagnostics = .{};
+    graph.setDiagnostics(&diagnostics);
+    var checked_types = checked.CheckedTypeStore{};
+    defer checked_types.deinit(gpa);
+    const leaf = try checked_types.appendSyntheticPayloadRoot(gpa, &name_store, .empty_record);
+    const pair = try checked_types.appendSyntheticPayloadRoot(gpa, &name_store, .{ .tuple = try gpa.dupe(checked.CheckedTypeId, &.{ leaf, leaf }) });
+    const alias = try checked_types.appendSyntheticPayloadRoot(gpa, &name_store, .{ .alias = .{
+        .name = try name_store.internTypeName("Pair"),
+        .origin_module = try name_store.internModuleIdentity(&([_]u8{0x62} ** 32)),
+        .owner_module = .{},
+        .backing = pair,
+    } });
+    const recursive = try checked_types.reserveSyntheticTypeRoot(gpa, .{}, false);
+    try checked_types.fillSyntheticTypeRoot(gpa, recursive, .{ .tuple = try gpa.dupe(checked.CheckedTypeId, &.{ recursive, recursive }) });
+
+    var builder: Builder = undefined;
+    builder.next_instantiation_scope = 0;
+    builder.timing = null;
+    builder.diagnostics = null;
+    builder.active_spec_job_diagnostics = null;
+    var ctx: BodyContext = undefined;
+    ctx.allocator = gpa;
+    ctx.builder = &builder;
+    ctx.graph = graph;
+    ctx.view.key = .{ .bytes = @splat(0) };
+    ctx.view.types = checked_types.view();
+    ctx.instantiation = TypeInstantiationContext.init(gpa, builder.allocateInstantiationScope(), ctx.view.key.bytes);
+    defer ctx.instantiation.deinit();
+
+    const pair_node = try ctx.instNode(pair);
+    try std.testing.expectEqual(@as(u64, 2), diagnostics.nodes_created);
+    try std.testing.expectEqual(@as(u64, 0), diagnostics.unify_requests);
+    try std.testing.expectEqual(pair_node, try ctx.instNode(pair));
+    try std.testing.expectEqual(pair_node, try ctx.instNode(alias));
+    try std.testing.expectEqual(@as(u64, 2), diagnostics.nodes_created);
+    try std.testing.expectEqual(@as(u64, 0), diagnostics.unify_requests);
+    const recursive_node = try ctx.instNode(recursive);
+    try std.testing.expectEqual(@as(u64, 4), diagnostics.nodes_created);
+    try std.testing.expectEqual(@as(u64, 1), diagnostics.unify_requests);
+    for (graph.content(recursive_node).tuple) |child| try std.testing.expect(graph.sameClass(child, recursive_node));
+    try std.testing.expectEqual(recursive_node, try ctx.instNode(recursive));
+    // Evidence remains attached to permanent nodes even when a placeholder
+    // redirects. Fresh contexts allocate independent cells in this same graph.
+    graph.registerConstructorEvidenceRequest(recursive_node);
+    try std.testing.expect(graph.requestPropagatesConstructorEvidence(recursive_node));
+    const fresh = try ctx.freshInstNode(pair);
+    try std.testing.expect(!graph.sameClass(pair_node, fresh));
+    try std.testing.expectEqual(pair_node, try ctx.instNode(pair));
+    try std.testing.expectEqual(@as(u64, 6), diagnostics.nodes_created);
+}
+
+test "issue 11362: allocation failure removes checked instantiation markers" {
+    const gpa = std.testing.allocator;
+    var checked_types = checked.CheckedTypeStore{};
+    defer checked_types.deinit(gpa);
+    const recursive = try checked_types.reserveSyntheticTypeRoot(gpa, .{}, false);
+    try checked_types.fillSyntheticTypeRoot(gpa, recursive, .{ .tuple = try gpa.dupe(checked.CheckedTypeId, &.{ recursive, recursive }) });
+    const Helper = struct {
+        fn run(allocator: Allocator, view: checked.CheckedTypeStoreView, root: checked.CheckedTypeId) Allocator.Error!void {
+            var name_store = names.NameStore.init(allocator);
+            defer name_store.deinit();
+            var type_store = Type.Store.init(allocator);
+            defer type_store.deinit();
+            const graph = try InstGraph.create(allocator, &type_store, &name_store);
+            defer graph.destroy();
+            var builder: Builder = undefined;
+            builder.next_instantiation_scope = 0;
+            builder.timing = null;
+            builder.diagnostics = null;
+            builder.active_spec_job_diagnostics = null;
+            var ctx: BodyContext = undefined;
+            ctx.allocator = allocator;
+            ctx.builder = &builder;
+            ctx.graph = graph;
+            ctx.view.key = .{ .bytes = @splat(0) };
+            ctx.view.types = view;
+            ctx.instantiation = TypeInstantiationContext.init(allocator, builder.allocateInstantiationScope(), ctx.view.key.bytes);
+            defer ctx.instantiation.deinit();
+            _ = ctx.instNode(root) catch |err| {
+                std.debug.assert(ctx.instantiation.node_map.get(root) == null);
+                return err;
+            };
+            std.debug.assert(ctx.instantiation.node_map.get(root).? == .node);
+        }
+    };
+    try std.testing.checkAllAllocationFailures(std.testing.allocator, Helper.run, .{ checked_types.view(), recursive });
+}
+
+fn testLazyCheckedInstantiation(allocator: Allocator, recursive: bool) (Allocator.Error || error{ TestUnexpectedResult, TestExpectedEqual })!void {
+    const gpa = std.testing.allocator;
+    var checked_types = checked.CheckedTypeStore{};
+    defer checked_types.deinit(gpa);
+    const closed = try checked_types.reserveSyntheticTypeRoot(gpa, .{}, false);
+    try checked_types.fillSyntheticTypeRoot(gpa, closed, .empty_record);
+    const leaf = try checked_types.reserveSyntheticTypeRoot(gpa, .{}, true);
+    try checked_types.fillSyntheticTypeRoot(gpa, leaf, .{ .flex = .{} });
+    const tuple = try checked_types.reserveSyntheticTypeRoot(gpa, .{}, true);
+    try checked_types.fillSyntheticTypeRoot(gpa, tuple, .{
+        .tuple = try gpa.dupe(checked.CheckedTypeId, if (recursive) &.{ tuple, tuple, leaf } else &.{ leaf, leaf }),
+    });
+    const function = try checked_types.appendSyntheticFunctionRoot(gpa, .pure, &.{tuple}, leaf);
+    var name_store = names.NameStore.init(allocator);
+    defer name_store.deinit();
+    var type_store = Type.Store.init(allocator);
+    defer type_store.deinit();
+    const graph = try InstGraph.create(allocator, &type_store, &name_store);
+    defer graph.destroy();
+    var diagnostics: Diagnostics = .{};
+    graph.setDiagnostics(&diagnostics.graph);
+    var builder: Builder = undefined;
+    builder.next_instantiation_scope = 0;
+    builder.timing = null;
+    builder.diagnostics = &diagnostics;
+    builder.active_spec_job_diagnostics = null;
+    var ctx: BodyContext = undefined;
+    ctx.allocator = allocator;
+    ctx.builder = &builder;
+    ctx.graph = graph;
+    ctx.view.key = .{ .bytes = @splat(0) };
+    ctx.view.types = checked_types.view();
+    ctx.instantiation = TypeInstantiationContext.init(allocator, builder.allocateInstantiationScope(), ctx.view.key.bytes);
+    defer ctx.instantiation.deinit();
+    errdefer {
+        var entries = ctx.instantiation.node_map.valueIterator();
+        while (entries.next()) |entry| std.debug.assert(entry.* == .node);
+        std.debug.assert(graph.nodes.items.len == graph.request_source_interfaces.items.len);
+        std.debug.assert(graph.nodes.items.len == graph.constructor_evidence_requests.items.len);
+    }
+
+    const node = try ctx.instNode(function);
+    try std.testing.expectEqual(node, try ctx.instNode(function));
+    try std.testing.expectEqual(@as(u64, 3), diagnostics.body.checked_node_cache_misses);
+    try std.testing.expectEqual(@as(u64, if (recursive) 4 else 3), diagnostics.graph.nodes_created);
+    try std.testing.expectEqual(@as(u64, if (recursive) 1 else 0), diagnostics.graph.unify_requests);
+    const tuple_node = (try graph.functionNodes(node)).args[0];
+    const items = graph.content(tuple_node).tuple;
+    if (recursive) {
+        try std.testing.expect(graph.sameClass(tuple_node, items[0]));
+        try std.testing.expectEqual(items[0], items[1]);
+    } else {
+        try std.testing.expectEqual(items[0], items[1]);
+    }
+    graph.registerConstructorEvidenceRequest(node);
+    try std.testing.expect(graph.requestPropagatesConstructorEvidence(node));
+    const fresh = try ctx.freshInstNode(function);
+    try std.testing.expect(!graph.sameClass(node, fresh));
+    try std.testing.expect(!graph.requestPropagatesConstructorEvidence(fresh));
+    try std.testing.expectEqual(node, try ctx.instNode(function));
+
+    const closed_node = try ctx.instNode(closed);
+
+    // An open type consults only the innermost declaration's bindings.
+    var outer = collections.DenseMap(checked.CheckedTypeId, InstantiatingNode).init(allocator);
+    defer outer.deinit();
+    var inner = collections.DenseMap(checked.CheckedTypeId, InstantiatingNode).init(allocator);
+    defer inner.deinit();
+    try outer.put(leaf, .{ .node = node });
+    try ctx.instantiation.decl_scopes.append(allocator, &outer);
+    defer _ = ctx.instantiation.decl_scopes.pop();
+    try std.testing.expectEqual(node, (try ctx.scopedNode(leaf)).?);
+    try ctx.instantiation.decl_scopes.append(allocator, &inner);
+    defer _ = ctx.instantiation.decl_scopes.pop();
+    try std.testing.expect(try ctx.scopedNode(leaf) == null);
+    const inner_node = try ctx.instNode(leaf);
+    try std.testing.expect(inner_node != node);
+    try std.testing.expectEqual(closed_node, try ctx.instNode(closed));
+    try std.testing.expect(inner.get(closed) == null);
+    try std.testing.expectEqual(node, outer.get(leaf).?.node);
+}
+
+test "lazy checked instantiation allocates no acyclic placeholders and preserves fresh scopes" {
+    try testLazyCheckedInstantiation(std.testing.allocator, false);
+}
+
+test "lazy checked instantiation shares recursive placeholders and cleans failed construction" {
+    try std.testing.checkAllAllocationFailures(std.testing.allocator, testLazyCheckedInstantiation, .{true});
 }
 
 test "lazy checked instantiation allocates only recursive placeholders and clears failed builds" {

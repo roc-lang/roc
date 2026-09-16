@@ -52,7 +52,8 @@ pub const MAGIC: u32 = 0x52494c52; // "RLIR" in little-endian bytes.
 /// v30: SIMD byte alignment carries a proven constant count, alongside v29's
 ///      self-tail proofs.
 /// v31: frozen static values and explicit callable/data relocations.
-pub const FORMAT_VERSION: u32 = 31;
+/// v32: procedure specs carry content identities.
+pub const FORMAT_VERSION: u32 = 33;
 const StaticDataImage = @import("lir_image_static_data.zig").Schema(@This());
 
 /// Public `ImageError` declaration.
@@ -1329,6 +1330,7 @@ test "LIR image views empty and populated boxy tables" {
     const ret_stmt = try lowered.store.addCFStmt(.{ .ret = .{ .value = ret_value } });
     const proc_id = try lowered.store.addProcSpec(.{
         .name = lowered.store.freshSyntheticSymbol(),
+        .identity = LIR.ProcIdentity.forTest(3),
         .args = try lowered.store.addLocalSpan(&.{ret_desc_local}),
         .body = ret_stmt,
         .ret_layout = .str,
@@ -1472,6 +1474,7 @@ test "LIR image round-trips ordered procedure rewrites with relocated suffixes" 
     for (&roots, &procs) |*root, *proc| {
         root.* = try store.addCFStmt(.{ .ret = .{ .value = original } });
         proc.* = try store.addProcSpec(.{
+            .identity = LIR.ProcIdentity.forTest(@intCast(store.procSpecCount())),
             .name = store.freshSyntheticSymbol(),
             .args = .empty(),
             .body = root.*,
@@ -1765,7 +1768,7 @@ test "mapped frozen graph preserves explicit data callable and helper relocation
     defer program.deinit();
     const value_slot: LIR.StaticDataId = @enumFromInt(program.static_data_values.items.len);
     try program.static_data_values.append(allocator, .{ .initializer = null, .layout_idx = .u64 });
-    const worker = try program.store.addProcSpec(.{ .name = program.store.freshSyntheticSymbol(), .args = .empty(), .body = null, .ret_layout = .zst });
+    const worker = try program.store.addProcSpec(.{ .name = program.store.freshSyntheticSymbol(), .identity = LIR.ProcIdentity.forTest(2), .args = .empty(), .body = null, .ret_layout = .zst });
     const memory = try allocator.alignedAlloc(u8, .@"16", 16384);
     defer allocator.free(memory);
     var fixed = std.heap.FixedBufferAllocator.init(memory);
@@ -1832,7 +1835,7 @@ test "in-place frozen image retains existing LIR arrays" {
     const local = try program.store.addLocal(.{ .layout_idx = .u64 });
     const ret = try program.store.addCFStmt(.{ .ret = .{ .value = local } });
     const body = try program.store.addCFStmt(.{ .assign_literal = .{ .target = local, .value = .{ .static_data = value_slot }, .next = ret } });
-    const proc = try program.store.addProcSpec(.{ .name = .fromRaw(1), .args = .empty(), .frame_locals = try program.store.addLocalSpan(&.{local}), .body = body, .ret_layout = .u64 });
+    const proc = try program.store.addProcSpec(.{ .name = .fromRaw(1), .identity = LIR.ProcIdentity.forTest(1), .args = .empty(), .frame_locals = try program.store.addLocalSpan(&.{local}), .body = body, .ret_layout = .u64 });
     try program.root_procs.append(image_allocator, proc);
     var value: [8]u8 = undefined;
     std.mem.writeInt(u64, &value, 42, .little);

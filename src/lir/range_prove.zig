@@ -137,6 +137,7 @@ test "range prove ordered procedure runs match whole-store constant arithmetic a
             .next = right,
         } });
         _ = try store.addProcSpec(.{
+            .identity = LIR.ProcIdentity.forTest(@intCast(store.procSpecCount())),
             .name = store.freshSyntheticSymbol(),
             .args = .empty(),
             .body = body,
@@ -145,6 +146,7 @@ test "range prove ordered procedure runs match whole-store constant arithmetic a
         const arg = try store.addLocal(.{ .layout_idx = .u64 });
         const noop_body = try store.addCFStmt(.{ .ret = .{ .value = arg } });
         const noop = try store.addProcSpec(.{
+            .identity = LIR.ProcIdentity.forTest(@intCast(store.procSpecCount())),
             .name = store.freshSyntheticSymbol(),
             .args = try store.addLocalSpan(&.{arg}),
             .body = noop_body,

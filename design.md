@@ -2507,10 +2507,13 @@ dependency. A non-cryptographic hash makes such a pair cheap to construct, and
 because the attacker supplies both halves the relevant bound is a birthday
 collision, so 128 bits (2^64 work) is not enough and 256 bits is required. The
 digests are also persisted in caches and compared across machines, which rules
-out keying them with a secret. Every 64-bit compiler target is built with the
-CPU's SHA-256 instructions enabled (`addSha256Floor` in build.zig) and has no
-software rounds; only 32-bit targets such as wasm32 compute the digest in
-software.
+out keying them with a secret. Nearly every 64-bit compiler target is built with
+the CPU's SHA-256 instructions enabled (`addSha256Floor` in build.zig) and has no
+software rounds; 32-bit targets such as wasm32 and x86_64 macOS compute the
+digest in software, which yields the same digest bytes more slowly. x86_64 macOS
+is the exception because Apple's Intel Macs are Skylake through Comet Lake cores,
+which have no SHA extension to put in that target's baseline
+(`usesSoftwareSha256` in src/target/mod.zig).
 
 All producers for a key domain must agree on the encoding, including child
 digests, length prefixes, identity numbering, and domain tags. The hash
@@ -8054,6 +8057,10 @@ destination shape. It cannot use the call expression's own type to select one:
 lowering may receive a different expected destination type. The existing affine
 destination-demand proof alone selects reuse during emission. Preparing a
 procedure identity never makes it reachable; only emitted references do.
+Specializations that render to one procedure identity share one procedure,
+and the specialization that interned it owns the body lowering: the first
+emitted reference to any of them queues the owner exactly once, so a prepared
+placeholder never survives as a reachable procedure without a body.
 
 Each callback reads a frozen coordinator prefix and writes a private LIR store
 suffix. Strings, names, inline scopes, patterns, control-flow tables, erased
@@ -8095,19 +8102,20 @@ identity and backing relationships, constructor-evidence requests, and generated
 iterator membership and provenance counts belong only to that graph epoch.
 Only the cumulative immutable type and name stores survive the reset.
 
-Graph-owned generated iterators are indexed by their stable declaration, kind,
-and callable evidence. Candidates in that bucket compare live argument roots,
-so argument unions do not stale the index. Content replacement and root union
-update producer membership explicitly. A monotone provenance counter lets both
-iterator finalizers return immediately for graphs without generated iterators.
+Generated iterator reuse is indexed by the exact declaration, iterator kind,
+callable evidence, and current argument-root tuple. Reverse argument dependencies
+rekey only entries touched by a union; content replacement updates provenance
+membership explicitly. Equal keys retain independently constructed nodes until
+an explicit relation joins them. Monotone provenance counts let finalization
+skip graphs that have never contained generated iterators, and private-evidence
+containment diagnostics distinguish guard returns from actual containment queries.
+
 Generated identity hashes a snapshot of the current graph representation after
 joins. An imported request's retained type remains its original witness and
 cannot supply the identity of a graph-owned producer that replaced it.
 Joining distinct iterator representations invalidates current snapshots and
 durable views, including snapshots of parents that reach the joined class.
 The losing representation's cached view cannot become the winner's view.
-Generated-private containment diagnostics distinguish guard returns from queries
-that reach the containment cache or walker.
 
 Declaration-backed nominal reuse is indexed by declaration identity plus the
 current argument-root tuple. Root unions rekey affected entries, so lookup cost

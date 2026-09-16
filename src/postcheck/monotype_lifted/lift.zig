@@ -509,6 +509,7 @@ const Lifter = struct {
         self.output.setFn(fn_id, .{
             .symbol = def.symbol,
             .source = source,
+            .root_identity = def.root_identity,
             .signature = if (def.fn_id) |source_fn_id| switch (self.source.fnSignatureRelation(source_fn_id)) {
                 .independent_roots => null,
                 .exact_graph => source.?.mono_fn_ty,

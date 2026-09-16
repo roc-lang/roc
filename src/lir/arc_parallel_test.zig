@@ -24,6 +24,7 @@ const Fixture = struct {
             const frame = try self.store.addLocalSpan(&.{ number, text });
             const body = try self.store.addCFStmt(.{ .ret = .{ .value = number } });
             _ = try self.store.addProcSpec(.{
+                .identity = core.LIR.ProcIdentity.forTest(@intCast(self.store.procSpecCount())),
                 .name = self.store.freshSyntheticSymbol(),
                 .args = frame,
                 .frame_locals = frame,
@@ -306,6 +307,7 @@ const OutcomeFixture = struct {
         } });
         const callee_body = try switchStmt(s, choose, mutate, failure);
         const callee = try s.addProcSpec(.{
+            .identity = core.LIR.ProcIdentity.forTest(@intCast(s.procSpecCount())),
             .name = s.freshSyntheticSymbol(),
             .args = try s.addLocalSpan(&.{ param, choose }),
             .frame_locals = try s.addLocalSpan(&.{ param, choose, changed, result }),
@@ -356,6 +358,7 @@ const OutcomeFixture = struct {
             .next = make_list,
         } });
         _ = try s.addProcSpec(.{
+            .identity = core.LIR.ProcIdentity.forTest(@intCast(s.procSpecCount())),
             .name = s.freshSyntheticSymbol(),
             .args = try s.addLocalSpan(&.{caller_choose}),
             .frame_locals = try s.addLocalSpan(&.{ item, input, caller_choose, call_result, discriminant, answer }),

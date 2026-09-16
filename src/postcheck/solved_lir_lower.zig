@@ -17,6 +17,7 @@ const match_tree = @import("match_tree.zig");
 const Mono = @import("monotype/ast.zig");
 const Lifted = @import("monotype_lifted/ast.zig");
 const SolvedInline = @import("solved_inline.zig");
+const proc_identity = @import("proc_identity.zig");
 const Solved = @import("lambda_solved/ast.zig");
 const SolvedType = @import("lambda_solved/type.zig");
 const LambdaMono = @import("lambda_mono/ast.zig");
@@ -127,6 +128,9 @@ pub const DictSeedMode = enum {
 
 /// Configuration for direct solved-to-LIR lowering.
 pub const Options = struct {
+    /// The object cache asked for closed specializations that no
+    /// compile-time root reaches.
+    spec_cache: ?Common.SpecCacheLookup = null,
     inline_plan: SolvedInline.Plan = .{},
     /// Reuse checking workers for prepared procedure-body lowering.
     post_check_executor: ?base.post_check_task_executor.Executor = null,
@@ -189,8 +193,15 @@ pub fn run(
     var owned = solved;
     errdefer owned.deinit();
 
+    const source_digests = try allocator.alloc(?proc_identity.Identity, owned.lifted.fnCount());
+    defer allocator.free(source_digests);
+    for (source_digests, 0..) |*digest, index| {
+        digest.* = owned.lifted.fnSourceDigest(@enumFromInt(@as(u32, @intCast(index))));
+    }
+
     var lowerer = try Lowerer.init(allocator, target_usize, &owned, options);
     errdefer lowerer.deinit();
+    lowerer.source_digests = source_digests;
 
     try lowerer.result.store.setSourceFiles(owned.lifted.sourceFiles());
     try lowerer.prepareExpectSites();
@@ -347,6 +358,13 @@ const FnEntry = struct {
     ret: Type.TypeId,
     capture_arg_ty: ?Type.TypeId,
     proc: ?LIR.LirProcSpecId,
+    /// The plain specialization this erased-ABI specialization forwards to
+    /// when the object cache holds the procedure; see `finalizeFnProc`.
+    forwards_to: ?Type.FnId = null,
+    /// The specialization whose reach-queue entry lowers `proc`'s body.
+    /// Specializations that render to one procedure identity share one proc,
+    /// and exactly one of them owns its lowering.
+    proc_owner: ?Type.FnId = null,
     worker_admissible: ?bool = null,
 };
 
@@ -520,6 +538,9 @@ const Lowerer = struct {
     allocator: std.mem.Allocator,
     solved: *const Solved.Program,
     solved_types: SolvedType.Store.View,
+    /// Checked source digest per lifted function, borrowed for the whole
+    /// lowering; see `proc_identity.Renderer`.
+    source_digests: []const ?proc_identity.Identity = &.{},
     post_check_executor: ?base.post_check_task_executor.Executor,
     types: Type.Store,
     result: LirProgram.Result,
@@ -528,6 +549,10 @@ const Lowerer = struct {
     fn_specs: std.ArrayList(FnSpec),
     fn_entries: std.ArrayList(FnEntry),
     fn_spec_map: std.HashMap(FnSpec, Type.FnId, FnSpecContext, std.hash_map.default_max_load_percentage),
+    /// The specialization that interned each procedure identity and owns its
+    /// body lowering. Distinct Lambda Mono specializations that render the
+    /// same identity are the same procedure and share the owner's proc.
+    procs_by_identity: std.AutoHashMap(LIR.ProcIdentity, Type.FnId),
     fn_written: std.ArrayList(bool),
     fn_reachable: std.ArrayList(bool),
     fn_reach_queue: std.ArrayList(Type.FnId),
@@ -539,12 +564,24 @@ const Lowerer = struct {
     list_in_place_map: bool,
     dict_seed_mode: DictSeedMode,
     proc_debug_names: bool,
+    spec_cache: ?Common.SpecCacheLookup,
+    /// True while the closure of the compile-time roots is being lowered.
+    /// Those procedures run in the compile-time evaluator, which has no
+    /// object-cache entries, so only procedures first reached afterwards may
+    /// be served from the cache.
+    comptime_phase: bool,
+    /// Drain positions, kept across calls so a second drain resumes.
+    fn_queue_index: usize,
+    initializer_queue_index: usize,
     layout_request_const_plans: bool,
     /// Match sites statically resolved by `foldListMapCanReuseMatch`,
     /// recorded (Debug only) so the Lambda Mono verifier replays them.
     folded_map_matches: std.ArrayList(Lifted.Program.FoldedMatch),
     /// Source functions indexed by their stage-stable symbols.
     source_symbols: std.AutoHashMap(Common.Symbol, Lifted.FnId),
+    /// Type digests shared by every procedure identity rendering; see
+    /// `proc_identity.Memo`.
+    identity_memo: proc_identity.Memo,
     /// Lowered capture record of every capture span seen so far. A capture
     /// record depends only on its captures, so one record serves every
     /// function type that carries the same span.
@@ -767,6 +804,7 @@ const Lowerer = struct {
             .fn_specs = .empty,
             .fn_entries = .empty,
             .fn_spec_map = std.HashMap(FnSpec, Type.FnId, FnSpecContext, std.hash_map.default_max_load_percentage).initContext(allocator, .{}),
+            .procs_by_identity = std.AutoHashMap(LIR.ProcIdentity, Type.FnId).init(allocator),
             .fn_written = .empty,
             .fn_reachable = .empty,
             .fn_reach_queue = .empty,
@@ -777,12 +815,17 @@ const Lowerer = struct {
             .list_in_place_map = options.list_in_place_map,
             .dict_seed_mode = options.dict_seed_mode,
             .proc_debug_names = options.proc_debug_names,
+            .spec_cache = options.spec_cache,
+            .comptime_phase = true,
+            .fn_queue_index = 0,
+            .initializer_queue_index = 0,
             .layout_request_const_plans = options.layout_request_const_plans,
             .debug_materialized_out = options.debug_materialized_out,
             .parallel_metrics = options.parallel_metrics,
             .root_requests = .{ .test_plan_metadata = options.test_plan_metadata },
             .folded_map_matches = .empty,
             .source_symbols = std.AutoHashMap(Common.Symbol, Lifted.FnId).init(allocator),
+            .identity_memo = proc_identity.Memo.init(allocator),
             .capture_types = std.AutoHashMap(CaptureSpanKey, Type.TypeId).init(allocator),
             .captures = collections.DenseMap(Lifted.LocalId, CaptureBinding).init(allocator),
             .recursive_value_locals = recursive_value_locals,
@@ -931,10 +974,12 @@ const Lowerer = struct {
         self.captures.deinit();
         self.capture_types.deinit();
         self.source_symbols.deinit();
+        self.identity_memo.deinit();
         self.fn_reach_queue.deinit(self.allocator);
         self.fn_reachable.deinit(self.allocator);
         self.fn_written.deinit(self.allocator);
         self.fn_spec_map.deinit();
+        self.procs_by_identity.deinit();
         self.fn_entries.deinit(self.allocator);
         self.fn_specs.deinit(self.allocator);
         self.type_map.deinit();
@@ -988,10 +1033,12 @@ const Lowerer = struct {
         self.captures.deinit();
         self.capture_types.deinit();
         self.source_symbols.deinit();
+        self.identity_memo.deinit();
         self.fn_reach_queue.deinit(self.allocator);
         self.fn_reachable.deinit(self.allocator);
         self.fn_written.deinit(self.allocator);
         self.fn_spec_map.deinit();
+        self.procs_by_identity.deinit();
         self.fn_entries.deinit(self.allocator);
         self.fn_specs.deinit(self.allocator);
         self.type_map.deinit();
@@ -1037,7 +1084,19 @@ const Lowerer = struct {
                 .fn_id = fn_id,
                 .request = root.request,
             });
-            _ = try self.markReachableFn(fn_id);
+        }
+        // The compile-time roots' closure lowers first, so that everything
+        // the evaluator runs is known before any runtime-only procedure can
+        // be served from the object cache.
+        for (self.roots.items) |root| {
+            if (!rootRunsAtCompileTime(root.request)) continue;
+            _ = try self.markReachableFn(root.fn_id);
+        }
+        try self.lowerReachableFns();
+        self.comptime_phase = false;
+        for (self.roots.items) |root| {
+            if (rootRunsAtCompileTime(root.request)) continue;
+            _ = try self.markReachableFn(root.fn_id);
         }
 
         try self.layout_requests.ensureTotalCapacity(self.allocator, self.solved.layout_requests.items.len);
@@ -1193,6 +1252,11 @@ const Lowerer = struct {
         worker.tail_call_scratch = workspace.tail_call_scratch;
         worker.return_forwarding_ambiguous = false;
         worker.return_forwarding_repeatable_depth = 0;
+        // Packed literal ids name string views in the body shard's own store,
+        // which ordered commit relocates. A worker therefore derives its own
+        // and never reads or grows the coordinator's cache.
+        worker.packed_plans = collections.DenseMap(layout.Idx, lir_core.PackedData.Plan).init(allocator);
+        worker.packed_literals = std.AutoHashMap(PackedLiteralKey, LIR.ListLiteral).init(allocator);
         worker.erased_owner_state_prefix = coordinator.erased_owner_states.items;
         worker.erased_owner_states = workspace.erased_owner_states;
         worker.erased_call_owner_uses = workspace.erased_call_owner_uses;
@@ -1204,6 +1268,7 @@ const Lowerer = struct {
     }
 
     fn deinitFnBodyWorker(self: *Lowerer, workspace: *FnBodyWorkspace, deinit_store: bool) void {
+        self.deinitPackedPlans();
         self.result.boxy_erased_arg_layouts.deinit(self.allocator);
         self.worker_discovered_fns.deinit(self.allocator);
         self.folded_map_matches.deinit(self.allocator);
@@ -1310,8 +1375,12 @@ const Lowerer = struct {
     }
 
     fn lowerReachableFns(self: *Lowerer) Common.LowerError!void {
-        var fn_queue_index: usize = 0;
-        var initializer_queue_index: usize = 0;
+        var fn_queue_index = self.fn_queue_index;
+        var initializer_queue_index = self.initializer_queue_index;
+        defer {
+            self.fn_queue_index = fn_queue_index;
+            self.initializer_queue_index = initializer_queue_index;
+        }
         while (fn_queue_index < self.fn_reach_queue.items.len or initializer_queue_index < self.static_initializer_queue.items.len) {
             while (fn_queue_index < self.fn_reach_queue.items.len) {
                 // Prepare the complete currently-reachable epoch before lowering
@@ -1570,6 +1639,11 @@ const Lowerer = struct {
                 .roc => |body| body,
                 .hosted => return false,
             };
+            // A procedure served from the object cache has no body to lower;
+            // the serial path records that and moves on.
+            if (l.fn_entries.items[@intFromEnum(fn_id)].proc) |proc| {
+                if (l.result.store.getProcSpec(proc).external) return false;
+            }
             try self.add(.{ .proc = fn_id });
             try self.add(.{ .expr = body });
             while (self.work.pop()) |item| {
@@ -2012,6 +2086,12 @@ const Lowerer = struct {
         self.aggregate_bindings = &aggregates;
         defer self.aggregate_bindings = saved_aggregates;
         const proc_id = try self.procPlaceholder(fn_id);
+        if (self.result.store.getProcSpec(proc_id).external) {
+            // The object cache provides this procedure's code; its body is
+            // never lowered, and nothing it would reach is reached through it.
+            if (!self.worker_callback) self.fn_written.items[@intFromEnum(fn_id)] = true;
+            return null;
+        }
         const entry = self.fn_entries.items[@intFromEnum(fn_id)];
         const source_fn = self.solved.lifted.getFn(spec.source);
         var lowered_body: ?LoweredFnBody = null;
@@ -2066,6 +2146,19 @@ const Lowerer = struct {
             .erased => {
                 if (proc_args.len != lifted_args.len + 2) Common.invariant("erased proc placeholder had wrong arity");
             },
+        }
+
+        if (entry.forwards_to) |plain_fn| {
+            lowered_body = try self.lowerCachedProcForwarder(proc_id, fn_id, entry.ret, plain_fn, proc_args[0..lifted_args.len]);
+            if (!self.worker_callback) {
+                const proc_ptr = self.result.store.getProcSpecPtr(proc_id);
+                proc_ptr.body = lowered_body.?.body;
+                proc_ptr.frame_locals = lowered_body.?.frame_locals;
+                proc_ptr.stack_probe = lowered_body.?.stack_probe;
+                proc_ptr.tail_calls = lowered_body.?.tail_calls;
+                self.fn_written.items[@intFromEnum(fn_id)] = true;
+            }
+            return lowered_body;
         }
 
         switch (source_fn.body) {
@@ -2154,7 +2247,8 @@ const Lowerer = struct {
                 }
             },
             .hosted => {
-                if (self.result.store.getProcSpec(proc_id).hosted == null) {
+                const proc = self.result.store.getProcSpec(proc_id);
+                if (proc.hosted == null and !proc.external) {
                     Common.invariant("hosted function reached direct LIR without hosted metadata");
                 }
             },
@@ -2164,6 +2258,56 @@ const Lowerer = struct {
             self.fn_written.items[@intFromEnum(fn_id)] = true;
         }
         return lowered_body;
+    }
+
+    /// Body of an erased-ABI specialization of a procedure the object cache
+    /// holds: the cached procedure takes the plain arguments, so this body
+    /// forwards them and returns the result. The erased capture and result
+    /// arguments are unused, exactly as in a capture-free closure's own
+    /// erased entry.
+    fn lowerCachedProcForwarder(
+        self: *Lowerer,
+        proc_id: LIR.LirProcSpecId,
+        fn_id: Type.FnId,
+        ret_ty: Type.TypeId,
+        plain_fn: Type.FnId,
+        plain_args: []const LIR.LocalId,
+    ) Common.LowerError!LoweredFnBody {
+        const saved_ret_ty = self.current_ret_ty;
+        const saved_proc_locals = self.current_proc_locals;
+        const saved_current_fn = self.current_fn;
+        const saved_current_proc = self.current_proc;
+        var proc_locals: ProcLocalSet = .{};
+        defer proc_locals.deinit(self.allocator);
+        self.current_proc_locals = &proc_locals;
+        self.current_ret_ty = ret_ty;
+        self.current_fn = fn_id;
+        self.current_proc = proc_id;
+        defer {
+            self.current_ret_ty = saved_ret_ty;
+            self.current_proc_locals = saved_proc_locals;
+            self.current_fn = saved_current_fn;
+            self.current_proc = saved_current_proc;
+        }
+        try self.noteLocalSpan(self.result.store.getProcSpec(proc_id).args);
+        const ret_layout = self.result.store.getProcSpec(proc_id).ret_layout;
+        const ret_local = try self.addLocalForLayout(ret_layout);
+        const ret_stmt = try self.result.store.addCFStmt(.{ .ret = .{ .value = ret_local } });
+        const body = try self.result.store.addCFStmt(.{ .assign_call = .{
+            .target = ret_local,
+            .proc = try self.markReachableFn(plain_fn),
+            .args = try self.result.store.addLocalSpan(plain_args),
+            .is_cold = false,
+            .next = ret_stmt,
+        } });
+        const frame_locals = try self.writeFrameLocals(&proc_locals);
+        const proc = self.result.store.getProcSpec(proc_id);
+        return .{
+            .body = body,
+            .frame_locals = frame_locals,
+            .stack_probe = self.stackProbeForProc(proc.args, frame_locals, proc.ret_layout),
+            .tail_calls = null,
+        };
     }
 
     fn hostedProcForSource(self: *Lowerer, source: ?Mono.FnTemplate) Common.LowerError!?LIR.HostedProc {
@@ -2283,10 +2427,18 @@ const Lowerer = struct {
             return proc;
         }
         const proc = try self.procPlaceholder(fn_id);
-        if (!self.fn_reachable.items[index]) {
-            self.fn_reachable.items[index] = true;
-            try self.fn_reach_queue.append(self.allocator, fn_id);
+        if (self.fn_reachable.items[index]) return proc;
+        self.fn_reachable.items[index] = true;
+        // Specializations sharing this proc queue its body under the owner,
+        // whichever of them an emitted reference reaches first.
+        const owner = self.fn_entries.items[index].proc_owner orelse
+            Common.invariant("direct LIR proc placeholder had no lowering owner");
+        const owner_index = @intFromEnum(owner);
+        if (owner_index != index) {
+            if (self.fn_reachable.items[owner_index]) return proc;
+            self.fn_reachable.items[owner_index] = true;
         }
+        try self.fn_reach_queue.append(self.allocator, owner);
         return proc;
     }
 
@@ -2325,6 +2477,56 @@ const Lowerer = struct {
         const arg_tys = self.types.span(entry.args);
         const lifted_args = self.solved.lifted.typedLocalSpan(source_fn.args);
         if (arg_tys.len != lifted_args.len) Common.invariant("direct Lambda Mono function arity changed after Lambda Solved");
+
+        const identity = try self.specIdentity(spec);
+        const plain_spec = spec.abi == .finite and source_fn.spec_constr_pattern == null and self.captureSpan(spec.captures).len == 0 and !spec.return_reuse.enabled();
+        var cached: ?Common.SpecCacheHit = null;
+        // Monotype completed a cached template's record without a body. That
+        // record is the cached procedure only for its own lifted function:
+        // a SpecConstr clone or a second lowering of the same template has a
+        // body and lowers normally.
+        if (source_fn.body == .hosted) if (source_fn.source) |template| if (template.cached) |hit| {
+            if (plain_spec) {
+                if (!std.mem.eql(u8, &hit.identity, &identity.bytes)) {
+                    Common.invariant("object cache entry identity disagrees with the identity lowered for its specialization key");
+                }
+                cached = hit;
+            } else {
+                // A closed procedure has no captures and no erased result, so
+                // the only other specialization is the erased-callable ABI.
+                // Its body forwards the plain arguments to the cached
+                // procedure.
+                if (spec.abi != .erased or source_fn.spec_constr_pattern != null or self.captureSpan(spec.captures).len != 0 or spec.return_reuse.enabled()) {
+                    Common.invariant("cached closed procedure was specialized with captures or an erased result");
+                }
+                entry.forwards_to = try self.ensureOwnFnSpec(spec.source, .finite);
+            }
+        };
+        if (cached == null and !self.comptime_phase and plain_spec) {
+            if (self.spec_cache) |cache| {
+                if (source_fn.source) |template| {
+                    if (template.spec_key) |key| {
+                        if (cache.lookup(key.bytes)) |hit| {
+                            if (std.mem.eql(u8, &hit.identity, &identity.bytes)) cached = hit;
+                            if (pack_trace_available and packTraceEnabled()) std.debug.print("lookup direct-lir key={x} {s}\n", .{ key.bytes[0..8], if (cached != null) "hit" else "identity-mismatch" });
+                        } else if (pack_trace_available and packTraceEnabled()) std.debug.print("lookup direct-lir key={x} miss\n", .{key.bytes[0..8]});
+                    }
+                }
+            }
+        } else if (pack_trace_available and self.spec_cache != null and packTraceEnabled()) {
+            if (source_fn.source) |template| if (template.spec_key) |key| std.debug.print("lookup direct-lir key={x} skipped comptime={} plain={} cached={}\n", .{ key.bytes[0..8], self.comptime_phase, plain_spec, cached != null });
+        }
+        if (self.procs_by_identity.get(identity)) |owner| {
+            // Another specialization interned this procedure. Share its proc;
+            // the owner's reach-queue entry lowers the body once, whether the
+            // owner or this spec is the first one an emitted reference reaches.
+            const existing = self.fn_entries.items[@intFromEnum(owner)].proc orelse
+                Common.invariant("direct LIR proc identity owner had no proc");
+            entry.proc = existing;
+            entry.proc_owner = owner;
+            self.fn_entries.items[index] = entry;
+            return existing;
+        }
 
         const arg_count = lifted_args.len + switch (spec.abi) {
             .finite => (if (entry.capture_arg_ty == null) @as(usize, 0) else 1) +
@@ -2377,6 +2579,7 @@ const Lowerer = struct {
         };
         const proc = try self.result.store.addProcSpec(.{
             .name = lirSymbol(entry.symbol),
+            .identity = identity,
             .args = args_span,
             .iterator_fusion_scope = source_fn.iterator_fusion_scope,
             .erased_reuse_arg = erased_reuse_arg,
@@ -2390,6 +2593,10 @@ const Lowerer = struct {
             .erased_capture_arg = if (spec.abi == .erased) arg_locals[lifted_args.len] else null,
             .abi = if (spec.abi == .erased) .erased_callable else .roc,
             .hosted = try self.hostedProcForSource(source_fn.source),
+            .external = cached != null,
+            .rc_borrowed_params = if (cached) |hit| hit.rc_borrowed_params else 0,
+            .rc_ret_borrowed = if (cached) |hit| hit.rc_ret_borrowed else false,
+            .rc_ret_lenders = if (cached) |hit| hit.rc_ret_lenders else 0,
             .stack_probe = self.stackProbeForProc(args_span, LIR.LocalSpan.empty(), ret_layout),
         });
         if (self.proc_debug_names) {
@@ -2397,7 +2604,16 @@ const Lowerer = struct {
                 try self.result.store.setProcDebugName(proc, self.solved.lifted.names.exportNameText(name));
             }
         }
+        try self.procs_by_identity.putNoClobber(identity, fn_id);
+        if (source_fn.source) |template| {
+            if (template.spec_key) |key| {
+                if (plain_spec) {
+                    try self.result.spec_procs.append(self.allocator, .{ .key = key.bytes, .proc = proc });
+                }
+            }
+        }
         entry.proc = proc;
+        entry.proc_owner = fn_id;
         self.fn_entries.items[index] = entry;
         return proc;
     }
@@ -3093,6 +3309,40 @@ const Lowerer = struct {
         return id;
     }
 
+    /// Identity of a specialization procedure, from its lifted source and the
+    /// solved function type it was specialized at.
+    fn specIdentity(self: *Lowerer, spec: FnSpec) std.mem.Allocator.Error!LIR.ProcIdentity {
+        const renderer = proc_identity.Renderer{
+            .allocator = self.allocator,
+            .types = self.solved_types,
+            .names = &self.solved.lifted.names,
+            .fn_tys = self.solved.fn_tys.items,
+            .source_digests = self.source_digests,
+            .fn_by_symbol = &self.source_symbols,
+            .memo = &self.identity_memo,
+        };
+        const return_reuse: []const u8 = switch (spec.return_reuse) {
+            .none => "no-return-reuse",
+            .erased_callable => "erased-return-reuse",
+        };
+        return .{ .bytes = try renderer.specIdentity(spec.source, spec.solved_fn_ty, self.captureSpan(spec.captures), @tagName(spec.abi), return_reuse) };
+    }
+
+    /// Identity of a static-initializer procedure. These procedures exist only
+    /// so target static-data materialization can run a value's construction;
+    /// they are never emitted by a runtime backend, so their identity names
+    /// the value's layout and static-data slot within this program.
+    fn staticInitializerIdentity(self: *Lowerer, request: StaticInitializerRequest) std.mem.Allocator.Error!LIR.ProcIdentity {
+        var digests = try layout.Digests.init(self.allocator, &self.result.layouts);
+        defer digests.deinit();
+        var hasher = base.TypeDigestHasher.init();
+        hasher.update("roc.proc.static-initializer.v1");
+        hasher.update(&try digests.get(request.layout_idx));
+        const slot: u32 = @intFromEnum(request.static_data);
+        hasher.update(&[_]u8{ @truncate(slot), @truncate(slot >> 8), @truncate(slot >> 16), @truncate(slot >> 24) });
+        return .{ .bytes = hasher.finalResult() };
+    }
+
     fn lirStaticDataFor(
         self: *Lowerer,
         candidate: Mono.StaticDataCandidate,
@@ -3112,6 +3362,7 @@ const Lowerer = struct {
 
         const proc = try self.result.store.addProcSpec(.{
             .name = lirSymbol(self.symbols.fresh()),
+            .identity = try self.staticInitializerIdentity(request),
             .args = LIR.LocalSpan.empty(),
             .body = null,
             .ret_layout = layout_idx,
@@ -12381,4 +12632,21 @@ test "named layout index applies backing metadata by named type policy" {
 
 test "direct LIR lower declarations are referenced" {
     std.testing.refAllDecls(@This());
+}
+
+/// Whether a root's procedure runs in the compile-time evaluator.
+/// Builds without libc (the playground) never read the environment and
+/// compile no trace output.
+const pack_trace_available = @import("builtin").link_libc;
+
+/// `ROC_PACK_TRACE` is set: print every object cache lookup.
+fn packTraceEnabled() bool {
+    return std.c.getenv("ROC_PACK_TRACE") != null;
+}
+
+fn rootRunsAtCompileTime(request: check.CheckedModule.RootRequest) bool {
+    return switch (request.kind) {
+        .compile_time_constant, .compile_time_callable => true,
+        .runtime_entrypoint, .provided_export, .platform_required_binding, .hosted_export, .test_expect, .repl_expr, .dev_expr => false,
+    };
 }

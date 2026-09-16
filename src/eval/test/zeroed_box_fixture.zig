@@ -51,6 +51,7 @@ pub fn run(allocator: std.mem.Allocator) Error!void {
     const cast = try lowLevelStmt(&store, p, .ptr_cast, &.{cell}, load_pre);
     const alloc = try lowLevelStmt(&store, cell, .box_alloc_zeroed, &.{}, cast);
     const proc = try store.addProcSpec(.{
+        .identity = lir.LIR.ProcIdentity.forTest(@intCast(store.procSpecCount())),
         .name = store.freshSyntheticSymbol(),
         .args = try store.addLocalSpan(&.{}),
         .frame_locals = try store.addLocalSpan(&.{ cell, p, pre, v, st, post, sum }),

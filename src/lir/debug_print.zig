@@ -710,6 +710,7 @@ test "debug print includes boxy RC helper descriptor references" {
     } });
     const proc = try store.addProcSpec(.{
         .name = .none,
+        .identity = LIR.ProcIdentity.forTest(2),
         .args = .empty(),
         .body = incref,
         .ret_layout = .str,
@@ -813,6 +814,7 @@ test "debug print includes boxy statement surface" {
     } });
     const proc = try store.addProcSpec(.{
         .name = .none,
+        .identity = LIR.ProcIdentity.forTest(1),
         .args = .empty(),
         .body = dict_ref,
         .ret_layout = .u64,

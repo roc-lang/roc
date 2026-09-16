@@ -1123,7 +1123,7 @@ fn expectInlinePlanDecision(
     lifted = undefined;
     defer solved.deinit();
 
-    var inline_plan = try postcheck.SolvedInline.analyze(allocator, .wrappers, procedure_usage.view(), &solved);
+    var inline_plan = try postcheck.SolvedInline.analyze(allocator, .wrappers, procedure_usage.view(), &solved, false);
     defer inline_plan.deinit();
     const plan = inline_plan.view();
 
