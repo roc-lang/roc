@@ -1221,6 +1221,11 @@ const Lowerer = struct {
         worker.tail_call_scratch = workspace.tail_call_scratch;
         worker.return_forwarding_ambiguous = false;
         worker.return_forwarding_repeatable_depth = 0;
+        // Packed literal ids name string views in the body shard's own store,
+        // which ordered commit relocates. A worker therefore derives its own
+        // and never reads or grows the coordinator's cache.
+        worker.packed_plans = collections.DenseMap(layout.Idx, lir_core.PackedData.Plan).init(allocator);
+        worker.packed_literals = std.AutoHashMap(PackedLiteralKey, LIR.ListLiteral).init(allocator);
         worker.erased_owner_state_prefix = coordinator.erased_owner_states.items;
         worker.erased_owner_states = workspace.erased_owner_states;
         worker.erased_call_owner_uses = workspace.erased_call_owner_uses;
@@ -1232,6 +1237,7 @@ const Lowerer = struct {
     }
 
     fn deinitFnBodyWorker(self: *Lowerer, workspace: *FnBodyWorkspace, deinit_store: bool) void {
+        self.deinitPackedPlans();
         self.result.boxy_erased_arg_layouts.deinit(self.allocator);
         self.worker_discovered_fns.deinit(self.allocator);
         self.folded_map_matches.deinit(self.allocator);
