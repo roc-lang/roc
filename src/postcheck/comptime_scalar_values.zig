@@ -175,24 +175,27 @@ test "completed successful scalar roots decode to literals; failed and aggregate
     failed_record[failed_offset] = 1;
     const relocation = [_]Program.StaticDataRelocation{.{ .offset = 0, .target_symbol_name = "backing" }};
     var exports = [_]Program.StaticDataExport{
-        .{ .symbol_name = "s0", .value_id = @enumFromInt(0), .bytes = &ok_record, .alignment = 8 },
-        .{ .symbol_name = "s1", .value_id = @enumFromInt(1), .bytes = &.{ 0x39, 0x30, 0, 0 }, .alignment = 4 },
-        .{ .symbol_name = "s2", .value_id = @enumFromInt(2), .bytes = &failed_record, .alignment = 8 },
-        .{ .symbol_name = "s3", .value_id = @enumFromInt(3), .bytes = &.{ 7, 0, 0, 0 }, .alignment = 4 },
-        .{ .symbol_name = "s4", .value_id = @enumFromInt(4), .bytes = &ok_record, .alignment = 8 },
-        .{ .symbol_name = "s5", .value_id = @enumFromInt(5), .bytes = &.{ 0xfe, 0xff }, .alignment = 2 },
-        .{ .symbol_name = "s6", .value_id = @enumFromInt(6), .bytes = &([_]u8{0} ** 24), .alignment = 8, .relocations = &relocation },
+        .{ .symbol_name = "s0", .bytes = &ok_record, .alignment = 8 },
+        .{ .symbol_name = "s1", .bytes = &.{ 0x39, 0x30, 0, 0 }, .alignment = 4 },
+        .{ .symbol_name = "s2", .bytes = &failed_record, .alignment = 8 },
+        .{ .symbol_name = "s3", .bytes = &.{ 7, 0, 0, 0 }, .alignment = 4 },
+        .{ .symbol_name = "s4", .bytes = &ok_record, .alignment = 8 },
+        .{ .symbol_name = "s5", .bytes = &.{ 0xfe, 0xff }, .alignment = 2 },
+        .{ .symbol_name = "s6", .bytes = &([_]u8{0} ** 24), .alignment = 8, .relocations = &relocation },
     };
+    // This program's static roots are exported densely in root order, so each
+    // export carries the id of its own position.
+    for (&exports, 0..) |*item, index| item.value_id = @enumFromInt(@as(u32, @intCast(index)));
     const frozen = Program.FrozenStaticData{ .allocator = allocator, .exports = &exports };
 
     var values = try CompletedScalarValues.init(allocator, &program, &frozen);
     defer values.deinit(allocator);
-    const first = values.literalFor(.{}, @enumFromInt(1), .u32) orelse return error.TestUnexpectedResult;
+    const first = values.literalFor(.{}, exports[1].value_id.?, .u32) orelse return error.TestUnexpectedResult;
     try std.testing.expectEqual(@as(i128, 12345), first.i128_literal.value);
     try std.testing.expectEqual(layout.Idx.u32, first.i128_literal.layout_idx);
-    try std.testing.expect(values.literalFor(.{}, @enumFromInt(1), .u64) == null);
-    try std.testing.expect(values.literalFor(.{}, @enumFromInt(3), .u32) == null);
-    const third = values.literalFor(.{}, @enumFromInt(5), .i16) orelse return error.TestUnexpectedResult;
+    try std.testing.expect(values.literalFor(.{}, exports[1].value_id.?, .u64) == null);
+    try std.testing.expect(values.literalFor(.{}, exports[3].value_id.?, .u32) == null);
+    const third = values.literalFor(.{}, exports[5].value_id.?, .i16) orelse return error.TestUnexpectedResult;
     try std.testing.expectEqual(@as(i128, -2), third.i128_literal.value);
-    try std.testing.expect(values.literalFor(.{}, @enumFromInt(6), .str) == null);
+    try std.testing.expect(values.literalFor(.{}, exports[6].value_id.?, .str) == null);
 }

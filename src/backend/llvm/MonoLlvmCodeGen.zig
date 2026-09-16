@@ -13575,25 +13575,28 @@ test "static-data slots with constant images are internal constants and function
     codegen.layout_store = &layouts;
     const address = [_]lir.Program.StaticDataRelocation{.{ .offset = 8, .target_symbol_name = "roc__ctfe_1_1", .addend = 16 }};
     const function = [_]lir.Program.StaticDataRelocation{.{ .offset = 0, .target_symbol_name = "roc__proc_1", .kind = .function_pointer }};
-    const exports = [_]lir.Program.StaticDataExport{
-        .{ .symbol_name = "roc__static_const_value_0", .value_id = @enumFromInt(0), .bytes = &.{ 1, 0, 0, 0, 0, 0, 0, 0 }, .alignment = 8 },
-        .{ .symbol_name = "roc__static_const_value_1", .value_id = @enumFromInt(1), .bytes = &([_]u8{0} ** 24), .alignment = 8, .relocations = &address },
-        .{ .symbol_name = "roc__static_const_value_2", .value_id = @enumFromInt(2), .bytes = &([_]u8{0} ** 8), .alignment = 8, .relocations = &function },
+    var exports = [_]lir.Program.StaticDataExport{
+        .{ .symbol_name = "roc__static_const_value_0", .bytes = &.{ 1, 0, 0, 0, 0, 0, 0, 0 }, .alignment = 8 },
+        .{ .symbol_name = "roc__static_const_value_1", .bytes = &([_]u8{0} ** 24), .alignment = 8, .relocations = &address },
+        .{ .symbol_name = "roc__static_const_value_2", .bytes = &([_]u8{0} ** 8), .alignment = 8, .relocations = &function },
     };
+    // This program's static roots are exported densely in root order, so each
+    // export carries the id of its own position.
+    for (&exports, 0..) |*item, index| item.value_id = @enumFromInt(@as(u32, @intCast(index)));
     try codegen.setStaticDataExports(&exports);
     var builder = try codegen.createBuilder("static_data_constants");
     defer builder.deinit();
     codegen.builder = &builder;
     defer codegen.builder = null;
 
-    _ = try codegen.staticDataGlobal(@enumFromInt(0), 8);
+    _ = try codegen.staticDataGlobal(exports[0].value_id.?, 8);
     const folded = builder.variables.items[builder.variables.items.len - 1];
     try std.testing.expectEqual(.internal, folded.global.ptrConst(&builder).linkage);
     try std.testing.expectEqual(.constant, folded.mutability);
     try std.testing.expect(folded.init != .no_init);
     try std.testing.expectEqual(LlvmBuilder.Alignment.fromByteUnits(8), folded.alignment);
 
-    _ = try codegen.staticDataGlobal(@enumFromInt(1), 24);
+    _ = try codegen.staticDataGlobal(exports[1].value_id.?, 24);
     const relocated = builder.variables.items[builder.variables.items.len - 1];
     try std.testing.expectEqual(.internal, relocated.global.ptrConst(&builder).linkage);
     try std.testing.expectEqual(.constant, relocated.mutability);
@@ -13604,7 +13607,7 @@ test "static-data slots with constant images are internal constants and function
     try std.testing.expectEqual(.external, declared.global.ptrConst(&builder).linkage);
     try std.testing.expect(codegen.static_data_symbols.contains("roc__ctfe_1_1"));
 
-    _ = try codegen.staticDataGlobal(@enumFromInt(2), 8);
+    _ = try codegen.staticDataGlobal(exports[2].value_id.?, 8);
     const callable = builder.variables.items[builder.variables.items.len - 1];
     try std.testing.expectEqual(.external, callable.global.ptrConst(&builder).linkage);
     try std.testing.expect(callable.init == .no_init);
