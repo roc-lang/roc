@@ -297,14 +297,18 @@ pub const SpecIdentity = struct {
 };
 
 /// Content key of a specialization identity: the callable rendered by tag
-/// and content plus every digest field except the requesting method scope.
-/// The scope only decides how dispatch evidence was derived, and the evidence
-/// digest already names the result, so two modules requesting the same
-/// specialization get one key. Identical for the same request in every
-/// program, and computable the moment the request is reserved.
-pub fn specIdentityKey(identity: SpecIdentity) names.TypeDigest {
+/// and content plus every digest field except the requesting method scope
+/// and the request type's identity digest. The scope only decides how
+/// dispatch evidence was derived, and the evidence digest already names the
+/// result, so two modules requesting the same specialization get one key.
+/// The request type enters as `request_equality`, its equality digest,
+/// because the identity digest names a nominal type by the checked type id
+/// of whichever module's store lowered it, and the same type lowered from
+/// two modules would otherwise get two keys. Identical for the same request
+/// in every program, and computable the moment the request is reserved.
+pub fn specIdentityKey(identity: SpecIdentity, request_equality: names.TypeDigest) names.TypeDigest {
     var hasher = TypeDigestHasher.init();
-    hasher.update("roc.monotype.spec-key.v1");
+    hasher.update("roc.monotype.spec-key.v2");
     switch (identity.callable) {
         .proc_template => |template| {
             hasher.update("proc_template");
@@ -338,7 +342,7 @@ pub fn specIdentityKey(identity: SpecIdentity) names.TypeDigest {
     hasher.update(&identity.source_fn_ty_digest.bytes);
     hasher.update(&identity.evidence_digest.bytes);
     hasher.update(&identity.codec_contract_digest.bytes);
-    hasher.update(&identity.request_fn_ty_digest.bytes);
+    hasher.update(&request_equality.bytes);
     return .{ .bytes = hasher.finalResult() };
 }
 
