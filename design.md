@@ -12948,10 +12948,10 @@ edges settle in one dependency graph as a greatest fixpoint: every derived
 local starts born and is lowered until nothing contradicts the rest. A loop
 that hands one unit around—a table passed to a helper that returns it, taken
 back out of the result and jumped to the loop head—therefore keeps the birth
-its entry edge brings, which is the inductive fact the runtime obeys: the
+its entry edge brings, which is the inductive invariant the runtime obeys: the
 entry value has count 1, and every edge on the cycle moves that single unit
 without adding a holder. Deadness (some occurrence adds a holder) is a
-separate fact that only grows along the same edges, and uniqueness is birth
+separate property that only grows along the same edges, and uniqueness is birth
 without deadness. A self-assignment is not an incoming ownership transfer and
 contributes no edge.
 
