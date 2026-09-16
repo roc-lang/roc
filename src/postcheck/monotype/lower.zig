@@ -5496,7 +5496,7 @@ const Builder = struct {
                 }
                 const view = self.moduleForDigest(names.procTemplateModuleDigest(job.template_ref));
                 const template = view.templates.get(job.template_ref.template);
-                if (self.spec_store.recordStatus(job.spec) == .ready or template.target == .hosted) {
+                if (self.spec_store.recordStatus(job.spec) == .ready or specJobCompletesOnCoordinator(job, template)) {
                     // Coordinator-only entries still wait their exact acceptance
                     // turn, but need not wait for any later worker task.
                     if (accepted == submitted) {
@@ -5768,45 +5768,46 @@ const Builder = struct {
         self.spec_store.markLowering(job.spec);
         const view = self.moduleForDigest(names.procTemplateModuleDigest(job.template_ref));
         const template = view.templates.get(job.template_ref.template);
-        switch (template.target) {
-            // Hosted completion has no Roc graph/draft pair to transfer. Keep
-            // it on the coordinator side while ordinary bodies establish that
-            // ownership handoff.
-            .hosted => {
-                try self.completeTemplateReservation(
-                    job.reservation,
-                    job.fn_template,
-                    job.template_ref,
-                    self.moduleForId(job.method_scope),
-                    job.source_fn_ty,
-                    job.source_fn_key,
-                    job.fn_ty,
-                    job.evidence,
-                    job.subst,
-                    null,
-                    job.signature_relation,
-                    job.codec_contract,
-                );
-                self.acceptSpecDispatch(job.dispatch_index);
-            },
-            .roc,
-            .intrinsic,
-            .entry,
-            .comptime_only,
-            => {
-                const worker = self.ensureSerialSpecJobWorker();
-                var shard = try self.lowerPendingSpecJobToShard(
-                    worker,
-                    self.ensureSpecJobCommitDomain(),
-                    job,
-                    view,
-                    self.moduleForId(job.method_scope),
-                    template,
-                );
-                defer shard.deinit();
-                try self.commitCompletedSpecJobShard(&shard);
-            },
+        if (specJobCompletesOnCoordinator(job, template)) {
+            // Hosted and object-cache completions have no Roc graph/draft
+            // pair to transfer. Keep them on the coordinator side while
+            // ordinary bodies establish that ownership handoff.
+            try self.completeTemplateReservation(
+                job.reservation,
+                job.fn_template,
+                job.template_ref,
+                self.moduleForId(job.method_scope),
+                job.source_fn_ty,
+                job.source_fn_key,
+                job.fn_ty,
+                job.evidence,
+                job.subst,
+                null,
+                job.signature_relation,
+                job.codec_contract,
+            );
+            self.acceptSpecDispatch(job.dispatch_index);
+            return;
         }
+        const worker = self.ensureSerialSpecJobWorker();
+        var shard = try self.lowerPendingSpecJobToShard(
+            worker,
+            self.ensureSpecJobCommitDomain(),
+            job,
+            view,
+            self.moduleForId(job.method_scope),
+            template,
+        );
+        defer shard.deinit();
+        try self.commitCompletedSpecJobShard(&shard);
+    }
+
+    /// Whether a queued specialization completes without lowering a Roc
+    /// body: a hosted template reaches the host directly, and a template the
+    /// object cache holds keeps its declared shape with no body. Neither has
+    /// a graph/draft pair for a worker lane to hand back.
+    fn specJobCompletesOnCoordinator(job: PendingSpecJob, template: checked.CheckedProcedureTemplate) bool {
+        return job.fn_template.cached != null or template.target == .hosted;
     }
 
     fn requireNextSpecAcceptance(self: *Builder, dispatch_index: u64) void {

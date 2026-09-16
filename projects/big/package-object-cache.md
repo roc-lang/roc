@@ -666,7 +666,32 @@ them.
       bound inside the backing rather than free. Treating them as free made
       every export returning `Try` or any other parameterized nominal open,
       which left the roc-deflate package with three roots out of sixty-eight
-      exports and no compressor in its pack.
+      exports and no compressor in its pack. Two more gaps hid behind that
+      one. A Monotype hit completes the reservation with no body only on
+      the coordinator; a queued request that a worker lane picks up lowered
+      its body regardless, so a rebuild with every hit still lowered five
+      million lifted expressions, ran SpecConstr and lambda solving over
+      them, and only then dropped the procedures as external. Queued
+      requests the cache holds now complete on the coordinator like hosted
+      ones. And the lifted source digest that seeds every procedure identity
+      hashed the stored-identity digest of the requested Monotype type,
+      which names nominals by store-local checked type ids exactly as the
+      key once did, so the identity in a pack's manifest disagreed with the
+      identity the app lowered for the same key; it hashes the equality
+      digest now. Last, the identity renderer digested a solved type as the
+      graph the program drew, with back-references counted up the rendering
+      stack, and two programs draw the same recursive type differently:
+      lambda solving materializes Monotype types lazily, so one program
+      holds a single node per knot where another rolls the knot out a level
+      before tying it back, depending on which shape reads touched the type.
+      A recursive nominal such as a UI element tree therefore got a
+      different identity in every program that mentioned it. The renderer
+      now digests a type's bisimulation class the way Monotype's own type
+      digests do (`proc_identity.zig`): strongly connected components
+      resolve in reverse topological order, a cyclic component is refined
+      to its coarsest bisimulation partition and rendered once as a group
+      with rank references, and each position's one-step unfolding is
+      remembered so a rolled-out copy of a position folds to its digest.
       The program shared with the compile-time evaluator takes no hits from
       packs today for a reason of ABI, not of policy: a pack's artifacts are
       object-file code, which passes no `RocOps` argument and calls host
