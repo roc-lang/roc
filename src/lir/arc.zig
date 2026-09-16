@@ -11891,6 +11891,99 @@ test "uniqueness: alias chain of two inherits the fresh birth" {
     try testing.expectEqual(@as(u64, 1), f.uniqueArgsFor(appended));
 }
 
+test "uniqueness: alias taken after an earlier alias keeps the check" {
+    var f = try ArcTest.init(testing.allocator);
+    defer f.deinit();
+    const list = try f.local(f.list_i64);
+    const held = try f.local(f.list_i64);
+    const pair = try f.local(f.pair_list);
+    const alias = try f.local(f.list_i64);
+    const elem = try f.local(.i64);
+    const appended = try f.local(f.list_i64);
+    const result = try f.local(.i64);
+
+    // elem = 5; list = []; held = list; pair = {held, held}; alias = list;
+    // appended = checked_op(alias, elem)—the struct holds the allocation
+    // through the earlier alias, so the count exceeds 1 at the op.
+    const ret = try f.ret(result);
+    const result_assign = try f.assignI64(result, 1, ret);
+    const append = try f.assignLowLevel(appended, &.{ alias, elem }, LIR.LowLevel.RcEffect.runtimeUniqueness(1), result_assign);
+    const alias_assign = try f.assignRefLocal(alias, list, append);
+    const pair_assign = try f.assignStruct(pair, &.{ held, held }, alias_assign);
+    const held_assign = try f.assignRefLocal(held, list, pair_assign);
+    const list_assign = try f.assignList(list, &.{}, held_assign);
+    const body = try f.assignI64(elem, 5, list_assign);
+    _ = try f.addProc(&.{}, body, .i64);
+
+    try f.run();
+    try testing.expectEqual(@as(u64, 0), f.uniqueArgsFor(appended));
+}
+
+test "uniqueness: join parameter inherits the fresh birth of its only incoming edge" {
+    var f = try ArcTest.init(testing.allocator);
+    defer f.deinit();
+    const list = try f.local(f.list_i64);
+    const acc = try f.local(f.list_i64);
+    const elem = try f.local(.i64);
+    const appended = try f.local(f.list_i64);
+    const result = try f.local(.i64);
+    const join_id = f.freshJoinPointId();
+
+    // elem = 5; list = []; acc := list; jump j;
+    // join j(acc) { appended = checked_op(acc, elem) }
+    const ret = try f.ret(result);
+    const result_assign = try f.assignI64(result, 1, ret);
+    const body = try f.assignLowLevel(appended, &.{ acc, elem }, LIR.LowLevel.RcEffect.runtimeUniqueness(1), result_assign);
+    const initial_jump = try f.store.addCFStmt(.{ .jump = .{ .target = join_id } });
+    const initialize_acc = try f.setLocal(acc, list, .initialize_join_param, initial_jump);
+    const list_assign = try f.assignList(list, &.{}, initialize_acc);
+    const remainder = try f.assignI64(elem, 5, list_assign);
+    const join = try f.store.addCFStmt(.{ .join = .{
+        .id = join_id,
+        .params = try f.span(&.{acc}),
+        .body = body,
+        .remainder = remainder,
+    } });
+    _ = try f.addProc(&.{}, join, .i64);
+
+    try f.run();
+    try testing.expectEqual(@as(u64, 1), f.uniqueArgsFor(appended));
+}
+
+test "uniqueness: join parameter whose source the body reads keeps the check" {
+    var f = try ArcTest.init(testing.allocator);
+    defer f.deinit();
+    const list = try f.local(f.list_i64);
+    const acc = try f.local(f.list_i64);
+    const elem = try f.local(.i64);
+    const appended = try f.local(f.list_i64);
+    const result = try f.local(.i64);
+    const join_id = f.freshJoinPointId();
+
+    // elem = 5; list = []; acc := list; jump j;
+    // join j(acc) { expect(list); appended = checked_op(acc, elem) }—the
+    // source stays in use past the transfer, so the parameter holds a
+    // second reference.
+    const ret = try f.ret(result);
+    const result_assign = try f.assignI64(result, 1, ret);
+    const append = try f.assignLowLevel(appended, &.{ acc, elem }, LIR.LowLevel.RcEffect.runtimeUniqueness(1), result_assign);
+    const body = try f.expectStmt(list, append);
+    const initial_jump = try f.store.addCFStmt(.{ .jump = .{ .target = join_id } });
+    const initialize_acc = try f.setLocal(acc, list, .initialize_join_param, initial_jump);
+    const list_assign = try f.assignList(list, &.{}, initialize_acc);
+    const remainder = try f.assignI64(elem, 5, list_assign);
+    const join = try f.store.addCFStmt(.{ .join = .{
+        .id = join_id,
+        .params = try f.span(&.{acc}),
+        .body = body,
+        .remainder = remainder,
+    } });
+    _ = try f.addProc(&.{}, join, .i64);
+
+    try f.run();
+    try testing.expectEqual(@as(u64, 0), f.uniqueArgsFor(appended));
+}
+
 test "uniqueness: list reinterpret alias inherits the fresh birth" {
     var f = try ArcTest.init(testing.allocator);
     defer f.deinit();
