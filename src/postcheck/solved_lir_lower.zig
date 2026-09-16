@@ -355,6 +355,10 @@ const FnEntry = struct {
     ret: Type.TypeId,
     capture_arg_ty: ?Type.TypeId,
     proc: ?LIR.LirProcSpecId,
+    /// The specialization whose reach-queue entry lowers `proc`'s body.
+    /// Specializations that render to one procedure identity share one proc,
+    /// and exactly one of them owns its lowering.
+    proc_owner: ?Type.FnId = null,
     worker_admissible: ?bool = null,
 };
 
@@ -539,10 +543,10 @@ const Lowerer = struct {
     fn_specs: std.ArrayList(FnSpec),
     fn_entries: std.ArrayList(FnEntry),
     fn_spec_map: std.HashMap(FnSpec, Type.FnId, FnSpecContext, std.hash_map.default_max_load_percentage),
-    /// The LIR proc lowered for each procedure identity. Distinct Lambda Mono
-    /// specializations that render the same identity are the same procedure
-    /// and share one proc.
-    procs_by_identity: std.AutoHashMap(LIR.ProcIdentity, LIR.LirProcSpecId),
+    /// The specialization that interned each procedure identity and owns its
+    /// body lowering. Distinct Lambda Mono specializations that render the
+    /// same identity are the same procedure and share the owner's proc.
+    procs_by_identity: std.AutoHashMap(LIR.ProcIdentity, Type.FnId),
     fn_written: std.ArrayList(bool),
     fn_reachable: std.ArrayList(bool),
     fn_reach_queue: std.ArrayList(Type.FnId),
@@ -785,7 +789,7 @@ const Lowerer = struct {
             .fn_specs = .empty,
             .fn_entries = .empty,
             .fn_spec_map = std.HashMap(FnSpec, Type.FnId, FnSpecContext, std.hash_map.default_max_load_percentage).initContext(allocator, .{}),
-            .procs_by_identity = std.AutoHashMap(LIR.ProcIdentity, LIR.LirProcSpecId).init(allocator),
+            .procs_by_identity = std.AutoHashMap(LIR.ProcIdentity, Type.FnId).init(allocator),
             .fn_written = .empty,
             .fn_reachable = .empty,
             .fn_reach_queue = .empty,
@@ -2307,10 +2311,18 @@ const Lowerer = struct {
             return proc;
         }
         const proc = try self.procPlaceholder(fn_id);
-        if (!self.fn_reachable.items[index]) {
-            self.fn_reachable.items[index] = true;
-            try self.fn_reach_queue.append(self.allocator, fn_id);
+        if (self.fn_reachable.items[index]) return proc;
+        self.fn_reachable.items[index] = true;
+        // Specializations sharing this proc queue its body under the owner,
+        // whichever of them an emitted reference reaches first.
+        const owner = self.fn_entries.items[index].proc_owner orelse
+            Common.invariant("direct LIR proc placeholder had no lowering owner");
+        const owner_index = @intFromEnum(owner);
+        if (owner_index != index) {
+            if (self.fn_reachable.items[owner_index]) return proc;
+            self.fn_reachable.items[owner_index] = true;
         }
+        try self.fn_reach_queue.append(self.allocator, owner);
         return proc;
     }
 
@@ -2351,13 +2363,15 @@ const Lowerer = struct {
         if (arg_tys.len != lifted_args.len) Common.invariant("direct Lambda Mono function arity changed after Lambda Solved");
 
         const identity = try self.specIdentity(spec);
-        if (self.procs_by_identity.get(identity)) |existing| {
-            // Another specialization already lowered this procedure. Reuse
-            // its proc and keep this spec out of the reach queue so the body
-            // is lowered once.
+        if (self.procs_by_identity.get(identity)) |owner| {
+            // Another specialization interned this procedure. Share its proc;
+            // the owner's reach-queue entry lowers the body once, whether the
+            // owner or this spec is the first one an emitted reference reaches.
+            const existing = self.fn_entries.items[@intFromEnum(owner)].proc orelse
+                Common.invariant("direct LIR proc identity owner had no proc");
             entry.proc = existing;
+            entry.proc_owner = owner;
             self.fn_entries.items[index] = entry;
-            self.fn_reachable.items[index] = true;
             return existing;
         }
 
@@ -2433,7 +2447,7 @@ const Lowerer = struct {
                 try self.result.store.setProcDebugName(proc, self.solved.lifted.names.exportNameText(name));
             }
         }
-        try self.procs_by_identity.putNoClobber(identity, proc);
+        try self.procs_by_identity.putNoClobber(identity, fn_id);
         if (source_fn.source) |template| {
             if (template.spec_key) |key| {
                 if (spec.abi == .finite and source_fn.spec_constr_pattern == null and self.captureSpan(spec.captures).len == 0 and !spec.return_reuse.enabled()) {
@@ -2442,6 +2456,7 @@ const Lowerer = struct {
             }
         }
         entry.proc = proc;
+        entry.proc_owner = fn_id;
         self.fn_entries.items[index] = entry;
         return proc;
     }
