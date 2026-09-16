@@ -5,8 +5,10 @@
 //! runtime (the same wrappers the machine-code shim resolves in-process) plus a
 //! `roc_boxy_init_embedded` entry that installs that runtime from a boxy sidecar
 //! embedded in the linked program. Each machine-code backend emits a call to
-//! `roc_boxy_init_embedded` at the top of each exported entrypoint, so the
-//! runtime is ready before any Roc procedure runs. Standalone output reaches
+//! `roc_boxy_init_embedded` at the top of each exported entrypoint of a
+//! platform program, so the runtime is ready before any Roc procedure runs.
+//! An object the compiler loads in-process never calls it: the evaluator
+//! installs its own runtime before calling in. Standalone output reaches
 //! host operations through linker-resolved symbols; evaluator Wasm receives its
 //! host operation table explicitly at initialization.
 
