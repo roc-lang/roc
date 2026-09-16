@@ -4184,6 +4184,24 @@ fn encodeSymbol(gpa: Allocator, output: *std.ArrayList(u8), sym: WasmLinking.Sym
     }
 }
 
+/// The start of the data segment an entry's offset is recorded against, or zero
+/// for an entry that names no segment (every `reloc.CODE` entry, whose offset is
+/// already a position in the code section).
+fn relocationSegmentDelta(self: *const Self, entry: WasmLinking.RelocationEntry) u32 {
+    const segment_index = switch (entry) {
+        .index => |idx| idx.data_segment_index,
+        .offset => |off| off.data_segment_index,
+    };
+    if (segment_index == std.math.maxInt(u32) or segment_index >= self.data_segments.items.len) return 0;
+    return self.data_segments.items[segment_index].section_offset;
+}
+
+/// The offset `encodeRelocationSection` writes for an entry: its own offset,
+/// plus the section-level deltas that only the encoder knows.
+fn encodedRelocationOffset(self: *const Self, entry: WasmLinking.RelocationEntry, code_offset_delta: u32) u32 {
+    return entry.getOffset() + code_offset_delta + self.relocationSegmentDelta(entry);
+}
+
 fn encodeRelocationSection(
     self: *Self,
     gpa: Allocator,
@@ -4202,17 +4220,26 @@ fn encodeRelocationSection(
     try leb128WriteU32(gpa, &payload, target_section);
     try leb128WriteU32(gpa, &payload, @intCast(entries.len));
 
-    for (entries) |entry| {
-        const segment_delta: u32 = switch (entry) {
-            .index => |idx| if (idx.data_segment_index != std.math.maxInt(u32) and idx.data_segment_index < self.data_segments.items.len)
-                self.data_segments.items[idx.data_segment_index].section_offset
-            else
-                0,
-            .offset => |off| if (off.data_segment_index != std.math.maxInt(u32) and off.data_segment_index < self.data_segments.items.len)
-                self.data_segments.items[off.data_segment_index].section_offset
-            else
-                0,
-        };
+    // A relocation section's entries go out in ascending offset order: a linker
+    // reading them in one pass rejects an object whose entries go backwards
+    // ("relocations not in offset order" from wasm-ld). An entry's offset is
+    // recorded against its own function or data segment, so the order is only
+    // decidable here, against the offset this function actually writes.
+    const ordered = try gpa.dupe(WasmLinking.RelocationEntry, entries);
+    defer gpa.free(ordered);
+    const SortContext = struct {
+        module: *Self,
+        code_offset_delta: u32,
+
+        fn lessThan(ctx: @This(), a: WasmLinking.RelocationEntry, b: WasmLinking.RelocationEntry) bool {
+            return ctx.module.encodedRelocationOffset(a, ctx.code_offset_delta) <
+                ctx.module.encodedRelocationOffset(b, ctx.code_offset_delta);
+        }
+    };
+    std.mem.sort(WasmLinking.RelocationEntry, ordered, SortContext{ .module = self, .code_offset_delta = code_offset_delta }, SortContext.lessThan);
+
+    for (ordered) |entry| {
+        const segment_delta = self.relocationSegmentDelta(entry);
         switch (entry) {
             .index => |idx| {
                 try payload.append(gpa, @intFromEnum(idx.type_id));
