@@ -11159,6 +11159,49 @@ duplicate, emitted statements are O(total pattern size); a debug statement-count
 lint in the emitter asserts a hard multiplier bound per match so an exponential
 regression fails loudly instead of shipping.
 
+### Procedure-Local LIR Rewrites
+
+TRMC, join scalarization, loop append promotion, range proving, and box reuse
+preserve their pipeline order. Within one phase, procedure bodies own disjoint
+writable statement rows. Rewriting reads a frozen phase input and produces a
+sparse patch of those rows, new body-owned data, and one procedure's metadata.
+The coordinator reserves pointer layouts and helper summaries before dispatch;
+workers cannot intern layouts or derive helper summaries from other workers'
+partially rewritten bodies.
+
+The same patch boundary applies with one worker. Every phase finishes its
+callbacks before committing in procedure order, so neither input visibility
+nor output identity depends on worker count or completion order. Each commit
+relocates appended references in both patched rows and procedure metadata.
+Allocation failure leaves an individual commit unapplied; failed callbacks
+are drained without replay, and failed lowering discards the whole result.
+Reporting follows ordered commits rather than worker completion order.
+
+Workers borrow unrelated input tables rather than copying a store. Writable
+rows, operand counts, clone substitutions, inline-scope remaps, and traversal
+state occupy only their live procedure domains. Subtree cloning reserves join
+identities from its explicit destination-procedure context, not from a scan of
+unrelated procedures. Active callbacks are executor-bounded; retained patches
+are proportional to the phase's procedure bodies and generated output.
+
+Loop promotion identifies back edges during its body-first lexical scan and
+uses source-indexed carrier edges. Shared body/remainder continuations remain
+back edges when the body can reach them; remainder-only entries are not loops.
+A successful parameter rewrite still requires fresh flow analysis. Freezing
+helper summaries and indexing traversal work do not authorize decisions from
+stale inventories.
+
+Helper classification proves replacement of the whole executed list-operation
+chain, not just its returned shape. Unknown calls or operations reject the
+summary even when their results are ignored. Every recognized operation extends
+the latest chain, and the return must carry that final operation identity;
+aliases preserve this provenance. Dependency traversal uses an explicit stack,
+and recursive helper dependencies reject deterministically rather than being
+hidden by an unused result.
+
+Interprocedural inlining, generated-procedure variants, global reachability,
+and ARC's solve remain outside this boundary.
+
 ### ARC
 
 The direct LIR builder emits ownership-neutral LIR. ARC insertion runs after

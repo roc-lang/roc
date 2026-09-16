@@ -7,6 +7,14 @@ const lir = @import("lir");
 
 const harness = @import("lower_to_lir_harness.zig");
 
+test "LIR pass workers deterministically reuse boxed payloads" {
+    try harness.expectLirPassParallelismDeterministicLir(
+        .{ .app_path = "test/postcheck/lir_pass_box_reuse/app.roc" },
+        .{ .inline_mode = .wrappers, .consume_dead_boxes = true, .proc_debug_names = true },
+        &.{.box_reuse},
+    );
+}
+
 const Counts = struct {
     prepare_update: usize = 0,
     owned_unbox: usize = 0,

@@ -197,6 +197,8 @@ pub const LirLoweringOptions = struct {
     detailed_monotype_diagnostics: bool = false,
     /// Receives deterministic solved-LIR body-shard task counts.
     solved_lir_parallel_metrics_out: ?*lir.CheckedPipeline.SolvedLirParallelMetrics = null,
+    /// Receives deterministic task and rewrite counts for procedure-local passes.
+    lir_pass_parallel_metrics_out: ?*lir.CheckedPipeline.LirPassParallelMetrics = null,
     /// Drain each active post-check group and report it in reverse arrival order.
     reverse_post_check_completions: bool = false,
     /// Stop after Monotype lowering. Focused postcheck regressions use this
@@ -379,6 +381,73 @@ pub fn expectRuntimeWorkerParallelismDeterministicLir(
                     });
                 }
                 try std.testing.expect(@field(metrics, field) > 0);
+            }
+        }
+    }
+}
+
+/// Compare full output and deterministic rewrite accounting using real coordinator
+/// workers. Required phases must change bodies, not merely admit no-op tasks.
+pub fn expectLirPassParallelismDeterministicLir(
+    fixture: RuntimeWorkerFixture,
+    options: LirLoweringOptions,
+    comptime phases: []const lir.CheckedPipeline.LirPassPhase,
+) LowerToLirHarnessError!void {
+    const gpa = std.testing.allocator;
+    var reference = std.Io.Writer.Allocating.init(gpa);
+    defer reference.deinit();
+    var metrics: lir.CheckedPipeline.LirPassParallelMetrics = .{
+        .tasks_submitted = 91,
+        .tasks_committed = 92,
+        .prepared_statement_rows = 93,
+        .appended_statements = 94,
+        .peak_retained_shards = 95,
+        .committed_by_phase = @splat(96),
+        .changed_by_phase = @splat(97),
+    };
+    var opts = options;
+    opts.specialization_workers = 1;
+    opts.reverse_post_check_completions = false;
+    opts.lir_pass_parallel_metrics_out = &metrics;
+    switch (fixture) {
+        .app_path => |path| try lowerAppPathToLir(gpa, path, &reference.writer, opts, null, null),
+        .app_body => |body| try runToLir(body, &reference.writer, opts, null),
+    }
+    try std.testing.expectEqualDeep(lir.CheckedPipeline.LirPassParallelMetrics{}, metrics);
+    var expected_metrics: ?lir.CheckedPipeline.LirPassParallelMetrics = null;
+    for ([_]usize{ 2, 4 }) |workers| {
+        for ([_]bool{ false, true }) |reverse| {
+            var candidate = std.Io.Writer.Allocating.init(gpa);
+            defer candidate.deinit();
+            opts.specialization_workers = workers;
+            opts.reverse_post_check_completions = reverse;
+            switch (fixture) {
+                .app_path => |path| try lowerAppPathToLir(gpa, path, &candidate.writer, opts, null, null),
+                .app_body => |body| try runToLir(body, &candidate.writer, opts, null),
+            }
+            try std.testing.expectEqualStrings(reference.written(), candidate.written());
+            try std.testing.expect(metrics.tasks_submitted > 0);
+            try std.testing.expectEqual(metrics.tasks_submitted, metrics.tasks_committed);
+            try std.testing.expect(metrics.prepared_statement_rows > 0);
+            var committed: u64 = 0;
+            for (metrics.committed_by_phase, metrics.changed_by_phase) |count, changed| {
+                committed += count;
+                try std.testing.expect(changed <= count);
+            }
+            try std.testing.expectEqual(metrics.tasks_committed, committed);
+            inline for (phases) |phase| {
+                if (metrics.changed_by_phase[@intFromEnum(phase)] == 0) {
+                    std.debug.print("No {s} LIR rewrites with {d} workers (reversed: {})\n", .{
+                        @tagName(phase), workers, reverse,
+                    });
+                    std.debug.print("{s}\n", .{reference.written()});
+                }
+                try std.testing.expect(metrics.changed_by_phase[@intFromEnum(phase)] > 0);
+            }
+            if (expected_metrics) |expected| {
+                try std.testing.expectEqualDeep(expected, metrics);
+            } else {
+                expected_metrics = metrics;
             }
         }
     }
@@ -960,6 +1029,7 @@ fn lowerAppPathToLir(
         .lifted_expr_count_out = opts.lifted_expr_count_out,
         .post_check_executor = post_check_executor,
         .solved_lir_parallel_metrics_out = opts.solved_lir_parallel_metrics_out,
+        .lir_pass_parallel_metrics_out = opts.lir_pass_parallel_metrics_out,
         .timing = if (opts.timing_out != null) &timing else null,
     };
     if (opts.prepared_inspect) |prepared_inspect| {

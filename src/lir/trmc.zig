@@ -75,36 +75,55 @@ const LowLevelOp = LIR.LowLevel;
 
 pub const ResourceError = std.mem.Allocator.Error;
 
+/// Diagnostic facts retained before rewriting removes the original sites.
+pub const Report = struct {
+    construct_count: usize,
+    tail_count: usize,
+};
+
+/// Intern worker-required layouts before freezing the phase's shared store.
+pub fn prepareLayouts(store: *const LirStore, layouts: *layout_mod.Store) ResourceError!void {
+    for (0..store.procSpecCount()) |index| {
+        const proc = store.getProcSpec(@enumFromInt(index));
+        if (proc.body != null and proc.hosted == null and proc.abi == .roc and
+            layouts.getLayout(proc.ret_layout).tag == .tag_union)
+        {
+            _ = try layouts.insertPtr(proc.ret_layout);
+        }
+    }
+}
+
+/// Rewrite one proc without mutating layouts or emitting unordered diagnostics.
+pub fn runProc(store: *LirStore, layouts: *const layout_mod.Store, proc_id: LIR.LirProcSpecId, scratch_allocator: Allocator) ResourceError!?Report {
+    std.debug.assert(store.tail_call_builder == null);
+    var scratch = Scratch.init(scratch_allocator);
+    defer scratch.deinit();
+    return transformProc(store, layouts, proc_id, &scratch);
+}
+
 /// Apply TRMC/TCE to every eligible proc in the store.
 pub fn run(store: *LirStore, layouts: *layout_mod.Store) ResourceError!void {
     std.debug.assert(store.tail_call_builder == null);
-    const print_transforms = build_options.print_trmc;
-    const print_ir = build_options.print_ir_after_trmc;
-
-    // Every statement a proc's walk can reach exists before the pass runs;
-    // statements appended by earlier transforms belong to already-processed
-    // procs, so sizing the stamp array once up front is safe.
-    var scratch = Scratch.init(store.allocator, store.cfStmtCount());
-    defer scratch.deinit();
+    try prepareLayouts(store, layouts);
 
     const proc_count = store.procSpecCount();
     var proc_index: usize = 0;
     while (proc_index < proc_count) : (proc_index += 1) {
         const proc_id: LIR.LirProcSpecId = @enumFromInt(proc_index);
-        try transformProc(store, layouts, proc_id, &scratch, print_transforms, print_ir);
+        if (try runProc(store, layouts, proc_id, store.allocator)) |report| {
+            reportProc(store, layouts, proc_id, report);
+        }
     }
 }
 
 fn transformProc(
     store: *LirStore,
-    layouts: *layout_mod.Store,
+    layouts: *const layout_mod.Store,
     proc_id: LIR.LirProcSpecId,
     scratch: *Scratch,
-    print_transforms: bool,
-    print_ir: bool,
-) ResourceError!void {
+) ResourceError!?Report {
     const proc = store.getProcSpec(proc_id);
-    if (proc.body == null or proc.hosted != null or proc.abi != .roc) return;
+    if (proc.body == null or proc.hosted != null or proc.abi != .roc) return null;
 
     var detection = Detection.init(store, layouts, proc_id, scratch);
     defer detection.deinit();
@@ -128,33 +147,100 @@ fn transformProc(
         tail_count += 1;
         tail_site = store.getCFStmt(id).assign_call.tail_call.?.next;
     }
-    if (construct_count == 0 and tail_count == 0) return;
+    if (construct_count == 0 and tail_count == 0) return null;
     if (builtin.mode == .Debug) detection.assertRewrittenStmtsUnshared();
 
     if (construct_count > 0) {
-        var transform = Transform.init(store.allocator, store, layouts, proc_id, &detection);
+        var transform = Transform.init(scratch.gpa, store, layouts, proc_id, &detection);
         defer transform.deinit();
         try transform.applyTrmc();
         store.getProcSpecPtr(proc_id).tail_transform = .trmc;
     } else {
-        var transform = Transform.init(store.allocator, store, layouts, proc_id, &detection);
+        var transform = Transform.init(scratch.gpa, store, layouts, proc_id, &detection);
         defer transform.deinit();
         try transform.applyTce();
         store.getProcSpecPtr(proc_id).tail_transform = .tce;
     }
 
     store.getProcSpecPtr(proc_id).tail_calls = null;
-    if (print_transforms) {
+    return .{ .construct_count = construct_count, .tail_count = tail_count };
+}
+
+/// Emit diagnostics on the coordinator, after committing the proc in order.
+pub fn reportProc(store: *const LirStore, layouts: *const layout_mod.Store, proc_id: LIR.LirProcSpecId, report: Report) void {
+    if (build_options.print_trmc) {
         const transformed = store.getProcSpec(proc_id);
         debugPrint("{s}: proc p{d} ({d} construct sites, {d} tail calls)\n", .{
             @tagName(transformed.tail_transform),
             @intFromEnum(proc_id),
-            construct_count,
-            tail_count,
+            report.construct_count,
+            report.tail_count,
         });
     }
-    if (print_ir) {
+    if (build_options.print_ir_after_trmc) {
         dumpProc(store, layouts, proc_id);
+    }
+}
+
+test "trmc per-proc and serial TCE preserve metadata and no-op procs" {
+    for ([_]bool{ false, true }) |per_proc| {
+        const allocator = std.testing.allocator;
+        var store = LirStore.init(allocator);
+        defer store.deinit();
+        var layouts = try layout_mod.Store.init(allocator, @import("base").target.TargetUsize.native);
+        defer layouts.deinit();
+        const arg = try store.addLocal(.{ .layout_idx = .u64 });
+        const result = try store.addLocal(.{ .layout_idx = .u64 });
+        const args = try store.addLocalSpan(&.{arg});
+        const frame = try store.addLocalSpan(&.{ arg, result });
+        const proc_id = try store.addProcSpec(.{
+            .name = store.freshSyntheticSymbol(),
+            .args = args,
+            .frame_locals = frame,
+            .ret_layout = .u64,
+        });
+        var builder = core.TailCallBuilder.init(allocator, proc_id);
+        defer builder.deinit();
+        store.tail_call_builder = &builder;
+        const ret = try store.addCFStmt(.{ .ret = .{ .value = result } });
+        const call = try store.addCFStmt(.{ .assign_call = .{
+            .target = result,
+            .proc = proc_id,
+            .args = args,
+            .next = ret,
+        } });
+        store.getProcSpecPtr(proc_id).body = call;
+        const sites = try builder.finish(&store);
+        store.getProcSpecPtr(proc_id).tail_calls = sites;
+        store.tail_call_builder = null;
+        const untouched = try store.addProcSpec(.{
+            .name = store.freshSyntheticSymbol(),
+            .args = args,
+            .frame_locals = frame,
+            .body = ret,
+            .ret_layout = .u64,
+        });
+        const untouched_before = store.getProcSpec(untouched);
+        try prepareLayouts(&store, &layouts);
+        const layout_count = layouts.layoutCount();
+        if (per_proc) {
+            var scratch = std.heap.ArenaAllocator.init(allocator);
+            defer scratch.deinit();
+            const report = (try runProc(&store, &layouts, proc_id, scratch.allocator())).?;
+            try std.testing.expectEqual(@as(usize, 0), report.construct_count);
+            try std.testing.expectEqual(@as(usize, 1), report.tail_count);
+            try std.testing.expect(try runProc(&store, &layouts, untouched, scratch.allocator()) == null);
+        } else {
+            try run(&store, &layouts);
+        }
+        try std.testing.expectEqual(layout_count, layouts.layoutCount());
+        try std.testing.expectEqualDeep(untouched_before, store.getProcSpec(untouched));
+        const proc = store.getProcSpec(proc_id);
+        try std.testing.expectEqual(LIR.TailTransform.tce, proc.tail_transform);
+        try std.testing.expect(proc.tail_calls == null);
+        const join = store.getCFStmt(proc.body.?).join;
+        try std.testing.expectEqual(call, join.body);
+        try std.testing.expectEqual(join.id, store.getCFStmt(call).jump.target);
     }
 }
 
@@ -255,14 +341,8 @@ const LoopMove = struct {
     pending: bool = false,
 };
 
-/// Per-run reusable buffers for detection and rewriting: containers that would
-/// otherwise be allocated and freed for every proc. The ArrayLists clear in
-/// O(1) via clearRetainingCapacity, and the visited marks clear by bumping
-/// `generation`—so after the high-water marks are reached, a proc's walk
-/// allocates nothing and costs one array load per statement instead of a
-/// hash probe. (A reused hashmap would be worse than no reuse for the
-/// visited set: its clearRetainingCapacity is O(capacity), which stays at
-/// the largest proc's high-water mark.)
+/// Proc-local detection and rewriting storage. Sparse marks scale with reachable
+/// statements, never with the frozen program's global statement ID domain.
 const Scratch = struct {
     gpa: Allocator,
     /// Visited marks for the walk, indexed by CFStmtId:
@@ -273,8 +353,7 @@ const Scratch = struct {
     ///
     /// Once a statement has two incoming references, every statement reachable
     /// through it is shared too: mutating any of them changes both paths.
-    stamps: []u32 = &.{},
-    original_stmt_count: usize,
+    stamps: collections.DenseMap(CFStmtId, u32),
     /// Bumped by 3 in beginProc so all stamp values are fresh.
     generation: u32 = 0,
     work: std.ArrayList(WorkItem) = .empty,
@@ -289,12 +368,12 @@ const Scratch = struct {
     moves: std.ArrayList(LoopMove) = .empty,
     ready_moves: std.ArrayList(usize) = .empty,
 
-    fn init(gpa: Allocator, stmt_count: usize) Scratch {
-        return .{ .gpa = gpa, .original_stmt_count = stmt_count };
+    fn init(gpa: Allocator) Scratch {
+        return .{ .gpa = gpa, .stamps = .init(gpa) };
     }
 
     fn deinit(self: *Scratch) void {
-        self.gpa.free(self.stamps);
+        self.stamps.deinit();
         self.work.deinit(self.gpa);
         self.candidates.deinit(self.gpa);
         self.shared_heads.deinit(self.gpa);
@@ -317,7 +396,7 @@ const Scratch = struct {
         if (self.generation >= std.math.maxInt(u32) - 2) {
             // ~2 billion procs in one run; unreachable in practice, but wrap
             // would make stale stamps read as visited.
-            @memset(self.stamps, 0);
+            self.stamps.clearRetainingCapacity();
             self.generation = 0;
         }
         self.generation += 3;
@@ -355,11 +434,6 @@ const Detection = struct {
         const proc = self.store.getProcSpec(self.proc_id);
         const ret_layout_val = self.layouts.getLayout(proc.ret_layout);
         self.eligible_trmc = ret_layout_val.tag == .tag_union;
-
-        if (self.scratch.stamps.len == 0) {
-            self.scratch.stamps = try self.scratch.gpa.alloc(u32, self.scratch.original_stmt_count);
-            @memset(self.scratch.stamps, 0);
-        }
 
         try self.walk(proc.body.?);
         if (self.bail) return;
@@ -407,15 +481,14 @@ const Detection = struct {
     fn walk(self: *Detection, body: CFStmtId) ResourceError!void {
         const gpa = self.scratch.gpa;
         const work = &self.scratch.work;
-        // No statement reachable from a proc body postdates the stamp array
-        // (transforms only append to already-processed procs), so plain
-        // indexing is in bounds.
-        const stamps = self.scratch.stamps;
+        const stamps = &self.scratch.stamps;
         const gen = self.scratch.generation;
 
         try work.append(gpa, .{ .stmt = body, .edge = .proc_body });
         while (work.pop()) |item| {
-            const stamp = &stamps[@intFromEnum(item.stmt)];
+            const entry = try stamps.getOrPut(item.stmt);
+            if (!entry.found_existing) entry.value_ptr.* = 0;
+            const stamp = entry.value_ptr;
             if (stamp.* >= gen) {
                 // Second arrival: this statement is the head of a shared tail.
                 // Record it so the sharing mark can be propagated to every
@@ -494,7 +567,7 @@ const Detection = struct {
     fn propagateSharedTails(self: *Detection) ResourceError!void {
         const gpa = self.scratch.gpa;
         const work = &self.scratch.work;
-        const stamps = self.scratch.stamps;
+        const stamps = &self.scratch.stamps;
         const gen = self.scratch.generation;
 
         work.clearRetainingCapacity();
@@ -503,7 +576,7 @@ const Detection = struct {
         }
 
         while (work.pop()) |item| {
-            const stamp = &stamps[@intFromEnum(item.stmt)];
+            const stamp = stamps.getPtr(item.stmt).?;
             if (stamp.* == gen + 2) continue;
             stamp.* = gen + 2;
 
@@ -513,7 +586,7 @@ const Detection = struct {
     }
 
     fn appendSharedSuccessor(self: *Detection, work: *std.ArrayList(WorkItem), stmt_id: CFStmtId) ResourceError!void {
-        if (self.scratch.stamps[@intFromEnum(stmt_id)] == self.scratch.generation + 2) return;
+        if (self.scratch.stamps.get(stmt_id) == self.scratch.generation + 2) return;
         try work.append(self.scratch.gpa, .{ .stmt = stmt_id, .edge = .proc_body });
     }
 
@@ -900,7 +973,7 @@ const Detection = struct {
     }
 
     fn isSharedPath(self: *const Detection, stmt_id: CFStmtId) bool {
-        return self.scratch.stamps[@intFromEnum(stmt_id)] >= self.scratch.generation + 1;
+        return (self.scratch.stamps.get(stmt_id) orelse 0) >= self.scratch.generation + 1;
     }
 
     /// Debug check, run just before transforming: candidate eligibility must
@@ -930,7 +1003,7 @@ const Detection = struct {
 const Transform = struct {
     gpa: Allocator,
     store: *LirStore,
-    layouts: *layout_mod.Store,
+    layouts: *const layout_mod.Store,
     proc_id: LIR.LirProcSpecId,
     detection: *const Detection,
     /// Every local created by the transform, merged into frame_locals at the end.
@@ -938,16 +1011,14 @@ const Transform = struct {
     /// Scratch copy of the original proc arg locals; they become loop params.
     old_args: []const LocalId,
     join_id: JoinPointId,
-    /// Membership is local to this proc: retaining a DenseMap across procs
-    /// would retain pages spanning unrelated local IDs. Scheduling arrays live
-    /// in Scratch and retain capacity across both sites and procedures.
+    /// Movement state is indexed only for parameters of this procedure.
     move_targets: collections.DenseMap(LocalId, usize),
     moves: *std.ArrayList(LoopMove),
     ready_moves: *std.ArrayList(usize),
     hole: LocalId = undefined,
     head: LocalId = undefined,
 
-    fn init(gpa: Allocator, store: *LirStore, layouts: *layout_mod.Store, proc_id: LIR.LirProcSpecId, detection: *const Detection) Transform {
+    fn init(gpa: Allocator, store: *LirStore, layouts: *const layout_mod.Store, proc_id: LIR.LirProcSpecId, detection: *const Detection) Transform {
         return .{
             .gpa = gpa,
             .store = store,
@@ -989,7 +1060,7 @@ const Transform = struct {
         const ret_layout = proc.ret_layout;
         try self.copyArgs(proc.args);
 
-        const ptr_ret = try self.layouts.insertPtr(ret_layout);
+        const ptr_ret = self.layouts.getPtr(ret_layout).?;
         self.hole = try self.addLocal(ptr_ret);
         self.head = try self.addLocal(ptr_ret);
         const initial = try self.addLocal(ptr_ret);

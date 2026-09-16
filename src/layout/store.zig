@@ -526,6 +526,31 @@ pub const Store = struct {
         return try self.insertLayout(layout);
     }
 
+    /// Look up a serially prepared pointer layout without touching shared scratch.
+    pub fn getPtr(self: *const Self, elem_idx: Idx) ?Idx {
+        var key: [1 + @sizeOf(u32)]u8 = undefined;
+        key[0] = @intCast(@intFromEnum(LayoutTag.ptr));
+        const raw_idx: u32 = @intCast(@intFromEnum(elem_idx));
+        @memcpy(key[1..], std.mem.asBytes(&raw_idx));
+        return self.interned_layouts.get(&key);
+    }
+
+    test "getPtr reads prepared layouts without changing intern scratch" {
+        var store = try Self.init(std.testing.allocator, target.TargetUsize.native);
+        defer store.deinit();
+        try std.testing.expect(store.getPtr(.u64) == null);
+        const ptr = try store.insertPtr(.u64);
+        _ = try store.insertBox(.u8);
+        const scratch = try std.testing.allocator.dupe(u8, store.scratch_intern_key.items);
+        defer std.testing.allocator.free(scratch);
+        const count = store.layoutCount();
+        const frozen: *const Self = &store;
+        try std.testing.expectEqual(ptr, frozen.getPtr(.u64).?);
+        try std.testing.expect(frozen.getPtr(.u8) == null);
+        try std.testing.expectEqual(count, store.layoutCount());
+        try std.testing.expectEqualSlices(u8, scratch, store.scratch_intern_key.items);
+    }
+
     /// Insert the canonical runtime layout for an erased callable behind a
     /// `Box(function)` boundary. The value is one pointer to a Roc refcounted
     /// allocation whose payload stores the callable header followed by inline
