@@ -3077,6 +3077,50 @@ pub const BuildEnv = struct {
         };
     }
 
+    /// How the object cache files a module's pack: `pkg` for a module of a
+    /// package or platform that arrived as a URL bundle, written once per
+    /// package version and only ever read; `local` for a module reached by
+    /// path, rewritten on every edit.
+    pub const PackOrigin = enum { local, pkg };
+
+    /// Where the object cache files a module's packs and how.
+    pub const PackPlacement = struct {
+        origin: PackOrigin,
+        /// Digest of what stays the same across edits of the module: for a
+        /// URL package its URL, otherwise the package's root directory, plus
+        /// the module's path within it. Every version of the module's pack
+        /// files under this one directory, so an edit still finds the
+        /// previous version's entries.
+        identity: [32]u8,
+    };
+
+    /// The pack placement of the module `key` names, or null when the build
+    /// does not know the module.
+    pub fn packPlacementForArtifactKey(
+        self: *const BuildEnv,
+        key: check.CheckedArtifact.CheckedModuleArtifactKey,
+    ) ?PackPlacement {
+        const coord = self.coordinator orelse return null;
+        const location = coord.checked_artifact_index.get(key.bytes) orelse return null;
+        const pkg = self.packages.get(location.pkg_name) orelse return null;
+        const coord_pkg = coord.packages.get(location.pkg_name) orelse return null;
+        const module = coord_pkg.getModule(location.module_id) orelse return null;
+        var hasher = std.crypto.hash.sha2.Sha256.init(.{});
+        if (pkg.url) |url| {
+            hasher.update("pkg\x00");
+            hasher.update(url.url);
+        } else {
+            hasher.update("local\x00");
+            hasher.update(pkg.root_dir);
+        }
+        hasher.update("\x00");
+        hasher.update(module.path);
+        return .{
+            .origin = if (pkg.url != null) .pkg else .local,
+            .identity = hasher.finalResult(),
+        };
+    }
+
     /// Every checked artifact `root_artifact` can lower against, other than
     /// itself and the builtin module: its lowering-visible modules in order.
     /// Builtins get no pack of their own; their instantiations belong to the

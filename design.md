@@ -8098,17 +8098,17 @@ Only the cumulative immutable type and name stores survive the reset.
 
 Graph-owned generated iterators are indexed by their stable declaration, kind,
 callable evidence, and current argument roots. Root unions rekey only affected
-entries, so lookups avoid scanning unrelated candidates. Content replacement and root union
-update producer membership explicitly. A monotone provenance counter lets both
-iterator finalizers return immediately for graphs without generated iterators.
+entries, so lookups avoid scanning unrelated candidates. Content replacement and
+root union update producer membership explicitly. Equal keys retain
+independently constructed nodes until an explicit relation joins them. A
+monotone provenance counter lets both iterator finalizers return immediately for
+graphs without generated iterators.
 Generated identity hashes a snapshot of the current graph representation after
 joins. An imported request's retained type remains its original witness and
 cannot supply the identity of a graph-owned producer that replaced it.
 Joining distinct iterator representations invalidates current snapshots and
 durable views, including snapshots of parents that reach the joined class.
 The losing representation's cached view cannot become the winner's view.
-Generated-private containment diagnostics distinguish guard returns from queries
-that reach the containment cache or walker.
 
 Declaration-backed nominal reuse is indexed by declaration identity plus the
 current argument-root tuple. Root unions rekey affected entries, so lookup cost

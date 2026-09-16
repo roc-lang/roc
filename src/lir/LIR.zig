@@ -1229,6 +1229,10 @@ pub const LirProcSpec = struct {
     is_static_initializer: bool = false,
     /// Hosted call ABI metadata, when this proc is provided by the platform.
     hosted: ?HostedProc = null,
+    /// Set when the object cache provides this proc's code: the proc has no
+    /// body here, its `identity` names the cache entry, and its `rc_*`
+    /// fields carry the ownership signature the entry was compiled with.
+    external: bool = false,
     /// Exact self-tail sites produced by LIR construction, consumed by TRMC/TCE.
     tail_calls: ?TailCalls = null,
     /// Tail-recursion rewrite applied by the TRMC pass, if any.

@@ -5546,6 +5546,12 @@ const Inserter = struct {
             if (callee_sig.paramMode(position) == .borrowed) {
                 // Borrowed positions keep the caller's ownership untouched.
                 const bit = arc_sig.paramBit(position) orelse continue;
+                // A pinned callee's signature is its ABI: an object-cache
+                // procedure was compiled with it and has no body to derive a
+                // variant from, so the caller keeps ownership here.
+                if (callee) |direct| {
+                    if (self.solution.isPinnedProc(direct)) continue;
+                }
                 const requires_tail_transfer = if (tail_call) |fact|
                     !fact.argumentOutlivesScc(position, self.current_sig)
                 else
@@ -5712,6 +5718,7 @@ const Inserter = struct {
         if (entry.found_existing) return entry.value_ptr.*;
 
         const source_spec = self.store.getProcSpec(callee);
+        if (source_spec.external) arcInvariant("ARC demanded a variant of an object-cache procedure, whose signature is fixed");
         const variant = try self.store.addProcSpec(.{
             .name = self.store.freshSyntheticSymbol(),
             .identity = try self.variantIdentity(source_spec.identity, demanded),

@@ -140,6 +140,12 @@ pub const TargetConfig = struct {
     list_in_place_map: bool = false,
     /// Preserve source-level procedure names in LIR for runtime diagnostics.
     proc_debug_names: bool = false,
+    /// The object cache Monotype asks for closed specializations.
+    spec_cache: ?postcheck.Common.SpecCacheLookup = null,
+    /// Keep every keyed specialization procedure through compaction; a pack
+    /// program offers them from its manifest whether or not its export
+    /// wrappers inlined their calls.
+    keep_specialization_procs: bool = false,
     /// Thread slack counters through loop-carried append-only lists so the
     /// per-element ownership and capacity checks amortize. On by default;
     /// shape-comparison tests turn it off because promotion intentionally
@@ -891,6 +897,11 @@ pub fn prepareCheckedModulesMonotype(
             rootRequests(roots, layout_requests, static_data_requests),
             .{
                 .proc_debug_names = target.proc_debug_names or LirDump.filter() != null or SpecCensus.enabled(),
+                // A program that is also the compile-time evaluator's host
+                // takes its hits in Direct LIR, after the compile-time
+                // closure is known; only a runtime-only program can take
+                // them here.
+                .spec_cache = if (target.checked_module_state == .complete) target.spec_cache else null,
                 .post_check_executor = target.post_check_executor,
                 .static_data_literals = target.checked_module_state == .checking_finalization or roots.include_internal_static_data,
                 .comptime_value_reads = target.comptime_value_reads,
@@ -955,6 +966,7 @@ pub fn prepareMonotypeToSolved(prepared: PreparedMonotype) Allocator.Error!Prepa
 
     const lifted_expr_count = lifted.exprCount();
     if (target.lifted_expr_count_out) |slot| slot.* = lifted_expr_count;
+    if (SpecCensus.enabled()) SpecCensus.runLifted(&lifted);
 
     var lambda_solve_timing_scope = PipelineTimingScope.begin(target.timing, .lambda_solve);
     defer lambda_solve_timing_scope.end();
@@ -970,7 +982,7 @@ pub fn prepareMonotypeToSolved(prepared: PreparedMonotype) Allocator.Error!Prepa
         .inline_plan,
     );
     defer inline_plan_timing_scope.end();
-    const inline_plan = try postcheck.SolvedInline.analyze(allocator, target.inline_mode, procedure_usage.view(), &solved);
+    const inline_plan = try postcheck.SolvedInline.analyze(allocator, target.inline_mode, procedure_usage.view(), &solved, target.keep_specialization_procs);
     inline_plan_timing_scope.end();
 
     return .{
@@ -1047,6 +1059,7 @@ pub fn lowerPreparedSolvedToLir(prepared: PreparedSolved) LowerResourceError!Low
     var local_parallel_metrics: SolvedLirParallelMetrics = .{};
     const parallel_metrics = solvedLirMetricsOutput(target, &local_parallel_metrics);
     var lowered = try postcheck.SolvedLirLower.run(allocator, target.target_usize, solved_input, .{
+        .spec_cache = target.spec_cache,
         .inline_plan = inline_plan.view(),
         .post_check_executor = target.post_check_executor,
         .inline_expects = target.inline_expects,
@@ -1114,7 +1127,11 @@ fn finishLoweredOutput(
     if (target.tag_reachability) {
         try TagReachability.run(&lowered.lir_result);
     }
-    try ReachableProcs.run(&lowered.lir_result);
+    if (target.keep_specialization_procs) {
+        try ReachableProcs.runKeepingSpecializations(&lowered.lir_result);
+    } else {
+        try ReachableProcs.run(&lowered.lir_result);
+    }
     lir_passes_timing_scope.end();
 
     var arc_timing_scope = PipelineTimingScope.begin(target.timing, .arc);
@@ -1489,6 +1506,7 @@ const SpecCensus = if (builtin.os.tag == .freestanding) struct {
         return false;
     }
     fn runMonotype(_: Allocator, _: CheckedModuleSet, _: *const postcheck.Monotype.Ast.Program) Allocator.Error!void {}
+    fn runLifted(_: *const postcheck.MonotypeLifted.Ast.Program) void {}
     fn runLir(_: Allocator, _: *const LirProgram.Result) Allocator.Error!void {}
 } else struct {
     const MonoAst = postcheck.Monotype.Ast;
@@ -1496,6 +1514,21 @@ const SpecCensus = if (builtin.os.tag == .freestanding) struct {
 
     fn enabled() bool {
         return std.c.getenv("ROC_SPEC_CENSUS") != null;
+    }
+
+    fn runLifted(lifted: *const postcheck.MonotypeLifted.Ast.Program) void {
+        std.debug.print("CENSUS_LIFTED\t{d}\t{d}\n", .{ lifted.fnCount(), lifted.exprCount() });
+        // Bodies are appended in lowering order, so consecutive body ids
+        // bound each function's expression count from above.
+        for (0..lifted.fnCount()) |index| {
+            const lifted_fn = lifted.getFn(@enumFromInt(@as(u32, @intCast(index))));
+            const body: usize = switch (lifted_fn.body) {
+                .roc => |body| @intFromEnum(body),
+                .hosted => 0,
+            };
+            const name = if (lifted.procDebugName(lifted_fn.symbol)) |id| lifted.names.exportNameText(id) else "?";
+            std.debug.print("CENSUS_LIFTED_FN\t{d}\t{d}\t{s}\n", .{ index, body, name });
+        }
     }
 
     const ModuleEnvPtr = @TypeOf(@as(*const checked.CheckedModuleArtifact, undefined).moduleEnvConst());
@@ -1622,7 +1655,75 @@ const SpecCensus = if (builtin.os.tag == .freestanding) struct {
     const RequestShape = struct {
         has_fn: bool = false,
         has_erased: bool = false,
+        /// A bare first-order function-typed parameter (a call-only
+        /// candidate for demand-based specialization).
+        fn_bare_param: bool = false,
+        /// A function type anywhere in the result.
+        fn_in_return: bool = false,
+        /// A function type nested inside a data type of a parameter.
+        fn_nested_in_data: bool = false,
+        /// A bare function-typed parameter whose own signature mentions a
+        /// function type.
+        fn_higher_order: bool = false,
+
+        fn classes(self: RequestShape) [4]u8 {
+            return .{
+                if (self.fn_bare_param) 'P' else '-',
+                if (self.fn_in_return) 'R' else '-',
+                if (self.fn_nested_in_data) 'D' else '-',
+                if (self.fn_higher_order) 'H' else '-',
+            };
+        }
     };
+
+    fn typeMentionsFn(allocator: Allocator, types: MonoType.Store.View, root: MonoType.TypeId) Allocator.Error!bool {
+        var visited = collections.DenseMap(MonoType.TypeId, void).init(allocator);
+        defer visited.deinit();
+        var stack = std.ArrayList(MonoType.TypeId).empty;
+        defer stack.deinit(allocator);
+        try stack.append(allocator, root);
+        while (stack.pop()) |ty| {
+            const gop = try visited.getOrPut(ty);
+            if (gop.found_existing) continue;
+            switch (types.get(ty)) {
+                .primitive, .zst => {},
+                .erased, .func => return true,
+                .named => |named| {
+                    try stack.appendSlice(allocator, types.span(named.args));
+                    if (named.backing) |backing| try stack.append(allocator, backing.ty);
+                },
+                .record => |span| for (types.fieldSpan(span)) |field| try stack.append(allocator, field.ty),
+                .tuple => |span| try stack.appendSlice(allocator, types.span(span)),
+                .tag_union => |span| for (types.tagSpan(span)) |tag| try stack.appendSlice(allocator, types.span(tag.payloads)),
+                .list, .box => |elem| try stack.append(allocator, elem),
+            }
+        }
+        return false;
+    }
+
+    fn classifyRequestShape(allocator: Allocator, types: MonoType.Store.View, root: MonoType.TypeId, shape: *RequestShape) Allocator.Error!void {
+        const func = switch (types.get(root)) {
+            .func => |func| func,
+            .primitive, .zst, .erased, .named, .record, .tuple, .tag_union, .list, .box => return,
+        };
+        for (types.span(func.args)) |arg| {
+            switch (types.get(arg)) {
+                .func => |inner| {
+                    var higher = false;
+                    for (types.span(inner.args)) |inner_arg| {
+                        if (try typeMentionsFn(allocator, types, inner_arg)) higher = true;
+                    }
+                    if (try typeMentionsFn(allocator, types, inner.ret)) higher = true;
+                    if (higher) shape.fn_higher_order = true else shape.fn_bare_param = true;
+                },
+                .erased => shape.fn_bare_param = true,
+                .primitive, .zst, .named, .record, .tuple, .tag_union, .list, .box => {
+                    if (try typeMentionsFn(allocator, types, arg)) shape.fn_nested_in_data = true;
+                },
+            }
+        }
+        if (try typeMentionsFn(allocator, types, func.ret)) shape.fn_in_return = true;
+    }
 
     fn requestShape(allocator: Allocator, types: MonoType.Store.View, root: MonoType.TypeId) Allocator.Error!RequestShape {
         var shape: RequestShape = .{};
@@ -1667,7 +1768,94 @@ const SpecCensus = if (builtin.os.tag == .freestanding) struct {
                 .list, .box => |elem| try stack.append(allocator, elem),
             }
         }
+        try classifyRequestShape(allocator, types, root, &shape);
         return shape;
+    }
+
+    /// Render a Monotype type as text for the census, depth-limited.
+    fn renderType(w: *std.Io.Writer, allocator: Allocator, mono: *const MonoAst.Program, types: MonoType.Store.View, ty: MonoType.TypeId, depth: u32) std.Io.Writer.Error!void {
+        if (depth > 6) {
+            try w.writeAll("…");
+            return;
+        }
+        switch (types.get(ty)) {
+            .primitive => |p| try w.writeAll(@tagName(p)),
+            .zst => try w.writeAll("zst"),
+            .erased => try w.writeAll("erased"),
+            .func => |func| {
+                try w.writeAll("(");
+                for (types.span(func.args), 0..) |arg, i| {
+                    if (i != 0) try w.writeAll(", ");
+                    try renderType(w, allocator, mono, types, arg, depth + 1);
+                }
+                try w.writeAll(" -> ");
+                try renderType(w, allocator, mono, types, func.ret, depth + 1);
+                try w.writeAll(")");
+            },
+            .named => |named| {
+                try w.print("{s}#{x}", .{ mono.names.typeNameText(named.def.type_name), mono.names.moduleIdentityBytes(named.def.module)[0..3] });
+                if (named.def.source_decl) |decl| try w.print("@{d}", .{decl});
+                try w.print("/{s}", .{@tagName(named.kind)});
+                const args = types.span(named.args);
+                if (args.len != 0) {
+                    try w.writeAll("<");
+                    for (args, 0..) |arg, i| {
+                        if (i != 0) try w.writeAll(", ");
+                        try renderType(w, allocator, mono, types, arg, depth + 1);
+                    }
+                    try w.writeAll(">");
+                }
+                if (named.backing) |backing| {
+                    try w.writeAll("{");
+                    try renderType(w, allocator, mono, types, backing.ty, depth + 1);
+                    try w.writeAll("}");
+                }
+            },
+            .record => |span| {
+                try w.writeAll("{");
+                for (types.fieldSpan(span), 0..) |field, i| {
+                    if (i != 0) try w.writeAll(", ");
+                    try w.print("{s}: ", .{mono.names.recordFieldLabelText(field.name)});
+                    try renderType(w, allocator, mono, types, field.ty, depth + 1);
+                }
+                try w.writeAll("}");
+            },
+            .tuple => |span| {
+                try w.writeAll("(");
+                for (types.span(span), 0..) |item, i| {
+                    if (i != 0) try w.writeAll(", ");
+                    try renderType(w, allocator, mono, types, item, depth + 1);
+                }
+                try w.writeAll(")");
+            },
+            .tag_union => |span| {
+                try w.writeAll("[");
+                for (types.tagSpan(span), 0..) |tag, i| {
+                    if (i != 0) try w.writeAll(", ");
+                    try w.writeAll(mono.names.tagLabelText(tag.name));
+                    const payloads = types.span(tag.payloads);
+                    if (payloads.len != 0) {
+                        try w.writeAll("(");
+                        for (payloads, 0..) |payload, j| {
+                            if (j != 0) try w.writeAll(", ");
+                            try renderType(w, allocator, mono, types, payload, depth + 1);
+                        }
+                        try w.writeAll(")");
+                    }
+                }
+                try w.writeAll("]");
+            },
+            .list => |elem| {
+                try w.writeAll("List(");
+                try renderType(w, allocator, mono, types, elem, depth + 1);
+                try w.writeAll(")");
+            },
+            .box => |elem| {
+                try w.writeAll("Box(");
+                try renderType(w, allocator, mono, types, elem, depth + 1);
+                try w.writeAll(")");
+            },
+        }
     }
 
     fn runMonotype(allocator: Allocator, modules: CheckedModuleSet, mono: *const MonoAst.Program) Allocator.Error!void {
@@ -1718,9 +1906,13 @@ const SpecCensus = if (builtin.os.tag == .freestanding) struct {
                 }
             }
             const shape = try requestShape(allocator, view.types, spec.identity.request_fn_ty);
+            var rendered: std.Io.Writer.Allocating = .init(allocator);
+            defer rendered.deinit();
+            renderType(&rendered.writer, allocator, mono, view.types, spec.identity.request_fn_ty, 0) catch return error.OutOfMemory;
+            const key_hex = std.fmt.bytesToHex(spec.request_fn_ty_digest.bytes, .lower);
             const req_hex = std.fmt.bytesToHex(spec.identity.request_fn_ty_digest.bytes, .lower);
             const solved_hex = std.fmt.bytesToHex(spec.solved_fn_ty_digest.bytes, .lower);
-            std.debug.print("CENSUS_SPEC\t{d}\t{s}\t{s}\t{s}\t{d}\t{d}\t{s}\t{d}\t{d}\t{d}\t{s}\t{s}\t{s}\n", .{
+            std.debug.print("CENSUS_SPEC\t{d}\t{s}\t{s}\t{s}\t{d}\t{d}\t{s}\t{d}\t{d}\t{d}\t{s}\t{s}\t{s}\t{s}\n", .{
                 index,
                 callable_kind,
                 module_kind,
@@ -1734,18 +1926,21 @@ const SpecCensus = if (builtin.os.tag == .freestanding) struct {
                 req_hex[0..16],
                 solved_hex[0..16],
                 @tagName(spec.status),
+                &shape.classes(),
             });
+            std.debug.print("CENSUS_REQ\t{s}\t{s}\t{s}\n", .{ callable_name, key_hex[0..16], rendered.written() });
         }
     }
 
     fn runLir(allocator: Allocator, result: *const LirProgram.Result) Allocator.Error!void {
+        std.debug.print("CENSUS_STATIC\t{d}\t{d}\n", .{ result.static_data_values.items.len, result.const_plans.items.len });
         const store = &result.store;
         for (0..store.procSpecCount()) |index| {
             const proc_id: LIR.LirProcSpecId = @enumFromInt(@as(u32, @intCast(index)));
             const spec = store.getProcSpec(proc_id);
             const name = store.procDebugName(proc_id) orelse "?";
             if (spec.body == null) {
-                std.debug.print("CENSUS_PROC\t{d}\t{s}\t0\t0\tnobody\n", .{ index, name });
+                std.debug.print("CENSUS_PROC\t{d}\t{s}\t0\t0\t{s}\n", .{ index, name, if (spec.is_static_initializer) "nobody-init" else "nobody" });
                 continue;
             }
             var buffer: std.Io.Writer.Allocating = .init(allocator);
@@ -1758,7 +1953,10 @@ const SpecCensus = if (builtin.os.tag == .freestanding) struct {
             for (text) |c| {
                 if (c == '\n') lines += 1;
             }
-            std.debug.print("CENSUS_PROC\t{d}\t{s}\t{d}\t{d}\tbody\n", .{ index, name, text.len, lines });
+            std.debug.print("CENSUS_PROC\t{d}\t{s}\t{d}\t{d}\t{s}\n", .{ index, name, text.len, lines, if (spec.is_static_initializer) "init" else "body" });
+            if (lines <= 120) {
+                std.debug.print("CENSUS_BODY\t{d}\n{s}\n", .{ index, text });
+            }
             if (lines > 20000) {
                 var shown: usize = 0;
                 var start: usize = 0;

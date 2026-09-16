@@ -10,11 +10,10 @@ whole-program unit: Monotype specialization, closure lifting, SpecConstr,
 lambda-set solving, LIR lowering, the LIR passes, ARC, and codegen all run over
 package and builtin code as if it were app code, and the result is exactly one
 relocatable object per build (`src/backend/dev/ObjectFileCompiler.zig:164`,
-`src/cli/main.zig:10336`). Measured on real apps with a debug compiler, the
-post-check "Specializing" phase is the dominant cost of a warm dev build
-(roc-signals task-board: 17.5s of 21.1s; roc-signals conduit: 26.7s of 61s;
-roc-ray top_down: 1.5s of 2.3s), while type checking is a small share and is
-already cached.
+`src/cli/main.zig:10336`). On real apps the post-check "Specializing" phase
+is the dominant cost of a warm dev build (roc-signals task-board: 83% of the
+build; roc-signals conduit: 44%; roc-ray top_down: 65%), while type checking
+is a small share and is already cached.
 
 The second cost is quality, not time. Dependencies such as roc-deflate rely on
 optimization to be usable at all, but a dev build compiles them with the dev
@@ -81,7 +80,12 @@ procedure base and template ordinals inside it are module-local and
 deterministic from the module's own source. Request type digests are content
 identities (the census saw one `List.len` instantiation under a single digest
 in 11 unrelated apps), and structural types such as records and tag unions
-digest by structure alone.
+digest by structure alone. The key takes the request type's equality digest,
+not its identity digest: the identity digest names a nominal type by the
+checked type id of whichever module's store lowered it, so the same
+`Try(List(U8), [CompressBug])` requested from an app and from the package's
+own pack program would carry two identity digests and two keys, and no
+package procedure returning a nominal type would ever hit.
 
 The specialization identity is therefore: callee module artifact key,
 procedure base ordinal, template ordinal, evidence digest, the demand-adjusted
@@ -470,7 +474,16 @@ once per package version.
 ## Optimized objects
 
 A closed tier 1 entry can be compiled with LLVM at package download time with
-no app involvement. Tier 2 entries can be LLVM-compiled only after an app
+no app involvement. "Download time" is the end of version resolution, not
+the moment a tarball lands: resolution can download a package version that
+some intermediate constraint asked for and then move past it when a later
+package wants a newer one, and such a version is never built. So `roc fetch`
+(and any build that has to fetch) first resolves every version, then runs
+the optimized pack build for each package version that this resolution
+downloaded for the first time, with `--opt=speed` for native targets and
+`--opt=size` for wasm32. A build whose store lacks a package's optimized
+pack, because the cache was deleted or the pack was never built, rebuilds
+it there and then, so the store is always recoverable from the sources. Tier 2 entries can be LLVM-compiled only after an app
 requests them; the first build emits them with the dev backend and a detached
 background job produces the optimized object for the next build, both under
 the same identity but distinct option sets in the key. `roc check` never
@@ -575,9 +588,12 @@ them.
       and panic on any difference in code bytes, relocations, or unwind
       records. Gated by a CLI subcommands case over the fixture apps; the
       full fixture corpus and the whole subcommands suite pass under the
-      flag. Not yet artifacts: aarch64 procedures, whose calls reach their targets
-      through registered branch sites and veneer islands that the artifact
-      references do not carry, so the round trip is x86_64 only for now; Boxy capture-drop helpers
+      flag. On aarch64 a call reaches a far target through a registered
+      branch site and a veneer island, so an assembled BL re-registers as a
+      call site (and a linked-function BL as an extern-call site) before it
+      is re-resolved, and islands are logged as their own regions and left
+      out of the artifact set: each placement lays out its own. Not yet
+      artifacts: Boxy capture-drop helpers, which
       are emitted inside their caller's bytes and are rejected as nested
       regions (Boxy programs never use the cache). No cache, no store.
    2. Pack programs (done): `src/lir/pack_program.zig` lowers one module's
@@ -604,14 +620,138 @@ them.
       module's pack references hosted functions by their declared names
       (`line!`), which the app build resolves through the platform's hosted
       tables; linking a platform pack needs the same resolution.
-   3. Store and hit: pack files under the cache root, the per-machine index,
-      the Monotype reservation-time hit for closed requests that records an
-      external reference and skips lowering, artifact splicing in the object
-      writer, and the origin-split sweep. Gate: cold-versus-warm differential
-      over the CLI corpus (program output and refcount event logs), plus the
-      byte-identical gate for packs written by two builds.
+   3. Store and hit (first slice done): `src/backend/dev/PackFile.zig` is
+      the on-disk pack, a deterministic encoding of an artifact set plus a
+      table from specialization key to root artifact and ownership
+      signature. The key (`Monotype.Ast.specIdentityKey`) digests the
+      callable and every identity digest except the requesting method scope,
+      is stamped on the template of every closed non-hosted request at
+      reservation, and Direct LIR records the procedure lowered for each key
+      (`Result.spec_procs`). A hit at reservation completes the record with
+      no body, exactly like a hosted procedure, and Direct LIR emits a
+      body-less external proc carrying the entry's identity and ownership
+      signature, which ARC treats as pinned. The object compiler splices the
+      entry's closure from the pack before compiling the program's own
+      procedures, registering spliced procedures under the program's proc ids
+      (so every call to them is an ordinary direct call and the program's own
+      compile skips them) and spliced refcount helpers by name (so a later
+      request reuses them). Literal backings are named by content
+      (`roc__static_str_{digest}`) and travel with the artifacts that name
+      them. Constants travel the same way: every backend and the compile-time
+      evaluator still find a constant by its per-program name
+      (`roc__static_const_value_N`), so the pack layer alone names it by
+      content (`roc__static_data_{digest}`, the digest of its bytes,
+      alignment, symbol offset, and relocations, with data targets by digest
+      through cycles and code targets by content name), renames the
+      relocations it lifts, and carries the constant graph an entry reaches
+      with its relocations; splicing defines what the program did not. An
+      entry reaching a constant that holds a code pointer, or the boxy
+      runtime, is still withheld. A pack program keeps every keyed
+      specialization as a procedure through inlining and compaction, since
+      an export wrapper that inlined its only call would otherwise leave the
+      module's own exports out of its pack. `ROC_DEV_PACK_HITS=<dir>` serves a
+      build from a directory of packs; the roc-parser app takes 16 hits and
+      splices 9 procedures, links, and behaves identically. Gate: a CLI
+      subcommands case builds cold, builds warm from the cold packs, requires
+      hits, and compares the two programs' behavior. The store is on for every
+      `roc build --opt=dev` that does not pass `--no-cache` and files packs under the cache root
+      as `objects/<target>-<opt>/<local|pkg>/<placement>/<artifact key>.rpk`,
+      where the placement digests what survives an edit (a URL package's URL
+      or a local package's root directory, plus the module's path), so an
+      edited module's previous packs stay beside its new one and unchanged
+      specializations keep hitting; the background sweep ages `local/` packs
+      one day and `pkg/` packs thirty, by the later of access and
+      modification time. Every build writes the pack of the program it
+      compiled (from that compile's own artifacts) and a pack program for
+      every other module in view whose pack the store lacks. Hits happen at
+      two points: Monotype reservation for a runtime-only program, and Direct
+      LIR for the program shared with the compile-time evaluator, where the
+      compile-time roots' closure lowers first and only procedures reached
+      afterwards may be served, since the evaluator has no entries to run.
+      Pack roots are the module's exported Roc procedures with closed types;
+      hosted, intrinsic, entry, and compile-time-only templates never lower
+      as procedures of the exporting module, and a module with no such root
+      gets no pack. The closed-type walk follows a nominal type into its
+      declaration's backing template, which is written over the
+      declaration's formal parameters; those rigid parameters stand for the
+      nominal's arguments, which the walk checks on their own, so they are
+      bound inside the backing rather than free. Treating them as free made
+      every export returning `Try` or any other parameterized nominal open,
+      which left the roc-deflate package with three roots out of sixty-eight
+      exports and no compressor in its pack. Two more gaps hid behind that
+      one. A Monotype hit completes the reservation with no body only on
+      the coordinator; a queued request that a worker lane picks up lowered
+      its body regardless, so a rebuild with every hit still lowered five
+      million lifted expressions, ran SpecConstr and lambda solving over
+      them, and only then dropped the procedures as external. Queued
+      requests the cache holds now complete on the coordinator like hosted
+      ones. And the lifted source digest that seeds every procedure identity
+      hashed the stored-identity digest of the requested Monotype type,
+      which names nominals by store-local checked type ids exactly as the
+      key once did, so the identity in a pack's manifest disagreed with the
+      identity the app lowered for the same key; it hashes the equality
+      digest now. Last, the identity renderer digested a solved type as the
+      graph the program drew, with back-references counted up the rendering
+      stack, and two programs draw the same recursive type differently:
+      lambda solving materializes Monotype types lazily, so one program
+      holds a single node per knot where another rolls the knot out a level
+      before tying it back, depending on which shape reads touched the type.
+      A recursive nominal such as a UI element tree therefore got a
+      different identity in every program that mentioned it. The renderer
+      now digests a type's bisimulation class the way Monotype's own type
+      digests do (`proc_identity.zig`): strongly connected components
+      resolve in reverse topological order, a cyclic component is refined
+      to its coarsest bisimulation partition and rendered once as a group
+      with rank references, and each position's one-step unfolding is
+      remembered so a rolled-out copy of a position folds to its digest.
+      The program shared with the compile-time evaluator takes no hits from
+      packs today for a reason of ABI, not of policy: a pack's artifacts are
+      object-file code, which passes no `RocOps` argument and calls host
+      symbols such as `roc_crashed` by name, while the evaluator image is
+      compiled under the native-execution convention that threads `RocOps`
+      as a hidden last argument through every procedure and builtin call.
+      Splicing an object artifact into that image links but crashes at the
+      first call. Serving hits there needs a second artifact flavor per
+      pack, compiled for the host under the evaluator's convention, laid out
+      with the evaluator's code and data, and resolved by the same
+      relocation walk the object splice uses; the pack store, keys, and
+      manifests are shared with it.
+      ARC treats an object-cache procedure's recorded signature as its ABI
+      and never derives a variant of it. A hit applies only to the record
+      Monotype completed without a body: a SpecConstr clone or a second
+      lowering of the same template has a body and an identity of its own
+      and lowers normally. A closed procedure requested with the
+      erased-callable ABI (passed as a value) has no body once the cache
+      holds it, so Direct LIR gives that specialization a body that forwards
+      the plain arguments to the cached procedure. Two packs can both hold a
+      procedure or refcount helper, since each carries the closure of its own
+      roots; the splice resolves an artifact another pack already placed to
+      the existing copy. Measured on the roc-parser app: a rebuild or an
+      edited rebuild takes 11 hits and splices 10 procedures; real-app
+      numbers are under "Measurement notes". The refcount gate is the corpus
+      sweep with every fixture sharing one store: each program's exit status,
+      stdout, and stderr must match its cold build's, and the test host
+      reports every allocation the program leaves unfreed on stderr, so a
+      wrong ownership signature shows as a leak report or a crash. The store
+      is always on: on the real apps measured, dev rebuild time is Monotype
+      specialization of open requests, compile-time evaluation, and
+      SpecConstr over large procedures, which no closed entry covers, so the
+      cache gains about 15% on task-board rebuilds and nothing elsewhere
+      while costing nothing measurable. The store is on for every dev build
+      that does not pass `--no-cache`; the wins beyond that come from
+      lambda-bearing entries (tier 2) and optimized package objects, which
+      are what make dev builds faster or their code faster.
    4. Debug info for cached procedures (DWARF line programs stored with the
       artifact) and the `roc run` host-executable path.
+   5. Optimized package objects for dev builds. The LLVM backend emits
+      procedures under a private packed-buffer convention
+      (`roc_proc_N(ret_ptr, args_ptr)`), so a pack program compiled with
+      LLVM cannot be spliced or linked into a dev-backend program until LLVM
+      gains an emission mode for boundary procedures under the C-ABI
+      classification the dev backend already uses ("ABI of a cached
+      procedure"). That mode, plus a pack file kind that holds a linkable
+      object instead of dev artifacts, is the whole of this slice; the
+      store, keys, and manifests are shared.
 
 5. **Tier 2 and hot reload.** Lambda Mono hit point, site-and-shape lambda
    identities, package objects in the cached host executable, background
@@ -627,3 +767,46 @@ procedures declared inside type blocks. The roc-deflate example is a poor
 timing benchmark because CTFE folds its compression of a string literal; with
 the folded buffers made runtime-dependent, its final LIR drops from 492,853
 lines to 60,039.
+
+### Real apps under the object cache (2026-09-15)
+
+x86_64 Linux, `roc build --opt=dev`, measured with a ReleaseFast compiler
+(`zig build roc -Doptimize=ReleaseFast`), on `main` (db0282b787) and on this
+branch with `main` merged (79150f5c0e). Each configuration uses a fresh
+cache root; `main` has no object store, so its columns are the checked
+artifact cache alone, and the branch columns add the store, which is on by
+default. "Edited" appends a comment to the app's root module (a source the
+cache root has never seen). Times are wall-clock seconds, the better of two
+runs.
+
+| compiler | app | cold | rebuild | edited |
+| --- | --- | --- | --- | --- |
+| main | task-board | 2.1 | 1.9 | 2.1 |
+| branch | task-board | 2.0 | 1.7 | 1.7 |
+| main | counter | 0.31 | 0.21 | 0.21 |
+| branch | counter | 0.41 | 0.23 | 0.22 |
+| main | deflate | 6.3 | 3.0 | 6.1 |
+| branch | deflate | 12.8 | 0.23 | 6.0 |
+
+What this says. The deflate example's plain rebuild is now one hit at the
+top of the call graph (`Deflate.decompress`) and nothing lowered beneath
+it: Monotype completes that record without a body, so the compressor's
+five million lifted expressions, SpecConstr, and lambda solving never run,
+and the rebuild goes from 3.0s to 0.23s. Task-board's rebuild takes 154
+hits and gains about 10%; its remaining time is Monotype specialization of
+open requests and the evaluator's shared program. Counter is too small to
+move. Two costs remain. A cold deflate build is twice as slow as on main
+because it now writes a real pack for every one of the package's modules
+(fifty-one packs, most of which previously had no closed root); that work
+belongs at package download time, which is the optimized-objects slice.
+And an edited rebuild is unchanged everywhere, because the program shared
+with the compile-time evaluator cannot take hits until packs carry an
+artifact flavor under the evaluator's calling convention.
+
+The identity renderer must never expand shared subtypes as a tree: the
+solved type graph of a closure-heavy program reaches one record type from
+hundreds of lambda-set members, and rendering each path took task-board's
+Direct LIR from seconds to more than fifteen minutes. `proc_identity.zig`
+renders every type as the digest of its own rendering and remembers, across
+all identities of a program, every type whose rendering refers to nothing
+above its own stack frame.
