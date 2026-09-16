@@ -2417,6 +2417,52 @@ fn procedureTemplateForRootSource(
     };
 }
 
+/// Root requests for every exported top-level procedure binding of a checked
+/// artifact, in export order, each at its template's own checked scheme
+/// root. These are the roots of the module's pack program; the caller keeps
+/// the ones whose types are closed.
+pub fn exportedProcedureRoots(
+    allocator: Allocator,
+    artifact: *const CheckedModuleArtifact,
+) Allocator.Error![]RootRequest {
+    var requests = std.ArrayList(RootRequest).empty;
+    errdefer requests.deinit(allocator);
+    for (artifact.exports.defs) |def_idx| {
+        const top_level = artifact.top_level_values.lookupByDef(def_idx) orelse continue;
+        const procedure_binding = switch (top_level.value) {
+            .procedure_binding => |binding| binding,
+            .const_ref => continue,
+        };
+        const template = procedureTemplateForTopLevelBinding(&artifact.top_level_procedure_bindings, procedure_binding) orelse continue;
+        const checked_template = artifact.checked_procedure_templates.get(template.template);
+        // Intrinsic and entry wrappers lower only at their call sites; a
+        // pack root must have a checked body of its own.
+        switch (checked_template.body) {
+            .checked_body => {},
+            .intrinsic_wrapper, .entry_wrapper, .unimplemented => continue,
+        }
+        // Only a Roc procedure has code of its own to cache: a hosted
+        // function's callers reach the host directly, and the other targets
+        // never lower as procedures of the exporting module.
+        switch (checked_template.target) {
+            .roc => {},
+            .hosted, .intrinsic, .entry, .comptime_only => continue,
+        }
+        const checked_fn_root = checked_template.checked_fn_root;
+        try appendRoot(&requests, allocator, .{
+            .module_idx = artifact.module_identity.module_idx,
+            .kind = .runtime_entrypoint,
+            .source = .{ .def = def_idx },
+            .checked_type = checked_fn_root,
+            .abi = .roc,
+            .exposure = .exported,
+            .procedure_template = template,
+            .procedure_binding = procedure_binding,
+        });
+    }
+    return try requests.toOwnedSlice(allocator);
+}
+
 fn procedureTemplateForTopLevelBinding(
     top_level_procedure_bindings: *const TopLevelProcedureBindingTable,
     binding_ref: TopLevelProcedureBindingRef,

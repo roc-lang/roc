@@ -74,6 +74,19 @@ pub const Table = struct {
     }
 };
 
+/// The symbol of a literal backing: a digest of the bytes and their
+/// alignment, the same in every program.
+pub fn literalSymbolName(allocator: Allocator, bytes: []const u8, alignment: u32) Allocator.Error![]u8 {
+    var hasher = base.TypeDigestHasher.init();
+    hasher.update("roc.static-str.v1");
+    var alignment_bytes: [4]u8 = undefined;
+    std.mem.writeInt(u32, &alignment_bytes, alignment, .little);
+    hasher.update(&alignment_bytes);
+    hasher.update(bytes);
+    const digest = hasher.finalResult();
+    return std.fmt.allocPrint(allocator, "roc__static_str_{s}", .{&std.fmt.bytesToHex(digest[0..16].*, .lower)});
+}
+
 /// Build readonly data exports from the exact LIR procedure backing demand.
 pub fn build(allocator: Allocator, store: *const lir.LirStore, target: RocTarget) Allocator.Error!Table {
     const word_size: u32 = @intCast(target.ptrBitWidth() / 8);
@@ -102,11 +115,24 @@ pub fn build(allocator: Allocator, store: *const lir.LirStore, target: RocTarget
 
     const demanded = try lir.LiteralBackings.collect(allocator, store);
     defer allocator.free(demanded);
+    // Literal backings are named by content so the same literal has the same
+    // symbol in every program, which is what lets an object-cache entry that
+    // references one link against the program that pulls it in. Two literal
+    // ids with the same bytes and alignment share one backing.
+    var by_name = std.StringHashMap(u32).init(allocator);
+    defer by_name.deinit();
     for (demanded) |id| {
         const entry = .{ .idx = id, .bytes = store.getString(id), .alignment = store.strings.alignment(id) };
-        const symbol_name = try std.fmt.allocPrint(allocator, "roc__static_str_{d}", .{@intFromEnum(entry.idx)});
+        const symbol_name = try literalSymbolName(allocator, entry.bytes, entry.alignment);
         var symbol_owned = true;
         errdefer if (symbol_owned) allocator.free(symbol_name);
+        if (by_name.get(symbol_name)) |existing| {
+            try index.putNoClobber(entry.idx, existing);
+            allocator.free(symbol_name);
+            symbol_owned = false;
+            continue;
+        }
+        try by_name.putNoClobber(symbol_name, @intCast(entries.items.len));
 
         const backing_alignment = @max(word_size, entry.alignment);
         const data_offset = staticDataPtrOffset(word_size, backing_alignment, false);
@@ -198,7 +224,7 @@ test "build emits demanded literal backing with static refcount headers" {
     _ = try store.addCFStmt(.{ .assign_literal = .{ .target = local, .value = .{ .str_literal = .{ .backing = dead, .offset = 0, .len = @intCast(store.getString(dead).len) } }, .next = end } });
     const tail = try store.addCFStmt(.{ .assign_literal = .{ .target = local, .value = .{ .str_literal = .{ .backing = large, .offset = 0, .len = @intCast(store.getString(large).len) } }, .next = end } });
     const head = try store.addCFStmt(.{ .assign_literal = .{ .target = local, .value = .{ .str_literal = .{ .backing = small, .offset = 0, .len = 5 } }, .next = tail } });
-    _ = try store.addProcSpec(.{ .name = store.freshSyntheticSymbol(), .args = .empty(), .body = head, .ret_layout = .str });
+    _ = try store.addProcSpec(.{ .name = store.freshSyntheticSymbol(), .identity = lir.LIR.ProcIdentity.forTest(1), .args = .empty(), .body = head, .ret_layout = .str });
 
     var table = try build(allocator, &store, .x64linux);
     defer table.deinit();

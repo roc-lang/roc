@@ -10172,6 +10172,7 @@ test "interpreter float NaN mode preserves runtime payloads and normalizes compi
     } });
     const f32_proc = try store.addProcSpec(.{
         .name = store.freshSyntheticSymbol(),
+        .identity = LIR.ProcIdentity.forTest(2),
         .args = LIR.LocalSpan.empty(),
         .body = f32_body,
         .ret_layout = .f32,
@@ -10187,6 +10188,7 @@ test "interpreter float NaN mode preserves runtime payloads and normalizes compi
     } });
     const f64_proc = try store.addProcSpec(.{
         .name = store.freshSyntheticSymbol(),
+        .identity = LIR.ProcIdentity.forTest(1),
         .args = LIR.LocalSpan.empty(),
         .body = f64_body,
         .ret_layout = .f64,
@@ -10239,6 +10241,7 @@ test "interpreter evaluates explicit static data by compact id" {
     const frame_locals = try store.addLocalSpan(&.{result_local});
     const proc = try store.addProcSpec(.{
         .name = store.freshSyntheticSymbol(),
+        .identity = LIR.ProcIdentity.forTest(1),
         .args = LIR.LocalSpan.empty(),
         .body = body,
         .ret_layout = .u64,

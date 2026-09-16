@@ -782,7 +782,15 @@ pub fn solve(
     for (0..store.procSpecCount()) |proc_index| {
         const proc = store.getProcSpec(@enumFromInt(@as(u32, @intCast(proc_index))));
         var sig = arc_sig.RcSig.all_owned;
-        if (!solver.pinned.isSet(proc_index)) {
+        if (proc.external) {
+            // The cache entry was compiled with this signature; the program
+            // that links it calls it exactly so.
+            sig = .{
+                .borrowed_params = @intCast(proc.rc_borrowed_params),
+                .ret_mode = if (proc.rc_ret_borrowed) .borrowed else .owned,
+                .ret_lenders = @intCast(proc.rc_ret_lenders),
+            };
+        } else if (!solver.pinned.isSet(proc_index)) {
             const params = store.getLocalSpan(proc.args);
             for (0..GuardedList.borrowLen(params)) |position| {
                 const param = GuardedList.at(params, position);

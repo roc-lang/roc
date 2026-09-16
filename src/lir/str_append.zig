@@ -207,6 +207,7 @@ fn testStrCallee(store: *LirStore) ResourceError!LIR.LirProcSpecId {
     const ret = try store.addCFStmt(.{ .ret = .{ .value = arg } });
     return try store.addProcSpec(.{
         .name = store.freshSyntheticSymbol(),
+        .identity = LIR.ProcIdentity.forTest(1),
         .args = try store.addLocalSpan(&.{arg}),
         .frame_locals = try store.addLocalSpan(&.{arg}),
         .body = ret,
@@ -246,6 +247,7 @@ test "str append fuses a single-use call result into a direct append call" {
     } });
     _ = try store.addProcSpec(.{
         .name = store.freshSyntheticSymbol(),
+        .identity = LIR.ProcIdentity.forTest(2),
         .args = try store.addLocalSpan(&.{ acc, x }),
         .frame_locals = try store.addLocalSpan(&.{ acc, x, result, out }),
         .body = call,
@@ -298,6 +300,7 @@ test "str append fuses through a single-use alias of the call result" {
     } });
     _ = try store.addProcSpec(.{
         .name = store.freshSyntheticSymbol(),
+        .identity = LIR.ProcIdentity.forTest(3),
         .args = try store.addLocalSpan(&.{ acc, x }),
         .frame_locals = try store.addLocalSpan(&.{ acc, x, result, result_alias, out }),
         .body = call,
@@ -343,6 +346,7 @@ test "str append does not fuse across an alias of an unrelated local" {
     } });
     _ = try store.addProcSpec(.{
         .name = store.freshSyntheticSymbol(),
+        .identity = LIR.ProcIdentity.forTest(4),
         .args = try store.addLocalSpan(&.{ acc, x, unrelated }),
         .frame_locals = try store.addLocalSpan(&.{ acc, x, unrelated, unrelated_alias, result, out, extra }),
         .body = call,
@@ -383,6 +387,7 @@ test "str append does not fuse a multi-use call result" {
     } });
     _ = try store.addProcSpec(.{
         .name = store.freshSyntheticSymbol(),
+        .identity = LIR.ProcIdentity.forTest(5),
         .args = try store.addLocalSpan(&.{ acc, x, other }),
         .frame_locals = try store.addLocalSpan(&.{ acc, x, other, result, out, extra }),
         .body = call,
