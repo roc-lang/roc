@@ -82,7 +82,7 @@ pub const ResourceError = Allocator.Error;
 
 /// Rewrite qualifying loops in every proc.
 pub fn run(store: *LirStore, layouts: *const layout_mod.Store) ResourceError!void {
-    var prepared = try prepareCallees(store, layouts, store.allocator);
+    var prepared = try prepareCallees(store, store.allocator);
     defer prepared.deinit();
     var pass = Pass.init(store, layouts, store.allocator, &prepared);
     defer pass.deinit();
@@ -104,8 +104,7 @@ pub const PreparedCallees = struct {
 };
 
 /// Classify the phase input before any procedure is rewritten.
-pub fn prepareCallees(store: *LirStore, layouts: *const layout_mod.Store, allocator: Allocator) ResourceError!PreparedCallees {
-    _ = layouts;
+pub fn prepareCallees(store: *LirStore, allocator: Allocator) ResourceError!PreparedCallees {
     var classifier = Pass.CalleeClassifier{
         .store = store,
         .allocator = allocator,
@@ -2340,7 +2339,7 @@ test "promote carrier index visits reverse ordered edges once and excludes unrel
 /// Compare the once-only scan against the original subtree definition, not
 /// another lexical-scope algorithm, and account for every visited statement.
 fn expectLoopScan(f: *PromoteTest, body: CFStmtId, statements: usize, jumps: usize, loops: usize) (Allocator.Error || error{TestExpectedEqual})!void {
-    var prepared = try prepareCallees(&f.store, &f.layouts, testing.allocator);
+    var prepared = try prepareCallees(&f.store, testing.allocator);
     defer prepared.deinit();
     var pass = Pass.init(&f.store, &f.layouts, testing.allocator, &prepared);
     defer pass.deinit();
@@ -2546,7 +2545,7 @@ test "promote prepared summaries are frozen across long forward helper chains an
         store.getProcSpecPtr(proc).args = args;
         store.getProcSpecPtr(proc).body = call;
     }
-    var prepared = try prepareCallees(store, &f.layouts, testing.allocator);
+    var prepared = try prepareCallees(store, testing.allocator);
     defer prepared.deinit();
     for (wrappers) |proc| try testing.expectEqual(ProcKind.checked_append, prepared.kinds.get(proc).?.?);
 
@@ -2554,7 +2553,7 @@ test "promote prepared summaries are frozen across long forward helper chains an
     // preparation, however, must reject this recursive cycle exactly.
     const last_body = store.getProcSpec(wrappers[wrappers.len - 1]).body.?;
     store.getCFStmtPtr(last_body).assign_call.proc = wrappers[0];
-    var recursive = try prepareCallees(store, &f.layouts, testing.allocator);
+    var recursive = try prepareCallees(store, testing.allocator);
     defer recursive.deinit();
     for (wrappers) |proc| {
         try testing.expectEqual(ProcKind.checked_append, prepared.kinds.get(proc).?.?);
@@ -2588,7 +2587,7 @@ test "promote summaries reject ignored recursive calls in either procedure order
         } });
         f.store.getProcSpecPtr(b).args = args;
         f.store.getProcSpecPtr(b).body = recursive;
-        var prepared = try prepareCallees(&f.store, &f.layouts, testing.allocator);
+        var prepared = try prepareCallees(&f.store, testing.allocator);
         defer prepared.deinit();
         try testing.expectEqual(@as(?ProcKind, null), prepared.kinds.get(a).?);
         try testing.expectEqual(@as(?ProcKind, null), prepared.kinds.get(b).?);
@@ -2630,7 +2629,7 @@ test "promote summaries reject discarded operations before checked append" {
             } });
         };
         f.store.getProcSpecPtr(helper).body = prefix;
-        var prepared = try prepareCallees(&f.store, &f.layouts, testing.allocator);
+        var prepared = try prepareCallees(&f.store, testing.allocator);
         defer prepared.deinit();
         try testing.expectEqual(@as(?ProcKind, null), prepared.kinds.get(helper).?);
     }
@@ -2664,7 +2663,7 @@ test "promote summaries preserve direct reserve and unsafe append wrappers" {
             .body = wrapper_body,
             .ret_layout = f.list,
         });
-        var prepared = try prepareCallees(&f.store, &f.layouts, testing.allocator);
+        var prepared = try prepareCallees(&f.store, testing.allocator);
         defer prepared.deinit();
         const expected: ProcKind = if (op == .list_reserve) .reserve else .append_unsafe;
         try testing.expectEqual(expected, prepared.kinds.get(helper).?.?);
@@ -2709,7 +2708,7 @@ test "promote summary provenance distinguishes aliased reserve siblings" {
             .next = ret,
         } });
         f.store.getCFStmtPtr(reserve.next).assign_low_level.next = return_alias;
-        var prepared = try prepareCallees(&f.store, &f.layouts, testing.allocator);
+        var prepared = try prepareCallees(&f.store, testing.allocator);
         defer prepared.deinit();
         try testing.expectEqual(
             @as(?ProcKind, if (discard_sibling) null else .checked_append),
@@ -2781,7 +2780,7 @@ test "promote threads slack through an append-only loop" {
     });
 
     {
-        var prepared = try prepareCallees(store, &f.layouts, testing.allocator);
+        var prepared = try prepareCallees(store, testing.allocator);
         defer prepared.deinit();
         var scratch = std.heap.ArenaAllocator.init(testing.allocator);
         defer scratch.deinit();
