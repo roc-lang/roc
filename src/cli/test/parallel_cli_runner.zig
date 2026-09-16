@@ -432,7 +432,7 @@ const CustomCase = enum {
     optimized_transcript_deterministic_before_summary,
     optimized_failure_transcript_deterministic_before_summary,
     optimized_color_mode_cache_replay,
-    optimized_multi_module_links_once,
+    optimized_multi_module_compiles_once,
     verbose_works_from_cache,
     verbose_caches_failure_reports,
     non_verbose_caches_verbose_reports,
@@ -452,7 +452,7 @@ const CustomCase = enum {
     glue_debug,
     glue_debug_dev,
     glue_dev_without_temp_env,
-    glue_dylib_cache_hit,
+    glue_plugin_cache_hit,
     glue_c_header,
     glue_c_header_compiles,
     glue_zig,
@@ -948,7 +948,7 @@ const glue_cases = [_]CliCase{
     .{ .id = 0, .suite = .glue, .name = "glue command with DebugGlue succeeds", .body = .{ .custom = .glue_debug } },
     .{ .id = 0, .suite = .glue, .name = "glue command with DebugGlue succeeds with --opt=dev", .body = .{ .custom = .glue_debug_dev } },
     .{ .id = 0, .suite = .glue, .name = "glue command succeeds without temp environment variables", .skip = .{ .windows = "Windows requires TEMP or TMP" }, .body = .{ .custom = .glue_dev_without_temp_env } },
-    .{ .id = 0, .suite = .glue, .name = "glue command reuses cached compiler-owned dylib", .body = .{ .custom = .glue_dylib_cache_hit } },
+    .{ .id = 0, .suite = .glue, .name = "glue command reuses cached compiler-owned plugin object", .body = .{ .custom = .glue_plugin_cache_hit } },
     .{ .id = 0, .suite = .glue, .name = "glue command with CGlue generates expected C header", .body = .{ .custom = .glue_c_header } },
     .{ .id = 0, .suite = .glue, .name = "glue command generated C header compiles with zig cc", .body = .{ .custom = .glue_c_header_compiles } },
     .{ .id = 0, .suite = .glue, .name = "glue regression: ZigGlue succeeds on fx platform", .body = .{ .custom = .glue_zig } },
@@ -1769,7 +1769,7 @@ const subcommand_cases = [_]CliCase{
     .{ .id = 0, .suite = .subcommands, .name = "roc test optimized transcript is deterministic before summary", .backend = .speed, .body = .{ .custom = .optimized_transcript_deterministic_before_summary } },
     .{ .id = 0, .suite = .subcommands, .name = "roc test optimized failure transcript is deterministic before summary", .backend = .speed, .body = .{ .custom = .optimized_failure_transcript_deterministic_before_summary } },
     .{ .id = 0, .suite = .subcommands, .name = "roc test optimized color mode re-renders cached failure facts", .backend = .speed, .body = .{ .custom = .optimized_color_mode_cache_replay } },
-    .{ .id = 0, .suite = .subcommands, .name = "roc test optimized multi-module execution links once", .backend = .speed, .body = .{ .custom = .optimized_multi_module_links_once } },
+    .{ .id = 0, .suite = .subcommands, .name = "roc test optimized multi-module execution compiles one object", .backend = .speed, .body = .{ .custom = .optimized_multi_module_compiles_once } },
     .{ .id = 0, .suite = .subcommands, .name = "roc test --verbose works from cache (interpreter)", .backend = .interpreter, .body = .{ .custom = .verbose_works_from_cache } },
     .{ .id = 0, .suite = .subcommands, .name = "roc test --verbose works from cache (dev)", .backend = .dev, .body = .{ .custom = .verbose_works_from_cache } },
     .{ .id = 0, .suite = .subcommands, .name = "roc test --verbose caches failure reports (interpreter)", .backend = .interpreter, .body = .{ .custom = .verbose_caches_failure_reports } },
@@ -1870,7 +1870,7 @@ const subcommand_cases = [_]CliCase{
     .{ .id = 0, .suite = .subcommands, .name = "roc run rejects --watch for installed shorthands", .body = .{ .command = .{ .args = &.{ "run", "sometool", "--watch" }, .exit = .failure, .contains = &.{.{ .stream = .stderr, .text = "--watch is not supported for installed shorthands" }} } } },
     .{ .id = 0, .suite = .subcommands, .name = "roc install/run roundtrip over loopback HTTP", .body = .{ .custom = .install_run_roundtrip } },
     .{ .id = 0, .suite = .subcommands, .name = "roc install rejects a hash mismatch and leaves no entry", .body = .{ .custom = .install_hash_mismatch } },
-    .{ .id = 0, .suite = .subcommands, .name = "roc install/glue roundtrip for a glue spec dylib", .body = .{ .custom = .install_glue_roundtrip } },
+    .{ .id = 0, .suite = .subcommands, .name = "roc install/glue roundtrip for a glue spec plugin", .body = .{ .custom = .install_glue_roundtrip } },
     .{ .id = 0, .suite = .subcommands, .name = "roc test runs pure expects for a wasm-only platform (issue 9668)", .body = .{ .command = .{ .args = &.{ "test", "--opt=dev", "--no-cache" }, .roc_file = "test/cli/issue_9668_wasm_only_platform.roc", .exit = .success, .contains = &.{.{ .stream = .stdout, .text = "All (1) tests passed" }}, .not_contains = &.{ .{ .stream = .stderr, .text = "shared libraries" }, .{ .stream = .stderr, .text = ".so/.dylib/.dll" } } } } },
     .{ .id = 0, .suite = .subcommands, .name = "roc explains wasm-only Shared output as a wasm module (issue 9668)", .body = .{ .command = .{ .args = &.{"--no-cache"}, .roc_file = "test/cli/issue_9668_wasm_only_platform.roc", .exit = .failure, .contains = &.{ .{ .stream = .stderr, .text = "targets wasm32" }, .{ .stream = .stderr, .text = ".wasm module" }, .{ .stream = .stderr, .text = "roc build" }, .{ .stream = .stderr, .text = "wasm artifact" } }, .not_contains = &.{.{ .stream = .stderr, .text = ".so/.dylib/.dll" }} } } },
     .{ .id = 0, .suite = .subcommands, .name = "roc --opt=dev rejects non executable targets", .backend = .dev, .body = .{ .command = .{ .args = &.{ "--opt=dev", "--target=wasm32" }, .roc_file = "test/wasm/app.roc", .exit = .failure, .contains_any = &.{.{ .needles = &.{ .{ .stream = .stderr, .text = "only produces static libraries" }, .{ .stream = .stderr, .text = "target not supported" }, .{ .stream = .stderr, .text = "unsupported target" } } }} } } },
@@ -3119,7 +3119,7 @@ fn runCustomCase(
         .optimized_transcript_deterministic_before_summary => customOptimizedTranscriptDeterministicBeforeSummary(io, allocator, &env, &timer, timeout_ms),
         .optimized_failure_transcript_deterministic_before_summary => customOptimizedFailureTranscriptDeterministicBeforeSummary(io, allocator, &env, &timer, timeout_ms),
         .optimized_color_mode_cache_replay => customOptimizedColorModeCacheReplay(io, allocator, &env, &timer, timeout_ms),
-        .optimized_multi_module_links_once => customOptimizedMultiModuleLinksOnce(io, allocator, &env, &timer, timeout_ms),
+        .optimized_multi_module_compiles_once => customOptimizedMultiModuleCompilesOnce(io, allocator, &env, &timer, timeout_ms),
         .verbose_works_from_cache => customVerboseWorksFromCache(io, allocator, &env, &timer, timeout_ms, spec.backend orelse .interpreter),
         .verbose_caches_failure_reports => customVerboseCachesFailureReports(io, allocator, &env, &timer, timeout_ms, spec.backend orelse .interpreter),
         .non_verbose_caches_verbose_reports => customNonVerboseCachesVerboseReports(io, allocator, &env, &timer, timeout_ms, spec.backend orelse .interpreter),
@@ -3139,7 +3139,7 @@ fn runCustomCase(
         .glue_debug => customGlueDebug(io, allocator, &env, &timer, timeout_ms),
         .glue_debug_dev => customGlueDebugDev(io, allocator, &env, &timer, timeout_ms),
         .glue_dev_without_temp_env => customGlueDevWithoutTempEnv(io, allocator, &env, &timer, timeout_ms),
-        .glue_dylib_cache_hit => customGlueDylibCacheHit(io, allocator, &env, &timer, timeout_ms),
+        .glue_plugin_cache_hit => customGluePluginCacheHit(io, allocator, &env, &timer, timeout_ms),
         .glue_c_header => customGlueCHeader(io, allocator, &env, &timer, timeout_ms),
         .glue_c_header_compiles => customGlueCHeaderCompiles(io, allocator, &env, &timer, timeout_ms),
         .glue_zig => customGlueZig(io, allocator, &env, &timer, timeout_ms),
@@ -7827,7 +7827,7 @@ fn customOptimizedColorModeCacheReplay(io: std.Io, allocator: Allocator, env: *c
     return null;
 }
 
-fn countLinkRecords(bytes: []const u8) u32 {
+fn countCompileRecords(bytes: []const u8) u32 {
     var count: u32 = 0;
     for (bytes) |byte| {
         if (byte == '\n') count += 1;
@@ -7835,21 +7835,21 @@ fn countLinkRecords(bytes: []const u8) u32 {
     return count;
 }
 
-fn customOptimizedMultiModuleLinksOnce(io: std.Io, allocator: Allocator, env: *const CaseEnv, timer: *harness.Timer, timeout_ms: u64) ?TestResult {
-    const link_count_path = std.fs.path.join(allocator, &.{ env.dirs.work_dir, "llvm-shared-link-count.txt" }) catch |err|
-        return customInfraFailure(allocator, timer, "failed to allocate link count path: {}", .{err});
-    defer allocator.free(link_count_path);
+fn customOptimizedMultiModuleCompilesOnce(io: std.Io, allocator: Allocator, env: *const CaseEnv, timer: *harness.Timer, timeout_ms: u64) ?TestResult {
+    const compile_count_path = std.fs.path.join(allocator, &.{ env.dirs.work_dir, "llvm-object-compile-count.txt" }) catch |err|
+        return customInfraFailure(allocator, timer, "failed to allocate compile count path: {}", .{err});
+    defer allocator.free(compile_count_path);
 
-    var link_count_env = CaseEnv{
+    var compile_count_env = CaseEnv{
         .dirs = env.dirs,
         .env_map = env.env_map.clone(allocator) catch |err|
-            return customInfraFailure(allocator, timer, "failed to clone environment for link-count run: {}", .{err}),
+            return customInfraFailure(allocator, timer, "failed to clone environment for compile-count run: {}", .{err}),
     };
-    defer link_count_env.env_map.deinit();
-    link_count_env.env_map.put("ROC_TEST_LLVM_SHARED_LINK_COUNT_FILE", link_count_path) catch |err|
-        return customInfraFailure(allocator, timer, "failed to set link-count file environment: {}", .{err});
+    defer compile_count_env.env_map.deinit();
+    compile_count_env.env_map.put("ROC_TEST_LLVM_OBJECT_COMPILE_COUNT_FILE", compile_count_path) catch |err|
+        return customInfraFailure(allocator, timer, "failed to set compile-count file environment: {}", .{err});
 
-    if (runRocAndCheck(io, allocator, &link_count_env, timer, timeout_ms, .{
+    if (runRocAndCheck(io, allocator, &compile_count_env, timer, timeout_ms, .{
         .args = &.{ "test", "--opt=speed", "--no-cache" },
         .roc_file = "test/cli/multi_module_expect_err/Main.roc",
         .exit = .{ .code = 1 },
@@ -7860,13 +7860,13 @@ fn customOptimizedMultiModuleLinksOnce(io: std.Io, allocator: Allocator, env: *c
         },
     })) |failure| return failure;
 
-    const count_bytes = std.Io.Dir.cwd().readFileAlloc(io, link_count_path, allocator, .limited(1024)) catch |err|
-        return customFailure(allocator, timer, "failed to read LLVM shared-library link count file {s}: {}", .{ link_count_path, err });
+    const count_bytes = std.Io.Dir.cwd().readFileAlloc(io, compile_count_path, allocator, .limited(1024)) catch |err|
+        return customFailure(allocator, timer, "failed to read LLVM object compile count file {s}: {}", .{ compile_count_path, err });
     defer allocator.free(count_bytes);
 
-    const link_count = countLinkRecords(count_bytes);
-    if (link_count != 1) {
-        return customFailure(allocator, timer, "expected optimized multi-module roc test to perform exactly one shared-library link, observed {d}", .{link_count});
+    const compile_count = countCompileRecords(count_bytes);
+    if (compile_count != 1) {
+        return customFailure(allocator, timer, "expected optimized multi-module roc test to compile exactly one plugin object, observed {d}", .{compile_count});
     }
 
     return null;
@@ -9653,15 +9653,15 @@ fn customGlueDevWithoutTempEnv(io: std.Io, allocator: Allocator, env: *const Cas
     return null;
 }
 
-const GlueDylibCacheFileCounts = struct {
-    dylibs: usize = 0,
+const GluePluginCacheFileCounts = struct {
+    plugins: usize = 0,
     temps: usize = 0,
 };
 
-fn hostSharedLibraryExtension() []const u8 {
+fn hostObjectExtension() []const u8 {
     return switch (builtin.os.tag) {
-        .windows => ".dll",
-        .macos => ".dylib",
+        .windows => ".obj",
+        .macos,
         .freestanding,
         .other,
         .contiki,
@@ -9702,11 +9702,11 @@ fn hostSharedLibraryExtension() []const u8 {
         .opencl,
         .opengl,
         .vulkan,
-        => ".so",
+        => ".o",
     };
 }
 
-fn countGlueDylibCacheFiles(io: std.Io, allocator: Allocator, cache_path: []const u8, opt_name: []const u8) CliRunnerError!GlueDylibCacheFileCounts {
+fn countGluePluginCacheFiles(io: std.Io, allocator: Allocator, cache_path: []const u8, opt_name: []const u8) CliRunnerError!GluePluginCacheFileCounts {
     var cache_dir = std.Io.Dir.cwd().openDir(io, cache_path, .{ .iterate = true }) catch |err| switch (err) {
         error.AccessDenied,
         error.BadPathName,
@@ -9732,11 +9732,11 @@ fn countGlueDylibCacheFiles(io: std.Io, allocator: Allocator, cache_path: []cons
     const opt_segment = try std.fmt.allocPrint(allocator, "{s}{s}{s}", .{ std.fs.path.sep_str, opt_name, std.fs.path.sep_str });
     defer allocator.free(opt_segment);
 
-    const extension = hostSharedLibraryExtension();
-    var counts = GlueDylibCacheFileCounts{};
+    const extension = hostObjectExtension();
+    var counts = GluePluginCacheFileCounts{};
     while (try walker.next(io)) |entry| {
         if (entry.kind != .file) continue;
-        if (std.mem.find(u8, entry.path, "glue-dylib") == null) continue;
+        if (std.mem.find(u8, entry.path, "glue-plugin") == null) continue;
 
         if (std.mem.endsWith(u8, entry.basename, ".tmp")) {
             counts.temps += 1;
@@ -9745,25 +9745,25 @@ fn countGlueDylibCacheFiles(io: std.Io, allocator: Allocator, cache_path: []cons
 
         if (std.mem.find(u8, entry.path, opt_segment) == null) continue;
         if (std.mem.endsWith(u8, entry.basename, extension)) {
-            counts.dylibs += 1;
+            counts.plugins += 1;
         }
     }
     return counts;
 }
 
-fn customGlueDylibCacheHit(io: std.Io, allocator: Allocator, env: *const CaseEnv, timer: *harness.Timer, timeout_ms: u64) ?TestResult {
-    const link_count_path = std.fs.path.join(allocator, &.{ env.dirs.work_dir, "glue-llvm-shared-link-count.txt" }) catch |err|
-        return customInfraFailure(allocator, timer, "failed to allocate glue link count path: {}", .{err});
-    defer allocator.free(link_count_path);
+fn customGluePluginCacheHit(io: std.Io, allocator: Allocator, env: *const CaseEnv, timer: *harness.Timer, timeout_ms: u64) ?TestResult {
+    const compile_count_path = std.fs.path.join(allocator, &.{ env.dirs.work_dir, "glue-llvm-object-compile-count.txt" }) catch |err|
+        return customInfraFailure(allocator, timer, "failed to allocate glue compile count path: {}", .{err});
+    defer allocator.free(compile_count_path);
 
-    var link_count_env = CaseEnv{
+    var compile_count_env = CaseEnv{
         .dirs = env.dirs,
         .env_map = env.env_map.clone(allocator) catch |err|
-            return customInfraFailure(allocator, timer, "failed to clone environment for glue link-count run: {}", .{err}),
+            return customInfraFailure(allocator, timer, "failed to clone environment for glue compile-count run: {}", .{err}),
     };
-    defer link_count_env.env_map.deinit();
-    link_count_env.env_map.put("ROC_TEST_LLVM_SHARED_LINK_COUNT_FILE", link_count_path) catch |err|
-        return customInfraFailure(allocator, timer, "failed to set glue link-count file environment: {}", .{err});
+    defer compile_count_env.env_map.deinit();
+    compile_count_env.env_map.put("ROC_TEST_LLVM_OBJECT_COMPILE_COUNT_FILE", compile_count_path) catch |err|
+        return customInfraFailure(allocator, timer, "failed to set glue compile-count file environment: {}", .{err});
 
     const first_output_dir = createWorkSubdir(io, allocator, env, "glue-cache-one") catch |err|
         return customInfraFailure(allocator, timer, "failed to create first glue cache output dir: {}", .{err});
@@ -9776,34 +9776,34 @@ fn customGlueDylibCacheHit(io: std.Io, allocator: Allocator, env: *const CaseEnv
         .{ .stream = .stderr, .text = "stamp" },
     };
 
-    if (runRocAndCheck(io, allocator, &link_count_env, timer, timeout_ms, .{
+    if (runRocAndCheck(io, allocator, &compile_count_env, timer, timeout_ms, .{
         .args = &.{ "glue", "--opt=dev", "src/glue/src/DebugGlue.roc", first_output_dir, "test/fx/platform/main.roc" },
         .contains = &.{.{ .stream = .stderr, .text = "name: \"main!\"" }},
         .not_contains = &common_not_contains,
     })) |failure| return failure;
 
-    if (runRocAndCheck(io, allocator, &link_count_env, timer, timeout_ms, .{
+    if (runRocAndCheck(io, allocator, &compile_count_env, timer, timeout_ms, .{
         .args = &.{ "glue", "--opt=dev", "src/glue/src/DebugGlue.roc", second_output_dir, "test/fx/platform/main.roc" },
         .contains = &.{.{ .stream = .stderr, .text = "name: \"main!\"" }},
         .not_contains = &common_not_contains,
     })) |failure| return failure;
 
-    const count_bytes = std.Io.Dir.cwd().readFileAlloc(io, link_count_path, allocator, .limited(1024)) catch |err|
-        return customFailure(allocator, timer, "failed to read glue LLVM shared-library link count file {s}: {}", .{ link_count_path, err });
+    const count_bytes = std.Io.Dir.cwd().readFileAlloc(io, compile_count_path, allocator, .limited(1024)) catch |err|
+        return customFailure(allocator, timer, "failed to read glue LLVM object compile count file {s}: {}", .{ compile_count_path, err });
     defer allocator.free(count_bytes);
 
-    const link_count = countLinkRecords(count_bytes);
-    if (link_count != 1) {
-        return customFailure(allocator, timer, "expected two identical roc glue runs to perform exactly one shared-library link, observed {d}", .{link_count});
+    const compile_count = countCompileRecords(count_bytes);
+    if (compile_count != 1) {
+        return customFailure(allocator, timer, "expected two identical roc glue runs to compile exactly one plugin object, observed {d}", .{compile_count});
     }
 
-    const cache_counts = countGlueDylibCacheFiles(io, allocator, env.dirs.roc_cache_dir, "dev") catch |err|
-        return customFailure(allocator, timer, "failed to inspect glue dylib cache: {}", .{err});
-    if (cache_counts.dylibs != 1) {
-        return customFailure(allocator, timer, "expected one dev glue dylib cache entry with extension {s}, found {d}", .{ hostSharedLibraryExtension(), cache_counts.dylibs });
+    const cache_counts = countGluePluginCacheFiles(io, allocator, env.dirs.roc_cache_dir, "dev") catch |err|
+        return customFailure(allocator, timer, "failed to inspect glue plugin cache: {}", .{err});
+    if (cache_counts.plugins != 1) {
+        return customFailure(allocator, timer, "expected one dev glue plugin cache entry with extension {s}, found {d}", .{ hostObjectExtension(), cache_counts.plugins });
     }
     if (cache_counts.temps != 0) {
-        return customFailure(allocator, timer, "expected no staged glue dylib temp entries to remain, found {d}", .{cache_counts.temps});
+        return customFailure(allocator, timer, "expected no staged glue plugin temp entries to remain, found {d}", .{cache_counts.temps});
     }
 
     return null;

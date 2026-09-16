@@ -3,19 +3,17 @@
 //! This module compiles LLVM bitcode to native artifacts. It handles:
 //! 1. Parse bitcode into an LLVM module
 //! 2. Merge builtin functions into the module
-//! 3. Compile to a native object file or shared library
+//! 3. Compile to a native object file
 //!
-//! The evaluator uses a temporary shared library so the platform loader owns
-//! relocations and symbol binding.
+//! The evaluator compiles to a relocatable object whose bytes the compiler's
+//! own loader (`vendor_relocatable_loader`) places, relocates, and binds to
+//! the compiler's host symbols in-process.
 
 const std = @import("std");
 const builtin = @import("builtin");
 const build_options = @import("build_options");
 const bindings = @import("vendor_llvm_compile_bindings");
-const embedded_lld = @import("embedded_lld");
 const llvm_embedded = @import("llvm_embedded");
-const collections = @import("collections");
-const roc_target = @import("roc_target");
 const builtins = @import("builtins");
 const builtin_registry = builtins.builtin_registry;
 
@@ -664,27 +662,16 @@ pub fn compileToObject(allocator: Allocator, io: std.Io, bitcode: []const u32, o
     return object_bytes;
 }
 
-/// Compile LLVM bitcode to a native shared library and return its path.
-/// Caller owns the returned path and is responsible for deleting the file.
-pub fn compileToSharedLibrary(allocator: Allocator, io: std.Io, bitcode: []const u32, options: CompileOptions) Error![:0]const u8 {
-    return compileBitcodeModulesToSharedLibrary(allocator, io, &.{bitcode}, options);
-}
-
-/// Compile LLVM bitcode modules to one native shared library and return its path.
-/// The modules are linked together before Roc builtins are merged, so the final
-/// native link sees one object and one copy of the builtin definitions.
-/// Caller owns the returned path and is responsible for deleting the file.
-pub fn compileBitcodeModulesToSharedLibrary(allocator: Allocator, io: std.Io, bitcodes: []const []const u32, options: CompileOptions) Error![:0]const u8 {
+/// Compile LLVM bitcode modules to one relocatable native object the
+/// compiler loads in-process, and return its bytes. The modules are linked
+/// together before the Roc builtins are merged, so the object holds one
+/// copy of the builtin definitions and imports only the host's symbols,
+/// which the relocatable loader binds when it loads the object.
+pub fn compileBitcodeModulesToObject(allocator: Allocator, io: std.Io, bitcodes: []const []const u32, options: CompileOptions) Error![]u8 {
     const object_path = createTempPath(allocator, io, objectExtension()) catch return Error.TempFileError;
     defer {
         std.Io.Dir.cwd().deleteFile(io, std.mem.sliceTo(object_path, 0)) catch {};
         allocator.free(object_path);
-    }
-
-    const shared_lib_path = createTempPath(allocator, io, sharedLibraryExtension()) catch return Error.TempFileError;
-    errdefer {
-        std.Io.Dir.cwd().deleteFile(io, std.mem.sliceTo(shared_lib_path, 0)) catch {};
-        allocator.free(shared_lib_path);
     }
 
     var pic_options = options;
@@ -697,37 +684,30 @@ pub fn compileBitcodeModulesToSharedLibrary(allocator: Allocator, io: std.Io, bi
     pic_options.lower_memory_intrinsics_to_loops = pic_options.no_target_libcalls;
 
     try emitMergedBitcodeModulesToObjectFile(allocator, io, bitcodes, pic_options, object_path);
+    recordInProcessCompileForTest(allocator, io);
+
+    const object_bytes = std.Io.Dir.cwd().readFileAlloc(
+        io,
+        std.mem.sliceTo(object_path, 0),
+        allocator,
+        .limited(256 * 1024 * 1024),
+    ) catch return Error.TempFileError;
 
     if (comptime build_options.llvm_keep_object.len != 0) {
-        std.Io.Dir.cwd().copyFile(
-            std.mem.sliceTo(object_path, 0),
-            std.Io.Dir.cwd(),
-            build_options.llvm_keep_object,
-            io,
-            .{},
-        ) catch {};
+        std.Io.Dir.cwd().writeFile(io, .{
+            .sub_path = build_options.llvm_keep_object,
+            .data = object_bytes,
+        }) catch {};
     }
 
-    try linkSharedLibrary(allocator, io, object_path, shared_lib_path);
-    recordSharedLibraryLinkForTest(allocator, io);
-
-    if (comptime build_options.llvm_keep_dylib.len != 0) {
-        std.Io.Dir.cwd().copyFile(
-            std.mem.sliceTo(shared_lib_path, 0),
-            std.Io.Dir.cwd(),
-            build_options.llvm_keep_dylib,
-            io,
-            .{},
-        ) catch {};
-    }
-
-    return shared_lib_path;
+    return object_bytes;
 }
 
-fn recordSharedLibraryLinkForTest(allocator: Allocator, io: std.Io) void {
-    const path_key = allocator.dupeZ(u8, "ROC_TEST_LLVM_SHARED_LINK_COUNT_FILE") catch return;
+/// Append one record to the file `ROC_TEST_LLVM_OBJECT_COMPILE_COUNT_FILE`
+/// names, so a test can count how many in-process objects a run compiled.
+fn recordInProcessCompileForTest(allocator: Allocator, io: std.Io) void {
+    const path_key = allocator.dupeZ(u8, "ROC_TEST_LLVM_OBJECT_COMPILE_COUNT_FILE") catch return;
     defer allocator.free(path_key);
-
     const path_z = std.c.getenv(path_key) orelse return;
     const path = allocator.dupe(u8, path_z[0..std.mem.len(path_z)]) catch return;
     defer allocator.free(path);
@@ -776,164 +756,6 @@ fn recordSharedLibraryLinkForTest(allocator: Allocator, io: std.Io) void {
     contents.appendSlice(allocator, "1\n") catch return;
 
     std.Io.Dir.cwd().writeFile(io, .{ .sub_path = path, .data = contents.items }) catch {};
-}
-
-fn linkSharedLibrary(
-    allocator: Allocator,
-    io: std.Io,
-    object_path: [:0]const u8,
-    shared_lib_path: [:0]const u8,
-) Error!void {
-    var arena_impl = collections.SingleThreadArena.init(allocator);
-    defer arena_impl.deinit();
-    const arena = arena_impl.allocator();
-
-    var args: std.ArrayList([]const u8) = .empty;
-    defer args.deinit(allocator);
-
-    var stack_probe_path: ?[:0]const u8 = null;
-    defer if (stack_probe_path) |path| {
-        std.Io.Dir.cwd().deleteFile(io, std.mem.sliceTo(path, 0)) catch {};
-        allocator.free(path);
-    };
-
-    var compiler_rt_path: ?[:0]const u8 = null;
-    defer if (compiler_rt_path) |path| {
-        std.Io.Dir.cwd().deleteFile(io, std.mem.sliceTo(path, 0)) catch {};
-        allocator.free(path);
-    };
-
-    switch (host_os) {
-        .macos => {
-            try args.append(allocator, "ld64.lld");
-            try args.append(allocator, "-dylib");
-            try args.append(allocator, "-o");
-            try args.append(allocator, std.mem.sliceTo(shared_lib_path, 0));
-            if (!build_options.linker_warnings) {
-                try args.append(allocator, "-w");
-            }
-            try args.append(allocator, "-arch");
-            try args.append(allocator, roc_target.machoArchName(builtin.cpu.arch) catch return Error.LinkFailed);
-            try args.append(allocator, "-platform_version");
-            try args.append(allocator, "macos");
-            try args.append(allocator, roc_target.macos_deployment.linker_version);
-            try args.append(allocator, roc_target.macos_deployment.linker_version);
-            try args.append(allocator, "-syslibroot");
-            try args.append(allocator, embedded_lld.darwin_sysroot.find(arena, io) catch return Error.OutOfMemory);
-            try args.append(allocator, std.mem.sliceTo(object_path, 0));
-            try args.append(allocator, "-lSystem");
-        },
-        .elf => {
-            try args.append(allocator, "ld.lld");
-            try args.append(allocator, "-shared");
-            // The eval-test-runner is a static-musl binary whose dlopen does not
-            // resolve a loaded library's own PLT/GOT (no dynamic-loader symbol
-            // binding), so default (preemptible, lazily-bound) intra-library
-            // calls like roc_builtins_dec_to_str leave GOT slots null and jump to
-            // 0x0. -Bsymbolic binds intra-library global references to their local
-            // definitions at link time (direct calls / RELATIVE relocs that musl
-            // always applies at load); -z now additionally forces eager binding.
-            try args.append(allocator, "-Bsymbolic");
-            try args.append(allocator, "-z");
-            try args.append(allocator, "now");
-            try args.append(allocator, "-o");
-            try args.append(allocator, std.mem.sliceTo(shared_lib_path, 0));
-            try args.append(allocator, std.mem.sliceTo(object_path, 0));
-        },
-        .windows => {
-            try args.append(allocator, "lld-link");
-            try args.append(allocator, "/dll");
-            try args.append(allocator, try std.fmt.allocPrint(arena, "/out:{s}", .{std.mem.sliceTo(shared_lib_path, 0)}));
-            try args.append(allocator, if (builtin.cpu.arch == .aarch64)
-                "/machine:arm64"
-            else if (builtin.cpu.arch == .x86_64)
-                "/machine:x64"
-            else if (builtin.cpu.arch == .x86)
-                "/machine:x86"
-            else
-                return Error.LinkFailed);
-            try args.append(allocator, std.mem.sliceTo(object_path, 0));
-            // LLVM emits ___chkstk_ms stack probes for functions with large
-            // frames; no Windows system library defines it, so link the same
-            // generated probe object the roc CLI linker uses.
-            if (builtin.cpu.arch == .x86_64) {
-                const probe_obj = embedded_lld.stack_probe.generateStackProbeObject(arena) catch return Error.OutOfMemory;
-                const probe_path = createTempPath(allocator, io, ".obj") catch return Error.TempFileError;
-                stack_probe_path = probe_path;
-                std.Io.Dir.cwd().writeFile(io, .{
-                    .sub_path = std.mem.sliceTo(probe_path, 0),
-                    .data = probe_obj,
-                }) catch return Error.TempFileError;
-                try args.append(allocator, std.mem.sliceTo(probe_path, 0));
-            }
-
-            // Native codegen lowers the merged module's 128-bit divide/remainder
-            // and 128-bit<->float operations to compiler-rt libcalls (__divti3,
-            // __fixdfti, ...) that the image itself does not define. The Unix
-            // loaders bind these at load time (the in-process eval_loader via
-            // native_runtime_libcalls.resolve, or the OS dynamic loader), but
-            // Windows' LoadLibrary needs a fully linked DLL, so link in the
-            // object that exports them. See eval_compiler_rt_libcalls.zig.
-            const compiler_rt_obj = llvm_embedded.eval_compiler_rt_libcalls_obj;
-            const compiler_rt_obj_path = createTempPath(allocator, io, ".obj") catch return Error.TempFileError;
-            compiler_rt_path = compiler_rt_obj_path;
-            std.Io.Dir.cwd().writeFile(io, .{
-                .sub_path = std.mem.sliceTo(compiler_rt_obj_path, 0),
-                .data = compiler_rt_obj,
-            }) catch return Error.TempFileError;
-            try args.append(allocator, std.mem.sliceTo(compiler_rt_obj_path, 0));
-
-            // Tell lld-link where to find the CRT and Windows SDK import
-            // libraries. Without these /libpath entries lld-link can only locate
-            // kernel32.lib/ntdll.lib/msvcrt.lib via the LIB environment variable,
-            // so linking fails in shells where LIB is unset (e.g. outside a
-            // Developer Command Prompt). The roc CLI linker resolves these the
-            // same way; this is a native compile, so target the host arch.
-            const query = std.Target.Query{
-                .cpu_arch = builtin.cpu.arch,
-                .os_tag = .windows,
-                .abi = .msvc,
-                .ofmt = .coff,
-            };
-            const target = std.zig.system.resolveTargetQuery(io, query) catch return Error.WindowsSDKNotFound;
-
-            var environ_map = std.process.Environ.empty.createMap(arena) catch return Error.OutOfMemory;
-            defer environ_map.deinit();
-            const native_libc = std.zig.LibCInstallation.findNative(arena, io, .{
-                .target = &target,
-                .environ_map = &environ_map,
-            }) catch return Error.WindowsSDKNotFound;
-
-            if (native_libc.crt_dir) |lib_dir| {
-                try args.append(allocator, try std.fmt.allocPrint(arena, "/libpath:{s}", .{lib_dir}));
-            } else return Error.WindowsSDKNotFound;
-
-            if (native_libc.msvc_lib_dir) |lib_dir| {
-                try args.append(allocator, try std.fmt.allocPrint(arena, "/libpath:{s}", .{lib_dir}));
-            } else return Error.WindowsSDKNotFound;
-
-            if (native_libc.kernel32_lib_dir) |lib_dir| {
-                try args.append(allocator, try std.fmt.allocPrint(arena, "/libpath:{s}", .{lib_dir}));
-            } else return Error.WindowsSDKNotFound;
-
-            try args.append(allocator, "/defaultlib:kernel32");
-            try args.append(allocator, "/defaultlib:ntdll");
-            try args.append(allocator, "/defaultlib:msvcrt");
-        },
-        .other => return Error.LinkFailed,
-    }
-
-    const format: embedded_lld.Format = switch (host_os) {
-        .macos => .macho,
-        .elf => .elf,
-        .windows => .coff,
-        .other => return Error.LinkFailed,
-    };
-
-    embedded_lld.link(allocator, format, args.items, .{}) catch |err| switch (err) {
-        error.OutOfMemory => return Error.OutOfMemory,
-        error.LinkFailed => return Error.LinkFailed,
-    };
 }
 
 fn getTempDir(allocator: Allocator) (Allocator.Error || error{TempDirUnavailable})![]u8 {
@@ -997,13 +819,5 @@ fn objectExtension() []const u8 {
     return switch (host_os) {
         .windows => ".obj",
         .macos, .elf, .other => ".o",
-    };
-}
-
-fn sharedLibraryExtension() []const u8 {
-    return switch (host_os) {
-        .windows => ".dll",
-        .macos => ".dylib",
-        .elf, .other => ".so",
     };
 }

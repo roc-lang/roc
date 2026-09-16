@@ -616,9 +616,9 @@ const ExpectErrRegionRecorder = in_process_host.ExpectErrRegionRecorder;
 
 /// The recorder for a `?` region. The compiler's own process records it
 /// directly. The LLVM bitcode flavor is compiled as wasm64 and retargeted, so
-/// it references the recorder by name: an in-process LLVM library resolves the
-/// name through its host table, and a platform executable resolves the weak
-/// reference to null. That address is only known at link time, so the null
+/// it references the recorder by name: the compiler's relocatable loader binds
+/// the name to the recorder when it loads an in-process object, and a platform
+/// executable resolves the weak reference to null. That address is only known at link time, so the null
 /// check happens at runtime, and the empty asm keeps the optimizer from
 /// assuming the weak reference is defined. Every other platform-role object
 /// has no recorder, since only the compiler's process reads the region back.

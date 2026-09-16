@@ -711,10 +711,14 @@ them.
       carries no host pointer. The compiler defines those symbols once
       (`builtins/in_process_host.zig`) as forwarders to the `RocOps` the
       current thread has entered, so a pack's object artifact and the
-      evaluator's image are the same kind of code. Serving hits inside the
-      program shared with the compile-time evaluator is therefore a splice
-      of object artifacts into that image, resolved by the same relocation
-      walk the object splice uses; no second artifact flavor exists.
+      evaluator's image are the same kind of code, and the compiler already
+      loads LLVM-compiled objects into its own process with a relocatable
+      loader (`vendor/relocatable_loader`) that binds their imports to the
+      compiler's host symbols and patches their calls in place. Serving hits
+      inside the program shared with the compile-time evaluator is therefore
+      a splice of object artifacts into that image; no second artifact
+      flavor exists, and the loader is the piece an LLVM-object splice
+      reuses.
       ARC treats an object-cache procedure's recorded signature as its ABI
       and never derives a variant of it. A hit applies only to the record
       Monotype completed without a body: a SpecConstr clone or a second

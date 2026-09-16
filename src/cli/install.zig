@@ -124,7 +124,7 @@ pub fn isValidShorthand(name: []const u8) bool {
 
 /// What kind of artifact an install entry carries: an app built to an
 /// executable that `roc run` executes, or a glue spec built to a plugin
-/// dylib that `roc glue` loads.
+/// object that `roc glue` loads.
 pub const InstallKind = enum {
     executable,
     glue,
@@ -211,14 +211,14 @@ pub const EntryPaths = struct {
     bin_dir: []const u8,
     /// `<entry>/bin/<shorthand>[.exe]`
     exe_path: []const u8,
-    /// `<entry>/bin/<shorthand>.<dylib|so|dll>`
-    glue_dylib_path: []const u8,
+    /// `<entry>/bin/<shorthand>.<o|obj>`
+    glue_plugin_path: []const u8,
 
     /// The artifact path an entry of the given kind must contain.
     pub fn artifactPath(self: *const EntryPaths, kind: InstallKind) []const u8 {
         return switch (kind) {
             .executable => self.exe_path,
-            .glue => self.glue_dylib_path,
+            .glue => self.glue_plugin_path,
         };
     }
 };
@@ -236,12 +236,11 @@ pub fn entryPathsIn(allocator: Allocator, entry_dir: []const u8, shorthand: []co
         try std.fmt.allocPrint(allocator, "{s}.exe", .{shorthand})
     else
         shorthand;
-    const dylib_ext = switch (classifyInstallOs(builtin.target.os.tag)) {
-        .windows => ".dll",
-        .macos => ".dylib",
-        .other => ".so",
+    const plugin_ext = switch (classifyInstallOs(builtin.target.os.tag)) {
+        .windows => ".obj",
+        .macos, .other => ".o",
     };
-    const dylib_filename = try std.fmt.allocPrint(allocator, "{s}{s}", .{ shorthand, dylib_ext });
+    const plugin_filename = try std.fmt.allocPrint(allocator, "{s}{s}", .{ shorthand, plugin_ext });
     return .{
         .entry_dir = entry_dir,
         .manifest_path = try std.fs.path.join(allocator, &.{ entry_dir, manifest_filename }),
@@ -249,7 +248,7 @@ pub fn entryPathsIn(allocator: Allocator, entry_dir: []const u8, shorthand: []co
         .main_roc_path = try std.fs.path.join(allocator, &.{ entry_dir, source_dir_name, "main.roc" }),
         .bin_dir = try std.fs.path.join(allocator, &.{ entry_dir, bin_dir_name }),
         .exe_path = try std.fs.path.join(allocator, &.{ entry_dir, bin_dir_name, exe_filename }),
-        .glue_dylib_path = try std.fs.path.join(allocator, &.{ entry_dir, bin_dir_name, dylib_filename }),
+        .glue_plugin_path = try std.fs.path.join(allocator, &.{ entry_dir, bin_dir_name, plugin_filename }),
     };
 }
 

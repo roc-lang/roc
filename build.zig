@@ -3069,7 +3069,6 @@ pub fn build(b: *std.Build) void {
     const llvm_keep_ir = b.option([]const u8, "llvm-keep-ir", "Write statement LLVM IR to this build-time path") orelse "";
     const llvm_keep_bitcode = b.option([]const u8, "llvm-keep-bitcode", "Write merged LLVM bitcode to this build-time path") orelse "";
     const llvm_keep_object = b.option([]const u8, "llvm-keep-object", "Write the temporary LLVM object file to this build-time path") orelse "";
-    const llvm_keep_dylib = b.option([]const u8, "llvm-keep-dylib", "Write the temporary LLVM dynamic library to this build-time path") orelse "";
     const test_progress_interval_ms = b.option(u64, "test-progress-interval-ms", "Print non-TTY parallel test progress every N milliseconds; 0 disables it") orelse 0;
     const eval_no_fork = b.option(bool, "eval-no-fork", "Run eval tests in-process instead of through fork isolation") orelse false;
     const eval_time_worker = b.option(bool, "eval-time-worker", "Print eval worker startup timing instrumentation") orelse false;
@@ -3146,7 +3145,6 @@ pub fn build(b: *std.Build) void {
     build_options.addOption([]const u8, "llvm_keep_ir", llvm_keep_ir);
     build_options.addOption([]const u8, "llvm_keep_bitcode", llvm_keep_bitcode);
     build_options.addOption([]const u8, "llvm_keep_object", llvm_keep_object);
-    build_options.addOption([]const u8, "llvm_keep_dylib", llvm_keep_dylib);
     build_options.addOption(u64, "test_progress_interval_ms", test_progress_interval_ms);
     build_options.addOption(bool, "eval_no_fork", eval_no_fork);
     build_options.addOption(bool, "eval_time_worker", eval_time_worker);
@@ -4152,28 +4150,6 @@ pub fn build(b: *std.Build) void {
     _ = builtins32_core_extern_bc_obj.getEmittedBin();
     const builtins32_core_extern_bc_file = builtins32_core_extern_bc_obj.getEmittedLlvmBc();
 
-    // Native object exporting the compiler-rt 128-bit libcalls (`__divti3`,
-    // `__fixdfti`, ...) that the eval LLVM backend's host re-codegen emits but
-    // does not define. The eval shared library links this in on Windows, whose
-    // LoadLibrary cannot bind undefined symbols the way the Unix loaders do (see
-    // src/builtins/eval_compiler_rt_libcalls.zig). Built for the host target
-    // since the eval backend only ever runs natively.
-    const eval_compiler_rt_obj = b.addObject(.{
-        .name = "eval_compiler_rt_libcalls",
-        .root_module = b.createModule(.{
-            .root_source_file = b.path("src/builtins/eval_compiler_rt_libcalls.zig"),
-            .target = target,
-            .optimize = .ReleaseFast,
-            .strip = true,
-            .single_threaded = true,
-        }),
-    });
-    eval_compiler_rt_obj.root_module.addImport("vendor_ryu", roc_modules.vendor_ryu);
-    eval_compiler_rt_obj.root_module.stack_check = false;
-    eval_compiler_rt_obj.bundle_compiler_rt = false;
-    configureBackend(eval_compiler_rt_obj, target);
-    const eval_compiler_rt_obj_file = eval_compiler_rt_obj.getEmittedBin();
-
     const llvm_embedded_files = b.addWriteFiles();
     _ = llvm_embedded_files.addCopyFile(builtins32_bc_file, "builtins32.bc");
     _ = llvm_embedded_files.addCopyFile(builtins64_bc_file, "builtins64.bc");
@@ -4183,7 +4159,6 @@ pub fn build(b: *std.Build) void {
     _ = llvm_embedded_files.addCopyFile(builtins64_extern_bc_file, "builtins64_extern.bc");
     _ = llvm_embedded_files.addCopyFile(builtins32_core_extern_bc_file, "builtins32_core_extern.bc");
     _ = llvm_embedded_files.addCopyFile(builtins64_core_extern_bc_file, "builtins64_core_extern.bc");
-    _ = llvm_embedded_files.addCopyFile(eval_compiler_rt_obj_file, "eval_compiler_rt_libcalls.obj");
 
     const llvm_embedded_source: []const u8 =
         \\pub const builtins32_bc = @embedFile("builtins32.bc");
@@ -4195,7 +4170,6 @@ pub fn build(b: *std.Build) void {
         \\pub const builtins32_core_extern_bc = @embedFile("builtins32_core_extern.bc");
         \\pub const builtins64_core_extern_bc = @embedFile("builtins64_core_extern.bc");
         \\pub const builtins_bc = builtins64_bc;
-        \\pub const eval_compiler_rt_libcalls_obj = @embedFile("eval_compiler_rt_libcalls.obj");
         \\
     ;
 

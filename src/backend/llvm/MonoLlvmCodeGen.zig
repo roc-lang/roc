@@ -10,11 +10,10 @@
 //! letting LLVM optimize ordinary local stack traffic.
 //!
 //! Generated code reaches its host only through the fixed runtime symbols
-//! (`roc_alloc`, `roc_crashed`, ...) and hosted-function symbols. A linked
-//! object imports them and the platform host defines them. A library the
-//! compiler loads in-process defines them itself as trampolines through
-//! `roc_in_process_host_table`, which the loader fills with the compiler's
-//! own definitions before the first call (see `host_table`).
+//! (`roc_alloc`, `roc_crashed`, ...) and hosted-function symbols, which
+//! every module imports. A platform host defines them at link time; the
+//! compiler's relocatable loader binds them to the compiler's own
+//! definitions when it loads an object in-process.
 
 const std = @import("std");
 
@@ -26,8 +25,6 @@ const LowLevelBuiltins = Base.LowLevelBuiltins;
 const numeric_conversion = Base.numeric_conversion;
 const builtins = @import("builtins");
 const shim_symbols = builtins.shim_symbols;
-const backend = @import("backend");
-const BoxyBuiltinFn = backend.LirCodeGenMod.BoxyBuiltinFn;
 const layout = @import("layout");
 const lir = @import("lir");
 const GuardedList = lir.LirStore.GuardedList;
@@ -284,12 +281,9 @@ pub const MonoLlvmCodeGen = struct {
     data_layout: []const u8,
     builtin_symbol_mode: BuiltinSymbolMode = .bitcode,
     proc_symbol_mode: ProcSymbolMode = .local_index,
-    /// How generated code reaches the runtime and boxy symbols: a linked
-    /// object imports them; a library loaded in-process defines trampolines
-    /// through the host table its loader fills.
-    host_symbols: HostSymbolMode = .trampolined,
-    /// The in-process host table global, created on first use.
-    host_table_var: ?LlvmBuilder.Variable.Index = null,
+    /// Who runs the module: a platform program linked by an ordinary
+    /// linker, or the compiler itself after loading the object in-process.
+    program_kind: ProgramKind = .in_process,
     store: *const lir.LirStore,
     erased_arg_desc_offsets: []const lir.LIR.ErasedArgDescOffset,
     erased_arg_desc_params: []const lir.LIR.ErasedArgDescParam,
@@ -439,46 +433,15 @@ pub const MonoLlvmCodeGen = struct {
         lir_symbol,
     };
 
-    /// How a module reaches the runtime and boxy symbols.
-    pub const HostSymbolMode = enum {
-        /// Extern declarations the platform host defines at link time.
-        imported,
-        /// Definitions in this module that forward through the host table.
-        trampolined,
-    };
-
-    /// The table of host definitions a library the compiler loads in-process
-    /// calls through. The library defines every runtime and boxy symbol as a
-    /// trampoline through its slot; the loader writes the compiler's own
-    /// definitions into the table before the first call.
-    pub const HostTable = struct {
-        /// The exported global holding the table: `slot_count` pointers.
-        pub const symbol_name = "roc_in_process_host_table";
-
-        const runtime_symbol_count: u32 = @typeInfo(builtins.in_process_host.Symbol).@"enum".fields.len;
-        /// Runtime symbols first, in `in_process_host.Symbol` order, then every
-        /// boxy symbol in `BoxyBuiltinFn` order.
-        pub const slot_count: u32 = runtime_symbol_count + @typeInfo(BoxyBuiltinFn).@"enum".fields.len;
-
-        /// The slot of `name`, or null when it is not a table symbol.
-        pub fn slotOf(name: []const u8) ?u32 {
-            if (builtins.in_process_host.Symbol.fromName(name)) |symbol| return @intFromEnum(symbol);
-            inline for (@typeInfo(BoxyBuiltinFn).@"enum".fields) |field| {
-                const boxy_fn: BoxyBuiltinFn = @enumFromInt(field.value);
-                if (std.mem.eql(u8, name, comptime boxy_fn.symbolName())) return runtime_symbol_count + field.value;
-            }
-            return null;
-        }
-
-        /// Fill `table` with the compiler's runtime symbol definitions and the
-        /// boxy runtime's native functions.
-        pub fn fill(table: [*]usize, boxy_fns: *const backend.LirCodeGenMod.BoxyNativeFnTable) void {
-            inline for (@typeInfo(builtins.in_process_host.Symbol).@"enum".fields) |field| {
-                const symbol: builtins.in_process_host.Symbol = @enumFromInt(field.value);
-                table[field.value] = symbol.address();
-            }
-            for (boxy_fns, 0..) |address, index| table[runtime_symbol_count + index] = address;
-        }
+    /// Who runs the module.
+    pub const ProgramKind = enum {
+        /// A platform program: entrypoints follow the platform's C ABI and
+        /// the boxy runtime is installed from the embedded sidecar.
+        platform,
+        /// An object the compiler loads in-process: entrypoints take the
+        /// internal (ret_ptr, args_ptr) convention and the evaluator installs
+        /// the boxy runtime before calling in.
+        in_process,
     };
 
     const RocOpsCallback = enum {
@@ -637,7 +600,7 @@ pub const MonoLlvmCodeGen = struct {
         var self = initWithTarget(allocator, store, erased_arg_desc_offsets, erased_arg_desc_params, boxy_worker_procs, target);
         self.builtin_symbol_mode = .native_object;
         self.proc_symbol_mode = .lir_symbol;
-        self.host_symbols = .imported;
+        self.program_kind = .platform;
         return self;
     }
 
@@ -2120,11 +2083,10 @@ pub const MonoLlvmCodeGen = struct {
         ret_layout: layout.Idx,
         abi: EntrypointAbi,
     ) Error!void {
-        if (self.host_symbols == .imported) {
+        if (self.program_kind == .platform) {
             return self.generateCAbiEntrypointWrapper(symbol_name, entry_proc, arg_layouts, ret_layout, null);
         }
         _ = abi;
-        try self.defineRuntimeTrampolines();
         // An in-process library's entrypoint takes the internal
         // (ret_ptr, args_ptr) convention the compiler calls directly.
         const builder = self.builder orelse return error.CompilationFailed;
@@ -2217,10 +2179,10 @@ pub const MonoLlvmCodeGen = struct {
     fn emitBoxyRuntimeInit(self: *MonoLlvmCodeGen) Error!void {
         if (!self.boxy_runtime_used and self.boxy_worker_procs.len == 0) return;
         const builder = self.builder orelse return error.CompilationFailed;
-        // A library the compiler loads in-process runs against the runtime the
+        // An object the compiler loads in-process runs against the runtime the
         // evaluator installs before calling it; only a platform program links
         // the boxy runtime object and installs it from the embedded sidecar.
-        if (self.host_symbols == .imported) {
+        if (self.program_kind == .platform) {
             const wip = self.wip orelse return error.CompilationFailed;
             const fn_ty = builder.fnType(.void, &.{try self.ptrType()}, .normal) catch return error.OutOfMemory;
             const init_fn = try self.declareExternSymbol("roc_boxy_init_embedded", fn_ty);
@@ -12867,90 +12829,13 @@ pub const MonoLlvmCodeGen = struct {
 
     /// Declare (once) a strong extern function: interpreter-shim symbols must
     /// pull their archive members at link time, which weak references do not.
-    /// In a library the compiler loads in-process, a runtime or boxy symbol
-    /// is instead defined here as a trampoline through the host table.
     fn declareExternSymbol(self: *MonoLlvmCodeGen, name: []const u8, fn_ty: LlvmBuilder.Type) Error!LlvmBuilder.Function.Index {
         const builder = self.builder orelse return error.CompilationFailed;
         if (self.builtin_functions.get(name)) |func| return func;
         const fn_name = builder.strtabString(name) catch return error.OutOfMemory;
         const func = builder.addFunction(fn_ty, fn_name, .default) catch return error.OutOfMemory;
         try self.builtin_functions.put(name, func);
-        if (self.host_symbols == .trampolined) {
-            if (HostTable.slotOf(name)) |table_slot| try self.defineHostTrampoline(func, fn_ty, table_slot);
-        }
         return func;
-    }
-
-    /// The in-process host table global: one pointer per `host_table` slot,
-    /// zero until the loader fills it.
-    fn hostTableVariable(self: *MonoLlvmCodeGen) Error!LlvmBuilder.Variable.Index {
-        if (self.host_table_var) |table| return table;
-        const builder = self.builder orelse return error.CompilationFailed;
-        const ptr_ty = try self.ptrType();
-        const table_ty = builder.arrayType(HostTable.slot_count, ptr_ty) catch return error.OutOfMemory;
-        const table = builder.addVariable(
-            builder.strtabString(HostTable.symbol_name) catch return error.OutOfMemory,
-            table_ty,
-            .default,
-        ) catch return error.OutOfMemory;
-        table.ptrConst(builder).global.setLinkage(.external, builder);
-        table.setInitializer(builder.zeroInitConst(table_ty) catch return error.OutOfMemory, builder) catch return error.OutOfMemory;
-        self.host_table_var = table;
-        return table;
-    }
-
-    /// Define the trampoline for every runtime symbol, whether or not this
-    /// module's own code names it: the builtins bitcode merged into the
-    /// module reaches the host through the same symbols.
-    fn defineRuntimeTrampolines(self: *MonoLlvmCodeGen) Error!void {
-        const builder = self.builder orelse return error.CompilationFailed;
-        const ptr_ty = try self.ptrType();
-        const usize_ty = self.ptrSizedIntType();
-        inline for (@typeInfo(builtins.in_process_host.Symbol).@"enum".fields) |field| {
-            const symbol: builtins.in_process_host.Symbol = @enumFromInt(field.value);
-            const fn_ty = switch (symbol) {
-                .roc_alloc => builder.fnType(ptr_ty, &.{ usize_ty, usize_ty }, .normal),
-                .roc_dealloc => builder.fnType(.void, &.{ ptr_ty, usize_ty }, .normal),
-                .roc_realloc => builder.fnType(ptr_ty, &.{ ptr_ty, usize_ty, usize_ty }, .normal),
-                .roc_dbg, .roc_expect_failed, .roc_crashed => builder.fnType(.void, &.{ ptr_ty, usize_ty }, .normal),
-                .roc_expect_observed => builder.fnType(.void, &.{ .i32, .i8 }, .normal),
-                .roc_expect_err_region => builder.fnType(.void, &.{ .i32, .i32 }, .normal),
-            } catch return error.OutOfMemory;
-            _ = try self.declareExternSymbol(symbol.name(), fn_ty);
-        }
-    }
-
-    /// Give `func` a body that loads the host table's `table_slot` and calls
-    /// it with its own arguments. The definition stays external so the
-    /// builtins bitcode merged into this module binds its own references to
-    /// it, and hidden so those references bind within the library.
-    fn defineHostTrampoline(self: *MonoLlvmCodeGen, func: LlvmBuilder.Function.Index, fn_ty: LlvmBuilder.Type, table_slot: u32) Error!void {
-        const builder = self.builder orelse return error.CompilationFailed;
-        const table = try self.hostTableVariable();
-        func.setLinkage(.external, builder);
-        func.ptrConst(builder).global.setVisibility(.hidden, builder);
-
-        const outer_wip = self.wip;
-        defer self.wip = outer_wip;
-        var wip = LlvmBuilder.WipFunction.init(builder, .{ .function = func, .strip = true }) catch return error.OutOfMemory;
-        defer wip.deinit();
-        self.wip = &wip;
-        const entry = wip.block(0, "entry") catch return error.OutOfMemory;
-        wip.cursor = .{ .block = entry };
-
-        const params = fn_ty.functionParameters(builder);
-        const args = try self.allocator.alloc(LlvmBuilder.Value, params.len);
-        defer self.allocator.free(args);
-        for (args, 0..) |*arg, index| arg.* = wip.arg(@intCast(index));
-
-        const target_ptr = try self.loadPointer(try self.offsetPtr(table.toValue(builder), table_slot * self.targetWordSize()));
-        const result = wip.call(.normal, .ccc, .none, fn_ty, target_ptr, args, "") catch return error.OutOfMemory;
-        if (fn_ty.functionReturn(builder) == .void) {
-            _ = wip.retVoid() catch return error.OutOfMemory;
-        } else {
-            _ = wip.ret(result) catch return error.OutOfMemory;
-        }
-        try self.finishCurrentWipFunction();
     }
 
     fn callFunctionIndex(self: *MonoLlvmCodeGen, func: LlvmBuilder.Function.Index, args: []const LlvmBuilder.Value, is_cold: bool, inline_here: bool) Error!LlvmBuilder.Value {

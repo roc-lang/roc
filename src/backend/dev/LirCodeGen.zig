@@ -358,6 +358,15 @@ pub const BoxyBuiltinFn = enum {
 
     /// Get the exported symbol name for shim relocation resolution. Each name
     /// must match a `pub fn` in `src/eval/boxy_abi.zig`.
+    /// The wrapper whose C symbol is `name`, or null.
+    pub fn fromSymbolName(name: []const u8) ?BoxyBuiltinFn {
+        inline for (@typeInfo(BoxyBuiltinFn).@"enum".fields) |field| {
+            const boxy_fn: BoxyBuiltinFn = @enumFromInt(field.value);
+            if (std.mem.eql(u8, name, comptime boxy_fn.symbolName())) return boxy_fn;
+        }
+        return null;
+    }
+
     pub fn symbolName(self: BoxyBuiltinFn) []const u8 {
         return switch (self) {
             .static_desc => "roc_boxy_static_desc",

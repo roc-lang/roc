@@ -19,7 +19,7 @@ const builtin_static = can.BuiltinStatic;
 const CompileTimeFinalization = @import("compile_time_finalization.zig");
 const Interpreter = @import("interpreter.zig").Interpreter;
 const RuntimeHostEnv = @import("runtime_host.zig");
-const EvalDynLib = @import("dynlib.zig").DynLib;
+const object_image = @import("object_image.zig");
 const boxy_abi = @import("boxy_abi.zig");
 const boxy_runtime = @import("boxy_runtime.zig");
 const BoxyNativeFnTable = boxy_abi.BoxyNativeFnTable;
@@ -3121,7 +3121,7 @@ const DevBoolRootEntry = struct {
 
 /// How the generated machine code for one bool-returning test root is invoked.
 const BoolRootCallTarget = union(enum) {
-    /// A symbol in a dlopen'd shared library produced by the LLVM backend.
+    /// A symbol in an object produced by the LLVM backend and loaded in-process.
     llvm: LlvmBoolRootEntryFn,
     dev: DevBoolRootEntry,
 };
@@ -3356,7 +3356,7 @@ pub fn llvmEvalBoolRootsWithExpectSites(
 }
 
 /// Compile bool-returning test roots from multiple lowered LIR modules via the
-/// LLVM backend, link them into one shared library, and run roots in parallel.
+/// LLVM backend, load them as one in-process object, and run roots in parallel.
 pub fn llvmEvalBoolRootModules(
     allocator: Allocator,
     modules: []const BoolRootModule,
@@ -3366,7 +3366,7 @@ pub fn llvmEvalBoolRootModules(
 }
 
 /// Compile bool-returning test roots from multiple lowered LIR modules via the
-/// LLVM backend, link them into one shared library, and run roots in parallel.
+/// LLVM backend, load them as one in-process object, and run roots in parallel.
 pub fn llvmEvalBoolRootModulesWithMaxWorkers(
     allocator: Allocator,
     modules: []const BoolRootModule,
@@ -3377,7 +3377,7 @@ pub fn llvmEvalBoolRootModulesWithMaxWorkers(
 }
 
 /// Compile bool-returning test roots from multiple lowered LIR modules via the
-/// LLVM backend, link them into one shared library, run roots in parallel, and
+/// LLVM backend, load them as one in-process object, run roots in parallel, and
 /// publish each successful root result as soon as its worker finishes.
 pub fn llvmEvalBoolRootModulesWithMaxWorkersAndCallback(
     allocator: Allocator,
@@ -3390,7 +3390,7 @@ pub fn llvmEvalBoolRootModulesWithMaxWorkersAndCallback(
 }
 
 /// Compile bool-returning test roots from multiple lowered LIR modules via the
-/// LLVM backend, link them into one shared library, run roots in parallel, and
+/// LLVM backend, load them as one in-process object, run roots in parallel, and
 /// publish root-local host events and successful root results while workers run.
 pub fn llvmEvalBoolRootModulesWithMaxWorkersAndCallbacks(
     allocator: Allocator,
@@ -3552,20 +3552,25 @@ fn executeLlvmBoolRootModules(
 
     var compile_options = try llvmCompileOptions(allocator, modules[0].layouts.targetUsize(), opt);
     defer compile_options.deinit(allocator);
-    const dylib_path = try llvm_compile.compileBitcodeModulesToSharedLibrary(
+    const object_bytes = try llvm_compile.compileBitcodeModulesToObject(
         allocator,
         std.Options.debug_io,
         bitcode_slices,
         compile_options.options,
     );
-    defer {
-        std.Io.Dir.deleteFileAbsolute(std.Options.debug_io, dylib_path) catch {};
-        allocator.free(dylib_path);
-    }
+    defer allocator.free(object_bytes);
 
-    var lib = try EvalDynLib.open(allocator, dylib_path);
-    defer lib.close();
-    try fillInProcessHostTable(&lib);
+    var lib = object_image.load(allocator, object_bytes) catch |err| switch (err) {
+        error.OutOfMemory => return error.OutOfMemory,
+        error.UnsupportedObject,
+        error.MalformedObject,
+        error.UnsupportedRelocation,
+        error.UndefinedSymbol,
+        error.RelocationOutOfRange,
+        error.MappingFailed,
+        => return error.LlvmBackendUnavailable,
+    };
+    defer lib.deinit();
 
     // The library supplies the exact callable and drop-helper symbols named
     // by each module's frozen graph. Relocate before any root can execute.
@@ -3833,14 +3838,4 @@ fn copyReturnedRocStr(
     const copied = try allocator.dupe(u8, roc_str.asSlice());
     if (roc_ops) |ops| roc_str.decref(ops);
     return copied;
-}
-
-/// Point a loaded in-process library's host table at this compiler's runtime
-/// symbol definitions and the boxy runtime's native functions; the library's
-/// trampolines forward through it.
-pub fn fillInProcessHostTable(lib: *EvalDynLib) error{LlvmBackendUnavailable}!void {
-    const HostTable = @import("llvm_compile").MonoLlvmCodeGen.HostTable;
-    const table = lib.lookup([*]usize, HostTable.symbol_name) orelse return error.LlvmBackendUnavailable;
-    const native_fns = boxy_abi.nativeFnTable();
-    HostTable.fill(table, &native_fns);
 }

@@ -17,7 +17,7 @@ const wasm32_boxy_runtime = @import("wasm32_boxy_runtime");
 const wasm32_builtins = @import("wasm32_builtins");
 
 const Allocator = std.mem.Allocator;
-const EvalDynLib = @import("dynlib.zig").DynLib;
+const object_image = @import("object_image.zig");
 const ExecutableMemory = backend.ExecutableMemory;
 const HostLirCodeGen = backend.HostLirCodeGen;
 const Interpreter = @import("interpreter.zig").Interpreter;
@@ -650,19 +650,25 @@ fn runLlvm(allocator: Allocator, program: Program) LlvmError!Result {
 
     var compile_options = try llvmCompileOptions(allocator, program.layouts.targetUsize());
     defer compile_options.deinit(allocator);
-    const dylib_path = try llvm_compile.compileToSharedLibrary(
+    const object_bytes = try llvm_compile.compileBitcodeModulesToObject(
         allocator,
         std.Options.debug_io,
-        bitcode.bitcode,
+        &.{bitcode.bitcode},
         compile_options.options,
     );
-    defer {
-        std.Io.Dir.deleteFileAbsolute(std.Options.debug_io, dylib_path) catch {};
-        allocator.free(dylib_path);
-    }
+    defer allocator.free(object_bytes);
 
-    var lib = try EvalDynLib.open(allocator, dylib_path);
-    defer lib.close();
+    var lib = object_image.load(allocator, object_bytes) catch |err| switch (err) {
+        error.OutOfMemory => return error.OutOfMemory,
+        error.UnsupportedObject,
+        error.MalformedObject,
+        error.UnsupportedRelocation,
+        error.UndefinedSymbol,
+        error.RelocationOutOfRange,
+        error.MappingFailed,
+        => return error.LlvmBackendUnavailable,
+    };
+    defer lib.deinit();
     var functions = std.StringHashMap(usize).init(allocator);
     defer functions.deinit();
     for (program.static_data) |data_export| for (data_export.relocations) |relocation| {
@@ -685,7 +691,6 @@ fn runLlvm(allocator: Allocator, program: Program) LlvmError!Result {
 
     const EntryFn = *const fn ([*]u8, ?*anyopaque) callconv(.c) void;
     const entry = lib.lookup(EntryFn, "roc_eval_main") orelse return error.LlvmBackendUnavailable;
-    try @import("inspected.zig").fillInProcessHostTable(&lib);
 
     var runtime_env = RuntimeHostEnv.init(allocator);
     defer runtime_env.deinit();

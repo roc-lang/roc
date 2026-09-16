@@ -1,9 +1,9 @@
 //! LLVM Compilation Module
 //!
-//! This module provides LLVM compilation and linking functionality that can be
-//! shared between the CLI and eval contexts. It handles:
-//! 1. Compiling LLVM bitcode to object files using LLVM bindings
-//! 2. Linking object files to native shared libraries using embedded LLD
+//! This module provides LLVM compilation functionality that can be shared
+//! between the CLI and eval contexts. It compiles LLVM bitcode to object
+//! files using LLVM bindings, both for programs the CLI links and for
+//! objects the compiler loads in-process.
 //!
 //! This module requires LLVM to be linked. Executables that use this module
 //! must have `addStaticLlvmOptionsToModule` called on them in build.zig.
@@ -20,8 +20,7 @@ pub const MonoLlvmCodeGen = @import("llvm_codegen").MonoLlvmCodeGen;
 
 // Re-export object compilation function
 pub const compileToObject = compile.compileToObject;
-pub const compileToSharedLibrary = compile.compileToSharedLibrary;
-pub const compileBitcodeModulesToSharedLibrary = compile.compileBitcodeModulesToSharedLibrary;
+pub const compileBitcodeModulesToObject = compile.compileBitcodeModulesToObject;
 pub const CompileOptions = compile.CompileOptions;
 pub const Error = compile.Error;
 
