@@ -5177,6 +5177,10 @@ in an iterative statement walk; a branch-built value gives its untouched source
 suffix to the existing shared-continuation transformation without copying that
 suffix or cloning the producer again. Retained statements keep their tail value
 inside the block, and a terminating block keeps its `unreachable` final marker.
+A block whose binding is branch-built is emitted with that continuation as its
+recorded tail, never dissolved into its consumer: a case over the block reads
+the arms' structure through the tail, which is what lets the constructor each
+arm builds resolve the consumer's match and keep its payload fields separate.
 Discarded intermediate construction must not grow with repeated traversal of
 nested prefixes or become input work for lambda-set solving.
 

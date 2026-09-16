@@ -8352,7 +8352,15 @@ const Cloner = struct {
                             try self.cloneLetWithValue(continuation, cloned, &block_bindings)
                         else
                             try self.cloneLetValue(continuation, &block_bindings);
-                        return try self.finishBlockValue(ty, terminated, &statements, block_bindings, value, bindings);
+                        // The continuation's value is branch-built. The block
+                        // keeps it as its recorded tail so a case over this
+                        // block reads the arms' structure instead of one
+                        // opaque value.
+                        return .{ .expr = try self.emitBlockWithTail(ty, &statements, .{
+                            .reused = null,
+                            .bindings = block_bindings,
+                            .value = value,
+                        }) };
                     }
                     if (let_.recursive and statements.items.len == 0 and !terminated) {
                         // Recursive bindings remain runtime anchors even
