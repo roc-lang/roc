@@ -132,7 +132,27 @@ fn intLiteral(comptime Int: type, layout_idx: layout.Idx, bytes: []const u8) ?LI
     const size = @sizeOf(Int);
     if (bytes.len < size) return null;
     const value = std.mem.readInt(Int, bytes[0..size], .little);
-    return .{ .i128_literal = .{ .value = @intCast(value), .layout_idx = layout_idx } };
+    // An integer literal carries its value's two's-complement bits in i128,
+    // as source literals do: a u128 above the i128 range keeps its bit
+    // pattern, and every narrower integer extends losslessly.
+    return .{ .i128_literal = .{
+        .value = if (Int == u128) @bitCast(value) else value,
+        .layout_idx = layout_idx,
+    } };
+}
+
+test "a u128 scalar above the i128 range decodes to its bit pattern" {
+    const max_bytes = [_]u8{0xff} ** 16;
+    const max = decodeScalar(.u128, &max_bytes) orelse return error.TestUnexpectedResult;
+    try std.testing.expectEqual(@as(u128, std.math.maxInt(u128)), @as(u128, @bitCast(max.i128_literal.value)));
+    try std.testing.expectEqual(layout.Idx.u128, max.i128_literal.layout_idx);
+
+    const high_bit_bytes = [_]u8{0} ** 15 ++ [_]u8{0x80};
+    const high_bit = decodeScalar(.u128, &high_bit_bytes) orelse return error.TestUnexpectedResult;
+    try std.testing.expectEqual(@as(u128, 1) << 127, @as(u128, @bitCast(high_bit.i128_literal.value)));
+
+    const min_i128 = decodeScalar(.i128, &high_bit_bytes) orelse return error.TestUnexpectedResult;
+    try std.testing.expectEqual(@as(i128, std.math.minInt(i128)), min_i128.i128_literal.value);
 }
 
 test "completed successful scalar roots decode to literals; failed and aggregate roots do not" {
