@@ -420,8 +420,8 @@ fn countReachable(store: *LirStore, body: CFStmtId, allocator: Allocator, compti
 
     while (try walk.next()) |stmt_id| {
         switch (kind) {
-            .reads => forEachStmtRead(store, store.getCFStmt(stmt_id), &counts, noteRead),
-            .defs => forEachStmtDef(store, store.getCFStmt(stmt_id), &counts, noteRead),
+            .reads => forEachStmtRead(store, store.getCFStmt(stmt_id), &counts, noteReachableRead),
+            .defs => forEachStmtDef(store, store.getCFStmt(stmt_id), &counts, noteReachableRead),
         }
         if (counts.failure) |err| return err;
     }
@@ -514,18 +514,18 @@ fn emitStepCaptures(store: *const LirStore, ctx: anytype, comptime note: fn (@Ty
     };
 }
 
-fn noteRead(counts: anytype, local: LocalId) void {
-    if (@TypeOf(counts) == *ReadCounts) {
-        if (counts.failure != null) return;
-        const entry = counts.counts.getOrPut(local) catch |err| {
-            counts.failure = err;
-            return;
-        };
-        if (!entry.found_existing) entry.value_ptr.* = 0;
-        entry.value_ptr.* += 1;
-    } else {
-        counts[@intFromEnum(local)] += 1;
-    }
+fn noteRead(counts: []u32, local: LocalId) void {
+    counts[@intFromEnum(local)] += 1;
+}
+
+fn noteReachableRead(counts: *ReadCounts, local: LocalId) void {
+    if (counts.failure != null) return;
+    const entry = counts.counts.getOrPut(local) catch |err| {
+        counts.failure = err;
+        return;
+    };
+    if (!entry.found_existing) entry.value_ptr.* = 0;
+    entry.value_ptr.* += 1;
 }
 
 fn emitSpan(store: *const LirStore, ctx: anytype, comptime note: fn (@TypeOf(ctx), LocalId) void, span: LIR.LocalSpan) void {
@@ -637,7 +637,7 @@ pub fn markStmtDefinitions(store: *const LirStore, defined: []bool, stmt_id: CFS
 
 fn noteDefinition(defined: anytype, local: LocalId) void {
     if (@TypeOf(defined) == *ReadCounts) {
-        noteRead(defined, local);
+        noteReachableRead(defined, local);
     } else {
         defined[@intFromEnum(local)] = true;
     }
