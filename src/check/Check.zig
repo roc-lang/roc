@@ -32429,11 +32429,32 @@ fn checkStaticDispatchConstraints(self: *Self, env: *Env, is_numeric_default_pas
                         // fresh copy and the drain would never settle.
                         const signature_resolved = self.types.resolveVar(rigid_var);
                         const same_root = signature_resolved.var_ == self.types.resolveVar(constraint.fn_var).var_;
-                        // A whole-method hole (`a.render : _`) has no signature
-                        // structure to copy: its shape is inferred from the
-                        // body's uses and shared by all of them.
-                        const signature_is_hole = signature_resolved.desc.content == .flex;
-                        const use_fn_var = if (same_root or signature_is_hole)
+                        // A whole-method hole (`a.render : _`) has no
+                        // signature structure to copy: its shape is inferred
+                        // from the body's uses and shared by all of them. Nor
+                        // does any other LEAF — a signature written as a bare
+                        // type variable resolves to a `.rigid`, an erroneous
+                        // annotation to `.err`. The predicate must mirror
+                        // `Instantiator`'s own share-leaf test
+                        // (`types/instantiate.zig:733-740`) exactly, polarity
+                        // marker and all: the instantiator SHARES such a root
+                        // instead of copying it, so `instantiateWhereMethodForUse`
+                        // leaves `var_map` empty and `recordWhereMethodUse`
+                        // has no callable copy to record (it panics). A
+                        // `#polarity` marker root is the one leaf the
+                        // instantiator does copy, so it must stay on the
+                        // instantiate path — sharing it would silently drop
+                        // the per-use deferral it stands for.
+                        const signature_is_polarity_marker = switch (signature_resolved.desc.content) {
+                            .rigid => |sig_rigid| sig_rigid.name.eql(self.cir.idents.polarity_var),
+                            else => false,
+                        };
+                        const signature_is_shared_leaf = !signature_is_polarity_marker and
+                            switch (signature_resolved.desc.content) {
+                                .alias, .structure => false,
+                                .flex, .rigid, .field_presence, .err => true,
+                            };
+                        const use_fn_var = if (same_root or signature_is_shared_leaf)
                             rigid_var
                         else blk: {
                             if (self.existingWhereMethodUse(rigid_var, constraint.fn_var)) |existing| {

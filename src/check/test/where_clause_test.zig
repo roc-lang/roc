@@ -828,6 +828,26 @@ test "where clause - a bare result type is not an implicit nullary function" {
     try test_env.assertFirstTypeError("Type Mismatch");
 }
 
+test "where clause - a bare type variable method signature is not a callable" {
+    // `a.render : b` is a LEAF signature, same as the whole-method hole
+    // `a.render : _`, except that it resolves to a `.rigid` rather than a
+    // `.flex`. `Instantiator` shares every leaf it is handed
+    // (`types/instantiate.zig:733-740`), so per-use instantiation of such a
+    // signature copies nothing; `Check.recordWhereMethodUse` used to panic
+    // with "where-method use instantiation produced no callable copy" on the
+    // empty map. The body dispatch must get an ordinary type error instead,
+    // like the bare `Str` signature in the test above.
+    const source =
+        \\Probe := {}
+        \\
+        \\helper : a -> b where [a.render : b]
+        \\helper = |x| x.render()
+    ;
+    var test_env = try TestEnv.init("BareTypeVarMethod", source);
+    defer test_env.deinit();
+    try test_env.assertFirstTypeError("Type Mismatch");
+}
+
 test "where clause - partial method result hole preserves explicit purity" {
     const source =
         \\Nom := [Nom].{
