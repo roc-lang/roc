@@ -167,8 +167,12 @@ fn assertBuiltinIterExtremum(
             }
             if (reaches_plan_class) body_use_count += 1;
         }
-        // At least one body use's signature copy reaches the plan's callable class.
-        try std.testing.expect(body_use_count >= 1);
+        // Per-use instantiation copies the signature at EVERY body use, so a
+        // method used twice in one body leaves two records reaching the plan's
+        // class. `>= 1` would pass even if per-use copying silently collapsed
+        // to sharing, which is the property this whole branch exists to
+        // establish.
+        try std.testing.expect(body_use_count >= 2);
 
         const plan = artifact.static_dispatch_plans.plans[entry.val];
         switch (plan.resolution) {
