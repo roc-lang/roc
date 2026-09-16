@@ -865,7 +865,10 @@ pub fn solve(
         const lists = try allocator.alloc([]const LIR.CFStmtId, solver.proc_stmts.len);
         defer allocator.free(lists);
         for (solver.proc_stmts, 0..) |stmts, index| lists[index] = stmts.items;
-        var order = try UseOrder.init(allocator, store, lists);
+        var order = try UseOrder.init(allocator, store, lists, .store, .{
+            .local_to_dense = domain.local_to_arc,
+            .count = domain.arc_to_local.len,
+        });
         defer order.deinit();
         break :blk try computeUniquenessFromFacts(allocator, &solver, &unique_origins, &order);
     };
@@ -4290,70 +4293,147 @@ fn collectUniqueOriginStmt(facts: *UniqueOriginFacts, store: *const LirStore, st
 
 /// One consuming use of a local, positioned at the statement that performs
 /// it. Whether it destroys the local's uniqueness is decided once every use
-/// is known, by asking whether any other use can still execute after it.
+/// is known, by asking whether another consume can still execute after it.
 const ConsumeAt = struct {
     index: u32,
     stmt: u32,
 };
 
-/// Orders the uses of a local along control flow. A consuming use takes the
-/// value's single ownership unit with it, so the value is unique at that use
-/// exactly when no other use of the same local can execute afterwards
-/// before the local is redefined: a read before the consume has finished
-/// with the allocation, and two consumes on exclusive branches never both
-/// run. The query walks the procedure's successor edges from the use,
-/// following jumps through the procedure's joins and stopping at a
+/// One transfer of a local's unit into `target` at `stmt`: an alias
+/// definition or a join edge. The transfer carries the unit through only
+/// when no use of `source` can execute after it.
+const TransferAt = struct {
+    source: u32,
+    target: u32,
+    stmt: u32,
+};
+
+/// The locals a `UseOrder` answers for, by dense index: the solver's
+/// reference-counted locals, one certified procedure's, or every local of
+/// the store when no mapping is given.
+const UseLocals = struct {
+    local_to_dense: ?[]const u32,
+    count: usize,
+
+    fn indexOf(self: UseLocals, local: LIR.LocalId) ?u32 {
+        const raw = @intFromEnum(local);
+        const mapping = self.local_to_dense orelse return if (raw < self.count) raw else null;
+        if (raw >= mapping.len) return null;
+        const dense = mapping[raw];
+        return if (dense == no_local) null else dense;
+    }
+};
+
+/// How a `UseOrder` numbers the statements it walks. The whole-store solver
+/// numbers them by id, once; certifying one emitted procedure numbers only
+/// that procedure's inventory, by rank, so its state never scales with the
+/// store.
+const UseScope = enum { store, inventory };
+
+/// Orders the uses of each local along control flow. A consuming use takes
+/// the value's single ownership unit with it, so the value is unique at that
+/// use exactly when no other consume of the same local can execute
+/// afterwards before the local is redefined: two consumes on exclusive
+/// branches never both run. A transfer edge carries the unit through only
+/// when no use of the source at all can execute after it.
+///
+/// Both questions are liveness over the procedure's successor edges,
+/// following jumps through the procedure's joins and killed at a
 /// redefinition of the local (an initializing write to it, or entering a
-/// join that declares it as a parameter), and reports whether it meets a
-/// statement that reads the local. Statement inventories are per procedure;
-/// variants sharing a body resolve its jumps to the same joins.
+/// join that declares it as a parameter). Each procedure's queried locals
+/// are packed 64 to a word and every question about them is answered by one
+/// backward fixpoint over that procedure's inventory, so the cost is linear
+/// in the inventory per 64 locals rather than one walk per use. Statement
+/// inventories are per procedure; variants sharing a body resolve its jumps
+/// to the same joins.
 const UseOrder = struct {
     allocator: Allocator,
     store: *const LirStore,
-    /// Statements reading each local, and statements defining each local.
-    reads_of: Rows,
-    defs_of: Rows,
-    /// The join statement each jump targets, or `no_local`.
+    locals: UseLocals,
+    lists: [][]const LIR.CFStmtId,
+    owned_inner: bool,
+    /// Inventory scope: the inventories' statement ids, sorted and unique; a
+    /// statement's rank is its index here. Store scope: null, and the rank
+    /// is the id.
+    ranked: ?[]u32,
+    /// Per rank: the inventory holding the statement and its position there.
+    stmt_list: []u32,
+    stmt_pos: []u32,
+    /// Per rank: the join statement a jump enters, or `no_local`.
     jump_join: []u32,
-    /// Generation stamps: a statement is visited in the current query when
-    /// its stamp equals `generation`.
-    visit_gen: []u32,
-    generation: u32,
-    work: std.ArrayList(u32),
-
-    /// CSR rows of statement ids per local, each row sorted.
-    const Rows = struct {
-        offsets: []u32,
-        stmts: []u32,
-
-        fn row(self: *const Rows, local: LIR.LocalId) []const u32 {
-            const raw = @intFromEnum(local);
-            if (raw + 1 >= self.offsets.len) return &.{};
-            return self.stmts[self.offsets[raw]..self.offsets[raw + 1]];
-        }
-
-        fn deinit(self: *Rows, allocator: Allocator) void {
-            allocator.free(self.offsets);
-            allocator.free(self.stmts);
-        }
-    };
+    /// Per dense local: its bit slot among the procedure being resolved, or
+    /// `no_local`. Entries touched for one procedure are reset before the
+    /// next.
+    local_slot: []u32,
+    touched: std.ArrayList(u32),
+    /// Per inventory position of the procedure being resolved, for the
+    /// current chunk of 64 slots.
+    use_mask: std.ArrayList(u64),
+    consume_mask: std.ArrayList(u64),
+    def_mask: std.ArrayList(u64),
+    in_use: std.ArrayList(u64),
+    in_consume: std.ArrayList(u64),
 
     const RowKind = enum { reads, defs };
+    const chunk_bits: u32 = 64;
+    const all_bits: u64 = std.math.maxInt(u64);
 
-    fn init(allocator: Allocator, store: *const LirStore, lists: []const []const LIR.CFStmtId) SolveError!UseOrder {
-        const stmt_count = store.cfStmtCount();
+    fn init(allocator: Allocator, store: *const LirStore, lists: []const []const LIR.CFStmtId, scope: UseScope, locals: UseLocals) SolveError!UseOrder {
+        const owned_lists = try allocator.dupe([]const LIR.CFStmtId, lists);
+        errdefer allocator.free(owned_lists);
+        return initOwned(allocator, store, owned_lists, false, scope, locals);
+    }
+
+    fn initOwned(allocator: Allocator, store: *const LirStore, lists: [][]const LIR.CFStmtId, owned_inner: bool, scope: UseScope, locals: UseLocals) SolveError!UseOrder {
+        const ranked: ?[]u32 = switch (scope) {
+            .store => null,
+            .inventory => blk: {
+                var total: usize = 0;
+                for (lists) |list| total += list.len;
+                const ids = try allocator.alloc(u32, total);
+                errdefer allocator.free(ids);
+                var len: usize = 0;
+                for (lists) |list| {
+                    for (list) |stmt_id| {
+                        ids[len] = @intFromEnum(stmt_id);
+                        len += 1;
+                    }
+                }
+                std.mem.sort(u32, ids, {}, std.sort.asc(u32));
+                // Variants sharing a body inventory its statements more than once.
+                var unique: usize = 0;
+                for (ids) |stmt| {
+                    if (unique != 0 and ids[unique - 1] == stmt) continue;
+                    ids[unique] = stmt;
+                    unique += 1;
+                }
+                break :blk try allocator.realloc(ids, unique);
+            },
+        };
+        errdefer if (ranked) |ids| allocator.free(ids);
+        const stmt_count: usize = if (ranked) |ids| ids.len else store.cfStmtCount();
+
+        const stmt_list = try allocator.alloc(u32, stmt_count);
+        errdefer allocator.free(stmt_list);
+        @memset(stmt_list, no_local);
+        const stmt_pos = try allocator.alloc(u32, stmt_count);
+        errdefer allocator.free(stmt_pos);
+        @memset(stmt_pos, no_local);
         const jump_join = try allocator.alloc(u32, stmt_count);
         errdefer allocator.free(jump_join);
         @memset(jump_join, no_local);
-        const visit_gen = try allocator.alloc(u32, stmt_count);
-        errdefer allocator.free(visit_gen);
-        @memset(visit_gen, 0);
+        const local_slot = try allocator.alloc(u32, locals.count);
+        errdefer allocator.free(local_slot);
+        @memset(local_slot, no_local);
 
         var joins = collections.DenseMap(LIR.JoinPointId, u32).init(allocator);
         defer joins.deinit();
-        for (lists) |list| {
+        for (lists, 0..) |list, list_index| {
             joins.clearRetainingCapacity();
-            for (list) |stmt_id| {
+            for (list, 0..) |stmt_id, pos| {
+                const rank = rankIn(ranked, @intFromEnum(stmt_id));
+                stmt_list[rank] = @intCast(list_index);
+                stmt_pos[rank] = @intCast(pos);
                 const stmt = store.getCFStmt(stmt_id);
                 if (stmt == .join) try joins.put(stmt.join.id, @intFromEnum(stmt_id));
             }
@@ -4361,28 +4441,108 @@ const UseOrder = struct {
                 const stmt = store.getCFStmt(stmt_id);
                 if (stmt != .jump) continue;
                 if (joins.get(stmt.jump.target)) |join_stmt| {
-                    jump_join[@intFromEnum(stmt_id)] = join_stmt;
+                    jump_join[rankIn(ranked, @intFromEnum(stmt_id))] = join_stmt;
                 }
             }
         }
 
-        var reads_of = try buildRows(allocator, store, lists, .reads);
-        errdefer reads_of.deinit(allocator);
-        var defs_of = try buildRows(allocator, store, lists, .defs);
-        errdefer defs_of.deinit(allocator);
         return .{
             .allocator = allocator,
             .store = store,
-            .reads_of = reads_of,
-            .defs_of = defs_of,
+            .locals = locals,
+            .lists = lists,
+            .owned_inner = owned_inner,
+            .ranked = ranked,
+            .stmt_list = stmt_list,
+            .stmt_pos = stmt_pos,
             .jump_join = jump_join,
-            .visit_gen = visit_gen,
-            .generation = 0,
-            .work = .empty,
+            .local_slot = local_slot,
+            .touched = .empty,
+            .use_mask = .empty,
+            .consume_mask = .empty,
+            .def_mask = .empty,
+            .in_use = .empty,
+            .in_consume = .empty,
         };
     }
 
-    /// Whether a statement contributes to the rows of `kind`.
+    /// Statement inventories walked structurally from each procedure body,
+    /// for callers that hold no per-procedure lists of their own.
+    fn initFromStore(allocator: Allocator, store: *const LirStore, only_proc: ?LIR.LirProcSpecId, locals: UseLocals) SolveError!UseOrder {
+        var lists = std.ArrayList([]const LIR.CFStmtId).empty;
+        errdefer {
+            for (lists.items) |list| allocator.free(list);
+            lists.deinit(allocator);
+        }
+        var seen = try std.bit_set.DynamicBitSetUnmanaged.initEmpty(allocator, store.cfStmtCount());
+        defer seen.deinit(allocator);
+        var stack = std.ArrayList(LIR.CFStmtId).empty;
+        defer stack.deinit(allocator);
+        for (0..store.procSpecCount()) |proc_index| {
+            if (only_proc) |proc_id| {
+                if (proc_index != @intFromEnum(proc_id)) continue;
+            }
+            const body = store.getProcSpec(@enumFromInt(@as(u32, @intCast(proc_index)))).body orelse continue;
+            var list = std.ArrayList(LIR.CFStmtId).empty;
+            errdefer list.deinit(allocator);
+            stack.clearRetainingCapacity();
+            try stack.append(allocator, body);
+            while (stack.pop()) |current| {
+                const index = @intFromEnum(current);
+                if (seen.isSet(index)) continue;
+                seen.set(index);
+                try list.append(allocator, current);
+                try appendStructuralSuccessors(allocator, store, &stack, store.getCFStmt(current));
+            }
+            for (list.items) |stmt| seen.unset(@intFromEnum(stmt));
+            try lists.append(allocator, try list.toOwnedSlice(allocator));
+        }
+        const owned_lists = try lists.toOwnedSlice(allocator);
+        errdefer {
+            for (owned_lists) |list| allocator.free(list);
+            allocator.free(owned_lists);
+        }
+        return initOwned(allocator, store, owned_lists, true, if (only_proc == null) .store else .inventory, locals);
+    }
+
+    fn deinit(self: *UseOrder) void {
+        const allocator = self.allocator;
+        if (self.owned_inner) for (self.lists) |list| allocator.free(list);
+        allocator.free(self.lists);
+        if (self.ranked) |ids| allocator.free(ids);
+        allocator.free(self.stmt_list);
+        allocator.free(self.stmt_pos);
+        allocator.free(self.jump_join);
+        allocator.free(self.local_slot);
+        self.touched.deinit(allocator);
+        self.use_mask.deinit(allocator);
+        self.consume_mask.deinit(allocator);
+        self.def_mask.deinit(allocator);
+        self.in_use.deinit(allocator);
+        self.in_consume.deinit(allocator);
+    }
+
+    fn rankIn(ranked: ?[]const u32, stmt: u32) u32 {
+        const ids = ranked orelse return stmt;
+        var lo: usize = 0;
+        var hi: usize = ids.len;
+        while (lo < hi) {
+            const mid = lo + (hi - lo) / 2;
+            if (ids[mid] == stmt) return @intCast(mid);
+            if (ids[mid] < stmt) lo = mid + 1 else hi = mid;
+        }
+        solveInvariant("use order reached a statement outside its inventories");
+    }
+
+    fn rankOf(self: *const UseOrder, stmt: u32) u32 {
+        const rank = rankIn(self.ranked, stmt);
+        if (rank >= self.stmt_list.len or self.stmt_list[rank] == no_local) {
+            solveInvariant("use order reached a statement outside its inventories");
+        }
+        return rank;
+    }
+
+    /// Whether a statement contributes to the masks of `kind`.
     /// Reference-counting statements are ARC's bookkeeping, not uses of the
     /// value: the analysis runs before they exist, and the certifier
     /// re-derives it from the emitted procedure where they do. A join
@@ -4435,169 +4595,203 @@ const UseOrder = struct {
         };
     }
 
-    fn buildRows(allocator: Allocator, store: *const LirStore, lists: []const []const LIR.CFStmtId, comptime kind: RowKind) SolveError!Rows {
-        const stmt_count = store.cfStmtCount();
-        const local_count = store.localCount();
-        var seen = try std.bit_set.DynamicBitSetUnmanaged.initEmpty(allocator, stmt_count);
-        defer seen.deinit(allocator);
-        const offsets = try allocator.alloc(u32, local_count + 1);
-        errdefer allocator.free(offsets);
-        @memset(offsets, 0);
-        const Count = struct {
-            offsets: []u32,
-            fn note(self: *@This(), local: LIR.LocalId) void {
-                self.offsets[@intFromEnum(local) + 1] += 1;
-            }
+    /// One query of a procedure: a consume at `stmt` of `local`, or a
+    /// transfer out of `local` at `stmt` recorded at `origin` in the
+    /// caller's transfer list.
+    const Query = struct {
+        list: u32,
+        local: u32,
+        stmt: u32,
+        origin: u32,
+        is_consume: bool,
+
+        fn lessThan(_: void, a: Query, b: Query) bool {
+            if (a.list != b.list) return a.list < b.list;
+            if (a.local != b.local) return a.local < b.local;
+            if (a.is_consume != b.is_consume) return a.is_consume;
+            return a.stmt < b.stmt;
+        }
+    };
+
+    /// Answers every query at once. A consume whose local another consume
+    /// can still reach afterwards sets the local in `destroyed`; a transfer
+    /// whose source any use can still reach afterwards sets its origin in
+    /// `dead_transfers`.
+    fn resolve(
+        self: *UseOrder,
+        consumes: []const ConsumeAt,
+        transfers: []const TransferAt,
+        destroyed: *std.bit_set.DynamicBitSetUnmanaged,
+        dead_transfers: *std.bit_set.DynamicBitSetUnmanaged,
+    ) SolveError!void {
+        const allocator = self.allocator;
+        const queries = try allocator.alloc(Query, consumes.len + transfers.len);
+        defer allocator.free(queries);
+        for (consumes, 0..) |consume, index| queries[index] = .{
+            .list = self.stmt_list[self.rankOf(consume.stmt)],
+            .local = consume.index,
+            .stmt = consume.stmt,
+            .origin = @intCast(index),
+            .is_consume = true,
         };
-        var count = Count{ .offsets = offsets };
-        for (lists) |list| {
-            for (list) |stmt_id| {
-                const index = @intFromEnum(stmt_id);
-                if (seen.isSet(index)) continue;
-                seen.set(index);
-                const stmt = store.getCFStmt(stmt_id);
-                if (!rowsInclude(stmt, kind)) continue;
-                switch (kind) {
-                    .reads => body_clone.forEachStmtRead(store, stmt, &count, Count.note),
-                    .defs => body_clone.forEachStmtDef(store, stmt, &count, Count.note),
-                }
-            }
-        }
-        for (0..local_count) |local| offsets[local + 1] += offsets[local];
-        const stmts = try allocator.alloc(u32, offsets[local_count]);
-        errdefer allocator.free(stmts);
-        const fill = try allocator.dupe(u32, offsets[0..local_count]);
-        defer allocator.free(fill);
-        const Fill = struct {
-            fill: []u32,
-            stmts: []u32,
-            stmt: u32,
-            fn note(self: *@This(), local: LIR.LocalId) void {
-                const raw = @intFromEnum(local);
-                self.stmts[self.fill[raw]] = self.stmt;
-                self.fill[raw] += 1;
-            }
+        for (transfers, 0..) |transfer, index| queries[consumes.len + index] = .{
+            .list = self.stmt_list[self.rankOf(transfer.stmt)],
+            .local = transfer.source,
+            .stmt = transfer.stmt,
+            .origin = @intCast(index),
+            .is_consume = false,
         };
-        var filler = Fill{ .fill = fill, .stmts = stmts, .stmt = 0 };
-        seen.setRangeValue(.{ .start = 0, .end = stmt_count }, false);
-        for (lists) |list| {
-            for (list) |stmt_id| {
-                const index = @intFromEnum(stmt_id);
-                if (seen.isSet(index)) continue;
-                seen.set(index);
-                filler.stmt = @intCast(index);
-                const stmt = store.getCFStmt(stmt_id);
-                if (!rowsInclude(stmt, kind)) continue;
-                switch (kind) {
-                    .reads => body_clone.forEachStmtRead(store, stmt, &filler, Fill.note),
-                    .defs => body_clone.forEachStmtDef(store, stmt, &filler, Fill.note),
-                }
+        std.mem.sort(Query, queries, {}, Query.lessThan);
+
+        var start: usize = 0;
+        while (start < queries.len) {
+            var end = start;
+            while (end < queries.len and queries[end].list == queries[start].list) end += 1;
+            try self.resolveList(queries[start..end], destroyed, dead_transfers);
+            start = end;
+        }
+    }
+
+    fn resolveList(
+        self: *UseOrder,
+        queries: []const Query,
+        destroyed: *std.bit_set.DynamicBitSetUnmanaged,
+        dead_transfers: *std.bit_set.DynamicBitSetUnmanaged,
+    ) SolveError!void {
+        const allocator = self.allocator;
+        const list = self.lists[queries[0].list];
+
+        // One statement consuming a local twice holds a second unit.
+        for (queries, 0..) |query, position| {
+            if (!query.is_consume or position == 0) continue;
+            const previous = queries[position - 1];
+            if (previous.is_consume and previous.local == query.local and previous.stmt == query.stmt) {
+                destroyed.set(query.local);
             }
         }
-        for (0..local_count) |local| {
-            std.mem.sort(u32, stmts[offsets[local]..offsets[local + 1]], {}, std.sort.asc(u32));
+
+        // Pack this procedure's queried locals into consecutive slots.
+        self.touched.clearRetainingCapacity();
+        var slot_count: u32 = 0;
+        for (queries) |query| {
+            if (self.local_slot[query.local] != no_local) continue;
+            self.local_slot[query.local] = slot_count;
+            slot_count += 1;
+            try self.touched.append(allocator, query.local);
         }
-        return .{ .offsets = offsets, .stmts = stmts };
-    }
+        defer for (self.touched.items) |local| {
+            self.local_slot[local] = no_local;
+        };
 
-    /// Statement inventories walked structurally from each procedure body,
-    /// for callers that hold no per-procedure lists of their own.
-    fn initFromStore(allocator: Allocator, store: *const LirStore, only_proc: ?LIR.LirProcSpecId) SolveError!UseOrder {
-        var lists = std.ArrayList([]const LIR.CFStmtId).empty;
-        defer {
-            for (lists.items) |list| allocator.free(list);
-            lists.deinit(allocator);
+        try self.use_mask.resize(allocator, list.len);
+        try self.consume_mask.resize(allocator, list.len);
+        try self.def_mask.resize(allocator, list.len);
+        try self.in_use.resize(allocator, list.len);
+        try self.in_consume.resize(allocator, list.len);
+
+        var base: u32 = 0;
+        while (base < slot_count) : (base += chunk_bits) {
+            try self.resolveChunk(list, queries, base, destroyed, dead_transfers);
         }
-        var seen = try std.bit_set.DynamicBitSetUnmanaged.initEmpty(allocator, store.cfStmtCount());
-        defer seen.deinit(allocator);
-        var stack = std.ArrayList(LIR.CFStmtId).empty;
-        defer stack.deinit(allocator);
-        for (0..store.procSpecCount()) |proc_index| {
-            if (only_proc) |proc_id| {
-                if (proc_index != @intFromEnum(proc_id)) continue;
-            }
-            const body = store.getProcSpec(@enumFromInt(@as(u32, @intCast(proc_index)))).body orelse continue;
-            var list = std.ArrayList(LIR.CFStmtId).empty;
-            errdefer list.deinit(allocator);
-            stack.clearRetainingCapacity();
-            try stack.append(allocator, body);
-            while (stack.pop()) |current| {
-                const index = @intFromEnum(current);
-                if (seen.isSet(index)) continue;
-                seen.set(index);
-                try list.append(allocator, current);
-                try appendStructuralSuccessors(allocator, store, &stack, store.getCFStmt(current));
-            }
-            for (list.items) |stmt| seen.unset(@intFromEnum(stmt));
-            try lists.append(allocator, try list.toOwnedSlice(allocator));
+    }
+
+    /// The mask bits a local occupies in the chunk starting at `base`, or 0.
+    fn chunkBit(self: *const UseOrder, local: LIR.LocalId, base: u32) u64 {
+        const dense = self.locals.indexOf(local) orelse return 0;
+        return self.slotBit(dense, base);
+    }
+
+    fn slotBit(self: *const UseOrder, dense: u32, base: u32) u64 {
+        const slot = self.local_slot[dense];
+        if (slot == no_local or slot < base or slot >= base + chunk_bits) return 0;
+        return @as(u64, 1) << @intCast(slot - base);
+    }
+
+    const MaskNote = struct {
+        order: *const UseOrder,
+        base: u32,
+        mask: *u64,
+
+        fn note(self: *@This(), local: LIR.LocalId) void {
+            self.mask.* |= self.order.chunkBit(local, self.base);
         }
-        return init(allocator, store, lists.items);
-    }
+    };
 
-    fn deinit(self: *UseOrder) void {
-        self.reads_of.deinit(self.allocator);
-        self.defs_of.deinit(self.allocator);
-        self.allocator.free(self.jump_join);
-        self.allocator.free(self.visit_gen);
-        self.work.deinit(self.allocator);
-    }
-
-    fn contains(row: []const u32, stmt: u32) bool {
-        var lo: usize = 0;
-        var hi: usize = row.len;
-        while (lo < hi) {
-            const mid = lo + (hi - lo) / 2;
-            if (row[mid] == stmt) return true;
-            if (row[mid] < stmt) lo = mid + 1 else hi = mid;
-        }
-        return false;
-    }
-
-    fn reads(self: *const UseOrder, stmt: u32, local: LIR.LocalId) bool {
-        return contains(self.reads_of.row(local), stmt);
-    }
-
-    fn defines(self: *const UseOrder, stmt: u32, local: LIR.LocalId) bool {
-        return contains(self.defs_of.row(local), stmt);
-    }
-
-    /// Whether another use of `local` can execute after the use at `from`
-    /// before `local` is redefined. An edge the walk cannot resolve counts
-    /// as a later use.
-    fn laterUse(self: *UseOrder, from: LIR.CFStmtId, local: LIR.LocalId) SolveError!bool {
-        return self.later(from, local, null);
-    }
-
-    /// Whether one of the statements in `among` (sorted) can execute after
-    /// the use at `from` before `local` is redefined.
-    fn laterAmong(self: *UseOrder, from: LIR.CFStmtId, local: LIR.LocalId, among: []const u32) SolveError!bool {
-        return self.later(from, local, among);
-    }
-
-    fn later(self: *UseOrder, from: LIR.CFStmtId, local: LIR.LocalId, among: ?[]const u32) SolveError!bool {
-        self.generation +%= 1;
-        if (self.generation == 0) {
-            @memset(self.visit_gen, 0);
-            self.generation = 1;
-        }
-        self.work.clearRetainingCapacity();
-        if (try self.pushSuccessors(@intFromEnum(from), local)) return true;
-        while (self.work.pop()) |stmt| {
-            if (self.visit_gen[stmt] == self.generation) continue;
-            self.visit_gen[stmt] = self.generation;
-            const hit = if (among) |row| contains(row, stmt) else self.reads(stmt, local);
-            if (hit) return true;
-            if (self.defines(stmt, local)) continue;
-            if (try self.pushSuccessors(stmt, local)) return true;
-        }
-        return false;
-    }
-
-    /// Pushes the control-flow successors of `stmt`; returns true when an
-    /// edge cannot be resolved and the caller must assume a later use.
-    fn pushSuccessors(self: *UseOrder, stmt: u32, local: LIR.LocalId) SolveError!bool {
+    fn resolveChunk(
+        self: *UseOrder,
+        list: []const LIR.CFStmtId,
+        queries: []const Query,
+        base: u32,
+        destroyed: *std.bit_set.DynamicBitSetUnmanaged,
+        dead_transfers: *std.bit_set.DynamicBitSetUnmanaged,
+    ) SolveError!void {
         const store = self.store;
-        switch (store.getCFStmt(@enumFromInt(stmt))) {
+        @memset(self.use_mask.items, 0);
+        @memset(self.consume_mask.items, 0);
+        @memset(self.def_mask.items, 0);
+        @memset(self.in_use.items, 0);
+        @memset(self.in_consume.items, 0);
+        for (list, 0..) |stmt_id, pos| {
+            const stmt = store.getCFStmt(stmt_id);
+            if (rowsInclude(stmt, .reads)) {
+                var reads = MaskNote{ .order = self, .base = base, .mask = &self.use_mask.items[pos] };
+                body_clone.forEachStmtRead(store, stmt, &reads, MaskNote.note);
+            }
+            if (rowsInclude(stmt, .defs)) {
+                var defs = MaskNote{ .order = self, .base = base, .mask = &self.def_mask.items[pos] };
+                body_clone.forEachStmtDef(store, stmt, &defs, MaskNote.note);
+            }
+        }
+        for (queries) |query| {
+            if (!query.is_consume) continue;
+            const bit = self.slotBit(query.local, base);
+            if (bit == 0) continue;
+            self.consume_mask.items[self.stmt_pos[self.rankOf(query.stmt)]] |= bit;
+        }
+
+        // Backward liveness to a fixpoint. The inventory is in entry-first
+        // structural order, so a backward sweep settles straight-line code
+        // in one pass and each loop level in one more.
+        while (true) {
+            var changed = false;
+            var pos = list.len;
+            while (pos > 0) {
+                pos -= 1;
+                const out = self.outSets(list, pos, base);
+                const kill = ~self.def_mask.items[pos];
+                const in_use = self.use_mask.items[pos] | (out.use & kill);
+                const in_consume = self.consume_mask.items[pos] | (out.consume & kill);
+                if (in_use != self.in_use.items[pos] or in_consume != self.in_consume.items[pos]) {
+                    self.in_use.items[pos] = in_use;
+                    self.in_consume.items[pos] = in_consume;
+                    changed = true;
+                }
+            }
+            if (!changed) break;
+        }
+
+        for (queries) |query| {
+            const bit = self.slotBit(query.local, base);
+            if (bit == 0) continue;
+            const out = self.outSets(list, self.stmt_pos[self.rankOf(query.stmt)], base);
+            if (query.is_consume) {
+                if ((out.consume & bit) != 0) destroyed.set(query.local);
+            } else if ((out.use & bit) != 0) {
+                dead_transfers.set(query.origin);
+            }
+        }
+    }
+
+    const LiveSets = struct { use: u64, consume: u64 };
+
+    /// The live sets after the statement at `pos` executes: the union over
+    /// its control-flow successors. An edge the walk cannot resolve counts
+    /// as every use.
+    fn outSets(self: *const UseOrder, list: []const LIR.CFStmtId, pos: usize, base: u32) LiveSets {
+        const store = self.store;
+        const list_index = self.stmt_list[self.rankOf(@intFromEnum(list[pos]))];
+        var out = LiveSets{ .use = 0, .consume = 0 };
+        switch (store.getCFStmt(list[pos])) {
             inline .init_uninitialized,
             .assign_ref,
             .assign_literal,
@@ -4629,48 +4823,53 @@ const UseOrder = struct {
             .decref,
             .decref_if_initialized,
             .free,
-            => |node| try self.work.append(self.allocator, @intFromEnum(node.next)),
+            => |node| self.joinIn(&out, list_index, node.next),
             .switch_stmt => |node| {
-                if (node.continuation) |continuation| try self.work.append(self.allocator, @intFromEnum(continuation));
-                try self.work.append(self.allocator, @intFromEnum(node.default_branch));
+                if (node.continuation) |continuation| self.joinIn(&out, list_index, continuation);
+                self.joinIn(&out, list_index, node.default_branch);
                 const branches = store.getCFSwitchBranches(node.branches);
                 for (0..GuardedList.borrowLen(branches)) |index| {
-                    try self.work.append(self.allocator, @intFromEnum(GuardedList.at(branches, index).body));
+                    self.joinIn(&out, list_index, GuardedList.at(branches, index).body);
                 }
             },
             .switch_initialized_payload => |node| {
-                try self.work.append(self.allocator, @intFromEnum(node.initialized_branch));
-                try self.work.append(self.allocator, @intFromEnum(node.uninitialized_branch));
+                self.joinIn(&out, list_index, node.initialized_branch);
+                self.joinIn(&out, list_index, node.uninitialized_branch);
             },
             .str_match => |node| {
-                try self.work.append(self.allocator, @intFromEnum(node.on_match));
-                try self.work.append(self.allocator, @intFromEnum(node.on_miss));
+                self.joinIn(&out, list_index, node.on_match);
+                self.joinIn(&out, list_index, node.on_miss);
             },
             .boxy_tag_match => |node| {
-                try self.work.append(self.allocator, @intFromEnum(node.on_match));
-                try self.work.append(self.allocator, @intFromEnum(node.on_miss));
+                self.joinIn(&out, list_index, node.on_match);
+                self.joinIn(&out, list_index, node.on_miss);
             },
             .str_match_set => |node| {
                 const arms = store.getStrMatchArms(node.arms);
                 for (0..GuardedList.borrowLen(arms)) |index| {
-                    try self.work.append(self.allocator, @intFromEnum(GuardedList.at(arms, index).on_match));
+                    self.joinIn(&out, list_index, GuardedList.at(arms, index).on_match);
                 }
-                try self.work.append(self.allocator, @intFromEnum(node.on_miss));
+                self.joinIn(&out, list_index, node.on_miss);
             },
             // A join's body runs only when jumped to; declaring the join
             // continues with its remainder.
-            .join => |node| try self.work.append(self.allocator, @intFromEnum(node.remainder)),
+            .join => |node| self.joinIn(&out, list_index, node.remainder),
             .jump => {
-                const join_stmt = self.jump_join[stmt];
-                if (join_stmt == no_local) return true;
+                const join_stmt = self.jump_join[self.rankOf(@intFromEnum(list[pos]))];
+                if (join_stmt == no_local) return .{ .use = all_bits, .consume = all_bits };
                 const join = store.getCFStmt(@enumFromInt(join_stmt)).join;
+                // Entering the join redefines its parameters.
+                var kill: u64 = 0;
                 const params = store.getLocalSpan(join.params);
                 for (0..GuardedList.borrowLen(params)) |index| {
-                    if (GuardedList.at(params, index) == local) return false;
+                    kill |= self.chunkBit(GuardedList.at(params, index), base);
                 }
-                try self.work.append(self.allocator, @intFromEnum(join.body));
+                var body = LiveSets{ .use = 0, .consume = 0 };
+                self.joinIn(&body, list_index, join.body);
+                out.use = body.use & ~kill;
+                out.consume = body.consume & ~kill;
             },
-            .loop_continue, .loop_break => return true,
+            .loop_continue, .loop_break => return .{ .use = all_bits, .consume = all_bits },
             .runtime_error,
             .comptime_exhaustiveness_failed,
             .expect_err,
@@ -4678,60 +4877,18 @@ const UseOrder = struct {
             .crash,
             => {},
         }
-        return false;
+        return out;
+    }
+
+    /// Adds the live-in sets of successor `stmt` to `out`.
+    fn joinIn(self: *const UseOrder, out: *LiveSets, list_index: u32, stmt: LIR.CFStmtId) void {
+        const rank = self.rankOf(@intFromEnum(stmt));
+        if (self.stmt_list[rank] != list_index) solveInvariant("use order followed an edge out of its procedure");
+        const pos = self.stmt_pos[rank];
+        out.use |= self.in_use.items[pos];
+        out.consume |= self.in_consume.items[pos];
     }
 };
-
-/// A consuming use takes the value's single unit; a second consume that can
-/// still execute after it finds the unit gone and destroys the local's
-/// uniqueness. Reads after a consume are left to emission, whose facts for
-/// the checked argument itself are path-sensitive.
-fn destroyOrderedConsumes(
-    allocator: Allocator,
-    order: *UseOrder,
-    consumes: []const ConsumeAt,
-    index_to_local: []const u32,
-    destroyed: *std.bit_set.DynamicBitSetUnmanaged,
-) SolveError!void {
-    // Consume statements grouped per local, sorted for membership tests.
-    const sorted = try allocator.dupe(ConsumeAt, consumes);
-    defer allocator.free(sorted);
-    std.mem.sort(ConsumeAt, sorted, {}, struct {
-        fn lessThan(_: void, a: ConsumeAt, b: ConsumeAt) bool {
-            return a.index < b.index or (a.index == b.index and a.stmt < b.stmt);
-        }
-    }.lessThan);
-    const stmts = try allocator.alloc(u32, sorted.len);
-    defer allocator.free(stmts);
-    for (sorted, 0..) |consume, position| stmts[position] = consume.stmt;
-    var start: usize = 0;
-    while (start < sorted.len) {
-        var end = start;
-        while (end < sorted.len and sorted[end].index == sorted[start].index) end += 1;
-        const index = sorted[start].index;
-        if (!destroyed.isSet(index)) {
-            const among = stmts[start..end];
-            for (among, 0..) |stmt, position| {
-                // One statement consuming the local twice, or a consume
-                // that can run again after another, holds a second unit.
-                const twice = position + 1 < among.len and among[position + 1] == stmt;
-                if (twice or try order.laterAmong(@enumFromInt(stmt), @enumFromInt(index_to_local[index]), among)) {
-                    destroyed.set(index);
-                    break;
-                }
-            }
-        }
-        start = end;
-    }
-}
-
-/// An alias definition or a join-parameter initialization is its source's
-/// consuming use: the unit moves through only when nothing else uses the
-/// source after it. Otherwise the target holds a second reference and has
-/// no unique birth of its own.
-fn deadTransferEdge(order: *UseOrder, stmt: u32, source: LIR.LocalId) SolveError!bool {
-    return order.laterUse(@enumFromInt(stmt), source);
-}
 
 fn settleUniqueOriginDependencies(
     allocator: Allocator,
@@ -4868,6 +5025,8 @@ fn computeUniquenessFromFacts(
     errdefer destroyed.deinit(allocator);
     var consumes = std.ArrayList(ConsumeAt).empty;
     defer consumes.deinit(allocator);
+    var transfers = std.ArrayList(TransferAt).empty;
+    defer transfers.deinit(allocator);
     var has_def = try std.bit_set.DynamicBitSetUnmanaged.initEmpty(allocator, local_count);
     defer has_def.deinit(allocator);
     var multi_def = try std.bit_set.DynamicBitSetUnmanaged.initEmpty(allocator, local_count);
@@ -4914,10 +5073,7 @@ fn computeUniquenessFromFacts(
                 foreign.set(target);
             } else {
                 try consumes.append(allocator, .{ .index = source, .stmt = @intFromEnum(alias.stmt) });
-                if (try deadTransferEdge(order, @intFromEnum(alias.stmt), alias.source)) {
-                    foreign.set(target);
-                    origins.static_foreign.set(target);
-                }
+                try transfers.append(allocator, .{ .source = source, .target = target, .stmt = @intFromEnum(alias.stmt) });
                 if (alias_source[target] == no_local) {
                     alias_source[target] = source;
                     try alias_targets.append(allocator, target);
@@ -4941,10 +5097,7 @@ fn computeUniquenessFromFacts(
             if (target == source) continue;
             try join_incoming.append(allocator, .{ .target = target, .source = source });
             try consumes.append(allocator, .{ .index = source, .stmt = @intFromEnum(incoming.stmt) });
-            if (try deadTransferEdge(order, @intFromEnum(incoming.stmt), incoming.source)) {
-                foreign.set(target);
-                origins.static_foreign.set(target);
-            }
+            try transfers.append(allocator, .{ .source = source, .target = target, .stmt = @intFromEnum(incoming.stmt) });
             try origins.noteJoinIncoming(incoming.target, incoming.source);
         },
         .consume => |consume| if (domain.indexOf(consume.local)) |index| {
@@ -4976,7 +5129,19 @@ fn computeUniquenessFromFacts(
             }
         }
     }
-    try destroyOrderedConsumes(allocator, order, consumes.items, domain.arc_to_local, &destroyed);
+    {
+        var dead_transfers = try std.bit_set.DynamicBitSetUnmanaged.initEmpty(allocator, transfers.items.len);
+        defer dead_transfers.deinit(allocator);
+        try order.resolve(consumes.items, transfers.items, &destroyed, &dead_transfers);
+        // A transfer whose source stays in use holds a second reference: its
+        // target has no unique birth of its own.
+        var dead = dead_transfers.iterator(.{});
+        while (dead.next()) |index| {
+            const target = transfers.items[index].target;
+            foreign.set(target);
+            origins.static_foreign.set(target);
+        }
+    }
 
     var foreign_iter = foreign.iterator(.{});
     while (foreign_iter.next()) |index| born.unset(index);
@@ -5590,21 +5755,14 @@ fn computeUniquenessDetailed(
         if (multi_def.isSet(target)) destroyed.set(target);
     }
 
-    // Dense index back to the local it names, for the ordered-use queries.
-    const index_to_local = try allocator.alloc(u32, local_count);
-    defer allocator.free(index_to_local);
-    if (proc_domain) |domain| {
-        for (domain.local_to_dense, 0..) |dense, raw| {
-            if (dense != no_local) index_to_local[dense] = @intCast(raw);
-        }
-    } else {
-        for (index_to_local, 0..) |*slot, raw| slot.* = @intCast(raw);
-    }
-
+    const use_locals = UseLocals{
+        .local_to_dense = if (proc_domain) |domain| domain.local_to_dense else null,
+        .count = local_count,
+    };
     var order = blk: {
         if (exact_stmts) |stmts| {
             const lists = [_][]const LIR.CFStmtId{stmts};
-            break :blk try UseOrder.init(allocator, store, &lists);
+            break :blk try UseOrder.init(allocator, store, &lists, .inventory, use_locals);
         }
         if (proc_stmts) |by_proc| {
             const lists = try allocator.alloc([]const LIR.CFStmtId, by_proc.len);
@@ -5617,18 +5775,26 @@ fn computeUniquenessDetailed(
                 lists[len] = stmts.items;
                 len += 1;
             }
-            break :blk try UseOrder.init(allocator, store, lists[0..len]);
+            break :blk try UseOrder.init(allocator, store, lists[0..len], if (only_proc == null) .store else .inventory, use_locals);
         }
-        break :blk try UseOrder.initFromStore(allocator, store, only_proc);
+        break :blk try UseOrder.initFromStore(allocator, store, only_proc, use_locals);
     };
     defer order.deinit();
-    for (alias_targets.items) |target| {
-        if (try deadTransferEdge(&order, alias_stmt[target], @enumFromInt(index_to_local[alias_source[target]]))) foreign_def.set(target);
+    {
+        var transfers = std.ArrayList(TransferAt).empty;
+        defer transfers.deinit(allocator);
+        for (alias_targets.items) |target| {
+            try transfers.append(allocator, .{ .source = alias_source[target], .target = target, .stmt = alias_stmt[target] });
+        }
+        for (join_incoming.items, join_incoming_stmts.items) |incoming, stmt| {
+            try transfers.append(allocator, .{ .source = incoming.source, .target = incoming.target, .stmt = stmt });
+        }
+        var dead_transfers = try std.bit_set.DynamicBitSetUnmanaged.initEmpty(allocator, transfers.items.len);
+        defer dead_transfers.deinit(allocator);
+        try order.resolve(consumes.items, transfers.items, &destroyed, &dead_transfers);
+        var dead = dead_transfers.iterator(.{});
+        while (dead.next()) |index| foreign_def.set(transfers.items[index].target);
     }
-    for (join_incoming.items, join_incoming_stmts.items) |incoming, stmt| {
-        if (try deadTransferEdge(&order, stmt, @enumFromInt(index_to_local[incoming.source]))) foreign_def.set(incoming.target);
-    }
-    try destroyOrderedConsumes(allocator, &order, consumes.items, index_to_local, &destroyed);
 
     try settleUniqueOriginDependencies(
         allocator,
