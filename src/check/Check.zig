@@ -578,6 +578,15 @@ annotation_implicit_open_exts: std.AutoHashMapUnmanaged(CIR.Annotation.Idx, Impl
 /// published type — what importers copy and what stored constants are sealed
 /// against — is the closed row the annotation produced before polarity.
 weak_value_implicit_open_ext_ranges: std.ArrayListUnmanaged(ImplicitOpenExtRange),
+/// Every implicitly opened extension the post-body audit
+/// (`auditImplicitOpenExts`) visited and did not report, in visit order.
+/// The audit is a single read of a mutable var, and an extension can still
+/// learn tags afterwards — so this list is narrowed and replayed once the
+/// module's types settle (`dropSettledLateImplicitOpenExtAudits` and
+/// `runLateImplicitOpenExtAudit`). Entries are copied rather than sliced out
+/// of `implicit_open_exts` by range so a later re-generation of the same
+/// annotation cannot move the range out from under the replay.
+late_implicit_open_ext_audits: std.ArrayListUnmanaged(ImplicitOpenExt),
 /// Tracks bindings whose defining expression is known erroneous and whose
 /// subsequent local lookups must therefore become explicit runtime errors.
 erroneous_value_patterns: std.AutoHashMapUnmanaged(CIR.Pattern.Idx, void),
@@ -2668,6 +2677,7 @@ fn initAssumePrepared(
         .implicit_open_exts = .empty,
         .annotation_implicit_open_exts = .empty,
         .weak_value_implicit_open_ext_ranges = .empty,
+        .late_implicit_open_ext_audits = .empty,
         .erroneous_value_patterns = .empty,
         .rejected_default_exprs = .empty,
         .accepted_nominal_constructor_backings = .empty,
@@ -2791,6 +2801,7 @@ pub fn deinit(self: *Self) void {
     self.implicit_open_exts.deinit(self.gpa);
     self.annotation_implicit_open_exts.deinit(self.gpa);
     self.weak_value_implicit_open_ext_ranges.deinit(self.gpa);
+    self.late_implicit_open_ext_audits.deinit(self.gpa);
     self.erroneous_value_patterns.deinit(self.gpa);
     self.rejected_default_exprs.deinit(self.gpa);
     self.accepted_nominal_constructor_backings.deinit(self.gpa);
@@ -8838,7 +8849,19 @@ fn checkFileInternal(self: *Self, skip_numeric_defaults: bool) std.mem.Allocator
         }
     }
 
+    // Every definition and top-level statement has had its say, so any
+    // implicitly opened extension still carrying no tags was not extended by
+    // its own definition and was not widened by a caller either. Those are the
+    // only ones the post-finalize replay below may still blame a definition for.
+    self.dropSettledLateImplicitOpenExtAudits();
+
     try self.finalizeTypes(&env, .{ .module = .{ .skip_numeric_defaults = skip_numeric_defaults } });
+
+    // Replay the implicit-open-ext audit now that nothing further unifies: a
+    // definition's own deferred constraint (a generated codec's error row) can
+    // widen its annotated row during finalize, long after the post-body audit
+    // read it.
+    try self.runLateImplicitOpenExtAudit(&env);
 
     try self.validateSettledValueTagRows(&env);
 
@@ -15590,6 +15613,13 @@ const ImplicitOpenExtRange = struct {
 /// `..` (a function, a pure signature, a value alias), so an explicit
 /// anonymous `..` in an output position adds nothing and warns. On a value
 /// binding `..` is the opt-in to a quantified row, so it never warns there.
+///
+/// This is a single READ of a mutable var, and it is not always the last word:
+/// a body can still widen its own row after this point, through a constraint
+/// the definition deferred (see `runLateImplicitOpenExtAudit`). Every
+/// extension this pass clears is therefore kept for that replay. The `..`
+/// warning is NOT replayed — it is a property of the annotation's own text,
+/// fully decided here.
 fn auditImplicitOpenExts(self: *Self, annotation_idx: CIR.Annotation.Idx, redundant_open_warns: bool, env: *Env) std.mem.Allocator.Error!void {
     const range = self.annotation_implicit_open_exts.get(annotation_idx) orelse return;
     for (self.implicit_open_exts.items[range.start..][0..range.len]) |entry| {
@@ -15600,57 +15630,114 @@ fn auditImplicitOpenExts(self: *Self, annotation_idx: CIR.Annotation.Idx, redund
                 } });
             }
         }
-        const resolved = self.types.resolveVar(entry.var_);
-        if (resolved.desc.content != .structure) continue;
-        if (resolved.desc.content.structure != .tag_union) continue;
-        const extension = resolved.desc.content.structure.tag_union;
-        if (extension.tags.count == 0) continue;
-        const first_tag = self.types.tags.get(extension.tags.start);
-        // Report this as an ordinary Type Mismatch carrying two rows, so the
-        // reader sees both types and the tag-typo hint comes from the shared
-        // snapshot diff. Neither row is a var the solver owns: the annotated
-        // union's own var shares the widened row by now, so it would display
-        // the body's tags on both sides.
-        //
-        // The ACTUAL row is the listed tags extended by the opened ext. Both
-        // tag gatherers (`TypeWriter.gatherTags`, `diff.gatherTagsFromUnion`)
-        // flatten extension chains, so this renders the listed tags plus every
-        // tag the body added — which is literally what the annotated union's
-        // var held when it was minted. The ext cannot collide with the tags:
-        // the checks above proved it resolved to a row carrying at least one.
-        const listed_tags = entry.listed_tags orelse types_mod.Tag.SafeMultiList.Range{
-            .start = @enumFromInt(0),
-            .count = 0,
-        };
-        const actual_var = try self.freshFromContent(.{ .structure = .{ .tag_union = .{
-            .tags = listed_tags,
-            .ext = entry.var_,
-        } } }, env, entry.region);
-        // The EXPECTED row is the union as the annotation wrote it: the same
-        // listed tags, closed.
-        const expected_ext_var = try self.freshFromContent(.{ .structure = .empty_tag_union }, env, entry.region);
-        const expected_var = try self.freshFromContent(.{ .structure = .{ .tag_union = .{
-            .tags = listed_tags,
-            .ext = expected_ext_var,
-        } } }, env, entry.region);
-        // Both snapshots must be taken before `markErroneous` below overwrites
-        // the extension's content with `.err`.
-        const actual_snapshot = try self.snapshots.snapshotVarForError(self.types, &self.type_writer, actual_var);
-        const expected_snapshot = try self.snapshots.snapshotVarForError(self.types, &self.type_writer, expected_var);
-        _ = try self.problems.appendProblem(self.gpa, .{ .type_mismatch = .{
-            .types = .{
-                .expected_var = expected_var,
-                .expected_snapshot = expected_snapshot,
-                .actual_var = actual_var,
-                .actual_snapshot = actual_snapshot,
-            },
-            .context = .{ .tag_not_in_annotation = .{
-                .region = entry.region,
-                .tag_name = first_tag.name,
-            } },
-        } });
-        try self.markErroneous(entry.var_);
+        if (!self.implicitOpenExtCarriesTags(entry)) {
+            try self.late_implicit_open_ext_audits.append(self.gpa, entry);
+            continue;
+        }
+        try self.reportImplicitOpenExtExtension(entry, env);
     }
+}
+
+/// Whether this implicitly opened extension currently carries a tag — the one
+/// question `auditImplicitOpenExts` asks of it, factored out so the late
+/// replay asks it the same way.
+fn implicitOpenExtCarriesTags(self: *const Self, entry: ImplicitOpenExt) bool {
+    const resolved = self.types.resolveVar(entry.var_);
+    if (resolved.desc.content != .structure) return false;
+    if (resolved.desc.content.structure != .tag_union) return false;
+    return resolved.desc.content.structure.tag_union.tags.count != 0;
+}
+
+/// Forget every extension that has picked up a tag since its binding's
+/// post-body audit cleared it. Run after every definition and top-level
+/// statement is checked, and BEFORE `finalizeTypes`.
+///
+/// A tag that lands in this window came from a CALLER: an output-position row
+/// is implicitly open precisely so a caller may use the result at a wider
+/// union, and the annotation still bounds only the definition itself. Dropping
+/// those entries is what keeps the late replay from mistaking legal use-site
+/// widening for a definition extending its own row.
+fn dropSettledLateImplicitOpenExtAudits(self: *Self) void {
+    var kept: usize = 0;
+    for (self.late_implicit_open_ext_audits.items) |entry| {
+        if (self.implicitOpenExtCarriesTags(entry)) continue;
+        self.late_implicit_open_ext_audits.items[kept] = entry;
+        kept += 1;
+    }
+    self.late_implicit_open_ext_audits.shrinkRetainingCapacity(kept);
+}
+
+/// Replay the audit over the extensions that were STILL unconstrained after
+/// the whole module was checked. Every definition and statement has had its
+/// say by then, so a tag that lands during `finalizeTypes` comes from a
+/// constraint the definition itself deferred — a generated codec's error row
+/// reaching the annotated row through
+/// `finalizeGeneratedCodecConstraintsToQuiescence` is the case that motivates
+/// this (issue 11246). Nothing unifies after finalize, so this is the last
+/// point at which the question can be asked, and it must run before
+/// `closeWeakValueImplicitOpenExts` grounds the survivors to `[]` — a grounded
+/// extension carries no tags and the audit would skip it.
+fn runLateImplicitOpenExtAudit(self: *Self, env: *Env) std.mem.Allocator.Error!void {
+    for (self.late_implicit_open_ext_audits.items) |entry| {
+        // Also the guard against reporting one extension twice: the report
+        // marks it `.err`, which carries no tags.
+        if (!self.implicitOpenExtCarriesTags(entry)) continue;
+        try self.reportImplicitOpenExtExtension(entry, env);
+    }
+}
+
+/// Report one implicitly opened extension that its definition EXTENDED, and
+/// mark the extension erroneous. Callers have already established that it
+/// carries at least one tag (`implicitOpenExtCarriesTags`).
+fn reportImplicitOpenExtExtension(self: *Self, entry: ImplicitOpenExt, env: *Env) std.mem.Allocator.Error!void {
+    const resolved = self.types.resolveVar(entry.var_);
+    const extension = resolved.desc.content.structure.tag_union;
+    const first_tag = self.types.tags.get(extension.tags.start);
+    // Report this as an ordinary Type Mismatch carrying two rows, so the
+    // reader sees both types and the tag-typo hint comes from the shared
+    // snapshot diff. Neither row is a var the solver owns: the annotated
+    // union's own var shares the widened row by now, so it would display
+    // the body's tags on both sides.
+    //
+    // The ACTUAL row is the listed tags extended by the opened ext. Both
+    // tag gatherers (`TypeWriter.gatherTags`, `diff.gatherTagsFromUnion`)
+    // flatten extension chains, so this renders the listed tags plus every
+    // tag the body added — which is literally what the annotated union's
+    // var held when it was minted. The ext cannot collide with the tags:
+    // `implicitOpenExtCarriesTags` proved it resolved to a row carrying at
+    // least one.
+    const listed_tags = entry.listed_tags orelse types_mod.Tag.SafeMultiList.Range{
+        .start = @enumFromInt(0),
+        .count = 0,
+    };
+    const actual_var = try self.freshFromContent(.{ .structure = .{ .tag_union = .{
+        .tags = listed_tags,
+        .ext = entry.var_,
+    } } }, env, entry.region);
+    // The EXPECTED row is the union as the annotation wrote it: the same
+    // listed tags, closed.
+    const expected_ext_var = try self.freshFromContent(.{ .structure = .empty_tag_union }, env, entry.region);
+    const expected_var = try self.freshFromContent(.{ .structure = .{ .tag_union = .{
+        .tags = listed_tags,
+        .ext = expected_ext_var,
+    } } }, env, entry.region);
+    // Both snapshots must be taken before `markErroneous` below overwrites
+    // the extension's content with `.err`.
+    const actual_snapshot = try self.snapshots.snapshotVarForError(self.types, &self.type_writer, actual_var);
+    const expected_snapshot = try self.snapshots.snapshotVarForError(self.types, &self.type_writer, expected_var);
+    _ = try self.problems.appendProblem(self.gpa, .{ .type_mismatch = .{
+        .types = .{
+            .expected_var = expected_var,
+            .expected_snapshot = expected_snapshot,
+            .actual_var = actual_var,
+            .actual_snapshot = actual_snapshot,
+        },
+        .context = .{ .tag_not_in_annotation = .{
+            .region = entry.region,
+            .tag_name = first_tag.name,
+        } },
+    } });
+    try self.markErroneous(entry.var_);
 }
 
 /// After the module solves, ground every still-open implicitly opened

@@ -5608,6 +5608,21 @@ tags — showing the row the body produced against the union the annotation
 wrote — marking that extension erroneous (diagnostic recovery, like every
 other reported problem).
 
+That pass is a single READ of a mutable variable, and a definition can still
+widen its own row afterwards when the widening comes from a constraint the
+definition DEFERRED: a generated codec's error row reaches the annotated row
+only once `finalizeGeneratedCodecConstraintsToQuiescence` resolves it, which is
+after every audit in the module has run. The audit is therefore replayed once.
+Every extension the post-body pass cleared is carried forward; just before
+`finalizeTypes` the list is narrowed to those still carrying no tags
+(`Check.dropSettledLateImplicitOpenExtAudits`), because one that gained a tag
+while the rest of the module was checked was widened by a CALLER, which is
+exactly what an output-position row is open for; and what survives is
+re-examined after finalize by `Check.runLateImplicitOpenExtAudit`, before
+`closeWeakValueImplicitOpenExts` grounds the leftovers to `[]` (a grounded
+extension carries no tags, so the audit would skip it). The rejected-parent-row
+case of issue #11246 is what this replay catches.
+
 A closed value flowing into an implicitly open output row WIDENS into it: the
 row published at that position is the one the annotation declares, whatever
 the body happened to produce. The signature is the whole of what a caller
