@@ -852,7 +852,7 @@ that repeat loop again: a table of zeros is a few instructions at runtime
 and would otherwise be that many bytes in the binary, and a static list
 can never be born unique, which would lose the in-place writes of every
 loop the table is carried through. A non-empty list with spare capacity
-freezes to its elements alone; only the capacity of an empty list
+freezes to its items alone; only the capacity of an empty list
 survives. A build that restores its compile-time values from a checked
 module's const store rather than from a completed host program, as every
 build after the first does, reaches the same constructions: the const
