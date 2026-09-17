@@ -179,7 +179,13 @@ fn assertBuiltinIterExtremum(
                 try std.testing.expect(resolution.independent_callable);
                 try std.testing.expect(resolution.reuse_slot_nested_evidence);
             },
-            else => return error.TestUnexpectedResult,
+            .direct_pending,
+            .direct_closed,
+            .direct_parametric,
+            .structural,
+            .checked_error,
+            .@"unreachable",
+            => return error.TestUnexpectedResult,
         }
     }
     try std.testing.expect(found_plan);

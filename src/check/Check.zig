@@ -15878,7 +15878,27 @@ fn applyTryErrorArgIndex(self: *const Self, apply: CIR.TypeAnno.Apply) ?usize {
         };
         const alias_decl = switch (self.cir.store.getStatement(base_ref.decl_idx)) {
             .s_alias_decl => |decl| decl,
-            else => return null,
+            .s_decl,
+            .s_var,
+            .s_var_uninitialized,
+            .s_reassign,
+            .s_crash,
+            .s_dbg,
+            .s_expr,
+            .s_expect,
+            .s_for,
+            .s_while,
+            .s_infinite_loop,
+            .s_breakable_loop,
+            .s_break,
+            .s_return,
+            .s_import,
+            .s_nominal_decl,
+            .s_where_alias_decl,
+            .s_type_anno,
+            .s_type_var_alias,
+            .s_runtime_error,
+            => return null,
         };
         const formals = self.cir.store.sliceTypeAnnos(self.cir.store.getTypeHeader(alias_decl.header).args);
         // The reference's arguments are substituted for the header's formals
@@ -15888,7 +15908,18 @@ fn applyTryErrorArgIndex(self: *const Self, apply: CIR.TypeAnno.Apply) ?usize {
 
         const body = switch (self.cir.store.getTypeAnno(self.annoSkipParens(alias_decl.anno))) {
             .apply => |body_apply| body_apply,
-            else => return null,
+            .rigid_var,
+            .rigid_var_lookup,
+            .underscore,
+            .lookup,
+            .tag_union,
+            .tag,
+            .tuple,
+            .record,
+            .@"fn",
+            .parens,
+            .malformed,
+            => return null,
         };
         const body_args = self.cir.store.sliceTypeAnnos(body.args);
 
@@ -15937,7 +15968,16 @@ fn annoRigidVarName(self: *const Self, anno_idx: CIR.TypeAnno.Idx) ?Ident.Idx {
             .rigid_var => |rigid| return rigid.name,
             .rigid_var_lookup => |lookup| current = lookup.ref,
             .parens => |parens| current = parens.anno,
-            else => return null,
+            .apply,
+            .underscore,
+            .lookup,
+            .tag_union,
+            .tag,
+            .tuple,
+            .record,
+            .@"fn",
+            .malformed,
+            => return null,
         }
     }
     return null;
@@ -15950,7 +15990,18 @@ fn annoSkipParens(self: *const Self, anno_idx: CIR.TypeAnno.Idx) CIR.TypeAnno.Id
     while (remaining > 0) : (remaining -= 1) {
         switch (self.cir.store.getTypeAnno(current)) {
             .parens => |parens| current = parens.anno,
-            else => return current,
+            .apply,
+            .rigid_var,
+            .rigid_var_lookup,
+            .underscore,
+            .lookup,
+            .tag_union,
+            .tag,
+            .tuple,
+            .record,
+            .@"fn",
+            .malformed,
+            => return current,
         }
     }
     return current;
@@ -32681,7 +32732,7 @@ fn checkStaticDispatchConstraints(self: *Self, env: *Env, is_numeric_default_pas
                         // the per-use deferral it stands for.
                         const signature_is_polarity_marker = switch (signature_resolved.desc.content) {
                             .rigid => |sig_rigid| sig_rigid.name.eql(self.cir.idents.polarity_var),
-                            else => false,
+                            .flex, .alias, .field_presence, .structure, .err => false,
                         };
                         const signature_is_shared_leaf = !signature_is_polarity_marker and
                             switch (signature_resolved.desc.content) {
@@ -34971,7 +35022,15 @@ fn closeTagRowsForDerivationHelp(
                         const empty_tu_var = try self.freshFromContent(.{ .structure = .empty_tag_union }, env, ext_region);
                         try self.types.dangerousSetVarRedirect(.derivation_marker_ext_closure, ext_resolved.var_, empty_tu_var);
                     },
-                    else => try self.closeTagRowsForDerivationHelp(tag_union.ext, env, visited),
+                    // A non-marker rigid falls through the `if` above with no
+                    // `else`, so it is left alone; every remaining content kind
+                    // keeps descending, which is what the `else` this replaced
+                    // did for all four.
+                    .alias,
+                    .field_presence,
+                    .structure,
+                    .err,
+                    => try self.closeTagRowsForDerivationHelp(tag_union.ext, env, visited),
                 }
             },
             .fn_pure, .fn_effectful, .fn_unbound, .empty_record, .empty_tag_union => {},

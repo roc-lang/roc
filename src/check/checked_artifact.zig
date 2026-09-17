@@ -39335,7 +39335,19 @@ test "direct dispatch classification follows instantiation clones to the scheme 
     const instantiated = try instantiateResolvedDispatchTargetCallable(allocator, &names, &store, template_root, template_root);
     const instantiated_tail = switch (store.payload(checkedFunctionPayload(&store, instantiated, "test callable").ret)) {
         .tag_union => |tag_union| tag_union.ext,
-        else => return error.TestUnexpectedResult,
+        .pending,
+        .err,
+        .flex,
+        .rigid,
+        .alias,
+        .record,
+        .record_unbound,
+        .tuple,
+        .nominal,
+        .function,
+        .empty_record,
+        .empty_tag_union,
+        => return error.TestUnexpectedResult,
     };
     try std.testing.expect(store.payload(instantiated_tail) == .flex);
     try std.testing.expectEqual(tail, store.identityOrigin(instantiated_tail));
@@ -39378,7 +39390,19 @@ test "direct dispatch classification follows instantiation clones to the scheme 
     const specialized = try instantiateResolvedDispatchTargetCallable(allocator, &names, &store, target_root, plan_root);
     const specialized_tail = switch (store.payload(checkedFunctionPayload(&store, specialized, "test callable").ret)) {
         .tag_union => |tag_union| tag_union.ext,
-        else => return error.TestUnexpectedResult,
+        .pending,
+        .err,
+        .flex,
+        .rigid,
+        .alias,
+        .record,
+        .record_unbound,
+        .tuple,
+        .nominal,
+        .function,
+        .empty_record,
+        .empty_tag_union,
+        => return error.TestUnexpectedResult,
     };
     try std.testing.expectEqual(plan_tail, store.identityOrigin(specialized_tail));
     try std.testing.expect(store.identityOrigin(specialized_tail) != target_tail);
@@ -39390,13 +39414,37 @@ test "direct dispatch classification follows instantiation clones to the scheme 
     const plan_clone = try store.cloneCheckedTypeRootSubstituting(allocator, &names, plan_root, &.{}, &.{}, &active);
     const plan_clone_tail = switch (store.payload(checkedFunctionPayload(&store, plan_clone, "test callable").ret)) {
         .tag_union => |tag_union| tag_union.ext,
-        else => return error.TestUnexpectedResult,
+        .pending,
+        .err,
+        .flex,
+        .rigid,
+        .alias,
+        .record,
+        .record_unbound,
+        .tuple,
+        .nominal,
+        .function,
+        .empty_record,
+        .empty_tag_union,
+        => return error.TestUnexpectedResult,
     };
     try std.testing.expectEqual(plan_tail, store.identity_origins.get(plan_clone_tail).?);
     const respecialized = try instantiateResolvedDispatchTargetCallable(allocator, &names, &store, target_root, plan_clone);
     const respecialized_tail = switch (store.payload(checkedFunctionPayload(&store, respecialized, "test callable").ret)) {
         .tag_union => |tag_union| tag_union.ext,
-        else => return error.TestUnexpectedResult,
+        .pending,
+        .err,
+        .flex,
+        .rigid,
+        .alias,
+        .record,
+        .record_unbound,
+        .tuple,
+        .nominal,
+        .function,
+        .empty_record,
+        .empty_tag_union,
+        => return error.TestUnexpectedResult,
     };
     try std.testing.expectEqual(plan_clone_tail, store.identity_origins.get(respecialized_tail).?);
     try std.testing.expectEqual(plan_tail, store.identityOrigin(respecialized_tail));

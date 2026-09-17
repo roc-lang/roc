@@ -8791,7 +8791,13 @@ test "W6a open where-method widening and nested evidence lower through explicit 
                     found_requires_record_reuse = true;
                 }
             },
-            else => {},
+            .direct_pending,
+            .direct_closed,
+            .direct_parametric,
+            .structural,
+            .checked_error,
+            .@"unreachable",
+            => {},
         }
     }
     try std.testing.expect(found_requires_record_reuse);
