@@ -606,13 +606,9 @@ pub const Timing = struct {
     }
 
     pub fn snapshot(self: *const Timing) TimingSnapshot {
-        const lowering = self.lowering.snapshot();
         return .{
             .total_ns = self.total_ns.load(),
-            .monotype_ns = lowering.monotype_ns,
-            .postcheck_to_lir_ns = lowering.lift_ns + lowering.spec_constr_ns + lowering.lambda_solve_ns + lowering.inline_plan_ns + lowering.lir_gen_ns,
-            .lir_passes_ns = lowering.lir_passes_ns,
-            .arc_ns = lowering.arc_ns,
+            .lowering = self.lowering.snapshot(),
             .static_data_ns = self.static_data_ns.load(),
             .code_generation_ns = self.code_generation_ns.load(),
             .execution_ns = self.execution_ns.load(),
@@ -623,14 +619,7 @@ pub const Timing = struct {
     }
 
     pub fn addSnapshot(self: *Timing, snapshot_value: TimingSnapshot) void {
-        self.lowering.addSnapshot(.{
-            .monotype_ns = snapshot_value.monotype_ns,
-            // The compile-time evaluation report shows lowering as one
-            // category; re-attribute the merged span to its first stage.
-            .lift_ns = snapshot_value.postcheck_to_lir_ns,
-            .lir_passes_ns = snapshot_value.lir_passes_ns,
-            .arc_ns = snapshot_value.arc_ns,
-        });
+        self.lowering.addSnapshot(snapshot_value.lowering);
         self.total_ns.add(snapshot_value.total_ns);
         self.static_data_ns.add(snapshot_value.static_data_ns);
         self.code_generation_ns.add(snapshot_value.code_generation_ns);
@@ -677,10 +666,8 @@ const TimingCounter = base.ConcurrentU64;
 /// Immutable compile-time finalization timings for progress reporting.
 pub const TimingSnapshot = struct {
     total_ns: u64 = 0,
-    monotype_ns: u64 = 0,
-    postcheck_to_lir_ns: u64 = 0,
-    lir_passes_ns: u64 = 0,
-    arc_ns: u64 = 0,
+    /// Preserve phase and worker identities when runtime reuses this program.
+    lowering: lir.CheckedPipeline.TimingSnapshot = .{},
     static_data_ns: u64 = 0,
     code_generation_ns: u64 = 0,
     execution_ns: u64 = 0,
@@ -688,6 +675,45 @@ pub const TimingSnapshot = struct {
     mem_min: u64 = std.math.maxInt(u64),
     mem_max: u64 = 0,
 };
+
+test "shared lowering timing preserves full snapshots through aggregation" {
+    var lowering: lir.CheckedPipeline.TimingSnapshot = .{};
+    inline for (std.meta.fields(lir.CheckedPipeline.TimingSnapshot), 0..) |field, i| {
+        if (field.type == u64) @field(lowering, field.name) = i + 1;
+    }
+    lowering.monotype_parallel.specialization_tasks_submitted = 11;
+    lowering.monotype_parallel.peak_worker_lanes_used = 4;
+    lowering.solved_lir_parallel.tasks_committed = 13;
+    lowering.lir_pass_parallel.tasks_committed = 17;
+    lowering.arc_parallel.planning_tasks_committed = 19;
+    lowering.monotype_diagnostics.specialization.template_requests = 23;
+    const input: TimingSnapshot = .{
+        .total_ns = 101,
+        .lowering = lowering,
+        .static_data_ns = 103,
+        .code_generation_ns = 107,
+        .execution_ns = 109,
+        .store_results_ns = 113,
+        .mem_min = 127,
+        .mem_max = 131,
+    };
+    var first = Timing.init(std.testing.io);
+    first.addSnapshot(input);
+    var second = Timing.init(std.testing.io);
+    second.addSnapshot(first.snapshot());
+    try std.testing.expectEqualDeep(input, second.snapshot());
+
+    second.addSnapshot(input);
+    var expected_lowering = lir.CheckedPipeline.Timing.init(std.testing.io);
+    expected_lowering.addSnapshot(lowering);
+    expected_lowering.addSnapshot(lowering);
+    const result = second.snapshot();
+    try std.testing.expectEqualDeep(expected_lowering.snapshot(), result.lowering);
+    try std.testing.expectEqual(@as(u64, 202), result.total_ns);
+    try std.testing.expectEqual(@as(u64, 127), result.mem_min);
+    try std.testing.expectEqual(@as(u64, 131), result.mem_max);
+    try std.testing.expectEqualDeep(TimingSnapshot{}, Timing.init(std.testing.io).snapshot());
+}
 
 const TimingPhase = enum {
     total,

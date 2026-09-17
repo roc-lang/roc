@@ -5008,6 +5008,14 @@ aggregate fixed points when every initializer, field read, and tag payload
 read is explicit. Every mutation plan requires disjoint statement roles before
 it changes the graph.
 
+Tag-case fusion inventories join identities once and shares monotonic fresh-ID
+allocation with its branch clones. Candidate-local region and binder facts
+remain valid only until rewiring; variants are indexed by their explicit
+variant/discriminant pair in first-producer order. Fixed-point discovery still
+revisits surrounding joins after a rewrite, since a rejected ancestor can
+become eligible when a descendant changes. No analysis cache crosses that
+mutation boundary.
+
 The clone propagates constructor values through ordinary bindings and solves
 loop fixed points over their leaves. As a result, `.none` mode does not rebuild
 the successor iterator record and callable on each back edge when the producer
@@ -8064,6 +8072,14 @@ discard, and ordered commit. `task_waves` counts root batches and specialization
 sessions, not individual dependency waits within a stream. Task,
 lane, and discard counts explain the relationship without using
 scheduling-dependent values for compiler behavior.
+
+Shared compile-time/runtime lowering retains that complete timing snapshot,
+including worker counts and individual post-check phases. Its report names
+the shared work explicitly; a reused runtime program does not report a second
+zero-filled set of lowering measurements. A genuinely separate runtime
+continuation keeps its own measurements rather than relabeling shared work or
+counting it twice. Snapshot aggregation preserves phase identities and the
+existing sum-versus-peak rules.
 
 Boxy follows a different post-check pipeline and reports its planning and
 lowering wall phases directly rather than projecting Monotype categories onto
@@ -13133,7 +13149,14 @@ call site turns each row into an edge from the arguments the row names to
 that part of its result, live only when the call is each argument's last
 use (otherwise the callee holds a retained copy). The signature bits and
 rows settle to a fixpoint with the analysis, since a new row only adds
-edges. Positions whose seed would let a runtime check in the body go
+edges. One settlement retains the immutable statement inventory, control-flow
+topology, and exact ordered-use answers while rebuilding signature-dependent
+lattice facts each round. A consuming-use proof is reused only while its exact
+consumption inventory is unchanged; holder-adding uses remain
+signature-dependent. Committed takes still require their own settlement, and
+only the converged result outlives the reusable round scratch.
+
+Positions whose seed would let a runtime check in the body go
 check-free form the proc's seed mask, which is what makes a call site
 demand the seeded variant. The owned flag a versioned loop measures once and
 dispatches on every iteration (`list_owned_unique`) is a check that consumes

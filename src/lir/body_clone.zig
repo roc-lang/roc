@@ -52,7 +52,8 @@ pub const JoinParamIndex = struct {
         self.next_join_point = @max(self.next_join_point, raw + 1);
     }
 
-    fn freshJoinPoint(self: *JoinParamIndex) LIR.JoinPointId {
+    /// Reserve an identity in the same domain used by subtree clones.
+    pub fn freshJoinPoint(self: *JoinParamIndex) LIR.JoinPointId {
         if (self.next_join_point == std.math.maxInt(u32)) @panic("join-point id space exhausted");
         const id: LIR.JoinPointId = @enumFromInt(self.next_join_point);
         self.next_join_point += 1;

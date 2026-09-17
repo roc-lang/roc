@@ -16319,12 +16319,16 @@ fn frontEndBreakdown(timing: anytype) [3]progress.SubTiming {
     };
 }
 
-fn compileTimeEvaluationBreakdown(timing: anytype) [8]progress.SubTiming {
+fn compileTimeEvaluationBreakdown(timing: eval.CompileTimeFinalization.TimingSnapshot) [12]progress.SubTiming {
     return .{
-        .{ .name = "Shared Monotype Lowering", .ns = timing.monotype_ns },
-        .{ .name = "Shared LIR Generation", .ns = timing.postcheck_to_lir_ns },
-        .{ .name = "Shared LIR Passes", .ns = timing.lir_passes_ns },
-        .{ .name = "Shared ARC", .ns = timing.arc_ns },
+        .{ .name = "Shared Monotype Lowering", .ns = timing.lowering.monotype_ns },
+        .{ .name = "Shared Closure Lifting", .ns = timing.lowering.lift_ns },
+        .{ .name = "Shared SpecConstr", .ns = timing.lowering.spec_constr_ns },
+        .{ .name = "Shared Lambda-Set Solving", .ns = timing.lowering.lambda_solve_ns },
+        .{ .name = "Shared Inline Planning", .ns = timing.lowering.inline_plan_ns },
+        .{ .name = "Shared LIR Generation", .ns = timing.lowering.lir_gen_ns },
+        .{ .name = "Shared LIR Passes", .ns = timing.lowering.lir_passes_ns },
+        .{ .name = "Shared ARC", .ns = timing.lowering.arc_ns },
         .{ .name = "Static Data", .ns = timing.static_data_ns },
         .{ .name = devInstructionGenerationPhaseName(backend.dev.LirCodeGenMod.host_lir_codegen_target.toCpuArch()), .ns = timing.code_generation_ns },
         .{ .name = "Execution", .ns = timing.execution_ns },
@@ -16385,19 +16389,32 @@ fn finishPostCheckLowering(
     strategy: base.SpecializationStrategy,
 ) void {
     const snapshot = timing.snapshot();
+    if (std.meta.eql(snapshot, lir.CheckedPipeline.TimingSnapshot{})) {
+        reporter.end();
+        return;
+    }
     switch (strategy) {
         .lss => reporter.endWithParentBreakdown(&postCheckLoweringBreakdown(snapshot)),
         .boxy => reporter.endWithParentBreakdown(&boxyPostCheckLoweringBreakdown(snapshot)),
     }
+    recordLoweringCounters(reporter, snapshot, strategy, "");
+}
+
+fn recordLoweringCounters(
+    reporter: *progress.Reporter,
+    snapshot: lir.CheckedPipeline.TimingSnapshot,
+    strategy: base.SpecializationStrategy,
+    comptime prefix: []const u8,
+) void {
     if (strategy == .lss) {
-        reporter.recordCounters("Monotype specialization", &monotypeSpecializationCounters(snapshot.monotype_diagnostics));
-        reporter.recordCounters("Monotype type graph", &monotypeGraphCounters(snapshot.monotype_diagnostics));
-        reporter.recordCounters("Monotype body + dispatch", &monotypeBodyCounters(snapshot.monotype_diagnostics));
-        reporter.recordCounters("Monotype parallel execution", &monotypeParallelCounters(snapshot.monotype_parallel));
-        reporter.recordCounters("Solved-LIR parallel execution", &solvedLirParallelCounters(snapshot.solved_lir_parallel));
+        reporter.recordCounters(prefix ++ "Monotype specialization", &monotypeSpecializationCounters(snapshot.monotype_diagnostics));
+        reporter.recordCounters(prefix ++ "Monotype type graph", &monotypeGraphCounters(snapshot.monotype_diagnostics));
+        reporter.recordCounters(prefix ++ "Monotype body + dispatch", &monotypeBodyCounters(snapshot.monotype_diagnostics));
+        reporter.recordCounters(prefix ++ "Monotype parallel execution", &monotypeParallelCounters(snapshot.monotype_parallel));
+        reporter.recordCounters(prefix ++ "Solved-LIR parallel execution", &solvedLirParallelCounters(snapshot.solved_lir_parallel));
     }
-    reporter.recordCounters("LIR pass parallel execution", &lirPassParallelCounters(snapshot.lir_pass_parallel));
-    reporter.recordCounters("ARC parallel execution", &arcParallelCounters(snapshot.arc_parallel));
+    reporter.recordCounters(prefix ++ "LIR pass parallel execution", &lirPassParallelCounters(snapshot.lir_pass_parallel));
+    reporter.recordCounters(prefix ++ "ARC parallel execution", &arcParallelCounters(snapshot.arc_parallel));
 }
 
 fn postCheckLoweringTotalNs(timing: lir.CheckedPipeline.TimingSnapshot) u64 {
@@ -16419,6 +16436,7 @@ fn recordPostCheckLowering(
     strategy: base.SpecializationStrategy,
 ) void {
     const snapshot = timing.snapshot();
+    if (std.meta.eql(snapshot, lir.CheckedPipeline.TimingSnapshot{})) return;
     switch (strategy) {
         .lss => reporter.recordCompletedWithBreakdown(
             aggregate_post_check_lowering_phase_name,
@@ -16433,15 +16451,7 @@ fn recordPostCheckLowering(
             &boxyPostCheckLoweringBreakdown(snapshot),
         ),
     }
-    if (strategy == .lss) {
-        reporter.recordCounters("Monotype specialization", &monotypeSpecializationCounters(snapshot.monotype_diagnostics));
-        reporter.recordCounters("Monotype type graph", &monotypeGraphCounters(snapshot.monotype_diagnostics));
-        reporter.recordCounters("Monotype body + dispatch", &monotypeBodyCounters(snapshot.monotype_diagnostics));
-        reporter.recordCounters("Monotype parallel execution", &monotypeParallelCounters(snapshot.monotype_parallel));
-        reporter.recordCounters("Solved-LIR parallel execution", &solvedLirParallelCounters(snapshot.solved_lir_parallel));
-    }
-    reporter.recordCounters("LIR pass parallel execution", &lirPassParallelCounters(snapshot.lir_pass_parallel));
-    reporter.recordCounters("ARC parallel execution", &arcParallelCounters(snapshot.arc_parallel));
+    recordLoweringCounters(reporter, snapshot, strategy, "");
 }
 
 fn devTestExecutionBreakdown(timing: eval.test_helpers.DevBoolRootTimingSnapshot) [6]progress.SubTiming {
@@ -16899,13 +16909,107 @@ test "timings display every Monotype graph counter" {
 fn finishFrontEndPhase(reporter: *progress.Reporter, timing: anytype) void {
     reporter.endWithBreakdown(&frontEndBreakdown(timing));
     const compile_time = timing.compile_time_evaluation;
-    if (compile_time.total_ns == 0) return;
+    if (compile_time.total_ns == 0 and std.meta.eql(compile_time.lowering, lir.CheckedPipeline.TimingSnapshot{})) return;
     reporter.recordCompletedWithBreakdown(
         "Shared Lowering and Compile-Time Evaluation",
         compile_time.total_ns,
         .{ .min = compile_time.mem_min, .max = compile_time.mem_max },
         &compileTimeEvaluationBreakdown(compile_time),
     );
+    if (!std.meta.eql(compile_time.lowering, lir.CheckedPipeline.TimingSnapshot{})) {
+        recordLoweringCounters(reporter, compile_time.lowering, .lss, "Shared ");
+    }
+}
+
+test "shared lowering reporting preserves counters for runtime reuse and continuation" {
+    const shared: eval.CompileTimeFinalization.TimingSnapshot = .{
+        .total_ns = 100_000_000,
+        .lowering = .{
+            .monotype_ns = 1,
+            .lift_ns = 2,
+            .spec_constr_ns = 3,
+            .lambda_solve_ns = 4,
+            .inline_plan_ns = 5,
+            .lir_gen_ns = 6,
+            .lir_passes_ns = 7,
+            .arc_ns = 8,
+            .solved_lir_parallel = .{ .tasks_submitted = 61, .tasks_committed = 61 },
+            .lir_pass_parallel = .{ .tasks_submitted = 67, .tasks_committed = 67 },
+            .arc_parallel = .{ .planning_tasks_submitted = 71, .planning_tasks_committed = 71 },
+        },
+        .static_data_ns = 9,
+        .code_generation_ns = 10,
+        .execution_ns = 11,
+        .store_results_ns = 12,
+    };
+    const rows = compileTimeEvaluationBreakdown(shared);
+    for (rows, 1..) |row, index| try std.testing.expectEqual(@as(u64, @intCast(index)), row.ns);
+    try std.testing.expectEqualStrings("Shared SpecConstr", rows[2].name);
+    try std.testing.expectEqualStrings("Shared Lambda-Set Solving", rows[3].name);
+    try std.testing.expectEqualStrings("Shared LIR Generation", rows[5].name);
+
+    const Case = struct { runtime_continuation: bool, counters_only: bool };
+    for ([_]Case{
+        .{ .runtime_continuation = false, .counters_only = false },
+        .{ .runtime_continuation = true, .counters_only = false },
+        .{ .runtime_continuation = false, .counters_only = true },
+        .{ .runtime_continuation = true, .counters_only = true },
+    }) |case| {
+        var shared_input = shared;
+        if (case.counters_only) {
+            shared_input.total_ns = 0;
+            inline for (std.meta.fields(lir.CheckedPipeline.TimingSnapshot)) |field| {
+                if (field.type == u64) @field(shared_input.lowering, field.name) = 0;
+            }
+            shared_input.static_data_ns = 0;
+            shared_input.code_generation_ns = 0;
+            shared_input.execution_ns = 0;
+            shared_input.store_results_ns = 0;
+        }
+        var buf = std.Io.Writer.Allocating.init(std.testing.allocator);
+        defer buf.deinit();
+        var reporter = progress.Reporter.init(.{
+            .std_io = std.testing.io,
+            .writer = &buf.writer,
+            .op_label = "roc build",
+            .timings_flag = true,
+            .is_tty = false,
+        });
+        defer reporter.deinit();
+        reporter.start();
+        reporter.begin("Type Checking");
+        finishFrontEndPhase(&reporter, .{
+            .tokenize_parse_ns = @as(u64, 0),
+            .canonicalize_ns = @as(u64, 0),
+            .canonicalize_diagnostics_ns = @as(u64, 0),
+            .type_checking_ns = @as(u64, 0),
+            .check_diagnostics_ns = @as(u64, 0),
+            .compile_time_evaluation = shared_input,
+        });
+        var runtime = lir.CheckedPipeline.Timing.init(std.testing.io);
+        if (case.runtime_continuation) runtime.addSnapshot(.{
+            // Recorded counters must survive even when a duration is zero.
+            .arc_parallel = .{ .planning_tasks_committed = 73 },
+        });
+        reporter.begin("Specializing");
+        finishPostCheckLowering(&reporter, &runtime, .lss);
+        reporter.finish();
+        const output = buf.written();
+        for ([_][]const u8{
+            "Shared Monotype specialization",
+            "Shared Monotype type graph",
+            "Shared Monotype body + dispatch",
+            "Shared Monotype parallel execution",
+            "Shared Solved-LIR parallel execution",
+            "Shared LIR pass parallel execution",
+            "Shared ARC parallel execution",
+        }) |label| try std.testing.expectEqual(@as(usize, 1), std.mem.count(u8, output, label));
+        try std.testing.expect(std.mem.find(u8, output, "71") != null);
+        try std.testing.expectEqual(
+            @as(usize, if (case.runtime_continuation) 1 else 0),
+            std.mem.count(u8, output, "  ARC parallel execution"),
+        );
+    }
 }
 
 /// Print the friendly post-build summary line and (optionally) cache statistics.

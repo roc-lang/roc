@@ -69,6 +69,10 @@ pub var outcome_solver_iterations: u64 = 0;
 /// Debug-only number of scratch entries initialized or scanned by restitution.
 pub var outcome_scratch_entries: u64 = 0;
 
+// Deterministic work accounting for solver tests; compiled out of production.
+var uniqueness_topology_builds: usize = 0;
+var uniqueness_analysis_rounds: usize = 0;
+
 const no_local: u32 = std.math.maxInt(u32);
 
 /// Presence-bit condition guarding a payload local whose storage may not be
@@ -3940,6 +3944,12 @@ const UseOrder = struct {
     marked_local: u32,
     marked_uses: bool,
     work: std.ArrayList(u32),
+    /// Only the fixed-point workspace enables this cache. Each key names
+    /// an immutable ordered-use question, independent of signatures/takes.
+    use_answers: ?*std.AutoHashMap(UseQuery, bool) = null,
+    backward_visits: usize = 0,
+
+    const UseQuery = struct { stmt: LIR.CFStmtId, local: LIR.LocalId };
 
     /// CSR rows of statement ids per key, each row sorted.
     const Rows = struct {
@@ -3964,6 +3974,7 @@ const UseOrder = struct {
     const RowKind = enum { reads, defs };
 
     fn init(allocator: Allocator, store: *const LirStore, lists: []const []const LIR.CFStmtId) SolveError!UseOrder {
+        if (builtin.is_test) uniqueness_topology_builds += 1;
         const stmt_count = store.cfStmtCount();
         const jump_join = try allocator.alloc(u32, stmt_count);
         errdefer allocator.free(jump_join);
@@ -4220,7 +4231,8 @@ const UseOrder = struct {
                 try list.append(allocator, current);
                 try appendStructuralSuccessors(allocator, store, &stack, store.getCFStmt(current));
             }
-            try lists.append(allocator, try list.toOwnedSlice(allocator));
+            try lists.ensureUnusedCapacity(allocator, 1);
+            lists.appendAssumeCapacity(try list.toOwnedSlice(allocator));
         }
         return init(allocator, store, lists.items);
     }
@@ -4258,12 +4270,16 @@ const UseOrder = struct {
     /// before `local` is redefined. Marks from the local's reads once and
     /// answers every later query about the same local from those marks.
     fn usesAfter(self: *UseOrder, from: u32, local: LIR.LocalId) SolveError!bool {
+        const key: UseQuery = .{ .stmt = @enumFromInt(from), .local = local };
+        if (self.use_answers) |answers| if (answers.get(key)) |answer| return answer;
         if (self.marked_local != @intFromEnum(local) or !self.marked_uses) {
             try self.markFrom(local, self.reads_of.row(local));
             self.marked_local = @intFromEnum(local);
             self.marked_uses = true;
         }
-        return self.after(from, local);
+        const answer = self.after(from, local);
+        if (self.use_answers) |answers| try answers.put(key, answer);
+        return answer;
     }
 
     /// Marks the statements from which one of `among` can execute before
@@ -4306,6 +4322,7 @@ const UseOrder = struct {
         var unresolved_iter = self.unresolved.iterator(.{});
         while (unresolved_iter.next()) |stmt| try self.mark(@intCast(stmt));
         while (self.work.pop()) |stmt| {
+            if (builtin.is_test) self.backward_visits += 1;
             for (self.preds.rowAt(stmt)) |pred| {
                 if (self.mark_gen[pred] == self.generation) continue;
                 if (self.cutEdge(pred, stmt, local)) continue;
@@ -4482,6 +4499,53 @@ fn destroyOrderedConsumes(
         start = end;
     }
 }
+
+/// The consuming-use relation is independent of return uniqueness. Its exact
+/// input inventory is the invalidation key: changing a parameter mode or view
+/// can change that inventory, while changing a conditional return row cannot.
+const ConsumptionProof = struct {
+    consumes: std.ArrayList(ConsumeAt) = .empty,
+    destroyed: std.bit_set.DynamicBitSetUnmanaged = .{},
+    valid: bool = false,
+    rebuilds: usize = 0,
+
+    fn deinit(self: *ConsumptionProof, allocator: Allocator) void {
+        self.consumes.deinit(allocator);
+        self.destroyed.deinit(allocator);
+    }
+
+    fn apply(
+        self: *ConsumptionProof,
+        allocator: Allocator,
+        order: *UseOrder,
+        consumes: []const ConsumeAt,
+        index_to_local: []const u32,
+        destroyed: *std.bit_set.DynamicBitSetUnmanaged,
+    ) SolveError!void {
+        var same = self.valid and self.consumes.items.len == consumes.len;
+        if (same) for (self.consumes.items, consumes) |old, new| {
+            if (old.index != new.index or old.stmt != new.stmt) {
+                same = false;
+                break;
+            }
+        };
+        if (!same) {
+            self.valid = false;
+            if (self.destroyed.bit_length != index_to_local.len) {
+                try self.destroyed.resize(allocator, index_to_local.len, false);
+            }
+            self.destroyed.setRangeValue(.{ .start = 0, .end = index_to_local.len }, false);
+            self.consumes.clearRetainingCapacity();
+            try self.consumes.appendSlice(allocator, consumes);
+            // Compute just consumption's contribution; holder-adding uses
+            // remain signature-dependent and are combined on every round.
+            try destroyOrderedConsumes(allocator, order, consumes, index_to_local, &self.destroyed);
+            self.valid = true;
+            if (builtin.is_test) self.rebuilds += 1;
+        }
+        destroyed.setUnion(self.destroyed);
+    }
+};
 
 /// Settles unique origins, their parameter conditions, per-field origins,
 /// and holder-adding deadness over the alias, join, field, and call edges
@@ -4842,7 +4906,7 @@ pub fn computeUniqueness(
     sigs: arc_sig.SigTable,
     layouts: *const layout_mod.Store,
 ) SolveError!Uniqueness {
-    return computeUniquenessDetailed(allocator, store, rc_local, sigs, null, null, null, null, true, layouts, .none, null);
+    return computeUniquenessDetailed(allocator, store, rc_local, sigs, null, null, null, null, true, layouts, .none, null, null);
 }
 
 const ProcUniquenessDomain = struct {
@@ -4885,8 +4949,74 @@ pub fn computeProcUniqueness(
         layouts,
         .stamped,
         null,
+        null,
     );
 }
+
+/// Control flow and ordered-use topology depend on the body, not on the
+/// signatures being settled. Keep them outside the signature fixed point.
+/// Body changes require a new workspace; signature and take changes require
+/// a fresh lattice analysis, not a fresh topology.
+const UniquenessWorkspace = struct {
+    allocator: Allocator,
+    stmts: []LIR.CFStmtId,
+    order: UseOrder,
+    use_answers: std.AutoHashMap(UseOrder.UseQuery, bool),
+    consumption: ConsumptionProof = .{},
+    scratch: std.heap.ArenaAllocator,
+    iterations: usize = 0,
+
+    fn init(allocator: Allocator, store: *const LirStore, proc_stmts: []const std.ArrayList(LIR.CFStmtId)) SolveError!UniquenessWorkspace {
+        const lists = try allocator.alloc([]const LIR.CFStmtId, proc_stmts.len);
+        defer allocator.free(lists);
+        var reachable = try std.bit_set.DynamicBitSetUnmanaged.initEmpty(allocator, store.cfStmtCount());
+        defer reachable.deinit(allocator);
+        for (proc_stmts, lists) |proc, *list| {
+            list.* = proc.items;
+            for (proc.items) |stmt| reachable.set(@intFromEnum(stmt));
+        }
+        const stmts = try allocator.alloc(LIR.CFStmtId, reachable.count());
+        errdefer allocator.free(stmts);
+        var iter = reachable.iterator(.{});
+        var index: usize = 0;
+        while (iter.next()) |raw| : (index += 1) stmts[index] = @enumFromInt(@as(u32, @intCast(raw)));
+        return .{
+            .allocator = allocator,
+            .stmts = stmts,
+            .order = try UseOrder.init(allocator, store, lists),
+            .use_answers = std.AutoHashMap(UseOrder.UseQuery, bool).init(allocator),
+            .scratch = std.heap.ArenaAllocator.init(allocator),
+        };
+    }
+
+    fn deinit(self: *UniquenessWorkspace) void {
+        self.scratch.deinit();
+        self.use_answers.deinit();
+        self.consumption.deinit(self.allocator);
+        self.order.deinit();
+        self.allocator.free(self.stmts);
+    }
+
+    fn analyze(
+        self: *UniquenessWorkspace,
+        store: *const LirStore,
+        rc_local: []const bool,
+        sigs: arc_sig.SigTable,
+        consume_dead_boxes: bool,
+        layouts: *const layout_mod.Store,
+        takes: TakeSource,
+        borrowed: *const std.bit_set.DynamicBitSetUnmanaged,
+    ) SolveError!Uniqueness {
+        // No result from the previous round survives into this call.
+        _ = self.scratch.reset(.retain_capacity);
+        if (builtin.is_test) {
+            self.iterations += 1;
+            uniqueness_analysis_rounds += 1;
+        }
+        self.order.use_answers = &self.use_answers;
+        return computeUniquenessDetailed(self.scratch.allocator(), store, rc_local, sigs, null, null, self.stmts, null, consume_dead_boxes, layouts, takes, borrowed, self);
+    }
+};
 
 /// Settles uniqueness for the whole store against the solved signatures and
 /// the given take source, iterating with the unique-return bits and the
@@ -4930,10 +5060,12 @@ pub fn settleUniqueness(
         }
     }
 
+    var workspace = try UniquenessWorkspace.init(allocator, store, proc_stmts);
+    defer workspace.deinit();
     var rows = std.ArrayList(arc_sig.RetCondition).empty;
     defer rows.deinit(allocator);
     while (true) {
-        var uniqueness = try computeUniquenessDetailed(allocator, store, rc_local, solution.sigTable(), null, null, null, null, consume_dead_boxes, layouts, takes, &solution.borrowed);
+        const uniqueness = try workspace.analyze(store, rc_local, solution.sigTable(), consume_dead_boxes, layouts, takes, &solution.borrowed);
         var changed = false;
         rows.clearRetainingCapacity();
         for (returns, 0..) |list, proc_index| {
@@ -5017,10 +5149,7 @@ pub fn settleUniqueness(
         const table = try allocator.dupe(arc_sig.RetCondition, rows.items);
         allocator.free(solution.ret_conditions);
         solution.ret_conditions = table;
-        if (changed) {
-            uniqueness.deinit(allocator);
-            continue;
-        }
+        if (changed) continue;
 
         // Parameter positions whose seed would let a runtime check the
         // body performs on a value carried from them go check-free.
@@ -5047,17 +5176,21 @@ pub fn settleUniqueness(
             }
         }
 
+        var unique = try uniqueness.unique.clone(allocator);
+        errdefer unique.deinit(allocator);
+        var destroyed = try uniqueness.destroyed.clone(allocator);
+        errdefer destroyed.deinit(allocator);
+        var born = try uniqueness.born_unique.clone(allocator);
+        errdefer born.deinit(allocator);
+        const conds = try allocator.dupe(arc_sig.ParamMask, uniqueness.conds);
         solution.unique.deinit(allocator);
         solution.unique_destroyed.deinit(allocator);
         solution.unique_born.deinit(allocator);
         allocator.free(solution.unique_conds);
-        solution.unique = uniqueness.unique;
-        solution.unique_destroyed = uniqueness.destroyed;
-        solution.unique_born = uniqueness.born_unique;
-        solution.unique_conds = uniqueness.conds;
-        allocator.free(uniqueness.field_masks);
-        uniqueness.field_conds.deinit(allocator);
-        uniqueness.consumed.deinit(allocator);
+        solution.unique = unique;
+        solution.unique_destroyed = destroyed;
+        solution.unique_born = born;
+        solution.unique_conds = conds;
         return;
     }
 }
@@ -5075,6 +5208,7 @@ fn computeUniquenessDetailed(
     layouts: *const layout_mod.Store,
     takes: TakeSource,
     borrowed: ?*const std.bit_set.DynamicBitSetUnmanaged,
+    workspace: ?*UniquenessWorkspace,
 ) SolveError!Uniqueness {
     const local_count = if (proc_domain) |domain| domain.count else store.localCount();
 
@@ -5834,10 +5968,13 @@ fn computeUniquenessDetailed(
         for (index_to_local, 0..) |*slot, raw| slot.* = @intCast(raw);
     }
 
-    var order = blk: {
+    var owned_order: ?UseOrder = null;
+    defer if (owned_order) |*order| order.deinit();
+    const order = if (workspace) |cached| &cached.order else blk: {
         if (exact_stmts) |stmts| {
             const lists = [_][]const LIR.CFStmtId{stmts};
-            break :blk try UseOrder.init(allocator, store, &lists);
+            owned_order = try UseOrder.init(allocator, store, &lists);
+            break :blk &owned_order.?;
         }
         if (proc_stmts) |by_proc| {
             const lists = try allocator.alloc([]const LIR.CFStmtId, by_proc.len);
@@ -5850,11 +5987,12 @@ fn computeUniquenessDetailed(
                 lists[len] = stmts.items;
                 len += 1;
             }
-            break :blk try UseOrder.init(allocator, store, lists[0..len]);
+            owned_order = try UseOrder.init(allocator, store, lists[0..len]);
+            break :blk &owned_order.?;
         }
-        break :blk try UseOrder.initFromStore(allocator, store, only_proc);
+        owned_order = try UseOrder.initFromStore(allocator, store, only_proc);
+        break :blk &owned_order.?;
     };
-    defer order.deinit();
     {
         var checks = std.ArrayList(EdgeCheck).empty;
         defer checks.deinit(allocator);
@@ -5864,14 +6002,20 @@ fn computeUniquenessDetailed(
         for (join_incoming.items, join_incoming_stmts.items) |incoming, stmt| {
             try checks.append(allocator, .{ .source = @enumFromInt(index_to_local[incoming.source]), .stmt = stmt, .target = incoming.target });
         }
-        try settleEdgeChecks(&order, checks.items, struct {
+        try settleEdgeChecks(order, checks.items, struct {
             foreign: *std.bit_set.DynamicBitSetUnmanaged,
             fn dead(ctx: @This(), target: u32) void {
                 ctx.foreign.set(target);
             }
         }{ .foreign = &foreign_def });
     }
-    try destroyOrderedConsumes(allocator, &order, consumes.items, index_to_local, &destroyed);
+    if (workspace) |cached| {
+        // The fixed-point workspace always uses the global local domain.
+        std.debug.assert(proc_domain == null);
+        try cached.consumption.apply(cached.allocator, order, consumes.items, index_to_local, &destroyed);
+    } else {
+        try destroyOrderedConsumes(allocator, order, consumes.items, index_to_local, &destroyed);
+    }
 
     // A stored field holds the source's unit only when the store is the
     // source's last use.
@@ -6169,4 +6313,251 @@ fn solveInvariant(comptime message: []const u8) noreturn {
 
 test "solve declarations are referenced" {
     std.testing.refAllDecls(@This());
+}
+
+/// Small ownership-neutral fixtures for exercising the solver without emission.
+const UniquenessTest = struct {
+    store: LirStore,
+    layouts: layout_mod.Store,
+    list: layout_mod.Idx,
+    pair: layout_mod.Idx,
+
+    fn init() SolveError!UniquenessTest {
+        var layouts = try layout_mod.Store.init(std.testing.allocator, .u64);
+        errdefer layouts.deinit();
+        const list = try layouts.insertList(.i64);
+        const pair = try layouts.putStructFields(&.{
+            .{ .index = 0, .layout = list },
+            .{ .index = 1, .layout = list },
+        });
+        return .{ .store = LirStore.init(std.testing.allocator), .layouts = layouts, .list = list, .pair = pair };
+    }
+
+    fn deinit(self: *@This()) void {
+        self.store.deinit();
+        self.layouts.deinit();
+    }
+
+    fn local(self: *@This(), layout: layout_mod.Idx) SolveError!LIR.LocalId {
+        return self.store.addLocal(.{ .layout_idx = layout });
+    }
+
+    fn ret(self: *@This(), value: LIR.LocalId) SolveError!LIR.CFStmtId {
+        return self.store.addCFStmt(.{ .ret = .{ .value = value } });
+    }
+
+    fn call(self: *@This(), target: LIR.LocalId, callee: LIR.LirProcSpecId, args: []const LIR.LocalId, next: LIR.CFStmtId) SolveError!LIR.CFStmtId {
+        return self.store.addCFStmt(.{ .assign_call = .{ .target = target, .proc = callee, .args = try self.store.addLocalSpan(args), .next = next } });
+    }
+
+    fn proc(self: *@This(), args: []const LIR.LocalId, body: ?LIR.CFStmtId, layout: layout_mod.Idx) SolveError!LIR.LirProcSpecId {
+        return self.store.addProcSpec(.{
+            .identity = LIR.ProcIdentity.forTest(@intCast(self.store.procSpecCount())),
+            .name = self.store.freshSyntheticSymbol(),
+            .args = try self.store.addLocalSpan(args),
+            .body = body,
+            .ret_layout = layout,
+        });
+    }
+
+    fn expectSame(expected: Uniqueness, actual: Uniqueness) error{TestExpectedEqual}!void {
+        const testing = std.testing;
+        try testing.expectEqualSlices(u64, expected.field_masks, actual.field_masks);
+        try testing.expectEqualSlices(arc_sig.ParamMask, expected.conds, actual.conds);
+        for (0..expected.conds.len) |index| {
+            try testing.expectEqual(expected.born_unique.isSet(index), actual.born_unique.isSet(index));
+            try testing.expectEqual(expected.unique.isSet(index), actual.unique.isSet(index));
+            try testing.expectEqual(expected.destroyed.isSet(index), actual.destroyed.isSet(index));
+            try testing.expectEqual(expected.consumed.isSet(index), actual.consumed.isSet(index));
+            for (0..64) |field| try testing.expectEqual(expected.field_conds.get(@intCast(index), @intCast(field)), actual.field_conds.get(@intCast(index), @intCast(field)));
+        }
+    }
+};
+
+test "ordered-use inventory transfer cleans up on allocation failure" {
+    var f = try UniquenessTest.init();
+    defer f.deinit();
+    const local = try f.local(f.list);
+    _ = try f.proc(&.{local}, try f.ret(local), f.list);
+    const Probe = struct {
+        fn run(allocator: Allocator, store: *const LirStore) SolveError!void {
+            var order = try UseOrder.initFromStore(allocator, store, null);
+            defer order.deinit();
+        }
+    };
+    try std.testing.checkAllAllocationFailures(std.testing.allocator, Probe.run, .{&f.store});
+}
+
+test "uniqueness workspace reuses topology and exact use queries across signature changes" {
+    const testing = std.testing;
+    const allocator = testing.allocator;
+    var f = try UniquenessTest.init();
+    defer f.deinit();
+    const param = try f.local(f.list);
+    const result = try f.local(f.list);
+    const alias = try f.local(f.list);
+    const single_field = try f.layouts.putStructFields(&.{.{ .index = 0, .layout = f.list }});
+    const pair = try f.local(single_field);
+    const taken = try f.local(f.list);
+    const proc = try f.proc(&.{param}, null, f.list);
+    const ret = try f.ret(taken);
+    const read = try f.store.addCFStmt(.{ .assign_ref = .{ .target = taken, .op = .{ .field = .{ .source = pair, .field_idx = 0 } }, .next = ret } });
+    const store = try f.store.addCFStmt(.{ .assign_struct = .{ .target = pair, .fields = try f.store.addLocalSpan(&.{alias}), .next = read } });
+    const alias_stmt = try f.store.addCFStmt(.{ .assign_ref = .{ .target = alias, .op = .{ .local = result }, .next = store } });
+    const call = try f.call(result, proc, &.{param}, alias_stmt);
+    f.store.setProcSpecBody(proc, call);
+    var statements = [_]std.ArrayList(LIR.CFStmtId){.empty};
+    defer statements[0].deinit(allocator);
+    try collectProcStatements(allocator, &f.store, call, &statements[0]);
+    var workspace = try UniquenessWorkspace.init(allocator, &f.store, &statements);
+    defer workspace.deinit();
+    const topology = workspace.order.preds.stmts.ptr;
+    var borrowed = try std.bit_set.DynamicBitSetUnmanaged.initEmpty(allocator, 5);
+    defer borrowed.deinit(allocator);
+    var takes = try std.bit_set.DynamicBitSetUnmanaged.initEmpty(allocator, f.store.cfStmtCount());
+    defer takes.deinit(allocator);
+    takes.set(@intFromEnum(read));
+    const rc = [_]bool{true} ** 5;
+    var sigs = [_]arc_sig.RcSig{.all_owned};
+    const conditions = [_]arc_sig.RetCondition{.{ .field = arc_sig.RetCondition.whole_value, .params = 1 }};
+    for (0..3) |round| {
+        // A recursive conditional return adds an exact argument dependency;
+        // later an unconditional birth removes that condition.
+        if (round == 1) sigs[0].ret_conditions = .{ .start = 0, .len = 1 };
+        if (round == 2) {
+            sigs[0].ret_conditions = .empty;
+            sigs[0].ret_unique = true;
+        }
+        const table = arc_sig.SigTable{ .sigs = &sigs, .ret_conditions = &conditions };
+        const actual = try workspace.analyze(&f.store, &rc, table, true, &f.layouts, .{ .set = &takes }, &borrowed);
+        var expected = try computeUniquenessDetailed(allocator, &f.store, &rc, table, null, null, null, null, true, &f.layouts, .{ .set = &takes }, &borrowed, null);
+        defer expected.deinit(allocator);
+        try UniquenessTest.expectSame(expected, actual);
+        try testing.expectEqual(topology, workspace.order.preds.stmts.ptr);
+        try testing.expectEqual(round != 0, actual.born_unique.isSet(@intFromEnum(taken)));
+        if (round == 1) try testing.expectEqual(@as(arc_sig.ParamMask, 1), actual.conds[@intFromEnum(taken)]);
+        if (round == 2) try testing.expect(actual.unique.isSet(@intFromEnum(taken)));
+        // Evict the current generation's local, not the immutable answers.
+        // Re-querying all recorded edges must not walk a single predecessor.
+        workspace.order.marked_local = no_local;
+        const visits = workspace.order.backward_visits;
+        var answers = workspace.use_answers.iterator();
+        while (answers.next()) |entry| {
+            const key = entry.key_ptr.*;
+            try testing.expectEqual(entry.value_ptr.*, try workspace.order.usesAfter(@intFromEnum(key.stmt), key.local));
+        }
+        try testing.expectEqual(visits, workspace.order.backward_visits);
+    }
+    try testing.expectEqual(@as(usize, 3), workspace.iterations);
+    try testing.expectEqual(@as(usize, 1), workspace.consumption.rebuilds);
+    // A separate post-take proof cannot reuse the pre-take lattice verdict.
+    const without_take = try workspace.analyze(&f.store, &rc, .{ .sigs = &sigs }, true, &f.layouts, .none, &borrowed);
+    try testing.expect(!without_take.born_unique.isSet(@intFromEnum(taken)));
+}
+
+test "uniqueness workspace reanalyzes read-only signatures through borrowed views" {
+    const testing = std.testing;
+    const allocator = testing.allocator;
+    var f = try UniquenessTest.init();
+    defer f.deinit();
+    const source = try f.local(f.list);
+    const view = try f.local(f.list);
+    const ignored = try f.local(.i64);
+    const param = try f.local(f.list);
+    const callee = try f.proc(&.{param}, null, .i64);
+    const ret = try f.ret(source);
+    const call = try f.call(ignored, callee, &.{view}, ret);
+    const alias = try f.store.addCFStmt(.{ .assign_ref = .{ .target = view, .op = .{ .local = source }, .next = call } });
+    const body = try f.store.addCFStmt(.{ .assign_list = .{ .target = source, .elems = try f.store.addLocalSpan(&.{}), .next = alias } });
+    _ = try f.proc(&.{}, body, f.list);
+    var statements = [_]std.ArrayList(LIR.CFStmtId){ .empty, .empty };
+    defer for (&statements) |*stmts| stmts.deinit(allocator);
+    try collectProcStatements(allocator, &f.store, body, &statements[1]);
+    var workspace = try UniquenessWorkspace.init(allocator, &f.store, &statements);
+    defer workspace.deinit();
+    const rc = [_]bool{ true, true, false, true };
+    var borrowed = try std.bit_set.DynamicBitSetUnmanaged.initEmpty(allocator, rc.len);
+    defer borrowed.deinit(allocator);
+    borrowed.set(@intFromEnum(view));
+    var sigs = [_]arc_sig.RcSig{ .{ .borrowed_params = 1 }, .all_owned };
+    for ([_]arc_sig.ParamMask{ 0, 1, 0 }) |read_only| {
+        sigs[0].read_only_params = read_only;
+        const table = arc_sig.SigTable{ .sigs = &sigs };
+        const actual = try workspace.analyze(&f.store, &rc, table, true, &f.layouts, .none, &borrowed);
+        var expected = try computeUniquenessDetailed(allocator, &f.store, &rc, table, null, null, null, null, true, &f.layouts, .none, &borrowed, null);
+        defer expected.deinit(allocator);
+        try UniquenessTest.expectSame(expected, actual);
+        try testing.expectEqual(read_only != 0, actual.unique.isSet(@intFromEnum(source)));
+        try testing.expect(!actual.consumed.isSet(@intFromEnum(view)));
+    }
+    try testing.expectEqual(@as(usize, 1), workspace.consumption.rebuilds);
+    sigs[0].read_only_params = 1;
+    for ([_]bool{ true, false, true }, 1..) |is_view, rebuilds| {
+        borrowed.setValue(@intFromEnum(view), is_view);
+        const table = arc_sig.SigTable{ .sigs = &sigs };
+        const actual = try workspace.analyze(&f.store, &rc, table, true, &f.layouts, .none, &borrowed);
+        var reference = try computeUniquenessDetailed(allocator, &f.store, &rc, table, null, null, null, null, true, &f.layouts, .none, &borrowed, null);
+        defer reference.deinit(allocator);
+        try UniquenessTest.expectSame(reference, actual);
+        // An owned alias adds a holder before the source's return. Restoring
+        // the borrowed view must remove that obsolete consumption contribution.
+        try testing.expectEqual(is_view, actual.unique.isSet(@intFromEnum(source)));
+        try testing.expectEqual(!is_view, actual.destroyed.isSet(@intFromEnum(source)));
+        try testing.expect(!actual.consumed.isSet(@intFromEnum(view)));
+        try testing.expectEqual(rebuilds, workspace.consumption.rebuilds);
+    }
+    sigs[0].borrowed_params = 0;
+    const table = arc_sig.SigTable{ .sigs = &sigs };
+    const owned = try workspace.analyze(&f.store, &rc, table, true, &f.layouts, .none, &borrowed);
+    var expected = try computeUniquenessDetailed(allocator, &f.store, &rc, table, null, null, null, null, true, &f.layouts, .none, &borrowed, null);
+    defer expected.deinit(allocator);
+    try UniquenessTest.expectSame(expected, owned);
+    try testing.expectEqual(@as(usize, 4), workspace.consumption.rebuilds);
+    try testing.expect(owned.consumed.isSet(@intFromEnum(view)));
+    try testing.expect(!owned.unique.isSet(@intFromEnum(source)));
+}
+
+test "uniqueness fixed point propagates fresh returns through a call diamond and chain" {
+    const testing = std.testing;
+    const allocator = testing.allocator;
+    var f = try UniquenessTest.init();
+    defer f.deinit();
+    const fresh = try f.local(f.list);
+    const leaf_ret = try f.ret(fresh);
+    const leaf_body = try f.store.addCFStmt(.{ .assign_list = .{ .target = fresh, .elems = try f.store.addLocalSpan(&.{}), .next = leaf_ret } });
+    const leaf = try f.proc(&.{}, leaf_body, f.list);
+    var branches: [2]LIR.LirProcSpecId = undefined;
+    for (&branches) |*branch| {
+        const result = try f.local(f.list);
+        branch.* = try f.proc(&.{}, try f.call(result, leaf, &.{}, try f.ret(result)), f.list);
+    }
+    const left = try f.local(f.list);
+    const right = try f.local(f.list);
+    const pair = try f.local(f.pair);
+    const ret = try f.ret(pair);
+    const make_pair = try f.store.addCFStmt(.{ .assign_struct = .{ .target = pair, .fields = try f.store.addLocalSpan(&.{ left, right }), .next = ret } });
+    const right_call = try f.call(right, branches[1], &.{}, make_pair);
+    var chain = try f.proc(&.{}, try f.call(left, branches[0], &.{}, right_call), f.pair);
+    for (0..8) |_| {
+        const result = try f.local(f.pair);
+        chain = try f.proc(&.{}, try f.call(result, chain, &.{}, try f.ret(result)), f.pair);
+    }
+    const rc = try allocator.alloc(bool, f.store.localCount());
+    defer allocator.free(rc);
+    @memset(rc, true);
+    const builds_before = uniqueness_topology_builds;
+    const rounds_before = uniqueness_analysis_rounds;
+    var solution = try solve(allocator, &f.store, &f.layouts, rc, &.{}, &.{}, true);
+    defer solution.deinit();
+    try testing.expectEqual(@as(usize, 1), uniqueness_topology_builds - builds_before);
+    try testing.expect(uniqueness_analysis_rounds - rounds_before > 8);
+    for (solution.sigs) |sig| try testing.expect(sig.ret_unique);
+    try testing.expectEqual(@as(u64, 3), solution.sigOf(chain).ret_unique_fields);
+    try testing.expect(solution.isUnique(fresh));
+    // Even settled signatures must receive the mandatory post-take analysis.
+    const settled_rounds = uniqueness_analysis_rounds;
+    try settleUniqueness(allocator, &f.store, &f.layouts, rc, &solution, .stamped, true);
+    try testing.expectEqual(@as(usize, 2), uniqueness_topology_builds - builds_before);
+    try testing.expectEqual(@as(usize, 1), uniqueness_analysis_rounds - settled_rounds);
+    try testing.expectEqual(@as(u64, 3), solution.sigOf(chain).ret_unique_fields);
 }
