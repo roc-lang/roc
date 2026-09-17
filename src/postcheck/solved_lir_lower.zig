@@ -12181,9 +12181,10 @@ test "shared procedure scheduling preserves exact specialization demand" {
         defer materialized.deinit();
         const direct_ty = try lowerer.types.add(.{ .primitive = .u8 });
         const materialized_ty = try materialized.types.add(.{ .primitive = .u8 });
-        const owner: Type.FnId = @enumFromInt(0);
-        const alias: Type.FnId = @enumFromInt(1);
-        const proc: LIR.LirProcSpecId = @enumFromInt(0);
+        const owner: Type.FnId = @enumFromInt(@as(u32, @intCast(lowerer.fn_entries.items.len)));
+        const alias: Type.FnId = @enumFromInt(@intFromEnum(owner) + 1);
+        const proc: LIR.LirProcSpecId = @enumFromInt(@as(u32, @intCast(lowerer.result.store.procSpecCount())));
+        const source: Lifted.FnId = @enumFromInt(@as(u32, @intCast(solved.lifted.fnCount())));
 
         // Distinct solved signatures have already been assigned the same
         // procedure identity. Only the alias is initially requested when
@@ -12191,7 +12192,7 @@ test "shared procedure scheduling preserves exact specialization demand" {
         for (0..2) |index| {
             try lowerer.fn_entries.append(allocator, .{
                 .spec = .{
-                    .source = @enumFromInt(0),
+                    .source = source,
                     .solved_fn_ty = @enumFromInt(@as(u32, @intCast(index))),
                     .abi = .finite,
                     .captures = CaptureSpanId.fromOwn(0, 0),

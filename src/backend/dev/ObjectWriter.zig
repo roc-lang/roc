@@ -1101,10 +1101,11 @@ const TestObjectTables = struct {
 test "separate static data objects expose private backing symbols to code objects" {
     const allocator = std.testing.allocator;
     const Compiler = @import("ObjectFileCompiler.zig");
+    const private_export_index: u32 = 0;
     const relocations = [_]Compiler.StaticDataRelocation{.{
         .offset = 0,
         .target_symbol_name = "private_backing",
-        .target = .{ .data_symbol = @enumFromInt(0) },
+        .target = .{ .data_symbol = @enumFromInt(private_export_index) },
     }};
     const exports = [_]Compiler.StaticDataExport{
         .{ .symbol_name = "private_backing", .bytes = &([_]u8{0} ** 8), .alignment = 8, .is_global = false, .is_exported = false },
