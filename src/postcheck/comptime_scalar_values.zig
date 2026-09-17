@@ -217,14 +217,19 @@ pub const Decoder = struct {
         const element_layout = physical.getIdx();
         const element_size = self.program.layouts.layoutSize(self.program.layouts.getLayout(element_layout));
         if (element_size == 0) return null;
-        const elements = backing.bytes[backing.symbol_offset..];
+        // The elements follow the backing's allocation header; the
+        // relocation's addend is that header's size.
+        if (relocation.addend < 0) return null;
+        const start = backing.symbol_offset + @as(usize, @intCast(relocation.addend));
+        if (start > backing.bytes.len) return null;
+        const elements = backing.bytes[start..];
         if (elements.len < len * element_size) return null;
         const first = elements[0..element_size];
         var index: u64 = 1;
         while (index < len) : (index += 1) {
             if (!std.mem.eql(u8, first, elements[index * element_size ..][0..element_size])) return null;
         }
-        const element = try self.decode(backing, elements, backing.symbol_offset, element_plan, element_layout) orelse return null;
+        const element = try self.decode(backing, elements, start, element_plan, element_layout) orelse return null;
         const stored = try self.arena.create(Construction);
         stored.* = element;
         return .{ .uniform_list = .{ .element = stored, .element_layout = element_layout, .count = len } };
@@ -462,15 +467,19 @@ test "completed empty and uniform list roots decode to their constructions" {
     std.mem.writeInt(u64, uniform_descriptor[8..16], 3, .little);
     var varied_descriptor = [_]u8{0} ** 24;
     std.mem.writeInt(u64, varied_descriptor[8..16], 3, .little);
-    const uniform_relocation = [_]Program.StaticDataRelocation{.{ .offset = 0, .target_symbol_name = "uniform_backing" }};
-    const varied_relocation = [_]Program.StaticDataRelocation{.{ .offset = 0, .target_symbol_name = "varied_backing" }};
+    // A backing starts with a word-sized allocation header that the
+    // relocation's addend skips; the varied list's header and first
+    // elements are zeros, so reading from the node start would mistake it
+    // for a uniform list of zeros.
+    const uniform_relocation = [_]Program.StaticDataRelocation{.{ .offset = 0, .target_symbol_name = "uniform_backing", .addend = 8 }};
+    const varied_relocation = [_]Program.StaticDataRelocation{.{ .offset = 0, .target_symbol_name = "varied_backing", .addend = 8 }};
     var exports = [_]Program.StaticDataExport{
         .{ .symbol_name = "s0", .bytes = &ok_record, .alignment = 8 },
         .{ .symbol_name = "s1", .bytes = &empty_descriptor, .alignment = 8, .empty_list_capacities = &.{.{ .offset = 0, .capacity = 16 }} },
         .{ .symbol_name = "s2", .bytes = &uniform_descriptor, .alignment = 8, .relocations = &uniform_relocation },
         .{ .symbol_name = "s3", .bytes = &varied_descriptor, .alignment = 8, .relocations = &varied_relocation },
-        .{ .symbol_name = "uniform_backing", .bytes = &.{ 7, 0, 0, 0, 7, 0, 0, 0, 7, 0, 0, 0 }, .alignment = 4 },
-        .{ .symbol_name = "varied_backing", .bytes = &.{ 1, 0, 0, 0, 2, 0, 0, 0, 3, 0, 0, 0 }, .alignment = 4 },
+        .{ .symbol_name = "uniform_backing", .bytes = &.{ 0, 0, 0, 0, 0, 0, 0, 0, 7, 0, 0, 0, 7, 0, 0, 0, 7, 0, 0, 0 }, .alignment = 8 },
+        .{ .symbol_name = "varied_backing", .bytes = &.{ 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 5, 0, 0, 0 }, .alignment = 8 },
     };
     for (&exports, 0..) |*item, index| {
         if (index < 4) item.value_id = @enumFromInt(index);
