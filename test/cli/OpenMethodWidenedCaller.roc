@@ -1,4 +1,4 @@
-# polarity_phase_two.md W3: a method whose implicitly open error row the
+# A method whose implicitly open error row the
 # enclosing function's own return row shares is a `direct_parametric` plan.
 # `use` widens `wrap`'s row through `?`, so classifying the dispatch in `wrap`
 # closed would seal the tail to `[]` and fail Monotype's exact unification

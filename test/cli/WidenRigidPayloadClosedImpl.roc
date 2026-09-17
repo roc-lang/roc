@@ -1,4 +1,4 @@
-# polarity_phase_two.md W6b: a CLOSED implementation whose row payloads are
+# A CLOSED implementation whose row payloads are
 # RIGID. `Relay(a).route` publishes `[Ok(a), Err(a)]`, closed because it
 # returns its own input-position parameter. `lowerType` of the checked root
 # seals a rigid to the empty tag union, so an adapter that took its narrowed

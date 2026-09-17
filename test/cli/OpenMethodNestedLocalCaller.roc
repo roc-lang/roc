@@ -1,4 +1,4 @@
-# polarity_phase_two.md W3: the dispatch sits inside a generalized local
+# The dispatch sits inside a generalized local
 # function whose receiver is concrete (`rows2 : Rows`), so the plan is direct
 # and its callable's row tail is quantified by the local's scheme (the
 # scope-chain arm of the classification): `direct_parametric`, and the outer

@@ -1,4 +1,4 @@
-# polarity_phase_two.md W6b: the adapter-reach restriction reached through a
+# The adapter-reach restriction reached through a
 # declaration REFERENCE. `Statuses` defers the row it writes, because an alias
 # declaration cannot know where its uses will put it—but the reference here
 # stands in `statuses`'s direct result, and the row sits inside a `List`, which

@@ -1,11 +1,10 @@
-# polarity_phase_two.md W6b: a CLOSED implementation reached through NESTED
-# EVIDENCE. `Wrap.status` carries its own where-clause (`a.name`), so the
+# A CLOSED implementation reached through NESTED EVIDENCE.
+# `Wrap.status` carries its own where-clause (`a.name`), so the
 # obligation that reaches it drags a second requirement along, while its
 # published result row is closed by the top-level `closed_ok` / `closed_err`.
 # `describe` uses the method twice in one body—once exhaustively at the
-# declared row and once widened (Appendix B's "Both" shape)—so the adapter
-# is minted beside an ordinary declared-row specialization of the same
-# template.
+# declared row and once widened—so the adapter is minted beside an ordinary
+# declared-row specialization of the same template.
 #
 # Both constructors are observed through `show`, and `Extra` sorts between
 # `Err` and `Ok`, so a re-tag that used the declared discriminants would show

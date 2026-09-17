@@ -1,5 +1,5 @@
-# polarity_phase_two.md W6b: the `Try` instance of the same mechanism. `fetch`
-# publishes the closed error row `[NotFound]`; `?` inside `load` requests
+# The `Try` instance of the result-row widening adapter. `fetch` publishes
+# the closed error row `[NotFound]`; `?` inside `load` requests
 # `[NotFound, Other]`. The adapter unwraps the declared-row `Try` and re-wraps
 # its error into the wider row. A `Try`'s ERROR row is the only adaptable
 # nested position—its OK row is not (see the checker rejection in

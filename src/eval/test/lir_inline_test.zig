@@ -5455,7 +5455,7 @@ fn directDispatchPlanIsParametric(
 }
 
 test "polarity: a method row tail is a closed direct plan only when no enclosing scheme quantifies it" {
-    // polarity_phase_two.md W3. `wrapped`'s annotated error row is implicitly
+    // `wrapped`'s annotated error row is implicitly
     // open, so every call instantiates it with a defaultable flex tail. The
     // dispatch in `wrap` shares that tail with `wrap`'s own return row: it is
     // an identity variable of the enclosing template, so the plan stays
@@ -11248,10 +11248,10 @@ test "issue 11376: packed products survive Boxy boundaries and copy-on-write" {
 
 /// A stored parser constant (`parse_stored = { Shape.parser_for(...) }`),
 /// mirroring test/cli/ParserTopLevelStoredParser.roc without its module
-/// header. `polarity_phase_two.md` W2b moved this body's emission behind the
-/// graph freeze; no snapshot anywhere carries lowered output, so the
-/// Monotype footprint below is the gate that the deferred body is the same
-/// body the eager restore used to emit.
+/// header. This body is emitted in Phase B, behind the graph freeze; no
+/// snapshot anywhere carries lowered output, so the Monotype footprint below
+/// is the gate that the deferred body is the same body the eager restore used
+/// to emit.
 const stored_parser_gate_source =
     \\Format := [Default].{
     \\    rename_field : Format, Str -> Str
@@ -11305,10 +11305,10 @@ const stored_parser_gate_source =
 ;
 
 test "stored codec restore emits the same Monotype shape from Phase B" {
-    // `polarity_phase_two.md` W2b moved this body's generation behind the
-    // graph freeze. No snapshot anywhere carries lowered output, so these are
-    // the numbers that stand in for "the sealed body is the body the eager
-    // restore used to emit". Measured on the pre-W2b compiler:
+    // This body's generation sits behind the graph freeze, in Phase B. No
+    // snapshot anywhere carries lowered output, so these are the numbers that
+    // stand in for "the sealed body is the body the eager restore used to
+    // emit". Measured on the compiler that still restored eagerly:
     //   fns=10 defs=11 exprs=535 locals=108 template_misses=14 nested_misses=0
     // and re-measured after the 2026-09-15 rebase onto upstream's codec
     // contract machinery, which the eager restore no longer exists to be
@@ -11320,8 +11320,8 @@ test "stored codec restore emits the same Monotype shape from Phase B" {
     // lowered expression), so deferring orphans no expression the eager path
     // kept and the predicted delta is zero. A window here would hide exactly
     // the drift this gate exists to catch. Specialization misses may only
-    // fall: W2a keyed the callee spec as an open request, and W2b removes
-    // that cause.
+    // fall: the eager restore keyed the callee spec as an open request, and
+    // Phase-B emission removes that cause.
     const allocator = std.testing.allocator;
     const stats = try structuralJsonMonotypeStatsForSource(allocator, stored_parser_gate_source);
     try std.testing.expectEqual(@as(usize, 10), stats.functions);
@@ -11333,11 +11333,11 @@ test "stored codec restore emits the same Monotype shape from Phase B" {
 }
 
 /// `stored_parser_gate_source` over a shape whose field KIND is decided at the
-/// freeze (`bar ?: Str`). This program panicked before W2b
-/// (`polarity_phase_two.md` Appendix A, "resolved Monotype view requested for
-/// an unresolved instantiation node"), so it has no pre-W2b baseline: its
-/// numbers are W2b's own, pinned as a regression gate rather than as an
-/// equivalence gate. It is the case W2b exists for.
+/// freeze (`bar ?: Str`). This program panicked while the restore was still
+/// eager ("resolved Monotype view requested for an unresolved instantiation
+/// node"), so it has no earlier baseline: its numbers are Phase-B emission's
+/// own, pinned as a regression gate rather than as an equivalence gate. It is
+/// the case the two-phase restore exists for.
 const stored_parser_optional_gate_source =
     \\Format := [Default].{
     \\    rename_field : Format, Str -> Str

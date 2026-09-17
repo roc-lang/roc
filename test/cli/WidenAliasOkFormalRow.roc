@@ -1,4 +1,4 @@
-# polarity_phase_two.md W6b negative control for the alias type-argument walk.
+# A negative control for the alias type-argument walk.
 # `OkRes(a) : Try(a, [IoErr])` puts its formal in the `Try`'s OK position, and
 # the result-row widening adapter NEVER re-tags that cell:
 # `resultRowWideningOrNull` widens only `args[1]` and relates every other

@@ -1,4 +1,4 @@
-# polarity_phase_two.md W6b: a zero-arity alias whose whole body is a bare row,
+# A zero-arity alias whose whole body is a bare row,
 # referenced as a where-method's direct result. The reference is a `.lookup`,
 # so the instantiator decides the row: `stepAlias` carries `.result` into the
 # backing, `stepTagUnion` carries it into the extension, and the marker stays a

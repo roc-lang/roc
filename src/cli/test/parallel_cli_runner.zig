@@ -1213,7 +1213,7 @@ const subcommand_cases = [_]CliCase{
     .{ .id = 0, .suite = .subcommands, .name = "issue 10847: imported nominal pattern backing mismatch", .body = .{ .command = .{ .args = &.{ "check", "--no-cache" }, .roc_file = "test/cli/issue_10847_nominal_record_patterns/external.roc", .exit = .{ .code = 1 }, .contains = &.{.{ .stream = .stderr, .text = "invalid nominal tag" }} } } },
     .{ .id = 0, .suite = .subcommands, .name = "issue 10847: independent execution survives invalid nominal pattern", .body = .{ .command = .{ .args = &.{"--no-cache"}, .roc_file = "test/cli/issue_10847_nominal_record_patterns/independent.roc", .exit = .{ .code = 1 }, .contains = &.{ .{ .stream = .stderr, .text = "invalid nominal type" }, .{ .stream = .stdout, .text = "independent main ran" } } } } },
     .{ .id = 0, .suite = .subcommands, .name = "issue 10847: independent expect survives invalid nominal pattern", .body = .{ .command = .{ .args = &.{ "test", "--no-cache" }, .roc_file = "test/cli/issue_10847_nominal_record_patterns/independent.roc", .exit = .{ .code = 1 }, .contains = &.{ .{ .stream = .stderr, .text = "invalid nominal type" }, .{ .stream = .stdout, .text = "All (1) tests passed" } } } } },
-    // polarity_phase_two.md W3: direct plans whose callable row tail the
+    // Direct plans whose callable row tail the
     // enclosing function quantifies stay parametric (a widened caller, a
     // caller at the callee's own row, and a named rigid extension); each
     // fixture runs on both backends.
@@ -1227,7 +1227,7 @@ const subcommand_cases = [_]CliCase{
     .{ .id = 0, .suite = .subcommands, .name = "polarity W3: dispatch inside a generalized local whose scheme quantifies the row tail (dev)", .backend = .dev, .body = .{ .command = .{ .args = &.{ "test", "--opt=dev", "--no-cache" }, .roc_file = "test/cli/OpenMethodNestedLocalCaller.roc", .exit = .success, .contains = &.{.{ .stream = .stdout, .text = "All (1) tests passed" }}, .not_contains = &.{ .{ .stream = .stderr, .text = "instantiation widened a closed tag union" }, .{ .stream = .stderr, .text = "postcheck invariant violated" }, .{ .stream = .stderr, .text = "Segmentation fault" }, .{ .stream = .stderr, .text = "panic" } } } } },
     .{ .id = 0, .suite = .subcommands, .name = "polarity W3: recursive method whose dispatch target is the enclosing template (interpreter)", .backend = .interpreter, .body = .{ .command = .{ .args = &.{ "test", "--opt=interpreter", "--no-cache" }, .roc_file = "test/cli/OpenMethodRecursiveMethod.roc", .exit = .success, .contains = &.{.{ .stream = .stdout, .text = "All (1) tests passed" }}, .not_contains = &.{ .{ .stream = .stderr, .text = "instantiation widened a closed tag union" }, .{ .stream = .stderr, .text = "postcheck invariant violated" }, .{ .stream = .stderr, .text = "Segmentation fault" }, .{ .stream = .stderr, .text = "panic" } } } } },
     .{ .id = 0, .suite = .subcommands, .name = "polarity W3: recursive method whose dispatch target is the enclosing template (dev)", .backend = .dev, .body = .{ .command = .{ .args = &.{ "test", "--opt=dev", "--no-cache" }, .roc_file = "test/cli/OpenMethodRecursiveMethod.roc", .exit = .success, .contains = &.{.{ .stream = .stdout, .text = "All (1) tests passed" }}, .not_contains = &.{ .{ .stream = .stderr, .text = "instantiation widened a closed tag union" }, .{ .stream = .stderr, .text = "postcheck invariant violated" }, .{ .stream = .stderr, .text = "Segmentation fault" }, .{ .stream = .stderr, .text = "panic" } } } } },
-    // polarity_phase_two.md W6b: a where-method implementation whose published
+    // A where-method implementation whose published
     // result row is CLOSED, requested at a row that includes it. The template
     // stays specialized at its declared row and a generated adapter at the
     // requested row re-tags the result (design.md "Result-Row Widening
@@ -1281,7 +1281,7 @@ const subcommand_cases = [_]CliCase{
     // mismatch. Without this the walk would be indistinguishable from "open
     // every argument of every alias over `Try`".
     .{ .id = 0, .suite = .subcommands, .name = "polarity W6b: alias type-argument in the Try ok position rejects a widening use", .body = .{ .command = .{ .args = &.{ "check", "--no-cache" }, .roc_file = "test/cli/WidenAliasOkFormalRow.roc", .exit = .failure, .stderr_min_len = 1, .contains = &.{ .{ .stream = .stderr, .text = "type mismatch" }, .{ .stream = .stderr, .text = "x.status()" } }, .not_contains = &.{ .{ .stream = .stderr, .text = "instantiation widened a closed tag union" }, .{ .stream = .stderr, .text = "compiler bug" }, .{ .stream = .stderr, .text = "postcheck invariant violated" }, .{ .stream = .stderr, .text = "panic" } } } } },
-    // polarity_phase_two.md W4: the exact issue 10121 program (an optional
+    // The exact issue 10121 program (an optional
     // nested record round trip whose `[Missing]` row is reached through an
     // alias marker) as a compile-time value root and as a runtime function,
     // on both backends, so the CLI path and the `lir_inline_test` harness

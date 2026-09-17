@@ -1,4 +1,4 @@
-# polarity_phase_two.md W6b: `status`'s published result row is CLOSED (its
+# `status`'s published result row is CLOSED (its
 # body returns the closed top-level `closed_value`), and the where-method use
 # in `describe` requests the wider row `[Ok(Str), Err(Str), Extra]`. The
 # implementation must stay specialized at its declared row and be reached

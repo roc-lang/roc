@@ -1,4 +1,4 @@
-# polarity_phase_two.md W3: an explicit extra tag with a NAMED extension. A
+# An explicit extra tag with a NAMED extension. A
 # named extension is a rigid, so the dispatch in `wrap` is `direct_parametric`
 # by the rigid arm of the classification, independent of row defaults.
 OpenMethodNamedExtensionCaller := {}

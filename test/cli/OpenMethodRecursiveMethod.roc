@@ -1,4 +1,4 @@
-# polarity_phase_two.md W3: the dispatch target is the enclosing template
+# The dispatch target is the enclosing template
 # itself. The plan's callable shares its row tail with the template's own
 # return row; specializing it against the target clones that plan-side tail
 # (identity against identity records no substitution, and the target-side

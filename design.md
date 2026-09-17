@@ -5627,6 +5627,25 @@ re-examined after finalize by `Check.runLateImplicitOpenExtAudit`, before
 extension carries no tags, so the audit would skip it). The rejected-parent-row
 case of issue #11246 is what this replay catches.
 
+Timing alone does not identify WHO widened a row in that final window, so the
+replay does not rely on it. The deferred relation it exists to catch is
+resolved by `finalizeGeneratedCodecConstraintsToQuiescence`, and a CALLER's use
+of a generated parser is resolved by the very same mechanism on the very same
+pass—the two arrive together and no narrowing can order them apart. The replay
+therefore asks about provenance instead. Each surviving entry is stamped, at
+the audit, with the source region of its binding's right-hand side
+(`Check.LateImplicitOpenExtAudit.owner_rhs`); each relation punted to the final
+type boundary records the region of the expression that introduced it
+(`Check.late_self_widening_writers`). The replay reports only when some
+recorded region lies INSIDE the binding's right-hand side, which is the
+definition widening its own row. Containment rather than equality: the
+deferring expression is routinely a nested local binding inside the annotated
+definition's body, and that is still the definition's own widening. Both
+unknowns—a binding with no region for its right-hand side, an empty set of
+recorded regions—answer "not the definition", because a binding is blamed on
+evidence or not at all. The clause is a conjunction with the tag test above it,
+so it can only withhold a report, never create one.
+
 A closed value flowing into an implicitly open output row WIDENS into it: the
 row recorded at that position is the one the annotation declares, whatever
 the body happened to produce. The signature is the whole of what a caller
@@ -5640,7 +5659,8 @@ check, so a closed value CLOSES the row instead of widening into it: a
 definition returning a value from a closed source (an input-position
 parameter, a nominal field, a hosted result) is checked with a closed row,
 and two identically annotated definitions then behave differently for their
-callers.
+callers. Deferred: Row Subsumption states what that costs, what replaces it,
+and what the replacement deletes.
 `test/fx-open/issue_9963_hosted_try_question_mark.roc` carries both halves of
 that witness in one platform module. `Fallible.via_match!` and
 `Fallible.via_question!` are annotated `{} => Try(Str, [HostErr(Str)])`
@@ -5650,15 +5670,9 @@ is never bound, and the function's row stays open. The second forwards the
 hosted error with `?`; the host's row is closed, so unifying it into the
 annotation's extension would bind that extension to `[]` and close the row.
 Hosted Try Question Widening covers exactly that forwarding, so the fixture is
-GREEN: a `?` on a direct hosted call no longer declines the rule merely
+GREEN: a `?` on a direct hosted call does not decline the rule merely
 because ordinary unification could relate the pair by GROUNDING the
-annotation's own still-open extension. (Recorded 2026-09-15 as a deliberate
-red witness—"not a defect to patch", on the premise that every available
-patch is a host-specific special case this design intends to delete—and
-REVERSED 2026-09-16 when that premise was falsified by measurement: the
-result-row widening adapter already serves a CLOSED checked row on an
-unpatched compiler, so it is the general mechanism rather than host-specific
-scaffolding awaiting deletion. See `polarity_phase_two.md` §9.2.)
+annotation's own still-open extension.
 Closing-by-body itself is unchanged, and row subsumption is still what
 replaces it: Hosted Try Question Widening is gated on a direct hosted call, so
 a NON-hosted forwarder's row still closes behind an identical open
@@ -5691,6 +5705,30 @@ the alias is used in—a fresh flex (recorded for the audit) in positive
 positions, `[]` in negative ones—negating through functions embedded in the
 alias body (`Instantiator.PolarityVarBehavior`). Nominal declaration bodies
 close as written.
+
+A row the reference itself WRITES as a type argument is decided the same way,
+by composition rather than by inheritance. A declaration's formal stands
+wherever the declaration's body puts it, so the argument substituted for it is
+generated at the reference's polarity composed with that formal's VARIANCE
+(`Check.applyFormalVariances`): `Handler(e) : e -> Str` holds `e` in an input
+position, so the `[A, B]` of `Handler([A, B])` written as an output is
+generated closed, exactly like the `[A, B] -> Str` the reference stands for,
+and `Handler([A, B])` written as an INPUT negates twice and opens, exactly
+like `([A, B] -> Str) -> Str` does. A formal the body places on both sides is
+invariant: one variable cannot be open on the output side and closed on the
+input side, so its argument is generated closed wherever the reference stands.
+The variance is read off the declaration's own annotation by a bounded walk
+that recurses through nested LOCAL declarations (`Outer(e) : Inner(e)`), so
+the answer composes across a chain; every other shape—a cross-module
+declaration, a compiler-constructed `List`/`Box`/numeric application, a
+reference below the walk's depth bound, a declaration cycle—contributes a
+COVARIANT occurrence, which is the pre-composition answer of inheriting the
+reference's polarity, so an unmodeled shape costs precision and never
+correctness. This is the polarity counterpart of the move
+`GenTypeAnnoCtx.instantiationReach` already makes for adapter reach: without
+it, `Handler([A, B])` opened a row the identical direct spelling closed, and
+the annotation did not constrain the definition at all when the body ignored
+the parameter.
 
 A WHERE-METHOD signature is a scheme the constrained body instantiates at
 each use, exactly like a call of an annotated function. It is walked like any
@@ -5744,10 +5782,11 @@ is unchanged—so it is not opened either. A tag union in any OTHER output
 position (inside a `List`, a
 record field, a tuple, a tag payload, a non-`Try` nominal) keeps its row
 as written, exactly as a negative position does, so a body use that tries
-to widen it is an ordinary type mismatch reported at the body use. This
-keeps the set of positions a use may widen equal to the set lowering can
-adapt, by construction rather than by a second rule; the set grows as the
-coercion generator grows. (Decided 2026-09-03 as the converse—open
+to widen it is an ordinary type mismatch reported at the body use. Keeping
+the set of positions a use may WIDEN equal to the set lowering can ADAPT is
+the rule this axis holds; it is held BY HAND, by a syntactic walk that must
+grow whenever the coercion generator does (see "Two Syntactic Walks"
+below). (Decided 2026-09-03 as the converse—open
 everywhere, reject a closed implementation at the enclosing-scheme
 instantiation—and reversed 2026-09-14: that instantiation
 (`instantiateTypeScheme`) is itself what closes the markers with
@@ -5762,6 +5801,63 @@ specialization graph is still open. Stored codec restores therefore prepare
 in Phase A and emit in Phase B like every other codec body, and the row is
 decided once, by final sealing. (The two Builder-level `*Expr` restores, which
 own a private graph, are the exception noted in the Monotype sealing rule.)
+
+#### Two Syntactic Walks
+
+Two walks over the annotation's own CIR, not over the type graph, decide
+where a use may widen and at what polarity an argument is generated. Each is
+a SEPARATE RULE from the thing it tracks, kept in step by hand: the first
+must match what the coercion generator re-tags, the second what the
+referenced declaration's body does with its formal. Growing either of those
+does not grow the walk.
+
+`Check.applyTryErrorArgIndex` answers which of a type application's own
+arguments lands in the builtin `Try`'s ERROR cell. It crosses transparent
+alias declarations (`Res(e) : Try(Str, e)`) because lowering crosses the same
+ones: `closedResultRowOrNull` reads the return through `resolvedPayload`,
+which walks alias backings, and `hostedTryNamedOrNull` crosses them by
+design. `Check.applyFormalVariances` answers the polarity an argument is
+generated at, by reading the VARIANCE of the formal it is substituted for out
+of the referenced declaration's own annotation, so `Handler([A, B])` composes
+instead of inheriting.
+
+Both stop at the same wall, and it is a MODULE boundary: a reference reached
+as `.external` or `.pending` is not walked at all, because the declaration's
+CIR and its formal names live in another module's stores. (A `.builtin`
+reference is declined too, and that one costs nothing: the applications the
+compiler constructs are `List`, `Box` and the numerics, which hold their
+arguments covariantly and are never the builtin `Try`.) Both also stop on the
+bounds a walk needs in order to answer in bounded time: an arity above
+`max_tracked_alias_formals`, which both share; a declaration chain past
+`max_formal_variance_decl_depth` or a position count past
+`max_formal_variance_nodes` in the variance walk, and a chain longer than the
+CIR node count in the `Try` walk; a declaration cycle; and, for the `Try`
+walk, an argument the declaration computes (`Outer(e) : Inner(List(e))`)
+rather than passes straight through.
+
+What stopping COSTS differs, and only one of the two is free. The variance
+walk's stop answer is the pre-walk answer, the argument keeping the
+reference's own polarity, so an unmodeled shape costs precision and never
+correctness. The `Try` walk's stop answer UNDER-OPENS: the opened set becomes
+strictly smaller than the adaptable set, and a use lowering would have
+re-tagged is refused as an ordinary mismatch. That is not a wrong tag layout,
+but it IS an instance of the interchangeability failure this axis exists to
+remove, and the module wall makes it reachable from ordinary source. Declare
+`Res(e) : Try(Str, e)` beside the signature that uses it and
+`load : a -> Res([IoErr, Other]) where [a.fetch : a -> Res([IoErr])]` checks,
+because the `?` widens an error row that was opened per use. Move that one
+declaration into an imported module, qualify its references, change nothing
+else, and the same `?` is a type mismatch: the reference is `.external`, the
+walk declines, and the error row is generated closed.
+
+So the invariant that holds is ONE-SIDED: the opened set is always a subset
+of the adaptable set, and the two are equal exactly on the shapes the `Try`
+walk models, which are a `Try` written directly and a chain of LOCAL
+transparent aliases that pass their formals straight through. A use is
+therefore never opened at a position lowering cannot re-tag; it can be
+refused at one lowering could have. Closing the remaining gap needs the
+declaration's variance and its `Try` error cell recorded in the checked
+module data an importer already reads, not a deeper walk.
 
 The HOST-BOUNDARY row above covers two opt-out sites, both genuine
 non-producers: host-boundary annotations (hosted lambdas and `provides` defs,
@@ -5793,6 +5889,81 @@ Display follows the same polarity: an anonymous, unshared, unconstrained flex
 ext in an output position is not rendered as `..`; rigid extensions are
 always rendered (a marker, which is written closed, is rendered closed).
 
+### Deferred: Row Subsumption
+
+Row subsumption—a closed row COERCING into an implicitly open one where the
+two meet, instead of binding the open row's extension shut—is the end state
+Polarity is written against. It is NOT implemented. This section states the
+rule it will be, what it replaces, and what it deletes.
+
+The argument for it is interchangeability. A signature is the whole of what a
+caller reads, so two definitions carrying identical annotations must be usable
+identically. Closing-by-body breaks that: a definition that CONSTRUCTS its
+result mints its own open row and never binds the annotation's extension,
+while a definition that FORWARDS a value out of a closed source—an
+input-position parameter, a nominal field, a hosted result—binds that
+extension to `[]`. The bodies differ; the signatures do not, and a caller that
+widens the first is rejected on the second.
+
+Closedness is therefore a property a body leaks rather than one an author
+states. Under subsumption, an author who wants a genuinely closed output row
+writes the closure explicitly, in the shape of `[MyErr, ..[]]`. That spelling
+does not exist today and is not designed.
+
+The change itself is at one unification: where a closed row meets an
+implicitly open annotated output row, coerce rather than bind. An incoming row
+whose tags are a subset of the listed tags coerces and leaves the extension
+open; an incoming row carrying unlisted tags binds as it does today, and
+`Check.auditImplicitOpenExts` reports it. The coercion's first instance is
+already built and running: the Result-Row Widening Adapter specializes a
+template at its own declared row and re-tags the result at the requested row.
+That adapter is wired to template completion for dispatch plans, so the one
+open question is whether a value coerced inside an ordinary body needs a
+re-tag it does not reach there.
+
+Subsumption deletes the CHECKER half of Hosted Try Question Widening: the
+use-site redirect that widens a `?` condition, together with the guard that
+keeps that redirect's decline shortcut from grounding the expected row's own
+extension. The LOWERING half is permanent, because the host ABI is fixed by
+something other than typing—a widened request at a host boundary is always
+served by a generated adapter that calls the declared-type boundary and
+re-tags its result, never by specializing the boundary at the widened layout.
+The two halves cannot be deferred together: `..` is rejected at host
+boundaries by rule, so a host error row is closed BY DECLARATION rather than
+by inference, and "a closed row meets a caller who wants it wider" arises at
+every host boundary rather than in rare corners.
+
+Two things bound what may be left unrepaired while the deferral stands, and
+both are about mistaking general machinery for scaffolding. First, a rule may
+be declined early by a shortcut only where taking the shortcut is
+observationally the same as applying the rule. Ordinary unification relating
+the two rows is not such a case: on the exact pair Hosted Try Question
+Widening exists for, it relates them only by GROUNDING the annotation's own
+still-open extension, which is a different outcome. A shortcut narrower than
+the rule it guards is an accident rather than a declared boundary, and
+removing one removes an exclusion rather than adding a host-specific special
+case—so it is not work subsumption later undoes, and it comes out with the
+checker half in the same sweep. Second, the widening machinery is not
+host-specific scaffolding awaiting deletion: the Result-Row Widening Adapter
+serves a CLOSED checked result row at a wider requested row with no host in
+the picture (`test/cli/WidenClosedImpl.roc` and its siblings), and the host
+case is one instance of it.
+
+Two questions are settled in the same pass, because each asks what a closed
+row means at a boundary. `Check.auditImplicitOpenExts` fires on an extension
+that resolved to a row carrying tags, and the Type Mismatch it reports is
+sound only because the audit has already proved the extension carries tags, so
+a coercion that changes when an extension gains tags moves the audit with it.
+`Check.closeWeakValueImplicitOpenExts` grounds a top-level weak value's
+still-open extensions to `[]`, and cross-module widening of annotated weak
+values waits on this same coercion rather than on a lowering default.
+
+The acceptance bar is that no fixture is edited: a program this design says
+should typecheck must typecheck as written. The hosted instance already meets
+it (`test/fx-open/issue_9963_hosted_try_question_mark.roc`). No corpus program
+spells a NON-hosted closed forwarder, so subsumption needs a fixture of its
+own.
+
 ### Hosted Try Question Widening
 
 `?` unwraps a `Try` condition and re-raises its error row into the enclosing
@@ -5802,8 +5973,9 @@ unification rejects the pair, and that mismatch is a type error by design: a
 closed error row is not widened into an open annotated row at use sites
 (issue #9798's program is rejected). Under polarity a non-hosted callee's
 annotated error row is itself implicitly open, but until row subsumption
-replaces closing-by-body (see Polarity) a body that forwards a closed value
-still leaves the row closed, so the pairing is not confined to host rows.
+replaces closing-by-body (see Deferred: Row Subsumption) a body that forwards
+a closed value still leaves the row closed, so the pairing is not confined to
+host rows.
 At a host boundary it is GUARANTEED: `..` is rejected there by rule, so a host
 error row is closed by declaration rather than by inference, and every hosted
 call whose caller wants a wider row meets it.
@@ -5948,7 +6120,7 @@ asserts the ok type is unchanged—and neither is a row nested inside a
 `List`, a record field, a tuple, a tag payload, or a non-`Try` nominal,
 because re-tagging cannot reach into those positions without the general
 row-subsumption coercion this design intends and does not yet implement (see
-Polarity).
+Deferred: Row Subsumption).
 
 The set of positions a use may WIDEN is therefore kept equal to the set
 lowering can ADAPT, and it is kept equal by construction rather than by a

@@ -1,4 +1,4 @@
-# polarity_phase_two.md W6b: the widening dispatch sits inside a generalized
+# The widening dispatch sits inside a generalized
 # local (`widen`) whose scheme quantifies the row tail, so the request reaches
 # template completion through the local's instantiation rather than from the
 # enclosing definition's annotation. The implementation's row is still closed
