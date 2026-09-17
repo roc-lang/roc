@@ -139,6 +139,170 @@ pub const CompletedScalarValues = struct {
     }
 };
 
+/// Emits `target = construction` into `store`, continuing at `next`, and
+/// returns the entry statement; null when the construction does not fit
+/// the target's layout. `ctx` supplies locals and join-point ids:
+/// `addLocal(layout.Idx) Allocator.Error!LIR.LocalId` and
+/// `freshJoinPointId() LIR.JoinPointId`. Every value the emitted code
+/// builds is fresh and consumed exactly once, so the code is complete
+/// without a reference-counting pass: a repeat loop builds its element
+/// anew on each iteration rather than sharing one across appends.
+pub fn emit(ctx: anytype, store: *core.LirStore, layouts: *const layout.Store, target: LIR.LocalId, construction: Construction, next: LIR.CFStmtId) Allocator.Error!?LIR.CFStmtId {
+    switch (construction) {
+        .literal => |literal| return try store.addCFStmt(.{ .assign_literal = .{ .target = target, .value = literal, .next = next } }),
+        .zst => return try store.addCFStmt(.{ .assign_struct = .{ .target = target, .fields = LIR.LocalSpan.empty(), .next = next } }),
+        .empty_str => return try store.addCFStmt(.{ .assign_literal = .{
+            .target = target,
+            .value = .{ .str_literal = try store.insertStringView("", 0, 0) },
+            .next = next,
+        } }),
+        .empty_list => |capacity| {
+            if (capacity > std.math.maxInt(i64)) return null;
+            return try emitWithCapacity(ctx, store, target, @intCast(capacity), next);
+        },
+        .uniform_list => |uniform| {
+            if (uniform.count > std.math.maxInt(i64)) return null;
+            return try emitRepeat(ctx, store, layouts, target, uniform.element.*, uniform.element_layout, @intCast(uniform.count), next);
+        },
+        .record => |fields| {
+            const layout_idx = store.getLocal(target).layout_idx;
+            const physical = layouts.getLayout(layout_idx);
+            if (physical.tag != .struct_) return null;
+            const struct_idx = physical.getStruct().idx;
+            const field_locals = try store.allocator.alloc(LIR.LocalId, fields.len);
+            defer store.allocator.free(field_locals);
+            for (field_locals, 0..) |*local, original_index| {
+                local.* = try ctx.addLocal(layouts.getStructFieldLayoutByOriginalIndex(struct_idx, @intCast(original_index)));
+            }
+            var current = try store.addCFStmt(.{ .assign_struct = .{
+                .target = target,
+                .fields = try store.addLocalSpan(field_locals),
+                .next = next,
+            } });
+            var index = fields.len;
+            while (index > 0) {
+                index -= 1;
+                current = try emit(ctx, store, layouts, field_locals[index], fields[index], current) orelse return null;
+            }
+            return current;
+        },
+        .tag => |tag| {
+            const layout_idx = store.getLocal(target).layout_idx;
+            const physical = layouts.getLayout(layout_idx);
+            if (physical.tag != .tag_union) return null;
+            const info = layouts.getTagUnionInfo(physical);
+            if (tag.variant_index >= info.variants.len) return null;
+            var payload_local: ?LIR.LocalId = null;
+            if (tag.payload != null) {
+                payload_local = try ctx.addLocal(info.variants.get(tag.variant_index).payload_layout);
+            }
+            const build = try store.addCFStmt(.{ .assign_tag = .{
+                .target = target,
+                .variant_index = tag.variant_index,
+                .discriminant = tag.discriminant,
+                .payload = payload_local,
+                .next = next,
+            } });
+            if (tag.payload) |payload| {
+                return try emit(ctx, store, layouts, payload_local.?, payload.*, build);
+            }
+            return build;
+        },
+    }
+}
+
+/// `target = list_with_capacity(capacity)`, the runtime form of a completed
+/// empty list.
+fn emitWithCapacity(ctx: anytype, store: *core.LirStore, target: LIR.LocalId, capacity: i64, next: LIR.CFStmtId) Allocator.Error!LIR.CFStmtId {
+    const capacity_local = try ctx.addLocal(.u64);
+    const build = try store.addCFStmt(.{ .assign_low_level = .{
+        .target = target,
+        .op = .list_with_capacity,
+        .rc_effect = LIR.LowLevel.list_with_capacity.rcEffect(),
+        .args = try store.addLocalSpan(&[_]LIR.LocalId{capacity_local}),
+        .next = next,
+    } });
+    return try store.addCFStmt(.{ .assign_literal = .{
+        .target = capacity_local,
+        .value = .{ .i64_literal = .{ .value = capacity, .layout_idx = .u64 } },
+        .next = build,
+    } });
+}
+
+/// The repeat loop a completed uniform list came from: reserve `count`
+/// elements, then build the element and append it `count` times unchecked.
+/// The later passes treat it as they do any source loop.
+fn emitRepeat(ctx: anytype, store: *core.LirStore, layouts: *const layout.Store, target: LIR.LocalId, element: Construction, element_layout: layout.Idx, count: i64, next: LIR.CFStmtId) Allocator.Error!?LIR.CFStmtId {
+    const list_layout = store.getLocal(target).layout_idx;
+    const count_local = try ctx.addLocal(.u64);
+    const reserved = try ctx.addLocal(list_layout);
+    const zero = try ctx.addLocal(.u64);
+    const list_param = try ctx.addLocal(list_layout);
+    const index_param = try ctx.addLocal(.u64);
+    const more = try ctx.addLocal(.bool);
+    const element_local = try ctx.addLocal(element_layout);
+    const appended = try ctx.addLocal(list_layout);
+    const one = try ctx.addLocal(.u64);
+    const next_index = try ctx.addLocal(.u64);
+    const join_id = ctx.freshJoinPointId();
+
+    // Exit: the carried list is the result.
+    const exit = try store.addCFStmt(.{ .assign_ref = .{ .target = target, .op = .{ .local = list_param }, .next = next } });
+    // Step: build the element, append it, and go round again.
+    const back_jump = try store.addCFStmt(.{ .jump = .{ .target = join_id } });
+    const set_index = try store.addCFStmt(.{ .set_local = .{ .target = index_param, .value = next_index, .mode = .initialize_join_param, .next = back_jump } });
+    const set_list = try store.addCFStmt(.{ .set_local = .{ .target = list_param, .value = appended, .mode = .initialize_join_param, .next = set_index } });
+    const bump = try store.addCFStmt(.{ .assign_low_level = .{
+        .target = next_index,
+        .op = .num_int_add_wrap,
+        .rc_effect = LIR.LowLevel.num_int_add_wrap.rcEffect(),
+        .args = try store.addLocalSpan(&[_]LIR.LocalId{ index_param, one }),
+        .next = set_list,
+    } });
+    const one_literal = try store.addCFStmt(.{ .assign_literal = .{ .target = one, .value = .{ .i64_literal = .{ .value = 1, .layout_idx = .u64 } }, .next = bump } });
+    const append = try store.addCFStmt(.{ .assign_low_level = .{
+        .target = appended,
+        .op = .list_append_unsafe,
+        .rc_effect = LIR.LowLevel.list_append_unsafe.rcEffect(),
+        .args = try store.addLocalSpan(&[_]LIR.LocalId{ list_param, element_local }),
+        .next = one_literal,
+    } });
+    const build_element = try emit(ctx, store, layouts, element_local, element, append) orelse return null;
+    const dispatch = try store.addCFStmt(.{ .switch_stmt = .{
+        .cond = more,
+        .branches = try store.addCFSwitchBranches(&.{.{ .value = 1, .body = build_element }}),
+        .default_branch = exit,
+        .default_is_cold = false,
+        .continuation = null,
+    } });
+    const body = try store.addCFStmt(.{ .assign_low_level = .{
+        .target = more,
+        .op = .num_is_lt,
+        .rc_effect = LIR.LowLevel.num_is_lt.rcEffect(),
+        .args = try store.addLocalSpan(&[_]LIR.LocalId{ index_param, count_local }),
+        .next = dispatch,
+    } });
+    // Entry: the count, the reserved list, and index zero.
+    const entry_jump = try store.addCFStmt(.{ .jump = .{ .target = join_id } });
+    const init_index = try store.addCFStmt(.{ .set_local = .{ .target = index_param, .value = zero, .mode = .initialize_join_param, .next = entry_jump } });
+    const init_list = try store.addCFStmt(.{ .set_local = .{ .target = list_param, .value = reserved, .mode = .initialize_join_param, .next = init_index } });
+    const zero_literal = try store.addCFStmt(.{ .assign_literal = .{ .target = zero, .value = .{ .i64_literal = .{ .value = 0, .layout_idx = .u64 } }, .next = init_list } });
+    const reserve = try store.addCFStmt(.{ .assign_low_level = .{
+        .target = reserved,
+        .op = .list_with_capacity,
+        .rc_effect = LIR.LowLevel.list_with_capacity.rcEffect(),
+        .args = try store.addLocalSpan(&[_]LIR.LocalId{count_local}),
+        .next = zero_literal,
+    } });
+    const count_literal = try store.addCFStmt(.{ .assign_literal = .{ .target = count_local, .value = .{ .i64_literal = .{ .value = count, .layout_idx = .u64 } }, .next = reserve } });
+    return try store.addCFStmt(.{ .join = .{
+        .id = join_id,
+        .params = try store.addLocalSpan(&[_]LIR.LocalId{ list_param, index_param }),
+        .body = body,
+        .remainder = count_literal,
+    } });
+}
+
 /// Decodes a completed value into its construction by walking the same
 /// const plan the freezer walked, at the same byte offsets. Any part that
 /// is not a scalar, the empty string, an empty or uniform list, a record,

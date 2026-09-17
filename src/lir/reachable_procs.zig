@@ -649,6 +649,7 @@ const Pass = struct {
         for (self.result.static_data_values.items, 0..) |*value, index| {
             if (!self.reachable_static_data[index]) continue;
             if (value.initializer) |initializer| value.initializer = self.remapProc(initializer);
+            if (value.accessor) |accessor| value.accessor = self.maybeRemapProc(accessor);
             if (value.compile_time_root) |*root| {
                 if (root.role == .value) {
                     root.role.value.failure_slot = self.remapStaticData(root.role.value.failure_slot);

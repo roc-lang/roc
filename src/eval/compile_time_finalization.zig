@@ -219,8 +219,13 @@ pub const ProgramSession = struct {
             prepared.target.completed_scalar_values = &scalar_values;
             break :block try lir.CheckedPipeline.lowerPreparedSolvedToLir(prepared);
         } else block: {
-            const host = self.host orelse finalizationInvariant("runtime program was already consumed");
+            var host = self.host orelse finalizationInvariant("runtime program was already consumed");
             self.host = null;
+            errdefer host.deinit();
+            // The reused program read its roots before they were evaluated;
+            // the completed constructions now replace those reads.
+            const host_frozen = if (host.frozen_static_data) |*frozen| frozen else finalizationInvariant("host program omitted its completed frozen values");
+            try lir.ComptimeRootAccessors.rebuild(allocator, &host.lir_result, host_frozen);
             break :block host;
         };
         errdefer lowered.deinit();
