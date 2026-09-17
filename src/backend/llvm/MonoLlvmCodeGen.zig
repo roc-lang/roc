@@ -13451,6 +13451,45 @@ test "LLVM small string constants preserve target layout at every length" {
     }
 }
 
+test "LLVM erased capture and reuse parameters may alias" {
+    const allocator = std.testing.allocator;
+    var store = lir.LirStore.init(allocator);
+    defer store.deinit();
+    const proc = try store.addProcSpec(.{
+        .name = .fromRaw(1),
+        .identity = lir.LIR.ProcIdentity.forTest(1),
+        .args = .empty(),
+        .ret_layout = .zst,
+        .abi = .erased_callable,
+    });
+    inline for (.{ .vtable, .extern_symbols }) |mode| {
+        var codegen = MonoLlvmCodeGen.init(allocator, &store, &.{}, &.{}, &.{});
+        defer codegen.deinit();
+        codegen.host_call_mode = mode;
+        codegen.proc_symbol_mode = .lir_symbol;
+        var builder = try codegen.createBuilder("erased_aliasing");
+        defer builder.deinit();
+        codegen.builder = &builder;
+        defer codegen.builder = null;
+        try codegen.declareProcSpec(proc, store.getProcSpec(proc));
+        const function = codegen.proc_registry.get(@intFromEnum(proc)).?;
+        const attrs = function.ptrConst(&builder).attributes;
+        const ret_index: usize = if (mode == .vtable) 2 else 1;
+        // An owned invocation's capture pointer points inside the allocation
+        // passed as reuse. LLVM must preserve capture reads before its release.
+        for ([_]usize{ ret_index, ret_index + 2, ret_index + 3 }) |index| {
+            for (attrs.param(index, &builder).slice(&builder)) |attribute| {
+                try std.testing.expect(attribute.toAttribute(&builder).getKind() != .@"noalias");
+            }
+        }
+        var pack_noalias = false;
+        for (attrs.param(ret_index + 1, &builder).slice(&builder)) |attribute| {
+            if (attribute.toAttribute(&builder).getKind() == .@"noalias") pack_noalias = true;
+        }
+        try std.testing.expect(pack_noalias);
+    }
+}
+
 test "LLVM erased callable explicit arguments exclude capture and reuse" {
     try std.testing.expectEqual(@as(usize, 3), try MonoLlvmCodeGen.explicitProcParamCount(.erased_callable, 5));
     try std.testing.expectEqual(@as(usize, 5), try MonoLlvmCodeGen.explicitProcParamCount(.roc, 5));
