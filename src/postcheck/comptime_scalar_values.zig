@@ -446,6 +446,7 @@ test "completed empty and uniform list roots decode to their constructions" {
     try program.const_plans.append(allocator, .{ .list = scalar_plan });
     // Slots: 0 = failure record of 1, 2 and 3; 1 = empty list evaluated with
     // capacity 16; 2 = three copies of 7; 3 = the list [1, 2, 3].
+    const failure_slot: LIR.StaticDataId = @enumFromInt(program.static_data_values.items.len);
     for (0..4) |index| {
         try program.static_data_values.append(allocator, .{
             .initializer = null,
@@ -457,7 +458,7 @@ test "completed empty and uniform list roots decode to their constructions" {
                 .role = if (index == 0)
                     .{ .failure_message = .{ .failed_field = 0, .message_field = 1, .failed_offset = failed_offset, .message_offset = message_offset } }
                 else
-                    .{ .value = .{ .failure_slot = @enumFromInt(0), .plan = plan } },
+                    .{ .value = .{ .failure_slot = failure_slot, .plan = plan } },
             },
         });
     }
@@ -524,6 +525,7 @@ test "an empty string root and a record of an empty list and a scalar decode to 
     // record { empty list with capacity 4, 9 }; 3 = the small string "ab".
     const layouts_by_slot = [_]layout.Idx{ failure_layout, .str, record_layout, .str };
     const plans_by_slot = [_]Program.ConstPlanId{ scalar_plan, str_plan, record_plan, str_plan };
+    const failure_slot: LIR.StaticDataId = @enumFromInt(program.static_data_values.items.len);
     for (layouts_by_slot, plans_by_slot, 0..) |slot_layout, slot_plan, index| {
         try program.static_data_values.append(allocator, .{
             .initializer = null,
@@ -535,7 +537,7 @@ test "an empty string root and a record of an empty list and a scalar decode to 
                 .role = if (index == 0)
                     .{ .failure_message = .{ .failed_field = 0, .message_field = 1, .failed_offset = failed_offset, .message_offset = message_offset } }
                 else
-                    .{ .value = .{ .failure_slot = @enumFromInt(0), .plan = slot_plan } },
+                    .{ .value = .{ .failure_slot = failure_slot, .plan = slot_plan } },
             },
         });
     }
