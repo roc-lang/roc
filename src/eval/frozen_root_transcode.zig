@@ -699,3 +699,99 @@ test "frozen root transcode distinguishes zero-sized capture contexts of one fun
     defer static_data.deinitStaticData(allocator, converted);
     try std.testing.expectEqual(@as(u8, 0), converted[0].bytes[0]);
 }
+
+test "frozen root transcode re-points a boxed slot at its payload across pointer widths" {
+    // A constant folded into a recursive tag payload is frozen as a pointer
+    // slot with the value in its own node. Transcoding has to follow the
+    // relocation rather than read the slot's bytes as the union itself.
+    const allocator = std.testing.allocator;
+    var source = try Program.Result.init(allocator, @import("base").target.TargetUsize.native);
+    defer source.deinit();
+    var target = try Program.Result.init(allocator, .u32);
+    defer target.deinit();
+
+    const Plans = struct {
+        fn append(program: *Program.Result, gpa: Allocator) Allocator.Error!Program.ConstPlanId {
+            const str_plan: Program.ConstPlanId = @enumFromInt(program.const_plans.items.len);
+            try program.const_plans.append(gpa, .str);
+            const variants = try gpa.alloc(Program.ConstTagVariant, 2);
+            variants[0] = .{ .name = try gpa.dupe(u8, "Leaf"), .checked_name = undefined, .discriminant = 0, .payloads = try gpa.alloc(Program.ConstPlanId, 0) };
+            variants[1] = .{ .name = try gpa.dupe(u8, "Wrap"), .checked_name = undefined, .discriminant = 1, .payloads = try gpa.dupe(Program.ConstPlanId, &.{str_plan}) };
+            const tag_plan: Program.ConstPlanId = @enumFromInt(program.const_plans.items.len);
+            try program.const_plans.append(gpa, .{ .tag_union = variants });
+            return tag_plan;
+        }
+    };
+    const source_plan = try Plans.append(&source, allocator);
+    const target_plan = try Plans.append(&target, allocator);
+
+    const source_tag = try source.layouts.putTagUnion(&.{ .zst, .str });
+    const target_tag = try target.layouts.putTagUnion(&.{ .zst, .str });
+    const source_box = try source.layouts.insertBox(source_tag);
+    const target_box = try target.layouts.insertBox(target_tag);
+
+    // The evaluator hands over the union itself; only the slot is a pointer.
+    const data = source.layouts.getTagUnionData(source.layouts.getLayout(source_tag).getTagUnion().idx);
+    const value_bytes = try allocator.alloc(u8, source.layouts.layoutSize(source.layouts.getLayout(source_tag)));
+    defer allocator.free(value_bytes);
+    @memset(value_bytes, 0xaa);
+    const text = "a boxed tag payload larger than an inline string";
+    var str = builtins.str.RocStr{ .bytes = @constCast(text.ptr), .length = text.len, .capacity_or_alloc_ptr = builtins.str.RocStr.encodeCapacity(text.len) };
+    @memcpy(value_bytes[0..@sizeOf(builtins.str.RocStr)], std.mem.asBytes(&str));
+    data.writeDiscriminant(value_bytes.ptr, 1, source.layouts.targetUsize());
+
+    const source_slot_id = try boxedValueSlot(&source, source_box, source_plan);
+    const native = try @import("native_root_export.zig").freezeRootIntoSlot(
+        allocator,
+        &source,
+        source_slot_id,
+        testRoot(source_plan, source_tag),
+        .{ .ptr = value_bytes.ptr },
+        .{},
+        source_box,
+    );
+    defer static_data.deinitStaticData(allocator, native);
+
+    // The frozen slot is one pointer wide and names the payload by relocation.
+    try std.testing.expectEqual(@sizeOf(usize), native[0].bytes.len);
+    try std.testing.expectEqual(@as(usize, 1), native[0].relocations.len);
+
+    const target_slot_id = try boxedValueSlot(&target, target_box, target_plan);
+    const converted = try transcodeValueSlot(
+        allocator,
+        &source,
+        source.static_data_values.items[@intFromEnum(source_slot_id)],
+        native,
+        testRootSymbol(native),
+        &target,
+        target_slot_id,
+    );
+    defer static_data.deinitStaticData(allocator, converted);
+
+    try std.testing.expectEqual(@as(usize, 4), converted[0].bytes.len);
+    try std.testing.expectEqual(@as(usize, 1), converted[0].relocations.len);
+    const payload_pointer = converted[0].relocations[0];
+    const payload_export = converted[@intFromEnum(payload_pointer.target.data_symbol)];
+    const payload_bytes = payload_export.bytes[@intCast(payload_pointer.addend)..];
+    const target_data = target.layouts.getTagUnionData(target.layouts.getLayout(target_tag).getTagUnion().idx);
+    try std.testing.expectEqual(@as(u32, 1), target_data.readDiscriminant(payload_bytes.ptr, target.layouts.targetUsize()));
+    const str_pointer = payload_export.relocations[0];
+    try std.testing.expectEqualStrings(text, converted[@intFromEnum(str_pointer.target.data_symbol)].bytes[@intCast(str_pointer.addend)..]);
+}
+
+fn boxedValueSlot(program: *Program.Result, box_idx: layout.Idx, plan: Program.ConstPlanId) Allocator.Error!lir.LIR.StaticDataId {
+    const failure_slot: lir.LIR.StaticDataId = @enumFromInt(program.static_data_values.items.len);
+    try program.static_data_values.append(program.store.allocator, .{ .initializer = null, .layout_idx = .zst });
+    const id: lir.LIR.StaticDataId = @enumFromInt(program.static_data_values.items.len);
+    try program.static_data_values.append(program.store.allocator, .{
+        .initializer = null,
+        .layout_idx = box_idx,
+        .compile_time_root = .{
+            .module = .{},
+            .root = @enumFromInt(0),
+            .const_locator = null,
+            .role = .{ .value = .{ .failure_slot = failure_slot, .plan = plan } },
+        },
+    });
+    return id;
+}
