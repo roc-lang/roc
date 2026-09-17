@@ -2969,8 +2969,10 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
                     return .{ .list_stack = .{ .struct_offset = result_offset, .data_offset = 0, .num_elements = 0 } };
                 },
                 .list_owned_unique => {
-                    // list_owned_unique(list) -> U64
+                    // list_owned_unique(list) -> U64; a list ARC proved unique
+                    // and owned here answers true without reading its count.
                     if (args.len != 1) unreachable;
+                    if ((ll.unique_args & 1) != 0) return .{ .immediate_i64 = 1 };
                     const list_loc = try self.emitValueLocal(GuardedList.at(args, 0));
                     const roc_ops_reg = self.roc_ops_reg orelse unreachable;
                     const list_off = try self.ensureOnStack(list_loc, roc_list_size);

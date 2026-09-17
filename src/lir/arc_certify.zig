@@ -214,7 +214,7 @@ fn certifyStoreWithWorkStats(
     defer maybe_uninitialized.deinit();
 
     try certifyRcAtomicity(allocator, store, rc_local, roots, diag);
-    try certifyUniqueArgs(allocator, store, rc_local, sigs, diag);
+    try certifyUniqueArgs(allocator, store, layouts, rc_local, sigs, diag);
 
     var certifier = Certifier.initStore(allocator, store, layouts, sigs, rc_local, &maybe_uninitialized, diag, work_stats);
     defer certifier.deinit();
@@ -402,6 +402,7 @@ fn certifyRcAtomicity(
 fn certifyUniqueArgs(
     allocator: Allocator,
     store: *const LirStore,
+    layouts: *const layout_mod.Store,
     rc_local: []const bool,
     sigs: arc_sig.SigTable,
     diag: *Diagnostic,
@@ -456,6 +457,7 @@ fn certifyUniqueArgs(
             proc_stmts.items,
             local_to_dense,
             dense_locals.items.len,
+            layouts,
         );
         defer uniqueness.deinit(allocator);
 
@@ -479,29 +481,17 @@ fn certifyUniqueArgs(
                 if ((assign.unique_args & bit) == 0) continue;
                 const raw = @intFromEnum(arg);
                 const dense = if (raw < local_to_dense.len) local_to_dense[raw] else no_dense;
-                if (dense != no_dense and uniqueness.born_unique.isSet(dense)) continue;
-                if (paramSeededUnique(sig, params, arg)) continue;
+                // The birth must hold under the parameter positions this
+                // emission's signature seeds born-unique.
+                if (dense != no_dense and uniqueness.born_unique.isSet(dense) and
+                    (uniqueness.conds[dense] & ~sig.unique_params) == 0) continue;
                 diag.context_proc = proc_id;
                 diag.context_stmt = current;
-                diag.set("stmt={d}: check-free uniqueness claim on argument {d} (local {d}) without a unique birth", .{ stmt_index, position, raw });
+                diag.set("stmt={d}: check-free uniqueness claim on argument {d} (local {d}) without a unique birth under the seeded parameters", .{ stmt_index, position, raw });
                 return error.Certification;
             }
         }
     }
-}
-
-/// True when the local is a parameter of the proc and the proc's signature
-/// seeds it born-unique (a mode-specialized variant whose caller proved the
-/// dying argument unique).
-fn paramSeededUnique(sig: arc_sig.RcSig, params: anytype, local: LIR.LocalId) bool {
-    if (sig.unique_params == 0) return false;
-    for (0..GuardedList.borrowLen(params)) |position| {
-        const param = GuardedList.at(params, position);
-        const bit = arc_sig.paramBit(position) orelse break;
-        if (param != local) continue;
-        return (sig.unique_params & bit) != 0;
-    }
-    return false;
 }
 
 /// Like `certifyStore`, but panics with a rendered failure context instead
@@ -6329,7 +6319,7 @@ const CertifyTest = struct {
             const lir_local = self.store.getLocal(@enumFromInt(@as(u32, @intCast(index))));
             rc_local[index] = self.layouts.layoutContainsRefcounted(self.layouts.getLayout(lir_local.layout_idx));
         }
-        return certifyUniqueArgs(self.allocator, &self.store, rc_local, arc_sig.SigTable.all_owned, &self.diag);
+        return certifyUniqueArgs(self.allocator, &self.store, &self.layouts, rc_local, arc_sig.SigTable.all_owned, &self.diag);
     }
 
     fn certifyProcAbiMetadataOnly(self: *CertifyTest) CertifyError!void {
@@ -6593,7 +6583,7 @@ test "unique-argument certification isolates shared locals between procedures" {
     try f.certifyUniqueArgsOnly();
 }
 
-test "unique-argument certification rejects multiple births in one procedure" {
+test "unique-argument certification rejects a multiply-defined local with a foreign definition" {
     var f = try CertifyTest.init(testing.allocator);
     defer f.deinit();
 
@@ -6620,17 +6610,16 @@ test "unique-argument certification rejects multiple births in one procedure" {
         .args = args,
         .next = checked,
     } });
-    const second_birth = try f.store.addCFStmt(.{ .assign_low_level = .{
+    // The other arm binds the parameter's value, which is no birth at all.
+    const second_def = try f.store.addCFStmt(.{ .assign_ref = .{
         .target = fresh,
-        .op = .str_concat,
-        .rc_effect = LIR.LowLevel.str_concat.rcEffect(),
-        .args = args,
+        .op = .{ .local = left },
         .next = checked,
     } });
     const body = try f.store.addCFStmt(.{ .switch_stmt = .{
         .cond = cond,
         .branches = try f.store.addCFSwitchBranches(&.{.{ .value = 1, .body = first_birth }}),
-        .default_branch = second_birth,
+        .default_branch = second_def,
         .continuation = checked,
     } });
     _ = try f.addProc(&.{ cond, left, right }, body, .str);

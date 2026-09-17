@@ -186,6 +186,8 @@ pub const LirLoweringOptions = struct {
     include_internal_static_data: bool = false,
     list_in_place_map: bool = false,
     proc_debug_names: bool = false,
+    /// Include backend symbol identities, which the compact LIR printer omits.
+    dump_proc_identities: bool = false,
     prove_ranges: bool = false,
     allow_user_errors: bool = false,
     /// Receives the expression count of the lifted program handed to lambda-set
@@ -197,6 +199,10 @@ pub const LirLoweringOptions = struct {
     detailed_monotype_diagnostics: bool = false,
     /// Receives deterministic solved-LIR body-shard task counts.
     solved_lir_parallel_metrics_out: ?*lir.CheckedPipeline.SolvedLirParallelMetrics = null,
+    /// Receives deterministic task and rewrite counts for procedure-local passes.
+    lir_pass_parallel_metrics_out: ?*lir.CheckedPipeline.LirPassParallelMetrics = null,
+    /// Receives ARC task counts and schedule-independent variant-wave accounting.
+    arc_parallel_metrics_out: ?*lir.CheckedPipeline.ArcParallelMetrics = null,
     /// Drain each active post-check group and report it in reverse arrival order.
     reverse_post_check_completions: bool = false,
     /// Stop after Monotype lowering. Focused postcheck regressions use this
@@ -379,6 +385,150 @@ pub fn expectRuntimeWorkerParallelismDeterministicLir(
                     });
                 }
                 try std.testing.expect(@field(metrics, field) > 0);
+            }
+        }
+    }
+}
+
+/// Compare full output and deterministic rewrite accounting using real coordinator
+/// workers. Required phases must change bodies, not merely admit no-op tasks.
+pub fn expectLirPassParallelismDeterministicLir(
+    fixture: RuntimeWorkerFixture,
+    options: LirLoweringOptions,
+    comptime phases: []const lir.CheckedPipeline.LirPassPhase,
+) LowerToLirHarnessError!void {
+    const gpa = std.testing.allocator;
+    var reference = std.Io.Writer.Allocating.init(gpa);
+    defer reference.deinit();
+    var metrics: lir.CheckedPipeline.LirPassParallelMetrics = .{
+        .tasks_submitted = 91,
+        .tasks_committed = 92,
+        .prepared_statement_rows = 93,
+        .appended_statements = 94,
+        .peak_retained_shards = 95,
+        .committed_by_phase = @splat(96),
+        .changed_by_phase = @splat(97),
+    };
+    var opts = options;
+    opts.specialization_workers = 1;
+    opts.reverse_post_check_completions = false;
+    opts.lir_pass_parallel_metrics_out = &metrics;
+    switch (fixture) {
+        .app_path => |path| try lowerAppPathToLir(gpa, path, &reference.writer, opts, null, null),
+        .app_body => |body| try runToLir(body, &reference.writer, opts, null),
+    }
+    try std.testing.expectEqualDeep(lir.CheckedPipeline.LirPassParallelMetrics{}, metrics);
+    var expected_metrics: ?lir.CheckedPipeline.LirPassParallelMetrics = null;
+    for ([_]usize{ 2, 4 }) |workers| {
+        for ([_]bool{ false, true }) |reverse| {
+            var candidate = std.Io.Writer.Allocating.init(gpa);
+            defer candidate.deinit();
+            opts.specialization_workers = workers;
+            opts.reverse_post_check_completions = reverse;
+            switch (fixture) {
+                .app_path => |path| try lowerAppPathToLir(gpa, path, &candidate.writer, opts, null, null),
+                .app_body => |body| try runToLir(body, &candidate.writer, opts, null),
+            }
+            try std.testing.expectEqualStrings(reference.written(), candidate.written());
+            try std.testing.expect(metrics.tasks_submitted > 0);
+            try std.testing.expectEqual(metrics.tasks_submitted, metrics.tasks_committed);
+            try std.testing.expect(metrics.prepared_statement_rows > 0);
+            var committed: u64 = 0;
+            for (metrics.committed_by_phase, metrics.changed_by_phase) |count, changed| {
+                committed += count;
+                try std.testing.expect(changed <= count);
+            }
+            try std.testing.expectEqual(metrics.tasks_committed, committed);
+            inline for (phases) |phase| {
+                if (metrics.changed_by_phase[@intFromEnum(phase)] == 0) {
+                    std.debug.print("No {s} LIR rewrites with {d} workers (reversed: {})\n", .{
+                        @tagName(phase), workers, reverse,
+                    });
+                    std.debug.print("{s}\n", .{reference.written()});
+                }
+                try std.testing.expect(metrics.changed_by_phase[@intFromEnum(phase)] > 0);
+            }
+            if (expected_metrics) |expected| {
+                try std.testing.expectEqualDeep(expected, metrics);
+            } else {
+                expected_metrics = metrics;
+            }
+        }
+    }
+}
+
+/// Compare every ARC-inserted procedure, including synthetic variant identities,
+/// across real worker schedules. The pipeline's borrow certifier checks every run.
+pub fn expectArcParallelismDeterministicLir(
+    fixture: RuntimeWorkerFixture,
+    options: LirLoweringOptions,
+    require_variants: bool,
+) LowerToLirHarnessError!void {
+    const gpa = std.testing.allocator;
+    var reference = std.Io.Writer.Allocating.init(gpa);
+    defer reference.deinit();
+    var serial_metrics: lir.CheckedPipeline.ArcParallelMetrics = .{};
+    var opts = options;
+    opts.specialization_workers = 1;
+    opts.reverse_post_check_completions = false;
+    opts.proc_debug_names = true;
+    opts.dump_proc_identities = true;
+    opts.arc_parallel_metrics_out = &serial_metrics;
+    switch (fixture) {
+        .app_path => |path| try lowerAppPathToLir(gpa, path, &reference.writer, opts, null, null),
+        .app_body => |body| try runToLir(body, &reference.writer, opts, null),
+    }
+    inline for (.{ "source", "planning", "emission" }) |phase| {
+        try std.testing.expectEqual(@as(u64, 0), @field(serial_metrics, phase ++ "_tasks_submitted"));
+        try std.testing.expectEqual(@as(u64, 0), @field(serial_metrics, phase ++ "_tasks_committed"));
+    }
+    try std.testing.expect(serial_metrics.waves > 0);
+    if (require_variants) try std.testing.expect(serial_metrics.variants_reserved > 0);
+
+    // A fresh serial lowering must overwrite every caller-provided metric,
+    // including the common algorithm's nonzero wave and variant counters.
+    var metrics: lir.CheckedPipeline.ArcParallelMetrics = .{
+        .source_tasks_submitted = 91,
+        .source_tasks_committed = 92,
+        .planning_tasks_submitted = 93,
+        .planning_tasks_committed = 94,
+        .emission_tasks_submitted = 95,
+        .emission_tasks_committed = 96,
+        .waves = 97,
+        .variants_reserved = 98,
+    };
+    opts.arc_parallel_metrics_out = &metrics;
+    switch (fixture) {
+        .app_path => |path| try lowerAppPathToLir(gpa, path, null, opts, null, null),
+        .app_body => |body| try runToLir(body, null, opts, null),
+    }
+    try std.testing.expectEqualDeep(serial_metrics, metrics);
+
+    var expected_metrics: ?lir.CheckedPipeline.ArcParallelMetrics = null;
+    for ([_]usize{ 2, 4 }) |workers| {
+        for ([_]bool{ false, true }) |reverse| {
+            var candidate = std.Io.Writer.Allocating.init(gpa);
+            defer candidate.deinit();
+            opts.specialization_workers = workers;
+            opts.reverse_post_check_completions = reverse;
+            switch (fixture) {
+                .app_path => |path| try lowerAppPathToLir(gpa, path, &candidate.writer, opts, null, null),
+                .app_body => |body| try runToLir(body, &candidate.writer, opts, null),
+            }
+            try std.testing.expectEqualStrings(reference.written(), candidate.written());
+            inline for (.{ "source", "planning", "emission" }) |phase| {
+                try std.testing.expect(@field(metrics, phase ++ "_tasks_submitted") > 0);
+                try std.testing.expectEqual(
+                    @field(metrics, phase ++ "_tasks_submitted"),
+                    @field(metrics, phase ++ "_tasks_committed"),
+                );
+            }
+            try std.testing.expectEqual(serial_metrics.waves, metrics.waves);
+            try std.testing.expectEqual(serial_metrics.variants_reserved, metrics.variants_reserved);
+            if (expected_metrics) |expected| {
+                try std.testing.expectEqualDeep(expected, metrics);
+            } else {
+                expected_metrics = metrics;
             }
         }
     }
@@ -960,6 +1110,8 @@ fn lowerAppPathToLir(
         .lifted_expr_count_out = opts.lifted_expr_count_out,
         .post_check_executor = post_check_executor,
         .solved_lir_parallel_metrics_out = opts.solved_lir_parallel_metrics_out,
+        .lir_pass_parallel_metrics_out = opts.lir_pass_parallel_metrics_out,
+        .arc_parallel_metrics_out = opts.arc_parallel_metrics_out,
         .timing = if (opts.timing_out != null) &timing else null,
     };
     if (opts.prepared_inspect) |prepared_inspect| {
@@ -976,6 +1128,13 @@ fn lowerAppPathToLir(
         const store = &lowered.lir_result.store;
         const layouts = &lowered.lir_result.layouts;
         for (0..store.getProcSpecs().len) |index| {
+            if (opts.dump_proc_identities) {
+                const proc_id: lir.LIR.LirProcSpecId = @enumFromInt(@as(u32, @intCast(index)));
+                try writer.print("symbol={d} debug_name={s}\n", .{
+                    store.getProcSpec(proc_id).name.raw(),
+                    store.procDebugName(proc_id) orelse "<synthetic>",
+                });
+            }
             try lir.DebugPrint.writeProc(gpa, store, layouts, @enumFromInt(@as(u32, @intCast(index))), writer);
         }
     }

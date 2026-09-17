@@ -212,63 +212,30 @@ fn setSelectionOnly(selection: *Selection, value: []const u8, arg: []const u8) !
     selection.to = value;
 }
 
-/// Fail before doing anything else when this 64-bit machine lacks SHA-256
-/// instructions. Those targets have them in their CPU baseline and
+/// Fail before doing anything else when this aarch64 machine lacks SHA-256
+/// instructions. aarch64 targets have them in their CPU baseline and
 /// `src/base/TypeDigestHasher.zig` has no software rounds for them, so on such
 /// a machine every artifact minici builds would die of SIGILL the first time it
-/// digests a type. The message says so instead. Machines that build with the
-/// portable rounds (`target.usesSoftwareSha256`, i.e. x86_64 macOS) need no
-/// instructions and are let through.
+/// digests a type. The message says so instead. x86_64 machines choose rounds
+/// at runtime (`dispatches_at_runtime` in src/base/sha256_rounds.zig) or build
+/// with the portable rounds (`uses_software_rounds` there, i.e. x86_64 macOS),
+/// so they need no instructions and are let through.
 fn requireSha256Hardware() void {
-    if (target.usesSoftwareSha256(builtin.cpu.arch, builtin.os.tag)) return;
-    const arch_class = target.classifyCpuArch(builtin.cpu.arch);
-    const supported = switch (arch_class) {
-        .x86_64 => x86HasShaExtension(),
+    const supported = switch (target.classifyCpuArch(builtin.cpu.arch)) {
         .aarch64 => aarch64HasSha2(),
-        .aarch64_be, .arm, .wasm32, .other => true,
+        .x86_64, .aarch64_be, .arm, .wasm32, .other => true,
     };
     if (supported) return;
     std.debug.print(
-        \\MiniCI: this CPU has no SHA-256 instructions ({s}).
-        \\roc requires them on this target: type digests are computed with the CPU's
-        \\SHA-256 instructions and there are no software rounds for it (see
+        \\MiniCI: this CPU has no SHA-256 instructions (the ARMv8 `sha2` crypto extension).
+        \\roc requires them on aarch64: type digests are computed with the CPU's SHA-256
+        \\instructions and there are no software rounds for it (see
         \\src/base/TypeDigestHasher.zig and addSha256Floor in build.zig).
-        \\A 64-bit CPU without them is not a supported machine for building or running
+        \\An aarch64 CPU without them is not a supported machine for building or running
         \\the roc compiler, so this run stops here rather than failing later with SIGILL.
         \\
-    , .{switch (arch_class) {
-        .x86_64 => "the x86 `sha` extension: AMD Zen or Intel Ice Lake / Goldmont and later",
-        .aarch64 => "the ARMv8 `sha2` crypto extension",
-        .aarch64_be, .arm, .wasm32, .other => unreachable,
-    }});
+    , .{});
     std.process.exit(1);
-}
-
-fn x86HasShaExtension() bool {
-    if (builtin.cpu.arch != .x86_64) return false;
-    // CPUID leaf 7, sub-leaf 0, EBX bit 29 reports the SHA extension; leaf 0
-    // reports the highest supported leaf.
-    const max_leaf = cpuid(0, 0).eax;
-    if (max_leaf < 7) return false;
-    return (cpuid(7, 0).ebx & (1 << 29)) != 0;
-}
-
-const CpuidRegisters = struct { eax: u32, ebx: u32, ecx: u32, edx: u32 };
-
-fn cpuid(leaf: u32, sub_leaf: u32) CpuidRegisters {
-    var eax: u32 = undefined;
-    var ebx: u32 = undefined;
-    var ecx: u32 = undefined;
-    var edx: u32 = undefined;
-    asm volatile ("cpuid"
-        : [_] "={eax}" (eax),
-          [_] "={ebx}" (ebx),
-          [_] "={ecx}" (ecx),
-          [_] "={edx}" (edx),
-        : [_] "{eax}" (leaf),
-          [_] "{ecx}" (sub_leaf),
-    );
-    return .{ .eax = eax, .ebx = ebx, .ecx = ecx, .edx = edx };
 }
 
 fn aarch64HasSha2() bool {

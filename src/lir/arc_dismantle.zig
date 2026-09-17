@@ -754,6 +754,183 @@ const Analysis = struct {
     }
 };
 
+/// Candidate-local backward may-observation solution. Reversing the CFG lets
+/// all reads share one traversal; each field bit crosses each edge at most once.
+/// Edge masks end precisely the old field lifetimes restored on that edge.
+const FutureFields = struct {
+    const Node = struct {
+        stmt: LIR.CFStmtId,
+        observed: u64 = 0,
+        pending: u64 = 0,
+        predecessor: u32 = no_index,
+    };
+    const Edge = struct { source: u32, next: u32, preserved: u64 };
+
+    indices: collections.DenseMap(LIR.CFStmtId, u32),
+    nodes: std.ArrayList(Node) = .empty,
+    edges: std.ArrayList(Edge) = .empty,
+    work: std.ArrayList(u32) = .empty,
+
+    fn init(gpa: Allocator) FutureFields {
+        return .{ .indices = collections.DenseMap(LIR.CFStmtId, u32).init(gpa) };
+    }
+
+    fn deinit(self: *FutureFields, gpa: Allocator) void {
+        self.indices.deinit();
+        self.nodes.deinit(gpa);
+        self.edges.deinit(gpa);
+        self.work.deinit(gpa);
+    }
+
+    fn clear(self: *FutureFields) void {
+        self.indices.clearRetainingCapacity();
+        self.nodes.clearRetainingCapacity();
+        self.edges.clearRetainingCapacity();
+        self.work.clearRetainingCapacity();
+    }
+
+    fn node(self: *FutureFields, gpa: Allocator, stmt: LIR.CFStmtId) Error!u32 {
+        if (self.indices.get(stmt)) |index| return index;
+        const index: u32 = @intCast(self.nodes.items.len);
+        try self.nodes.ensureUnusedCapacity(gpa, 1);
+        try self.indices.put(stmt, index);
+        self.nodes.appendAssumeCapacity(.{ .stmt = stmt });
+        return index;
+    }
+
+    fn edge(self: *FutureFields, gpa: Allocator, source: u32, target: LIR.CFStmtId, preserved: u64) Error!void {
+        if (preserved == 0) return;
+        const target_index = try self.node(gpa, target);
+        const target_node = &self.nodes.items[target_index];
+        try self.edges.append(gpa, .{ .source = source, .next = target_node.predecessor, .preserved = preserved });
+        target_node.predecessor = @intCast(self.edges.items.len - 1);
+    }
+
+    fn observe(self: *FutureFields, gpa: Allocator, index: u32, bits: u64) Error!void {
+        const target = &self.nodes.items[index];
+        const added = bits & ~target.observed;
+        if (added == 0) return;
+        if (target.pending == 0) try self.work.append(gpa, index);
+        target.observed |= added;
+        target.pending |= added;
+    }
+
+    fn solve(self: *FutureFields, gpa: Allocator) Error!void {
+        while (self.work.pop()) |index| {
+            const bits = self.nodes.items[index].pending;
+            self.nodes.items[index].pending = 0;
+            var predecessor = self.nodes.items[index].predecessor;
+            while (predecessor != no_index) {
+                const incoming = self.edges.items[predecessor];
+                try self.observe(gpa, incoming.source, bits & incoming.preserved);
+                predecessor = incoming.next;
+            }
+        }
+    }
+
+    fn observed(self: *const FutureFields, stmt: LIR.CFStmtId) u64 {
+        return self.nodes.items[self.indices.get(stmt).?].observed;
+    }
+
+    fn compute(
+        self: *FutureFields,
+        gpa: Allocator,
+        store: *const LirStore,
+        solution: *const arc_solve.Solution,
+        local: LIR.LocalId,
+        reads: *const std.AutoHashMapUnmanaged(LIR.CFStmtId, ReadKind),
+        joins: *const std.AutoHashMapUnmanaged(u32, LIR.CFStmtId),
+        receipts: []const FieldRestitution,
+        redefinition: ?LIR.CFStmtId,
+    ) Error!void {
+        self.clear();
+        var read_it = reads.iterator();
+        while (read_it.next()) |read| {
+            if (read.value_ptr.consuming) {
+                _ = try self.node(gpa, store.getCFStmt(read.key_ptr.*).assign_ref.next);
+            }
+        }
+        var successors = std.ArrayList(LIR.CFStmtId).empty;
+        defer successors.deinit(gpa);
+        // Node insertion is the finite discovery worklist. No statement is
+        // decoded again when another consuming read reaches the same region.
+        var index: u32 = 0;
+        while (index < self.nodes.items.len) : (index += 1) {
+            const cursor = self.nodes.items[index].stmt;
+            // Past the container's own single definition, reached through a
+            // loop back edge, every read observes the next iteration's value.
+            if (redefinition) |def_stmt| if (cursor == def_stmt) continue;
+            if (reads.get(cursor)) |read| try self.observe(gpa, index, read.bit);
+            switch (store.getCFStmt(cursor)) {
+                .set_local => |stmt| {
+                    if (stmt.target != local) try self.edge(gpa, index, stmt.next, ~@as(u64, 0));
+                },
+                .join => |stmt| try self.edge(gpa, index, stmt.remainder, ~@as(u64, 0)),
+                .jump => |stmt| {
+                    if (joins.get(@intFromEnum(stmt.target))) |body| try self.edge(gpa, index, body, ~@as(u64, 0));
+                },
+                .switch_stmt => |stmt| {
+                    const branches = store.getCFSwitchBranches(stmt.branches);
+                    for (0..GuardedList.borrowLen(branches)) |branch_index| {
+                        const branch = GuardedList.at(branches, branch_index);
+                        try self.edge(gpa, index, branch.body, ~restoredFieldMaskForBranch(solution, receipts, cursor, branch.value));
+                    }
+                    try self.edge(gpa, index, stmt.default_branch, ~restoredFieldMaskForDefault(solution, store, receipts, cursor));
+                },
+                .loop_continue, .loop_break => {
+                    if (solution.isJoinParam(local)) try self.observe(gpa, index, ~@as(u64, 0));
+                },
+                .init_uninitialized,
+                .assign_ref,
+                .assign_literal,
+                .assign_call,
+                .assign_call_erased,
+                .assign_packed_erased_fn,
+                .assign_boxy_desc_ref,
+                .assign_boxy_dict_ref,
+                .assign_boxy_box,
+                .assign_boxy_reuse_box,
+                .assign_boxy_unbox,
+                .assign_boxy_adapt,
+                .assign_boxy_inspect,
+                .assign_boxy_eq,
+                .assign_boxy_tag,
+                .assign_boxy_tag_payload,
+                .assign_call_dict,
+                .assign_low_level,
+                .assign_list,
+                .assign_struct,
+                .assign_tag,
+                .store_struct,
+                .store_tag,
+                .debug,
+                .expect,
+                .comptime_branch_taken,
+                .incref,
+                .decref,
+                .decref_if_initialized,
+                .free,
+                .switch_initialized_payload,
+                .str_match,
+                .str_match_set,
+                .boxy_tag_match,
+                .ret,
+                .crash,
+                .expect_err,
+                .runtime_error,
+                .comptime_exhaustiveness_failed,
+                => {
+                    successors.clearRetainingCapacity();
+                    try body_clone.appendSuccessors(@constCast(store), &successors, cursor);
+                    for (successors.items) |next| try self.edge(gpa, index, next, ~@as(u64, 0));
+                },
+            }
+        }
+        try self.solve(gpa);
+    }
+};
+
+/// Independent test oracle: the original per-read traversal.
 /// Proves whether a stored field is observed again in this definition. Every
 /// reachable statement is visited once; explicit reinitialization and outcome
 /// restitution end the old field lifetime on their respective edges.
@@ -767,6 +944,8 @@ fn fieldObservedAfter(
     reads: *const std.AutoHashMapUnmanaged(LIR.CFStmtId, ReadKind),
     joins: *const std.AutoHashMapUnmanaged(u32, LIR.CFStmtId),
     receipts: []const FieldRestitution,
+    redefinition: ?LIR.CFStmtId,
+    visits: *usize,
 ) Error!bool {
     var seen = collections.DenseMap(LIR.CFStmtId, void).init(gpa);
     defer seen.deinit();
@@ -775,6 +954,10 @@ fn fieldObservedAfter(
     try work.append(gpa, start);
     while (work.pop()) |cursor| {
         if ((try seen.getOrPut(cursor)).found_existing) continue;
+        visits.* += 1;
+        // Past the container's own single definition, reached through a
+        // loop back edge, every read observes the next iteration's value.
+        if (redefinition) |def_stmt| if (cursor == def_stmt) continue;
         if (reads.get(cursor)) |read| {
             if (read.bit & bit != 0) return true;
         }
@@ -842,6 +1025,161 @@ fn fieldObservedAfter(
         }
     }
     return false;
+}
+
+test "future field observations agree with per-read traversal across joins rebinds loops and outcomes" {
+    const gpa = std.testing.allocator;
+    var store = LirStore.init(gpa);
+    defer store.deinit();
+    const local = try store.addLocal(.{ .layout_idx = .str });
+    const other = try store.addLocal(.{ .layout_idx = .str });
+    const exit = try store.addCFStmt(.{ .ret = .{ .value = other } });
+    const boundary = try store.addCFStmt(.loop_continue);
+    // Reserve the two procedure-local join identities before building their
+    // bodies, which contain forward references to the enclosing joins.
+    var join_ids: [2]LIR.JoinPointId = undefined;
+    for (&join_ids, 0..) |*id, index| id.* = @enumFromInt(index);
+    const outer_id = join_ids[0];
+    const nested_id = join_ids[1];
+    const jump = try store.addCFStmt(.{ .jump = .{ .target = outer_id } });
+    const rebind = try store.addCFStmt(.{ .set_local = .{
+        .target = local,
+        .value = other,
+        .mode = .initialize_join_param,
+        .next = jump,
+    } });
+    const read = try store.addCFStmt(.{ .assign_ref = .{
+        .target = other,
+        .op = .{ .field = .{ .source = local, .field_idx = 0 } },
+        .next = rebind,
+    } });
+    const branch = try store.addCFStmt(.{ .switch_stmt = .{
+        .cond = other,
+        .branches = try store.addCFSwitchBranches(&.{
+            .{ .value = 0, .body = read },
+            .{ .value = 1, .body = boundary },
+        }),
+        .default_branch = read,
+    } });
+    const nested_jump = try store.addCFStmt(.{ .jump = .{ .target = nested_id } });
+    const nested = try store.addCFStmt(.{ .join = .{
+        .id = nested_id,
+        .params = .empty(),
+        .body = branch,
+        .remainder = nested_jump,
+    } });
+    const outer = try store.addCFStmt(.{ .join = .{
+        .id = outer_id,
+        .params = .empty(),
+        .body = nested,
+        .remainder = jump,
+    } });
+    var joins = std.AutoHashMapUnmanaged(u32, LIR.CFStmtId).empty;
+    defer joins.deinit(gpa);
+    try joins.put(gpa, @intFromEnum(outer_id), nested);
+    try joins.put(gpa, @intFromEnum(nested_id), branch);
+    var reads = std.AutoHashMapUnmanaged(LIR.CFStmtId, ReadKind).empty;
+    defer reads.deinit(gpa);
+    try reads.put(gpa, read, .{ .bit = 1, .consuming = false });
+    // Models the already-expanded borrowed descendant/whole-value mentions.
+    try reads.put(gpa, rebind, .{ .bit = 2, .consuming = false });
+    const starts = [_]LIR.CFStmtId{ exit, boundary, jump, rebind, read, branch, nested_jump, nested, outer };
+    for (starts) |start| {
+        const probe = try store.addCFStmt(.{ .assign_ref = .{
+            .target = other,
+            .op = .{ .field = .{ .source = local, .field_idx = 2 } },
+            .next = start,
+        } });
+        try reads.put(gpa, probe, .{ .bit = 4, .consuming = true });
+    }
+    // These queries consume only join membership and the outcome signature
+    // table; keep unrelated solver state undefined so accidental access fails.
+    var solution: arc_solve.Solution = undefined;
+    solution.sigs = &.{};
+    var leaders = [_]u32{ 0, 1 };
+    solution.leader = &leaders;
+    solution.join_param = try std.bit_set.DynamicBitSetUnmanaged.initEmpty(gpa, 2);
+    defer solution.join_param.deinit(gpa);
+    var outcomes = [_]arc_sig.Outcome{
+        .{ .discriminant = 0, .restituted_params = 0 },
+        .{ .discriminant = 1, .restituted_params = 0 },
+        .{ .discriminant = 2, .restituted_params = 0 },
+        .{ .discriminant = 3, .restituted_params = 0 },
+    };
+    solution.outcomes = &outcomes;
+    const receipts = [_]FieldRestitution{.{
+        .call_arg = .{ .stmt = read, .position = 0 },
+        .projection = read,
+        .switch_stmt = branch,
+        .field_mask = 1,
+        .outcomes = .{ .start = 0, .len = 4 },
+    }};
+    var future = FutureFields.init(gpa);
+    defer future.deinit(gpa);
+    for (0..128) |configuration| {
+        for (&outcomes, 0..) |*outcome, index| outcome.restituted_params = @intCast((configuration >> @intCast(index)) & 1);
+        if (configuration & 16 != 0) solution.join_param.set(0) else solution.join_param.unset(0);
+        store.getCFStmtPtr(boundary).* = if (configuration & 1 != 0) .loop_break else .loop_continue;
+        store.getCFStmtPtr(rebind).set_local.target = if (configuration & 32 != 0) local else other;
+        try joins.put(gpa, 0, if (configuration & 64 != 0) nested else exit);
+        try future.compute(gpa, &store, &solution, local, &reads, &joins, &receipts, null);
+        try std.testing.expectEqual(if (configuration & 16 != 0) ~@as(u64, 0) else @as(u64, 0), future.observed(boundary));
+        for (starts) |start| {
+            for ([_]u64{ 1, 2, 4 }) |bit| {
+                var visits: usize = 0;
+                const expected = try fieldObservedAfter(gpa, &store, &solution, local, bit, start, &reads, &joins, &receipts, null, &visits);
+                try std.testing.expectEqual(expected, future.observed(start) & bit != 0);
+            }
+        }
+    }
+}
+
+test "future field observations share CFG discovery across many consuming reads" {
+    const gpa = std.testing.allocator;
+    var store = LirStore.init(gpa);
+    defer store.deinit();
+    const local = try store.addLocal(.{ .layout_idx = .str });
+    var start = try store.addCFStmt(.{ .ret = .{ .value = local } });
+    const exit = start;
+    // Mutually exclusive consuming reads share a long continuation observing
+    // another field: the old DFS cannot exit early for any of their queries.
+    for (0..255) |_| {
+        start = try store.addCFStmt(.{ .assign_ref = .{
+            .target = local,
+            .op = .{ .local = local },
+            .next = start,
+        } });
+    }
+    var reads = std.AutoHashMapUnmanaged(LIR.CFStmtId, ReadKind).empty;
+    defer reads.deinit(gpa);
+    try reads.put(gpa, exit, .{ .bit = 2, .consuming = false });
+    const joins = std.AutoHashMapUnmanaged(u32, LIR.CFStmtId).empty;
+    var solution: arc_solve.Solution = undefined;
+    solution.leader = &.{};
+    solution.join_param = .{};
+    solution.sigs = &.{};
+    solution.outcomes = &.{};
+    var future = FutureFields.init(gpa);
+    defer future.deinit(gpa);
+    for ([_]usize{ 1, 16, 256 }) |count| {
+        while (reads.count() <= count) {
+            const probe = try store.addCFStmt(.{ .assign_ref = .{
+                .target = local,
+                .op = .{ .field = .{ .source = local, .field_idx = 0 } },
+                .next = start,
+            } });
+            try reads.put(gpa, probe, .{ .bit = 1, .consuming = true });
+        }
+        var old_visits: usize = 0;
+        for (0..count) |_| {
+            try std.testing.expect(!try fieldObservedAfter(gpa, &store, &solution, local, 1, start, &reads, &joins, &.{}, null, &old_visits));
+        }
+        try future.compute(gpa, &store, &solution, local, &reads, &joins, &.{}, null);
+        try std.testing.expectEqual(@as(usize, 256) * count, old_visits);
+        try std.testing.expectEqual(@as(usize, 256), future.nodes.items.len);
+        try std.testing.expectEqual(@as(usize, 255), future.edges.items.len);
+        try std.testing.expectEqual(@as(u64, 2), future.observed(start));
+    }
 }
 
 /// Per-field take dataflow state at one point in a candidate's region. The
@@ -1746,6 +2084,15 @@ pub fn compute(
     defer read_kinds.deinit(gpa);
     var join_bodies = std.AutoHashMapUnmanaged(u32, LIR.CFStmtId).empty;
     defer join_bodies.deinit(gpa);
+    // Candidate solving does not mutate CFG edges. The later alias
+    // materialization changes assign_ref.op only, never join ownership.
+    for (0..store.cfStmtCount()) |stmt_index| {
+        if (!visited.isSet(stmt_index)) continue;
+        const stmt = store.getCFStmt(@enumFromInt(@as(u32, @intCast(stmt_index))));
+        if (stmt == .join) try join_bodies.put(gpa, @intFromEnum(stmt.join.id), stmt.join.body);
+    }
+    var future_fields = FutureFields.init(gpa);
+    defer future_fields.deinit(gpa);
     var body_states = std.AutoHashMapUnmanaged(LIR.CFStmtId, FlowState).empty;
     defer body_states.deinit(gpa);
     const FlowFrame = struct { cursor: LIR.CFStmtId, state: FlowState };
@@ -2020,17 +2367,13 @@ pub fn compute(
         if (candidate_mask == 0) continue;
 
         var poison: u64 = 0;
-        join_bodies.clearRetainingCapacity();
-        for (0..store.cfStmtCount()) |stmt_index| {
-            if (!visited.isSet(stmt_index)) continue;
-            const stmt = store.getCFStmt(@enumFromInt(@as(u32, @intCast(stmt_index))));
-            if (stmt == .join) try join_bodies.put(gpa, @intFromEnum(stmt.join.id), stmt.join.body);
-        }
+        const redefinition: ?LIR.CFStmtId = if (candidate.join_starts.items.len == 0) candidate.def_stmt else null;
+        try future_fields.compute(gpa, store, solution, local, &read_kinds, &join_bodies, field_restitutions.items, redefinition);
         for (candidate.reads.items) |read| {
             const kind = read_kinds.getPtr(read.stmt) orelse continue;
             if (!kind.consuming) continue;
             const definition = store.getCFStmt(read.stmt).assign_ref;
-            if (try fieldObservedAfter(gpa, store, solution, local, kind.bit, definition.next, &read_kinds, &join_bodies, field_restitutions.items)) {
+            if (future_fields.observed(definition.next) & kind.bit != 0) {
                 kind.consuming = false;
             }
         }
@@ -2060,6 +2403,12 @@ pub fn compute(
                     poison = ~@as(u64, 0);
                     break :flow;
                 }
+                // Reaching the container's single value-producing definition
+                // again, through a loop back edge, starts the next
+                // iteration's fresh value with every field intact; the
+                // previous value is dead past its redefinition exactly as it
+                // is past an explicit join-cell write.
+                if (cursor == candidate.def_stmt and candidate.join_starts.items.len == 0) state = .{ .may = 0, .must = 0 };
                 if (read_kinds.getPtr(cursor)) |kind| {
                     kind.visited = true;
                     if (kind.consuming) {
@@ -2084,7 +2433,6 @@ pub fn compute(
                         cursor = stmt.next;
                     },
                     .join => |stmt| {
-                        try join_bodies.put(gpa, @intFromEnum(stmt.id), stmt.body);
                         cursor = stmt.remainder;
                     },
                     .switch_stmt => |stmt| {
