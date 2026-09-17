@@ -1271,8 +1271,8 @@ pub const TwoStaticDispatchConstraints = struct {
 
 /// Polarity of a type position: roughly, which side of an arrow it sits on.
 ///
-/// This is walk state for annotation generation, instantiation, and display —
-/// it is never stored in a type. The root of an annotation is positive
+/// This is walk state for annotation generation, instantiation, and display—it
+/// is never stored in a type. The root of an annotation is positive
 /// (output), function argument positions negate the surrounding polarity, and
 /// every other position (returns, type application args, record fields, tuple
 /// elems, tag payloads) preserves it.
@@ -1305,7 +1305,7 @@ pub const Polarity = enum {
 /// rigid a written `..` produces) in output positions, closed (`[]`) in input
 /// positions. See `Instantiator.PolarityVarBehavior`.
 ///
-/// The marker is an ordinary rigid — no new content kind — with a reserved
+/// The marker is an ordinary rigid—no new content kind—with a reserved
 /// name. The `#` prefix guarantees no user-written type var can collide with
 /// it, and idents are re-interned by text when types are copied across module
 /// envs, so text identity (and per-env precomputed `Ident.Idx` identity) is

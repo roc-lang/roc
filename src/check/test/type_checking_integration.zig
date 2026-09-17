@@ -2783,7 +2783,7 @@ test "check type - tag - args" {
 test "check type - tag union - tag typo" {
     // Polarity: `Color` in an output position is implicitly open for the
     // value's users, but the annotation still bounds the value's own body, so
-    // the unlisted tag is rejected — by the post-body audit rather than by
+    // the unlisted tag is rejected—by the post-body audit rather than by
     // unification, because the open row absorbed it.
     const source =
         \\main! = |_| {}
@@ -6974,8 +6974,8 @@ test "check type - try operator on method call should apply to whole expression 
 test "check type - polarity - try flows error row between open output rows" {
     // Under polarity, every error row in an output position is implicitly
     // open at the call, so `?` flows `inner`'s errors into `outer`'s row
-    // through ordinary unification. (Before polarity this was a type error —
-    // issue #9798 — because `inner`'s written row was closed; that closed
+    // through ordinary unification. (Before polarity this was a type error—issue
+    // #9798—because `inner`'s written row was closed; that closed
     // spelling no longer exists in output positions.)
     const source =
         \\inner : {} -> Try({}, [InnerErr])
@@ -8919,7 +8919,7 @@ test "check type - polarity - annotated value shares one weak row across uses" {
     // sees a value whose row carries `A`, which its own annotation does not
     // list. (Exactly how an inferred `e = Boom` already behaves; on main the
     // closed `[Boom]` rejected both uses.) Write `..` on the value to
-    // generalize it instead — see the next test.
+    // generalize it instead—see the next test.
     const source =
         \\e : [Boom]
         \\e = Boom
@@ -8935,7 +8935,7 @@ test "check type - polarity - annotated value shares one weak row across uses" {
 
 test "check type - polarity - a defaulted field use may widen a weak value row" {
     // A defaulted record field's default expression is an ordinary USE SITE,
-    // so it may widen the weak row of the value it names — exactly like the
+    // so it may widen the weak row of the value it names—exactly like the
     // accepted first use in the test above. It is checked later than every
     // other use (`checkPendingDefaults` is the first pass of `finalizeTypes`,
     // after the whole def pass), and the late implicit-open-ext replay
@@ -9114,7 +9114,7 @@ test "check type - polarity - where-method row nested in the result stays closed
     // a `Try` result's rows. A row inside a `List` is generated as written, so
     // the body use that widens it is an ordinary mismatch at the use rather
     // than a widening no lowering could express. `Job`'s implementation
-    // publishes the closed row — the case the adapter exists for, which it
+    // publishes the closed row—the case the adapter exists for, which it
     // cannot reach here.
     const source =
         \\describe : a -> List([Ok(Str), Err(Str), Extra]) where [a.statuses : a -> List([Ok(Str), Err(Str)])]
@@ -9200,7 +9200,7 @@ test "check type - polarity - alias-referenced Try error row is still adapter-re
     // The positive control for the test above: a reference whose declaration
     // body IS the adapter-reachable position keeps its marker deferred, so the
     // body use may widen it. `Res` stands in the signature's direct result and
-    // its body is a `Try`, whose ERROR argument the adapter re-tags — so the
+    // its body is a `Try`, whose ERROR argument the adapter re-tags—so the
     // marker on `[NotFound]` survives the reference and `load` may return the
     // wider row.
     const source =

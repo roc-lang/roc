@@ -1,6 +1,6 @@
 # polarity_phase_two.md W6b: the adapter-reach restriction reached through a
 # declaration REFERENCE. `Statuses` defers the row it writes, because an alias
-# declaration cannot know where its uses will put it — but the reference here
+# declaration cannot know where its uses will put it—but the reference here
 # stands in `statuses`'s direct result, and the row sits inside a `List`, which
 # no adapter can re-tag. So the row is contributed as written and the body use
 # that widens it is an ordinary type mismatch at the use.

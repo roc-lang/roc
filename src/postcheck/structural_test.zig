@@ -1387,8 +1387,8 @@ test "hosted Try adaptation consumes checker-recorded nominal provenance" {
     // The hosted `Try` adapter is now one instance of the general result-row
     // widening adapter (design.md "Result-Row Widening Adapter"), so the two
     // functions this slices between carry the general names. The adapter no
-    // longer returns early on a missing capability — a template whose result
-    // is a bare closed row is adapted without one — so the assertion that
+    // longer returns early on a missing capability—a template whose result
+    // is a bare closed row is adapted without one—so the assertion that
     // pinned the capability as the only route to `Try` moved to the two
     // `hostedTryInfoOrNull` calls that read the `Try` rows through it.
     const adapter_source = sourceSliceBetween(

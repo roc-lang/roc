@@ -5597,15 +5597,15 @@ A value binding generalizes only when its annotation writes a type variable,
 exactly as before; a host boundary opts out because the host is a fixed ABI
 rather than a Roc producer participating in unification.
 
-The annotation still BOUNDS the definition — widening happens only at
+The annotation still BOUNDS the definition—widening happens only at
 instantiation sites. A tag the annotation does not list is absorbed by
 ordinary unification rather than rejected, so `Check.auditImplicitOpenExts`
 runs immediately after the definition's right-hand side is checked, over every
 extension the annotation's generation minted (`Check.implicit_open_exts`,
 sliced per annotation by `annotation_implicit_open_exts`), and reports a Type
 Mismatch in the annotation context for any that resolved to a row carrying
-tags — showing the row the body produced against the union the annotation
-wrote — marking that extension erroneous (diagnostic recovery, like every
+tags—showing the row the body produced against the union the annotation
+wrote—marking that extension erroneous (diagnostic recovery, like every
 other reported problem).
 
 That pass is a single READ of a mutable variable, and a definition can still
@@ -5652,8 +5652,8 @@ Hosted Try Question Widening covers exactly that forwarding, so the fixture is
 GREEN: a `?` on a direct hosted call no longer declines the rule merely
 because ordinary unification could relate the pair by GROUNDING the
 annotation's own still-open extension. (Recorded 2026-09-15 as a deliberate
-red witness — "not a defect to patch", on the premise that every available
-patch is a host-specific special case this design intends to delete — and
+red witness—"not a defect to patch", on the premise that every available
+patch is a host-specific special case this design intends to delete—and
 REVERSED 2026-09-16 when that premise was falsified by measurement: the
 result-row widening adapter already serves a CLOSED published row on an
 unpatched compiler, so it is the general mechanism rather than host-specific
@@ -5686,8 +5686,8 @@ An ALIAS of a tag union defers the decision to each use site: the alias
 declaration stores a marker rigid (`types.polarity_var_text`, an ordinary
 rigid with a reserved name) as the ext of each extensionless union in its
 body, and instantiation resolves every marker by the polarity of the position
-the alias is used in — a fresh flex (recorded for the audit) in positive
-positions, `[]` in negative ones — negating through functions embedded in the
+the alias is used in—a fresh flex (recorded for the audit) in positive
+positions, `[]` in negative ones—negating through functions embedded in the
 alias body (`Instantiator.PolarityVarBehavior`). Nominal declaration bodies
 close as written.
 
@@ -5695,9 +5695,9 @@ A WHERE-METHOD signature is a scheme the constrained body instantiates at
 each use, exactly like a call of an annotated function. It is walked like any
 function annotation (arguments closed as written, return an output), but its
 implicitly opened output rows are generated as polarity MARKERS
-(`AnnotationGenCtx.opening = .per_use`) rather than flex vars. A body use —
-the point where a body dispatch on the constrained rigid is matched by name
-to the where-clause constraint — instantiates the signature
+(`AnnotationGenCtx.opening = .per_use`) rather than flex vars. A body use—the
+point where a body dispatch on the constrained rigid is matched by name
+to the where-clause constraint—instantiates the signature
 (`Check.instantiateWhereMethodForUse`): every marker becomes a fresh flex, so
 that use may match the result exhaustively (closing its own copy) or widen it
 (`?` composes into a wider enclosing row), independently of every other use;
@@ -5726,8 +5726,8 @@ witness is recorded. A method name never DECIDES the relation. When no
 candidate carries the plan's exact callable, a same-name candidate nominates
 the evidence slot the plan resolves through, and the record then decides
 whether that independent callable may reuse the slot's checked nested
-evidence — it may exactly when its copy descends from the slot's own
-signature — or must synthesize its own. An index naming a record of the wrong
+evidence—it may exactly when its copy descends from the slot's own
+signature—or must synthesize its own. An index naming a record of the wrong
 kind, a record missing its signature-callable copy, or a copy that does not
 resolve to the body constraint is a checked-artifact invariant violation, not
 a fallback. An
@@ -5738,17 +5738,17 @@ at the template boundary specializes that implementation at its own declared
 row and re-tags the result at the requested row, generalizing the hosted
 `Try` adapter. Per-use opening applies only at the output positions that
 adapter can re-tag: the signature's direct result row, and the ERROR row of
-a `Try` result. A `Try`'s ok row is not adaptable — the adapter asserts the ok type
-is unchanged — so it is not opened either. A tag union in any OTHER output
+a `Try` result. A `Try`'s ok row is not adaptable—the adapter asserts the ok type
+is unchanged—so it is not opened either. A tag union in any OTHER output
 position (inside a `List`, a
 record field, a tuple, a tag payload, a non-`Try` nominal) keeps its row
 as written, exactly as a negative position does, so a body use that tries
 to widen it is an ordinary type mismatch reported at the body use. This
 keeps the set of positions a use may widen equal to the set lowering can
 adapt, by construction rather than by a second rule; the set grows as the
-coercion generator grows. (Decided 2026-09-03 as the converse — open
+coercion generator grows. (Decided 2026-09-03 as the converse—open
 everywhere, reject a closed implementation at the enclosing-scheme
-instantiation — and reversed 2026-09-14: that instantiation
+instantiation—and reversed 2026-09-14: that instantiation
 (`instantiateTypeScheme`) is itself what closes the markers with
 `PolarityVarBehavior.close`, so it observes `[]` rather than a marker, and
 a marker's structural position is not recorded when it is minted; keying
@@ -5773,8 +5773,8 @@ reachable from a hosted lambda or a `provides` def (see Host Symbol ABI), so a
 unchanged; it does not when the platform's own `provides` annotation narrows
 the row away first.
 
-Derived structural implementations — parsers, encoders, and derived
-`map`/`map!` — are consumers that determine each tag row exactly (and, for
+Derived structural implementations—parsers, encoders, and derived
+`map`/`map!`—are consumers that determine each tag row exactly (and, for
 map, its payload selection, which an open payload row would defeat by
 reading as a type variable), so before one is derived for a type every
 reachable tag-union extension that is an unbound flex collapses to `[]`
@@ -5933,7 +5933,7 @@ integration test cited above.
 ### Result-Row Widening Adapter
 
 A procedure template whose published result row is CLOSED may be requested at
-a row that INCLUDES it — the same tags with usable payloads, plus others.
+a row that INCLUDES it—the same tags with usable payloads, plus others.
 The request is related component-wise WITHOUT unifying the two rows, the
 template is specialized at its own declared row, and a generated
 `.checked_generated` adapter at the requested row calls that specialization
@@ -5942,8 +5942,8 @@ rule where the declared row is the host ABI; the extern boundary is still
 emitted at the declared row, as Host Symbol ABI requires.
 
 Only two positions are adapted: the template's DIRECT result row, and the
-ERROR row of a `Try` result. A `Try`'s ok row is not adapted — the adapter
-asserts the ok type is unchanged — and neither is a row nested inside a
+ERROR row of a `Try` result. A `Try`'s ok row is not adapted—the adapter
+asserts the ok type is unchanged—and neither is a row nested inside a
 `List`, a record field, a tuple, a tag payload, or a non-`Try` nominal,
 because re-tagging cannot reach into those positions without the general
 row-subsumption coercion this design intends and does not yet implement (see
@@ -5961,8 +5961,8 @@ That withholding is by POSITION, not by declaration. A type declaration
 defers every extensionless tag union it writes, at any depth, because the
 declaration cannot know where its references will stand; a reference resolves
 those deferrals by where the reference itself sits. A marker on the referenced
-declaration's own row — reached only through alias backings, and through the
-ERROR argument of a `Try` standing in the signature's direct result — stays
+declaration's own row—reached only through alias backings, and through the
+ERROR argument of a `Try` standing in the signature's direct result—stays
 deferred; a marker reached under any other constructor is closed as written.
 So `Statuses : List([Ok(Str), Err(Str)])` named as a where-method's result
 contributes a closed row, exactly as the same type written inline there does.
@@ -5974,8 +5974,8 @@ another, which is a wrong value rather than a crash. Every site that declines
 to unify therefore requires that an adapter is reachable for that request;
 where it is not, the site relates exactly instead and the ordinary
 `unifyTagRows` invariant reports the widening. A dispatch target that is not a
-procedure template — a lambda-bound local procedure, a structural registry
-result — has no template reservation and so can never reach an adapter.
+procedure template—a lambda-bound local procedure, a structural registry
+result—has no template reservation and so can never reach an adapter.
 
 The relation's answer is also the ONLY answer. It is recorded on the
 specialization request it declined to unify, and template completion mints the
@@ -7527,7 +7527,7 @@ site to any family below must classify it here.
   reaching a derivation through a directly-used local alias declaration
   meets no instantiation that would resolve it, and the derivation
   determines the row exactly, so the marker redirects to the empty tag
-  union — the same outcome instantiation's `.close` behavior produces.
+  union—the same outcome instantiation's `.close` behavior produces.
 
 Other solved-graph mutations:
 
@@ -7581,9 +7581,9 @@ Other solved-graph mutations:
   parser, encoder, or derived `map`/`map!` is derived for a type, every
   reachable tag-union extension that is an unbound flex var (implicit
   output-position openness) unifies with the empty tag union: a derived
-  implementation determines each row exactly — and derived map additionally
+  implementation determines each row exactly—and derived map additionally
   determines its payload selection, which an open payload row would defeat
-  by reading as a type variable — so the openness collapses like an
+  by reading as a type variable—so the openness collapses like an
   exhaustive match closing an inferred row. A polarity MARKER rigid in
   tag-ext position (the alias-declaration-body deferral) collapses the same
   way via `RedirectRule.derivation_marker_ext_closure` (above): a
@@ -8941,16 +8941,16 @@ and subsequent relations still act on the original graph node.
 The only time an unresolved checked variable with an empty-tag-union row
 default may become durable `tag_union []` is final graph sealing, after every
 checked interface relation and specialization demand for that body has been
-applied. Every codec body reached during specialization-body lowering —
-derived, or restored from a stored constant — is generated after that point.
+applied. Every codec body reached during specialization-body lowering—derived,
+or restored from a stored constant—is generated after that point.
 One narrow exception remains, and it is not a graph-defaulting exception: the
 two Builder-level stored-codec restores (`restoreConstParserRuntimeFnExpr` and
 `restoreConstEncoderForRuntimeFnExpr`) build their body in a private graph of
 their own and seal it with `sealActiveBodyDraft`. They still take eager
 resolved views inside that private graph (`resolvedTypeViewForNode` of the
 constructor node, `resolvedCheckedTypeView` of the dispatcher) before it
-seals, so a shape whose own cells are still undecided — an optional `?:` field
-slot — panics there. Nothing is defaulted early; the view is simply demanded
+seals, so a shape whose own cells are still undecided—an optional `?:` field
+slot—panics there. Nothing is defaulted early; the view is simply demanded
 early. They are the last eager codec consumers.
 After sealing, `tag_union []` is closed and uninhabited. Values such as `[]` can
 still be represented as `List(tag_union [])` because they contain no items,

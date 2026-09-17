@@ -356,7 +356,7 @@ pub const Instantiator = struct {
     /// The polarity of the position currently being instantiated. Starts at
     /// the polarity of the instantiation root (callers using
     /// `.resolve_by_polarity` set it) and is negated for function argument
-    /// positions as the walk descends — each func frame saves the
+    /// positions as the walk descends—each func frame saves the
     /// surrounding polarity and re-asserts the stage-appropriate value
     /// before every child it requests.
     current_polarity: Polarity = .pos,
@@ -450,7 +450,7 @@ pub const Instantiator = struct {
         /// annotation, or an alias body embedded in one).
         ///
         /// A marker reached under any other constructor closes. Deferring it
-        /// would reopen, per use, a row Monotype cannot adapt — an alias
+        /// would reopen, per use, a row Monotype cannot adapt—an alias
         /// declaration mints a marker for every extensionless tag union at any
         /// depth, so `Statuses : List([Ok(Str), Err(Str)])` as a where-method
         /// result would otherwise let a use widen the row inside the `List`.

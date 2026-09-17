@@ -1482,8 +1482,8 @@ const ClosedResultRow = struct {
 /// Whether a checked tag row is closed for result-row widening. This is
 /// `CheckedTypePayload.variableSealsToRowDefault`, the same rule the checked
 /// artifact's `checkedResultRowIsClosed` uses to decide whether to publish the
-/// `Try` capability, so the two cannot drift. A rigid tail is parametric — the
-/// caller supplies the row — and is therefore not closed.
+/// `Try` capability, so the two cannot drift. A rigid tail is parametric—the
+/// caller supplies the row—and is therefore not closed.
 fn checkedResultRowIsClosed(view: ModuleView, root: checked.CheckedTypeId) bool {
     var current = root;
     var remaining = view.types.payloadCount();
@@ -1776,9 +1776,9 @@ fn requestRowIncludesClosedRow(
 /// checker's own answer for this template, so the cell opened here is exactly
 /// the cell `resultRowWideningAdapterSourceType` builds a narrowed source type
 /// for: a `Try` result's error argument, or the function's own result row. The
-/// adapter-reachable set is exactly those two. Every other component — a
+/// adapter-reachable set is exactly those two. Every other component—a
 /// `Try`'s `Ok` argument (`hostedTryReturnInjectionExpr` rejects an `Ok` type
-/// change outright), an alias's type arguments, a nested row — relates exactly,
+/// change outright), an alias's type arguments, a nested row—relates exactly,
 /// so a widening there meets the ordinary closed-row rejection instead of
 /// silently passing a request no adapter will serve.
 fn resultRowWideningOrNull(
@@ -1904,7 +1904,7 @@ fn applyResultRowWidening(
 /// design.md "Result-Row Widening Adapter": because the relation deliberately
 /// declines to unify the two rows, it must fail CLOSED. A request related this
 /// way that then does NOT reach an adapter leaves a callee producing one tag
-/// layout and a caller reading another — a wrong value rather than a crash. A
+/// layout and a caller reading another—a wrong value rather than a crash. A
 /// site that cannot reach `completeTemplateReservation` therefore states
 /// `.no_adapter` and relates exactly instead, so the widening meets the
 /// ordinary `unifyTagRows` rejection.
@@ -3582,12 +3582,12 @@ const Builder = struct {
     /// scope whose inputs and outputs are program ids. A reservation claimed by
     /// an immediate caller completes wherever that caller was lowering, which
     /// can be inside an ordinary specialization shard whose private workspace
-    /// is the active destination — but the completion itself is coordinator
+    /// is the active destination—but the completion itself is coordinator
     /// work either way: it reads `lower_fn_ty`, a program id, and writes the
     /// program's definitions. Without this pin, a type lowered for that
     /// completion would land in the workspace and then be compared against
     /// program ids, which is an out-of-bounds read in debug and an arbitrary
-    /// in-bounds read — a wrong type, silently — in release.
+    /// in-bounds read—a wrong type, silently—in release.
     const ProgramTypeDestination = struct {
         builder: *Builder,
         saved: bool,
@@ -5229,7 +5229,7 @@ const Builder = struct {
             break :blk (try self.materializeRootProcedureEvidence(fn_template, evidence_ref)).vector;
         } else &.{};
         // A root is requested at the template's own declared type, which no
-        // relation ever widened — checked, not assumed.
+        // relation ever widened—checked, not assumed.
         try self.requireRequestDidNotWidenResultRow(
             template_ref,
             fn_ty,
@@ -5691,7 +5691,7 @@ const Builder = struct {
     /// relation's own answer, carried here from the specialization request; it
     /// is the single source of truth for whether an adapter is owed. Re-deriving
     /// the answer from the checked root instead would let the relation and the
-    /// completion disagree — the relation declining with no adapter minted is a
+    /// completion disagree—the relation declining with no adapter minted is a
     /// silent miscompile, and an adapter minted where the relation unified is a
     /// spurious narrow specialization behind a pointless re-tag.
     ///
@@ -5703,8 +5703,8 @@ const Builder = struct {
     /// is sound only because `closedResultRowOrNull` refused every row whose
     /// tail is a rigid or an unsealed flex: `lowerCheckedTypeVariable` seals a
     /// rigid to the empty tag union, which would otherwise pass a parametric
-    /// row off as a closed one. A rigid *payload* is harmless — every narrowed
-    /// payload is taken from the request, never from the declared type — and
+    /// row off as a closed one. A rigid *payload* is harmless—every narrowed
+    /// payload is taken from the request, never from the declared type—and
     /// `requireLoweredDeclaredRowLabels` checks the lowered label set against
     /// the checker's published row so a collapse cannot go unnoticed.
     fn resultRowWideningAdapterOrNull(
@@ -5857,9 +5857,9 @@ const Builder = struct {
         var completion_timing_scope = ProcedureTimingScope.begin(self.timing, .completion);
         defer completion_timing_scope.end();
 
-        // The generated body is built from program ids throughout — the
+        // The generated body is built from program ids throughout—the
         // reserved definition, its locals, and the re-tagging match all live
-        // in the coordinator program — while the shape helpers it uses read
+        // in the coordinator program—while the shape helpers it uses read
         // the active store. `resultRowWideningAdapterOrNull` pins its own
         // destination, but this step also requests the declared-row
         // specialization, so it cannot simply pin over an active shard.
@@ -7333,8 +7333,8 @@ const Builder = struct {
         // completion: it lowers its body inline at `root_node` below and
         // registers the def at the declared interface, so no adapter would
         // ever be generated and the caller would call the narrow body through
-        // its wide request. Declining here leaves the ordinary relation — and
-        // its loud rejection of a widened closed row — in charge.
+        // its wide request. Declining here leaves the ordinary relation—and
+        // its loud rejection of a widened closed row—in charge.
         const closed_row_widened = template.target != .hosted and
             try relateClosedResultRowRequestInterface(
                 source_ctx.graph,
@@ -9011,7 +9011,7 @@ const Builder = struct {
             Common.invariant("final function-template lowering was called during an active body draft");
         }
         // Root and wrapper paths request the binding's own published type; no
-        // request relation ran, so no widening was recorded — checked here
+        // request relation ran, so no widening was recorded—checked here
         // rather than stated.
         //
         // `.checked_generated` is excluded because its `template_ref` is not
@@ -9127,8 +9127,8 @@ const Builder = struct {
                 // was already reserved at this exact type; the identity hit
                 // above carries its recorded answer. If the identity was not
                 // registered locally this lowers the body at the requested
-                // type, so the claim is checked rather than stated —
-                // `.checked_generated` excluded for the reason given at the
+                // type, so the claim is checked rather than stated—`.checked_generated`
+                // excluded for the reason given at the
                 // call-target site above.
                 if (fn_template.fn_def != .checked_generated) {
                     try self.requireRequestDidNotWidenResultRow(
@@ -10151,9 +10151,9 @@ const Builder = struct {
             Common.invariant("deferred stored codec restore had no enclosing codec contract"));
 
         // No `active_codec_contract` here, unlike `prepareDraftStructuralSerialization`:
-        // a stored codec restore has no `SpecStructuralEvidence` — its
+        // a stored codec restore has no `SpecStructuralEvidence`—its
         // constructor came from the ConstStore, not from a structural dispatch
-        // plan — so `checkedGeneratedCodecCallee` correctly finds no contract
+        // plan—so `checkedGeneratedCodecCallee` correctly finds no contract
         // and falls back to ordinary method-lookup resolution. The eager
         // restore this replaced set no contract either.
         return try ctx.prepareStructuralCodecCallsAtNode(
@@ -12825,7 +12825,7 @@ const Builder = struct {
     /// payloads) but contains only the declared labels, so the generated Roc
     /// adapter performs one explicit row injection and no representation
     /// conversion. With a capability the adapted row is the result `Try`'s
-    /// error argument — the hosted instance, where the declared row is the
+    /// error argument—the hosted instance, where the declared row is the
     /// host ABI; without one it is the function's own result row.
     fn resultRowWideningAdapterSourceType(
         self: *Builder,
@@ -13081,8 +13081,8 @@ const Builder = struct {
     }
 
     /// The hosted `Try` nominal a Monotype names, crossing transparent alias
-    /// layers on the way. The checked side already crosses them —
-    /// `closedResultRowOrNull` resolves the result payload through aliases — so
+    /// layers on the way. The checked side already crosses them—`closedResultRowOrNull`
+    /// resolves the result payload through aliases—so
     /// a template declared `Res : Try(Str, [NotFound])` publishes a capability
     /// and a recorded row widening. Its lowered return is a `.alias` named node
     /// whose backing is the `Try` nominal, so matching only the outermost def
@@ -60210,10 +60210,10 @@ test "hosted Try info accepts alias-wrapped nominal arguments over unwrapped bac
 test "hosted Try graph walk crosses transparent alias layers to the Try nominal" {
     // `graphHostedTryInfoOrNull` is the relation side of the same recognition
     // `Builder.hostedTryNamedOrNull` performs while lowering, and the two must
-    // agree. No end-to-end fixture reaches the crossing — instantiating a
+    // agree. No end-to-end fixture reaches the crossing—instantiating a
     // checked root resolves alias layers, so even a hosted result declared as
     // `IoResult(Str)` arrives as the bare `Try` nominal
-    // (test/fx-open/hosted_alias_try_question.roc) — so the alias chain is
+    // (test/fx-open/hosted_alias_try_question.roc)—so the alias chain is
     // built here directly, including a two-layer chain no single-step guard
     // would walk.
     const gpa = std.testing.allocator;

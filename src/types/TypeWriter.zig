@@ -89,7 +89,7 @@ default_source_ctx: *const anyopaque = undefined,
 /// negated through function argument positions. Tag unions in output
 /// positions are implicitly open, so an anonymous extension there (the rigid
 /// `..` produces, or its instantiated flex) is not displayed (openness is
-/// meaningful — and shown — in input positions and for shared, constrained,
+/// meaningful—and shown—in input positions and for shared, constrained,
 /// or named extensions). Maintained by the func frame: each `FuncFrame` saves
 /// the surrounding polarity and re-asserts the stage-appropriate value before
 /// every child it requests.
@@ -1186,7 +1186,7 @@ fn stepTagUnion(self: *TypeWriter, writer: *ByteWrite, frame: *TagUnionFrame, ro
                     .flex => |flex| {
                         // An anonymous, unshared, unconstrained flex ext in an
                         // output position is that position's implicit openness
-                        // (an instantiated `..`) — hide it. Openness is still
+                        // (an instantiated `..`)—hide it. Openness is still
                         // shown in input positions, for named extensions, and
                         // when the ext var is shared or constrained elsewhere in
                         // the type (where it carries real information).

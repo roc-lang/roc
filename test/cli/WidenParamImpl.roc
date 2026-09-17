@@ -1,5 +1,5 @@
 # polarity_phase_two.md W6b: the same widening where the implementation's row
-# is closed by a parameter rather than by a top-level constant — an input
+# is closed by a parameter rather than by a top-level constant—an input
 # position stays closed as written, and returning it publishes a closed result
 # row. The request still lists `Extra`, which sorts between `Err` and `Ok`.
 WidenParamImpl := {}

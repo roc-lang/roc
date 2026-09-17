@@ -2,8 +2,8 @@
 # EVIDENCE. `Wrap.status` carries its own where-clause (`a.name`), so the
 # obligation that reaches it drags a second requirement along, while its
 # published result row is closed by the top-level `closed_ok` / `closed_err`.
-# `describe` uses the method twice in one body — once exhaustively at the
-# declared row and once widened (Appendix B's "Both" shape) — so the adapter
+# `describe` uses the method twice in one body—once exhaustively at the
+# declared row and once widened (Appendix B's "Both" shape)—so the adapter
 # is minted beside an ordinary declared-row specialization of the same
 # template.
 #

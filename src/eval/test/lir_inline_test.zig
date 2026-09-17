@@ -8922,8 +8922,8 @@ test "W6b closed impl reached through nested evidence is adapted" {
     // `Wrap.status` carries its OWN where-clause, so the obligation that
     // reaches it drags a second requirement along, and its published result
     // row is still closed by `closed_ok` / `closed_err`. `describe` uses the
-    // method twice in one body — exhaustively at the declared row and widened
-    // — so the adapter is minted beside an ordinary declared-row
+    // method twice in one body—exhaustively at the declared row and widened—so
+    // the adapter is minted beside an ordinary declared-row
     // specialization of the same template. `test/cli`'s
     // `WidenNestedEvidenceClosedImpl.roc` runs this program on both backends
     // and only proves it computes the right answer; the adapter count is what
@@ -8979,8 +8979,8 @@ test "W6b closed impl reached through nested evidence is adapted" {
 
 test "W6b closed impl with rigid payloads is adapted at the requested payloads" {
     const allocator = std.testing.allocator;
-    // `Relay(a).route` publishes the closed row `[Ok(a), Err(a)]` — closed
-    // because it returns its own input-position parameter — with RIGID
+    // `Relay(a).route` publishes the closed row `[Ok(a), Err(a)]`—closed
+    // because it returns its own input-position parameter—with RIGID
     // payloads. `lowerCheckedTypeVariable` seals a rigid to the empty tag
     // union, so the adapter's narrowed source type must take its payloads
     // from the REQUEST rather than from `lowerType` of the checked root
@@ -9021,7 +9021,7 @@ test "W6b direct-result widening adapter re-tags into the requested row at run t
     // `Err` 0, `Ok` 1 while the requested row numbers `Err` 0, `Extra` 1,
     // `Ok` 2. An adapter that forwarded the callee's result unchanged, or that
     // mapped the labels in the wrong order, would therefore read the `Ok`
-    // payload out of a payload-less `Extra` — which only running the program
+    // payload out of a payload-less `Extra`—which only running the program
     // can catch. (`Err` maps 0 to 0 and proves nothing on its own; it is here
     // so both constructors travel through the adapter.)
     const source =
@@ -9079,7 +9079,7 @@ test "W6b Try error-row widening adapter re-tags into the requested row at run t
     const allocator = std.testing.allocator;
     // The `Try` instance, executed. The extra label is `Gone` rather than the
     // `Other` the lowering-only test uses, because `Other` sorts AFTER
-    // `NotFound` and leaves it at discriminant 0 in both rows — an adapter that
+    // `NotFound` and leaves it at discriminant 0 in both rows—an adapter that
     // injected nothing at all would still produce the right answer. `Gone`
     // sorts first, so the declared row numbers `NotFound` 0 while the requested
     // row numbers `Gone` 0 and `NotFound` 1, and a missing or misordered
@@ -9145,7 +9145,7 @@ test "W6b alias-wrapped closed Try error row is adapted and re-tagged at run tim
     // `Try`'s, which declined the adapter after the relation had already
     // committed to it. `test/cli/WidenAliasTryClosedImpl.roc` runs the same
     // shape end to end on both backends; the count below is what proves an
-    // adapter — not a specialization at the wide row — serves the request.
+    // adapter—not a specialization at the wide row—serves the request.
     //
     // `Gone` sorts before `NotFound`, so the declared row numbers `NotFound` 0
     // while the requested row numbers `Gone` 0 and `NotFound` 1: a missing or
@@ -9285,8 +9285,8 @@ test "polarity W3 open-method widening adapter counts" {
     defer direct_lowered.deinit(allocator);
 
     // No adapters in any of the three. Every row `?` widens here belongs to an
-    // ORDINARY ANNOTATED signature — `wrap`'s in the first program, the method
-    // `wrapped`'s own in the third — and an ordinary annotated result row is
+    // ORDINARY ANNOTATED signature—`wrap`'s in the first program, the method
+    // `wrapped`'s own in the third—and an ordinary annotated result row is
     // implicitly open: its extension is an unresolved flex the request relation
     // unifies with the wider row like any other. Nothing declined to unify, so
     // nothing is owed an adapter; each specialization simply lowers at the row
@@ -9296,7 +9296,7 @@ test "polarity W3 open-method widening adapter counts" {
     // The first and third counted 1 before template completion consumed the
     // relation's own answer. Completion used to re-derive "is this row closed"
     // from the checked root, where `variableSealsToRowDefault` reports a flex
-    // tail defaulting to the empty tag union as closed — the right answer for a
+    // tail defaulting to the empty tag union as closed—the right answer for a
     // where-method's per-use marker, the wrong one for an ordinary annotated
     // row. Each spurious adapter also added a second, narrow specialization of
     // the same template and pulled it off the parallel body shards onto the

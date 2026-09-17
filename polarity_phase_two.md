@@ -47,7 +47,7 @@ postcheck and are the subject of this plan:
 | `resolved Monotype view requested for an unresolved instantiation node` building `test/http-headers/app.roc`, `test/json-decoder/camel_app.roc`, `test/json-decoder/camel_direct_app.roc`, and `roc test` on `test/cli/ParserTopLevelStored*.roc` and `issue_10888_json_parse_repeated_nested_field.roc` | `lower.zig` `resolvedPreparedCodecCallsForBoundary` | W2 |
 | Same panic for a stored parser whose shape has an optional `?:` field, raised at the restore function's FIRST eager view of the shape node (`lower.zig` ~33935, before any codec call is prepared), so no chokepoint grounding can reach it. Found by the W2a review (2026-09-03); reproduced on `main` + W1 (`kusqzzsn`) with a `..`-style probe, so pre-existing, not a polarity regression. Probes: scratchpad `w2a-review/ParserTopLevelStoredOptionalField*.roc`. | `lower.zig` stored-codec restore functions | W2b |
 | `lir_inline_test` "nested iterator results retain the callee-authored representation", case `closed direct Try method` | `checked_artifact.zig` plan classification | W3 |
-| `lir_inline_test` "issue 10121 …" (five tests): four `missing method` (encoder) errors, then `instantiation widened a closed tag union` in a Builtin lambda specialization — as measured BEFORE `rzysvtry`/`rprvoylp`. Re-measured 2026-09-03 in a clean workspace at the plan commit: all five pass. `rprvoylp`'s derivation closure subsumed both. | resolved by `rprvoylp`; W4 pins it | W4 (W5 folded in) |
+| `lir_inline_test` "issue 10121 …" (five tests): four `missing method` (encoder) errors, then `instantiation widened a closed tag union` in a Builtin lambda specialization—as measured BEFORE `rzysvtry`/`rprvoylp`. Re-measured 2026-09-03 in a clean workspace at the plan commit: all five pass. `rprvoylp`'s derivation closure subsumed both. | resolved by `rprvoylp`; W4 pins it | W4 (W5 folded in) |
 | A where-method use that widens its copy panics when the implementation's own return row is closed (`instantiation widened a closed tag union` in `instantiateTargetFromPlanNode`) | `lower.zig` dispatch lowering | W6 |
 
 ## 2. Work items
@@ -114,7 +114,7 @@ Phase-B boundary", ~5737–5748) and states that a defaultable checked
 variable becomes durable `[]` only at final sealing (~7002–7006). The eager
 stored-codec restore violates both today; polarity merely made a row reach
 it unresolved. The deferred structural path already has the machinery the
-restore lacks — a `.pending_deferred` reservation, a boundary record
+restore lacks—a `.pending_deferred` reservation, a boundary record
 (`deferred_structural_serializations`), Phase-A preparation of codec calls
 and `??` field defaults, and Phase-B emission from sealed types
 (`emitDraftDeferredStructuralSerializations`, `sealedPreparedCodecCallsForBoundary`,
@@ -150,18 +150,18 @@ enforces that."
 
 **Verification.** `timeout 120 ./zig-out/bin/roc test --no-cache test/cli/ParserTopLevelStoredParser.roc` and siblings; `zig build run-test-cli -- --suite subcommands --filter stored --filter "issue 10888"`; the two platform steps; `zig build run-test-zig-lir-inline` (must stay green: the deferred structural path shares the prepare functions).
 
-**Risks.** (1) The callee spec was keyed as an open request (`draftOpenRequestKey`) before grounding; a later identical closed request may specialize the same format method twice. Not a correctness issue; measure spec counts on the JSON fixtures; W2b removes the cause. (2) The four restore functions take an eager resolved view of the shape node right after `instNode` (~33786, ~33935 and the encoder twins), before any codec call is prepared, so a shape whose own cells are unresolved (an optional `?:` field slot) panics there, ahead of the chokepoint; W2a does not cover it (decided 2026-09-03, option 1: W2a stays minimal, W2b owns it — pre-existing on `main`). The chokepoint's `shape_node` grounding was therefore a provable no-op and was dropped; the declared exception names only callable nodes. (3) The doc invariant is weakened by exactly one declared case; the Phase-B assertions ("deferred structural serialization changed its sealed result type") stay satisfied because grounding yields the same content sealing would. (4) A format-method implementation whose own protocol row was closed by its body (a closed-source return) meets a grounded request that lists more tags: that is the W6b family inside codec land and W6b's adapter covers it; W2a must not paper over it with a wider grounding.
+**Risks.** (1) The callee spec was keyed as an open request (`draftOpenRequestKey`) before grounding; a later identical closed request may specialize the same format method twice. Not a correctness issue; measure spec counts on the JSON fixtures; W2b removes the cause. (2) The four restore functions take an eager resolved view of the shape node right after `instNode` (~33786, ~33935 and the encoder twins), before any codec call is prepared, so a shape whose own cells are unresolved (an optional `?:` field slot) panics there, ahead of the chokepoint; W2a does not cover it (decided 2026-09-03, option 1: W2a stays minimal, W2b owns it—pre-existing on `main`). The chokepoint's `shape_node` grounding was therefore a provable no-op and was dropped; the declared exception names only callable nodes. (3) The doc invariant is weakened by exactly one declared case; the Phase-B assertions ("deferred structural serialization changed its sealed result type") stay satisfied because grounding yields the same content sealing would. (4) A format-method implementation whose own protocol row was closed by its body (a closed-source return) meets a grounded request that lists more tags: that is the W6b family inside codec land and W6b's adapter covers it; W2a must not paper over it with a wider grounding.
 
 **W2b. Two-phase stored-codec restore.** Decision: the four BodyContext-level
 restores with dead `frozen_sealed_emission` branches (`lower.zig` ~33786,
 ~33937, ~34104, ~34274: parser and encoder runtime functions, `AtNode` and
-plain) split into a Phase-A half that runs while the graph accepts relations
-— instantiate the constructor plan against the request, bind const source
+plain) split into a Phase-A half that runs while the graph accepts relations—instantiate
+the constructor plan against the request, bind const source
 captures, restore the encoding capture, `prepareStructuralCodecCallsAtNode`,
 prepare `??` field defaults the way `prepareDraftDeferredExprs` does,
 `buildParserRestoredPrecomputedPlan`, reserve the runtime boundary
 `.pending_deferred`, and append a boundary record alongside
-`deferred_structural_serializations` — and a Phase-B half run by the same
+`deferred_structural_serializations`—and a Phase-B half run by the same
 pass as `emitDraftDeferredStructuralSerializations`: sealed prepared calls
 and field defaults, `lowerParseResultFromState` against sealed `TypeId`s,
 `addFn` with a `.sealed` `mono_fn_ty`, the capture lets, and
@@ -173,8 +173,8 @@ The Builder-level `restoreConstParserRuntimeFnExpr` (own graph, sealed by
 owns the optional-field case from the status table: the eager shape view
 disappears with the split (the shape is sealed in Phase B like every
 other type), and the W2a review's probe lands as registered `test/cli`
-fixtures — a stored parser and a stored encoder over
-`{ foo : Str, bar ?: Str }` — asserting no panic on both backends. Until
+fixtures—a stored parser and a stored encoder over
+`{ foo : Str, bar ?: Str }`—asserting no panic on both backends. Until
 W2b lands that program panics exactly as it does on `main`. Rule text:
 delete W2a's exception; the ~7005 statement and the ~15535 doc comment read
 as on `main`, and the Phase-A/Phase-B paragraph at ~5737 gains one sentence:
@@ -182,7 +182,7 @@ as on `main`, and the Phase-A/Phase-B paragraph at ~5737 gains one sentence:
 prepare in Phase A and emit in Phase B like every other codec body." Tests:
 the same fixtures; `run-check-snapshots` on the JSON and http-headers
 fixtures must show no lowered-output change against W2a (the sealed body
-equals the eagerly emitted one). Cost: medium — the mechanism exists, the
+equals the eagerly emitted one). Cost: medium—the mechanism exists, the
 work is moving the emission halves across the freeze and making the stored
 path prepare field defaults; I could not size it more precisely without a
 build. Risk: `enterCallableBodyDemandScope` and `constFnEvidence` must be
@@ -264,23 +264,23 @@ builder already collects identity-variable slots per published root
 (`identity_variables`, ~6956/7566), so `specializeResolvedStaticDispatchPlanCallables`
 is driven per template over its plan-ref span (or receives the set per
 plan) instead of over the flat plan table. `rootContainsIdentityVariables`
-is unchanged: its other consumers — the substitution fast path (~4932) and
-the payload identity walk that decides digest identity (~6602) — need the
+is unchanged: its other consumers—the substitution fast path (~4932) and
+the payload identity walk that decides digest identity (~6602)—need the
 var-based meaning.
 
 Rejected alternative: seal defaultable tails on the Monotype side before
 the `typeIsResolved` gate in `completeDeferredIteratorResult` (~32164).
 That makes iterator completion a second eager consumer of row defaults
 (W2a's class) and leaves every polarity-opened method call
-`direct_parametric` — a precision and compile-time regression against
+`direct_parametric`—a precision and compile-time regression against
 `main`, where the same calls were closed.
 
 **Rule text (design.md "Static Dispatch In Monotype", the `direct_closed`
 bullet ~7756).** "A checked flex row tail that carries a row default and no
 constraints, and that the enclosing template does not quantify (it is not
 an identity variable of the template's root, its where-clause signatures,
-or a nested generalized scope), has exactly one instantiation — its row
-default — and does not make a direct plan parametric; the closed path seals
+or a nested generalized scope), has exactly one instantiation—its row
+default—and does not make a direct plan parametric; the closed path seals
 it to that default (`lowerCheckedTypeVariable`). A tail the enclosing
 template quantifies is parametric, as any other identity variable."
 
@@ -296,10 +296,10 @@ suite; snapshots.
 
 **Risks.** Any other place that expects `direct_parametric` for defaultable
 tails; grep every consumer of the classification before changing it. The
-compiler already carries two notions of variable identity — digest identity
+compiler already carries two notions of variable identity—digest identity
 (any variable, `rootContainsIdentityVariables`) and compile-time-root
 concreteness (`checkedTypeIsConcreteCompileTimeRoot`, `.flex => false`,
-~1703) — and boxy and glue already treat a defaultable tail as closed
+~1703)—and boxy and glue already treat a defaultable tail as closed
 (`boxy/plan.zig` ~5360, `glue.zig` ~4434). This predicate is a third; the
 commit documents all three side by side so they cannot drift silently. The
 old branch's sprawl is not re-imported: the compile-time-root gate and the
@@ -316,9 +316,9 @@ would unify the row with closed `[Missing]` during validation if the
 walker had not already closed it (the walker runs at constraint
 resolution, before validation reaches the pin). So three of
 the four new alias-marker tests pin `closeTagRowsForDerivation`
-(encoder `[Missing]`, encoder `[Null]`, parser `[Null]`) — verified by
+(encoder `[Missing]`, encoder `[Null]`, parser `[Null]`)—verified by
 temporarily no-op'ing the walker, which fails exactly those plus three
-existing `rprvoylp` tests — while the parser `[Missing]` test pins the
+existing `rprvoylp` tests—while the parser `[Missing]` test pins the
 issue-10121 shape through the pre-existing wildcard pin and says so in
 its name. The two CLI fixtures pass with warnings from compile-time
 evaluation (unused match branch; condition known at compile time) and are
@@ -343,9 +343,9 @@ stack before `rzysvtry` and `rprvoylp` landed. Re-run in a clean jj
 workspace at the plan commit `wlzsxolu` (no phase-two code), all five
 `lir_inline_test` "issue 10121" tests pass (`zig build
 run-test-zig-lir-inline --summary all -- --test-filter "issue 10121"`:
-5/5). The earlier W4 failure — encoder derivation reporting `missing
+5/5). The earlier W4 failure—encoder derivation reporting `missing
 method` because `[Missing]` behind an alias marker resolved to an open row
-at the eligibility check — is exactly what `closeTagRowsForDerivation`
+at the eligibility check—is exactly what `closeTagRowsForDerivation`
 (`rprvoylp`) closes before every derivation site, as that item's design.md
 Rewrite Inventory entries state. The earlier W5 panic was observed only
 after a parser-style *tolerance* had been prototyped for W4, which left
@@ -474,7 +474,7 @@ row calls it and re-tags (`completeTemplateReservation` `.hosted` arm
 Hosted is the instance where the declared row is the host ABI; a Roc
 implementation whose published result row is closed (its body returns a
 closed-source value) is the other instance, and only where-method uses can
-reach it — a direct caller of such a function at a wider row is already a
+reach it—a direct caller of such a function at a wider row is already a
 checker mismatch. Work: (1) lift the declared-vs-requested comparison out
 of the `.hosted` arm into a pre-step that also runs for `.roc` templates
 whose checked root has a closed result row (bare union or `Try`), taking
@@ -482,15 +482,15 @@ the narrowed source type from the REQUEST's tags by the declared labels as
 `hostedTryAdapterSourceType` does (a polymorphic implementation's rigid
 payloads come from the request, never from `lowerType` of the checked
 root); (2) make the relation in `instantiateTargetFromPlanNode` /
-`methodTargetNodeFromPlan` (~30540, ~39625) width-aware — arguments exact,
+`methodTargetNodeFromPlan` (~30540, ~39625) width-aware—arguments exact,
 result at included width when the implementation's row is closed and the
-plan's row includes it — so the request reaches template completion at the
+plan's row includes it—so the request reaches template completion at the
 wider row instead of panicking in `unifyTagRows`; (3) compute the `Try`
 capability from the type (`hostedTryAdapterCapabilityForRoot` ~19539 is
 already generic over any function returning `Builtin.Try` with a closed
 error row) and publish it for every template with a closed result row, not
 only behind `isHostedProcedureExpr` (~19758). Chosen because one keyed
-mechanism — an adapter per (template, requested type) — serves dispatch
+mechanism—an adapter per (template, requested type)—serves dispatch
 plans, `.synthesize` targets, and iterator plans without touching each
 call-lowering path, and the hosted path stops being a special case. Cost:
 the hosted arm is restructured (pinned by the existing hosted `?`
@@ -506,18 +506,18 @@ tuple, a tag payload, a non-`Try` nominal) is decided by the checker. The
 earlier draft's claim that check-time rejection is not expressible is wrong
 in the direction that matters: a body use's widening is observable when
 the constrained function's body is checked (its fresh extension resolved
-to a row carrying tags — the audit's own test), and each marker's position
+to a row carrying tags—the audit's own test), and each marker's position
 in the signature is known when it is minted. Two checker shapes were
 possible; Jared decided (e) on 2026-09-03 (question 3, now closed): (d) per-use opening is
-restricted to the positions the adapter can re-tag — the direct result row
-and a `Try`'s rows — and every other output position of a where-method
+restricted to the positions the adapter can re-tag—the direct result row
+and a `Try`'s rows—and every other output position of a where-method
 signature stays closed as written, so a nested widening is an ordinary
 mismatch at the body use and the set of opened positions grows with the
 coercion generator; or (e) per-use opening stays everywhere and the
 obligation reports a new problem when the implementation's row at a
 widened nested marker is closed, which needs the widened markers recorded
 per signature and the implementation's scheme inspected before the
-obligation unifies it. Decision: **(d)** — reversed from (e) on 2026-09-14, see below. Per-use
+obligation unifies it. Decision: **(d)**—reversed from (e) on 2026-09-14, see below. Per-use
 opening is restricted at GENERATION time to the positions the adapter can
 re-tag: the direct result row and a `Try`'s rows. Every other output
 position of a where-method signature stays closed as written, so a nested
@@ -525,8 +525,8 @@ widening is an ordinary type mismatch at the body use, reported at the
 body use's own region. The set of opened positions grows with the coercion
 generator (§6). The nested-position fixture asserts that mismatch.
 
-(Correction, W7: "a `Try`'s rows" in this section reads plural — here, above,
-and in the proposed rule text below — but only the ERROR row is adaptable and
+(Correction, W7: "a `Try`'s rows" in this section reads plural—here, above,
+and in the proposed rule text below—but only the ERROR row is adaptable and
 only it is opened. A `Try`'s ok row is not adapted: the adapter asserts the ok
 type is unchanged, so an ok row is generated as written. The wording is left
 as it was written at decision time; `AdapterReachPosition` in
@@ -549,7 +549,7 @@ code does not support:
 
 So (e) could not be marker-keyed; it would have to be path-keyed, which
 requires a structural path encoding, a NEW SERIALIZED `ModuleEnv` table
-(obligations fire cross-module — `where_clause_test.zig:304` is an existing
+(obligations fire cross-module—`where_clause_test.zig:304` is an existing
 green test of that shape), a cache bump to 75, probe-rollback and
 rehydration arms, and a new non-local invariant that structural paths stay
 stable across generalization, cross-module copy, the closing instantiation,
@@ -557,8 +557,8 @@ and cache round-trip. Nothing else in the tree depends on path stability;
 every existing cross-phase identity is a Var, a node index, or a
 `TypeDigest`. Estimated 540-840 lines across 9-13 functions.
 
-That is the same shape as the reverted W6b stack — a serialized side table
-plus bookkeeping to keep an identity alive across phases — for a rule that
+That is the same shape as the reverted W6b stack—a serialized side table
+plus bookkeeping to keep an identity alive across phases—for a rule that
 would still be narrower than the adapter's own lowerability test (the
 checker has only `tagExtIsClosedEmpty`, "literally `[]` now";
 `row_default` does not exist until publication), i.e. two rules that can
@@ -572,7 +572,7 @@ Rule text (design.md, a new "Result-Row Widening Adapter" section beside
 Hosted Try Question Widening, which becomes its first instance; the
 where-method paragraph's lowering note cites it): "A procedure template
 whose published result row is closed may be requested at a row that
-includes it — the same tags with usable payloads, plus others — when a
+includes it—the same tags with usable payloads, plus others—when a
 where-method body use widened its copy of the signature and the obligation
 resolved to that implementation. The request is related component-wise
 without unifying the rows, the template is specialized at its declared
@@ -628,7 +628,7 @@ shared diff logic. Concretely: the audit appends a `type_mismatch` problem
 with a new context variant (`problem/context.zig` ~55, beside
 `type_annotation`) carrying the annotated union's region, an "actual"
 snapshot of the resolved row (the listed tags plus every extra tag the
-body produced — all of them, not only the first) and an "expected"
+body produced—all of them, not only the first) and an "expected"
 snapshot of the union as the annotation wrote it: the recorded
 `listed_tags` with a closed extension, built as a fresh var at audit time
 so the annotation's own var (which shares the widened row) is not what is
@@ -727,8 +727,8 @@ Seven divergences from the plan, all deliberate and all recorded in §8 and §9:
 - **Eleven commits the plan never anticipated** (21, 24, 25, 29–36): two
   design-decision records, the issue-11246 audit replay, the two defects the
   measure-first pass turned up (29 and 30), four correctness and hygiene fixes
-  found by review (31–34), and the two widening fixes at the top (35, 36) —
-  the second of which REVERSES §9.2's rejection on measured evidence.
+  found by review (31–34), and the two widening fixes at the top (35, 36)—the
+  second of which REVERSES §9.2's rejection on measured evidence.
 - **A base-code fix this branch does not own** (26–28) sits in the stack,
   deliberately unsquashed so a future rebase can drop the commits individually
   if upstream takes the fix.
@@ -751,13 +751,13 @@ replaced; §8.1.3 and §8.1.8 record why.
 | Module check (fast gate) | `zig build run-test-zig-module-check` | the per-commit gate actually used from W6b onward |
 | Monotype/LIR | `zig build run-test-zig-lir-inline` | green after W3; the five issue-10121 cases pinned by W4 stay green |
 | Stored codecs | `zig build run-test-cli -- --suite subcommands --filter stored --filter "issue 10888"` | green after W2a and unchanged after W2b |
-| Stored-codec equivalence | Monotype-footprint comparison (`structuralJsonMonotypeStatsForSource`), NOT a snapshot comparison | `stored_parser_gate_source` measures fns=10 defs=11 exprs=535 locals=108 misses=14/0 identically before and after W2b. The planned gate ("`run-check-snapshots` must show no lowered-output change") is impossible: no snapshot carries lowered output — the `# MONO` section is a CIR re-emitter (§8.1.3, §8.1.8 deviation 3). |
+| Stored-codec equivalence | Monotype-footprint comparison (`structuralJsonMonotypeStatsForSource`), NOT a snapshot comparison | `stored_parser_gate_source` measures fns=10 defs=11 exprs=535 locals=108 misses=14/0 identically before and after W2b. The planned gate ("`run-check-snapshots` must show no lowered-output change") is impossible: no snapshot carries lowered output—the `# MONO` section is a CIR re-emitter (§8.1.3, §8.1.8 deviation 3). |
 | Adapter actually ran | count Monotype fns whose `source.fn_def == .checked_generated`, or the specialization counters | The CLI fixtures are mechanism-blind: `OpenMethodWidenedCaller` asserts only exit success and needle absence, so it passes whether the program compiles to one wide specialization or to an adapter plus a narrow one (§8.1.3). |
 | Where-method fixtures | `roc test --no-cache --opt=interpreter` and `--opt=dev` on the W6 fixtures | green after W6a (open impls) and W6b (closed impls) |
 | Platforms | `zig build run-test-zig-http-header-decoder-platform`, `zig build run-test-zig-json-decoder-platform` | green after W2a |
 | Diagnostic | `zig build run-test-zig -- --test-filter "check type"`, `run-test-cli` filter `10689`, `run-check-snapshots` | green after W8 |
 | Build mode | every widening gate must run in **Debug** | `Common.invariant` compiles to `unreachable` outside Debug (`src/postcheck/common.zig:252–257`), so a release run proves nothing about a panic being gone (§8.1.2). |
-| Everything | `zig build run-test-zig`, `zig build run-check-snapshots`, `zig build run-test-cli` | The deliberate red class recorded here through 2026-09-15 — `test/fx-open/issue_9963_hosted_try_question_mark.roc` and its three success-asserting registrations — is GONE: that rejection was reversed and the defect fixed (§8.1.7, §9.2). Measured at W7 on `1f2d149d` plus the two W7 doc commits: `run-test-zig` 5763/5771 (8 skipped, 0 failed, 0 crashed); `run-check-snapshots` clean; `run-test-cli` 1253 passed / 4 run-failed / 9 infra / 19 skipped, with `platforms` 266 run 0 failed and all 13 failures pre-existing (11133, 11158, 10584, boxy JSON codec descriptors, and nine RustGlue `error.FileNotFound` infra errors). Full breakdown in the PR description. |
+| Everything | `zig build run-test-zig`, `zig build run-check-snapshots`, `zig build run-test-cli` | The deliberate red class recorded here through 2026-09-15—`test/fx-open/issue_9963_hosted_try_question_mark.roc` and its three success-asserting registrations—is GONE: that rejection was reversed and the defect fixed (§8.1.7, §9.2). Measured at W7 on `1f2d149d` plus the two W7 doc commits: `run-test-zig` 5763/5771 (8 skipped, 0 failed, 0 crashed); `run-check-snapshots` clean; `run-test-cli` 1253 passed / 4 run-failed / 9 infra / 19 skipped, with `platforms` 266 run 0 failed and all 13 failures pre-existing (11133, 11158, 10584, boxy JSON codec descriptors, and nine RustGlue `error.FileNotFound` infra errors). Full breakdown in the PR description. |
 
 ## 5. Risks and rollback
 
@@ -811,7 +811,7 @@ replaced; §8.1.3 and §8.1.8 record why.
 2. (Decided 2026-09-03: artifact side, with the clone-origin record; see
    the W3 landing note.)
 3. (Decided 2026-09-03: (e). **REVERSED 2026-09-14: (d)**, after recon
-   showed (e)'s two enabling premises are false — markers are closed to
+   showed (e)'s two enabling premises are false—markers are closed to
    `[]` before the obligation runs, and mint-time positions are not
    recorded. Per-use opening is restricted at generation time to the
    adapter-reachable positions; a nested widening is an ordinary mismatch
@@ -819,7 +819,7 @@ replaced; §8.1.3 and §8.1.8 record why.
 4. W6b mechanism: the adapter at the template boundary is my choice over
    the earlier draft's call-site wrap. If restructuring the hosted arm is
    judged too risky for this PR, the fallback is the call-site wrap with
-   the same rule text minus "hosted is an instance" — it is a second
+   the same rule text minus "hosted is an instance"—it is a second
    re-tag site and should then be listed as debt.
 5. (Closed 2026-09-03.) W5's panic is not reachable on the stack; see W4.
 6. (Closed 2026-09-03.) The 10121 harness tests pass on the stack; the CLI
@@ -858,8 +858,8 @@ W6b's Monotype half needed no change to `solve.zig`: the widening relation
 never unifies the differing rows, so `RowWidthRelation` is untouched and
 neither `unifyTagRows`'s panic nor the `relateOpaqueInterface` twin is
 reachable from it. It applied at NINE relation sites, not the six the plan
-named — the evidence target root, the draft-template path, and interface
-replay also unify a closed root with a widened request — and adapter spec
+named—the evidence target root, the draft-template path, and interface
+replay also unify a closed root with a widened request—and adapter spec
 jobs had to route to the coordinator from two dispatch points, not one.
 
 **As pushed, `vruxrtsl` is NOT landable.** Adversarial review found three
@@ -872,12 +872,12 @@ and the borrow-across-transaction fix it claims is not in the diff
 
 | # | Defect | Consequence |
 |---|---|---|
-| B1 | `resultRowWideningOrNull` accepts a widening at ANY type argument of a same-definition nominal — a `Try`'s **Ok** arg, or any alias type argument. The gate computes a `ClosedResultRow` but never passes it to the relation, and `resultRowWideningAdapterSourceType` narrows only the ERR row, so it returns null and no adapter is minted while the rows stay unrelated. | miscompile |
-| B2 | On the `local_context_dependent` path the relation is honoured but the body is lowered at the declared row and no adapter is generated — the adapter exists at exactly one site, the relation at nine. | miscompile |
+| B1 | `resultRowWideningOrNull` accepts a widening at ANY type argument of a same-definition nominal—a `Try`'s **Ok** arg, or any alias type argument. The gate computes a `ClosedResultRow` but never passes it to the relation, and `resultRowWideningAdapterSourceType` narrows only the ERR row, so it returns null and no adapter is minted while the rows stay unrelated. | miscompile |
+| B2 | On the `local_context_dependent` path the relation is honoured but the body is lowered at the declared row and no adapter is generated—the adapter exists at exactly one site, the relation at nine. | miscompile |
 | B3 | The pre-step mixes worker-workspace and coordinator type ids (`lowerType` writes to `activeTypeStore()`, `sameMonoType` reads `program.types`). In release this is an arbitrary in-bounds read. | miscompile |
 
 Root cause, and the fix to make: **three sources of truth for "is this row
-closed"** — the graph (`tagRowIsClosed`, unresolved ext ⇒ open), the
+closed"**—the graph (`tagRowIsClosed`, unresolved ext ⇒ open), the
 dispatch callable's checked type (a fresh clone), and the template root's
 checked type. The relation uses the first two, the adapter the third, and
 every gap between them is a wrong tag discriminant. The relation must
@@ -890,7 +890,7 @@ Also to fix: the closedness rule classifies an ordinary implicitly-open
 annotated result row as closed, so the adapter fires for a broad class of
 ordinary programs (not just where-method uses, contradicting this plan's
 own premise that "only where-method uses can reach it") and pulls them out
-of parallel body shards onto the coordinator — a compile-time regression.
+of parallel body shards onto the coordinator—a compile-time regression.
 And the pre-step's capability invariant is evaluated before the predicate
 that says the path is relevant, adding release-mode UB sites on a hot path.
 
@@ -900,7 +900,7 @@ A first W6b attempt ran from `ssvqsxro` through 23 WIP commits and was
 **reverted**: it grew `Check.zig` from 37,525 to 112,958 lines (+59,292 in
 one commit), added 42 side-table `SafeList` fields to `ModuleEnv`, and left
 the full checker gate red (1,257/1,383 pass, 6 fail, 120 crash) with W6b's
-actual deliverable — the result-row widening adapter — still unwritten.
+actual deliverable—the result-row widening adapter—still unwritten.
 
 Cause, for the record: W6a's raw-witness validators were strict enough to
 reject PRE-EXISTING, unrelated checker state, and each rejection was
@@ -922,7 +922,7 @@ Recorded here rather than rediscovered later:
   `CheckedTypePayload.variableSealsToRowDefault` rule (`.rigid => false`,
   no constraints, no numeric default phase), NOT `checkedTypeIsClosedTagRow`
   (which counts a rigid carrying an empty-tag-union default as closed). A
-  rigid result row is parametric — the caller supplies it — so the other
+  rigid result row is parametric—the caller supplies it—so the other
   rule would mint adapters for polymorphic templates. This keeps W6b on the
   same closure rule W3 and W6a share.
 - **The widening width is structurally non-recursive.** It applies to
@@ -953,11 +953,11 @@ Every remaining item was re-grounded in the source before implementation.
 Corrections to sections 1-7, which are NOT amended in place so the drift
 stays visible:
 
-**Verification tooling — the most important finding.** Only two mechanisms
+**Verification tooling—the most important finding.** Only two mechanisms
 can prove the widening adapter actually ran: counting Monotype fns whose
 `source.fn_def == .checked_generated`, or the specialization counters
 (`monotypeCountersForModule` / `expectMonotypeSpecializationCountersWithin`).
-**Every CLI fixture is mechanism-blind** — `OpenMethodWidenedCaller` asserts
+**Every CLI fixture is mechanism-blind**—`OpenMethodWidenedCaller` asserts
 only exit success, "All (1) tests passed", and the absence of panic needles,
 so it passes identically whether the program compiles to one wide
 specialization or to an adapter plus a narrow one. `lir_inline_test` runs the
@@ -968,8 +968,8 @@ which mechanism ran.
 
 **There is no snapshot of lowered output anywhere.** The `# MONO` snapshot
 section is a CIR re-emitter (`snapshot_tool` `generateMonoSection`), not
-Monotype/LIR. W2b's stated gate — "`run-check-snapshots` must show no
-lowered-output change against W2a" — is therefore **impossible as written**.
+Monotype/LIR. W2b's stated gate—"`run-check-snapshots` must show no
+lowered-output change against W2a"—is therefore **impossible as written**.
 Substitute a Monotype view equivalence (`expectEquivalentMonotypeProgramViews`)
 or spec-count equality in a lir test.
 
@@ -980,7 +980,7 @@ widening at EITHER `Try` type argument, while `closedResultRowOrNull`,
 handle only `args[1]` (the error row). That asymmetry is the bug, and the fix
 is a five-function lockstep change.
 
-**W6b / B2 — the plan's reproduction recipe is wrong.**
+**W6b / B2—the plan's reproduction recipe is wrong.**
 `local_context_dependent` is driven by a `.local_proc` evidence TARGET
 (`specEvidenceLocalOwner`), not by "a dispatch from inside a generalized
 local scope". A dispatch inside `helper = |r| ...` does NOT make the target
@@ -1003,8 +1003,8 @@ rows", plural. That is wrong: `closedResultRowOrNull` returns
 ok row against a closed implementation panics on both the pre-W6b and
 post-W6b binaries. **The adapter-reachable set is exactly: the direct result
 row, and a `Try`'s ERROR row.** Decided 2026-09-14: both halves are
-restricted to that set rather than extending the adapter to the ok row —
-the relation relates every other type argument (a `Try`'s `args[0]`, every
+restricted to that set rather than extending the adapter to the ok row—the
+relation relates every other type argument (a `Try`'s `args[0]`, every
 alias type argument) at `.exact` so a widening there restores the loud panic,
 and per-use opening is withheld from those positions in the checker. An
 ok-row widening is therefore an ordinary mismatch at the body use, like any
@@ -1016,14 +1016,14 @@ by roughly +510-530), but the Builder-level `restoreConstParserRuntimeFnExpr`
 takes its OWN eager resolved view, so the optional-field fix needs SIX sites,
 not four, and the plan's claim that the Builder-level restore "is unaffected"
 holds only for prepared codec calls. `groundRowDefaults` has ONE production
-caller plus five in unit tests — not the thirteen the plan feared. The
+caller plus five in unit tests—not the thirteen the plan feared. The
 existing deferred-structural boundary record cannot be reused as-is: it
 carries a dispatch plan and structural evidence where the stored restore
 needs a const fn value, a store view, capture lets and a precomputed parser
 plan. Sizing: ~500-800 lines.
 
 **W2b follow-up: sites 1-2 are harder than "they also have an eager view".**
-The two Builder-level restores prepare NO codec calls at all — they lower
+The two Builder-level restores prepare NO codec calls at all—they lower
 format-method calls through the ordinary unfrozen path. Moving their emission
 behind the freeze therefore REQUIRES giving them
 `prepareStructuralCodecCallsAtNode`, or they hit `Common.invariant("sealed
@@ -1050,7 +1050,7 @@ rise). Plus `roc build --timings` counters compared across binaries.
 chain and touches no graph. The real highest-probability blocker is instead
 `ParserPrecomputedPlan`: `buildParserRestoredPrecomputedPlan` takes a sealed
 `shape_ty`, so it must move to Phase B, where it calls `restoreConstNodeAtType`
-for `Str` field-name literals — which can in principle reach
+for `Str` field-name literals—which can in principle reach
 `constrainTypeToMono`, i.e. relation production, after the freeze.
 
 **Appendix A's path is site 4** (`restoreConstParserRuntimeFnAtNode`), proven
@@ -1059,7 +1059,7 @@ minus the `bar ?: Str` field and passes today. But WHICH eager view panics is
 still open, and there is a genuine contradiction to resolve: an annotated `?:`
 field pins `.optional` concretely (so its slot is closed, not unresolved), and
 an `.undetermined` field kind is rejected for a compile-time root by
-`checkedFieldTypesAreConcreteCompileTimeRoots` — so BOTH documented mechanisms
+`checkedFieldTypesAreConcreteCompileTimeRoots`—so BOTH documented mechanisms
 for an unresolved cell are excluded on paper. The unresolved cell is something
 else, most likely inside the generated parser's protocol rows. Settle it by
 running the fixture on the pre-change binary in Debug and reading the frame;
@@ -1068,17 +1068,17 @@ it does not change the design, since all views at those sites move to Phase B.
 Fan-out is 14 points, derived by diffing the two existing deferred lists
 (record, store field, `.empty`, two deinit loops, two discard-after-seal
 points, the discarded-state assertion, the Phase-A fixpoint arm and its
-`.pending_deferred` assertion, and THREE Phase-B emit call sites — the shard
-path, the ordinary spec-job seal, and the coordinator commit — not one).
+`.pending_deferred` assertion, and THREE Phase-B emit call sites—the shard
+path, the ordinary spec-job seal, and the coordinator commit—not one).
 Nothing here is serialized, and it must stay that way.
 
-**W8.** `findBestTypoSuggestions` (`report.zig`) is the wrong citation — it
+**W8.** `findBestTypoSuggestions` (`report.zig`) is the wrong citation—it
 handles RECORD-FIELD typos; the tag typo hint comes from the snapshot diff
 and arrives automatically once real snapshots are supplied, so the bespoke
 hint is simply deleted. A type snapshot CANNOT be built without minting a
 var, and "mint and discard under a probe" is not viable because probe
 rollback truncates the type store and invalidates the region index the report
-needs — so mint for real at the entry's region. The audit does not currently
+needs—so mint for real at the entry's region. The audit does not currently
 hold the annotated UNION var (only the ext var and the listed tags), so
 `ImplicitOpenExt` must carry it, added at three mint sites; the alias-marker
 site is the hard one, having neither the union var nor a reliable region.
@@ -1094,14 +1094,14 @@ refuted both halves of the difficulty recorded above.
   `Region.zero()` branch is dead code. Proven behaviourally: the existing
   test at `type_checking_integration.zig:2797` already renders a caret under
   the annotated alias through exactly this path.
-- *The union var is obtainable* — one line in `instantiate.zig`'s
+- *The union var is obtainable*—one line in `instantiate.zig`'s
   `stepTagUnion.await_ext` stage, where the marker and its union meet and
   `listed_tags` is already attached.
 - **But W8 does not need it.** Synthesize the "actual" row as
   `{ tags = listed_tags, ext = entry.var_ }`. `TypeWriter.gatherTags` and
   `diff.gatherTagsFromUnion` both flatten ext chains, so this renders exactly
-  the listed tags plus EVERY extra tag — the plan's "all of them, not only
-  the first" — and is identical to what the real union var would render,
+  the listed tags plus EVERY extra tag—the plan's "all of them, not only
+  the first"—and is identical to what the real union var would render,
   because that var's content is literally that pair at mint time. This keeps
   W8 out of `src/types/instantiate.zig` entirely, adds no `ImplicitOpenExt`
   field, and is strictly safer: `makeMismatchReport` degrades to "the
@@ -1111,7 +1111,7 @@ refuted both halves of the difficulty recorded above.
 
 Two further corrections: the report arm should pass
 `ProblemRegion{ .direct = ctx.region }` rather than
-`regionIdxFrom(actual_var)` — `getRegionSafe` SILENTLY drops the caret when a
+`regionIdxFrom(actual_var)`—`getRegionSafe` SILENTLY drops the caret when a
 var's index is past the region list, and `.direct` reproduces today's caret
 byte-for-byte while removing all dependence on where synthesized vars land.
 And `snapshot/diff.zig` carries a stale comment claiming the polarity audit
@@ -1128,20 +1128,20 @@ new sites, because the prescribed root fix was skipped.
 
 | # | Defect | Status |
 |---|---|---|
-| B1' | `.defer_open` is position-blind. A DECLARATION REFERENCE at `.result`/`.try_row` defers every marker beneath it, at any depth, because the instantiator flips polarity only through `stepFunc` — `List`/record/tuple/tag-payload args never demote. So `Statuses : List([Ok(Str), Err(Str)])` as a where-method result reopens the nested marker. | CONFIRMED BY PROBE: checks clean, then panics in `unifyTagRows` |
-| B2' | `.local_proc` dispatch targets decline at three sites where the adapter is unreachable BY CONSTRUCTION (a local proc has no `checked_fn_root` and never reaches `completeTemplateReservation`). Prevented only by an incidental exact re-relate, which is `Common.invariant` — `unreachable` in release. | code-confirmed |
-| B3' | The relation is handed `lookup.target.callable_ty`, completion uses `template.checked_fn_root` — and it is `checked_fn_root` that is the SUBSTITUTING clone (`specializeRoot`), the opposite of what was assumed. Closedness is id-independent for a fresh tail, but a substituted tail flips the predicate, fail-open and unguarded. | code-confirmed |
+| B1' | `.defer_open` is position-blind. A DECLARATION REFERENCE at `.result`/`.try_row` defers every marker beneath it, at any depth, because the instantiator flips polarity only through `stepFunc`—`List`/record/tuple/tag-payload args never demote. So `Statuses : List([Ok(Str), Err(Str)])` as a where-method result reopens the nested marker. | CONFIRMED BY PROBE: checks clean, then panics in `unifyTagRows` |
+| B2' | `.local_proc` dispatch targets decline at three sites where the adapter is unreachable BY CONSTRUCTION (a local proc has no `checked_fn_root` and never reaches `completeTemplateReservation`). Prevented only by an incidental exact re-relate, which is `Common.invariant`—`unreachable` in release. | code-confirmed |
+| B3' | The relation is handed `lookup.target.callable_ty`, completion uses `template.checked_fn_root`—and it is `checked_fn_root` that is the SUBSTITUTING clone (`specializeRoot`), the opposite of what was assumed. Closedness is id-independent for a fresh tail, but a substituted tail flips the predicate, fail-open and unguarded. | code-confirmed |
 
 Also: the fail-closed assert added for B2 is STATICALLY DEAD (its condition
 already contains `!local_context_dependent`), and both new `lir_inline_test`s
-are COMPILE-ONLY — `lowerMonotypeModuleWithOptions` never runs the
+are COMPILE-ONLY—`lowerMonotypeModuleWithOptions` never runs the
 interpreter, so they pin "an adapter was minted" and no value correctness. An
 adapter with a wrong tag mapping passes both.
 
 **Why it recurred: an over-broad scope rule.** This plan's restart rule was
 written into subagent briefs as "no new side tables", and the implementer
-therefore skipped the prescribed fix — "the relation RECORDS the widening it
-performed and completion CONSUMES that record" — because it appeared to need
+therefore skipped the prescribed fix—"the relation RECORDS the widening it
+performed and completion CONSUMES that record"—because it appeared to need
 new state. That is the wrong reading. The explosion this branch is recovering
 from was 42 SERIALIZED `ModuleEnv` tables plus validator families; a value
 threaded along a call path is not that. **Corrected rule: prefer the smallest
@@ -1167,9 +1167,9 @@ request, every route into template completion, and every route that lowers a
 body around it, answers the question this plan kept re-opening.
 
 **Why four rounds found the same shape.** Three independent recognizers each
-answered "is this a widening?" from a different representation — the checked
+answered "is this a widening?" from a different representation—the checked
 type (`closedResultRowOrNull`), the graph (`resultRowWideningOrNull`), and the
-mono type (`resultRowWideningAdapterSourceType`) — and every relation site had
+mono type (`resultRowWideningAdapterSourceType`)—and every relation site had
 to re-derive "can an adapter serve me?" by hand. Any new site, or any
 representation the three disagree on, reproduces the defect. That is
 structural, not bad luck.
@@ -1180,12 +1180,12 @@ consuming it once makes the decline and the reservation the same fact, and
 decline. Three leaks remain, in priority order:
 
 1. **One recognizer, not three.** `closedResultRowOrNull` resolves aliases,
-   and the checker treats an alias as transparent for reach — but the GRAPH
+   and the checker treats an alias as transparent for reach—but the GRAPH
    recognizers refuse aliases (`kind == .nominal` required, `isBareTagRowNode`
    rejects `.named`, and an alias's def is not `Try`'s). So for
    `IoResult(a) : Try(a, [IoErr(Str)])` the checker opens per use, lowering
    declines to recognize, the exact relation fires, and `unifyTagRows` panics.
-   HIGH likelihood on real code — hosted rows are always closed, so `?`
+   HIGH likelihood on real code—hosted rows are always closed, so `?`
    through an aliased hosted result is the natural driver. Best fix: have the
    CHECKER publish the widening per call edge in the checked artifact (it
    already publishes `hosted_try_adapter`, where-method scheme-use records and
@@ -1197,16 +1197,16 @@ decline. Three leaks remain, in priority order:
 3. **The backstop must be loud in EVERY mode.** Every "loud" rejection in the
    table bottoms out in `Common.invariant`, which is `unreachable` outside
    Debug. The widening-specific guards were upgraded to `compilerBug`, but the
-   one invariant whose violation actually changes emitted code — the closed-row
-   rejection in `unifyTagRows` / `relateOpaqueTagRows` — was not. Promoting it
+   one invariant whose violation actually changes emitted code—the closed-row
+   rejection in `unifyTagRows` / `relateOpaqueTagRows`—was not. Promoting it
    converts every remaining hole in this section from a wrong tag discriminant
    into a build stop, in release too. Cheapest and highest-value of the three.
 
 Two further findings, both unpinned:
 
 - **For-clause aliases bypass instantiation.** An `is_for_clause_alias`
-  annotation unifies the app's alias DECLARATION var — whose body carries
-  markers at every depth — directly into the annotation, with no polarity or
+  annotation unifies the app's alias DECLARATION var—whose body carries
+  markers at every depth—directly into the annotation, with no polarity or
   reach resolution. If that annotation is a where-method signature, the nested
   markers are then opened per use. Needs a platform test
   (`requires { Model }`, `Model : { items : [Pending, Done] }`, and a
@@ -1215,7 +1215,7 @@ Two further findings, both unpinned:
   (`src/postcheck/monotype/lower.zig:47484`; the name recorded here as
   `relateCustomParserErrorInjection` was taken from its invariant message, not
   from the declaration)
-  relates only shared labels' payloads and never checks closedness — the same
+  relates only shared labels' payloads and never checks closedness—the same
   defect shape in the parser-error-injection mechanism, whose adapter is the
   parser runtime rather than the template adapter. Not audited; out of W6b's
   scope but it should be recorded as debt rather than forgotten.
@@ -1246,11 +1246,11 @@ through `resolveVar(...).var_`, and only to compare it against the omitted
 receiver's root; `recordGeneralizedDispatchTargetShare` is called with the
 OMITTED var, never the retained one. Both vars are in the same equivalence class,
 so recording either is behaviourally identical. The field is a validation witness,
-and its doc comment calling it the "Raw receiver" is the misleading part — it is
+and its doc comment calling it the "Raw receiver" is the misleading part—it is
 the class's checked representative at merge time, which the store explicitly does
 not promise to be the caller's var.
 
-**Fix:** one line, test-side — compare roots rather than spellings at the second
+**Fix:** one line, test-side—compare roots rather than spellings at the second
 assertion, and tighten that doc comment. Do NOT "fix" the production code; there
 is no defect there.
 
@@ -1268,7 +1268,7 @@ marker-checked binary in a comparison workspace. Neither is pre-existing.
 They are not both fx-open: issue_9826 is a `test/cli` fixture registered in
 the `subcommands` suite, and only issue_9963 is under `test/fx-open`.
 
-**issue_9826 — a rejection that stopped happening.** `wyzrkrmn` deleted the
+**issue_9826—a rejection that stopped happening.** `wyzrkrmn` deleted the
 exact `..` the test exists to reject, in a HOSTED lambda annotation:
 `line! : Str => Try({}, [LineErr(IOErr), ..])`. Hosted annotations are
 `.as_written`, so that `..` was load-bearing; with it gone there is nothing
@@ -1291,7 +1291,7 @@ implicit opening, so an extensionless hosted row must stay closed; if that
 opt-out ever regressed the row would be implicitly opened, the closed-row
 check would reject it, and this case would fail loudly.
 
-**issue_9963 — a valid program that stopped compiling.** The obvious lead was
+**issue_9963—a valid program that stopped compiling.** The obvious lead was
 wrong and is recorded here so it is not re-tried: `via_question!` and an app's
 `main!` are NOT host-boundary positions. An app `main!` is not a `provides`
 def, and `via_question!` has a body so it is not a hosted lambda. Measured:
@@ -1304,11 +1304,11 @@ output positions. `via_question!`'s body is `Ok(host_call!({})?)`, so at the
 `?` the probe `expected=[HostErr(Str), ..flex]` against `actual=[HostErr(Str)]`
 now SUCCEEDS by binding the flex to `[]`. Hosted Try Question Widening
 therefore declines, the binding is performed for real, and `via_question!`
-generalizes with a CLOSED row — after which the caller's `?` is rejected. At
+generalizes with a CLOSED row—after which the caller's `?` is rejected. At
 base the same `..` was the rigid `#others`: the probe failed, the rule fired,
 the row stayed open.
 
-**Restoring `..` does NOT fix this one** — it is now the same flex either way.
+**Restoring `..` does NOT fix this one**—it is now the same flex either way.
 The consequence is broader than one fixture: after `kupupkyt` there is no
 longer any way to spell "this output row stays open" on a function whose body
 produces a closed row. design.md claims this pairing "now arises only where
@@ -1318,7 +1318,7 @@ decision below. (Still true for a NON-hosted body as of 2026-09-16: the fix in
 §9.2 restores the open publication for a `?` on a direct hosted call by making
 the rule decide instead of the probe, not by restoring a spelling.)
 
-**Recorded 2026-09-15 as KNOWN RED, DELIBERATE — REVERSED AND FIXED
+**Recorded 2026-09-15 as KNOWN RED, DELIBERATE—REVERSED AND FIXED
 2026-09-16.** The position taken here was:
 
 > `test/fx-open/issue_9963_hosted_try_question_mark.roc` stays failing. It is
@@ -1335,7 +1335,7 @@ the rule decide instead of the probe, not by restoring a spelling.)
 > skipped at all. So the test stays simply red, and the PR description carries
 > the reason.
 
-Everything in that block about the MECHANISM is still accurate — including the
+Everything in that block about the MECHANISM is still accurate—including the
 regression attribution to `kupupkyt` above. What was wrong is the last
 inference: that every available patch is host-specific. §9.2 below records the
 measurement that falsified it and the fix that landed. The fixture is green,
@@ -1353,7 +1353,7 @@ elimination.** The four `BodyContext`-level stored-codec restores
 now prepare in Phase A and emit in Phase B, from sealed types only. The two
 Builder-level restores (`restoreConstParserRuntimeFnExpr`,
 `restoreConstEncoderForRuntimeFnExpr`) do NOT, and W2b never claimed
-otherwise — they build their body in a private graph they create and destroy
+otherwise—they build their body in a private graph they create and destroy
 themselves, seal it with `sealActiveBodyDraft`, and still take eager resolved
 views inside it (`resolvedCheckedTypeView` of the dispatcher). They are the
 last eager codec consumers, and 8.1.3's follow-up note explains why moving
@@ -1375,7 +1375,7 @@ went with it.
 1. *The precomputed-plan builder moved to Phase B, not Phase A.* The plan
    listed `buildParserRestoredPrecomputedPlan` among the Phase-A steps. It
    takes a sealed `shape_ty`, and in Phase A the shape is exactly what is not
-   yet decided — asking for it there is the eager view W2b exists to remove.
+   yet decided—asking for it there is the eager view W2b exists to remove.
    It runs in `emitStoredParserRuntimeBody` on `sealer.sealNode(boundary.shape_node)`.
    8.1.3 flagged the risk that its `restoreConstNodeAtType` calls for `Str`
    field-name literals might produce relations after the freeze; measured, they
@@ -1387,11 +1387,11 @@ went with it.
    smuggled in under a refactor.
 3. *The gate is a Monotype-footprint comparison, not a snapshot comparison.*
    The plan's gate ("`run-check-snapshots` must show no lowered-output
-   change") is impossible — no snapshot carries lowered output. 8.1.3
+   change") is impossible—no snapshot carries lowered output. 8.1.3
    proposed `structuralJsonMonotypeStatsForSource` with a window on
    expressions and locals; the window turned out to be unnecessary and was
    removed. `stored_parser_gate_source` measures fns=10 defs=11 exprs=535
-   locals=108 misses=14/0 both before and after W2b — an exact match, because
+   locals=108 misses=14/0 both before and after W2b—an exact match, because
    the eager path already reserved and filled, so deferring orphans nothing
    new. Two further gates (`stored_parser_optional_gate_source`,
    `stored_encoder_optional_gate_source`) pin W2b's OWN numbers; they cannot
@@ -1426,8 +1426,8 @@ went with it.
   `restoreConstEncoderForRuntimeFn` (the `ty: Type.TypeId` shapes, reached
   only through `BodyContext.restoreConstFn`), and ZERO reach the Builder-level
   `restoreConstParserRuntimeFnExpr` / `restoreConstEncoderForRuntimeFnExpr`.
-  So the two restores W2b changed most — the ones that lost `expected_ret_ty`
-  and gained the `sameClass` deferral assertion — are covered by no test, and
+  So the two restores W2b changed most—the ones that lost `expected_ret_ty`
+  and gained the `sameClass` deferral assertion—are covered by no test, and
   the two "last eager codec consumers" design.md now documents are not
   exercised either. The probe was removed before the final build. Two open
   options, for Jared: build a fixture that forces the `Type.TypeId` path (the
@@ -1649,7 +1649,7 @@ the W6a section adds: an implementation with its own where-clause for
 `.synthesize` evidence, and a `requires_record` schema); W6b turns the
 panicking ones green. Each is a module named after its file.
 
-**Widen** (passes) — a body use widened to `[Ok, Err, Extra]`, open impl:
+**Widen** (passes)—a body use widened to `[Ok, Err, Extra]`, open impl:
 ```roc
 describe : a -> [Ok(Str), Err(Str), Extra] where [a.status : a -> [Ok(Str), Err(Str)]]
 describe = |x| x.status()
@@ -1665,7 +1665,7 @@ main = describe(Job.Pending)
 expect match main { Ok(s) => s == "p", Err(_) => False, Extra => False }
 ```
 
-**Widen2** (passes) — same with a tag that sorts between `Err` and `Ok`
+**Widen2** (passes)—same with a tag that sorts between `Err` and `Ok`
 observed through both constructors, proving the impl is specialized at
 the wider row:
 ```roc
@@ -1684,7 +1684,7 @@ expect show(describe(Job.Pending)) == "Ok(p)"
 expect show(describe(Job.Failed)) == "Err(f)"
 ```
 
-**Question** (passes) — `?` into a wider error row:
+**Question** (passes)—`?` into a wider error row:
 ```roc
 load : a -> Try(Str, [NotFound, Other]) where [a.fetch : a -> Try(Str, [NotFound])]
 load = |x| {
@@ -1700,7 +1700,7 @@ Src := [S].{
 expect match load(Src.S) { Ok(s) => s == "hit", Err(_) => False }
 ```
 
-**Closed** (passes) — exhaustive match closes the copy:
+**Closed** (passes)—exhaustive match closes the copy:
 ```roc
 describe : a -> Str where [a.status : a -> [Ok(Str), Err(Str)]]
 describe = |x| match x.status() {
@@ -1716,7 +1716,7 @@ Job := [Pending].{
 expect describe(Job.Pending) == "pending"
 ```
 
-**Both** (passes) — one closing use and one widening use of the same
+**Both** (passes)—one closing use and one widening use of the same
 method in one body:
 ```roc
 both : a -> [Ok(Str), Err(Str), Extra] where [a.status : a -> [Ok(Str), Err(Str)]]
@@ -1736,7 +1736,7 @@ Job := [Pending].{
 expect match both(Job.Pending) { Ok(s) => s == "p", Err(_) => False, Extra => False }
 ```
 
-**NestedEvidence** (passes) — the implementation has its own where-clause
+**NestedEvidence** (passes)—the implementation has its own where-clause
 (nested evidence), used both widened and exhaustively:
 ```roc
 Wrap(a) := [W(a)].{
@@ -1762,7 +1762,7 @@ expect show(describe(Wrap.W(Thing.T))) == "Ok(thing)"
 expect exhaustive(Wrap.W(Thing.T)) == "thing"
 ```
 
-**ImplOpen** (believed passing; re-verify) — direct call of a method at a
+**ImplOpen** (believed passing; re-verify)—direct call of a method at a
 wider row, no where-clause:
 ```roc
 Job := [Pending].{
@@ -1776,7 +1776,7 @@ direct = Job.status(Job.Pending)
 expect match direct { Ok(s) => s == "p", Err(_) => False, Extra => False }
 ```
 
-**SubsetImpl** (believed passing; re-verify) — implementation row is a
+**SubsetImpl** (believed passing; re-verify)—implementation row is a
 subset of the signature's:
 ```roc
 describe : a -> Str where [a.status : a -> [Ok(Str), Err(Str)]]
@@ -1793,7 +1793,7 @@ Job := [Pending].{
 expect describe(Job.Pending) == "pending"
 ```
 
-**ClosedImplExhaustive** (passes) — closed implementation, closing use:
+**ClosedImplExhaustive** (passes)—closed implementation, closing use:
 ```roc
 describe : a -> Str where [a.status : a -> [Ok(Str), Err(Str)]]
 describe = |x| match x.status() { Ok(s) => s, Err(e) => e }
@@ -1809,8 +1809,8 @@ Job := [Pending].{
 expect describe(Job.Pending) == "cv"
 ```
 
-**WidenClosedImpl** (PANICS: `instantiation widened a closed tag union`)
-— closed implementation (body returns a top-level constant), widened
+**WidenClosedImpl** (PANICS: `instantiation widened a closed tag union`)—closed
+implementation (body returns a top-level constant), widened
 use; W6b's adapter case:
 ```roc
 describe : a -> [Ok(Str), Err(Str), Extra] where [a.status : a -> [Ok(Str), Err(Str)]]
@@ -1830,7 +1830,7 @@ show = |v| match v { Ok(s) => "Ok(${s})", Err(e) => "Err(${e})", Extra => "Extra
 expect show(describe(Job.Pending)) == "Ok(cv)"
 ```
 
-**WidenParamImpl** (PANICS) — implementation returns an input-position
+**WidenParamImpl** (PANICS)—implementation returns an input-position
 parameter, so its row is closed:
 ```roc
 describe : a -> [Ok(Str), Err(Str), Extra] where [a.status : a, [Ok(Str), Err(Str)] -> [Ok(Str), Err(Str)]]
@@ -1847,7 +1847,7 @@ show = |v| match v { Ok(s) => "Ok(${s})", Err(e) => "Err(${e})", Extra => "Extra
 expect show(describe(Job.Pending)) == "Ok(arg)"
 ```
 
-**QuestionClosedImpl** (PANICS) — closed implementation reached through
+**QuestionClosedImpl** (PANICS)—closed implementation reached through
 `?` into a wider row:
 ```roc
 load : a -> Try(Str, [NotFound, Other]) where [a.fetch : a -> Try(Str, [NotFound])]
@@ -1874,13 +1874,13 @@ implemented. It is written down because the discussion that produced it cost
 several passes to reconstruct from three paragraphs of `design.md` that were
 far apart, and because `test/fx-open/issue_9963_hosted_try_question_mark.roc`
 was left deliberately RED as its standing witness. §9.2 has since been
-reversed and the hosted instance fixed; §9.1 and §9.3–§9.6 are unaffected —
-subsumption is not implemented.
+reversed and the hosted instance fixed; §9.1 and §9.3–§9.6 are unaffected—subsumption
+is not implemented.
 
 ### 9.1 The decision
 
 **Closing-by-body is not the intended end state.** A closed value flowing into
-an implicitly open output row should WIDEN into it — row subsumption — rather
+an implicitly open output row should WIDEN into it—row subsumption—rather
 than bind its extension shut. The row published at a position is the one the
 annotation declares, whatever the body happened to construct.
 
@@ -1907,18 +1907,18 @@ host's closed row through `?`, which binds the flex to `[]`. A caller that
 unwraps the first into a wider row is accepted; the same call on the second is
 rejected. The bodies differ; the signatures do not.
 
-(Correction, 2026-09-16: this pair is no longer a live example — §9.2 fixed the
+(Correction, 2026-09-16: this pair is no longer a live example—§9.2 fixed the
 HOSTED instance, so `via_question!` above now publishes OPEN and the fixture is
 green. The argument is unchanged and the defect is not gone: substitute a
 non-hosted callee for `FallibleHost.str_ok!` and the pair behaves exactly as
 described. No such pair exists in the corpus today.)
 
 To get a genuinely closed output row under the intended rule you would have to
-write the closure explicitly — something in the shape of `[MyErr, ..[]]` — so
+write the closure explicitly—something in the shape of `[MyErr, ..[]]`—so
 that closedness is a thing the author states rather than a thing the body
 leaks. That spelling does not exist today and is not designed.
 
-### 9.2 The hosted half WAS patched — a rejection reversed on evidence
+### 9.2 The hosted half WAS patched—a rejection reversed on evidence
 
 **Rejected 2026-09-15, reversed 2026-09-16.** Both positions are kept here
 because the reason the first one was wrong is the useful part.
@@ -1934,9 +1934,9 @@ Two shapes were considered and rejected under that premise:
 - Make the existing use-site redirect fire here. It is a checker special case
   fighting polarity rather than expressing it.
 - Desugar `?` on a direct hosted call into the reconstruct-by-`match` form that
-  `via_match!` uses. This is the nicer of the two — the reconstruction yields an
+  `via_match!` uses. This is the nicer of the two—the reconstruction yields an
   open row naturally and IS the re-tag at lowering, so no adapter is needed on
-  that path — but it is still host-specific.
+  that path—but it is still host-specific.
 
 **Why it was reversed (2026-09-16, Jared's call).** The rejection rests on ONE
 premise: that every available patch is a host-specific special case subsumption
@@ -1948,20 +1948,20 @@ will delete. Scoping work falsified it on three counts.
    shape to the broken wrapper with only a wider annotation, and
    `test/fx-open/hosted_channels_declared.roc:20` printed `closed wider: ok`.
    So the widening machinery is NOT host-specific scaffolding awaiting
-   deletion — it is the general mechanism, already working.
+   deletion—it is the general mechanism, already working.
 2. **The change removes an EXCLUSION rather than adding a special case.** The
    rule, its `RedirectRule.hosted_try_question_widening` member
    (`src/types/store.zig:795-799`), the design.md declaration and the accept
    and reject fixtures all already existed. `tryErrorRowNeedsUseSiteWidening`
-   opened with a shortcut — decline if `probeCanUseAs(expected, actual)`
-   succeeds, since ordinary unification then already relates the pair — and
+   opened with a shortcut—decline if `probeCanUseAs(expected, actual)`
+   succeeds, since ordinary unification then already relates the pair—and
    under polarity that probe succeeds on the exact pair the rule exists for,
    BY BINDING the annotation's still-open extension to `[]`. A shortcut past a
    rule is sound only when taking it is observationally the same as applying
    it; grounding the annotation's own extension is not. The shortcut was an
    implementation-level early return strictly NARROWER than the rule's declared
    condition, and an artifact of commit `kupupkyt` collapsing a written `..`
-   and an absent extension into one flex (§8.1.7 above) — an accident, not a
+   and an absent extension into one flex (§8.1.7 above)—an accident, not a
    designed boundary.
 3. **Marginal deletion cost is ~zero.** design.md's "Hosted Try Question
    Widening" already says the checker half of the rule comes out wholesale
@@ -1977,16 +1977,16 @@ three registrations to pin behaviour the design calls a defect.
 **What landed** (commit "fix(check): stop hosted `?` from grounding its own
 annotated error row"): the decline shortcut is skipped when the expected row
 still ends open, and the rule's declared inclusion test decides on its own.
-`tryErrorRowEndsOpen` walks the expected row's explicit extension chain —
-a rigid tail (`..others`) and an already-closed row both read as not-open, so
+`tryErrorRowEndsOpen` walks the expected row's explicit extension chain—a
+rigid tail (`..others`) and an already-closed row both read as not-open, so
 only an annotation's implicitly opened extension takes the new path. No
 fixture was edited, which is the acceptance bar in §9.6 below.
 
 **This is NOT row subsumption, and §9.1 and §9.3–§9.6 stand unchanged.** The
 fix is gated on `tryConditionIsDirectHostedCall` (`Check.zig:23923`), so it
 covers the hosted instance only. Closing-by-body remains a general defect over
-every closed source — an input-position parameter, a nominal field, a hosted
-result — and a NON-hosted forwarder still publishes closed behind an open
+every closed source—an input-position parameter, a nominal field, a hosted
+result—and a NON-hosted forwarder still publishes closed behind an open
 annotation while its `match`-reconstructing twin publishes open. Row
 subsumption is still the intended end state and still deletes the checker half
 of this rule.
@@ -1998,7 +1998,7 @@ This is the part that resolved the discussion, and it is easy to get wrong.
 **The LOWERING half is permanent.** A widened request at a host boundary must
 always be bridged by a generated adapter that calls the declared-type boundary
 and re-tags, never by specializing the boundary at the widened layout. That is
-not a typing decision — the host ABI is fixed by something outside the type
+not a typing decision—the host ABI is fixed by something outside the type
 system. W6b already generalized it: hosted is the instance of the Result-Row
 Widening Adapter in which the declared row is the host ABI.
 
@@ -2009,7 +2009,7 @@ makes unnecessary, and is the part to delete once subsumption lands.
 **They cannot be deferred together.** An explicit open extension is REJECTED at
 host boundaries by rule, so a host error row is closed BY DECLARATION rather
 than by inference. "A closed row meets a caller who wants it wider" therefore
-arises at every host boundary, not in rare corners — which means the general
+arises at every host boundary, not in rare corners—which means the general
 mechanism cannot be half-built, and also means it will be exercised constantly
 once it exists.
 
@@ -2024,7 +2024,7 @@ here because it is the key to reading everything above:
 |---|---|---|
 | a FUNCTION signature | quantified flex, instantiated fresh per call | each caller may widen independently |
 | a VALUE binding | ONE weak flex shared module-wide, grounded to `[]` after the module solves | uses share and accumulate; later uses see what accumulated |
-| a HOST BOUNDARY (hosted lambda, `provides` def, platform `requires` type) | none — the row is generated exactly as written | nothing; an explicit `..` reaching the boundary is an error |
+| a HOST BOUNDARY (hosted lambda, `provides` def, platform `requires` type) | none—the row is generated exactly as written | nothing; an explicit `..` reaching the boundary is an error |
 
 Note the two host rules have different scopes: the opt-out from opening covers
 all three host positions, but the rejection of a written `..` is enforced only
@@ -2049,7 +2049,7 @@ Smaller than it first appears, because W6b built the lowering.
 
 **The open question, which is answerable by measurement rather than argument:**
 does stopping the bind SUFFICE? Make the checker not bind the marker at that
-site, rebuild, and run the witness. Three outcomes — it passes (the pieces
+site, rebuild, and run the witness. Three outcomes—it passes (the pieces
 already fit), it fails in LOWERING (an inner coercion is genuinely needed), or
 it fails elsewhere in CHECK (something else depends on closing). That one
 experiment scopes the whole item.
@@ -2066,7 +2066,7 @@ experiment scopes the whole item.
   since both concern what a closed row means at a module boundary.
 - `test/fx-open/issue_9963_hosted_try_question_mark.roc` should go green with no
   fixture edit. If it needs one, the implementation diverged from this design.
-  (The HOSTED half met this bar on 2026-09-16 — green, no fixture edited, both
-  rejection fixtures still rejected — but that is §9.2's narrow fix, not
+  (The HOSTED half met this bar on 2026-09-16—green, no fixture edited, both
+  rejection fixtures still rejected—but that is §9.2's narrow fix, not
   subsumption. The bar still stands for the non-hosted closed sources, which
   need a fixture of their own since no corpus case spells one today.)

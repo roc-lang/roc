@@ -21258,7 +21258,7 @@ test "hosted Try adapter capability recognizes only closed structural error rows
 /// doc comment: the rule Monotype's sealed-cell guard shares, so the two
 /// cannot drift), not `checkedTypeIsClosedTagRow` above. The two differ at a
 /// rigid tail, which that rule counts as closed. A rigid result row is
-/// parametric — the caller supplies it — so a template carrying one is
+/// parametric—the caller supplies it—so a template carrying one is
 /// polymorphic in its result and must never mint a widening adapter.
 fn checkedResultRowIsClosed(
     checked_types: *const CheckedTypeStore,
@@ -21294,7 +21294,7 @@ fn checkedResultRowIsClosed(
 /// Whether a procedure template's published result row is closed, so a request
 /// at a row that includes it is served by a generated widening adapter
 /// (design.md "Result-Row Widening Adapter"). The result row is the function
-/// result's own tag row, or — when the result is `Builtin.Try` — its error
+/// result's own tag row, or—when the result is `Builtin.Try`—its error
 /// argument's row. Monotype mirrors this walk in `lower.zig`'s
 /// `closedResultRowOrNull`.
 fn checkedRootHasClosedResultRow(

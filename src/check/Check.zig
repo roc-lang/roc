@@ -561,13 +561,13 @@ erroneous_reassignments: std.AutoHashMapUnmanaged(CIR.Statement.Idx, CIR.Expr.Id
 /// an error and therefore cannot be used to introduce a parent call relation.
 call_operand_type_error_exprs: std.ArrayListUnmanaged(bool),
 /// Annotations that describe host-boundary values (hosted lambdas and
-/// `provides` defs). Their rows are generated as written — implicit polarity
+/// `provides` defs). Their rows are generated as written—implicit polarity
 /// opening does not apply across the host boundary. Populated once per check
 /// from the module's defs and provides entries.
 host_boundary_annotations: std.AutoHashMapUnmanaged(CIR.Annotation.Idx, void),
 /// Every implicitly opened tag-union extension minted while generating an
-/// annotation — implicit output-position openness, an anonymous `..` in an
-/// output position, and alias markers resolved open — in generation order.
+/// annotation—implicit output-position openness, an anonymous `..` in an
+/// output position, and alias markers resolved open—in generation order.
 /// `annotation_implicit_open_exts` slices it per annotation for the post-body
 /// audit (`auditImplicitOpenExts`).
 implicit_open_exts: std.ArrayListUnmanaged(ImplicitOpenExt),
@@ -575,13 +575,13 @@ annotation_implicit_open_exts: std.AutoHashMapUnmanaged(CIR.Annotation.Idx, Impl
 /// The `implicit_open_exts` ranges of top-level VALUE bindings that do not
 /// generalize (a weak shared row; design.md "Polarity"). Grounded to `[]`
 /// after the module solves (`closeWeakValueImplicitOpenExts`), so the
-/// published type — what importers copy and what stored constants are sealed
-/// against — is the closed row the annotation produced before polarity.
+/// published type—what importers copy and what stored constants are sealed
+/// against—is the closed row the annotation produced before polarity.
 weak_value_implicit_open_ext_ranges: std.ArrayListUnmanaged(ImplicitOpenExtRange),
 /// Every implicitly opened extension the post-body audit
 /// (`auditImplicitOpenExts`) visited and did not report, in visit order.
 /// The audit is a single read of a mutable var, and an extension can still
-/// learn tags afterwards — so this list is narrowed and replayed once the
+/// learn tags afterwards—so this list is narrowed and replayed once the
 /// module's types settle (`dropSettledLateImplicitOpenExtAudits` and
 /// `runLateImplicitOpenExtAudit`). Entries are copied rather than sliced out
 /// of `implicit_open_exts` by range so a later re-generation of the same
@@ -6583,9 +6583,9 @@ fn instantiateVar(
 /// Instantiate a where-method signature for one use (design.md "Polarity"):
 /// the signature is a scheme the constrained body instantiates at each use,
 /// exactly like a call of an annotated function. Only its polarity markers
-/// change — each resolves to a fresh flex in an output position, so this use
+/// change—each resolves to a fresh flex in an output position, so this use
 /// may match the result exhaustively or widen it independently of every
-/// other use — while every other leaf (the receiver rigid, the enclosing
+/// other use—while every other leaf (the receiver rigid, the enclosing
 /// scheme's other variables) stays the same variable whatever its rank: the
 /// signature belongs to the enclosing scheme, whether that scheme is still
 /// being checked (a body use) or already generalized (a requirement on the
@@ -6626,9 +6626,9 @@ fn instantiateWhereMethodForUse(self: *Self, signature_var: Var, env: *Env, regi
 /// Persist the explicit callable relation for one per-use where-method
 /// instantiation. The instantiator copied structure while sharing every leaf,
 /// so its complete map proves the body dispatch callable's relation to the
-/// pristine signature. Checked-artifact construction reads this record — by
+/// pristine signature. Checked-artifact construction reads this record—by
 /// the raw callable, or by its settled root once generalized requirement
-/// deduplication has unified same-shape callables — and never INFERS the
+/// deduplication has unified same-shape callables—and never INFERS the
 /// relation from a method name: a same-name match only nominates the evidence
 /// slot, and this record decides what that slot's plan may reuse
 /// (`EvidencePass.fallbackCallableRelation`). A signature that resolves to a
@@ -13244,8 +13244,8 @@ fn exposedAppDefByIdent(self: *Self, ident: Ident.Idx) ?CIR.Def.Idx {
     return @enumFromInt(node_idx);
 }
 
-/// Record every annotation that types a host-boundary value — a hosted
-/// lambda or a `provides` def — so annotation generation keeps its rows as
+/// Record every annotation that types a host-boundary value—a hosted
+/// lambda or a `provides` def—so annotation generation keeps its rows as
 /// written instead of implicitly opening output-position tag unions (see
 /// `GenTypeAnnoCtx.AnnotationGenCtx.opening`).
 fn collectHostBoundaryAnnotations(self: *Self) std.mem.Allocator.Error!void {
@@ -15399,8 +15399,8 @@ const GenTypeAnnoCtx = union(enum) {
     const AnnotationGenCtx = struct {
         where: ?CIR.WhereClause.Span,
         /// Whether extensionless tag unions in output (positive) positions are
-        /// implicitly opened — given the anonymous `#others` rigid ext a
-        /// written `..` produces, instead of `[]` — and polarity vars in
+        /// implicitly opened—given the anonymous `#others` rigid ext a
+        /// written `..` produces, instead of `[]`—and polarity vars in
         /// referenced aliases resolved by position.
         ///
         /// Disabled for host-boundary annotations (hosted lambdas and
@@ -15486,7 +15486,7 @@ const GenTypeAnnoCtx = union(enum) {
                 .implicit_open => .resolve_by_polarity,
                 // A referenced alias's markers stay deferred inside a
                 // where-method signature: the signature's own instantiation
-                // decides them — but only where the result-row widening
+                // decides them—but only where the result-row widening
                 // adapter could re-tag the row. Elsewhere the alias
                 // contributes its row as written, like a negative position.
                 //
@@ -15625,7 +15625,7 @@ const ImplicitOpenExtRange = struct {
 /// a body can still widen its own row after this point, through a constraint
 /// the definition deferred (see `runLateImplicitOpenExtAudit`). Every
 /// extension this pass clears is therefore kept for that replay. The `..`
-/// warning is NOT replayed — it is a property of the annotation's own text,
+/// warning is NOT replayed—it is a property of the annotation's own text,
 /// fully decided here.
 fn auditImplicitOpenExts(self: *Self, annotation_idx: CIR.Annotation.Idx, redundant_open_warns: bool, env: *Env) std.mem.Allocator.Error!void {
     const range = self.annotation_implicit_open_exts.get(annotation_idx) orelse return;
@@ -15645,7 +15645,7 @@ fn auditImplicitOpenExts(self: *Self, annotation_idx: CIR.Annotation.Idx, redund
     }
 }
 
-/// Whether this implicitly opened extension currently carries a tag — the one
+/// Whether this implicitly opened extension currently carries a tag—the one
 /// question `auditImplicitOpenExts` asks of it, factored out so the late
 /// replay asks it the same way.
 fn implicitOpenExtCarriesTags(self: *const Self, entry: ImplicitOpenExt) bool {
@@ -15680,12 +15680,12 @@ fn dropSettledLateImplicitOpenExtAudits(self: *Self) void {
 /// Replay the audit over the extensions that were STILL unconstrained after
 /// the whole module was checked. Every definition and statement has had its
 /// say by then, so a tag that lands during `finalizeTypes` comes from a
-/// constraint the definition itself deferred — a generated codec's error row
+/// constraint the definition itself deferred—a generated codec's error row
 /// reaching the annotated row through
 /// `finalizeGeneratedCodecConstraintsToQuiescence` is the case that motivates
 /// this (issue 11246). Nothing unifies after finalize, so this is the last
 /// point at which the question can be asked, and it must run before
-/// `closeWeakValueImplicitOpenExts` grounds the survivors to `[]` — a grounded
+/// `closeWeakValueImplicitOpenExts` grounds the survivors to `[]`—a grounded
 /// extension carries no tags and the audit would skip it.
 fn runLateImplicitOpenExtAudit(self: *Self, env: *Env) std.mem.Allocator.Error!void {
     for (self.late_implicit_open_ext_audits.items) |entry| {
@@ -15712,7 +15712,7 @@ fn reportImplicitOpenExtExtension(self: *Self, entry: ImplicitOpenExt, env: *Env
     // The ACTUAL row is the listed tags extended by the opened ext. Both
     // tag gatherers (`TypeWriter.gatherTags`, `diff.gatherTagsFromUnion`)
     // flatten extension chains, so this renders the listed tags plus every
-    // tag the body added — which is literally what the annotated union's
+    // tag the body added—which is literally what the annotated union's
     // var held when it was minted. The ext cannot collide with the tags:
     // `implicitOpenExtCarriesTags` proved it resolved to a row carrying at
     // least one.
@@ -15806,7 +15806,7 @@ fn externalTypeRefTargetsBuiltin(self: *const Self, import_idx: CIR.Import.Idx) 
 /// The application's BASE decides this, not the name it was written with.
 /// Shadowing a builtin type is only a warning and the local binding wins, so
 /// `Try(a, b) := [Yes(a), No(b)]` in scope makes a written `Try(ok, err)` that
-/// LOCAL nominal — matching on the interned name alone would open a row
+/// LOCAL nominal—matching on the interned name alone would open a row
 /// lowering will not adapt, which is a wrong tag layout rather than a
 /// diagnostic. `Try` is not one of the compiler-constructed builtin
 /// annotations (`List`, `Box`, the numerics), so `.builtin` is never it.
@@ -16020,9 +16020,9 @@ fn completeOwnedStaticDispatchConstraint(
     //
     // Only the output positions the result-row widening adapter can re-tag
     // open per use (`AnnotationGenCtx.AdapterReach`). The return starts at
-    // `.result`; every other position of the signature — the receiver, the
+    // `.result`; every other position of the signature—the receiver, the
     // arguments, and anything the walk descends into that is not a `Try`
-    // result's rows — keeps its row as written.
+    // result's rows—keeps its row as written.
     const method_ctx: GenTypeAnnoCtx = switch (ctx) {
         .annotation => |anno_ctx| .{ .annotation = .{
             .where = anno_ctx.where,
@@ -17003,11 +17003,11 @@ fn generateAnnoTypeInPlace(self: *Self, anno_idx: CIR.TypeAnno.Idx, env: *Env, c
             //
             // An absent ext means:
             //   * in an opening annotation: implicitly open in output
-            //     positions — a fresh flex ext, recorded for the post-body
+            //     positions—a fresh flex ext, recorded for the post-body
             //     audit (`auditImplicitOpenExts`) that keeps the annotation a
-            //     bound on the definition — and closed (`[]`) in input
+            //     bound on the definition—and closed (`[]`) in input
             //     positions;
-            //   * in an alias declaration body: deferred — a polarity marker
+            //   * in an alias declaration body: deferred—a polarity marker
             //     resolved by the polarity of each use site (see
             //     `types.polarity_var_text`);
             //   * otherwise (nominal bodies, host-boundary annotations):
@@ -17030,7 +17030,7 @@ fn generateAnnoTypeInPlace(self: *Self, anno_idx: CIR.TypeAnno.Idx, env: *Env, c
                 null;
             const implicitly_open = output_opening == .implicit_open;
             // A where-method signature's output row: deferred with the
-            // polarity marker, resolved per body use and per obligation — but
+            // polarity marker, resolved per body use and per obligation—but
             // only in a position the result-row widening adapter can re-tag
             // (design.md "Result-Row Widening Adapter"). A row nested anywhere
             // else is generated as written, so a body use that widens it is an
@@ -28140,7 +28140,7 @@ fn finalizeTypes(self: *Self, env: *Env, scope: FinalizeScope) std.mem.Allocator
     try self.checkPendingDefaults(env);
     // `checkPendingDefaults` is the last pass to run `checkExpr` over user
     // source. A default expression is an ordinary USE SITE, so a tag it adds
-    // to a binding's implicitly opened row is caller widening — exactly like
+    // to a binding's implicitly opened row is caller widening—exactly like
     // every use checked before `dropSettledLateImplicitOpenExtAudits` ran at
     // the module call site, and legal there. Narrow again so the
     // post-finalize replay (`runLateImplicitOpenExtAudit`) cannot mistake it
@@ -32666,7 +32666,7 @@ fn checkStaticDispatchConstraints(self: *Self, env: *Env, is_numeric_default_pas
                         // A whole-method hole (`a.render : _`) has no
                         // signature structure to copy: its shape is inferred
                         // from the body's uses and shared by all of them. Nor
-                        // does any other LEAF — a signature written as a bare
+                        // does any other LEAF—a signature written as a bare
                         // type variable resolves to a `.rigid`, an erroneous
                         // annotation to `.err`. The predicate must mirror
                         // `Instantiator`'s own share-leaf test
@@ -32677,7 +32677,7 @@ fn checkStaticDispatchConstraints(self: *Self, env: *Env, is_numeric_default_pas
                         // has no callable copy to record (it panics). A
                         // `#polarity` marker root is the one leaf the
                         // instantiator does copy, so it must stay on the
-                        // instantiate path — sharing it would silently drop
+                        // instantiate path—sharing it would silently drop
                         // the per-use deferral it stands for.
                         const signature_is_polarity_marker = switch (signature_resolved.desc.content) {
                             .rigid => |sig_rigid| sig_rigid.name.eql(self.cir.idents.polarity_var),
@@ -32889,8 +32889,8 @@ fn checkStaticDispatchConstraints(self: *Self, env: *Env, is_numeric_default_pas
                         if (constraint.fn_name.eql(self.cir.idents.parser_for)) {
                             if (self.schemeDefersGeneratedCodecConstraint(constraint.fn_var)) continue;
                             // A derived parser determines each tag row exactly, so
-                            // implicit output-position openness collapses first —
-                            // including rows inside the nominal's args (eg a Dict
+                            // implicit output-position openness collapses first—including
+                            // rows inside the nominal's args (eg a Dict
                             // key union). See closeTagRowsForDerivation.
                             try self.closeTagRowsForDerivation(deferred_constraint.var_, env);
                             switch (try self.nominalSupportsDerivedParseShape(nominal_type, env, region)) {
@@ -32933,8 +32933,8 @@ fn checkStaticDispatchConstraints(self: *Self, env: *Env, is_numeric_default_pas
                                 continue;
                             };
                             // A derived encoder determines each tag row exactly, so
-                            // implicit output-position openness collapses first —
-                            // including rows inside the nominal's args (see
+                            // implicit output-position openness collapses first—including
+                            // rows inside the nominal's args (see
                             // closeTagRowsForDerivation).
                             try self.closeTagRowsForDerivation(deferred_constraint.var_, env);
                             switch (try self.nominalSupportsDerivedEncodeShape(nominal_type, encoding_var, env, region)) {
@@ -34876,7 +34876,7 @@ fn nominalIsBuiltinBoolType(self: *const Self, nominal_type: types_mod.NominalTy
 /// a polymorphic open row may hold tags no derivation was checked for, so it
 /// stays rejected. The one rigid that does close is the alias-declaration
 /// polarity MARKER (the helper's marker arm). The walk follows structure
-/// only — never a variable's static-dispatch constraints — so a where-method
+/// only—never a variable's static-dispatch constraints—so a where-method
 /// signature reachable through a constrained rigid keeps the markers its
 /// per-use instantiation resolves.
 fn closeTagRowsForDerivation(self: *Self, var_: Var, env: *Env) Allocator.Error!void {
@@ -37586,7 +37586,7 @@ fn satisfyDerivedMapConstraint(
     effectful: bool,
 ) Allocator.Error!DerivedMapConstraintResult {
     // A derived map determines the union and its payload selection exactly,
-    // so implicit output-position openness collapses first — on the
+    // so implicit output-position openness collapses first—on the
     // dispatcher's own row and on payload rows, whose flex extensions would
     // otherwise read as type variables and defeat the unambiguous-payload
     // judgment (design.md: closeTagRowsForDerivation).
