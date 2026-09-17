@@ -9799,6 +9799,13 @@ Lambda Mono expression, pattern, or statement tree. The direct `.lss` LIR
 builder consumes the Lambda Solved lifted syntax together with Lambda Mono
 decision tables. `.boxy` does not construct Lambda Mono decisions.
 
+Exact specialization demand and shared LIR procedure-body scheduling are separate
+state. When distinct specializations have one procedure identity, a reference
+demands its exact specialization and queues the shared owner's body once. It
+does not demand the owner's specialization merely because that owner supplies
+the body. The debug materializer compares referenced specializations; sharing a
+procedure must not introduce additional specialization demands into that check.
+
 The Lambda Mono type store has no function type. Function values have already
 become ordinary value representations:
 

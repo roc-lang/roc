@@ -370,6 +370,9 @@ const FnEntry = struct {
     /// Specializations that render to one procedure identity share one proc,
     /// and exactly one of them owns its lowering.
     proc_owner: ?Type.FnId = null,
+    /// The shared procedure body is queued independently of which exact
+    /// specializations are referenced by emitted calls or constant metadata.
+    body_queued: bool = false,
     worker_admissible: ?bool = null,
 };
 
@@ -559,6 +562,8 @@ const Lowerer = struct {
     /// same identity are the same procedure and share the owner's proc.
     procs_by_identity: std.AutoHashMap(LIR.ProcIdentity, Type.FnId),
     fn_written: std.ArrayList(bool),
+    /// Exact specializations demanded by emitted references, independently
+    /// of the representative chosen to lower a shared procedure body.
     fn_reachable: std.ArrayList(bool),
     fn_reach_queue: std.ArrayList(Type.FnId),
     inline_plan: SolvedInline.Plan,
@@ -2441,11 +2446,9 @@ const Lowerer = struct {
         const owner = self.fn_entries.items[index].proc_owner orelse
             Common.invariant("direct LIR proc placeholder had no lowering owner");
         const owner_index = @intFromEnum(owner);
-        if (owner_index != index) {
-            if (self.fn_reachable.items[owner_index]) return proc;
-            self.fn_reachable.items[owner_index] = true;
-        }
+        if (self.fn_entries.items[owner_index].body_queued) return proc;
         try self.fn_reach_queue.append(self.allocator, owner);
+        self.fn_entries.items[owner_index].body_queued = true;
         return proc;
     }
 
