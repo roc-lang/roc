@@ -102,7 +102,7 @@ pub fn Snapshot(comptime T: type, comptime empty: T) type {
             reverse: bool,
 
             fn push(self: *Iterator, node: *const anyopaque, base: u32) void {
-                if (@import("builtin").mode == .Debug) iterator_node_visits += 1;
+                if (@import("builtin").mode == .Debug) _ = @atomicRmw(u64, &iterator_node_visits, .Add, 1, .monotonic);
                 self.frames[self.len] = .{ .node = node, .base = base };
                 self.len += 1;
             }
@@ -145,7 +145,7 @@ pub fn Snapshot(comptime T: type, comptime empty: T) type {
         }
 
         fn rangeHasValue(maybe_node: ?*const anyopaque, depth: u8, base: u64, start: u64, end: u64) bool {
-            if (@import("builtin").mode == .Debug) range_query_node_visits += 1;
+            if (@import("builtin").mode == .Debug) _ = @atomicRmw(u64, &range_query_node_visits, .Add, 1, .monotonic);
             const node = maybe_node orelse return false;
             const width = @as(u64, 1) << @as(u6, @intCast(leaf_bits + @as(usize, depth) * radix_bits));
             if (end <= base or start >= base + width) return false;
@@ -229,7 +229,7 @@ pub fn Snapshot(comptime T: type, comptime empty: T) type {
             comptime emitFn: fn (@TypeOf(context), u32, T, T) Allocator.Error!void,
         ) Allocator.Error!void {
             if (lhs == rhs or lhs == null) return;
-            if (@import("builtin").mode == .Debug) difference_node_visits += 1;
+            if (@import("builtin").mode == .Debug) _ = @atomicRmw(u64, &difference_node_visits, .Add, 1, .monotonic);
             if (depth == 0) {
                 const left: *const Leaf = @ptrCast(@alignCast(lhs.?));
                 const right: ?*const Leaf = @ptrCast(@alignCast(rhs));

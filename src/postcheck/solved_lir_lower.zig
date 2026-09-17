@@ -13,8 +13,10 @@ const check = @import("check");
 const collections = @import("collections");
 const layout = @import("layout");
 const Common = @import("common.zig");
+const ComptimeScalarValues = @import("comptime_scalar_values.zig");
 const match_tree = @import("match_tree.zig");
 const Mono = @import("monotype/ast.zig");
+const postcheck_values = @import("comptime_scalar_values.zig");
 const Lifted = @import("monotype_lifted/ast.zig");
 const SolvedInline = @import("solved_inline.zig");
 const proc_identity = @import("proc_identity.zig");
@@ -157,6 +159,10 @@ pub const Options = struct {
     layout_request_const_plans: bool = true,
     /// Optional command-level test-plan metadata keyed by checked root order.
     test_plan_metadata: []const Common.RootTestPlanMetadata = &.{},
+    /// Completed compile-time scalar roots, lowered as literals instead of
+    /// slot reads so the LIR passes see the constants. Only a continuation
+    /// lowered after the host program completed can supply them.
+    completed_scalar_values: ?*const ComptimeScalarValues.CompletedScalarValues = null,
     /// Debug-only destination for the materialized Lambda Mono verifier input.
     debug_materialized_out: ?*?LambdaMono.Program = null,
     /// Optional deterministic task counts for parallel solved-LIR lowering.
@@ -369,6 +375,9 @@ const FnEntry = struct {
     /// Specializations that render to one procedure identity share one proc,
     /// and exactly one of them owns its lowering.
     proc_owner: ?Type.FnId = null,
+    /// The shared procedure body is queued independently of which exact
+    /// specializations are referenced by emitted calls or constant metadata.
+    body_queued: bool = false,
     worker_admissible: ?bool = null,
 };
 
@@ -558,6 +567,8 @@ const Lowerer = struct {
     /// same identity are the same procedure and share the owner's proc.
     procs_by_identity: std.AutoHashMap(LIR.ProcIdentity, Type.FnId),
     fn_written: std.ArrayList(bool),
+    /// Exact specializations demanded by emitted references, independently
+    /// of the representative chosen to lower a shared procedure body.
     fn_reachable: std.ArrayList(bool),
     fn_reach_queue: std.ArrayList(Type.FnId),
     inline_plan: SolvedInline.Plan,
@@ -567,6 +578,7 @@ const Lowerer = struct {
     observe_expects: bool,
     list_in_place_map: bool,
     dict_seed_mode: DictSeedMode,
+    completed_scalar_values: ?*const ComptimeScalarValues.CompletedScalarValues,
     proc_debug_names: bool,
     spec_cache: ?Common.SpecCacheLookup,
     comptime_closure_hits: bool,
@@ -819,6 +831,7 @@ const Lowerer = struct {
             .observe_expects = options.test_plan_metadata.len != 0,
             .list_in_place_map = options.list_in_place_map,
             .dict_seed_mode = options.dict_seed_mode,
+            .completed_scalar_values = options.completed_scalar_values,
             .proc_debug_names = options.proc_debug_names,
             .spec_cache = options.spec_cache,
             .comptime_closure_hits = options.comptime_closure_hits,
@@ -2441,11 +2454,9 @@ const Lowerer = struct {
         const owner = self.fn_entries.items[index].proc_owner orelse
             Common.invariant("direct LIR proc placeholder had no lowering owner");
         const owner_index = @intFromEnum(owner);
-        if (owner_index != index) {
-            if (self.fn_reachable.items[owner_index]) return proc;
-            self.fn_reachable.items[owner_index] = true;
-        }
+        if (self.fn_entries.items[owner_index].body_queued) return proc;
         try self.fn_reach_queue.append(self.allocator, owner);
+        self.fn_entries.items[owner_index].body_queued = true;
         return proc;
     }
 
@@ -2821,6 +2832,355 @@ const Lowerer = struct {
             .record => assign,
             .erased_ptr => |ptr| try self.lowerErasedCaptureLoadInto(record_local, ptr, assign),
         };
+    }
+
+    /// Builds a completed compile-time value from its construction, or
+    /// returns null when a part exceeds what a literal can carry, in which
+    /// case the root keeps its slot.
+    fn lowerConstructionInto(self: *Lowerer, target: LIR.LocalId, construction: postcheck_values.Construction, next: LIR.CFStmtId) Common.LowerError!?LIR.CFStmtId {
+        const store = &self.result.store;
+        switch (construction) {
+            .literal => |literal| return try store.addCFStmt(.{ .assign_literal = .{ .target = target, .value = literal, .next = next } }),
+            .zst => return try self.assignZst(target, next),
+            .empty_str => return try store.addCFStmt(.{ .assign_literal = .{
+                .target = target,
+                .value = .{ .str_literal = try store.insertStringView("", 0, 0) },
+                .next = next,
+            } }),
+            .empty_list => |capacity| {
+                if (capacity > std.math.maxInt(i64)) return null;
+                return try self.lowerListWithCapacityInto(target, @intCast(capacity), next);
+            },
+            .uniform_list => |uniform| {
+                if (uniform.count > std.math.maxInt(i64)) return null;
+                const element_local = try self.addLocalForLayout(uniform.element_layout);
+                const loop = try self.lowerRepeatInto(target, element_local, @intCast(uniform.count), next);
+                return try self.lowerConstructionInto(element_local, uniform.element.*, loop);
+            },
+            .record => |fields| {
+                const layout_idx = store.getLocal(target).layout_idx;
+                const value_layout = self.result.layouts.getLayout(layout_idx);
+                if (value_layout.tag != .struct_) return null;
+                const struct_idx = value_layout.getStruct().idx;
+                const field_locals = try self.allocator.alloc(LIR.LocalId, fields.len);
+                defer self.allocator.free(field_locals);
+                for (field_locals, 0..) |*local, original_index| {
+                    local.* = try self.addLocalForLayout(self.result.layouts.getStructFieldLayoutByOriginalIndex(struct_idx, @intCast(original_index)));
+                }
+                var current = try store.addCFStmt(.{ .assign_struct = .{
+                    .target = target,
+                    .fields = try store.addLocalSpan(field_locals),
+                    .next = next,
+                } });
+                var index = fields.len;
+                while (index > 0) {
+                    index -= 1;
+                    current = try self.lowerConstructionInto(field_locals[index], fields[index], current) orelse return null;
+                }
+                return current;
+            },
+            .tag => |tag| {
+                const layout_idx = store.getLocal(target).layout_idx;
+                const value_layout = self.result.layouts.getLayout(layout_idx);
+                if (value_layout.tag != .tag_union) return null;
+                const info = self.result.layouts.getTagUnionInfo(value_layout);
+                if (tag.variant_index >= info.variants.len) return null;
+                var payload_local: ?LIR.LocalId = null;
+                if (tag.payload != null) {
+                    payload_local = try self.addLocalForLayout(info.variants.get(tag.variant_index).payload_layout);
+                }
+                const build = try store.addCFStmt(.{ .assign_tag = .{
+                    .target = target,
+                    .variant_index = tag.variant_index,
+                    .discriminant = tag.discriminant,
+                    .payload = payload_local,
+                    .next = next,
+                } });
+                if (tag.payload) |payload| {
+                    return try self.lowerConstructionInto(payload_local.?, payload.*, build);
+                }
+                return build;
+            },
+        }
+    }
+
+    /// Lowers a restored compile-time value as the construction it came from
+    /// when every part of it is a scalar, the empty string, an empty list,
+    /// a list of copies of one construction, or a record or tag of such
+    /// parts, exactly as a completed root decoded from a frozen image does
+    /// (see `ComptimeScalarValues`); null leaves the value to its slot.
+    fn lowerConstructionExprInto(self: *Lowerer, target: LIR.LocalId, expr_id: Lifted.ExprId, ty: Type.TypeId, next: LIR.CFStmtId) Common.LowerError!?LIR.CFStmtId {
+        var arena = std.heap.ArenaAllocator.init(self.allocator);
+        defer arena.deinit();
+        const layout_idx = self.result.store.getLocal(target).layout_idx;
+        const construction = try self.constructionOfExpr(arena.allocator(), expr_id, ty, layout_idx) orelse return null;
+        return try self.lowerConstructionInto(target, construction, next);
+    }
+
+    fn constructionOfExpr(self: *Lowerer, arena: std.mem.Allocator, expr_id: Lifted.ExprId, ty: Type.TypeId, layout_idx: layout.Idx) Common.LowerError!?postcheck_values.Construction {
+        const value_layout = self.result.layouts.getLayout(layout_idx);
+        if (value_layout.tag == .zst) return .zst;
+        const expr = self.solved.lifted.getExpr(expr_id);
+        return switch (expr.data) {
+            .unit => .zst,
+            .int_lit => |value| .{ .literal = .{ .i128_literal = .{ .value = value.toI128(), .layout_idx = layout_idx } } },
+            .frac_f32_lit => |value| .{ .literal = .{ .f32_literal = value } },
+            .frac_f64_lit => |value| .{ .literal = .{ .f64_literal = value } },
+            .dec_lit => |value| .{ .literal = .{ .dec_literal = value.num } },
+            .str_lit => |literal| if (self.stringLiteral(literal).len == 0) .empty_str else null,
+            .low_level => |call| blk: {
+                if (call.op != .list_with_capacity or value_layout.tag != .list) break :blk null;
+                const args = self.solved.lifted.exprSpan(call.args);
+                if (args.len != 1) break :blk null;
+                const count = self.solved.lifted.getExpr(GuardedList.at(args, 0));
+                if (count.data != .int_lit) break :blk null;
+                const capacity = count.data.int_lit.toI128();
+                if (capacity < 0 or capacity > std.math.maxInt(u64)) break :blk null;
+                break :blk .{ .empty_list = @intCast(capacity) };
+            },
+            .list => |items| try self.constructionOfListExpr(arena, items, ty, value_layout),
+            .bytes_lit => |literal| try self.constructionOfPackedList(arena, literal, ty, value_layout),
+            .record => |fields| try self.constructionOfRecordExpr(arena, fields, ty, value_layout),
+            .tuple => |items| try self.constructionOfStructExprs(arena, self.solved.lifted.exprSpan(items), self.tupleItemTypes(ty), value_layout),
+            .tag => |tag| try self.constructionOfTagExpr(arena, tag.name, tag.payloads, ty, layout_idx),
+            .nominal => |backing| try self.constructionOfExpr(arena, backing, try self.nominalBackingType(ty, backing), layout_idx),
+            .static_data_candidate => |candidate| try self.constructionOfExpr(arena, candidate.runtime_expr, ty, layout_idx),
+            .local,
+            .@"unreachable",
+            .inline_expects_enabled,
+            .comptime_value,
+            .typed_boundary,
+            .record_update,
+            .let_,
+            .lambda,
+            .def_ref,
+            .fn_def,
+            .fn_ref,
+            .call_value,
+            .call_proc,
+            .field_access,
+            .tuple_access,
+            .structural_eq,
+            .structural_hash,
+            .match_,
+            .if_,
+            .uninitialized,
+            .uninitialized_payload,
+            .if_initialized_payload,
+            .try_sequence,
+            .try_record_sequence,
+            .block,
+            .loop_,
+            .break_,
+            .continue_,
+            .join_point,
+            .jump,
+            .return_,
+            .crash,
+            .comptime_branch_taken,
+            .comptime_exhaustiveness_failed,
+            .dbg,
+            .expect_err,
+            .expect,
+            => null,
+        };
+    }
+
+    fn constructionOfListExpr(self: *Lowerer, arena: std.mem.Allocator, span: Lifted.Span(Lifted.ExprId), ty: Type.TypeId, value_layout: layout.Layout) Common.LowerError!?postcheck_values.Construction {
+        if (value_layout.tag != .list) return null;
+        const items = self.solved.lifted.exprSpan(span);
+        if (items.len == 0) return .{ .empty_list = 0 };
+        const element_layout = value_layout.getIdx();
+        const element_ty = self.listElemType(ty);
+        const first = try self.constructionOfExpr(arena, GuardedList.at(items, 0), element_ty, element_layout) orelse return null;
+        for (1..items.len) |index| {
+            const other = try self.constructionOfExpr(arena, GuardedList.at(items, index), element_ty, element_layout) orelse return null;
+            if (!constructionEql(first, other)) return null;
+        }
+        const stored = try arena.create(postcheck_values.Construction);
+        stored.* = first;
+        return .{ .uniform_list = .{ .element = stored, .element_layout = element_layout, .count = items.len } };
+    }
+
+    /// A packed list is uniform when every element's packed bytes match
+    /// the first's; that element then decodes through the frozen-image
+    /// decoder, over its memory bytes.
+    fn constructionOfPackedList(self: *Lowerer, arena: std.mem.Allocator, literal: Mono.PackedListLiteral, ty: Type.TypeId, value_layout: layout.Layout) Common.LowerError!?postcheck_values.Construction {
+        if (value_layout.tag != .list) return null;
+        if (literal.len == 0) return .{ .empty_list = 0 };
+        const element_layout = value_layout.getIdx();
+        const encoded = self.stringLiteral(literal.literal).text();
+        const width: usize = if (literal.element) |scalar| scalar.byteWidth() else literal.product_width;
+        if (width == 0 or encoded.len < @as(usize, literal.len) * width) return null;
+        const first = encoded[0..width];
+        for (1..literal.len) |index| {
+            if (!std.mem.eql(u8, first, encoded[index * width ..][0..width])) return null;
+        }
+        const size_align = self.result.layouts.layoutSizeAlign(self.result.layouts.getLayout(element_layout));
+        const memory = try arena.alloc(u8, size_align.size);
+        if (literal.element != null) {
+            if (memory.len != width) return null;
+            @memcpy(memory, first);
+        } else {
+            if (!self.packed_plans.contains(element_layout)) {
+                var plan = try lir_core.PackedData.Plan.init(self.allocator, &self.result.layouts, element_layout);
+                errdefer plan.deinit();
+                try self.packed_plans.put(element_layout, plan);
+            }
+            const plan = self.packed_plans.getPtr(element_layout).?;
+            if (plan.packed_width != literal.product_width or plan.memory_width != memory.len) return null;
+            plan.decode(memory, first, 1);
+        }
+        var decoder = postcheck_values.Decoder{ .program = &self.result, .frozen = null, .arena = arena };
+        const element = try decoder.decode(null, memory, 0, try self.constPlanOfType(self.listElemType(ty)), element_layout) orelse return null;
+        const stored = try arena.create(postcheck_values.Construction);
+        stored.* = element;
+        return .{ .uniform_list = .{ .element = stored, .element_layout = element_layout, .count = literal.len } };
+    }
+
+    fn constructionOfRecordExpr(self: *Lowerer, arena: std.mem.Allocator, span: Lifted.Span(Lifted.FieldExpr), ty: Type.TypeId, value_layout: layout.Layout) Common.LowerError!?postcheck_values.Construction {
+        if (value_layout.tag != .struct_) return null;
+        const shape = try self.recordShape(ty);
+        const expr_fields = self.solved.lifted.fieldExprSpan(span);
+        if (expr_fields.len != shape.fields.len) return null;
+        const ordered = try arena.alloc(Lifted.ExprId, shape.fields.len);
+        const field_tys = try arena.alloc(Type.TypeId, shape.fields.len);
+        for (shape.fields, 0..) |field, index| field_tys[index] = field.ty;
+        for (0..expr_fields.len) |index| {
+            const field = GuardedList.at(expr_fields, index);
+            const position = shape.indices.get(field.name) orelse return null;
+            ordered[position] = field.value;
+        }
+        return try self.constructionOfStructExprs(arena, ordered, field_tys, value_layout);
+    }
+
+    fn constructionOfStructExprs(self: *Lowerer, arena: std.mem.Allocator, items: anytype, item_tys: anytype, value_layout: layout.Layout) Common.LowerError!?postcheck_values.Construction {
+        if (value_layout.tag != .struct_) return null;
+        if (items.len != item_tys.len) return null;
+        const struct_idx = value_layout.getStruct().idx;
+        const fields = try arena.alloc(postcheck_values.Construction, items.len);
+        for (0..items.len) |original_index| {
+            const field_layout = self.result.layouts.getStructFieldLayoutByOriginalIndex(struct_idx, @intCast(original_index));
+            fields[original_index] = try self.constructionOfExpr(arena, GuardedList.at(items, original_index), GuardedList.at(item_tys, original_index), field_layout) orelse return null;
+        }
+        return .{ .record = fields };
+    }
+
+    fn constructionOfTagExpr(self: *Lowerer, arena: std.mem.Allocator, name: Type.names.TagNameId, payload_span: Lifted.Span(Lifted.ExprId), ty: Type.TypeId, layout_idx: layout.Idx) Common.LowerError!?postcheck_values.Construction {
+        const variant_index = self.tagIndex(ty, name);
+        const payloads = self.solved.lifted.exprSpan(payload_span);
+        // A payload-free two-variant union is a byte: its discriminant is
+        // the value.
+        if (layout_idx == .bool) {
+            if (payloads.len != 0) return null;
+            return .{ .literal = .{ .i128_literal = .{ .value = variant_index, .layout_idx = .bool } } };
+        }
+        const value_layout = self.result.layouts.getLayout(layout_idx);
+        if (value_layout.tag != .tag_union) return null;
+        const payload_tys = self.tagPayloadTypesByIndex(ty, variant_index);
+        if (payloads.len != payload_tys.len) return null;
+        var payload: ?*const postcheck_values.Construction = null;
+        if (payloads.len != 0) {
+            const payload_layout = self.tagUnionPayloadLayout(layout_idx, variant_index);
+            const stored = try arena.create(postcheck_values.Construction);
+            stored.* = if (payloads.len == 1)
+                try self.constructionOfExpr(arena, GuardedList.at(payloads, 0), GuardedList.at(payload_tys, 0), payload_layout) orelse return null
+            else
+                try self.constructionOfStructExprs(arena, payloads, payload_tys, self.result.layouts.getLayout(payload_layout)) orelse return null;
+            payload = stored;
+        }
+        return .{ .tag = .{ .variant_index = variant_index, .discriminant = variant_index, .payload = payload } };
+    }
+
+    /// `target = list_with_capacity(capacity)`, the runtime form of a completed
+    /// empty list root.
+    fn lowerListWithCapacityInto(self: *Lowerer, target: LIR.LocalId, capacity: i64, next: LIR.CFStmtId) Common.LowerError!LIR.CFStmtId {
+        const capacity_local = try self.addLocalForLayout(.u64);
+        const build = try self.result.store.addCFStmt(.{ .assign_low_level = .{
+            .target = target,
+            .op = .list_with_capacity,
+            .rc_effect = LIR.LowLevel.list_with_capacity.rcEffect(),
+            .args = try self.result.store.addLocalSpan(&[_]LIR.LocalId{capacity_local}),
+            .next = next,
+        } });
+        return try self.result.store.addCFStmt(.{ .assign_literal = .{
+            .target = capacity_local,
+            .value = .{ .i64_literal = .{ .value = capacity, .layout_idx = .u64 } },
+            .next = build,
+        } });
+    }
+
+    /// The repeat loop a completed uniform list root came from: reserve
+    /// `count` elements, then append the element `count` times unchecked.
+    /// The later passes treat it as they do any source loop.
+    fn lowerRepeatInto(self: *Lowerer, target: LIR.LocalId, element_local: LIR.LocalId, count: i64, next: LIR.CFStmtId) Common.LowerError!LIR.CFStmtId {
+        const store = &self.result.store;
+        const list_layout = store.getLocal(target).layout_idx;
+        const count_local = try self.addLocalForLayout(.u64);
+        const reserved = try self.addLocalForLayout(list_layout);
+        const zero = try self.addLocalForLayout(.u64);
+        const list_param = try self.addLocalForLayout(list_layout);
+        const index_param = try self.addLocalForLayout(.u64);
+        const more = try self.addLocalForLayout(.bool);
+        const appended = try self.addLocalForLayout(list_layout);
+        const one = try self.addLocalForLayout(.u64);
+        const next_index = try self.addLocalForLayout(.u64);
+        const join_id = self.freshJoinPointId();
+
+        // Exit: the carried list is the result.
+        const exit = try store.addCFStmt(.{ .assign_ref = .{ .target = target, .op = .{ .local = list_param }, .next = next } });
+        // Step: append one element and go round again.
+        const back_jump = try store.addCFStmt(.{ .jump = .{ .target = join_id } });
+        const set_index = try store.addCFStmt(.{ .set_local = .{ .target = index_param, .value = next_index, .mode = .initialize_join_param, .next = back_jump } });
+        const set_list = try store.addCFStmt(.{ .set_local = .{ .target = list_param, .value = appended, .mode = .initialize_join_param, .next = set_index } });
+        const bump = try store.addCFStmt(.{ .assign_low_level = .{
+            .target = next_index,
+            .op = .num_int_add_wrap,
+            .rc_effect = LIR.LowLevel.num_int_add_wrap.rcEffect(),
+            .args = try store.addLocalSpan(&[_]LIR.LocalId{ index_param, one }),
+            .next = set_list,
+        } });
+        const one_literal = try store.addCFStmt(.{ .assign_literal = .{ .target = one, .value = .{ .i64_literal = .{ .value = 1, .layout_idx = .u64 } }, .next = bump } });
+        const append = try store.addCFStmt(.{ .assign_low_level = .{
+            .target = appended,
+            .op = .list_append_unsafe,
+            .rc_effect = LIR.LowLevel.list_append_unsafe.rcEffect(),
+            .args = try store.addLocalSpan(&[_]LIR.LocalId{ list_param, element_local }),
+            .next = one_literal,
+        } });
+        const dispatch = try store.addCFStmt(.{ .switch_stmt = .{
+            .cond = more,
+            .branches = try store.addCFSwitchBranches(&.{.{ .value = 1, .body = append }}),
+            .default_branch = exit,
+            .default_is_cold = false,
+            .continuation = null,
+        } });
+        const body = try store.addCFStmt(.{ .assign_low_level = .{
+            .target = more,
+            .op = .num_is_lt,
+            .rc_effect = LIR.LowLevel.num_is_lt.rcEffect(),
+            .args = try store.addLocalSpan(&[_]LIR.LocalId{ index_param, count_local }),
+            .next = dispatch,
+        } });
+        // Entry: the element, the count, the reserved list, and index zero.
+        const entry_jump = try store.addCFStmt(.{ .jump = .{ .target = join_id } });
+        const init_index = try store.addCFStmt(.{ .set_local = .{ .target = index_param, .value = zero, .mode = .initialize_join_param, .next = entry_jump } });
+        const init_list = try store.addCFStmt(.{ .set_local = .{ .target = list_param, .value = reserved, .mode = .initialize_join_param, .next = init_index } });
+        const zero_literal = try store.addCFStmt(.{ .assign_literal = .{ .target = zero, .value = .{ .i64_literal = .{ .value = 0, .layout_idx = .u64 } }, .next = init_list } });
+        const reserve = try store.addCFStmt(.{ .assign_low_level = .{
+            .target = reserved,
+            .op = .list_with_capacity,
+            .rc_effect = LIR.LowLevel.list_with_capacity.rcEffect(),
+            .args = try store.addLocalSpan(&[_]LIR.LocalId{count_local}),
+            .next = zero_literal,
+        } });
+        const count_literal = try store.addCFStmt(.{ .assign_literal = .{ .target = count_local, .value = .{ .i64_literal = .{ .value = count, .layout_idx = .u64 } }, .next = reserve } });
+        return try store.addCFStmt(.{ .join = .{
+            .id = join_id,
+            .params = try store.addLocalSpan(&[_]LIR.LocalId{ list_param, index_param }),
+            .body = body,
+            .remainder = count_literal,
+        } });
     }
 
     fn lowerErasedCaptureLoadInto(self: *Lowerer, target: LIR.LocalId, ptr: LIR.LocalId, next: LIR.CFStmtId) Common.LowerError!LIR.CFStmtId {
@@ -4216,6 +4576,11 @@ const Lowerer = struct {
         next: LIR.CFStmtId,
     ) Common.LowerError!LIR.CFStmtId {
         const layout_idx = self.result.store.getLocal(target).layout_idx;
+        if (self.completed_scalar_values) |values| {
+            if (values.constructionFor(value.root.module, value.root.root, layout_idx)) |construction| {
+                if (try self.lowerConstructionInto(target, construction, next)) |built| return built;
+            }
+        }
         const request = ComptimeValueRequest{
             .module = value.root.module,
             .root = value.root.root,
@@ -4254,6 +4619,7 @@ const Lowerer = struct {
         next: LIR.CFStmtId,
     ) Common.LowerError!LIR.CFStmtId {
         const layout_idx = self.result.store.getLocal(target).layout_idx;
+        if (try self.lowerConstructionExprInto(target, candidate.runtime_expr, ty, next)) |built| return built;
         if (candidate.storage.needsTargetStorage(self.result.layouts.targetUsize()) and self.layoutNeedsStaticData(layout_idx)) {
             return try self.result.store.addCFStmt(.{ .assign_literal = .{
                 .target = target,
@@ -12040,6 +12406,32 @@ fn constBackingAuthority(authority: MonoType.BackingAuthority) const_store.TypeB
     };
 }
 
+/// Whether two constructions build the same value.
+fn constructionEql(a: postcheck_values.Construction, b: postcheck_values.Construction) bool {
+    if (std.meta.activeTag(a) != std.meta.activeTag(b)) return false;
+    return switch (a) {
+        .literal => |literal| std.meta.eql(literal, b.literal),
+        .zst, .empty_str => true,
+        .empty_list => |capacity| capacity == b.empty_list,
+        .uniform_list => |uniform| uniform.count == b.uniform_list.count and
+            uniform.element_layout == b.uniform_list.element_layout and
+            constructionEql(uniform.element.*, b.uniform_list.element.*),
+        .record => |fields| blk: {
+            if (fields.len != b.record.len) break :blk false;
+            for (fields, b.record) |field, other| {
+                if (!constructionEql(field, other)) break :blk false;
+            }
+            break :blk true;
+        },
+        .tag => |tag| blk: {
+            if (tag.variant_index != b.tag.variant_index or tag.discriminant != b.tag.discriminant) break :blk false;
+            if ((tag.payload == null) != (b.tag.payload == null)) break :blk false;
+            if (tag.payload) |payload| break :blk constructionEql(payload.*, b.tag.payload.?.*);
+            break :blk true;
+        },
+    };
+}
+
 fn lirSymbol(symbol: Common.Symbol) LIR.Symbol {
     return LIR.Symbol.fromRaw(@intCast(@intFromEnum(symbol)));
 }
@@ -12155,6 +12547,69 @@ fn emptySolvedProgramForTest(allocator: std.mem.Allocator) Solved.Program {
         0, // next_symbol
     );
     return Solved.Program.init(allocator, lifted);
+}
+
+test "shared procedure scheduling preserves exact specialization demand" {
+    const allocator = std.testing.allocator;
+    var solved = emptySolvedProgramForTest(allocator);
+    defer solved.deinit();
+
+    for ([_]bool{ false, true }) |owner_first| {
+        var lowerer = try Lowerer.init(allocator, .u64, &solved, .{});
+        defer lowerer.deinit();
+        var materialized = LambdaMono.Program.init(allocator, NameStore.init(allocator), .empty, .empty, .empty);
+        defer materialized.deinit();
+        const direct_ty = try lowerer.types.add(.{ .primitive = .u8 });
+        const materialized_ty = try materialized.types.add(.{ .primitive = .u8 });
+        const owner: Type.FnId = @enumFromInt(@as(u32, @intCast(lowerer.fn_entries.items.len)));
+        const alias: Type.FnId = @enumFromInt(@intFromEnum(owner) + 1);
+        const proc: LIR.LirProcSpecId = @enumFromInt(@as(u32, @intCast(lowerer.result.store.procSpecCount())));
+        const source: Lifted.FnId = @enumFromInt(@as(u32, @intCast(solved.lifted.fnCount())));
+
+        // Distinct solved signatures have already been assigned the same
+        // procedure identity. Only the alias is initially requested when
+        // owner_first is false, just as in the nested-hover-grid regression.
+        for (0..2) |index| {
+            try lowerer.fn_entries.append(allocator, .{
+                .spec = .{
+                    .source = source,
+                    .solved_fn_ty = @enumFromInt(@as(u32, @intCast(index))),
+                    .abi = .finite,
+                    .captures = CaptureSpanId.fromOwn(0, 0),
+                    .capture_ty = null,
+                    .return_reuse = .none,
+                },
+                .symbol = lowerer.symbols.fresh(),
+                .source = null,
+                .args = .empty(),
+                .ret = direct_ty,
+                .capture_arg_ty = null,
+                .proc = proc,
+                .proc_owner = owner,
+            });
+            try lowerer.fn_reachable.append(allocator, false);
+        }
+        var identities: std.ArrayList(LambdaMonoLower.SpecializationIdentity) = .empty;
+        defer identities.deinit(allocator);
+        const order = if (owner_first) [_]Type.FnId{ owner, alias } else [_]Type.FnId{ alias, owner };
+        for (order) |requested| {
+            try std.testing.expectEqual(proc, try lowerer.markReachableFn(requested));
+            try std.testing.expectEqual(proc, try lowerer.markReachableFn(requested));
+            try std.testing.expectEqualSlices(Type.FnId, &.{owner}, lowerer.fn_reach_queue.items);
+            const entry = lowerer.fn_entries.items[@intFromEnum(requested)];
+            _ = try materialized.addFn(.{
+                .symbol = entry.symbol,
+                .source = null,
+                .args = .empty(),
+                .ret = materialized_ty,
+                .body = .hosted,
+            });
+            try identities.append(allocator, Lowerer.specializationIdentity(entry.spec));
+            try lowerer.verifyFnEntriesMatch(&materialized, identities.items);
+        }
+        try std.testing.expect(lowerer.fn_reachable.items[@intFromEnum(owner)]);
+        try std.testing.expect(lowerer.fn_reachable.items[@intFromEnum(alias)]);
+    }
 }
 
 test "frozen solved clone preserves producer IDs and releases partial allocations" {

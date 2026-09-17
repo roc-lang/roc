@@ -15178,6 +15178,7 @@ const ProcBodyBuilder = struct {
         const list_len: usize = switch (list) {
             .nodes => |items| items.len,
             .packed_bytes => |packed_list| packed_list.len,
+            .empty => 0,
         };
         const elems = try self.parent.allocator.alloc(LIR.LocalId, list_len);
         defer self.parent.allocator.free(elems);
@@ -15200,6 +15201,7 @@ const ProcBodyBuilder = struct {
                 }
             },
             .packed_bytes => unreachable,
+            .empty => {},
         }
         return continuation;
     }
@@ -15467,6 +15469,7 @@ const ProcBodyBuilder = struct {
         const list_len: usize = switch (list) {
             .nodes => |items| items.len,
             .packed_bytes => |packed_list| packed_list.len,
+            .empty => 0,
         };
         const elem_locals = try self.parent.allocator.alloc(LIR.LocalId, list_len);
         defer self.parent.allocator.free(elem_locals);
@@ -15502,6 +15505,7 @@ const ProcBodyBuilder = struct {
                 }
             },
             .packed_bytes => unreachable,
+            .empty => {},
         }
         return continuation;
     }

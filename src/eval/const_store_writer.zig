@@ -329,6 +329,10 @@ pub const Writer = struct {
             writerInvariant("list const plan had non-list layout");
         }
         const roc_list: *const RocList = @ptrCast(@alignCast(value.ptr));
+        if (roc_list.len() == 0) {
+            self.module.const_store.fill(target_node, .{ .list = .{ .empty = roc_list.getCapacity() } });
+            return;
+        }
         if (self.planIsScalar(elem_plan)) {
             return try self.storePackedList(target_node, layout_value, roc_list);
         }
@@ -1416,5 +1420,14 @@ test "const store writer stores 20KB scalar lists as shared blob" {
     const u16_scalar_bytes = artifact.const_store.get(stored_u16_list.const_node).list.packed_bytes;
     try testing.expectEqual(@as(u32, 10 * 1024), u16_scalar_bytes.len);
     try testing.expectEqual(const_store.ConstPackedScalar.u16, u16_scalar_bytes.element);
+
+    // An empty list keeps the capacity it was evaluated with.
+    var roc_empty_list = RocList{
+        .bytes = bytes.ptr,
+        .length = 0,
+        .capacity_or_alloc_ptr = RocList.encodeCapacity(bytes.len),
+    };
+    const stored_empty_list = try writer.storeRoot(testConstRoot(list_plan, u8_list_layout), .{ .ptr = @ptrCast(&roc_empty_list) });
+    try testing.expectEqual(@as(u64, bytes.len), artifact.const_store.get(stored_empty_list.const_node).list.empty);
     try testing.expectEqual(str_value.str.data, u16_scalar_bytes.bytes.data);
 }

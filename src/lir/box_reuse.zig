@@ -32,7 +32,6 @@
 //! validate the payload/box layouts before rewriting.
 
 const std = @import("std");
-const collections = @import("collections");
 const Allocator = std.mem.Allocator;
 const core = @import("lir_core");
 const layout_mod = @import("layout");
@@ -52,30 +51,46 @@ const ForwardedAlias = body_clone.ForwardedAlias;
 /// Allocation failure raised while rewriting box update statements.
 pub const ResourceError = Allocator.Error;
 
+/// Prepare pointer layouts serially; every accepted wrapper returns its box.
+pub fn prepareLayouts(store: *const LirStore, layouts: *layout_mod.Store) ResourceError!void {
+    for (0..store.procSpecCount()) |index| {
+        const proc_id: LIR.LirProcSpecId = @enumFromInt(index);
+        const proc = store.getProcSpec(proc_id);
+        if (proc.body == null or proc.hosted != null or proc.abi != .roc) continue;
+        const ret = layouts.getLayout(proc.ret_layout);
+        if (ret.tag == .box and !payloadNeedsOwnedUnbox(layouts, ret.getIdx())) {
+            _ = try layouts.insertPtr(ret.getIdx());
+        }
+    }
+}
+
 /// Rewrite eligible box unwrap/update pairs to direct box reuse helper calls.
 pub fn run(store: *LirStore, layouts: *layout_mod.Store) ResourceError!void {
+    try prepareLayouts(store, layouts);
     const proc_count = store.procSpecCount();
     var proc_index: usize = 0;
     while (proc_index < proc_count) : (proc_index += 1) {
         const proc_id: LIR.LirProcSpecId = @enumFromInt(proc_index);
-        try transformProc(store, layouts, proc_id);
+        try runProc(store, layouts, proc_id, store.allocator);
     }
 }
 
-fn transformProc(store: *LirStore, layouts: *layout_mod.Store, proc_id: LIR.LirProcSpecId) ResourceError!void {
+/// Rewrite one proc against serially prepared, immutable layouts.
+pub fn runProc(store: *LirStore, layouts: *const layout_mod.Store, proc_id: LIR.LirProcSpecId, scratch_allocator: Allocator) ResourceError!void {
     const body = body_clone.rewritableProcBody(store, proc_id) orelse return;
 
-    var reads = try body_clone.countReachableReads(store, body);
+    var reads = try body_clone.countReachableReadsWithAllocator(store, body, scratch_allocator);
     defer reads.deinit();
 
     var transform = Transform{
         .store = store,
+        .scratch_allocator = scratch_allocator,
         .layouts = layouts,
         .proc_id = proc_id,
         .reads = &reads,
         .new_locals = .empty,
     };
-    defer transform.new_locals.deinit(store.allocator);
+    defer transform.new_locals.deinit(scratch_allocator);
 
     var current = body;
     while (true) {
@@ -91,7 +106,8 @@ fn transformProc(store: *LirStore, layouts: *layout_mod.Store, proc_id: LIR.LirP
 
 const Transform = struct {
     store: *LirStore,
-    layouts: *layout_mod.Store,
+    scratch_allocator: Allocator,
+    layouts: *const layout_mod.Store,
     proc_id: LIR.LirProcSpecId,
     reads: *const body_clone.ReadCounts,
     new_locals: std.ArrayList(LocalId),
@@ -133,7 +149,7 @@ const Transform = struct {
         // Follow only explicit straight-line `next` edges. The statement-count
         // bound turns a malformed cycle into a declined rewrite rather than an
         // unbounded compiler loop.
-        var remaining = self.store.getCFStmts().len;
+        var remaining = self.store.cfStmtCount();
         while (remaining > 0) : (remaining -= 1) {
             const candidate = self.store.getCFStmt(box_stmt_id);
             if (candidate == .assign_low_level and candidate.assign_low_level.op == .box_box) {
@@ -177,7 +193,7 @@ const Transform = struct {
         if (self.reads.get(boxed) != 1) return false;
         if (self.reads.get(result_box) != 1) return false;
 
-        const ptr_layout = try self.layouts.insertPtr(payload_layout);
+        const ptr_layout = self.layouts.getPtr(payload_layout).?;
         const payload_ptr = try self.addLocal(ptr_layout);
         const store_unit = try self.addLocal(.zst);
 
@@ -281,7 +297,7 @@ const Transform = struct {
         if (self.store.getLocal(join_payload).layout_idx != payload_layout) return false;
         if (self.store.getLocal(payload_value).layout_idx != payload_layout) return false;
 
-        const ptr_layout = try self.layouts.insertPtr(payload_layout);
+        const ptr_layout = self.layouts.getPtr(payload_layout).?;
         const payload_ptr = try self.addLocal(ptr_layout);
         const store_unit = try self.addLocal(.zst);
 
@@ -387,7 +403,7 @@ const Transform = struct {
         if (self.store.getLocal(join_payload).layout_idx != payload_layout) return false;
         if (self.store.getLocal(payload_value).layout_idx != payload_layout) return false;
 
-        const ptr_layout = try self.layouts.insertPtr(payload_layout);
+        const ptr_layout = self.layouts.getPtr(payload_layout).?;
         const payload_ptr = try self.addLocal(ptr_layout);
         const store_unit = try self.addLocal(.zst);
 
@@ -469,10 +485,10 @@ const Transform = struct {
         if (new_stmt.capture != null and new_stmt.capture.? == old_stmt.target) return false;
 
         var return_chain = std.ArrayList(LocalId).empty;
-        defer return_chain.deinit(self.store.allocator);
+        defer return_chain.deinit(self.scratch_allocator);
         const returned = try body_clone.forwardLocalAliasChainInto(
             self.store,
-            self.store.allocator,
+            self.scratch_allocator,
             new_stmt.target,
             new_stmt.next,
             &return_chain,
@@ -574,21 +590,21 @@ const Transform = struct {
         const body = proc.body orelse return 0;
 
         var work = std.ArrayList(CFStmtId).empty;
-        defer work.deinit(self.store.allocator);
-        var visited = collections.DenseMap(CFStmtId, void).init(self.store.allocator);
-        defer visited.deinit();
+        defer work.deinit(self.scratch_allocator);
+        var visited = std.AutoHashMapUnmanaged(CFStmtId, void).empty;
+        defer visited.deinit(self.scratch_allocator);
 
         var count: usize = 0;
-        try work.append(self.store.allocator, body);
+        try work.append(self.scratch_allocator, body);
         while (work.pop()) |stmt_id| {
-            const entry = try visited.getOrPut(stmt_id);
+            const entry = try visited.getOrPut(self.scratch_allocator, stmt_id);
             if (entry.found_existing) continue;
 
             const stmt = self.store.getCFStmt(stmt_id);
             if (stmt == .jump) {
                 if (stmt.jump.target == join_id) count += 1;
             } else {
-                try body_clone.appendSuccessors(self.store, &work, stmt_id);
+                try body_clone.appendSuccessorsWithAllocator(self.store, &work, stmt_id, self.scratch_allocator);
             }
         }
 
@@ -597,15 +613,15 @@ const Transform = struct {
 
     fn addLocal(self: *Transform, layout_idx: layout_mod.Idx) ResourceError!LocalId {
         const local = try self.store.addLocal(.{ .layout_idx = layout_idx });
-        try self.new_locals.append(self.store.allocator, local);
+        try self.new_locals.append(self.scratch_allocator, local);
         return local;
     }
 
     fn updateFrameLocals(self: *Transform) ResourceError!void {
         const proc = self.store.getProcSpec(self.proc_id);
         const old = self.store.getLocalSpan(proc.frame_locals);
-        var merged = try std.ArrayList(LocalId).initCapacity(self.store.allocator, old.len + self.new_locals.items.len);
-        defer merged.deinit(self.store.allocator);
+        var merged = try std.ArrayList(LocalId).initCapacity(self.scratch_allocator, old.len + self.new_locals.items.len);
+        defer merged.deinit(self.scratch_allocator);
         for (0..old.len) |index| merged.appendAssumeCapacity(GuardedList.at(old, index));
         merged.appendSliceAssumeCapacity(self.new_locals.items);
         std.mem.sort(LocalId, merged.items, {}, body_clone.localIdLessThan);
@@ -719,6 +735,11 @@ fn testPackedErased(
 }
 
 test "box reuse rewrites the direct unbox call rebox return chain" {
+    try testDirectBoxReuse(false);
+    try testDirectBoxReuse(true);
+}
+
+fn testDirectBoxReuse(per_proc: bool) (Allocator.Error || error{ TestExpectedEqual, TestUnexpectedResult })!void {
     const allocator = std.testing.allocator;
     var store = LirStore.init(allocator);
     defer store.deinit();
@@ -759,7 +780,17 @@ test "box reuse rewrites the direct unbox call rebox return chain" {
         .ret_layout = box_u64,
     });
 
-    try run(&store, &layouts);
+    if (per_proc) {
+        try prepareLayouts(&store, &layouts);
+        const layout_count = layouts.layoutCount();
+        var scratch = std.heap.ArenaAllocator.init(allocator);
+        defer scratch.deinit();
+        try runProc(&store, &layouts, caller, scratch.allocator());
+        try std.testing.expectEqual(layout_count, layouts.layoutCount());
+        try std.testing.expect(store.getProcSpec(callee).body == null);
+    } else {
+        try run(&store, &layouts);
+    }
 
     const prepare = store.getCFStmt(unbox).assign_low_level;
     try std.testing.expectEqual(LowLevelOp.box_prepare_update, prepare.op);
@@ -840,6 +871,11 @@ test "box reuse rewrites an inlined straight-line payload producer" {
 }
 
 test "box reuse rejects a straight-line region with another input-box consumer" {
+    try testRejectedBoxReuse(false);
+    try testRejectedBoxReuse(true);
+}
+
+fn testRejectedBoxReuse(per_proc: bool) (Allocator.Error || error{ TestExpectedEqual, TestUnexpectedResult })!void {
     const allocator = std.testing.allocator;
     var store = LirStore.init(allocator);
     defer store.deinit();
@@ -857,7 +893,7 @@ test "box reuse rejects a straight-line region with another input-box consumer" 
     const rebox = try testLowLevel(&store, result_box, .box_box, &.{old_payload}, ret);
     const extra_consumer = try testLocalRef(&store, boxed_copy, boxed_arg, rebox);
     const unbox = try testLowLevel(&store, old_payload, .box_unbox, &.{boxed_arg}, extra_consumer);
-    _ = try store.addProcSpec(.{
+    const proc_id = try store.addProcSpec(.{
         .name = store.freshSyntheticSymbol(),
         .identity = LIR.ProcIdentity.forTest(4),
         .args = try store.addLocalSpan(&.{boxed_arg}),
@@ -866,7 +902,14 @@ test "box reuse rejects a straight-line region with another input-box consumer" 
         .ret_layout = box_u64,
     });
 
-    try run(&store, &layouts);
+    if (per_proc) {
+        try prepareLayouts(&store, &layouts);
+        const layout_count = layouts.layoutCount();
+        try runProc(&store, &layouts, proc_id, allocator);
+        try std.testing.expectEqual(layout_count, layouts.layoutCount());
+    } else {
+        try run(&store, &layouts);
+    }
 
     try std.testing.expectEqual(LowLevelOp.box_unbox, store.getCFStmt(unbox).assign_low_level.op);
     try std.testing.expectEqual(LowLevelOp.box_box, store.getCFStmt(rebox).assign_low_level.op);

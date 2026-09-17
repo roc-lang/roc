@@ -8497,13 +8497,35 @@ test "shared CTFE and runtime requests specialize once across workers and target
             try std.testing.expectEqual(@as(u32, 1), metrics.solved_runs);
             try std.testing.expectEqual(@as(u32, if (width == base.target.TargetUsize.native) 1 else 2), metrics.lir_continuations);
             try std.testing.expectEqual(@as(usize, 1), runtime.lir_result.root_procs.items.len);
+            // The native width reuses the completed host program, whose
+            // value slot is read as frozen data; a forked width lowers its
+            // own continuation, where the completed scalar is a literal and
+            // no value slot survives to be transcoded.
             const frozen = runtime.frozen_static_data orelse return error.TestUnexpectedResult;
-            try std.testing.expect(frozen.exports.len > 0);
-            var has_value_slot = false;
+            var value_exports: usize = 0;
             for (frozen.exports) |item| {
-                if (item.value_id != null) has_value_slot = true;
+                if (item.value_id != null) value_exports += 1;
             }
-            try std.testing.expect(has_value_slot);
+            var slot_reads: usize = 0;
+            var literal_answers: usize = 0;
+            for (0..runtime.lir_result.store.cfStmtCount()) |index| {
+                const stmt = runtime.lir_result.store.getCFStmt(@enumFromInt(@as(u32, @intCast(index))));
+                if (stmt != .assign_literal) continue;
+                switch (stmt.assign_literal.value) {
+                    .static_data => slot_reads += 1,
+                    .i128_literal => |literal| if (literal.value == 42) {
+                        literal_answers += 1;
+                    },
+                    .i64_literal, .f64_literal, .f32_literal, .dec_literal, .str_literal, .boxy_dynamic_num_literal, .boxy_dynamic_frac_literal, .bytes_literal, .null_ptr, .proc_ref => {},
+                }
+            }
+            if (width == base.target.TargetUsize.native) {
+                try std.testing.expect(value_exports > 0);
+            } else {
+                try std.testing.expectEqual(@as(usize, 0), value_exports);
+                try std.testing.expectEqual(@as(usize, 0), slot_reads);
+                try std.testing.expectEqual(@as(usize, 1), literal_answers);
+            }
         }
     }
 }

@@ -1098,6 +1098,39 @@ const TestObjectTables = struct {
     }
 };
 
+test "separate static data objects expose private backing symbols to code objects" {
+    const allocator = std.testing.allocator;
+    const Compiler = @import("ObjectFileCompiler.zig");
+    const private_export_index: u32 = 0;
+    const relocations = [_]Compiler.StaticDataRelocation{.{
+        .offset = 0,
+        .target_symbol_name = "private_backing",
+        .target = .{ .data_symbol = @enumFromInt(private_export_index) },
+    }};
+    const exports = [_]Compiler.StaticDataExport{
+        .{ .symbol_name = "private_backing", .bytes = &([_]u8{0} ** 8), .alignment = 8, .is_global = false, .is_exported = false },
+        .{ .symbol_name = "public_root", .bytes = &([_]u8{0} ** 8), .alignment = 8, .relocations = &relocations },
+    };
+    var compiler = Compiler.ObjectFileCompiler.init(allocator);
+    var result = try compiler.compileStaticDataObject(&exports, .x64linux);
+    defer result.deinit();
+    const decoded = try TestObjectTables.read(.x64linux, result.object_bytes);
+    var found: usize = 0;
+    for (0..decoded.symbols.len / 24) |index| {
+        const symbol = decoded.symbols[index * 24 ..][0..24];
+        const name_offset = TestObjectTables.read32(symbol, 0);
+        const name = std.mem.sliceTo(decoded.strings[name_offset..], 0);
+        const private = std.mem.eql(u8, name, "private_backing");
+        if (!private and !std.mem.eql(u8, name, "public_root")) continue;
+        found += 1;
+        // LLVM can fold a root's address relocation into its separate code
+        // object. The backing must have global binding but remain hidden.
+        try std.testing.expectEqual(@as(u8, 1), symbol[4] >> 4); // STB_GLOBAL
+        try std.testing.expectEqual(@as(u8, if (private) 2 else 0), symbol[5] & 3); // visibility
+    }
+    try std.testing.expectEqual(@as(usize, 2), found);
+}
+
 test "static data object collection scales linearly and preserves cyclic targets" {
     const allocator = std.testing.allocator;
     const small = @max(1, try fastestStaticObjectNs(allocator, 500));
