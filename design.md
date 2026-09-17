@@ -853,7 +853,13 @@ and would otherwise be that many bytes in the binary, and a static list
 can never be born unique, which would lose the in-place writes of every
 loop the table is carried through. A non-empty list with spare capacity
 freezes to its elements alone; only the capacity of an empty list
-survives. After the passes, which compact the slot table, the remaining
+survives. A build that restores its compile-time values from a checked
+module's const store rather than from a completed host program, as every
+build after the first does, reaches the same constructions: the const
+store keeps an empty list's evaluated capacity and restores it as the
+`with_capacity` call, and a restored value whose parts are all
+constructions lowers as them rather than as a static-data candidate.
+After the passes, which compact the slot table, the remaining
 aggregate slots are transcoded into the target's frozen image. The LLVM
 backend then defines each slot whose image is a link-time constant—bytes with
 address relocations as symbolic pointer fields—as an internal constant in the

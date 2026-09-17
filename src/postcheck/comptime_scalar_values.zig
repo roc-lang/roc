@@ -25,6 +25,12 @@
 //! loop the table is carried through. Other aggregate roots keep their
 //! slots and fold in the backend; failed roots keep the guard that crashes
 //! with the original failure.
+//!
+//! A build that restores its compile-time values from a checked module's
+//! const store, rather than from a completed host program, reaches the
+//! same constructions through the restored expressions; the lowerer's
+//! static-data candidate path decides those, and shares this decoder for
+//! the elements of a packed list.
 const std = @import("std");
 const check = @import("check");
 const core = @import("lir_core");
@@ -103,7 +109,7 @@ pub const CompletedScalarValues = struct {
             const slot: LIR.StaticDataId = @enumFromInt(index);
             if (!slotSucceeded(program, frozen, slot)) continue;
             const data_export = exportOf(frozen, slot) orelse continue;
-            const construction = try decoder.decode(data_export, data_export.symbol_offset, root.role.value.plan, entry.layout_idx) orelse continue;
+            const construction = try decoder.decode(data_export, data_export.bytes[data_export.symbol_offset..], data_export.symbol_offset, root.role.value.plan, entry.layout_idx) orelse continue;
             try values.entries.put(allocator, .{ .module = root.module, .root = root.root }, .{ .layout_idx = entry.layout_idx, .construction = construction });
         }
         return values;
@@ -133,27 +139,30 @@ pub const CompletedScalarValues = struct {
     }
 };
 
-/// Decodes a frozen value into its construction by walking the same const
-/// plan the freezer walked, at the same byte offsets. Any part that is not
-/// a scalar, the empty string, an empty or uniform list, a record, or a tag
-/// leaves the whole root on its slot.
-const Decoder = struct {
+/// Decodes a completed value into its construction by walking the same
+/// const plan the freezer walked, at the same byte offsets. Any part that
+/// is not a scalar, the empty string, an empty or uniform list, a record,
+/// or a tag leaves the whole value undecoded. A decoder over plain memory
+/// bytes has no frozen image; lists in such bytes stay undecoded, since
+/// their elements live behind a relocation the bytes cannot follow.
+pub const Decoder = struct {
     program: *const Program.Result,
-    frozen: *const Program.FrozenStaticData,
+    frozen: ?*const Program.FrozenStaticData,
     arena: Allocator,
 
-    fn decode(self: *Decoder, data_export: *const Program.StaticDataExport, offset: usize, plan: Program.ConstPlanId, layout_idx: layout.Idx) Allocator.Error!?Construction {
+    /// `bytes` is the value's image, starting at `offset` within
+    /// `data_export`; both are null for plain memory bytes.
+    pub fn decode(self: *Decoder, data_export: ?*const Program.StaticDataExport, bytes: []const u8, offset: usize, plan: Program.ConstPlanId, layout_idx: layout.Idx) Allocator.Error!?Construction {
         const physical = self.program.layouts.getLayout(layout_idx);
         if (physical.tag == .zst) return .zst;
-        const bytes = data_export.bytes[offset..];
         return switch (self.program.const_plans.items[@intFromEnum(plan)]) {
             .zst => .zst,
             .scalar => if (decodeScalar(layout_idx, bytes)) |literal| .{ .literal = literal } else null,
             .str => if (self.stringIsEmpty(bytes)) .empty_str else null,
-            .list => |element_plan| try self.decodeList(data_export, offset, element_plan, physical),
-            .named => |named| try self.decode(data_export, offset, named.backing, layout_idx),
-            .tuple, .record => |child_plans| try self.decodeRecord(data_export, offset, child_plans, physical),
-            .tag_union => |variants| try self.decodeTag(data_export, offset, variants, physical),
+            .list => |element_plan| try self.decodeList(data_export, bytes, offset, element_plan, physical),
+            .named => |named| try self.decode(data_export, bytes, offset, named.backing, layout_idx),
+            .tuple, .record => |child_plans| try self.decodeRecord(data_export, bytes, offset, child_plans, physical),
+            .tag_union => |variants| try self.decodeTag(data_export, bytes, offset, variants, layout_idx),
             .pending, .layout_only, .box, .fn_value, .erased_fn => null,
         };
     }
@@ -189,19 +198,22 @@ const Decoder = struct {
         return len == 0;
     }
 
-    fn decodeList(self: *Decoder, data_export: *const Program.StaticDataExport, offset: usize, element_plan: Program.ConstPlanId, physical: layout.Layout) Allocator.Error!?Construction {
+    fn decodeList(self: *Decoder, data_export: ?*const Program.StaticDataExport, bytes: []const u8, offset: usize, element_plan: Program.ConstPlanId, physical: layout.Layout) Allocator.Error!?Construction {
         if (physical.tag != .list) return null;
-        const bytes = data_export.bytes[offset..];
         const len = self.readWord(bytes, 1) orelse return null;
         if (len == 0) {
             var capacity: u64 = 0;
-            for (data_export.empty_list_capacities) |item| {
-                if (item.offset == offset) capacity = item.capacity;
+            if (data_export) |exported| {
+                for (exported.empty_list_capacities) |item| {
+                    if (item.offset == offset) capacity = item.capacity;
+                }
             }
             return .{ .empty_list = capacity };
         }
-        const relocation = relocationAt(data_export, offset) orelse return null;
-        const backing = exportNamed(self.frozen, relocation.target_symbol_name) orelse return null;
+        const exported = data_export orelse return null;
+        const frozen = self.frozen orelse return null;
+        const relocation = relocationAt(exported, offset) orelse return null;
+        const backing = exportNamed(frozen, relocation.target_symbol_name) orelse return null;
         const element_layout = physical.getIdx();
         const element_size = self.program.layouts.layoutSize(self.program.layouts.getLayout(element_layout));
         if (element_size == 0) return null;
@@ -212,27 +224,34 @@ const Decoder = struct {
         while (index < len) : (index += 1) {
             if (!std.mem.eql(u8, first, elements[index * element_size ..][0..element_size])) return null;
         }
-        const element = try self.decode(backing, backing.symbol_offset, element_plan, element_layout) orelse return null;
+        const element = try self.decode(backing, elements, backing.symbol_offset, element_plan, element_layout) orelse return null;
         const stored = try self.arena.create(Construction);
         stored.* = element;
         return .{ .uniform_list = .{ .element = stored, .element_layout = element_layout, .count = len } };
     }
 
-    fn decodeRecord(self: *Decoder, data_export: *const Program.StaticDataExport, offset: usize, child_plans: []const Program.ConstPlanId, physical: layout.Layout) Allocator.Error!?Construction {
+    fn decodeRecord(self: *Decoder, data_export: ?*const Program.StaticDataExport, bytes: []const u8, offset: usize, child_plans: []const Program.ConstPlanId, physical: layout.Layout) Allocator.Error!?Construction {
         if (physical.tag != .struct_) return null;
         const struct_idx = physical.getStruct().idx;
         const fields = try self.arena.alloc(Construction, child_plans.len);
         for (child_plans, 0..) |child_plan, original_index| {
             const field_layout = self.program.layouts.getStructFieldLayoutByOriginalIndex(struct_idx, @intCast(original_index));
             const field_offset = self.program.layouts.getStructFieldOffsetByOriginalIndex(struct_idx, @intCast(original_index));
-            fields[original_index] = try self.decode(data_export, offset + field_offset, child_plan, field_layout) orelse return null;
+            if (bytes.len < field_offset) return null;
+            fields[original_index] = try self.decode(data_export, bytes[field_offset..], offset + field_offset, child_plan, field_layout) orelse return null;
         }
         return .{ .record = fields };
     }
 
-    fn decodeTag(self: *Decoder, data_export: *const Program.StaticDataExport, offset: usize, variants: []const Program.ConstTagVariant, physical: layout.Layout) Allocator.Error!?Construction {
+    fn decodeTag(self: *Decoder, data_export: ?*const Program.StaticDataExport, bytes: []const u8, offset: usize, variants: []const Program.ConstTagVariant, layout_idx: layout.Idx) Allocator.Error!?Construction {
+        // A payload-free two-variant union is a byte: its discriminant is
+        // the value.
+        if (layout_idx == .bool) {
+            if (bytes.len < 1) return null;
+            return .{ .literal = .{ .i128_literal = .{ .value = bytes[0], .layout_idx = .bool } } };
+        }
+        const physical = self.program.layouts.getLayout(layout_idx);
         if (physical.tag != .tag_union) return null;
-        const bytes = data_export.bytes[offset..];
         const data = self.program.layouts.getTagUnionData(physical.getTagUnion().idx);
         if (bytes.len < data.size.get(self.program.layouts.targetUsize())) return null;
         const discriminant = data.readDiscriminant(bytes.ptr, self.program.layouts.targetUsize());
@@ -244,11 +263,11 @@ const Decoder = struct {
             var payload: ?*const Construction = null;
             if (variant.payloads.len == 1) {
                 const stored = try self.arena.create(Construction);
-                stored.* = try self.decode(data_export, offset, variant.payloads[0], payload_layout) orelse return null;
+                stored.* = try self.decode(data_export, bytes, offset, variant.payloads[0], payload_layout) orelse return null;
                 payload = stored;
             } else if (variant.payloads.len > 1) {
                 const stored = try self.arena.create(Construction);
-                stored.* = try self.decodeRecord(data_export, offset, variant.payloads, self.program.layouts.getLayout(payload_layout)) orelse return null;
+                stored.* = try self.decodeRecord(data_export, bytes, offset, variant.payloads, self.program.layouts.getLayout(payload_layout)) orelse return null;
                 payload = stored;
             }
             return .{ .tag = .{ .variant_index = @intCast(discriminant), .discriminant = @intCast(discriminant), .payload = payload } };
