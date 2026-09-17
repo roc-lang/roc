@@ -586,7 +586,16 @@ weak_value_implicit_open_ext_ranges: std.ArrayListUnmanaged(ImplicitOpenExtRange
 /// `runLateImplicitOpenExtAudit`). Entries are copied rather than sliced out
 /// of `implicit_open_exts` by range so a later re-generation of the same
 /// annotation cannot move the range out from under the replay.
-late_implicit_open_ext_audits: std.ArrayListUnmanaged(ImplicitOpenExt),
+late_implicit_open_ext_audits: std.ArrayListUnmanaged(LateImplicitOpenExtAudit),
+/// The introducing-expression regions of every dispatch relation punted into
+/// the window the replay reads—the window between the last narrowing and
+/// `runLateImplicitOpenExtAudit`. The replay blames a binding only when one of
+/// these lies inside that binding's own right-hand side, which is what
+/// separates a definition widening its own row from a caller widening it. The
+/// queues that carry these regions are drained before the replay runs
+/// (`checkFinalGeneratedCodecConstraints` clears them), so the replay cannot
+/// re-derive them and they are recorded here at deferral time instead.
+late_self_widening_writers: std.ArrayListUnmanaged(Region) = .empty,
 /// Tracks bindings whose defining expression is known erroneous and whose
 /// subsequent local lookups must therefore become explicit runtime errors.
 erroneous_value_patterns: std.AutoHashMapUnmanaged(CIR.Pattern.Idx, void),
@@ -2802,6 +2811,7 @@ pub fn deinit(self: *Self) void {
     self.annotation_implicit_open_exts.deinit(self.gpa);
     self.weak_value_implicit_open_ext_ranges.deinit(self.gpa);
     self.late_implicit_open_ext_audits.deinit(self.gpa);
+    self.late_self_widening_writers.deinit(self.gpa);
     self.erroneous_value_patterns.deinit(self.gpa);
     self.rejected_default_exprs.deinit(self.gpa);
     self.accepted_nominal_constructor_backings.deinit(self.gpa);
@@ -13773,7 +13783,12 @@ fn checkDef(self: *Self, def_idx: CIR.Def.Idx, env: *Env) std.mem.Allocator.Erro
         // quantified row.
         const is_value_alias = def_expr == .e_lookup_local or def_expr == .e_lookup_external;
         const generalizes_regardless = def_is_function or def_expr == .e_anno_only or is_value_alias;
-        try self.auditImplicitOpenExts(annotation_idx, generalizes_regardless, env);
+        try self.auditImplicitOpenExts(
+            annotation_idx,
+            generalizes_regardless,
+            self.cir.store.getExprRegion(def.expr),
+            env,
+        );
 
         // A top-level value binding that does not generalize (not a function,
         // not a pure signature, not a value alias, and no written type
@@ -15626,6 +15641,22 @@ const ImplicitOpenExtRange = struct {
     len: u32,
 };
 
+/// One extension the post-body audit cleared, kept for the late replay, with
+/// the binding that owns it named by source region.
+///
+/// The owner is stamped HERE—at the audit—rather than where the extension is
+/// minted: `generateAnnotationType` knows only the annotation, and it runs
+/// speculatively during `predeclareAnnotationScheme` and is rolled back, so a
+/// region recorded at the mint cannot be trusted to survive.
+const LateImplicitOpenExtAudit = struct {
+    ext: ImplicitOpenExt,
+    /// Source region of the right-hand side of the binding whose annotation
+    /// minted `ext`. `Region.zero()` when the audit's caller could not name
+    /// one: the replay then never blames this entry (see
+    /// `lateWriterInsideOwner`).
+    owner_rhs: Region,
+};
+
 /// After a binding's right-hand side has been checked against its annotation,
 /// verify that the definition did not EXTEND any implicitly opened tag-union
 /// row (design.md "Polarity": the annotation bounds the definition; only its
@@ -15646,7 +15677,13 @@ const ImplicitOpenExtRange = struct {
 /// extension this pass clears is therefore kept for that replay. The `..`
 /// warning is NOT replayed—it is a property of the annotation's own text,
 /// fully decided here.
-fn auditImplicitOpenExts(self: *Self, annotation_idx: CIR.Annotation.Idx, redundant_open_warns: bool, env: *Env) std.mem.Allocator.Error!void {
+fn auditImplicitOpenExts(
+    self: *Self,
+    annotation_idx: CIR.Annotation.Idx,
+    redundant_open_warns: bool,
+    owner_rhs: Region,
+    env: *Env,
+) std.mem.Allocator.Error!void {
     const range = self.annotation_implicit_open_exts.get(annotation_idx) orelse return;
     for (self.implicit_open_exts.items[range.start..][0..range.len]) |entry| {
         if (redundant_open_warns) {
@@ -15657,7 +15694,10 @@ fn auditImplicitOpenExts(self: *Self, annotation_idx: CIR.Annotation.Idx, redund
             }
         }
         if (!self.implicitOpenExtCarriesTags(entry)) {
-            try self.late_implicit_open_ext_audits.append(self.gpa, entry);
+            try self.late_implicit_open_ext_audits.append(self.gpa, .{
+                .ext = entry,
+                .owner_rhs = owner_rhs,
+            });
             continue;
         }
         try self.reportImplicitOpenExtExtension(entry, env, .report_and_poison);
@@ -15689,7 +15729,7 @@ fn implicitOpenExtCarriesTags(self: *const Self, entry: ImplicitOpenExt) bool {
 fn dropSettledLateImplicitOpenExtAudits(self: *Self) void {
     var kept: usize = 0;
     for (self.late_implicit_open_ext_audits.items) |entry| {
-        if (self.implicitOpenExtCarriesTags(entry)) continue;
+        if (self.implicitOpenExtCarriesTags(entry.ext)) continue;
         self.late_implicit_open_ext_audits.items[kept] = entry;
         kept += 1;
     }
@@ -15706,10 +15746,16 @@ fn dropSettledLateImplicitOpenExtAudits(self: *Self) void {
 /// the survivors to `[]`: a grounded extension carries no tags and the audit
 /// would skip it.
 ///
-/// The window is NOT exclusive to the definition, and this pass does not claim
-/// it is. A use site whose unification is deferred into the same window widens
-/// the same row and is indistinguishable here, so the replay is a report, not
-/// a judgment the solver acts on. See `ImplicitOpenExtReportKind`.
+/// The window is NOT exclusive to the definition. A use site whose unification
+/// is deferred into the same window widens the same row on the same pass, so
+/// timing alone cannot tell the two apart and the narrowings above cannot
+/// separate them. The replay therefore asks a SECOND question, about
+/// provenance rather than timing: does some relation punted into this window
+/// come from an expression inside the binding's own right-hand side
+/// (`lateWriterInsideOwner`)? Only then is the widening the definition's own.
+///
+/// The replay still reports rather than poisons: the answer is an attribution,
+/// not a proof that the solved row is wrong. See `ImplicitOpenExtReportKind`.
 fn runLateImplicitOpenExtAudit(self: *Self, env: *Env) std.mem.Allocator.Error!void {
     // The direct audit's `markErroneous` doubles as its no-double-report
     // guard. The replay does not poison, so it carries its own: one report per
@@ -15717,11 +15763,37 @@ fn runLateImplicitOpenExtAudit(self: *Self, env: *Env) std.mem.Allocator.Error!v
     var reported: std.AutoHashMapUnmanaged(Var, void) = .empty;
     defer reported.deinit(self.gpa);
     for (self.late_implicit_open_ext_audits.items) |entry| {
-        if (!self.implicitOpenExtCarriesTags(entry)) continue;
-        const root = self.types.resolveVar(entry.var_).var_;
+        if (!self.implicitOpenExtCarriesTags(entry.ext)) continue;
+        if (!self.lateWriterInsideOwner(entry.owner_rhs)) continue;
+        const root = self.types.resolveVar(entry.ext.var_).var_;
         if ((try reported.getOrPut(self.gpa, root)).found_existing) continue;
-        try self.reportImplicitOpenExtExtension(entry, env, .report_only);
+        try self.reportImplicitOpenExtExtension(entry.ext, env, .report_only);
     }
+}
+
+/// Whether the definition itself is responsible for a widening that landed in
+/// the late window: whether some relation deferred into that window was
+/// introduced by an expression lying inside this binding's right-hand side.
+///
+/// The test is CONTAINMENT, not equality. The relation that widens a row is
+/// routinely introduced by a nested local binding inside the annotated
+/// definition's body (`parse_ = T.parser_for(...)` inside an annotated
+/// `parse`), which is still the definition widening its own row. Conversely a
+/// caller's widening is introduced somewhere else in the module entirely, and
+/// a caller widening an output-position row is exactly what implicit openness
+/// is for.
+///
+/// Both unknowns answer "not the definition's": an owner whose right-hand side
+/// has no region, and a writer set with nothing inside it. Blaming a binding
+/// is only ever correct on evidence, so where provenance is missing this
+/// stays silent.
+fn lateWriterInsideOwner(self: *const Self, owner_rhs: Region) bool {
+    if (owner_rhs.isEmpty()) return false;
+    for (self.late_self_widening_writers.items) |writer| {
+        if (writer.start.offset >= owner_rhs.start.offset and
+            writer.end.offset <= owner_rhs.end.offset) return true;
+    }
+    return false;
 }
 
 /// Whether a report also marks the extension it reports erroneous.
@@ -23148,7 +23220,12 @@ fn checkBlockStatements(self: *Self, statements: CIR.Statement.Span, env: *Env, 
                 const decl_expr_does_fx = try self.checkExpr(decl_stmt.expr, env, expectation);
                 // The annotation bounds the definition (see `checkDef`).
                 if (decl_stmt.anno) |annotation_idx| {
-                    try self.auditImplicitOpenExts(annotation_idx, decl_is_fn, env);
+                    try self.auditImplicitOpenExts(
+                        annotation_idx,
+                        decl_is_fn,
+                        self.cir.store.getExprRegion(decl_stmt.expr),
+                        env,
+                    );
                 }
                 does_fx = decl_expr_does_fx or does_fx;
                 statement_blocks_later_hoists = self.checkedExprBlocksLaterHoists(decl_stmt.expr, decl_expr_does_fx);
@@ -32996,7 +33073,34 @@ fn deferGeneratedCodecConstraintToFinalization(
         .constraint = constraint,
         .failure_expr = deferred.failure_expr,
     });
+    try self.recordLateSelfWideningWriter(deferred, constraint);
     return true;
+}
+
+/// Remember WHERE a relation punted to the final type boundary came from, for
+/// the late implicit-open-ext replay. A relation parked here is decided inside
+/// `finalizeGeneratedCodecConstraintsToQuiescence`, which is after both
+/// narrowing passes, so the replay sees its widening and must decide whether
+/// the binding it is about to blame is the one that introduced it.
+///
+/// The region is resolved now, not at the replay: `Provenance.intro_expr` is
+/// module-local, and reinterpreting an index that arrived with an imported
+/// type as a local expression could name an unrelated region and blame a
+/// binding that did nothing wrong. Here we are in this module's checker with
+/// this module's CIR, so the index is this module's—guarded below regardless.
+fn recordLateSelfWideningWriter(
+    self: *Self,
+    deferred: DeferredConstraintCheck,
+    constraint: StaticDispatchConstraint,
+) Allocator.Error!void {
+    const expr_idx = constraintIntroExpr(constraint) orelse
+        self.deferredConstraintFailureExpr(deferred) orelse return;
+    const node_idx: CIR.Node.Idx = @enumFromInt(@intFromEnum(expr_idx));
+    if (@intFromEnum(node_idx) >= self.cir.store.nodes.len()) return;
+    if (!isExprNodeTag(self.cir.store.nodes.get(node_idx).tag)) return;
+    const region = self.cir.store.getExprRegion(expr_idx);
+    if (region.isEmpty()) return;
+    try self.late_self_widening_writers.append(self.gpa, region);
 }
 
 fn checkFinalGeneratedCodecConstraints(self: *Self, env: *Env) Allocator.Error!void {

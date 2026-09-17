@@ -2,7 +2,10 @@
 const std = @import("std");
 const TestEnv = @import("TestEnv.zig");
 
-const source =
+/// Formats whose four protocol methods fail with distinct closed error rows,
+/// one of them infallible. Shared by every case below; only the tail that
+/// consumes the generated parser differs.
+const prelude =
     \\
     \\State := { bytes : List(U8) }.{ is_eq : _ }
     \\
@@ -34,6 +37,9 @@ const source =
     \\    }
     \\}
     \\
+;
+
+const source = prelude ++
     \\parse : List(U8) -> Try({ value : List(U8), rest : State }, [BadByte(U8), NoByte, Separator(Str), Start(U64)])
     \\parse = |bytes| {
     \\    T : List(U8)
@@ -62,4 +68,93 @@ test "issue 11246: parent cannot change an error payload" {
     var env = try TestEnv.init("Test", input);
     defer env.deinit();
     try env.assertOneTypeError("Type Mismatch");
+}
+
+// The three cases below are the other side of the same replay: a composed
+// error row that only the generated parser decides, reaching a binding that
+// did not produce it. The row still settles inside
+// `finalizeGeneratedCodecConstraintsToQuiescence`, i.e. after both narrowing
+// passes, so the late audit sees it widen; but the expression that introduced
+// the relation lies outside the annotated binding, which is an ordinary caller
+// using an output-position row at a wider union.
+
+/// `seed`'s single tag reaches the composed error row through a CALLER
+/// (`compose`), whose generated parser decides that row at finalization. The
+/// annotation bounds `seed` itself, which produced only `NoByte`.
+const caller_widens_top_level_value = prelude ++
+    \\seed : [NoByte]
+    \\seed = NoByte
+    \\
+    \\compose : List(U8) -> Str
+    \\compose = |bytes| {
+    \\    T : List(U8)
+    \\    parse_ = T.parser_for(Format.{})
+    \\    match parse_(State.{ bytes }) {
+    \\        Ok(_) => "ok"
+    \\        Err(e) => {
+    \\            _ = [e, seed]
+    \\            "err"
+    \\        }
+    \\    }
+    \\}
+;
+
+/// The same widening with `seed` a LOCAL binding sharing one definition and
+/// one binding group with the parser that widens it: writer identity has to be
+/// finer than the enclosing definition to tell these apart.
+const caller_widens_local_value = prelude ++
+    \\compose : List(U8) -> Str
+    \\compose = |bytes| {
+    \\    seed : [NoByte]
+    \\    seed = NoByte
+    \\    T : List(U8)
+    \\    parse_ = T.parser_for(Format.{})
+    \\    match parse_(State.{ bytes }) {
+    \\        Ok(_) => "ok"
+    \\        Err(e) => {
+    \\            _ = [e, seed]
+    \\            "err"
+    \\        }
+    \\    }
+    \\}
+;
+
+/// The function form of the same program. A function's opened row is
+/// quantified, so each call widens a fresh copy and the binding's own row
+/// never gains the caller's tags. It is accepted for a different reason than
+/// the two above, and it pins that reason.
+const caller_widens_function = prelude ++
+    \\seed : {} -> [NoByte]
+    \\seed = |_| NoByte
+    \\
+    \\compose : List(U8) -> Str
+    \\compose = |bytes| {
+    \\    T : List(U8)
+    \\    parse_ = T.parser_for(Format.{})
+    \\    match parse_(State.{ bytes }) {
+    \\        Ok(_) => "ok"
+    \\        Err(e) => {
+    \\            _ = [e, seed({})]
+    \\            "err"
+    \\        }
+    \\    }
+    \\}
+;
+
+test "issue 11246: a caller's late composed error row does not blame a top-level value" {
+    var env = try TestEnv.init("Test", caller_widens_top_level_value);
+    defer env.deinit();
+    try env.assertNoErrors();
+}
+
+test "issue 11246: a caller's late composed error row does not blame a local value" {
+    var env = try TestEnv.init("Test", caller_widens_local_value);
+    defer env.deinit();
+    try env.assertNoErrors();
+}
+
+test "issue 11246: a caller's late composed error row does not blame a function" {
+    var env = try TestEnv.init("Test", caller_widens_function);
+    defer env.deinit();
+    try env.assertNoErrors();
 }
