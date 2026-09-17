@@ -207,6 +207,7 @@ fn constF32ListMatches(
             }
             break :blk true;
         },
+        .empty => expected.len == 0,
         .packed_bytes => |scalar_bytes| blk: {
             if (scalar_bytes.element != .f32 or scalar_bytes.len != expected.len) break :blk false;
             const bytes = store.blobBytes(scalar_bytes.bytes);
@@ -232,6 +233,7 @@ fn constF64ListMatches(
             }
             break :blk true;
         },
+        .empty => expected.len == 0,
         .packed_bytes => |scalar_bytes| blk: {
             if (scalar_bytes.element != .f64 or scalar_bytes.len != expected.len) break :blk false;
             const bytes = store.blobBytes(scalar_bytes.bytes);

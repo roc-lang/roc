@@ -225,7 +225,7 @@ pub const Decoder = struct {
         const elements = backing.bytes[start..];
         if (elements.len < len * element_size) return null;
         const first = elements[0..element_size];
-        var index: u64 = 1;
+        var index: usize = 1;
         while (index < len) : (index += 1) {
             if (!std.mem.eql(u8, first, elements[index * element_size ..][0..element_size])) return null;
         }
