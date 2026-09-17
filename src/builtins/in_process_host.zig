@@ -109,9 +109,11 @@ fn requireOps() *RocOps {
 }
 
 /// A breach of the host contract by the compiler itself. No `RocOps` exists
-/// to report it through, so the process stops after naming it.
+/// to report it through, so the process stops after naming it. A freestanding
+/// build has no process to abort or stream to name it on, so it traps.
 fn hostInvariant(comptime message: []const u8) noreturn {
-    if (comptime builtin.os.tag != .freestanding) std.debug.print("in-process host invariant violated: {s}\n", .{message});
+    if (comptime builtin.os.tag == .freestanding) @trap();
+    std.debug.print("in-process host invariant violated: {s}\n", .{message});
     std.process.abort();
 }
 
