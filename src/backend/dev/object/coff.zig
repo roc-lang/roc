@@ -932,16 +932,19 @@ pub const CoffWriter = struct {
         // Relocations follow all section data
         // Note: COFF relocations are exactly 10 bytes (not @sizeOf which may include padding)
         const reloc_entry_size: u32 = 10;
+        const text_relocs = RelocCount.of(self.text_relocs.items.len);
         const text_reloc_offset: u32 = debug_info_offset + debug_info_size;
-        const text_reloc_size: u32 = @as(u32, @intCast(self.text_relocs.items.len)) * reloc_entry_size;
+        const text_reloc_size: u32 = text_relocs.entries * reloc_entry_size;
 
+        const rdata_relocs = RelocCount.of(self.rdata_relocs.items.len);
         const rdata_reloc_offset: u32 = text_reloc_offset + text_reloc_size;
-        const rdata_reloc_size: u32 = @as(u32, @intCast(self.rdata_relocs.items.len)) * reloc_entry_size;
+        const rdata_reloc_size: u32 = rdata_relocs.entries * reloc_entry_size;
 
         // .pdata relocations.
-        const pdata_reloc_offset: u32 = rdata_reloc_offset + rdata_reloc_size;
         const pdata_reloc_count: u32 = if (need_unwind) function_count * self.pdataRelocCountPerFunction() else 0;
-        const pdata_reloc_size: u32 = pdata_reloc_count * reloc_entry_size;
+        const pdata_relocs = RelocCount.of(pdata_reloc_count);
+        const pdata_reloc_offset: u32 = rdata_reloc_offset + rdata_reloc_size;
+        const pdata_reloc_size: u32 = pdata_relocs.entries * reloc_entry_size;
 
         // DWARF relocations.
         const debug_line_relocs = RelocCount.of(if (has_debug) self.debug_line_relocs.len else 0);
@@ -1072,14 +1075,15 @@ pub const CoffWriter = struct {
             .virtual_address = 0,
             .size_of_raw_data = text_size,
             .pointer_to_raw_data = if (text_size > 0) text_offset else 0,
-            .pointer_to_relocations = if (self.text_relocs.items.len > 0) text_reloc_offset else 0,
+            .pointer_to_relocations = if (text_relocs.entries > 0) text_reloc_offset else 0,
             .pointer_to_line_numbers = 0,
-            .number_of_relocations = @intCast(self.text_relocs.items.len),
+            .number_of_relocations = text_relocs.header,
             .number_of_line_numbers = 0,
             .characteristics = COFF.IMAGE_SCN_CNT_CODE |
                 COFF.IMAGE_SCN_MEM_EXECUTE |
                 COFF.IMAGE_SCN_MEM_READ |
-                COFF.IMAGE_SCN_ALIGN_16BYTES,
+                COFF.IMAGE_SCN_ALIGN_16BYTES |
+                text_relocs.flags,
         };
         output.appendSliceAssumeCapacity(std.mem.asBytes(&text_header));
 
@@ -1093,13 +1097,14 @@ pub const CoffWriter = struct {
                 .virtual_address = 0,
                 .size_of_raw_data = rdata_size,
                 .pointer_to_raw_data = rdata_offset,
-                .pointer_to_relocations = if (self.rdata_relocs.items.len > 0) rdata_reloc_offset else 0,
+                .pointer_to_relocations = if (rdata_relocs.entries > 0) rdata_reloc_offset else 0,
                 .pointer_to_line_numbers = 0,
-                .number_of_relocations = @intCast(self.rdata_relocs.items.len),
+                .number_of_relocations = rdata_relocs.header,
                 .number_of_line_numbers = 0,
                 .characteristics = COFF.IMAGE_SCN_CNT_INITIALIZED_DATA |
                     COFF.IMAGE_SCN_MEM_READ |
-                    COFF.IMAGE_SCN_ALIGN_16BYTES,
+                    COFF.IMAGE_SCN_ALIGN_16BYTES |
+                    rdata_relocs.flags,
             };
             output.appendSliceAssumeCapacity(std.mem.asBytes(&rdata_header));
         }
@@ -1115,13 +1120,14 @@ pub const CoffWriter = struct {
                 .virtual_address = 0,
                 .size_of_raw_data = pdata_size,
                 .pointer_to_raw_data = pdata_offset,
-                .pointer_to_relocations = if (pdata_reloc_count > 0) pdata_reloc_offset else 0,
+                .pointer_to_relocations = if (pdata_relocs.entries > 0) pdata_reloc_offset else 0,
                 .pointer_to_line_numbers = 0,
-                .number_of_relocations = @intCast(pdata_reloc_count),
+                .number_of_relocations = pdata_relocs.header,
                 .number_of_line_numbers = 0,
                 .characteristics = COFF.IMAGE_SCN_CNT_INITIALIZED_DATA |
                     COFF.IMAGE_SCN_MEM_READ |
-                    COFF.IMAGE_SCN_ALIGN_4BYTES,
+                    COFF.IMAGE_SCN_ALIGN_4BYTES |
+                    pdata_relocs.flags,
             };
             output.appendSliceAssumeCapacity(std.mem.asBytes(&pdata_header));
 
@@ -1208,16 +1214,19 @@ pub const CoffWriter = struct {
         }
 
         // Write .text relocations (10 bytes each: u32 offset, u32 symbol_idx, u16 type)
+        if (text_relocs.flags != 0) writeRelocation(output, text_relocs.entries, 0, 0);
         for (self.text_relocs.items) |rel| {
             writeRelocation(output, rel.offset, rel.symbol_idx, rel.reloc_type);
         }
 
+        if (rdata_relocs.flags != 0) writeRelocation(output, rdata_relocs.entries, 0, 0);
         for (self.rdata_relocs.items) |rel| {
             writeRelocation(output, rel.offset, rel.symbol_idx, self.arch.absolutePointerRelocType());
         }
 
         // Write .pdata relocations.
         if (need_unwind) {
+            if (pdata_relocs.flags != 0) writeRelocation(output, pdata_relocs.entries, 0, 0);
             for (self.functions.items, 0..) |_, func_idx| {
                 const pdata_entry_offset: u32 = @as(u32, @intCast(func_idx)) * self.pdataEntrySize();
                 const xdata_offset_for_func = xdata_offsets.items[func_idx];
@@ -1312,6 +1321,55 @@ test "coff with external symbol" {
     // Should produce valid COFF
     const machine = std.mem.readInt(u16, output.items[0..2], .little);
     try std.testing.expectEqual(COFF.IMAGE_FILE_MACHINE_AMD64, machine);
+}
+
+test "coff records more than 0xffff relocations in the extended form" {
+    var writer = try CoffWriter.init(std.testing.allocator, .x86_64);
+    defer writer.deinit();
+
+    writer.setCode(&[_]u8{0xC3});
+    const target = try writer.addSymbol(.{
+        .name = "target",
+        .section = .text,
+        .offset = 0,
+        .is_global = true,
+        .is_function = true,
+    });
+
+    // One pointer-sized .rdata slot per relocation, one past the u16 limit.
+    const count: u32 = 0x10000;
+    const rdata = try std.testing.allocator.alloc(u8, count * 8);
+    defer std.testing.allocator.free(rdata);
+    @memset(rdata, 0);
+    writer.setRodata(rdata);
+    for (0..count) |idx| {
+        try writer.addRdataRelocation(@intCast(idx * 8), target, 0);
+    }
+
+    var output: std.ArrayList(u8) = .empty;
+    defer output.deinit(std.testing.allocator);
+    try writer.write(&output);
+
+    // .text is section 1, .rdata section 2. Section headers follow the
+    // 20-byte COFF header, 40 bytes each.
+    const rdata_header = output.items[20 + 40 ..][0..40];
+    const number_of_relocations = std.mem.readInt(u16, rdata_header[32..34], .little);
+    const characteristics = std.mem.readInt(u32, rdata_header[36..40], .little);
+    const pointer_to_relocations = std.mem.readInt(u32, rdata_header[24..28], .little);
+
+    // The header count saturates and the overflow flag redirects the reader.
+    try std.testing.expectEqual(@as(u16, 0xFFFF), number_of_relocations);
+    try std.testing.expect(characteristics & COFF.IMAGE_SCN_LNK_NRELOC_OVFL != 0);
+
+    // The real count lives in the VirtualAddress of an extra leading entry
+    // and includes that entry itself.
+    const first = output.items[pointer_to_relocations..][0..10];
+    try std.testing.expectEqual(count + 1, std.mem.readInt(u32, first[0..4], .little));
+
+    // Every relocation still follows it, and the last one is intact.
+    const last = output.items[pointer_to_relocations + count * 10 ..][0..10];
+    try std.testing.expectEqual((count - 1) * 8, std.mem.readInt(u32, last[0..4], .little));
+    try std.testing.expectEqual(target, std.mem.readInt(u32, last[4..8], .little));
 }
 
 test "coff with long symbol name" {
