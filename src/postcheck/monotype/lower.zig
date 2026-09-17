@@ -1469,7 +1469,7 @@ fn selectRequestRepresentation(graph: *InstGraph, declared_node: NodeId, produce
     }
 }
 
-/// A procedure template's published result row, once it is known closed.
+/// A procedure template's checked result row, once it is known closed.
 const ClosedResultRow = struct {
     /// The checked row itself: the function result's own row, or the error
     /// argument row of a `Builtin.Try` result.
@@ -1480,9 +1480,9 @@ const ClosedResultRow = struct {
 };
 
 /// Whether a checked tag row is closed for result-row widening. This is
-/// `CheckedTypePayload.variableSealsToRowDefault`, the same rule the checked
-/// artifact's `checkedResultRowIsClosed` uses to decide whether to publish the
-/// `Try` capability, so the two cannot drift. A rigid tail is parametric—the
+/// `CheckedTypePayload.variableSealsToRowDefault`, the same rule the checker's
+/// `checkedResultRowIsClosed` uses to decide whether to record the `Try`
+/// capability, so the two cannot drift. A rigid tail is parametric—the
 /// caller supplies the row—and is therefore not closed.
 fn checkedResultRowIsClosed(view: ModuleView, root: checked.CheckedTypeId) bool {
     var current = root;
@@ -1501,10 +1501,10 @@ fn checkedResultRowIsClosed(view: ModuleView, root: checked.CheckedTypeId) bool 
     Common.invariant("checked result row extension chain was cyclic");
 }
 
-/// The template's published result row when it is closed, so a request at a
+/// The template's checked result row when it is closed, so a request at a
 /// row that includes it is served by a generated widening adapter (design.md
-/// "Result-Row Widening Adapter"). Mirrors the checked artifact's
-/// `checkedRootHasClosedResultRow`, which gates publishing the `Try`
+/// "Result-Row Widening Adapter"). Mirrors the checker's
+/// `checkedRootHasClosedResultRow`, which gates recording the `Try`
 /// capability this adapter consumes.
 fn closedResultRowOrNull(view: ModuleView, checked_fn_root: checked.CheckedTypeId) ?ClosedResultRow {
     const function = switch (resolvedPayload(view, checked_fn_root).payload) {
@@ -1696,7 +1696,7 @@ fn hostedTryWideningRequestHasAdditionalErrors(
 }
 
 /// Returns whether the hosted `Try` widening claimed the request, which is the
-/// fact hosted template completion consumes: the adapter keeps the extern
+/// answer hosted template completion consumes: the adapter keeps the extern
 /// boundary at the declared host ABI and re-tags into the requested error row.
 fn relateHostedFunctionRequestInterface(
     graph: *InstGraph,
@@ -1729,7 +1729,7 @@ const ResultRowWidening = struct {
 };
 
 /// Type-argument index of `Builtin.Try`'s error row. `closedResultRowOrNull`
-/// publishes `args[1]` as the closed row and the checker's
+/// names `args[1]` as the closed row and the checker's
 /// `hostedTryAdapterCapabilityForRoot` records the same index, so this relation
 /// and the adapter open one and the same cell.
 const try_error_type_arg_index: usize = 1;
@@ -1855,7 +1855,7 @@ fn relateIncludedRowPayloads(
 }
 
 /// Recognize a request whose result row includes the template's closed
-/// published row (design.md "Result-Row Widening Adapter"). Nothing is related
+/// checked row (design.md "Result-Row Widening Adapter"). Nothing is related
 /// here, so a site that cannot reach an adapter can ask the question and then
 /// decline without having already taken the rows apart.
 fn resultRowWideningRequestOrNull(
@@ -1931,10 +1931,10 @@ fn dispatchTargetAdapterReachability(target: static_dispatch.MethodTarget) Adapt
     };
 }
 
-/// `relateFunctionRequestInterface` for a template that may publish a closed
-/// result row: when the request's result row includes it, the two relate
+/// `relateFunctionRequestInterface` for a template whose checked result row
+/// may be closed: when the request's result row includes it, the two relate
 /// component-wise without unifying the rows. Returns whether the relation
-/// declined to unify, which is exactly the fact template completion consumes.
+/// declined to unify, which is exactly the answer template completion consumes.
 fn relateClosedResultRowRequestInterface(
     graph: *InstGraph,
     view: ModuleView,
@@ -2696,7 +2696,7 @@ const PendingSpecJob = struct {
     signature_relation: Ast.SignatureRelation,
     codec_contract: ?SealedCodecContractContext,
     /// The request relation's own answer for this specialization: whether it
-    /// declined to unify the template's closed published result row with the
+    /// declined to unify the template's closed checked result row with the
     /// requested one. Completion mints a widening adapter exactly when this is
     /// set (design.md "Result-Row Widening Adapter").
     widened_result_row: bool,
@@ -4383,7 +4383,7 @@ const Builder = struct {
         const capability = checked_capability orelse return null;
         // `try_error_type_arg_index` names the cell the widening relation opens
         // and the cell the adapter re-tags; `err_type_arg_index` is the same
-        // fact carried from the checker. Cross-check them once, here, so the
+        // index carried from the checker. Cross-check them once, here, so the
         // two cannot drift into opening one cell and re-tagging another.
         if (capability.err_type_arg_index != try_error_type_arg_index) {
             Common.compilerBug("checker-recorded Try error type-argument index disagreed with the widening relation's");
@@ -5233,7 +5233,7 @@ const Builder = struct {
         try self.requireRequestDidNotWidenResultRow(
             template_ref,
             fn_ty,
-            "root template request widened the template's closed published result row",
+            "root template request widened the template's closed checked result row",
         );
         return try self.lowerTemplateWithMono(
             template_ref,
@@ -5686,7 +5686,7 @@ const Builder = struct {
     };
 
     /// Plan the adapter for a specialization whose request relation DECLINED to
-    /// unify the template's closed published row with the requested one
+    /// unify the template's closed checked row with the requested one
     /// (design.md "Result-Row Widening Adapter"). `widened_result_row` is that
     /// relation's own answer, carried here from the specialization request; it
     /// is the single source of truth for whether an adapter is owed. Re-deriving
@@ -5706,7 +5706,7 @@ const Builder = struct {
     /// row off as a closed one. A rigid *payload* is harmless—every narrowed
     /// payload is taken from the request, never from the declared type—and
     /// `requireLoweredDeclaredRowLabels` checks the lowered label set against
-    /// the checker's published row so a collapse cannot go unnoticed.
+    /// the checker's recorded row so a collapse cannot go unnoticed.
     fn resultRowWideningAdapterOrNull(
         self: *Builder,
         view: ModuleView,
@@ -5716,7 +5716,7 @@ const Builder = struct {
     ) Allocator.Error!?ResultRowWideningAdapter {
         if (!widened_result_row) return null;
         const declared_row = closedResultRowOrNull(view, template.checked_fn_root) orelse
-            Common.compilerBug("result-row widening relation declined for a template with no closed published result row");
+            Common.compilerBug("result-row widening relation declined for a template with no closed checked result row");
         // Everything below is coordinator-program work: `requested_fn_ty` is a
         // program id, `sameMonoType` compares through `program.types`, and the
         // interned narrowed source type is handed to a program-domain
@@ -5764,7 +5764,7 @@ const Builder = struct {
     }
 
     /// Guard for the label source above: the lowered declared type must list
-    /// exactly the labels the checker published for this row. A row tail that
+    /// exactly the labels the checker recorded for this row. A row tail that
     /// `lowerCheckedTypeVariable` sealed away shows up here as a disagreement.
     fn requireLoweredDeclaredRowLabels(
         self: *Builder,
@@ -5782,7 +5782,7 @@ const Builder = struct {
         const lowered_tags = self.bareTagUnionTagsOrNull(row_ty) orelse
             Common.compilerBug("closed result row did not lower to a tag union");
         if (lowered_tags.len != checkedClosedRowLabelCount(view, declared_row.row)) {
-            Common.compilerBug("lowered declared result row disagreed with the checker's published labels");
+            Common.compilerBug("lowered declared result row disagreed with the checker's recorded labels");
         }
     }
 
@@ -5794,7 +5794,7 @@ const Builder = struct {
     /// running that relation and lower the body directly at the requested type
     /// (`lowerTemplate`'s root, `lowerFnTemplateCallTarget`, and
     /// `lowerRestoredConstFnTemplate`). Each states that its request is the
-    /// binding's own published type; if one were ever wrong the template would
+    /// binding's own declared type; if one were ever wrong the template would
     /// be defined at the wide row, which is exactly the miscompile the adapter
     /// exists to prevent. So the claim is checked against the types here
     /// instead of being taken on faith: if the adapter pre-step would have
@@ -5807,7 +5807,7 @@ const Builder = struct {
     ) Allocator.Error!void {
         const view = self.moduleForDigest(names.procTemplateModuleDigest(template_ref));
         const template = view.templates.get(template_ref.template);
-        // Only a closed published result row can be widened at all, and this
+        // Only a closed checked result row can be widened at all, and this
         // filter is a checked-type walk while everything below it lowers a
         // type; keep it first.
         const declared_row = closedResultRowOrNull(view, template.checked_fn_root) orelse return;
@@ -5824,7 +5824,7 @@ const Builder = struct {
         // The same guard the pre-step applies before reading declared labels
         // out of the lowered type, and for the same reason: a row
         // `lowerCheckedTypeVariable` sealed to the empty tag union lists fewer
-        // labels than the checker published, which would make an ordinary
+        // labels than the checker recorded, which would make an ordinary
         // request look wider than the declared row and report a lowering
         // collapse as a widening that never happened.
         try self.requireLoweredDeclaredRowLabels(view, declared_row, try_capability, declared_mono_fn_ty);
@@ -5956,7 +5956,7 @@ const Builder = struct {
             return;
         }
 
-        // A template whose published result row is closed may be requested at
+        // A template whose checked result row is closed may be requested at
         // a row that includes it (design.md "Result-Row Widening Adapter").
         // Such a request is served by specializing the template at its
         // declared row and generating an adapter at the requested row that
@@ -7322,7 +7322,7 @@ const Builder = struct {
         defer body_ctx.deinit();
         if (lexical) |captured| try body_ctx.restoreCodecLexicalContext(captured);
         const root_node = try body_ctx.instNode(template.checked_fn_root);
-        // A request whose result row includes this template's closed published
+        // A request whose result row includes this template's closed checked
         // row keeps its extra labels: the rows are related component-wise and
         // the adapter is generated when the specialization completes
         // (design.md "Result-Row Widening Adapter"). Hosted templates take
@@ -9010,7 +9010,7 @@ const Builder = struct {
         if (self.active_graph != null) {
             Common.invariant("final function-template lowering was called during an active body draft");
         }
-        // Root and wrapper paths request the binding's own published type; no
+        // Root and wrapper paths request the binding's own declared type; no
         // request relation ran, so no widening was recorded—checked here
         // rather than stated.
         //
@@ -9024,7 +9024,7 @@ const Builder = struct {
             try self.requireRequestDidNotWidenResultRow(
                 template_ref,
                 fn_template.mono_fn_ty,
-                "function-template call target widened the template's closed published result row",
+                "function-template call target widened the template's closed checked result row",
             );
         }
         const def = try self.lowerTemplateWithMono(
@@ -9134,7 +9134,7 @@ const Builder = struct {
                     try self.requireRequestDidNotWidenResultRow(
                         template_ref,
                         fn_template.mono_fn_ty,
-                        "restored constant function request widened the template's closed published result row",
+                        "restored constant function request widened the template's closed checked result row",
                     );
                 }
                 const def = try self.lowerTemplateWithMono(
@@ -13083,7 +13083,7 @@ const Builder = struct {
     /// The hosted `Try` nominal a Monotype names, crossing transparent alias
     /// layers on the way. The checked side already crosses them—`closedResultRowOrNull`
     /// resolves the result payload through aliases—so
-    /// a template declared `Res : Try(Str, [NotFound])` publishes a capability
+    /// a template declared `Res : Try(Str, [NotFound])` carries a capability
     /// and a recorded row widening. Its lowered return is a `.alias` named node
     /// whose backing is the `Try` nominal, so matching only the outermost def
     /// would decline a widening the checker already committed to.
@@ -14400,7 +14400,7 @@ const DraftTemplateSpec = struct {
     requires_local: bool = false,
     local_context_dependent: bool = false,
     /// Whether this request's relation declined to unify the template's closed
-    /// published result row with the requested one. Recorded by the relation
+    /// checked result row with the requested one. Recorded by the relation
     /// and consumed by `completeTemplateReservation`, which mints the widening
     /// adapter exactly when it is set (design.md "Result-Row Widening Adapter").
     widened_result_row: bool = false,
