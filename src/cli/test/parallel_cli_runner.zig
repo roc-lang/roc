@@ -5867,21 +5867,72 @@ fn customNativeBuildPackHits(
     // second program reaches closed module functions as values too, so its
     // rebuild goes through the entries that forward to cached procedures.
     // The third reaches module functions whose results are constants, so
-    // its cached entries carry the constants they point at.
-    const store_apps = [_]struct { roc_file: []const u8, prefix: []const u8 }{
+    // its cached entries carry the constants they point at. The fourth
+    // reaches module functions from compile-time roots, so the evaluator
+    // splices their entries into its own image, and one of them produces
+    // floats, which the evaluator must lower itself; the app is edited
+    // between its builds, since only an app checked again evaluates its
+    // roots again.
+    var comptime_app: []const u8 = undefined;
+    if (stageComptimeApp(io, allocator, env, timer, &comptime_app)) |failure| return failure;
+    const store_apps = [_]struct { roc_file: []const u8, prefix: []const u8, expect: StoreExpectations = .{} }{
         .{ .roc_file = roc_file, .prefix = "store" },
         .{ .roc_file = "test/cli/pack_values/PackValues.roc", .prefix = "values" },
         .{ .roc_file = "test/cli/pack_constants/PackConstants.roc", .prefix = "constants" },
+        .{ .roc_file = comptime_app, .prefix = "comptime", .expect = .{ .edit_between_builds = true, .evaluator_artifacts = true, .withheld_float_results = true } },
     };
     for (store_apps) |app| {
-        if (storeBuildsBehaveIdentically(io, allocator, env, timer, timeout_ms, app.roc_file, warm_dir, app.prefix)) |failure| return failure;
+        if (storeBuildsBehaveIdentically(io, allocator, env, timer, timeout_ms, app.roc_file, warm_dir, app.prefix, app.expect)) |failure| return failure;
     }
     return null;
 }
 
+/// Copies the compile-time object-cache app into the case's work directory,
+/// with its platform path pointing back at the repository, so the case can
+/// edit it between builds.
+fn stageComptimeApp(io: std.Io, allocator: Allocator, env: *const CaseEnv, timer: *harness.Timer, staged_app: *[]const u8) ?TestResult {
+    const staged_dir = std.fs.path.join(allocator, &.{ env.dirs.work_dir, "pack_comptime" }) catch |err|
+        return customInfraFailure(allocator, timer, "failed to allocate staged app dir: {}", .{err});
+    std.Io.Dir.cwd().createDirPath(io, staged_dir) catch |err|
+        return customInfraFailure(allocator, timer, "failed to create {s}: {}", .{ staged_dir, err });
+    const platform_path = absoluteFromProjectRoot(allocator, "test/fx/platform/main.roc") catch |err|
+        return customInfraFailure(allocator, timer, "failed to allocate platform path: {}", .{err});
+    const platform_relative = std.fs.path.relative(allocator, project_root_path, null, staged_dir, platform_path) catch |err|
+        return customInfraFailure(allocator, timer, "failed to relate the platform path: {}", .{err});
+    for ([_][]const u8{ "Shapes.roc", "PackComptime.roc" }) |name| {
+        const source_path = absoluteFromProjectRoot(allocator, "test/cli/pack_comptime") catch |err|
+            return customInfraFailure(allocator, timer, "failed to allocate app source dir: {}", .{err});
+        const from = std.fs.path.join(allocator, &.{ source_path, name }) catch |err|
+            return customInfraFailure(allocator, timer, "failed to allocate app source path: {}", .{err});
+        const source = std.Io.Dir.cwd().readFileAlloc(io, from, allocator, .limited(1024 * 1024)) catch |err|
+            return customInfraFailure(allocator, timer, "failed to read {s}: {}", .{ from, err });
+        const staged = std.mem.replaceOwned(u8, allocator, source, "../../fx/platform/main.roc", platform_relative) catch |err|
+            return customInfraFailure(allocator, timer, "failed to rewrite the platform path: {}", .{err});
+        const to = std.fs.path.join(allocator, &.{ staged_dir, name }) catch |err|
+            return customInfraFailure(allocator, timer, "failed to allocate staged path: {}", .{err});
+        std.Io.Dir.cwd().writeFile(io, .{ .sub_path = to, .data = staged }) catch |err|
+            return customInfraFailure(allocator, timer, "failed to write {s}: {}", .{ to, err });
+    }
+    staged_app.* = std.fs.path.join(allocator, &.{ staged_dir, "PackComptime.roc" }) catch |err|
+        return customInfraFailure(allocator, timer, "failed to allocate staged app path: {}", .{err});
+    return null;
+}
+
+/// What the second of two store builds must report beyond pack hits.
+const StoreExpectations = struct {
+    /// Append a comment to the app between the builds, so the second build
+    /// checks it again instead of reusing its cached checked artifact.
+    edit_between_builds: bool = false,
+    /// The compile-time evaluator spliced at least one entry.
+    evaluator_artifacts: bool = false,
+    /// The evaluator declined an entry because it produces floats, which
+    /// the pack trace reports.
+    withheld_float_results: bool = false,
+};
+
 /// Builds `roc_file` twice with the object cache on under the case's cache
-/// root, requires the second build to report pack hits, and requires both
-/// programs to behave identically.
+/// root, requires the second build to report pack hits and whatever
+/// `expect` asks, and requires both programs to behave identically.
 fn storeBuildsBehaveIdentically(
     io: std.Io,
     allocator: Allocator,
@@ -5891,8 +5942,18 @@ fn storeBuildsBehaveIdentically(
     roc_file: []const u8,
     out_dir: []const u8,
     prefix: []const u8,
+    expect: StoreExpectations,
 ) ?TestResult {
     const hits_marker = "pack hits: ";
+    const evaluator_marker = "evaluator artifacts: ";
+    var traced_env = CaseEnv{
+        .dirs = env.dirs,
+        .env_map = env.env_map.clone(allocator) catch |err|
+            return customInfraFailure(allocator, timer, "failed to clone traced environment: {}", .{err}),
+    };
+    defer traced_env.env_map.deinit();
+    traced_env.env_map.put("ROC_PACK_TRACE", "1") catch |err|
+        return customInfraFailure(allocator, timer, "failed to enable the pack trace: {}", .{err});
     const store_exes = [_][]const u8{ "a", "b" };
     var store_runs: [store_exes.len]std.process.RunResult = undefined;
     for (store_exes, 0..) |name, index| {
@@ -5902,20 +5963,33 @@ fn storeBuildsBehaveIdentically(
             return customInfraFailure(allocator, timer, "failed to allocate output arg: {}", .{err});
         const build_timeout = childCommandTimeoutMs(timer, timeout_ms) orelse
             return timeoutFailure(allocator, timer, .run, "case timeout exhausted before a store build");
-        const built = runRocInEnv(io, allocator, env, &.{ "build", "--opt=dev", out_arg }, roc_file, .relative, &.{}, null, build_timeout) catch |err|
+        const last = index == store_exes.len - 1;
+        if (last and expect.edit_between_builds) {
+            const source = std.Io.Dir.cwd().readFileAlloc(io, roc_file, allocator, .limited(1024 * 1024)) catch |err|
+                return customInfraFailure(allocator, timer, "failed to read {s}: {}", .{ roc_file, err });
+            const edited = std.fmt.allocPrint(allocator, "{s}\n# Edited between builds, so this build checks the app again.\n", .{source}) catch |err|
+                return customInfraFailure(allocator, timer, "failed to allocate the edited app: {}", .{err});
+            std.Io.Dir.cwd().writeFile(io, .{ .sub_path = roc_file, .data = edited }) catch |err|
+                return customInfraFailure(allocator, timer, "failed to write {s}: {}", .{ roc_file, err });
+        }
+        const build_env = if (last and expect.withheld_float_results) &traced_env else env;
+        const built = runRocInEnv(io, allocator, build_env, &.{ "build", "--opt=dev", out_arg }, roc_file, .relative, &.{}, null, build_timeout) catch |err|
             return customInfraFailure(allocator, timer, "store build spawn error: {}", .{err});
         if (!processSucceeded(built.term) or std.mem.find(u8, built.stdout, "successfully building") == null or std.mem.find(u8, built.stderr, "panic") != null) {
             return failureFromRun(allocator, timer, built, "build with the object cache did not succeed");
         }
-        if (index == store_exes.len - 1) {
+        if (last) {
             const at = std.mem.find(u8, built.stderr, hits_marker) orelse
                 return failureFromRun(allocator, timer, built, "build with the object cache did not report pack hits");
-            var store_hits: u64 = 0;
-            for (built.stderr[at + hits_marker.len ..]) |byte| {
-                if (byte < '0' or byte > '9') break;
-                store_hits = store_hits * 10 + (byte - '0');
+            if (countAfterMarker(built.stderr[at + hits_marker.len ..]) == 0) return failureFromRun(allocator, timer, built, "second build with the object cache reported no pack hits");
+            if (expect.evaluator_artifacts) {
+                const evaluator_at = std.mem.find(u8, built.stderr, evaluator_marker) orelse
+                    return failureFromRun(allocator, timer, built, "build with the object cache did not report evaluator artifacts");
+                if (countAfterMarker(built.stderr[evaluator_at + evaluator_marker.len ..]) == 0) return failureFromRun(allocator, timer, built, "the compile-time evaluator spliced no object-cache entry");
             }
-            if (store_hits == 0) return failureFromRun(allocator, timer, built, "second build with the object cache reported no pack hits");
+            if (expect.withheld_float_results and std.mem.find(u8, built.stderr, "withheld-float-results") == null) {
+                return failureFromRun(allocator, timer, built, "the compile-time evaluator took an object-cache entry that produces floats");
+            }
         }
         const exe_timeout = childCommandTimeoutMs(timer, timeout_ms) orelse
             return timeoutFailure(allocator, timer, .run, "case timeout exhausted before running a store build");
@@ -5926,6 +6000,16 @@ fn storeBuildsBehaveIdentically(
         return failureFromRun(allocator, timer, store_runs[1], "program served from the object cache behaves differently from the build that filled it");
     }
     return null;
+}
+
+/// The decimal number at the start of `text`, or zero when it starts with none.
+fn countAfterMarker(text: []const u8) u64 {
+    var count: u64 = 0;
+    for (text) |byte| {
+        if (byte < '0' or byte > '9') break;
+        count = count * 10 + (byte - '0');
+    }
+    return count;
 }
 
 fn validateWasmOutput(

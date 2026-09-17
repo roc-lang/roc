@@ -324,6 +324,9 @@ pub const SpecCacheHit = struct {
     rc_borrowed_params: u64,
     rc_ret_borrowed: bool,
     rc_ret_lenders: u64,
+    /// No procedure in the entry's closure assigns a float, so its results
+    /// carry no NaN the compile-time evaluator would have normalized.
+    float_free: bool,
 };
 
 /// The object cache's answer for a specialization key, asked when Monotype

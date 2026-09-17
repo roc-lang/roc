@@ -106,6 +106,8 @@ pub const LoadedPacks = struct {
     artifacts: std.AutoHashMap(lir.ProcIdentity, backend.dev.LocatedArtifact),
     /// Specializations served so far.
     hits: u64 = 0,
+    /// Artifacts handed to a splice so far.
+    artifacts_served: u64 = 0,
     /// Set until `indexPacks` runs; lookups before that load the pending
     /// store's packs for the modules in view first.
     pending: ?Pending = null,
@@ -188,6 +190,7 @@ pub const LoadedPacks = struct {
                     .rc_borrowed_params = spec.rc_borrowed_params,
                     .rc_ret_borrowed = spec.rc_ret_borrowed,
                     .rc_ret_lenders = spec.rc_ret_lenders,
+                    .float_free = try closureIsFloatFree(self.allocator, &pack.set, spec.artifact),
                 };
             }
         }
@@ -252,9 +255,28 @@ pub const LoadedPacks = struct {
 
     fn findArtifact(context: *anyopaque, identity: lir.ProcIdentity) ?backend.dev.LocatedArtifact {
         const self: *LoadedPacks = @ptrCast(@alignCast(context));
-        return self.artifacts.get(identity);
+        const located = self.artifacts.get(identity) orelse return null;
+        self.artifacts_served += 1;
+        return located;
     }
 };
+
+/// Whether no artifact reachable from `root` assigns a float.
+fn closureIsFloatFree(allocator: Allocator, set: *const backend.dev.ProcArtifact.Set, root: u32) Allocator.Error!bool {
+    var seen = std.AutoHashMap(u32, void).init(allocator);
+    defer seen.deinit();
+    var stack = std.ArrayList(u32).empty;
+    defer stack.deinit(allocator);
+    try stack.append(allocator, root);
+    while (stack.pop()) |index| {
+        const gop = try seen.getOrPut(index);
+        if (gop.found_existing) continue;
+        const artifact = set.artifacts[index];
+        if (artifact.float_results) return false;
+        for (artifact.refs) |ref| try stack.append(allocator, ref.target);
+    }
+    return true;
+}
 
 fn nameLessThan(_: void, lhs: []u8, rhs: []u8) bool {
     return std.mem.order(u8, lhs, rhs) == .lt;

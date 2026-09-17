@@ -338,7 +338,12 @@ fn compileWithCodeGen(
     var spliced_data = std.ArrayList(ProcArtifact.DataItem).empty;
     defer spliced_data.deinit(allocator);
     if (splice_source) |source| {
-        spliceExternalProcs(CodeGen, allocator, &codegen, proc_specs, source, &spliced_data) catch return CompilationError.OutOfMemory;
+        var external_procs = std.ArrayList(lir.LIR.LirProcSpecId).empty;
+        defer external_procs.deinit(allocator);
+        for (proc_specs, 0..) |proc, index| {
+            if (proc.external) external_procs.append(allocator, @enumFromInt(@as(u32, @intCast(index)))) catch return CompilationError.OutOfMemory;
+        }
+        spliceExternalProcs(CodeGen, allocator, &codegen, proc_specs, external_procs.items, source, &spliced_data) catch return CompilationError.OutOfMemory;
     }
     if (proc_specs.len > 0) {
         codegen.compileAllProcSpecs(proc_specs) catch return CompilationError.OutOfMemory;
@@ -695,14 +700,17 @@ pub const SpliceSource = struct {
     find: *const fn (context: *anyopaque, identity: lir.ProcIdentity) ?LocatedArtifact,
 };
 
-/// Place the object-cache entry of every external procedure, with its
+/// Place the object-cache entry of each of `external_procs`, with its
 /// closure, into the code generator before the program's own procedures
-/// compile. Each pack's artifacts are placed once, in proc order.
-fn spliceExternalProcs(
+/// compile. Each pack's artifacts are placed once, in the given order. The
+/// data items the entries carry are appended to `data_out` for the caller
+/// to define.
+pub fn spliceExternalProcs(
     comptime CodeGen: type,
     allocator: Allocator,
     codegen: *CodeGen,
     proc_specs: []const LirProcSpec,
+    external_procs: []const lir.LIR.LirProcSpecId,
     source: SpliceSource,
     data_out: *std.ArrayList(ProcArtifact.DataItem),
 ) Allocator.Error!void {
@@ -721,8 +729,9 @@ fn spliceExternalProcs(
         packs.deinit();
     }
 
-    for (proc_specs) |proc| {
-        if (!proc.external) continue;
+    for (external_procs) |proc_id| {
+        const proc = proc_specs[@intFromEnum(proc_id)];
+        if (!proc.external) std.debug.panic("procedure {d} was offered for splicing but is not an object-cache entry", .{@intFromEnum(proc_id)});
         const located = source.find(source.context, proc.identity) orelse {
             if (builtin.mode == .Debug) {
                 std.debug.panic("object cache served a specialization whose artifact {s} is not in any loaded pack", .{&proc.identity.symbolHex()});

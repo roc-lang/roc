@@ -895,6 +895,8 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
         /// Compile-time execution normalizes every produced NaN before it can
         /// enter static data. Ordinary runtime code preserves target NaN bits.
         float_nan_mode: builtins.float_bits.NanMode,
+        /// Whether the procedure being compiled has assigned a float so far.
+        region_float_results: bool = false,
         /// Explicit execution-environment policy for shared compile-time LIR.
         dict_seed_mode: builtins.utils.DictSeedMode = .runtime,
         /// Borrowed producer declarations and cached IDs for internal static roots.
@@ -1260,6 +1262,9 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
             /// A refcount helper spliced from an object-cache entry,
             /// registered by name in `spliced_helper_offsets`.
             spliced_helper,
+            /// The compile-time evaluator's stand-in for a hosted function
+            /// spliced code calls: it reports the function unavailable.
+            hosted_stub,
         };
 
         /// One contiguous range of the code buffer with a known producer.
@@ -1269,6 +1274,9 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
             /// Offset from `start` that references to this region resolve to.
             entry: usize,
             kind: CodeRegionKind,
+            /// The region assigns a float, so it may produce a NaN that
+            /// `float_nan_mode` decides the fate of.
+            float_results: bool = false,
         };
 
         /// Frame metadata carried with an assembled region so its unwind
@@ -9420,14 +9428,14 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
             stable_loc: ValueLocation,
             layout_idx: layout.Idx,
         ) Allocator.Error!void {
-            if (self.float_nan_mode == .preserve) return;
-
             const width: FloatWidth = if (layout_idx == .f32)
                 .f32
             else if (layout_idx == .f64)
                 .f64
             else
                 return;
+            self.region_float_results = true;
+            if (self.float_nan_mode == .preserve) return;
 
             const offset = switch (stable_loc) {
                 .stack => |stack_loc| stack_loc.offset,
@@ -20489,7 +20497,9 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
             for (demand) |proc_id| {
                 const proc = self.store.getProcSpec(proc_id);
                 std.debug.assert(!proc.is_static_initializer);
-                std.debug.assert(self.proc_registry.get(@intFromEnum(proc_id)) == null);
+                // A procedure spliced from an object-cache entry is already
+                // registered with its code.
+                if (self.proc_registry.contains(@intFromEnum(proc_id))) continue;
                 try self.proc_registry.put(@intFromEnum(proc_id), .{
                     .id = proc_id,
                     .code_start = unresolved_proc_code_start,
@@ -20499,11 +20509,21 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
                 });
             }
             for (demand) |proc_id| {
+                const proc = self.store.getProcSpec(proc_id);
+                if (self.proc_registry.get(@intFromEnum(proc_id))) |registered| {
+                    if (registered.code_start != unresolved_proc_code_start) continue;
+                }
+                if (proc.external) {
+                    if (builtin.mode == .Debug) {
+                        std.debug.panic("Dev/codegen invariant violated: external proc {d} had no object-cache entry spliced before compilation", .{@intFromEnum(proc_id)});
+                    }
+                    unreachable;
+                }
                 if (comptime target.toCpuArch() == .aarch64) {
                     try self.emitBranchIslandIfNeeded();
                     try self.codegen.compactBranchSites();
                 }
-                try self.compileProcSpec(proc_id, self.store.getProcSpec(proc_id));
+                try self.compileProcSpec(proc_id, proc);
             }
             try self.patchPendingCalls();
             try self.patchPendingProcAddrs();
@@ -20630,6 +20650,7 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
         fn compileProcSpec(self: *Self, proc_id: lir.LIR.LirProcSpecId, proc: LirProcSpec) Allocator.Error!void {
             const key: u32 = @intFromEnum(proc_id);
             const stack_probe_required = proc.stack_probe == .required;
+            self.region_float_results = false;
             // Save current state - procedure has its own scope that shouldn't pollute caller
             const saved_stack_offset = self.codegen.stack_offset;
             const saved_callee_saved_used = self.codegen.callee_saved_used;
@@ -20885,6 +20906,7 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
                         .end = entry.code_end,
                         .entry = 0,
                         .kind = .{ .proc = proc_id },
+                        .float_results = self.region_float_results,
                     });
                 }
                 try self.recordUnwindFunction(
@@ -20967,6 +20989,7 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
                         .end = entry.code_end,
                         .entry = 0,
                         .kind = .{ .proc = proc_id },
+                        .float_results = self.region_float_results,
                     });
                 }
                 try self.recordUnwindFunction(
@@ -25311,6 +25334,7 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
             kind: CodeRegionKind,
             entry: usize,
             frame: ?AssembledFrame,
+            float_results: bool,
         ) Allocator.Error!usize {
             self.assertImageOpen();
             const start = self.codegen.currentOffset();
@@ -25336,7 +25360,7 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
                 },
                 .rc_helper => |key| try self.compiled_rc_helpers.put(key, start + entry),
                 .boxy_thunk => |proc_id| try self.boxy_dict_thunks.put(@intFromEnum(proc_id), start),
-                .entrypoint, .message_pool_run, .branch_island, .spliced_proc, .spliced_helper => {},
+                .entrypoint, .message_pool_run, .branch_island, .hosted_stub, .spliced_proc, .spliced_helper => {},
             }
             if (frame) |frame_info| {
                 try self.recordUnwindFunction(
@@ -25350,7 +25374,31 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
                     frame_info.uses_frame_pointer,
                 );
             }
-            try self.code_regions.append(self.allocator, .{ .start = start, .end = end, .entry = entry, .kind = kind });
+            try self.code_regions.append(self.allocator, .{ .start = start, .end = end, .entry = entry, .kind = kind, .float_results = float_results });
+            return start;
+        }
+
+        /// Emit the compile-time evaluator's stand-in for the hosted
+        /// function `symbol_name`, which spliced object-cache code calls by
+        /// relocation: it reports the function unavailable and traps.
+        /// Returns the stub's code offset.
+        pub fn generateHostedStub(self: *Self, symbol_name: []const u8) Allocator.Error!usize {
+            self.assertImageOpen();
+            const start = self.codegen.currentOffset();
+            const msg = try std.fmt.allocPrint(
+                self.allocator,
+                "hosted function `{s}` is not available while evaluating at compile time",
+                .{symbol_name},
+            );
+            defer self.allocator.free(msg);
+            try self.emitRocCrash(msg);
+            try self.emitTrap();
+            try self.code_regions.append(self.allocator, .{
+                .start = start,
+                .end = self.codegen.currentOffset(),
+                .entry = 0,
+                .kind = .hosted_stub,
+            });
             return start;
         }
 

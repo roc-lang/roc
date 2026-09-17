@@ -106,6 +106,9 @@ pub const Artifact = struct {
     /// Offset within `code` that references to this artifact resolve to.
     entry: u32,
     frame: ?Frame,
+    /// The code assigns a float, so it may produce a NaN the compile-time
+    /// evaluator's own code would have normalized.
+    float_results: bool = false,
     refs: []const Reference,
     relocations: []const NamedRelocation,
     data: []const DataItem,
@@ -373,8 +376,8 @@ pub fn extract(
     defer allocator.free(artifact_of_region);
     var artifact_count: u32 = 0;
     for (regions, 0..) |region, index| {
-        artifact_of_region[index] = if (region.kind == .branch_island) null else artifact_count;
-        if (region.kind != .branch_island) artifact_count += 1;
+        artifact_of_region[index] = if (regionHasArtifact(region.kind)) artifact_count else null;
+        if (regionHasArtifact(region.kind)) artifact_count += 1;
     }
 
     const artifacts = try arena_allocator.alloc(Artifact, artifact_count);
@@ -386,7 +389,7 @@ pub fn extract(
             .boxy_thunk => |proc_id| .{ .boxy_thunk = proc_specs[@intFromEnum(proc_id)].identity },
             .entrypoint => .entrypoint,
             .message_pool_run => .message_pool_run,
-            .branch_island => unreachable,
+            .branch_island, .hosted_stub => unreachable,
             .spliced_proc => |identity| .{ .proc = identity },
             .spliced_helper => .{ .rc_helper = try arena_allocator.dupe(u8, codegen.splicedHelperName(region.start + region.entry) orelse return error.DanglingReference) },
         };
@@ -482,6 +485,7 @@ pub fn extract(
             .code = try arena_allocator.dupe(u8, code[region.start..region.end]),
             .entry = @intCast(region.entry),
             .frame = frame,
+            .float_results = region.float_results,
             .refs = try region_refs.toOwnedSlice(arena_allocator),
             .relocations = try region_relocations.toOwnedSlice(arena_allocator),
             .data = try region_data.toOwnedSlice(arena_allocator),
@@ -489,6 +493,16 @@ pub fn extract(
     }
 
     return .{ .arena = arena, .artifacts = artifacts };
+}
+
+/// Whether a region lifts into an artifact. Branch islands belong to one
+/// placement of the code, and a hosted stub exists only in the evaluator's
+/// image.
+fn regionHasArtifact(kind: anytype) bool {
+    return switch (kind) {
+        .branch_island, .hosted_stub => false,
+        .proc, .rc_helper, .boxy_thunk, .entrypoint, .message_pool_run, .spliced_proc, .spliced_helper => true,
+    };
 }
 
 fn regionStartsBefore(comptime Region: type) fn (void, Region, Region) bool {
@@ -525,7 +539,7 @@ fn messageOffsetInCode(comptime CG: type, regions: []const CG.CodeRegion, messag
             .message_pool_run => |pool_from| {
                 if (pool_from <= message_offset) found = region.start + (message_offset - pool_from);
             },
-            .proc, .rc_helper, .boxy_thunk, .entrypoint, .branch_island, .spliced_proc, .spliced_helper => {},
+            .proc, .rc_helper, .boxy_thunk, .entrypoint, .branch_island, .hosted_stub, .spliced_proc, .spliced_helper => {},
         }
     }
     return found;
@@ -573,7 +587,7 @@ pub fn assemble(
             .message_pool_run => .{ .message_pool_run = 0 },
             .branch_island => .branch_island,
         };
-        starts[index] = try codegen.appendAssembledRegion(artifact.code, kind, artifact.entry, artifact.frame);
+        starts[index] = try codegen.appendAssembledRegion(artifact.code, kind, artifact.entry, artifact.frame, artifact.float_results);
         for (artifact.relocations) |relocation| {
             const symbol = try codegen.internSymbolName(relocation.name);
             const offset: u64 = starts[index] + relocation.offset;
@@ -688,7 +702,7 @@ pub fn verifyRoundTrip(
 /// placement lays out for itself.
 fn artifactRegionCount(comptime CG: type, regions: []const CG.CodeRegion) usize {
     var count: usize = 0;
-    for (regions) |region| count += @intFromBool(region.kind != .branch_island);
+    for (regions) |region| count += @intFromBool(regionHasArtifact(region.kind));
     return count;
 }
 
@@ -796,7 +810,7 @@ pub fn splice(
             .message_pool_run => .{ .message_pool_run = 0 },
             .branch_island => .branch_island,
         };
-        const start = try codegen.appendAssembledRegion(artifact.code, kind, artifact.entry, artifact.frame);
+        const start = try codegen.appendAssembledRegion(artifact.code, kind, artifact.entry, artifact.frame, artifact.float_results);
         switch (artifact.kind) {
             .rc_helper => |name| try codegen.registerSplicedHelper(name, start + artifact.entry),
             .proc, .boxy_thunk => |identity| try codegen.registerSplicedProc(identity, start),

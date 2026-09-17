@@ -19,6 +19,8 @@
 //! archive member would satisfy references before the host's member was
 //! pulled in.
 
+const std = @import("std");
+const builtin = @import("builtin");
 const host_abi = @import("host_abi.zig");
 const shim_symbols = @import("shim_symbols.zig");
 
@@ -103,7 +105,14 @@ pub fn expectErrRegionRecorder() ?ExpectErrRegionRecorder {
 }
 
 fn requireOps() *RocOps {
-    return current_ops orelse @panic("Roc code ran in-process on a thread that entered no host");
+    return current_ops orelse hostInvariant("Roc code ran in-process on a thread that entered no host");
+}
+
+/// A breach of the host contract by the compiler itself. No `RocOps` exists
+/// to report it through, so the process stops after naming it.
+fn hostInvariant(comptime message: []const u8) noreturn {
+    if (comptime builtin.os.tag != .freestanding) std.debug.print("in-process host invariant violated: {s}\n", .{message});
+    std.process.abort();
 }
 
 fn symbolAlloc(_: *RocOps, length: usize, alignment: usize) callconv(.c) ?*anyopaque {
@@ -178,7 +187,7 @@ fn rocCrashed(bytes: [*]const u8, len: usize) callconv(.c) void {
 
 fn rocExpectObserved(site: u32, passed: u8) callconv(.c) void {
     const o = requireOps();
-    const observer = current_expect_observer orelse @panic("a test expect ran under a host with no expect observer");
+    const observer = current_expect_observer orelse hostInvariant("a test expect ran under a host with no expect observer");
     observer(o, site, passed);
 }
 

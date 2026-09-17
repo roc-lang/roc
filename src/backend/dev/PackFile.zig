@@ -15,7 +15,7 @@ const Allocator = std.mem.Allocator;
 
 const magic = "RPCK";
 /// Format version; bump whenever the encoding or artifact contents change.
-pub const format_version: u32 = 2;
+pub const format_version: u32 = 3;
 
 /// One specialization the pack can serve: its reservation-time key, the
 /// artifact holding its procedure, and the ownership signature ARC solved
@@ -85,6 +85,7 @@ pub fn write(allocator: Allocator, set: *const ProcArtifact.Set, specs: []const 
         } else {
             try writer.byte(0);
         }
+        try writer.byte(@intFromBool(artifact.float_results));
         try writer.str(artifact.code);
         try writer.word(@intCast(artifact.refs.len));
         for (artifact.refs) |ref| {
@@ -179,6 +180,11 @@ pub fn read(allocator: Allocator, bytes: []const u8) ReadError!Pack {
             },
             else => return error.MalformedPack,
         };
+        const float_results = switch (try reader.byte()) {
+            0 => false,
+            1 => true,
+            else => return error.MalformedPack,
+        };
         const code = try reader.strOwned(arena_allocator);
         const refs = try arena_allocator.alloc(ProcArtifact.Reference, try reader.word());
         for (refs) |*ref| {
@@ -244,6 +250,7 @@ pub fn read(allocator: Allocator, bytes: []const u8) ReadError!Pack {
             .code = code,
             .entry = entry,
             .frame = frame,
+            .float_results = float_results,
             .refs = refs,
             .relocations = relocations,
             .data = data,

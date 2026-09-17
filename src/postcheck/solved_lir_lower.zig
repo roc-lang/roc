@@ -128,9 +128,13 @@ pub const DictSeedMode = enum {
 
 /// Configuration for direct solved-to-LIR lowering.
 pub const Options = struct {
-    /// The object cache asked for closed specializations that no
-    /// compile-time root reaches.
+    /// The object cache asked for closed specializations.
     spec_cache: ?Common.SpecCacheLookup = null,
+    /// Whether the cache may also serve specializations the compile-time
+    /// roots reach. The evaluator splices those entries into its own image,
+    /// which is only faithful when no compile-time-only exhaustiveness site
+    /// waits for the evaluation to reach it (`CheckedPipeline` decides).
+    comptime_closure_hits: bool = false,
     inline_plan: SolvedInline.Plan = .{},
     /// Reuse checking workers for prepared procedure-body lowering.
     post_check_executor: ?base.post_check_task_executor.Executor = null,
@@ -565,10 +569,12 @@ const Lowerer = struct {
     dict_seed_mode: DictSeedMode,
     proc_debug_names: bool,
     spec_cache: ?Common.SpecCacheLookup,
+    comptime_closure_hits: bool,
     /// True while the closure of the compile-time roots is being lowered.
-    /// Those procedures run in the compile-time evaluator, which has no
-    /// object-cache entries, so only procedures first reached afterwards may
-    /// be served from the cache.
+    /// Those procedures run in the compile-time evaluator, which takes
+    /// object-cache entries only under `comptime_closure_hits` and only
+    /// when their results carry no floats; procedures first reached
+    /// afterwards may always be served.
     comptime_phase: bool,
     /// Drain positions, kept across calls so a second drain resumes.
     fn_queue_index: usize,
@@ -816,6 +822,7 @@ const Lowerer = struct {
             .dict_seed_mode = options.dict_seed_mode,
             .proc_debug_names = options.proc_debug_names,
             .spec_cache = options.spec_cache,
+            .comptime_closure_hits = options.comptime_closure_hits,
             .comptime_phase = true,
             .fn_queue_index = 0,
             .initializer_queue_index = 0,
@@ -1085,9 +1092,10 @@ const Lowerer = struct {
                 .request = root.request,
             });
         }
-        // The compile-time roots' closure lowers first, so that everything
-        // the evaluator runs is known before any runtime-only procedure can
-        // be served from the object cache.
+        // The compile-time roots' closure lowers first, so that a procedure
+        // the evaluator runs is known as such when the object cache is
+        // asked for it: the evaluator takes hits only under its own rules
+        // (`comptime_closure_hits`), a runtime-only procedure takes any.
         for (self.roots.items) |root| {
             if (!rootRunsAtCompileTime(root.request)) continue;
             _ = try self.markReachableFn(root.fn_id);
@@ -2502,13 +2510,18 @@ const Lowerer = struct {
                 entry.forwards_to = try self.ensureOwnFnSpec(spec.source, .finite);
             }
         };
-        if (cached == null and !self.comptime_phase and plain_spec) {
+        if (cached == null and plain_spec and (!self.comptime_phase or self.comptime_closure_hits)) {
             if (self.spec_cache) |cache| {
                 if (source_fn.source) |template| {
                     if (template.spec_key) |key| {
                         if (cache.lookup(key.bytes)) |hit| {
-                            if (std.mem.eql(u8, &hit.identity, &identity.bytes)) cached = hit;
-                            if (pack_trace_available and packTraceEnabled()) std.debug.print("lookup direct-lir key={x} {s}\n", .{ key.bytes[0..8], if (cached != null) "hit" else "identity-mismatch" });
+                            // The evaluator normalizes every NaN a procedure
+                            // produces and cached code does not, so an entry
+                            // that produces floats stays out of the
+                            // compile-time closure.
+                            const usable = !self.comptime_phase or hit.float_free;
+                            if (usable and std.mem.eql(u8, &hit.identity, &identity.bytes)) cached = hit;
+                            if (pack_trace_available and packTraceEnabled()) std.debug.print("lookup direct-lir key={x} {s}\n", .{ key.bytes[0..8], if (cached != null) "hit" else if (!usable) "withheld-float-results" else "identity-mismatch" });
                         } else if (pack_trace_available and packTraceEnabled()) std.debug.print("lookup direct-lir key={x} miss\n", .{key.bytes[0..8]});
                     }
                 }
