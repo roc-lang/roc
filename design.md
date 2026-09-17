@@ -5009,7 +5009,7 @@ read is explicit. Every mutation plan requires disjoint statement roles before
 it changes the graph.
 
 Tag-case fusion inventories join identities once and shares monotonic fresh-ID
-allocation with its branch clones. Candidate-local region and binder facts
+allocation with its branch clones. Candidate-local region and binder inventories
 remain valid only until rewiring; variants are indexed by their explicit
 variant/discriminant pair in first-producer order. Fixed-point discovery still
 revisits surrounding joins after a rewrite, since a rejected ancestor can
@@ -13151,7 +13151,7 @@ use (otherwise the callee holds a retained copy). The signature bits and
 rows settle to a fixpoint with the analysis, since a new row only adds
 edges. One settlement retains the immutable statement inventory, control-flow
 topology, and exact ordered-use answers while rebuilding signature-dependent
-lattice facts each round. A consuming-use proof is reused only while its exact
+lattice state each round. A consuming-use proof is reused only while its exact
 consumption inventory is unchanged; holder-adding uses remain
 signature-dependent. Committed takes still require their own settlement, and
 only the converged result outlives the reusable round scratch.
