@@ -5646,12 +5646,21 @@ that witness in one platform module. `Fallible.via_match!` and
 identically. The first reconstructs the hosted error with a `match`, so the
 `Err(HostErr(msg))` construction mints its own open row, the annotation's flex
 is never bound, and the function publishes open. The second forwards the
-hosted error with `?`, so the host's closed row binds the flex to `[]` and the
-function publishes closed. A caller that unwraps the first with `?` into a
-wider row is accepted; the same call on the second is rejected. That test
-stays RED until row subsumption replaces closing-by-body. It is the rule's
-witness, not a defect to patch, and the only available patches are
-host-specific special cases this design intends to delete.
+hosted error with `?`; the host's row is closed, so unifying it into the
+annotation's extension would bind that extension to `[]` and publish closed.
+Hosted Try Question Widening covers exactly that forwarding, so the fixture is
+GREEN: a `?` on a direct hosted call no longer declines the rule merely
+because ordinary unification could relate the pair by GROUNDING the
+annotation's own still-open extension. (Recorded 2026-09-15 as a deliberate
+red witness — "not a defect to patch", on the premise that every available
+patch is a host-specific special case this design intends to delete — and
+REVERSED 2026-09-16 when that premise was falsified by measurement: the
+result-row widening adapter already serves a CLOSED published row on an
+unpatched compiler, so it is the general mechanism rather than host-specific
+scaffolding awaiting deletion. See `polarity_phase_two.md` §9.2.)
+Closing-by-body itself is unchanged, and row subsumption is still what
+replaces it: the rule above is gated on a direct hosted call, so a NON-hosted
+forwarder still publishes closed behind an identical open annotation.
 
 An anonymous `..` in a positive position of an opening annotation means
 exactly what absence means there and is generated the same way (a recorded
@@ -5813,11 +5822,15 @@ The rule has two halves with different lifetimes. The LOWERING half (a widened
 request is bridged by a generated adapter that calls the declared-type
 boundary and re-tags its result, never by specializing the boundary at the
 widened layout) is PERMANENT, because the host ABI is fixed by something other
-than typing. W6b already generalized it: Hosted Try Question Widening is the
-instance of Result-Row Widening Adapter in which the declared row is the host
-ABI. The CHECKER half (the use-site redirect that widens the `?` condition) is
-exactly what general row subsumption subsumes, and is the part to delete once
-subsumption lands. The two cannot be deferred together:
+than typing. Hosted Try Question Widening is the instance of Result-Row
+Widening Adapter in which the declared row is the host ABI. The CHECKER half
+is exactly what general row subsumption subsumes, and is the part to delete
+once subsumption lands. It is the use-site redirect that widens the `?`
+condition, plus the roughly fifty lines that keep that redirect's decline
+shortcut from grounding the expected row's own extension
+(`tryErrorRowEndsOpen` and the guard on `tryErrorRowNeedsUseSiteWidening`'s
+early return, both in `Check.zig`); the two come out in one sweep. The two
+halves cannot be deferred together:
 because `..` is rejected at host boundaries, a host error row is closed BY
 RULE rather than by inference, so "a closed row meets a caller who wants it
 wider" arises at every host boundary and the general mechanism cannot be
@@ -5826,8 +5839,9 @@ half-built.
 Both sides are pinned by tests: accepted—
 test/fx-open/issue_9963_hosted_try_question_mark.roc (a direct hosted `?`
 inside an open-row platform function builds and the host's Ok is observed as
-Ok), which is currently RED: closing-by-body closes the wrapper's own row
-before any caller reaches it, so the widening never arises (see Polarity);
+Ok) and test/cli/SpecConstrInlineScopeRebaseGrowth.roc (the same forwarding
+one level deeper, through a second wrapper); both were red under the decline
+shortcut described above and are green since 2026-09-16;
 rejected—test/fx-open/hosted_try_question_not_included.roc (a direct
 hosted `?` whose enclosing annotation omits the hosted error is a type
 error). The non-hosted side of issue #9798 is superseded by polarity: a

@@ -708,8 +708,10 @@ and `run-check-snapshots` run after W3, after W6b, and after W2b.
   2026-09-15: this is the intended end state, not one option among several.
   Closing-by-body is a defect: it makes two functions with identical
   signatures behave differently for their callers, and
-  `test/fx-open/issue_9963_hosted_try_question_mark.roc` is its standing
-  witness. Out of scope for THIS PR only. W6b's adapter is the coercion's
+  `test/fx-open/issue_9963_hosted_try_question_mark.roc` was its standing
+  witness until the hosted instance was fixed on 2026-09-16 (§9.2); a
+  NON-hosted forwarder still exhibits it, and subsumption is still the fix.
+  Out of scope for THIS PR only. W6b's adapter is the coercion's
   first instance and its LOWERING half is permanent; the checker-side
   `?`-condition redirect is the half subsumption deletes. Nested positions
   extend the adapter (and, under option (d), open the corresponding signature
@@ -1173,6 +1175,10 @@ is no defect there.
 
 ### 8.1.7 Two branch test failures are OURS, from phase one (settled 2026-09-15)
 
+**Status 2026-09-16: BOTH ARE NOW FIXED.** issue_9826 by the two-case split
+below; issue_9963 by the reversal recorded at the end of this section and in
+§9.2. The analysis is kept because it is the diagnosis the fixes rest on.
+
 Both fail on the branch and both PASS at `kusqzzsn`, measured with a
 marker-checked binary in a comparison workspace. Neither is pre-existing.
 They are not both fx-open: issue_9826 is a `test/cli` fixture registered in
@@ -1224,20 +1230,35 @@ longer any way to spell "this output row stays open" on a function whose body
 produces a closed row. design.md claims this pairing "now arises only where
 closed rows still exist"; issue_9963 is a live counterexample. That design.md
 sentence was corrected on 2026-09-15 in the same change that recorded the
-decision below.
+decision below. (Still true for a NON-hosted body as of 2026-09-16: the fix in
+§9.2 restores the open publication for a `?` on a direct hosted call by making
+the rule decide instead of the probe, not by restoring a spelling.)
 
-**KNOWN RED, DELIBERATE.** `test/fx-open/issue_9963_hosted_try_question_mark.roc`
-stays failing. It is the standing witness that closing-by-body must be replaced
-by row subsumption (design.md "Polarity"): its platform module holds two
-functions with identical annotations whose callers are treated differently
-because one forwards a closed hosted row with `?` and the other reconstructs it
-with `match`. It is not stale and not pre-existing: it passes at `kusqzzsn`
-and regressed with `kupupkyt`. Do not patch or disable it: every available
-patch is a host-specific special case this design intends to delete. The
-harness offers no expected-failure status; `CliCase.skip = .{ .always = ... }`
-would only silence the two `subcommands` cases, because `SimpleTestSpec` has no
-skip field and the `test/fx-open` platform cases it generates cannot be skipped
-at all. So the test stays simply red, and the PR description carries the reason.
+**Recorded 2026-09-15 as KNOWN RED, DELIBERATE — REVERSED AND FIXED
+2026-09-16.** The position taken here was:
+
+> `test/fx-open/issue_9963_hosted_try_question_mark.roc` stays failing. It is
+> the standing witness that closing-by-body must be replaced by row
+> subsumption (design.md "Polarity"): its platform module holds two functions
+> with identical annotations whose callers are treated differently because one
+> forwards a closed hosted row with `?` and the other reconstructs it with
+> `match`. It is not stale and not pre-existing: it passes at `kusqzzsn` and
+> regressed with `kupupkyt`. Do not patch or disable it: every available patch
+> is a host-specific special case this design intends to delete. The harness
+> offers no expected-failure status; `CliCase.skip = .{ .always = ... }` would
+> only silence the two `subcommands` cases, because `SimpleTestSpec` has no
+> skip field and the `test/fx-open` platform cases it generates cannot be
+> skipped at all. So the test stays simply red, and the PR description carries
+> the reason.
+
+Everything in that block about the MECHANISM is still accurate — including the
+regression attribution to `kupupkyt` above. What was wrong is the last
+inference: that every available patch is host-specific. §9.2 below records the
+measurement that falsified it and the fix that landed. The fixture is green,
+its three registrations pass, and a second witness of the same defect
+(`test/cli/SpecConstrInlineScopeRebaseGrowth.roc`, which forwards
+`Fallible.via_question!({})?` one level deeper through its own `read_line!`)
+went green with it. No fixture was edited.
 
 ### 8.1.8 W2b closeout (2026-09-15)
 
@@ -1766,7 +1787,9 @@ Decided with Jared on 2026-09-15, at the end of phase two. Nothing here is
 implemented. It is written down because the discussion that produced it cost
 several passes to reconstruct from three paragraphs of `design.md` that were
 far apart, and because `test/fx-open/issue_9963_hosted_try_question_mark.roc`
-is left deliberately RED as its standing witness.
+was left deliberately RED as its standing witness. §9.2 has since been
+reversed and the hosted instance fixed; §9.1 and §9.3–§9.6 are unaffected —
+subsumption is not implemented.
 
 ### 9.1 The decision
 
@@ -1803,12 +1826,18 @@ write the closure explicitly — something in the shape of `[MyErr, ..[]]` — s
 that closedness is a thing the author states rather than a thing the body
 leaks. That spelling does not exist today and is not designed.
 
-### 9.2 Why this is not a bug to patch now
+### 9.2 The hosted half WAS patched — a rejection reversed on evidence
 
-Every available patch is host-specific, and the host-specific machinery is
-what subsumption is expected to DELETE. Patching it means writing, reviewing
-and then removing the same code. Two shapes were considered and rejected for
-this PR:
+**Rejected 2026-09-15, reversed 2026-09-16.** Both positions are kept here
+because the reason the first one was wrong is the useful part.
+
+**What was decided on 2026-09-15 (the rejection):**
+
+> Every available patch is host-specific, and the host-specific machinery is
+> what subsumption is expected to DELETE. Patching it means writing, reviewing
+> and then removing the same code.
+
+Two shapes were considered and rejected under that premise:
 
 - Make the existing use-site redirect fire here. It is a checker special case
   fighting polarity rather than expressing it.
@@ -1816,6 +1845,59 @@ this PR:
   `via_match!` uses. This is the nicer of the two — the reconstruction yields an
   open row naturally and IS the re-tag at lowering, so no adapter is needed on
   that path — but it is still host-specific.
+
+**Why it was reversed (2026-09-16, Jared's call).** The rejection rests on ONE
+premise: that every available patch is a host-specific special case subsumption
+will delete. Scoping work falsified it on three counts.
+
+1. **Measured, on an UNPATCHED binary: the adapter already fires for a CLOSED
+   published row.** `FallibleChannels.via_question_closed_wider!`
+   (`test/fx-open/platform/FallibleChannels.roc:38-39`) has the identical body
+   shape to the broken wrapper with only a wider annotation, and
+   `test/fx-open/hosted_channels_declared.roc:20` printed `closed wider: ok`.
+   So the widening machinery is NOT host-specific scaffolding awaiting
+   deletion — it is the general mechanism, already working.
+2. **The change removes an EXCLUSION rather than adding a special case.** The
+   rule, its `RedirectRule.hosted_try_question_widening` member
+   (`src/types/store.zig:795-799`), the design.md declaration and the accept
+   and reject fixtures all already existed. `tryErrorRowNeedsUseSiteWidening`
+   opened with a shortcut — decline if `probeCanUseAs(expected, actual)`
+   succeeds, since ordinary unification then already relates the pair — and
+   under polarity that probe succeeds on the exact pair the rule exists for,
+   BY BINDING the annotation's still-open extension to `[]`. A shortcut past a
+   rule is sound only when taking it is observationally the same as applying
+   it; grounding the annotation's own extension is not. The shortcut was an
+   implementation-level early return strictly NARROWER than the rule's declared
+   condition, and an artifact of commit `kupupkyt` collapsing a written `..`
+   and an absent extension into one flex (§8.1.7 above) — an accident, not a
+   designed boundary.
+3. **Marginal deletion cost is ~zero.** design.md's "Hosted Try Question
+   Widening" already says the checker half of the rule comes out wholesale
+   when subsumption lands. The roughly fifty lines this fix adds sit inside
+   that same half and come out in the same sweep.
+
+"Do nothing" was not free either: 9963 has THREE registrations, all asserting
+success (`src/cli/test/platform_config.zig:87`,
+`src/cli/test/parallel_cli_runner.zig:2165` dev, `:2166` interpreter), so
+leaving it red meant either a permanently red pipeline or touching those same
+three registrations to pin behaviour the design calls a defect.
+
+**What landed** (commit "fix(check): stop hosted `?` from grounding its own
+annotated error row"): the decline shortcut is skipped when the expected row
+still ends open, and the rule's declared inclusion test decides on its own.
+`tryErrorRowEndsOpen` walks the expected row's explicit extension chain —
+a rigid tail (`..others`) and an already-closed row both read as not-open, so
+only an annotation's implicitly opened extension takes the new path. No
+fixture was edited, which is the acceptance bar in §9.6 below.
+
+**This is NOT row subsumption, and §9.1 and §9.3–§9.6 stand unchanged.** The
+fix is gated on `tryConditionIsDirectHostedCall` (`Check.zig:23923`), so it
+covers the hosted instance only. Closing-by-body remains a general defect over
+every closed source — an input-position parameter, a nominal field, a hosted
+result — and a NON-hosted forwarder still publishes closed behind an open
+annotation while its `match`-reconstructing twin publishes open. Row
+subsumption is still the intended end state and still deletes the checker half
+of this rule.
 
 ### 9.3 Hosted Try widening splits in two, with different lifetimes
 
@@ -1892,3 +1974,7 @@ experiment scopes the whole item.
   since both concern what a closed row means at a module boundary.
 - `test/fx-open/issue_9963_hosted_try_question_mark.roc` should go green with no
   fixture edit. If it needs one, the implementation diverged from this design.
+  (The HOSTED half met this bar on 2026-09-16 — green, no fixture edited, both
+  rejection fixtures still rejected — but that is §9.2's narrow fix, not
+  subsumption. The bar still stands for the non-hosted closed sources, which
+  need a fixture of their own since no corpus case spells one today.)
