@@ -271,7 +271,7 @@ const Builder = struct {
         if (list_value.len() == 0) {
             // The descriptor cannot carry the capacity the value was
             // evaluated with; keep it on the root so the runtime can
-            // rebuild the list as the `with_capacity` it came from.
+            // construct the list as the `with_capacity` it came from.
             if (@intFromEnum(job.dest.symbol) == 0 and physical.tag == .list and list_value.getCapacity() != 0) {
                 try self.nodes.items[0].empty_list_capacities.append(self.allocator, .{ .offset = job.dest.offset, .capacity = list_value.getCapacity() });
             }
