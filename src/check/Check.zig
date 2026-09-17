@@ -6626,8 +6626,15 @@ fn instantiateWhereMethodForUse(self: *Self, signature_var: Var, env: *Env, regi
 /// Persist the explicit callable relation for one per-use where-method
 /// instantiation. The instantiator copied structure while sharing every leaf,
 /// so its complete map proves the body dispatch callable's relation to the
-/// pristine signature; checked-artifact construction must never try to recover
-/// that relation by method name.
+/// pristine signature. Checked-artifact construction reads this record — by
+/// the raw callable, or by its settled root once generalized requirement
+/// deduplication has unified same-shape callables — and never INFERS the
+/// relation from a method name: a same-name match only nominates the evidence
+/// slot, and this record decides what that slot's plan may reuse
+/// (`EvidencePass.fallbackCallableRelation`). A signature that resolves to a
+/// shared LEAF never reaches here: the instantiator shares such a root instead
+/// of copying it, so the caller takes the signature var directly and records
+/// nothing (see the `signature_is_shared_leaf` test at the body-dispatch site).
 fn recordWhereMethodUse(
     self: *Self,
     signature_var: Var,

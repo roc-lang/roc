@@ -5,7 +5,8 @@ This plan covers the lowering-side work that the polarity checker change
 open. The checker semantics are settled and are not changed here: an
 extensionless tag union in an output position of an annotation is
 implicitly open (a fresh flex extension, instantiated fresh at every use),
-the annotation bounds its own definition (`Tag Not In Annotation`), and a
+the annotation bounds its own definition (an ordinary Type Mismatch in the
+annotation context since W8), and a
 where-method signature is instantiated per body use and closed per
 obligation. Phase two makes postcheck accept every program the checker
 accepts, with no panic reachable from a type-correct program.
@@ -19,6 +20,10 @@ described before the work starts, with no debug prints and no undeclared
 solver mutation.
 
 ## 1. Where things stand
+
+(Superseded: this section describes the stack as of `main` `96c3b2fa`. The
+branch was rebased onto `f58f67d3` (PR #11394) on 2026-09-15; the current
+stack is the table in §3 and the bookmark `jared/polarity` points at its top.)
 
 Stack on `main` (`96c3b2fa`), bottom to top:
 
@@ -520,6 +525,14 @@ widening is an ordinary type mismatch at the body use, reported at the
 body use's own region. The set of opened positions grows with the coercion
 generator (§6). The nested-position fixture asserts that mismatch.
 
+(Correction, W7: "a `Try`'s rows" in this section reads plural — here, above,
+and in the proposed rule text below — but only the ERROR row is adaptable and
+only it is opened. A `Try`'s ok row is not adapted: the adapter asserts the ok
+type is unchanged, so an ok row is generated as written. The wording is left
+as it was written at decision time; `AdapterReachPosition` in
+`src/types/instantiate.zig` and design.md "Result-Row Widening Adapter" are the
+authorities.)
+
 **Why (e) was reversed (2026-09-14).** (e) rested on two premises that the
 code does not support:
 
@@ -655,32 +668,96 @@ producing expression is unknown once the tag has been absorbed by
 unification; recording the producer would be a solver change and is out
 of scope.
 
-## 3. Sequencing and commit stack
+## 3. Sequencing and commit stack (as executed)
 
-Order: W1 (already present, move to the bottom) → W2a → W3 → W4 (pins
-only) → W6a → W6b → W2b → W7 → W8 (last: it only changes how one
-diagnostic renders, and it touches the same integration tests and
-snapshots every other item may regenerate). W2a through W4 are
-independent of each other and can be developed in parallel worktrees but
-land in this order so each commit's verification is monotone. W6b
-depends on W6a's fixtures. W2b is independent and lands last among the
-code items so the nine unblocked programs are green early; it is not
-optional (open question 1). Every commit is created with `jj new -m` before
-its first edit, carries the trailer lines, and is verified in isolation
-with its item's commands before the next starts; the full `run-test-zig`
-and `run-check-snapshots` run after W3, after W6b, and after W2b.
+Planned order was W1 → W2a → W3 → W4 → W6a → W6b → W2b → W7 → W8. What
+landed, bottom to top on `main` `f58f67d3` (PR #11394), is the stack below.
+Regenerate this table from `jj log -r 'main..jared/polarity'` before relying
+on it; the branch kept growing after the plan was last amended.
 
-## 4. Verification matrix
-
-| Level | Command | Gate |
+| # | Change | Item |
 |---|---|---|
-| Checker | `zig build run-test-zig -- --test-filter "check type"` | green after W4, W6a, and W6b's nested-position rule |
-| Monotype/LIR | `zig build run-test-zig-lir-inline` | green after W3 (iterator, `OpenMethodWidenedCaller` stays green); the five 10121 cases stay green throughout (W4 pins them) |
-| Stored codecs | `zig build run-test-cli -- --suite subcommands --filter stored --filter "issue 10888"` | green after W2a; unchanged lowered output after W2b |
-| Where-method fixtures | `roc test --no-cache --opt=interpreter` and `--opt=dev` on the W6 fixtures | green after W6a (open impls), W6b (closed impls) |
-| Platforms | `zig build run-test-zig-http-header-decoder-platform`, `zig build run-test-zig-json-decoder-platform` | green after W2a (verified 2026-09-03: all three json-decoder apps and the http-headers app build and run) |
+| 1 | `kupupkyt` | phase one: open output-position tag unions implicitly |
+| 2 | `wyzrkrmn` | phase one: drop redundant `..` in Builtin and fixtures |
+| 3 | `wlylqvxq` | phase one: instantiate where-method signatures per body use |
+| 4 | `rzysvtry` | phase one: typo hint for an unlisted tag |
+| 5 | `rprvoylp` | phase one: close implicitly open rows before structural derivation |
+| 6 | `wlzsxolu` | this plan |
+| 7 | `tsrzvryw` | W2a |
+| 8 | `wwnsvqrn` | W3 |
+| 9 | `vrpryvko` | W4 (W5 folded in) |
+| 10 | `wrtzpoum` | design.md: the where-method widening decision |
+| 11 | `ktlykkxv` | W6a |
+| 12–17 | `vruxrtsl`, `prmlpmmy`, `yyoornun`, `plzyornk`, `olvxkykz`, `wrxsqpmp` | W6b |
+| 18 | `uqzypmnn` | W2b |
+| 19 | `uwzuostv` | W6b review closeout |
+| 20 | `lsnntsns` | W2b review closeout |
+| 21 | `somtktym` | design.md: closing-by-body decision; host-boundary guard restored |
+| 22 | `qpzrzksn` | W8 |
+| 23 | `qvpuwyko` | goldens and snapshots regenerated after the rebase onto main |
+| 24 | `ynxvlmul` | design.md / §9: the deferred row-subsumption decision |
+| 25 | `zoyxpqzs` | issue-11246: replay the implicit-open-ext audit after deferred constraints settle |
+| 26–28 | `ltqzwlnz`, `rwlpplmm`, `xoqntxzw` | bodyless LIR procs: base fix from PR #11394, its test, its diagnostic. Three independently droppable commits. |
+| 29 | `lrtpxpzu` | re-narrow the late implicit-open-ext audit after defaults are checked (a false positive commit 25 introduced) |
+| 30 | `yzzwzumz` | share a LEAF where-method signature instead of instantiating it (compiler panic) |
+| 31 | `qzxqokny` | require an established relation before deduplicating generalized callables |
+| 32 | `yxqlpwtt` | revert: restore upstream executable-root naming in the coordinator test |
+| 33 | `yvrutsqx` | restore the two-body-use assertion on where-method evidence |
+| 34 | `unplymtr` | make every `AdapterReach` reader exhaustive (no behaviour change) |
+| 35 | `uqnnpmwn` | open an alias-contributed `Try` error row at the signature result |
+| 36 | `uxtoqmoo` | stop hosted `?` from grounding its own annotated error row (§9.2) |
+| 37–38 | W7 | this documentation pass and the PR description |
+
+Seven divergences from the plan, all deliberate and all recorded in §8 and §9:
+
+- **W1 is gone.** The `any_negative` build fix (`kusqzzsn`) was dropped at the
+  rebase onto `f58f67d3`; upstream carries it. It is not in
+  `main..jared/polarity`.
+- **W6b is six commits, not one**, and it reversed a decision mid-flight. A
+  first attempt was reverted wholesale (§8.1.1, preserved at bookmark
+  `jared/polarity-w6b-archive`); the restart took option (d) over the
+  previously-chosen (e) (§7 question 3, §8.1.2–§8.1.5), then needed three
+  further rounds to make the decline the single source of truth and to fail
+  closed at every declining site.
+- **W2b is two commits and interleaves with W6b's closeouts** rather than
+  following them.
+- **W8 landed before W7**, not last: the diagnostic rewrite (`qpzrzksn`)
+  preceded the final rebase and golden regeneration, so W7's numbers are
+  measured over a tree that already carries it.
+- **Eleven commits the plan never anticipated** (21, 24, 25, 29–36): two
+  design-decision records, the issue-11246 audit replay, the two defects the
+  measure-first pass turned up (29 and 30), four correctness and hygiene fixes
+  found by review (31–34), and the two widening fixes at the top (35, 36) —
+  the second of which REVERSES §9.2's rejection on measured evidence.
+- **A base-code fix this branch does not own** (26–28) sits in the stack,
+  deliberately unsquashed so a future rebase can drop the commits individually
+  if upstream takes the fix.
+- **A rebase-regeneration commit** (`qvpuwyko`) exists because the branch was
+  rebased from `96c3b2fa` onto `f58f67d3` mid-flight.
+
+Working rules that did hold: one scoped commit per item, created with
+`jj new -m` before the first edit; never merge, rebase only; one implementer
+then one adversarial reviewer per item; full `run-test-zig` and
+`run-check-snapshots` after W3, after W6b and after W2b.
+
+## 4. Verification matrix (as executed)
+
+Two gates in the original matrix were IMPOSSIBLE AS WRITTEN and were
+replaced; §8.1.3 and §8.1.8 record why.
+
+| Level | Command | Outcome |
+|---|---|---|
+| Checker | `zig build run-test-zig -- --test-filter "check type"` | green after W4, W6a and W6b's nested-position rule |
+| Module check (fast gate) | `zig build run-test-zig-module-check` | the per-commit gate actually used from W6b onward |
+| Monotype/LIR | `zig build run-test-zig-lir-inline` | green after W3; the five issue-10121 cases pinned by W4 stay green |
+| Stored codecs | `zig build run-test-cli -- --suite subcommands --filter stored --filter "issue 10888"` | green after W2a and unchanged after W2b |
+| Stored-codec equivalence | Monotype-footprint comparison (`structuralJsonMonotypeStatsForSource`), NOT a snapshot comparison | `stored_parser_gate_source` measures fns=10 defs=11 exprs=535 locals=108 misses=14/0 identically before and after W2b. The planned gate ("`run-check-snapshots` must show no lowered-output change") is impossible: no snapshot carries lowered output — the `# MONO` section is a CIR re-emitter (§8.1.3, §8.1.8 deviation 3). |
+| Adapter actually ran | count Monotype fns whose `source.fn_def == .checked_generated`, or the specialization counters | The CLI fixtures are mechanism-blind: `OpenMethodWidenedCaller` asserts only exit success and needle absence, so it passes whether the program compiles to one wide specialization or to an adapter plus a narrow one (§8.1.3). |
+| Where-method fixtures | `roc test --no-cache --opt=interpreter` and `--opt=dev` on the W6 fixtures | green after W6a (open impls) and W6b (closed impls) |
+| Platforms | `zig build run-test-zig-http-header-decoder-platform`, `zig build run-test-zig-json-decoder-platform` | green after W2a |
 | Diagnostic | `zig build run-test-zig -- --test-filter "check type"`, `run-test-cli` filter `10689`, `run-check-snapshots` | green after W8 |
-| Everything | `zig build run-test-zig`, `zig build run-check-snapshots` | 100% after W6b and again after W2b and after W8 |
+| Build mode | every widening gate must run in **Debug** | `Common.invariant` compiles to `unreachable` outside Debug (`src/postcheck/common.zig:252–257`), so a release run proves nothing about a panic being gone (§8.1.2). |
+| Everything | `zig build run-test-zig`, `zig build run-check-snapshots`, `zig build run-test-cli` | The deliberate red class recorded here through 2026-09-15 — `test/fx-open/issue_9963_hosted_try_question_mark.roc` and its three success-asserting registrations — is GONE: that rejection was reversed and the defect fixed (§8.1.7, §9.2). Measured at W7 on `1f2d149d` plus the two W7 doc commits: `run-test-zig` 5763/5771 (8 skipped, 0 failed, 0 crashed); `run-check-snapshots` clean; `run-test-cli` 1253 passed / 4 run-failed / 9 infra / 19 skipped, with `platforms` 266 run 0 failed and all 13 failures pre-existing (11133, 11158, 10584, boxy JSON codec descriptors, and nine RustGlue `error.FileNotFound` infra errors). Full breakdown in the PR description. |
 
 ## 5. Risks and rollback
 
@@ -695,9 +772,9 @@ and `run-check-snapshots` run after W3, after W6b, and after W2b.
   sites.
 - W6b restructures the hosted adapter arm into a general one; the hosted
   `?` fixtures are the regression gate. The adapter re-tags only the
-  direct result row and a `Try`'s rows; every other position is a checker
-  decision, so lowering cannot silently produce a wrong representation and
-  never reports.
+  direct result row and a `Try`'s ERROR row; every other position is a
+  checker decision, so lowering cannot silently produce a wrong
+  representation and never reports.
 - The stack sits on a `main` that needs W1 to build; if upstream fixes the
   artifact first, rebase and drop W1.
 
@@ -756,6 +833,10 @@ either here, in `design.md`, or in the repository.
 
 ### 8.1 Where the stack is
 
+(Superseded: this section describes the stack as of `main` `96c3b2fa`. The
+branch was rebased onto `f58f67d3` (PR #11394) on 2026-09-15; the current
+stack is the table in §3 and the bookmark `jared/polarity` points at its top.)
+
 On `main` `96c3b2fa`, bottom to top (jj change ids; every commit is
 described in full, with trailers):
 
@@ -771,7 +852,7 @@ described in full, with trailers):
 | `ktlykkxv` | W6a | landed; producer, lifecycle, codec dominance, serialization/recheck, `requires_record`, and combined LIR focused gates green |
 | `vruxrtsl` | W6b, Monotype half | landed + pushed; three probes green on both backends, postcheck 457/457, lir-inline at baseline parity, W6a gate 2/2. Adversarial review in flight |
 
-Bookmark `jared/polarity` points at `vruxrtsl` (W6b Monotype half) and is pushed.
+Bookmark `jared/polarity` points at the top of the stack in §3 and is pushed.
 
 W6b's Monotype half needed no change to `solve.zig`: the widening relation
 never unifies the differing rows, so `RowWidthRelation` is untouched and
@@ -1130,7 +1211,10 @@ Two further findings, both unpinned:
   markers are then opened per use. Needs a platform test
   (`requires { Model }`, `Model : { items : [Pending, Done] }`, and a
   where-method returning `Model`).
-- **A second declining relation exists.** `relateCustomParserErrorInjection`
+- **A second declining relation exists.** `relateParserErrorInjection`
+  (`src/postcheck/monotype/lower.zig:47484`; the name recorded here as
+  `relateCustomParserErrorInjection` was taken from its invariant message, not
+  from the declaration)
   relates only shared labels' payloads and never checks closedness — the same
   defect shape in the parser-error-injection mechanism, whose adapter is the
   parser runtime rather than the template adapter. Not audited; out of W6b's
@@ -1379,17 +1463,19 @@ went with it.
   local optimum. Every behaviour change is a declared rule in
   `design.md` and is pinned by tests at each level it touches.
 - Jared's answers so far are recorded in §7 and in each item's "Landed"
-  note. Question 3 is closed: Jared chose option (e) and explicitly gave the
-  driver the green light to continue the planned work autonomously. Ask only
-  if implementation exposes a typing or lowering policy not covered by this plan.
+  note. Question 3 was closed on 2026-09-03 as option (e) and REVERSED to
+  option (d) on 2026-09-14 (§7 question 3, §W6b "Why (e) was reversed"); the
+  driver had explicit green light to continue the planned work autonomously.
+  Ask only if implementation exposes a typing or lowering policy not covered
+  by this plan.
 
 ### 8.3 What is next, in order
 
-W6a is implemented and its focused verification is complete. Next: W6b → W2b (also owns the optional-field
-stored-codec fixtures, Appendix A) → W7 → W8. Each
-section above is the specification; the "Landed" notes on W2a/W3/W4
-show the level of detail expected in a commit and what the reviewers
-looked for. Verification matrix in §4.
+W6a, W6b, W2b and W8 are all implemented and reviewed; see the commit table
+in §3. Only W7 (documentation and PR description) remains. Each section above
+is the specification; the "Landed" notes on W2a/W3/W4 show the level of detail
+expected in a commit and what the reviewers looked for. Verification matrix in
+§4.
 
 Facts that were only in the lost scratchpad and matter for W6:
 - Where-method widening lowered for OPEN implementations in the original
@@ -1820,6 +1906,12 @@ row, so the annotation's flex is never bound. `via_question!` FORWARDS the
 host's closed row through `?`, which binds the flex to `[]`. A caller that
 unwraps the first into a wider row is accepted; the same call on the second is
 rejected. The bodies differ; the signatures do not.
+
+(Correction, 2026-09-16: this pair is no longer a live example — §9.2 fixed the
+HOSTED instance, so `via_question!` above now publishes OPEN and the fixture is
+green. The argument is unchanged and the defect is not gone: substitute a
+non-hosted callee for `FallibleHost.str_ok!` and the pair behaves exactly as
+described. No such pair exists in the corpus today.)
 
 To get a genuinely closed output row under the intended rule you would have to
 write the closure explicitly — something in the shape of `[MyErr, ..[]]` — so

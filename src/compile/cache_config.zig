@@ -198,8 +198,9 @@ pub const Constants = struct {
     ///     poisons the expression producing its value, leaving the expected
     ///     result type intact.
     /// 93: Tag unions in annotation output positions are implicitly open
-    ///     (polarity): extensionless unions there carry an anonymous rigid
-    ///     extension, and alias declaration bodies store a deferral marker.
+    ///     (polarity): extensionless unions there carry an anonymous flex
+    ///     extension, while alias declaration bodies and where-method
+    ///     signatures store a rigid deferral marker resolved per use site.
     /// 94: Scheme-use records distinguish per-use where-method signature
     ///     copies from evidence-bearing instantiations, and checked dispatch
     ///     plans retain independent-callable/nested-evidence-reuse flags.

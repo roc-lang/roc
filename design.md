@@ -5659,12 +5659,14 @@ result-row widening adapter already serves a CLOSED published row on an
 unpatched compiler, so it is the general mechanism rather than host-specific
 scaffolding awaiting deletion. See `polarity_phase_two.md` §9.2.)
 Closing-by-body itself is unchanged, and row subsumption is still what
-replaces it: the rule above is gated on a direct hosted call, so a NON-hosted
-forwarder still publishes closed behind an identical open annotation.
+replaces it: Hosted Try Question Widening is gated on a direct hosted call, so
+a NON-hosted forwarder still publishes closed behind an identical open
+annotation.
 
 An anonymous `..` in a positive position of an opening annotation means
 exactly what absence means there and is generated the same way (a recorded
-flex), so the two spellings cannot drift. Elsewhere `..` remains the rigid
+flex, or the rigid deferral marker where the annotation defers per use), so
+the two spellings cannot drift. Elsewhere `..` remains the rigid
 `#others` it always was, and a named extension (`..others`) is always a
 rigid.
 
@@ -5712,22 +5714,31 @@ intact (`.preserve`). Lowering note: a body use that WIDENS its copy is
 specialized by Monotype at the wider row when the implementation's own
 result row is open. `instantiateWhereMethodForUse` records an exact raw
 `SchemeUseRecord.where_method_use`, keyed by the body's constraint callable,
-relating the per-use copy to its pristine signature callable; checked-artifact
-construction reads that record and never recovers the relation by method
-name or by searching the solved equivalence class. When generalized
-requirement deduplication drops a same-shape duplicate it first unifies the
-duplicate's callable with the retained one (a committed probe, see
-`deduplicateGeneralizedDispatchRequirements` in the Rewrite Inventory), so
-an omitted callable class IS the retained class and no separate witness is
-recorded. An
+relating the per-use copy to its pristine signature callable. That record is
+the only AUTHORITY on the relation. Checked-artifact construction indexes it
+twice: by the raw callable, and by that callable's SETTLED ROOT. The second
+index exists because generalized requirement deduplication first unifies a
+dropped duplicate's callable with the retained one (a committed probe, see
+`deduplicateGeneralizedDispatchRequirements` in the Rewrite Inventory), after
+which the equivalence class rather than the raw spelling is the equality
+authority; an omitted callable class IS the retained class and no separate
+witness is recorded. A method name never DECIDES the relation. When no
+candidate carries the plan's exact callable, a same-name candidate nominates
+the evidence slot the plan resolves through, and the record then decides
+whether that independent callable may reuse the slot's checked nested
+evidence — it may exactly when its copy descends from the slot's own
+signature — or must synthesize its own. An index naming a record of the wrong
+kind, a record missing its signature-callable copy, or a copy that does not
+resolve to the body constraint is a checked-artifact invariant violation, not
+a fallback. An
 implementation whose checked scheme result row is CLOSED (its body returns a
 closed-source value: a top-level constant, an input-position parameter, a
-nominal field) cannot yet serve a widened use; W6b adds a result-row
-widening adapter at the template boundary, generalizing the hosted `Try`
-adapter, which re-tags only the direct result row and a `Try`'s rows.
-Per-use opening applies only at the output positions the adapter can
-re-tag: the signature's direct result row, and the ERROR row of a `Try`
-result. A `Try`'s ok row is not adaptable — the adapter asserts the ok type
+nominal field) still serves a widened use: the Result-Row Widening Adapter
+at the template boundary specializes that implementation at its own declared
+row and re-tags the result at the requested row, generalizing the hosted
+`Try` adapter. Per-use opening applies only at the output positions that
+adapter can re-tag: the signature's direct result row, and the ERROR row of
+a `Try` result. A `Try`'s ok row is not adaptable — the adapter asserts the ok type
 is unchanged — so it is not opened either. A tag union in any OTHER output
 position (inside a `List`, a
 record field, a tuple, a tag payload, a non-`Try` nominal) keeps its row
@@ -5736,8 +5747,9 @@ to widen it is an ordinary type mismatch reported at the body use. This
 keeps the set of positions a use may widen equal to the set lowering can
 adapt, by construction rather than by a second rule; the set grows as the
 coercion generator grows. (Decided 2026-09-03 as the converse — open
-everywhere, reject a closed implementation at the obligation — and
-reversed 2026-09-14: the obligation instantiates the enclosing scheme with
+everywhere, reject a closed implementation at the enclosing-scheme
+instantiation — and reversed 2026-09-14: that instantiation
+(`instantiateTypeScheme`) is itself what closes the markers with
 `PolarityVarBehavior.close`, so it observes `[]` rather than a marker, and
 a marker's structural position is not recorded when it is minted; keying
 the rejection by structural path would have required a serialized
