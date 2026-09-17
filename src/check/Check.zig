@@ -15660,7 +15660,7 @@ fn auditImplicitOpenExts(self: *Self, annotation_idx: CIR.Annotation.Idx, redund
             try self.late_implicit_open_ext_audits.append(self.gpa, entry);
             continue;
         }
-        try self.reportImplicitOpenExtExtension(entry, env);
+        try self.reportImplicitOpenExtExtension(entry, env, .report_and_poison);
     }
 }
 
@@ -15697,28 +15697,57 @@ fn dropSettledLateImplicitOpenExtAudits(self: *Self) void {
 }
 
 /// Replay the audit over the extensions that were STILL unconstrained after
-/// the whole module was checked. Every definition and statement has had its
-/// say by then, so a tag that lands during `finalizeTypes` comes from a
-/// constraint the definition itself deferred—a generated codec's error row
+/// the whole module was checked. The case that motivates it is a constraint
+/// the definition itself deferred: a generated codec's composed error row
 /// reaching the annotated row through
-/// `finalizeGeneratedCodecConstraintsToQuiescence` is the case that motivates
-/// this (issue 11246). Nothing unifies after finalize, so this is the last
-/// point at which the question can be asked, and it must run before
-/// `closeWeakValueImplicitOpenExts` grounds the survivors to `[]`—a grounded
-/// extension carries no tags and the audit would skip it.
+/// `finalizeGeneratedCodecConstraintsToQuiescence` (issue 11246). Nothing
+/// unifies after finalize, so this is the last point at which the question can
+/// be asked, and it must run before `closeWeakValueImplicitOpenExts` grounds
+/// the survivors to `[]`: a grounded extension carries no tags and the audit
+/// would skip it.
+///
+/// The window is NOT exclusive to the definition, and this pass does not claim
+/// it is. A use site whose unification is deferred into the same window widens
+/// the same row and is indistinguishable here, so the replay is a report, not
+/// a judgment the solver acts on. See `ImplicitOpenExtReportKind`.
 fn runLateImplicitOpenExtAudit(self: *Self, env: *Env) std.mem.Allocator.Error!void {
+    // The direct audit's `markErroneous` doubles as its no-double-report
+    // guard. The replay does not poison, so it carries its own: one report per
+    // extension CLASS, since two entries can share a resolved root.
+    var reported: std.AutoHashMapUnmanaged(Var, void) = .empty;
+    defer reported.deinit(self.gpa);
     for (self.late_implicit_open_ext_audits.items) |entry| {
-        // Also the guard against reporting one extension twice: the report
-        // marks it `.err`, which carries no tags.
         if (!self.implicitOpenExtCarriesTags(entry)) continue;
-        try self.reportImplicitOpenExtExtension(entry, env);
+        const root = self.types.resolveVar(entry.var_).var_;
+        if ((try reported.getOrPut(self.gpa, root)).found_existing) continue;
+        try self.reportImplicitOpenExtExtension(entry, env, .report_only);
     }
 }
 
-/// Report one implicitly opened extension that its definition EXTENDED, and
-/// mark the extension erroneous. Callers have already established that it
-/// carries at least one tag (`implicitOpenExtCarriesTags`).
-fn reportImplicitOpenExtExtension(self: *Self, entry: ImplicitOpenExt, env: *Env) std.mem.Allocator.Error!void {
+/// Whether a report also marks the extension it reports erroneous.
+///
+/// The post-body audit proves what it reports: the binding's own body is the
+/// only thing that has run against that row, so the tag is the definition's
+/// and `.err` is the right content for a row the annotation rejects. The
+/// REPLAY establishes no such thing. It reads WHEN a tag landed—inside
+/// `finalizeTypes`, after the narrowing—and treats that timing as provenance,
+/// which it is not: a use site whose unification is deferred into the same
+/// window (a stored dispatch requirement, a generated codec's composed error
+/// row reaching a value binding through an ordinary use) lands there too, and
+/// the replay cannot tell the two apart. Writing `.err` on that reading turns
+/// a possibly-wrong message into a definitely wrong type, so the replay
+/// reports and leaves the solved row as the module solved it.
+const ImplicitOpenExtReportKind = enum { report_and_poison, report_only };
+
+/// Report one implicitly opened extension that its definition EXTENDED.
+/// Callers have already established that it carries at least one tag
+/// (`implicitOpenExtCarriesTags`).
+fn reportImplicitOpenExtExtension(
+    self: *Self,
+    entry: ImplicitOpenExt,
+    env: *Env,
+    report_kind: ImplicitOpenExtReportKind,
+) std.mem.Allocator.Error!void {
     const resolved = self.types.resolveVar(entry.var_);
     const extension = resolved.desc.content.structure.tag_union;
     const first_tag = self.types.tags.get(extension.tags.start);
@@ -15747,7 +15776,7 @@ fn reportImplicitOpenExtExtension(self: *Self, entry: ImplicitOpenExt, env: *Env
         .tags = listed_tags,
         .ext = expected_ext_var,
     } } }, env, entry.region);
-    // Both snapshots must be taken before `markErroneous` below overwrites
+    // Both snapshots must be taken before the `markErroneous` below overwrites
     // the extension's content with `.err`.
     const actual_snapshot = try self.snapshots.snapshotVarForError(self.types, &self.type_writer, actual_var);
     const expected_snapshot = try self.snapshots.snapshotVarForError(self.types, &self.type_writer, expected_var);
@@ -15763,7 +15792,10 @@ fn reportImplicitOpenExtExtension(self: *Self, entry: ImplicitOpenExt, env: *Env
             .tag_name = first_tag.name,
         } },
     } });
-    try self.markErroneous(entry.var_);
+    switch (report_kind) {
+        .report_and_poison => try self.markErroneous(entry.var_),
+        .report_only => {},
+    }
 }
 
 /// After the module solves, ground every still-open implicitly opened
