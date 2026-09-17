@@ -5689,6 +5689,14 @@ pub fn build(b: *std.Build) void {
         });
     }
 
+    if (main_exe_result.archive_member_names_test) |names_test| {
+        test_suites.register(.{
+            .step_suffix = "archive-member-names",
+            .description = "Run archive member-name rewriting tests",
+            .compile = names_test,
+        });
+    }
+
     if (main_exe_result.machine_code_shim_archive_check) |machine_code_shim_archive_check| {
         run_check_machine_code_shim_archive_step.dependOn(machine_code_shim_archive_check);
     }
@@ -7470,6 +7478,7 @@ const MainExeResult = struct {
     machine_code_shim_archive_check: ?*Step,
     boundary_link_tests: [2]?*Step.Compile,
     machine_code_shim_archive_test: ?*Step.Compile,
+    archive_member_names_test: ?*Step.Compile,
 };
 fn addMainExe(
     b: *std.Build,
@@ -7665,15 +7674,32 @@ fn addMainExe(
     // Include the pre-built builtins object
     interpreter_shim_lib.root_module.addObjectFile(builtins_obj.getEmittedBin());
     interpreter_shim_lib.bundle_compiler_rt = true;
+    // Zig names archive members after the paths of the objects it packed,
+    // which puts a `.zig-cache` key and the build machine's home directory
+    // into the archive; `roc` embeds the archive, so strip the names to bare
+    // file names first (see src/build/archive_member_names.zig).
+    const archive_member_names_tool = b.addExecutable(.{
+        .name = "archive_member_names",
+        .root_module = b.createModule(.{
+            .root_source_file = b.path("src/build/archive_member_names.zig"),
+            .target = b.graph.host,
+            .optimize = .ReleaseSafe,
+        }),
+    });
+    configureBackend(archive_member_names_tool, b.graph.host);
+    const interpreter_shim_filename = if (target.result.os.tag == .windows) "roc_interpreter_shim.lib" else "libroc_interpreter_shim.a";
+    const strip_interpreter_shim_names = b.addRunArtifact(archive_member_names_tool);
+    strip_interpreter_shim_names.addArg(@tagName(target.result.os.tag));
+    strip_interpreter_shim_names.addFileArg(interpreter_shim_lib.getEmittedBin());
+    const bare_interpreter_shim = strip_interpreter_shim_names.addOutputFileArg(interpreter_shim_filename);
     // Install shim library to the output directory
-    const install_interpreter_shim = b.addInstallArtifact(interpreter_shim_lib, .{});
+    const install_interpreter_shim = b.addInstallLibFile(bare_interpreter_shim, interpreter_shim_filename);
     b.getInstallStep().dependOn(&install_interpreter_shim.step);
     // Copy the shim library to the src/ directory for embedding as binary data
     // This is because @embedFile happens at compile time and needs the file to exist already
     // and zig doesn't permit embedding files from directories outside the source tree.
     const copy_interpreter_shim = b.addUpdateSourceFiles();
-    const interpreter_shim_filename = if (target.result.os.tag == .windows) "roc_interpreter_shim.lib" else "libroc_interpreter_shim.a";
-    copy_interpreter_shim.addCopyFileToSource(interpreter_shim_lib.getEmittedBin(), b.pathJoin(&.{ "src/cli", interpreter_shim_filename }));
+    copy_interpreter_shim.addCopyFileToSource(bare_interpreter_shim, b.pathJoin(&.{ "src/cli", interpreter_shim_filename }));
     exe.step.dependOn(&copy_interpreter_shim.step);
 
     const machine_code_shim_lib = addMachineCodeShimLib(b, roc_modules, target, optimize, strip, omit_frame_pointer, shim_host_abi_module, compiled_builtins_module, write_compiled_builtins);
@@ -7682,6 +7708,7 @@ fn addMainExe(
     var machine_code_shim_archive_check_for_registry: ?*Step = null;
     var boundary_link_tests: [2]?*Step.Compile = .{ null, null };
     var machine_code_shim_archive_test_for_registry: ?*Step.Compile = null;
+    var archive_member_names_test_for_registry: ?*Step.Compile = null;
     if (add_machine_code_shim_test) {
         const machine_code_shim_test = b.addTest(.{
             .name = "machine_code_shim",
@@ -7762,6 +7789,10 @@ fn addMainExe(
     const machine_code_shim_filename = if (target.result.os.tag == .windows) "roc_machine_code_shim.lib" else "libroc_machine_code_shim.a";
     const checked_machine_code_shim = check_archive.addOutputFileArg(machine_code_shim_filename);
     machine_code_shim_archive_check_for_registry = &check_archive.step;
+    const strip_machine_code_shim_names = b.addRunArtifact(archive_member_names_tool);
+    strip_machine_code_shim_names.addArg(@tagName(target.result.os.tag));
+    strip_machine_code_shim_names.addFileArg(checked_machine_code_shim);
+    const bare_machine_code_shim = strip_machine_code_shim_names.addOutputFileArg(machine_code_shim_filename);
 
     // Cross-check every shipped native ABI from any developer host. No target
     // executable is run: the host checker reads each target's object format.
@@ -7833,17 +7864,30 @@ fn addMainExe(
             .filters = test_filters,
         });
         machine_code_shim_archive_test_for_registry = checker_tests;
+        const archive_member_names_tests = b.addTest(.{
+            .name = "archive_member_names",
+            .root_module = b.createModule(.{
+                .root_source_file = b.path("src/build/archive_member_names.zig"),
+                .target = b.graph.host,
+                .optimize = .ReleaseSafe,
+            }),
+            .filters = test_filters,
+        });
+        archive_member_names_test_for_registry = archive_member_names_tests;
+        configureBackend(archive_member_names_tests, b.graph.host);
+        const run_archive_member_names_tests = b.addRunArtifact(archive_member_names_tests);
+        checks.dependOn(&run_archive_member_names_tests.step);
         configureBackend(checker_tests, b.graph.host);
         const run_checker_tests = b.addRunArtifact(checker_tests);
         checks.dependOn(&run_checker_tests.step);
         machine_code_shim_archive_check_for_registry = checks;
     }
 
-    const install_machine_code_shim = b.addInstallLibFile(checked_machine_code_shim, machine_code_shim_filename);
+    const install_machine_code_shim = b.addInstallLibFile(bare_machine_code_shim, machine_code_shim_filename);
     b.getInstallStep().dependOn(&install_machine_code_shim.step);
 
     const copy_machine_code_shim = b.addUpdateSourceFiles();
-    copy_machine_code_shim.addCopyFileToSource(checked_machine_code_shim, b.pathJoin(&.{ "src/cli", machine_code_shim_filename }));
+    copy_machine_code_shim.addCopyFileToSource(bare_machine_code_shim, b.pathJoin(&.{ "src/cli", machine_code_shim_filename }));
     exe.step.dependOn(&copy_machine_code_shim.step);
 
     // Copy builtins object for the host target for embedding into CLI
@@ -8173,6 +8217,7 @@ fn addMainExe(
         .machine_code_shim_archive_check = machine_code_shim_archive_check_for_registry,
         .boundary_link_tests = boundary_link_tests,
         .machine_code_shim_archive_test = machine_code_shim_archive_test_for_registry,
+        .archive_member_names_test = archive_member_names_test_for_registry,
     };
 }
 
