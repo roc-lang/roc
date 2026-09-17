@@ -7055,7 +7055,27 @@ fn instantiateVarHelp(
                     .rigid => |rigid| rigid.constraints.len(),
                     .alias, .field_presence, .structure, .err => 0,
                 };
-                const fresh_is_quantified = switch (fresh_resolved.desc.content) {
+                // A `#polarity` marker is a quantified variable of the
+                // scheme—`canonical_type_keys` enumerates every rigid as an
+                // identity variable, marker included—but the instantiator
+                // resolves it to a CONTENT rather than to a variable: a use
+                // that closes the deferred row copies it as
+                // `.structure = .empty_tag_union` (`types/instantiate.zig`,
+                // the `.close`/`.neg`/`.nested` arms). That closed row IS this
+                // instantiation's substitution for the marker, so the pair must
+                // be recorded even though the copy is not itself quantified.
+                // Without it `appendSiteSubstitution` finds no substitution for
+                // a variable the identity walk enumerated, falls back to the
+                // pristine marker, and panics because publication—which walks
+                // the recorded pairs—never reached it. Only markers widen the
+                // predicate: pairing every copied structural node would change
+                // the length of every substitution.
+                const old_resolved = self.types.resolveVar(x.key_ptr.*);
+                const old_is_polarity_marker = switch (old_resolved.desc.content) {
+                    .rigid => |old_rigid| old_rigid.name.eql(self.cir.idents.polarity_var),
+                    .flex, .alias, .field_presence, .structure, .err => false,
+                };
+                const fresh_is_quantified = old_is_polarity_marker or switch (fresh_resolved.desc.content) {
                     .flex, .rigid => true,
                     .alias, .field_presence, .structure, .err => false,
                 };
@@ -7066,7 +7086,6 @@ fn instantiateVarHelp(
                     });
                 }
                 if (fresh_constraints_len > 0) {
-                    const old_resolved = self.types.resolveVar(x.key_ptr.*);
                     const old_constraints_range = switch (old_resolved.desc.content) {
                         .flex => |flex| flex.constraints,
                         .rigid => |rigid| rigid.constraints,
