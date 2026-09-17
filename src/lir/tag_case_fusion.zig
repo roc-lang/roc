@@ -1599,12 +1599,28 @@ fn testConditionalAliasRelease(extra_read: bool) TestError!void {
 }
 
 test "tag case fusion variant index preserves pair identity and checks repeated payload presence" {
+    var store = LirStore.init(std.testing.allocator);
+    defer store.deinit();
+    var layouts = try layout_mod.Store.init(std.testing.allocator, .u64);
+    defer layouts.deinit();
+    var graph: TestGraph = .{ .store = &store };
+    defer graph.deinit();
+    const payload = try graph.local(.u64);
+    const param = try graph.local(try layouts.putTagUnion(&.{ .u64, .zst, .zst }));
+    const jump = try store.addCFStmt(.{ .jump = .{ .target = graph.freshJoin() } });
+    const build = try store.addCFStmt(.{ .assign_tag = .{
+        .target = param,
+        .variant_index = 1,
+        .discriminant = 2,
+        .payload = null,
+        .next = jump,
+    } });
     var variants = Variants.init(std.testing.allocator);
     defer variants.deinit();
     var stats: WorkStats = .{};
     const first: BuildSite = .{
-        .stmt = @enumFromInt(0),
-        .edge_jump = @enumFromInt(1),
+        .stmt = build,
+        .edge_jump = jump,
         .variant_index = 1,
         .discriminant = 2,
         .payload = null,
@@ -1618,7 +1634,7 @@ test "tag case fusion variant index preserves pair identity and checks repeated 
     different.discriminant = 1;
     try std.testing.expect(try variants.add(different, &stats));
     different = first;
-    different.payload = @enumFromInt(0);
+    different.payload = payload;
     try std.testing.expect(!try variants.add(different, &stats));
     try std.testing.expectEqual(@as(usize, 3), variants.builds.items.len);
     try std.testing.expectEqual(@as(usize, 5), stats.variant_lookups);

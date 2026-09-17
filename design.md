@@ -5009,7 +5009,7 @@ read is explicit. Every mutation plan requires disjoint statement roles before
 it changes the graph.
 
 Tag-case fusion inventories join identities once and shares monotonic fresh-ID
-allocation with its branch clones. Candidate-local region and binder facts
+allocation with its branch clones. Candidate-local region and binder inventories
 remain valid only until rewiring; variants are indexed by their explicit
 variant/discriminant pair in first-producer order. Fixed-point discovery still
 revisits surrounding joins after a rewrite, since a rejected ancestor can
@@ -13158,18 +13158,18 @@ use (otherwise the callee holds a retained copy). The signature bits and
 rows settle to a fixpoint with the analysis, since a new row only adds
 edges. One settlement retains the immutable statement inventory, control-flow
 topology, and exact ordered-use answers while rebuilding signature-dependent
-lattice facts when their inputs change. Procedures sharing reachable statement
+lattice state when its inputs change. Procedures sharing reachable statement
 identities or ownership-relevant locals form one analysis component, preserving
-the base solver's combined definition and use semantics. Direct calls establish
+the base solver's combined definition and use constraints. Direct calls establish
 directed signature dependencies between components rather than merging a call
 graph into one ownership domain.
 
 Every component begins dirty. A dirty component is reseeded and solved against
 a frozen signature/return-row snapshot; independent components may run on
-workers with private compact domains and query state. The coordinator publishes
+workers with private compact domains and query state. The coordinator commits
 results in deterministic procedure order after the wave drains and dirties
-callers only when signature facts or return-row contents change. Moving an
-unchanged row to a different table offset is not a semantic change. Clean
+callers only when signature bits or return-row contents change. Moving an
+unchanged row to a different table offset does not change its contents. Clean
 component results remain valid while those inputs stay fixed; newly discovered
 return capabilities must not inherit a stale poisoned lattice verdict.
 
