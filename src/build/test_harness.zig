@@ -48,6 +48,19 @@ pub const Timer = struct {
 };
 
 /// Returns a monotonic timestamp in nanoseconds.
+///
+/// Time the machine spent suspended must not count here. Every deadline in
+/// this file is a difference of two of these readings, so a clock that keeps
+/// running across suspend charges a laptop's sleep to whichever tests happened
+/// to be in flight: they wake already past their timeout and are killed as
+/// hangs, having done nothing wrong. It also makes the durations printed
+/// beside them disagree with the ones `minici` prints for the same step.
+///
+/// macOS `CLOCK_MONOTONIC` does keep running across suspend, so ask for
+/// `CLOCK_UPTIME_RAW` there -- the same clock `minici` measures its steps
+/// with, by way of `std.Io`'s `.awake`. Linux's `CLOCK_MONOTONIC` already
+/// excludes suspended time (`CLOCK_BOOTTIME` is the one that does not), so it
+/// stays as it was, and so do the other platforms' branches below.
 pub fn monotonicNs() u64 {
     if (builtin.os.tag == .linux) {
         var ts: std.os.linux.timespec = undefined;
@@ -55,7 +68,7 @@ pub fn monotonicNs() u64 {
         return @as(u64, @intCast(ts.sec)) * 1_000_000_000 + @as(u64, @intCast(ts.nsec));
     } else if (builtin.os.tag == .macos or builtin.os.tag == .freebsd) {
         var ts: std.c.timespec = undefined;
-        _ = std.c.clock_gettime(std.c.CLOCK.MONOTONIC, &ts);
+        _ = std.c.clock_gettime(awake_clock_id, &ts);
         return @as(u64, @intCast(ts.sec)) * 1_000_000_000 + @as(u64, @intCast(ts.nsec));
     } else if (builtin.os.tag == .windows) {
         const k32 = struct {
@@ -155,11 +168,17 @@ pub fn milliTimestamp() i64 {
         // divide freq down first so the multiplication can't blow.
         return @divTrunc(counter, @divTrunc(freq, 1000));
     }
-    // POSIX (macOS, BSD, etc.) via libc.
+    // POSIX (macOS, BSD, etc.) via libc. See `monotonicNs` for why this asks
+    // for a clock that stops while the machine is suspended.
     var ts: std.c.timespec = undefined;
-    _ = std.c.clock_gettime(.MONOTONIC, &ts);
+    _ = std.c.clock_gettime(awake_clock_id, &ts);
     return @as(i64, ts.sec) * 1000 + @divTrunc(@as(i64, ts.nsec), 1_000_000);
 }
+
+/// The libc clock to measure test time with. macOS is the platform whose
+/// `CLOCK_MONOTONIC` is known to run across suspend, so only it is redirected;
+/// everything else keeps the clock it already used. See `monotonicNs`.
+const awake_clock_id: std.c.CLOCK = if (builtin.os.tag == .macos) .UPTIME_RAW else .MONOTONIC;
 
 /// pipe: returns [2]fd_t or error. Only defined where fork-based pools
 /// exist: mingw declares but does not implement pipe, so it must never be
@@ -762,6 +781,37 @@ pub fn parseStandardArgs(allocator: Allocator, process_args: std.process.Args) !
     // Cast from []const [:0]const u8 to []const []const u8.
     const raw_args_plain: []const []const u8 = @ptrCast(raw_args);
     return parseStandardArgsFromSlice(raw_args_plain, allocator);
+}
+
+test "timestamp helpers read the same clock as each other" {
+    // Deadlines mix both helpers, so they have to agree on what "now" means.
+    const ms = milliTimestamp();
+    const ns_as_ms: i64 = @intCast(monotonicNs() / std.time.ns_per_ms);
+    try std.testing.expect(@abs(ns_as_ms - ms) < 1000);
+}
+
+test "harness clock excludes time the machine spent suspended" {
+    if (builtin.os.tag != .macos) return error.SkipZigTest;
+
+    var uptime: std.c.timespec = undefined;
+    var monotonic: std.c.timespec = undefined;
+    _ = std.c.clock_gettime(.UPTIME_RAW, &uptime);
+    _ = std.c.clock_gettime(.MONOTONIC, &monotonic);
+    const uptime_ms: i64 = @as(i64, uptime.sec) * 1000 + @divTrunc(@as(i64, uptime.nsec), 1_000_000);
+    const monotonic_ms: i64 = @as(i64, monotonic.sec) * 1000 + @divTrunc(@as(i64, monotonic.nsec), 1_000_000);
+
+    const now = milliTimestamp();
+    try std.testing.expect(@abs(now - uptime_ms) < 1000);
+
+    // On macOS these two clocks differ by however long the machine has been
+    // suspended since boot. Where they have diverged, reading the monotonic
+    // one is the bug this guards: a suspend would be charged to whichever
+    // tests were in flight, and they would wake up already past their timeout
+    // and be killed as hangs. A machine that has never slept cannot tell the
+    // two apart, so there is nothing to assert there.
+    if (monotonic_ms - uptime_ms > 2000) {
+        try std.testing.expect(now < monotonic_ms - 1000);
+    }
 }
 
 test "parseStandardArgsFromSlice preserves help and explicit timeout" {
