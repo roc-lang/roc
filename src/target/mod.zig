@@ -126,25 +126,6 @@ pub fn classifyOs(os: std.Target.Os.Tag) OsClass {
     };
 }
 
-/// Whether a target computes type digests with the portable software SHA-256
-/// rounds instead of the CPU's SHA-256 instructions.
-///
-/// Every other 64-bit target requires the instructions and gets them from its
-/// CPU baseline (`addSha256Floor` in build.zig); x86_64 macOS is the exception,
-/// because no Mac it runs on is guaranteed to have them. Apple's Intel line is
-/// Skylake through Comet Lake, whose cores have no SHA extension (only the 2020
-/// Ice Lake MacBook Air does), so a macos_x86_64 build with the extension in its
-/// baseline dies of SIGILL on nearly every Intel Mac -- including the Coffee
-/// Lake i7-8700B that GitHub's macos-15-intel runner builds the nightly on.
-/// Digest bytes are identical either way; only the speed differs.
-///
-/// `uses_software_rounds` in src/base/sha256_rounds.zig applies this same rule
-/// to the compilation target, and `TypeDigestHasher` rejects any other 64-bit
-/// target that lacks the instructions.
-pub fn usesSoftwareSha256(arch: std.Target.Cpu.Arch, os: std.Target.Os.Tag) bool {
-    return classifyCpuArch(arch) == .x86_64 and classifyOs(os) == .macos;
-}
-
 const AbiClass = enum { musl, gnu, gnu_x32, other };
 
 fn classifyAbi(abi: std.Target.Abi) AbiClass {

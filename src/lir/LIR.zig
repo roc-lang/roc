@@ -960,10 +960,12 @@ pub const CFStmt = union(enum) {
         /// Bit i set => argument i is named by the op's
         /// `may_runtime_uniqueness_check_args` and ARC emission proved its
         /// runtime count check redundant: the argument's value was born
-        /// unique, its single ownership unit moves into this op, and no
-        /// borrow of it is live here. Consumers may take the in-place path
-        /// without inspecting the count; the runtime check is always sound,
-        /// so a zero mask reproduces fully checked behavior.
+        /// unique, its single ownership unit moves into this op (or is owned
+        /// here, for a check that only reads the count), and no borrow of it
+        /// is live here. Consumers may take the in-place path, or answer a
+        /// count check with true, without inspecting the count; the runtime
+        /// check is always sound, so a zero mask reproduces fully checked
+        /// behavior.
         unique_args: u64 = 0,
         /// For `list_map_can_reuse`: whether the input and output element
         /// layouts are interchangeable in one allocation, computed per pointer

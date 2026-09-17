@@ -841,6 +841,7 @@ const FutureFields = struct {
         reads: *const std.AutoHashMapUnmanaged(LIR.CFStmtId, ReadKind),
         joins: *const std.AutoHashMapUnmanaged(u32, LIR.CFStmtId),
         receipts: []const FieldRestitution,
+        redefinition: ?LIR.CFStmtId,
     ) Error!void {
         self.clear();
         var read_it = reads.iterator();
@@ -856,6 +857,9 @@ const FutureFields = struct {
         var index: u32 = 0;
         while (index < self.nodes.items.len) : (index += 1) {
             const cursor = self.nodes.items[index].stmt;
+            // Past the container's own single definition, reached through a
+            // loop back edge, every read observes the next iteration's value.
+            if (redefinition) |def_stmt| if (cursor == def_stmt) continue;
             if (reads.get(cursor)) |read| try self.observe(gpa, index, read.bit);
             switch (store.getCFStmt(cursor)) {
                 .set_local => |stmt| {
@@ -940,6 +944,7 @@ fn fieldObservedAfter(
     reads: *const std.AutoHashMapUnmanaged(LIR.CFStmtId, ReadKind),
     joins: *const std.AutoHashMapUnmanaged(u32, LIR.CFStmtId),
     receipts: []const FieldRestitution,
+    redefinition: ?LIR.CFStmtId,
     visits: *usize,
 ) Error!bool {
     var seen = collections.DenseMap(LIR.CFStmtId, void).init(gpa);
@@ -950,6 +955,9 @@ fn fieldObservedAfter(
     while (work.pop()) |cursor| {
         if ((try seen.getOrPut(cursor)).found_existing) continue;
         visits.* += 1;
+        // Past the container's own single definition, reached through a
+        // loop back edge, every read observes the next iteration's value.
+        if (redefinition) |def_stmt| if (cursor == def_stmt) continue;
         if (reads.get(cursor)) |read| {
             if (read.bit & bit != 0) return true;
         }
@@ -1114,12 +1122,12 @@ test "future field observations agree with per-read traversal across joins rebin
         store.getCFStmtPtr(boundary).* = if (configuration & 1 != 0) .loop_break else .loop_continue;
         store.getCFStmtPtr(rebind).set_local.target = if (configuration & 32 != 0) local else other;
         try joins.put(gpa, 0, if (configuration & 64 != 0) nested else exit);
-        try future.compute(gpa, &store, &solution, local, &reads, &joins, &receipts);
+        try future.compute(gpa, &store, &solution, local, &reads, &joins, &receipts, null);
         try std.testing.expectEqual(if (configuration & 16 != 0) ~@as(u64, 0) else @as(u64, 0), future.observed(boundary));
         for (starts) |start| {
             for ([_]u64{ 1, 2, 4 }) |bit| {
                 var visits: usize = 0;
-                const expected = try fieldObservedAfter(gpa, &store, &solution, local, bit, start, &reads, &joins, &receipts, &visits);
+                const expected = try fieldObservedAfter(gpa, &store, &solution, local, bit, start, &reads, &joins, &receipts, null, &visits);
                 try std.testing.expectEqual(expected, future.observed(start) & bit != 0);
             }
         }
@@ -1164,9 +1172,9 @@ test "future field observations share CFG discovery across many consuming reads"
         }
         var old_visits: usize = 0;
         for (0..count) |_| {
-            try std.testing.expect(!try fieldObservedAfter(gpa, &store, &solution, local, 1, start, &reads, &joins, &.{}, &old_visits));
+            try std.testing.expect(!try fieldObservedAfter(gpa, &store, &solution, local, 1, start, &reads, &joins, &.{}, null, &old_visits));
         }
-        try future.compute(gpa, &store, &solution, local, &reads, &joins, &.{});
+        try future.compute(gpa, &store, &solution, local, &reads, &joins, &.{}, null);
         try std.testing.expectEqual(@as(usize, 256) * count, old_visits);
         try std.testing.expectEqual(@as(usize, 256), future.nodes.items.len);
         try std.testing.expectEqual(@as(usize, 255), future.edges.items.len);
@@ -2359,7 +2367,8 @@ pub fn compute(
         if (candidate_mask == 0) continue;
 
         var poison: u64 = 0;
-        try future_fields.compute(gpa, store, solution, local, &read_kinds, &join_bodies, field_restitutions.items);
+        const redefinition: ?LIR.CFStmtId = if (candidate.join_starts.items.len == 0) candidate.def_stmt else null;
+        try future_fields.compute(gpa, store, solution, local, &read_kinds, &join_bodies, field_restitutions.items, redefinition);
         for (candidate.reads.items) |read| {
             const kind = read_kinds.getPtr(read.stmt) orelse continue;
             if (!kind.consuming) continue;
@@ -2394,6 +2403,12 @@ pub fn compute(
                     poison = ~@as(u64, 0);
                     break :flow;
                 }
+                // Reaching the container's single value-producing definition
+                // again, through a loop back edge, starts the next
+                // iteration's fresh value with every field intact; the
+                // previous value is dead past its redefinition exactly as it
+                // is past an explicit join-cell write.
+                if (cursor == candidate.def_stmt and candidate.join_starts.items.len == 0) state = .{ .may = 0, .must = 0 };
                 if (read_kinds.getPtr(cursor)) |kind| {
                     kind.visited = true;
                     if (kind.consuming) {
