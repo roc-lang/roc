@@ -770,6 +770,12 @@ closed initializer reads the slot after evaluation; it does not restore a
 pending ConstStore entry or run the value computation again. Requests for an
 explicit stored subnode continue to consume that exact stored node.
 
+Runtime reconstruction of completed values is not a target static initializer
+operation. Closed static initializers preserve literal aggregate data rather
+than introducing allocation calls or repeat loops; their explicit procedure
+role selects this construction-only lowering contract. Their compile-time root
+reads always name the completed slot directly, never a runtime accessor.
+
 Evaluation and static storage are separate checked outputs. Unreachable
 top-level values are still evaluated when eligible so their `crash`, `dbg`, and
 `expect` behavior is reported, but successfully evaluated unreachable data does

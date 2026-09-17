@@ -4431,7 +4431,10 @@ const Lowerer = struct {
         next: LIR.CFStmtId,
     ) Common.LowerError!LIR.CFStmtId {
         const layout_idx = self.result.store.getLocal(target).layout_idx;
-        if (self.completed_scalar_values) |values| {
+        const proc_id = self.current_proc orelse Common.invariant("compile-time value lowering ran without a current procedure");
+        const is_static_initializer = self.result.store.getProcSpec(proc_id).is_static_initializer;
+        const runtime_values = if (is_static_initializer) null else self.completed_scalar_values;
+        if (runtime_values) |values| {
             if (values.constructionFor(value.root.module, value.root.root, layout_idx)) |construction| {
                 if (try self.lowerConstructionInto(target, construction, next)) |built| return built;
             }
@@ -4464,7 +4467,7 @@ const Lowerer = struct {
         // an accessor: a root that completes as a construction then rebuilds
         // it in the accessor's body, while every call site stays as it is.
         // A program lowered after evaluation reads its slots directly.
-        if (self.completed_scalar_values == null) {
+        if (!is_static_initializer and self.completed_scalar_values == null) {
             const accessor = try self.comptimeRootAccessor(id, layout_idx);
             return try self.result.store.addCFStmt(.{ .assign_call = .{
                 .target = target,
@@ -4526,6 +4529,12 @@ const Lowerer = struct {
         next: LIR.CFStmtId,
     ) Common.LowerError!LIR.CFStmtId {
         const layout_idx = self.result.store.getLocal(target).layout_idx;
+        const proc_id = self.current_proc orelse Common.invariant("static data candidate lowering ran without a current procedure");
+        if (self.result.store.getProcSpec(proc_id).is_static_initializer) {
+            // Closed target initializers serialize the stored value, not a runtime
+            // allocation recipe; in particular, uniform lists remain literal data.
+            return try self.lowerExprIntoAtType(target, candidate.runtime_expr, ty, next);
+        }
         if (try self.lowerConstructionExprInto(target, candidate.runtime_expr, ty, next)) |built| return built;
         if (candidate.storage.needsTargetStorage(self.result.layouts.targetUsize()) and self.layoutNeedsStaticData(layout_idx)) {
             return try self.result.store.addCFStmt(.{ .assign_literal = .{
