@@ -44,6 +44,23 @@ pub fn freezeRoot(
     value: Value,
     callables: CallableResolver,
 ) Error![]static_data.StaticDataExport {
+    return freezeRootIntoSlot(allocator, program, slot, root, value, callables, root.ret_layout);
+}
+
+/// Freeze a root whose slot may hold a pointer to the value rather than the
+/// value itself. A constant folded into a recursive tag's payload lands in such
+/// a slot: the payload position is a pointer, while the root's own procedure
+/// returns the union unboxed. The value is the same either way, so the slot
+/// gets a relocation to the frozen payload.
+pub fn freezeRootIntoSlot(
+    allocator: Allocator,
+    program: *const Program.Result,
+    slot: lir.LIR.StaticDataId,
+    root: Program.ConstRootPlan,
+    value: Value,
+    callables: CallableResolver,
+    slot_layout: layout.Idx,
+) Error![]static_data.StaticDataExport {
     if (program.layouts.targetUsize().size() != word_size) {
         invariant("native root export requires host-width LIR");
     }
@@ -57,10 +74,27 @@ pub fn freezeRoot(
     };
     const root_symbol = try builder.addNode(
         try Program.staticDataSymbolName(builder.allocator, slot),
-        builder.size(root.ret_layout),
-        builder.alignment(root.ret_layout),
+        builder.size(slot_layout),
+        builder.alignment(slot_layout),
     );
-    try builder.enqueue(root.plan, root.ret_layout, value, .{ .symbol = root_symbol }, .value);
+    if (slot_layout == root.ret_layout) {
+        try builder.enqueue(root.plan, root.ret_layout, value, .{ .symbol = root_symbol }, .value);
+    } else {
+        const slot_physical = program.layouts.getLayout(slot_layout);
+        if (slot_physical.tag != .box or slot_physical.getIdx() != root.ret_layout) {
+            invariant("evaluated root slot was neither the root's layout nor a box around it");
+        }
+        const payload_layout = root.ret_layout;
+        const result = try builder.reserveAllocation(.{
+            .address = @intFromPtr(value.ptr),
+            .plan = root.plan,
+            .layout_idx = payload_layout,
+            .count = 1,
+            .kind = .value,
+        }, builder.size(payload_layout), builder.alignment(payload_layout), program.layouts.layoutContainsRefcounted(program.layouts.getLayout(payload_layout)), null);
+        try builder.relocate(.{ .symbol = root_symbol }, result.dest);
+        if (result.fresh) try builder.enqueue(root.plan, payload_layout, value, result.dest, .value);
+    }
     var next: usize = 0;
     while (next < builder.jobs.items.len) : (next += 1) {
         const job = builder.jobs.items[next];
