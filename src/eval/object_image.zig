@@ -39,5 +39,5 @@ test "the host resolver covers the runtime, boxy, and libcall symbols" {
 }
 
 test {
-    _ = relocatable_loader;
+    std.testing.refAllDecls(relocatable_loader);
 }
