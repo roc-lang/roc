@@ -2824,9 +2824,6 @@ const Lowerer = struct {
         };
     }
 
-    /// Builds a completed compile-time value from its construction, or
-    /// returns null when a part exceeds what a literal can carry, in which
-    /// case the root keeps its slot.
     /// Emits a construction with this lowerer's locals and join points.
     const ConstructionEmitContext = struct {
         lowerer: *Lowerer,
@@ -2858,8 +2855,8 @@ const Lowerer = struct {
     }
 
     fn constructionOfExpr(self: *Lowerer, arena: std.mem.Allocator, expr_id: Lifted.ExprId, ty: Type.TypeId, layout_idx: layout.Idx) Common.LowerError!?postcheck_values.Construction {
-        const physical = self.result.layouts.getLayout(layout_idx);
-        if (physical.tag == .zst) return .zst;
+        const value_layout = self.result.layouts.getLayout(layout_idx);
+        if (value_layout.tag == .zst) return .zst;
         const expr = self.solved.lifted.getExpr(expr_id);
         return switch (expr.data) {
             .unit => .zst,
@@ -2869,7 +2866,7 @@ const Lowerer = struct {
             .dec_lit => |value| .{ .literal = .{ .dec_literal = value.num } },
             .str_lit => |literal| if (self.stringLiteral(literal).len == 0) .empty_str else null,
             .low_level => |call| blk: {
-                if (call.op != .list_with_capacity or physical.tag != .list) break :blk null;
+                if (call.op != .list_with_capacity or value_layout.tag != .list) break :blk null;
                 const args = self.solved.lifted.exprSpan(call.args);
                 if (args.len != 1) break :blk null;
                 const count = self.solved.lifted.getExpr(GuardedList.at(args, 0));
@@ -2878,10 +2875,10 @@ const Lowerer = struct {
                 if (capacity < 0 or capacity > std.math.maxInt(u64)) break :blk null;
                 break :blk .{ .empty_list = @intCast(capacity) };
             },
-            .list => |items| try self.constructionOfListExpr(arena, items, ty, physical),
-            .bytes_lit => |literal| try self.constructionOfPackedList(arena, literal, ty, physical),
-            .record => |fields| try self.constructionOfRecordExpr(arena, fields, ty, physical),
-            .tuple => |items| try self.constructionOfStructExprs(arena, self.solved.lifted.exprSpan(items), self.tupleItemTypes(ty), physical),
+            .list => |items| try self.constructionOfListExpr(arena, items, ty, value_layout),
+            .bytes_lit => |literal| try self.constructionOfPackedList(arena, literal, ty, value_layout),
+            .record => |fields| try self.constructionOfRecordExpr(arena, fields, ty, value_layout),
+            .tuple => |items| try self.constructionOfStructExprs(arena, self.solved.lifted.exprSpan(items), self.tupleItemTypes(ty), value_layout),
             .tag => |tag| try self.constructionOfTagExpr(arena, tag.name, tag.payloads, ty, layout_idx),
             .nominal => |backing| try self.constructionOfExpr(arena, backing, try self.nominalBackingType(ty, backing), layout_idx),
             .static_data_candidate => |candidate| try self.constructionOfExpr(arena, candidate.runtime_expr, ty, layout_idx),
@@ -2926,11 +2923,11 @@ const Lowerer = struct {
         };
     }
 
-    fn constructionOfListExpr(self: *Lowerer, arena: std.mem.Allocator, span: Lifted.Span(Lifted.ExprId), ty: Type.TypeId, physical: layout.Layout) Common.LowerError!?postcheck_values.Construction {
-        if (physical.tag != .list) return null;
+    fn constructionOfListExpr(self: *Lowerer, arena: std.mem.Allocator, span: Lifted.Span(Lifted.ExprId), ty: Type.TypeId, value_layout: layout.Layout) Common.LowerError!?postcheck_values.Construction {
+        if (value_layout.tag != .list) return null;
         const items = self.solved.lifted.exprSpan(span);
         if (items.len == 0) return .{ .empty_list = 0 };
-        const element_layout = physical.getIdx();
+        const element_layout = value_layout.getIdx();
         const element_ty = self.listElemType(ty);
         const first = try self.constructionOfExpr(arena, GuardedList.at(items, 0), element_ty, element_layout) orelse return null;
         for (1..items.len) |index| {
@@ -2942,19 +2939,19 @@ const Lowerer = struct {
         return .{ .uniform_list = .{ .element = stored, .element_layout = element_layout, .count = items.len } };
     }
 
-    /// A packed list is uniform when every element's canonical bytes match
+    /// A packed list is uniform when every element's packed bytes match
     /// the first's; that element then decodes through the frozen-image
     /// decoder, over its memory bytes.
-    fn constructionOfPackedList(self: *Lowerer, arena: std.mem.Allocator, literal: Mono.PackedListLiteral, ty: Type.TypeId, physical: layout.Layout) Common.LowerError!?postcheck_values.Construction {
-        if (physical.tag != .list) return null;
+    fn constructionOfPackedList(self: *Lowerer, arena: std.mem.Allocator, literal: Mono.PackedListLiteral, ty: Type.TypeId, value_layout: layout.Layout) Common.LowerError!?postcheck_values.Construction {
+        if (value_layout.tag != .list) return null;
         if (literal.len == 0) return .{ .empty_list = 0 };
-        const element_layout = physical.getIdx();
-        const canonical = self.stringLiteral(literal.literal).text();
+        const element_layout = value_layout.getIdx();
+        const encoded = self.stringLiteral(literal.literal).text();
         const width: usize = if (literal.element) |scalar| scalar.byteWidth() else literal.product_width;
-        if (width == 0 or canonical.len < @as(usize, literal.len) * width) return null;
-        const first = canonical[0..width];
+        if (width == 0 or encoded.len < @as(usize, literal.len) * width) return null;
+        const first = encoded[0..width];
         for (1..literal.len) |index| {
-            if (!std.mem.eql(u8, first, canonical[index * width ..][0..width])) return null;
+            if (!std.mem.eql(u8, first, encoded[index * width ..][0..width])) return null;
         }
         const size_align = self.result.layouts.layoutSizeAlign(self.result.layouts.getLayout(element_layout));
         const memory = try arena.alloc(u8, size_align.size);
@@ -2978,8 +2975,8 @@ const Lowerer = struct {
         return .{ .uniform_list = .{ .element = stored, .element_layout = element_layout, .count = literal.len } };
     }
 
-    fn constructionOfRecordExpr(self: *Lowerer, arena: std.mem.Allocator, span: Lifted.Span(Lifted.FieldExpr), ty: Type.TypeId, physical: layout.Layout) Common.LowerError!?postcheck_values.Construction {
-        if (physical.tag != .struct_) return null;
+    fn constructionOfRecordExpr(self: *Lowerer, arena: std.mem.Allocator, span: Lifted.Span(Lifted.FieldExpr), ty: Type.TypeId, value_layout: layout.Layout) Common.LowerError!?postcheck_values.Construction {
+        if (value_layout.tag != .struct_) return null;
         const shape = try self.recordShape(ty);
         const expr_fields = self.solved.lifted.fieldExprSpan(span);
         if (expr_fields.len != shape.fields.len) return null;
@@ -2991,13 +2988,13 @@ const Lowerer = struct {
             const position = shape.indices.get(field.name) orelse return null;
             ordered[position] = field.value;
         }
-        return try self.constructionOfStructExprs(arena, ordered, field_tys, physical);
+        return try self.constructionOfStructExprs(arena, ordered, field_tys, value_layout);
     }
 
-    fn constructionOfStructExprs(self: *Lowerer, arena: std.mem.Allocator, items: anytype, item_tys: anytype, physical: layout.Layout) Common.LowerError!?postcheck_values.Construction {
-        if (physical.tag != .struct_) return null;
+    fn constructionOfStructExprs(self: *Lowerer, arena: std.mem.Allocator, items: anytype, item_tys: anytype, value_layout: layout.Layout) Common.LowerError!?postcheck_values.Construction {
+        if (value_layout.tag != .struct_) return null;
         if (items.len != item_tys.len) return null;
-        const struct_idx = physical.getStruct().idx;
+        const struct_idx = value_layout.getStruct().idx;
         const fields = try arena.alloc(postcheck_values.Construction, items.len);
         for (0..items.len) |original_index| {
             const field_layout = self.result.layouts.getStructFieldLayoutByOriginalIndex(struct_idx, @intCast(original_index));
@@ -3015,8 +3012,8 @@ const Lowerer = struct {
             if (payloads.len != 0) return null;
             return .{ .literal = .{ .i128_literal = .{ .value = variant_index, .layout_idx = .bool } } };
         }
-        const physical = self.result.layouts.getLayout(layout_idx);
-        if (physical.tag != .tag_union) return null;
+        const value_layout = self.result.layouts.getLayout(layout_idx);
+        if (value_layout.tag != .tag_union) return null;
         const payload_tys = self.tagPayloadTypesByIndex(ty, variant_index);
         if (payloads.len != payload_tys.len) return null;
         var payload: ?*const postcheck_values.Construction = null;

@@ -317,15 +317,15 @@ pub const Decoder = struct {
     /// `bytes` is the value's image, starting at `offset` within
     /// `data_export`; both are null for plain memory bytes.
     pub fn decode(self: *Decoder, data_export: ?*const Program.StaticDataExport, bytes: []const u8, offset: usize, plan: Program.ConstPlanId, layout_idx: layout.Idx) Allocator.Error!?Construction {
-        const physical = self.program.layouts.getLayout(layout_idx);
-        if (physical.tag == .zst) return .zst;
+        const value_layout = self.program.layouts.getLayout(layout_idx);
+        if (value_layout.tag == .zst) return .zst;
         return switch (self.program.const_plans.items[@intFromEnum(plan)]) {
             .zst => .zst,
             .scalar => if (decodeScalar(layout_idx, bytes)) |literal| .{ .literal = literal } else null,
             .str => if (self.stringIsEmpty(bytes)) .empty_str else null,
-            .list => |element_plan| try self.decodeList(data_export, bytes, offset, element_plan, physical),
+            .list => |element_plan| try self.decodeList(data_export, bytes, offset, element_plan, value_layout),
             .named => |named| try self.decode(data_export, bytes, offset, named.backing, layout_idx),
-            .tuple, .record => |child_plans| try self.decodeRecord(data_export, bytes, offset, child_plans, physical),
+            .tuple, .record => |child_plans| try self.decodeRecord(data_export, bytes, offset, child_plans, value_layout),
             .tag_union => |variants| try self.decodeTag(data_export, bytes, offset, variants, layout_idx),
             .pending, .layout_only, .box, .fn_value, .erased_fn => null,
         };
@@ -362,8 +362,8 @@ pub const Decoder = struct {
         return len == 0;
     }
 
-    fn decodeList(self: *Decoder, data_export: ?*const Program.StaticDataExport, bytes: []const u8, offset: usize, element_plan: Program.ConstPlanId, physical: layout.Layout) Allocator.Error!?Construction {
-        if (physical.tag != .list) return null;
+    fn decodeList(self: *Decoder, data_export: ?*const Program.StaticDataExport, bytes: []const u8, offset: usize, element_plan: Program.ConstPlanId, value_layout: layout.Layout) Allocator.Error!?Construction {
+        if (value_layout.tag != .list) return null;
         const len = self.readWord(bytes, 1) orelse return null;
         if (len == 0) {
             var capacity: u64 = 0;
@@ -378,7 +378,7 @@ pub const Decoder = struct {
         const frozen = self.frozen orelse return null;
         const relocation = relocationAt(exported, offset) orelse return null;
         const backing = exportNamed(frozen, relocation.target_symbol_name) orelse return null;
-        const element_layout = physical.getIdx();
+        const element_layout = value_layout.getIdx();
         const element_size = self.program.layouts.layoutSize(self.program.layouts.getLayout(element_layout));
         if (element_size == 0) return null;
         // The elements follow the backing's allocation header; the
@@ -399,9 +399,9 @@ pub const Decoder = struct {
         return .{ .uniform_list = .{ .element = stored, .element_layout = element_layout, .count = len } };
     }
 
-    fn decodeRecord(self: *Decoder, data_export: ?*const Program.StaticDataExport, bytes: []const u8, offset: usize, child_plans: []const Program.ConstPlanId, physical: layout.Layout) Allocator.Error!?Construction {
-        if (physical.tag != .struct_) return null;
-        const struct_idx = physical.getStruct().idx;
+    fn decodeRecord(self: *Decoder, data_export: ?*const Program.StaticDataExport, bytes: []const u8, offset: usize, child_plans: []const Program.ConstPlanId, value_layout: layout.Layout) Allocator.Error!?Construction {
+        if (value_layout.tag != .struct_) return null;
+        const struct_idx = value_layout.getStruct().idx;
         const fields = try self.arena.alloc(Construction, child_plans.len);
         for (child_plans, 0..) |child_plan, original_index| {
             const field_layout = self.program.layouts.getStructFieldLayoutByOriginalIndex(struct_idx, @intCast(original_index));
@@ -419,9 +419,9 @@ pub const Decoder = struct {
             if (bytes.len < 1) return null;
             return .{ .literal = .{ .i128_literal = .{ .value = bytes[0], .layout_idx = .bool } } };
         }
-        const physical = self.program.layouts.getLayout(layout_idx);
-        if (physical.tag != .tag_union) return null;
-        const data = self.program.layouts.getTagUnionData(physical.getTagUnion().idx);
+        const value_layout = self.program.layouts.getLayout(layout_idx);
+        if (value_layout.tag != .tag_union) return null;
+        const data = self.program.layouts.getTagUnionData(value_layout.getTagUnion().idx);
         if (bytes.len < data.size.get(self.program.layouts.targetUsize())) return null;
         const discriminant = data.readDiscriminant(bytes.ptr, self.program.layouts.targetUsize());
         const layout_variants = self.program.layouts.getTagUnionVariants(data);
@@ -610,6 +610,7 @@ test "completed empty and uniform list roots decode to their constructions" {
     try program.const_plans.append(allocator, .{ .list = scalar_plan });
     // Slots: 0 = failure record of 1, 2 and 3; 1 = empty list evaluated with
     // capacity 16; 2 = three copies of 7; 3 = the list [1, 2, 3].
+    const failure_slot: LIR.StaticDataId = @enumFromInt(program.static_data_values.items.len);
     for (0..4) |index| {
         try program.static_data_values.append(allocator, .{
             .initializer = null,
@@ -621,7 +622,7 @@ test "completed empty and uniform list roots decode to their constructions" {
                 .role = if (index == 0)
                     .{ .failure_message = .{ .failed_field = 0, .message_field = 1, .failed_offset = failed_offset, .message_offset = message_offset } }
                 else
-                    .{ .value = .{ .failure_slot = @enumFromInt(0), .plan = plan } },
+                    .{ .value = .{ .failure_slot = failure_slot, .plan = plan } },
             },
         });
     }
@@ -688,6 +689,7 @@ test "an empty string root and a record of an empty list and a scalar decode to 
     // record { empty list with capacity 4, 9 }; 3 = the small string "ab".
     const layouts_by_slot = [_]layout.Idx{ failure_layout, .str, record_layout, .str };
     const plans_by_slot = [_]Program.ConstPlanId{ scalar_plan, str_plan, record_plan, str_plan };
+    const failure_slot: LIR.StaticDataId = @enumFromInt(program.static_data_values.items.len);
     for (layouts_by_slot, plans_by_slot, 0..) |slot_layout, slot_plan, index| {
         try program.static_data_values.append(allocator, .{
             .initializer = null,
@@ -699,7 +701,7 @@ test "an empty string root and a record of an empty list and a scalar decode to 
                 .role = if (index == 0)
                     .{ .failure_message = .{ .failed_field = 0, .message_field = 1, .failed_offset = failed_offset, .message_offset = message_offset } }
                 else
-                    .{ .value = .{ .failure_slot = @enumFromInt(0), .plan = slot_plan } },
+                    .{ .value = .{ .failure_slot = failure_slot, .plan = slot_plan } },
             },
         });
     }
