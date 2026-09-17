@@ -6822,7 +6822,7 @@ fn writeCallTreeApp(
     }
 
     try out.writeAll(
-        \\main! : List(Str) => Try({}, [Exit(I32), ..])
+        \\main! : List(Str) => Try({}, [Exit(I32)])
         \\main! = |args| {
         \\    Stdout.line!(f0(args.len().to_str()))
         \\    Ok({})

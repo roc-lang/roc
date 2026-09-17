@@ -39280,19 +39280,19 @@ test "direct dispatch classification treats only a body-local defaultable row ta
     const scopes = [_]DispatchRefScope{
         .{
             .parent = null,
-            .scheme_var = @enumFromInt(0),
+            .scheme_var = testIndexId(Var, 0),
             .scheme_root = quantifying_root,
             .checked_expr = testIndexId(CheckedExprId, 0),
         },
         .{
-            .parent = @enumFromInt(0),
-            .scheme_var = @enumFromInt(1),
+            .parent = testIndexId(DispatchScopeId, 0),
+            .scheme_var = testIndexId(Var, 1),
             .scheme_root = local_callable,
             .checked_expr = testIndexId(CheckedExprId, 1),
         },
     };
-    const outer_scope_site = [_]EnclosingDispatchSite{.{ .template_root = local_callable, .scope = .{ .generalized = @enumFromInt(0) } }};
-    const inner_scope_site = [_]EnclosingDispatchSite{.{ .template_root = local_callable, .scope = .{ .generalized = @enumFromInt(1) } }};
+    const outer_scope_site = [_]EnclosingDispatchSite{.{ .template_root = local_callable, .scope = .{ .generalized = testIndexId(DispatchScopeId, 0) } }};
+    const inner_scope_site = [_]EnclosingDispatchSite{.{ .template_root = local_callable, .scope = .{ .generalized = testIndexId(DispatchScopeId, 1) } }};
     try std.testing.expect(!try callableIdentityIsSpecializationIndependent(
         allocator,
         &store,

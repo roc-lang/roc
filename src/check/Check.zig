@@ -15716,10 +15716,7 @@ fn reportImplicitOpenExtExtension(self: *Self, entry: ImplicitOpenExt, env: *Env
     // var held when it was minted. The ext cannot collide with the tags:
     // `implicitOpenExtCarriesTags` proved it resolved to a row carrying at
     // least one.
-    const listed_tags = entry.listed_tags orelse types_mod.Tag.SafeMultiList.Range{
-        .start = @enumFromInt(0),
-        .count = 0,
-    };
+    const listed_tags = entry.listed_tags orelse types_mod.Tag.SafeMultiList.Range.empty();
     const actual_var = try self.freshFromContent(.{ .structure = .{ .tag_union = .{
         .tags = listed_tags,
         .ext = entry.var_,
