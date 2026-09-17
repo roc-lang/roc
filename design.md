@@ -262,6 +262,13 @@ explicit target, and a missing internal definition is a compiler invariant failu
 The named object-input API resolves its declared names once at its boundary;
 compiler-generated machine code uses the indexed API directly.
 
+A standalone readonly-data object gives its definitions global linker binding:
+the separate LLVM code object can directly reference any allocation named by a
+frozen address relocation when embedding a constant root. Private allocations
+retain hidden visibility and do not become host exports. A combined code/data
+object keeps local binding for private allocations because those references
+remain inside that object.
+
 Definitions retain their assigned symbol IDs through final metadata assembly.
 Object writers borrow immutable section bytes until emission, compute the final
 layout before allocating the output, and apply implicit addends only to that
@@ -13411,6 +13418,13 @@ be an outer nominal or zero-discriminant tag wrapper only when the emitted
 certification derives that exact allocation identity from those explicit
 producer operations and rejects a call that would pass one allocation to the
 machine ABI while consuming another in ARC.
+
+The erased ABI's capture pointer addresses the interior of the callable passed
+as the reuse ownership input. LLVM must not mark either parameter `noalias`:
+capture reads and writes or releases through the owner can access the same
+allocation. The return destination can also alias reused storage. Backend
+alias attributes preserve these explicit ABI relationships and the ordering of
+the LIR memory operations; they do not change ownership policy.
 
 Destination-aware aggregate construction is required for the full benefit of
 box reuse. A record update or tag construction whose result is demanded in a

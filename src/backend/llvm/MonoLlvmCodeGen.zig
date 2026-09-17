@@ -1710,13 +1710,11 @@ pub const MonoLlvmCodeGen = struct {
                 try attrs_wip.addFnAttr(.inlinehint, builder);
             }
         }
-        // Every parameter except the return slot is a distinct object no
-        // callee can reach another way: RocOps is host-provided and never
-        // stored in a Roc value, the argument pack is a fresh caller-local
-        // area holding by-value copies, and a capture record's bytes are
-        // never also passed as an argument. The return slot stays
-        // unannotated: a return-slot variant can aim it at a reused box
-        // interior that an argument value also reaches.
+        // RocOps and the argument pack are distinct objects. The return slot
+        // can point into a reused allocation. In the erased ABI, capture also
+        // points inside the callable passed as reuse, so neither pointer may
+        // promise noalias: capture reads must precede an explicit release or
+        // overwrite through reuse, exactly as ordered in LIR.
         const ret_param_index: usize = if (proc.abi == .erased_callable and self.host_call_mode == .vtable)
             2
         else if (proc.abi == .erased_callable)
@@ -1727,6 +1725,8 @@ pub const MonoLlvmCodeGen = struct {
             2;
         for (0..params.len) |param_index| {
             if (param_index == ret_param_index) continue;
+            if (proc.abi == .erased_callable and
+                (param_index == ret_param_index + 2 or param_index == ret_param_index + 3)) continue;
             try attrs_wip.addParamAttr(param_index, .@"noalias", builder);
         }
         // The argument pack is only ever copied out of, and its address never
