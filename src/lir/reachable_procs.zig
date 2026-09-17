@@ -732,7 +732,10 @@ const Pass = struct {
         }
         for (data.exports, 0..) |item, index| {
             data.allocator.free(item.symbol_name);
-            if (!self.reachable_exports[index]) data.allocator.free(item.bytes);
+            if (!self.reachable_exports[index]) {
+                data.allocator.free(item.bytes);
+                data.allocator.free(item.empty_list_capacities);
+            }
             for (item.relocations) |relocation| {
                 if (relocation.owns_target_symbol_name) data.allocator.free(relocation.target_symbol_name);
             }
@@ -1321,6 +1324,7 @@ test "frozen runtime data prunes witnesses and remaps callable and data identiti
             .bytes = try allocator.alloc(u8, 0),
             .alignment = 1,
             .is_exported = false,
+            .empty_list_capacities = try allocator.dupe(LirProgram.EmptyListCapacity, &.{.{ .offset = 0, .capacity = 16 + index }}),
         };
     }
     var frozen = LirProgram.FrozenStaticData{ .allocator = allocator, .exports = exports };
@@ -1365,6 +1369,8 @@ test "frozen runtime data prunes witnesses and remaps callable and data identiti
     try std.testing.expectEqual(@as(u32, 0), @intFromEnum(frozen.exports[1].relocations[0].procedure.?));
     try std.testing.expectEqualStrings("callable", frozen.exports[1].relocations[0].target_symbol_name);
     try std.testing.expect(frozen.exports[1].relocations[0].owns_target_symbol_name);
+    try std.testing.expectEqual(@as(u64, 17), frozen.exports[0].empty_list_capacities[0].capacity);
+    try std.testing.expectEqual(@as(u64, 18), frozen.exports[1].empty_list_capacities[0].capacity);
 }
 
 test "CTFE code demand retains union identities and omits runtime-only procedure" {
