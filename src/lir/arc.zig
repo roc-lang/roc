@@ -62,8 +62,11 @@ pub const InsertOptions = struct {
     metrics_out: ?*ParallelMetrics = null,
 };
 
-/// Callback counts exclude inline execution; waves and reservations describe
-/// the common deterministic schedule in either execution mode.
+/// Exact work and worker callbacks for signature-dependent uniqueness solving.
+pub const UniquenessMetrics = arc_solve.UniquenessMetrics;
+
+/// Emission callback counts exclude inline execution; waves and reservations
+/// describe the common schedule. All analysis/emission counters reset together.
 pub const ParallelMetrics = struct {
     source_tasks_submitted: u64 = 0,
     source_tasks_committed: u64 = 0,
@@ -73,11 +76,13 @@ pub const ParallelMetrics = struct {
     emission_tasks_committed: u64 = 0,
     waves: u64 = 0,
     variants_reserved: u64 = 0,
+    uniqueness: UniquenessMetrics = .{},
 
     pub fn add(self: *ParallelMetrics, other: ParallelMetrics) void {
         inline for (std.meta.fields(ParallelMetrics)) |field| {
-            @field(self, field.name) +|= @field(other, field.name);
+            if (field.type == u64) @field(self, field.name) +|= @field(other, field.name);
         }
+        self.uniqueness.add(other.uniqueness);
     }
 };
 
@@ -449,7 +454,11 @@ pub fn insert(store: *LirStore, layouts: *const layout_mod.Store, options: Inser
     inserter.local_contains_refcounted = local_contains_refcounted;
     inserter.boxy_rc_descs = boxy_rc_descs;
 
-    var solution = try arc_solve.solve(
+    const uniqueness_options: arc_solve.UniquenessOptions = .{
+        .executor = options.post_check_executor,
+        .metrics = if (options.metrics_out) |metrics| &metrics.uniqueness else null,
+    };
+    var solution = try arc_solve.solveWithOptions(
         store.allocator,
         store,
         layouts,
@@ -457,6 +466,7 @@ pub fn insert(store: *LirStore, layouts: *const layout_mod.Store, options: Inser
         boxy_rc_descs,
         options.roots,
         options.consume_dead_boxes,
+        uniqueness_options,
     );
     defer solution.deinit();
     inserter.solution = &solution;
@@ -482,7 +492,7 @@ pub fn insert(store: *LirStore, layouts: *const layout_mod.Store, options: Inser
         any_take = true;
     }
     if (any_take) {
-        try arc_solve.settleUniqueness(store.allocator, store, layouts, borrow_anchor_refcounted, &solution, .{ .set = &take_stmts }, options.consume_dead_boxes);
+        try arc_solve.settleUniquenessWithOptions(store.allocator, store, layouts, borrow_anchor_refcounted, &solution, .{ .set = &take_stmts }, options.consume_dead_boxes, uniqueness_options);
     }
 
     const base_proc_count = store.procSpecCount();

@@ -60,7 +60,9 @@ pub const LaneState = struct {
 pub const Worker = struct {
     id: usize,
     /// Allocator for task-owned output. The caller owns cleanup of allocations
-    /// retained in `Completion.value`.
+    /// retained in `Completion.value`. Its backing state must outlive retained
+    /// owners and permit their use on another lane after a completion barrier.
+    /// Owners remain exclusively accessed; the allocator itself is thread-safe.
     allocator: std.mem.Allocator,
     /// Temporary storage which becomes invalid when the task callback returns.
     scratch: std.mem.Allocator,

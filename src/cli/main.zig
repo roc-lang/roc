@@ -16595,7 +16595,7 @@ fn solvedLirParallelCounters(parallel: lir.CheckedPipeline.SolvedLirParallelMetr
     };
 }
 
-fn arcParallelCounters(parallel: lir.CheckedPipeline.ArcParallelMetrics) [8]progress.Counter {
+fn arcParallelCounters(parallel: lir.CheckedPipeline.ArcParallelMetrics) [17]progress.Counter {
     return .{
         .{ .name = "Source tasks submitted", .count = parallel.source_tasks_submitted },
         .{ .name = "Source tasks committed", .count = parallel.source_tasks_committed },
@@ -16605,6 +16605,15 @@ fn arcParallelCounters(parallel: lir.CheckedPipeline.ArcParallelMetrics) [8]prog
         .{ .name = "Emission tasks committed", .count = parallel.emission_tasks_committed },
         .{ .name = "Specialization waves", .count = parallel.waves },
         .{ .name = "Variants reserved", .count = parallel.variants_reserved },
+        .{ .name = "Uniqueness settlements", .count = parallel.uniqueness.settlements },
+        .{ .name = "Uniqueness components", .count = parallel.uniqueness.components },
+        .{ .name = "Uniqueness component runs", .count = parallel.uniqueness.component_runs },
+        .{ .name = "Uniqueness tasks submitted", .count = parallel.uniqueness.task_submitted },
+        .{ .name = "Uniqueness tasks committed", .count = parallel.uniqueness.task_committed },
+        .{ .name = "Uniqueness signature waves", .count = parallel.uniqueness.signature_waves },
+        .{ .name = "Uniqueness signature changes", .count = parallel.uniqueness.signature_changes },
+        .{ .name = "Uniqueness statement rows", .count = parallel.uniqueness.statement_visits },
+        .{ .name = "Uniqueness local rows", .count = parallel.uniqueness.local_visits },
     };
 }
 
@@ -16618,6 +16627,17 @@ test "post-check diagnostics preserve labeled ARC counts" {
         .emission_tasks_committed = 6,
         .waves = 7,
         .variants_reserved = 8,
+        .uniqueness = .{
+            .settlements = 9,
+            .components = 10,
+            .component_runs = 11,
+            .task_submitted = 12,
+            .task_committed = 13,
+            .signature_waves = 14,
+            .signature_changes = 15,
+            .statement_visits = 16,
+            .local_visits = 17,
+        },
     });
     const names = [_][]const u8{
         "Source tasks submitted",
@@ -16628,8 +16648,18 @@ test "post-check diagnostics preserve labeled ARC counts" {
         "Emission tasks committed",
         "Specialization waves",
         "Variants reserved",
+        "Uniqueness settlements",
+        "Uniqueness components",
+        "Uniqueness component runs",
+        "Uniqueness tasks submitted",
+        "Uniqueness tasks committed",
+        "Uniqueness signature waves",
+        "Uniqueness signature changes",
+        "Uniqueness statement rows",
+        "Uniqueness local rows",
     };
-    try std.testing.expectEqual(std.meta.fields(lir.CheckedPipeline.ArcParallelMetrics).len, rows.len);
+    try std.testing.expectEqual(std.meta.fields(lir.CheckedPipeline.ArcParallelMetrics).len - 1 +
+        std.meta.fields(@FieldType(lir.CheckedPipeline.ArcParallelMetrics, "uniqueness")).len, rows.len);
     for (rows, names, 0..) |row, name, index| {
         try std.testing.expectEqualStrings(name, row.name);
         try std.testing.expectEqual(@as(u64, index + 1), row.count);

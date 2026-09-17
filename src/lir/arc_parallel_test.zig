@@ -5,6 +5,8 @@ const core = @import("lir_core");
 const layout = @import("layout");
 const executor = @import("base").post_check_task_executor;
 const arc = @import("arc.zig");
+const arc_solve = @import("arc_solve.zig");
+const arc_sig = @import("arc_sig.zig");
 const debug_print = @import("debug_print.zig");
 const testing = std.testing;
 
@@ -71,8 +73,8 @@ const ReverseExecutor = struct {
     fail_session: ?usize = null,
     fail_submit: bool = false,
     fail_task: usize = 2,
+    rotate_wave_lane: bool = false,
     output_failure: testing.FailingAllocator = testing.FailingAllocator.init(testing.allocator, .{ .fail_index = 0 }),
-    scratch_failure: testing.FailingAllocator = testing.FailingAllocator.init(testing.allocator, .{ .fail_index = 0 }),
     lane_states: [4]executor.LaneState = @splat(executor.LaneState.init(testing.allocator)),
 
     fn deinit(self: *ReverseExecutor) void {
@@ -103,13 +105,17 @@ const ReverseExecutor = struct {
         const task = self.pending[self.pending_len];
         // Execute only when draining, including after a submit failure. This
         // catches releasing callback contexts before accepted work finishes.
-        const worker_id = task.id % self.lanes;
+        // Rotating whole waves forces retained component owners across lanes.
+        const worker_id = if (self.rotate_wave_lane) (self.sessions - 1) % self.lanes else task.id % self.lanes;
+        var scratch_bytes: [64 * 1024]u8 = undefined;
+        var scratch = std.heap.FixedBufferAllocator.init(&scratch_bytes);
         const result = task.run(task.context, .{
             .id = worker_id,
             .allocator = if (!self.fail_submit and self.selected(task.id)) self.output_failure.allocator() else testing.allocator,
-            .scratch = self.scratch_failure.allocator(),
+            .scratch = scratch.allocator(),
             .lane_state = &self.lane_states[worker_id],
         });
+        @memset(&scratch_bytes, 0xa5);
         self.received += 1;
         return .{ .id = task.id, .worker_id = worker_id, .value = result };
     }
@@ -135,11 +141,18 @@ const ReverseExecutor = struct {
         try testing.expectEqual(self.sessions, self.ended);
         try testing.expectEqual(self.accepted, self.received);
         try testing.expectEqual(@as(usize, 0), self.pending_len);
-        // ARC deliberately retains owner arenas, not lane scratch. Supplying
-        // fail-at-zero scratch pins that lifetime distinction in every phase.
-        try testing.expect(!self.scratch_failure.has_induced_failure);
     }
 };
+
+fn expectUniquenessMetrics(expected: arc_solve.UniquenessMetrics, actual: arc_solve.UniquenessMetrics) error{ TestExpectedEqual, TestUnexpectedResult }!void {
+    try testing.expectEqual(@as(u64, 0), expected.task_submitted);
+    try testing.expectEqual(@as(u64, 0), expected.task_committed);
+    try testing.expect(actual.task_submitted > 0);
+    try testing.expectEqual(actual.task_submitted, actual.task_committed);
+    inline for (.{ "settlements", "components", "component_runs", "signature_waves", "signature_changes", "statement_visits", "local_visits" }) |counter| {
+        try testing.expectEqual(@field(expected, counter), @field(actual, counter));
+    }
+}
 
 fn expectSame(expected: *Fixture, actual: *Fixture) (debug_print.Error || error{TestExpectedEqual})!void {
     var left = std.Io.Writer.Allocating.init(testing.allocator);
@@ -183,7 +196,12 @@ test "ARC executor reverse completions match inline RC bodies and identities acr
         var metrics: arc.ParallelMetrics = .{};
         try candidate.run(&interface, &metrics);
         try runner.expectDrained();
-        try testing.expectEqual(@as(usize, 120), runner.received);
+        try testing.expectEqual(@as(u64, 120) + metrics.uniqueness.task_committed, runner.received);
+        try expectUniquenessMetrics(inline_metrics.uniqueness, metrics.uniqueness);
+        // These pinned, independent bodies return scalars: no signature can
+        // change, so uniqueness is one initial wave before source preparation.
+        try testing.expectEqual(@as(u64, 1), metrics.uniqueness.signature_waves);
+        try testing.expectEqual(@as(u64, 40), metrics.uniqueness.component_runs);
         try testing.expectEqual(@as(u64, 40), metrics.source_tasks_submitted);
         try testing.expectEqual(@as(u64, 40), metrics.source_tasks_committed);
         try testing.expectEqual(@as(u64, 40), metrics.planning_tasks_submitted);
@@ -199,7 +217,9 @@ test "ARC executor reverse completions match inline RC bodies and identities acr
 }
 
 test "ARC executor submit failures drain accepted callbacks in each phase" {
-    for (0..3) |phase| {
+    // Uniqueness, source, planning, emission. The pinned scalar-return fixture
+    // has exactly one uniqueness wave, asserted by the successful test above.
+    for (0..4) |phase| {
         var source = try Fixture.init(8);
         defer source.deinit();
         var candidate = try Fixture.init(8);
@@ -217,8 +237,8 @@ test "ARC executor submit failures drain accepted callbacks in each phase" {
     }
 }
 
-test "ARC executor sweeps retained allocations through source planning and emission bodies" {
-    for (0..3) |phase| {
+test "ARC executor sweeps retained allocations through uniqueness source planning and emission bodies" {
+    for (0..4) |phase| {
         var fail_index: usize = 0;
         while (true) : (fail_index += 1) {
             var source = try Fixture.init(8);
@@ -253,9 +273,9 @@ test "ARC executor later wave failure drains without rolling back earlier commit
     var candidate = try Fixture.init(40);
     defer candidate.deinit();
     const before = candidate.store.cfStmtCount();
-    // Two source batches, then planning/emission for the first 32 bodies,
+    // One uniqueness wave, two source batches, then planning/emission for the first 32 bodies,
     // followed by planning/emission for the final eight.
-    var runner: ReverseExecutor = .{ .fail_session = 5, .fail_submit = true };
+    var runner: ReverseExecutor = .{ .fail_session = 6, .fail_submit = true };
     defer runner.deinit();
     const interface = runner.interface();
     var metrics: arc.ParallelMetrics = .{};
@@ -264,6 +284,195 @@ test "ARC executor later wave failure drains without rolling back earlier commit
     try testing.expectEqual(@as(u64, 32), metrics.emission_tasks_committed);
     try testing.expect(candidate.store.cfStmtCount() > before);
     // The caller discards this incomplete result; no stronger rollback is owed.
+}
+
+/// A unique-return chain and fork, an unrelated fresh birth, shared parameter
+/// definitions, and an independent conditional return retained across waves.
+const UniquenessFixture = struct {
+    fixture: Fixture,
+
+    fn init() std.mem.Allocator.Error!UniquenessFixture {
+        var f = try Fixture.init(0);
+        errdefer f.deinit();
+        const s = &f.store;
+        const list = try f.layouts.insertList(.str);
+        for (0..6) |index| {
+            const param = try s.addLocal(.{ .layout_idx = list });
+            const result = if (index <= 3)
+                try s.addLocal(.{ .layout_idx = list })
+            else
+                param;
+            const ret = try s.addCFStmt(.{ .ret = .{ .value = result } });
+            const body = if (index == 0)
+                try s.addCFStmt(.{ .assign_low_level = .{
+                    .target = result,
+                    .op = .list_reverse,
+                    .rc_effect = core.LIR.LowLevel.RcEffect.runtimeUniqueness(1),
+                    .args = try s.addLocalSpan(&.{param}),
+                    .next = ret,
+                } })
+            else if (index <= 3)
+                try s.addCFStmt(.{ .assign_call = .{
+                    .target = result,
+                    .proc = @enumFromInt(@as(u32, if (index == 2) 1 else 0)),
+                    .args = try s.addLocalSpan(&.{param}),
+                    .next = ret,
+                } })
+            else if (index == 4)
+                try s.addCFStmt(.{ .assign_list = .{
+                    .target = result,
+                    .elems = .empty(),
+                    .next = ret,
+                } })
+            else
+                ret;
+            _ = try s.addProcSpec(.{
+                .identity = core.LIR.ProcIdentity.forTest(@intCast(index)),
+                .name = s.freshSyntheticSymbol(),
+                .args = if (index == 4) .empty() else try s.addLocalSpan(&.{param}),
+                .frame_locals = try s.addLocalSpan(if (param == result) &.{param} else &.{ param, result }),
+                .body = body,
+                .ret_layout = list,
+            });
+        }
+        const shared = s.getProcSpec(@enumFromInt(5));
+        for (0..2) |index| {
+            var spec = shared;
+            spec.identity = core.LIR.ProcIdentity.forTest(@intCast(s.procSpecCount()));
+            spec.name = s.freshSyntheticSymbol();
+            if (index == 1) spec.body = try s.addCFStmt(s.getCFStmt(shared.body.?));
+            _ = try s.addProcSpec(spec);
+        }
+        const independent = try s.addLocal(.{ .layout_idx = list });
+        _ = try s.addProcSpec(.{
+            .identity = core.LIR.ProcIdentity.forTest(8),
+            .name = s.freshSyntheticSymbol(),
+            .args = try s.addLocalSpan(&.{independent}),
+            .frame_locals = try s.addLocalSpan(&.{independent}),
+            .body = try s.addCFStmt(.{ .ret = .{ .value = independent } }),
+            .ret_layout = list,
+        });
+        return .{ .fixture = f };
+    }
+
+    fn solve(self: *UniquenessFixture, runner: ?*const executor.Executor, metrics: *arc_solve.UniquenessMetrics) arc_solve.SolveError!arc_solve.Solution {
+        const rc = try testing.allocator.alloc(bool, self.fixture.store.localCount());
+        defer testing.allocator.free(rc);
+        @memset(rc, true);
+        return arc_solve.solveWithOptions(testing.allocator, &self.fixture.store, &self.fixture.layouts, rc, &.{}, &.{}, true, .{
+            .executor = runner,
+            .metrics = metrics,
+        });
+    }
+};
+
+fn expectSameUniqueness(expected: *const arc_solve.Solution, actual: *const arc_solve.Solution) error{TestExpectedEqual}!void {
+    try testing.expectEqualDeep(expected.sigs, actual.sigs);
+    try testing.expectEqualDeep(expected.ret_conditions, actual.ret_conditions);
+    try testing.expectEqualDeep(expected.unique_conds, actual.unique_conds);
+    for (0..expected.unique.bit_length) |index| {
+        try testing.expectEqual(expected.unique.isSet(index), actual.unique.isSet(index));
+        try testing.expectEqual(expected.unique_born.isSet(index), actual.unique_born.isSet(index));
+        try testing.expectEqual(expected.unique_destroyed.isSet(index), actual.unique_destroyed.isSet(index));
+    }
+}
+
+test "ARC public solve component barriers preserve conditional rows and shared global local verdicts" {
+    var fixture = try UniquenessFixture.init();
+    defer fixture.fixture.deinit();
+    var inline_metrics: arc_solve.UniquenessMetrics = .{};
+    var direct = try fixture.solve(null, &inline_metrics);
+    defer direct.deinit();
+    // Seven components, not nine: shared body and shared RC-local ownership
+    // merge procedures 5..7 even though the last body is distinct.
+    try testing.expectEqual(@as(u64, 7), inline_metrics.components);
+    try testing.expect(inline_metrics.signature_waves >= 3);
+    try testing.expect(inline_metrics.component_runs < inline_metrics.components * inline_metrics.signature_waves);
+    for (direct.sigs, 0..) |sig, index| {
+        if (index <= 4) {
+            try testing.expect(sig.ret_unique);
+        } else if (index == 8) {
+            try testing.expect(!sig.ret_unique);
+            try testing.expectEqualDeep(&[_]arc_sig.RetCondition{.{ .field = arc_sig.RetCondition.whole_value, .params = 1 }}, direct.sigTable().retConditionsOf(sig));
+        } else {
+            // Multiple definitions of one shared parameter are not independent
+            // births. Keep the base solver's combined proof.
+            try testing.expect(!sig.ret_unique);
+            try testing.expectEqual(@as(usize, 0), direct.sigTable().retConditionsOf(sig).len);
+        }
+    }
+    const shared_param = core.LirStore.GuardedList.at(fixture.fixture.store.getLocalSpan(fixture.fixture.store.getProcSpec(@enumFromInt(5)).args), 0);
+    try testing.expect(!direct.unique_born.isSet(@intFromEnum(shared_param)));
+    for ([_]usize{ 2, 4 }) |lanes| {
+        var runner: ReverseExecutor = .{ .lanes = lanes, .rotate_wave_lane = true };
+        defer runner.deinit();
+        const interface = runner.interface();
+        var metrics: arc_solve.UniquenessMetrics = .{};
+        var actual = try fixture.solve(&interface, &metrics);
+        defer actual.deinit();
+        try runner.expectDrained();
+        try expectSameUniqueness(&direct, &actual);
+        try expectUniquenessMetrics(inline_metrics, metrics);
+        try testing.expect(metrics.component_runs > metrics.components);
+        const settled = metrics;
+        const rc = try testing.allocator.alloc(bool, fixture.fixture.store.localCount());
+        defer testing.allocator.free(rc);
+        @memset(rc, true);
+        // A post-take settlement reanalyzes every component, even when no
+        // signature changed. Metrics accumulate; only Arc.insert resets them.
+        try arc_solve.settleUniquenessWithOptions(testing.allocator, &fixture.fixture.store, &fixture.fixture.layouts, rc, &actual, .stamped, true, .{
+            .executor = &interface,
+            .metrics = &metrics,
+        });
+        try runner.expectDrained();
+        try expectSameUniqueness(&direct, &actual);
+        try testing.expectEqual(settled.settlements + 1, metrics.settlements);
+        try testing.expectEqual(settled.components + 7, metrics.components);
+        try testing.expectEqual(settled.component_runs + 7, metrics.component_runs);
+        try testing.expectEqual(settled.signature_waves + 1, metrics.signature_waves);
+        try testing.expectEqual(settled.signature_changes, metrics.signature_changes);
+        try testing.expectEqual(settled.task_submitted + 7, metrics.task_submitted);
+        try testing.expectEqual(metrics.task_submitted, metrics.task_committed);
+    }
+}
+
+test "ARC public solve sweeps changing uniqueness callbacks and drains later wave failures" {
+    var fixture = try UniquenessFixture.init();
+    defer fixture.fixture.deinit();
+    var reference_metrics: arc_solve.UniquenessMetrics = .{};
+    var reference = try fixture.solve(null, &reference_metrics);
+    defer reference.deinit();
+    // Initial analysis (task 0) changes a unique-return signature; the later wave
+    // fails its first submission only after the initial barrier committed.
+    for ([_]bool{ false, true }) |fail_submit| {
+        var fail_index: usize = 0;
+        while (true) : (fail_index += 1) {
+            var runner: ReverseExecutor = .{
+                .fail_session = if (fail_submit) 1 else 0,
+                .fail_task = 0,
+                .fail_submit = fail_submit,
+                .output_failure = testing.FailingAllocator.init(testing.allocator, .{ .fail_index = fail_index }),
+            };
+            defer runner.deinit();
+            const interface = runner.interface();
+            var metrics: arc_solve.UniquenessMetrics = .{};
+            const result = fixture.solve(&interface, &metrics);
+            try runner.expectDrained();
+            if (fail_submit or runner.output_failure.has_induced_failure) {
+                try testing.expectError(error.OutOfMemory, result);
+                if (fail_submit) {
+                    try testing.expect(metrics.task_committed > 0);
+                    break;
+                }
+            } else {
+                var actual = try result;
+                defer actual.deinit();
+                try testing.expect(fail_index > 1);
+                try expectSameUniqueness(&reference, &actual);
+                break;
+            }
+        }
+    }
 }
 
 const OutcomeFixture = struct {
@@ -450,6 +659,7 @@ test "ARC executor outcome restitution variant closure matches inline under reve
         try testing.expectEqual(metrics.emission_tasks_committed, metrics.emission_tasks_submitted);
         try testing.expectEqual(inline_metrics.waves, metrics.waves);
         try testing.expectEqual(inline_metrics.variants_reserved, metrics.variants_reserved);
+        try expectUniquenessMetrics(inline_metrics.uniqueness, metrics.uniqueness);
         if (expected_metrics) |expected| try testing.expectEqualDeep(expected, metrics);
         expected_metrics = metrics;
     }

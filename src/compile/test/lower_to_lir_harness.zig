@@ -484,6 +484,10 @@ pub fn expectArcParallelismDeterministicLir(
     }
     try std.testing.expect(serial_metrics.waves > 0);
     if (require_variants) try std.testing.expect(serial_metrics.variants_reserved > 0);
+    try std.testing.expectEqual(@as(u64, 0), serial_metrics.uniqueness.task_submitted);
+    try std.testing.expectEqual(@as(u64, 0), serial_metrics.uniqueness.task_committed);
+    try std.testing.expect(serial_metrics.uniqueness.settlements > 0);
+    try std.testing.expect(serial_metrics.uniqueness.component_runs > 0);
 
     // A fresh serial lowering must overwrite every caller-provided metric,
     // including the common algorithm's nonzero wave and variant counters.
@@ -496,6 +500,17 @@ pub fn expectArcParallelismDeterministicLir(
         .emission_tasks_committed = 96,
         .waves = 97,
         .variants_reserved = 98,
+        .uniqueness = .{
+            .settlements = 101,
+            .components = 102,
+            .component_runs = 103,
+            .task_submitted = 104,
+            .task_committed = 105,
+            .signature_waves = 106,
+            .signature_changes = 107,
+            .statement_visits = 108,
+            .local_visits = 109,
+        },
     };
     opts.arc_parallel_metrics_out = &metrics;
     switch (fixture) {
@@ -525,6 +540,11 @@ pub fn expectArcParallelismDeterministicLir(
             }
             try std.testing.expectEqual(serial_metrics.waves, metrics.waves);
             try std.testing.expectEqual(serial_metrics.variants_reserved, metrics.variants_reserved);
+            try std.testing.expect(metrics.uniqueness.task_submitted > 0);
+            try std.testing.expectEqual(metrics.uniqueness.task_submitted, metrics.uniqueness.task_committed);
+            inline for (.{ "settlements", "components", "component_runs", "signature_waves", "signature_changes", "statement_visits", "local_visits" }) |counter| {
+                try std.testing.expectEqual(@field(serial_metrics.uniqueness, counter), @field(metrics.uniqueness, counter));
+            }
             if (expected_metrics) |expected| {
                 try std.testing.expectEqualDeep(expected, metrics);
             } else {
@@ -1130,9 +1150,14 @@ fn lowerAppPathToLir(
         for (0..store.getProcSpecs().len) |index| {
             if (opts.dump_proc_identities) {
                 const proc_id: lir.LIR.LirProcSpecId = @enumFromInt(@as(u32, @intCast(index)));
-                try writer.print("symbol={d} debug_name={s}\n", .{
-                    store.getProcSpec(proc_id).name.raw(),
+                const proc = store.getProcSpec(proc_id);
+                try writer.print("identity={x} symbol={d} debug_name={s} borrowed_params={x} ret_borrowed={} ret_lenders={x}\n", .{
+                    &proc.identity.bytes,
+                    proc.name.raw(),
                     store.procDebugName(proc_id) orelse "<synthetic>",
+                    proc.rc_borrowed_params,
+                    proc.rc_ret_borrowed,
+                    proc.rc_ret_lenders,
                 });
             }
             try lir.DebugPrint.writeProc(gpa, store, layouts, @enumFromInt(@as(u32, @intCast(index))), writer);
