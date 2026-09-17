@@ -19521,13 +19521,6 @@ const BodyContext = struct {
         return id;
     }
 
-    fn fillExprReservation(self: *BodyContext, reservation: DraftExprId, value: DraftExprId) void {
-        self.draft.exprs.items[@intFromEnum(reservation)] =
-            self.draft.exprs.items[@intFromEnum(value)];
-        self.draft.expr_impossibility_proofs.items[@intFromEnum(reservation)] =
-            self.draft.expr_impossibility_proofs.items[@intFromEnum(value)];
-    }
-
     /// Add a structural constructor expression (tag, record, or tuple),
     /// typing it at the nominal construction backing and wrapping it in one
     /// explicit `.nominal` node per nominal layer of `ty`. This keeps

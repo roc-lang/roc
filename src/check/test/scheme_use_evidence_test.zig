@@ -7,7 +7,6 @@
 //! resolves those records after checking settles.
 
 const std = @import("std");
-const base = @import("base");
 const can = @import("can");
 const collections = @import("collections");
 const compiled_builtins = @import("compiled_builtins");
@@ -131,7 +130,7 @@ test "concrete recursive dispatch records a shared method instance without copyi
 fn assertBuiltinIterExtremum(
     artifact: *const checked_artifact.CheckedModuleArtifact,
     method_name: []const u8,
-) !void {
+) error{ NoSpaceLeft, TestUnexpectedResult }!void {
     const env = artifact.moduleEnvConst();
     const source = env.getSourceAll();
     var needle_buffer: [64]u8 = undefined;
