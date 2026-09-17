@@ -740,7 +740,17 @@ test "frozen root transcode re-points a boxed slot at its payload across pointer
     @memcpy(value_bytes[0..@sizeOf(builtins.str.RocStr)], std.mem.asBytes(&str));
     data.writeDiscriminant(value_bytes.ptr, 1, source.layouts.targetUsize());
 
-    const source_slot_id = try boxedValueSlot(&source, source_box, source_plan);
+    // transcodeValueSlot checks that the paired slots name the same checked
+    // root, so both are published against one real entry rather than a
+    // placeholder index.
+    const checked = @import("check").CheckedArtifact;
+    var roots = std.ArrayList(checked.CompileTimeRoot).empty;
+    defer roots.deinit(allocator);
+    const root_id: checked.ComptimeRootId = @enumFromInt(roots.items.len);
+    // Transcoding reads only the published root identity, not its source body/type.
+    try roots.append(allocator, .{ .id = root_id, .module_idx = 0, .kind = .constant, .source = undefined, .pattern = null, .expr = undefined, .checked_type = undefined, .request_eligibility = .eligible, .payload = .discarded });
+
+    const source_slot_id = try boxedValueSlot(&source, source_box, source_plan, roots.items[@intFromEnum(root_id)].id);
     const native = try @import("native_root_export.zig").freezeRootIntoSlot(
         allocator,
         &source,
@@ -756,7 +766,7 @@ test "frozen root transcode re-points a boxed slot at its payload across pointer
     try std.testing.expectEqual(@sizeOf(usize), native[0].bytes.len);
     try std.testing.expectEqual(@as(usize, 1), native[0].relocations.len);
 
-    const target_slot_id = try boxedValueSlot(&target, target_box, target_plan);
+    const target_slot_id = try boxedValueSlot(&target, target_box, target_plan, roots.items[@intFromEnum(root_id)].id);
     const converted = try transcodeValueSlot(
         allocator,
         &source,
@@ -779,7 +789,12 @@ test "frozen root transcode re-points a boxed slot at its payload across pointer
     try std.testing.expectEqualStrings(text, converted[@intFromEnum(str_pointer.target.data_symbol)].bytes[@intCast(str_pointer.addend)..]);
 }
 
-fn boxedValueSlot(program: *Program.Result, box_idx: layout.Idx, plan: Program.ConstPlanId) Allocator.Error!lir.LIR.StaticDataId {
+fn boxedValueSlot(
+    program: *Program.Result,
+    box_idx: layout.Idx,
+    plan: Program.ConstPlanId,
+    root: @import("check").CheckedArtifact.ComptimeRootId,
+) Allocator.Error!lir.LIR.StaticDataId {
     const failure_slot: lir.LIR.StaticDataId = @enumFromInt(program.static_data_values.items.len);
     try program.static_data_values.append(program.store.allocator, .{ .initializer = null, .layout_idx = .zst });
     const id: lir.LIR.StaticDataId = @enumFromInt(program.static_data_values.items.len);
@@ -788,7 +803,7 @@ fn boxedValueSlot(program: *Program.Result, box_idx: layout.Idx, plan: Program.C
         .layout_idx = box_idx,
         .compile_time_root = .{
             .module = .{},
-            .root = @enumFromInt(0),
+            .root = root,
             .const_locator = null,
             .role = .{ .value = .{ .failure_slot = failure_slot, .plan = plan } },
         },
