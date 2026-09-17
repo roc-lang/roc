@@ -138,7 +138,7 @@ fn parse(gpa: std.mem.Allocator, bytes: []const u8, os: Os) RewriteError!Parsed 
 }
 
 fn baseName(name: []const u8) RewriteError![]const u8 {
-    const base = if (std.mem.lastIndexOfAny(u8, name, "/\\")) |i| name[i + 1 ..] else name;
+    const base = if (std.mem.findLastAny(u8, name, "/\\")) |i| name[i + 1 ..] else name;
     if (base.len == 0) return error.MalformedArchive;
     return base;
 }
@@ -379,7 +379,7 @@ fn expectStripped(os: Os, objects: []const TestObject, symbols: []const TestSymb
             var entries = std.mem.splitScalar(u8, member.data, if (os == .windows) 0 else '\n');
             while (entries.next()) |entry| {
                 if (entry.len == 0) continue;
-                try std.testing.expect(std.mem.indexOfAny(u8, std.mem.trimEnd(u8, entry, "/"), "/\\") == null);
+                try std.testing.expect(std.mem.findAny(u8, std.mem.trimEnd(u8, entry, "/"), "/\\") == null);
             }
         }
     }
@@ -433,8 +433,8 @@ test "GNU archive: names that already fit inline keep the archive free of a long
     defer gpa.free(input);
     const output = try stripDirectories(gpa, input, .linux);
     defer gpa.free(output);
-    try std.testing.expect(std.mem.indexOf(u8, output, "//") == null);
-    try std.testing.expect(std.mem.indexOf(u8, output, "short.o/") != null);
+    try std.testing.expect(std.mem.find(u8, output, "//") == null);
+    try std.testing.expect(std.mem.find(u8, output, "short.o/") != null);
     try expectStripped(.linux, &.{
         .{ .name = "a/b/short.o", .data = "1" },
         .{ .name = "x.o", .data = "22" },
