@@ -189,12 +189,45 @@ fn rocCrashed(bytes: [*]const u8, len: usize) callconv(.c) void {
 
 fn rocExpectObserved(site: u32, passed: u8) callconv(.c) void {
     const o = requireOps();
-    const observer = current_expect_observer orelse hostInvariant("a test expect ran under a host with no expect observer");
+    const observer = current_expect_observer orelse {
+        o.crash("a test expect ran under a host with no expect observer");
+        unreachable;
+    };
     observer(o, site, passed);
 }
 
 fn rocExpectErrRegion(start: u32, end: u32) callconv(.c) void {
     last_expect_err_region = .{ .start = start, .end = end };
+}
+
+test "in-process host scopes restore ops and expect observers" {
+    const TestEnv = @import("utils.zig").TestEnv;
+    const Observer = struct {
+        fn observe(o: *RocOps, site: u32, passed: u8) callconv(.c) void {
+            const count: *u32 = @ptrCast(@alignCast(o.env));
+            count.* += site * passed;
+        }
+    };
+    var outer = TestEnv.init(std.testing.allocator);
+    defer outer.deinit();
+    var inner = TestEnv.init(std.testing.allocator);
+    defer inner.deinit();
+    var count: u32 = 0;
+    outer.getOps().env = &count;
+
+    const before = enter(outer.getOps(), &Observer.observe);
+    defer leave(before);
+    try std.testing.expectEqual(outer.getOps(), requireOps());
+    rocExpectObserved(3, 1);
+    {
+        const saved = enter(inner.getOps(), null);
+        defer leave(saved);
+        try std.testing.expectEqual(inner.getOps(), requireOps());
+        try std.testing.expect(current_expect_observer == null);
+    }
+    try std.testing.expectEqual(outer.getOps(), requireOps());
+    rocExpectObserved(4, 1);
+    try std.testing.expectEqual(@as(u32, 7), count);
 }
 
 /// The runtime symbols an in-process host defines, in `runtime_set` order,
