@@ -168,9 +168,9 @@ pub fn emit(ctx: anytype, store: *core.LirStore, layouts: *const layout.Store, t
         },
         .record => |fields| {
             const layout_idx = store.getLocal(target).layout_idx;
-            const physical = layouts.getLayout(layout_idx);
-            if (physical.tag != .struct_) return null;
-            const struct_idx = physical.getStruct().idx;
+            const value_layout = layouts.getLayout(layout_idx);
+            if (value_layout.tag != .struct_) return null;
+            const struct_idx = value_layout.getStruct().idx;
             const field_locals = try store.allocator.alloc(LIR.LocalId, fields.len);
             defer store.allocator.free(field_locals);
             for (field_locals, 0..) |*local, original_index| {
@@ -190,9 +190,9 @@ pub fn emit(ctx: anytype, store: *core.LirStore, layouts: *const layout.Store, t
         },
         .tag => |tag| {
             const layout_idx = store.getLocal(target).layout_idx;
-            const physical = layouts.getLayout(layout_idx);
-            if (physical.tag != .tag_union) return null;
-            const info = layouts.getTagUnionInfo(physical);
+            const value_layout = layouts.getLayout(layout_idx);
+            if (value_layout.tag != .tag_union) return null;
+            const info = layouts.getTagUnionInfo(value_layout);
             if (tag.variant_index >= info.variants.len) return null;
             var payload_local: ?LIR.LocalId = null;
             if (tag.payload != null) {
