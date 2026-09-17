@@ -253,17 +253,11 @@ const min_inline_site_loop_depth: u32 = 2;
 
 /// Lowers statement-only LIR procedures to LLVM bitcode.
 pub const MonoLlvmCodeGen = struct {
-    pub const EntrypointAbi = enum {
-        test_runner,
-        plugin,
-    };
-
     pub const Entrypoint = struct {
         symbol_name: []const u8,
         proc: LirProcSpecId,
         arg_layouts: []const layout.Idx,
         ret_layout: layout.Idx,
-        abi: EntrypointAbi = .test_runner,
     };
 
     allocator: Allocator,
@@ -894,7 +888,6 @@ pub const MonoLlvmCodeGen = struct {
                 entrypoint.proc,
                 entrypoint.arg_layouts,
                 entrypoint.ret_layout,
-                entrypoint.abi,
             );
         }
 
@@ -1594,8 +1587,6 @@ pub const MonoLlvmCodeGen = struct {
 
     fn declareRuntimeErrorHelper(self: *MonoLlvmCodeGen) Error!void {
         const builder = self.builder orelse return error.CompilationFailed;
-        const ptr_ty = try self.ptrType();
-        _ = ptr_ty;
         const fn_ty = builder.fnType(.void, &.{}, .normal) catch return error.OutOfMemory;
         const func = builder.addFunction(fn_ty, builder.strtabString("roc_runtime_error") catch return error.OutOfMemory, .default) catch return error.OutOfMemory;
         func.setLinkage(.internal, builder);
@@ -2081,12 +2072,10 @@ pub const MonoLlvmCodeGen = struct {
         entry_proc: LirProcSpecId,
         arg_layouts: []const layout.Idx,
         ret_layout: layout.Idx,
-        abi: EntrypointAbi,
     ) Error!void {
         if (self.program_kind == .platform) {
             return self.generateCAbiEntrypointWrapper(symbol_name, entry_proc, arg_layouts, ret_layout, null);
         }
-        _ = abi;
         // An in-process library's entrypoint takes the internal
         // (ret_ptr, args_ptr) convention the compiler calls directly.
         const builder = self.builder orelse return error.CompilationFailed;

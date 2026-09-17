@@ -111,6 +111,8 @@ const host_routines = struct {
     extern fn memmove(dest: ?[*]u8, src: ?[*]const u8, len: usize) callconv(.c) ?[*]u8;
     extern fn memset(dest: ?[*]u8, value: c_int, len: usize) callconv(.c) ?[*]u8;
     extern fn memcmp(a: ?[*]const u8, b: ?[*]const u8, len: usize) callconv(.c) c_int;
+    /// Apple targets lower a zero-filling `memset` to `bzero`.
+    extern fn bzero(dest: ?[*]u8, len: usize) callconv(.c) void;
     /// LLVM's stack probe for frames past a page on Windows x64.
     extern fn ___chkstk_ms() callconv(.c) void;
 
@@ -131,6 +133,9 @@ pub fn resolve(name: []const u8) ?usize {
     }
     inline for (host_routines.entries) |entry| {
         if (std.mem.eql(u8, name, entry[0])) return @intFromPtr(entry[1]);
+    }
+    if (builtin.os.tag.isDarwin()) {
+        if (std.mem.eql(u8, name, "bzero")) return @intFromPtr(&host_routines.bzero);
     }
     if (builtin.os.tag == .windows and builtin.cpu.arch == .x86_64) {
         if (std.mem.eql(u8, name, "___chkstk_ms")) return @intFromPtr(&host_routines.___chkstk_ms);

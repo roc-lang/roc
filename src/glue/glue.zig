@@ -770,7 +770,6 @@ fn buildGluePlugin(
         .proc = glue_proc,
         .arg_layouts = arg_layouts,
         .ret_layout = proc.ret_layout,
-        .abi = .plugin,
     }};
     var bitcode = generate: {
         var codegen = llvm_compile.MonoLlvmCodeGen.init(
