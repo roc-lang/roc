@@ -333,7 +333,6 @@ fn runInterpreter(allocator: std.mem.Allocator, lowered: *const LoweredProgram) 
         &lowered.view.layouts,
         Interpreter.BoxyTables.fromImageView(&lowered.view),
         runtime_env.get_ops(),
-        .preserve,
     );
     defer interp.deinit();
 
@@ -390,7 +389,6 @@ fn runDev(allocator: std.mem.Allocator, lowered: *const LoweredProgram) BackendE
             lowered.view.boxy_erased_arg_desc_offsets,
             lowered.view.boxy_erased_arg_desc_params,
             lowered.view.boxy_worker_procs,
-            .preserve,
             roc_target.host_cpu.level(),
         );
         defer codegen.deinit();

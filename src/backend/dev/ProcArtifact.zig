@@ -106,9 +106,6 @@ pub const Artifact = struct {
     /// Offset within `code` that references to this artifact resolve to.
     entry: u32,
     frame: ?Frame,
-    /// The code assigns a float, so it may produce a NaN the compile-time
-    /// evaluator's own code would have normalized.
-    float_results: bool = false,
     refs: []const Reference,
     relocations: []const NamedRelocation,
     data: []const DataItem,
@@ -485,7 +482,6 @@ pub fn extract(
             .code = try arena_allocator.dupe(u8, code[region.start..region.end]),
             .entry = @intCast(region.entry),
             .frame = frame,
-            .float_results = region.float_results,
             .refs = try region_refs.toOwnedSlice(arena_allocator),
             .relocations = try region_relocations.toOwnedSlice(arena_allocator),
             .data = try region_data.toOwnedSlice(arena_allocator),
@@ -587,7 +583,7 @@ pub fn assemble(
             .message_pool_run => .{ .message_pool_run = 0 },
             .branch_island => .branch_island,
         };
-        starts[index] = try codegen.appendAssembledRegion(artifact.code, kind, artifact.entry, artifact.frame, artifact.float_results);
+        starts[index] = try codegen.appendAssembledRegion(artifact.code, kind, artifact.entry, artifact.frame);
         for (artifact.relocations) |relocation| {
             const symbol = try codegen.internSymbolName(relocation.name);
             const offset: u64 = starts[index] + relocation.offset;
@@ -810,7 +806,7 @@ pub fn splice(
             .message_pool_run => .{ .message_pool_run = 0 },
             .branch_island => .branch_island,
         };
-        const start = try codegen.appendAssembledRegion(artifact.code, kind, artifact.entry, artifact.frame, artifact.float_results);
+        const start = try codegen.appendAssembledRegion(artifact.code, kind, artifact.entry, artifact.frame);
         switch (artifact.kind) {
             .rc_helper => |name| try codegen.registerSplicedHelper(name, start + artifact.entry),
             .proc, .boxy_thunk => |identity| try codegen.registerSplicedProc(identity, start),

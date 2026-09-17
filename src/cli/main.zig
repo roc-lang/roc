@@ -6397,7 +6397,6 @@ fn writeDevRunImageToSharedMemory(
             lowered.lir_result.boxy_erased_arg_desc_offsets.items,
             lowered.lir_result.boxy_erased_arg_desc_params.items,
             lowered.lir_result.boxy_worker_procs.items,
-            .preserve,
             roc_target.host_cpu.level(),
         );
         defer codegen.deinit();
@@ -6684,7 +6683,6 @@ fn evaluateLirImageEntrypoint(
         &view.layouts,
         eval.LirInterpreter.BoxyTables.fromImageView(view),
         ops,
-        .preserve,
     );
     defer interpreter.deinit();
     static_data.install(&interpreter);
@@ -12673,7 +12671,6 @@ fn runInterpreterTestRoots(
         &lowered.lir_result.layouts,
         eval.LirInterpreter.BoxyTables.fromResult(&lowered.lir_result),
         &roc_ops,
-        .preserve,
     );
     defer interpreter.deinit();
 

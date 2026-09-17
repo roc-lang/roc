@@ -1733,7 +1733,7 @@ const InterpreterProgram = struct {
         errdefer self.slots.deinit();
         self.host = CompilerHost.init(allocator);
         errdefer self.host.deinit();
-        self.interpreter = try Interpreter.initWithBoxyTables(allocator, &lowered.lir_result.store, &lowered.lir_result.layouts, Interpreter.BoxyTables.fromResult(&lowered.lir_result), self.host.ops(), .normalize);
+        self.interpreter = try Interpreter.initWithBoxyTables(allocator, &lowered.lir_result.store, &lowered.lir_result.layouts, Interpreter.BoxyTables.fromResult(&lowered.lir_result), self.host.ops());
         errdefer self.interpreter.deinit();
         self.interpreter.dict_seed_mode = .comptime_zero;
         self.interpreter.failure_origins = self.slots.failure_origins;
@@ -1767,7 +1767,7 @@ const InterpreterProgram = struct {
         };
         errdefer child.host.deinit();
         errdefer child.static_callables.deinit(allocator);
-        child.interpreter = try Interpreter.initWithBoxyTables(allocator, &lowered.lir_result.store, &lowered.lir_result.layouts, Interpreter.BoxyTables.fromResult(&lowered.lir_result), child.host.ops(), .normalize);
+        child.interpreter = try Interpreter.initWithBoxyTables(allocator, &lowered.lir_result.store, &lowered.lir_result.layouts, Interpreter.BoxyTables.fromResult(&lowered.lir_result), child.host.ops());
         errdefer child.interpreter.deinit();
         child.interpreter.dict_seed_mode = .comptime_zero;
         child.interpreter.failure_origins = child.slotEnvironment().failure_origins;
@@ -2094,7 +2094,6 @@ const DevProgram = struct {
             lowered.lir_result.boxy_erased_arg_desc_offsets.items,
             lowered.lir_result.boxy_erased_arg_desc_params.items,
             lowered.lir_result.boxy_worker_procs.items,
-            .normalize,
             roc_target.host_cpu.level(),
         );
         errdefer codegen.deinit();
@@ -3627,7 +3626,7 @@ fn testInterpreterSlot(failure_message: ?[]const u8, nested: bool, cycle: bool) 
     owner.slots = .{ .allocator = allocator, .materialized = materialized, .image = image, .addresses = addresses, .failure_origins = failure_origins };
     owner.host = CompilerHost.init(allocator);
     owner.static_callables = .empty;
-    owner.interpreter = try Interpreter.initWithBoxyTables(allocator, &result.store, &result.layouts, Interpreter.BoxyTables.fromResult(result), owner.host.ops(), .normalize);
+    owner.interpreter = try Interpreter.initWithBoxyTables(allocator, &result.store, &result.layouts, Interpreter.BoxyTables.fromResult(result), owner.host.ops());
     defer owner.deinit();
     try owner.refreshCallableMetadata();
     if (nested) {
@@ -3728,7 +3727,7 @@ fn testNativeSlotDemand(lowered: *lir.CheckedPipeline.LoweredProgram, slots: *St
     const allocator = std.testing.allocator;
     var strings = try backend.StaticStringData.build(allocator, &lowered.lir_result.store, backend.dev.LirCodeGenMod.host_lir_codegen_target);
     defer strings.deinit();
-    var codegen = try backend.HostLirCodeGen.initWithBoxyMetadata(allocator, &lowered.lir_result.store, &lowered.lir_result.layouts, strings.view(), &.{}, &.{}, &.{}, .normalize, roc_target.host_cpu.level());
+    var codegen = try backend.HostLirCodeGen.initWithBoxyMetadata(allocator, &lowered.lir_result.store, &lowered.lir_result.layouts, strings.view(), &.{}, &.{}, &.{}, roc_target.host_cpu.level());
     defer codegen.deinit();
     codegen.setNativeStaticData(slots.addresses);
     codegen.setComptimeHooks(.{
@@ -3864,7 +3863,7 @@ test "shared frozen erased callables execute on interpreter dev and LLVM" {
     defer data.deinit();
     var host = CompilerHost.init(allocator);
     defer host.deinit();
-    var interpreter = try Interpreter.initWithBoxyTables(allocator, &program.store, &program.layouts, Interpreter.BoxyTables.fromResult(&program), host.ops(), .normalize);
+    var interpreter = try Interpreter.initWithBoxyTables(allocator, &program.store, &program.layouts, Interpreter.BoxyTables.fromResult(&program), host.ops());
     defer interpreter.deinit();
     interpreter.setStaticData(data.addresses, &.{});
     try std.testing.expectError(error.RuntimeError, interpreter.eval(.{ .proc_id = caller, .ret_layout = .bool }));
@@ -3927,7 +3926,7 @@ test "shared frozen erased callables execute on interpreter dev and LLVM" {
     defer view.deinit();
     var mapped_data = try StaticInterpreterData.init(allocator, view.static_data, view.static_data_value_count);
     defer mapped_data.deinit();
-    var mapped_interpreter = try Interpreter.initWithBoxyTables(allocator, &view.store, &view.layouts, Interpreter.BoxyTables.fromImageView(&view), host.ops(), .normalize);
+    var mapped_interpreter = try Interpreter.initWithBoxyTables(allocator, &view.store, &view.layouts, Interpreter.BoxyTables.fromImageView(&view), host.ops());
     defer mapped_interpreter.deinit();
     mapped_data.install(&mapped_interpreter);
     var mapped_answer: u8 = 0;

@@ -190,7 +190,6 @@ pub const LoadedPacks = struct {
                     .rc_borrowed_params = spec.rc_borrowed_params,
                     .rc_ret_borrowed = spec.rc_ret_borrowed,
                     .rc_ret_lenders = spec.rc_ret_lenders,
-                    .float_free = try closureIsFloatFree(self.allocator, &pack.set, spec.artifact),
                 };
             }
         }
@@ -260,23 +259,6 @@ pub const LoadedPacks = struct {
         return located;
     }
 };
-
-/// Whether no artifact reachable from `root` assigns a float.
-fn closureIsFloatFree(allocator: Allocator, set: *const backend.dev.ProcArtifact.Set, root: u32) Allocator.Error!bool {
-    var seen = std.AutoHashMap(u32, void).init(allocator);
-    defer seen.deinit();
-    var stack = std.ArrayList(u32).empty;
-    defer stack.deinit(allocator);
-    try stack.append(allocator, root);
-    while (stack.pop()) |index| {
-        const gop = try seen.getOrPut(index);
-        if (gop.found_existing) continue;
-        const artifact = set.artifacts[index];
-        if (artifact.float_results) return false;
-        for (artifact.refs) |ref| try stack.append(allocator, ref.target);
-    }
-    return true;
-}
 
 fn nameLessThan(_: void, lhs: []u8, rhs: []u8) bool {
     return std.mem.order(u8, lhs, rhs) == .lt;

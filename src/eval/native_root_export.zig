@@ -195,7 +195,16 @@ const Builder = struct {
             .zst => {},
             .scalar => {
                 if (physical.tag != .scalar or physical.getScalar().tag == .opaque_ptr or physical.getScalar().tag == .str) invariant("scalar export plan did not name pointer-free scalar bytes");
-                @memcpy(self.bytes(job.dest, self.size(job.layout_idx)), job.source.readBytes(self.size(job.layout_idx)));
+                const dest = self.bytes(job.dest, self.size(job.layout_idx));
+                @memcpy(dest, job.source.readBytes(self.size(job.layout_idx)));
+                // Frozen data is canonical: a NaN keeps whatever bits the
+                // evaluation produced until here, where it becomes Roc's one
+                // NaN.
+                if (job.layout_idx == .f32) {
+                    std.mem.writeInt(u32, dest[0..4], builtins.float_bits.normalizeF32NanBits(std.mem.readInt(u32, dest[0..4], .little)), .little);
+                } else if (job.layout_idx == .f64) {
+                    std.mem.writeInt(u64, dest[0..8], builtins.float_bits.normalizeF64NanBits(std.mem.readInt(u64, dest[0..8], .little)), .little);
+                }
             },
             .str => try self.string(job),
             .list => |element| try self.list(job, element),
@@ -698,4 +707,31 @@ test "native root export follows only selected tag payload and clears inactive b
             try std.testing.expectEqualStrings(text, exports[@intFromEnum(pointer.target.data_symbol)].bytes[@intCast(pointer.addend)..]);
         }
     }
+}
+
+test "native root export freezes every NaN as Roc's one NaN" {
+    const allocator = std.testing.allocator;
+    var program = try Program.Result.init(allocator, @import("base").target.TargetUsize.native);
+    defer program.deinit();
+    const scalar_plan: Program.ConstPlanId = @enumFromInt(program.const_plans.items.len);
+    try program.const_plans.append(allocator, .scalar);
+
+    var nan_payload: u64 = 0xfff9_2345_6789_abcd;
+    const nan_slot = try testSlot(&program, .f64);
+    const nan_exports = try freezeRoot(allocator, &program, nan_slot, testRoot(scalar_plan, .f64), .{ .ptr = @ptrCast(&nan_payload) }, .{});
+    defer static_data.deinitStaticData(allocator, nan_exports);
+    try std.testing.expectEqual(@as(usize, 1), nan_exports.len);
+    try std.testing.expectEqual(builtins.float_bits.normalized_f64_nan_bits, std.mem.readInt(u64, nan_exports[0].bytes[nan_exports[0].symbol_offset..][0..8], .little));
+
+    var f32_payload: u32 = 0xffc1_2345;
+    const f32_slot = try testSlot(&program, .f32);
+    const f32_exports = try freezeRoot(allocator, &program, f32_slot, testRoot(scalar_plan, .f32), .{ .ptr = @ptrCast(&f32_payload) }, .{});
+    defer static_data.deinitStaticData(allocator, f32_exports);
+    try std.testing.expectEqual(builtins.float_bits.normalized_f32_nan_bits, std.mem.readInt(u32, f32_exports[0].bytes[f32_exports[0].symbol_offset..][0..4], .little));
+
+    var finite: u64 = @bitCast(@as(f64, -2.5));
+    const finite_slot = try testSlot(&program, .f64);
+    const finite_exports = try freezeRoot(allocator, &program, finite_slot, testRoot(scalar_plan, .f64), .{ .ptr = @ptrCast(&finite) }, .{});
+    defer static_data.deinitStaticData(allocator, finite_exports);
+    try std.testing.expectEqual(finite, std.mem.readInt(u64, finite_exports[0].bytes[finite_exports[0].symbol_offset..][0..8], .little));
 }

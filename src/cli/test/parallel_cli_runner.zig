@@ -5869,17 +5869,16 @@ fn customNativeBuildPackHits(
     // The third reaches module functions whose results are constants, so
     // its cached entries carry the constants they point at. The fourth
     // reaches module functions from compile-time roots, so the evaluator
-    // splices their entries into its own image, and one of them produces
-    // floats, which the evaluator must lower itself; the app is edited
-    // between its builds, since only an app checked again evaluates its
-    // roots again.
+    // splices their entries into its own image; the app is edited between
+    // its builds, since only an app checked again evaluates its roots
+    // again.
     var comptime_app: []const u8 = undefined;
     if (stageComptimeApp(io, allocator, env, timer, &comptime_app)) |failure| return failure;
     const store_apps = [_]struct { roc_file: []const u8, prefix: []const u8, expect: StoreExpectations = .{} }{
         .{ .roc_file = roc_file, .prefix = "store" },
         .{ .roc_file = "test/cli/pack_values/PackValues.roc", .prefix = "values" },
         .{ .roc_file = "test/cli/pack_constants/PackConstants.roc", .prefix = "constants" },
-        .{ .roc_file = comptime_app, .prefix = "comptime", .expect = .{ .edit_between_builds = true, .evaluator_artifacts = true, .withheld_float_results = true } },
+        .{ .roc_file = comptime_app, .prefix = "comptime", .expect = .{ .edit_between_builds = true, .evaluator_artifacts = true } },
     };
     for (store_apps) |app| {
         if (storeBuildsBehaveIdentically(io, allocator, env, timer, timeout_ms, app.roc_file, warm_dir, app.prefix, app.expect)) |failure| return failure;
@@ -5925,9 +5924,6 @@ const StoreExpectations = struct {
     edit_between_builds: bool = false,
     /// The compile-time evaluator spliced at least one entry.
     evaluator_artifacts: bool = false,
-    /// The evaluator declined an entry because it produces floats, which
-    /// the pack trace reports.
-    withheld_float_results: bool = false,
 };
 
 /// Builds `roc_file` twice with the object cache on under the case's cache
@@ -5946,14 +5942,6 @@ fn storeBuildsBehaveIdentically(
 ) ?TestResult {
     const hits_marker = "pack hits: ";
     const evaluator_marker = "evaluator artifacts: ";
-    var traced_env = CaseEnv{
-        .dirs = env.dirs,
-        .env_map = env.env_map.clone(allocator) catch |err|
-            return customInfraFailure(allocator, timer, "failed to clone traced environment: {}", .{err}),
-    };
-    defer traced_env.env_map.deinit();
-    traced_env.env_map.put("ROC_PACK_TRACE", "1") catch |err|
-        return customInfraFailure(allocator, timer, "failed to enable the pack trace: {}", .{err});
     const store_exes = [_][]const u8{ "a", "b" };
     var store_runs: [store_exes.len]std.process.RunResult = undefined;
     for (store_exes, 0..) |name, index| {
@@ -5972,8 +5960,7 @@ fn storeBuildsBehaveIdentically(
             std.Io.Dir.cwd().writeFile(io, .{ .sub_path = roc_file, .data = edited }) catch |err|
                 return customInfraFailure(allocator, timer, "failed to write {s}: {}", .{ roc_file, err });
         }
-        const build_env = if (last and expect.withheld_float_results) &traced_env else env;
-        const built = runRocInEnv(io, allocator, build_env, &.{ "build", "--opt=dev", out_arg }, roc_file, .relative, &.{}, null, build_timeout) catch |err|
+        const built = runRocInEnv(io, allocator, env, &.{ "build", "--opt=dev", out_arg }, roc_file, .relative, &.{}, null, build_timeout) catch |err|
             return customInfraFailure(allocator, timer, "store build spawn error: {}", .{err});
         if (!processSucceeded(built.term) or std.mem.find(u8, built.stdout, "successfully building") == null or std.mem.find(u8, built.stderr, "panic") != null) {
             return failureFromRun(allocator, timer, built, "build with the object cache did not succeed");
@@ -5986,9 +5973,6 @@ fn storeBuildsBehaveIdentically(
                 const evaluator_at = std.mem.find(u8, built.stderr, evaluator_marker) orelse
                     return failureFromRun(allocator, timer, built, "build with the object cache did not report evaluator artifacts");
                 if (countAfterMarker(built.stderr[evaluator_at + evaluator_marker.len ..]) == 0) return failureFromRun(allocator, timer, built, "the compile-time evaluator spliced no object-cache entry");
-            }
-            if (expect.withheld_float_results and std.mem.find(u8, built.stderr, "withheld-float-results") == null) {
-                return failureFromRun(allocator, timer, built, "the compile-time evaluator took an object-cache entry that produces floats");
             }
         }
         const exe_timeout = childCommandTimeoutMs(timer, timeout_ms) orelse

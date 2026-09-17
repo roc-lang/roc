@@ -668,17 +668,17 @@ them.
       LIR for the program shared with the compile-time evaluator, where the
       compile-time roots' closure lowers first so that an entry served inside
       it is known to be the evaluator's; the evaluator splices those entries
-      into its own image (below), under two rules that keep its evaluation
-      the same as lowering the procedure itself. An entry whose closure
-      assigns a float is withheld from the compile-time closure, because the
-      evaluator normalizes every NaN its own code produces and cached code
-      keeps the machine's bits (each pack artifact records whether it assigns
-      a float, and a spec entry is float-free when nothing it reaches does).
-      And a program with an exhaustiveness site that only the evaluation can
-      resolve (a match reachable only at compile time whose branches the
-      evaluator must be seen to take) takes no hits inside the compile-time
-      closure at all, since a spliced entry reports no branches; the checked
-      pipeline decides this per program from the modules' site policies.
+      into its own image (below), under one rule that keeps its evaluation
+      the same as lowering the procedure itself: a program with an
+      exhaustiveness site that only the evaluation can resolve (a match
+      reachable only at compile time whose branches the evaluator must be
+      seen to take) takes no hits inside the compile-time closure at all,
+      since a spliced entry reports no branches; the checked pipeline decides
+      this per program from the modules' site policies. Floats need no rule:
+      compile-time evaluation keeps the machine's NaN bits like any other
+      code, and the writers of frozen data canonicalize every NaN they store
+      (`design.md`), so a cached entry's floats freeze to the same bytes as
+      the evaluator's own.
       Pack roots are the module's exported Roc procedures with closed types;
       hosted, intrinsic, entry, and compile-time-only templates never lower
       as procedures of the exporting module, and a module with no such root
@@ -753,8 +753,9 @@ them.
       recorded call rather than the failing statement, since the entry
       carries no compile-time hooks. Gate: the object-cache CLI case builds
       an app whose compile-time roots reach closed module functions, one of
-      which produces floats, twice through the store and requires the second
-      build to report evaluator artifacts and the withheld float entry.
+      which produces floats, twice through the store, edited in between so
+      the second build evaluates again, and requires that build to report
+      evaluator artifacts.
       ARC treats an object-cache procedure's recorded signature as its ABI
       and never derives a variant of it. A hit applies only to the record
       Monotype completed without a body: a SpecConstr clone or a second

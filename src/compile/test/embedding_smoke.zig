@@ -203,7 +203,6 @@ fn runEmbeddingSequence(
         &view.layouts,
         eval.LirInterpreter.BoxyTables.fromImageView(&view),
         &roc_ops,
-        .preserve,
     );
     defer interp.deinit();
 

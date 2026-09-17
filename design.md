@@ -969,19 +969,15 @@ only at an explicit language conversion between F32 and F64. Integer and Dec
 conversions to F32 must round directly to binary32 rather than converting to
 F64 first, so they cannot double-round.
 
-Floating-point evaluation has an explicit NaN mode. Ordinary runtime execution
-uses `preserve`, which permits the target's native f32 and f64 NaN sign, payload,
-and signaling-bit result. Any interpreter or backend used to execute a static
-initializer must instead use `normalize`. In that mode, every f32 or f64 value
-produced by an LIR assignment is canonicalized before it is bound to its local:
-all f32 NaNs become bits `0x7fc00000`, and all f64 NaNs become bits
-`0x7ff8000000000000`. This producer-side invariant includes results nested into
-later aggregates because aggregate construction consumes already-normalized
-locals. The `ConstStore` writer and target static-data materializer must freeze
-the value they receive and must not inspect, repair, or guess floating-point
-behavior. Consequently, the same checked initializer has byte-identical NaNs
-whether compile-time evaluation runs through the interpreter or native code,
-and regardless of the host used for cross-compilation.
+Floating-point evaluation keeps the target's native f32 and f64 NaN sign,
+payload, and signaling bit wherever it runs, including compile-time evaluation
+through the interpreter, native code, or an object-cache entry. Frozen data
+holds one NaN encoding instead: the `ConstStore` writer and the native
+static-data exporter rewrite every f32 NaN they store to bits `0x7fc00000` and
+every f64 NaN to bits `0x7ff8000000000000`, whatever bits the evaluation
+produced, and every other float value verbatim. Consequently, the same checked initializer has
+byte-identical NaNs whichever evaluator computed it and regardless of the host
+used for cross-compilation, and the evaluation itself pays nothing for it.
 
 Runtime NaNs need not have identical in-memory bits, but Roc code must not be
 able to distinguish their sign or payload. The float `to_bits` operations and

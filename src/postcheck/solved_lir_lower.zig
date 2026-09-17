@@ -572,9 +572,8 @@ const Lowerer = struct {
     comptime_closure_hits: bool,
     /// True while the closure of the compile-time roots is being lowered.
     /// Those procedures run in the compile-time evaluator, which takes
-    /// object-cache entries only under `comptime_closure_hits` and only
-    /// when their results carry no floats; procedures first reached
-    /// afterwards may always be served.
+    /// object-cache entries only under `comptime_closure_hits`; procedures
+    /// first reached afterwards may always be served.
     comptime_phase: bool,
     /// Drain positions, kept across calls so a second drain resumes.
     fn_queue_index: usize,
@@ -2515,13 +2514,8 @@ const Lowerer = struct {
                 if (source_fn.source) |template| {
                     if (template.spec_key) |key| {
                         if (cache.lookup(key.bytes)) |hit| {
-                            // The evaluator normalizes every NaN a procedure
-                            // produces and cached code does not, so an entry
-                            // that produces floats stays out of the
-                            // compile-time closure.
-                            const usable = !self.comptime_phase or hit.float_free;
-                            if (usable and std.mem.eql(u8, &hit.identity, &identity.bytes)) cached = hit;
-                            if (pack_trace_available and packTraceEnabled()) std.debug.print("lookup direct-lir key={x} {s}\n", .{ key.bytes[0..8], if (cached != null) "hit" else if (!usable) "withheld-float-results" else "identity-mismatch" });
+                            if (std.mem.eql(u8, &hit.identity, &identity.bytes)) cached = hit;
+                            if (pack_trace_available and packTraceEnabled()) std.debug.print("lookup direct-lir key={x} {s}\n", .{ key.bytes[0..8], if (cached != null) "hit" else "identity-mismatch" });
                         } else if (pack_trace_available and packTraceEnabled()) std.debug.print("lookup direct-lir key={x} miss\n", .{key.bytes[0..8]});
                     }
                 }
