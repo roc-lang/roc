@@ -7,6 +7,159 @@ const executor = @import("base").post_check_task_executor;
 const passes = @import("proc_passes.zig");
 const debug_print = @import("debug_print.zig");
 const testing = std.testing;
+const body_clone = @import("body_clone.zig");
+const collections = @import("collections");
+
+/// Every procedure deliberately reuses source join IDs 0..3. The consumer
+/// contains a nested binder and a jump to an enclosing, non-cloned binder.
+fn fusionFixture(phase: passes.Phase) std.mem.Allocator.Error!Fixture {
+    var fixture: Fixture = .{
+        .store = core.LirStore.init(testing.allocator),
+        .layouts = try layout.Store.init(testing.allocator, .u64),
+    };
+    errdefer fixture.deinit();
+    const store = &fixture.store;
+    for (0..8) |index| {
+        const selector = try store.addLocal(.{ .layout_idx = .u64 });
+        const result = try store.addLocal(.{ .layout_idx = .u64 });
+        const outer = try store.addLocal(.{ .layout_idx = if (phase == .tag_fusion) .bool else .u64 });
+        const inner = try store.addLocal(.{ .layout_idx = .u64 });
+        const disc = try store.addLocal(.{ .layout_idx = .u16 });
+        const carried = try store.addLocal(.{ .layout_idx = .u64 });
+        const ret = try store.addCFStmt(.{ .ret = .{ .value = result } });
+        const external_jump = try store.addCFStmt(.{ .jump = .{ .target = @enumFromInt(1) } });
+        const internal_jump = try store.addCFStmt(.{ .jump = .{ .target = @enumFromInt(2) } });
+        const initialize = try store.addCFStmt(.{ .assign_literal = .{
+            .target = result,
+            .value = .{ .i64_literal = .{ .value = 42, .layout_idx = .u64 } },
+            .next = internal_jump,
+        } });
+        const arm = try store.addCFStmt(.{ .join = .{
+            .id = @enumFromInt(2),
+            .params = try store.addLocalSpan(&.{result}),
+            .body = external_jump,
+            .remainder = initialize,
+        } });
+        const jump_outer = try store.addCFStmt(.{ .jump = .{ .target = @enumFromInt(0) } });
+        var consumer = arm;
+        var producer: core.LIR.CFStmtId = undefined;
+        if (phase == .tag_fusion) {
+            const choose = try store.addCFStmt(.{ .switch_stmt = .{
+                .cond = disc,
+                .branches = try store.addCFSwitchBranches(&.{.{ .value = 0, .body = arm }}),
+                .default_branch = arm,
+            } });
+            consumer = try store.addCFStmt(.{ .assign_ref = .{
+                .target = disc,
+                .op = .{ .discriminant = .{ .source = outer } },
+                .next = choose,
+            } });
+            const first = try store.addCFStmt(.{ .assign_tag = .{
+                .target = outer,
+                .variant_index = 0,
+                .discriminant = 0,
+                .payload = null,
+                .next = jump_outer,
+            } });
+            const second = try store.addCFStmt(.{ .assign_tag = .{
+                .target = outer,
+                .variant_index = 1,
+                .discriminant = 1,
+                .payload = null,
+                .next = try store.addCFStmt(.{ .jump = .{ .target = @enumFromInt(0) } }),
+            } });
+            producer = try store.addCFStmt(.{ .switch_stmt = .{
+                .cond = selector,
+                .branches = try store.addCFSwitchBranches(&.{.{ .value = 0, .body = first }}),
+                .default_branch = second,
+            } });
+        } else {
+            const forward = try store.addCFStmt(.{ .set_local = .{
+                .target = outer,
+                .value = inner,
+                .mode = .initialize_join_param,
+                .next = jump_outer,
+            } });
+            const jump_inner = try store.addCFStmt(.{ .jump = .{ .target = @enumFromInt(3) } });
+            const set_inner = try store.addCFStmt(.{ .set_local = .{
+                .target = inner,
+                .value = selector,
+                .mode = .initialize_join_param,
+                .next = jump_inner,
+            } });
+            producer = try store.addCFStmt(.{ .join = .{
+                .id = @enumFromInt(3),
+                .params = try store.addLocalSpan(&.{inner}),
+                .body = forward,
+                .remainder = set_inner,
+            } });
+        }
+        const candidate = try store.addCFStmt(.{ .join = .{
+            .id = @enumFromInt(0),
+            .params = try store.addLocalSpan(&.{outer}),
+            .body = consumer,
+            .remainder = producer,
+        } });
+        const initialize_carried = try store.addCFStmt(.{ .assign_literal = .{
+            .target = carried,
+            .value = .{ .i64_literal = .{ .value = 17, .layout_idx = .u64 } },
+            .next = candidate,
+        } });
+        const root = try store.addCFStmt(.{
+            .join = .{
+                .id = @enumFromInt(1),
+                // Keep this external continuation outside the one-parameter
+                // forwarding rule, so its original identity survives the fixed point.
+                .params = try store.addLocalSpan(&.{ result, carried }),
+                .body = ret,
+                .remainder = initialize_carried,
+            },
+        });
+        _ = try store.addProcSpec(.{
+            .identity = core.LIR.ProcIdentity.forTest(@intCast(index)),
+            .name = store.freshSyntheticSymbol(),
+            .args = try store.addLocalSpan(&.{selector}),
+            .frame_locals = try store.addLocalSpan(&.{ selector, result, outer, inner, disc, carried }),
+            .body = root,
+            .iterator_fusion_scope = true,
+            .ret_layout = .u64,
+        });
+    }
+    return fixture;
+}
+
+const TestError = std.mem.Allocator.Error || std.Io.Writer.Error || error{ TestExpectedEqual, TestUnexpectedResult };
+
+fn expectFusionJoins(fixture: *Fixture, phase: passes.Phase) TestError!void {
+    var fresh = collections.DenseMap(core.LIR.JoinPointId, void).init(testing.allocator);
+    defer fresh.deinit();
+    for (0..fixture.store.procSpecCount()) |index| {
+        const proc = fixture.store.getProcSpec(@enumFromInt(index));
+        var walk = try body_clone.ReachableStmts.init(&fixture.store, proc.body.?);
+        defer walk.deinit();
+        var nested: usize = 0;
+        var external_jumps: usize = 0;
+        while (try walk.next()) |id| {
+            const stmt = fixture.store.getCFStmt(id);
+            if (stmt == .jump and @intFromEnum(stmt.jump.target) == 1) external_jumps += 1;
+            const last_source_join: u32 = if (phase == .tag_fusion) 2 else 3;
+            if (stmt != .join or @intFromEnum(stmt.join.id) <= last_source_join) continue;
+            try testing.expect(!fresh.contains(stmt.join.id));
+            try fresh.put(stmt.join.id, {});
+            const params = fixture.store.getLocalSpan(stmt.join.params);
+            if (params.len == 0) continue;
+            nested += 1;
+            const initialized = fixture.store.getCFStmt(stmt.join.remainder).assign_literal;
+            try testing.expectEqual(core.LirStore.GuardedList.at(params, 0), initialized.target);
+            try testing.expectEqual(stmt.join.id, fixture.store.getCFStmt(initialized.next).jump.target);
+            const bridge = fixture.store.getCFStmt(stmt.join.body).set_local;
+            try testing.expectEqual(core.LirStore.GuardedList.at(params, 0), bridge.value);
+            try testing.expectEqual(@as(u32, 1), @intFromEnum(fixture.store.getCFStmt(bridge.next).jump.target));
+        }
+        try testing.expectEqual(@as(usize, if (phase == .tag_fusion) 2 else 1), nested);
+        try testing.expect(external_jumps > 0);
+    }
+}
 
 const Fixture = struct {
     store: core.LirStore,
@@ -151,6 +304,9 @@ const ReverseExecutor = struct {
     output_failure: testing.FailingAllocator = testing.FailingAllocator.init(testing.allocator, .{ .fail_index = 0 }),
     scratch_failure: testing.FailingAllocator = testing.FailingAllocator.init(testing.allocator, .{ .fail_index = 0 }),
     accepted: usize = 0,
+    frozen_source: ?*const core.LirStore = null,
+    frozen_prefix: core.LirStore.BodyPrefix = undefined,
+    source_unchanged_until_end: bool = true,
 
     fn deinit(self: *ReverseExecutor) void {
         for (&self.lane_states) |*lane| lane.deinit();
@@ -162,6 +318,7 @@ const ReverseExecutor = struct {
         self.ended = false;
         self.received = 0;
         self.accepted = 0;
+        if (self.frozen_source) |source| self.frozen_prefix = source.captureBodyPrefix();
     }
 
     fn submit(context: *anyopaque, task: executor.Task) std.mem.Allocator.Error!void {
@@ -191,6 +348,10 @@ const ReverseExecutor = struct {
     fn end(context: *anyopaque) void {
         const self: *ReverseExecutor = @ptrCast(@alignCast(context));
         std.debug.assert(self.pending_len == 0);
+        if (self.frozen_source) |source| {
+            self.source_unchanged_until_end = self.source_unchanged_until_end and
+                std.meta.eql(self.frozen_prefix, source.captureBodyPrefix());
+        }
         self.ended = true;
     }
 
@@ -205,6 +366,207 @@ const ReverseExecutor = struct {
         };
     }
 };
+
+test "LIR proc pass fusion relocates only generated joins in procedure order" {
+    inline for (.{ passes.Phase.forwarding_join, passes.Phase.tag_fusion }) |phase| {
+        var serial = try fusionFixture(phase);
+        defer serial.deinit();
+        try passes.run(testing.allocator, &serial.store, &serial.layouts, phase, null, null);
+        try expectFusionJoins(&serial, phase);
+        var reference = std.Io.Writer.Allocating.init(testing.allocator);
+        defer reference.deinit();
+        try serial.dump(&reference.writer);
+        var expected: ?passes.ParallelMetrics = null;
+        for ([_]usize{ 2, 4 }) |lanes| {
+            var fixture = try fusionFixture(phase);
+            defer fixture.deinit();
+            var runner: ReverseExecutor = .{ .lanes = lanes, .frozen_source = &fixture.store };
+            defer runner.deinit();
+            var metrics: passes.ParallelMetrics = .{};
+            try passes.run(testing.allocator, &fixture.store, &fixture.layouts, phase, runner.interface(), &metrics);
+            try expectFusionJoins(&fixture, phase);
+            try testing.expect(runner.ended);
+            try testing.expect(runner.source_unchanged_until_end);
+            try testing.expectEqual(@as(usize, 8), runner.received);
+            try testing.expectEqual(@as(u64, 8), metrics.tasks_submitted);
+            try testing.expectEqual(@as(u64, 8), metrics.tasks_committed);
+            for (metrics.changed_by_phase, metrics.committed_by_phase, 0..) |changed, committed, index| {
+                try testing.expectEqual(@as(u64, if (index == @intFromEnum(phase)) 8 else 0), changed);
+                try testing.expectEqual(changed, committed);
+            }
+            if (expected) |counts| try testing.expectEqualDeep(counts, metrics);
+            expected = metrics;
+            var output = std.Io.Writer.Allocating.init(testing.allocator);
+            defer output.deinit();
+            try fixture.dump(&output.writer);
+            try testing.expectEqualStrings(reference.written(), output.written());
+            // DebugPrint does not expose all procedure metadata.
+            for (0..fixture.store.procSpecCount()) |index| {
+                const id: core.LIR.LirProcSpecId = @enumFromInt(index);
+                try testing.expectEqualDeep(serial.store.getProcSpec(id), fixture.store.getProcSpec(id));
+                const serial_frame = serial.store.getLocalSpan(serial.store.getProcSpec(id).frame_locals);
+                const parallel_frame = fixture.store.getLocalSpan(fixture.store.getProcSpec(id).frame_locals);
+                try testing.expectEqual(serial_frame.len, parallel_frame.len);
+                for (0..serial_frame.len) |local_index| {
+                    const serial_local = core.LirStore.GuardedList.at(serial_frame, local_index);
+                    const parallel_local = core.LirStore.GuardedList.at(parallel_frame, local_index);
+                    try testing.expectEqual(serial_local, parallel_local);
+                    try testing.expectEqualDeep(serial.store.getLocal(serial_local), fixture.store.getLocal(parallel_local));
+                }
+            }
+        }
+    }
+}
+
+/// Move the entire tag-fusion graph, including its external join, into an
+/// iterator continuation. That fresh external identity becomes source input
+/// to the following tag phase and must not be relocated a second time.
+fn wrapFusionInForwarder(fixture: *Fixture) std.mem.Allocator.Error!void {
+    const store = &fixture.store;
+    for (0..store.procSpecCount()) |index| {
+        const id: core.LIR.LirProcSpecId = @enumFromInt(index);
+        const proc = store.getProcSpec(id);
+        const outer = try store.addLocal(.{ .layout_idx = .u64 });
+        const inner = try store.addLocal(.{ .layout_idx = .u64 });
+        const jump_outer = try store.addCFStmt(.{ .jump = .{ .target = @enumFromInt(4) } });
+        const forward = try store.addCFStmt(.{ .set_local = .{
+            .target = outer,
+            .value = inner,
+            .mode = .initialize_join_param,
+            .next = jump_outer,
+        } });
+        const jump_inner = try store.addCFStmt(.{ .jump = .{ .target = @enumFromInt(3) } });
+        const initialize = try store.addCFStmt(.{ .set_local = .{
+            .target = inner,
+            .value = core.LirStore.GuardedList.at(store.getLocalSpan(proc.args), 0),
+            .mode = .initialize_join_param,
+            .next = jump_inner,
+        } });
+        const inner_join = try store.addCFStmt(.{ .join = .{
+            .id = @enumFromInt(3),
+            .params = try store.addLocalSpan(&.{inner}),
+            .body = forward,
+            .remainder = initialize,
+        } });
+        const body = try store.addCFStmt(.{ .join = .{
+            .id = @enumFromInt(4),
+            .params = try store.addLocalSpan(&.{outer}),
+            .body = proc.body.?,
+            .remainder = inner_join,
+        } });
+        var frame = std.ArrayList(core.LIR.LocalId).empty;
+        defer frame.deinit(testing.allocator);
+        const old_frame = store.getLocalSpan(proc.frame_locals);
+        for (0..old_frame.len) |local| try frame.append(testing.allocator, core.LirStore.GuardedList.at(old_frame, local));
+        try frame.appendSlice(testing.allocator, &.{ outer, inner });
+        const frame_span = try store.addLocalSpan(frame.items);
+        store.getProcSpecPtr(id).body = body;
+        store.getProcSpecPtr(id).frame_locals = frame_span;
+    }
+}
+
+test "LIR proc pass forwarding generated joins become frozen source for tag fusion" {
+    var reference = std.Io.Writer.Allocating.init(testing.allocator);
+    defer reference.deinit();
+    var expected: ?passes.ParallelMetrics = null;
+    for ([_]usize{ 1, 2, 4 }) |lanes| {
+        var fixture = try fusionFixture(.tag_fusion);
+        defer fixture.deinit();
+        try wrapFusionInForwarder(&fixture);
+        var runner: ReverseExecutor = .{ .lanes = lanes };
+        defer runner.deinit();
+        var metrics: passes.ParallelMetrics = .{};
+        const exec: ?executor.Executor = if (lanes == 1) null else runner.interface();
+        try passes.run(testing.allocator, &fixture.store, &fixture.layouts, .forwarding_join, exec, &metrics);
+        var external_ids: [8]core.LIR.JoinPointId = undefined;
+        for (&external_ids, 0..) |*external, index| {
+            const proc = fixture.store.getProcSpec(@enumFromInt(index));
+            const inner = fixture.store.getCFStmt(proc.body.?).join;
+            try testing.expectEqual(@as(u32, 3), @intFromEnum(inner.id));
+            external.* = fixture.store.getCFStmt(inner.body).join.id;
+            try testing.expect(@intFromEnum(external.*) > 4);
+        }
+        try passes.run(testing.allocator, &fixture.store, &fixture.layouts, .tag_fusion, exec, &metrics);
+        for (external_ids, 0..) |external, index| {
+            const proc = fixture.store.getProcSpec(@enumFromInt(index));
+            const inner = fixture.store.getCFStmt(proc.body.?).join;
+            try testing.expectEqual(external, fixture.store.getCFStmt(inner.body).join.id);
+            var walk = try body_clone.ReachableStmts.init(&fixture.store, proc.body.?);
+            defer walk.deinit();
+            var external_jumps: usize = 0;
+            while (try walk.next()) |id| {
+                const stmt = fixture.store.getCFStmt(id);
+                if (stmt == .jump and stmt.jump.target == external) external_jumps += 1;
+            }
+            try testing.expectEqual(@as(usize, 2), external_jumps);
+        }
+        if (lanes == 1) {
+            try fixture.dump(&reference.writer);
+        } else {
+            try testing.expectEqual(@as(u64, 8), metrics.changed_by_phase[@intFromEnum(passes.Phase.forwarding_join)]);
+            try testing.expectEqual(@as(u64, 8), metrics.changed_by_phase[@intFromEnum(passes.Phase.tag_fusion)]);
+            if (expected) |counts| try testing.expectEqualDeep(counts, metrics);
+            expected = metrics;
+            var actual = std.Io.Writer.Allocating.init(testing.allocator);
+            defer actual.deinit();
+            try fixture.dump(&actual.writer);
+            try testing.expectEqualStrings(reference.written(), actual.written());
+        }
+    }
+}
+
+test "LIR proc pass fusion output scratch and submission failures drain before commit" {
+    inline for (.{ passes.Phase.forwarding_join, passes.Phase.tag_fusion }) |phase| {
+        for (0..3) |kind| {
+            var fail_index: usize = 0;
+            while (true) : (fail_index += 1) {
+                var fixture = try fusionFixture(phase);
+                defer fixture.deinit();
+                var before = std.Io.Writer.Allocating.init(testing.allocator);
+                defer before.deinit();
+                try fixture.dump(&before.writer);
+                const prefix = fixture.store.captureBodyPrefix();
+                var procs: [8]core.LIR.LirProcSpec = undefined;
+                for (&procs, 0..) |*proc, index| proc.* = fixture.store.getProcSpec(@enumFromInt(index));
+                var runner: ReverseExecutor = .{
+                    .lanes = 4,
+                    .frozen_source = &fixture.store,
+                    .fail_output_task = if (kind == 0) 7 else null,
+                    .fail_scratch_task = if (kind == 1) 7 else null,
+                    .fail_submit_task = if (kind == 2) 7 else null,
+                    .output_failure = testing.FailingAllocator.init(testing.allocator, .{ .fail_index = fail_index }),
+                    .scratch_failure = testing.FailingAllocator.init(testing.allocator, .{ .fail_index = fail_index }),
+                };
+                defer runner.deinit();
+                var metrics: passes.ParallelMetrics = .{};
+                const result = passes.run(testing.allocator, &fixture.store, &fixture.layouts, phase, runner.interface(), &metrics);
+                try testing.expect(runner.ended);
+                try testing.expect(runner.source_unchanged_until_end);
+                try testing.expectEqual(@as(usize, if (kind == 2) 7 else 8), runner.accepted);
+                try testing.expectEqual(runner.accepted, runner.received);
+                try testing.expectEqual(@as(usize, 0), runner.pending_len);
+                const failed = kind == 2 or (if (kind == 0) runner.output_failure.has_induced_failure else runner.scratch_failure.has_induced_failure);
+                if (failed) {
+                    try testing.expectError(error.OutOfMemory, result);
+                    try testing.expectEqual(@as(u64, 0), metrics.tasks_committed);
+                    try testing.expectEqualDeep(prefix, fixture.store.captureBodyPrefix());
+                    for (procs, 0..) |proc, index| try testing.expectEqualDeep(proc, fixture.store.getProcSpec(@enumFromInt(index)));
+                    var after = std.Io.Writer.Allocating.init(testing.allocator);
+                    defer after.deinit();
+                    try fixture.dump(&after.writer);
+                    try testing.expectEqualStrings(before.written(), after.written());
+                    if (kind == 2) break;
+                } else {
+                    try result;
+                    try testing.expect(fail_index > 1);
+                    try testing.expectEqual(@as(u64, 8), metrics.changed_by_phase[@intFromEnum(phase)]);
+                    try expectFusionJoins(&fixture, phase);
+                    break;
+                }
+            }
+        }
+    }
+}
 
 test "LIR proc pass scalarization keeps erased-body eligibility" {
     var direct = try Fixture.init();

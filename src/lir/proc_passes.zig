@@ -16,6 +16,8 @@ const ScalarizeJoins = @import("scalarize_joins.zig");
 const LoopAppendPromote = @import("loop_append_promote.zig");
 const RangeProve = @import("range_prove.zig");
 const BoxReuse = @import("box_reuse.zig");
+const ForwardingJoinInline = @import("forwarding_join_inline.zig");
+const TagCaseFusion = @import("tag_case_fusion.zig");
 
 const Allocator = std.mem.Allocator;
 const LIR = core.LIR;
@@ -25,6 +27,8 @@ const TaskExecutor = base.post_check_task_executor;
 /// Phase boundaries preserve the established optimization order.
 pub const Phase = enum {
     trmc,
+    forwarding_join,
+    tag_fusion,
     scalarize,
     loop_append,
     range,
@@ -66,6 +70,8 @@ const TaskContext = struct {
     completed: bool = false,
     changed: bool = false,
     trmc_report: ?Trmc.Report = null,
+    first_fresh_join: u32 = 0,
+    fresh_join_count: u32 = 0,
 
     fn run(context_opaque: *anyopaque, worker: TaskExecutor.Worker) ?*anyopaque {
         const self: *TaskContext = @ptrCast(@alignCast(context_opaque));
@@ -80,6 +86,17 @@ const TaskContext = struct {
         errdefer shard.deinit();
         switch (self.phase) {
             .trmc => self.trmc_report = try Trmc.runProc(&shard, self.layouts, self.proc, scratch_allocator),
+            .forwarding_join, .tag_fusion => {
+                var joins = BodyClone.JoinParamIndex.init(scratch_allocator);
+                defer joins.deinit();
+                joins.next_join_point = self.first_fresh_join;
+                if (self.phase == .forwarding_join) {
+                    try ForwardingJoinInline.runProc(&shard, self.layouts, self.proc, scratch_allocator, &joins);
+                } else {
+                    try TagCaseFusion.runProc(&shard, self.layouts, self.proc, scratch_allocator, &joins);
+                }
+                self.fresh_join_count = joins.next_join_point - self.first_fresh_join;
+            },
             .scalarize => try ScalarizeJoins.runProc(&shard, self.layouts, self.proc, scratch_allocator),
             .loop_append => try LoopAppendPromote.runProc(&shard, self.layouts, self.proc, scratch_allocator, self.callees.?),
             .range => try RangeProve.runProc(&shard, self.layouts, self.proc, scratch_allocator),
@@ -103,7 +120,7 @@ pub fn run(
     switch (phase) {
         .trmc => try Trmc.prepareLayouts(store, layouts),
         .box_reuse => try BoxReuse.prepareLayouts(store, layouts),
-        .scalarize, .loop_append, .range => {},
+        .forwarding_join, .tag_fusion, .scalarize, .loop_append, .range => {},
     }
     var callees = if (phase == .loop_append)
         try LoopAppendPromote.prepareCallees(store, allocator)
@@ -119,6 +136,8 @@ pub fn run(
     for (0..store.procSpecCount()) |index| {
         const proc: LIR.LirProcSpecId = @enumFromInt(@as(u32, @intCast(index)));
         const body = switch (phase) {
+            .forwarding_join => ForwardingJoinInline.rewritableProcBody(store, proc),
+            .tag_fusion => TagCaseFusion.rewritableProcBody(store, proc),
             .scalarize => ScalarizeJoins.rewritableProcBody(store, proc),
             .trmc, .loop_append, .range, .box_reuse => BodyClone.rewritableProcBody(store, proc),
         };
@@ -139,6 +158,13 @@ pub fn run(
     }
     if (contexts.items.len == 0) return;
 
+    // Only the coordinator scans the phase's identity domain. Workers reserve
+    // fresh joins above this boundary; ordered commit rebases only those IDs.
+    const first_fresh_join = switch (phase) {
+        .forwarding_join, .tag_fusion => BodyClone.firstFreshJoinPoint(store),
+        .trmc, .scalarize, .loop_append, .range, .box_reuse => 0,
+    };
+    for (contexts.items) |*context| context.first_fresh_join = first_fresh_join;
     const prefix = store.captureBodyPrefix();
     const layout_count = layouts.layoutCount();
     const parallel = if (executor) |value| value.worker_count > 1 and contexts.items.len > 1 else false;
@@ -183,27 +209,24 @@ pub fn run(
         if (context.shard == null) invariant("LIR pass completed without a procedure rewrite");
     }
     if (builtin.mode == .Debug) {
-        var owners = collections.DenseMap(u32, LIR.LirProcSpecId).init(allocator);
-        defer owners.deinit();
-        for (contexts.items) |*context| {
-            for (context.shard.?.procRewriteStatementIds()) |id| {
-                const entry = try owners.getOrPut(id);
-                if (entry.found_existing and entry.value_ptr.* != context.proc) {
-                    invariant("procedure-local LIR rewrites shared a writable statement");
-                }
-                entry.value_ptr.* = context.proc;
-            }
-        }
+        validateWritableOwnership(allocator, contexts.items) catch |err| switch (err) {
+            error.OutOfMemory => return error.OutOfMemory,
+            error.SharedWritableStatement => invariant("procedure-local LIR rewrites shared a writable statement"),
+        };
     }
 
+    var next_fresh_join = first_fresh_join;
     for (contexts.items) |*context| {
         const shard = &context.shard.?;
         if (context.changed) {
-            store.commitProcRewrite(shard) catch |err| switch (err) {
+            const reservation = reserveJoins(first_fresh_join, next_fresh_join, context.fresh_join_count) catch
+                invariant("LIR rewrite exhausted join-point identities");
+            store.commitProcRewriteWithJoinRelocation(shard, reservation.relocation) catch |err| switch (err) {
                 error.OutOfMemory => return error.OutOfMemory,
                 error.InvalidBodyPrefix => invariant("LIR rewrite lost its frozen prefix"),
                 error.UnsupportedShardMetadata => invariant("LIR rewrite emitted unprepared metadata"),
             };
+            next_fresh_join = reservation.next;
         }
         if (parallel) if (metrics) |counts| {
             counts.tasks_committed +|= 1;
@@ -216,6 +239,83 @@ pub fn run(
         shard.deinit();
         context.shard = null;
     }
+}
+
+const JoinReservation = struct {
+    relocation: ?LirStore.JoinPointRelocation,
+    next: u32,
+};
+
+fn reserveJoins(first_fresh: u32, next: u32, count: u32) error{JoinIdExhausted}!JoinReservation {
+    std.debug.assert(next >= first_fresh);
+    return .{
+        .next = std.math.add(u32, next, count) catch return error.JoinIdExhausted,
+        .relocation = if (count == 0) null else .{ .first_fresh = first_fresh, .offset = next - first_fresh },
+    };
+}
+
+fn validateWritableOwnership(allocator: Allocator, contexts: []const TaskContext) (Allocator.Error || error{SharedWritableStatement})!void {
+    var owners = collections.DenseMap(u32, LIR.LirProcSpecId).init(allocator);
+    defer owners.deinit();
+    for (contexts) |*context| {
+        for (context.shard.?.procRewriteStatementIds()) |id| {
+            const entry = try owners.getOrPut(id);
+            if (entry.found_existing and entry.value_ptr.* != context.proc) return error.SharedWritableStatement;
+            entry.value_ptr.* = context.proc;
+        }
+    }
+}
+
+test "procedure fusion join reservations retain allocation counts and reject cumulative overflow" {
+    const max = std.math.maxInt(u32);
+    const empty = try reserveJoins(max, max, 0);
+    try std.testing.expectEqual(@as(u32, max), empty.next);
+    try std.testing.expect(empty.relocation == null);
+    const last = try reserveJoins(max - 1, max - 1, 1);
+    try std.testing.expectEqual(@as(u32, max), last.next);
+    try std.testing.expectEqual(@as(u32, 0), last.relocation.?.offset);
+    try std.testing.expectError(error.JoinIdExhausted, reserveJoins(max - 1, last.next, 1));
+
+    // Allocations eliminated during a fixed point still consume their IDs.
+    const first = try reserveJoins(10, 10, 2);
+    const second = try reserveJoins(10, first.next, 3);
+    try std.testing.expectEqual(@as(u32, 2), second.relocation.?.offset);
+    try std.testing.expectEqual(@as(u32, 15), second.next);
+}
+
+test "procedure rewrite ownership includes statements reached through shared metadata" {
+    const allocator = std.testing.allocator;
+    var store = LirStore.init(allocator);
+    defer store.deinit();
+    const value = try store.addLocal(.{ .layout_idx = .u64 });
+    const shared_body = try store.addCFStmt(.{ .ret = .{ .value = value } });
+    const branches = try store.addCFSwitchBranches(&.{.{ .value = 0, .body = shared_body }});
+    var contexts: [2]TaskContext = undefined;
+    var initialized: usize = 0;
+    defer for (contexts[0..initialized]) |*context| context.shard.?.deinit();
+    for (&contexts, 0..) |*context, i| {
+        const fallback = try store.addCFStmt(.{ .ret = .{ .value = value } });
+        const body = try store.addCFStmt(.{ .switch_stmt = .{
+            .cond = value,
+            .branches = branches,
+            .default_branch = fallback,
+        } });
+        const proc = try store.addProcSpec(.{
+            .identity = LIR.ProcIdentity.forTest(@intCast(i)),
+            .name = store.freshSyntheticSymbol(),
+            .args = try store.addLocalSpan(&.{value}),
+            .body = body,
+            .ret_layout = .u64,
+        });
+        context.* = .{ .source = &store, .layouts = undefined, .phase = .tag_fusion, .proc = proc, .callees = null };
+    }
+    const prefix = store.captureBodyPrefix();
+    for (&contexts) |*context| {
+        context.shard = try store.cloneForProcRewrite(allocator, context.proc);
+        initialized += 1;
+    }
+    try std.testing.expectError(error.SharedWritableStatement, validateWritableOwnership(allocator, &contexts));
+    try std.testing.expectEqualDeep(prefix, store.captureBodyPrefix());
 }
 
 fn invariant(comptime message: []const u8) noreturn {
