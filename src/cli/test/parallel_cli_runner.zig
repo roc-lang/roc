@@ -5898,6 +5898,8 @@ fn stageComptimeApp(io: std.Io, allocator: Allocator, env: *const CaseEnv, timer
         return customInfraFailure(allocator, timer, "failed to allocate platform path: {}", .{err});
     const platform_relative = std.fs.path.relative(allocator, project_root_path, null, staged_dir, platform_path) catch |err|
         return customInfraFailure(allocator, timer, "failed to relate the platform path: {}", .{err});
+    // Windows accepts forward slashes, which need no escaping in Roc strings.
+    if (builtin.os.tag == .windows) std.mem.replaceScalar(u8, platform_relative, '\\', '/');
     for ([_][]const u8{ "Shapes.roc", "PackComptime.roc" }) |name| {
         const source_path = absoluteFromProjectRoot(allocator, "test/cli/pack_comptime") catch |err|
             return customInfraFailure(allocator, timer, "failed to allocate app source dir: {}", .{err});

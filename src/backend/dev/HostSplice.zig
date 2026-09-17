@@ -334,18 +334,14 @@ fn collectCodeSymbols(allocator: Allocator, codegen: *const HostLirCodeGen, out:
 /// AArch64 `ldr x16, #8; br x16` over it.
 fn writeStub(stub: *[stub_size]u8, target: usize) void {
     @memset(stub, 0);
-    switch (builtin.cpu.arch) {
-        .x86_64 => {
-            stub[0..6].* = .{ 0xFF, 0x25, 0x00, 0x00, 0x00, 0x00 };
-            std.mem.writeInt(u64, stub[6..14], target, .little);
-        },
-        .aarch64 => {
-            std.mem.writeInt(u32, stub[0..4], 0x58000050, .little);
-            std.mem.writeInt(u32, stub[4..8], 0xD61F0200, .little);
-            std.mem.writeInt(u64, stub[8..16], target, .little);
-        },
-        else => unreachable,
-    }
+    if (builtin.cpu.arch == .x86_64) {
+        stub[0..6].* = .{ 0xFF, 0x25, 0x00, 0x00, 0x00, 0x00 };
+        std.mem.writeInt(u64, stub[6..14], target, .little);
+    } else if (builtin.cpu.arch == .aarch64) {
+        std.mem.writeInt(u32, stub[0..4], 0x58000050, .little);
+        std.mem.writeInt(u32, stub[4..8], 0xD61F0200, .little);
+        std.mem.writeInt(u64, stub[8..16], target, .little);
+    } else unreachable;
 }
 
 test "compiler functions resolve and the dict seed is the evaluator's zero" {
