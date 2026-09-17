@@ -5202,6 +5202,20 @@ corresponding arm jump, and keeps continuation bindings in the join body. No
 binding chain is stored in ambient cloner state, and a nested clone cannot
 observe, capture, flush, or move a chain owned by its caller.
 
+Block cloning consumes each source statement once. Encountering a retained
+statement or a branch-built value preserves the already-cloned prefix instead
+of restarting the block through a second lowering path. Ordinary bindings stay
+in an iterative statement walk; a branch-built value gives its untouched source
+suffix to the existing shared-continuation transformation without copying that
+suffix or cloning the producer again. Retained statements keep their tail value
+inside the block, and a terminating block keeps its `unreachable` final marker.
+A block whose binding is branch-built is emitted with that continuation as its
+recorded tail, never dissolved into its consumer: a case over the block reads
+the arms' structure through the tail, which is what lets the constructor each
+arm builds resolve the consumer's match and keep its payload fields separate.
+Discarded intermediate construction must not grow with repeated traversal of
+nested prefixes or become input work for lambda-set solving.
+
 A recursive binding is an explicit finite-graph anchor, not a reason to make
 the whole enclosing value opaque. The clone reserves a fresh runtime binder
 before cloning the initializer, so every recursive occurrence becomes an exact
@@ -11181,6 +11195,49 @@ duplicate, emitted statements are O(total pattern size); a debug statement-count
 lint in the emitter asserts a hard multiplier bound per match so an exponential
 regression fails loudly instead of shipping.
 
+### Procedure-Local LIR Rewrites
+
+TRMC, join scalarization, loop append promotion, range proving, and box reuse
+preserve their pipeline order. Within one phase, procedure bodies own disjoint
+writable statement rows. Rewriting reads a frozen phase input and produces a
+sparse patch of those rows, new body-owned data, and one procedure's metadata.
+The coordinator reserves pointer layouts and helper summaries before dispatch;
+workers cannot intern layouts or derive helper summaries from other workers'
+partially rewritten bodies.
+
+The same patch boundary applies with one worker. Every phase finishes its
+callbacks before committing in procedure order, so neither input visibility
+nor output identity depends on worker count or completion order. Each commit
+relocates appended references in both patched rows and procedure metadata.
+Allocation failure leaves an individual commit unapplied; failed callbacks
+are drained without replay, and failed lowering discards the whole result.
+Reporting follows ordered commits rather than worker completion order.
+
+Workers borrow unrelated input tables rather than copying a store. Writable
+rows, operand counts, clone substitutions, inline-scope remaps, and traversal
+state occupy only their live procedure domains. Subtree cloning reserves join
+identities from its explicit destination-procedure context, not from a scan of
+unrelated procedures. Active callbacks are executor-bounded; retained patches
+are proportional to the phase's procedure bodies and generated output.
+
+Loop promotion identifies back edges during its body-first lexical scan and
+uses source-indexed carrier edges. Shared body/remainder continuations remain
+back edges when the body can reach them; remainder-only entries are not loops.
+A successful parameter rewrite still requires fresh flow analysis. Freezing
+helper summaries and indexing traversal work do not authorize decisions from
+stale inventories.
+
+Helper classification proves replacement of the whole executed list-operation
+chain, not just its returned shape. Unknown calls or operations reject the
+summary even when their results are ignored. Every recognized operation extends
+the latest chain, and the return must carry that final operation identity;
+aliases preserve this provenance. Dependency traversal uses an explicit stack,
+and recursive helper dependencies reject deterministically rather than being
+hidden by an unused result.
+
+Interprocedural inlining, generated-procedure variants, global reachability,
+and ARC's solve remain outside this boundary.
+
 ### ARC
 
 The direct LIR builder emits ownership-neutral LIR. ARC insertion runs after
@@ -12086,7 +12143,13 @@ machine word are stored inline; wider sets use exact allocated words. This is a
 representation choice made solely from the producer-authored domain width, not
 a heuristic. The ownership-neutral liveness graph is immutable and built once
 per source proc, then shared by every ownership variant emitted from that
-source. It uses a reusable dense statement-to-node table, so successors,
+source. Ordinary and complete-outcome conventions share graph topology and
+ordinal metadata but have separate immutable liveness rows: restitution-only
+boundary reads must never widen the ordinary convention's read contract.
+Preparation freezes both contracts before workers select rows by their emitted
+signature. Temporary traversal and SCC storage does not outlive preparation;
+persistent snapshot subtrees remain source-owned.
+The graph uses a reusable dense statement-to-node table, so successors,
 predecessors, and worklist edges are direct node indices rather than statement
 hash lookups. Its strongly-connected-component condensation is solved in
 reverse dependency order: an acyclic singleton is evaluated once, and
@@ -12227,6 +12290,22 @@ Variant bodies are cloned with the existing statement-cloning machinery and
 added with `LirStore.addProcSpec`. Root procs are never specialized; their
 vectors are pinned. The variant count is bounded by realized demand vectors,
 not by the theoretical vector space.
+
+Ownership solving and field-take analysis finish before parallel emission
+begins. Source preparation freezes each ownership-neutral procedure's frame
+domain and liveness data; variants share that source data, never a previously
+emitted ARC body. Mutable residual masks, ownership overrides, plans, and
+materialization scratch belong to one emission.
+
+Planning produces ownership-demand variant requests without allocating procedure
+identities. A coordinator reserves those identities in FIFO procedure/request
+order, then materialization consumes the fixed call targets and appends only
+to private body shards. Ordered commit relocates generated locals, statements,
+and join spans before committing each procedure's metadata. Bounded waves use
+the same schedule with or without workers, so worker count and completion order
+cannot change variant symbols or emitted LIR. Submission or callback failure
+drains accepted work before freeing its owners; insertion failure discards the
+entire result rather than replaying work against a partially emitted store.
 
 A build without optional mode specialization suppresses general cost-only
 demand vectors, but it does not force every call to the solved base `RcSig`.
@@ -12719,6 +12798,14 @@ It allocates per-candidate tables only: a container that cannot benefit --
 wrong layout shape, borrowed, or non-operand whole uses -- contributes
 nothing beyond its visit in one linear statement scan, preserving the rule
 that ARC memory scales with ownership work actually demanded.
+
+All candidates share the frozen reachable-join inventory. Within one candidate,
+future field observations are a backward may-dataflow over the union of its
+consuming reads' successor regions. Each field bit propagates through an edge
+at most once; reinitialization and outcome restitution end exactly the old
+field lifetime on that edge. This answers every consuming-read query without
+repeatedly traversing shared continuations, while preserving the same loop,
+branch, and observation rules as a separate traversal from each read.
 
 The certifier verifies takes from the emitted LIR alone, with no side tables,
 by deferred claims. A field or payload read still binds its result at balance
