@@ -771,7 +771,6 @@ fn runCase(allocator: Allocator, case: Case) SweepError!void {
         &lowered.view.layouts,
         Interpreter.BoxyTables.fromImageView(&lowered.view),
         runtime_env.get_ops(),
-        .preserve,
     );
     defer interp.deinit();
 

@@ -892,11 +892,6 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
         static_strings: StaticStringData.View,
         /// Resolved readonly values used only by in-process native execution.
         native_static_data: []const usize,
-        /// Compile-time execution normalizes every produced NaN before it can
-        /// enter static data. Ordinary runtime code preserves target NaN bits.
-        float_nan_mode: builtins.float_bits.NanMode,
-        /// Whether the procedure being compiled has assigned a float so far.
-        region_float_results: bool = false,
         /// Explicit execution-environment policy for shared compile-time LIR.
         dict_seed_mode: builtins.utils.DictSeedMode = .runtime,
         /// Borrowed producer declarations and cached IDs for internal static roots.
@@ -1274,9 +1269,6 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
             /// Offset from `start` that references to this region resolve to.
             entry: usize,
             kind: CodeRegionKind,
-            /// The region assigns a float, so it may produce a NaN that
-            /// `float_nan_mode` decides the fate of.
-            float_results: bool = false,
         };
 
         /// Frame metadata carried with an assembled region so its unwind
@@ -1464,7 +1456,6 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
             layout_store_opt: *const LayoutStore,
             static_strings: StaticStringData.View,
             boxy_worker_procs: []const lir.LIR.LirProcSpecId,
-            float_nan_mode: builtins.float_bits.NanMode,
             cpu_level: CpuLevel,
         ) Allocator.Error!Self {
             return initWithBoxyMetadata(
@@ -1475,7 +1466,6 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
                 &.{},
                 &.{},
                 boxy_worker_procs,
-                float_nan_mode,
                 cpu_level,
             );
         }
@@ -1488,7 +1478,6 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
             erased_arg_desc_offsets: []const lir.LIR.ErasedArgDescOffset,
             erased_arg_desc_params: []const lir.LIR.ErasedArgDescParam,
             boxy_worker_procs: []const lir.LIR.LirProcSpecId,
-            float_nan_mode: builtins.float_bits.NanMode,
             cpu_level: CpuLevel,
         ) Allocator.Error!Self {
             return .{
@@ -1500,7 +1489,6 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
                 .layout_store = layout_store_opt,
                 .static_strings = static_strings,
                 .native_static_data = &.{},
-                .float_nan_mode = float_nan_mode,
                 .static_data_symbols = .init(allocator),
                 .literal_symbols = .init(allocator),
                 .builtin_symbols = .init(allocator),
@@ -9363,7 +9351,6 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
             const local_layout = self.localLayout(local);
             if (self.local_locations.get(key)) |stable_loc| {
                 try self.storeValueIntoStableLocation(stable_loc, value_loc, local_layout);
-                try self.emitNormalizeFloatNanInStableLocation(stable_loc, local_layout);
                 try self.emitDebugAssertValidBoxLocal(local, stable_loc);
                 try self.emitDebugAssertValidStrLocal(local, stable_loc);
                 return;
@@ -9387,11 +9374,12 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
 
             const stable_loc = try self.materializeValueToStackForLayout(value_loc, local_layout);
             try self.setLocalLocation(key, stable_loc);
-            try self.emitNormalizeFloatNanInStableLocation(stable_loc, local_layout);
             try self.emitDebugAssertValidBoxLocal(local, stable_loc);
             try self.emitDebugAssertValidStrLocal(local, stable_loc);
         }
 
+        /// Canonicalize a NaN observed through `to_bits`: Roc code never sees
+        /// a NaN's sign or payload.
         fn emitNormalizeNanBitsInReg(self: *Self, bits_reg: GeneralReg, width: FloatWidth) Allocator.Error!void {
             const masked_reg = try self.allocTempGeneral();
             defer self.codegen.freeGeneral(masked_reg);
@@ -9421,51 +9409,6 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
             const not_nan_patch = try self.codegen.emitCondJump(condBelowOrEqual());
             try self.codegen.emitLoadImm(bits_reg, @bitCast(normalized_nan_bits));
             try self.codegen.patchJump(not_nan_patch, self.codegen.currentOffset());
-        }
-
-        fn emitNormalizeFloatNanInStableLocation(
-            self: *Self,
-            stable_loc: ValueLocation,
-            layout_idx: layout.Idx,
-        ) Allocator.Error!void {
-            const width: FloatWidth = if (layout_idx == .f32)
-                .f32
-            else if (layout_idx == .f64)
-                .f64
-            else
-                return;
-            self.region_float_results = true;
-            if (self.float_nan_mode == .preserve) return;
-
-            const offset = switch (stable_loc) {
-                .stack => |stack_loc| stack_loc.offset,
-                .noreturn => return,
-                .general_reg,
-                .float_reg,
-                .vector_reg,
-                .stack_i128,
-                .stack_str,
-                .list_stack,
-                .immediate_i64,
-                .immediate_f32,
-                .immediate_f64,
-                .immediate_i128,
-                => std.debug.panic(
-                    "LIR/codegen invariant violated: float local did not lower to a scalar stack location",
-                    .{},
-                ),
-            };
-            const bits_reg = try self.allocTempGeneral();
-            defer self.codegen.freeGeneral(bits_reg);
-            switch (width) {
-                .f32 => try self.emitLoad(.w32, bits_reg, frame_ptr, offset),
-                .f64 => try self.emitLoad(.w64, bits_reg, frame_ptr, offset),
-            }
-            try self.emitNormalizeNanBitsInReg(bits_reg, width);
-            switch (width) {
-                .f32 => try self.emitStore(.w32, frame_ptr, offset, bits_reg),
-                .f64 => try self.emitStore(.w64, frame_ptr, offset, bits_reg),
-            }
         }
 
         fn emitDebugAssertValidBoxLocal(
@@ -20650,7 +20593,6 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
         fn compileProcSpec(self: *Self, proc_id: lir.LIR.LirProcSpecId, proc: LirProcSpec) Allocator.Error!void {
             const key: u32 = @intFromEnum(proc_id);
             const stack_probe_required = proc.stack_probe == .required;
-            self.region_float_results = false;
             // Save current state - procedure has its own scope that shouldn't pollute caller
             const saved_stack_offset = self.codegen.stack_offset;
             const saved_callee_saved_used = self.codegen.callee_saved_used;
@@ -20906,7 +20848,6 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
                         .end = entry.code_end,
                         .entry = 0,
                         .kind = .{ .proc = proc_id },
-                        .float_results = self.region_float_results,
                     });
                 }
                 try self.recordUnwindFunction(
@@ -20989,7 +20930,6 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
                         .end = entry.code_end,
                         .entry = 0,
                         .kind = .{ .proc = proc_id },
-                        .float_results = self.region_float_results,
                     });
                 }
                 try self.recordUnwindFunction(
@@ -25334,7 +25274,6 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
             kind: CodeRegionKind,
             entry: usize,
             frame: ?AssembledFrame,
-            float_results: bool,
         ) Allocator.Error!usize {
             self.assertImageOpen();
             const start = self.codegen.currentOffset();
@@ -25374,7 +25313,7 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
                     frame_info.uses_frame_pointer,
                 );
             }
-            try self.code_regions.append(self.allocator, .{ .start = start, .end = end, .entry = entry, .kind = kind, .float_results = float_results });
+            try self.code_regions.append(self.allocator, .{ .start = start, .end = end, .entry = entry, .kind = kind });
             return start;
         }
 
@@ -25852,17 +25791,7 @@ const CompiledTestRoot = struct {
 };
 
 fn compileRoot(store: *LirStore, layout_store: *layout.Store, root_proc: lir.LIR.LirProcSpecId, ret_layout: layout.Idx) Allocator.Error!CompiledTestRoot {
-    return compileRootWithFloatNanMode(store, layout_store, root_proc, ret_layout, .preserve);
-}
-
-fn compileRootWithFloatNanMode(
-    store: *LirStore,
-    layout_store: *layout.Store,
-    root_proc: lir.LIR.LirProcSpecId,
-    ret_layout: layout.Idx,
-    float_nan_mode: builtins.float_bits.NanMode,
-) Allocator.Error!CompiledTestRoot {
-    return compileRootWith(store, layout_store, root_proc, ret_layout, float_nan_mode, null);
+    return compileRootWith(store, layout_store, root_proc, ret_layout, null);
 }
 
 fn compileRootWithHostedSymbols(
@@ -25872,7 +25801,7 @@ fn compileRootWithHostedSymbols(
     ret_layout: layout.Idx,
     hosted_symbols: HostedSymbolResolver,
 ) Allocator.Error!CompiledTestRoot {
-    return compileRootWith(store, layout_store, root_proc, ret_layout, .preserve, hosted_symbols);
+    return compileRootWith(store, layout_store, root_proc, ret_layout, hosted_symbols);
 }
 
 fn compileRootWith(
@@ -25880,13 +25809,12 @@ fn compileRootWith(
     layout_store: *layout.Store,
     root_proc: lir.LIR.LirProcSpecId,
     ret_layout: layout.Idx,
-    float_nan_mode: builtins.float_bits.NanMode,
     hosted_symbols: ?HostedSymbolResolver,
 ) Allocator.Error!CompiledTestRoot {
     const allocator = std.testing.allocator;
     // The callers of this run the code they get back, so it is held to what
     // the machine running the tests executes.
-    var codegen = try HostLirCodeGen.init(allocator, store, layout_store, .{}, &.{}, float_nan_mode, roc_target_mod.host_cpu.level());
+    var codegen = try HostLirCodeGen.init(allocator, store, layout_store, .{}, &.{}, roc_target_mod.host_cpu.level());
     defer codegen.deinit();
     codegen.setHostedSymbolResolver(hosted_symbols);
     try codegen.compileAllProcSpecs(store.getProcSpecs());
@@ -25961,10 +25889,9 @@ fn runRootFloatBits(
     layout_store: *layout.Store,
     root_proc: lir.LIR.LirProcSpecId,
     ret_layout: layout.Idx,
-    float_nan_mode: builtins.float_bits.NanMode,
 ) (Allocator.Error || error{ EmptyCode, MmapFailed, VirtualAllocFailed, MprotectFailed, VirtualProtectFailed, UnsupportedPlatform, UnwindRegistrationFailed })!u64 {
     const allocator = std.testing.allocator;
-    const compiled = try compileRootWithFloatNanMode(store, layout_store, root_proc, ret_layout, float_nan_mode);
+    const compiled = try compileRoot(store, layout_store, root_proc, ret_layout);
     defer allocator.free(compiled.code);
     defer allocator.free(compiled.unwind_functions);
 
@@ -25980,7 +25907,7 @@ fn runRootFloatBits(
     return if (ret_layout == .f32) @as(u32, @truncate(out)) else out;
 }
 
-test "dev float NaN mode preserves runtime payloads and normalizes compile-time results" {
+test "dev keeps every float NaN payload" {
     if (comptime builtin.cpu.arch != .x86_64 and builtin.cpu.arch != .aarch64) {
         return error.SkipZigTest;
     }
@@ -25996,10 +25923,8 @@ test "dev float NaN mode preserves runtime payloads and normalizes compile-time 
     const f32_proc = try addLiteralProc(&store, .{ .f32_literal = @bitCast(f32_bits) }, .f32);
     const f64_proc = try addLiteralProc(&store, .{ .f64_literal = @bitCast(f64_bits) }, .f64);
 
-    try std.testing.expectEqual(@as(u64, f32_bits), try runRootFloatBits(&store, &test_state.layout_store, f32_proc, .f32, .preserve));
-    try std.testing.expectEqual(f64_bits, try runRootFloatBits(&store, &test_state.layout_store, f64_proc, .f64, .preserve));
-    try std.testing.expectEqual(@as(u64, builtins.float_bits.normalized_f32_nan_bits), try runRootFloatBits(&store, &test_state.layout_store, f32_proc, .f32, .normalize));
-    try std.testing.expectEqual(builtins.float_bits.normalized_f64_nan_bits, try runRootFloatBits(&store, &test_state.layout_store, f64_proc, .f64, .normalize));
+    try std.testing.expectEqual(@as(u64, f32_bits), try runRootFloatBits(&store, &test_state.layout_store, f32_proc, .f32));
+    try std.testing.expectEqual(f64_bits, try runRootFloatBits(&store, &test_state.layout_store, f64_proc, .f64));
 }
 
 test "dev lowering: init_uninitialized writes poison pattern" {
@@ -26059,7 +25984,7 @@ test "code generator initialization" {
     var test_state = try TestLayoutState.init(allocator);
     defer test_state.deinit();
 
-    var codegen = try HostLirCodeGen.init(allocator, &store, &test_state.layout_store, .{}, &.{}, .preserve, .default);
+    var codegen = try HostLirCodeGen.init(allocator, &store, &test_state.layout_store, .{}, &.{}, .default);
     defer codegen.deinit();
 }
 
@@ -26093,7 +26018,6 @@ test "Boxy dictionary thunks are emitted only for producer-named workers" {
         &.{},
         &.{},
         &.{worker_proc},
-        .preserve,
         roc_target_mod.host_cpu.level(),
     );
     defer codegen.deinit();
@@ -26115,7 +26039,7 @@ test "statement environments restore nested bindings and overwrites without allo
     defer store.deinit();
     var test_state = try TestLayoutState.init(allocator);
     defer test_state.deinit();
-    var codegen = try HostLirCodeGen.init(allocator, &store, &test_state.layout_store, .{}, &.{}, .preserve, .default);
+    var codegen = try HostLirCodeGen.init(allocator, &store, &test_state.layout_store, .{}, &.{}, .default);
     defer codegen.deinit();
 
     const before = try addLocal(&store, .u64);
@@ -26179,7 +26103,7 @@ test "statement environments spill vectors before marks and undo arm spills in r
     defer store.deinit();
     var test_state = try TestLayoutState.init(allocator);
     defer test_state.deinit();
-    var codegen = try HostLirCodeGen.init(allocator, &store, &test_state.layout_store, .{}, &.{}, .preserve, .default);
+    var codegen = try HostLirCodeGen.init(allocator, &store, &test_state.layout_store, .{}, &.{}, .default);
     defer codegen.deinit();
 
     const before = try addLocal(&store, .u8x16);
@@ -26231,7 +26155,7 @@ test "statement environment journal survives procedure scopes" {
     defer store.deinit();
     var test_state = try TestLayoutState.init(allocator);
     defer test_state.deinit();
-    var codegen = try HostLirCodeGen.init(allocator, &store, &test_state.layout_store, .{}, &.{}, .preserve, .default);
+    var codegen = try HostLirCodeGen.init(allocator, &store, &test_state.layout_store, .{}, &.{}, .default);
     defer codegen.deinit();
 
     _ = try addLiteralProc(&store, .{ .i64_literal = .{ .value = 42, .layout_idx = .u64 } }, .u64);
@@ -26257,7 +26181,7 @@ test "vector spill residency is independent of scalar local count" {
     var test_state = try TestLayoutState.init(allocator);
     defer test_state.deinit();
 
-    var codegen = try HostLirCodeGen.init(allocator, &store, &test_state.layout_store, .{}, &.{}, .preserve, .default);
+    var codegen = try HostLirCodeGen.init(allocator, &store, &test_state.layout_store, .{}, &.{}, .default);
     defer codegen.deinit();
 
     const vector_local = try addLocal(&store, .u8x16);
@@ -26322,7 +26246,7 @@ test "proc params and mutable list cells use distinct stack slots" {
     } });
     const args = try store.addLocalSpan(&.{ start, end });
 
-    var codegen = try HostLirCodeGen.init(allocator, &store, &test_state.layout_store, .{}, &.{}, .preserve, .default);
+    var codegen = try HostLirCodeGen.init(allocator, &store, &test_state.layout_store, .{}, &.{}, .default);
     defer codegen.deinit();
 
     const HostCodeGen = @TypeOf(codegen.codegen);
@@ -26394,7 +26318,7 @@ test "immutable aliases share storage but aliases of mutable locals do not" {
         .next = alias1_stmt,
     } });
 
-    var codegen = try HostLirCodeGen.init(allocator, &store, &test_state.layout_store, .{}, &.{}, .preserve, .default);
+    var codegen = try HostLirCodeGen.init(allocator, &store, &test_state.layout_store, .{}, &.{}, .default);
     defer codegen.deinit();
     const HostCodeGen = @TypeOf(codegen.codegen);
     if (comptime builtin.cpu.arch == .aarch64) {
@@ -26438,7 +26362,7 @@ test "Windows internal proc ABI reads stack arguments after shadow space" {
     const list = try addLocal(&store, list_layout);
     const args = try store.addLocalSpan(&.{ a, b, c, d, list });
 
-    var codegen = try WinCodeGen.init(allocator, &store, &test_state.layout_store, .{}, &.{}, .preserve, .default);
+    var codegen = try WinCodeGen.init(allocator, &store, &test_state.layout_store, .{}, &.{}, .default);
     defer codegen.deinit();
 
     const InnerCodeGen = @TypeOf(codegen.codegen);
@@ -26464,7 +26388,7 @@ test "Windows erased callable ABI reads reuse pointer from caller stack" {
     const args = try store.addLocalSpan(&.{ explicit_arg, capture_arg, reuse_arg });
     const arg_plan = try store.internErasedCallArgsPlan(&test_state.layout_store, &.{.u64});
 
-    var codegen = try WinCodeGen.init(allocator, &store, &test_state.layout_store, .{}, &.{}, .preserve, .default);
+    var codegen = try WinCodeGen.init(allocator, &store, &test_state.layout_store, .{}, &.{}, .default);
     defer codegen.deinit();
 
     const InnerCodeGen = @TypeOf(codegen.codegen);
@@ -26500,7 +26424,7 @@ test "Windows dictionary thunk ABI reads result descriptor pointer from caller s
     const proc = store.getProcSpec(proc_id);
 
     const WinCodeGen = LirCodeGen(.x64win);
-    var codegen = try WinCodeGen.init(allocator, &store, &test_state.layout_store, .{}, &.{}, .preserve, .default);
+    var codegen = try WinCodeGen.init(allocator, &store, &test_state.layout_store, .{}, &.{}, .default);
     defer codegen.deinit();
 
     try codegen.proc_registry.put(@intFromEnum(proc_id), .{
@@ -26538,7 +26462,7 @@ test "AArch64 internal proc ABI uses caller stack arg base for stack arguments" 
     const stack_arg = try addLocal(&store, .u64);
     const args = try store.addLocalSpan(&.{ a0, a1, a2, a3, a4, a5, a6, a7, stack_arg });
 
-    var codegen = try ArmCodeGen.init(allocator, &store, &test_state.layout_store, .{}, &.{}, .preserve, .default);
+    var codegen = try ArmCodeGen.init(allocator, &store, &test_state.layout_store, .{}, &.{}, .default);
     defer codegen.deinit();
 
     const InnerCodeGen = @TypeOf(codegen.codegen);
@@ -26562,7 +26486,7 @@ test "AArch64 compare immediate accepts large bit masks" {
     defer test_state.deinit();
 
     const ArmCodeGen = LirCodeGen(.arm64mac);
-    var codegen = try ArmCodeGen.init(allocator, &store, &test_state.layout_store, .{}, &.{}, .preserve, .default);
+    var codegen = try ArmCodeGen.init(allocator, &store, &test_state.layout_store, .{}, &.{}, .default);
     defer codegen.deinit();
 
     try codegen.emitCmpImm(aarch64.GeneralReg.X0, @bitCast(@as(u64, 1) << 63));
@@ -27076,7 +27000,7 @@ test "dev lowering keeps F32 addition in binary32 locations" {
     defer test_state.deinit();
 
     const proc = try addBinaryF32LowLevelProc(&store, .num_float_add, 1.25, 2.5);
-    try std.testing.expectEqual(@as(u64, @as(u32, @bitCast(@as(f32, 3.75)))), try runRootFloatBits(&store, &test_state.layout_store, proc, .f32, .preserve));
+    try std.testing.expectEqual(@as(u64, @as(u32, @bitCast(@as(f32, 3.75)))), try runRootFloatBits(&store, &test_state.layout_store, proc, .f32));
 }
 
 test "record equality uses layout-aware comparison" {
@@ -27467,7 +27391,7 @@ test "entrypoint arg offsets preserve Roc alignment order" {
     var test_state = try TestLayoutState.init(allocator);
     defer test_state.deinit();
 
-    var codegen = try HostLirCodeGen.init(allocator, &store, &test_state.layout_store, .{}, &.{}, .preserve, .default);
+    var codegen = try HostLirCodeGen.init(allocator, &store, &test_state.layout_store, .{}, &.{}, .default);
     defer codegen.deinit();
 
     var offsets: [2]u32 = undefined;
@@ -27494,7 +27418,7 @@ test "entrypoint param slots round aggregates to ABI word width" {
         test_state.layout_store.getLayout(.f32),
     });
 
-    var codegen = try HostLirCodeGen.init(allocator, &store, &test_state.layout_store, .{}, &.{}, .preserve, .default);
+    var codegen = try HostLirCodeGen.init(allocator, &store, &test_state.layout_store, .{}, &.{}, .default);
     defer codegen.deinit();
 
     try std.testing.expectEqual(@as(u32, 16), codegen.entrypointParamSlotSize(aggregate_layout));
@@ -27740,7 +27664,7 @@ test "symbol producer caches reuse identities and reset with generated code" {
     inline for (.{ RocTarget.x64linux, RocTarget.arm64linux }) |target| {
         var strings = try StaticStringData.build(allocator, &store, target);
         defer strings.deinit();
-        var codegen = try LirCodeGen(target).init(allocator, &store, &test_state.layout_store, strings.view(), &.{}, .preserve, .default);
+        var codegen = try LirCodeGen(target).init(allocator, &store, &test_state.layout_store, strings.view(), &.{}, .default);
         defer codegen.deinit();
         try std.testing.expectEqual(@as(usize, 0), codegen.getSymbolNames().len);
         const data_id: lir.LIR.StaticDataId = @enumFromInt(7);
@@ -27779,7 +27703,7 @@ test "dev explicit procedure demand leaves runtime-only body uncompiled" {
     defer test_state.deinit();
     const runtime = try addLiteralProc(&store, .{ .i64_literal = .{ .value = 99, .layout_idx = .i64 } }, .i64);
     const compile_time = try addLiteralProc(&store, .{ .i64_literal = .{ .value = 42, .layout_idx = .i64 } }, .i64);
-    var codegen = try HostLirCodeGen.init(allocator, &store, &test_state.layout_store, .{}, &.{}, .preserve, roc_target_mod.host_cpu.level());
+    var codegen = try HostLirCodeGen.init(allocator, &store, &test_state.layout_store, .{}, &.{}, roc_target_mod.host_cpu.level());
     defer codegen.deinit();
     try codegen.compileSelectedProcSpecs(&.{compile_time});
     try std.testing.expect(codegen.compiledProcSymbol(runtime) == null);
@@ -27794,7 +27718,7 @@ test "branch location checkpoints restore only changed bindings in a wide proced
     defer store.deinit();
     var test_state = try TestLayoutState.init(allocator);
     defer test_state.deinit();
-    var codegen = try HostLirCodeGen.init(allocator, &store, &test_state.layout_store, .{}, &.{}, .preserve, .default);
+    var codegen = try HostLirCodeGen.init(allocator, &store, &test_state.layout_store, .{}, &.{}, .default);
     defer codegen.deinit();
     for (0..4096) |index| try codegen.setLocalLocation(@intCast(index), .{ .immediate_i64 = @intCast(index) });
     const outer = try codegen.captureStmtEnv();

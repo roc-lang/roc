@@ -317,7 +317,6 @@ fn compileWithCodeGen(
         erased_arg_desc_offsets,
         erased_arg_desc_params,
         boxy_worker_procs,
-        .preserve,
         target.cpuLevel(),
     ) catch return CompilationError.OutOfMemory;
     defer codegen.deinit();
@@ -589,7 +588,6 @@ fn compileWithCodeGen(
             erased_arg_desc_offsets,
             erased_arg_desc_params,
             boxy_worker_procs,
-            .preserve,
             target.cpuLevel(),
         ) catch return CompilationError.OutOfMemory;
         defer fresh.deinit();

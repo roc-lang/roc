@@ -19,7 +19,6 @@ fn runApp(lowered: *const lir.CheckedPipeline.LoweredProgram, expected_crash: bo
         &program.layouts,
         eval.LirInterpreter.BoxyTables.fromResult(program),
         host.get_ops(),
-        .preserve,
     );
     defer interpreter.deinit();
     const root_id = program.root_procs.items[0];
