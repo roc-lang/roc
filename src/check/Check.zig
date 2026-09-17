@@ -16023,6 +16023,341 @@ fn annoSkipParens(self: *const Self, anno_idx: CIR.TypeAnno.Idx) CIR.TypeAnno.Id
     return current;
 }
 
+/// Where a type declaration's body places one of its own formals, relative to
+/// the declaration's root.
+///
+/// A reference's argument stands wherever the declaration puts the formal it
+/// is substituted for, so the argument is generated at the reference's
+/// polarity COMPOSED with this—the same position the type spelled out in place
+/// would have. `Handler(e) : e -> Str` puts `e` in an input position, so the
+/// `[A, B]` of `Handler([A, B])` written as an output is generated closed,
+/// exactly like the `[A, B] -> Str` the reference stands for. Without the
+/// composition the argument inherited the REFERENCE's polarity and opened,
+/// and an annotation that the direct spelling enforces was not enforced
+/// through the alias.
+///
+/// This is the polarity counterpart of `instantiationReach`: reach already
+/// re-decides itself inside the referenced declaration, and polarity did not.
+///
+/// Every shape the walk does not model contributes a COVARIANT occurrence.
+/// `.covariant` and "no idea" take the same action—the argument keeps the
+/// reference's own polarity—which is what every argument did before this walk
+/// existed, so an unmodeled shape can only fail to the pre-walk answer rather
+/// than to a wrong one.
+const FormalVariance = enum {
+    /// The declaration body never names this formal.
+    unused,
+    /// Only positions that preserve the reference's polarity, plus every
+    /// position this walk does not model (see above).
+    covariant,
+    /// Only positions that negate it.
+    contravariant,
+    /// Both. One variable cannot be open on the output side and closed on the
+    /// input side, so an invariant argument is generated closed whatever the
+    /// reference's own polarity is.
+    invariant,
+
+    /// This formal's variance given one more occurrence's.
+    fn join(self: FormalVariance, other: FormalVariance) FormalVariance {
+        if (self == .unused) return other;
+        if (other == .unused) return self;
+        if (self == other) return self;
+        return .invariant;
+    }
+
+    /// One occurrence standing at `polarity` within the declaration body.
+    fn ofOccurrence(polarity: Polarity) FormalVariance {
+        return switch (polarity) {
+            .pos => .covariant,
+            .neg => .contravariant,
+        };
+    }
+
+    /// The polarity an argument substituted for this formal is generated at,
+    /// given the polarity of the reference itself.
+    fn compose(self: FormalVariance, reference: Polarity) Polarity {
+        return switch (self) {
+            .unused, .covariant => reference,
+            .contravariant => reference.flip(),
+            .invariant => .neg,
+        };
+    }
+};
+
+/// How many nested declarations `applyFormalVariances` descends through. Only
+/// the DECLARATION chain is native-stack recursion; each declaration's body is
+/// walked iteratively, so an alias spine thousands of layers deep costs no
+/// native stack. A reference below this depth is walked as unmodeled, the same
+/// answer a cross-module or builtin reference gets.
+const max_formal_variance_decl_depth: usize = 8;
+
+/// How many positions of one declaration body may be pending at once. Sized
+/// for the nesting and fan-out of a real declaration, not for a generated
+/// spine.
+const max_formal_variance_pending: usize = 256;
+
+/// The total positions one `applyFormalVariances` may visit, across the
+/// declarations it descends through. Bounded for the same reason the alias
+/// walk in `applyTryErrorArgIndex` is: a guard whose only job is to answer
+/// must answer in bounded time, whatever declaration graph it is handed.
+const max_formal_variance_nodes: usize = 2048;
+
+/// One position of a declaration body still to be visited, and where that
+/// position sits relative to the declaration's own root.
+const FormalVariancePending = struct {
+    anno: CIR.TypeAnno.Idx,
+    polarity: Polarity,
+};
+
+/// Allocation-free state of one `applyFormalVariances` walk.
+///
+/// Every bound below costs PRECISION only: when one is hit the walk reports
+/// itself exhausted, the whole answer is discarded, and every argument keeps
+/// the application's own polarity, which is what all of them did before this
+/// walk existed. A partial answer is never used, because a walk that stopped
+/// early can miss an occurrence and name a variance the declaration does not
+/// have.
+const FormalVarianceWalk = struct {
+    /// Declarations currently being walked, outermost first. A reference back
+    /// into one of them is a cycle (`Tree(a) := [Node(Tree(a)), Leaf(a)]`):
+    /// its arguments are walked as unmodeled rather than descended into again,
+    /// so the walk terminates without discarding the rest of the body.
+    open_decls: [max_formal_variance_decl_depth]CIR.Statement.Idx,
+    open_decls_len: usize,
+    /// Positions the walk may still visit.
+    fuel: usize,
+    /// Set when a bound was hit. See the type's doc comment.
+    exhausted: bool,
+};
+
+/// The variance of each formal of the declaration `apply` references, written
+/// into `out`, returning how many formals were written. Null when this is not
+/// a reference whose declaration the walk models, in which case every argument
+/// keeps the application's own polarity, as it always did.
+fn applyFormalVariances(
+    self: *const Self,
+    apply: CIR.TypeAnno.Apply,
+    out: *[max_tracked_alias_formals]FormalVariance,
+) ?usize {
+    // Cross-module declarations are deliberately out of scope, exactly as they
+    // are in `applyTryErrorArgIndex`: the declaration's CIR lives in another
+    // module and its formal names are interned in another ident store. A
+    // compiler-constructed `.builtin` application (`List`, `Box`, the
+    // numerics) holds its argument covariantly, which is what inheriting the
+    // application's polarity already does.
+    const local = switch (apply.base) {
+        .local => |local_ref| local_ref,
+        .builtin, .external, .pending => return null,
+    };
+    var walk = FormalVarianceWalk{
+        .open_decls = undefined,
+        .open_decls_len = 0,
+        .fuel = max_formal_variance_nodes,
+        .exhausted = false,
+    };
+    const formals_len = self.declFormalVariances(local.decl_idx, out, &walk) orelse return null;
+    if (walk.exhausted) return null;
+    // An arity mismatch is reported by the caller; until then the positional
+    // correspondence this walk assumes does not hold.
+    if (formals_len != self.cir.store.sliceTypeAnnos(apply.args).len) return null;
+    return formals_len;
+}
+
+/// The variance of each of `decl_idx`'s own formals within its body, written
+/// into `out`, returning how many formals were written. Null when `decl_idx`
+/// is not an alias or nominal declaration this walk models.
+fn declFormalVariances(
+    self: *const Self,
+    decl_idx: CIR.Statement.Idx,
+    out: *[max_tracked_alias_formals]FormalVariance,
+    walk: *FormalVarianceWalk,
+) ?usize {
+    if (walk.exhausted) return null;
+    if (walk.open_decls_len == max_formal_variance_decl_depth) return null;
+    for (walk.open_decls[0..walk.open_decls_len]) |open_decl| {
+        if (open_decl == decl_idx) return null;
+    }
+
+    const header, const body = switch (self.cir.store.getStatement(decl_idx)) {
+        .s_alias_decl => |decl| .{ decl.header, decl.anno },
+        .s_nominal_decl => |decl| .{ decl.header, decl.anno },
+        .s_decl,
+        .s_var,
+        .s_var_uninitialized,
+        .s_reassign,
+        .s_crash,
+        .s_dbg,
+        .s_expr,
+        .s_expect,
+        .s_for,
+        .s_while,
+        .s_infinite_loop,
+        .s_breakable_loop,
+        .s_break,
+        .s_return,
+        .s_import,
+        .s_where_alias_decl,
+        .s_type_anno,
+        .s_type_var_alias,
+        .s_runtime_error,
+        => return null,
+    };
+
+    const formals = self.cir.store.sliceTypeAnnos(self.cir.store.getTypeHeader(header).args);
+    if (formals.len > max_tracked_alias_formals) return null;
+    for (out[0..formals.len]) |*variance| variance.* = .unused;
+
+    walk.open_decls[walk.open_decls_len] = decl_idx;
+    walk.open_decls_len += 1;
+    defer walk.open_decls_len -= 1;
+
+    // A declaration's body root is an output position relative to the
+    // declaration itself, the same convention `generateAnnotationType` starts
+    // an annotation walk with.
+    self.accumulateFormalVariances(body, formals, .pos, out, walk);
+    return formals.len;
+}
+
+/// Join into `out[i]` the variance of every occurrence of `formals[i]` within
+/// `root_anno_idx`, which itself stands at `root_polarity` relative to the
+/// declaration whose formals these are.
+///
+/// The body is walked on an explicit stack, not the native one: a declaration
+/// body can be an alias spine thousands of layers deep
+/// (`A(a) : List(List(... List(B(a)) ...))`), which a recursive descent cannot
+/// survive. Only the DECLARATION chain recurses, bounded by
+/// `max_formal_variance_decl_depth`.
+fn accumulateFormalVariances(
+    self: *const Self,
+    root_anno_idx: CIR.TypeAnno.Idx,
+    formals: []const CIR.TypeAnno.Idx,
+    root_polarity: Polarity,
+    out: *[max_tracked_alias_formals]FormalVariance,
+    walk: *FormalVarianceWalk,
+) void {
+    var pending: [max_formal_variance_pending]FormalVariancePending = undefined;
+    var pending_len: usize = 1;
+    pending[0] = .{ .anno = root_anno_idx, .polarity = root_polarity };
+
+    while (pending_len > 0) {
+        if (walk.fuel == 0) {
+            walk.exhausted = true;
+            return;
+        }
+        walk.fuel -= 1;
+
+        pending_len -= 1;
+        const here = pending[pending_len];
+
+        // Room for the positions this node opens up, checked once before any
+        // is pushed.
+        const anno = self.cir.store.getTypeAnno(here.anno);
+        const child_count: usize = switch (anno) {
+            .rigid_var, .rigid_var_lookup, .lookup, .underscore, .malformed => 0,
+            .parens => 1,
+            .@"fn" => |func| self.cir.store.sliceTypeAnnos(func.args).len + 1,
+            .tag_union => |tag_union| self.cir.store.sliceTypeAnnos(tag_union.tags).len +
+                @intFromBool(tag_union.ext != null),
+            .tag => |tag| self.cir.store.sliceTypeAnnos(tag.args).len,
+            .tuple => |tuple| self.cir.store.sliceTypeAnnos(tuple.elems).len,
+            .record => |record| self.cir.store.sliceAnnoRecordFields(record.fields).len +
+                @intFromBool(record.ext != null),
+            .apply => |inner| self.cir.store.sliceTypeAnnos(inner.args).len,
+        };
+        if (pending_len + child_count > pending.len) {
+            walk.exhausted = true;
+            return;
+        }
+
+        switch (anno) {
+            .rigid_var, .rigid_var_lookup => {
+                if (self.annoFormalIndex(here.anno, formals)) |formal_index| {
+                    out[formal_index] = out[formal_index].join(FormalVariance.ofOccurrence(here.polarity));
+                }
+            },
+            .parens => |parens| {
+                pending[pending_len] = .{ .anno = parens.anno, .polarity = here.polarity };
+                pending_len += 1;
+            },
+            .@"fn" => |func| {
+                // The same rule the annotation walk uses: argument positions
+                // negate the surrounding polarity, the return preserves it.
+                for (self.cir.store.sliceTypeAnnos(func.args)) |arg_anno_idx| {
+                    pending[pending_len] = .{ .anno = arg_anno_idx, .polarity = here.polarity.flip() };
+                    pending_len += 1;
+                }
+                pending[pending_len] = .{ .anno = func.ret, .polarity = here.polarity };
+                pending_len += 1;
+            },
+            .tag_union => |tag_union| {
+                for (self.cir.store.sliceTypeAnnos(tag_union.tags)) |tag_anno_idx| {
+                    pending[pending_len] = .{ .anno = tag_anno_idx, .polarity = here.polarity };
+                    pending_len += 1;
+                }
+                if (tag_union.ext) |ext_anno_idx| {
+                    pending[pending_len] = .{ .anno = ext_anno_idx, .polarity = here.polarity };
+                    pending_len += 1;
+                }
+            },
+            .tag => |tag| {
+                for (self.cir.store.sliceTypeAnnos(tag.args)) |tag_arg_idx| {
+                    pending[pending_len] = .{ .anno = tag_arg_idx, .polarity = here.polarity };
+                    pending_len += 1;
+                }
+            },
+            .tuple => |tuple| {
+                for (self.cir.store.sliceTypeAnnos(tuple.elems)) |elem_anno_idx| {
+                    pending[pending_len] = .{ .anno = elem_anno_idx, .polarity = here.polarity };
+                    pending_len += 1;
+                }
+            },
+            .record => |record| {
+                for (self.cir.store.sliceAnnoRecordFields(record.fields)) |field_idx| {
+                    pending[pending_len] = .{
+                        .anno = self.cir.store.getAnnoRecordField(field_idx).ty,
+                        .polarity = here.polarity,
+                    };
+                    pending_len += 1;
+                }
+                if (record.ext) |ext_anno_idx| {
+                    pending[pending_len] = .{ .anno = ext_anno_idx, .polarity = here.polarity };
+                    pending_len += 1;
+                }
+            },
+            .apply => |inner| {
+                // A nested reference composes the same way the top-level one
+                // does. When the inner declaration is not one this walk
+                // models, its arguments are walked at this position's own
+                // polarity, which is the pre-walk answer.
+                const inner_args = self.cir.store.sliceTypeAnnos(inner.args);
+                var inner_variances: [max_tracked_alias_formals]FormalVariance = undefined;
+                const inner_modeled = inner_blk: {
+                    const base_ref = switch (inner.base) {
+                        .local => |local_ref| local_ref,
+                        .builtin, .external, .pending => break :inner_blk false,
+                    };
+                    const written = self.declFormalVariances(base_ref.decl_idx, &inner_variances, walk) orelse
+                        break :inner_blk false;
+                    break :inner_blk written == inner_args.len;
+                };
+                if (walk.exhausted) return;
+                for (inner_args, 0..) |inner_arg_idx, inner_index| {
+                    pending[pending_len] = .{
+                        .anno = inner_arg_idx,
+                        .polarity = if (inner_modeled)
+                            inner_variances[inner_index].compose(here.polarity)
+                        else
+                            here.polarity,
+                    };
+                    pending_len += 1;
+                }
+            },
+            // No formal can be named by any of these.
+            .lookup, .underscore, .malformed => {},
+        }
+    }
+}
+
 /// Push every constraint one where clause places on `owner_var`. A method
 /// clause declares exactly one, left for `completeOwnedStaticDispatchConstraint`
 /// to type from its annotation; a where alias contributes each constraint it
@@ -16695,9 +17030,16 @@ fn generateAnnoTypeInPlace(self: *Self, anno_idx: CIR.TypeAnno.Idx, env: *Env, c
         .apply => |a| {
             if (try self.rejectWhereAliasInTypePosition(a.name, a.base, anno_var, anno_region, env)) return;
 
-            // Generate the types for the arguments. Type application args
-            // inherit the application's polarity: `Try(U8, [E])` in an output
-            // position puts `[E]` in an output position too. A `Try` written
+            // Generate the types for the arguments. Each argument stands
+            // wherever the referenced DECLARATION puts the formal it is
+            // substituted for, so its polarity is the application's composed
+            // with that formal's variance (`applyFormalVariances`): `Try(U8,
+            // [E])` holds its error row covariantly, so `[E]` in an output
+            // position is an output position too, while `Handler(e) : e -> Str`
+            // holds `e` contravariantly, so the `[A, B]` of `Handler([A, B])`
+            // is generated closed exactly like the `[A, B] -> Str` the
+            // reference stands for. An argument whose declaration the walk does
+            // not model keeps the application's own polarity. A `Try` written
             // as the direct result also passes the adapter's reach to its
             // ERROR row; every other application argument puts its arguments
             // out of reach.
@@ -16735,12 +17077,18 @@ fn generateAnnoTypeInPlace(self: *Self, anno_idx: CIR.TypeAnno.Idx, env: *Env, c
             const nested_arg_ctx = ctx.withReach(.nested);
             const try_error_arg_ctx = ctx.withReach(.try_row);
             const anno_args = self.cir.store.sliceTypeAnnos(a.args);
+            var formal_variances: [max_tracked_alias_formals]FormalVariance = undefined;
+            const formal_variances_len = self.applyFormalVariances(a, &formal_variances);
             for (anno_args, 0..) |anno_arg, arg_index| {
                 const arg_ctx = if (try_error_row_reachable and arg_index == try_error_arg_index.?)
                     try_error_arg_ctx
                 else
                     nested_arg_ctx;
-                try self.generateAnnoTypeInPlace(anno_arg, env, arg_ctx, polarity);
+                const arg_polarity = if (formal_variances_len == null)
+                    polarity
+                else
+                    formal_variances[arg_index].compose(polarity);
+                try self.generateAnnoTypeInPlace(anno_arg, env, arg_ctx, arg_polarity);
             }
             const anno_arg_vars: []Var = @ptrCast(anno_args);
 

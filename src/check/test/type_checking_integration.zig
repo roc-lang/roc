@@ -8895,6 +8895,128 @@ test "check type - polarity - alias in output position still bounds the body" {
     try checkTypesModule(source, .fail_first, "Type Mismatch");
 }
 
+test "check type - polarity - alias reference closes a row the declaration puts in an input position" {
+    // The regression this pins: `Handler(e) : e -> Str` puts `e` in an INPUT
+    // position, so `Handler([A, B])` written as an output must generate
+    // `[A, B]` closed, exactly like the `[A, B] -> Str` it stands for. The
+    // reference's own polarity used to reach the argument unchanged, which
+    // opened the row and left the annotation unenforced: `process(C)` checked.
+    //
+    // The body deliberately ignores its parameter. Any body that USES the
+    // parameter closes the row on its own and hides the bug.
+    const source =
+        \\Handler(e) : e -> Str
+        \\
+        \\process : Handler([A, B])
+        \\process = |_tag| "x"
+        \\
+        \\bad = process(C)
+    ;
+    try checkTypesModule(source, .fail, "Type Mismatch");
+}
+
+test "check type - polarity - the same row written directly is closed" {
+    // The control for the test above, and the whole point of it: the alias
+    // spelling and the direct spelling are the same type, so they must check
+    // the same way. This half was always correct.
+    const source =
+        \\process : [A, B] -> Str
+        \\process = |_tag| "x"
+        \\
+        \\bad = process(C)
+    ;
+    try checkTypesModule(source, .fail, "Type Mismatch");
+}
+
+test "check type - polarity - alias reference in an input position composes back to open" {
+    // Composition, not closing: a contravariant formal applied in an INPUT
+    // position negates twice, so the row is an output again and a wider
+    // handler is accepted, exactly as the direct spelling
+    // `(([A, B] -> Str) -> Str)` accepts one. A fix that merely closed every
+    // argument of a contravariant formal would reject this.
+    const source =
+        \\Handler(e) : e -> Str
+        \\
+        \\run : Handler([A, B]) -> Str
+        \\run = |_h| "ran"
+        \\
+        \\wide : [A, B, C] -> Str
+        \\wide = |_tag| "w"
+        \\
+        \\out = run(wide)
+    ;
+    try checkTypesModule(source, .{ .pass = .{ .def = "out" } }, "Str");
+}
+
+test "check type - polarity - alias reference still opens a row the declaration puts in an output position" {
+    // The feature itself, through the same walk: `Producer(e) : Str -> e`
+    // holds `e` covariantly, so the applied row keeps the reference's polarity
+    // and stays open for callers.
+    const source =
+        \\Producer(e) : Str -> e
+        \\
+        \\produce : Producer([A, B])
+        \\produce = |_| A
+        \\
+        \\consume : [A, B, C] -> Str
+        \\consume = |_| "x"
+        \\
+        \\out = consume(produce("s"))
+    ;
+    try checkTypesModule(source, .{ .pass = .{ .def = "out" } }, "Str");
+}
+
+test "check type - polarity - a formal in both positions is closed" {
+    // One variable cannot be open on the output side and closed on the input
+    // side, so an invariant formal's argument is generated closed whatever the
+    // reference's own polarity is: the output use may not widen it either.
+    const source =
+        \\Both(e) : { to : e -> Str, from : Str -> e }
+        \\
+        \\pair : Both([A, B])
+        \\pair = { to: |_tag| "x", from: |_| A }
+        \\
+        \\bad = {
+        \\    { to, from: _ } = pair
+        \\    to(C)
+        \\}
+    ;
+    try checkTypesModule(source, .fail, "Type Mismatch");
+}
+
+test "check type - polarity - a formal reached through a nested alias composes through both" {
+    // Variance composes across declarations: `Outer(e) : Inner(e)` and
+    // `Inner(x) : x -> Str` place `e` in an input position two declarations
+    // down, so `Outer([A, B])` written as an output still closes the row.
+    const source =
+        \\Inner(x) : x -> Str
+        \\Outer(e) : Inner(e)
+        \\
+        \\process : Outer([A, B])
+        \\process = |_tag| "x"
+        \\
+        \\bad = process(C)
+    ;
+    try checkTypesModule(source, .fail, "Type Mismatch");
+}
+
+test "check type - polarity - a nominal declaration's input position closes the applied row too" {
+    // A nominal declaration substitutes its formals the same way an alias
+    // does, so the walk models it the same way.
+    const source =
+        \\Consumer(e) := { f : e -> Str }
+        \\
+        \\make : Consumer([A, B])
+        \\make = Consumer.{ f: |_tag| "x" }
+        \\
+        \\bad = {
+        \\    Consumer.{ f } = make
+        \\    f(C)
+        \\}
+    ;
+    try checkTypesModule(source, .fail, "Type Mismatch");
+}
+
 test "check type - polarity - empty tag union stays closed in output position" {
     // `[]` asserts uninhabitedness (eg `Try(a, [])` needs no `Err` branch);
     // polarity must not open it, so producing any error tag is rejected.
