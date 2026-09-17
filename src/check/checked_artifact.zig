@@ -19165,7 +19165,7 @@ const EvidencePass = struct {
             null;
     }
 
-    /// A same-name fallback names an independent callable. When that callable
+    /// A same-name candidate names an independent callable. When that callable
     /// is (in one settled class with) a per-use where-method signature copy
     /// (`SchemeUseRecord.where_method_use`) whose pristine signature is the
     /// slot's own callable, the plan may reuse the slot's checked
