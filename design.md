@@ -262,6 +262,13 @@ explicit target, and a missing internal definition is a compiler invariant failu
 The named object-input API resolves its declared names once at its boundary;
 compiler-generated machine code uses the indexed API directly.
 
+A standalone readonly-data object gives its definitions global linker binding:
+the separate LLVM code object can directly reference any allocation named by a
+frozen address relocation when embedding a constant root. Private allocations
+retain hidden visibility and do not become host exports. A combined code/data
+object keeps local binding for private allocations because those references
+remain inside that object.
+
 Definitions retain their assigned symbol IDs through final metadata assembly.
 Object writers borrow immutable section bytes until emission, compute the final
 layout before allocating the output, and apply implicit addends only to that
@@ -9835,6 +9842,13 @@ Lambda Mono expression, pattern, or statement tree. The direct `.lss` LIR
 builder consumes the Lambda Solved lifted syntax together with Lambda Mono
 decision tables. `.boxy` does not construct Lambda Mono decisions.
 
+Exact specialization demand and shared LIR procedure-body scheduling are separate
+state. When distinct specializations have one procedure identity, a reference
+demands its exact specialization and queues the shared owner's body once. It
+does not demand the owner's specialization merely because that owner supplies
+the body. The debug materializer compares referenced specializations; sharing a
+procedure must not introduce additional specialization demands into that check.
+
 The Lambda Mono type store has no function type. Function values have already
 become ordinary value representations:
 
@@ -13513,6 +13527,13 @@ be an outer nominal or zero-discriminant tag wrapper only when the emitted
 certification derives that exact allocation identity from those explicit
 producer operations and rejects a call that would pass one allocation to the
 machine ABI while consuming another in ARC.
+
+The erased ABI's capture pointer addresses the interior of the callable passed
+as the reuse ownership input. LLVM must not mark either parameter `noalias`:
+capture reads and writes or releases through the owner can access the same
+allocation. The return destination can also alias reused storage. Backend
+alias attributes preserve these explicit ABI relationships and the ordering of
+the LIR memory operations; they do not change ownership policy.
 
 Destination-aware aggregate construction is required for the full benefit of
 box reuse. A record update or tag construction whose result is demanded in a

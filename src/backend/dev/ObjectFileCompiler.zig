@@ -895,6 +895,13 @@ fn compileStaticDataObjectBytes(
 
     try appendStaticDataExports(allocator, &table, static_data_exports, &rodata, &rodata_relocations, &symbols);
 
+    // This object is linked separately from generated code. LLVM constant
+    // expressions can reference any backing named by a frozen relocation,
+    // including allocations private to the program. Give those definitions
+    // cross-object binding while retaining their explicit hidden visibility.
+    // Combined code/data objects keep the materializer's local bindings.
+    for (symbols.items) |*definition| definition.symbol.is_global = true;
+
     var resolved = try resolveObjectSymbols(allocator, &table, symbols.items, &.{});
     defer resolved.deinit(allocator);
 

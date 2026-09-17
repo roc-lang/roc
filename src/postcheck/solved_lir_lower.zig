@@ -371,6 +371,9 @@ const FnEntry = struct {
     /// Specializations that render to one procedure identity share one proc,
     /// and exactly one of them owns its lowering.
     proc_owner: ?Type.FnId = null,
+    /// The shared procedure body is queued independently of which exact
+    /// specializations are referenced by emitted calls or constant metadata.
+    body_queued: bool = false,
     worker_admissible: ?bool = null,
 };
 
@@ -560,6 +563,8 @@ const Lowerer = struct {
     /// same identity are the same procedure and share the owner's proc.
     procs_by_identity: std.AutoHashMap(LIR.ProcIdentity, Type.FnId),
     fn_written: std.ArrayList(bool),
+    /// Exact specializations demanded by emitted references, independently
+    /// of the representative chosen to lower a shared procedure body.
     fn_reachable: std.ArrayList(bool),
     fn_reach_queue: std.ArrayList(Type.FnId),
     inline_plan: SolvedInline.Plan,
@@ -2442,11 +2447,9 @@ const Lowerer = struct {
         const owner = self.fn_entries.items[index].proc_owner orelse
             Common.invariant("direct LIR proc placeholder had no lowering owner");
         const owner_index = @intFromEnum(owner);
-        if (owner_index != index) {
-            if (self.fn_reachable.items[owner_index]) return proc;
-            self.fn_reachable.items[owner_index] = true;
-        }
+        if (self.fn_entries.items[owner_index].body_queued) return proc;
         try self.fn_reach_queue.append(self.allocator, owner);
+        self.fn_entries.items[owner_index].body_queued = true;
         return proc;
     }
 
@@ -12537,6 +12540,69 @@ fn emptySolvedProgramForTest(allocator: std.mem.Allocator) Solved.Program {
         0, // next_symbol
     );
     return Solved.Program.init(allocator, lifted);
+}
+
+test "shared procedure scheduling preserves exact specialization demand" {
+    const allocator = std.testing.allocator;
+    var solved = emptySolvedProgramForTest(allocator);
+    defer solved.deinit();
+
+    for ([_]bool{ false, true }) |owner_first| {
+        var lowerer = try Lowerer.init(allocator, .u64, &solved, .{});
+        defer lowerer.deinit();
+        var materialized = LambdaMono.Program.init(allocator, NameStore.init(allocator), .empty, .empty, .empty);
+        defer materialized.deinit();
+        const direct_ty = try lowerer.types.add(.{ .primitive = .u8 });
+        const materialized_ty = try materialized.types.add(.{ .primitive = .u8 });
+        const owner: Type.FnId = @enumFromInt(@as(u32, @intCast(lowerer.fn_entries.items.len)));
+        const alias: Type.FnId = @enumFromInt(@intFromEnum(owner) + 1);
+        const proc: LIR.LirProcSpecId = @enumFromInt(@as(u32, @intCast(lowerer.result.store.procSpecCount())));
+        const source: Lifted.FnId = @enumFromInt(@as(u32, @intCast(solved.lifted.fnCount())));
+
+        // Distinct solved signatures have already been assigned the same
+        // procedure identity. Only the alias is initially requested when
+        // owner_first is false, just as in the nested-hover-grid regression.
+        for (0..2) |index| {
+            try lowerer.fn_entries.append(allocator, .{
+                .spec = .{
+                    .source = source,
+                    .solved_fn_ty = @enumFromInt(@as(u32, @intCast(index))),
+                    .abi = .finite,
+                    .captures = CaptureSpanId.fromOwn(0, 0),
+                    .capture_ty = null,
+                    .return_reuse = .none,
+                },
+                .symbol = lowerer.symbols.fresh(),
+                .source = null,
+                .args = .empty(),
+                .ret = direct_ty,
+                .capture_arg_ty = null,
+                .proc = proc,
+                .proc_owner = owner,
+            });
+            try lowerer.fn_reachable.append(allocator, false);
+        }
+        var identities: std.ArrayList(LambdaMonoLower.SpecializationIdentity) = .empty;
+        defer identities.deinit(allocator);
+        const order = if (owner_first) [_]Type.FnId{ owner, alias } else [_]Type.FnId{ alias, owner };
+        for (order) |requested| {
+            try std.testing.expectEqual(proc, try lowerer.markReachableFn(requested));
+            try std.testing.expectEqual(proc, try lowerer.markReachableFn(requested));
+            try std.testing.expectEqualSlices(Type.FnId, &.{owner}, lowerer.fn_reach_queue.items);
+            const entry = lowerer.fn_entries.items[@intFromEnum(requested)];
+            _ = try materialized.addFn(.{
+                .symbol = entry.symbol,
+                .source = null,
+                .args = .empty(),
+                .ret = materialized_ty,
+                .body = .hosted,
+            });
+            try identities.append(allocator, Lowerer.specializationIdentity(entry.spec));
+            try lowerer.verifyFnEntriesMatch(&materialized, identities.items);
+        }
+        try std.testing.expect(lowerer.fn_reachable.items[@intFromEnum(owner)]);
+        try std.testing.expect(lowerer.fn_reachable.items[@intFromEnum(alias)]);
+    }
 }
 
 test "frozen solved clone preserves producer IDs and releases partial allocations" {
