@@ -369,6 +369,6 @@ test "a stub jumps to its target" {
     defer executable.deinit();
     writeStub(executable.memory[0..stub_size], @intFromPtr(&Target.answer));
     try executable.finishWrite();
-    const stub: *const fn () callconv(.c) u64 = @ptrCast(executable.codePtr());
+    const stub: *const fn () callconv(.c) u64 = @ptrCast(@alignCast(executable.codePtr()));
     try std.testing.expectEqual(@as(u64, 42), stub());
 }
