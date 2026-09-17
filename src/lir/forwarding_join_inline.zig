@@ -275,10 +275,10 @@ fn applyCandidate(
     for (0..frame.len) |index| {
         const local = GuardedList.at(frame, index);
         if (!candidate.fresh_definitions[@intFromEnum(local)]) {
-            cloner.local_map[@intFromEnum(local)] = local;
+            try cloner.local_map.put(local, local);
         }
     }
-    cloner.local_map[@intFromEnum(candidate.outer_param)] = candidate.inner_param;
+    try cloner.local_map.put(candidate.outer_param, candidate.inner_param);
 
     const moved_body = try cloner.cloneStmt(outer.body);
     store.getCFStmtPtr(candidate.inner_stmt).join.body = moved_body;

@@ -224,6 +224,7 @@ fn inlineAt(store: *LirStore, layouts: *layout_mod.Store, site: CallSite) Resour
         store,
         .{ .target = call.target, .next = call.next },
         inline_scope,
+        store.getProcSpec(site.caller).body.?,
     );
     defer cloner.deinit();
 
@@ -254,7 +255,7 @@ fn inlineAt(store: *LirStore, layouts: *layout_mod.Store, site: CallSite) Resour
     while (arg_index > 0) {
         arg_index -= 1;
         cloned_body = try store.addCFStmt(.{ .assign_ref = .{
-            .target = cloner.local_map[@intFromEnum(source_args[arg_index])].?,
+            .target = cloner.local_map.get(source_args[arg_index]).?,
             .op = .{ .local = call_args[arg_index] },
             .next = cloned_body,
         } });

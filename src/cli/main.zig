@@ -9796,6 +9796,7 @@ fn compileLlvmAppObject(
         const static_data_procs = try backend.collectReferencedProcs(ctx.gpa, static_data_exports);
         defer ctx.gpa.free(static_data_procs);
         codegen.static_data_procs = static_data_procs;
+        try codegen.setStaticDataExports(static_data_exports);
 
         const llvm_entrypoints = try ctx.arena.alloc(llvm_codegen.MonoLlvmCodeGen.Entrypoint, entrypoints.len);
         for (entrypoints, 0..) |entrypoint, i| {
@@ -16394,6 +16395,8 @@ fn finishPostCheckLowering(
         reporter.recordCounters("Monotype parallel execution", &monotypeParallelCounters(snapshot.monotype_parallel));
         reporter.recordCounters("Solved-LIR parallel execution", &solvedLirParallelCounters(snapshot.solved_lir_parallel));
     }
+    reporter.recordCounters("LIR pass parallel execution", &lirPassParallelCounters(snapshot.lir_pass_parallel));
+    reporter.recordCounters("ARC parallel execution", &arcParallelCounters(snapshot.arc_parallel));
 }
 
 fn postCheckLoweringTotalNs(timing: lir.CheckedPipeline.TimingSnapshot) u64 {
@@ -16436,6 +16439,8 @@ fn recordPostCheckLowering(
         reporter.recordCounters("Monotype parallel execution", &monotypeParallelCounters(snapshot.monotype_parallel));
         reporter.recordCounters("Solved-LIR parallel execution", &solvedLirParallelCounters(snapshot.solved_lir_parallel));
     }
+    reporter.recordCounters("LIR pass parallel execution", &lirPassParallelCounters(snapshot.lir_pass_parallel));
+    reporter.recordCounters("ARC parallel execution", &arcParallelCounters(snapshot.arc_parallel));
 }
 
 fn devTestExecutionBreakdown(timing: eval.test_helpers.DevBoolRootTimingSnapshot) [6]progress.SubTiming {
@@ -16494,7 +16499,7 @@ fn monotypeSpecializationCounters(diagnostics: postcheck.Monotype.Lower.Diagnost
     };
 }
 
-fn monotypeGraphCounters(diagnostics: postcheck.Monotype.Lower.Diagnostics) [27]progress.Counter {
+fn monotypeGraphCounters(diagnostics: postcheck.Monotype.Lower.Diagnostics) [28]progress.Counter {
     const graph = diagnostics.graph;
     return .{
         .{ .name = "Graphs created", .count = diagnostics.body.graphs_created },
@@ -16524,6 +16529,7 @@ fn monotypeGraphCounters(diagnostics: postcheck.Monotype.Lower.Diagnostics) [27]
         .{ .name = "Argument class snapshot nodes", .count = graph.argument_class_members_snapshotted },
         .{ .name = "Structural backing visited slots", .count = graph.structural_backing_scan_slots },
         .{ .name = "Generated-private guard returns", .count = graph.generated_private_guard_returns },
+        .{ .name = "Generated-iterator index lookups", .count = graph.generated_iterator_lookups },
     };
 }
 
@@ -16576,6 +16582,64 @@ fn solvedLirParallelCounters(parallel: lir.CheckedPipeline.SolvedLirParallelMetr
         .{ .name = "Worker literal tasks committed", .count = parallel.worker_literal_tasks_committed },
         .{ .name = "Worker loop tasks committed", .count = parallel.worker_loop_tasks_committed },
     };
+}
+
+fn arcParallelCounters(parallel: lir.CheckedPipeline.ArcParallelMetrics) [8]progress.Counter {
+    return .{
+        .{ .name = "Source tasks submitted", .count = parallel.source_tasks_submitted },
+        .{ .name = "Source tasks committed", .count = parallel.source_tasks_committed },
+        .{ .name = "Planning tasks submitted", .count = parallel.planning_tasks_submitted },
+        .{ .name = "Planning tasks committed", .count = parallel.planning_tasks_committed },
+        .{ .name = "Emission tasks submitted", .count = parallel.emission_tasks_submitted },
+        .{ .name = "Emission tasks committed", .count = parallel.emission_tasks_committed },
+        .{ .name = "Specialization waves", .count = parallel.waves },
+        .{ .name = "Variants reserved", .count = parallel.variants_reserved },
+    };
+}
+
+test "post-check diagnostics preserve labeled ARC counts" {
+    const rows = arcParallelCounters(.{
+        .source_tasks_submitted = 1,
+        .source_tasks_committed = 2,
+        .planning_tasks_submitted = 3,
+        .planning_tasks_committed = 4,
+        .emission_tasks_submitted = 5,
+        .emission_tasks_committed = 6,
+        .waves = 7,
+        .variants_reserved = 8,
+    });
+    const names = [_][]const u8{
+        "Source tasks submitted",
+        "Source tasks committed",
+        "Planning tasks submitted",
+        "Planning tasks committed",
+        "Emission tasks submitted",
+        "Emission tasks committed",
+        "Specialization waves",
+        "Variants reserved",
+    };
+    try std.testing.expectEqual(std.meta.fields(lir.CheckedPipeline.ArcParallelMetrics).len, rows.len);
+    for (rows, names, 0..) |row, name, index| {
+        try std.testing.expectEqualStrings(name, row.name);
+        try std.testing.expectEqual(@as(u64, index + 1), row.count);
+    }
+    for (arcParallelCounters(.{})) |row| try std.testing.expectEqual(@as(u64, 0), row.count);
+}
+
+fn lirPassParallelCounters(parallel: lir.CheckedPipeline.LirPassParallelMetrics) [15]progress.Counter {
+    var rows: [15]progress.Counter = undefined;
+    rows[0..5].* = .{
+        .{ .name = "Tasks submitted", .count = parallel.tasks_submitted },
+        .{ .name = "Tasks committed", .count = parallel.tasks_committed },
+        .{ .name = "Prepared statement rows", .count = parallel.prepared_statement_rows },
+        .{ .name = "Appended statements", .count = parallel.appended_statements },
+        .{ .name = "Peak retained procedure shards", .count = parallel.peak_retained_shards },
+    };
+    inline for (.{ "TRMC", "Join scalarization", "Loop append promotion", "Range proving", "Box reuse" }, 0..) |name, index| {
+        rows[5 + 2 * index] = .{ .name = name ++ " tasks", .count = parallel.committed_by_phase[index] };
+        rows[6 + 2 * index] = .{ .name = name ++ " rewrites", .count = parallel.changed_by_phase[index] };
+    }
+    return rows;
 }
 
 fn monotypeParallelCounters(parallel: postcheck.Monotype.Lower.ParallelMetricsSnapshot) [13]progress.Counter {
@@ -16718,6 +16782,28 @@ test "post-check diagnostics preserve labeled Solved-LIR counts" {
     }
 }
 
+test "post-check diagnostics preserve labeled LIR pass counts" {
+    const rows = lirPassParallelCounters(.{
+        .tasks_submitted = 10,
+        .tasks_committed = 10,
+        .prepared_statement_rows = 100,
+        .appended_statements = 30,
+        .peak_retained_shards = 8,
+        .committed_by_phase = .{ 1, 2, 3, 4, 5 },
+        .changed_by_phase = .{ 0, 1, 2, 3, 4 },
+    });
+    try std.testing.expectEqualStrings("Tasks submitted", rows[0].name);
+    try std.testing.expectEqual(@as(u64, 10), rows[0].count);
+    try std.testing.expectEqualStrings("Peak retained procedure shards", rows[4].name);
+    try std.testing.expectEqual(@as(u64, 8), rows[4].count);
+    try std.testing.expectEqualStrings("Box reuse rewrites", rows[14].name);
+    for (0..5) |index| {
+        try std.testing.expectEqual(@as(u64, @intCast(index + 1)), rows[5 + 2 * index].count);
+        try std.testing.expectEqual(@as(u64, @intCast(index)), rows[6 + 2 * index].count);
+    }
+    for (lirPassParallelCounters(.{})) |row| try std.testing.expectEqual(@as(u64, 0), row.count);
+}
+
 test "post-check diagnostics preserve labeled Monotype counts" {
     var diagnostics: postcheck.Monotype.Lower.Diagnostics = .{};
     diagnostics.specialization.template_requests = 101;
@@ -16725,6 +16811,7 @@ test "post-check diagnostics preserve labeled Monotype counts" {
     diagnostics.graph.nodes_created = 201;
     diagnostics.graph.generated_private_nodes_visited = 202;
     diagnostics.graph.generated_private_guard_returns = 204;
+    diagnostics.graph.generated_iterator_lookups = 206;
     diagnostics.graph.nominal_backing_tombstone_deletions = 203;
     diagnostics.body.instantiation_scopes_created = 303;
     diagnostics.body.checked_node_cache_hits = 301;
@@ -16748,6 +16835,8 @@ test "post-check diagnostics preserve labeled Monotype counts" {
     try std.testing.expectEqualStrings("Generated-private containment queries", graph[15].name);
     try std.testing.expectEqualStrings("Generated-private guard returns", graph[26].name);
     try std.testing.expectEqual(@as(u64, 204), graph[26].count);
+    try std.testing.expectEqualStrings("Generated-iterator index lookups", graph[27].name);
+    try std.testing.expectEqual(@as(u64, 206), graph[27].count);
 
     const body = monotypeBodyCounters(diagnostics);
     try std.testing.expectEqualStrings("Type instantiation scopes", body[3].name);

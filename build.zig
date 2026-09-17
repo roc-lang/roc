@@ -336,48 +336,72 @@ fn getReleaseTargetQuery(b: *std.Build, target: ResolvedTarget) std.Target.Query
     return query;
 }
 
-/// `addSha256Floor` applied to an already-resolved target, unless the query
-/// named a CPU model explicitly (`-Dcpu`), in which case the caller's choice
-/// stands and `TypeDigestHasher` reports a missing feature at compile time.
-fn withSha256Floor(b: *std.Build, target: ResolvedTarget) ResolvedTarget {
+/// `addSha256Floor` applied to the target `zig build` compiles for, unless the
+/// query named a CPU model explicitly (`-Dcpu`), in which case the caller's
+/// choice stands and `TypeDigestHasher` reports a missing feature at compile
+/// time.
+///
+/// A Debug build for this machine's own x86_64 architecture and OS also gets
+/// the SHA extension (with the SSSE3 the rounds use) when this machine has
+/// it. Debug uses Zig's self-hosted x86_64 backend, which encodes only
+/// instructions in the target CPU's feature set, so without the feature such
+/// a build has no hardware rounds at all and computes every digest with the
+/// portable rounds (see `dispatches_at_runtime` in
+/// src/base/sha256_rounds.zig). The floor keeps Debug builds and test suites
+/// on hardware rounds where the CPU allows it; a machine without the
+/// extension gets the portable rounds, and every LLVM build stays at the
+/// architecture baseline and dispatches at runtime, like a released binary.
+fn withSha256Floor(b: *std.Build, target: ResolvedTarget, optimize: std.builtin.OptimizeMode) ResolvedTarget {
     var query = target.query;
     switch (query.cpu_model) {
         .determined_by_arch_os, .baseline => {},
         .native, .explicit => return target,
     }
     addSha256Floor(&query);
+    if (optimize == .Debug and hostBuildsDebugWithSha(target)) {
+        query.cpu_features_add.addFeature(@intFromEnum(std.Target.x86.Feature.sha));
+        query.cpu_features_add.addFeature(@intFromEnum(std.Target.x86.Feature.ssse3));
+    }
     return b.resolveTargetQuery(query);
 }
 
-/// Raise a 64-bit compiler target's CPU floor to include the SHA-256
+/// Whether `target` is this machine's own x86_64 architecture and OS and this
+/// machine's CPU has the SHA extension and SSSE3. `builtin.cpu` here is the
+/// CPU the build runner was compiled for, which Zig detects from the machine.
+/// x86_64 macOS never takes the floor: it computes digests with the portable
+/// rounds unless `-Dcpu` names its CPU (see `uses_software_rounds` in
+/// src/base/sha256_rounds.zig).
+fn hostBuildsDebugWithSha(target: ResolvedTarget) bool {
+    if (builtin.target.cpu.arch != .x86_64) return false;
+    if (target.result.cpu.arch != .x86_64 or target.result.os.tag != builtin.target.os.tag) return false;
+    if (target.result.os.tag == .macos) return false;
+    return builtin.cpu.hasAll(.x86, &.{ .sha, .ssse3 });
+}
+
+/// Raise an aarch64 compiler target's CPU floor to include the SHA-256
 /// instructions. Type digests are cryptographic SHA-256 (see
-/// `src/base/TypeDigestHasher.zig` for why) and every target this applies to
-/// computes them in hardware with no software rounds, so a 64-bit CPU without
-/// these instructions is not a supported host for the compiler. This is the only
-/// feature added above the architecture baseline: on x86_64 it is the SHA
-/// extension (every SHA CPU already has the SSSE3 the rounds also use), which
-/// AMD Zen and Intel Ice Lake and later carry but Intel's 2015-2020 Skylake
-/// through Comet Lake cores do not; on aarch64 it is the `sha2` crypto
-/// extension, present on all Apple Silicon, Graviton, Ampere and Raspberry
-/// Pi 5, absent on the Cortex-A53/A72 in Raspberry Pi 4 and earlier. A
-/// `-Dcpu` that omits the feature fails to compile `TypeDigestHasher` rather
-/// than silently getting a slower binary.
+/// `src/base/TypeDigestHasher.zig` for why) and aarch64 computes them in
+/// hardware with no software rounds, so an aarch64 CPU without these
+/// instructions is not a supported host for the compiler. This is the only
+/// feature added above the architecture baseline: the `sha2` crypto extension,
+/// present on all Apple Silicon, Graviton, Ampere and Raspberry Pi 5, absent on
+/// the Cortex-A53/A72 in Raspberry Pi 4 and earlier. A `-Dcpu` that omits the
+/// feature fails to compile `TypeDigestHasher` rather than silently getting a
+/// slower binary.
 ///
-/// x86_64 macOS gets no floor: its CPUs are the Skylake-through-Comet-Lake
-/// cores named above, so the floor would make the binary die of SIGILL on
-/// nearly every Intel Mac. It computes digests with the portable rounds
-/// instead -- see `roc_target.usesSoftwareSha256`.
+/// x86_64 gets no floor here. Its SHA extension is missing from Intel's
+/// 2015-2020 Skylake through Comet Lake cores, which are every Intel Mac and
+/// still a common Linux and Windows machine, so the binary stays at the
+/// architecture baseline and the rounds are chosen for the CPU it runs on: at
+/// runtime by CPUID on every x86_64 target except macOS (see
+/// `dispatches_at_runtime` in src/base/sha256_rounds.zig), and always the
+/// portable rounds on x86_64 macOS (see `uses_software_rounds` there). Debug
+/// builds for this machine are the one exception, in `withSha256Floor`.
 fn addSha256Floor(query: *std.Target.Query) void {
     const arch = query.cpu_arch orelse builtin.target.cpu.arch;
-    const os = query.os_tag orelse builtin.target.os.tag;
-    if (roc_target.usesSoftwareSha256(arch, os)) return;
     switch (roc_target.classifyCpuArch(arch)) {
-        .x86_64 => {
-            query.cpu_features_add.addFeature(@intFromEnum(std.Target.x86.Feature.sha));
-            query.cpu_features_add.addFeature(@intFromEnum(std.Target.x86.Feature.ssse3));
-        },
         .aarch64 => query.cpu_features_add.addFeature(@intFromEnum(std.Target.aarch64.Feature.sha2)),
-        .aarch64_be, .arm, .wasm32, .other => {},
+        .x86_64, .aarch64_be, .arm, .wasm32, .other => {},
     }
 }
 
@@ -776,10 +800,10 @@ const CheckTypeCheckerPatternsStep = struct {
         // compare indices in. It also compares bare display names solely to
         // choose an unambiguous human-readable origin. Error-reporting path,
         // not a type-checker judgment.
-        .{ .file = "compile_time_finalization.zig", .start = 3185, .end = 3191 },
+        .{ .file = "compile_time_finalization.zig", .start = 3194, .end = 3200 },
         // Consumer compatibility excludes observation sinks by Zig field name at
         // compile time. These are compiler API fields, never Roc identifiers.
-        .{ .file = "compile_time_finalization.zig", .start = 164, .end = 175 },
+        .{ .file = "compile_time_finalization.zig", .start = 164, .end = 176 },
         // report.zig compares already-formatted diagnostic text only to avoid
         // printing two visually identical types. This is presentation logic,
         // not a type-checking or identifier comparison.
@@ -3035,6 +3059,7 @@ pub fn build(b: *std.Build) void {
     const build_release_step = b.step("build-release", "Build optimized release binary for distribution");
 
     // general configuration
+    const optimize = b.standardOptimizeOption(.{});
     const target = blk: {
         var default_target_query: std.Target.Query = .{
             .abi = if (builtin.target.os.tag == .linux) .musl else null,
@@ -3049,9 +3074,8 @@ pub fn build(b: *std.Build) void {
             default_target_query.cpu_model = .baseline;
         }
 
-        break :blk withSha256Floor(b, b.standardTargetOptions(.{ .default_target = default_target_query }));
+        break :blk withSha256Floor(b, b.standardTargetOptions(.{ .default_target = default_target_query }), optimize);
     };
-    const optimize = b.standardOptimizeOption(.{});
     const strip_flag = b.option(bool, "strip", "Omit debug information");
     const no_bin = b.option(bool, "no-bin", "Skip emitting binaries (important for fast incremental compilation)") orelse false;
     const trace_eval = b.option(bool, "trace-eval", "Enable detailed evaluation tracing for debugging") orelse false;
@@ -5121,6 +5145,20 @@ pub fn build(b: *std.Build) void {
         build_wasm_issue_10836_app.step.dependOn(build_test_hosts_step);
         build_test_wasm_static_lib_runner_step.dependOn(&build_wasm_issue_10836_app.step);
 
+        // A constant record whose pointer fields are laid out in the opposite
+        // order to their field order: its relocations must still reach the
+        // object in offset order, or wasm-ld refuses it (#11419).
+        const build_wasm_issue_11419_app = b.addRunArtifact(roc_exe);
+        build_wasm_issue_11419_app.addArgs(&.{
+            "build",
+            "test/wasm/issue_11419_static_record_reloc_order_static_lib_app.roc",
+            "--opt=dev",
+            "--target=wasm32",
+            "--output=test/wasm/issue_11419_static_record_reloc_order_static_lib_app.wasm",
+        });
+        build_wasm_issue_11419_app.step.dependOn(build_test_hosts_step);
+        build_test_wasm_static_lib_runner_step.dependOn(&build_wasm_issue_11419_app.step);
+
         const wasm_test_exe = b.addExecutable(.{
             .name = "wasm_static_lib_test",
             .root_module = b.createModule(.{
@@ -5393,6 +5431,16 @@ pub fn build(b: *std.Build) void {
             });
             run_wasm_issue_10836_test.step.dependOn(build_test_wasm_static_lib_runner_step);
             run_test_wasm_static_lib_step.dependOn(&run_wasm_issue_10836_test.step);
+
+            const run_wasm_issue_11419_test = b.addRunArtifact(wasm_test_exe);
+            run_wasm_issue_11419_test.addArgs(&.{
+                "--wasm-path",
+                "test/wasm/issue_11419_static_record_reloc_order_static_lib_app.wasm",
+                "--expected",
+                "id=txt",
+            });
+            run_wasm_issue_11419_test.step.dependOn(build_test_wasm_static_lib_runner_step);
+            run_test_wasm_static_lib_step.dependOn(&run_wasm_issue_11419_test.step);
         }
         run_wasm_test.step.dependOn(build_test_wasm_static_lib_runner_step);
         run_test_wasm_static_lib_step.dependOn(&run_wasm_test.step);
@@ -5613,6 +5661,14 @@ pub fn build(b: *std.Build) void {
             .step_suffix = "machine-code-shim-archive",
             .description = "Run machine-code shim archive contract tests",
             .compile = archive_test,
+        });
+    }
+
+    if (main_exe_result.archive_member_names_test) |names_test| {
+        test_suites.register(.{
+            .step_suffix = "archive-member-names",
+            .description = "Run archive member-name rewriting tests",
+            .compile = names_test,
         });
     }
 
@@ -7397,6 +7453,7 @@ const MainExeResult = struct {
     machine_code_shim_archive_check: ?*Step,
     boundary_link_tests: [2]?*Step.Compile,
     machine_code_shim_archive_test: ?*Step.Compile,
+    archive_member_names_test: ?*Step.Compile,
 };
 fn addMainExe(
     b: *std.Build,
@@ -7592,15 +7649,32 @@ fn addMainExe(
     // Include the pre-built builtins object
     interpreter_shim_lib.root_module.addObjectFile(builtins_obj.getEmittedBin());
     interpreter_shim_lib.bundle_compiler_rt = true;
+    // Zig names archive members after the paths of the objects it packed,
+    // which puts a `.zig-cache` key and the build machine's home directory
+    // into the archive; `roc` embeds the archive, so strip the names to bare
+    // file names first (see src/build/archive_member_names.zig).
+    const archive_member_names_tool = b.addExecutable(.{
+        .name = "archive_member_names",
+        .root_module = b.createModule(.{
+            .root_source_file = b.path("src/build/archive_member_names.zig"),
+            .target = b.graph.host,
+            .optimize = .ReleaseSafe,
+        }),
+    });
+    configureBackend(archive_member_names_tool, b.graph.host);
+    const interpreter_shim_filename = if (target.result.os.tag == .windows) "roc_interpreter_shim.lib" else "libroc_interpreter_shim.a";
+    const strip_interpreter_shim_names = b.addRunArtifact(archive_member_names_tool);
+    strip_interpreter_shim_names.addArg(@tagName(target.result.os.tag));
+    strip_interpreter_shim_names.addFileArg(interpreter_shim_lib.getEmittedBin());
+    const bare_interpreter_shim = strip_interpreter_shim_names.addOutputFileArg(interpreter_shim_filename);
     // Install shim library to the output directory
-    const install_interpreter_shim = b.addInstallArtifact(interpreter_shim_lib, .{});
+    const install_interpreter_shim = b.addInstallLibFile(bare_interpreter_shim, interpreter_shim_filename);
     b.getInstallStep().dependOn(&install_interpreter_shim.step);
     // Copy the shim library to the src/ directory for embedding as binary data
     // This is because @embedFile happens at compile time and needs the file to exist already
     // and zig doesn't permit embedding files from directories outside the source tree.
     const copy_interpreter_shim = b.addUpdateSourceFiles();
-    const interpreter_shim_filename = if (target.result.os.tag == .windows) "roc_interpreter_shim.lib" else "libroc_interpreter_shim.a";
-    copy_interpreter_shim.addCopyFileToSource(interpreter_shim_lib.getEmittedBin(), b.pathJoin(&.{ "src/cli", interpreter_shim_filename }));
+    copy_interpreter_shim.addCopyFileToSource(bare_interpreter_shim, b.pathJoin(&.{ "src/cli", interpreter_shim_filename }));
     exe.step.dependOn(&copy_interpreter_shim.step);
 
     const machine_code_shim_lib = addMachineCodeShimLib(b, roc_modules, target, optimize, strip, omit_frame_pointer, shim_host_abi_module, compiled_builtins_module, write_compiled_builtins);
@@ -7609,6 +7683,7 @@ fn addMainExe(
     var machine_code_shim_archive_check_for_registry: ?*Step = null;
     var boundary_link_tests: [2]?*Step.Compile = .{ null, null };
     var machine_code_shim_archive_test_for_registry: ?*Step.Compile = null;
+    var archive_member_names_test_for_registry: ?*Step.Compile = null;
     if (add_machine_code_shim_test) {
         const machine_code_shim_test = b.addTest(.{
             .name = "machine_code_shim",
@@ -7689,6 +7764,10 @@ fn addMainExe(
     const machine_code_shim_filename = if (target.result.os.tag == .windows) "roc_machine_code_shim.lib" else "libroc_machine_code_shim.a";
     const checked_machine_code_shim = check_archive.addOutputFileArg(machine_code_shim_filename);
     machine_code_shim_archive_check_for_registry = &check_archive.step;
+    const strip_machine_code_shim_names = b.addRunArtifact(archive_member_names_tool);
+    strip_machine_code_shim_names.addArg(@tagName(target.result.os.tag));
+    strip_machine_code_shim_names.addFileArg(checked_machine_code_shim);
+    const bare_machine_code_shim = strip_machine_code_shim_names.addOutputFileArg(machine_code_shim_filename);
 
     // Cross-check every shipped native ABI from any developer host. No target
     // executable is run: the host checker reads each target's object format.
@@ -7760,17 +7839,30 @@ fn addMainExe(
             .filters = test_filters,
         });
         machine_code_shim_archive_test_for_registry = checker_tests;
+        const archive_member_names_tests = b.addTest(.{
+            .name = "archive_member_names",
+            .root_module = b.createModule(.{
+                .root_source_file = b.path("src/build/archive_member_names.zig"),
+                .target = b.graph.host,
+                .optimize = .ReleaseSafe,
+            }),
+            .filters = test_filters,
+        });
+        archive_member_names_test_for_registry = archive_member_names_tests;
+        configureBackend(archive_member_names_tests, b.graph.host);
+        const run_archive_member_names_tests = b.addRunArtifact(archive_member_names_tests);
+        checks.dependOn(&run_archive_member_names_tests.step);
         configureBackend(checker_tests, b.graph.host);
         const run_checker_tests = b.addRunArtifact(checker_tests);
         checks.dependOn(&run_checker_tests.step);
         machine_code_shim_archive_check_for_registry = checks;
     }
 
-    const install_machine_code_shim = b.addInstallLibFile(checked_machine_code_shim, machine_code_shim_filename);
+    const install_machine_code_shim = b.addInstallLibFile(bare_machine_code_shim, machine_code_shim_filename);
     b.getInstallStep().dependOn(&install_machine_code_shim.step);
 
     const copy_machine_code_shim = b.addUpdateSourceFiles();
-    copy_machine_code_shim.addCopyFileToSource(checked_machine_code_shim, b.pathJoin(&.{ "src/cli", machine_code_shim_filename }));
+    copy_machine_code_shim.addCopyFileToSource(bare_machine_code_shim, b.pathJoin(&.{ "src/cli", machine_code_shim_filename }));
     exe.step.dependOn(&copy_machine_code_shim.step);
 
     // Copy builtins object for the host target for embedding into CLI
@@ -7975,7 +8067,7 @@ fn addMainExe(
                     .root_source_file = default_platform_root_source,
                     .target = cross_resolved_target,
                     .optimize = .ReleaseFast,
-                    .strip = false,
+                    .strip = strip,
                     .omit_frame_pointer = false,
                     .pic = true,
                     .single_threaded = true,
@@ -8013,7 +8105,7 @@ fn addMainExe(
                         .root_source_file = .{ .cwd_relative = b.pathJoin(&.{ zig_lib_path, "compiler_rt.zig" }) },
                         .target = cross_resolved_target,
                         .optimize = .ReleaseFast,
-                        .strip = false,
+                        .strip = strip,
                         .omit_frame_pointer = false,
                         .pic = true,
                     }),
@@ -8035,7 +8127,7 @@ fn addMainExe(
                     .root_source_file = default_platform_root_source,
                     .target = cross_resolved_target,
                     .optimize = .ReleaseFast,
-                    .strip = false,
+                    .strip = strip,
                     .omit_frame_pointer = false,
                     .pic = true,
                     .single_threaded = true,
@@ -8100,6 +8192,7 @@ fn addMainExe(
         .machine_code_shim_archive_check = machine_code_shim_archive_check_for_registry,
         .boundary_link_tests = boundary_link_tests,
         .machine_code_shim_archive_test = machine_code_shim_archive_test_for_registry,
+        .archive_member_names_test = archive_member_names_test_for_registry,
     };
 }
 

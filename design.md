@@ -262,6 +262,13 @@ explicit target, and a missing internal definition is a compiler invariant failu
 The named object-input API resolves its declared names once at its boundary;
 compiler-generated machine code uses the indexed API directly.
 
+A standalone readonly-data object gives its definitions global linker binding:
+the separate LLVM code object can directly reference any allocation named by a
+frozen address relocation when embedding a constant root. Private allocations
+retain hidden visibility and do not become host exports. A combined code/data
+object keeps local binding for private allocations because those references
+remain inside that object.
+
 Definitions retain their assigned symbol IDs through final metadata assembly.
 Object writers borrow immutable section bytes until emission, compute the final
 layout before allocating the output, and apply implicit addends only to that
@@ -827,6 +834,46 @@ immutable evaluation image, including its immortal string backing, and introduce
 no ownership transfers. The pass extends each affected procedure's sorted frame
 local inventory and recomputes its stack-probe requirement. Backends consume
 only these explicit ordinary LIR operations.
+
+A runtime program forked from the completed host program receives the
+completed values in two forms. Its lowering carries the host's completed
+successful scalar roots, decoded from the host's frozen image and keyed by
+checked root identity as transcoding matches slots, and emits each such read
+as the scalar literal rather than a slot read, so range proving, loop
+versioning, and overflow elision see the constant they would have seen from
+a literal in source; a table built by `List.repeat` with a compile-time
+length keeps no index check the prover can discharge, and no slot, failure
+record, or guard exists for the root. The decoded value is a construction
+tree, and a root whose every leaf is a scalar, the empty string, an empty
+list, or a list of copies of one construction lowers as that tree rather
+than as bytes, because static data is the wrong home for it: records,
+tuples, and tag payloads of such parts rebuild field by field, so an
+empty `Dict` or `Set`, which is a record of empty lists, never reaches the
+image either. An empty list lowers to the `with_capacity` it was evaluated
+with: a frozen descriptor's capacity word is its length, so the freezer
+keeps each empty list's evaluated capacity on the root's export, keyed by
+its byte offset within the image, and the runtime rebuilds the request so
+the first append goes in place. A list of copies of one construction,
+which is what `List.repeat` and any constant fill loop produce, lowers to
+that repeat loop again: a table of zeros is a few instructions at runtime
+and would otherwise be that many bytes in the binary, and a static list
+can never be born unique, which would lose the in-place writes of every
+loop the table is carried through. A non-empty list with spare capacity
+freezes to its items alone; only the capacity of an empty list
+survives. A build that restores its compile-time values from a checked
+module's const store rather than from a completed host program, as every
+build after the first does, reaches the same constructions: the const
+store keeps an empty list's evaluated capacity and restores it as the
+`with_capacity` call, and a restored value whose parts are all
+constructions lowers as them rather than as a static-data candidate.
+After the passes, which compact the slot table, the remaining
+aggregate slots are transcoded into the target's frozen image. The LLVM
+backend then defines each slot whose image is a link-time constant—bytes with
+address relocations as symbolic pointer fields—as an internal constant in the
+app module, and the readonly object binds every node globally so those
+references resolve; only slots with function-pointer relocations stay
+external declarations. Slot reads therefore fold to immediates and
+relocatable addresses instead of loads from a linker symbol.
 
 The guard pass also records each guard's crash statement identity. Failed root
 completion associates those statements with the original evaluated failure's
@@ -2507,13 +2554,16 @@ dependency. A non-cryptographic hash makes such a pair cheap to construct, and
 because the attacker supplies both halves the relevant bound is a birthday
 collision, so 128 bits (2^64 work) is not enough and 256 bits is required. The
 digests are also persisted in caches and compared across machines, which rules
-out keying them with a secret. Nearly every 64-bit compiler target is built with
-the CPU's SHA-256 instructions enabled (`addSha256Floor` in build.zig) and has no
-software rounds; 32-bit targets such as wasm32 and x86_64 macOS compute the
-digest in software, which yields the same digest bytes more slowly. x86_64 macOS
-is the exception because Apple's Intel Macs are Skylake through Comet Lake cores,
-which have no SHA extension to put in that target's baseline
-(`usesSoftwareSha256` in src/target/mod.zig).
+out keying them with a secret. aarch64 compiler targets are built with the
+CPU's SHA-256 instructions enabled (`addSha256Floor` in build.zig) and have no
+software rounds. x86_64 stays at the architecture baseline, because Intel's
+Skylake through Comet Lake cores have no SHA extension: a released x86_64
+compiler for anything but macOS carries both the hardware and the portable
+rounds and picks one with CPUID the first time a process digests a type
+(`dispatches_at_runtime` in src/base/sha256_rounds.zig), and x86_64 macOS,
+whose Intel Macs are all such cores, always uses the portable rounds
+(`uses_software_rounds` there), as do 32-bit targets such as wasm32. Every path
+yields the same digest bytes; only the speed differs.
 
 All producers for a key domain must agree on the encoding, including child
 digests, length prefixes, identity numbering, and domain tags. The hash
@@ -4667,7 +4717,15 @@ The representation producer is `generatedIteratorNode` in
 `src/postcheck/monotype/solve.zig`. Construction records the exact public
 source, producer kind, component nodes, callable evidence, and private backing
 in the active instantiation graph. Finalization consumes that complete graph
-before any durable Monotype type is sealed. Together they compute:
+before any durable Monotype type is sealed. A graph-owned exact construction
+index keys generated iterators by declaration, producer kind, callable evidence,
+and ordered item/component classes. Union updates only keys that reference its
+losing class; content replacement updates provenance keys. Equal keys retain
+all permanent candidates without adding an implicit type relation. Monotone
+provenance counts let iterator finalization and private-evidence containment
+return immediately when their graphs have never received the relevant evidence.
+Containment diagnostics distinguish these guard returns from actual queries.
+Together construction and finalization compute:
 
 - `List.iter` as a first-class source representation rather than a public
   recursive `Iter` boundary;
@@ -5172,6 +5230,20 @@ bindings before the case outside the join, keeps arm bindings around the
 corresponding arm jump, and keeps continuation bindings in the join body. No
 binding chain is stored in ambient cloner state, and a nested clone cannot
 observe, capture, flush, or move a chain owned by its caller.
+
+Block cloning consumes each source statement once. Encountering a retained
+statement or a branch-built value preserves the already-cloned prefix instead
+of restarting the block through a second lowering path. Ordinary bindings stay
+in an iterative statement walk; a branch-built value gives its untouched source
+suffix to the existing shared-continuation transformation without copying that
+suffix or cloning the producer again. Retained statements keep their tail value
+inside the block, and a terminating block keeps its `unreachable` final marker.
+A block whose binding is branch-built is emitted with that continuation as its
+recorded tail, never dissolved into its consumer: a case over the block reads
+the arms' structure through the tail, which is what lets the constructor each
+arm builds resolve the consumer's match and keep its payload fields separate.
+Discarded intermediate construction must not grow with repeated traversal of
+nested prefixes or become input work for lambda-set solving.
 
 A recursive binding is an explicit finite-graph anchor, not a reason to make
 the whole enclosing value opaque. The clone reserves a fresh runtime binder
@@ -8089,18 +8161,18 @@ iterator membership and provenance counts belong only to that graph epoch.
 Only the cumulative immutable type and name stores survive the reset.
 
 Graph-owned generated iterators are indexed by their stable declaration, kind,
-and callable evidence. Candidates in that bucket compare live argument roots,
-so argument unions do not stale the index. Content replacement and root union
-update producer membership explicitly. A monotone provenance counter lets both
-iterator finalizers return immediately for graphs without generated iterators.
+callable evidence, and current argument roots. Root unions rekey only affected
+entries, so lookups avoid scanning unrelated candidates. Content replacement and
+root union update producer membership explicitly. Equal keys retain
+independently constructed nodes until an explicit relation joins them. A
+monotone provenance counter lets both iterator finalizers return immediately for
+graphs without generated iterators.
 Generated identity hashes a snapshot of the current graph representation after
 joins. An imported request's retained type remains its original witness and
 cannot supply the identity of a graph-owned producer that replaced it.
 Joining distinct iterator representations invalidates current snapshots and
 durable views, including snapshots of parents that reach the joined class.
 The losing representation's cached view cannot become the winner's view.
-Generated-private containment diagnostics distinguish guard returns from queries
-that reach the containment cache or walker.
 
 Declaration-backed nominal reuse is indexed by declaration identity plus the
 current argument-root tuple. Root unions rekey affected entries, so lookup cost
@@ -9770,6 +9842,13 @@ Lambda Mono expression, pattern, or statement tree. The direct `.lss` LIR
 builder consumes the Lambda Solved lifted syntax together with Lambda Mono
 decision tables. `.boxy` does not construct Lambda Mono decisions.
 
+Exact specialization demand and shared LIR procedure-body scheduling are separate
+state. When distinct specializations have one procedure identity, a reference
+demands its exact specialization and queues the shared owner's body once. It
+does not demand the owner's specialization merely because that owner supplies
+the body. The debug materializer compares referenced specializations; sharing a
+procedure must not introduce additional specialization demands into that check.
+
 The Lambda Mono type store has no function type. Function values have already
 become ordinary value representations:
 
@@ -11152,6 +11231,49 @@ duplicate, emitted statements are O(total pattern size); a debug statement-count
 lint in the emitter asserts a hard multiplier bound per match so an exponential
 regression fails loudly instead of shipping.
 
+### Procedure-Local LIR Rewrites
+
+TRMC, join scalarization, loop append promotion, range proving, and box reuse
+preserve their pipeline order. Within one phase, procedure bodies own disjoint
+writable statement rows. Rewriting reads a frozen phase input and produces a
+sparse patch of those rows, new body-owned data, and one procedure's metadata.
+The coordinator reserves pointer layouts and helper summaries before dispatch;
+workers cannot intern layouts or derive helper summaries from other workers'
+partially rewritten bodies.
+
+The same patch boundary applies with one worker. Every phase finishes its
+callbacks before committing in procedure order, so neither input visibility
+nor output identity depends on worker count or completion order. Each commit
+relocates appended references in both patched rows and procedure metadata.
+Allocation failure leaves an individual commit unapplied; failed callbacks
+are drained without replay, and failed lowering discards the whole result.
+Reporting follows ordered commits rather than worker completion order.
+
+Workers borrow unrelated input tables rather than copying a store. Writable
+rows, operand counts, clone substitutions, inline-scope remaps, and traversal
+state occupy only their live procedure domains. Subtree cloning reserves join
+identities from its explicit destination-procedure context, not from a scan of
+unrelated procedures. Active callbacks are executor-bounded; retained patches
+are proportional to the phase's procedure bodies and generated output.
+
+Loop promotion identifies back edges during its body-first lexical scan and
+uses source-indexed carrier edges. Shared body/remainder continuations remain
+back edges when the body can reach them; remainder-only entries are not loops.
+A successful parameter rewrite still requires fresh flow analysis. Freezing
+helper summaries and indexing traversal work do not authorize decisions from
+stale inventories.
+
+Helper classification proves replacement of the whole executed list-operation
+chain, not just its returned shape. Unknown calls or operations reject the
+summary even when their results are ignored. Every recognized operation extends
+the latest chain, and the return must carry that final operation identity;
+aliases preserve this provenance. Dependency traversal uses an explicit stack,
+and recursive helper dependencies reject deterministically rather than being
+hidden by an unused result.
+
+Interprocedural inlining, generated-procedure variants, global reachability,
+and ARC's solve remain outside this boundary.
+
 ### ARC
 
 The direct LIR builder emits ownership-neutral LIR. ARC insertion runs after
@@ -12057,7 +12179,13 @@ machine word are stored inline; wider sets use exact allocated words. This is a
 representation choice made solely from the producer-authored domain width, not
 a heuristic. The ownership-neutral liveness graph is immutable and built once
 per source proc, then shared by every ownership variant emitted from that
-source. It uses a reusable dense statement-to-node table, so successors,
+source. Ordinary and complete-outcome conventions share graph topology and
+ordinal metadata but have separate immutable liveness rows: restitution-only
+boundary reads must never widen the ordinary convention's read contract.
+Preparation freezes both contracts before workers select rows by their emitted
+signature. Temporary traversal and SCC storage does not outlive preparation;
+persistent snapshot subtrees remain source-owned.
+The graph uses a reusable dense statement-to-node table, so successors,
 predecessors, and worklist edges are direct node indices rather than statement
 hash lookups. Its strongly-connected-component condensation is solved in
 reverse dependency order: an acyclic singleton is evaluated once, and
@@ -12198,6 +12326,22 @@ Variant bodies are cloned with the existing statement-cloning machinery and
 added with `LirStore.addProcSpec`. Root procs are never specialized; their
 vectors are pinned. The variant count is bounded by realized demand vectors,
 not by the theoretical vector space.
+
+Ownership solving and field-take analysis finish before parallel emission
+begins. Source preparation freezes each ownership-neutral procedure's frame
+domain and liveness data; variants share that source data, never a previously
+emitted ARC body. Mutable residual masks, ownership overrides, plans, and
+materialization scratch belong to one emission.
+
+Planning produces ownership-demand variant requests without allocating procedure
+identities. A coordinator reserves those identities in FIFO procedure/request
+order, then materialization consumes the fixed call targets and appends only
+to private body shards. Ordered commit relocates generated locals, statements,
+and join spans before committing each procedure's metadata. Bounded waves use
+the same schedule with or without workers, so worker count and completion order
+cannot change variant symbols or emitted LIR. Submission or callback failure
+drains accepted work before freeing its owners; insertion failure discards the
+entire result rather than replaying work against a partially emitted store.
 
 A build without optional mode specialization suppresses general cost-only
 demand vectors, but it does not force every call to the solved base `RcSig`.
@@ -12478,7 +12622,12 @@ operand; it does not implicitly use every live ownership place.
 
 Each reachable `initialize_join_param` write defines a fresh container value.
 Dismantle analysis starts field-take flow at every such write's successor,
-with all fields available. A later write first checks its value operand against
+with all fields available. A container's single value-producing definition
+reached again through a loop back edge likewise starts the next iteration's
+fresh value with every field intact: the previous value is dead past its
+redefinition, so a take that the back edge reaches again is not a second take
+of the same unit. Without that, a record rebuilt on every iteration (the
+result a per-position helper returns) would poison all of its fields. A later write first checks its value operand against
 the previous definition's take state, then starts the new definition with all
 fields available. This includes loop back edges: the join cell has no global
 incoming ownership origin, and each explicit write supplies its own intact unit.
@@ -12685,6 +12834,14 @@ It allocates per-candidate tables only: a container that cannot benefit --
 wrong layout shape, borrowed, or non-operand whole uses -- contributes
 nothing beyond its visit in one linear statement scan, preserving the rule
 that ARC memory scales with ownership work actually demanded.
+
+All candidates share the frozen reachable-join inventory. Within one candidate,
+future field observations are a backward may-dataflow over the union of its
+consuming reads' successor regions. Each field bit propagates through an edge
+at most once; reinitialization and outcome restitution end exactly the old
+field lifetime on that edge. This answers every consuming-read query without
+repeatedly traversing shared continuations, while preserving the same loop,
+branch, and observation rules as a separate traversal from each read.
 
 The certifier verifies takes from the emitted LIR alone, with no side tables,
 by deferred claims. A field or payload read still binds its result at balance
@@ -12986,12 +13143,94 @@ also lets LLVM optimize across what was an opaque control split.
 A join parameter is an ownership phi, not a foreign definition. Its origin is
 born-unique exactly when it has at least one explicit non-self
 `initialize_join_param` incoming edge and every such edge carries a born-unique
-origin. An incoming edge consumes its source ownership unit; a second consuming
-occurrence or a non-consuming read destroys uniqueness through that edge. Join
-edges, pure same-value aliases, and unique-return call edges settle in one
-monotone dependency graph, so loop back edges preserve a unique circulating
-unit only when an explicit unique birth reaches the cycle. A self-assignment is
-not an incoming ownership transfer and contributes no edge.
+origin. Join edges, pure same-value aliases, field stores and takes, and call
+edges settle in one dependency graph as a greatest fixpoint: every derived
+local starts born and is lowered until nothing contradicts the rest. A loop
+that hands one unit around—a table passed to a helper that returns it, taken
+back out of the result and jumped to the loop head—therefore keeps the birth
+its entry edge brings, which is the inductive invariant the runtime obeys: the
+entry value has count 1, and every edge on the cycle moves that single unit
+without adding a holder. Deadness (some occurrence adds a holder) is a
+separate property that only grows along the same edges, and uniqueness is birth
+without deadness. A self-assignment is not an incoming ownership transfer and
+contributes no edge.
+
+Births carry a condition. A tracked parameter is born on the condition that
+its own position is seeded, which a call site does by demanding a variant
+after proving its dying argument unique; the condition is the union of the
+conditions along every transfer, so an alias, join parameter, field, or
+returned part derived from parameters names exactly the positions whose
+seeds it needs, and one analysis answers for every emission of a proc:
+emission and the certifier test a local's condition against the
+`unique_params` of the variant at hand. A returned value or field whose
+condition is empty sets the signature's unconditional unique-return bit; one
+whose condition names parameters becomes a conditional-return row, and a
+call site turns each row into an edge from the arguments the row names to
+that part of its result, live only when the call is each argument's last
+use (otherwise the callee holds a retained copy). The signature bits and
+rows settle to a fixpoint with the analysis, since a new row only adds
+edges. Positions whose seed would let a runtime check in the body go
+check-free form the proc's seed mask, which is what makes a call site
+demand the seeded variant. The owned flag a versioned loop measures once and
+dispatches on every iteration (`list_owned_unique`) is a check that consumes
+nothing; on a list proven unique and owned at the read it is stamped like
+any other check, and every backend then answers it with a constant, which
+lets the loop's copy version fall away.
+
+Several definitions do not by themselves lose a value's origin. A join
+result cell—the parameter a conditional's arms assign directly before
+jumping to the join, often declared by several nested joins—keeps a
+tracked origin when every definition is a birth, a join declaration, or an
+alias, each alias being one of the cell's incoming edges alongside its
+explicit initializations; whichever arm ran, the cell's value is accounted
+for, and the use order stops at each redefinition. A solved-borrowed alias
+is a view of its source rather than a holder: a view that is only read is a
+read of the source, and a view that some statement consumes is retained
+there and hands the retained unit on, so it follows the alias rule. A
+low-level op that neither allocates nor checks and whose result is its one
+consumed argument's own unit passes the value through and is an alias of
+that argument. A tag birth without a refcounted payload has every payload
+field vacuously unique, so an error-path return never vetoes the fields the
+success path carries. A borrowed argument position the callee only reads
+(`read_only_params`: no consuming use, no holder-adding occurrence) adds no
+holder to the caller's argument; every other borrowed position is treated
+as a holder that may outlive the call.
+
+Uses of a local are ordered along control flow rather than counted. A
+consuming use (an owned argument, a store into an aggregate, an alias
+definition, a join edge) takes the value's single ownership unit with it, so
+it destroys the local's uniqueness only when another consuming use of the
+same local can still execute after it before the local is redefined: two
+consumes on exclusive branches never both run, and a consume whose only
+successors read other locals leaves the value unique. A transfer edge (alias
+or join) carries the unit through to its target only when no use of the
+source at all, read or consume, can execute after it; otherwise the target
+holds a second reference and has no unique birth of its own. The order is
+answered over the procedure's predecessor edges, following jumps through the
+procedure's joins and stopping at a redefinition of the local: the oracle
+marks backward once per local from that local's uses and answers every edge
+of that local from the marks, so the cost is one pass per local rather than
+one walk per use. Reference-counting statements are never uses, so the debug
+certifier re-derives the same verdict from the emitted procedure.
+
+Uniqueness also flows through aggregate fields. Storing a local into a fresh
+struct or tag is the local's consuming use; when the local was unique and the
+store is its last use, the field holds the value's single unit. That field
+uniqueness is a mask per aggregate local (original struct field index, or bit
+0 for a tag's single payload), flows unchanged through pure aliases and the
+tag's payload view, and is settled in the same worklist as alias and join
+edges. A field read inherits the field's uniqueness only when it is the
+committed take that moves the container's stored unit, since any other read
+retains and leaves count 2; and not when a copy holding its own unit can reach
+the take: a consuming use of the container, or a retained read of the same
+field. Takes are decided after the borrow modes, so the solver settles without
+them and emission re-derives uniqueness against the committed takes, settling
+the unique-return bits and the per-field unique-return mask of each signature
+to a fixpoint; a caller taking a field out of a callee's dying `Try` record
+result thus holds the callee's fresh birth, and a caller taking back a
+field the callee built from its own parameter holds the argument's birth
+under the argument's condition. The certifier re-derives the same verdict
+from the `take_kind` stamped on emitted reads.
 
 A checked argument's check is deletable when three conditions hold at the
 call:
@@ -13288,6 +13527,13 @@ be an outer nominal or zero-discriminant tag wrapper only when the emitted
 certification derives that exact allocation identity from those explicit
 producer operations and rejects a call that would pass one allocation to the
 machine ABI while consuming another in ARC.
+
+The erased ABI's capture pointer addresses the interior of the callable passed
+as the reuse ownership input. LLVM must not mark either parameter `noalias`:
+capture reads and writes or releases through the owner can access the same
+allocation. The return destination can also alias reused storage. Backend
+alias attributes preserve these explicit ABI relationships and the ordering of
+the LIR memory operations; they do not change ownership policy.
 
 Destination-aware aggregate construction is required for the full benefit of
 box reuse. A record update or tag construction whose result is demanded in a

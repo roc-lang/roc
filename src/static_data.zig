@@ -20,6 +20,7 @@ const GuardedList = @import("collections").GuardedList;
 pub const StaticDataSymbolId = lir.Program.StaticDataSymbolId;
 pub const StaticDataExport = lir.Program.StaticDataExport;
 pub const StaticDataRelocation = lir.Program.StaticDataRelocation;
+pub const EmptyListCapacity = lir.Program.EmptyListCapacity;
 
 /// Deterministic cross-object symbol for an atomic generated RC helper.
 pub fn atomicRcHelperSymbolName(allocator: Allocator, layouts: *const layout.Store, helper: layout.RcHelperKey) Allocator.Error![]u8 {
@@ -990,6 +991,7 @@ pub fn deinitStaticData(allocator: Allocator, exports: []StaticDataExport) void 
         allocator.free(static_export.bytes);
         deinitRelocationSlice(allocator, static_export.relocations);
         allocator.free(static_export.relocations);
+        allocator.free(static_export.empty_list_capacities);
     }
     allocator.free(exports);
 }
@@ -1004,6 +1006,7 @@ pub fn cloneStaticData(allocator: Allocator, exports: []const StaticDataExport) 
             allocator.free(item.bytes);
             deinitRelocationSlice(allocator, item.relocations);
             allocator.free(item.relocations);
+            allocator.free(item.empty_list_capacities);
         }
         allocator.free(result);
     }
@@ -1024,10 +1027,12 @@ pub fn cloneStaticData(allocator: Allocator, exports: []const StaticDataExport) 
             copy.owns_target_symbol_name = true;
             copied += 1;
         }
+        const capacities = try allocator.dupe(EmptyListCapacity, source.empty_list_capacities);
         dest.* = source;
         dest.symbol_name = name;
         dest.bytes = bytes;
         dest.relocations = relocations;
+        dest.empty_list_capacities = capacities;
         completed += 1;
     }
     return result;
@@ -1094,12 +1099,11 @@ const StaticDataBuilder = struct {
         if (self.lowered.frozen_static_data) |frozen| {
             const cloned = try cloneStaticData(self.allocator, frozen.exports);
             errdefer deinitStaticData(self.allocator, cloned);
-            // LIR value slots are referenced from the independently emitted
-            // code object. Their symbols have global linker binding even when
-            // the value is private to the Roc program's host ABI.
-            for (cloned) |*item| if (item.value_id != null) {
-                item.is_global = true;
-            };
+            // The independently emitted code object references LIR value
+            // slots by symbol, and the nodes their images point at through
+            // relocated constants. Every symbol has global linker binding
+            // even when the value is private to the Roc program's host ABI.
+            for (cloned) |*item| item.is_global = true;
             try self.nodes.appendSlice(self.allocator, cloned);
             self.allocator.free(cloned);
         }

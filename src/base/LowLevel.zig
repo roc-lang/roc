@@ -913,6 +913,10 @@ pub const LowLevel = enum(u16) {
             // changing it. List.map additionally gates this result on item
             // representation compatibility during lowering.
             .list_map_can_reuse => RcEffect.none(),
+            // The owned flag reads the list's count and nothing else; it is
+            // the check a versioned loop dispatches on, so a list proven
+            // unique makes it a constant.
+            .list_owned_unique => .{ .may_runtime_uniqueness_check_args = argMask(&.{0}) },
 
             // Retypes a unique non-slice list to the output element type,
             // keeping the same allocation. Only reachable behind a true
@@ -1026,7 +1030,6 @@ pub const LowLevel = enum(u16) {
             .list_len,
             .list_capacity,
             .list_slack_unique,
-            .list_owned_unique,
             .bool_not,
             .dict_pseudo_seed,
             .hasher_finish,

@@ -693,7 +693,6 @@ test "issue 11376: folded record List.repeat does not grow LIR per element" {
 }
 
 fn repeatedRecordListLirSize(comptime count: usize) HoistedConstantsTestError!usize {
-    const gpa = std.testing.allocator;
     const source = std.fmt.comptimePrint(
         \\app [main!] {{ pf: platform "./.roc_echo_platform/main.roc" }}
         \\import pf.Echo
@@ -703,6 +702,85 @@ fn repeatedRecordListLirSize(comptime count: usize) HoistedConstantsTestError!us
         \\    Ok({{}})
         \\}}
     , .{count});
+    return try lowerEchoApp(source, struct {
+        fn inspect(result: *lir.Program.Result) HoistedConstantsTestError!usize {
+            // A list of copies of one record is its repeat loop, not bytes.
+            try std.testing.expectEqual(@as(usize, 0), result.static_data_values.items.len);
+            try expectLowLevelPresent(result, .list_with_capacity);
+            try expectLowLevelPresent(result, .list_append_unsafe);
+            return try reachableStatementCount(result);
+        }
+    }.inspect);
+}
+
+test "a compile-time list of copies of one scalar lowers as its repeat loop" {
+    _ = try lowerEchoApp(
+        \\app [main!] { pf: platform "./.roc_echo_platform/main.roc" }
+        \\import pf.Echo
+        \\table = List.repeat(0.U32, 6)
+        \\main! = |args| {
+        \\    Echo.line!(Str.inspect(List.get(table, List.len(args))))
+        \\    Ok({})
+        \\}
+    , struct {
+        fn inspect(result: *lir.Program.Result) HoistedConstantsTestError!usize {
+            try std.testing.expectEqual(@as(usize, 0), result.static_data_values.items.len);
+            try expectLowLevelPresent(result, .list_with_capacity);
+            try expectLowLevelPresent(result, .list_append_unsafe);
+            return 0;
+        }
+    }.inspect);
+}
+
+test "an empty compile-time list rebuilds with the capacity it was evaluated with" {
+    _ = try lowerEchoApp(
+        \\app [main!] { pf: platform "./.roc_echo_platform/main.roc" }
+        \\import pf.Echo
+        \\buffer : List(U64)
+        \\buffer = List.with_capacity(64)
+        \\main! = |args| {
+        \\    Echo.line!(Str.inspect(List.append(buffer, List.len(args))))
+        \\    Ok({})
+        \\}
+    , struct {
+        fn inspect(result: *lir.Program.Result) HoistedConstantsTestError!usize {
+            try std.testing.expectEqual(@as(usize, 0), result.static_data_values.items.len);
+            try expectLowLevelPresent(result, .list_with_capacity);
+            try expectIntLiteralPresent(result, 64);
+            return 0;
+        }
+    }.inspect);
+}
+
+test "a compile-time record of an empty list and a scalar lowers as its constructor" {
+    // The record is read whole: a field projection of a completed record
+    // is its own compile-time root, evaluated from the frozen record,
+    // whose empty list carries no capacity.
+    _ = try lowerEchoApp(
+        \\app [main!] { pf: platform "./.roc_echo_platform/main.roc" }
+        \\import pf.Echo
+        \\state : { items : List(U64), count : U64 }
+        \\state = { items: List.with_capacity(8), count: 3 }
+        \\fill : { items : List(U64), count : U64 }, U64 -> U64
+        \\fill = |record, n| List.len(List.append(record.items, n)) + record.count
+        \\main! = |args| {
+        \\    Echo.line!(Str.inspect(fill(state, List.len(args))))
+        \\    Ok({})
+        \\}
+    , struct {
+        fn inspect(result: *lir.Program.Result) HoistedConstantsTestError!usize {
+            try std.testing.expectEqual(@as(usize, 0), result.static_data_values.items.len);
+            try expectLowLevelPresent(result, .list_with_capacity);
+            try expectIntLiteralPresent(result, 8);
+            return 0;
+        }
+    }.inspect);
+}
+
+/// Checks and lowers an app over the echo platform, handing the lowered
+/// program to `inspect` while it is alive.
+fn lowerEchoApp(source: []const u8, comptime inspect: fn (*lir.Program.Result) HoistedConstantsTestError!usize) HoistedConstantsTestError!usize {
+    const gpa = std.testing.allocator;
     var tmp_dir = std.testing.tmpDir(.{});
     defer tmp_dir.cleanup();
 
@@ -763,50 +841,39 @@ fn repeatedRecordListLirSize(comptime count: usize) HoistedConstantsTestError!us
         },
     );
     defer lowered.deinit();
+    return try inspect(&lowered.lir_result);
+}
 
-    try std.testing.expectEqual(@as(usize, 1), lowered.lir_result.static_data_values.items.len);
-    try expectStaticInitializersMaterializationOnly(&lowered.lir_result);
-    try expectStaticDataLiteralPresent(&lowered.lir_result);
-
-    const exports = try static_data_exports.buildStaticData(
-        gpa,
-        .{
-            .root = check.CheckedArtifact.loweringViewWithRelations(root, relations),
-            .imports = imports,
-        },
-        &lowered,
-        .x64linux,
-        .{ .include_provided_exports = true },
-    );
-    defer static_data_exports.deinitStaticData(gpa, exports);
-
-    // Pin the actual data as well, so dropping or truncating the list cannot
-    // satisfy the code-size assertion. This fixture has 8-byte, all-zero items.
-    var found_list = false;
-    for (exports) |data_export| {
-        if (data_export.value_id == null) continue;
-        const bytes = data_export.bytes[data_export.symbol_offset..];
-        try std.testing.expectEqual(@as(u64, count), std.mem.readInt(u64, bytes[8..16], .little));
-        try std.testing.expectEqual(@as(usize, 1), data_export.relocations.len);
-        const relocation = data_export.relocations[0];
-        try std.testing.expectEqual(@as(u64, data_export.symbol_offset), relocation.offset);
-        const backing = exports[@intFromEnum(relocation.target.data_symbol)];
-        const offset: usize = @intCast(@as(i64, backing.symbol_offset) + relocation.addend);
-        try std.testing.expectEqualSlices(u8, &([_]u8{0} ** (count * 8)), backing.bytes[offset..][0 .. count * 8]);
-        found_list = true;
-    }
-    try std.testing.expect(found_list);
-
+fn reachableStatementCount(result: *lir.Program.Result) HoistedConstantsTestError!usize {
     // Include initializer procedures: moving per-element code out of the runtime
     // entrypoint still makes the compiler process it (the regression in #11376).
     var statement_count: usize = 0;
-    for (lowered.lir_result.store.getProcSpecs()) |proc| {
+    for (result.store.getProcSpecs()) |proc| {
         const body = proc.body orelse continue;
-        var statements = try lir.BodyClone.ReachableStmts.init(&lowered.lir_result.store, body);
+        var statements = try lir.BodyClone.ReachableStmts.init(&result.store, body);
         defer statements.deinit();
         while (try statements.next()) |_| statement_count += 1;
     }
     return statement_count;
+}
+
+fn expectLowLevelPresent(result: *const lir.Program.Result, op: lir.LIR.LowLevel) HoistedConstantsTestError!void {
+    for (result.store.getCFStmts()) |stmt| {
+        if (stmt == .assign_low_level and stmt.assign_low_level.op == op) return;
+    }
+    return error.StaticDataLiteralNotFound;
+}
+
+fn expectIntLiteralPresent(result: *const lir.Program.Result, value: i128) HoistedConstantsTestError!void {
+    for (result.store.getCFStmts()) |stmt| {
+        if (stmt != .assign_literal) continue;
+        switch (stmt.assign_literal.value) {
+            .i128_literal => |literal| if (literal.value == value) return,
+            .i64_literal => |literal| if (literal.value == value) return,
+            .f64_literal, .f32_literal, .dec_literal, .str_literal, .boxy_dynamic_num_literal, .boxy_dynamic_frac_literal, .static_data, .bytes_literal, .null_ptr, .proc_ref => {},
+        }
+    }
+    return error.StaticDataLiteralNotFound;
 }
 
 test "callable binding with alias annotation is const-evaluated" {
