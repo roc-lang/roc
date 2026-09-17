@@ -1522,6 +1522,11 @@ pub const ProcedureEvidenceSchema = enum {
     requires_record,
 };
 
+/// Classify a procedure template's evidence parameters into the schema above.
+/// No parameters is `.none`. A scheme callable is always derivable from the
+/// instantiated callable, and so is an explicit numeric default standing at the
+/// callable root (an empty path). Every other source, and any explicit default
+/// reached through a path, needs the checked record.
 pub fn procedureEvidenceSchema(
     params: []const EvidenceParamRecord,
     paths: []const EvidencePathStep,
