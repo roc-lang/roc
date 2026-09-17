@@ -836,9 +836,31 @@ as the scalar literal rather than a slot read, so range proving, loop
 versioning, and overflow elision see the constant they would have seen from
 a literal in source; a table built by `List.repeat` with a compile-time
 length keeps no index check the prover can discharge, and no slot, failure
-record, or guard exists for the root. After the passes, which compact the
-slot table, the remaining aggregate slots are transcoded into the target's
-frozen image. The LLVM
+record, or guard exists for the root. The decoded value is a construction
+tree, and a root whose every leaf is a scalar, the empty string, an empty
+list, or a list of copies of one construction lowers as that tree rather
+than as bytes, because static data is the wrong home for it: records,
+tuples, and tag payloads of such parts rebuild field by field, so an
+empty `Dict` or `Set`, which is a record of empty lists, never reaches the
+image either. An empty list lowers to the `with_capacity` it was evaluated
+with: a frozen descriptor's capacity word is its length, so the freezer
+keeps each empty list's evaluated capacity on the root's export, keyed by
+its byte offset within the image, and the runtime rebuilds the request so
+the first append goes in place. A list of copies of one construction,
+which is what `List.repeat` and any constant fill loop produce, lowers to
+that repeat loop again: a table of zeros is a few instructions at runtime
+and would otherwise be that many bytes in the binary, and a static list
+can never be born unique, which would lose the in-place writes of every
+loop the table is carried through. A non-empty list with spare capacity
+freezes to its items alone; only the capacity of an empty list
+survives. A build that restores its compile-time values from a checked
+module's const store rather than from a completed host program, as every
+build after the first does, reaches the same constructions: the const
+store keeps an empty list's evaluated capacity and restores it as the
+`with_capacity` call, and a restored value whose parts are all
+constructions lowers as them rather than as a static-data candidate.
+After the passes, which compact the slot table, the remaining
+aggregate slots are transcoded into the target's frozen image. The LLVM
 backend then defines each slot whose image is a link-time constant—bytes with
 address relocations as symbolic pointer fields—as an internal constant in the
 app module, and the readonly object binds every node globally so those

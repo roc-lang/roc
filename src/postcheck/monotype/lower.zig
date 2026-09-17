@@ -3250,6 +3250,15 @@ const Builder = struct {
         return restoreScalar(scalar);
     }
 
+    /// An empty compile-time list restores as the `with_capacity` it was
+    /// evaluated with, so the first append at runtime goes in place; one
+    /// evaluated with no capacity is the empty literal.
+    fn constEmptyListData(self: *Builder, capacity: u64) Allocator.Error!ConstExprData {
+        if (capacity == 0) return .{ .list = try self.program.addExprSpan(&[0]Ast.ExprId{}) };
+        const requested = try self.program.addExpr(.{ .ty = try self.primitiveType(.u64), .data = restoreScalar(.{ .u64 = capacity }) });
+        return .{ .low_level = .{ .op = .list_with_capacity, .args = try self.program.addExprSpan(&.{requested}) } };
+    }
+
     fn init(allocator: Allocator, modules: Common.CheckedModules, program: *Ast.Program, options: Options) Builder {
         const counters = options.specialization_counters orelse
             if (options.diagnostics) |diagnostics| &diagnostics.specialization else null;
@@ -7978,7 +7987,7 @@ const Builder = struct {
             => true,
             .box => |child| try self.constNodeHasStableStaticDataRepresentation(view, child),
             .list => |list| switch (list) {
-                .packed_bytes => true,
+                .packed_bytes, .empty => true,
                 .nodes => |children| blk: {
                     for (children) |child| {
                         if (!try self.constNodeHasStableStaticDataRepresentation(view, child)) break :blk false;
@@ -8018,6 +8027,8 @@ const Builder = struct {
             .list => |list| switch (list) {
                 .nodes => |items| items.len != 0,
                 .packed_bytes => |packed_list| packed_list.len != 0,
+                // Rebuilt as the `with_capacity` it was evaluated with.
+                .empty => false,
             },
             .box => true,
             .tuple,
@@ -17588,6 +17599,15 @@ const BodyContext = struct {
     /// This scope's mapping from a stored scalar to expression data.
     fn constScalarData(_: *BodyContext, scalar: checked.ConstScalar) ConstExprData {
         return restoreScalarBody(scalar);
+    }
+
+    /// An empty compile-time list restores as the `with_capacity` it was
+    /// evaluated with, so the first append at runtime goes in place; one
+    /// evaluated with no capacity is the empty literal.
+    fn constEmptyListData(self: *BodyContext, capacity: u64) Allocator.Error!ConstExprData {
+        if (capacity == 0) return .{ .list = try self.addExprSpan(&[0]DraftExprId{}) };
+        const requested = try self.addExpr(.{ .ty = try self.primitiveType(.u64), .data = restoreScalarBody(.{ .u64 = capacity }) });
+        return .{ .low_level = .{ .op = .list_with_capacity, .args = try self.addExprSpan(&.{requested}) } };
     }
 
     fn parserPlanKey(self: *BodyContext, shape_ty: Type.TypeId) names.TypeDigest {
@@ -34897,6 +34917,7 @@ const BodyContext = struct {
                 items,
                 static_data_const_locator,
             ) },
+            .empty => |capacity| try self.constEmptyListData(capacity),
             .packed_bytes => |packed_list| .{ .bytes_lit = .{
                 .literal = try self.addConstBlobView(
                     store_view.key.bytes,
@@ -57889,6 +57910,7 @@ fn constRestoreListData(
 ) Allocator.Error!@TypeOf(restorer.*).ConstExprData {
     return switch (list) {
         .nodes => |items| .{ .list = try constRestoreList(restorer, store_view, type_view, ty, items, static_data_const_locator) },
+        .empty => |capacity| try restorer.constEmptyListData(capacity),
         .packed_bytes => |packed_list| .{ .bytes_lit = .{
             .literal = try restorer.constEmit().addConstBlobView(
                 store_view.key.bytes,
