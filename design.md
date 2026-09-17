@@ -2552,14 +2552,14 @@ deliberately different questions; each is documented here so they cannot
 drift silently:
 
 - DIGEST IDENTITY (`rootContainsIdentityVariables`): does any flex or rigid
-  reach the root at all? Publication marks every variable, a defaultable row
-  tail included, as an identity variable. This decides whether a root may be
-  shared by digest, whether substitution can reuse a root unchanged (the
-  closed-root fast path), and which roots the payload identity walk pairs
-  slot by slot with a platform requirement.
+  reach the root at all? Checked-type store construction marks every
+  variable, a defaultable row tail included, as an identity variable. This
+  decides whether a root may be shared by digest, whether substitution can
+  reuse a root unchanged (the closed-root fast path), and which roots the
+  payload identity walk pairs slot by slot with a platform requirement.
 - COMPILE-TIME-ROOT CONCRETENESS (`checkedTypeIsConcreteCompileTimeRoot`):
   may a value of this type be evaluated at check time? Any flex answers no,
-  a rigid answers no in the value graph and yes only as a declaration
+  a rigid answers no in the `value_graph` walk and yes only as a declaration
   template's formal; a defaultable tail is still a variable here.
 - SPECIALIZATION INDEPENDENCE (`callableIdentityIsSpecializationIndependent`,
   the direct-dispatch classification): does the callable need an input from
@@ -2567,10 +2567,10 @@ drift silently:
   that no enclosing scheme quantifies has exactly one instantiation and does
   not; every other variable does. Boxy and glue already read such a tail as
   closed (`boxy/plan.zig` `tagUnionExtensionIsExplicitlyClosed`, `glue.zig`
-  and `checked_artifact_layout_resolver.zig` tag-union conversion, the
-  hosted `Try` adapter's `checkedTypeIsClosedTagRow`, and—on row tails
-  only—Monotype's hosted-generic scan `checkedTypeHasVariable`, which also
-  treats a numeric-default variable as closed where this classification does
+  `appendTagRowTags` tag-union conversion, the hosted `Try` adapter's
+  `checkedTypeIsClosedTagRow`, and—on row tails only—Monotype's
+  hosted-generic scan `checkedTypeHasVariable`, which also treats a
+  numeric-default variable as closed where this classification does
   not), so this classification agrees with the representation consumers
   rather than with the digest.
   Monotype's sealed-cell guard (`checkedTypeSealsWithoutSpecialization`)
@@ -2588,10 +2588,10 @@ substitution-cloned variable was minted from, and `identityOrigin` follows
 that record (through nested clones) so the specialization question compares
 origins, never raw clone ids. Every variable root filled through the
 synthetic path must declare an origin—its clone source, or itself when it
-is a fresh instance such as an imported projection—and `identityOrigin`
-refuses one that declares none, so a forgotten origin fails loudly instead
-of reading as an unquantified tail. Serialized stores carry no origins: no
-post-check consumer asks the question.
+is a fresh instance such as an imported or viewed variable brought into
+this store—and `identityOrigin` refuses one that declares none, so a
+forgotten origin fails loudly instead of reading as an unquantified tail.
+Serialized stores carry no origins: no post-check consumer asks the question.
 
 Type substitution preserves this graph discipline. A substitution of a closed
 root is the original root, because no formal can occur in it. A real
@@ -5628,7 +5628,7 @@ extension carries no tags, so the audit would skip it). The rejected-parent-row
 case of issue #11246 is what this replay catches.
 
 A closed value flowing into an implicitly open output row WIDENS into it: the
-row published at that position is the one the annotation declares, whatever
+row recorded at that position is the one the annotation declares, whatever
 the body happened to produce. The signature is the whole of what a caller
 reads, so two definitions with identical annotations must be interchangeable
 for every caller, which is precisely what identical signatures already
@@ -5638,16 +5638,17 @@ return path constructed.
 NOT YET IMPLEMENTED. Today the extension is an ordinary flex during the body
 check, so a closed value CLOSES the row instead of widening into it: a
 definition returning a value from a closed source (an input-position
-parameter, a nominal field, a hosted result) publishes a closed row, and two
-identically annotated definitions then behave differently for their callers.
+parameter, a nominal field, a hosted result) is checked with a closed row,
+and two identically annotated definitions then behave differently for their
+callers.
 `test/fx-open/issue_9963_hosted_try_question_mark.roc` carries both halves of
 that witness in one platform module. `Fallible.via_match!` and
 `Fallible.via_question!` are annotated `{} => Try(Str, [HostErr(Str)])`
 identically. The first reconstructs the hosted error with a `match`, so the
 `Err(HostErr(msg))` construction mints its own open row, the annotation's flex
-is never bound, and the function publishes open. The second forwards the
+is never bound, and the function's row stays open. The second forwards the
 hosted error with `?`; the host's row is closed, so unifying it into the
-annotation's extension would bind that extension to `[]` and publish closed.
+annotation's extension would bind that extension to `[]` and close the row.
 Hosted Try Question Widening covers exactly that forwarding, so the fixture is
 GREEN: a `?` on a direct hosted call no longer declines the rule merely
 because ordinary unification could relate the pair by GROUNDING the
@@ -5655,12 +5656,12 @@ annotation's own still-open extension. (Recorded 2026-09-15 as a deliberate
 red witness—"not a defect to patch", on the premise that every available
 patch is a host-specific special case this design intends to delete—and
 REVERSED 2026-09-16 when that premise was falsified by measurement: the
-result-row widening adapter already serves a CLOSED published row on an
+result-row widening adapter already serves a CLOSED checked row on an
 unpatched compiler, so it is the general mechanism rather than host-specific
 scaffolding awaiting deletion. See `polarity_phase_two.md` §9.2.)
 Closing-by-body itself is unchanged, and row subsumption is still what
 replaces it: Hosted Try Question Widening is gated on a direct hosted call, so
-a NON-hosted forwarder still publishes closed behind an identical open
+a NON-hosted forwarder's row still closes behind an identical open
 annotation.
 
 An anonymous `..` in a positive position of an opening annotation means
@@ -5715,7 +5716,7 @@ specialized by Monotype at the wider row when the implementation's own
 result row is open. `instantiateWhereMethodForUse` records an exact raw
 `SchemeUseRecord.where_method_use`, keyed by the body's constraint callable,
 relating the per-use copy to its pristine signature callable. That record is
-the only AUTHORITY on the relation. Checked-artifact construction indexes it
+the only AUTHORITY on the relation. Checked-module construction indexes it
 twice: by the raw callable, and by that callable's SETTLED ROOT. The second
 index exists because generalized requirement deduplication first unifies a
 dropped duplicate's callable with the retained one (a committed probe, see
@@ -5729,7 +5730,7 @@ whether that independent callable may reuse the slot's checked nested
 evidence—it may exactly when its copy descends from the slot's own
 signature—or must synthesize its own. An index naming a record of the wrong
 kind, a record missing its signature-callable copy, or a copy that does not
-resolve to the body constraint is a checked-artifact invariant violation, not
+resolve to the body constraint is a checked-module invariant violation, not
 a fallback. An
 implementation whose checked scheme result row is CLOSED (its body returns a
 closed-source value: a top-level constant, an input-position parameter, a
@@ -5802,7 +5803,7 @@ closed error row is not widened into an open annotated row at use sites
 (issue #9798's program is rejected). Under polarity a non-hosted callee's
 annotated error row is itself implicitly open, but until row subsumption
 replaces closing-by-body (see Polarity) a body that forwards a closed value
-still publishes the row closed, so the pairing is not confined to host rows.
+still leaves the row closed, so the pairing is not confined to host rows.
 At a host boundary it is GUARANTEED: `..` is rejected there by rule, so a host
 error row is closed by declaration rather than by inference, and every hosted
 call whose caller wants a wider row meets it.
@@ -5831,7 +5832,7 @@ only the declared type no matter what a use site's type turned out to be. So
 the rule can be tightened, loosened, or replaced on typing grounds alone.
 
 The rule has two halves with different lifetimes. The LOWERING half (a widened
-request is bridged by a generated adapter that calls the declared-type
+request is served by a generated adapter that calls the declared-type
 boundary and re-tags its result, never by specializing the boundary at the
 widened layout) is PERMANENT, because the host ABI is fixed by something other
 than typing. Hosted Try Question Widening is the instance of Result-Row
@@ -5932,7 +5933,7 @@ integration test cited above.
 
 ### Result-Row Widening Adapter
 
-A procedure template whose published result row is CLOSED may be requested at
+A procedure template whose checked result row is CLOSED may be requested at
 a row that INCLUDES it—the same tags with usable payloads, plus others.
 The request is related component-wise WITHOUT unifying the two rows, the
 template is specialized at its own declared row, and a generated
@@ -5983,9 +5984,9 @@ adapter exactly when that record says so, rather than asking a second time
 whether the declared row is closed. The two questions are not the same
 question: the relation asks it of the live request graph, where an extension
 that is still unresolved means the row is OPEN and the ordinary relation may
-simply unify it, while a published checked type gives every implicitly open
+simply unify it, while a recorded checked type gives every implicitly open
 annotated result row a flexible tail that defaults to the empty tag union.
-Deriving the answer a second time from the published type therefore reports
+Deriving the answer a second time from the recorded type therefore reports
 "closed" for rows the relation had already unified, minting an adapter over a
 second, narrow specialization of a template that needed neither.
 
