@@ -143,7 +143,9 @@ pub const CompletedScalarValues = struct {
 /// returns the entry statement; null when the construction does not fit
 /// the target's layout. `ctx` supplies locals and join-point ids:
 /// `addLocal(layout.Idx) Allocator.Error!LIR.LocalId` and
-/// `freshJoinPointId() LIR.JoinPointId`. Every value the emitted code
+/// `freshJoinPointId() LIR.JoinPointId`, and
+/// `addJoin(LIR.JoinPoint, LIR.CFStmtId) Allocator.Error!LIR.CFStmtId`.
+/// The context owns final join metadata when emitting after ARC. Every value the emitted code
 /// builds is fresh and consumed exactly once, so the code is complete
 /// without a reference-counting pass: a repeat loop builds its element
 /// anew on each iteration rather than sharing one across appends.
@@ -295,12 +297,11 @@ fn emitRepeat(ctx: anytype, store: *core.LirStore, layouts: *const layout.Store,
         .next = zero_literal,
     } });
     const count_literal = try store.addCFStmt(.{ .assign_literal = .{ .target = count_local, .value = .{ .i64_literal = .{ .value = count, .layout_idx = .u64 } }, .next = reserve } });
-    return try store.addCFStmt(.{ .join = .{
+    return try ctx.addJoin(.{
         .id = join_id,
         .params = try store.addLocalSpan(&[_]LIR.LocalId{ list_param, index_param }),
         .body = body,
-        .remainder = count_literal,
-    } });
+    }, count_literal);
 }
 
 /// Decodes a completed value into its construction by walking the same

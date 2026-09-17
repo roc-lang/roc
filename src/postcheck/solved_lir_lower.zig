@@ -2835,6 +2835,15 @@ const Lowerer = struct {
         pub fn freshJoinPointId(self: ConstructionEmitContext) LIR.JoinPointId {
             return self.lowerer.freshJoinPointId();
         }
+
+        pub fn addJoin(self: ConstructionEmitContext, point: LIR.JoinPoint, remainder: LIR.CFStmtId) Common.LowerError!LIR.CFStmtId {
+            return try self.lowerer.result.store.addCFStmt(.{ .join = .{
+                .id = point.id,
+                .params = point.params,
+                .body = point.body,
+                .remainder = remainder,
+            } });
+        }
     };
 
     fn lowerConstructionInto(self: *Lowerer, target: LIR.LocalId, construction: postcheck_values.Construction, next: LIR.CFStmtId) Common.LowerError!?LIR.CFStmtId {
