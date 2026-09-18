@@ -113,8 +113,6 @@ pub const Target = union(enum) {
 };
 
 test "relocation target keys retain the complete section identity" {
-    var keys: std.AutoHashMapUnmanaged(Target, usize) = .empty;
-    defer keys.deinit(std.testing.allocator);
     const targets = [_]Target{
         .{ .symbol = 1 },
         .{ .section = .{ .index = 1, .offset = 0 } },
@@ -122,9 +120,13 @@ test "relocation target keys retain the complete section identity" {
         .{ .section = .{ .index = 1 + (1 << 22), .offset = 0 } },
         .{ .section = .{ .index = 1, .offset = std.math.maxInt(u64) } },
     };
-    for (targets, 0..) |target, i| try keys.put(std.testing.allocator, target, i);
-    try std.testing.expectEqual(targets.len, keys.count());
-    for (targets, 0..) |target, i| try std.testing.expectEqual(i, keys.get(target).?);
+    inline for (.{ "got_slots", "stubs" }) |field| {
+        var keys: @FieldType(Loader, field) = .empty;
+        defer keys.deinit(std.testing.allocator);
+        for (targets, 0..) |target, i| try keys.put(std.testing.allocator, target, i);
+        try std.testing.expectEqual(targets.len, keys.count());
+        for (targets, 0..) |target, i| try std.testing.expectEqual(i, keys.get(target).?);
+    }
 }
 
 pub const Relocation = struct {
