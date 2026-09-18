@@ -11129,9 +11129,13 @@ pub const MonoLlvmCodeGen = struct {
         if (self.rc_helpers.get(cache_key)) |entry| return entry.function;
 
         const ptr_ty = try self.ptrType();
+        // The trailing pointer is the callback ABI's ops slot, which generated
+        // helpers ignore. The builtins call element and `on_drop` callbacks with
+        // it, and a wasm `call_indirect` traps unless the callee's signature
+        // has it too.
         const params: []const LlvmBuilder.Type = switch (helper_key.op) {
-            .incref => &.{ ptr_ty, self.ptrSizedIntType() },
-            .decref, .free => &.{ptr_ty},
+            .incref => &.{ ptr_ty, self.ptrSizedIntType(), ptr_ty },
+            .decref, .free => &.{ ptr_ty, ptr_ty },
         };
         const fn_ty = builder.fnType(.void, params, .normal) catch return error.OutOfMemory;
         const is_static_data_helper = self.proc_symbol_mode == .lir_symbol and
@@ -11299,9 +11303,12 @@ pub const MonoLlvmCodeGen = struct {
 
     fn emitRcHelperCall(self: *MonoLlvmCodeGen, helper_key: layout.RcHelperKey, atomicity: RcAtomicity, value_ptr: LlvmBuilder.Value, count_value: ?LlvmBuilder.Value) Error!void {
         const func = (try self.declareRcHelper(helper_key, atomicity)) orelse return;
+        const builder = self.builder orelse return error.CompilationFailed;
+        // The callback ABI's ops slot, which generated helpers ignore.
+        const ops_slot = builder.nullValue(try self.ptrType()) catch return error.OutOfMemory;
         switch (helper_key.op) {
-            .incref => _ = try self.callFunctionIndex(func, &.{ value_ptr, count_value.? }, false, false),
-            .decref, .free => _ = try self.callFunctionIndex(func, &.{value_ptr}, false, false),
+            .incref => _ = try self.callFunctionIndex(func, &.{ value_ptr, count_value.?, ops_slot }, false, false),
+            .decref, .free => _ = try self.callFunctionIndex(func, &.{ value_ptr, ops_slot }, false, false),
         }
     }
 
@@ -13467,6 +13474,38 @@ test "frozen relocation offsets are bounded before host indexing for either targ
         try std.testing.expect((try codegen.frozenExportConstant(data_export)) == null);
         relocation[0].offset = std.math.maxInt(u64) - (@as(u64, word) - 1);
         try std.testing.expect((try codegen.frozenExportConstant(data_export)) == null);
+    }
+}
+
+test "issue 11454: RC helpers declare the callback ABI's ops slot" {
+    const allocator = std.testing.allocator;
+    var store = lir.LirStore.init(allocator);
+    defer store.deinit();
+    var layouts = try layout.Store.init(allocator, .u64);
+    defer layouts.deinit();
+    const target = try std.zig.system.resolveTargetQuery(std.testing.io, .{ .cpu_arch = .x86_64, .os_tag = .linux });
+    var codegen = MonoLlvmCodeGen.initForLinkedObject(allocator, &store, &.{}, &.{}, &.{}, target);
+    defer codegen.deinit();
+    codegen.layout_store = &layouts;
+    var builder = try codegen.createBuilder("rc_helper_signatures");
+    defer builder.deinit();
+    codegen.builder = &builder;
+    defer codegen.builder = null;
+
+    // The builtins call an element incref as (element, count, ops) and an
+    // element decref, free or `on_drop` as (value, ops). A wasm `call_indirect`
+    // traps unless the helper it reaches has exactly that signature.
+    const ptr_ty = try codegen.ptrType();
+    inline for (.{
+        .{ layout.RcOp.incref, 3 },
+        .{ layout.RcOp.decref, 2 },
+        .{ layout.RcOp.free, 2 },
+    }) |case| {
+        const helper = (try codegen.declareRcHelper(.{ .op = case[0], .layout_idx = .str }, .atomic)).?;
+        const params = helper.typeOf(&builder).functionParameters(&builder);
+        try std.testing.expectEqual(@as(usize, case[1]), params.len);
+        try std.testing.expectEqual(ptr_ty, params[0]);
+        try std.testing.expectEqual(ptr_ty, params[params.len - 1]);
     }
 }
 
