@@ -233,6 +233,7 @@ fn scanElfClass(comptime Word: type, bytes: []const u8, check: *Check) ArchiveEr
     var found_table = false;
     for (0..shnum) |i| {
         const sh = sections[i * shsize ..][0..section_size];
+        if (try int(Word, sh, 8) & std.elf.SHF_TLS != 0) return error.UnexpectedTls;
         if (try int(u32, sh, 4) != std.elf.SHT_SYMTAB) continue;
         found_table = true;
         const link = try int(u32, sh, if (wide) 40 else 24);
@@ -502,6 +503,9 @@ test "ELF parser checks weak imports, hidden exports, and missing tables" {
     bytes[sym + 4] |= std.elf.STT_TLS;
     try std.testing.expectError(error.UnexpectedTls, scanElf(&bytes, &check));
     bytes[sym + 4] = @as(u8, std.elf.STB_LOCAL) << 4;
+    putInt(u64, &bytes, 64 + 8, std.elf.SHF_TLS);
+    try std.testing.expectError(error.UnexpectedTls, scanElf(&bytes, &check));
+    putInt(u64, &bytes, 64 + 8, 0);
     putInt(u32, &bytes, sym_section + 4, std.elf.SHT_NULL);
     try std.testing.expectError(error.MissingSymbolTable, scanElf(&bytes, &check));
 }
@@ -532,6 +536,9 @@ test "ELF32 parser preserves the symbol contract and rejects out-of-bounds secti
     @memcpy(bytes[strings + 1 ..][0..name.len], name);
     var check: Check = .{ .os = .linux };
     try scanElf(&bytes, &check);
+    putInt(u32, &bytes, 52 + 8, std.elf.SHF_TLS);
+    try std.testing.expectError(error.UnexpectedTls, scanElf(&bytes, &check));
+    putInt(u32, &bytes, 52 + 8, 0);
     bytes[sym + 12] = std.elf.STT_TLS; // Local TLS is not a permitted private definition.
     putInt(u16, &bytes, sym + 14, 1);
     try std.testing.expectError(error.UnexpectedTls, scanElf(&bytes, &check));
