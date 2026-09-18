@@ -1012,6 +1012,9 @@ fn shimEntrypoint(
 
 fn shimDefaultMain(argc: usize, argv: [*][*:0]const u8) callconv(.c) usize {
     stack_probe.retain();
+    if (!builtin.is_test and builtin.os.tag == .linux and
+        (builtin.cpu.arch == .x86 or builtin.cpu.arch.isArm()))
+        @import("private_compiler_rt").retain();
     const ops = shim_host_abi.getOps();
     const app_args = if (argc > 1) argv[1..argc] else argv[0..0];
     var cli_args_list = shim_host_abi.buildDefaultRunCliArgs(app_args, allocator()) catch {
