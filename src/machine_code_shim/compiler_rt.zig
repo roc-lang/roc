@@ -7,9 +7,13 @@ const builtin = @import("builtin");
 const int = @import("compiler_rt/int.zig");
 const arm = @import("compiler_rt/arm.zig");
 
+/// Use the toolchain's ARM EABI implementations on ARM Linux.
 pub const want_aeabi = builtin.cpu.arch.isArm();
+/// This private runtime is not used by Windows shims.
 pub const want_windows_arm_abi = false;
+/// This private runtime is not used by Windows shims.
 pub const want_windows_v2u64_abi = false;
+/// Match the toolchain's runtime arithmetic rather than its test instrumentation.
 pub const test_safety = false;
 
 /// Upstream modules must not register their public compiler-rt exports.
@@ -72,7 +76,7 @@ fn f2ulz(a: f32) callconv(.{ .arm_aapcs = .{} }) u64 {
     return @import("compiler_rt/fixunssfdi.zig").__fixunssfdi(a);
 }
 
-// compiler_rt/udivmod.zig's type adapter, matching Zig's compiler_rt root.
+/// Supply the upstream division implementation's exact integer-halving contract.
 pub fn HalveInt(comptime T: type, comptime signed_half: bool) type {
     return extern union {
         pub const bits = @divExact(@typeInfo(T).int.bits, 2);
@@ -87,6 +91,7 @@ pub fn HalveInt(comptime T: type, comptime signed_half: bool) type {
     };
 }
 
+/// Keep compiler-inserted libcalls bound locally even after LLVM optimization.
 pub inline fn retain() void {
     inline for (helpers) |helper| {
         // LLVM introduces libcalls after dead-code elimination, which removes
