@@ -219,8 +219,13 @@ pub const ProgramSession = struct {
             prepared.target.completed_scalar_values = &scalar_values;
             break :block try lir.CheckedPipeline.lowerPreparedSolvedToLir(prepared);
         } else block: {
-            const host = self.host orelse finalizationInvariant("runtime program was already consumed");
+            var host = self.host orelse finalizationInvariant("runtime program was already consumed");
             self.host = null;
+            errdefer host.deinit();
+            // The reused program read its roots before they were evaluated;
+            // the completed constructions now replace those reads.
+            const host_frozen = if (host.frozen_static_data) |*frozen| frozen else finalizationInvariant("host program omitted its completed frozen values");
+            try lir.ComptimeRootAccessors.rebuild(allocator, &host.lir_result, host_frozen);
             break :block host;
         };
         errdefer lowered.deinit();
@@ -3193,10 +3198,17 @@ fn comptimeFailureSiteFrom(
     const loc = failed_loc orelse return .{ .region = root_region, .foreign = null };
     const file = failed_file orelse return .{ .region = root_region, .foreign = null };
     const env = module.moduleEnvConst();
-    if (std.mem.eql(u8, file.qualified_name, env.qualifiedModuleName())) {
-        return .{ .region = failed_region orelse root_region, .foreign = null };
+    // Resolve source-table names in this environment's interner before comparing
+    // identities; indices from another module's store are not interchangeable.
+    if (env.common.idents.lookup(base.Ident.for_text(file.qualified_name))) |qualified_ident| {
+        if (qualified_ident.eql(env.qualified_module_ident)) {
+            return .{ .region = failed_region orelse root_region, .foreign = null };
+        }
     }
-    const bare_name_collides = std.mem.eql(u8, file.name, env.module_name);
+    const bare_name_collides = if (env.common.idents.lookup(base.Ident.for_text(file.name))) |display_ident|
+        display_ident.eql(env.display_module_name_idx)
+    else
+        false;
     return .{ .region = root_region, .foreign = .{
         .module_name = if (bare_name_collides) file.qualified_name else file.name,
         .line = loc.line,
