@@ -416,7 +416,10 @@ const StaticInitializerMachine = struct {
                 .join,
                 .jump,
                 .crash,
-                => staticDataInvariant("non-construction LIR reached static initializer materialization"),
+                => std.debug.panic("static data invariant violated: {s} in initializer {d} is not construction LIR", .{
+                    @tagName(self.store().getCFStmt(current)),
+                    @intFromEnum(proc_id),
+                }),
             }
         }
     }
