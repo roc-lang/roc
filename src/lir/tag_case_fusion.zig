@@ -66,7 +66,7 @@ const Variants = struct {
     }
 
     fn resolveTargets(self: *Variants, store: *LirStore, switch_stmt: @FieldType(LIR.CFStmt, "switch_stmt"), stats: *WorkStats) ResourceError!void {
-        var targets = std.AutoHashMap(u64, LIR.CFStmtId).init(store.allocator);
+        var targets = std.AutoHashMap(u64, LIR.CFStmtId).init(self.indices.allocator);
         defer targets.deinit();
         const branches = store.getCFSwitchBranches(switch_stmt.branches);
         for (0..branches.len) |index| {
@@ -77,7 +77,7 @@ const Variants = struct {
         }
         for (self.builds.items) |build| {
             stats.variant_lookups += 1;
-            try self.targets.append(store.allocator, targets.get(build.discriminant) orelse switch_stmt.default_branch);
+            try self.targets.append(self.indices.allocator, targets.get(build.discriminant) orelse switch_stmt.default_branch);
         }
     }
 };
@@ -282,24 +282,56 @@ pub fn runWithStats(store: *LirStore, layouts: *const layout_mod.Store) Resource
     defer join_params.deinit();
     // The identity domain includes other procedures and unreachable old clones.
     // Reserve it once; destinations and branch clones share the same allocator.
-    join_params.next_join_point = nextJoinPointRaw(store, &stats);
+    join_params.next_join_point = body_clone.firstFreshJoinPoint(store);
+    stats.global_statement_visits = store.cfStmtCount();
     for (0..store.procSpecCount()) |proc_index| {
         const proc: LIR.LirProcSpecId = @enumFromInt(@as(u32, @intCast(proc_index)));
-        var indexed = false;
-        while (try findCandidate(store, layouts, proc, &stats)) |found| {
-            var candidate = found;
-            defer candidate.deinit(store.allocator);
-            if (!indexed) {
-                try join_params.indexReachable(store, store.getProcSpec(proc).body.?);
-                indexed = true;
-            }
-            const fused_id = store.getCFStmt(candidate.join_stmt).join.id;
-            try applyCandidate(store, layouts, &join_params, &candidate, &stats);
-            stats.fusions += 1;
-            try debugCheckJumpScopes(store, proc, fused_id);
-        }
+        try runProcWithStats(store, layouts, proc, store.allocator, &join_params, &stats);
     }
     return stats;
+}
+
+/// Fusion applies to every available body, including erased-ABI procedures.
+pub fn rewritableProcBody(store: *const LirStore, proc: LIR.LirProcSpecId) ?LIR.CFStmtId {
+    return store.getProcSpec(proc).body;
+}
+
+/// Reach the procedure's fixed point using task-owned scratch. The caller must
+/// seed the scratch-owned join index above every source join identity before
+/// dispatch; only emitted LIR is retained by the store.
+pub fn runProc(
+    store: *LirStore,
+    layouts: *const layout_mod.Store,
+    proc: LIR.LirProcSpecId,
+    scratch_allocator: Allocator,
+    join_params: *body_clone.JoinParamIndex,
+) ResourceError!void {
+    var stats: WorkStats = .{};
+    try runProcWithStats(store, layouts, proc, scratch_allocator, join_params, &stats);
+}
+
+fn runProcWithStats(
+    store: *LirStore,
+    layouts: *const layout_mod.Store,
+    proc: LIR.LirProcSpecId,
+    allocator: Allocator,
+    join_params: *body_clone.JoinParamIndex,
+    stats: *WorkStats,
+) ResourceError!void {
+    const body = rewritableProcBody(store, proc) orelse return;
+    var indexed = false;
+    while (try findCandidate(store, layouts, proc, stats, allocator)) |found| {
+        var candidate = found;
+        defer candidate.deinit(allocator);
+        if (!indexed) {
+            try join_params.indexReachable(store, body);
+            indexed = true;
+        }
+        const fused_id = store.getCFStmt(candidate.join_stmt).join.id;
+        try applyCandidate(store, layouts, join_params, &candidate, stats, allocator);
+        stats.fusions += 1;
+        try debugCheckJumpScopes(store, proc, fused_id, allocator);
+    }
 }
 
 /// Debug-only invariant: after a fusion, every jump in the procedure still
@@ -307,9 +339,8 @@ pub fn runWithStats(store: *LirStore, layouts: *const layout_mod.Store) Resource
 /// fresh joins and hoists the match's continuation joins around them, and a
 /// jump left outside its declaration's scope would only surface later as an
 /// ARC lift failure with no pointer back here.
-fn debugCheckJumpScopes(store: *LirStore, proc: LIR.LirProcSpecId, fused_id: LIR.JoinPointId) ResourceError!void {
+fn debugCheckJumpScopes(store: *LirStore, proc: LIR.LirProcSpecId, fused_id: LIR.JoinPointId, allocator: Allocator) ResourceError!void {
     if (builtin.mode != .Debug) return;
-    const allocator = store.allocator;
     const Item = struct { stmt: LIR.CFStmtId, depth: usize };
     var work = std.ArrayList(Item).empty;
     defer work.deinit(allocator);
@@ -387,7 +418,7 @@ fn debugCheckJumpScopes(store: *LirStore, proc: LIR.LirProcSpecId, fused_id: LIR
             .assign_call_dict,
             => {
                 successors.clearRetainingCapacity();
-                try body_clone.appendSuccessors(store, &successors, item.stmt);
+                try body_clone.appendSuccessorsWithAllocator(store, &successors, item.stmt, allocator);
                 for (successors.items) |next| try work.append(allocator, .{ .stmt = next, .depth = item.depth });
             },
         }
@@ -399,10 +430,11 @@ fn findCandidate(
     layouts: *const layout_mod.Store,
     proc: LIR.LirProcSpecId,
     stats: *WorkStats,
+    allocator: Allocator,
 ) ResourceError!?Candidate {
-    const body = store.getProcSpec(proc).body orelse return null;
+    const body = rewritableProcBody(store, proc) orelse return null;
     stats.discovery_walks += 1;
-    var walk = try body_clone.ReachableStmts.init(store, body);
+    var walk = try body_clone.ReachableStmts.initWithAllocator(store, body, allocator);
     defer walk.deinit();
     while (try walk.next()) |join_stmt| {
         stats.discovery_statement_visits += 1;
@@ -418,22 +450,22 @@ fn findCandidate(
 
         var wrappers = std.ArrayList(LIR.CFStmtId).empty;
         var keep_wrappers = false;
-        defer if (!keep_wrappers) wrappers.deinit(store.allocator);
+        defer if (!keep_wrappers) wrappers.deinit(allocator);
         var match_start = join.body;
         while (store.getCFStmt(match_start) == .join) {
-            try wrappers.append(store.allocator, match_start);
+            try wrappers.append(allocator, match_start);
             match_start = store.getCFStmt(match_start).join.remainder;
         }
 
         var matched_value = param;
         var match_stmt = match_start;
         var alias_sources = std.ArrayList(LIR.LocalId).empty;
-        defer alias_sources.deinit(store.allocator);
+        defer alias_sources.deinit(allocator);
         while (true) {
             const alias_node = store.getCFStmt(match_stmt);
             if (alias_node != .assign_ref or alias_node.assign_ref.op != .local) break;
             if (alias_node.assign_ref.op.local != matched_value) break;
-            try alias_sources.append(store.allocator, matched_value);
+            try alias_sources.append(allocator, matched_value);
             matched_value = alias_node.assign_ref.target;
             match_stmt = alias_node.assign_ref.next;
         }
@@ -453,22 +485,22 @@ fn findCandidate(
         if (switch_node.switch_stmt.continuation != null) continue;
 
         var union_locals = std.ArrayList(LIR.LocalId).empty;
-        errdefer union_locals.deinit(store.allocator);
-        try union_locals.append(store.allocator, param);
+        errdefer union_locals.deinit(allocator);
+        try union_locals.append(allocator, param);
         for (alias_sources.items) |source| {
-            if (source != param) try union_locals.append(store.allocator, source);
+            if (source != param) try union_locals.append(allocator, source);
         }
-        if (matched_value != param) try union_locals.append(store.allocator, matched_value);
+        if (matched_value != param) try union_locals.append(allocator, matched_value);
 
         // The consumer may re-enter the match with a new value, jumping back
         // to the union join from an arm or from later code. Such an edge is a
         // producer the union join must still receive, and it lies inside the
         // region the hoisted continuations would enclose, so fusion cannot
         // keep every jump in scope; the join stays as lowered.
-        var body_facts = try RegionFacts.init(store, join.body, false, stats);
+        var body_facts = try RegionFacts.init(store, join.body, false, stats, allocator);
         defer body_facts.deinit();
         if (body_facts.jump_targets.contains(join.id)) {
-            union_locals.deinit(store.allocator);
+            union_locals.deinit(allocator);
             continue;
         }
 
@@ -482,32 +514,32 @@ fn findCandidate(
             }
         }
         if (!aliases_are_linear) {
-            union_locals.deinit(store.allocator);
+            union_locals.deinit(allocator);
             continue;
         }
         if (match_node == .assign_ref and join_reads.get(match_node.assign_ref.target) != 1) {
-            union_locals.deinit(store.allocator);
+            union_locals.deinit(allocator);
             continue;
         }
 
         var builds = std.ArrayList(BuildSite).empty;
-        errdefer builds.deinit(store.allocator);
-        var variants = Variants.init(store.allocator);
+        errdefer builds.deinit(allocator);
+        var variants = Variants.init(allocator);
         var keep_variants = false;
         defer if (!keep_variants) variants.deinit();
         var consistent_payloads = true;
         var jump_count: usize = 0;
-        var predecessors = collections.DenseMap(LIR.CFStmtId, u32).init(store.allocator);
+        var predecessors = collections.DenseMap(LIR.CFStmtId, u32).init(allocator);
         defer predecessors.deinit();
         var successors = std.ArrayList(LIR.CFStmtId).empty;
-        defer successors.deinit(store.allocator);
-        var remainder_walk = try body_clone.ReachableStmts.init(store, join.remainder);
+        defer successors.deinit(allocator);
+        var remainder_walk = try body_clone.ReachableStmts.initWithAllocator(store, join.remainder, allocator);
         defer remainder_walk.deinit();
         stats.inventory_walks += 1;
         while (try remainder_walk.next()) |stmt_id| {
             stats.inventory_statement_visits += 1;
             successors.clearRetainingCapacity();
-            try body_clone.appendSuccessors(store, &successors, stmt_id);
+            try body_clone.appendSuccessorsWithAllocator(store, &successors, stmt_id, allocator);
             for (successors.items) |next| try predecessors.put(next, (predecessors.get(next) orelse 0) + 1);
             const stmt = store.getCFStmt(stmt_id);
             if (stmt == .jump and stmt.jump.target == join.id) jump_count += 1;
@@ -522,7 +554,7 @@ fn findCandidate(
                 .discriminant = assign.discriminant,
                 .payload = assign.payload,
             };
-            try builds.append(store.allocator, build);
+            try builds.append(allocator, build);
             if (!try variants.add(build, stats)) consistent_payloads = false;
             // Every producer's payload must be checked, including duplicates
             // of a variant whose consumer only needs to be analyzed once.
@@ -534,8 +566,8 @@ fn findCandidate(
             } else consistent_payloads = false;
         }
         if (builds.items.len == 0 or builds.items.len != jump_count) {
-            builds.deinit(store.allocator);
-            union_locals.deinit(store.allocator);
+            builds.deinit(allocator);
+            union_locals.deinit(allocator);
             continue;
         }
         // A producer edge's statements may also be reached from elsewhere:
@@ -602,22 +634,22 @@ fn findCandidate(
             }
         }
         if (!consistent_payloads) {
-            builds.deinit(store.allocator);
-            union_locals.deinit(store.allocator);
+            builds.deinit(allocator);
+            union_locals.deinit(allocator);
             continue;
         }
-        var branch_facts = RegionCache.init(store.allocator);
+        var branch_facts = RegionCache.init(allocator);
         var keep_branch_facts = false;
         defer if (!keep_branch_facts) branch_facts.deinit();
         try variants.resolveTargets(store, switch_node.switch_stmt, stats);
         if (!try branchesUseOnlyPayloads(store, layouts, matched_value, param, &variants, &branch_facts, stats)) {
-            builds.deinit(store.allocator);
-            union_locals.deinit(store.allocator);
+            builds.deinit(allocator);
+            union_locals.deinit(allocator);
             continue;
         }
         const known_edges_cover = classifyJoinTagUses(store, layouts, &body_facts, matched_value, match_stmt, &variants, stats) orelse {
-            builds.deinit(store.allocator);
-            union_locals.deinit(store.allocator);
+            builds.deinit(allocator);
+            union_locals.deinit(allocator);
             continue;
         };
         const complete = known_edges_cover and !shared_edge;
@@ -729,15 +761,15 @@ const RegionFacts = struct {
     projections: std.ArrayList(LIR.CFStmtId) = .empty,
     jump_targets: collections.DenseMap(LIR.JoinPointId, void),
 
-    fn init(store: *LirStore, body: LIR.CFStmtId, comptime include_defs: bool, stats: *WorkStats) ResourceError!RegionFacts {
+    fn init(store: *LirStore, body: LIR.CFStmtId, comptime include_defs: bool, stats: *WorkStats, allocator: Allocator) ResourceError!RegionFacts {
         var self: RegionFacts = .{
-            .reads = .{ .counts = collections.DenseMap(LIR.LocalId, u32).init(store.allocator) },
-            .defs = .{ .counts = collections.DenseMap(LIR.LocalId, u32).init(store.allocator) },
-            .releases = .{ .counts = collections.DenseMap(LIR.LocalId, u32).init(store.allocator) },
-            .jump_targets = collections.DenseMap(LIR.JoinPointId, void).init(store.allocator),
+            .reads = .{ .counts = collections.DenseMap(LIR.LocalId, u32).init(allocator) },
+            .defs = .{ .counts = collections.DenseMap(LIR.LocalId, u32).init(allocator) },
+            .releases = .{ .counts = collections.DenseMap(LIR.LocalId, u32).init(allocator) },
+            .jump_targets = collections.DenseMap(LIR.JoinPointId, void).init(allocator),
         };
         errdefer self.deinit();
-        var walk = try body_clone.ReachableStmts.init(store, body);
+        var walk = try body_clone.ReachableStmts.initWithAllocator(store, body, allocator);
         defer walk.deinit();
         stats.inventory_walks += 1;
         var statement_count: usize = 0;
@@ -748,7 +780,7 @@ const RegionFacts = struct {
             body_clone.forEachStmtRead(store, stmt, &self.reads, noteRead);
             if (self.reads.failure) |failure| return failure;
             if (stmt == .assign_ref) {
-                try self.projections.append(store.allocator, stmt_id);
+                try self.projections.append(allocator, stmt_id);
             } else if (stmt == .jump) {
                 try self.jump_targets.put(stmt.jump.target, {});
             } else if (stmt == .decref) {
@@ -760,7 +792,7 @@ const RegionFacts = struct {
         if (include_defs) {
             // Cloning needs lexical binders, not operand writes (`set_local`
             // writes an outer binder). Keep using the cloner's exact inventory.
-            self.defs = try body_clone.collectReachableDefinitions(store, body);
+            self.defs = try body_clone.collectReachableDefinitionsWithAllocator(store, body, allocator);
             stats.definition_walks += 1;
             stats.definition_statement_visits += statement_count;
         }
@@ -803,7 +835,7 @@ const RegionCache = struct {
 
     fn get(self: *RegionCache, store: *LirStore, body: LIR.CFStmtId, stats: *WorkStats) ResourceError!*const RegionFacts {
         if (self.regions.getPtr(body)) |facts| return facts;
-        var facts = try RegionFacts.init(store, body, true, stats);
+        var facts = try RegionFacts.init(store, body, true, stats, self.regions.allocator);
         errdefer facts.deinit();
         try self.regions.put(body, facts);
         return self.regions.getPtr(body).?;
@@ -920,12 +952,13 @@ fn applyCandidate(
     join_params: *body_clone.JoinParamIndex,
     candidate: *const Candidate,
     stats: *WorkStats,
+    allocator: Allocator,
 ) ResourceError!void {
     const join = store.getCFStmt(candidate.join_stmt).join;
     var dests = std.ArrayList(VariantDest).empty;
-    defer dests.deinit(store.allocator);
+    defer dests.deinit(allocator);
     var cloned_locals = std.ArrayList(LIR.LocalId).empty;
-    defer cloned_locals.deinit(store.allocator);
+    defer cloned_locals.deinit(allocator);
     for (candidate.variants.builds.items, candidate.variants.targets.items) |build, branch| {
         const payload_layout = variantPayloadLayout(store, layouts, candidate.param, build.variant_index) orelse unreachable;
         const payload_param = if (build.payload != null) try store.addLocal(.{ .layout_idx = payload_layout }) else null;
@@ -942,7 +975,7 @@ fn applyCandidate(
         try join_params.record(store.getCFStmt(join_stmt).join);
 
         const branch_defs = candidate.branch_facts.regions.get(branch).?.defs;
-        var cloner = try body_clone.BodyCloner(BranchRewriter).initWithFreshDeclaredJoins(store, .{
+        var cloner = try body_clone.BodyCloner(BranchRewriter).initWithFreshDeclaredJoinsAndAllocator(store, .{
             .param = candidate.matched_value,
             .variant_index = build.variant_index,
             .payload = payload_param orelse candidate.param,
@@ -950,7 +983,7 @@ fn applyCandidate(
             .layouts = layouts,
             .union_locals = candidate.union_locals.items,
             .has_payload = payload_param != null,
-        }, branch, join_params);
+        }, branch, join_params, allocator);
         defer cloner.deinit();
         const frame = store.getLocalSpan(store.getProcSpec(candidate.proc).frame_locals);
         for (0..frame.len) |index| {
@@ -958,9 +991,9 @@ fn applyCandidate(
             if (branch_defs.get(local) == 0) try cloner.local_map.put(local, local);
         }
         const body = try cloner.cloneStmt(branch);
-        try cloned_locals.appendSlice(store.allocator, cloner.new_locals.items);
+        try cloned_locals.appendSlice(allocator, cloner.new_locals.items);
         store.getCFStmtPtr(join_stmt).join.body = body;
-        try dests.append(store.allocator, .{
+        try dests.append(allocator, .{
             .payload_param = payload_param,
             .join_id = join_id,
             .join_stmt = join_stmt,
@@ -1012,11 +1045,11 @@ fn applyCandidate(
 
     const proc = store.getProcSpecPtr(candidate.proc);
     var frame = std.ArrayList(LIR.LocalId).empty;
-    defer frame.deinit(store.allocator);
+    defer frame.deinit(allocator);
     const old_frame = store.getLocalSpan(proc.frame_locals);
-    for (0..old_frame.len) |old_index| try frame.append(store.allocator, GuardedList.at(old_frame, old_index));
-    for (dests.items) |dest| if (dest.payload_param) |payload| try frame.append(store.allocator, payload);
-    try frame.appendSlice(store.allocator, cloned_locals.items);
+    for (0..old_frame.len) |old_index| try frame.append(allocator, GuardedList.at(old_frame, old_index));
+    for (dests.items) |dest| if (dest.payload_param) |payload| try frame.append(allocator, payload);
+    try frame.appendSlice(allocator, cloned_locals.items);
     std.mem.sort(LIR.LocalId, frame.items, {}, body_clone.localIdLessThan);
     const unique_len = body_clone.uniqueSortedLocals(frame.items);
     proc.frame_locals = try store.addLocalSpan(frame.items[0..unique_len]);
@@ -1098,18 +1131,6 @@ fn redirectProducerEdge(
         .assign_call_dict,
         => unreachable,
     }
-}
-
-fn nextJoinPointRaw(store: *LirStore, stats: ?*WorkStats) u32 {
-    var next: u32 = 0;
-    for (store.getCFStmts()) |stmt| {
-        if (stats) |counts| counts.global_statement_visits += 1;
-        if (stmt != .join) continue;
-        const raw = @intFromEnum(stmt.join.id);
-        if (raw == std.math.maxInt(u32)) @panic("join-point id space exhausted");
-        next = @max(next, raw + 1);
-    }
-    return next;
 }
 
 test "tag case fusion declarations are referenced" {
@@ -1196,6 +1217,74 @@ const TestGraph = struct {
 };
 
 const TestError = ResourceError || error{ TestExpectedEqual, TestUnexpectedResult };
+
+test "tag case fusion procedure scratch is bounded and output survives scratch destruction" {
+    const testing = std.testing;
+    var layouts = try layout_mod.Store.init(testing.allocator, .u64);
+    defer layouts.deinit();
+    const layout_count = layouts.layoutCount();
+    var standalone = LirStore.init(testing.allocator);
+    defer standalone.deinit();
+    var procedures = LirStore.init(testing.allocator);
+    defer procedures.deinit();
+    for ([_]*LirStore{ &standalone, &procedures }) |store| {
+        var graph: TestGraph = .{ .store = store };
+        defer graph.deinit();
+        // Put the small procedure beyond a large unrelated identity prefix.
+        for (0..16384) |_| {
+            const local = try store.addLocal(.{ .layout_idx = .u64 });
+            _ = try store.addCFStmt(.{ .ret = .{ .value = local } });
+        }
+        const selector = try graph.local(.u64);
+        const result = try graph.local(.u64);
+        const ret = try store.addCFStmt(.{ .ret = .{ .value = result } });
+        _ = try store.addCFStmt(.{ .join = .{
+            .id = @enumFromInt(50000),
+            .params = .empty(),
+            .body = ret,
+            .remainder = ret,
+        } });
+        for (0..2) |index| {
+            const body = try graph.candidate(selector, .{ ret, ret }, 2);
+            const proc = try graph.proc(body);
+            // Unlike call-specializing passes, fusion does not change the ABI.
+            if (index == 1) store.getProcSpecPtr(proc).abi = .erased_callable;
+        }
+    }
+    try run(&standalone, &layouts);
+    var next_join = body_clone.firstFreshJoinPoint(&procedures);
+    try testing.expectEqual(@as(u32, 50001), next_join);
+    for (0..procedures.procSpecCount()) |index| {
+        var scratch: [65536]u8 = undefined;
+        {
+            var fixed = std.heap.FixedBufferAllocator.init(&scratch);
+            var joins = body_clone.JoinParamIndex.init(fixed.allocator());
+            defer joins.deinit();
+            joins.next_join_point = next_join;
+            try runProc(&procedures, &layouts, @enumFromInt(index), fixed.allocator(), &joins);
+            next_join = joins.next_join_point;
+        }
+        // Poison the storage to catch accidentally retained temporary spans.
+        @memset(&scratch, 0xa5);
+    }
+    try testing.expectEqual(@as(u32, 50005), next_join);
+    try testing.expectEqual(layout_count, layouts.layoutCount());
+    try testing.expectEqual(standalone.cfStmtCount(), procedures.cfStmtCount());
+    for (0..standalone.cfStmtCount()) |index| {
+        try testing.expectEqualDeep(standalone.getCFStmt(@enumFromInt(index)), procedures.getCFStmt(@enumFromInt(index)));
+    }
+    for (0..procedures.procSpecCount()) |index| {
+        const proc: LIR.LirProcSpecId = @enumFromInt(index);
+        try testing.expectEqualDeep(standalone.getProcSpec(proc), procedures.getProcSpec(proc));
+        var walk = try body_clone.ReachableStmts.init(&procedures, rewritableProcBody(&procedures, proc).?);
+        defer walk.deinit();
+        while (try walk.next()) |stmt| {
+            const node = procedures.getCFStmt(stmt);
+            try testing.expect(node != .assign_tag);
+            if (node == .join) try testing.expect(@intFromEnum(node.join.id) > 50000);
+        }
+    }
+}
 
 fn testIndependentFusions(allocator: Allocator, candidate_count: usize, unrelated_count: usize, producer_count: usize) TestError!WorkStats {
     const testing = std.testing;
@@ -1299,7 +1388,7 @@ test "tag case fusion does not recover opaque producers after descendant cloning
     } });
     const proc = try graph.proc(outer);
     var before: WorkStats = .{};
-    var first = (try findCandidate(&store, &layouts, proc, &before)).?;
+    var first = (try findCandidate(&store, &layouts, proc, &before, testing.allocator)).?;
     defer first.deinit(testing.allocator);
     try testing.expectEqual(inner, first.join_stmt);
     const stats = try runWithStats(&store, &layouts);
@@ -1351,7 +1440,7 @@ test "tag case fusion retries an ancestor after a descendant removes an unproduc
     const proc = try graph.proc(outer);
     var before: WorkStats = .{};
     {
-        var first = (try findCandidate(&store, &layouts, proc, &before)).?;
+        var first = (try findCandidate(&store, &layouts, proc, &before, testing.allocator)).?;
         defer first.deinit(testing.allocator);
         try testing.expectEqual(inner, first.join_stmt);
     }
@@ -1755,7 +1844,7 @@ test "tag case fusion routes exact constructor edges without materializing tags"
     const selector = try store.addLocal(.{ .layout_idx = .bool });
     const zero = try store.addLocal(.{ .layout_idx = .u64 });
     const one = try store.addLocal(.{ .layout_idx = .u64 });
-    const join_id: LIR.JoinPointId = @enumFromInt(nextJoinPointRaw(&store, null));
+    const join_id: LIR.JoinPointId = @enumFromInt(body_clone.firstFreshJoinPoint(&store));
 
     const ret_zero = try store.addCFStmt(.{ .ret = .{ .value = zero } });
     const branch_zero = try store.addCFStmt(.{ .assign_literal = .{
@@ -1843,7 +1932,7 @@ test "tag case fusion renames complete arms with a shared suffix" {
     const one_prefix = try store.addLocal(.{ .layout_idx = .u64 });
     const two_prefix = try store.addLocal(.{ .layout_idx = .u64 });
     const shared_default = try store.addLocal(.{ .layout_idx = .u64 });
-    const join_id: LIR.JoinPointId = @enumFromInt(nextJoinPointRaw(&store, null));
+    const join_id: LIR.JoinPointId = @enumFromInt(body_clone.firstFreshJoinPoint(&store));
 
     const ret_zero = try store.addCFStmt(.{ .ret = .{ .value = zero } });
     const branch_zero = try store.addCFStmt(.{ .assign_literal = .{
@@ -1963,7 +2052,7 @@ test "tag case fusion carries releases on a producer edge" {
     const finished = try store.addLocal(.{ .layout_idx = .str });
     const zero = try store.addLocal(.{ .layout_idx = .u64 });
     const one = try store.addLocal(.{ .layout_idx = .u64 });
-    const join_id: LIR.JoinPointId = @enumFromInt(nextJoinPointRaw(&store, null));
+    const join_id: LIR.JoinPointId = @enumFromInt(body_clone.firstFreshJoinPoint(&store));
 
     const ret_zero = try store.addCFStmt(.{ .ret = .{ .value = zero } });
     const branch_zero = try store.addCFStmt(.{ .assign_literal = .{
@@ -2059,7 +2148,7 @@ test "tag case fusion releases the payload where an arm released the union" {
     const taken = try store.addLocal(.{ .layout_idx = .str });
     const zero = try store.addLocal(.{ .layout_idx = .u64 });
     const one = try store.addLocal(.{ .layout_idx = .u64 });
-    const join_id: LIR.JoinPointId = @enumFromInt(nextJoinPointRaw(&store, null));
+    const join_id: LIR.JoinPointId = @enumFromInt(body_clone.firstFreshJoinPoint(&store));
 
     // The payload arm reads the payload, then releases the whole union.
     const ret_one = try store.addCFStmt(.{ .ret = .{ .value = one } });
@@ -2162,7 +2251,7 @@ test "tag case fusion keeps the match's continuation join enclosing the fused ar
     const out = try store.addLocal(.{ .layout_idx = .u64 });
     const zero = try store.addLocal(.{ .layout_idx = .u64 });
     const one = try store.addLocal(.{ .layout_idx = .u64 });
-    const join_id: LIR.JoinPointId = @enumFromInt(nextJoinPointRaw(&store, null));
+    const join_id: LIR.JoinPointId = @enumFromInt(body_clone.firstFreshJoinPoint(&store));
     const cont_id: LIR.JoinPointId = @enumFromInt(@intFromEnum(join_id) + 1);
 
     // Each arm initializes the match result and jumps to its continuation,
@@ -2267,7 +2356,7 @@ test "tag case fusion keeps the join when a producer edge is shared with another
     const selector = try store.addLocal(.{ .layout_idx = .bool });
     const zero = try store.addLocal(.{ .layout_idx = .u64 });
     const one = try store.addLocal(.{ .layout_idx = .u64 });
-    const join_id: LIR.JoinPointId = @enumFromInt(nextJoinPointRaw(&store, null));
+    const join_id: LIR.JoinPointId = @enumFromInt(body_clone.firstFreshJoinPoint(&store));
     const dead_id: LIR.JoinPointId = @enumFromInt(@intFromEnum(join_id) + 1);
 
     const ret_zero = try store.addCFStmt(.{ .ret = .{ .value = zero } });

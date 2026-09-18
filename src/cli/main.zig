@@ -16637,8 +16637,10 @@ test "post-check diagnostics preserve labeled ARC counts" {
     for (arcParallelCounters(.{})) |row| try std.testing.expectEqual(@as(u64, 0), row.count);
 }
 
-fn lirPassParallelCounters(parallel: lir.CheckedPipeline.LirPassParallelMetrics) [15]progress.Counter {
-    var rows: [15]progress.Counter = undefined;
+const lir_pass_counter_count = 5 + 2 * std.meta.fields(lir.CheckedPipeline.LirPassPhase).len;
+
+fn lirPassParallelCounters(parallel: lir.CheckedPipeline.LirPassParallelMetrics) [lir_pass_counter_count]progress.Counter {
+    var rows: [lir_pass_counter_count]progress.Counter = undefined;
     rows[0..5].* = .{
         .{ .name = "Tasks submitted", .count = parallel.tasks_submitted },
         .{ .name = "Tasks committed", .count = parallel.tasks_committed },
@@ -16646,7 +16648,16 @@ fn lirPassParallelCounters(parallel: lir.CheckedPipeline.LirPassParallelMetrics)
         .{ .name = "Appended statements", .count = parallel.appended_statements },
         .{ .name = "Peak retained procedure shards", .count = parallel.peak_retained_shards },
     };
-    inline for (.{ "TRMC", "Join scalarization", "Loop append promotion", "Range proving", "Box reuse" }, 0..) |name, index| {
+    inline for (comptime std.meta.tags(lir.CheckedPipeline.LirPassPhase), 0..) |phase, index| {
+        const name = comptime switch (phase) {
+            .trmc => "TRMC",
+            .forwarding_join => "Forwarding joins",
+            .tag_fusion => "Tag-case fusion",
+            .scalarize => "Join scalarization",
+            .loop_append => "Loop append promotion",
+            .range => "Range proving",
+            .box_reuse => "Box reuse",
+        };
         rows[5 + 2 * index] = .{ .name = name ++ " tasks", .count = parallel.committed_by_phase[index] };
         rows[6 + 2 * index] = .{ .name = name ++ " rewrites", .count = parallel.changed_by_phase[index] };
     }
@@ -16800,15 +16811,17 @@ test "post-check diagnostics preserve labeled LIR pass counts" {
         .prepared_statement_rows = 100,
         .appended_statements = 30,
         .peak_retained_shards = 8,
-        .committed_by_phase = .{ 1, 2, 3, 4, 5 },
-        .changed_by_phase = .{ 0, 1, 2, 3, 4 },
+        .committed_by_phase = .{ 1, 2, 3, 4, 5, 6, 7 },
+        .changed_by_phase = .{ 0, 1, 2, 3, 4, 5, 6 },
     });
     try std.testing.expectEqualStrings("Tasks submitted", rows[0].name);
     try std.testing.expectEqual(@as(u64, 10), rows[0].count);
     try std.testing.expectEqualStrings("Peak retained procedure shards", rows[4].name);
     try std.testing.expectEqual(@as(u64, 8), rows[4].count);
-    try std.testing.expectEqualStrings("Box reuse rewrites", rows[14].name);
-    for (0..5) |index| {
+    try std.testing.expectEqualStrings("Forwarding joins tasks", rows[7].name);
+    try std.testing.expectEqualStrings("Tag-case fusion rewrites", rows[10].name);
+    try std.testing.expectEqualStrings("Box reuse rewrites", rows[18].name);
+    for (0..std.meta.fields(lir.CheckedPipeline.LirPassPhase).len) |index| {
         try std.testing.expectEqual(@as(u64, @intCast(index + 1)), rows[5 + 2 * index].count);
         try std.testing.expectEqual(@as(u64, @intCast(index)), rows[6 + 2 * index].count);
     }

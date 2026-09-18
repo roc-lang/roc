@@ -11213,8 +11213,9 @@ regression fails loudly instead of shipping.
 
 ### Procedure-Local LIR Rewrites
 
-TRMC, join scalarization, loop append promotion, range proving, and box reuse
-preserve their pipeline order. Within one phase, procedure bodies own disjoint
+TRMC, forwarding-join inlining, tag-case fusion, join scalarization, loop
+append promotion, range proving, and box reuse preserve their pipeline order
+and existing procedure eligibility. Within one phase, procedure bodies own disjoint
 writable statement rows. Rewriting reads a frozen phase input and produces a
 sparse patch of those rows, new body-owned data, and one procedure's metadata.
 The coordinator reserves pointer layouts and helper summaries before dispatch;
@@ -11225,6 +11226,12 @@ The same patch boundary applies with one worker. Every phase finishes its
 callbacks before committing in procedure order, so neither input visibility
 nor output identity depends on worker count or completion order. Each commit
 relocates appended references in both patched rows and procedure metadata.
+Fusion workers keep a procedure's full fixed point in one task. The coordinator
+inventories the old join-ID domain once; each task allocates fresh identities
+above that boundary and returns its exact allocation count. Ordered commit
+assigns disjoint fresh ranges and relocates only generated identities, preserving
+original joins and jumps to enclosing source continuations. Prefix patches and
+appended data obey the same typed relocation rule.
 Allocation failure leaves an individual commit unapplied; failed callbacks
 are drained without replay, and failed lowering discards the whole result.
 Reporting follows ordered commits rather than worker completion order.

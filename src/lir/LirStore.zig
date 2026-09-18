@@ -233,10 +233,16 @@ pub fn procRewriteChanged(self: *const Self) bool {
 /// appendBodyShard reserves before mutation; the remaining prefix patches cannot
 /// fail. Join-point identities already belong to the procedure and are preserved.
 pub fn commitProcRewrite(self: *Self, worker: *const Self) AppendBodyError!void {
+    return self.commitProcRewriteWithJoinRelocation(worker, null);
+}
+
+/// Relocate only phase-generated joins, consistently across suffixes, prefix
+/// patches, and procedure metadata. The coordinator supplies the allocator range.
+pub fn commitProcRewriteWithJoinRelocation(self: *Self, worker: *const Self, relocation: ?JoinPointRelocation) AppendBodyError!void {
     std.debug.assert(worker.body_coordinator == self);
     const rewrite = if (worker.proc_rewrite) |*prepared| prepared else @panic("LirStore invariant violated: expected procedure rewrite shard");
     const shard = try worker.captureBodyShard(worker.body_prefix);
-    const appended = try self.appendBodyShard(shard, null, .empty(), null);
+    const appended = try self.appendBodyShardWithJoinRelocation(shard, null, .empty(), relocation);
     inline for (rewrite_columns) |field|
         @field(rewrite, field).commit(self, worker.body_prefix, appended.relocation);
     self.getProcSpecPtr(rewrite.proc_id).* =
@@ -281,6 +287,13 @@ pub const BodyShard = struct {
     erased_arg_layout_base: u32 = 0,
 };
 
+/// Explicit phase allocator boundary: identities below it belong to the frozen
+/// prefix and must retain their meaning even in newly appended rows.
+pub const JoinPointRelocation = struct {
+    first_fresh: u32,
+    offset: u32,
+};
+
 /// Base indices used to translate references from a private shard to the
 /// coordinator store.
 pub const BodyRelocation = struct {
@@ -300,6 +313,7 @@ pub const BodyRelocation = struct {
     string_bytes: u32,
     join_point_id_base: u32,
     relocate_join_point_ids: bool,
+    join_point_id_first_fresh: u32 = 0,
     erased_arg_layout_base: u32 = 0,
 
     pub fn local(self: BodyRelocation, prefix: BodyPrefix, id: LocalId) LocalId {
@@ -493,7 +507,8 @@ fn relocateBodyValue(comptime T: type, value: T, prefix: BodyPrefix, bases: Body
         return @enumFromInt(movedIndex(@intFromEnum(value), prefix.inline_scopes, bases.inline_scopes));
     }
     if (T == lir_defs.JoinPointId and bases.relocate_join_point_ids) {
-        return @enumFromInt(bases.join_point_id_base + @intFromEnum(value));
+        const raw = @intFromEnum(value);
+        return if (raw < bases.join_point_id_first_fresh) value else @enumFromInt(bases.join_point_id_base + raw);
     }
     if (T == LirPatternId) {
         if (value == LirPatternId.none) return value;
@@ -552,6 +567,21 @@ pub fn appendBodyShard(
     frame_locals: LocalSpan,
     join_point_id_base: ?u32,
 ) AppendBodyError!AppendedBody {
+    return self.appendBodyShardWithJoinRelocation(shard, root, frame_locals, if (join_point_id_base) |offset| .{
+        .first_fresh = 0,
+        .offset = offset,
+    } else null);
+}
+
+/// Append with an explicit generated-identity boundary instead of rebasing all
+/// joins. Reservation still completes before any destination contents change.
+pub fn appendBodyShardWithJoinRelocation(
+    self: *Self,
+    shard: BodyShard,
+    root: ?CFStmtId,
+    frame_locals: LocalSpan,
+    relocation: ?JoinPointRelocation,
+) AppendBodyError!AppendedBody {
     const source = shard.store;
     const prefix = shard.prefix;
     const source_prefix: BodyPrefix = if (source.body_coordinator != null)
@@ -583,8 +613,9 @@ pub fn appendBodyShard(
         .pattern_ids = @intCast(self.pattern_ids.len()),
         .inline_scopes = @intCast(self.inline_scopes.len()),
         .string_bytes = self.ownStringByteCount(),
-        .join_point_id_base = join_point_id_base orelse 0,
-        .relocate_join_point_ids = join_point_id_base != null,
+        .join_point_id_base = if (relocation) |joins| joins.offset else 0,
+        .relocate_join_point_ids = relocation != null,
+        .join_point_id_first_fresh = if (relocation) |joins| joins.first_fresh else 0,
         .erased_arg_layout_base = shard.erased_arg_layout_base,
     };
     const stmt_len = source.cf_stmts.len() - source_prefix.cf_stmts;
@@ -1790,6 +1821,82 @@ test "procedure rewrite shards preserve frozen prefixes and relocate ordered com
     try std.testing.expectEqual(committed_b.body.?, coordinator.getCFStmt(other_ret).assign_call.next);
 }
 
+test "procedure rewrite relocates only generated joins across simultaneous shards" {
+    const allocator = std.testing.allocator;
+    var coordinator = Self.init(allocator);
+    defer coordinator.deinit();
+    const source: lir_defs.JoinPointId = @enumFromInt(99);
+    const fresh: lir_defs.JoinPointId = @enumFromInt(100);
+    var procs: [2]LirProcSpecId = undefined;
+    var roots: [2]CFStmtId = undefined;
+    var old_spans: [2]JoinPointSpan = undefined;
+    for (0..2) |i| {
+        roots[i] = try coordinator.addCFStmt(.{ .jump = .{ .target = source } });
+        old_spans[i] = try coordinator.addJoinPointSpan(&.{.{ .id = source, .params = .empty(), .body = roots[i] }});
+        procs[i] = try coordinator.addProcSpec(.{
+            .identity = lir_defs.ProcIdentity.forTest(@intCast(i)),
+            .name = coordinator.freshSyntheticSymbol(),
+            .args = .empty(),
+            .ret_layout = .zst,
+            .body = roots[i],
+            .join_points = old_spans[i],
+        });
+    }
+    var a = try coordinator.cloneForProcRewrite(allocator, procs[0]);
+    defer a.deinit();
+    var b = try coordinator.cloneForProcRewrite(allocator, procs[1]);
+    defer b.deinit();
+    for ([_]*Self{ &a, &b }, 0..) |worker, i| {
+        const external = try worker.addCFStmt(.{ .jump = .{ .target = source } });
+        const clone_jump = try worker.addCFStmt(.{ .jump = .{ .target = @enumFromInt(101) } });
+        const clone = try worker.addCFStmt(.{ .join = .{
+            .id = @enumFromInt(101),
+            .params = .empty(),
+            .body = external,
+            .remainder = clone_jump,
+        } });
+        const destination = try worker.addCFStmt(.{ .join = .{
+            .id = fresh,
+            .params = .empty(),
+            .body = clone,
+            .remainder = external,
+        } });
+        worker.getCFStmtPtr(roots[i]).jump.target = fresh;
+        // An old join row can point to generated statements without changing identity.
+        GuardedList.atPtr(worker.getJoinPointSpanMut(old_spans[i]), 0).body = destination;
+        worker.getProcSpecPtr(procs[i]).body = destination;
+        worker.getProcSpecPtr(procs[i]).join_points = try worker.addJoinPointSpan(&.{
+            .{ .id = source, .params = .empty(), .body = external },
+            .{ .id = fresh, .params = .empty(), .body = clone },
+            .{ .id = @enumFromInt(101), .params = .empty(), .body = external },
+        });
+        worker.getProcSpecPtr(procs[i]).tail_calls = .{ .head = roots[i], .loop = if (i == 0) source else fresh };
+    }
+    try std.testing.expectEqualDeep(a.body_prefix, b.body_prefix);
+    for ([_]*Self{ &a, &b }, 0..) |worker, i| {
+        // Each worker explicitly allocated two IDs from the same phase boundary.
+        const offset: u32 = @intCast(i * 2);
+        try coordinator.commitProcRewriteWithJoinRelocation(worker, .{ .first_fresh = 100, .offset = offset });
+        const proc = coordinator.getProcSpec(procs[i]);
+        const destination = coordinator.getCFStmt(proc.body.?).join;
+        const clone = coordinator.getCFStmt(destination.body).join;
+        try std.testing.expectEqual(100 + offset, @intFromEnum(destination.id));
+        try std.testing.expectEqual(101 + offset, @intFromEnum(clone.id));
+        try std.testing.expectEqual(clone.id, coordinator.getCFStmt(clone.remainder).jump.target);
+        try std.testing.expectEqual(source, coordinator.getCFStmt(clone.body).jump.target);
+        try std.testing.expectEqual(source, coordinator.getCFStmt(destination.remainder).jump.target);
+        try std.testing.expectEqual(destination.id, coordinator.getCFStmt(roots[i]).jump.target);
+        const old = GuardedList.at(coordinator.getJoinPointSpan(old_spans[i]), 0);
+        try std.testing.expectEqual(source, old.id);
+        try std.testing.expectEqual(proc.body.?, old.body);
+        const joins = coordinator.getJoinPointSpan(proc.join_points);
+        try std.testing.expectEqual(source, GuardedList.at(joins, 0).id);
+        try std.testing.expectEqual(destination.id, GuardedList.at(joins, 1).id);
+        try std.testing.expectEqual(clone.id, GuardedList.at(joins, 2).id);
+        try std.testing.expectEqual(if (i == 0) source else destination.id, proc.tail_calls.?.loop);
+    }
+}
+
 test "procedure rewrite prepares tail chains and overlapping arm spans" {
     const allocator = std.testing.allocator;
     var coordinator = Self.init(allocator);
@@ -1879,13 +1986,20 @@ test "procedure rewrite allocation failures leave coordinator unchanged" {
             }
             worker.getCFStmtPtr(ret).* = .{ .init_uninitialized = .{ .target = local, .next = appended } };
             worker.getProcSpecPtr(proc).body = appended;
-            coordinator.commitProcRewrite(&worker) catch |err| {
+            worker.getProcSpecPtr(proc).tail_calls = .{ .head = appended, .loop = @enumFromInt(100) };
+            worker.getProcSpecPtr(proc).join_points = try worker.addJoinPointSpan(&.{.{
+                .id = @enumFromInt(100),
+                .params = .empty(),
+                .body = appended,
+            }});
+            coordinator.commitProcRewriteWithJoinRelocation(&worker, .{ .first_fresh = 100, .offset = 2 }) catch |err| {
                 try std.testing.expectEqualDeep(prefix, coordinator.captureBodyPrefix());
                 try std.testing.expectEqualDeep(metadata, coordinator.getProcSpec(proc));
                 try std.testing.expectEqual(local, coordinator.getCFStmt(ret).ret.value);
                 return err;
             };
             try std.testing.expectEqual(appended, coordinator.getProcSpec(proc).body.?);
+            try std.testing.expectEqual(@as(u32, 102), @intFromEnum(coordinator.getProcSpec(proc).tail_calls.?.loop));
         }
     };
     try std.testing.checkAllAllocationFailures(std.testing.allocator, Helper.run, .{});
