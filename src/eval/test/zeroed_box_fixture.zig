@@ -4,6 +4,7 @@
 
 const std = @import("std");
 const base = @import("base");
+const builtins = @import("builtins");
 const eval = @import("eval");
 const layout = @import("layout");
 const lir = @import("lir");
@@ -22,6 +23,8 @@ pub fn run(allocator: std.mem.Allocator) Error!void {
     defer layouts.deinit();
     var runtime_env = eval.RuntimeHostEnv.init(allocator);
     defer runtime_env.deinit();
+    const entered = builtins.in_process_host.enter(runtime_env.get_ops(), null);
+    defer builtins.in_process_host.leave(entered);
 
     const box_u64 = try layouts.insertBox(.u64);
     const ptr_u64 = try layouts.insertPtr(.u64);
@@ -59,7 +62,7 @@ pub fn run(allocator: std.mem.Allocator) Error!void {
         .ret_layout = .u64,
     });
 
-    var interp = try eval.Interpreter.init(allocator, &store, &layouts, runtime_env.get_ops(), .preserve);
+    var interp = try eval.Interpreter.init(allocator, &store, &layouts, runtime_env.get_ops());
     defer interp.deinit();
     const result = try interp.eval(.{ .proc_id = proc, .arg_layouts = &.{} });
     const value: *const u64 = @ptrCast(@alignCast(result.value.ptr));

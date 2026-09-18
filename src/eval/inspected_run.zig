@@ -357,7 +357,6 @@ fn runInterpreter(allocator: Allocator, program: Program, execution_host: Execut
         program.layouts,
         program.boxy_tables,
         runtime_env.get_ops(),
-        .preserve,
         .{
             .context = &bound_host,
             .dispatch = BoundHostedCallDependency.dispatch,
@@ -423,7 +422,6 @@ fn runDev(allocator: Allocator, program: Program) DevError!Result {
             program.boxy_tables.erased_arg_desc_offsets,
             program.boxy_tables.erased_arg_desc_params,
             program.boxy_tables.worker_procs,
-            .preserve,
             roc_target.host_cpu.level(),
         );
         defer codegen.deinit();

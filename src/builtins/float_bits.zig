@@ -2,13 +2,6 @@
 
 const std = @import("std");
 
-/// Whether an evaluator preserves the target's NaN result bits or rewrites
-/// every NaN to Roc's single normalized quiet-NaN representation.
-pub const NanMode = enum {
-    preserve,
-    normalize,
-};
-
 /// Roc's canonical F32 quiet-NaN bit pattern.
 pub const normalized_f32_nan_bits: u32 = 0x7fc0_0000;
 /// Roc's canonical F64 quiet-NaN bit pattern.

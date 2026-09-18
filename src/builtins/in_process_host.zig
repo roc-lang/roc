@@ -19,6 +19,8 @@
 //! archive member would satisfy references before the host's member was
 //! pulled in.
 
+const std = @import("std");
+const builtin = @import("builtin");
 const host_abi = @import("host_abi.zig");
 const shim_symbols = @import("shim_symbols.zig");
 
@@ -103,10 +105,16 @@ pub fn expectErrRegionRecorder() ?ExpectErrRegionRecorder {
 }
 
 fn requireOps() *RocOps {
-    // Entering a host is a compiler precondition, not a Roc crash: without
-    // an entered host there is no crash handler to notify. Trap even in
-    // optimized builds rather than continuing with an invalid host.
-    return current_ops orelse @trap();
+    return current_ops orelse hostInvariant("Roc code ran in-process on a thread that entered no host");
+}
+
+/// A breach of the host contract by the compiler itself. No `RocOps` exists
+/// to report it through, so the process stops after naming it. A freestanding
+/// build has no process to abort or stream to name it on, so it traps.
+fn hostInvariant(comptime message: []const u8) noreturn {
+    if (comptime builtin.os.tag == .freestanding) @trap();
+    std.debug.print("in-process host invariant violated: {s}\n", .{message});
+    std.process.abort();
 }
 
 fn symbolAlloc(_: *RocOps, length: usize, alignment: usize) callconv(.c) ?*anyopaque {
@@ -193,7 +201,6 @@ fn rocExpectErrRegion(start: u32, end: u32) callconv(.c) void {
 }
 
 test "in-process host scopes restore ops and expect observers" {
-    const std = @import("std");
     const TestEnv = @import("utils.zig").TestEnv;
     const Observer = struct {
         fn observe(o: *RocOps, site: u32, passed: u8) callconv(.c) void {

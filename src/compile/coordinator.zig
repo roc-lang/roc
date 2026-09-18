@@ -3080,6 +3080,7 @@ pub const Coordinator = struct {
         var options = compile_package.compileTimeFinalizationOptions(self.max_threads, &self.roc_ctx, &self.ctfe_timing);
         options.post_check_executor = self.postCheckExecutor();
         options.cached_debug_modules = cached_debug_modules.items;
+        options.splice_source = if (self.runtime_lowering) |config| config.splice_source else null;
         var runtime_target: ?lir.CheckedPipeline.TargetConfig = if (self.runtime_lowering) |config| config.target else null;
         if (runtime_target) |*target| target.post_check_executor = self.postCheckExecutor();
         std.debug.assert(self.program_session == null);

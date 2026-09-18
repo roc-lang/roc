@@ -18,7 +18,6 @@ fn runConsumer(lowered: *const lir.CheckedPipeline.LoweredProgram, expected_cras
         &program.layouts,
         eval.LirInterpreter.BoxyTables.fromResult(program),
         host.get_ops(),
-        .preserve,
     );
     defer interpreter.deinit();
     const root_id = program.root_procs.items[0];

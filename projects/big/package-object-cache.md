@@ -666,8 +666,19 @@ them.
       every other module in view whose pack the store lacks. Hits happen at
       two points: Monotype reservation for a runtime-only program, and Direct
       LIR for the program shared with the compile-time evaluator, where the
-      compile-time roots' closure lowers first and only procedures reached
-      afterwards may be served, since the evaluator has no entries to run.
+      compile-time roots' closure lowers first so that an entry served inside
+      it is known to be the evaluator's; the evaluator splices those entries
+      into its own image (below), under one rule that keeps its evaluation
+      the same as lowering the procedure itself: a program with an
+      exhaustiveness site that only the evaluation can resolve (a match
+      reachable only at compile time whose branches the evaluator must be
+      seen to take) takes no hits inside the compile-time closure at all,
+      since a spliced entry reports no branches; the checked pipeline decides
+      this per program from the modules' site policies. Floats need no rule:
+      compile-time evaluation keeps the machine's NaN bits like any other
+      code, and the writers of frozen data canonicalize every NaN they store
+      (`design.md`), so a cached entry's floats freeze to the same bytes as
+      the evaluator's own.
       Pack roots are the module's exported Roc procedures with closed types;
       hosted, intrinsic, entry, and compile-time-only templates never lower
       as procedures of the exporting module, and a module with no such root
@@ -716,9 +727,35 @@ them.
       loader (`vendor/relocatable_loader`) that binds their imports to the
       compiler's host symbols and patches their calls in place. Serving hits
       inside the program shared with the compile-time evaluator is therefore
-      a splice of object artifacts into that image; no second artifact
-      flavor exists, and the loader is the piece an LLVM-object splice
-      reuses.
+      a splice of object artifacts into that image, and that splice exists:
+      the evaluator's program construction (`DevProgram.init`) places the
+      entries of the external procedures its roots demand with the same
+      `spliceExternalProcs` the object compiler uses, compiles the rest of
+      the demand around them, and links the finished image
+      (`backend/dev/HostSplice.zig`). The evaluator's own code is generated
+      for native execution and carries every address it needs, while spliced
+      code reaches everything by relocation and name, so the link binds
+      those names: builtins by their registry symbol, the fixed runtime
+      symbols of `in_process_host`, the boxy runtime's native table,
+      compiler-rt and the C memory routines, procedures and refcount helpers
+      of the image by their object names, and the data items the entries
+      carry (constants and literal backings by content name). The image is
+      one mapping of the code, a jump stub for every compiler function it
+      calls, and the carried data, since object code reaches its targets
+      PC-relative and the compiler's functions and heap can be anywhere in
+      the address space. A hosted function a spliced entry calls binds to a
+      stub the code generator emits that reports the function unavailable
+      at compile time, exactly as the evaluator's own code does at such a
+      call (the evaluator's own code names a hosted function too where it
+      takes one as a value, and binds it the same way); the dict seed binds
+      to the evaluator's fixed zero. A failure
+      inside a spliced entry reports the region of the evaluator's last
+      recorded call rather than the failing statement, since the entry
+      carries no compile-time hooks. Gate: the object-cache CLI case builds
+      an app whose compile-time roots reach closed module functions, one of
+      which produces floats, twice through the store, edited in between so
+      the second build evaluates again, and requires that build to report
+      evaluator artifacts.
       ARC treats an object-cache procedure's recorded signature as its ABI
       and never derives a variant of it. A hit applies only to the record
       Monotype completed without a body: a SpecConstr clone or a second
@@ -802,10 +839,10 @@ move. Two costs remain. A cold deflate build is twice as slow as on main
 because it now writes a real pack for every one of the package's modules
 (fifty-one packs, most of which previously had no closed root); that work
 belongs at package download time, which is the optimized-objects slice.
-And an edited rebuild is unchanged everywhere, because the program shared
-with the compile-time evaluator does not yet splice pack artifacts into its
-image; since every host now shares one calling convention, that splice is
-the only missing piece.
+And an edited rebuild was unchanged everywhere at the time of that
+measurement, because the program shared with the compile-time evaluator did
+not yet splice pack artifacts into its image; the splice exists now and the
+edited-rebuild numbers are to be taken again on CI.
 
 The identity renderer must never expand shared subtypes as a tree: the
 solved type graph of a closure-heavy program reaches one record type from

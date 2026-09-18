@@ -795,7 +795,7 @@ const CheckTypeCheckerPatternsStep = struct {
         .{ .file = "inspected_run.zig", .start = 109, .end = 109 },
         // Consumer compatibility excludes observation sinks by Zig field name at
         // compile time. These are compiler API fields, never Roc identifiers.
-        .{ .file = "compile_time_finalization.zig", .start = 164, .end = 176 },
+        .{ .file = "compile_time_finalization.zig", .start = 171, .end = 183 },
         // report.zig compares already-formatted diagnostic text only to avoid
         // printing two visually identical types. This is presentation logic,
         // not a type-checking or identifier comparison.

@@ -592,7 +592,6 @@ fn runLoweredWithHostEvents(
         &lowered.lir_result.store,
         &lowered.lir_result.layouts,
         runtime_env.get_ops(),
-        .preserve,
     );
     defer interpreter.deinit();
 
@@ -3428,7 +3427,6 @@ test "interpreter captures the virtual source frame of an inlined crash" {
         store,
         &lowered_source.lowered.lir_result.layouts,
         runtime_env.get_ops(),
-        .preserve,
     );
     defer interpreter.deinit();
 
@@ -3479,7 +3477,6 @@ test "boxy lowering preserves a runtime-built crash message" {
         &result.layouts,
         eval.boxy_runtime.BoxyTables.fromResult(result),
         runtime_env.get_ops(),
-        .preserve,
     );
     defer interpreter.deinit();
 
@@ -4239,7 +4236,7 @@ test "issue 11317 or-pattern captures reuse one closure with and without special
         defer runtime_env.deinit();
         {
             const result = &lowered.lowered.lir_result;
-            var interpreter = try eval.Interpreter.init(allocator, &result.store, &result.layouts, runtime_env.get_ops(), .preserve);
+            var interpreter = try eval.Interpreter.init(allocator, &result.store, &result.layouts, runtime_env.get_ops());
             defer interpreter.deinit();
             var n: u64 = 5;
             const evaluated = try interpreter.eval(.{
@@ -8531,7 +8528,6 @@ test "issue 10340 fold over effect-produced list scalarizes in root" {
         &optimized.lowered.lir_result.store,
         &optimized.lowered.lir_result.layouts,
         runtime_env.get_ops(),
-        .preserve,
     );
     defer interpreter.deinit();
     const result = try interpreter.eval(.{ .proc_id = try rootProc(&optimized.lowered) });
@@ -9179,7 +9175,6 @@ test "owned variants take a helper parameter's fields at the call" {
         &optimized.lowered.lir_result.store,
         &optimized.lowered.lir_result.layouts,
         runtime_env.get_ops(),
-        .preserve,
     );
     defer interpreter.deinit();
 
@@ -9294,7 +9289,6 @@ test "issue 10435 SpecConstr preserves frozen types for partially used while sta
         &optimized.lowered.lir_result.store,
         &optimized.lowered.lir_result.layouts,
         runtime_env.get_ops(),
-        .preserve,
     );
     defer interpreter.deinit();
 
@@ -9392,7 +9386,6 @@ test "issue 10461 ScalarizeJoins keeps neighboring join parameter initialization
         &optimized.lowered.lir_result.store,
         &optimized.lowered.lir_result.layouts,
         runtime_env.get_ops(),
-        .preserve,
     );
     defer interpreter.deinit();
 
@@ -9447,7 +9440,6 @@ test "issue 10461 SpecConstr keeps outer loop back edge out of inner loop body" 
         &optimized.lowered.lir_result.store,
         &optimized.lowered.lir_result.layouts,
         runtime_env.get_ops(),
-        .preserve,
     );
     defer interpreter.deinit();
 
@@ -9710,7 +9702,6 @@ test "issue 10797 SpecConstr keeps the threaded var parameter bound in a special
         &optimized.lowered.lir_result.store,
         &optimized.lowered.lir_result.layouts,
         runtime_env.get_ops(),
-        .preserve,
     );
     defer interpreter.deinit();
 
@@ -10001,7 +9992,6 @@ test "tail calls behind an inlined loop still become jumps" {
             &result.store,
             &result.layouts,
             runtime_env.get_ops(),
-            .preserve,
         );
         defer interpreter.deinit();
         const evaluated = try interpreter.eval(.{ .proc_id = try rootProc(&lowered_source.lowered) });
@@ -10048,7 +10038,6 @@ test "tail-call lowering handles a source loop in both inline modes" {
             &result.layouts,
             eval.boxy_runtime.BoxyTables.fromResult(result),
             runtime_env.get_ops(),
-            .preserve,
         );
         defer interpreter.deinit();
         const evaluated = try interpreter.eval(.{ .proc_id = try rootProc(&lowered.lowered) });
@@ -10085,7 +10074,7 @@ test "tail-call lowering preserves a failure after a recursive call" {
         const result = &lowered.lowered.lir_result;
         var runtime_env = eval.RuntimeHostEnv.init(allocator);
         defer runtime_env.deinit();
-        var interpreter = try eval.Interpreter.init(allocator, &result.store, &result.layouts, runtime_env.get_ops(), .preserve);
+        var interpreter = try eval.Interpreter.init(allocator, &result.store, &result.layouts, runtime_env.get_ops());
         defer interpreter.deinit();
         try std.testing.expectError(error.Crash, interpreter.eval(.{ .proc_id = try rootProc(&lowered.lowered) }));
     }
@@ -10165,7 +10154,6 @@ fn expectKeyedContainersEvaluate(source: []const u8, expected: u64) (TestError |
                 &result.layouts,
                 eval.boxy_runtime.BoxyTables.fromResult(result),
                 runtime_env.get_ops(),
-                .preserve,
             );
             defer interpreter.deinit();
             var count: u64 = 40;
@@ -10202,7 +10190,6 @@ test "tail-call lowering preserves boxy return adaptations" {
         &result.layouts,
         eval.boxy_runtime.BoxyTables.fromResult(result),
         runtime_env.get_ops(),
-        .preserve,
     );
     defer interpreter.deinit();
     const evaluated = try interpreter.eval(.{ .proc_id = try rootProc(&lowered.lowered) });
@@ -10233,7 +10220,7 @@ test "tail-call lowering preserves owning argument permutations" {
         defer runtime_env.deinit();
         {
             const result = &lowered.lowered.lir_result;
-            var interpreter = try eval.Interpreter.init(allocator, &result.store, &result.layouts, runtime_env.get_ops(), .preserve);
+            var interpreter = try eval.Interpreter.init(allocator, &result.store, &result.layouts, runtime_env.get_ops());
             defer interpreter.deinit();
             var count: u64 = 5;
             const evaluated = try interpreter.eval(.{
@@ -10290,7 +10277,7 @@ test "tail-call transfers preserve owning cycles and duplicated sources" {
             defer runtime_env.deinit();
             {
                 const result = &lowered.lowered.lir_result;
-                var interpreter = try eval.Interpreter.init(allocator, &result.store, &result.layouts, runtime_env.get_ops(), .preserve);
+                var interpreter = try eval.Interpreter.init(allocator, &result.store, &result.layouts, runtime_env.get_ops());
                 defer interpreter.deinit();
                 var count: u64 = 5;
                 const evaluated = try interpreter.eval(.{
@@ -10374,7 +10361,6 @@ test "issue 11376: packed products survive Boxy boundaries and copy-on-write" {
                 &result.layouts,
                 eval.boxy_runtime.BoxyTables.fromResult(result),
                 runtime_env.get_ops(),
-                .preserve,
             );
             defer interpreter.deinit();
             var index: u64 = 1;

@@ -2868,7 +2868,6 @@ pub fn devEvalSharedBoolRootModules(allocator: Allocator, modules: []const BoolR
             tables.erased_arg_desc_offsets,
             tables.erased_arg_desc_params,
             tables.worker_procs,
-            .preserve,
             roc_target.host_cpu.level(),
         );
         defer codegen.deinit();
@@ -3712,7 +3711,6 @@ pub fn lirInterpreterTranscript(allocator: Allocator, lowered: *const LoweredPro
         &lowered.view.layouts,
         boxy_runtime.BoxyTables.fromImageView(&lowered.view),
         runtime_env.get_ops(),
-        .preserve,
     );
     defer interp.deinit();
     static_data.install(&interp);

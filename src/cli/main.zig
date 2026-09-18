@@ -6397,7 +6397,6 @@ fn writeDevRunImageToSharedMemory(
             lowered.lir_result.boxy_erased_arg_desc_offsets.items,
             lowered.lir_result.boxy_erased_arg_desc_params.items,
             lowered.lir_result.boxy_worker_procs.items,
-            .preserve,
             roc_target.host_cpu.level(),
         );
         defer codegen.deinit();
@@ -6684,7 +6683,6 @@ fn evaluateLirImageEntrypoint(
         &view.layouts,
         eval.LirInterpreter.BoxyTables.fromImageView(view),
         ops,
-        .preserve,
     );
     defer interpreter.deinit();
     static_data.install(&interpreter);
@@ -10551,7 +10549,10 @@ fn rocBuildNative(ctx: *CliCtx, args: cli_args.BuildArgs) CliMainError!BuildResu
         base.target.TargetUsize.fromPtrBitWidth(target.ptrBitWidth()),
         args.synthetic_default_platform,
     );
-    if (loaded_packs) |*packs| runtime_lowering.target.spec_cache = packs.specCacheLookup();
+    if (loaded_packs) |*packs| {
+        runtime_lowering.target.spec_cache = packs.specCacheLookup();
+        runtime_lowering.splice_source = packs.spliceSource();
+    }
     build_env.setRuntimeLowering(runtime_lowering);
     build_env.setValidateTargetFilesForSelectedTarget(true);
     reporter.begin("Type Checking");
@@ -10607,7 +10608,9 @@ fn rocBuildNative(ctx: *CliCtx, args: cli_args.BuildArgs) CliMainError!BuildResu
         for (lowered.lir_result.store.getProcSpecs()) |proc| {
             if (proc.external) external_procs += 1;
         }
-        std.debug.print("pack hits: {d} external procs: {d} packs loaded: {d} keys: {d}\n", .{ packs.hits, external_procs, packs.packs.items.len, packs.specs.count() });
+        // The compile-time evaluator has already spliced its entries; the
+        // object compiler asks for the runtime program's afterwards.
+        std.debug.print("pack hits: {d} external procs: {d} evaluator artifacts: {d} packs loaded: {d} keys: {d}\n", .{ packs.hits, external_procs, packs.artifacts_served, packs.packs.items.len, packs.specs.count() });
     }
 
     const entrypoints = try nativeBuildEntrypoints(ctx, root_artifact, &lowered);
@@ -12669,7 +12672,6 @@ fn runInterpreterTestRoots(
         &lowered.lir_result.layouts,
         eval.LirInterpreter.BoxyTables.fromResult(&lowered.lir_result),
         &roc_ops,
-        .preserve,
     );
     defer interpreter.deinit();
 

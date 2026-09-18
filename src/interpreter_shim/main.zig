@@ -198,7 +198,6 @@ fn evaluateEntrypointInState(
         &view.layouts,
         eval.LirInterpreter.BoxyTables.fromImageView(view),
         ops,
-        .preserve,
         shimIo(),
     ) catch {
         ops.crash("LIR shim could not initialize the LIR interpreter");
