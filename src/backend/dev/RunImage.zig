@@ -655,6 +655,15 @@ fn asBoundedLen(len: u64) ImageError!usize {
     return @intCast(len);
 }
 
+test "run image offsets reject values outside the host buffer" {
+    try std.testing.expectEqual(@as(usize, 3), try asBoundedOffset(3, 3));
+    try std.testing.expectError(error.InvalidDevRunImage, asBoundedOffset(4, 3));
+    try std.testing.expectError(error.InvalidDevRunImage, asBoundedOffset(@as(u64, 1) << 32, 3));
+    if (@sizeOf(usize) == 4) {
+        try std.testing.expectError(error.InvalidDevRunImage, asBoundedLen(@as(u64, 1) << 32));
+    }
+}
+
 fn bytesOf(ptr: anytype) []u8 {
     const raw: [*]u8 = @ptrCast(ptr);
     return raw[0..@sizeOf(@TypeOf(ptr.*))];

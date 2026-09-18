@@ -112,6 +112,21 @@ pub const Target = union(enum) {
     section: struct { index: u32, offset: u64 },
 };
 
+test "relocation target keys retain the complete section identity" {
+    var keys: std.AutoHashMapUnmanaged(Target, usize) = .empty;
+    defer keys.deinit(std.testing.allocator);
+    const targets = [_]Target{
+        .{ .symbol = 1 },
+        .{ .section = .{ .index = 1, .offset = 0 } },
+        .{ .section = .{ .index = 1, .offset = @as(u64, 1) << 40 } },
+        .{ .section = .{ .index = 1 + (1 << 22), .offset = 0 } },
+        .{ .section = .{ .index = 1, .offset = std.math.maxInt(u64) } },
+    };
+    for (targets, 0..) |target, i| try keys.put(std.testing.allocator, target, i);
+    try std.testing.expectEqual(targets.len, keys.count());
+    for (targets, 0..) |target, i| try std.testing.expectEqual(i, keys.get(target).?);
+}
+
 pub const Relocation = struct {
     /// The section being patched and the offset within it.
     section: u32,

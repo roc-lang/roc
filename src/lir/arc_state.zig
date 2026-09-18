@@ -6,35 +6,42 @@ const Allocator = std.mem.Allocator;
 
 /// Debug metrics count work, not addresses. Keep 64-bit counts even on hosts
 /// whose native atomics cannot update 64 bits; all reads share the same lock.
-pub const WorkCounter = struct {
-    value: u64 = 0,
-    mutex: std.atomic.Mutex = .unlocked,
+pub const WorkCounter = WorkCounterFor(@sizeOf(usize) >= @sizeOf(u64));
 
-    pub fn increment(self: *WorkCounter) void {
-        if (@sizeOf(usize) >= @sizeOf(u64)) {
-            _ = @atomicRmw(u64, &self.value, .Add, 1, .monotonic);
-        } else {
-            while (!self.mutex.tryLock()) std.atomic.spinLoopHint();
-            defer self.mutex.unlock();
-            self.value +%= 1;
-        }
-    }
+fn WorkCounterFor(comptime native_atomic: bool) type {
+    return struct {
+        const Self = @This();
+        value: u64 = 0,
+        mutex: std.atomic.Mutex = .unlocked,
 
-    pub fn read(self: *WorkCounter) u64 {
-        if (@sizeOf(usize) >= @sizeOf(u64)) {
-            return @atomicLoad(u64, &self.value, .monotonic);
-        } else {
-            while (!self.mutex.tryLock()) std.atomic.spinLoopHint();
-            defer self.mutex.unlock();
-            return self.value;
+        pub fn increment(self: *Self) void {
+            if (native_atomic) {
+                _ = @atomicRmw(u64, &self.value, .Add, 1, .monotonic);
+            } else {
+                while (!self.mutex.tryLock()) std.atomic.spinLoopHint();
+                defer self.mutex.unlock();
+                self.value +%= 1;
+            }
         }
-    }
-};
+
+        pub fn read(self: *Self) u64 {
+            if (native_atomic) {
+                return @atomicLoad(u64, &self.value, .monotonic);
+            } else {
+                while (!self.mutex.tryLock()) std.atomic.spinLoopHint();
+                defer self.mutex.unlock();
+                return self.value;
+            }
+        }
+    };
+}
 
 test "work counters preserve counts beyond the 32-bit address range" {
-    var counter: WorkCounter = .{ .value = std.math.maxInt(u32) };
-    counter.increment();
-    try std.testing.expectEqual(@as(u64, 1) << 32, counter.read());
+    inline for (.{ WorkCounter, WorkCounterFor(false) }) |Counter| {
+        var counter: Counter = .{ .value = std.math.maxInt(u32) };
+        counter.increment();
+        try std.testing.expectEqual(@as(u64, 1) << 32, counter.read());
+    }
 }
 
 /// Debug-only work counter for exact sparse range queries.

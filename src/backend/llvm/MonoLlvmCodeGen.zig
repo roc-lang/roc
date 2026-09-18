@@ -13436,6 +13436,39 @@ test "static-data slots with constant images are internal constants and function
     try std.testing.expect(callable.init == .no_init);
 }
 
+test "frozen relocation offsets are bounded before host indexing for either target width" {
+    const allocator = std.testing.allocator;
+    inline for (.{ std.Target.Cpu.Arch.wasm32, std.Target.Cpu.Arch.aarch64 }) |arch| {
+        var store = lir.LirStore.init(allocator);
+        defer store.deinit();
+        const target = try std.zig.system.resolveTargetQuery(std.testing.io, .{ .cpu_arch = arch, .os_tag = if (arch == .wasm32) .freestanding else .linux });
+        var codegen = MonoLlvmCodeGen.initForLinkedObject(allocator, &store, &.{}, &.{}, &.{}, target);
+        defer codegen.deinit();
+        var builder = try codegen.createBuilder("frozen_relocation_bounds");
+        defer builder.deinit();
+        codegen.builder = &builder;
+        defer codegen.builder = null;
+
+        const word = codegen.targetWordSize();
+        var relocation = [_]lir.Program.StaticDataRelocation{.{ .offset = 16 - word, .target_symbol_name = "frozen_target" }};
+        const data_export: lir.Program.StaticDataExport = .{
+            .symbol_name = "frozen_value",
+            .bytes = &([_]u8{0} ** 16),
+            .alignment = word,
+            .relocations = &relocation,
+        };
+        try std.testing.expect((try codegen.frozenExportConstant(data_export)) != null);
+        // Aligned but past the final complete target pointer.
+        relocation[0].offset = 16;
+        try std.testing.expect((try codegen.frozenExportConstant(data_export)) == null);
+        // Neither truncation to a 32-bit index nor wrapping offset + word is valid.
+        relocation[0].offset = @as(u64, 1) << 32;
+        try std.testing.expect((try codegen.frozenExportConstant(data_export)) == null);
+        relocation[0].offset = std.math.maxInt(u64) - (@as(u64, word) - 1);
+        try std.testing.expect((try codegen.frozenExportConstant(data_export)) == null);
+    }
+}
+
 test "frozen callable procedures and explicit drop helpers are DLL exports on Windows" {
     const allocator = std.testing.allocator;
     var store = lir.LirStore.init(allocator);
