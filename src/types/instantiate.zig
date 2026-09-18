@@ -467,6 +467,11 @@ pub const Instantiator = struct {
     pub const OpenedMarkerExt = struct {
         ext: Var,
         listed_tags: ?Tag.SafeMultiList.Range = null,
+        /// The copied union this marker became the extension of. Unification
+        /// can leave `ext` referenced by nothing once the row is solved, so a
+        /// consumer that needs to find the solved row again has to hold the
+        /// union rather than its extension.
+        union_var: ?Var = null,
     };
 
     const Self = @This();
@@ -1491,11 +1496,14 @@ pub const Instantiator = struct {
                     const fresh_ext = machine.value_stack.pop().?;
                     // A marker resolved open is this union's ext: hand the
                     // post-body audit the tags it sits next to, so its report
-                    // can suggest a listed tag for an unlisted near-miss.
+                    // can suggest a listed tag for an unlisted near-miss, and
+                    // the union itself, which is the only handle on this row
+                    // that survives solving.
                     if (self.opened_marker_exts) |sink| {
                         for (sink.items) |*opened| {
                             if (opened.ext == fresh_ext and opened.listed_tags == null) {
                                 opened.listed_tags = frame.tags_range;
+                                opened.union_var = frame.common.fresh_var;
                                 break;
                             }
                         }

@@ -8984,6 +8984,147 @@ test "check type - polarity - a formal in both positions is closed" {
     try checkTypesModule(source, .fail, "Type Mismatch");
 }
 
+// polarity: variance across a module boundary //
+//
+// The walk reads variance out of the referenced declaration's own annotation,
+// and an imported declaration's annotation lives in another module's CIR with
+// its formal names interned in another ident store. Its variance is therefore
+// UNKNOWN, and unknown is treated as INVARIANT: the argument is generated
+// closed whatever the reference's own polarity is. Guessing covariance (which
+// is what inheriting the reference's polarity amounts to) un-enforced the
+// annotation across the boundary: an imported contravariant or invariant
+// alias opened a row the local spelling closes. The four tests below pin both
+// sides of that boundary, which previously had assertions on neither.
+
+test "check type - polarity - imported contravariant alias closes the applied row" {
+    // The cross-module half of "alias reference closes a row the declaration
+    // puts in an input position": `Handler(e) : e -> Str` is contravariant in
+    // `e`, and the import must close `[A, B]` exactly as the local spelling
+    // does. Accepted before this rule; a Type Mismatch now.
+    const source_lib =
+        \\module [Handler]
+        \\
+        \\Handler(e) : e -> Str
+    ;
+    var lib_env = try TestEnv.init("Lib", source_lib);
+    defer lib_env.deinit();
+
+    const source_main =
+        \\import Lib
+        \\
+        \\process : Lib.Handler([A, B])
+        \\process = |_tag| "x"
+        \\
+        \\bad = process(C)
+    ;
+    var main_env = try TestEnv.initWithImport("Main", source_main, "Lib", &lib_env);
+    defer main_env.deinit();
+    try main_env.assertOneTypeError("Type Mismatch");
+}
+
+test "check type - polarity - imported invariant alias closes the applied row" {
+    // The cross-module half of "a formal in both positions is closed".
+    // `Both(e)` names `e` in an input position and an output one, so the
+    // applied row is closed; the import reaches the same answer by not knowing
+    // the variance at all. Accepted before this rule; a Type Mismatch now.
+    const source_lib =
+        \\module [Both]
+        \\
+        \\Both(e) : { to : e -> Str, from : Str -> e }
+    ;
+    var lib_env = try TestEnv.init("Lib", source_lib);
+    defer lib_env.deinit();
+
+    const source_main =
+        \\import Lib
+        \\
+        \\pair : Lib.Both([A, B])
+        \\pair = { to: |_tag| "x", from: |_| A }
+        \\
+        \\bad = {
+        \\    { to, from: _ } = pair
+        \\    to(C)
+        \\}
+    ;
+    var main_env = try TestEnv.initWithImport("Main", source_main, "Lib", &lib_env);
+    defer main_env.deinit();
+    try main_env.assertOneTypeError("Type Mismatch");
+}
+
+test "check type - polarity - imported covariant alias closes the applied row too" {
+    // The COST of the rule, pinned deliberately. `Producer(e) : Str -> e` is
+    // covariant, so the local spelling keeps `[A, B]` open for callers ("alias
+    // reference still opens a row the declaration puts in an output
+    // position"). Imported, the walk cannot see that it is covariant, and
+    // unknown variance is invariant, so `consume(produce("s"))` at the wider
+    // union is a Type Mismatch.
+    //
+    // This is the conservative choice, taken because the alternative,
+    // guessing covariance, is the one that accepts programs the annotation
+    // was written to reject. Recording each declaration's formal variances in
+    // the checked module data an importer already reads (design.md
+    // "Polarity") replaces the guess with the real answer and would make this
+    // pass again; that is a pure relaxation, since it can only ever accept
+    // more programs than this rule does.
+    const source_lib =
+        \\module [Producer]
+        \\
+        \\Producer(e) : Str -> e
+    ;
+    var lib_env = try TestEnv.init("Lib", source_lib);
+    defer lib_env.deinit();
+
+    const source_main =
+        \\import Lib
+        \\
+        \\produce : Lib.Producer([A, B])
+        \\produce = |_| A
+        \\
+        \\consume : [A, B, C] -> Str
+        \\consume = |_| "x"
+        \\
+        \\out = consume(produce("s"))
+    ;
+    var main_env = try TestEnv.initWithImport("Main", source_main, "Lib", &lib_env);
+    defer main_env.deinit();
+    try main_env.assertOneTypeError("Type Mismatch");
+}
+
+test "check type - polarity - a builtin application's row still opens for callers" {
+    // The regression guard for the rule above: compiler-owned declarations are
+    // KNOWN covariant, not unknown. A `.builtin` application (`List`, `Box`,
+    // the numerics) must keep holding its argument covariantly, so a row
+    // inside one, in an output position, still opens for callers. If this
+    // starts failing, the unknown answer has leaked onto the builtins.
+    const source =
+        \\produce : Str -> List([A, B])
+        \\produce = |_| [A]
+        \\
+        \\consume : List([A, B, C]) -> Str
+        \\consume = |_| "x"
+        \\
+        \\out = consume(produce("s"))
+    ;
+    try checkTypesModule(source, .{ .pass = .{ .def = "out" } }, "Str");
+}
+
+test "check type - polarity - a builtin Try error row still opens for callers" {
+    // The other half of the same guard, and the one with teeth: `Try(ok, err)`
+    // is declared in the `Builtin` module, so a written `Try` is an EXTERNAL
+    // reference, not a `.builtin` application. Builtin-module declarations are
+    // compiler-owned and covariant, so they must be excluded from the unknown
+    // answer; treating them as unknown would close every annotated error row
+    // in the language.
+    const source =
+        \\parse : Str -> Try(U8, [Fail])
+        \\parse = |_| Err(Fail)
+        \\
+        \\wider : Str -> Try(U8, [Fail, Other])
+        \\wider = |s| parse(s)
+    ;
+    try checkTypesModule(source, .{ .pass = .{ .def = "wider" } }, "Str -> Try(U8, [Fail, Other])");
+}
+
 test "check type - polarity - a formal reached through a nested alias composes through both" {
     // Variance composes across declarations: `Outer(e) : Inner(e)` and
     // `Inner(x) : x -> Str` place `e` in an input position two declarations

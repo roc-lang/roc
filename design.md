@@ -5821,13 +5821,13 @@ generated at, by reading the VARIANCE of the formal it is substituted for out
 of the referenced declaration's own annotation, so `Handler([A, B])` composes
 instead of inheriting.
 
-Both stop at the same wall, and it is a MODULE boundary: a reference reached
-as `.external` or `.pending` is not walked at all, because the declaration's
-CIR and its formal names live in another module's stores. (A `.builtin`
-reference is declined too, and that one costs nothing: the applications the
-compiler constructs are `List`, `Box` and the numerics, which hold their
-arguments covariantly and are never the builtin `Try`.) Both also stop on the
-bounds a walk needs in order to answer in bounded time: an arity above
+Both stop at the same wall, and it is a MODULE boundary: neither reads a
+declaration reached as `.external` or `.pending`, because that declaration's
+CIR and its formal names live in another module's stores. (The `Try` walk
+declines a `.builtin` reference too, and that one costs nothing: the
+applications the compiler constructs are `List`, `Box` and the numerics, which
+are never the builtin `Try`.) Both also stop on
+the bounds a walk needs in order to answer in bounded time: an arity above
 `max_tracked_alias_formals`, which both share; a declaration chain past
 `max_formal_variance_decl_depth` or a position count past
 `max_formal_variance_nodes` in the variance walk, and a chain longer than the
@@ -5835,10 +5835,45 @@ CIR node count in the `Try` walk; a declaration cycle; and, for the `Try`
 walk, an argument the declaration computes (`Outer(e) : Inner(List(e))`)
 rather than passes straight through.
 
-What stopping COSTS differs, and only one of the two is free. The variance
-walk's stop answer is the pre-walk answer, the argument keeping the
-reference's own polarity, so an unmodeled shape costs precision and never
-correctness. The `Try` walk's stop answer UNDER-OPENS: the opened set becomes
+Neither stop is free, and the DIRECTION each fails in is the rule. Both fail
+toward the closed row, which is the direction where the annotation keeps
+bounding and a rejected program is the worst outcome.
+
+The variance walk answers UNKNOWN variance as INVARIANT, and an invariant
+formal's argument is generated closed whatever the reference's own polarity
+is. Unknown must not be answered covariantly: covariance is the most
+permissive variance, and guessing it stops the annotation bounding the caller
+at all. `Handler(e) : e -> Str` declared beside the signature that uses it
+closes the `[A, B]` of `process : Handler([A, B])`, so `process(C)` is a
+mismatch; move that one declaration into an imported module, qualify the
+reference, change nothing else, and the closed answer must survive—which it
+does only because the importer treats what it cannot read as invariant. The
+cost is the covariant case: `Producer(e) : Str -> e` keeps `Producer([A, B])`
+open for callers when it is declared locally and closes it when it is
+imported. Two kinds of reference are exempt, because their variance is KNOWN
+rather than unknown, and both are compiler-owned: a `.builtin` application
+(`List`, `Box`, the numerics) and a reference into the `Builtin` module.
+`Try`'s error row in particular is an EXTERNAL reference from every ordinary
+module, so this exemption is what keeps annotated error rows open at all.
+
+The second exemption rests on a property of `Builtin` rather than on a list of
+names, and the property is the thing to preserve: EVERY parameterized
+declaration in `Builtin` is covariant in each of its formals, or leaves that
+formal unused. That holds today across all twelve of them—`Try(ok, err)`,
+`Dict(k, v)`, `DictData(k, v)`, `Set(item)`, `Iter(item)`, `Stream(item)`,
+`Range(num)`, `Box(item)`, `List(_item)`, `FieldName(_shape)`,
+`FieldNames(_shape)` and `ParseTagUnionSpec(_shape)`. Three of them are worth
+naming because they are the near misses: `Iter` and `Stream` each put their
+formal under an arrow (`step : () -> [One({ item : item, ... }), ...]`) and are
+covariant only because it lands in that arrow's RESULT, and `Dict` carries its
+formals inside a `List((k, v))` payload rather than a function at all. A
+`Builtin` declaration that put a formal in an arrow's ARGUMENT—a
+`Consumer(item) :: { push : item -> {} }`—would be contravariant, and this
+exemption would then answer it covariantly and reopen exactly the hole the
+rule above closes. The exemption is sound because of that property, so adding
+such a declaration means narrowing the exemption rather than relying on it.
+
+The `Try` walk's stop answer UNDER-OPENS: the opened set becomes
 strictly smaller than the adaptable set, and a use lowering would have
 re-tagged is refused as an ordinary mismatch. That is not a wrong tag layout,
 but it IS an instance of the interchangeability failure this axis exists to
@@ -5850,14 +5885,17 @@ declaration into an imported module, qualify its references, change nothing
 else, and the same `?` is a type mismatch: the reference is `.external`, the
 walk declines, and the error row is generated closed.
 
-So the invariant that holds is ONE-SIDED: the opened set is always a subset
-of the adaptable set, and the two are equal exactly on the shapes the `Try`
-walk models, which are a `Try` written directly and a chain of LOCAL
-transparent aliases that pass their formals straight through. A use is
-therefore never opened at a position lowering cannot re-tag; it can be
-refused at one lowering could have. Closing the remaining gap needs the
-declaration's variance and its `Try` error cell recorded in the checked
-module data an importer already reads, not a deeper walk.
+So the invariant that holds is ONE-SIDED, on both walks. The opened set is
+always a subset of the adaptable set, and the two are equal exactly on the
+shapes the `Try` walk models, which are a `Try` written directly and a chain
+of LOCAL transparent aliases that pass their formals straight through; a use
+is therefore never opened at a position lowering cannot re-tag, only refused
+at one lowering could have. The generated polarity is likewise never more
+permissive than the declaration's real variance, only less. Closing both gaps
+needs the declaration's variance and its `Try` error cell recorded in the
+checked module data an importer already reads, not a deeper walk. Recording
+them is a pure RELAXATION on both axes: it replaces a conservative answer with
+the true one, so it can only ever accept more programs than the rule above.
 
 The HOST-BOUNDARY row above covers two opt-out sites, both genuine
 non-producers: host-boundary annotations (hosted lambdas and `provides` defs,

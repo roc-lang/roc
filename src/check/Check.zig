@@ -587,15 +587,17 @@ weak_value_implicit_open_ext_ranges: std.ArrayListUnmanaged(ImplicitOpenExtRange
 /// of `implicit_open_exts` by range so a later re-generation of the same
 /// annotation cannot move the range out from under the replay.
 late_implicit_open_ext_audits: std.ArrayListUnmanaged(LateImplicitOpenExtAudit),
-/// The introducing-expression regions of every dispatch relation punted into
-/// the window the replay reads—the window between the last narrowing and
-/// `runLateImplicitOpenExtAudit`. The replay blames a binding only when one of
-/// these lies inside that binding's own right-hand side, which is what
-/// separates a definition widening its own row from a caller widening it. The
-/// queues that carry these regions are drained before the replay runs
-/// (`checkFinalGeneratedCodecConstraints` clears them), so the replay cannot
-/// re-derive them and they are recorded here at deferral time instead.
-late_self_widening_writers: std.ArrayListUnmanaged(Region) = .empty,
+/// Every dispatch relation punted into the window the replay reads—the window
+/// between the last narrowing and `runLateImplicitOpenExtAudit`—recorded with
+/// both the expression that introduced it and the types it can write through.
+/// The replay blames a binding for one of its rows only when a writer lies
+/// inside that binding's own right-hand side AND that writer's type graph
+/// reaches that row, which is what separates a definition widening its own row
+/// from a caller widening it. The queues that carry these relations are drained
+/// before the replay runs (`checkFinalGeneratedCodecConstraints` clears them),
+/// so the replay cannot re-derive them and they are recorded here at deferral
+/// time instead.
+late_self_widening_writers: std.ArrayListUnmanaged(LateSelfWideningWriter) = .empty,
 /// Tracks bindings whose defining expression is known erroneous and whose
 /// subsequent local lookups must therefore become explicit runtime errors.
 erroneous_value_patterns: std.AutoHashMapUnmanaged(CIR.Pattern.Idx, void),
@@ -6775,6 +6777,7 @@ fn recordOpenedMarkerExts(self: *Self, opened: []const Instantiator.OpenedMarker
             .var_ = marker.ext,
             .region = region,
             .listed_tags = marker.listed_tags,
+            .union_var = marker.union_var,
         });
     }
 }
@@ -13519,6 +13522,13 @@ pub fn checkExprRepl(self: *Self, expr_idx: CIR.Expr.Idx) std.mem.Allocator.Erro
     try self.finalizeTypes(&env, .{ .repl_expr = expr_idx });
     try self.reportPolymorphicConstrainedExpr(expr_idx);
 
+    // Polarity's two settled-state steps, in the one order they may run in
+    // (see `runLateImplicitOpenExtAudit`): replay the implicit-open-ext audit
+    // while the rows still carry the tags it reads, then—after every pass that
+    // can still widen one—ground the survivors. `checkFile` runs the same two
+    // steps at the matching points in its own sequence.
+    try self.runLateImplicitOpenExtAudit(&env);
+
     try self.validateSettledValueTagRows(&env);
 
     // Check for infinite types, at the expression root and at every binding
@@ -13526,119 +13536,9 @@ pub fn checkExprRepl(self: *Self, expr_idx: CIR.Expr.Idx) std.mem.Allocator.Erro
     try self.checkForInfiniteType(CIR.Expr.Idx, expr_idx);
     try self.checkBindingRootsForInfiniteTypes();
     try self.recheckNominalConstructorBackings(&env);
-    try self.finalizeExpectEffectSlots();
 
-    try self.finalizeBindingSchemeNodes();
+    try self.closeWeakValueImplicitOpenExts(&env);
 
-    self.debugAssertNominalDeclTableComplete();
-}
-
-/// Check a REPL expression, also type-checking any definitions (for local type declarations)
-pub fn checkExprReplWithDefs(self: *Self, expr_idx: CIR.Expr.Idx) std.mem.Allocator.Error!void {
-    const trace = tracy.trace(@src());
-    defer trace.end();
-
-    try ensureTypeStoreIsFilled(self);
-
-    // Record which annotations type host-boundary values before any
-    // annotation is generated (their rows are kept as written rather than
-    // implicitly opened by polarity).
-    try self.collectHostBoundaryAnnotations();
-
-    // Copy builtin types into this module's type store
-    try self.copyBuiltinTypes();
-
-    // Create a solver env
-    var env = try self.env_pool.acquire();
-    defer self.env_pool.release(env);
-    std.debug.assert(env.rank() == .generalized);
-
-    // First, iterate over the statements, generating types for each type declaration
-    // Note that any types generated will be generalized
-    for (0..self.cir.builtin_statements.span.len) |stmt_offset| {
-        const stmt_idx = self.cir.store.statementAt(self.cir.builtin_statements, stmt_offset);
-        try self.generateStmtTypeDeclType(stmt_idx, &env);
-    }
-
-    // Validate nominal declaration recursion before checking values.
-    try self.finalizeTypeDeclarationValidity();
-
-    // Initialize top_level_ptrns with any defs from local type declarations
-    for (0..self.cir.all_defs.span.len) |def_offset| {
-        const def_idx = self.cir.store.defAt(self.cir.all_defs, def_offset);
-        const def = self.cir.store.getDef(def_idx);
-        self.setTopLevelPattern(def.pattern, DefProcessed{
-            .def_idx = def_idx,
-            .def_name = null,
-            .status = .not_processed,
-        });
-    }
-
-    // Set the rank to be outermost
-    try env.var_pool.pushRank();
-    std.debug.assert(env.rank() == .outermost);
-
-    // Type-check defs from local type declarations (their associated blocks),
-    // as dependency-ordered binding groups just like file checking.
-    try self.setupCheckOrder();
-    try self.predeclareAnnotatedDefSchemes(&env);
-    const group_count: u32 = @intCast(self.check_order.?.sccs.len);
-    var group_index: u32 = 0;
-    while (group_index < group_count) : (group_index += 1) {
-        try self.ensureGroupChecked(group_index, &env);
-        std.debug.assert(env.rank() == .outermost);
-    }
-
-    // Check the expr
-    _ = try self.checkExpr(expr_idx, &env, Expected.none());
-
-    // Check any accumulated constraints
-    try self.checkAllConstraints(&env);
-    try self.resolvePendingTupleAccesses(&env, false);
-    try self.checkAllConstraints(&env);
-    try self.resolveNumericLiteralsFromContext(&env);
-    // Destructure binders bind before the defaulting rounds so defaulting
-    // sees them through the row (see `judgeRecordDestructBinds`).
-    try self.judgeRecordDestructBinds(&env);
-    try self.finalizeLiteralDefaults(&env);
-
-    // After finalizing literal defaults, resolve any remaining deferred static
-    // dispatch constraints: committing a default can generate deferred
-    // method_call constraints (e.g. Dec.to_str returns Str). Without this step,
-    // the return type of methods on numerics stays an unconstrained flex var,
-    // causing incorrect .zst layouts.
-    if (env.deferred_static_dispatch_constraints.items.items.len > 0) {
-        try self.checkStaticDispatchConstraints(&env, true);
-        try self.checkAllConstraints(&env);
-    }
-
-    // After solving all deferred constraints, check every binding root
-    // (top-level defs and local bindings) for infinite types
-    try self.validateSettledValueTagRows(&env);
-    try self.checkBindingRootsForInfiniteTypes();
-
-    // Check the result expression itself, matching checkExprRepl: its type may
-    // have incompatible constraints (e.g. !3) or be infinite/anonymously
-    // recursive, neither of which is covered by the per-def checks above.
-    const expr_var = ModuleEnv.varFrom(expr_idx);
-    try self.checkPendingDefaults(&env);
-    try self.judgeFieldKindsAtBoundary(&env);
-    _ = try self.checkFlexVarConstraintCompatibility(expr_var, &env, true, .{});
-    try self.validateResolvedOpenNumeralLiterals(&env);
-    try self.finalizeGeneratedCodecConstraintsToQuiescence(&env, false);
-    try self.resolvePendingTupleAccesses(&env, true);
-    try self.checkAllConstraints(&env);
-    try self.checkDefaultRestrictions();
-    // Kind defaulting, mirroring `finalizeTypes` (this path inlines its own
-    // finalize sequence): last, after every judgment above, for the same
-    // reasons documented there.
-    try self.defaultLiteralFieldKinds(&env);
-    try self.validateSettledValueTagRows(&env);
-    try self.checkForInfiniteType(CIR.Expr.Idx, expr_idx);
-    try self.recheckNominalConstructorBackings(&env);
-
-    try self.reportPolymorphicConstrainedExpr(expr_idx);
-    try self.poisonErroneousValueUses();
     try self.finalizeExpectEffectSlots();
 
     try self.finalizeBindingSchemeNodes();
@@ -15633,6 +15533,14 @@ const ImplicitOpenExt = struct {
     /// an unlisted one that looks like a typo; null (no hint) when the
     /// minting site did not see the union.
     listed_tags: ?types_mod.Tag.SafeMultiList.Range = null,
+    /// The union this extension opens. Solving routinely leaves `var_`
+    /// referenced by nothing—unifying `[A | ext]` with a wider concrete row
+    /// writes the joined row into the union and leaves `ext` holding the
+    /// leftover tags off to one side—so the union is the only handle on this
+    /// row that can still be found in a solved type. Null where the minting
+    /// site did not see the union, which is also where the late replay
+    /// declines to blame (see `lateWriterWidenedOwnerRow`).
+    union_var: ?Var = null,
 };
 
 /// The slice of `implicit_open_exts` one annotation's generation minted.
@@ -15653,8 +15561,29 @@ const LateImplicitOpenExtAudit = struct {
     /// Source region of the right-hand side of the binding whose annotation
     /// minted `ext`. `Region.zero()` when the audit's caller could not name
     /// one: the replay then never blames this entry (see
-    /// `lateWriterInsideOwner`).
+    /// `lateWriterWidenedOwnerRow`).
     owner_rhs: Region,
+};
+
+/// One dispatch relation punted to the final type boundary, as the late replay
+/// needs to read it: WHERE it was introduced, and WHICH types it can write
+/// through.
+///
+/// The region alone answers only "was this relation introduced inside the
+/// binding the replay is about to blame". That is one binding's worth of
+/// resolution, and a binding routinely holds more than one implicitly opened
+/// row: a value whose right-hand side derives a codec owns a writer, yet the
+/// row a caller widened may be one that writer never touches. The two vars are
+/// the relation's own type graph—the receiver it dispatches on and the method
+/// type it resolved to—so the replay can ask the finer question of each row
+/// separately (`lateWriterWidenedOwnerRow`).
+const LateSelfWideningWriter = struct {
+    region: Region,
+    /// The receiver var the relation dispatches on.
+    dispatcher_var: Var,
+    /// The var of the method type the relation resolves. The composed row a
+    /// generated codec decides at finalization lives in here.
+    fn_var: Var,
 };
 
 /// After a binding's right-hand side has been checked against its annotation,
@@ -15750,50 +15679,166 @@ fn dropSettledLateImplicitOpenExtAudits(self: *Self) void {
 /// is deferred into the same window widens the same row on the same pass, so
 /// timing alone cannot tell the two apart and the narrowings above cannot
 /// separate them. The replay therefore asks a SECOND question, about
-/// provenance rather than timing: does some relation punted into this window
-/// come from an expression inside the binding's own right-hand side
-/// (`lateWriterInsideOwner`)? Only then is the widening the definition's own.
+/// provenance rather than timing: is this row reachable from some relation
+/// punted into this window by an expression inside the binding's own right-hand
+/// side (`lateWriterWidenedOwnerRow`)? Only then is the widening the
+/// definition's own.
 ///
 /// The replay still reports rather than poisons: the answer is an attribution,
 /// not a proof that the solved row is wrong. See `ImplicitOpenExtReportKind`.
 fn runLateImplicitOpenExtAudit(self: *Self, env: *Env) std.mem.Allocator.Error!void {
     // The direct audit's `markErroneous` doubles as its no-double-report
     // guard. The replay does not poison, so it carries its own: one report per
-    // extension CLASS, since two entries can share a resolved root.
+    // row CLASS, since two entries can share a resolved root.
     var reported: std.AutoHashMapUnmanaged(Var, void) = .empty;
     defer reported.deinit(self.gpa);
+    // Scratch for the reachability walks, reused across entries: one walk
+    // clears them, so nothing carries between writers.
+    var reach_seen: std.AutoHashMapUnmanaged(Var, void) = .empty;
+    defer reach_seen.deinit(self.gpa);
+    var reach_stack: std.ArrayListUnmanaged(Var) = .empty;
+    defer reach_stack.deinit(self.gpa);
     for (self.late_implicit_open_ext_audits.items) |entry| {
         if (!self.implicitOpenExtCarriesTags(entry.ext)) continue;
-        if (!self.lateWriterInsideOwner(entry.owner_rhs)) continue;
-        const root = self.types.resolveVar(entry.ext.var_).var_;
-        if ((try reported.getOrPut(self.gpa, root)).found_existing) continue;
+        // The row is what a writer can be shown to have reached; the extension
+        // usually cannot be, because solving leaves it holding the tags the
+        // join added while the union it opened holds the joined row. Both are
+        // accepted so an extension the solver did leave in place still counts,
+        // and so an entry minted without a union (`union_var == null`) keeps
+        // the extension as its only handle.
+        const row_root = self.types.resolveVar(entry.ext.union_var orelse entry.ext.var_).var_;
+        const ext_root = self.types.resolveVar(entry.ext.var_).var_;
+        if (!try self.lateWriterWidenedOwnerRow(
+            entry.owner_rhs,
+            &.{ row_root, ext_root },
+            &reach_seen,
+            &reach_stack,
+        )) continue;
+        if ((try reported.getOrPut(self.gpa, row_root)).found_existing) continue;
         try self.reportImplicitOpenExtExtension(entry.ext, env, .report_only);
     }
 }
 
-/// Whether the definition itself is responsible for a widening that landed in
-/// the late window: whether some relation deferred into that window was
-/// introduced by an expression lying inside this binding's right-hand side.
+/// Whether the definition itself is responsible for THIS row's widening: does
+/// some relation deferred into the late window come from an expression lying
+/// inside this binding's right-hand side, and can that relation's own types
+/// reach this row.
 ///
-/// The test is CONTAINMENT, not equality. The relation that widens a row is
-/// routinely introduced by a nested local binding inside the annotated
+/// The region test is CONTAINMENT, not equality. The relation that widens a row
+/// is routinely introduced by a nested local binding inside the annotated
 /// definition's body (`parse_ = T.parser_for(...)` inside an annotated
 /// `parse`), which is still the definition widening its own row. Conversely a
-/// caller's widening is introduced somewhere else in the module entirely, and
-/// a caller widening an output-position row is exactly what implicit openness
-/// is for.
+/// caller's widening is introduced somewhere else in the module entirely, and a
+/// caller widening an output-position row is exactly what implicit openness is
+/// for.
 ///
-/// Both unknowns answer "not the definition's": an owner whose right-hand side
-/// has no region, and a writer set with nothing inside it. Blaming a binding
-/// is only ever correct on evidence, so where provenance is missing this
-/// stays silent.
-fn lateWriterInsideOwner(self: *const Self, owner_rhs: Region) bool {
+/// Containment alone is too coarse, because a binding is not one row. A value
+/// whose right-hand side derives a codec owns a writer AND exposes other
+/// implicitly opened rows that writer never touches; a caller widening one of
+/// those would be blamed on the strength of an unrelated relation in the same
+/// right-hand side. Reachability is what makes the answer per-row: the widening
+/// a deferred relation performs travels through that relation's own type graph,
+/// so a row outside it was written by something else.
+///
+/// The conjunction over-approximates in one direction only—a writer whose graph
+/// reaches a row it did not itself widen—and that requires the definition's own
+/// body to have already unified the two, which is the definition widening its
+/// own row and is correctly blamed.
+///
+/// Every unknown answers "not the definition's": an owner whose right-hand side
+/// has no region, a writer set with nothing inside it, and a row no contained
+/// writer reaches. Blaming a binding is only ever correct on evidence, so where
+/// provenance is missing this stays silent.
+fn lateWriterWidenedOwnerRow(
+    self: *const Self,
+    owner_rhs: Region,
+    targets: []const Var,
+    seen: *std.AutoHashMapUnmanaged(Var, void),
+    stack: *std.ArrayListUnmanaged(Var),
+) std.mem.Allocator.Error!bool {
     if (owner_rhs.isEmpty()) return false;
     for (self.late_self_widening_writers.items) |writer| {
-        if (writer.start.offset >= owner_rhs.start.offset and
-            writer.end.offset <= owner_rhs.end.offset) return true;
+        if (writer.region.start.offset < owner_rhs.start.offset) continue;
+        if (writer.region.end.offset > owner_rhs.end.offset) continue;
+        if (try self.typeGraphReaches(
+            &.{ writer.dispatcher_var, writer.fn_var },
+            targets,
+            seen,
+            stack,
+        )) return true;
     }
     return false;
+}
+
+/// Whether any of `targets` (already resolved) lies anywhere in the type graph
+/// rooted at `starts`. The descent is the one `validateSettledValueTagRows`
+/// uses—alias backings and arguments, structure arguments, function arguments,
+/// effect dependencies and result, record fields and extension, tag payloads
+/// and extension—and terminates the same way, by refusing to expand a resolved
+/// var twice. `seen` and `stack` are caller-owned scratch so a sweep over many
+/// starts does not reallocate per walk.
+fn typeGraphReaches(
+    self: *const Self,
+    starts: []const Var,
+    targets: []const Var,
+    seen: *std.AutoHashMapUnmanaged(Var, void),
+    stack: *std.ArrayListUnmanaged(Var),
+) std.mem.Allocator.Error!bool {
+    seen.clearRetainingCapacity();
+    stack.clearRetainingCapacity();
+    try stack.appendSlice(self.gpa, starts);
+    while (stack.pop()) |current| {
+        const resolved = self.types.resolveVar(current);
+        for (targets) |target| {
+            if (resolved.var_ == target) return true;
+        }
+        if ((try seen.getOrPut(self.gpa, resolved.var_)).found_existing) continue;
+
+        switch (resolved.desc.content) {
+            .alias => |alias| {
+                try stack.append(self.gpa, self.types.getAliasBackingVar(alias));
+                try stack.appendSlice(self.gpa, self.types.sliceAliasArgs(alias));
+            },
+            .structure => |flat_type| switch (flat_type) {
+                .tuple => |tuple| try stack.appendSlice(self.gpa, self.types.sliceVars(tuple.elems)),
+                .nominal_type => |nominal| try stack.appendSlice(self.gpa, self.types.sliceNominalArgs(nominal)),
+                .fn_pure, .fn_effectful, .fn_unbound => |func| {
+                    try stack.append(self.gpa, func.ret);
+                    try stack.appendSlice(self.gpa, self.types.sliceVars(func.args));
+                    try stack.appendSlice(self.gpa, self.types.sliceVars(func.effect_deps));
+                },
+                .record => |record| {
+                    try stack.append(self.gpa, record.ext);
+                    try self.appendRecordFieldVars(stack, record.fields);
+                },
+                .record_unbound => |fields_range| try self.appendRecordFieldVars(stack, fields_range),
+                .tag_union => |tag_union| {
+                    try stack.append(self.gpa, tag_union.ext);
+                    const tags = self.types.getTagsSlice(tag_union.tags);
+                    for (tags.items(.args)) |args| {
+                        try stack.appendSlice(self.gpa, self.types.sliceVars(args));
+                    }
+                },
+                .empty_record, .empty_tag_union => {},
+            },
+            .flex, .rigid, .field_presence, .err => {},
+        }
+    }
+    return false;
+}
+
+fn appendRecordFieldVars(
+    self: *const Self,
+    stack: *std.ArrayListUnmanaged(Var),
+    fields: types_mod.RecordField.SafeMultiList.Range,
+) std.mem.Allocator.Error!void {
+    const slice = self.types.getRecordFieldsSlice(fields);
+    for (slice.items(.presence)) |presence| {
+        try stack.append(self.gpa, presence.typeVar());
+        if (presence.presenceVar()) |presence_var| {
+            try stack.append(self.gpa, presence_var);
+        }
+    }
 }
 
 /// Whether a report also marks the extension it reports erroneous.
@@ -15878,6 +15923,10 @@ fn reportImplicitOpenExtExtension(
 /// did. An extension that meanwhile joined a generalized scheme (a function's
 /// quantified row) is left alone: closing a quantified variable after it has
 /// been instantiated would desync the scheme from its uses.
+///
+/// Every entry point runs this AFTER `runLateImplicitOpenExtAudit`, for the
+/// reason stated there: grounding an extension empties it, and the replay only
+/// reads extensions that still carry tags.
 fn closeWeakValueImplicitOpenExts(self: *Self, env: *Env) std.mem.Allocator.Error!void {
     for (self.weak_value_implicit_open_ext_ranges.items) |range| {
         for (self.implicit_open_exts.items[range.start..][0..range.len]) |entry| {
@@ -16143,11 +16192,12 @@ fn annoSkipParens(self: *const Self, anno_idx: CIR.TypeAnno.Idx) CIR.TypeAnno.Id
 /// This is the polarity counterpart of `instantiationReach`: reach already
 /// re-decides itself inside the referenced declaration, and polarity did not.
 ///
-/// Every shape the walk does not model contributes a COVARIANT occurrence.
-/// `.covariant` and "no idea" take the same action—the argument keeps the
-/// reference's own polarity—which is what every argument did before this walk
-/// existed, so an unmodeled shape can only fail to the pre-walk answer rather
-/// than to a wrong one.
+/// A shape the walk does not model contributes a COVARIANT occurrence, which
+/// keeps the reference's own polarity. That default is only sound where the
+/// shape genuinely preserves polarity; a position whose variance is UNKNOWN
+/// must not take it, because covariance is the most permissive answer and
+/// guessing it un-enforces the annotation. Unknown variance is `.invariant`
+/// instead; see `applyDeclKnowledge`.
 const FormalVariance = enum {
     /// The declaration body never names this formal.
     unused,
@@ -16211,7 +16261,74 @@ const max_formal_variance_nodes: usize = 2048;
 const FormalVariancePending = struct {
     anno: CIR.TypeAnno.Idx,
     polarity: Polarity,
+    /// Set for every position below a reference whose variance this walk
+    /// cannot read (`ApplyDeclKnowledge.unknown`). A formal found here is
+    /// joined as `.invariant` rather than by its polarity: the declaration on
+    /// the other side may place it in either position, and only invariant
+    /// covers both.
+    unknown: bool = false,
 };
+
+/// What this walk can know about the declaration a type application
+/// references.
+///
+/// The two non-local cases used to share one `null`, and sharing it was a bug:
+/// "the compiler built this application and it is covariant" and "this
+/// declaration lives in a module I cannot read" were both answered with the
+/// most permissive variance. An annotation the local spelling enforces was
+/// then not enforced through an imported alias.
+const ApplyDeclKnowledge = union(enum) {
+    /// The declaration is in THIS module, so its body can be walked for the
+    /// real variance of each formal.
+    local: CIR.Statement.Idx,
+    /// Compiler-owned, and covariant in every formal. Two kinds qualify: a
+    /// `.builtin` application (`List`, `Box`, the numerics), and a reference
+    /// into the `Builtin` module, whose only parameterized declarations are
+    /// `Try(ok, err)` (`src/build/roc/Builtin.roc:5257`), `Dict(k, v)`
+    /// (`5557`) and `Set(item)` (`6231`)—each of which names its formals
+    /// only in output positions of its own body.
+    covariant,
+    /// Another module's declaration. Its CIR and its formal names live in
+    /// stores this walk cannot read, so its variance is UNKNOWN, and unknown
+    /// is treated as the most RESTRICTIVE variance: invariant, which generates
+    /// the argument closed whatever the reference's own polarity is. Guessing
+    /// covariance instead would open a row the declaration may hold
+    /// contravariantly, which is the annotation silently ceasing to bound the
+    /// caller. Recording each declaration's variance in the checked module
+    /// data an importer already reads (design.md "Polarity") would replace
+    /// this with the real answer; that is a pure relaxation, since it can only
+    /// ever accept more programs.
+    unknown,
+};
+
+/// Which of the three `ApplyDeclKnowledge` cases this application is.
+fn applyDeclKnowledge(self: *const Self, apply: CIR.TypeAnno.Apply) ApplyDeclKnowledge {
+    return switch (apply.base) {
+        .builtin => .covariant,
+        .local => |local_ref| .{ .local = local_ref.decl_idx },
+        .external => |ext| if (self.externalTypeRefTargetsBuiltin(ext.module_idx))
+            .covariant
+        else
+            .unknown,
+        .pending => |pend| if (self.externalTypeRefTargetsBuiltin(pend.module_idx))
+            .covariant
+        else
+            .unknown,
+    };
+}
+
+/// Write one variance into `out[0..len]` and return `len`, for a reference
+/// whose every formal has the same variance. Null past the tracked arity, the
+/// same bound the walk over a local declaration answers null on.
+fn uniformFormalVariances(
+    out: *[max_tracked_alias_formals]FormalVariance,
+    len: usize,
+    variance: FormalVariance,
+) ?usize {
+    if (len > max_tracked_alias_formals) return null;
+    for (out[0..len]) |*slot| slot.* = variance;
+    return len;
+}
 
 /// Allocation-free state of one `applyFormalVariances` walk.
 ///
@@ -16235,23 +16352,22 @@ const FormalVarianceWalk = struct {
 };
 
 /// The variance of each formal of the declaration `apply` references, written
-/// into `out`, returning how many formals were written. Null when this is not
-/// a reference whose declaration the walk models, in which case every argument
-/// keeps the application's own polarity, as it always did.
+/// into `out`, returning how many formals were written. Null only when a LOCAL
+/// declaration's walk could not answer—an arity past the tracked bound, a
+/// statement that is not a type declaration, a cycle, or an exhausted walk—in
+/// which case every argument keeps the application's own polarity, as it always
+/// did. A reference whose declaration is not local answers from
+/// `ApplyDeclKnowledge` instead, and answers for every formal at once.
 fn applyFormalVariances(
     self: *const Self,
     apply: CIR.TypeAnno.Apply,
     out: *[max_tracked_alias_formals]FormalVariance,
 ) ?usize {
-    // Cross-module declarations are deliberately out of scope, exactly as they
-    // are in `applyTryErrorArgIndex`: the declaration's CIR lives in another
-    // module and its formal names are interned in another ident store. A
-    // compiler-constructed `.builtin` application (`List`, `Box`, the
-    // numerics) holds its argument covariantly, which is what inheriting the
-    // application's polarity already does.
-    const local = switch (apply.base) {
-        .local => |local_ref| local_ref,
-        .builtin, .external, .pending => return null,
+    const args_len = self.cir.store.sliceTypeAnnos(apply.args).len;
+    const local_decl_idx = switch (self.applyDeclKnowledge(apply)) {
+        .local => |decl_idx| decl_idx,
+        .covariant => return uniformFormalVariances(out, args_len, .covariant),
+        .unknown => return uniformFormalVariances(out, args_len, .invariant),
     };
     var walk = FormalVarianceWalk{
         .open_decls = undefined,
@@ -16259,11 +16375,11 @@ fn applyFormalVariances(
         .fuel = max_formal_variance_nodes,
         .exhausted = false,
     };
-    const formals_len = self.declFormalVariances(local.decl_idx, out, &walk) orelse return null;
+    const formals_len = self.declFormalVariances(local_decl_idx, out, &walk) orelse return null;
     if (walk.exhausted) return null;
     // An arity mismatch is reported by the caller; until then the positional
     // correspondence this walk assumes does not hold.
-    if (formals_len != self.cir.store.sliceTypeAnnos(apply.args).len) return null;
+    if (formals_len != args_len) return null;
     return formals_len;
 }
 
@@ -16376,42 +16492,46 @@ fn accumulateFormalVariances(
         switch (anno) {
             .rigid_var, .rigid_var_lookup => {
                 if (self.annoFormalIndex(here.anno, formals)) |formal_index| {
-                    out[formal_index] = out[formal_index].join(FormalVariance.ofOccurrence(here.polarity));
+                    const occurrence: FormalVariance = if (here.unknown)
+                        .invariant
+                    else
+                        FormalVariance.ofOccurrence(here.polarity);
+                    out[formal_index] = out[formal_index].join(occurrence);
                 }
             },
             .parens => |parens| {
-                pending[pending_len] = .{ .anno = parens.anno, .polarity = here.polarity };
+                pending[pending_len] = .{ .anno = parens.anno, .polarity = here.polarity, .unknown = here.unknown };
                 pending_len += 1;
             },
             .@"fn" => |func| {
                 // The same rule the annotation walk uses: argument positions
                 // negate the surrounding polarity, the return preserves it.
                 for (self.cir.store.sliceTypeAnnos(func.args)) |arg_anno_idx| {
-                    pending[pending_len] = .{ .anno = arg_anno_idx, .polarity = here.polarity.flip() };
+                    pending[pending_len] = .{ .anno = arg_anno_idx, .polarity = here.polarity.flip(), .unknown = here.unknown };
                     pending_len += 1;
                 }
-                pending[pending_len] = .{ .anno = func.ret, .polarity = here.polarity };
+                pending[pending_len] = .{ .anno = func.ret, .polarity = here.polarity, .unknown = here.unknown };
                 pending_len += 1;
             },
             .tag_union => |tag_union| {
                 for (self.cir.store.sliceTypeAnnos(tag_union.tags)) |tag_anno_idx| {
-                    pending[pending_len] = .{ .anno = tag_anno_idx, .polarity = here.polarity };
+                    pending[pending_len] = .{ .anno = tag_anno_idx, .polarity = here.polarity, .unknown = here.unknown };
                     pending_len += 1;
                 }
                 if (tag_union.ext) |ext_anno_idx| {
-                    pending[pending_len] = .{ .anno = ext_anno_idx, .polarity = here.polarity };
+                    pending[pending_len] = .{ .anno = ext_anno_idx, .polarity = here.polarity, .unknown = here.unknown };
                     pending_len += 1;
                 }
             },
             .tag => |tag| {
                 for (self.cir.store.sliceTypeAnnos(tag.args)) |tag_arg_idx| {
-                    pending[pending_len] = .{ .anno = tag_arg_idx, .polarity = here.polarity };
+                    pending[pending_len] = .{ .anno = tag_arg_idx, .polarity = here.polarity, .unknown = here.unknown };
                     pending_len += 1;
                 }
             },
             .tuple => |tuple| {
                 for (self.cir.store.sliceTypeAnnos(tuple.elems)) |elem_anno_idx| {
-                    pending[pending_len] = .{ .anno = elem_anno_idx, .polarity = here.polarity };
+                    pending[pending_len] = .{ .anno = elem_anno_idx, .polarity = here.polarity, .unknown = here.unknown };
                     pending_len += 1;
                 }
             },
@@ -16420,27 +16540,33 @@ fn accumulateFormalVariances(
                     pending[pending_len] = .{
                         .anno = self.cir.store.getAnnoRecordField(field_idx).ty,
                         .polarity = here.polarity,
+                        .unknown = here.unknown,
                     };
                     pending_len += 1;
                 }
                 if (record.ext) |ext_anno_idx| {
-                    pending[pending_len] = .{ .anno = ext_anno_idx, .polarity = here.polarity };
+                    pending[pending_len] = .{ .anno = ext_anno_idx, .polarity = here.polarity, .unknown = here.unknown };
                     pending_len += 1;
                 }
             },
             .apply => |inner| {
                 // A nested reference composes the same way the top-level one
-                // does. When the inner declaration is not one this walk
-                // models, its arguments are walked at this position's own
-                // polarity, which is the pre-walk answer.
+                // does, and it splits the same three ways
+                // (`ApplyDeclKnowledge`): a local declaration is walked, a
+                // compiler-owned one is covariant and its arguments keep this
+                // position's own polarity, and one this walk cannot read marks
+                // its arguments unknown, so any formal beneath it is joined
+                // invariant rather than by a polarity the declaration may not
+                // have.
                 const inner_args = self.cir.store.sliceTypeAnnos(inner.args);
                 var inner_variances: [max_tracked_alias_formals]FormalVariance = undefined;
+                const inner_knowledge = self.applyDeclKnowledge(inner);
                 const inner_modeled = inner_blk: {
-                    const base_ref = switch (inner.base) {
-                        .local => |local_ref| local_ref,
-                        .builtin, .external, .pending => break :inner_blk false,
+                    const inner_decl_idx = switch (inner_knowledge) {
+                        .local => |decl_idx| decl_idx,
+                        .covariant, .unknown => break :inner_blk false,
                     };
-                    const written = self.declFormalVariances(base_ref.decl_idx, &inner_variances, walk) orelse
+                    const written = self.declFormalVariances(inner_decl_idx, &inner_variances, walk) orelse
                         break :inner_blk false;
                     break :inner_blk written == inner_args.len;
                 };
@@ -16452,6 +16578,7 @@ fn accumulateFormalVariances(
                             inner_variances[inner_index].compose(here.polarity)
                         else
                             here.polarity,
+                        .unknown = here.unknown or inner_knowledge == .unknown,
                     };
                     pending_len += 1;
                 }
@@ -17580,6 +17707,7 @@ fn generateAnnoTypeInPlace(self: *Self, anno_idx: CIR.TypeAnno.Idx, env: *Env, c
                             .region = anno_region,
                             .explicit_ext_region = self.cir.store.getNodeRegion(ModuleEnv.nodeIdxFrom(ext_anno_idx)),
                             .listed_tags = tags_range,
+                            .union_var = anno_var,
                         });
                         break :inner_blk open_ext_var;
                     }
@@ -17597,6 +17725,7 @@ fn generateAnnoTypeInPlace(self: *Self, anno_idx: CIR.TypeAnno.Idx, env: *Env, c
                         .var_ = open_ext_var,
                         .region = anno_region,
                         .listed_tags = tags_range,
+                        .union_var = anno_var,
                     });
                     break :inner_blk open_ext_var;
                 }
@@ -33077,17 +33206,23 @@ fn deferGeneratedCodecConstraintToFinalization(
     return true;
 }
 
-/// Remember WHERE a relation punted to the final type boundary came from, for
-/// the late implicit-open-ext replay. A relation parked here is decided inside
+/// Remember WHERE a relation punted to the final type boundary came from and
+/// WHAT it can write through, for the late implicit-open-ext replay. A relation
+/// parked here is decided inside
 /// `finalizeGeneratedCodecConstraintsToQuiescence`, which is after both
 /// narrowing passes, so the replay sees its widening and must decide whether
-/// the binding it is about to blame is the one that introduced it.
+/// the row it is about to blame a binding for is one this relation could have
+/// written.
 ///
 /// The region is resolved now, not at the replay: `Provenance.intro_expr` is
 /// module-local, and reinterpreting an index that arrived with an imported
 /// type as a local expression could name an unrelated region and blame a
 /// binding that did nothing wrong. Here we are in this module's checker with
 /// this module's CIR, so the index is this module's—guarded below regardless.
+///
+/// The two vars are recorded raw, not resolved: the relation has not been
+/// decided yet, and the replay resolves them itself once everything has
+/// settled.
 fn recordLateSelfWideningWriter(
     self: *Self,
     deferred: DeferredConstraintCheck,
@@ -33100,7 +33235,11 @@ fn recordLateSelfWideningWriter(
     if (!isExprNodeTag(self.cir.store.nodes.get(node_idx).tag)) return;
     const region = self.cir.store.getExprRegion(expr_idx);
     if (region.isEmpty()) return;
-    try self.late_self_widening_writers.append(self.gpa, region);
+    try self.late_self_widening_writers.append(self.gpa, .{
+        .region = region,
+        .dispatcher_var = deferred.var_,
+        .fn_var = constraint.fn_var,
+    });
 }
 
 fn checkFinalGeneratedCodecConstraints(self: *Self, env: *Env) Allocator.Error!void {
