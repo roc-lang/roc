@@ -317,7 +317,6 @@ fn runEchoView(
         &view.layouts,
         eval.LirInterpreter.BoxyTables.fromImageView(view),
         &roc_ops,
-        .preserve,
     ) catch |err| {
         diag.step("LirInterpreter.init", err);
         return err;

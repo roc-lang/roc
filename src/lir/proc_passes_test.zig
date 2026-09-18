@@ -10,7 +10,14 @@ const testing = std.testing;
 const body_clone = @import("body_clone.zig");
 const collections = @import("collections");
 
-/// Every procedure deliberately reuses source join IDs 0..3. The consumer
+const FusionJoins = struct {
+    candidate: core.LIR.JoinPointId,
+    external: core.LIR.JoinPointId,
+    nested: core.LIR.JoinPointId,
+    forwarding: core.LIR.JoinPointId,
+};
+
+/// Every procedure deliberately reuses the same reserved source join IDs. The consumer
 /// contains a nested binder and a jump to an enclosing, non-cloned binder.
 fn fusionFixture(phase: passes.Phase) std.mem.Allocator.Error!Fixture {
     var fixture: Fixture = .{
@@ -19,6 +26,15 @@ fn fusionFixture(phase: passes.Phase) std.mem.Allocator.Error!Fixture {
     };
     errdefer fixture.deinit();
     const store = &fixture.store;
+    var join_ids = body_clone.JoinParamIndex.init(testing.allocator);
+    defer join_ids.deinit();
+    const joins: FusionJoins = .{
+        .candidate = join_ids.freshJoinPoint(),
+        .external = join_ids.freshJoinPoint(),
+        .nested = join_ids.freshJoinPoint(),
+        .forwarding = join_ids.freshJoinPoint(),
+    };
+    fixture.fusion_joins = joins;
     for (0..8) |index| {
         const selector = try store.addLocal(.{ .layout_idx = .u64 });
         const result = try store.addLocal(.{ .layout_idx = .u64 });
@@ -27,20 +43,20 @@ fn fusionFixture(phase: passes.Phase) std.mem.Allocator.Error!Fixture {
         const disc = try store.addLocal(.{ .layout_idx = .u16 });
         const carried = try store.addLocal(.{ .layout_idx = .u64 });
         const ret = try store.addCFStmt(.{ .ret = .{ .value = result } });
-        const external_jump = try store.addCFStmt(.{ .jump = .{ .target = @enumFromInt(1) } });
-        const internal_jump = try store.addCFStmt(.{ .jump = .{ .target = @enumFromInt(2) } });
+        const external_jump = try store.addCFStmt(.{ .jump = .{ .target = joins.external } });
+        const internal_jump = try store.addCFStmt(.{ .jump = .{ .target = joins.nested } });
         const initialize = try store.addCFStmt(.{ .assign_literal = .{
             .target = result,
             .value = .{ .i64_literal = .{ .value = 42, .layout_idx = .u64 } },
             .next = internal_jump,
         } });
         const arm = try store.addCFStmt(.{ .join = .{
-            .id = @enumFromInt(2),
+            .id = joins.nested,
             .params = try store.addLocalSpan(&.{result}),
             .body = external_jump,
             .remainder = initialize,
         } });
-        const jump_outer = try store.addCFStmt(.{ .jump = .{ .target = @enumFromInt(0) } });
+        const jump_outer = try store.addCFStmt(.{ .jump = .{ .target = joins.candidate } });
         var consumer = arm;
         var producer: core.LIR.CFStmtId = undefined;
         if (phase == .tag_fusion) {
@@ -66,7 +82,7 @@ fn fusionFixture(phase: passes.Phase) std.mem.Allocator.Error!Fixture {
                 .variant_index = 1,
                 .discriminant = 1,
                 .payload = null,
-                .next = try store.addCFStmt(.{ .jump = .{ .target = @enumFromInt(0) } }),
+                .next = try store.addCFStmt(.{ .jump = .{ .target = joins.candidate } }),
             } });
             producer = try store.addCFStmt(.{ .switch_stmt = .{
                 .cond = selector,
@@ -80,7 +96,7 @@ fn fusionFixture(phase: passes.Phase) std.mem.Allocator.Error!Fixture {
                 .mode = .initialize_join_param,
                 .next = jump_outer,
             } });
-            const jump_inner = try store.addCFStmt(.{ .jump = .{ .target = @enumFromInt(3) } });
+            const jump_inner = try store.addCFStmt(.{ .jump = .{ .target = joins.forwarding } });
             const set_inner = try store.addCFStmt(.{ .set_local = .{
                 .target = inner,
                 .value = selector,
@@ -88,14 +104,14 @@ fn fusionFixture(phase: passes.Phase) std.mem.Allocator.Error!Fixture {
                 .next = jump_inner,
             } });
             producer = try store.addCFStmt(.{ .join = .{
-                .id = @enumFromInt(3),
+                .id = joins.forwarding,
                 .params = try store.addLocalSpan(&.{inner}),
                 .body = forward,
                 .remainder = set_inner,
             } });
         }
         const candidate = try store.addCFStmt(.{ .join = .{
-            .id = @enumFromInt(0),
+            .id = joins.candidate,
             .params = try store.addLocalSpan(&.{outer}),
             .body = consumer,
             .remainder = producer,
@@ -107,7 +123,7 @@ fn fusionFixture(phase: passes.Phase) std.mem.Allocator.Error!Fixture {
         } });
         const root = try store.addCFStmt(.{
             .join = .{
-                .id = @enumFromInt(1),
+                .id = joins.external,
                 // Keep this external continuation outside the one-parameter
                 // forwarding rule, so its original identity survives the fixed point.
                 .params = try store.addLocalSpan(&.{ result, carried }),
@@ -131,6 +147,7 @@ fn fusionFixture(phase: passes.Phase) std.mem.Allocator.Error!Fixture {
 const TestError = std.mem.Allocator.Error || std.Io.Writer.Error || error{ TestExpectedEqual, TestUnexpectedResult };
 
 fn expectFusionJoins(fixture: *Fixture, phase: passes.Phase) TestError!void {
+    const joins = fixture.fusion_joins.?;
     var fresh = collections.DenseMap(core.LIR.JoinPointId, void).init(testing.allocator);
     defer fresh.deinit();
     for (0..fixture.store.procSpecCount()) |index| {
@@ -141,9 +158,9 @@ fn expectFusionJoins(fixture: *Fixture, phase: passes.Phase) TestError!void {
         var external_jumps: usize = 0;
         while (try walk.next()) |id| {
             const stmt = fixture.store.getCFStmt(id);
-            if (stmt == .jump and @intFromEnum(stmt.jump.target) == 1) external_jumps += 1;
-            const last_source_join: u32 = if (phase == .tag_fusion) 2 else 3;
-            if (stmt != .join or @intFromEnum(stmt.join.id) <= last_source_join) continue;
+            if (stmt == .jump and stmt.jump.target == joins.external) external_jumps += 1;
+            const last_source_join = if (phase == .tag_fusion) joins.nested else joins.forwarding;
+            if (stmt != .join or @intFromEnum(stmt.join.id) <= @intFromEnum(last_source_join)) continue;
             try testing.expect(!fresh.contains(stmt.join.id));
             try fresh.put(stmt.join.id, {});
             const params = fixture.store.getLocalSpan(stmt.join.params);
@@ -154,7 +171,7 @@ fn expectFusionJoins(fixture: *Fixture, phase: passes.Phase) TestError!void {
             try testing.expectEqual(stmt.join.id, fixture.store.getCFStmt(initialized.next).jump.target);
             const bridge = fixture.store.getCFStmt(stmt.join.body).set_local;
             try testing.expectEqual(core.LirStore.GuardedList.at(params, 0), bridge.value);
-            try testing.expectEqual(@as(u32, 1), @intFromEnum(fixture.store.getCFStmt(bridge.next).jump.target));
+            try testing.expectEqual(joins.external, fixture.store.getCFStmt(bridge.next).jump.target);
         }
         try testing.expectEqual(@as(usize, if (phase == .tag_fusion) 2 else 1), nested);
         try testing.expect(external_jumps > 0);
@@ -164,6 +181,7 @@ fn expectFusionJoins(fixture: *Fixture, phase: passes.Phase) TestError!void {
 const Fixture = struct {
     store: core.LirStore,
     layouts: layout.Store,
+    fusion_joins: ?FusionJoins = null,
 
     fn init() std.mem.Allocator.Error!Fixture {
         var self: Fixture = .{

@@ -4,21 +4,21 @@
 //! The eval LLVM backend merges the (target-independent) builtins bitcode into
 //! the user module and re-codegens the whole thing for the host's native
 //! target. That final instruction selection lowers operations with no native
-//! instruction—128-bit multiply/divide/remainder and 128-bit<->float
-//! conversions—to compiler-rt libcalls (`__divti3`, `__fixsfti`, ...). Those
-//! symbols are not in the builtins bitcode (they are introduced *after* it,
-//! during native codegen), so the produced shared object references them as
-//! *undefined* symbols.
+//! instruction (128-bit multiply/divide/remainder and 128-bit<->float
+//! conversions) to compiler-rt libcalls (`__divti3`, `__fixsfti`, ...). Those
+//! symbols are not in the builtins bitcode (they are introduced after it,
+//! during native codegen), so the produced object references them as
+//! undefined symbols.
 //!
 //! For a normally-linked program the system linker resolves these against
-//! compiler-rt. The eval path instead loads the object with a minimal
-//! in-process loader (`eval_loader`) in a static, no-libc binary that has no
-//! dynamic linker to bind undefined symbols. `resolve` lets that loader bind
-//! each such symbol to the matching decomposed-64-bit implementation already
-//! maintained for the builtins in `compiler_rt_128`, keeping the loaded image
-//! self-contained without depending on the host's own compiler-rt.
+//! compiler-rt. The compiler's relocatable loader instead binds each such
+//! symbol through `resolve` to the matching decomposed-64-bit implementation
+//! already maintained for the builtins in `compiler_rt_128`, keeping the
+//! loaded image self-contained without depending on the host's own
+//! compiler-rt.
 
 const std = @import("std");
+const builtin = @import("builtin");
 const compiler_rt = @import("compiler_rt_128.zig");
 
 // `callconv(.c)` wrappers matching each compiler-rt symbol's ABI. The
@@ -102,24 +102,50 @@ const entries = .{
     .{ "__floatuntidf", &__floatuntidf },
 };
 
-/// Resolve a compiler-rt runtime symbol to its host implementation, or null if
-/// it is not one we provide. The signature matches
-/// `base.elf_self_relocate.UndefinedSymbolResolver` so it can be handed to the
-/// in-process eval loader.
+/// The C memory routines and stack probes native codegen may also emit
+/// calls to, bound to the definitions this binary already carries. These
+/// are resolved for a loaded object but never exported by `exportLibcalls`,
+/// since a linked program gets them from its own C runtime.
+const host_routines = struct {
+    extern fn memcpy(dest: ?[*]u8, src: ?[*]const u8, len: usize) callconv(.c) ?[*]u8;
+    extern fn memmove(dest: ?[*]u8, src: ?[*]const u8, len: usize) callconv(.c) ?[*]u8;
+    extern fn memset(dest: ?[*]u8, value: c_int, len: usize) callconv(.c) ?[*]u8;
+    extern fn memcmp(a: ?[*]const u8, b: ?[*]const u8, len: usize) callconv(.c) c_int;
+    /// Apple targets lower a zero-filling `memset` to `bzero`.
+    extern fn bzero(dest: ?[*]u8, len: usize) callconv(.c) void;
+    /// LLVM's stack probe for frames past a page on Windows x64.
+    extern fn ___chkstk_ms() callconv(.c) void;
+
+    const entries = .{
+        .{ "memcpy", &memcpy },
+        .{ "memmove", &memmove },
+        .{ "memset", &memset },
+        .{ "memcmp", &memcmp },
+    };
+};
+
+/// Resolve a symbol native codegen emits a call to (a compiler-rt libcall, a
+/// C memory routine, or a stack probe) to its host implementation, or null
+/// if it is not one we provide.
 pub fn resolve(name: []const u8) ?usize {
     inline for (entries) |entry| {
         if (std.mem.eql(u8, name, entry[0])) return @intFromPtr(entry[1]);
+    }
+    inline for (host_routines.entries) |entry| {
+        if (std.mem.eql(u8, name, entry[0])) return @intFromPtr(entry[1]);
+    }
+    if (builtin.os.tag.isDarwin()) {
+        if (std.mem.eql(u8, name, "bzero")) return @intFromPtr(&host_routines.bzero);
+    }
+    if (builtin.os.tag == .windows and builtin.cpu.arch == .x86_64) {
+        if (std.mem.eql(u8, name, "___chkstk_ms")) return @intFromPtr(&host_routines.___chkstk_ms);
     }
     return null;
 }
 
 /// Emit every libcall in `entries` as an exported symbol under its compiler-rt
-/// name. The standalone `eval_compiler_rt_libcalls` object calls this from a
-/// `comptime` block so it can be linked into the eval shared library on targets
-/// whose loader cannot bind undefined symbols at load time. The in-process
-/// `eval_loader` (static-musl Linux) and the OS dynamic loader (other Unixes)
-/// bind them via `resolve` / their own compiler-rt instead, but Windows loads
-/// the eval image with `LoadLibrary`, which requires a fully linked DLL.
+/// name, for an object that is linked into a program rather than loaded by
+/// the compiler.
 ///
 /// `linkage` is `.weak` for an object that only needs these when nothing else
 /// in the link supplies them: a strong definition elsewhere then wins, which

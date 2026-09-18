@@ -373,8 +373,8 @@ pub fn extract(
     defer allocator.free(artifact_of_region);
     var artifact_count: u32 = 0;
     for (regions, 0..) |region, index| {
-        artifact_of_region[index] = if (region.kind == .branch_island) null else artifact_count;
-        if (region.kind != .branch_island) artifact_count += 1;
+        artifact_of_region[index] = if (regionHasArtifact(region.kind)) artifact_count else null;
+        if (regionHasArtifact(region.kind)) artifact_count += 1;
     }
 
     const artifacts = try arena_allocator.alloc(Artifact, artifact_count);
@@ -386,7 +386,7 @@ pub fn extract(
             .boxy_thunk => |proc_id| .{ .boxy_thunk = proc_specs[@intFromEnum(proc_id)].identity },
             .entrypoint => .entrypoint,
             .message_pool_run => .message_pool_run,
-            .branch_island => unreachable,
+            .branch_island, .hosted_stub => unreachable,
             .spliced_proc => |identity| .{ .proc = identity },
             .spliced_helper => .{ .rc_helper = try arena_allocator.dupe(u8, codegen.splicedHelperName(region.start + region.entry) orelse return error.DanglingReference) },
         };
@@ -491,6 +491,16 @@ pub fn extract(
     return .{ .arena = arena, .artifacts = artifacts };
 }
 
+/// Whether a region lifts into an artifact. Branch islands belong to one
+/// placement of the code, and a hosted stub exists only in the evaluator's
+/// image.
+fn regionHasArtifact(kind: anytype) bool {
+    return switch (kind) {
+        .branch_island, .hosted_stub => false,
+        .proc, .rc_helper, .boxy_thunk, .entrypoint, .message_pool_run, .spliced_proc, .spliced_helper => true,
+    };
+}
+
 fn regionStartsBefore(comptime Region: type) fn (void, Region, Region) bool {
     return struct {
         fn lessThan(_: void, lhs: Region, rhs: Region) bool {
@@ -525,7 +535,7 @@ fn messageOffsetInCode(comptime CG: type, regions: []const CG.CodeRegion, messag
             .message_pool_run => |pool_from| {
                 if (pool_from <= message_offset) found = region.start + (message_offset - pool_from);
             },
-            .proc, .rc_helper, .boxy_thunk, .entrypoint, .branch_island, .spliced_proc, .spliced_helper => {},
+            .proc, .rc_helper, .boxy_thunk, .entrypoint, .branch_island, .hosted_stub, .spliced_proc, .spliced_helper => {},
         }
     }
     return found;
@@ -688,7 +698,7 @@ pub fn verifyRoundTrip(
 /// placement lays out for itself.
 fn artifactRegionCount(comptime CG: type, regions: []const CG.CodeRegion) usize {
     var count: usize = 0;
-    for (regions) |region| count += @intFromBool(region.kind != .branch_island);
+    for (regions) |region| count += @intFromBool(regionHasArtifact(region.kind));
     return count;
 }
 

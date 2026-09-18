@@ -91,6 +91,8 @@ const Node = struct {
     bytes: []u8,
     alignment: u32,
     relocations: std.ArrayList(static_data.StaticDataRelocation) = .empty,
+    /// The evaluated capacities of the empty lists inside the root value.
+    empty_list_capacities: std.ArrayList(static_data.EmptyListCapacity) = .empty,
 };
 
 /// A typed view is explicit in the producer's plan. Reserving its destination
@@ -195,7 +197,16 @@ const Builder = struct {
             .zst => {},
             .scalar => {
                 if (physical.tag != .scalar or physical.getScalar().tag == .opaque_ptr or physical.getScalar().tag == .str) invariant("scalar export plan did not name pointer-free scalar bytes");
-                @memcpy(self.bytes(job.dest, self.size(job.layout_idx)), job.source.readBytes(self.size(job.layout_idx)));
+                const dest = self.bytes(job.dest, self.size(job.layout_idx));
+                @memcpy(dest, job.source.readBytes(self.size(job.layout_idx)));
+                // Frozen data is canonical: a NaN keeps whatever bits the
+                // evaluation produced until here, where it becomes Roc's one
+                // NaN.
+                if (job.layout_idx == .f32) {
+                    std.mem.writeInt(u32, dest[0..4], builtins.float_bits.normalizeF32NanBits(std.mem.readInt(u32, dest[0..4], .little)), .little);
+                } else if (job.layout_idx == .f64) {
+                    std.mem.writeInt(u64, dest[0..8], builtins.float_bits.normalizeF64NanBits(std.mem.readInt(u64, dest[0..8], .little)), .little);
+                }
             },
             .str => try self.string(job),
             .list => |element| try self.list(job, element),
@@ -266,7 +277,16 @@ const Builder = struct {
         const list_value = job.source.read(builtins.list.RocList);
         self.writeWord(job.dest.offsetBy(word_size), list_value.len());
         self.writeWord(job.dest.offsetBy(2 * word_size), builtins.list.RocList.encodeCapacity(list_value.len()));
-        if (physical.tag == .list_of_zst or list_value.len() == 0) return;
+        if (list_value.len() == 0) {
+            // The descriptor cannot carry the capacity the value was
+            // evaluated with; keep it on the root so the runtime can
+            // construct the list as the `with_capacity` it came from.
+            if (@intFromEnum(job.dest.symbol) == 0 and physical.tag == .list and list_value.getCapacity() != 0) {
+                try self.nodes.items[0].empty_list_capacities.append(self.allocator, .{ .offset = job.dest.offset, .capacity = list_value.getCapacity() });
+            }
+            return;
+        }
+        if (physical.tag == .list_of_zst) return;
         const ptr = list_value.bytes orelse invariant("nonempty native list had a null pointer");
         const element_layout = physical.getIdx();
         const element_size = self.size(element_layout);
@@ -393,6 +413,9 @@ const Builder = struct {
             const owned_bytes = try allocator.dupe(u8, source.bytes);
             errdefer allocator.free(owned_bytes);
             const relocations = try allocator.dupe(static_data.StaticDataRelocation, source.relocations.items);
+            errdefer allocator.free(relocations);
+            const capacities = try allocator.dupe(static_data.EmptyListCapacity, source.empty_list_capacities.items);
+            errdefer allocator.free(capacities);
             // All names are assigned in a separate pass once every symbol exists.
             for (relocations) |*relocation| relocation.owns_target_symbol_name = false;
             dest.* = .{
@@ -403,6 +426,7 @@ const Builder = struct {
                 .is_global = false,
                 .is_exported = false,
                 .relocations = relocations,
+                .empty_list_capacities = capacities,
             };
             done += 1;
         }
@@ -455,6 +479,31 @@ fn testRoot(plan: Program.ConstPlanId, ret_layout: layout.Idx) Program.ConstRoot
         .ret_type = undefined,
         .plan = plan,
     };
+}
+
+test "native root export keeps an empty list root's evaluated capacity" {
+    const allocator = std.testing.allocator;
+    var program = try Program.Result.init(allocator, @import("base").target.TargetUsize.native);
+    defer program.deinit();
+    const elem_plan: Program.ConstPlanId = @enumFromInt(program.const_plans.items.len);
+    try program.const_plans.append(allocator, .scalar);
+    const list_plan: Program.ConstPlanId = @enumFromInt(program.const_plans.items.len);
+    try program.const_plans.append(allocator, .{ .list = elem_plan });
+    const list_layout = try program.layouts.insertList(.u32);
+    var backing: [16]u32 = undefined;
+    var list_value = builtins.list.RocList{
+        .bytes = @ptrCast(&backing),
+        .length = 0,
+        .capacity_or_alloc_ptr = builtins.list.RocList.encodeCapacity(backing.len),
+    };
+    const slot = try testSlot(&program, list_layout);
+    const exports = try freezeRoot(allocator, &program, slot, testRoot(list_plan, list_layout), .{ .ptr = @ptrCast(&list_value) }, .{});
+    defer static_data.deinitStaticData(allocator, exports);
+    try std.testing.expectEqual(@as(usize, 1), exports.len);
+    try std.testing.expectEqual(@as(usize, 1), exports[0].empty_list_capacities.len);
+    try std.testing.expectEqual(@as(u64, 0), exports[0].empty_list_capacities[0].offset);
+    try std.testing.expectEqual(@as(u64, 16), exports[0].empty_list_capacities[0].capacity);
+    try std.testing.expectEqual(@as(usize, 0), exports[0].relocations.len);
 }
 
 test "native root export owns list strings and preserves shared typed pointers" {
@@ -698,4 +747,31 @@ test "native root export follows only selected tag payload and clears inactive b
             try std.testing.expectEqualStrings(text, exports[@intFromEnum(pointer.target.data_symbol)].bytes[@intCast(pointer.addend)..]);
         }
     }
+}
+
+test "native root export freezes every NaN as Roc's one NaN" {
+    const allocator = std.testing.allocator;
+    var program = try Program.Result.init(allocator, @import("base").target.TargetUsize.native);
+    defer program.deinit();
+    const scalar_plan: Program.ConstPlanId = @enumFromInt(program.const_plans.items.len);
+    try program.const_plans.append(allocator, .scalar);
+
+    var nan_payload: u64 = 0xfff9_2345_6789_abcd;
+    const nan_slot = try testSlot(&program, .f64);
+    const nan_exports = try freezeRoot(allocator, &program, nan_slot, testRoot(scalar_plan, .f64), .{ .ptr = @ptrCast(&nan_payload) }, .{});
+    defer static_data.deinitStaticData(allocator, nan_exports);
+    try std.testing.expectEqual(@as(usize, 1), nan_exports.len);
+    try std.testing.expectEqual(builtins.float_bits.normalized_f64_nan_bits, std.mem.readInt(u64, nan_exports[0].bytes[nan_exports[0].symbol_offset..][0..8], .little));
+
+    var f32_payload: u32 = 0xffc1_2345;
+    const f32_slot = try testSlot(&program, .f32);
+    const f32_exports = try freezeRoot(allocator, &program, f32_slot, testRoot(scalar_plan, .f32), .{ .ptr = @ptrCast(&f32_payload) }, .{});
+    defer static_data.deinitStaticData(allocator, f32_exports);
+    try std.testing.expectEqual(builtins.float_bits.normalized_f32_nan_bits, std.mem.readInt(u32, f32_exports[0].bytes[f32_exports[0].symbol_offset..][0..4], .little));
+
+    var finite: u64 = @bitCast(@as(f64, -2.5));
+    const finite_slot = try testSlot(&program, .f64);
+    const finite_exports = try freezeRoot(allocator, &program, finite_slot, testRoot(scalar_plan, .f64), .{ .ptr = @ptrCast(&finite) }, .{});
+    defer static_data.deinitStaticData(allocator, finite_exports);
+    try std.testing.expectEqual(finite, std.mem.readInt(u64, finite_exports[0].bytes[finite_exports[0].symbol_offset..][0..8], .little));
 }

@@ -25,7 +25,7 @@ pub fn backendAvailable(backend_kind: EvalBackend) bool {
 /// Executable memory for running generated code (re-exported from backend module)
 pub const ExecutableMemory = backend.ExecutableMemory;
 /// Shared dynamic-library loader for LLVM-generated libraries.
-pub const DynLib = @import("dynlib.zig").DynLib;
+pub const object_image = @import("object_image.zig");
 /// Layout module (re-exported for result type information)
 pub const layout = @import("layout");
 /// Utilities for loading compiled builtin modules
@@ -77,7 +77,6 @@ pub const interpreter = if (builtin.target.os.tag == .freestanding) struct {
             _: *const @import("lir").LirStore,
             _: *const @import("layout").Store,
             _: *const @import("builtins").host_abi.RocOps,
-            _: @import("builtins").float_bits.NanMode,
         ) error{BackendUnavailable}!@This() {
             return error.BackendUnavailable;
         }

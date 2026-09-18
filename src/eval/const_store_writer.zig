@@ -261,9 +261,11 @@ pub const Writer = struct {
                 .u128 => .{ .u128 = value.read(u128) },
                 .i128 => .{ .i128 = value.read(i128) },
             },
+            // A stored NaN is Roc's one NaN, whatever bits the evaluation
+            // produced.
             .frac => switch (scalar.getFrac()) {
-                .f32 => .{ .f32_bits = @bitCast(value.read(f32)) },
-                .f64 => .{ .f64_bits = @bitCast(value.read(f64)) },
+                .f32 => .{ .f32_bits = builtins.float_bits.normalizeF32NanBits(@bitCast(value.read(f32))) },
+                .f64 => .{ .f64_bits = builtins.float_bits.normalizeF64NanBits(@bitCast(value.read(f64))) },
                 .dec => .{ .dec_bits = value.read(builtins.dec.RocDec).num },
             },
             .opaque_ptr => writerInvariant("opaque pointer scalar layout reached scalar const plan"),
@@ -327,6 +329,10 @@ pub const Writer = struct {
             writerInvariant("list const plan had non-list layout");
         }
         const roc_list: *const RocList = @ptrCast(@alignCast(value.ptr));
+        if (roc_list.len() == 0) {
+            self.module.const_store.fill(target_node, .{ .list = .{ .empty = roc_list.getCapacity() } });
+            return;
+        }
         if (self.planIsScalar(elem_plan)) {
             return try self.storePackedList(target_node, layout_value, roc_list);
         }
@@ -1316,6 +1322,40 @@ test "const store writer pointer memoization is scoped to one root" {
     try testing.expectEqualStrings(second_bytes, artifact.const_store.strBytes(second_value.str));
 }
 
+test "const store writer stores every NaN as Roc's one NaN" {
+    const testing = std.testing;
+
+    var module_env = try can.ModuleEnv.init(testing.allocator, "");
+    defer module_env.deinit();
+
+    var artifact = try initTestArtifact(testing.allocator, &module_env);
+    defer deinitTestArtifact(&artifact, testing.allocator);
+
+    var program = try LirProgram.Result.init(testing.allocator, .u64);
+    defer program.deinit();
+    const scalar_plan: LirProgram.ConstPlanId = @enumFromInt(program.const_plans.items.len);
+    try program.const_plans.append(testing.allocator, .scalar);
+
+    var writer = Writer.init(testing.allocator, &artifact, &program);
+    defer writer.deinit();
+
+    var f64_payload: u64 = 0xfff9_2345_6789_abcd;
+    const stored_f64 = try writer.storeRoot(testConstRoot(scalar_plan, .f64), .{ .ptr = @ptrCast(&f64_payload) });
+    const f64_value = artifact.const_store.get(stored_f64.const_node);
+    try testing.expect(f64_value == .scalar and f64_value.scalar == .f64_bits);
+    try testing.expectEqual(builtins.float_bits.normalized_f64_nan_bits, f64_value.scalar.f64_bits);
+
+    var f32_payload: u32 = 0xffc1_2345;
+    const stored_f32 = try writer.storeRoot(testConstRoot(scalar_plan, .f32), .{ .ptr = @ptrCast(&f32_payload) });
+    const f32_value = artifact.const_store.get(stored_f32.const_node);
+    try testing.expect(f32_value == .scalar and f32_value.scalar == .f32_bits);
+    try testing.expectEqual(builtins.float_bits.normalized_f32_nan_bits, f32_value.scalar.f32_bits);
+
+    var finite: u64 = @bitCast(@as(f64, -2.5));
+    const stored_finite = try writer.storeRoot(testConstRoot(scalar_plan, .f64), .{ .ptr = @ptrCast(&finite) });
+    try testing.expectEqual(finite, artifact.const_store.get(stored_finite.const_node).scalar.f64_bits);
+}
+
 // Repro for https://github.com/roc-lang/roc/issues/10177
 test "const store writer stores 20KB scalar lists as shared blob" {
     const testing = std.testing;
@@ -1380,5 +1420,14 @@ test "const store writer stores 20KB scalar lists as shared blob" {
     const u16_scalar_bytes = artifact.const_store.get(stored_u16_list.const_node).list.packed_bytes;
     try testing.expectEqual(@as(u32, 10 * 1024), u16_scalar_bytes.len);
     try testing.expectEqual(const_store.ConstPackedScalar.u16, u16_scalar_bytes.element);
+
+    // An empty list keeps the capacity it was evaluated with.
+    var roc_empty_list = RocList{
+        .bytes = bytes.ptr,
+        .length = 0,
+        .capacity_or_alloc_ptr = RocList.encodeCapacity(bytes.len),
+    };
+    const stored_empty_list = try writer.storeRoot(testConstRoot(list_plan, u8_list_layout), .{ .ptr = @ptrCast(&roc_empty_list) });
+    try testing.expectEqual(@as(u64, bytes.len), artifact.const_store.get(stored_empty_list.const_node).list.empty);
     try testing.expectEqual(str_value.str.data, u16_scalar_bytes.bytes.data);
 }

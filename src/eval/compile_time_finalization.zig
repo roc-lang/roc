@@ -45,6 +45,9 @@ pub const EventCallback = struct {
     notify: *const fn (*anyopaque, EventView) void,
 };
 
+/// Where the compile-time evaluator splices object-cache entries from.
+pub const SpliceSource = backend.dev.SpliceSource;
+
 /// Runtime options for compile-time finalization.
 pub const Options = struct {
     pub const StderrWriter = struct {
@@ -72,6 +75,10 @@ pub const Options = struct {
     slow_root_threshold_ns: u64 = 3 * std.time.ns_per_s,
     slow_root_period_ns: u64 = std.time.ns_per_s,
     timing: ?*Timing = null,
+    /// The object cache's artifacts. A procedure the compile-time roots
+    /// reach that the cache served during lowering has no body; the
+    /// evaluator splices its entry into the image it runs.
+    splice_source: ?SpliceSource = null,
 };
 
 const DebugEvents = struct {
@@ -219,8 +226,13 @@ pub const ProgramSession = struct {
             prepared.target.completed_scalar_values = &scalar_values;
             break :block try lir.CheckedPipeline.lowerPreparedSolvedToLir(prepared);
         } else block: {
-            const host = self.host orelse finalizationInvariant("runtime program was already consumed");
+            var host = self.host orelse finalizationInvariant("runtime program was already consumed");
             self.host = null;
+            errdefer host.deinit();
+            // The reused program read its roots before they were evaluated;
+            // the completed constructions now replace those reads.
+            const host_frozen = if (host.frozen_static_data) |*frozen| frozen else finalizationInvariant("host program omitted its completed frozen values");
+            try lir.ComptimeRootAccessors.rebuild(allocator, &host.lir_result, host_frozen);
             break :block host;
         };
         errdefer lowered.deinit();
@@ -1762,7 +1774,7 @@ const InterpreterProgram = struct {
         errdefer self.slots.deinit();
         self.host = CompilerHost.init(allocator);
         errdefer self.host.deinit();
-        self.interpreter = try Interpreter.initWithBoxyTables(allocator, &lowered.lir_result.store, &lowered.lir_result.layouts, Interpreter.BoxyTables.fromResult(&lowered.lir_result), self.host.ops(), .normalize);
+        self.interpreter = try Interpreter.initWithBoxyTables(allocator, &lowered.lir_result.store, &lowered.lir_result.layouts, Interpreter.BoxyTables.fromResult(&lowered.lir_result), self.host.ops());
         errdefer self.interpreter.deinit();
         self.interpreter.dict_seed_mode = .comptime_zero;
         self.interpreter.failure_origins = self.slots.failure_origins;
@@ -1796,7 +1808,7 @@ const InterpreterProgram = struct {
         };
         errdefer child.host.deinit();
         errdefer child.static_callables.deinit(allocator);
-        child.interpreter = try Interpreter.initWithBoxyTables(allocator, &lowered.lir_result.store, &lowered.lir_result.layouts, Interpreter.BoxyTables.fromResult(&lowered.lir_result), child.host.ops(), .normalize);
+        child.interpreter = try Interpreter.initWithBoxyTables(allocator, &lowered.lir_result.store, &lowered.lir_result.layouts, Interpreter.BoxyTables.fromResult(&lowered.lir_result), child.host.ops());
         errdefer child.interpreter.deinit();
         child.interpreter.dict_seed_mode = .comptime_zero;
         child.interpreter.failure_origins = child.slotEnvironment().failure_origins;
@@ -2097,6 +2109,9 @@ const DevProgram = struct {
     static_strings: backend.StaticStringData.Table,
     slots: StaticSlotEnvironment,
     codegen: backend.HostLirCodeGen,
+    /// The object-cache entries spliced into the image and the names the
+    /// image binds for them.
+    splice: backend.dev.HostSplice,
     executable: backend.ExecutableMemory,
     entry_offsets: collections.DenseMap(lir.LIR.LirProcSpecId, usize),
 
@@ -2120,7 +2135,6 @@ const DevProgram = struct {
             lowered.lir_result.boxy_erased_arg_desc_offsets.items,
             lowered.lir_result.boxy_erased_arg_desc_params.items,
             lowered.lir_result.boxy_worker_procs.items,
-            .normalize,
             roc_target.host_cpu.level(),
         );
         errdefer codegen.deinit();
@@ -2141,6 +2155,9 @@ const DevProgram = struct {
         for (lowered.lir_result.const_roots.items, evaluation_roots) |root, *proc| proc.* = root.proc;
         const evaluation_demand = try lir.ReachableProcs.collectProcDemand(allocator, &lowered.lir_result, evaluation_roots, slots.materialized);
         defer allocator.free(evaluation_demand);
+        var splice = backend.dev.HostSplice.init(allocator);
+        errdefer splice.deinit();
+        if (options.splice_source) |source| try splice.spliceExternal(&codegen, evaluation_demand, source);
         try codegen.compileSelectedProcSpecs(evaluation_demand);
         const static_rc_helpers = try static_data_exports.collectRequiredRcHelpers(allocator, slots.materialized);
         defer allocator.free(static_rc_helpers);
@@ -2156,8 +2173,14 @@ const DevProgram = struct {
             try entry_offsets.put(root.proc, entrypoint.offset);
         }
         codegen.boxy_native_fns = null;
+        try splice.generateHostedStubs(&codegen, &native_fns);
         try codegen.finishImage();
-        var executable = try backend.ExecutableMemory.initWithEntryOffset(codegen.getGeneratedCode(), 0);
+        var executable = splice.link(&codegen, &native_fns) catch |err| switch (err) {
+            error.OutOfMemory => return error.OutOfMemory,
+            error.MappingFailed => return error.MmapFailed,
+            error.UnresolvedSymbol => spliceInvariant(&splice, "spliced object-cache code names a symbol the compile-time evaluator cannot bind"),
+            error.InvalidRelocation => spliceInvariant(&splice, "spliced object-cache code carries a relocation the compile-time evaluator cannot patch"),
+        };
         errdefer executable.deinit();
 
         const StaticFunctionResolver = struct {
@@ -2199,6 +2222,7 @@ const DevProgram = struct {
             .static_strings = static_strings,
             .slots = slots,
             .codegen = codegen,
+            .splice = splice,
             .executable = executable,
             .entry_offsets = entry_offsets,
         };
@@ -2241,6 +2265,7 @@ const DevProgram = struct {
     fn deinit(self: *DevProgram) void {
         self.entry_offsets.deinit();
         self.executable.deinit();
+        self.splice.deinit();
         self.codegen.deinit();
         self.slots.deinit();
         self.static_strings.deinit();
@@ -2538,15 +2563,16 @@ fn devRootWorker(_: Allocator, context: *DevRunContext, item_id: usize) void {
     if (context.progress_reporter) |progress| progress.rootStarted();
 
     var crash_boundary = job.host.enterCrashBoundary();
+    const entered = builtins.in_process_host.enter(job.host.ops(), null);
     const sj = crash_boundary.set();
     if (sj == 0) {
         context.executable.callRocABIAt(
             job.entry_offset,
-            @ptrCast(job.host.ops()),
             @ptrCast(job.ret_buf.ptr),
             null,
         );
     }
+    builtins.in_process_host.leave(entered);
     crash_boundary.deinit();
 
     job.result = switch (job.host.termination) {
@@ -3219,10 +3245,17 @@ fn comptimeFailureSiteFrom(
     const loc = failed_loc orelse return .{ .region = root_region, .foreign = null };
     const file = failed_file orelse return .{ .region = root_region, .foreign = null };
     const env = module.moduleEnvConst();
-    if (std.mem.eql(u8, file.qualified_name, env.qualifiedModuleName())) {
-        return .{ .region = failed_region orelse root_region, .foreign = null };
+    // Resolve source-table names in this environment's interner before comparing
+    // identities; indices from another module's store are not interchangeable.
+    if (env.common.idents.lookup(base.Ident.for_text(file.qualified_name))) |qualified_ident| {
+        if (qualified_ident.eql(env.qualified_module_ident)) {
+            return .{ .region = failed_region orelse root_region, .foreign = null };
+        }
     }
-    const bare_name_collides = std.mem.eql(u8, file.name, env.module_name);
+    const bare_name_collides = if (env.common.idents.lookup(base.Ident.for_text(file.name))) |display_ident|
+        display_ident.eql(env.display_module_name_idx)
+    else
+        false;
     return .{ .region = root_region, .foreign = .{
         .module_name = if (bare_name_collides) file.qualified_name else file.name,
         .line = loc.line,
@@ -3438,6 +3471,14 @@ fn lowerFinalizationModulesToLir(
     };
 }
 
+/// A splice invariant failure names the symbol the link stopped at.
+fn spliceInvariant(splice: *const backend.dev.HostSplice, comptime message: []const u8) noreturn {
+    if (@import("builtin").mode == .Debug) {
+        std.debug.panic("compile-time finalization invariant violated: {s}: {s}", .{ message, splice.unresolved orelse "" });
+    }
+    finalizationInvariant(message);
+}
+
 fn finalizationInvariant(comptime message: []const u8) noreturn {
     if (@import("builtin").mode == .Debug) {
         std.debug.panic("compile-time finalization invariant violated: {s}", .{message});
@@ -3633,7 +3674,7 @@ fn testInterpreterSlot(failure_message: ?[]const u8, nested: bool, cycle: bool) 
     owner.slots = .{ .allocator = allocator, .materialized = materialized, .image = image, .addresses = addresses, .failure_origins = failure_origins };
     owner.host = CompilerHost.init(allocator);
     owner.static_callables = .empty;
-    owner.interpreter = try Interpreter.initWithBoxyTables(allocator, &result.store, &result.layouts, Interpreter.BoxyTables.fromResult(result), owner.host.ops(), .normalize);
+    owner.interpreter = try Interpreter.initWithBoxyTables(allocator, &result.store, &result.layouts, Interpreter.BoxyTables.fromResult(result), owner.host.ops());
     defer owner.deinit();
     try owner.refreshCallableMetadata();
     if (nested) {
@@ -3734,7 +3775,7 @@ fn testNativeSlotDemand(lowered: *lir.CheckedPipeline.LoweredProgram, slots: *St
     const allocator = std.testing.allocator;
     var strings = try backend.StaticStringData.build(allocator, &lowered.lir_result.store, backend.dev.LirCodeGenMod.host_lir_codegen_target);
     defer strings.deinit();
-    var codegen = try backend.HostLirCodeGen.initWithBoxyMetadata(allocator, &lowered.lir_result.store, &lowered.lir_result.layouts, strings.view(), &.{}, &.{}, &.{}, .normalize, roc_target.host_cpu.level());
+    var codegen = try backend.HostLirCodeGen.initWithBoxyMetadata(allocator, &lowered.lir_result.store, &lowered.lir_result.layouts, strings.view(), &.{}, &.{}, &.{}, roc_target.host_cpu.level());
     defer codegen.deinit();
     codegen.setNativeStaticData(slots.addresses);
     codegen.setComptimeHooks(.{
@@ -3769,7 +3810,9 @@ fn testNativeSlotDemand(lowered: *lir.CheckedPipeline.LoweredProgram, slots: *St
             defer child.deinit();
             var bytes: [@sizeOf(builtins.str.RocStr)]u8 align(16) = @splat(0);
             var boundary = child.enterCrashBoundary();
-            if (boundary.set() == 0) self.executable.callRocABIAt(self.source_offset, @ptrCast(child.ops()), @ptrCast(&bytes), null);
+            const entered = builtins.in_process_host.enter(child.ops(), null);
+            if (boundary.set() == 0) self.executable.callRocABIAt(self.source_offset, @ptrCast(&bytes), null);
+            builtins.in_process_host.leave(entered);
             boundary.deinit();
             if (child.termination != .returned) return error.Unexpected;
             try self.slots.publishRoot(self.lowered, .{}, self.root_id, .{
@@ -3790,7 +3833,9 @@ fn testNativeSlotDemand(lowered: *lir.CheckedPipeline.LoweredProgram, slots: *St
         host.resetForRun();
         var bytes: [@sizeOf(builtins.str.RocStr)]u8 align(16) = @splat(0);
         var boundary = host.enterCrashBoundary();
-        if (boundary.set() == 0) executable.callRocABIAt(consumer_entry.offset, @ptrCast(host.ops()), @ptrCast(&bytes), null);
+        const entered = builtins.in_process_host.enter(host.ops(), null);
+        if (boundary.set() == 0) executable.callRocABIAt(consumer_entry.offset, @ptrCast(&bytes), null);
+        builtins.in_process_host.leave(entered);
         boundary.deinit();
         try std.testing.expectEqual(CompileTimeHost.Termination.returned, host.termination);
         const str: *const builtins.str.RocStr = @ptrCast(&bytes);
@@ -3866,7 +3911,7 @@ test "shared frozen erased callables execute on interpreter dev and LLVM" {
     defer data.deinit();
     var host = CompilerHost.init(allocator);
     defer host.deinit();
-    var interpreter = try Interpreter.initWithBoxyTables(allocator, &program.store, &program.layouts, Interpreter.BoxyTables.fromResult(&program), host.ops(), .normalize);
+    var interpreter = try Interpreter.initWithBoxyTables(allocator, &program.store, &program.layouts, Interpreter.BoxyTables.fromResult(&program), host.ops());
     defer interpreter.deinit();
     interpreter.setStaticData(data.addresses, &.{});
     try std.testing.expectError(error.RuntimeError, interpreter.eval(.{ .proc_id = caller, .ret_layout = .bool }));
@@ -3929,7 +3974,7 @@ test "shared frozen erased callables execute on interpreter dev and LLVM" {
     defer view.deinit();
     var mapped_data = try StaticInterpreterData.init(allocator, view.static_data, view.static_data_value_count);
     defer mapped_data.deinit();
-    var mapped_interpreter = try Interpreter.initWithBoxyTables(allocator, &view.store, &view.layouts, Interpreter.BoxyTables.fromImageView(&view), host.ops(), .normalize);
+    var mapped_interpreter = try Interpreter.initWithBoxyTables(allocator, &view.store, &view.layouts, Interpreter.BoxyTables.fromImageView(&view), host.ops());
     defer mapped_interpreter.deinit();
     mapped_data.install(&mapped_interpreter);
     var mapped_answer: u8 = 0;

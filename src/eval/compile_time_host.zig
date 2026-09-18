@@ -250,7 +250,8 @@ pub fn finishDemandTiming(self: *CompileTimeHost, started: i128) void {
 }
 
 /// A static read demands completion of its explicitly identified producer.
-pub fn rocComptimeEnsureStaticValue(roc_ops: *RocOps, slot: u32) callconv(.c) void {
+pub fn rocComptimeEnsureStaticValue(slot: u32) callconv(.c) void {
+    const roc_ops = enteredOps();
     const self: *CompileTimeHost = @ptrCast(@alignCast(roc_ops.env));
     const demand = self.slot_demand orelse return;
     const started = self.startDemandTiming();
@@ -269,8 +270,8 @@ pub fn rocComptimeEnsureStaticValue(roc_ops: *RocOps, slot: u32) callconv(.c) vo
 }
 
 /// Dev-backend hook called when a compile-time branch marker is reached.
-pub fn rocComptimeBranchTaken(roc_ops: *RocOps, site_raw: u32, branch_index: u32) callconv(.c) void {
-    const self: *CompileTimeHost = @ptrCast(@alignCast(roc_ops.env));
+pub fn rocComptimeBranchTaken(site_raw: u32, branch_index: u32) callconv(.c) void {
+    const self = enteredHost();
     self.comptime_branch_hits.append(self.host_arena.allocator(), .{
         .site = @enumFromInt(site_raw),
         .branch_index = branch_index,
@@ -280,8 +281,8 @@ pub fn rocComptimeBranchTaken(roc_ops: *RocOps, site_raw: u32, branch_index: u32
 }
 
 /// Dev-backend hook called when empirical exhaustiveness fails.
-pub fn rocComptimeExhaustivenessFailed(roc_ops: *RocOps, site_raw: u32) callconv(.c) void {
-    const self: *CompileTimeHost = @ptrCast(@alignCast(roc_ops.env));
+pub fn rocComptimeExhaustivenessFailed(site_raw: u32) callconv(.c) void {
+    const self = enteredHost();
     self.comptime_failed_site = @enumFromInt(site_raw);
     self.jump(.comptime_exhaustiveness);
 }
@@ -289,8 +290,8 @@ pub fn rocComptimeExhaustivenessFailed(roc_ops: *RocOps, site_raw: u32) callconv
 /// Dev-backend hook recording the source region for an imminent failure,
 /// together with the failing statement's resolved location (whose file entry
 /// names the declaring module).
-pub fn rocComptimeFailureRegion(roc_ops: *RocOps, start_offset: u32, end_offset: u32, file: u32, line: u32, column: u32, stmt: u32) callconv(.c) void {
-    const self: *CompileTimeHost = @ptrCast(@alignCast(roc_ops.env));
+pub fn rocComptimeFailureRegion(start_offset: u32, end_offset: u32, file: u32, line: u32, column: u32, stmt: u32) callconv(.c) void {
+    const self = enteredHost();
     if (stmt < self.failure_origins.len) {
         if (self.failure_origins[stmt]) |origin| {
             self.failed_region = origin.region;
@@ -304,8 +305,8 @@ pub fn rocComptimeFailureRegion(roc_ops: *RocOps, start_offset: u32, end_offset:
 }
 
 /// Dev-backend hook pushing a source region for a generated call frame.
-pub fn rocComptimeCallEnter(roc_ops: *RocOps, start_offset: u32, end_offset: u32, file: u32, line: u32, column: u32) callconv(.c) void {
-    const self: *CompileTimeHost = @ptrCast(@alignCast(roc_ops.env));
+pub fn rocComptimeCallEnter(start_offset: u32, end_offset: u32, file: u32, line: u32, column: u32) callconv(.c) void {
+    const self = enteredHost();
     self.call_regions.append(self.host_arena.allocator(), .{
         .region = base.Region.from_raw_offsets(start_offset, end_offset),
         .loc = .{ .file = file, .line = line, .column = column },
@@ -315,12 +316,22 @@ pub fn rocComptimeCallEnter(roc_ops: *RocOps, start_offset: u32, end_offset: u32
 }
 
 /// Dev-backend hook popping the source region for a generated call frame.
-pub fn rocComptimeCallExit(roc_ops: *RocOps) callconv(.c) void {
-    const self: *CompileTimeHost = @ptrCast(@alignCast(roc_ops.env));
+pub fn rocComptimeCallExit() callconv(.c) void {
+    const self = enteredHost();
     if (self.call_regions.items.len == 0) {
         @panic("compile-time call-region stack underflow");
     }
     _ = self.call_regions.pop();
+}
+
+/// The ops of the evaluation this thread entered, which the hooks above are
+/// only ever called from.
+fn enteredOps() *RocOps {
+    return builtins.in_process_host.current() orelse @panic("compile-time hook ran on a thread that entered no host");
+}
+
+fn enteredHost() *CompileTimeHost {
+    return @ptrCast(@alignCast(enteredOps().env));
 }
 
 fn installJumpBuf(self: *CompileTimeHost, jmp_buf: *JmpBuf) ?*JmpBuf {

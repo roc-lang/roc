@@ -7449,7 +7449,10 @@ test "component uniqueness inventories join parameters incoming transfers and no
         .args = try f.store.addLocalSpan(&.{joined}),
         .next = try f.ret(result),
     } });
-    const jump = try f.store.addCFStmt(.{ .jump = .{ .target = @enumFromInt(0) } });
+    var join_ids = body_clone.JoinParamIndex.init(allocator);
+    defer join_ids.deinit();
+    const join_id = join_ids.freshJoinPoint();
+    const jump = try f.store.addCFStmt(.{ .jump = .{ .target = join_id } });
     const incoming = try f.store.addCFStmt(.{ .set_local = .{
         .target = joined,
         .value = param,
@@ -7457,7 +7460,7 @@ test "component uniqueness inventories join parameters incoming transfers and no
         .next = jump,
     } });
     const body = try f.store.addCFStmt(.{ .join = .{
-        .id = @enumFromInt(0),
+        .id = join_id,
         .params = try f.store.addLocalSpan(&.{joined}),
         .body = mutate,
         .remainder = incoming,

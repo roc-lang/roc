@@ -5,8 +5,10 @@
 //! runtime (the same wrappers the machine-code shim resolves in-process) plus a
 //! `roc_boxy_init_embedded` entry that installs that runtime from a boxy sidecar
 //! embedded in the linked program. Each machine-code backend emits a call to
-//! `roc_boxy_init_embedded` at the top of each exported entrypoint, so the
-//! runtime is ready before any Roc procedure runs. Standalone output reaches
+//! `roc_boxy_init_embedded` at the top of each exported entrypoint of a
+//! platform program, so the runtime is ready before any Roc procedure runs.
+//! An object the compiler loads in-process never calls it: the evaluator
+//! installs its own runtime before calling in. Standalone output reaches
 //! host operations through linker-resolved symbols; evaluator Wasm receives its
 //! host operation table explicitly at initialization.
 
@@ -24,7 +26,7 @@ const RocOps = builtins.host_abi.RocOps;
 const BoxySidecar = lir.LirImage.BoxySidecar;
 
 /// Host operations resolve through linker-provided symbols.
-pub const roc_host_call_mode: builtins.host_abi.HostCallMode = .extern_symbols;
+pub const roc_host_role: builtins.host_abi.HostRole = .platform;
 /// This object is linked into the programs roc produces, not into the compiler,
 /// so it carries no tracy instrumentation.
 pub const roc_disable_tracy = true;
@@ -33,9 +35,13 @@ pub const roc_disable_tracy = true;
 pub const panic = std.debug.FullPanic(panicImpl);
 
 fn panicImpl(msg: []const u8, _: ?usize) noreturn {
-    startup_ops.crash(msg);
+    (startup_ops orelse builtins.in_process_host.ops()).crash(msg);
     unreachable;
 }
+
+/// Whether this root is the evaluator Wasm flavor, which receives its host
+/// operation table at initialization instead of resolving symbols.
+const evaluator_flavor = @hasDecl(@import("root"), "roc_boxy_runtime_evaluator");
 pub const std_options_elf_debug_info_search_paths = shim_io.elfDebugInfoSearchPaths;
 /// Minimal debug output override; avoids pulling in the full threaded IO vtable.
 pub const std_options_debug_io = shim_io.io();
@@ -54,10 +60,10 @@ extern var roc_boxy_sidecar_blob: u8;
 extern const roc_boxy_sidecar_blob_len: u64;
 extern const roc_boxy_sidecar_desc: BoxySidecar;
 
-/// Backing `RocOps` for the global runtime. The evaluator runtime copies the
-/// table supplied at initialization; under the standalone extern-symbol ABI
-/// the methods ignore this value.
-var startup_ops: RocOps = undefined;
+/// Backing `RocOps` for the global runtime once initialized: the host's
+/// runtime symbols, or for evaluator Wasm the table supplied at initialization.
+var startup_ops: ?*RocOps = null;
+var evaluator_ops: RocOps = undefined;
 
 /// A bump allocator for the runtime's own bookkeeping—the descriptor tables,
 /// the decoded sidecar view, and its arenas. This memory lives for the whole
@@ -142,9 +148,12 @@ var initialized = false;
 /// entrypoint wrappers call this before invoking any Roc procedure; the first
 /// call installs the runtime and later calls return early. The decoded sidecar
 /// view lives for the process, so it is intentionally leaked.
-pub export fn roc_boxy_init_embedded(roc_ops: *const RocOps) callconv(.c) void {
-    if (comptime builtins.host_abi.host_call_mode == .vtable) {
-        startup_ops = roc_ops.*;
+pub export fn roc_boxy_init_embedded(roc_ops: ?*const RocOps) callconv(.c) void {
+    if (evaluator_flavor) {
+        evaluator_ops = (roc_ops orelse unreachable).*;
+        startup_ops = &evaluator_ops;
+    } else {
+        startup_ops = builtins.in_process_host.ops();
     }
 
     if (initialized) return;
@@ -166,7 +175,7 @@ pub export fn roc_boxy_init_embedded(roc_ops: *const RocOps) callconv(.c) void {
         return;
     };
 
-    boxy_abi.initGlobalFromSidecarView(gpa, view, &startup_ops) catch |err| {
+    boxy_abi.initGlobalFromSidecarView(gpa, view, startup_ops.?) catch |err| {
         view.deinit();
         gpa.destroy(view);
         switch (err) {
@@ -186,7 +195,7 @@ comptime {
     // Evaluator Wasm is merged without the standalone builtins object, so it
     // carries the small self-contained libcall set. Standalone Wasm resolves
     // these symbols from the builtins object linked before this runtime.
-    if (builtin.cpu.arch.isWasm() and builtins.host_abi.host_call_mode == .vtable) {
+    if (builtin.cpu.arch.isWasm() and evaluator_flavor) {
         builtins.native_runtime_libcalls.exportLibcalls(.strong);
     }
 

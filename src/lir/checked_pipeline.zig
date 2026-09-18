@@ -150,6 +150,12 @@ pub const TargetConfig = struct {
     proc_debug_names: bool = false,
     /// The object cache Monotype asks for closed specializations.
     spec_cache: ?postcheck.Common.SpecCacheLookup = null,
+    /// Whether Direct LIR may serve cache entries to the compile-time
+    /// roots' closure. `prepareCheckedModulesMonotype` sets this from the
+    /// modules: a match whose exhaustiveness only the evaluation can decide
+    /// must run as the evaluator's own code, which reports the branches it
+    /// takes, and a spliced entry reports nothing.
+    comptime_closure_hits: bool = false,
     /// Keep every keyed specialization procedure through compaction; a pack
     /// program offers them from its manifest whether or not its export
     /// wrappers inlined their calls.
@@ -1130,13 +1136,40 @@ pub fn prepareCheckedModulesMonotype(
         );
     };
     if (SpecCensus.enabled()) try SpecCensus.runMonotype(allocator, modules, &mono);
+    var prepared_target = target;
+    prepared_target.comptime_closure_hits = comptimeClosureHitsAllowed(modules);
     return .{
         .allocator = allocator,
         .program = mono,
-        .target = target,
+        .target = prepared_target,
         .root_count = roots.requests.len,
         .test_plan_metadata = test_plan_metadata,
     };
+}
+
+/// Whether every exhaustiveness site of the program resolves without the
+/// evaluator observing the branch it takes. A site reachable only at compile
+/// time is resolved by the evaluation reaching it, which a spliced
+/// object-cache entry never reports.
+fn comptimeClosureHitsAllowed(modules: CheckedModuleSet) bool {
+    if (hasCompileTimeOnlySite(&modules.root.module.exhaustiveness_sites)) return false;
+    for (modules.root.relation_modules) |relation| {
+        if (hasCompileTimeOnlySite(relation.exhaustiveness_sites)) return false;
+    }
+    for (modules.imports) |import| {
+        if (hasCompileTimeOnlySite(import.exhaustiveness_sites)) return false;
+    }
+    return true;
+}
+
+fn hasCompileTimeOnlySite(sites: *const checked.CheckedExhaustivenessSiteTable) bool {
+    for (sites.sites) |site| {
+        switch (site.policy) {
+            .compile_time_only => return true,
+            .compile_time_replaced_by_root, .runtime_reachable, .not_pending => {},
+        }
+    }
+    return false;
 }
 
 /// Consumes the prepared program on success and failure. No specialization
@@ -1281,6 +1314,7 @@ pub fn lowerPreparedSolvedToLir(prepared: PreparedSolved) LowerResourceError!Low
     const parallel_metrics = solvedLirMetricsOutput(target, &local_parallel_metrics);
     var lowered = try postcheck.SolvedLirLower.run(allocator, target.target_usize, solved_input, .{
         .spec_cache = target.spec_cache,
+        .comptime_closure_hits = target.comptime_closure_hits,
         .inline_plan = inline_plan.view(),
         .post_check_executor = target.post_check_executor,
         .inline_expects = target.inline_expects,

@@ -408,6 +408,11 @@ pub const ConstPackedList = struct {
 pub const ConstList = union(enum) {
     nodes: []const ConstNodeId,
     packed_bytes: ConstPackedList,
+    /// An empty list, with the capacity it was evaluated with. A frozen or
+    /// restored descriptor cannot carry a capacity beyond its length, so the
+    /// request travels on the value and the runtime rebuilds the list as
+    /// the `with_capacity` it came from.
+    empty: u64,
 };
 
 /// Compile-time constant stored in checked module data.
@@ -443,6 +448,7 @@ const StoredValue = union(enum) {
     list: union(enum) {
         nodes: ConstRange,
         packed_bytes: ConstPackedList,
+        empty: u64,
     },
     box: ConstNodeId,
     tuple: ConstRange,
@@ -826,6 +832,7 @@ pub const ConstStore = struct {
             .list => |list| .{ .list = switch (list) {
                 .nodes => |items| .{ .nodes = try self.appendNodes(items) },
                 .packed_bytes => |packed_list| .{ .packed_bytes = packed_list },
+                .empty => |capacity| .{ .empty = capacity },
             } },
             .tuple => |items| .{ .tuple = try self.appendNodes(items) },
             .record => |items| .{ .record = try self.appendNodes(items) },
@@ -969,6 +976,7 @@ pub const ConstStore = struct {
             .list => |list| .{ .list = switch (list) {
                 .nodes => |r| .{ .nodes = self.nodeSlice(r) },
                 .packed_bytes => |packed_list| .{ .packed_bytes = packed_list },
+                .empty => |capacity| .{ .empty = capacity },
             } },
             .tuple => |r| .{ .tuple = self.nodeSlice(r) },
             .record => |r| .{ .record = self.nodeSlice(r) },
@@ -1145,6 +1153,7 @@ pub const ConstStore = struct {
                         constStoreInvariant("packed list byte length differs from its element encoding");
                     }
                 },
+                .empty => {},
             },
             .tuple,
             .record,
@@ -1236,6 +1245,7 @@ test "ConstStore: build, serialize/relocate, and read back values, fns, strings"
         .element = null,
         .product_width = 5,
     } } });
+    const empty_list = try store.append(.{ .list = .{ .empty = 4096 } });
     // A function value with a capture (exercises capture_pool).
     const capture_ty = try store.type_store.append(.{ .primitive = .u64 });
     const private_backing_ty = try store.type_store.append(.{ .record = .{} });
@@ -1338,6 +1348,7 @@ test "ConstStore: build, serialize/relocate, and read back values, fns, strings"
     const loaded_product = loaded.get(product_list).list.packed_bytes;
     try std.testing.expectEqual(@as(?ConstPackedScalar, null), loaded_product.element);
     try std.testing.expectEqual(@as(u32, 5), loaded_product.byteWidth());
+    try std.testing.expectEqual(@as(u64, 4096), loaded.get(empty_list).list.empty);
     try std.testing.expectEqual(@as(u32, 2), loaded_product.len);
     try std.testing.expectEqualStrings("ello world", loaded.blobBytes(loaded_product.bytes));
     // Function captures

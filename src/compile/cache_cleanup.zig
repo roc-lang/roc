@@ -216,7 +216,7 @@ fn cleanupPersistentCache(std_io: Io, cache_base: []const u8, now_ns: i128, mayb
         .{ .name = "exe", .nested_directory_depth = 1 },
         .{ .name = "test", .nested_directory_depth = 1 },
         .{ .name = "wasm-host", .nested_directory_depth = 1 },
-        .{ .name = "glue-dylib", .nested_directory_depth = 2 },
+        .{ .name = "glue-plugin", .nested_directory_depth = 2 },
     };
 
     var version_it = base_dir.iterate();
@@ -567,7 +567,7 @@ test "cleanupPersistentCache deletes old cache files at each family depth" {
     const cache_base = std.fs.path.join(allocator, &.{ ".zig-cache", "tmp", &tmp_dir.sub_path, "roc-cache" }) catch unreachable;
     defer allocator.free(cache_base);
 
-    const glue_dir = std.fs.path.join(allocator, &.{ cache_base, "0.0.0-test", "glue-dylib", "x64mac", "dev" }) catch unreachable;
+    const glue_dir = std.fs.path.join(allocator, &.{ cache_base, "0.0.0-test", "glue-plugin", "x64mac", "dev" }) catch unreachable;
     defer allocator.free(glue_dir);
 
     const mod_dir = std.fs.path.join(allocator, &.{ cache_base, "0.0.0-test", "mod", "aa" }) catch unreachable;
@@ -579,9 +579,9 @@ test "cleanupPersistentCache deletes old cache files at each family depth" {
     Dir.cwd().createDirPath(std.testing.io, mod_dir) catch unreachable;
     Dir.cwd().createDirPath(std.testing.io, wasm_host_dir) catch unreachable;
 
-    const glue_file = std.fs.path.join(allocator, &.{ glue_dir, "old.dylib" }) catch unreachable;
+    const glue_file = std.fs.path.join(allocator, &.{ glue_dir, "old.o" }) catch unreachable;
     defer allocator.free(glue_file);
-    const glue_tmp = std.fs.path.join(allocator, &.{ glue_dir, "old.dylib.1.0.tmp" }) catch unreachable;
+    const glue_tmp = std.fs.path.join(allocator, &.{ glue_dir, "old.o.1.0.tmp" }) catch unreachable;
     defer allocator.free(glue_tmp);
     const mod_file = std.fs.path.join(allocator, &.{ mod_dir, "old.rcache" }) catch unreachable;
     defer allocator.free(mod_file);

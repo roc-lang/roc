@@ -1850,7 +1850,7 @@ const Builder = struct {
                 switch (list_value) {
                     // Packed products carry no nested ConstStore nodes, so
                     // there is nothing further to analyze for representation.
-                    .packed_bytes => {},
+                    .packed_bytes, .empty => {},
                     .nodes => |children| for (children) |child| try self.analyzeStaticConstNode(store_view, child, elem_rep, elem_type, visited),
                 }
             },

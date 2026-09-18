@@ -19,6 +19,8 @@ const shim_io = @import("shim_io");
 
 /// Route std.debug.print / std.debug.panic through the minimal shim_io vtable so
 /// the shim archive does not pull in `std.Io.Threaded`.
+/// The platform host this shim is linked into defines the runtime symbols.
+pub const roc_host_role: builtins.host_abi.HostRole = .platform;
 pub const std_options_elf_debug_info_search_paths = shim_io.elfDebugInfoSearchPaths;
 /// Minimal std.Io override for debug output; avoids pulling in the full threaded IO vtable.
 pub const std_options_debug_io = shim_io.io();
@@ -196,7 +198,6 @@ fn evaluateEntrypointInState(
         &view.layouts,
         eval.LirInterpreter.BoxyTables.fromImageView(view),
         ops,
-        .preserve,
         shimIo(),
     ) catch {
         ops.crash("LIR shim could not initialize the LIR interpreter");

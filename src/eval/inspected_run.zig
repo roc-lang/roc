@@ -17,7 +17,7 @@ const wasm32_boxy_runtime = @import("wasm32_boxy_runtime");
 const wasm32_builtins = @import("wasm32_builtins");
 
 const Allocator = std.mem.Allocator;
-const EvalDynLib = @import("dynlib.zig").DynLib;
+const object_image = @import("object_image.zig");
 const ExecutableMemory = backend.ExecutableMemory;
 const HostLirCodeGen = backend.HostLirCodeGen;
 const Interpreter = @import("interpreter.zig").Interpreter;
@@ -357,7 +357,6 @@ fn runInterpreter(allocator: Allocator, program: Program, execution_host: Execut
         program.layouts,
         program.boxy_tables,
         runtime_env.get_ops(),
-        .preserve,
         .{
             .context = &bound_host,
             .dispatch = BoundHostedCallDependency.dispatch,
@@ -423,7 +422,6 @@ fn runDev(allocator: Allocator, program: Program) DevError!Result {
             program.boxy_tables.erased_arg_desc_offsets,
             program.boxy_tables.erased_arg_desc_params,
             program.boxy_tables.worker_procs,
-            .preserve,
             roc_target.host_cpu.level(),
         );
         defer codegen.deinit();
@@ -488,8 +486,9 @@ fn runDev(allocator: Allocator, program: Program) DevError!Result {
         const sj = crash_boundary.set();
         if (sj != 0) return crashResult(allocator, &runtime_env, null);
 
+        const entered = builtins.in_process_host.enter(runtime_env.get_ops(), null);
+        defer builtins.in_process_host.leave(entered);
         exec_mem.callRocABI(
-            @ptrCast(runtime_env.get_ops()),
             @ptrCast(ret_buf.ptr),
             if (arg_buffer) |buf| @ptrCast(buf.ptr) else null,
         );
@@ -556,8 +555,6 @@ fn runWasm(allocator: Allocator, program: Program) WasmError!Result {
         .allocation_count = result.allocation_count,
     };
 }
-
-const InProcessContext = boxy_abi.InProcessContext;
 
 const OwnedLlvmCompileOptions = struct {
     options: @import("llvm_compile").CompileOptions,
@@ -651,19 +648,25 @@ fn runLlvm(allocator: Allocator, program: Program) LlvmError!Result {
 
     var compile_options = try llvmCompileOptions(allocator, program.layouts.targetUsize());
     defer compile_options.deinit(allocator);
-    const dylib_path = try llvm_compile.compileToSharedLibrary(
+    const object_bytes = try llvm_compile.compileBitcodeModulesToObject(
         allocator,
         std.Options.debug_io,
-        bitcode.bitcode,
+        &.{bitcode.bitcode},
         compile_options.options,
     );
-    defer {
-        std.Io.Dir.deleteFileAbsolute(std.Options.debug_io, dylib_path) catch {};
-        allocator.free(dylib_path);
-    }
+    defer allocator.free(object_bytes);
 
-    var lib = try EvalDynLib.open(allocator, dylib_path);
-    defer lib.close();
+    var lib = object_image.load(allocator, object_bytes) catch |err| switch (err) {
+        error.OutOfMemory => return error.OutOfMemory,
+        error.UnsupportedObject,
+        error.MalformedObject,
+        error.UnsupportedRelocation,
+        error.UndefinedSymbol,
+        error.RelocationOutOfRange,
+        error.MappingFailed,
+        => return error.LlvmBackendUnavailable,
+    };
+    defer lib.deinit();
     var functions = std.StringHashMap(usize).init(allocator);
     defer functions.deinit();
     for (program.static_data) |data_export| for (data_export.relocations) |relocation| {
@@ -684,7 +687,7 @@ fn runLlvm(allocator: Allocator, program: Program) LlvmError!Result {
         else => return error.Internal,
     };
 
-    const EntryFn = *const fn (*builtins.host_abi.RocOps, *InProcessContext, [*]u8, ?*anyopaque) callconv(.c) void;
+    const EntryFn = *const fn ([*]u8, ?*anyopaque) callconv(.c) void;
     const entry = lib.lookup(EntryFn, "roc_eval_main") orelse return error.LlvmBackendUnavailable;
 
     var runtime_env = RuntimeHostEnv.init(allocator);
@@ -707,14 +710,12 @@ fn runLlvm(allocator: Allocator, program: Program) LlvmError!Result {
 
     var crash_boundary = runtime_env.enterCrashBoundary();
     defer crash_boundary.deinit();
+    const entered = builtins.in_process_host.enter(runtime_env.get_ops(), null);
+    defer builtins.in_process_host.leave(entered);
     const sj = crash_boundary.set();
     if (sj != 0) return crashResult(allocator, &runtime_env, null);
 
-    const native_fns = boxy_abi.nativeFnTable();
-    var in_process_context: InProcessContext = .{ .boxy_fn_table = &native_fns };
     entry(
-        runtime_env.get_ops(),
-        &in_process_context,
         ret_buf.ptr,
         if (arg_buffer) |buf| @ptrCast(buf.ptr) else null,
     );

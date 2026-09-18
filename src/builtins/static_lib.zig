@@ -20,6 +20,10 @@ pub const std_options_debug_threaded_io = null;
 /// `shim_io.std_options_static_archive`.
 pub const std_options = shim_io.std_options_static_archive;
 
+/// The host that links this archive, or the in-process library it is merged
+/// into, defines the runtime symbols.
+pub const roc_host_role: @import("host_abi.zig").HostRole = .platform;
+
 const builtin_registry = @import("builtin_registry.zig");
 
 // Export overflow functions that might need compiler-rt symbols.

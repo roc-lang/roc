@@ -10,7 +10,7 @@ pub const GlueArgs = glue.GlueArgs;
 pub const GlueError = glue.GlueError;
 pub const GlueOpt = glue.GlueOpt;
 pub const rocGlue = glue.rocGlue;
-pub const buildGlueSpecDylibFile = glue.buildGlueSpecDylibFile;
+pub const buildGlueSpecPluginFile = glue.buildGlueSpecPluginFile;
 
 test "glue tests" {
     std.testing.refAllDecls(glue);

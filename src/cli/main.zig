@@ -6397,7 +6397,6 @@ fn writeDevRunImageToSharedMemory(
             lowered.lir_result.boxy_erased_arg_desc_offsets.items,
             lowered.lir_result.boxy_erased_arg_desc_params.items,
             lowered.lir_result.boxy_worker_procs.items,
-            .preserve,
             roc_target.host_cpu.level(),
         );
         defer codegen.deinit();
@@ -6684,7 +6683,6 @@ fn evaluateLirImageEntrypoint(
         &view.layouts,
         eval.LirInterpreter.BoxyTables.fromImageView(view),
         ops,
-        .preserve,
     );
     defer interpreter.deinit();
     static_data.install(&interpreter);
@@ -7632,11 +7630,11 @@ fn rocInstall(ctx: *CliCtx, args: cli_args.InstallArgs) CliMainError!void {
             try ctx.io.stdout().print("Building {s} glue plugin with --opt=speed ...\n", .{args.shorthand});
             ctx.io.flush();
 
-            try glue.buildGlueSpecDylibFile(
+            try glue.buildGlueSpecPluginFile(
                 ctx.gpa,
                 ctx.io.stderr(),
                 staging.main_roc_path,
-                staging.glue_dylib_path,
+                staging.glue_plugin_path,
                 .speed,
                 ctx.reportConfig(.stderr),
                 ctx.io.std_io,
@@ -9439,10 +9437,9 @@ fn writeDevWasmObject(
     codegen.configureTableReloc(table_symbol);
     codegen.configureRelocatableObject();
 
-    // Register the symbol-ABI imports while the module has no defined
-    // functions yet; a function import added later would shift every defined
-    // function index.
-    codegen.configureSymbolAbi();
+    // Register the runtime and hosted symbol imports while the module has no
+    // defined functions yet; a function import added later would shift every
+    // defined function index.
     try codegen.registerHostedSymbolTargets(lowered.lir_result.store.getProcSpecs());
     if (lirResultNeedsBoxyRuntime(&lowered.lir_result)) try codegen.registerBoxySymbolTargets();
 
@@ -10552,7 +10549,10 @@ fn rocBuildNative(ctx: *CliCtx, args: cli_args.BuildArgs) CliMainError!BuildResu
         base.target.TargetUsize.fromPtrBitWidth(target.ptrBitWidth()),
         args.synthetic_default_platform,
     );
-    if (loaded_packs) |*packs| runtime_lowering.target.spec_cache = packs.specCacheLookup();
+    if (loaded_packs) |*packs| {
+        runtime_lowering.target.spec_cache = packs.specCacheLookup();
+        runtime_lowering.splice_source = packs.spliceSource();
+    }
     build_env.setRuntimeLowering(runtime_lowering);
     build_env.setValidateTargetFilesForSelectedTarget(true);
     reporter.begin("Type Checking");
@@ -10608,7 +10608,9 @@ fn rocBuildNative(ctx: *CliCtx, args: cli_args.BuildArgs) CliMainError!BuildResu
         for (lowered.lir_result.store.getProcSpecs()) |proc| {
             if (proc.external) external_procs += 1;
         }
-        std.debug.print("pack hits: {d} external procs: {d} packs loaded: {d} keys: {d}\n", .{ packs.hits, external_procs, packs.packs.items.len, packs.specs.count() });
+        // The compile-time evaluator has already spliced its entries; the
+        // object compiler asks for the runtime program's afterwards.
+        std.debug.print("pack hits: {d} external procs: {d} evaluator artifacts: {d} packs loaded: {d} keys: {d}\n", .{ packs.hits, external_procs, packs.artifacts_served, packs.packs.items.len, packs.specs.count() });
     }
 
     const entrypoints = try nativeBuildEntrypoints(ctx, root_artifact, &lowered);
@@ -12670,7 +12672,6 @@ fn runInterpreterTestRoots(
         &lowered.lir_result.layouts,
         eval.LirInterpreter.BoxyTables.fromResult(&lowered.lir_result),
         &roc_ops,
-        .preserve,
     );
     defer interpreter.deinit();
 
@@ -16153,11 +16154,11 @@ const RocGlueError = glue.GlueError || CliError || SourceRefResolveError || erro
 
 fn rocGlue(ctx: *CliCtx, args: cli_args.GlueArgs) RocGlueError!void {
     // The glue spec accepts a local path, a bundle URL, or an installed
-    // shorthand. An installed glue entry also carries the plugin dylib that
+    // shorthand. An installed glue entry also carries the plugin object that
     // was built with --opt=speed at install time, so it is loaded directly
-    // instead of compiling a dylib on the fly.
+    // instead of compiling a plugin on the fly.
     var glue_spec = args.glue_spec;
-    var installed_dylib_path: ?[]const u8 = null;
+    var installed_plugin_path: ?[]const u8 = null;
     const specialization_strategy = currentRuntimeSpecializationStrategy(args.specialization_strategy);
     switch (install_store.classifySourceRef(args.glue_spec)) {
         .local_path => {},
@@ -16173,7 +16174,7 @@ fn rocGlue(ctx: *CliCtx, args: cli_args.GlueArgs) RocGlueError!void {
             }
             glue_spec = entry.paths.main_roc_path;
             if (specialization_strategy == .lss) {
-                installed_dylib_path = entry.artifact_path;
+                installed_plugin_path = entry.artifact_path;
             }
         },
     }
@@ -16186,7 +16187,7 @@ fn rocGlue(ctx: *CliCtx, args: cli_args.GlueArgs) RocGlueError!void {
         .report_config = ctx.reportConfig(.stderr),
         .specialization_strategy = specialization_strategy,
         .no_cache = args.no_cache,
-        .installed_dylib_path = installed_dylib_path,
+        .installed_plugin_path = installed_plugin_path,
         .opt = switch (args.opt) {
             .dev => .dev,
             .size => .size,
@@ -16195,7 +16196,7 @@ fn rocGlue(ctx: *CliCtx, args: cli_args.GlueArgs) RocGlueError!void {
         },
     }, ctx.coreCtx(), ctx.io.std_io) catch |err| {
         switch (err) {
-            error.GlueDylibStampMismatch, error.GlueDylibUnavailable => if (installed_dylib_path != null) {
+            error.GluePluginStampMismatch, error.GluePluginUnavailable => if (installed_plugin_path != null) {
                 try ctx.io.stderr().print(
                     "The installed glue plugin for `{s}` cannot be used by this compiler. Reinstall it with: roc install {s} <URL>\n",
                     .{ args.glue_spec, args.glue_spec },

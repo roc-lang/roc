@@ -262,6 +262,13 @@ explicit target, and a missing internal definition is a compiler invariant failu
 The named object-input API resolves its declared names once at its boundary;
 compiler-generated machine code uses the indexed API directly.
 
+A standalone readonly-data object gives its definitions global linker binding:
+the separate LLVM code object can directly reference any allocation named by a
+frozen address relocation when embedding a constant root. Private allocations
+retain hidden visibility and do not become host exports. A combined code/data
+object keeps local binding for private allocations because those references
+remain inside that object.
+
 Definitions retain their assigned symbol IDs through final metadata assembly.
 Object writers borrow immutable section bytes until emission, compute the final
 layout before allocating the output, and apply implicit addends only to that
@@ -770,6 +777,12 @@ closed initializer reads the slot after evaluation; it does not restore a
 pending ConstStore entry or run the value computation again. Requests for an
 explicit stored subnode continue to consume that exact stored node.
 
+Runtime reconstruction of completed values is not a target static initializer
+operation. Closed static initializers preserve literal aggregate data rather
+than introducing allocation calls or repeat loops; their explicit procedure
+role selects this construction-only lowering contract. Their compile-time root
+reads always name the completed slot directly, never a runtime accessor.
+
 Evaluation and static storage are separate checked outputs. Unreachable
 top-level values are still evaluated when eligible so their `crash`, `dbg`, and
 `expect` behavior is reported, but successfully evaluated unreachable data does
@@ -836,9 +849,31 @@ as the scalar literal rather than a slot read, so range proving, loop
 versioning, and overflow elision see the constant they would have seen from
 a literal in source; a table built by `List.repeat` with a compile-time
 length keeps no index check the prover can discharge, and no slot, failure
-record, or guard exists for the root. After the passes, which compact the
-slot table, the remaining aggregate slots are transcoded into the target's
-frozen image. The LLVM
+record, or guard exists for the root. The decoded value is a construction
+tree, and a root whose every leaf is a scalar, the empty string, an empty
+list, or a list of copies of one construction lowers as that tree rather
+than as bytes, because static data is the wrong home for it: records,
+tuples, and tag payloads of such parts rebuild field by field, so an
+empty `Dict` or `Set`, which is a record of empty lists, never reaches the
+image either. An empty list lowers to the `with_capacity` it was evaluated
+with: a frozen descriptor's capacity word is its length, so the freezer
+keeps each empty list's evaluated capacity on the root's export, keyed by
+its byte offset within the image, and the runtime rebuilds the request so
+the first append goes in place. A list of copies of one construction,
+which is what `List.repeat` and any constant fill loop produce, lowers to
+that repeat loop again: a table of zeros is a few instructions at runtime
+and would otherwise be that many bytes in the binary, and a static list
+can never be born unique, which would lose the in-place writes of every
+loop the table is carried through. A non-empty list with spare capacity
+freezes to its items alone; only the capacity of an empty list
+survives. A build that restores its compile-time values from a checked
+module's const store rather than from a completed host program, as every
+build after the first does, reaches the same constructions: the const
+store keeps an empty list's evaluated capacity and restores it as the
+`with_capacity` call, and a restored value whose parts are all
+constructions lowers as them rather than as a static-data candidate.
+After the passes, which compact the slot table, the remaining
+aggregate slots are transcoded into the target's frozen image. The LLVM
 backend then defines each slot whose image is a link-time constant—bytes with
 address relocations as symbolic pointer fields—as an internal constant in the
 app module, and the readonly object binds every node globally so those
@@ -987,19 +1022,15 @@ only at an explicit language conversion between F32 and F64. Integer and Dec
 conversions to F32 must round directly to binary32 rather than converting to
 F64 first, so they cannot double-round.
 
-Floating-point evaluation has an explicit NaN mode. Ordinary runtime execution
-uses `preserve`, which permits the target's native f32 and f64 NaN sign, payload,
-and signaling-bit result. Any interpreter or backend used to execute a static
-initializer must instead use `normalize`. In that mode, every f32 or f64 value
-produced by an LIR assignment is canonicalized before it is bound to its local:
-all f32 NaNs become bits `0x7fc00000`, and all f64 NaNs become bits
-`0x7ff8000000000000`. This producer-side invariant includes results nested into
-later aggregates because aggregate construction consumes already-normalized
-locals. The `ConstStore` writer and target static-data materializer must freeze
-the value they receive and must not inspect, repair, or guess floating-point
-behavior. Consequently, the same checked initializer has byte-identical NaNs
-whether compile-time evaluation runs through the interpreter or native code,
-and regardless of the host used for cross-compilation.
+Floating-point evaluation keeps the target's native f32 and f64 NaN sign,
+payload, and signaling bit wherever it runs, including compile-time evaluation
+through the interpreter, native code, or an object-cache entry. Frozen data
+holds one NaN encoding instead: the `ConstStore` writer and the native
+static-data exporter rewrite every f32 NaN they store to bits `0x7fc00000` and
+every f64 NaN to bits `0x7ff8000000000000`, whatever bits the evaluation
+produced, and every other float value verbatim. Consequently, the same checked initializer has
+byte-identical NaNs whichever evaluator computed it and regardless of the host
+used for cross-compilation, and the evaluation itself pays nothing for it.
 
 Runtime NaNs need not have identical in-memory bits, but Roc code must not be
 able to distinguish their sign or payload. The float `to_bits` operations and
@@ -5009,7 +5040,7 @@ read is explicit. Every mutation plan requires disjoint statement roles before
 it changes the graph.
 
 Tag-case fusion inventories join identities once and shares monotonic fresh-ID
-allocation with its branch clones. Candidate-local region and binder facts
+allocation with its branch clones. Candidate-local region and binder inventories
 remain valid only until rewiring; variants are indexed by their explicit
 variant/discriminant pair in first-producer order. Fixed-point discovery still
 revisits surrounding joins after a rewrite, since a rejected ancestor can
@@ -9878,6 +9909,13 @@ Lambda Mono expression, pattern, or statement tree. The direct `.lss` LIR
 builder consumes the Lambda Solved lifted syntax together with Lambda Mono
 decision tables. `.boxy` does not construct Lambda Mono decisions.
 
+Exact specialization demand and shared LIR procedure-body scheduling are separate
+state. When distinct specializations have one procedure identity, a reference
+demands its exact specialization and queues the shared owner's body once. It
+does not demand the owner's specialization merely because that owner supplies
+the body. The debug materializer compares referenced specializations; sharing a
+procedure must not introduce additional specialization demands into that check.
+
 The Lambda Mono type store has no function type. Function values have already
 become ordinary value representations:
 
@@ -13207,18 +13245,18 @@ use (otherwise the callee holds a retained copy). The signature bits and
 rows settle to a fixpoint with the analysis, since a new row only adds
 edges. One settlement retains the immutable statement inventory, control-flow
 topology, and exact ordered-use answers while rebuilding signature-dependent
-lattice facts when their inputs change. Procedures sharing reachable statement
+lattice state when its inputs change. Procedures sharing reachable statement
 identities or ownership-relevant locals form one analysis component, preserving
-the base solver's combined definition and use semantics. Direct calls establish
+the base solver's combined definition and use constraints. Direct calls establish
 directed signature dependencies between components rather than merging a call
 graph into one ownership domain.
 
 Every component begins dirty. A dirty component is reseeded and solved against
 a frozen signature/return-row snapshot; independent components may run on
-workers with private compact domains and query state. The coordinator publishes
+workers with private compact domains and query state. The coordinator commits
 results in deterministic procedure order after the wave drains and dirties
-callers only when signature facts or return-row contents change. Moving an
-unchanged row to a different table offset is not a semantic change. Clean
+callers only when signature bits or return-row contents change. Moving an
+unchanged row to a different table offset does not change its contents. Clean
 component results remain valid while those inputs stay fixed; newly discovered
 return capabilities must not inherit a stale poisoned lattice verdict.
 
@@ -13587,6 +13625,13 @@ be an outer nominal or zero-discriminant tag wrapper only when the emitted
 certification derives that exact allocation identity from those explicit
 producer operations and rejects a call that would pass one allocation to the
 machine ABI while consuming another in ARC.
+
+The erased ABI's capture pointer addresses the interior of the callable passed
+as the reuse ownership input. LLVM must not mark either parameter `noalias`:
+capture reads and writes or releases through the owner can access the same
+allocation. The return destination can also alias reused storage. Backend
+alias attributes preserve these explicit ABI relationships and the ordering of
+the LIR memory operations; they do not change ownership policy.
 
 Destination-aware aggregate construction is required for the full benefit of
 box reuse. A record update or tag construction whose result is demanded in a

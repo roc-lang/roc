@@ -231,6 +231,12 @@ pub const BuiltinFn = enum {
         return symbol_names[@intFromEnum(self)];
     }
 
+    /// The builtin a linker symbol names, if any.
+    pub fn fromSymbolName(name: []const u8) ?BuiltinFn {
+        if (!std.mem.startsWith(u8, name, symbol_prefix)) return null;
+        return std.meta.stringToEnum(BuiltinFn, name[symbol_prefix.len..]);
+    }
+
     /// The wrapper function backing this builtin, typed per member.
     pub fn wrapper(comptime self: BuiltinFn) *const @TypeOf(@field(dev_wrappers, symbol_prefix ++ @tagName(self))) {
         return &@field(dev_wrappers, symbol_prefix ++ @tagName(self));

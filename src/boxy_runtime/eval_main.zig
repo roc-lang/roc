@@ -6,8 +6,11 @@
 const builtins = @import("builtins");
 const runtime = @import("main.zig");
 
-/// Configure the shared runtime root for evaluator-vtable host calls.
-pub const roc_host_call_mode: builtins.host_abi.HostCallMode = .vtable;
+/// The evaluator Wasm module reaches the host through the RocOps table its
+/// generated entrypoint installs, never through symbols defined here.
+pub const roc_host_role: builtins.host_abi.HostRole = .platform;
+/// Marks the evaluator flavor for the shared runtime root.
+pub const roc_boxy_runtime_evaluator = true;
 pub const roc_disable_tracy = runtime.roc_disable_tracy;
 pub const panic = runtime.panic;
 pub const std_options_elf_debug_info_search_paths = runtime.std_options_elf_debug_info_search_paths;

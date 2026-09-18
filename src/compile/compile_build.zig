@@ -27,6 +27,9 @@ pub const RuntimeLoweringConfig = struct {
     explicit_roots: ?lir.CheckedPipeline.RootRequestSet = null,
     root_module: ?*const check.CheckedArtifact.CheckedModuleArtifact = null,
     target: lir.CheckedPipeline.TargetConfig,
+    /// The object cache's artifacts, for the compile-time evaluator to
+    /// splice the entries `target.spec_cache` serves into its image.
+    splice_source: ?eval.CompileTimeFinalization.SpliceSource = null,
     include_provided_data_exports: bool = false,
     include_internal_static_data: bool = false,
 };

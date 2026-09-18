@@ -339,7 +339,6 @@ pub const Interpreter = struct {
     store: *const LirStore,
     layout_store: *const layout_mod.Store,
     helper: LayoutHelper,
-    float_nan_mode: builtins.float_bits.NanMode,
     dict_seed_mode: builtins.utils.DictSeedMode = .runtime,
     /// Arena for runtime-created descriptors whose identities can escape in a
     /// retained callable or host result and must survive later evaluations.
@@ -657,7 +656,6 @@ pub const Interpreter = struct {
             layout_store: *const layout_mod.Store,
             boxy_tables: BoxyTables,
             caller_roc_ops: *RocOps,
-            float_nan_mode: builtins.float_bits.NanMode,
             synchronization_io: std.Io,
         ) Allocator.Error!*Retained {
             const self = try allocator.create(Retained);
@@ -673,7 +671,6 @@ pub const Interpreter = struct {
                     layout_store,
                     boxy_tables,
                     caller_roc_ops,
-                    float_nan_mode,
                 ),
             };
             self.interpreter.retained_owner = self;
@@ -756,7 +753,6 @@ pub const Interpreter = struct {
         store: *const LirStore,
         layout_store: *const layout_mod.Store,
         caller_roc_ops: *RocOps,
-        float_nan_mode: builtins.float_bits.NanMode,
     ) Allocator.Error!LirInterpreter {
         return initWithBoxyTablesAndHostedCallHandler(
             allocator,
@@ -764,7 +760,6 @@ pub const Interpreter = struct {
             layout_store,
             .{},
             caller_roc_ops,
-            float_nan_mode,
             null,
         );
     }
@@ -775,7 +770,6 @@ pub const Interpreter = struct {
         layout_store: *const layout_mod.Store,
         boxy_tables: BoxyTables,
         caller_roc_ops: *RocOps,
-        float_nan_mode: builtins.float_bits.NanMode,
     ) Allocator.Error!LirInterpreter {
         return initWithBoxyTablesAndHostedCallHandler(
             allocator,
@@ -783,7 +777,6 @@ pub const Interpreter = struct {
             layout_store,
             boxy_tables,
             caller_roc_ops,
-            float_nan_mode,
             null,
         );
     }
@@ -796,7 +789,6 @@ pub const Interpreter = struct {
         store: *const LirStore,
         layout_store: *const layout_mod.Store,
         caller_roc_ops: *RocOps,
-        float_nan_mode: builtins.float_bits.NanMode,
         hosted_call_handler: ?HostedCallHandler,
     ) Allocator.Error!LirInterpreter {
         return initWithBoxyTablesAndHostedCallHandler(
@@ -805,7 +797,6 @@ pub const Interpreter = struct {
             layout_store,
             .{},
             caller_roc_ops,
-            float_nan_mode,
             hosted_call_handler,
         );
     }
@@ -818,7 +809,6 @@ pub const Interpreter = struct {
         layout_store: *const layout_mod.Store,
         boxy_tables: BoxyTables,
         caller_roc_ops: *RocOps,
-        float_nan_mode: builtins.float_bits.NanMode,
         hosted_call_handler: ?HostedCallHandler,
     ) Allocator.Error!LirInterpreter {
         const frame_plans = try buildFramePlans(allocator, store);
@@ -851,7 +841,6 @@ pub const Interpreter = struct {
             .store = store,
             .layout_store = layout_store,
             .helper = LayoutHelper.init(layout_store),
-            .float_nan_mode = float_nan_mode,
             .descriptor_arena = base.SingleThreadArena.init(allocator),
             .arena = base.SingleThreadArena.init(allocator),
             .roc_env = roc_env,
@@ -1658,7 +1647,6 @@ pub const Interpreter = struct {
         root_list_validation: DebugListValidation,
     ) Error!void {
         const layout_idx = self.store.getLocal(local_id).layout_idx;
-        const normalized_value = try self.normalizeFloatNanValue(value, layout_idx);
 
         if (builtin.mode == .Debug) {
             var visited = std.ArrayList(DebugVisitedValue).empty;
@@ -1667,7 +1655,7 @@ pub const Interpreter = struct {
                 frame.proc_id,
                 stmt_id,
                 local_id,
-                normalized_value,
+                value,
                 layout_idx,
                 &visited,
                 allow_zeroed_box_payload_holes,
@@ -1676,31 +1664,7 @@ pub const Interpreter = struct {
             );
         }
 
-        frame.setLocal(local_id, normalized_value);
-    }
-
-    fn normalizeFloatNanValue(self: *LirInterpreter, value: Value, layout_idx: layout_mod.Idx) Error!Value {
-        if (self.float_nan_mode == .preserve) return value;
-
-        if (layout_idx == .f32) {
-            const bits = value.read(u32);
-            const normalized = builtins.float_bits.normalizeF32NanBits(bits);
-            if (bits == normalized) return value;
-            const result = try self.alloc(layout_idx);
-            result.write(u32, normalized);
-            return result;
-        }
-
-        if (layout_idx == .f64) {
-            const bits = value.read(u64);
-            const normalized = builtins.float_bits.normalizeF64NanBits(bits);
-            if (bits == normalized) return value;
-            const result = try self.alloc(layout_idx);
-            result.write(u64, normalized);
-            return result;
-        }
-
-        return value;
+        frame.setLocal(local_id, value);
     }
 
     fn getLocalChecked(self: *LirInterpreter, frame: *const Frame, local_id: LocalId) Error!Value {
@@ -6623,12 +6587,13 @@ pub const Interpreter = struct {
                 if (sj != 0) return error.Crash;
                 var result: RocStr = undefined;
                 const roc_str = valueToRocStr(args[0]);
+                const entered = builtins.in_process_host.enter(&self.roc_ops, null);
+                defer builtins.in_process_host.leave(entered);
                 dev_wrappers.roc_builtins_str_escape_and_quote(
                     &result,
                     roc_str.bytes,
                     roc_str.length,
                     roc_str.capacity_or_alloc_ptr,
-                    &self.roc_ops,
                 );
                 break :blk self.rocStrToValue(result, ll.ret_layout);
             },
@@ -10195,23 +10160,13 @@ test "interpreter float NaN mode preserves runtime payloads and normalizes compi
         .frame_locals = try store.addLocalSpan(&.{f64_local}),
     });
 
-    const cases = [_]struct {
-        mode: builtins.float_bits.NanMode,
-        expected_f32: u32,
-        expected_f64: u64,
-    }{
-        .{ .mode = .preserve, .expected_f32 = 0xffc1_2345, .expected_f64 = 0xfff9_2345_6789_abcd },
-        .{ .mode = .normalize, .expected_f32 = builtins.float_bits.normalized_f32_nan_bits, .expected_f64 = builtins.float_bits.normalized_f64_nan_bits },
-    };
-    for (cases) |case| {
-        var interpreter = try Interpreter.init(allocator, &store, &layouts, runtime_env.get_ops(), case.mode);
-        defer interpreter.deinit();
+    var interpreter = try Interpreter.init(allocator, &store, &layouts, runtime_env.get_ops());
+    defer interpreter.deinit();
 
-        const f32_result = try interpreter.eval(.{ .proc_id = f32_proc, .ret_layout = .f32 });
-        try std.testing.expectEqual(case.expected_f32, f32_result.value.read(u32));
-        const f64_result = try interpreter.eval(.{ .proc_id = f64_proc, .ret_layout = .f64 });
-        try std.testing.expectEqual(case.expected_f64, f64_result.value.read(u64));
-    }
+    const f32_result = try interpreter.eval(.{ .proc_id = f32_proc, .ret_layout = .f32 });
+    try std.testing.expectEqual(@as(u32, 0xffc1_2345), f32_result.value.read(u32));
+    const f64_result = try interpreter.eval(.{ .proc_id = f64_proc, .ret_layout = .f64 });
+    try std.testing.expectEqual(@as(u64, 0xfff9_2345_6789_abcd), f64_result.value.read(u64));
 }
 
 test "interpreter evaluates explicit static data by compact id" {
@@ -10248,7 +10203,7 @@ test "interpreter evaluates explicit static data by compact id" {
         .frame_locals = frame_locals,
     });
 
-    var interpreter = try Interpreter.init(allocator, &store, &layouts, runtime_env.get_ops(), .preserve);
+    var interpreter = try Interpreter.init(allocator, &store, &layouts, runtime_env.get_ops());
     defer interpreter.deinit();
     interpreter.setStaticData(static_addresses.items, &.{});
 
