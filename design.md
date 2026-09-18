@@ -13158,10 +13158,27 @@ use (otherwise the callee holds a retained copy). The signature bits and
 rows settle to a fixpoint with the analysis, since a new row only adds
 edges. One settlement retains the immutable statement inventory, control-flow
 topology, and exact ordered-use answers while rebuilding signature-dependent
-lattice state each round. A consuming-use proof is reused only while its exact
+lattice state when its inputs change. Procedures sharing reachable statement
+identities or ownership-relevant locals form one analysis component, preserving
+the base solver's combined definition and use constraints. Direct calls establish
+directed signature dependencies between components rather than merging a call
+graph into one ownership domain.
+
+Every component begins dirty. A dirty component is reseeded and solved against
+a frozen signature/return-row snapshot; independent components may run on
+workers with private compact domains and query state. The coordinator commits
+results in deterministic procedure order after the wave drains and dirties
+callers only when signature bits or return-row contents change. Moving an
+unchanged row to a different table offset does not change its contents. Clean
+component results remain valid while those inputs stay fixed; newly discovered
+return capabilities must not inherit a stale poisoned lattice verdict.
+
+A consuming-use proof is reused only while its exact
 consumption inventory is unchanged; holder-adding uses remain
 signature-dependent. Committed takes still require their own settlement, and
-only the converged result outlives the reusable round scratch.
+every component starts that settlement dirty. Only the converged result
+outlives reusable analysis scratch. The whole-program analysis remains a test
+oracle, not a production replay or fallback.
 
 Positions whose seed would let a runtime check in the body go
 check-free form the proc's seed mask, which is what makes a call site

@@ -53,6 +53,7 @@ const core = @import("lir_core");
 const layout_mod = @import("layout");
 const arc_sig = @import("arc_sig.zig");
 const body_clone = @import("body_clone.zig");
+const task_executor = @import("base").post_check_task_executor;
 
 const LIR = core.LIR;
 const LirStore = core.LirStore;
@@ -70,8 +71,33 @@ pub var outcome_solver_iterations: u64 = 0;
 pub var outcome_scratch_entries: u64 = 0;
 
 // Deterministic work accounting for solver tests; compiled out of production.
-var uniqueness_topology_builds: usize = 0;
-var uniqueness_analysis_rounds: usize = 0;
+threadlocal var uniqueness_topology_builds: usize = 0;
+threadlocal var uniqueness_analysis_rounds: usize = 0;
+
+/// Exact work performed by uniqueness settlements, accumulated by the coordinator.
+pub const UniquenessMetrics = struct {
+    settlements: u64 = 0,
+    components: u64 = 0,
+    component_runs: u64 = 0,
+    task_submitted: u64 = 0,
+    task_committed: u64 = 0,
+    signature_waves: u64 = 0,
+    signature_changes: u64 = 0,
+    statement_visits: u64 = 0,
+    local_visits: u64 = 0,
+
+    pub fn add(self: *UniquenessMetrics, other: UniquenessMetrics) void {
+        inline for (std.meta.fields(UniquenessMetrics)) |field| {
+            @field(self, field.name) +|= @field(other, field.name);
+        }
+    }
+};
+
+/// A null executor uses the identical component solver on the calling thread.
+pub const UniquenessOptions = struct {
+    executor: ?*const task_executor.Executor = null,
+    metrics: ?*UniquenessMetrics = null,
+};
 
 const no_local: u32 = std.math.maxInt(u32);
 
@@ -703,6 +729,20 @@ pub fn solve(
     roots: []const LIR.LirProcSpecId,
     consume_dead_boxes: bool,
 ) SolveError!Solution {
+    return solveWithOptions(allocator, store, layouts, rc_local, boxy_rc_descs, roots, consume_dead_boxes, .{});
+}
+
+/// Solves ARC with optional component-parallel uniqueness execution.
+pub fn solveWithOptions(
+    allocator: Allocator,
+    store: *const LirStore,
+    layouts: *const layout_mod.Store,
+    rc_local: []const bool,
+    boxy_rc_descs: []const ?LIR.BoxyDescRef,
+    roots: []const LIR.LirProcSpecId,
+    consume_dead_boxes: bool,
+    options: UniquenessOptions,
+) SolveError!Solution {
     const local_count = store.localCount();
     const proc_count = store.procSpecCount();
     if (boxy_rc_descs.len != 0 and boxy_rc_descs.len != local_count) {
@@ -719,52 +759,38 @@ pub fn solve(
         .boxy_rc_descs = boxy_rc_descs,
         .consume_dead_boxes = consume_dead_boxes,
         .domain = &domain,
-        .sigs = try allocator.alloc(arc_sig.RcSig, proc_count),
-        .pinned = try std.bit_set.DynamicBitSetUnmanaged.initEmpty(allocator, proc_count),
-        .scc = try allocator.alloc(u32, proc_count),
-        .defs = try allocator.alloc(DefKind, arc_local_count),
-        .demand = try allocator.alloc(bool, arc_local_count),
-        .alias_source = try allocator.alloc(u32, arc_local_count),
-        .param_position = try allocator.alloc(u32, arc_local_count),
-        .param_proc = try allocator.alloc(u32, arc_local_count),
-        .join_param = try std.bit_set.DynamicBitSetUnmanaged.initEmpty(allocator, arc_local_count),
-        .maybe_uninitialized_join_param = try std.bit_set.DynamicBitSetUnmanaged.initEmpty(allocator, arc_local_count),
-        .maybe_uninitialized_condition = try allocator.alloc(u32, arc_local_count),
-        .maybe_uninitialized_condition_mask = try allocator.alloc(u64, arc_local_count),
+        .sigs = &.{},
+        .pinned = .{},
+        .scc = &.{},
+        .defs = &.{},
+        .demand = &.{},
+        .alias_source = &.{},
+        .param_position = &.{},
+        .param_proc = &.{},
+        .join_param = .{},
+        .maybe_uninitialized_join_param = .{},
+        .maybe_uninitialized_condition = &.{},
+        .maybe_uninitialized_condition_mask = &.{},
         .param_uses = .empty,
         .binding_facts = .empty,
         .visibility_facts = .empty,
         .unique_facts = .empty,
-        .address_taken = try std.bit_set.DynamicBitSetUnmanaged.initEmpty(allocator, proc_count),
-        .proc_stmts = try allocator.alloc(std.ArrayList(LIR.CFStmtId), proc_count),
-        .proc_returns = try allocator.alloc(std.ArrayList(u32), proc_count),
-        .proc_join_bodies = try allocator.alloc(std.ArrayList(JoinBody), proc_count),
-        .join_index_by_stmt = try allocator.alloc(u32, store.cfStmtCount()),
-        .jump_target_join_index_by_stmt = try allocator.alloc(u32, store.cfStmtCount()),
-        .jump_site_index_by_stmt = try allocator.alloc(u32, store.cfStmtCount()),
-        .switch_count_by_proc = try allocator.alloc(u32, proc_count),
-        .switch_index_by_stmt = try allocator.alloc(u32, store.cfStmtCount()),
+        .address_taken = .{},
+        .proc_stmts = &.{},
+        .proc_returns = &.{},
+        .proc_join_bodies = &.{},
+        .join_index_by_stmt = &.{},
+        .jump_target_join_index_by_stmt = &.{},
+        .jump_site_index_by_stmt = &.{},
+        .switch_count_by_proc = &.{},
+        .switch_index_by_stmt = &.{},
         .pending_jumps = .empty,
         .direct_calls = .empty,
         .unique_calls = .empty,
         .stack = std.ArrayList(LIR.CFStmtId).empty,
     };
-    @memset(solver.proc_stmts, .empty);
-    @memset(solver.proc_returns, .empty);
-    @memset(solver.proc_join_bodies, .empty);
-    @memset(solver.join_index_by_stmt, no_local);
-    @memset(solver.jump_target_join_index_by_stmt, no_local);
-    @memset(solver.jump_site_index_by_stmt, no_local);
-    @memset(solver.switch_count_by_proc, 0);
-    @memset(solver.switch_index_by_stmt, no_local);
-    var solver_sigs_kept = false;
-    var solver_join_indices_kept = false;
     defer {
-        if (solver_sigs_kept) {
-            // Ownership of proc-indexed solution tables moved into Solution.
-            solver.sigs = &.{};
-        }
-        if (!solver_sigs_kept) solver.pinned.deinit(allocator);
+        solver.pinned.deinit(allocator);
         allocator.free(solver.scc);
         allocator.free(solver.defs);
         allocator.free(solver.demand);
@@ -786,20 +812,49 @@ pub fn solve(
         allocator.free(solver.proc_returns);
         for (solver.proc_join_bodies) |*joins| joins.deinit(allocator);
         allocator.free(solver.proc_join_bodies);
-        if (!solver_join_indices_kept) {
-            allocator.free(solver.join_index_by_stmt);
-            allocator.free(solver.jump_target_join_index_by_stmt);
-            allocator.free(solver.jump_site_index_by_stmt);
-            allocator.free(solver.switch_count_by_proc);
-            allocator.free(solver.switch_index_by_stmt);
-        }
+        allocator.free(solver.join_index_by_stmt);
+        allocator.free(solver.jump_target_join_index_by_stmt);
+        allocator.free(solver.jump_site_index_by_stmt);
+        allocator.free(solver.switch_count_by_proc);
+        allocator.free(solver.switch_index_by_stmt);
         solver.pending_jumps.deinit(allocator);
         solver.direct_calls.deinit(allocator);
         solver.unique_calls.deinit(allocator);
         solver.stack.deinit(allocator);
-        if (!solver_sigs_kept) allocator.free(solver.sigs);
+        allocator.free(solver.sigs);
     }
 
+    // Register the sole owner before allocating, including partially built
+    // nested inventories. Moved result tables are reset to empty at handoff.
+    solver.sigs = try allocator.alloc(arc_sig.RcSig, proc_count);
+    solver.pinned = try std.bit_set.DynamicBitSetUnmanaged.initEmpty(allocator, proc_count);
+    solver.scc = try allocator.alloc(u32, proc_count);
+    solver.defs = try allocator.alloc(DefKind, arc_local_count);
+    solver.demand = try allocator.alloc(bool, arc_local_count);
+    solver.alias_source = try allocator.alloc(u32, arc_local_count);
+    solver.param_position = try allocator.alloc(u32, arc_local_count);
+    solver.param_proc = try allocator.alloc(u32, arc_local_count);
+    solver.join_param = try std.bit_set.DynamicBitSetUnmanaged.initEmpty(allocator, arc_local_count);
+    solver.maybe_uninitialized_join_param = try std.bit_set.DynamicBitSetUnmanaged.initEmpty(allocator, arc_local_count);
+    solver.maybe_uninitialized_condition = try allocator.alloc(u32, arc_local_count);
+    solver.maybe_uninitialized_condition_mask = try allocator.alloc(u64, arc_local_count);
+    solver.address_taken = try std.bit_set.DynamicBitSetUnmanaged.initEmpty(allocator, proc_count);
+    solver.proc_stmts = try allocator.alloc(std.ArrayList(LIR.CFStmtId), proc_count);
+    @memset(solver.proc_stmts, .empty);
+    solver.proc_returns = try allocator.alloc(std.ArrayList(u32), proc_count);
+    @memset(solver.proc_returns, .empty);
+    solver.proc_join_bodies = try allocator.alloc(std.ArrayList(JoinBody), proc_count);
+    @memset(solver.proc_join_bodies, .empty);
+    solver.join_index_by_stmt = try allocator.alloc(u32, store.cfStmtCount());
+    solver.jump_target_join_index_by_stmt = try allocator.alloc(u32, store.cfStmtCount());
+    solver.jump_site_index_by_stmt = try allocator.alloc(u32, store.cfStmtCount());
+    solver.switch_count_by_proc = try allocator.alloc(u32, proc_count);
+    solver.switch_index_by_stmt = try allocator.alloc(u32, store.cfStmtCount());
+    @memset(solver.join_index_by_stmt, no_local);
+    @memset(solver.jump_target_join_index_by_stmt, no_local);
+    @memset(solver.jump_site_index_by_stmt, no_local);
+    @memset(solver.switch_count_by_proc, 0);
+    @memset(solver.switch_index_by_stmt, no_local);
     @memset(solver.param_position, no_local);
     @memset(solver.param_proc, no_local);
     @memset(solver.maybe_uninitialized_condition, no_local);
@@ -880,182 +935,160 @@ pub fn solve(
         }
     }
 
-    var tail_call_table = try buildTailCallTable(&solver, &binding);
-    var tail_call_table_kept = false;
-    defer if (!tail_call_table_kept) tail_call_table.deinit(allocator);
+    // Allocation-level cleanup ends at this ownership-transfer boundary.
+    // Later failures are handled exclusively by Solution.deinit.
+    var solution = solution: {
+        var tail_call_table = try buildTailCallTable(&solver, &binding);
+        errdefer tail_call_table.deinit(allocator);
 
-    var visible = try computeVisibilityFromFacts(allocator, &solver);
-    errdefer visible.deinit(allocator);
-    if (builtin.mode == .Debug) {
-        var independently_visible = try computeVisibilityFromLift(allocator, store, rc_local, &solver.pinned, solver.proc_stmts, solver.proc_returns);
-        defer independently_visible.deinit(allocator);
-        if (!visible.eql(independently_visible)) solveInvariant("typed visibility facts disagreed with independent LIR analysis");
-    }
+        var visible = try computeVisibilityFromFacts(allocator, &solver);
+        errdefer visible.deinit(allocator);
+        if (builtin.mode == .Debug) {
+            var independently_visible = try computeVisibilityFromLift(allocator, store, rc_local, &solver.pinned, solver.proc_stmts, solver.proc_returns);
+            defer independently_visible.deinit(allocator);
+            if (!visible.eql(independently_visible)) solveInvariant("typed visibility facts disagreed with independent LIR analysis");
+        }
 
-    // Uniqueness is settled below against the solved signatures, once the
-    // solution's tables exist for the settle to fill.
-    var unique = try std.bit_set.DynamicBitSetUnmanaged.initEmpty(allocator, local_count);
-    errdefer unique.deinit(allocator);
-    var unique_destroyed = try std.bit_set.DynamicBitSetUnmanaged.initEmpty(allocator, local_count);
-    errdefer unique_destroyed.deinit(allocator);
-    var unique_born = try std.bit_set.DynamicBitSetUnmanaged.initEmpty(allocator, local_count);
-    errdefer unique_born.deinit(allocator);
-    const unique_conds = try allocator.alloc(arc_sig.ParamMask, local_count);
-    errdefer allocator.free(unique_conds);
-    @memset(unique_conds, 0);
-    const unique_seed_masks = try allocator.alloc(arc_sig.ParamMask, proc_count);
-    errdefer allocator.free(unique_seed_masks);
-    @memset(unique_seed_masks, 0);
-    const join_body_offsets = try allocator.alloc(u32, proc_count);
-    errdefer allocator.free(join_body_offsets);
-    const join_body_lens = try allocator.alloc(u32, proc_count);
-    errdefer allocator.free(join_body_lens);
-    var join_body_count: u32 = 0;
-    for (solver.proc_join_bodies, 0..) |joins, proc_index| {
-        join_body_offsets[proc_index] = join_body_count;
-        join_body_lens[proc_index] = @intCast(joins.items.len);
-        join_body_count += @intCast(joins.items.len);
-    }
-    const join_bodies = try allocator.alloc(JoinBody, join_body_count);
-    errdefer allocator.free(join_bodies);
-    for (solver.proc_join_bodies, 0..) |joins, proc_index| {
-        const start = join_body_offsets[proc_index];
-        @memcpy(join_bodies[start..][0..joins.items.len], joins.items);
-    }
+        // Uniqueness is settled below against the solved signatures, once the
+        // solution's tables exist for the settle to fill.
+        var unique = try std.bit_set.DynamicBitSetUnmanaged.initEmpty(allocator, local_count);
+        errdefer unique.deinit(allocator);
+        var unique_destroyed = try std.bit_set.DynamicBitSetUnmanaged.initEmpty(allocator, local_count);
+        errdefer unique_destroyed.deinit(allocator);
+        var unique_born = try std.bit_set.DynamicBitSetUnmanaged.initEmpty(allocator, local_count);
+        errdefer unique_born.deinit(allocator);
+        const unique_conds = try allocator.alloc(arc_sig.ParamMask, local_count);
+        errdefer allocator.free(unique_conds);
+        @memset(unique_conds, 0);
+        const unique_seed_masks = try allocator.alloc(arc_sig.ParamMask, proc_count);
+        errdefer allocator.free(unique_seed_masks);
+        @memset(unique_seed_masks, 0);
+        const join_body_offsets = try allocator.alloc(u32, proc_count);
+        errdefer allocator.free(join_body_offsets);
+        const join_body_lens = try allocator.alloc(u32, proc_count);
+        errdefer allocator.free(join_body_lens);
+        var join_body_count: u32 = 0;
+        for (solver.proc_join_bodies, 0..) |joins, proc_index| {
+            join_body_offsets[proc_index] = join_body_count;
+            join_body_lens[proc_index] = @intCast(joins.items.len);
+            join_body_count += @intCast(joins.items.len);
+        }
+        const join_bodies = try allocator.alloc(JoinBody, join_body_count);
+        errdefer allocator.free(join_bodies);
+        for (solver.proc_join_bodies, 0..) |joins, proc_index| {
+            const start = join_body_offsets[proc_index];
+            @memcpy(join_bodies[start..][0..joins.items.len], joins.items);
+        }
 
-    // Expand the dense ARC solution exactly once for LocalId-indexed stage
-    // consumers. Non-ARC locals are identity leaders with no ownership bits.
-    var borrowed = try std.bit_set.DynamicBitSetUnmanaged.initEmpty(allocator, local_count);
-    errdefer borrowed.deinit(allocator);
-    var borrowed_call_result = try std.bit_set.DynamicBitSetUnmanaged.initEmpty(allocator, local_count);
-    errdefer borrowed_call_result.deinit(allocator);
-    var representation_alias = try std.bit_set.DynamicBitSetUnmanaged.initEmpty(allocator, local_count);
-    errdefer representation_alias.deinit(allocator);
-    const leader = try allocator.alloc(u32, local_count);
-    errdefer allocator.free(leader);
-    const alias_source = try allocator.alloc(u32, local_count);
-    errdefer allocator.free(alias_source);
-    const borrow_source = try allocator.alloc(u32, local_count);
-    errdefer allocator.free(borrow_source);
-    const maybe_uninitialized_condition = try allocator.alloc(u32, local_count);
-    errdefer allocator.free(maybe_uninitialized_condition);
-    const maybe_uninitialized_condition_mask = try allocator.alloc(u64, local_count);
-    errdefer allocator.free(maybe_uninitialized_condition_mask);
-    var join_param = try std.bit_set.DynamicBitSetUnmanaged.initEmpty(allocator, local_count);
-    errdefer join_param.deinit(allocator);
-    var maybe_uninitialized_join_param = try std.bit_set.DynamicBitSetUnmanaged.initEmpty(allocator, local_count);
-    errdefer maybe_uninitialized_join_param.deinit(allocator);
-    for (leader, 0..) |*entry, index| entry.* = @intCast(index);
-    @memset(alias_source, no_local);
-    @memset(borrow_source, no_local);
-    @memset(maybe_uninitialized_condition, no_local);
-    @memset(maybe_uninitialized_condition_mask, 0);
-    for (domain.arc_to_local, 0..) |local_index, arc_index| {
-        if (binding.borrowed.isSet(arc_index)) {
-            borrowed.set(local_index);
-            switch (solver.defs[arc_index]) {
-                .borrow_capable => |lender| borrow_source[local_index] = domain.localAt(lender),
-                .none, .multi, .fresh => {},
+        // Expand the dense ARC solution exactly once for LocalId-indexed stage
+        // consumers. Non-ARC locals are identity leaders with no ownership bits.
+        var borrowed = try std.bit_set.DynamicBitSetUnmanaged.initEmpty(allocator, local_count);
+        errdefer borrowed.deinit(allocator);
+        var borrowed_call_result = try std.bit_set.DynamicBitSetUnmanaged.initEmpty(allocator, local_count);
+        errdefer borrowed_call_result.deinit(allocator);
+        var representation_alias = try std.bit_set.DynamicBitSetUnmanaged.initEmpty(allocator, local_count);
+        errdefer representation_alias.deinit(allocator);
+        const leader = try allocator.alloc(u32, local_count);
+        errdefer allocator.free(leader);
+        const alias_source = try allocator.alloc(u32, local_count);
+        errdefer allocator.free(alias_source);
+        const borrow_source = try allocator.alloc(u32, local_count);
+        errdefer allocator.free(borrow_source);
+        const maybe_uninitialized_condition = try allocator.alloc(u32, local_count);
+        errdefer allocator.free(maybe_uninitialized_condition);
+        const maybe_uninitialized_condition_mask = try allocator.alloc(u64, local_count);
+        errdefer allocator.free(maybe_uninitialized_condition_mask);
+        var join_param = try std.bit_set.DynamicBitSetUnmanaged.initEmpty(allocator, local_count);
+        errdefer join_param.deinit(allocator);
+        var maybe_uninitialized_join_param = try std.bit_set.DynamicBitSetUnmanaged.initEmpty(allocator, local_count);
+        errdefer maybe_uninitialized_join_param.deinit(allocator);
+        for (leader, 0..) |*entry, index| entry.* = @intCast(index);
+        @memset(alias_source, no_local);
+        @memset(borrow_source, no_local);
+        @memset(maybe_uninitialized_condition, no_local);
+        @memset(maybe_uninitialized_condition_mask, 0);
+        for (domain.arc_to_local, 0..) |local_index, arc_index| {
+            if (binding.borrowed.isSet(arc_index)) {
+                borrowed.set(local_index);
+                switch (solver.defs[arc_index]) {
+                    .borrow_capable => |lender| borrow_source[local_index] = domain.localAt(lender),
+                    .none, .multi, .fresh => {},
+                }
+            }
+            leader[local_index] = domain.localAt(binding.leader[arc_index]);
+            if (representation_aliases.isSet(arc_index)) {
+                representation_alias.set(local_index);
+                borrowed.set(local_index);
+                leader[local_index] = local_index;
+                borrow_source[local_index] = no_local;
+            }
+            const source = solver.alias_source[arc_index];
+            if (source != no_local) alias_source[local_index] = domain.localAt(source);
+            if (solver.join_param.isSet(arc_index)) join_param.set(local_index);
+            if (solver.maybe_uninitialized_join_param.isSet(arc_index)) {
+                maybe_uninitialized_join_param.set(local_index);
+                maybe_uninitialized_condition[local_index] = solver.maybe_uninitialized_condition[arc_index];
+                maybe_uninitialized_condition_mask[local_index] = solver.maybe_uninitialized_condition_mask[arc_index];
             }
         }
-        leader[local_index] = domain.localAt(binding.leader[arc_index]);
-        if (representation_aliases.isSet(arc_index)) {
-            representation_alias.set(local_index);
-            borrowed.set(local_index);
-            leader[local_index] = local_index;
-            borrow_source[local_index] = no_local;
+        for (solver.unique_calls.items) |call| {
+            const target = domain.indexOf(call.target) orelse continue;
+            if (binding.borrowed.isSet(target)) borrowed_call_result.set(@intFromEnum(call.target));
         }
-        const source = solver.alias_source[arc_index];
-        if (source != no_local) alias_source[local_index] = domain.localAt(source);
-        if (solver.join_param.isSet(arc_index)) join_param.set(local_index);
-        if (solver.maybe_uninitialized_join_param.isSet(arc_index)) {
-            maybe_uninitialized_join_param.set(local_index);
-            maybe_uninitialized_condition[local_index] = solver.maybe_uninitialized_condition[arc_index];
-            maybe_uninitialized_condition_mask[local_index] = solver.maybe_uninitialized_condition_mask[arc_index];
-        }
-    }
-    for (solver.unique_calls.items) |call| {
-        const target = domain.indexOf(call.target) orelse continue;
-        if (binding.borrowed.isSet(target)) borrowed_call_result.set(@intFromEnum(call.target));
-    }
 
-    var solution = Solution{
-        .allocator = allocator,
-        .borrowed = borrowed,
-        .borrowed_call_result = borrowed_call_result,
-        .representation_alias = representation_alias,
-        .leader = leader,
-        .alias_source = alias_source,
-        .borrow_source = borrow_source,
-        .sigs = solver.sigs,
-        .outcomes = &.{},
-        .available_outcome_spans = try allocator.alloc(arc_sig.OutcomeSpan, proc_count),
-        .restitution_params_by_stmt = try allocator.alloc(arc_sig.ParamMask, store.cfStmtCount()),
-        .unique_seed_masks = unique_seed_masks,
-        .tail_call_offsets = tail_call_table.offsets,
-        .tail_call_lens = tail_call_table.lens,
-        .tail_calls = tail_call_table.facts,
-        .join_body_offsets = join_body_offsets,
-        .join_body_lens = join_body_lens,
-        .join_bodies = join_bodies,
-        .join_index_by_stmt = solver.join_index_by_stmt,
-        .jump_target_join_index_by_stmt = solver.jump_target_join_index_by_stmt,
-        .jump_site_index_by_stmt = solver.jump_site_index_by_stmt,
-        .switch_count_by_proc = solver.switch_count_by_proc,
-        .switch_index_by_stmt = solver.switch_index_by_stmt,
-        .join_param = join_param,
-        .maybe_uninitialized_join_param = maybe_uninitialized_join_param,
-        .maybe_uninitialized_condition = maybe_uninitialized_condition,
-        .maybe_uninitialized_condition_mask = maybe_uninitialized_condition_mask,
-        .visible = visible,
-        .unique = unique,
-        .unique_destroyed = unique_destroyed,
-        .unique_born = unique_born,
-        .unique_conds = unique_conds,
-        .ret_conditions = &.{},
-        .pinned = solver.pinned,
+        const available_outcome_spans = try allocator.alloc(arc_sig.OutcomeSpan, proc_count);
+        errdefer allocator.free(available_outcome_spans);
+        const restitution_params_by_stmt = try allocator.alloc(arc_sig.ParamMask, store.cfStmtCount());
+        errdefer allocator.free(restitution_params_by_stmt);
+        @memset(restitution_params_by_stmt, 0);
+        @memset(available_outcome_spans, .empty);
+        break :solution Solution{
+            .allocator = allocator,
+            .borrowed = borrowed,
+            .borrowed_call_result = borrowed_call_result,
+            .representation_alias = representation_alias,
+            .leader = leader,
+            .alias_source = alias_source,
+            .borrow_source = borrow_source,
+            .sigs = solver.sigs,
+            .outcomes = &.{},
+            .available_outcome_spans = available_outcome_spans,
+            .restitution_params_by_stmt = restitution_params_by_stmt,
+            .unique_seed_masks = unique_seed_masks,
+            .tail_call_offsets = tail_call_table.offsets,
+            .tail_call_lens = tail_call_table.lens,
+            .tail_calls = tail_call_table.facts,
+            .join_body_offsets = join_body_offsets,
+            .join_body_lens = join_body_lens,
+            .join_bodies = join_bodies,
+            .join_index_by_stmt = solver.join_index_by_stmt,
+            .jump_target_join_index_by_stmt = solver.jump_target_join_index_by_stmt,
+            .jump_site_index_by_stmt = solver.jump_site_index_by_stmt,
+            .switch_count_by_proc = solver.switch_count_by_proc,
+            .switch_index_by_stmt = solver.switch_index_by_stmt,
+            .join_param = join_param,
+            .maybe_uninitialized_join_param = maybe_uninitialized_join_param,
+            .maybe_uninitialized_condition = maybe_uninitialized_condition,
+            .maybe_uninitialized_condition_mask = maybe_uninitialized_condition_mask,
+            .visible = visible,
+            .unique = unique,
+            .unique_destroyed = unique_destroyed,
+            .unique_born = unique_born,
+            .unique_conds = unique_conds,
+            .ret_conditions = &.{},
+            .pinned = solver.pinned,
+        };
     };
-    @memset(solution.restitution_params_by_stmt, 0);
-    @memset(solution.available_outcome_spans, .empty);
-    solver_sigs_kept = true;
-    solver_join_indices_kept = true;
-    tail_call_table_kept = true;
-    errdefer {
-        solution.borrowed.deinit(allocator);
-        solution.borrowed_call_result.deinit(allocator);
-        allocator.free(solution.leader);
-        allocator.free(solution.alias_source);
-        allocator.free(solution.borrow_source);
-        allocator.free(solution.sigs);
-        allocator.free(solution.outcomes);
-        allocator.free(solution.available_outcome_spans);
-        allocator.free(solution.restitution_params_by_stmt);
-        allocator.free(solution.unique_seed_masks);
-        allocator.free(solution.tail_call_offsets);
-        allocator.free(solution.tail_call_lens);
-        allocator.free(solution.tail_calls);
-        allocator.free(solution.join_body_offsets);
-        allocator.free(solution.join_body_lens);
-        allocator.free(solution.join_bodies);
-        allocator.free(solution.join_index_by_stmt);
-        allocator.free(solution.jump_target_join_index_by_stmt);
-        allocator.free(solution.jump_site_index_by_stmt);
-        allocator.free(solution.switch_count_by_proc);
-        allocator.free(solution.switch_index_by_stmt);
-        solution.join_param.deinit(allocator);
-        solution.maybe_uninitialized_join_param.deinit(allocator);
-        allocator.free(solution.maybe_uninitialized_condition);
-        allocator.free(solution.maybe_uninitialized_condition_mask);
-        solution.visible.deinit(allocator);
-        solution.unique.deinit(allocator);
-        solution.unique_destroyed.deinit(allocator);
-        solution.unique_born.deinit(allocator);
-        allocator.free(solution.unique_conds);
-        allocator.free(solution.ret_conditions);
-        solution.pinned.deinit(allocator);
-    }
+    solver.sigs = &.{};
+    solver.pinned = .{};
+    solver.join_index_by_stmt = &.{};
+    solver.jump_target_join_index_by_stmt = &.{};
+    solver.jump_site_index_by_stmt = &.{};
+    solver.switch_count_by_proc = &.{};
+    solver.switch_index_by_stmt = &.{};
+    errdefer solution.deinit();
 
-    try settleUniqueness(allocator, store, layouts, rc_local, &solution, .none, consume_dead_boxes);
+    try settleUniquenessWithOptions(allocator, store, layouts, rc_local, &solution, .none, consume_dead_boxes, options);
     try computeOutcomeRestitution(allocator, store, layouts, rc_local, consume_dead_boxes, &solution, solver.proc_stmts);
 
     return solution;
@@ -3922,19 +3955,14 @@ const ConsumeAt = struct {
 /// variants sharing a body resolve its jumps to the same joins.
 const UseOrder = struct {
     allocator: Allocator,
-    store: *const LirStore,
-    /// Statements reading each local, and statements defining each local.
-    reads_of: Rows,
-    defs_of: Rows,
-    /// The join statement each jump targets, or `no_local`.
-    jump_join: []u32,
-    /// Predecessors of each statement over the edges `forEachSuccessor`
-    /// enumerates, so a query marks backward from a local's uses once and
-    /// answers every edge of that local in constant time.
-    preds: Rows,
-    /// Statements whose successors cannot be resolved (loop boundaries and
-    /// jumps outside the inventory); everything after them counts as used.
-    unresolved: std.bit_set.DynamicBitSetUnmanaged,
+    topology: Topology,
+    /// Component views borrow immutable CSR topology and own only compact marks.
+    component: ?struct {
+        stmt_to_dense: []const u32,
+        stmt_owner: []const u32,
+        id: u32,
+        unresolved: []const u32,
+    } = null,
     /// Generation stamps: a statement is marked for the current local when
     /// its stamp equals `generation`.
     mark_gen: []u32,
@@ -3950,6 +3978,29 @@ const UseOrder = struct {
     backward_visits: usize = 0,
 
     const UseQuery = struct { stmt: LIR.CFStmtId, local: LIR.LocalId };
+
+    /// Immutable store-wide CSR and control-flow topology. Component orders
+    /// borrow these slices; all marking and query-cache state lives separately.
+    const Topology = struct {
+        store: *const LirStore,
+        /// Statements reading and defining each local.
+        reads_of: Rows,
+        defs_of: Rows,
+        /// The join statement each jump targets, or `no_local`.
+        jump_join: []u32,
+        /// Reverse edges of `forEachSuccessor`.
+        preds: Rows,
+        /// Unknown successors conservatively count as used.
+        unresolved: std.bit_set.DynamicBitSetUnmanaged,
+
+        fn deinit(self: *@This(), allocator: Allocator) void {
+            self.reads_of.deinit(allocator);
+            self.defs_of.deinit(allocator);
+            self.preds.deinit(allocator);
+            self.unresolved.deinit(allocator);
+            allocator.free(self.jump_join);
+        }
+    };
 
     /// CSR rows of statement ids per key, each row sorted.
     const Rows = struct {
@@ -3974,15 +4025,27 @@ const UseOrder = struct {
     const RowKind = enum { reads, defs };
 
     fn init(allocator: Allocator, store: *const LirStore, lists: []const []const LIR.CFStmtId) SolveError!UseOrder {
+        var topology = try initTopology(allocator, store, lists);
+        errdefer topology.deinit(allocator);
+        const mark_gen = try allocator.alloc(u32, store.cfStmtCount());
+        @memset(mark_gen, 0);
+        return .{
+            .allocator = allocator,
+            .topology = topology,
+            .mark_gen = mark_gen,
+            .generation = 0,
+            .marked_local = no_local,
+            .marked_uses = false,
+            .work = .empty,
+        };
+    }
+
+    fn initTopology(allocator: Allocator, store: *const LirStore, lists: []const []const LIR.CFStmtId) SolveError!Topology {
         if (builtin.is_test) uniqueness_topology_builds += 1;
         const stmt_count = store.cfStmtCount();
         const jump_join = try allocator.alloc(u32, stmt_count);
         errdefer allocator.free(jump_join);
         @memset(jump_join, no_local);
-        const mark_gen = try allocator.alloc(u32, stmt_count);
-        errdefer allocator.free(mark_gen);
-        @memset(mark_gen, 0);
-
         var joins = collections.DenseMap(LIR.JoinPointId, u32).init(allocator);
         defer joins.deinit();
         for (lists) |list| {
@@ -4010,18 +4073,12 @@ const UseOrder = struct {
         var preds = try buildPreds(allocator, store, lists, jump_join, &unresolved);
         errdefer preds.deinit(allocator);
         return .{
-            .allocator = allocator,
             .store = store,
             .reads_of = reads_of,
             .defs_of = defs_of,
             .jump_join = jump_join,
             .preds = preds,
             .unresolved = unresolved,
-            .mark_gen = mark_gen,
-            .generation = 0,
-            .marked_local = no_local,
-            .marked_uses = false,
-            .work = .empty,
         };
     }
 
@@ -4238,13 +4295,17 @@ const UseOrder = struct {
     }
 
     fn deinit(self: *UseOrder) void {
-        self.reads_of.deinit(self.allocator);
-        self.defs_of.deinit(self.allocator);
-        self.preds.deinit(self.allocator);
-        self.unresolved.deinit(self.allocator);
-        self.allocator.free(self.jump_join);
+        if (self.component == null) self.topology.deinit(self.allocator);
         self.allocator.free(self.mark_gen);
         self.work.deinit(self.allocator);
+    }
+
+    fn markIndex(self: *const UseOrder, stmt: u32) u32 {
+        if (self.component) |component| {
+            std.debug.assert(component.stmt_owner[stmt] == component.id);
+            return component.stmt_to_dense[stmt];
+        }
+        return stmt;
     }
 
     fn contains(row: []const u32, stmt: u32) bool {
@@ -4259,11 +4320,11 @@ const UseOrder = struct {
     }
 
     fn reads(self: *const UseOrder, stmt: u32, local: LIR.LocalId) bool {
-        return contains(self.reads_of.row(local), stmt);
+        return contains(self.topology.reads_of.row(local), stmt);
     }
 
     fn defines(self: *const UseOrder, stmt: u32, local: LIR.LocalId) bool {
-        return contains(self.defs_of.row(local), stmt);
+        return contains(self.topology.defs_of.row(local), stmt);
     }
 
     /// Whether another use of `local` can execute after the use at `from`
@@ -4273,7 +4334,7 @@ const UseOrder = struct {
         const key: UseQuery = .{ .stmt = @enumFromInt(from), .local = local };
         if (self.use_answers) |answers| if (answers.get(key)) |answer| return answer;
         if (self.marked_local != @intFromEnum(local) or !self.marked_uses) {
-            try self.markFrom(local, self.reads_of.row(local));
+            try self.markFrom(local, self.topology.reads_of.row(local));
             self.marked_local = @intFromEnum(local);
             self.marked_uses = true;
         }
@@ -4292,7 +4353,7 @@ const UseOrder = struct {
 
     /// Whether a marked statement can execute after `stmt`.
     fn after(self: *const UseOrder, stmt: u32, local: LIR.LocalId) bool {
-        if (self.unresolved.isSet(stmt)) return true;
+        if (self.topology.unresolved.isSet(stmt)) return true;
         const Probe = struct {
             order: *const UseOrder,
             stmt: u32,
@@ -4300,11 +4361,11 @@ const UseOrder = struct {
             hit: bool,
             fn note(self_probe: *@This(), succ: u32) void {
                 if (self_probe.order.cutEdge(self_probe.stmt, succ, self_probe.local)) return;
-                if (self_probe.order.mark_gen[succ] == self_probe.order.generation) self_probe.hit = true;
+                if (self_probe.order.mark_gen[self_probe.order.markIndex(succ)] == self_probe.order.generation) self_probe.hit = true;
             }
         };
         var probe = Probe{ .order = self, .stmt = stmt, .local = local, .hit = false };
-        _ = forEachSuccessor(self.store, self.jump_join, stmt, &probe, Probe.note);
+        _ = forEachSuccessor(self.topology.store, self.topology.jump_join, stmt, &probe, Probe.note);
         return probe.hit;
     }
 
@@ -4319,12 +4380,16 @@ const UseOrder = struct {
         }
         self.work.clearRetainingCapacity();
         for (initial) |stmt| try self.mark(stmt);
-        var unresolved_iter = self.unresolved.iterator(.{});
-        while (unresolved_iter.next()) |stmt| try self.mark(@intCast(stmt));
+        if (self.component) |component| {
+            for (component.unresolved) |stmt| try self.mark(stmt);
+        } else {
+            var unresolved_iter = self.topology.unresolved.iterator(.{});
+            while (unresolved_iter.next()) |stmt| try self.mark(@intCast(stmt));
+        }
         while (self.work.pop()) |stmt| {
             if (builtin.is_test) self.backward_visits += 1;
-            for (self.preds.rowAt(stmt)) |pred| {
-                if (self.mark_gen[pred] == self.generation) continue;
+            for (self.topology.preds.rowAt(stmt)) |pred| {
+                if (self.mark_gen[self.markIndex(pred)] == self.generation) continue;
                 if (self.cutEdge(pred, stmt, local)) continue;
                 if (self.defines(pred, local)) continue;
                 try self.mark(pred);
@@ -4333,21 +4398,22 @@ const UseOrder = struct {
     }
 
     fn mark(self: *UseOrder, stmt: u32) SolveError!void {
-        if (self.mark_gen[stmt] == self.generation) return;
-        self.mark_gen[stmt] = self.generation;
+        const index = self.markIndex(stmt);
+        if (self.mark_gen[index] == self.generation) return;
+        self.mark_gen[index] = self.generation;
         try self.work.append(self.allocator, stmt);
     }
 
     /// A jump into a join that declares `local` as a parameter redefines
     /// it, so that edge carries no use of the previous value.
     fn cutEdge(self: *const UseOrder, from: u32, to: u32, local: LIR.LocalId) bool {
-        const node = self.store.getCFStmt(@enumFromInt(from));
+        const node = self.topology.store.getCFStmt(@enumFromInt(from));
         if (node != .jump) return false;
-        const join_stmt = self.jump_join[from];
+        const join_stmt = self.topology.jump_join[from];
         if (join_stmt == no_local) return false;
-        const join = self.store.getCFStmt(@enumFromInt(join_stmt)).join;
+        const join = self.topology.store.getCFStmt(@enumFromInt(join_stmt)).join;
         if (@intFromEnum(join.body) != to) return false;
-        const params = self.store.getLocalSpan(join.params);
+        const params = self.topology.store.getLocalSpan(join.params);
         for (0..GuardedList.borrowLen(params)) |index| {
             if (GuardedList.at(params, index) == local) return true;
         }
@@ -4912,11 +4978,18 @@ pub fn computeUniqueness(
 const ProcUniquenessDomain = struct {
     local_to_dense: []const u32,
     count: usize,
+    locals: ?[]const u32 = null,
+    procs: ?[]const u32 = null,
+    owners: ?[]const u32 = null,
+    component: u32 = 0,
 
     fn indexOf(self: ProcUniquenessDomain, local: LIR.LocalId) ?u32 {
         const raw = @intFromEnum(local);
         if (raw >= self.local_to_dense.len) return null;
         const dense = self.local_to_dense[raw];
+        if (dense != no_local) if (self.owners) |owners| {
+            std.debug.assert(owners[raw] == self.component);
+        };
         return if (dense == no_local) null else dense;
     }
 };
@@ -5040,6 +5113,475 @@ pub fn settleUniqueness(
     takes: TakeSource,
     consume_dead_boxes: bool,
 ) SolveError!void {
+    return settleUniquenessWithOptions(allocator, store, layouts, rc_local, solution, takes, consume_dead_boxes, .{});
+}
+
+/// Ownership components, unlike call SCCs, contain every procedure which can
+/// affect the same base-analysis local or statement. Calls only invalidate.
+const UniquenessComponent = struct {
+    procs: std.ArrayList(u32) = .empty,
+    locals: std.ArrayList(u32) = .empty,
+    stmts: std.ArrayList(LIR.CFStmtId) = .empty,
+    unresolved: std.ArrayList(u32) = .empty,
+    result: ?*UniquenessComponentResult = null,
+};
+
+const UniquenessProcUpdate = struct {
+    sig: arc_sig.RcSig,
+    rows: []const arc_sig.RetCondition,
+    seeds: arc_sig.ParamMask,
+};
+
+/// A result's arena belongs to the allocator of the executing worker, never
+/// its scratch allocator. Clean components retain these exact verdicts.
+const UniquenessComponentResult = struct {
+    allocator: Allocator,
+    arena: std.heap.ArenaAllocator,
+    workspace: UniquenessWorkspace,
+    uniqueness: Uniqueness,
+    updates: []UniquenessProcUpdate,
+
+    fn deinit(self: *@This()) void {
+        const allocator = self.allocator;
+        self.workspace.scratch.deinit();
+        self.arena.deinit();
+        allocator.destroy(self);
+    }
+};
+
+const UniquenessComponentTask = struct {
+    store: *const LirStore,
+    layouts: *const layout_mod.Store,
+    rc_local: []const bool,
+    solution: *const Solution,
+    takes: TakeSource,
+    consume_dead_boxes: bool,
+    component: *UniquenessComponent,
+    domain: ProcUniquenessDomain,
+    topology: *const UseOrder.Topology,
+    stmt_to_dense: []const u32,
+    stmt_owner: []const u32,
+    proc_stmts: []const std.ArrayList(LIR.CFStmtId),
+    returns: []const std.ArrayList(LIR.LocalId),
+    failed: bool = false,
+    completed: bool = false,
+    analysis_started: bool = false,
+
+    fn run(context: *anyopaque, worker: task_executor.Worker) ?*anyopaque {
+        const self: *@This() = @ptrCast(@alignCast(context));
+        self.execute(worker.allocator) catch {
+            self.failed = true;
+        };
+        return self;
+    }
+
+    fn countWork(self: *const @This(), metrics: *UniquenessMetrics) void {
+        if (!self.analysis_started) return;
+        metrics.component_runs += 1;
+        metrics.statement_visits += @intCast(self.component.stmts.items.len);
+        metrics.local_visits += @intCast(self.component.locals.items.len);
+    }
+
+    fn execute(self: *@This(), allocator: Allocator) SolveError!void {
+        const result = self.component.result orelse create: {
+            const owner = try allocator.create(UniquenessComponentResult);
+            errdefer allocator.destroy(owner);
+            owner.* = .{
+                .allocator = allocator,
+                .arena = std.heap.ArenaAllocator.init(allocator),
+                .workspace = undefined,
+                .uniqueness = undefined,
+                .updates = undefined,
+            };
+            errdefer owner.arena.deinit();
+            const persistent = owner.arena.allocator();
+            const order = UseOrder{
+                .allocator = persistent,
+                .topology = self.topology.*,
+                .component = .{
+                    .stmt_to_dense = self.stmt_to_dense,
+                    .stmt_owner = self.stmt_owner,
+                    .id = self.domain.component,
+                    .unresolved = self.component.unresolved.items,
+                },
+                .mark_gen = try persistent.alloc(u32, self.component.stmts.items.len),
+                .generation = 0,
+                .marked_local = no_local,
+                .marked_uses = false,
+                .work = .empty,
+            };
+            @memset(order.mark_gen, 0);
+            owner.workspace = .{
+                .allocator = persistent,
+                .stmts = self.component.stmts.items,
+                .order = order,
+                .use_answers = std.AutoHashMap(UseOrder.UseQuery, bool).init(persistent),
+                .scratch = std.heap.ArenaAllocator.init(allocator),
+            };
+            owner.workspace.order.use_answers = &owner.workspace.use_answers;
+            self.component.result = owner;
+            break :create owner;
+        };
+        // Cached topology queries survive; no prior lattice fact survives.
+        _ = result.workspace.scratch.reset(.retain_capacity);
+        const arena = result.workspace.scratch.allocator();
+        self.analysis_started = true;
+        result.uniqueness = try computeUniquenessDetailed(
+            arena,
+            self.store,
+            self.rc_local,
+            self.solution.sigTable(),
+            null,
+            null,
+            self.component.stmts.items,
+            self.domain,
+            self.consume_dead_boxes,
+            self.layouts,
+            self.takes,
+            &self.solution.borrowed,
+            &result.workspace,
+        );
+        result.updates = try arena.alloc(UniquenessProcUpdate, self.component.procs.items.len);
+        for (self.component.procs.items, result.updates) |proc, *update| {
+            update.* = try self.derive(arena, proc, result.uniqueness);
+        }
+    }
+
+    /// This is the base signature derivation, not the emitted-proc certifier.
+    /// Unconditional capabilities accumulate; conditional rows are recomputed.
+    fn derive(self: *const @This(), allocator: Allocator, proc_index: u32, uniqueness: Uniqueness) SolveError!UniquenessProcUpdate {
+        var sig = self.solution.sigs[proc_index];
+        var rows = std.ArrayList(arc_sig.RetCondition).empty;
+        const pinned = self.solution.pinned.isSet(proc_index);
+        if (!pinned) {
+            const proc = self.store.getProcSpec(@enumFromInt(proc_index));
+            const params = self.store.getLocalSpan(proc.args);
+            var read_only: arc_sig.ParamMask = 0;
+            for (0..@min(GuardedList.borrowLen(params), arc_sig.tracked_param_count)) |position| {
+                if (sig.paramMode(position) != .borrowed) continue;
+                const dense = self.domain.indexOf(GuardedList.at(params, position)) orelse continue;
+                if (uniqueness.destroyed.isSet(dense) or uniqueness.consumed.isSet(dense)) continue;
+                read_only |= arc_sig.paramBit(position).?;
+            }
+            sig.read_only_params = read_only;
+        }
+        const returns = self.returns[proc_index].items;
+        if (!pinned and returns.len != 0) {
+            var all_born = true;
+            var whole_params: arc_sig.ParamMask = 0;
+            var fields: u64 = std.math.maxInt(u64);
+            var field_params: [64]arc_sig.ParamMask = @splat(0);
+            for (returns) |local| {
+                const dense = self.domain.indexOf(local) orelse {
+                    all_born = false;
+                    fields = 0;
+                    break;
+                };
+                if (!uniqueness.born_unique.isSet(dense) or uniqueness.destroyed.isSet(dense)) {
+                    all_born = false;
+                } else {
+                    whole_params |= uniqueness.conds[dense];
+                }
+                fields &= uniqueness.field_masks[dense];
+                var born_fields = std.bit_set.IntegerBitSet(64){ .mask = uniqueness.field_masks[dense] };
+                var iter = born_fields.iterator(.{});
+                while (iter.next()) |field| field_params[field] |= uniqueness.field_conds.get(dense, @intCast(field));
+            }
+            if (all_born) {
+                if (whole_params == 0) sig.ret_unique = true else try rows.append(allocator, .{
+                    .field = arc_sig.RetCondition.whole_value,
+                    .params = whole_params,
+                });
+            }
+            var returned_fields = std.bit_set.IntegerBitSet(64){ .mask = fields };
+            var iter = returned_fields.iterator(.{});
+            while (iter.next()) |field| {
+                if (field_params[field] == 0) {
+                    sig.ret_unique_fields |= @as(u64, 1) << @as(u6, @intCast(field));
+                } else {
+                    try rows.append(allocator, .{ .field = @intCast(field), .params = field_params[field] });
+                }
+            }
+        }
+        var seeds: arc_sig.ParamMask = 0;
+        for (self.proc_stmts[proc_index].items) |stmt| {
+            const node = self.store.getCFStmt(stmt);
+            if (node != .assign_low_level) continue;
+            const assign = node.assign_low_level;
+            const effect = if (!self.consume_dead_boxes and assign.op == .box_unbox)
+                assign.op.arcBorrowedResultVariant().?.rcEffect()
+            else
+                assign.op.arcInferenceRcEffect(assign.rc_effect);
+            const args = self.store.getLocalSpan(assign.args);
+            for (0..@min(GuardedList.borrowLen(args), 64)) |position| {
+                if ((effect.may_runtime_uniqueness_check_args & (@as(u64, 1) << @as(u6, @intCast(position)))) == 0) continue;
+                const dense = self.domain.indexOf(GuardedList.at(args, position)) orelse continue;
+                if (!uniqueness.born_unique.isSet(dense) or uniqueness.destroyed.isSet(dense)) continue;
+                seeds |= uniqueness.conds[dense];
+            }
+        }
+        return .{ .sig = sig, .rows = rows.items, .seeds = seeds };
+    }
+};
+
+const UniquenessPartition = struct {
+    parents: []u32,
+    local_owner: []u32,
+    rc_local: []const bool,
+    proc: u32 = 0,
+
+    fn root(self: *@This(), node: u32) u32 {
+        var current = node;
+        while (self.parents[current] != current) {
+            self.parents[current] = self.parents[self.parents[current]];
+            current = self.parents[current];
+        }
+        return current;
+    }
+
+    fn unite(self: *@This(), left: u32, right: u32) void {
+        const a = self.root(left);
+        const b = self.root(right);
+        self.parents[@max(a, b)] = @min(a, b);
+    }
+
+    fn local(self: *@This(), id: LIR.LocalId) void {
+        const raw = @intFromEnum(id);
+        if (raw >= self.rc_local.len or !self.rc_local[raw]) return;
+        if (self.local_owner[raw] == no_local) self.local_owner[raw] = self.proc else self.unite(self.proc, self.local_owner[raw]);
+    }
+};
+
+fn sameRetConditions(a: []const arc_sig.RetCondition, b: []const arc_sig.RetCondition) bool {
+    if (a.len != b.len) return false;
+    for (a, b) |left, right| if (left.field != right.field or left.params != right.params) return false;
+    return true;
+}
+
+fn runUniquenessTasks(
+    contexts: []UniquenessComponentTask,
+    executor: *const task_executor.Executor,
+    metrics: *UniquenessMetrics,
+) SolveError!void {
+    var session = executor.begin();
+    var submitted: usize = 0;
+    var received: usize = 0;
+    var failed = false;
+    while (received < submitted or (!failed and submitted < contexts.len)) {
+        while (!failed and submitted < contexts.len and session.canSubmit()) {
+            session.submit(.{ .id = submitted, .context = &contexts[submitted], .run = UniquenessComponentTask.run }) catch {
+                failed = true;
+                break;
+            };
+            submitted += 1;
+            metrics.task_submitted += 1;
+        }
+        if (received < submitted) {
+            const completion = session.receive();
+            if (completion.id >= submitted or completion.worker_id >= executor.worker_count) solveInvariant("uniqueness received invalid task identity");
+            const context = &contexts[completion.id];
+            if (context.completed or completion.value != @as(*anyopaque, @ptrCast(context))) solveInvariant("uniqueness received invalid task completion");
+            context.completed = true;
+            context.countWork(metrics);
+            received += 1;
+            if (context.failed) failed = true;
+        }
+    }
+    session.end();
+    if (failed) return error.OutOfMemory;
+}
+
+/// Exact ownership components run against frozen signatures in deterministic
+/// waves. Only callers of semantically changed signatures enter the next wave.
+/// Every invocation starts all components afresh, including post-take settlement.
+pub fn settleUniquenessWithOptions(
+    allocator: Allocator,
+    store: *const LirStore,
+    layouts: *const layout_mod.Store,
+    rc_local: []const bool,
+    solution: *Solution,
+    takes: TakeSource,
+    consume_dead_boxes: bool,
+    options: UniquenessOptions,
+) SolveError!void {
+    var memory = std.heap.ArenaAllocator.init(allocator);
+    defer memory.deinit();
+    const arena = memory.allocator();
+    const proc_count = store.procSpecCount();
+    const proc_stmts = try arena.alloc(std.ArrayList(LIR.CFStmtId), proc_count);
+    @memset(proc_stmts, .empty);
+    const returns = try arena.alloc(std.ArrayList(LIR.LocalId), proc_count);
+    @memset(returns, .empty);
+    const callers = try arena.alloc(std.ArrayList(u32), proc_count);
+    @memset(callers, .empty);
+    const lists = try arena.alloc([]const LIR.CFStmtId, proc_count);
+    const parents = try arena.alloc(u32, proc_count);
+    for (parents, 0..) |*parent, index| parent.* = @intCast(index);
+    const local_owner = try arena.alloc(u32, store.localCount());
+    @memset(local_owner, no_local);
+    const stmt_owner = try arena.alloc(u32, store.cfStmtCount());
+    @memset(stmt_owner, no_local);
+    var partition = UniquenessPartition{ .parents = parents, .local_owner = local_owner, .rc_local = rc_local };
+    for (0..proc_count) |proc_index| {
+        partition.proc = @intCast(proc_index);
+        const proc = store.getProcSpec(@enumFromInt(@as(u32, @intCast(proc_index))));
+        const args = store.getLocalSpan(proc.args);
+        for (0..GuardedList.borrowLen(args)) |position| partition.local(GuardedList.at(args, position));
+        if (proc.body) |body| try collectProcStatements(arena, store, body, &proc_stmts[proc_index]);
+        lists[proc_index] = proc_stmts[proc_index].items;
+        for (proc_stmts[proc_index].items) |stmt_id| {
+            const raw = @intFromEnum(stmt_id);
+            if (stmt_owner[raw] == no_local) stmt_owner[raw] = @intCast(proc_index) else partition.unite(@intCast(proc_index), stmt_owner[raw]);
+            const stmt = store.getCFStmt(stmt_id);
+            body_clone.forEachStmtRead(store, stmt, &partition, UniquenessPartition.local);
+            body_clone.forEachStmtDef(store, stmt, &partition, UniquenessPartition.local);
+            if (stmt == .ret) try returns[proc_index].append(arena, stmt.ret.value);
+            if (stmt == .assign_call) try callers[@intFromEnum(stmt.assign_call.proc)].append(arena, @intCast(proc_index));
+        }
+    }
+    const proc_component = try arena.alloc(u32, proc_count);
+    const root_component = try arena.alloc(u32, proc_count);
+    @memset(root_component, no_local);
+    var components = std.ArrayList(UniquenessComponent).empty;
+    for (0..proc_count) |index| {
+        const root = partition.root(@intCast(index));
+        if (root_component[root] == no_local) {
+            root_component[root] = @intCast(components.items.len);
+            try components.append(arena, .{});
+        }
+        const component = root_component[root];
+        proc_component[index] = component;
+        try components.items[component].procs.append(arena, @intCast(index));
+    }
+    defer for (components.items) |component| if (component.result) |result| result.deinit();
+    const local_to_dense = try arena.alloc(u32, store.localCount());
+    @memset(local_to_dense, no_local);
+    for (local_owner, 0..) |*owner, raw| {
+        if (owner.* == no_local) continue;
+        owner.* = proc_component[owner.*];
+        const component = &components.items[owner.*];
+        local_to_dense[raw] = @intCast(component.locals.items.len);
+        try component.locals.append(arena, @intCast(raw));
+    }
+    const topology = try UseOrder.initTopology(arena, store, lists);
+    const stmt_to_dense = try arena.alloc(u32, store.cfStmtCount());
+    @memset(stmt_to_dense, no_local);
+    // Ascending statement ids reproduce the legacy whole-store deduplication.
+    for (stmt_owner, 0..) |*owner, raw| {
+        if (owner.* == no_local) continue;
+        owner.* = proc_component[owner.*];
+        const component = &components.items[owner.*];
+        stmt_to_dense[raw] = @intCast(component.stmts.items.len);
+        try component.stmts.append(arena, @enumFromInt(@as(u32, @intCast(raw))));
+        if (topology.unresolved.isSet(raw)) try component.unresolved.append(arena, @intCast(raw));
+    }
+    const contexts = try arena.alloc(UniquenessComponentTask, components.items.len);
+    var dirty = try std.bit_set.DynamicBitSetUnmanaged.initFull(arena, components.items.len);
+    var local_metrics: UniquenessMetrics = .{};
+    const metrics = options.metrics orelse &local_metrics;
+    metrics.settlements += 1;
+    metrics.components += @intCast(components.items.len);
+    const proc_rows = try arena.alloc([]const arc_sig.RetCondition, proc_count);
+    for (solution.sigs, proc_rows) |sig, *row| row.* = solution.sigTable().retConditionsOf(sig);
+    var flat_rows = std.ArrayList(arc_sig.RetCondition).empty;
+    defer flat_rows.deinit(allocator);
+    while (dirty.count() != 0) {
+        metrics.signature_waves += 1;
+        if (builtin.is_test) uniqueness_analysis_rounds += 1;
+        var count: usize = 0;
+        var iter = dirty.iterator(.{});
+        while (iter.next()) |id| {
+            const component = &components.items[id];
+            // Rows in proc_rows are replaced below before publishing; workers
+            // read the frozen global row table, never another owner's scratch.
+            contexts[count] = .{
+                .store = store,
+                .layouts = layouts,
+                .rc_local = rc_local,
+                .solution = solution,
+                .takes = takes,
+                .consume_dead_boxes = consume_dead_boxes,
+                .component = component,
+                .topology = &topology,
+                .domain = .{
+                    .local_to_dense = local_to_dense,
+                    .count = component.locals.items.len,
+                    .locals = component.locals.items,
+                    .procs = component.procs.items,
+                    .owners = local_owner,
+                    .component = @intCast(id),
+                },
+                .stmt_to_dense = stmt_to_dense,
+                .stmt_owner = stmt_owner,
+                .proc_stmts = proc_stmts,
+                .returns = returns,
+            };
+            count += 1;
+        }
+        dirty.setRangeValue(.{ .start = 0, .end = components.items.len }, false);
+        if (options.executor) |executor| {
+            try runUniquenessTasks(contexts[0..count], executor, metrics);
+        } else {
+            for (contexts[0..count]) |*context| {
+                defer context.countWork(metrics);
+                try context.execute(allocator);
+            }
+        }
+        for (contexts[0..count]) |context| if (context.failed) return error.OutOfMemory;
+        for (contexts[0..count]) |context| {
+            const result = context.component.result.?;
+            if (options.executor != null) metrics.task_committed += 1;
+            for (context.component.procs.items, result.updates) |proc, update| {
+                const old = solution.sigs[proc];
+                const changed = old.read_only_params != update.sig.read_only_params or
+                    old.ret_unique != update.sig.ret_unique or old.ret_unique_fields != update.sig.ret_unique_fields or
+                    !sameRetConditions(solution.sigTable().retConditionsOf(old), update.rows);
+                solution.sigs[proc].read_only_params = update.sig.read_only_params;
+                solution.sigs[proc].ret_unique = update.sig.ret_unique;
+                solution.sigs[proc].ret_unique_fields = update.sig.ret_unique_fields;
+                solution.unique_seed_masks[proc] = update.seeds;
+                proc_rows[proc] = update.rows;
+                if (changed) {
+                    metrics.signature_changes += 1;
+                    for (callers[proc].items) |caller| dirty.set(proc_component[caller]);
+                }
+            }
+        }
+        flat_rows.clearRetainingCapacity();
+        for (proc_rows, solution.sigs) |row, *sig| {
+            sig.ret_conditions = .{ .start = @intCast(flat_rows.items.len), .len = @intCast(row.len) };
+            try flat_rows.appendSlice(allocator, row);
+        }
+        const published = try allocator.dupe(arc_sig.RetCondition, flat_rows.items);
+        allocator.free(solution.ret_conditions);
+        solution.ret_conditions = published;
+    }
+    solution.unique.setRangeValue(.{ .start = 0, .end = solution.unique.bit_length }, false);
+    solution.unique_destroyed.setRangeValue(.{ .start = 0, .end = solution.unique_destroyed.bit_length }, false);
+    solution.unique_born.setRangeValue(.{ .start = 0, .end = solution.unique_born.bit_length }, false);
+    @memset(solution.unique_conds, 0);
+    for (components.items) |component| {
+        const verdict = component.result.?.uniqueness;
+        for (component.locals.items, 0..) |raw, dense| {
+            solution.unique.setValue(raw, verdict.unique.isSet(dense));
+            solution.unique_destroyed.setValue(raw, verdict.destroyed.isSet(dense));
+            solution.unique_born.setValue(raw, verdict.born_unique.isSet(dense));
+            solution.unique_conds[raw] = verdict.conds[dense];
+        }
+    }
+}
+
+/// Whole-store reference implementation, deliberately unavailable to production.
+fn settleUniquenessOracle(
+    allocator: Allocator,
+    store: *const LirStore,
+    layouts: *const layout_mod.Store,
+    rc_local: []const bool,
+    solution: *Solution,
+    takes: TakeSource,
+    consume_dead_boxes: bool,
+) SolveError!void {
+    comptime std.debug.assert(builtin.is_test);
     const proc_count = store.procSpecCount();
     var proc_stmts = try allocator.alloc(std.ArrayList(LIR.CFStmtId), proc_count);
     defer allocator.free(proc_stmts);
@@ -5316,9 +5858,13 @@ fn computeUniquenessDetailed(
         births: []u32,
 
         fn indexOf(self: @This(), local: LIR.LocalId) ?u32 {
-            if (self.domain) |domain| return domain.indexOf(local);
             const index = @intFromEnum(local);
             if (index >= self.rc.len or !self.rc[index]) return null;
+            if (self.domain) |domain| {
+                const dense = domain.indexOf(local);
+                if (domain.owners != null) std.debug.assert(dense != null);
+                return dense;
+            }
             return @intCast(index);
         }
 
@@ -5411,7 +5957,9 @@ fn computeUniquenessDetailed(
     var alias_defs = std.ArrayList(AliasDef).empty;
     defer alias_defs.deinit(allocator);
 
-    for (0..store.procSpecCount()) |proc_index| {
+    const component_procs = if (proc_domain) |domain| domain.procs else null;
+    for (0..if (component_procs) |procs| procs.len else store.procSpecCount()) |proc_slot| {
+        const proc_index = if (component_procs) |procs| procs[proc_slot] else proc_slot;
         if (only_proc) |proc_id| {
             if (proc_index != @intFromEnum(proc_id)) continue;
         }
@@ -5452,7 +6000,7 @@ fn computeUniquenessDetailed(
                     .nominal => |op| op.backing_ref,
                     .discriminant, .field, .tag_payload, .tag_payload_struct => null,
                 };
-                const is_view = alias_of != null and borrowed != null and proc_domain == null and
+                const is_view = alias_of != null and borrowed != null and
                     borrowed.?.isSet(@intFromEnum(assign.target));
                 if (is_view) {
                     marks.destroy(&foreign_def, assign.target);
@@ -5961,8 +6509,12 @@ fn computeUniquenessDetailed(
     const index_to_local = try allocator.alloc(u32, local_count);
     defer allocator.free(index_to_local);
     if (proc_domain) |domain| {
-        for (domain.local_to_dense, 0..) |dense, raw| {
-            if (dense != no_local) index_to_local[dense] = @intCast(raw);
+        if (domain.locals) |locals| {
+            @memcpy(index_to_local, locals);
+        } else {
+            for (domain.local_to_dense, 0..) |dense, raw| {
+                if (dense != no_local) index_to_local[dense] = @intCast(raw);
+            }
         }
     } else {
         for (index_to_local, 0..) |*slot, raw| slot.* = @intCast(raw);
@@ -6010,8 +6562,6 @@ fn computeUniquenessDetailed(
         }{ .foreign = &foreign_def });
     }
     if (workspace) |cached| {
-        // The fixed-point workspace always uses the global local domain.
-        std.debug.assert(proc_domain == null);
         try cached.consumption.apply(cached.allocator, order, consumes.items, index_to_local, &destroyed);
     } else {
         try destroyOrderedConsumes(allocator, order, consumes.items, index_to_local, &destroyed);
@@ -6374,6 +6924,29 @@ const UniquenessTest = struct {
     }
 };
 
+test "ARC public solve cleans up every coordinator allocation failure" {
+    var f = try UniquenessTest.init();
+    defer f.deinit();
+    const param = try f.local(f.list);
+    const callee = try f.proc(&.{param}, try f.ret(param), f.list);
+    const argument = try f.local(f.list);
+    const result = try f.local(f.list);
+    const caller = try f.proc(&.{argument}, try f.call(result, callee, &.{argument}, try f.ret(result)), f.list);
+    const rc_local = try std.testing.allocator.alloc(bool, f.store.localCount());
+    defer std.testing.allocator.free(rc_local);
+    @memset(rc_local, true);
+
+    const Probe = struct {
+        fn run(allocator: Allocator, fixture: *const UniquenessTest, rc: []const bool, root: LIR.LirProcSpecId) SolveError!void {
+            var solution = try solve(allocator, &fixture.store, &fixture.layouts, rc, &.{}, &.{root}, true);
+            defer solution.deinit();
+        }
+    };
+    // Inputs outlive the entire sweep: every injected failure belongs to
+    // public solver construction, analysis, publication, or result handoff.
+    try std.testing.checkAllAllocationFailures(std.testing.allocator, Probe.run, .{ &f, rc_local, caller });
+}
+
 test "ordered-use inventory transfer cleans up on allocation failure" {
     var f = try UniquenessTest.init();
     defer f.deinit();
@@ -6411,7 +6984,7 @@ test "uniqueness workspace reuses topology and exact use queries across signatur
     try collectProcStatements(allocator, &f.store, call, &statements[0]);
     var workspace = try UniquenessWorkspace.init(allocator, &f.store, &statements);
     defer workspace.deinit();
-    const topology = workspace.order.preds.stmts.ptr;
+    const topology = workspace.order.topology.preds.stmts.ptr;
     var borrowed = try std.bit_set.DynamicBitSetUnmanaged.initEmpty(allocator, 5);
     defer borrowed.deinit(allocator);
     var takes = try std.bit_set.DynamicBitSetUnmanaged.initEmpty(allocator, f.store.cfStmtCount());
@@ -6433,7 +7006,7 @@ test "uniqueness workspace reuses topology and exact use queries across signatur
         var expected = try computeUniquenessDetailed(allocator, &f.store, &rc, table, null, null, null, null, true, &f.layouts, .{ .set = &takes }, &borrowed, null);
         defer expected.deinit(allocator);
         try UniquenessTest.expectSame(expected, actual);
-        try testing.expectEqual(topology, workspace.order.preds.stmts.ptr);
+        try testing.expectEqual(topology, workspace.order.topology.preds.stmts.ptr);
         try testing.expectEqual(round != 0, actual.born_unique.isSet(@intFromEnum(taken)));
         if (round == 1) try testing.expectEqual(@as(arc_sig.ParamMask, 1), actual.conds[@intFromEnum(taken)]);
         if (round == 2) try testing.expect(actual.unique.isSet(@intFromEnum(taken)));
@@ -6560,4 +7133,347 @@ test "uniqueness fixed point propagates fresh returns through a call diamond and
     try testing.expectEqual(@as(usize, 2), uniqueness_topology_builds - builds_before);
     try testing.expectEqual(@as(usize, 1), uniqueness_analysis_rounds - settled_rounds);
     try testing.expectEqual(@as(u64, 3), solution.sigOf(chain).ret_unique_fields);
+    UniquenessOracleState.resetCapabilities(&solution);
+    var metrics: UniquenessMetrics = .{};
+    try UniquenessOracleState.compare(&f, rc, &solution, .none, &metrics);
+}
+
+/// Only the fields settlement owns are copied; binding/topology facts remain
+/// frozen and borrowed from the fixture's solved base solution.
+const UniquenessOracleState = struct {
+    solution: Solution,
+
+    fn init(source: *const Solution) SolveError!@This() {
+        const allocator = std.testing.allocator;
+        var result = source.*;
+        result.sigs = try allocator.dupe(arc_sig.RcSig, source.sigs);
+        errdefer allocator.free(result.sigs);
+        result.ret_conditions = try allocator.dupe(arc_sig.RetCondition, source.ret_conditions);
+        errdefer allocator.free(result.ret_conditions);
+        result.unique_seed_masks = try allocator.dupe(arc_sig.ParamMask, source.unique_seed_masks);
+        errdefer allocator.free(result.unique_seed_masks);
+        result.unique = try source.unique.clone(allocator);
+        errdefer result.unique.deinit(allocator);
+        result.unique_born = try source.unique_born.clone(allocator);
+        errdefer result.unique_born.deinit(allocator);
+        result.unique_destroyed = try source.unique_destroyed.clone(allocator);
+        errdefer result.unique_destroyed.deinit(allocator);
+        result.unique_conds = try allocator.dupe(arc_sig.ParamMask, source.unique_conds);
+        return .{ .solution = result };
+    }
+
+    fn deinit(self: *@This()) void {
+        const allocator = std.testing.allocator;
+        allocator.free(self.solution.sigs);
+        allocator.free(self.solution.ret_conditions);
+        allocator.free(self.solution.unique_seed_masks);
+        self.solution.unique.deinit(allocator);
+        self.solution.unique_born.deinit(allocator);
+        self.solution.unique_destroyed.deinit(allocator);
+        allocator.free(self.solution.unique_conds);
+    }
+
+    fn resetCapabilities(solution: *Solution) void {
+        for (solution.sigs) |*sig| {
+            sig.read_only_params = 0;
+            sig.ret_unique = false;
+            sig.ret_unique_fields = 0;
+            sig.ret_conditions = .empty;
+        }
+    }
+
+    fn compare(f: *const UniquenessTest, rc: []const bool, solution: *Solution, takes: TakeSource, metrics: *UniquenessMetrics) (SolveError || error{TestExpectedEqual})!void {
+        var oracle = try init(solution);
+        defer oracle.deinit();
+        try settleUniquenessOracle(std.testing.allocator, &f.store, &f.layouts, rc, &oracle.solution, takes, true);
+        try settleUniquenessWithOptions(std.testing.allocator, &f.store, &f.layouts, rc, solution, takes, true, .{ .metrics = metrics });
+        // Includes every signature field and exact flat span/row ordering.
+        try std.testing.expectEqualDeep(oracle.solution.sigs, solution.sigs);
+        try std.testing.expectEqualDeep(oracle.solution.ret_conditions, solution.ret_conditions);
+        try std.testing.expectEqualSlices(arc_sig.ParamMask, oracle.solution.unique_seed_masks, solution.unique_seed_masks);
+        try std.testing.expectEqualSlices(arc_sig.ParamMask, oracle.solution.unique_conds, solution.unique_conds);
+        for (0..solution.unique.bit_length) |raw| {
+            try std.testing.expectEqual(oracle.solution.unique.isSet(raw), solution.unique.isSet(raw));
+            try std.testing.expectEqual(oracle.solution.unique_born.isSet(raw), solution.unique_born.isSet(raw));
+            try std.testing.expectEqual(oracle.solution.unique_destroyed.isSet(raw), solution.unique_destroyed.isSet(raw));
+        }
+    }
+};
+
+test "component uniqueness preserves shared RC definitions shared statements and bodyless argument positions" {
+    const allocator = std.testing.allocator;
+    var f = try UniquenessTest.init();
+    defer f.deinit();
+    const shared = try f.local(f.list);
+    const bodyless = try f.local(f.list);
+    const scalar = try f.local(.i64);
+    for (0..2) |_| {
+        const body = try f.store.addCFStmt(.{ .assign_list = .{
+            .target = shared,
+            .elems = try f.store.addLocalSpan(&.{}),
+            .next = try f.ret(shared),
+        } });
+        _ = try f.proc(&.{}, body, f.list);
+    }
+    _ = try f.proc(&.{ scalar, shared }, null, f.list);
+    _ = try f.proc(&.{bodyless}, null, f.list);
+    // A shared scalar is not an ownership overlap.
+    for (0..2) |_| _ = try f.proc(&.{scalar}, try f.ret(scalar), .i64);
+    // Sharing a statement is an overlap even without an RC local.
+    const shared_body = try f.ret(scalar);
+    for (0..2) |_| _ = try f.proc(&.{scalar}, shared_body, .i64);
+    // The last proc's shared argument position wins, just as in the global
+    // parameter scan; component formation must not reorder these definitions.
+    _ = try f.proc(&.{shared}, null, f.list);
+    const rc = [_]bool{ true, true, false };
+    var solution = try solve(allocator, &f.store, &f.layouts, &rc, &.{}, &.{}, true);
+    defer solution.deinit();
+    UniquenessOracleState.resetCapabilities(&solution);
+    var metrics: UniquenessMetrics = .{};
+    try UniquenessOracleState.compare(&f, &rc, &solution, .none, &metrics);
+    try std.testing.expectEqual(@as(u64, 5), metrics.components);
+    try std.testing.expectEqual(@as(u64, 5), metrics.component_runs);
+    try std.testing.expectEqual(@as(u64, 2), metrics.local_visits);
+    try std.testing.expectEqual(@as(u64, 7), metrics.statement_visits);
+    try std.testing.expect(solution.unique_born.isSet(@intFromEnum(bodyless)));
+    try std.testing.expectEqual(@as(arc_sig.ParamMask, 1), solution.unique_conds[@intFromEnum(bodyless)]);
+    try std.testing.expectEqual(@as(arc_sig.ParamMask, 1), solution.unique_conds[@intFromEnum(shared)]);
+    // Pinned capabilities are contracts, but their conditional rows follow
+    // the legacy rule and are cleared rather than inferred.
+    allocator.free(solution.ret_conditions);
+    solution.ret_conditions = try allocator.dupe(arc_sig.RetCondition, &.{.{ .field = 0, .params = 1 }});
+    solution.sigs[3].ret_conditions = .{ .start = 0, .len = 1 };
+    solution.sigs[3].read_only_params = 1;
+    solution.sigs[3].ret_unique = true;
+    solution.sigs[3].ret_unique_fields = 1;
+    metrics = .{};
+    try UniquenessOracleState.compare(&f, &rc, &solution, .none, &metrics);
+    try std.testing.expectEqual(@as(u32, 0), solution.sigs[3].ret_conditions.len);
+    try std.testing.expectEqual(@as(arc_sig.ParamMask, 1), solution.sigs[3].read_only_params);
+    try std.testing.expect(solution.sigs[3].ret_unique);
+    try std.testing.expectEqual(@as(u64, 1), solution.sigs[3].ret_unique_fields);
+}
+
+test "component uniqueness revisits only dirty callers along a long chain" {
+    const allocator = std.testing.allocator;
+    var f = try UniquenessTest.init();
+    defer f.deinit();
+    const leaf = try f.local(f.list);
+    const birth = try f.store.addCFStmt(.{ .assign_list = .{
+        .target = leaf,
+        .elems = try f.store.addLocalSpan(&.{}),
+        .next = try f.ret(leaf),
+    } });
+    var callee = try f.proc(&.{}, birth, f.list);
+    for (0..6) |_| {
+        const local = try f.local(f.list);
+        callee = try f.proc(&.{}, try f.call(local, callee, &.{}, try f.ret(local)), f.list);
+    }
+    for (0..10) |_| {
+        const local = try f.local(f.list);
+        const body = try f.store.addCFStmt(.{ .assign_list = .{
+            .target = local,
+            .elems = try f.store.addLocalSpan(&.{}),
+            .next = try f.ret(local),
+        } });
+        _ = try f.proc(&.{}, body, f.list);
+    }
+    const rc = [_]bool{true} ** 17;
+    var solution = try solve(allocator, &f.store, &f.layouts, &rc, &.{}, &.{}, true);
+    defer solution.deinit();
+    UniquenessOracleState.resetCapabilities(&solution);
+    var metrics: UniquenessMetrics = .{};
+    try UniquenessOracleState.compare(&f, &rc, &solution, .none, &metrics);
+    try std.testing.expectEqual(@as(u64, 17), metrics.components);
+    try std.testing.expectEqual(@as(u64, 7), metrics.signature_waves);
+    try std.testing.expectEqual(@as(u64, 23), metrics.component_runs);
+    try std.testing.expectEqual(@as(u64, 23), metrics.local_visits);
+    try std.testing.expectEqual(@as(u64, 46), metrics.statement_visits);
+    for (solution.sigs) |sig| try std.testing.expect(sig.ret_unique);
+    metrics = .{};
+    try UniquenessOracleState.compare(&f, &rc, &solution, .stamped, &metrics);
+    try std.testing.expectEqual(@as(u64, 17), metrics.component_runs);
+    try std.testing.expectEqual(@as(u64, 1), metrics.signature_waves);
+}
+
+test "component uniqueness ignores offset-only return condition changes" {
+    const allocator = std.testing.allocator;
+    var f = try UniquenessTest.init();
+    defer f.deinit();
+    var params: [4]LIR.LocalId = undefined;
+    var procs: [4]LIR.LirProcSpecId = undefined;
+    for (&params, &procs) |*param, *proc| {
+        param.* = try f.local(f.list);
+        proc.* = try f.proc(&.{param.*}, null, f.list);
+    }
+    f.store.setProcSpecBody(procs[1], try f.ret(params[1]));
+    f.store.setProcSpecBody(procs[2], try f.ret(params[2]));
+    for ([_]usize{ 0, 3 }, [_]usize{ 2, 1 }) |caller, callee| {
+        const result = try f.local(f.list);
+        f.store.setProcSpecBody(procs[caller], try f.call(result, procs[callee], &.{params[caller]}, try f.ret(result)));
+    }
+    const rc = [_]bool{true} ** 6;
+    var solution = try solve(allocator, &f.store, &f.layouts, &rc, &.{}, &.{}, true);
+    defer solution.deinit();
+    // Owned inputs transfer their unit into the conditional-return edge.
+    for (solution.sigs) |*sig| {
+        sig.borrowed_params = 0;
+        sig.ret_mode = .owned;
+    }
+    UniquenessOracleState.resetCapabilities(&solution);
+    var metrics: UniquenessMetrics = .{};
+    try UniquenessOracleState.compare(&f, &rc, &solution, .none, &metrics);
+    try std.testing.expectEqual(@as(u64, 4), metrics.components);
+    try std.testing.expectEqual(@as(u64, 2), metrics.signature_waves);
+    try std.testing.expectEqual(@as(u64, 6), metrics.component_runs);
+    for (solution.sigs, 0..) |sig, index| {
+        try std.testing.expectEqual(@as(u32, @intCast(index)), sig.ret_conditions.start);
+        try std.testing.expectEqual(@as(u32, 1), sig.ret_conditions.len);
+    }
+}
+
+test "component uniqueness read-only return refinement revives a borrowed-view lender" {
+    const allocator = std.testing.allocator;
+    var f = try UniquenessTest.init();
+    defer f.deinit();
+    const source = try f.local(f.list);
+    const view = try f.local(f.list);
+    const ignored = try f.local(.i64);
+    const param = try f.local(f.list);
+    const scalar = try f.local(.i64);
+    const callee_body = try f.store.addCFStmt(.{ .assign_literal = .{
+        .target = scalar,
+        .value = .{ .i64_literal = .{ .value = 0, .layout_idx = .i64 } },
+        .next = try f.ret(scalar),
+    } });
+    const callee = try f.proc(&.{param}, callee_body, .i64);
+    const call = try f.call(ignored, callee, &.{view}, try f.ret(source));
+    const alias = try f.store.addCFStmt(.{ .assign_ref = .{ .target = view, .op = .{ .local = source }, .next = call } });
+    const body = try f.store.addCFStmt(.{ .assign_list = .{
+        .target = source,
+        .elems = try f.store.addLocalSpan(&.{}),
+        .next = alias,
+    } });
+    _ = try f.proc(&.{}, body, f.list);
+    const rc = [_]bool{ true, true, false, true, false };
+    var solution = try solve(allocator, &f.store, &f.layouts, &rc, &.{}, &.{}, true);
+    defer solution.deinit();
+    try std.testing.expect(solution.borrowed.isSet(@intFromEnum(view)));
+    UniquenessOracleState.resetCapabilities(&solution);
+    var metrics: UniquenessMetrics = .{};
+    try UniquenessOracleState.compare(&f, &rc, &solution, .none, &metrics);
+    try std.testing.expectEqual(@as(u64, 2), metrics.components);
+    try std.testing.expectEqual(@as(u64, 3), metrics.component_runs);
+    try std.testing.expectEqual(@as(u64, 2), metrics.signature_waves);
+    try std.testing.expect(solution.isUnique(source));
+    try std.testing.expectEqual(@as(arc_sig.ParamMask, 1), solution.sigs[@intFromEnum(callee)].read_only_params);
+}
+
+test "component uniqueness recursive conditional fields restart after committed takes" {
+    const allocator = std.testing.allocator;
+    var f = try UniquenessTest.init();
+    defer f.deinit();
+    const param = try f.local(f.list);
+    const called = try f.local(f.list);
+    const pair = try f.local(f.pair);
+    const taken = try f.local(f.list);
+    const scalar = try f.local(.i64);
+    const proc = try f.proc(&.{param}, null, f.list);
+    const ret = try f.ret(taken);
+    const read = try f.store.addCFStmt(.{ .assign_ref = .{
+        .target = taken,
+        .op = .{ .field = .{ .source = pair, .field_idx = 0 } },
+        .next = ret,
+    } });
+    const aggregate = try f.store.addCFStmt(.{ .assign_struct = .{
+        .target = pair,
+        .fields = try f.store.addLocalSpan(&.{ called, scalar }),
+        .next = read,
+    } });
+    f.store.setProcSpecBody(proc, try f.call(called, proc, &.{param}, aggregate));
+    // The aggregate-producing peer exercises semantic field rows separately.
+    const field_param = try f.local(f.list);
+    const returned_pair = try f.local(f.pair);
+    const field_body = try f.store.addCFStmt(.{ .assign_struct = .{
+        .target = returned_pair,
+        .fields = try f.store.addLocalSpan(&.{ field_param, scalar }),
+        .next = try f.ret(returned_pair),
+    } });
+    const field_proc = try f.proc(&.{field_param}, field_body, f.pair);
+    const rc = [_]bool{ true, true, true, true, false, true, true };
+    var solution = try solve(allocator, &f.store, &f.layouts, &rc, &.{}, &.{}, true);
+    defer solution.deinit();
+    for (solution.sigs) |*sig| {
+        sig.borrowed_params = 0;
+        sig.ret_mode = .owned;
+    }
+    UniquenessOracleState.resetCapabilities(&solution);
+    // A previously proved recursive contract is an input to this settlement.
+    allocator.free(solution.ret_conditions);
+    solution.ret_conditions = try allocator.dupe(arc_sig.RetCondition, &.{.{
+        .field = arc_sig.RetCondition.whole_value,
+        .params = 1,
+    }});
+    solution.sigs[@intFromEnum(proc)].ret_conditions = .{ .start = 0, .len = 1 };
+    var takes = try std.bit_set.DynamicBitSetUnmanaged.initEmpty(allocator, f.store.cfStmtCount());
+    defer takes.deinit(allocator);
+    takes.set(@intFromEnum(read));
+    var metrics: UniquenessMetrics = .{};
+    try UniquenessOracleState.compare(&f, &rc, &solution, .{ .set = &takes }, &metrics);
+    try std.testing.expectEqual(@as(u64, 2), metrics.components);
+    try std.testing.expect(solution.unique_born.isSet(@intFromEnum(taken)));
+    try std.testing.expectEqual(@as(arc_sig.ParamMask, 1), solution.unique_conds[@intFromEnum(taken)]);
+    const field_rows = solution.sigTable().retConditionsOf(solution.sigs[@intFromEnum(field_proc)]);
+    try std.testing.expectEqual(@as(usize, 1), field_rows.len);
+    try std.testing.expectEqual(@as(u32, 0), field_rows[0].field);
+    try std.testing.expectEqual(@as(arc_sig.ParamMask, 1), field_rows[0].params);
+    metrics = .{};
+    try UniquenessOracleState.compare(&f, &rc, &solution, .none, &metrics);
+    try std.testing.expect(!solution.unique_born.isSet(@intFromEnum(taken)));
+    // Clearing the recursive row dirties its own component, not the field peer.
+    try std.testing.expectEqual(@as(u64, 3), metrics.component_runs);
+    try std.testing.expectEqual(@as(u64, 2), metrics.signature_waves);
+}
+
+test "component uniqueness inventories join parameters incoming transfers and nonzero seeds without frames" {
+    const allocator = std.testing.allocator;
+    var f = try UniquenessTest.init();
+    defer f.deinit();
+    const param = try f.local(f.list);
+    const joined = try f.local(f.list);
+    const result = try f.local(f.list);
+    const mutate = try f.store.addCFStmt(.{ .assign_low_level = .{
+        .target = result,
+        .op = .list_reverse,
+        .rc_effect = LIR.LowLevel.RcEffect.runtimeUniqueness(1),
+        .args = try f.store.addLocalSpan(&.{joined}),
+        .next = try f.ret(result),
+    } });
+    var join_ids = body_clone.JoinParamIndex.init(allocator);
+    defer join_ids.deinit();
+    const join_id = join_ids.freshJoinPoint();
+    const jump = try f.store.addCFStmt(.{ .jump = .{ .target = join_id } });
+    const incoming = try f.store.addCFStmt(.{ .set_local = .{
+        .target = joined,
+        .value = param,
+        .mode = .initialize_join_param,
+        .next = jump,
+    } });
+    const body = try f.store.addCFStmt(.{ .join = .{
+        .id = join_id,
+        .params = try f.store.addLocalSpan(&.{joined}),
+        .body = mutate,
+        .remainder = incoming,
+    } });
+    const proc = try f.proc(&.{param}, body, f.list);
+    const rc = [_]bool{true} ** 3;
+    var solution = try solve(allocator, &f.store, &f.layouts, &rc, &.{}, &.{}, true);
+    defer solution.deinit();
+    UniquenessOracleState.resetCapabilities(&solution);
+    var metrics: UniquenessMetrics = .{};
+    try UniquenessOracleState.compare(&f, &rc, &solution, .none, &metrics);
+    try std.testing.expectEqual(@as(u64, 1), metrics.components);
+    try std.testing.expectEqual(@as(u64, 3), metrics.local_visits);
+    try std.testing.expectEqual(@as(arc_sig.ParamMask, 1), solution.unique_seed_masks[@intFromEnum(proc)]);
+    try std.testing.expectEqual(@as(arc_sig.ParamMask, 1), solution.unique_conds[@intFromEnum(joined)]);
 }

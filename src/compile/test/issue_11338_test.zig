@@ -226,7 +226,8 @@ test "specialization discovery submits a child before an unrelated task finishes
     try std.testing.expectEqual(arc.source_tasks_submitted, arc.source_tasks_committed);
     try std.testing.expectEqual(arc.planning_tasks_submitted, arc.planning_tasks_committed);
     try std.testing.expectEqual(arc.emission_tasks_submitted, arc.emission_tasks_committed);
-    const arc_tasks = arc.source_tasks_submitted + arc.planning_tasks_submitted + arc.emission_tasks_submitted;
+    try std.testing.expectEqual(arc.uniqueness.task_submitted, arc.uniqueness.task_committed);
+    const arc_tasks = arc.source_tasks_submitted + arc.planning_tasks_submitted + arc.emission_tasks_submitted + arc.uniqueness.task_submitted;
     try std.testing.expectEqual(monotype.specialization_tasks_submitted + solved_lir.tasks_submitted + rewrites.tasks_submitted + arc_tasks, executor.submitted);
     try std.testing.expect(executor.peak_outstanding <= 4);
     try std.testing.expect(!executor.open);

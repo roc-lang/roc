@@ -589,22 +589,30 @@ test "pipeline timing aggregates ARC counters with saturation and fresh reset" {
     var timing = Timing.init(std.testing.io);
     var first: ArcParallelMetrics = .{};
     inline for (std.meta.fields(ArcParallelMetrics), 0..) |field, i| {
-        @field(first, field.name) = i + 1;
+        if (field.type == u64) @field(first, field.name) = i + 1;
     }
+    inline for (std.meta.fields(Arc.UniquenessMetrics), 0..) |field, i| @field(first.uniqueness, field.name) = i + 1;
     timing.addArcParallel(first);
     var aggregate = Timing.init(std.testing.io);
     aggregate.addSnapshot(timing.snapshot());
     aggregate.addSnapshot(timing.snapshot());
     const doubled = aggregate.snapshot();
     inline for (std.meta.fields(ArcParallelMetrics), 0..) |field, i| {
-        try std.testing.expectEqual(@as(u64, 2 * (i + 1)), @field(doubled.arc_parallel, field.name));
-        @field(first, field.name) = std.math.maxInt(u64);
+        if (field.type == u64) {
+            try std.testing.expectEqual(@as(u64, 2 * (i + 1)), @field(doubled.arc_parallel, field.name));
+            @field(first, field.name) = std.math.maxInt(u64);
+        }
+    }
+    inline for (std.meta.fields(Arc.UniquenessMetrics), 0..) |field, i| {
+        try std.testing.expectEqual(@as(u64, 2 * (i + 1)), @field(doubled.arc_parallel.uniqueness, field.name));
+        @field(first.uniqueness, field.name) = std.math.maxInt(u64);
     }
     aggregate.addArcParallel(first);
     const saturated = aggregate.snapshot();
     inline for (std.meta.fields(ArcParallelMetrics)) |field| {
-        try std.testing.expectEqual(std.math.maxInt(u64), @field(saturated.arc_parallel, field.name));
+        if (field.type == u64) try std.testing.expectEqual(std.math.maxInt(u64), @field(saturated.arc_parallel, field.name));
     }
+    inline for (std.meta.fields(Arc.UniquenessMetrics)) |field| try std.testing.expectEqual(std.math.maxInt(u64), @field(saturated.arc_parallel.uniqueness, field.name));
     try std.testing.expectEqual(@as(u64, 0), saturated.arc_ns);
     aggregate = Timing.init(std.testing.io);
     try std.testing.expectEqualDeep(ArcParallelMetrics{}, aggregate.snapshot().arc_parallel);

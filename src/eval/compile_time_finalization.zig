@@ -686,6 +686,7 @@ test "shared lowering timing preserves full snapshots through aggregation" {
     lowering.solved_lir_parallel.tasks_committed = 13;
     lowering.lir_pass_parallel.tasks_committed = 17;
     lowering.arc_parallel.planning_tasks_committed = 19;
+    lowering.arc_parallel.uniqueness.component_runs = 23;
     lowering.monotype_diagnostics.specialization.template_requests = 23;
     const input: TimingSnapshot = .{
         .total_ns = 101,
