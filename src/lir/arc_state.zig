@@ -36,11 +36,13 @@ fn WorkCounterFor(comptime native_atomic: bool) type {
     };
 }
 
-test "work counters preserve counts beyond the 32-bit address range" {
+test "work counters preserve wide counts and wrap consistently" {
     inline for (.{ WorkCounter, WorkCounterFor(false) }) |Counter| {
-        var counter: Counter = .{ .value = std.math.maxInt(u32) };
-        counter.increment();
-        try std.testing.expectEqual(@as(u64, 1) << 32, counter.read());
+        for ([_]u64{ std.math.maxInt(u32), std.math.maxInt(u64) }) |initial| {
+            var counter: Counter = .{ .value = initial };
+            counter.increment();
+            try std.testing.expectEqual(initial +% 1, counter.read());
+        }
     }
 }
 
