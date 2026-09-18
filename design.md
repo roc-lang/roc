@@ -5043,6 +5043,14 @@ aggregate fixed points when every initializer, field read, and tag payload
 read is explicit. Every mutation plan requires disjoint statement roles before
 it changes the graph.
 
+Tag-case fusion inventories join identities once and shares monotonic fresh-ID
+allocation with its branch clones. Candidate-local region and binder inventories
+remain valid only until rewiring; variants are indexed by their explicit
+variant/discriminant pair in first-producer order. Fixed-point discovery still
+revisits surrounding joins after a rewrite, since a rejected ancestor can
+become eligible when a descendant changes. No analysis cache crosses that
+mutation boundary.
+
 The clone propagates constructor values through ordinary bindings and solves
 loop fixed points over their leaves. As a result, `.none` mode does not rebuild
 the successor iterator record and callable on each back edge when the producer
@@ -8099,6 +8107,14 @@ discard, and ordered commit. `task_waves` counts root batches and specialization
 sessions, not individual dependency waits within a stream. Task,
 lane, and discard counts explain the relationship without using
 scheduling-dependent values for compiler behavior.
+
+Shared compile-time/runtime lowering retains that complete timing snapshot,
+including worker counts and individual post-check phases. Its report names
+the shared work explicitly; a reused runtime program does not report a second
+zero-filled set of lowering measurements. A genuinely separate runtime
+continuation keeps its own measurements rather than relabeling shared work or
+counting it twice. Snapshot aggregation preserves phase identities and the
+existing sum-versus-peak rules.
 
 Boxy follows a different post-check pipeline and reports its planning and
 lowering wall phases directly rather than projecting Monotype categories onto
@@ -11239,8 +11255,9 @@ regression fails loudly instead of shipping.
 
 ### Procedure-Local LIR Rewrites
 
-TRMC, join scalarization, loop append promotion, range proving, and box reuse
-preserve their pipeline order. Within one phase, procedure bodies own disjoint
+TRMC, forwarding-join inlining, tag-case fusion, join scalarization, loop
+append promotion, range proving, and box reuse preserve their pipeline order
+and existing procedure eligibility. Within one phase, procedure bodies own disjoint
 writable statement rows. Rewriting reads a frozen phase input and produces a
 sparse patch of those rows, new body-owned data, and one procedure's metadata.
 The coordinator reserves pointer layouts and helper summaries before dispatch;
@@ -11251,6 +11268,12 @@ The same patch boundary applies with one worker. Every phase finishes its
 callbacks before committing in procedure order, so neither input visibility
 nor output identity depends on worker count or completion order. Each commit
 relocates appended references in both patched rows and procedure metadata.
+Fusion workers keep a procedure's full fixed point in one task. The coordinator
+inventories the old join-ID domain once; each task allocates fresh identities
+above that boundary and returns its exact allocation count. Ordered commit
+assigns disjoint fresh ranges and relocates only generated identities, preserving
+original joins and jumps to enclosing source continuations. Prefix patches and
+appended data obey the same typed relocation rule.
 Allocation failure leaves an individual commit unapplied; failed callbacks
 are drained without replay, and failed lowering discards the whole result.
 Reporting follows ordered commits rather than worker completion order.
@@ -13175,7 +13198,31 @@ call site turns each row into an edge from the arguments the row names to
 that part of its result, live only when the call is each argument's last
 use (otherwise the callee holds a retained copy). The signature bits and
 rows settle to a fixpoint with the analysis, since a new row only adds
-edges. Positions whose seed would let a runtime check in the body go
+edges. One settlement retains the immutable statement inventory, control-flow
+topology, and exact ordered-use answers while rebuilding signature-dependent
+lattice state when its inputs change. Procedures sharing reachable statement
+identities or ownership-relevant locals form one analysis component, preserving
+the base solver's combined definition and use constraints. Direct calls establish
+directed signature dependencies between components rather than merging a call
+graph into one ownership domain.
+
+Every component begins dirty. A dirty component is reseeded and solved against
+a frozen signature/return-row snapshot; independent components may run on
+workers with private compact domains and query state. The coordinator commits
+results in deterministic procedure order after the wave drains and dirties
+callers only when signature bits or return-row contents change. Moving an
+unchanged row to a different table offset does not change its contents. Clean
+component results remain valid while those inputs stay fixed; newly discovered
+return capabilities must not inherit a stale poisoned lattice verdict.
+
+A consuming-use proof is reused only while its exact
+consumption inventory is unchanged; holder-adding uses remain
+signature-dependent. Committed takes still require their own settlement, and
+every component starts that settlement dirty. Only the converged result
+outlives reusable analysis scratch. The whole-program analysis remains a test
+oracle, not a production replay or fallback.
+
+Positions whose seed would let a runtime check in the body go
 check-free form the proc's seed mask, which is what makes a call site
 demand the seeded variant. The owned flag a versioned loop measures once and
 dispatches on every iteration (`list_owned_unique`) is a check that consumes

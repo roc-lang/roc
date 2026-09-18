@@ -47,7 +47,8 @@ const max_subphases: usize = 25;
 // Test-cache diagnostics plus the post-check workload groups already require
 // four entries; retain headroom so later explicit diagnostics are not silently
 // dropped merely because their recording order changes.
-const max_counter_groups: usize = 8;
+// Shared lowering and a separate runtime continuation each report seven groups.
+const max_counter_groups: usize = 16;
 const max_counters_per_group: usize = 32;
 
 /// Wide enough for at least seven digits, their grouping underscores, and the ms suffix.

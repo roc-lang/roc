@@ -22,6 +22,20 @@ const GuardedList = LirStore.GuardedList;
 const CFStmtId = LIR.CFStmtId;
 const LocalId = LIR.LocalId;
 
+/// Reserve the source identity domain once before dispatching procedure work.
+/// Include unreachable statements and borrowed prefixes, not just owned output.
+pub fn firstFreshJoinPoint(store: *const LirStore) u32 {
+    var next: u32 = 0;
+    for (0..store.cfStmtCount()) |index| {
+        const stmt = store.getCFStmt(@enumFromInt(index));
+        if (stmt != .join) continue;
+        const raw = @intFromEnum(stmt.join.id);
+        if (raw == std.math.maxInt(u32)) @panic("join-point id space exhausted");
+        next = @max(next, raw + 1);
+    }
+    return next;
+}
+
 /// A local reached by forwarding through `assign_ref .local` aliases, paired
 /// with the first statement past the alias chain.
 pub const ForwardedAlias = struct {
@@ -52,7 +66,8 @@ pub const JoinParamIndex = struct {
         self.next_join_point = @max(self.next_join_point, raw + 1);
     }
 
-    fn freshJoinPoint(self: *JoinParamIndex) LIR.JoinPointId {
+    /// Reserve an identity in the same domain used by subtree clones.
+    pub fn freshJoinPoint(self: *JoinParamIndex) LIR.JoinPointId {
         if (self.next_join_point == std.math.maxInt(u32)) @panic("join-point id space exhausted");
         const id: LIR.JoinPointId = @enumFromInt(self.next_join_point);
         self.next_join_point += 1;
@@ -633,6 +648,12 @@ pub fn collectReachableDefinitionsWithAllocator(store: *LirStore, body: CFStmtId
 /// Add every local defined by `stmt_id` to an existing definition set.
 pub fn markStmtDefinitions(store: *const LirStore, defined: []bool, stmt_id: CFStmtId) void {
     visitStmtDefinitions(store, defined, stmt_id);
+}
+
+/// Add exact lexical binders without allocating for unrelated local identities.
+pub fn markStmtDefinitionsSparse(store: *const LirStore, defined: *ReadCounts, stmt_id: CFStmtId) Allocator.Error!void {
+    visitStmtDefinitions(store, defined, stmt_id);
+    if (defined.failure) |err| return err;
 }
 
 fn noteDefinition(defined: anytype, local: LocalId) void {

@@ -17,8 +17,6 @@ const ProcPasses = @import("proc_passes.zig");
 const ReturnSlot = @import("return_slot.zig");
 const StrAppend = @import("str_append.zig");
 const SingleUseInline = @import("single_use_inline.zig");
-const ForwardingJoinInline = @import("forwarding_join_inline.zig");
-const TagCaseFusion = @import("tag_case_fusion.zig");
 
 /// Completed compile-time scalar roots a forked continuation lowers as literals.
 pub const CompletedScalarValues = postcheck.ComptimeScalarValues.CompletedScalarValues;
@@ -591,22 +589,30 @@ test "pipeline timing aggregates ARC counters with saturation and fresh reset" {
     var timing = Timing.init(std.testing.io);
     var first: ArcParallelMetrics = .{};
     inline for (std.meta.fields(ArcParallelMetrics), 0..) |field, i| {
-        @field(first, field.name) = i + 1;
+        if (field.type == u64) @field(first, field.name) = i + 1;
     }
+    inline for (std.meta.fields(Arc.UniquenessMetrics), 0..) |field, i| @field(first.uniqueness, field.name) = i + 1;
     timing.addArcParallel(first);
     var aggregate = Timing.init(std.testing.io);
     aggregate.addSnapshot(timing.snapshot());
     aggregate.addSnapshot(timing.snapshot());
     const doubled = aggregate.snapshot();
     inline for (std.meta.fields(ArcParallelMetrics), 0..) |field, i| {
-        try std.testing.expectEqual(@as(u64, 2 * (i + 1)), @field(doubled.arc_parallel, field.name));
-        @field(first, field.name) = std.math.maxInt(u64);
+        if (field.type == u64) {
+            try std.testing.expectEqual(@as(u64, 2 * (i + 1)), @field(doubled.arc_parallel, field.name));
+            @field(first, field.name) = std.math.maxInt(u64);
+        }
+    }
+    inline for (std.meta.fields(Arc.UniquenessMetrics), 0..) |field, i| {
+        try std.testing.expectEqual(@as(u64, 2 * (i + 1)), @field(doubled.arc_parallel.uniqueness, field.name));
+        @field(first.uniqueness, field.name) = std.math.maxInt(u64);
     }
     aggregate.addArcParallel(first);
     const saturated = aggregate.snapshot();
     inline for (std.meta.fields(ArcParallelMetrics)) |field| {
-        try std.testing.expectEqual(std.math.maxInt(u64), @field(saturated.arc_parallel, field.name));
+        if (field.type == u64) try std.testing.expectEqual(std.math.maxInt(u64), @field(saturated.arc_parallel, field.name));
     }
+    inline for (std.meta.fields(Arc.UniquenessMetrics)) |field| try std.testing.expectEqual(std.math.maxInt(u64), @field(saturated.arc_parallel.uniqueness, field.name));
     try std.testing.expectEqual(@as(u64, 0), saturated.arc_ns);
     aggregate = Timing.init(std.testing.io);
     try std.testing.expectEqualDeep(ArcParallelMetrics{}, aggregate.snapshot().arc_parallel);
@@ -651,8 +657,8 @@ test "pipeline timing aggregates LIR pass totals and preserves peaks" {
     try std.testing.expectEqual(@as(u64, 7), result.peak_retained_shards);
     try std.testing.expectEqual(@as(u64, 200), result.prepared_statement_rows);
     try std.testing.expectEqual(@as(u64, 60), result.appended_statements);
-    try std.testing.expectEqualDeep([_]u64{ 6, 6, 6, 6, 6 }, result.committed_by_phase);
-    try std.testing.expectEqualDeep([_]u64{ 2, 2, 2, 2, 2 }, result.changed_by_phase);
+    try std.testing.expectEqualDeep(@as(@TypeOf(result.committed_by_phase), @splat(6)), result.committed_by_phase);
+    try std.testing.expectEqualDeep(@as(@TypeOf(result.changed_by_phase), @splat(2)), result.changed_by_phase);
     timing.addLirPassParallel(.{ .tasks_committed = std.math.maxInt(u64), .changed_by_phase = @splat(std.math.maxInt(u64)) });
     const saturated = timing.snapshot().lir_pass_parallel;
     try std.testing.expectEqual(std.math.maxInt(u64), saturated.tasks_committed);
@@ -1258,13 +1264,13 @@ fn finishLoweredOutput(
     if (target.specialization_strategy == .lss) {
         if (target.inline_mode == .none) {
             try SingleUseInline.run(&lowered.lir_result);
-            try ForwardingJoinInline.run(&lowered.lir_result.store, &lowered.lir_result.layouts);
+            try runProcedurePass(allocator, &lowered.lir_result, pass_target, .forwarding_join);
         }
         // Every inline mode produces tag-valued joins whose body matches the
         // tag at once: the iterator-fusion clone in `.none`, and the checked
         // wrappers substituted at their call sites in `.wrappers`, whose
         // `Try` results the caller matches immediately.
-        try TagCaseFusion.run(&lowered.lir_result.store, &lowered.lir_result.layouts);
+        try runProcedurePass(allocator, &lowered.lir_result, pass_target, .tag_fusion);
     }
     try runProcedurePass(allocator, &lowered.lir_result, pass_target, .scalarize);
     if (target.promote_loop_appends) {

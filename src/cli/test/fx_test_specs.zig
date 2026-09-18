@@ -89,6 +89,11 @@ pub const io_spec_tests = [_]TestSpec{
         .io_spec = "0<left|1>outer|1>inner|1>after-inner|1>prefix|1>left|1>shared|1>result: 32|0<right|1>outer|1>inner|1>after-inner|1>prefix|1>right|1>shared|1>result: 80|0<stop|1>outer|1>inner|1>after-inner|1>prefix|1>early|1>result: 99",
         .description = "SpecConstr single-pass blocks retain strict effects, recursive captures, shared branch continuations, and early returns",
     },
+    .{
+        .roc_file = "test/fx/parallel_fusion.roc",
+        .io_spec = "0<|1>0|0<a|1>0|0<abcd|1>12",
+        .description = "Fused numeric iterator continuations execute empty, singleton, and repeated iterations",
+    },
 
     // Match expression tests
     .{
