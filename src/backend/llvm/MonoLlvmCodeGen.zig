@@ -12069,6 +12069,7 @@ pub const MonoLlvmCodeGen = struct {
         };
     }
 
+    // These are target words, not indices into a compiler-host allocation.
     fn storeListFields(self: *MonoLlvmCodeGen, ptr: LlvmBuilder.Value, bytes: LlvmBuilder.Value, len: u64, cap: u64) Error!void {
         const builder = self.builder orelse return error.CompilationFailed;
         try self.storePointer(ptr, bytes);
