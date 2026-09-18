@@ -19,7 +19,7 @@ const builtin_static = can.BuiltinStatic;
 const CompileTimeFinalization = @import("compile_time_finalization.zig");
 const Interpreter = @import("interpreter.zig").Interpreter;
 const RuntimeHostEnv = @import("runtime_host.zig");
-const EvalDynLib = @import("dynlib.zig").DynLib;
+const object_image = @import("object_image.zig");
 const boxy_abi = @import("boxy_abi.zig");
 const boxy_runtime = @import("boxy_runtime.zig");
 const BoxyNativeFnTable = boxy_abi.BoxyNativeFnTable;
@@ -465,8 +465,6 @@ pub const DevBoolRootTiming = struct {
 };
 
 /// Per-call state passed to optimized test entrypoints.
-pub const TestInvocationContext = boxy_abi.InProcessContext;
-
 /// A host event observed while evaluating a bool-returning test root.
 pub const BoolRootEvent = union(enum) {
     dbg: []const u8,
@@ -2880,7 +2878,6 @@ pub fn devEvalSharedBoolRootModules(allocator: Allocator, modules: []const BoolR
         // this function returns.
         var native_fns = boxyNativeFnTable();
         codegen.boxy_native_fns = &native_fns;
-        if (expect_site_count != 0) codegen.setExpectObserverHook(&RuntimeHostEnv.rocExpectObserved);
         if (timing) |timings| timings.finish(codegen_setup_started_ns, .codegen_setup);
 
         const procedure_codegen_started_ns = if (timing) |timings| timings.start() else 0;
@@ -3018,7 +3015,6 @@ fn callBoolRoot(
     store: *const lir.LirStore,
     tables: boxy_runtime.BoxyTables,
     target: BoolRootCallTarget,
-    boxy_fns: *const BoxyNativeFnTable,
     root: BoolRoot,
     longjmp_on_crash: bool,
     call_index: usize,
@@ -3043,11 +3039,6 @@ fn callBoolRoot(
     runtime_env.resetObservation();
     runtime_env.resetAllocationTracker();
     runtime_env.setExpectCounters(expect_passed, expect_failed);
-    var test_context: TestInvocationContext = .{
-        .expect_passed = if (expect_passed.len == 0) null else expect_passed.ptr,
-        .expect_failed = if (expect_failed.len == 0) null else expect_failed.ptr,
-        .boxy_fn_table = boxy_fns,
-    };
     const boxy_runtime_instance = if (tables.needsRuntimeForStore(store))
         try boxy_abi.createRuntimeFromStores(allocator, store, layouts, tables, runtime_env.get_ops())
     else
@@ -3069,25 +3060,23 @@ fn callBoolRoot(
 
     var crash_boundary = runtime_env.enterCrashBoundary();
     defer crash_boundary.deinit();
+    const entered = builtins.in_process_host.enter(runtime_env.get_ops(), RuntimeHostEnv.rocExpectObserved);
+    defer builtins.in_process_host.leave(entered);
     const sj = crash_boundary.set();
     if (sj == 0) {
         switch (target) {
             .llvm => |entry| {
                 entry(
-                    runtime_env.get_ops(),
-                    &test_context,
                     ret_buf.ptr,
                     if (arg_buffer) |buf| @ptrCast(buf.ptr) else null,
                 );
             },
             .dev => |entry| {
-                // Dev-JIT code calls the host's own expect_err wrapper, which
-                // records the `?` region in this thread-local slot; clear any
-                // stale value first.
-                _ = builtins.dev_wrappers.takeExpectErrRegion();
+                // Dev-JIT code records the `?` region through the in-process
+                // host's `roc_expect_err_region`; clear any stale value first.
+                _ = builtins.in_process_host.takeExpectErrRegion();
                 entry.executable.callRocABIAt(
                     entry.entry_offset,
-                    @ptrCast(runtime_env.get_ops()),
                     @ptrCast(ret_buf.ptr),
                     if (arg_buffer) |buf| @ptrCast(buf.ptr) else null,
                 );
@@ -3098,16 +3087,12 @@ fn callBoolRoot(
     const outcome: BoolRootEvalOutcome = switch (runtime_env.crashState()) {
         .did_not_crash => .{ .passed = ret_buf[0] != 0 },
         .crashed => blk: {
-            const expect_err_region: ?struct { start: u32, end: u32 } = switch (target) {
-                .llvm => if (test_context.expect_err_set != 0)
-                    .{ .start = test_context.expect_err_start, .end = test_context.expect_err_end }
-                else
-                    null,
-                .dev => if (builtins.dev_wrappers.takeExpectErrRegion()) |region|
-                    .{ .start = region.start, .end = region.end }
-                else
-                    null,
-            };
+            // Both backends record the `?` region through the in-process
+            // host's `roc_expect_err_region` before crashing.
+            const expect_err_region: ?struct { start: u32, end: u32 } = if (builtins.in_process_host.takeExpectErrRegion()) |region|
+                .{ .start = region.start, .end = region.end }
+            else
+                null;
             if (expect_err_region) |region| {
                 break :blk .{ .expect_err = .{
                     .message = try copyRuntimeCrashMessage(allocator, &runtime_env),
@@ -3126,7 +3111,7 @@ fn callBoolRoot(
     };
 }
 
-const LlvmBoolRootEntryFn = *const fn (*builtins.host_abi.RocOps, *TestInvocationContext, [*]u8, ?*anyopaque) callconv(.c) void;
+const LlvmBoolRootEntryFn = *const fn ([*]u8, ?*anyopaque) callconv(.c) void;
 
 /// An entrypoint wrapper inside a dev-backend executable mapping.
 const DevBoolRootEntry = struct {
@@ -3136,7 +3121,7 @@ const DevBoolRootEntry = struct {
 
 /// How the generated machine code for one bool-returning test root is invoked.
 const BoolRootCallTarget = union(enum) {
-    /// A symbol in a dlopen'd shared library produced by the LLVM backend.
+    /// A symbol in an object produced by the LLVM backend and loaded in-process.
     llvm: LlvmBoolRootEntryFn,
     dev: DevBoolRootEntry,
 };
@@ -3154,7 +3139,6 @@ const BoolRootCall = struct {
 const BoolRootWorkerState = struct {
     allocator: Allocator,
     calls: []const BoolRootCall,
-    boxy_fns: *const BoxyNativeFnTable,
     longjmp_on_crash: bool,
     next_call: std.atomic.Value(usize),
     results: []?BoolRootEvalResult,
@@ -3192,7 +3176,6 @@ fn boolRootWorker(args: *BoolRootWorkerArgs) void {
             call.store,
             call.tables,
             call.target,
-            state.boxy_fns,
             call.root,
             state.longjmp_on_crash,
             index,
@@ -3241,7 +3224,6 @@ fn runBoolRootCalls(
     defer allocator.free(errors);
     for (errors) |*slot| slot.* = null;
 
-    const boxy_fns = boxyNativeFnTable();
     const worker_count = optimizedTestWorkerCount(calls.len, max_workers);
     var total_expect_sites: usize = 0;
     for (calls) |call| {
@@ -3269,7 +3251,6 @@ fn runBoolRootCalls(
     var state = BoolRootWorkerState{
         .allocator = allocator,
         .calls = calls,
-        .boxy_fns = &boxy_fns,
         .longjmp_on_crash = longjmp_on_crash,
         .next_call = std.atomic.Value(usize).init(0),
         .results = slots,
@@ -3375,7 +3356,7 @@ pub fn llvmEvalBoolRootsWithExpectSites(
 }
 
 /// Compile bool-returning test roots from multiple lowered LIR modules via the
-/// LLVM backend, link them into one shared library, and run roots in parallel.
+/// LLVM backend, load them as one in-process object, and run roots in parallel.
 pub fn llvmEvalBoolRootModules(
     allocator: Allocator,
     modules: []const BoolRootModule,
@@ -3385,7 +3366,7 @@ pub fn llvmEvalBoolRootModules(
 }
 
 /// Compile bool-returning test roots from multiple lowered LIR modules via the
-/// LLVM backend, link them into one shared library, and run roots in parallel.
+/// LLVM backend, load them as one in-process object, and run roots in parallel.
 pub fn llvmEvalBoolRootModulesWithMaxWorkers(
     allocator: Allocator,
     modules: []const BoolRootModule,
@@ -3396,7 +3377,7 @@ pub fn llvmEvalBoolRootModulesWithMaxWorkers(
 }
 
 /// Compile bool-returning test roots from multiple lowered LIR modules via the
-/// LLVM backend, link them into one shared library, run roots in parallel, and
+/// LLVM backend, load them as one in-process object, run roots in parallel, and
 /// publish each successful root result as soon as its worker finishes.
 pub fn llvmEvalBoolRootModulesWithMaxWorkersAndCallback(
     allocator: Allocator,
@@ -3409,7 +3390,7 @@ pub fn llvmEvalBoolRootModulesWithMaxWorkersAndCallback(
 }
 
 /// Compile bool-returning test roots from multiple lowered LIR modules via the
-/// LLVM backend, link them into one shared library, run roots in parallel, and
+/// LLVM backend, load them as one in-process object, run roots in parallel, and
 /// publish root-local host events and successful root results while workers run.
 pub fn llvmEvalBoolRootModulesWithMaxWorkersAndCallbacks(
     allocator: Allocator,
@@ -3571,19 +3552,25 @@ fn executeLlvmBoolRootModules(
 
     var compile_options = try llvmCompileOptions(allocator, modules[0].layouts.targetUsize(), opt);
     defer compile_options.deinit(allocator);
-    const dylib_path = try llvm_compile.compileBitcodeModulesToSharedLibrary(
+    const object_bytes = try llvm_compile.compileBitcodeModulesToObject(
         allocator,
         std.Options.debug_io,
         bitcode_slices,
         compile_options.options,
     );
-    defer {
-        std.Io.Dir.deleteFileAbsolute(std.Options.debug_io, dylib_path) catch {};
-        allocator.free(dylib_path);
-    }
+    defer allocator.free(object_bytes);
 
-    var lib = try EvalDynLib.open(allocator, dylib_path);
-    defer lib.close();
+    var lib = object_image.load(allocator, object_bytes) catch |err| switch (err) {
+        error.OutOfMemory => return error.OutOfMemory,
+        error.UnsupportedObject,
+        error.MalformedObject,
+        error.UnsupportedRelocation,
+        error.UndefinedSymbol,
+        error.RelocationOutOfRange,
+        error.MappingFailed,
+        => return error.LlvmBackendUnavailable,
+    };
+    defer lib.deinit();
 
     // The library supplies the exact callable and drop-helper symbols named
     // by each module's frozen graph. Relocate before any root can execute.

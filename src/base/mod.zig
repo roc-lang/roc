@@ -44,7 +44,6 @@ pub const process_memory = @import("process_memory.zig");
 pub const signal_handler = @import("signal_handler.zig");
 pub const stack_budget = @import("stack_budget.zig");
 pub const stack_overflow = @import("stack_overflow.zig");
-pub const elf_self_relocate = @import("elf_self_relocate.zig");
 
 pub const target = @import("target.zig");
 pub const DataSpan = @import("DataSpan.zig").DataSpan;
@@ -176,7 +175,6 @@ test "base tests" {
     std.testing.refAllDecls(@import("SerialStringInterner.zig"));
     std.testing.refAllDecls(@import("SmallStringInterner.zig"));
     std.testing.refAllDecls(@import("SpecializationStrategy.zig"));
-    std.testing.refAllDecls(@import("elf_self_relocate.zig"));
     std.testing.refAllDecls(@import("source_utils.zig"));
     std.testing.refAllDecls(@import("stack_overflow.zig"));
     std.testing.refAllDecls(@import("StringLiteral.zig"));

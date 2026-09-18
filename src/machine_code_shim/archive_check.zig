@@ -41,6 +41,10 @@ const exports = [_][]const u8{
 const imports = symbols.runtime_set ++ .{
     symbols.roc_shim_hosted_fns,
     symbols.roc_shim_hosted_count,
+    symbols.roc_shim_hosted_names,
+    // Referenced weakly by the builtins; a platform executable leaves it
+    // undefined and the `?`-in-expect region goes unrecorded.
+    symbols.roc_expect_err_region,
 };
 
 // Explicit OS ABI dependencies, not symbols discovered from the built archive.
@@ -411,7 +415,12 @@ fn localizeCoff(bytes: []u8) ArchiveError!void {
             else
                 std.mem.sliceTo(sym[0..8], 0);
             if (!contains(&exports, name)) {
-                if (section <= 0 or section > section_count or storage != 2) return error.UnsupportedCoffDefinition;
+                // A private definition lives in one of this object's sections
+                // or is absolute: the default a weak reference resolves to
+                // when nothing defines its target is an absolute zero, named
+                // for the reference and reached by symbol index.
+                const absolute = section == -1;
+                if ((section <= 0 and !absolute) or section > section_count or storage != 2) return error.UnsupportedCoffDefinition;
                 sym[16] = 3; // STATIC: relocations keep referring to the same index.
             }
         }

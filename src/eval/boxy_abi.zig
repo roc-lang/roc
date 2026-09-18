@@ -57,8 +57,6 @@ pub const BoxyNativeFnTable = backend.LirCodeGenMod.BoxyNativeFnTable;
 ///
 /// The function table is immutable input. The observation fields are mutable
 /// output used by test roots; non-test entrypoints initialize them to zero.
-pub const InProcessContext = backend.in_process_abi.Context(BoxyNativeFnTable);
-
 /// Build the explicit function table consumed by in-process machine code.
 pub fn nativeFnTable() BoxyNativeFnTable {
     var table: BoxyNativeFnTable = undefined;
@@ -76,8 +74,6 @@ pub fn nativeFnTable() BoxyNativeFnTable {
 /// worker's result; `ret_desc` receives the result descriptor (null when the
 /// worker produces none).
 pub const BoxyProcFn = *const fn (
-    ops: *RocOps,
-    in_process_context: ?*anyopaque,
     args: [*]const ?*const anyopaque,
     ret: ?*anyopaque,
     ret_desc: *?*const anyopaque,
@@ -427,7 +423,6 @@ pub fn deinitGlobal() void {
 /// arena, and RC plans come uncached from the layout store.
 const AbiHooks = struct {
     g: *GlobalBoxyRuntime,
-    in_process_context: ?*anyopaque,
 
     pub fn resolveDescRef(self: AbiHooks, desc_ref: LIR.BoxyDescRef) Error!*const BoxyTypeDesc {
         return switch (desc_ref) {
@@ -495,8 +490,6 @@ const AbiHooks = struct {
         const ret_size = self.g.runtime.helper.sizeOf(registered.ret_layout);
         var ret_desc: ?*const anyopaque = null;
         registered.callee(
-            self.g.runtime.roc_ops,
-            self.in_process_context,
             arg_ptrs.ptr,
             if (ret_size == 0) null else @ptrCast(ret_value.ptr),
             &ret_desc,
@@ -565,11 +558,7 @@ const AbiHooks = struct {
 };
 
 fn hooks(g: *GlobalBoxyRuntime) AbiHooks {
-    return .{ .g = g, .in_process_context = null };
-}
-
-fn hooksWithInProcessContext(g: *GlobalBoxyRuntime, in_process_context: ?*anyopaque) AbiHooks {
-    return .{ .g = g, .in_process_context = in_process_context };
+    return .{ .g = g };
 }
 
 fn enter(g: *GlobalBoxyRuntime) void {
@@ -805,8 +794,6 @@ const BoxySortContext = struct {
     elem_layouts: [2]layout_mod.Idx,
     descs: []const ?*const BoxyTypeDesc,
     keys: []const LIR.ErasedArgDescKey,
-    in_process: bool,
-    in_process_context: ?*anyopaque,
 };
 
 fn invokeBoxySortComparator(context_bytes: ?*anyopaque, _: [*]u8, args: [*]u8) callconv(.c) u8 {
@@ -825,8 +812,6 @@ fn invokeBoxySortComparator(context_bytes: ?*anyopaque, _: [*]u8, args: [*]u8) c
     var returned_desc: ?*const anyopaque = null;
     invokeErasedCallable(
         context.raw,
-        context.in_process,
-        context.in_process_context,
         context.g.runtime.roc_ops,
         @ptrCast(&ordering),
         invocation_args,
@@ -1106,12 +1091,8 @@ fn prepareErasedInvocationArgsWithKeys(
 /// buffer of its own layout and the result is materialized into the caller's
 /// layout through the target descriptor. When the callable is unregistered or
 /// its actual layout already equals the expected layout, the callable writes
-/// the caller's buffer directly. `in_process` selects the ABI the callable was
-/// compiled against and applies on every one of those paths.
+/// the caller's buffer directly.
 pub fn roc_boxy_call_erased(
-    ops: *RocOps,
-    in_process_context: ?*anyopaque,
-    in_process: bool,
     fn_ptr: ?*const anyopaque,
     ret: ?[*]u8,
     args: ?[*]const u8,
@@ -1133,7 +1114,7 @@ pub fn roc_boxy_call_erased(
     // every erased result already uses the caller's exact layout.
     const g = currentRuntime() orelse {
         var returned_desc: ?*const anyopaque = @ptrCast(result_desc);
-        invokeErasedCallable(raw, in_process, in_process_context, ops, ret, args, capture, reuse, &returned_desc);
+        invokeErasedCallable(raw, builtins.in_process_host.ops(), ret, args, capture, reuse, &returned_desc);
         out_desc.* = if (returned_desc) |desc| @ptrCast(@alignCast(desc)) else null;
         return;
     };
@@ -1141,7 +1122,7 @@ pub fn roc_boxy_call_erased(
     const actual = g.erased_procs.get(@intFromPtr(raw));
     if (actual == null) {
         var returned_desc: ?*const anyopaque = @ptrCast(result_desc);
-        invokeErasedCallable(raw, in_process, in_process_context, g.runtime.roc_ops, ret, args, capture, reuse, &returned_desc);
+        invokeErasedCallable(raw, g.runtime.roc_ops, ret, args, capture, reuse, &returned_desc);
         out_desc.* = if (returned_desc) |desc| @ptrCast(@alignCast(desc)) else null;
         return;
     }
@@ -1170,7 +1151,7 @@ pub fn roc_boxy_call_erased(
     );
     if (actual.?.ret_layout == expected and result_desc == null) {
         var returned_desc: ?*const anyopaque = @ptrCast(metadata_desc);
-        invokeErasedCallable(raw, in_process, in_process_context, g.runtime.roc_ops, ret, invocation_args, invocation_capture, reuse, &returned_desc);
+        invokeErasedCallable(raw, g.runtime.roc_ops, ret, invocation_args, invocation_capture, reuse, &returned_desc);
         out_desc.* = if (returned_desc) |desc| @ptrCast(@alignCast(desc)) else null;
         return;
     }
@@ -1179,7 +1160,7 @@ pub fn roc_boxy_call_erased(
     const actual_size = g.runtime.helper.sizeOf(actual_layout);
     const worker_result = hooks(g).allocValue(actual_layout) catch abiCrash(g, "erased call result buffer");
     var returned_desc: ?*const anyopaque = @ptrCast(metadata_desc);
-    invokeErasedCallable(raw, in_process, in_process_context, g.runtime.roc_ops, if (actual_size == 0) null else @ptrCast(worker_result.ptr), invocation_args, invocation_capture, reuse, &returned_desc);
+    invokeErasedCallable(raw, g.runtime.roc_ops, if (actual_size == 0) null else @ptrCast(worker_result.ptr), invocation_args, invocation_capture, reuse, &returned_desc);
     const actual_desc: ?*const BoxyTypeDesc = if (returned_desc) |desc| @ptrCast(@alignCast(desc)) else null;
     const materialized = g.runtime.materializeCallResult(
         hooks(g),
@@ -1193,23 +1174,9 @@ pub fn roc_boxy_call_erased(
     out_desc.* = materialized.desc;
 }
 
-const InProcessErasedCallableFn = *const fn (
-    ops: *RocOps,
-    in_process_context: ?*anyopaque,
-    ret: ?[*]u8,
-    args: ?[*]const u8,
-    capture: ?[*]u8,
-    reuse: ?[*]u8,
-    out_desc: *?*const anyopaque,
-) callconv(.c) void;
-
-/// Invoke an erased callable through whichever ABI it was compiled against:
-/// backends that emit in-process callables pass the invocation context as
-/// a second parameter, everything else uses the plain public erased ABI.
+/// Invoke an erased callable through the public erased ABI.
 fn invokeErasedCallable(
     raw: *const anyopaque,
-    in_process: bool,
-    in_process_context: ?*anyopaque,
     ops: *RocOps,
     ret: ?[*]u8,
     args: ?[*]const u8,
@@ -1217,13 +1184,8 @@ fn invokeErasedCallable(
     reuse: ?[*]u8,
     out_desc: *?*const anyopaque,
 ) void {
-    if (in_process) {
-        const callable: InProcessErasedCallableFn = @ptrCast(@alignCast(raw));
-        callable(ops, in_process_context, ret, args, capture, reuse, out_desc);
-    } else {
-        const callable: builtins.erased_callable.ErasedCallableFn = @ptrCast(@alignCast(raw));
-        callable(ops, ret, args, capture, reuse, out_desc);
-    }
+    const callable: builtins.erased_callable.ErasedCallableFn = @ptrCast(@alignCast(raw));
+    callable(ops, ret, args, capture, reuse, out_desc);
 }
 
 /// Box a payload into dynamic storage. Writes the boxed value through `out`
@@ -1405,7 +1367,6 @@ pub fn roc_boxy_eq(
 /// resulting `RocStr` through `out`.
 pub fn roc_boxy_inspect(
     out: ?[*]u8,
-    in_process_context: ?*anyopaque,
     source: ?[*]const u8,
     source_layout: u32,
     desc: *const BoxyTypeDesc,
@@ -1423,7 +1384,7 @@ pub fn roc_boxy_inspect(
 
     var bytes = std.ArrayList(u8).empty;
     g.runtime.appendBoxyInspect(
-        hooksWithInProcessContext(g, in_process_context),
+        hooks(g),
         &bytes,
         valueAt(source),
         layoutIdx(source_layout),
@@ -1492,7 +1453,6 @@ pub fn roc_boxy_list_concat(
     elem_layout: u32,
     list_desc: *const BoxyTypeDesc,
     update_modes: u64,
-    _: *RocOps,
 ) callconv(.c) void {
     const g = requireGlobal();
     enter(g);
@@ -1528,7 +1488,6 @@ pub fn roc_boxy_list_prepend(
     elem_layout: u32,
     list_desc: *const BoxyTypeDesc,
     update_mode: builtins.utils.UpdateMode,
-    _: *RocOps,
 ) callconv(.c) void {
     const g = requireGlobal();
     enter(g);
@@ -1563,7 +1522,6 @@ pub fn roc_boxy_list_sublist(
     elem_layout: u32,
     list_desc: *const BoxyTypeDesc,
     update_mode: builtins.utils.UpdateMode,
-    _: *RocOps,
 ) callconv(.c) void {
     const g = requireGlobal();
     enter(g);
@@ -1595,7 +1553,6 @@ pub fn roc_boxy_list_drop_at(
     elem_layout: u32,
     list_desc: *const BoxyTypeDesc,
     update_mode: builtins.utils.UpdateMode,
-    _: *RocOps,
 ) callconv(.c) void {
     const g = requireGlobal();
     enter(g);
@@ -1630,7 +1587,6 @@ pub fn roc_boxy_list_replace(
     elem_layout: u32,
     list_desc: *const BoxyTypeDesc,
     update_mode: builtins.utils.UpdateMode,
-    _: *RocOps,
 ) callconv(.c) void {
     const input = RocList{ .bytes = list_bytes, .length = list_len, .capacity_or_alloc_ptr = list_cap };
     if (update_mode == .InPlace) {
@@ -1672,7 +1628,6 @@ pub fn roc_boxy_list_set(
     elem_layout: u32,
     list_desc: *const BoxyTypeDesc,
     update_mode: builtins.utils.UpdateMode,
-    _: *RocOps,
 ) callconv(.c) void {
     const g = requireGlobal();
     enter(g);
@@ -1708,7 +1663,6 @@ pub fn roc_boxy_list_swap(
     elem_layout: u32,
     list_desc: *const BoxyTypeDesc,
     update_mode: builtins.utils.UpdateMode,
-    _: *RocOps,
 ) callconv(.c) void {
     const g = requireGlobal();
     enter(g);
@@ -1742,7 +1696,6 @@ pub fn roc_boxy_list_reverse(
     elem_layout: u32,
     list_desc: *const BoxyTypeDesc,
     update_mode: builtins.utils.UpdateMode,
-    _: *RocOps,
 ) callconv(.c) void {
     const g = requireGlobal();
     enter(g);
@@ -1779,9 +1732,6 @@ pub fn roc_boxy_list_sort_with(
     elem_layout: u32,
     list_desc: ?*const BoxyTypeDesc,
     update_mode: builtins.utils.UpdateMode,
-    in_process: bool,
-    in_process_context: ?*anyopaque,
-    _: *RocOps,
 ) callconv(.c) void {
     const g = requireGlobal();
     enter(g);
@@ -1836,8 +1786,6 @@ pub fn roc_boxy_list_sort_with(
         .elem_layouts = .{ layoutIdx(elem_layout), layoutIdx(elem_layout) },
         .descs = used_descs,
         .keys = used_keys,
-        .in_process = in_process,
-        .in_process_context = in_process_context,
     };
     var native_ctx: NativeListElementContext = undefined;
     const rc_context: ?*anyopaque = if (elem_ctx) |ctx|
@@ -1891,7 +1839,6 @@ pub fn roc_boxy_list_reserve(
     elem_layout: u32,
     list_desc: *const BoxyTypeDesc,
     update_mode: builtins.utils.UpdateMode,
-    _: *RocOps,
 ) callconv(.c) void {
     const g = requireGlobal();
     enter(g);
@@ -1923,7 +1870,6 @@ pub fn roc_boxy_list_release_excess_capacity(
     elem_layout: u32,
     list_desc: *const BoxyTypeDesc,
     update_mode: builtins.utils.UpdateMode,
-    _: *RocOps,
 ) callconv(.c) void {
     const g = requireGlobal();
     enter(g);
@@ -2229,7 +2175,6 @@ pub fn roc_boxy_dynamic_frac_literal_ref(
 pub fn roc_boxy_call_dict(
     out: ?[*]u8,
     out_desc: *?*const BoxyTypeDesc,
-    in_process_context: ?*anyopaque,
     dict: *const BoxyDict,
     method_slot: u32,
     method: u32,
@@ -2308,8 +2253,6 @@ pub fn roc_boxy_call_dict(
             const ret_value = hooks(g).allocValue(registered.ret_layout) catch abiCrash(g, "dictionary call result buffer");
             var ret_desc: ?*const anyopaque = null;
             registered.callee(
-                g.runtime.roc_ops,
-                in_process_context,
                 arg_ptrs.ptr,
                 if (ret_size == 0) null else @ptrCast(ret_value.ptr),
                 &ret_desc,

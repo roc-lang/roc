@@ -10,7 +10,6 @@ const roc_target = @import("roc_target");
 
 pub const dev = @import("dev/mod.zig");
 pub const wasm = @import("wasm/mod.zig");
-pub const in_process_abi = @import("in_process_abi.zig");
 
 // Re-export dev backend types at top level.
 pub const x86_64 = dev.x86_64;
@@ -54,7 +53,6 @@ test "backend tests" {
     const std = @import("std");
     std.testing.refAllDecls(StructuralTest);
     std.testing.refAllDecls(dev);
-    std.testing.refAllDecls(in_process_abi);
     std.testing.refAllDecls(wasm);
 }
 
@@ -145,9 +143,8 @@ test "issue 10295: dev backend preserves deep structural equality under register
     defer executable.deinit();
 
     var actual: u8 = 0;
-    var dummy_roc_ops: u8 = 0;
-    const entry: *const fn (*anyopaque, *anyopaque) callconv(.c) void = @ptrCast(@alignCast(executable.entryPtr()));
-    entry(@ptrCast(&actual), @ptrCast(&dummy_roc_ops));
+    const entry: *const fn (*anyopaque) callconv(.c) void = @ptrCast(@alignCast(executable.entryPtr()));
+    entry(@ptrCast(&actual));
     try std.testing.expectEqual(@as(u8, 1), actual);
 }
 
@@ -217,9 +214,8 @@ test "issue 10295: nested list equality has bounded register pressure" {
     defer executable.deinit();
 
     var actual: u8 = 0;
-    var dummy_roc_ops: u8 = 0;
-    const entry: *const fn (*anyopaque, *anyopaque) callconv(.c) void = @ptrCast(@alignCast(executable.entryPtr()));
-    entry(@ptrCast(&actual), @ptrCast(&dummy_roc_ops));
+    const entry: *const fn (*anyopaque) callconv(.c) void = @ptrCast(@alignCast(executable.entryPtr()));
+    entry(@ptrCast(&actual));
     try std.testing.expectEqual(@as(u8, 1), actual);
 }
 
@@ -401,6 +397,8 @@ test "issue 10993: erased callable ABI writes exactly ret_size bytes through the
         // only ret_buf[8 .. 8 + expected.len].
         var ret_buf align(16) = [_]u8{0xAA} ** 32;
         var out_desc: ?*const anyopaque = null;
+        const saved_host = builtins.in_process_host.enter(&roc_ops, null);
+        defer builtins.in_process_host.leave(saved_host);
         callable(&roc_ops, ret_buf[8..].ptr, null, null, null, &out_desc);
 
         try std.testing.expectEqualSlices(u8, case.expected, ret_buf[8 .. 8 + case.expected.len]);
