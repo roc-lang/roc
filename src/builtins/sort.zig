@@ -3284,8 +3284,8 @@ test "fluxsort reverses whole quadrants without shifting elements by a byte" {
         var seen = [_]bool{false} ** len;
         for (items) |item| {
             try testing.expect(item.input_index < len);
-            try testing.expect(!seen[item.input_index]);
-            seen[item.input_index] = true;
+            try testing.expect(!seen[@intCast(item.input_index)]);
+            seen[@intCast(item.input_index)] = true;
             const key = if (item.input_index * 2 < len) item.input_index else len - item.input_index;
             try testing.expectEqual(key, item.key);
         }
@@ -3345,7 +3345,8 @@ test "fluxsort agrees with a reference stable sort over randomized inputs" {
         const owned = random.boolean();
         const wide = random.boolean();
 
-        var refcount: isize = 1 << 40;
+        // Leave room for temporary increments on both 32- and 64-bit hosts.
+        var refcount: isize = std.math.maxInt(isize) / 2;
 
         if (wide) {
             var items: [300]Probe32 = undefined;
@@ -3471,11 +3472,11 @@ test "sorting with a self-contradicting comparison still returns a permutation" 
 
             var seen = [_]bool{false} ** 400;
             for (items[0..len]) |item| {
-                if (item.input_index >= len or seen[item.input_index]) {
+                if (item.input_index >= len or seen[@intCast(item.input_index)]) {
                     std.debug.print("seed={d} len={d} duplicated input_index={d}\n", .{ seed, len, item.input_index });
                     return error.TestUnexpectedResult;
                 }
-                seen[item.input_index] = true;
+                seen[@intCast(item.input_index)] = true;
             }
         }
 
@@ -3507,11 +3508,11 @@ test "sorting with a self-contradicting comparison still returns a permutation" 
 
             var wide_seen = [_]bool{false} ** 300;
             for (wide[0..wide_len]) |item| {
-                if (item.item.input_index >= wide_len or wide_seen[item.item.input_index]) {
+                if (item.item.input_index >= wide_len or wide_seen[@intCast(item.item.input_index)]) {
                     std.debug.print("seed={d} wide_len={d} duplicated input_index={d}\n", .{ seed, wide_len, item.item.input_index });
                     return error.TestUnexpectedResult;
                 }
-                wide_seen[item.item.input_index] = true;
+                wide_seen[@intCast(item.item.input_index)] = true;
                 if (item.padding[0] != @as(u8, @intCast(item.item.input_index % 251))) {
                     std.debug.print("seed={d} wide_len={d} corrupted payload\n", .{ seed, wide_len });
                     return error.TestUnexpectedResult;

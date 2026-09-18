@@ -8260,10 +8260,10 @@ pub const MonoLlvmCodeGen = struct {
         if (data_export.relocations.len == 0) {
             return builder.stringConst(builder.string(data_export.bytes) catch return error.OutOfMemory) catch return error.OutOfMemory;
         }
-        const word: u64 = self.targetWordSize();
+        const word: usize = self.targetWordSize();
         for (data_export.relocations) |relocation| {
             if (relocation.kind != .address or relocation.rc_helper != null) return null;
-            if (relocation.offset % word != 0 or relocation.offset + word > data_export.bytes.len) return null;
+            if (relocation.offset % word != 0 or relocation.offset > data_export.bytes.len or word > data_export.bytes.len - relocation.offset) return null;
         }
         const sorted = self.allocator.dupe(lir.Program.StaticDataRelocation, data_export.relocations) catch return error.OutOfMemory;
         defer self.allocator.free(sorted);
@@ -8277,11 +8277,13 @@ pub const MonoLlvmCodeGen = struct {
         defer field_types.deinit(self.allocator);
         var field_values = std.ArrayList(LlvmBuilder.Constant).empty;
         defer field_values.deinit(self.allocator);
-        var cursor: u64 = 0;
+        var cursor: usize = 0;
         for (sorted) |relocation| {
-            if (relocation.offset < cursor) return null;
-            if (relocation.offset > cursor) {
-                const chunk = builder.stringConst(builder.string(data_export.bytes[cursor..relocation.offset]) catch return error.OutOfMemory) catch return error.OutOfMemory;
+            // The range check above proves this serialized offset fits the host buffer.
+            const offset: usize = @intCast(relocation.offset);
+            if (offset < cursor) return null;
+            if (offset > cursor) {
+                const chunk = builder.stringConst(builder.string(data_export.bytes[cursor..offset]) catch return error.OutOfMemory) catch return error.OutOfMemory;
                 try field_types.append(self.allocator, chunk.typeOf(builder));
                 try field_values.append(self.allocator, chunk);
             }
@@ -8290,7 +8292,7 @@ pub const MonoLlvmCodeGen = struct {
             const address = builder.gepConst(.normal, .i8, target, null, &.{addend}) catch return error.OutOfMemory;
             try field_types.append(self.allocator, try self.ptrType());
             try field_values.append(self.allocator, address);
-            cursor = relocation.offset + word;
+            cursor = offset + word;
         }
         if (cursor < data_export.bytes.len) {
             const tail = builder.stringConst(builder.string(data_export.bytes[cursor..]) catch return error.OutOfMemory) catch return error.OutOfMemory;
@@ -12067,7 +12069,7 @@ pub const MonoLlvmCodeGen = struct {
         };
     }
 
-    fn storeListFields(self: *MonoLlvmCodeGen, ptr: LlvmBuilder.Value, bytes: LlvmBuilder.Value, len: usize, cap: usize) Error!void {
+    fn storeListFields(self: *MonoLlvmCodeGen, ptr: LlvmBuilder.Value, bytes: LlvmBuilder.Value, len: u64, cap: u64) Error!void {
         const builder = self.builder orelse return error.CompilationFailed;
         try self.storePointer(ptr, bytes);
         try self.storeListLen(ptr, builder.intValue(self.ptrSizedIntType(), len) catch return error.OutOfMemory);
