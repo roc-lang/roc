@@ -82,8 +82,13 @@ cd "$repo_root"
 # variable, ten instructions per eight bytes instead of nine, and the setup and
 # tail are laid out differently, 94 to 100. The loop is still load, load,
 # compare, advance with the `from_le_bytes` bounds test as its termination.
+# The symbol-backed runtime adapter is immutable so LLVM resolves its callbacks
+# directly. On arm64musl this removes three allocation-setup instructions
+# (adapter address and callback load), restoring 100 instead of 103. On x64musl
+# the adapter-address move disappears; loop and trailing alignment padding also
+# change, for a net 98 to 97. Both compare loops are unchanged.
 expectations=(
-    "x64musl:98"
+    "x64musl:97"
     "arm64musl:100"
 )
 

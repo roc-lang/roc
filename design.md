@@ -14552,6 +14552,11 @@ interpreter-internal structure (the dev-build translation shim and
 compiler-internal evaluation construct one); it is not part of any host ABI,
 and glue never emits it.
 
+The internal adapter from builtin operations to runtime symbols is immutable,
+so optimized compiled code resolves those operations directly. This does not
+make interpreter-owned `RocOps` immutable or bypass their callbacks: shim
+observers and nested evaluator hosts retain their own state and dispatch.
+
 Generated Zig and Rust bindings provide a `RocHost` helper for host-owned
 allocation state. Its fields are exactly the `env` and callback prefix of
 `RocOps`, with callback self pointers referring to `RocHost`. It has no

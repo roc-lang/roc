@@ -80,9 +80,9 @@ pub fn current() ?*RocOps {
 
 /// The ops a builtin called from compiled code uses: the entered evaluation's
 /// in-process, or in a platform the process-wide table over the host's own
-/// runtime symbols.
+/// runtime symbols. Callers may invoke these operations, not modify the table.
 pub fn ops() *RocOps {
-    return current() orelse &symbol_backed_ops;
+    return current() orelse @constCast(&symbol_backed_ops);
 }
 
 /// Return and clear the `?` region recorded by the most recent
@@ -133,9 +133,11 @@ fn symbolCrashed(_: *RocOps, bytes: [*]const u8, len: usize) callconv(.c) void {
     host_abi.extern_host.roc_crashed(bytes, len);
 }
 
-/// A `RocOps` whose every operation is the process's runtime symbol.
-var symbol_backed_ops: RocOps = .{
-    .env = @ptrCast(&symbol_backed_ops),
+/// An immutable adapter over runtime symbols, so compiled builtins can resolve
+/// its callbacks statically. RocOps uses mutable self pointers for host-owned
+/// state, but these callbacks ignore self and never mutate the adapter.
+const symbol_backed_ops: RocOps = .{
+    .env = @ptrCast(@constCast(&symbol_backed_ops)),
     .roc_alloc = &symbolAlloc,
     .roc_dealloc = &symbolDealloc,
     .roc_realloc = &symbolRealloc,
@@ -221,6 +223,36 @@ test "in-process host scopes restore ops and expect observers" {
     try std.testing.expectEqual(outer.getOps(), requireOps());
     rocExpectObserved(4, 1);
     try std.testing.expectEqual(@as(u32, 7), count);
+}
+
+test "immutable symbol adapter uses the entered allocator across nested scopes" {
+    const std = @import("std");
+    const TestEnv = @import("utils.zig").TestEnv;
+    var outer = TestEnv.init(std.testing.allocator);
+    defer outer.deinit();
+    var inner = TestEnv.init(std.testing.allocator);
+    defer inner.deinit();
+    const adapter: *RocOps = @constCast(&symbol_backed_ops);
+
+    const before = enter(outer.getOps(), null);
+    defer leave(before);
+    try std.testing.expectEqual(outer.getOps(), ops());
+    var allocation = adapter.tryAlloc(32, 8).?;
+    try std.testing.expectEqual(@as(usize, 1), outer.getAllocationCount());
+    {
+        const saved = enter(inner.getOps(), null);
+        defer leave(saved);
+        try std.testing.expectEqual(inner.getOps(), ops());
+        const nested = adapter.tryAlloc(16, 8).?;
+        try std.testing.expectEqual(@as(usize, 1), inner.getAllocationCount());
+        adapter.dealloc(nested, 8);
+        try std.testing.expectEqual(@as(usize, 0), inner.getAllocationCount());
+    }
+    try std.testing.expectEqual(outer.getOps(), ops());
+    allocation = adapter.tryRealloc(allocation, 64, 8).?;
+    try std.testing.expectEqual(@as(usize, 1), outer.getAllocationCount());
+    adapter.dealloc(allocation, 8);
+    try std.testing.expectEqual(@as(usize, 0), outer.getAllocationCount());
 }
 
 /// The runtime symbols an in-process host defines, in `runtime_set` order,
