@@ -10,6 +10,7 @@ const ArchiveError = std.fmt.ParseIntError || error{
     DuplicateExport,
     UnexpectedExport,
     UnexpectedImport,
+    UnexpectedTls,
     NoObjectMembers,
     MissingExport,
     MalformedObject,
@@ -56,7 +57,8 @@ const c_imports = [_][]const u8{
     "fmod",   "fmodf",   "trunc",  "truncf",
 };
 // ELF's GOT anchor is supplied by the linker, not by a platform host.
-const linux_imports = c_imports ++ .{ "__tls_get_addr", "___tls_get_addr", "_GLOBAL_OFFSET_TABLE_" };
+// The freestanding shim has no TLS startup and must not import a TLS resolver.
+const linux_imports = c_imports ++ .{"_GLOBAL_OFFSET_TABLE_"};
 const darwin_imports = [_][]const u8{
     // libSystem's IO, mapping, synchronization, TLS and stack-protector ABI.
     "bzero",                 "_NSGetExecutablePath", "__bzero",                "__error",               "__stack_chk_fail",
@@ -243,7 +245,11 @@ fn scanElfClass(comptime Word: type, bytes: []const u8, check: *Check) ArchiveEr
         if (table.len == 0 or table.len % symbol_size != 0) return error.MalformedObject;
         for (0..table.len / symbol_size) |s| {
             const sym = table[s * symbol_size ..][0..symbol_size];
-            const bind = sym[if (wide) 4 else 12] >> 4;
+            const info = sym[if (wide) 4 else 12];
+            // Local TLS is equally invalid: it still needs the host to install
+            // a TLS image, even when codegen does not call a global resolver.
+            if (info & 0xf == std.elf.STT_TLS) return error.UnexpectedTls;
+            const bind = info >> 4;
             if (bind == std.elf.STB_LOCAL) continue;
             const name = try string(strings, try int(u32, sym, 0));
             try check.symbol(name, try int(u16, sym, if (wide) 6 else 14) != std.elf.SHN_UNDEF, true);
@@ -338,6 +344,8 @@ test "OS dependencies are explicit and target specific" {
     try linux.symbol("_GLOBAL_OFFSET_TABLE_", false, true);
     try std.testing.expectError(error.UnexpectedExport, linux.symbol("_GLOBAL_OFFSET_TABLE_", true, true));
     try std.testing.expectError(error.UnexpectedImport, darwin.symbol("_GLOBAL_OFFSET_TABLE_", false, true));
+    try std.testing.expectError(error.UnexpectedImport, linux.symbol("__tls_get_addr", false, true));
+    try std.testing.expectError(error.UnexpectedImport, linux.symbol("___tls_get_addr", false, true));
     try std.testing.expectError(error.UnexpectedImport, linux.symbol("sys_icache_invalidate", false, true));
     try darwin.symbol("sys_icache_invalidate", false, true);
     try windows.symbol("__imp_FlushInstructionCache", false, true);
@@ -491,6 +499,9 @@ test "ELF parser checks weak imports, hidden exports, and missing tables" {
     try std.testing.expectError(error.UnexpectedExport, scanElf(&bytes, &check));
     bytes[sym + 4] = @as(u8, std.elf.STB_LOCAL) << 4;
     try scanElf(&bytes, &check);
+    bytes[sym + 4] |= std.elf.STT_TLS;
+    try std.testing.expectError(error.UnexpectedTls, scanElf(&bytes, &check));
+    bytes[sym + 4] = @as(u8, std.elf.STB_LOCAL) << 4;
     putInt(u32, &bytes, sym_section + 4, std.elf.SHT_NULL);
     try std.testing.expectError(error.MissingSymbolTable, scanElf(&bytes, &check));
 }
@@ -521,6 +532,10 @@ test "ELF32 parser preserves the symbol contract and rejects out-of-bounds secti
     @memcpy(bytes[strings + 1 ..][0..name.len], name);
     var check: Check = .{ .os = .linux };
     try scanElf(&bytes, &check);
+    bytes[sym + 12] = std.elf.STT_TLS; // Local TLS is not a permitted private definition.
+    putInt(u16, &bytes, sym + 14, 1);
+    try std.testing.expectError(error.UnexpectedTls, scanElf(&bytes, &check));
+    bytes[sym + 12] = @as(u8, std.elf.STB_WEAK) << 4;
     putInt(u16, &bytes, sym + 14, 1);
     bytes[sym + 13] = 2; // STV_HIDDEN still exports.
     try std.testing.expectError(error.UnexpectedExport, scanElf(&bytes, &check));
