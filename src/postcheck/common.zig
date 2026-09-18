@@ -84,6 +84,9 @@ pub const StaticDataRequest = struct {
     checked_type: checked.CheckedTypeId,
 };
 
+/// Program-local descriptor index, not a semantic checked-root identity.
+pub const ComptimeValueRootId = enum(u32) { _ };
+
 /// Stable checked identity of one selected compile-time value. Representation
 /// identity belongs to the typed expression that carries this reference.
 pub const ComptimeValueRoot = struct {

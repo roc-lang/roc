@@ -44,11 +44,9 @@ const name_width: usize = 37;
 /// Maximum number of top-level phases a single operation reports.
 const max_phases: usize = 16;
 const max_subphases: usize = 25;
-// Test-cache diagnostics plus the post-check workload groups already require
-// four entries; retain headroom so later explicit diagnostics are not silently
-// dropped merely because their recording order changes.
-// Shared lowering and a separate runtime continuation each report seven groups.
-const max_counter_groups: usize = 16;
+// Shared lowering and a runtime continuation each report eight groups; tests
+// also report result-cache counts on the same operation.
+const max_counter_groups: usize = 2 * 8 + 1;
 const max_counters_per_group: usize = 32;
 
 /// Wide enough for at least seven digits, their grouping underscores, and the ms suffix.

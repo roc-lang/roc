@@ -5099,6 +5099,38 @@ whole bodies to classify branch-chosen loops, count construction-call depth,
 recognize iterator types by text, or set a guessed body category that changes
 how a later clone interprets opaque calls.
 
+Value-aware pattern discovery, final loop-result projection, and iterator-only
+body rewriting may run as independent tasks over a frozen lifted program.
+Discovery returns ordered semantic pattern requests; only the coordinator
+admits patterns, in source-function and request order. Discovery eligibility is
+fixed at phase entry. Requests neither consume admission capacity nor change
+another body's discovery work before publication, even across bounded waves.
+This separates discovery's exact per-body work budget from global admission;
+it does not promise the same candidate set as immediate, interleaved admission.
+Ordinary specialization cloning and callable-worker creation remain serial
+because discovering a new worker can change the current clone's call decision.
+They cannot be made parallel by replaying that decision after emitting its body.
+
+Body tasks borrow source rows and own only appended AST columns and their
+selected function's replacement record. Types and canonical names remain
+immutable: the coordinator prepares query caches before sharing them, and
+workers neither intern identities nor populate shared caches. A missing
+prepared query is an invariant violation, not a serial fallback. Preparation
+is explicit about query kinds: these workers need full and equality digests,
+not specialization digests or iterator-containment caches.
+
+The coordinator commits bounded task waves in source-function order, relocating
+all generated AST references, spans, source metadata, and fresh symbol/join
+identities together. Frozen identities retain their meaning. Allocation counts,
+not surviving-node scans, determine fresh identity ranges. Task scratch cannot
+escape through published rows or retained discovery requests. Accepted tasks
+are drained before their owners are destroyed, including failure paths.
+Donor rows remain immutable, and allocator-owned text retains its independent
+ownership across the publication boundary.
+Serial execution uses the same task and commit boundary. Exact capture
+finalization and usage-dependent localization remain coordinator barriers over
+the completed program.
+
 After the exact append-tail pre-clone rewrite, SpecConstr seals each original
 function's source body together with its measured body-size admission result.
 Every specialization and inline clone consumes that paired source record. Once
@@ -8701,6 +8733,23 @@ layout as three separate data.
 
 Monotype expressions preserve the post-check expression shape, not source syntax
 that has already served checking.
+
+Compile-time value reads carry a compact, program-local
+`ComptimeValueRootId` plus their initializer witness. The full checked module
+key, checked root identity, and optional constant locator live in an immutable
+side table, so infrequent identity metadata does not widen every expression
+row. The initializer remains representation evidence, never a source from
+which to reconstruct the root.
+
+Drafts own their root descriptors until sealing; a draft ID cannot be used in
+the destination program without explicit remapping. Whole-program forks copy
+the table with its ID domain, while Lift transfers it with the expression
+storage. SpecConstr body shards borrow the frozen table without allocating or
+relocating root IDs. Materialized Lambda Mono owns its matching table, and LIR
+lowering resolves the descriptor before producing runtime slots. Local table
+ordinals never replace checked semantic identity in slot caches or serialized
+artifacts, and moving metadata out of line does not change their existing
+module/root matching rules.
 
 ```zig
 const Expr = struct {

@@ -102,6 +102,10 @@ pub const RootRequestSet = struct {
 /// Deterministic task counts for parallel solved-LIR body lowering.
 pub const SolvedLirParallelMetrics = postcheck.SolvedLirLower.ParallelMetrics;
 
+/// Exact staged SpecConstr work, independent of worker completion order.
+pub const SpecConstrParallelMetrics = postcheck.MonotypeLifted.SpecConstr.ParallelMetrics;
+pub const SpecConstrPhase = postcheck.MonotypeLifted.SpecConstr.Phase;
+
 /// Deterministic worker counters for procedure-local LIR optimization phases.
 pub const LirPassParallelMetrics = ProcPasses.ParallelMetrics;
 /// ARC worker task counts and deterministic serial-or-parallel work totals.
@@ -173,6 +177,8 @@ pub const TargetConfig = struct {
     debug_materialized_out: ?*?postcheck.LambdaMono.Ast.Program = null,
     /// Optional deterministic task counts for solved-LIR body-shard lowering.
     solved_lir_parallel_metrics_out: ?*SolvedLirParallelMetrics = null,
+    /// Per-run staged specialization counters; SpecConstr owns resetting them.
+    spec_constr_parallel_metrics_out: ?*SpecConstrParallelMetrics = null,
     /// Reset once before the LIR pass pipeline, then accumulated across phases.
     lir_pass_parallel_metrics_out: ?*LirPassParallelMetrics = null,
     /// Per-run ARC counters; ARC insertion owns resetting this output.
@@ -197,6 +203,8 @@ pub const Timing = struct {
     monotype_diagnostics: postcheck.Monotype.Lower.Diagnostics = .{},
     solved_lir_parallel_mutex: std.Io.Mutex = .init,
     solved_lir_parallel: SolvedLirParallelMetrics = .{},
+    spec_constr_parallel_mutex: std.Io.Mutex = .init,
+    spec_constr_parallel: SpecConstrParallelMetrics = .{},
     lir_pass_parallel_mutex: std.Io.Mutex = .init,
     lir_pass_parallel: LirPassParallelMetrics = .{},
     arc_parallel_mutex: std.Io.Mutex = .init,
@@ -303,6 +311,7 @@ pub const Timing = struct {
             .arc_ns = self.arc_ns.load(),
             .monotype_diagnostics = diagnostics,
             .solved_lir_parallel = self.solvedLirParallelSnapshot(),
+            .spec_constr_parallel = self.specConstrParallelSnapshot(),
             .lir_pass_parallel = self.lirPassParallelSnapshot(),
             .arc_parallel = self.arcParallelSnapshot(),
         };
@@ -331,6 +340,7 @@ pub const Timing = struct {
         self.monotype_finalization_ns.add(snapshot_value.monotype_finalization_ns);
         self.addMonotypeParallel(snapshot_value.monotype_parallel);
         self.addSolvedLirParallel(snapshot_value.solved_lir_parallel);
+        self.addSpecConstrParallel(snapshot_value.spec_constr_parallel);
         self.addLirPassParallel(snapshot_value.lir_pass_parallel);
         self.addArcParallel(snapshot_value.arc_parallel);
         self.boxy_plan_ns.add(snapshot_value.boxy_plan_ns);
@@ -421,6 +431,19 @@ pub const Timing = struct {
         return self.solved_lir_parallel;
     }
 
+    fn addSpecConstrParallel(self: *Timing, parallel: SpecConstrParallelMetrics) void {
+        self.spec_constr_parallel_mutex.lockUncancelable(self.std_io);
+        defer self.spec_constr_parallel_mutex.unlock(self.std_io);
+        self.spec_constr_parallel.add(parallel);
+    }
+
+    fn specConstrParallelSnapshot(self: *const Timing) SpecConstrParallelMetrics {
+        const mutable = @constCast(self);
+        mutable.spec_constr_parallel_mutex.lockUncancelable(self.std_io);
+        defer mutable.spec_constr_parallel_mutex.unlock(self.std_io);
+        return self.spec_constr_parallel;
+    }
+
     fn addLirPassParallel(self: *Timing, parallel: LirPassParallelMetrics) void {
         self.lir_pass_parallel_mutex.lockUncancelable(self.std_io);
         defer self.lir_pass_parallel_mutex.unlock(self.std_io);
@@ -487,6 +510,7 @@ pub const TimingSnapshot = struct {
     monotype_finalization_ns: u64 = 0,
     monotype_parallel: postcheck.Monotype.Lower.ParallelMetricsSnapshot = .{},
     solved_lir_parallel: SolvedLirParallelMetrics = .{},
+    spec_constr_parallel: SpecConstrParallelMetrics = .{},
     lir_pass_parallel: LirPassParallelMetrics = .{},
     arc_parallel: ArcParallelMetrics = .{},
     boxy_plan_ns: u64 = 0,
@@ -583,6 +607,68 @@ test "pipeline timing preserves explicit Solved-LIR metrics output" {
     try std.testing.expectEqualDeep(explicit, timing.snapshot().solved_lir_parallel);
     try std.testing.expectEqual(@as(u64, 3), explicit.tasks_submitted);
     try std.testing.expectEqualDeep(SolvedLirParallelMetrics{}, local);
+}
+
+test "pipeline timing aggregates SpecConstr totals and preserves peaks" {
+    var timing = Timing.init(std.testing.io);
+    var first: SpecConstrParallelMetrics = .{
+        .tasks_submitted = 3,
+        .tasks_committed = 3,
+        .patterns_recorded = 5,
+        .patterns_admitted = 2,
+        .bodies_committed = 4,
+        .expressions_committed = 30,
+        .peak_retained_shards = 2,
+        .committed_by_phase = .{ 1, 2, 3 },
+        .changed_by_phase = .{ 1, 1, 2 },
+    };
+    timing.addSpecConstrParallel(first);
+    var aggregate = Timing.init(std.testing.io);
+    aggregate.addSnapshot(timing.snapshot());
+    aggregate.addSnapshot(timing.snapshot());
+    const doubled = aggregate.snapshot().spec_constr_parallel;
+    inline for (std.meta.fields(SpecConstrParallelMetrics)) |field| {
+        if (comptime std.mem.eql(u8, field.name, "peak_retained_shards")) {
+            try std.testing.expectEqual(@field(first, field.name), @field(doubled, field.name));
+        } else if (field.type == u64) {
+            try std.testing.expectEqual(2 * @field(first, field.name), @field(doubled, field.name));
+        } else {
+            for (@field(first, field.name), @field(doubled, field.name)) |value, total| {
+                try std.testing.expectEqual(2 * value, total);
+            }
+        }
+        if (field.type == u64) {
+            @field(first, field.name) = std.math.maxInt(u64);
+        } else {
+            @memset(&@field(first, field.name), std.math.maxInt(u64));
+        }
+    }
+    aggregate.addSpecConstrParallel(first);
+    aggregate.addSpecConstrParallel(first);
+    try std.testing.expectEqualDeep(first, aggregate.snapshot().spec_constr_parallel);
+    try std.testing.expectEqual(@as(u64, 0), aggregate.snapshot().spec_constr_ns);
+    aggregate = Timing.init(std.testing.io);
+    try std.testing.expectEqualDeep(SpecConstrParallelMetrics{}, aggregate.snapshot().spec_constr_parallel);
+}
+
+test "pipeline timing preserves explicit SpecConstr metrics output" {
+    var timing = Timing.init(std.testing.io);
+    var local: SpecConstrParallelMetrics = .{};
+    var explicit: SpecConstrParallelMetrics = .{ .tasks_submitted = 99 };
+    try std.testing.expect(specConstrMetricsOutput(.{}, &local) == null);
+    try std.testing.expect(specConstrMetricsOutput(.{ .timing = &timing }, &local).? == &local);
+    try std.testing.expect(specConstrMetricsOutput(.{ .spec_constr_parallel_metrics_out = &explicit }, &local).? == &explicit);
+    const output = specConstrMetricsOutput(.{
+        .timing = &timing,
+        .spec_constr_parallel_metrics_out = &explicit,
+    }, &local).?;
+    try std.testing.expect(output == &explicit);
+    try std.testing.expectEqual(@as(u64, 99), explicit.tasks_submitted);
+    // The pass owns resetting its output; aggregation only observes it.
+    output.* = .{ .tasks_submitted = 3, .tasks_committed = 3 };
+    timing.addSpecConstrParallel(output.*);
+    try std.testing.expectEqualDeep(explicit, timing.snapshot().spec_constr_parallel);
+    try std.testing.expectEqualDeep(SpecConstrParallelMetrics{}, local);
 }
 
 test "pipeline timing aggregates ARC counters with saturation and fresh reset" {
@@ -1078,19 +1164,26 @@ pub fn prepareMonotypeToSolved(prepared: PreparedMonotype) Allocator.Error!Prepa
     errdefer if (lifted_owned) lifted.deinit();
     lift_timing_scope.end();
 
+    var local_spec_constr_metrics: SpecConstrParallelMetrics = .{};
+    const spec_constr_metrics = specConstrMetricsOutput(target, &local_spec_constr_metrics);
+    const spec_constr_options: postcheck.MonotypeLifted.SpecConstr.Options = .{
+        .executor = target.post_check_executor,
+        .metrics_out = spec_constr_metrics,
+    };
     var procedure_usage = if (target.inline_mode != .none) blk: {
         var spec_constr_timing_scope = PipelineTimingScope.begin(target.timing, .spec_constr);
         defer spec_constr_timing_scope.end();
-        const usage = try postcheck.MonotypeLifted.SpecConstr.runAndCollectProcedureUsage(allocator, &lifted, target.spec_constr_clone_inlining);
+        const usage = try postcheck.MonotypeLifted.SpecConstr.runAndCollectProcedureUsageWithOptions(allocator, &lifted, target.spec_constr_clone_inlining, spec_constr_options);
         spec_constr_timing_scope.end();
         break :blk usage;
     } else blk: {
         const spec_constr_started_ns = if (target.timing) |timing| timing.start() else 0;
-        try postcheck.MonotypeLifted.SpecConstr.runIteratorFusion(allocator, &lifted);
+        try postcheck.MonotypeLifted.SpecConstr.runIteratorFusionWithOptions(allocator, &lifted, spec_constr_options);
         if (target.timing) |timing| timing.finish(spec_constr_started_ns, .spec_constr);
         break :blk postcheck.MonotypeLifted.SpecConstr.OwnedProcedureUsage.empty(allocator);
     };
     defer procedure_usage.deinit();
+    if (target.timing) |timing| timing.addSpecConstrParallel(spec_constr_metrics.?.*);
 
     const lifted_expr_count = lifted.exprCount();
     if (target.lifted_expr_count_out) |slot| slot.* = lifted_expr_count;
@@ -1214,6 +1307,12 @@ pub fn lowerPreparedSolvedToLir(prepared: PreparedSolved) LowerResourceError!Low
 /// collecting aggregate timings neither resets nor overwrites it a second time.
 fn solvedLirMetricsOutput(target: TargetConfig, local: *SolvedLirParallelMetrics) ?*SolvedLirParallelMetrics {
     return target.solved_lir_parallel_metrics_out orelse
+        if (target.timing != null) local else null;
+}
+
+/// SpecConstr alone resets per-run counters, including caller-owned output.
+fn specConstrMetricsOutput(target: TargetConfig, local: *SpecConstrParallelMetrics) ?*SpecConstrParallelMetrics {
+    return target.spec_constr_parallel_metrics_out orelse
         if (target.timing != null) local else null;
 }
 
