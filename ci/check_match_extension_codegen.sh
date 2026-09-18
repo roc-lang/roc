@@ -82,9 +82,14 @@ cd "$repo_root"
 # variable, ten instructions per eight bytes instead of nine, and the setup and
 # tail are laid out differently, 94 to 100. The loop is still load, load,
 # compare, advance with the `from_le_bytes` bounds test as its termination.
+# Preserving the mutable symbol-backed host callbacks adds three ARM64
+# instructions in List.repeat allocation setup (100 to 103): materializing the
+# adapter address and loading its allocator callback for an indirect call.
+# The compare, byte-tail, and fill loops and return convention are unchanged;
+# x64musl remains at 98.
 expectations=(
     "x64musl:98"
-    "arm64musl:100"
+    "arm64musl:103"
 )
 
 failed=0

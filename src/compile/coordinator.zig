@@ -8498,9 +8498,9 @@ test "shared CTFE and runtime requests specialize once across workers and target
             try std.testing.expectEqual(@as(u32, if (width == base.target.TargetUsize.native) 1 else 2), metrics.lir_continuations);
             try std.testing.expectEqual(@as(usize, 1), runtime.lir_result.root_procs.items.len);
             // The native width reuses the completed host program, whose
-            // value slot is read as frozen data; a forked width lowers its
-            // own continuation, where the completed scalar is a literal and
-            // no value slot survives to be transcoded.
+            // accessor now returns the completed scalar as a literal; a
+            // forked width lowers its own continuation, where the read is
+            // the literal. Either way no value slot survives.
             const frozen = runtime.frozen_static_data orelse return error.TestUnexpectedResult;
             var value_exports: usize = 0;
             for (frozen.exports) |item| {
@@ -8519,13 +8519,9 @@ test "shared CTFE and runtime requests specialize once across workers and target
                     .i64_literal, .f64_literal, .f32_literal, .dec_literal, .str_literal, .boxy_dynamic_num_literal, .boxy_dynamic_frac_literal, .bytes_literal, .null_ptr, .proc_ref => {},
                 }
             }
-            if (width == base.target.TargetUsize.native) {
-                try std.testing.expect(value_exports > 0);
-            } else {
-                try std.testing.expectEqual(@as(usize, 0), value_exports);
-                try std.testing.expectEqual(@as(usize, 0), slot_reads);
-                try std.testing.expectEqual(@as(usize, 1), literal_answers);
-            }
+            try std.testing.expectEqual(@as(usize, 0), value_exports);
+            try std.testing.expectEqual(@as(usize, 0), slot_reads);
+            try std.testing.expectEqual(@as(usize, 1), literal_answers);
         }
     }
 }
