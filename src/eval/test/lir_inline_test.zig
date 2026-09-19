@@ -8948,8 +8948,10 @@ test "W6b widened closed where-method impl is reached through a generated adapte
         \\describe : a -> [Ok(Str), Err(Str), Extra] where [a.status : a -> [Ok(Str), Err(Str)]]
         \\describe = |x| x.status()
         \\
-        \\closed_value : [Ok(Str), Err(Str)]
-        \\closed_value = Ok("cv")
+        \\closed : [Ok(Str), Err(Str)] -> [Ok(Str), Err(Str)]
+        \\closed = |v| v
+        \\
+        \\closed_value = closed(Ok("cv"))
         \\
         \\Job := [Pending].{
         \\    status : Job -> [Ok(Str), Err(Str)]
@@ -8975,8 +8977,10 @@ test "W6b widened closed where-method impl is reached through a generated adapte
         \\describe : a -> [Ok(Str), Err(Str)] where [a.status : a -> [Ok(Str), Err(Str)]]
         \\describe = |x| x.status()
         \\
-        \\closed_value : [Ok(Str), Err(Str)]
-        \\closed_value = Ok("cv")
+        \\closed : [Ok(Str), Err(Str)] -> [Ok(Str), Err(Str)]
+        \\closed = |v| v
+        \\
+        \\closed_value = closed(Ok("cv"))
         \\
         \\Job := [Pending].{
         \\    status : Job -> [Ok(Str), Err(Str)]
@@ -9010,8 +9014,10 @@ test "W6b question-widened closed Try impl is reached through a generated adapte
         \\    Ok(s)
         \\}
         \\
-        \\closed_try : Try(Str, [NotFound])
-        \\closed_try = Ok("hit")
+        \\closed : Try(Str, [NotFound]) -> Try(Str, [NotFound])
+        \\closed = |v| v
+        \\
+        \\closed_try = closed(Ok("hit"))
         \\
         \\Src := [S].{
         \\    fetch : Src -> Try(Str, [NotFound])
@@ -9041,11 +9047,12 @@ test "W6b closed impl reached through nested evidence is adapted" {
     // and only proves it computes the right answer; the adapter count is what
     // proves the mechanism.
     const source =
-        \\closed_ok : [Ok(Str), Err(Str)]
-        \\closed_ok = Ok("ok")
+        \\closed : [Ok(Str), Err(Str)] -> [Ok(Str), Err(Str)]
+        \\closed = |v| v
         \\
-        \\closed_err : [Ok(Str), Err(Str)]
-        \\closed_err = Err("err")
+        \\closed_ok = closed(Ok("ok"))
+        \\
+        \\closed_err = closed(Err("err"))
         \\
         \\Wrap(a) := [W(a)].{
         \\    status : Wrap(a) -> [Ok(Str), Err(Str)] where [a.name : a -> Str]
@@ -9137,11 +9144,12 @@ test "W6b direct-result widening adapter re-tags into the requested row at run t
     // can catch. (`Err` maps 0 to 0 and proves nothing on its own; it is here
     // so both constructors travel through the adapter.)
     const source =
-        \\closed_ok : [Ok(Str), Err(Str)]
-        \\closed_ok = Ok("ok")
+        \\closed : [Ok(Str), Err(Str)] -> [Ok(Str), Err(Str)]
+        \\closed = |v| v
         \\
-        \\closed_err : [Ok(Str), Err(Str)]
-        \\closed_err = Err("bad")
+        \\closed_ok = closed(Ok("ok"))
+        \\
+        \\closed_err = closed(Err("bad"))
         \\
         \\Job := [Pending, Failed].{
         \\    status : Job -> [Ok(Str), Err(Str)]
@@ -9197,11 +9205,12 @@ test "W6b Try error-row widening adapter re-tags into the requested row at run t
     // row numbers `Gone` 0 and `NotFound` 1, and a missing or misordered
     // injection reports `Gone` where the callee returned `NotFound`.
     const source =
-        \\closed_hit : Try(Str, [NotFound])
-        \\closed_hit = Ok("hit")
+        \\closed : Try(Str, [NotFound]) -> Try(Str, [NotFound])
+        \\closed = |v| v
         \\
-        \\closed_miss : Try(Str, [NotFound])
-        \\closed_miss = Err(NotFound)
+        \\closed_hit = closed(Ok("hit"))
+        \\
+        \\closed_miss = closed(Err(NotFound))
         \\
         \\Src := [Found, Missing].{
         \\    fetch : Src -> Try(Str, [NotFound])
@@ -9266,11 +9275,12 @@ test "W6b alias-wrapped closed Try error row is adapted and re-tagged at run tim
     const source =
         \\IoResult(a) : Try(a, [NotFound])
         \\
-        \\closed_hit : IoResult(Str)
-        \\closed_hit = Ok("hit")
+        \\closed : IoResult(Str) -> IoResult(Str)
+        \\closed = |v| v
         \\
-        \\closed_miss : IoResult(Str)
-        \\closed_miss = Err(NotFound)
+        \\closed_hit = closed(Ok("hit"))
+        \\
+        \\closed_miss = closed(Err(NotFound))
         \\
         \\Src := [Found, Missing].{
         \\    fetch : Src -> IoResult(Str)

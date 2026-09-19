@@ -6588,18 +6588,31 @@ tags (`[]`) is exempt: it asserts uninhabitedness (`Try(a, [])` needs no
 `Err` branch), which opening would destroy. Polarity is walk state only
 (`types.Polarity`); no new content kind exists.
 
-What that opening MEANS depends on what is annotated. One spelling, three
+What that opening MEANS depends on what is annotated. One spelling, two
 rules:
 
 | Annotated thing | The opened extension | What a use may do |
 | --- | --- | --- |
-| A FUNCTION signature | A quantified flex in the generalized scheme, instantiated fresh at every call | Each caller may use the result at a wider union, independently of every other caller |
-| A VALUE binding | ONE weak flex shared by every use in the module, grounded to `[]` after the module solves (`Check.closeWeakValueImplicitOpenExts`) | Uses may widen the shared row, and what accumulates is what every later use sees |
+| A FUNCTION signature or a VALUE binding | A quantified flex in the generalized scheme, instantiated fresh at every use | Each use may use the result at a wider union, independently of every other use |
 | A HOST-BOUNDARY annotation (a hosted lambda, a `provides` def, a platform `requires` type) | None: the row is generated exactly as written (`AnnotationGenCtx.opening = .as_written`) | Nothing |
 
-A value binding generalizes only when its annotation writes a type variable,
-exactly as before; a host boundary opts out because the host is a fixed ABI
-rather than a Roc producer participating in unification.
+Minting an implicitly opened extension is itself an opt-in to a quantified
+row, exactly as writing `..` or any other type variable is, so an annotated
+VALUE binding generalizes for the same reason a function does and through the
+same machinery (`Check.isGeneralizableValueBinding`). A host boundary opts out
+because the host is a fixed ABI rather than a Roc producer participating in
+unification.
+
+The value case used to be a THIRD rule: one weak flex shared by every use in
+the module, grounded to `[]` after the module solved. It was removed because
+it was ORDER-DEPENDENT rather than merely permissive. The first use to widen
+the shared row fixed it for every later use, so the same three
+definitions—a value, a use that widens its row, and a use at the annotated
+width—typechecked or did not depending on which of the two INDEPENDENT uses
+was written first, and the Type Mismatch was reported at the second, innocent
+use with a hint naming a tag the first use had introduced. Quantifying the row
+gives every use its own copy, so no use can observe another's widening and
+source order cannot change the answer.
 
 The annotation still BOUNDS the definition—widening happens only at
 instantiation sites. A tag the annotation does not list is absorbed by
@@ -6627,7 +6640,7 @@ parser's error tags, and any tag the validation added to the row by relating it
 to a format method. After finalize, `Check.runLateImplicitOpenExtAudit` reports
 every demanded tag that lies in the extension of a binding whose right-hand side
 contains the demanding expression and whose row the demand shares (the two rows
-end in the same extension variable), before `closeWeakValueImplicitOpenExts`
+end in the same extension variable), before `groundUnquantifiedValueImplicitOpenExts`
 grounds the leftovers to `[]`. The rejected-parent-row case of issue #11246 is
 one such report.
 
@@ -6679,17 +6692,28 @@ the two spellings cannot drift. Elsewhere `..` remains the rigid
 `#others` it always was, and a named extension (`..others`) is always a
 rigid.
 
-The VALUE row above is the pre-polarity behaviour of an inferred value
-(`x = Boom`) extended to annotated ones: the value's body is bounded by the
-audit, and a later annotated use listing fewer tags than the shared row has
-accumulated is rejected by its own audit. Writing `..` on the value opts into
-a quantified row, as it always has. Grounding those extensions is safe because
-nothing in the module can widen them further, and the closed row is exactly
-what the annotation produced before polarity, so importers and Monotype's
-stored constants see the type they always did (an extension that meanwhile
-joined a generalized scheme is left alone). Local value bindings are not
-grounded: their rows behave like inferred local rows and are sealed by
-Monotype's row defaults.
+A value binding's opened row is quantified whether the opening is WRITTEN
+(`x : [Boom, ..]`) or implicit (`x : [Boom]`), so the two spellings mean the
+same thing and `..` on a value is redundant rather than load-bearing. The
+decision is made by a syntactic pre-test over the annotation's own CIR
+(`Check.annotationOpensValueRow`, the third of the walks below) because
+`checkExpr` must push the binding's rank BEFORE the frame materializes the
+annotation, so it cannot read the extensions generation actually minted. An
+UNANNOTATED value (`x = Boom`) still infers one weak row shared by its uses: it
+has no annotation to opt in with, and its row is sealed by Monotype's row
+defaults rather than by the checker. Making the annotation the opt-in is the
+rule functions already have, where annotated and unannotated both generalize.
+
+The implicit opt-in is restricted to TOP-LEVEL bindings, and that restriction
+is a LOWERING bound rather than a typing one. A generalized row on a
+block-local binding reaches Monotype without the binding-scheme metadata a
+top-level one records in its checked module data, and `unifyTagRows` panics
+"instantiation widened a closed tag union" when a use instantiates it wider. That is reachable today by
+writing `x : [A, ..]` on a local, so it is a pre-existing lowering gap rather
+than anything this rule introduced; the rule simply declines to give it a
+second spelling. A local annotated value therefore behaves like a local
+unannotated one, which is what this section already said about local rows.
+Closing that gap is what would let the implicit opt-in apply at every depth.
 
 An ALIAS of a tag union defers the decision to each use site: the alias
 declaration stores a marker rigid (`types.polarity_var_text`, an ordinary
@@ -6800,14 +6824,15 @@ in Phase A and emit in Phase B like every other codec body, and the row is
 decided once, by final sealing. (The two Builder-level `*Expr` restores, which
 own a private graph, are the exception noted in the Monotype sealing rule.)
 
-#### Two Syntactic Walks
+#### Three Syntactic Walks
 
-Two walks over the annotation's own CIR, not over the type graph, decide
-where a use may widen and at what polarity an argument is generated. Each is
-a SEPARATE RULE from the thing it tracks, kept in step by hand: the first
-must match what the coercion generator re-tags, the second what the
-referenced declaration's body does with its formal. Growing either of those
-does not grow the walk.
+Three walks over the annotation's own CIR, not over the type graph, decide
+where a use may widen, at what polarity an argument is generated, and whether
+an annotated value binding generalizes. Each is a SEPARATE RULE from the thing
+it tracks, kept in step by hand: the first must match what the coercion
+generator re-tags, the second what the referenced declaration's body does with
+its formal, the third what annotation generation itself mints. Growing any of
+those does not grow the walk.
 
 `Check.applyTryErrorArgIndex` answers which of a type application's own
 arguments lands in the builtin `Try`'s ERROR cell. It crosses transparent
@@ -6819,7 +6844,22 @@ generated at, by reading the VARIANCE of the formal it is substituted for out
 of the referenced declaration's own annotation, so `Handler([A, B])` composes
 instead of inheriting.
 
-Both stop at the same wall, and it is a MODULE boundary: neither reads a
+`Check.annotationOpensValueRow` answers whether generating this annotation
+will mint an implicitly opened extension at all, which is what makes an
+annotated VALUE binding generalize. It is a walk rather than a read of
+`annotation_implicit_open_exts` for a TIMING reason: `checkExpr` consults
+`shouldGeneralize` and pushes the binding's rank at the frame that then
+materializes the annotation, so the answer is needed before generation has
+produced it. It mirrors the generator's own polarity and reaches into a LOCAL
+alias body, because an alias contributes a marker the reference resolves open.
+Its two error directions are not symmetric, and it is the one walk that fails
+toward the OPEN row: answering yes where the generator mints nothing costs
+only a rank push whose generalize call quantifies nothing, exactly as a
+concrete annotation satisfying `mentions_type_var` already does, while
+answering no where the generator mints would leave an extension neither
+quantified nor closed.
+
+The first two stop at the same wall, and it is a MODULE boundary: neither reads a
 declaration reached as `.external` or `.pending`, because that declaration's
 CIR and its formal names live in another module's stores. (The `Try` walk
 declines a `.builtin` reference too, and that one costs nothing: the
@@ -6836,6 +6876,41 @@ rather than passes straight through.
 Neither stop is free, and the DIRECTION each fails in is the rule. Both fail
 toward the closed row, which is the direction where the annotation keeps
 bounding and a rejected program is the worst outcome.
+
+The generalization walk stops at a declaration chain past
+`max_value_row_decl_depth`, where it answers by polarity alone, and at the same
+module boundary—where it answers NO, the opposite direction from its other
+stops. That asymmetry is measured rather than reasoned: answering yes for an
+`.external` base made every `r : Str` generalize and moved dispatch verdicts
+in modules holding no tag row at all.
+
+That is worth stating as its own trap, because it has now bitten this axis
+twice from opposite directions: A BUILTIN TYPE REACHES AN ORDINARY MODULE AS
+AN `.external`. `Str` and `Try` are declared in `Builtin`, so a written `Try`
+arrives at the walks as an import, not as something the compiler constructed.
+Treating every external as UNKNOWN would therefore have closed every annotated
+error row in the language, which is why `applyDeclKnowledge` splits the
+non-local cases by `externalTypeRefTargetsBuiltin` rather than lumping them;
+treating every external as OPENABLE pulls the whole numeric and string
+vocabulary into value generalization. Neither blanket answer is available, and
+a walk that reaches this boundary has to say which of the two it is choosing
+and why.
+
+The cost of answering NO is that an imported ALIAS whose body is a bare row
+can still mint an extension this walk does not see, and
+`Check.groundUnquantifiedValueImplicitOpenExts` is the backstop that closes
+exactly that residue: a value binding that did not generalize and still holds
+an open extension after the module solves has it grounded to `[]`, which is
+what the whole value rule used to do. A sweep of every `.roc` file in the tree
+found no program that reaches it.
+
+That backstop is expected to be RETIRABLE rather than permanent. Recording a
+per-declaration metadata entry an importer reads—the same entry that lets
+`applyFormalVariances` and `applyTryErrorArgIndex` answer for an `.external`
+base instead of declining—gives this walk the capability it is missing, at
+which point `.external` can be answered properly and the residue shrinks to
+nothing. That is the change to make before deleting the pass, and the reason
+the pass is still here.
 
 The variance walk answers UNKNOWN variance by generating the argument, and
 everything beneath it, AS WRITTEN: no row under an unknown formal is
@@ -7002,9 +7077,18 @@ row means at a boundary. `Check.auditImplicitOpenExts` fires on an extension
 that resolved to a row carrying tags, and the Type Mismatch it reports is
 sound only because the audit has already proved the extension carries tags, so
 a coercion that changes when an extension gains tags moves the audit with it.
-`Check.closeWeakValueImplicitOpenExts` grounds a top-level weak value's
-still-open extensions to `[]`, and cross-module widening of annotated weak
-values waits on this same coercion rather than on a lowering default.
+`Check.groundUnquantifiedValueImplicitOpenExts` grounds to `[]` the still-open
+extensions of a value binding that did not generalize, and it is a backstop
+for a pre-test gap rather than a rule subsumption interacts with. The original
+claim here—that cross-module widening of an annotated value waits on the same
+coercion—was wrong and is superseded: it waits on the row being QUANTIFIED.
+`Lib.x : [A, ..]` imported and used at `[A, B]` was accepted with no
+subsumption implemented and no coercion in the picture, because a quantified
+row hands each importing use its own copy
+(`Check.instantiateImportedBindingVar`), while the same value spelled
+`Lib.x : [A]` was rejected. Generalizing an annotated value's opened row is
+therefore a PREREQUISITE for that half of subsumption, not an independent
+cleanup, and it landed first.
 
 The acceptance bar is that no fixture is edited: a program this design says
 should typecheck must typecheck as written. The hosted instance already meets

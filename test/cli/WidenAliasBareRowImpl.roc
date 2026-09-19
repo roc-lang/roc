@@ -9,8 +9,17 @@ Status : [Ok(Str), Err(Str)]
 describe : a -> [Ok(Str), Err(Str), Extra] where [a.status : a -> Status]
 describe = |x| x.status()
 
-closed_value : Status
-closed_value = Ok("cv")
+# `closed_value` is deliberately UNANNOTATED. An annotated value's implicitly
+# opened row is quantified now (design.md "Polarity"), so an annotation can no
+# longer produce a closed row at all. `closed` takes the row in an INPUT
+# position, where it is generated as written, and returns it, so its result row
+# is bound to `[]` by its own body: an input-position parameter is one of the
+# closed sources design.md names. `closed_value` is therefore still a top-level
+# constant whose row is closed, which is what this fixture needs.
+closed : Status -> Status
+closed = |v| v
+
+closed_value = closed(Ok("cv"))
 
 Job := [Pending].{
     status : Job -> Status

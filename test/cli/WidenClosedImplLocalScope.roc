@@ -5,8 +5,17 @@
 # by `closed_value`, so the adapter is still the only way to reach it.
 WidenClosedImplLocalScope := {}
 
-closed_value : [Ok(Str), Err(Str)]
-closed_value = Ok("cv")
+# `closed_value` is deliberately UNANNOTATED. An annotated value's implicitly
+# opened row is quantified now (design.md "Polarity"), so an annotation can no
+# longer produce a closed row at all. `closed` takes the row in an INPUT
+# position, where it is generated as written, and returns it, so its result row
+# is bound to `[]` by its own body: an input-position parameter is one of the
+# closed sources design.md names. `closed_value` is therefore still a top-level
+# constant whose row is closed, which is what this fixture needs.
+closed : [Ok(Str), Err(Str)] -> [Ok(Str), Err(Str)]
+closed = |v| v
+
+closed_value = closed(Ok("cv"))
 
 Job := [Pending].{
     status : Job -> [Ok(Str), Err(Str)]

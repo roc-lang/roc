@@ -9364,13 +9364,15 @@ test "check type - polarity - annotated value body is bounded" {
     try checkTypesModule(source, .fail_first, "Type Mismatch");
 }
 
-test "check type - polarity - annotated value shares one weak row across uses" {
-    // A value binding's implicitly opened row is one weak variable shared by
-    // every use. The first use widens it to `[A, Boom]`; the second use then
-    // sees a value whose row carries `A`, which its own annotation does not
-    // list. (Exactly how an inferred `e = Boom` already behaves; on main the
-    // closed `[Boom]` rejected both uses.) Write `..` on the value to
-    // generalize it instead—see the next test.
+test "check type - polarity - an annotated value's opened row is quantified" {
+    // A value binding's implicitly opened row is QUANTIFIED, exactly as a
+    // written `..` is (see the `..` control below, which is now the same
+    // program): each use instantiates its own copy, so `use_a` widening the
+    // row to `[A, Boom]` is invisible to `use_b`.
+    //
+    // The row used to be one weak variable shared by every use in the module,
+    // which made this program a Type Mismatch reported at `use_b`—the use that
+    // widened nothing.
     const source =
         \\e : [Boom]
         \\e = Boom
@@ -9381,15 +9383,53 @@ test "check type - polarity - annotated value shares one weak row across uses" {
         \\use_b : Str -> [B, Boom]
         \\use_b = |_| e
     ;
-    try checkTypesModule(source, .fail_first, "Type Mismatch");
+    try checkTypesModuleDefs(source, &.{
+        .{ .def = "use_a", .expected = "Str -> [A, Boom]" },
+        .{ .def = "use_b", .expected = "Str -> [B, Boom]" },
+    });
 }
 
-test "check type - polarity - a defaulted field use may widen a weak value row" {
+test "check type - polarity - an annotated value's verdict does not depend on use order" {
+    // The reason the weak row went. These two modules are the SAME three
+    // definitions—a value, a use that widens its row, and a use at the
+    // annotated width—differing only in the source order of the two uses,
+    // which do not reference each other. Under the shared weak row the second
+    // one typechecked and the first did not, so an edit that only moved a
+    // definition changed the verdict. A quantified row cannot: neither use can
+    // observe the other's copy.
+    const widener_first =
+        \\x : [A]
+        \\x = A
+        \\
+        \\widen : Bool -> [A, B]
+        \\widen = |c| if c x else B
+        \\
+        \\narrow : {} -> [A]
+        \\narrow = |_| x
+    ;
+    const widener_second =
+        \\x : [A]
+        \\x = A
+        \\
+        \\narrow : {} -> [A]
+        \\narrow = |_| x
+        \\
+        \\widen : Bool -> [A, B]
+        \\widen = |c| if c x else B
+    ;
+    inline for (.{ widener_first, widener_second }) |source| {
+        var test_env = try TestEnv.init("Test", source);
+        defer test_env.deinit();
+        try test_env.assertNoErrors();
+    }
+}
+
+test "check type - polarity - a defaulted field use may widen a value row" {
     // A defaulted record field's default expression is an ordinary USE SITE,
-    // so it may widen the weak row of the value it names—exactly like the
-    // accepted first use in the test above. It is checked later than every
-    // other use (`checkPendingDefaults` is the first pass of `finalizeTypes`,
-    // after the whole def pass), and the late implicit-open-ext replay
+    // so it may widen its own copy of the row of the value it names—exactly
+    // like the uses in the test above. It is checked later than every other
+    // use (`checkPendingDefaults` is the first pass of `finalizeTypes`, after
+    // the whole def pass), and the late implicit-open-ext replay
     // (`Check.runLateImplicitOpenExtAudit`) used to read the row after that
     // widening and blame `e` for producing `A`, which `e = Boom` cannot.
     const source =
@@ -9419,8 +9459,10 @@ test "check type - polarity - a defaulted field use at the annotated width is cl
 }
 
 test "check type - polarity - value with explicit open ext generalizes" {
-    // `..` on a value annotation is the opt-in to a quantified row (as on
-    // main): each use instantiates it fresh.
+    // `..` on a value annotation is the opt-in to a quantified row: each use
+    // instantiates it fresh. Now that an IMPLICITLY opened row is quantified
+    // too, this is the same program as the first test above with the opening
+    // written out, and it is kept as the pin that the two spellings agree.
     const source =
         \\e : [Boom, ..]
         \\e = Boom

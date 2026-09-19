@@ -575,6 +575,12 @@ checking_executable_root: bool = false,
 /// treatment of a variable binding. Deliberately NOT set for mutable `var`
 /// bindings, which must never generalize.
 checking_binding_rhs: bool = false,
+/// Whether the immediate binding RHS is a TOP-LEVEL definition's rather than a
+/// block-local `s_decl`'s. Only an implicitly opened row on a top-level value
+/// generalizes (`isGeneralizableValueBinding`); a local one keeps the inferred
+/// behaviour of an unannotated local and is sealed by Monotype's row defaults
+/// (design.md "Polarity").
+checking_top_level_binding_rhs: bool = false,
 /// Pattern for the immediate binding RHS being checked.
 checking_binding_rhs_pattern: ?CIR.Pattern.Idx = null,
 /// The outer RHS expression of the currently checked `_ = ...` discard binding,
@@ -612,12 +618,14 @@ host_boundary_annotations: std.AutoHashMapUnmanaged(CIR.Annotation.Idx, void),
 /// audit (`auditImplicitOpenExts`).
 implicit_open_exts: std.ArrayListUnmanaged(ImplicitOpenExt),
 annotation_implicit_open_exts: std.AutoHashMapUnmanaged(CIR.Annotation.Idx, ImplicitOpenExtRange),
-/// The `implicit_open_exts` ranges of top-level VALUE bindings that do not
-/// generalize (a weak shared row; design.md "Polarity"). Grounded to `[]`
-/// after the module solves (`closeWeakValueImplicitOpenExts`), so the
-/// published type—what importers copy and what stored constants are sealed
-/// against—is the closed row the annotation produced before polarity.
-weak_value_implicit_open_ext_ranges: std.ArrayListUnmanaged(ImplicitOpenExtRange),
+/// The `implicit_open_exts` ranges of VALUE bindings whose rows were minted
+/// but NOT quantified—the residue of the syntactic pre-test that decides
+/// value generalization (`annotationOpensValueRow`; design.md "Three
+/// Syntactic Walks"). Grounded to `[]` after the module solves
+/// (`groundUnquantifiedValueImplicitOpenExts`), so an extension the pre-test
+/// did not see can still not reach the published type—what importers copy and
+/// what stored constants are sealed against—as a bare flex.
+unquantified_value_implicit_open_ext_ranges: std.ArrayListUnmanaged(ImplicitOpenExtRange),
 /// Every implicitly opened extension the post-body audit
 /// (`auditImplicitOpenExts`) visited and did not report, in visit order, with
 /// the binding that owns it. A generated codec validated after that audit can
@@ -2955,7 +2963,7 @@ fn initAssumePrepared(
         .host_boundary_annotations = .empty,
         .implicit_open_exts = .empty,
         .annotation_implicit_open_exts = .empty,
-        .weak_value_implicit_open_ext_ranges = .empty,
+        .unquantified_value_implicit_open_ext_ranges = .empty,
         .late_implicit_open_ext_audits = .empty,
         .erroneous_value_patterns = .empty,
         .rejected_default_exprs = .empty,
@@ -3094,7 +3102,7 @@ pub fn deinit(self: *Self) void {
     self.host_boundary_annotations.deinit(self.gpa);
     self.implicit_open_exts.deinit(self.gpa);
     self.annotation_implicit_open_exts.deinit(self.gpa);
-    self.weak_value_implicit_open_ext_ranges.deinit(self.gpa);
+    self.unquantified_value_implicit_open_ext_ranges.deinit(self.gpa);
     self.late_implicit_open_ext_audits.deinit(self.gpa);
     self.codec_row_demands.deinit(self.gpa);
     self.codec_row_demand_tags.deinit(self.gpa);
@@ -9794,7 +9802,7 @@ fn checkFileInternal(self: *Self, skip_numeric_defaults: bool) std.mem.Allocator
     try self.reportNonExhaustiveLambdaParams(&env);
     try self.reportNonExhaustiveForPatterns(&env);
 
-    try self.closeWeakValueImplicitOpenExts(&env);
+    try self.groundUnquantifiedValueImplicitOpenExts(&env);
 
     try self.pruneSelectedHoistedRootsAfterSolving();
     // Pruning can mark a destructured name erroneous; its uses are poisoned
@@ -14443,7 +14451,7 @@ pub fn checkExprRepl(self: *Self, expr_idx: CIR.Expr.Idx) std.mem.Allocator.Erro
     try self.checkBindingRootsForInfiniteTypes();
     try self.recheckNominalConstructorBackings(&env);
 
-    try self.closeWeakValueImplicitOpenExts(&env);
+    try self.groundUnquantifiedValueImplicitOpenExts(&env);
 
     try self.finalizeExpectEffectSlots();
 
@@ -14562,6 +14570,7 @@ fn checkDef(self: *Self, def_idx: CIR.Def.Idx, env: *Env) std.mem.Allocator.Erro
     if (self.checking_executable_root) self.checking_immediate_callee = true;
     defer self.checking_immediate_callee = saved_checking_immediate_callee;
     self.checking_binding_rhs = true;
+    self.checking_top_level_binding_rhs = true;
     self.checking_binding_rhs_pattern = def.pattern;
     const saved_active_scheme_root = self.active_scheme_root;
     // A singleton value definition has no scheme boundary and therefore owns
@@ -14594,16 +14603,17 @@ fn checkDef(self: *Self, def_idx: CIR.Def.Idx, env: *Env) std.mem.Allocator.Erro
             env,
         );
 
-        // A top-level value binding that does not generalize (not a function,
-        // not a pure signature, not a value alias, and no written type
-        // variable) shares its implicitly opened rows weakly with every use;
-        // whatever is still open after the module solves is grounded to `[]`
-        // (`closeWeakValueImplicitOpenExts`).
-        if (!generalizes_regardless and
-            !self.cir.store.getAnnotation(annotation_idx).mentions_type_var)
-        {
+        // A value binding whose implicitly opened rows were NOT quantified is
+        // the residue of the syntactic pre-test
+        // (`annotationOpensValueRow`): generation minted an extension the
+        // pre-test did not predict, so no rank was pushed and the extension
+        // joined no scheme. Record it so
+        // `groundUnquantifiedValueImplicitOpenExts` can close it once the
+        // module solves. The recorded range is deliberately over-inclusive:
+        // an extension that did join a scheme is skipped there by its rank.
+        if (!generalizes_regardless and !self.isGeneralizableValueBinding(annotation_idx, true, true)) {
             if (self.annotation_implicit_open_exts.get(annotation_idx)) |range| {
-                if (range.len > 0) try self.weak_value_implicit_open_ext_ranges.append(self.gpa, range);
+                if (range.len > 0) try self.unquantified_value_implicit_open_ext_ranges.append(self.gpa, range);
             }
         }
     }
@@ -17081,7 +17091,7 @@ fn implicitOpenExtCarriesTags(self: *const Self, entry: ImplicitOpenExt) bool {
 ///
 /// Codec relations can be validated after the post-body audit read the row,
 /// so this runs once nothing further unifies, before
-/// `closeWeakValueImplicitOpenExts` grounds the remaining extensions to `[]`.
+/// `groundUnquantifiedValueImplicitOpenExts` grounds the remaining extensions to `[]`.
 /// Provenance is exact: each demand names its owning expression and the tags
 /// it requires, so neither timing nor type-graph reachability decides who
 /// widened a row.
@@ -17331,20 +17341,39 @@ fn reportImplicitOpenExtExtension(
     try self.markErroneous(entry.var_);
 }
 
-/// After the module solves, ground every still-open implicitly opened
-/// extension of a top-level weak value binding to `[]` (design.md
-/// "Polarity"). Nothing in this module can widen the row any further, and
-/// the closed row is exactly what the annotation produced before polarity,
-/// so importers and Monotype's stored constants see the type they always
-/// did. An extension that meanwhile joined a generalized scheme (a function's
-/// quantified row) is left alone: closing a quantified variable after it has
-/// been instantiated would desync the scheme from its uses.
+/// After the module solves, ground to `[]` every implicitly opened extension
+/// of a value binding that did NOT generalize (design.md "Three Syntactic
+/// Walks"). This is a BACKSTOP, not the rule: an annotated value binding that
+/// mints such an extension generalizes, so the extension is quantified and
+/// skipped here by its rank. What reaches this loop is the residue of the
+/// syntactic pre-test, whose one known gap is an IMPORTED alias whose body is
+/// a bare row—the pre-test cannot read another module's CIR. A sweep of every
+/// `.roc` file in the tree found no program that reaches it.
+///
+/// Grounding is what the gap needs. An extension left bare-flex in the
+/// published type is copied by `copy_import.zig` with `rank = .generalized`,
+/// so an importer would quantify per use a row this module never decided to
+/// quantify—the rule silently changing at a module boundary—and Monotype
+/// would seal the defining module's own stored constant to `[]` regardless
+/// (`lower.zig` `lowerCheckedTypeVariable`).
+///
+/// An extension that joined a generalized scheme is left alone: closing a
+/// quantified variable after it has been instantiated would desync the scheme
+/// from its uses.
+///
+/// This pass is RETIRABLE, not permanent. Recording a per-declaration metadata
+/// entry an importer reads—the same entry that would let
+/// `applyFormalVariances` and `applyTryErrorArgIndex` answer for an
+/// `.external` base instead of declining—gives `annotationOpensValueRow` the
+/// capability it is missing, at which point `.external` can be answered
+/// properly and this residue shrinks to nothing. Make that change before
+/// deleting this.
 ///
 /// Every entry point runs this AFTER `runLateImplicitOpenExtAudit`, for the
 /// reason stated there: grounding an extension empties it, and the late audit
 /// only reads extensions that still carry tags.
-fn closeWeakValueImplicitOpenExts(self: *Self, env: *Env) std.mem.Allocator.Error!void {
-    for (self.weak_value_implicit_open_ext_ranges.items) |range| {
+fn groundUnquantifiedValueImplicitOpenExts(self: *Self, env: *Env) std.mem.Allocator.Error!void {
+    for (self.unquantified_value_implicit_open_ext_ranges.items) |range| {
         for (self.implicit_open_exts.items[range.start..][0..range.len]) |entry| {
             const resolved = self.types.resolveVar(entry.var_);
             if (resolved.desc.content != .flex) continue;
@@ -18490,6 +18519,189 @@ fn resolvedRigid(self: *Self, var_: Var) ?Rigid {
     return switch (self.types.resolveVar(var_).desc.content) {
         .rigid => |rigid| rigid,
         .flex, .alias, .field_presence, .structure, .err => null,
+    };
+}
+
+/// How many declaration bodies `annotationOpensValueRow` descends through
+/// before it answers conservatively. Same bound and same reason as
+/// `max_formal_variance_decl_depth`: a guard whose only job is to answer must
+/// answer in bounded time, whatever declaration graph it is handed.
+const max_value_row_decl_depth: usize = 8;
+
+/// Whether generating `annotation_idx` will mint at least one IMPLICITLY
+/// OPENED extension, the pre-test that makes an annotated value binding
+/// generalize (`isGeneralizableValueBinding`).
+///
+/// This is the THIRD hand-maintained walk over an annotation's own CIR
+/// (design.md "Three Syntactic Walks"), and it exists for a TIMING reason
+/// rather than a semantic one: `checkExpr` consults `shouldGeneralize` and
+/// pushes the binding's rank BEFORE the frame materializes the annotation, so
+/// the decision cannot read `annotation_implicit_open_exts`, which
+/// `generateAnnotationType` only commits once generation is done.
+///
+/// The walk mirrors `generateAnnoTypeInPlace`'s opening decision, and the two
+/// error directions are NOT symmetric:
+///
+///   * Answering YES where the generator mints nothing is SAFE. The rank push
+///     is paid, and the generalize call then quantifies nothing, exactly as it
+///     already does for a concrete annotation that happens to satisfy
+///     `mentions_type_var` (`x : (a -> a)` writes a var in a negative
+///     position and generalizes today). So every position this walk cannot
+///     read answers YES.
+///   * Answering NO where the generator MINTS is not safe: the extension would
+///     be neither quantified nor closed, and would reach the module boundary
+///     as a bare flex that `copy_import.zig` stamps `.generalized`: the rule
+///     silently changing at a boundary the author did not write.
+fn annotationOpensValueRow(self: *const Self, annotation_idx: CIR.Annotation.Idx) bool {
+    // A host-boundary annotation keeps its rows as written and mints nothing
+    // (see `generateAnnotationType`).
+    if (self.host_boundary_annotations.contains(annotation_idx)) return false;
+    return self.annoOpensRow(self.cir.store.getAnnotation(annotation_idx).anno, .pos, 0);
+}
+
+/// One position of the walk above. `polarity` tracks
+/// `generateAnnoTypeInPlace`'s own polarity exactly; `decl_depth` counts the
+/// alias bodies already entered.
+fn annoOpensRow(
+    self: *const Self,
+    anno_idx: CIR.TypeAnno.Idx,
+    polarity: Polarity,
+    decl_depth: usize,
+) bool {
+    return switch (self.cir.store.getTypeAnno(anno_idx)) {
+        // A written type variable is answered by `mentions_type_var`, which is
+        // consulted beside this walk; nothing here mints on its own.
+        .rigid_var, .rigid_var_lookup, .underscore, .malformed => false,
+        .parens => |p| self.annoOpensRow(p.anno, polarity, decl_depth),
+        // Argument positions negate the surrounding polarity; the return
+        // position preserves it (`generateAnnoTypeInPlace`'s `.@"fn"` arm).
+        .@"fn" => |f| self.anyAnnoOpensRow(f.args, polarity.flip(), decl_depth) or
+            self.annoOpensRow(f.ret, polarity, decl_depth),
+        .tuple => |t| self.anyAnnoOpensRow(t.elems, polarity, decl_depth),
+        .tag => |t| self.anyAnnoOpensRow(t.args, polarity, decl_depth),
+        .record => |r| blk: {
+            for (self.cir.store.sliceAnnoRecordFields(r.fields)) |field_idx| {
+                if (self.annoOpensRow(self.cir.store.getAnnoRecordField(field_idx).ty, polarity, decl_depth)) break :blk true;
+            }
+            break :blk if (r.ext) |ext_idx| self.annoOpensRow(ext_idx, polarity, decl_depth) else false;
+        },
+        .tag_union => |tu| blk: {
+            const tags = self.cir.store.sliceTypeAnnos(tu.tags);
+            // A union with no tags is never opened: `[]` asserts
+            // uninhabitedness, which opening would destroy.
+            if (polarity == .pos and tags.len > 0) {
+                if (tu.ext) |ext_idx| {
+                    // An anonymous `..` in an output position means exactly
+                    // what absence means there, and is minted the same way.
+                    if (self.annoIsAnonymousOpenExt(ext_idx)) break :blk true;
+                } else {
+                    break :blk true;
+                }
+            }
+            if (self.anyAnnoOpensRow(tu.tags, polarity, decl_depth)) break :blk true;
+            break :blk if (tu.ext) |ext_idx| self.annoOpensRow(ext_idx, polarity, decl_depth) else false;
+        },
+        .lookup => |l| self.declOpensRow(l.base, polarity, decl_depth),
+        .apply => |a| blk: {
+            if (self.declOpensRow(a.base, polarity, decl_depth)) break :blk true;
+            // A reference whose variance this walk cannot read generates
+            // everything beneath it `.as_written` at every depth, so no
+            // argument of one can mint. Exhaustive by construction, for the
+            // same reason the generator's own `variance_unknown` is: adding an
+            // `ApplyDeclKnowledge` variant must be a compile error here rather
+            // than a silent answer.
+            switch (self.applyDeclKnowledge(a)) {
+                .unknown => break :blk false,
+                .local, .covariant => {},
+            }
+            var formal_variances: [max_tracked_alias_formals]FormalVariance = undefined;
+            const formal_variances_len = self.applyFormalVariances(a, &formal_variances);
+            for (self.cir.store.sliceTypeAnnos(a.args), 0..) |arg_idx, arg_index| {
+                const arg_polarity = if (formal_variances_len == null)
+                    polarity
+                else
+                    formal_variances[arg_index].compose(polarity);
+                if (self.annoOpensRow(arg_idx, arg_polarity, decl_depth)) break :blk true;
+            }
+            break :blk false;
+        },
+    };
+}
+
+fn anyAnnoOpensRow(
+    self: *const Self,
+    annos: CIR.TypeAnno.Span,
+    polarity: Polarity,
+    decl_depth: usize,
+) bool {
+    for (self.cir.store.sliceTypeAnnos(annos)) |anno_idx| {
+        if (self.annoOpensRow(anno_idx, polarity, decl_depth)) return true;
+    }
+    return false;
+}
+
+/// Whether instantiating the declaration a `.lookup` or `.apply` references
+/// resolves a polarity marker OPEN at this position, the third mint site
+/// `recordOpenedMarkerExts`.
+///
+/// An ALIAS declaration body mints a marker for every extensionless tag union
+/// it holds, and `polarityVarBehavior` resolves those by the referencing
+/// position's polarity, so the alias body is walked at this position's own
+/// polarity. A NOMINAL body has no use-site polarity and closes as written, a
+/// `.builtin` reference is built by `setBuiltinTypeContent` without
+/// instantiating anything, and a `.pending` reference is poisoned before it
+/// generates.
+///
+/// `.external` and `.external_identity` are the positions this walk cannot
+/// read: the declaration's CIR lives in another module's stores, the same wall
+/// `ApplyDeclKnowledge.unknown` stops at. It answers NO rather than
+/// conservatively YES, and the reason is measured rather than argued: YES here
+/// makes every `r : Str` in a test module generalize, because a Builtin type
+/// reaches an ordinary module as an `.external`, and that moved verdicts in
+/// tests with no row in them at all. An imported alias whose body is a bare row
+/// is therefore the one shape whose extension this walk can still miss; the
+/// backstop below (`groundUnquantifiedValueImplicitOpenExts`) closes it, and a
+/// corpus sweep of every `.roc` file found no program that reaches it.
+fn declOpensRow(
+    self: *const Self,
+    decl_base: CIR.TypeAnno.LocalOrExternal,
+    polarity: Polarity,
+    decl_depth: usize,
+) bool {
+    return switch (decl_base) {
+        .builtin, .pending, .external, .external_identity => false,
+        // Only an ALIAS body carries polarity markers. A nominal body closes
+        // as written, and nothing else is a type declaration at all. Listed
+        // exhaustively rather than with an `else`, so a new statement kind is
+        // a compile error here instead of a silent NO from a walk whose whole
+        // job is to not answer NO wrongly.
+        .local => |local| switch (self.cir.store.getStatement(local.decl_idx)) {
+            .s_alias_decl => |alias| if (decl_depth >= max_value_row_decl_depth or alias.anno == .placeholder)
+                polarity == .pos
+            else
+                self.annoOpensRow(alias.anno, polarity, decl_depth + 1),
+            .s_nominal_decl,
+            .s_decl,
+            .s_var,
+            .s_var_uninitialized,
+            .s_reassign,
+            .s_crash,
+            .s_dbg,
+            .s_expr,
+            .s_expect,
+            .s_for,
+            .s_while,
+            .s_infinite_loop,
+            .s_breakable_loop,
+            .s_break,
+            .s_return,
+            .s_import,
+            .s_where_alias_decl,
+            .s_type_anno,
+            .s_type_var_alias,
+            .s_runtime_error,
+            => false,
+        },
     };
 }
 
@@ -21306,8 +21518,10 @@ fn beginExprCheckFrame(
 
     // Consume the binding-RHS flag: it applies only to this expression.
     frame.is_binding_rhs = self.checking_binding_rhs;
+    const is_top_level_binding_rhs = self.checking_top_level_binding_rhs;
     const binding_rhs_pattern = self.checking_binding_rhs_pattern;
     self.checking_binding_rhs = false;
+    self.checking_top_level_binding_rhs = false;
     self.checking_binding_rhs_pattern = null;
     if (frame.is_binding_rhs) {
         if (binding_rhs_pattern) |pattern_idx| {
@@ -21323,7 +21537,7 @@ fn beginExprCheckFrame(
     if (frame.suppress_group_member_generalize) self.suppress_generalize_expr = null;
 
     frame.should_generalize = !frame.suppress_group_member_generalize and
-        self.shouldGeneralize(expr, expected.annotation, frame.is_binding_rhs, frame.is_call_arg);
+        self.shouldGeneralize(expr, expected.annotation, frame.is_binding_rhs, frame.is_call_arg, is_top_level_binding_rhs);
     if (frame.should_generalize) self.active_scheme_root = expr_var_raw;
 
     if (frame.should_generalize) {
@@ -24176,26 +24390,56 @@ fn shouldGeneralize(
     annotation: ?CIR.Annotation.Idx,
     is_binding_rhs: bool,
     is_call_arg: bool,
+    is_top_level_binding_rhs: bool,
 ) bool {
     if (isFunctionDef(&self.cir.store, expr) and expr != .e_closure and !is_call_arg) return true;
     if (is_binding_rhs and (expr == .e_lookup_local or expr == .e_lookup_external)) return true;
-    return self.isGeneralizableValueBinding(annotation, is_binding_rhs);
+    return self.isGeneralizableValueBinding(annotation, is_binding_rhs, is_top_level_binding_rhs);
 }
 
 /// True when a value binding generalizes to its annotated scheme: it sits in
 /// binding-RHS position (only a binding's own right-hand side qualifies; a call
-/// argument never generalizes on its own) and has an annotation introducing a
-/// type variable. The polymorphic annotation is the opt-in, honored regardless
-/// of whether the RHS does work (an expansive definition pays per-specialization—
-/// the cost the author chose by writing the scheme).
+/// argument never generalizes on its own) and has an annotation that quantifies
+/// something. Two spellings do:
+///
+///   - The annotation WRITES a type variable (`mentions_type_var`), including
+///     the anonymous `..` of an explicitly opened row.
+///   - The annotation mints an IMPLICITLY opened extension
+///     (`annotationOpensValueRow`) and the binding is TOP-LEVEL: an
+///     extensionless tag union standing in an output position. The row the
+///     author did not close is the one polarity opens, and it is quantified
+///     for the same reason a written one is.
+///
+/// The second is why a value annotation has exactly ONE meaning again. Before
+/// it, such a row was a single weak variable shared by every use in the module
+/// and grounded to `[]` afterwards, which made the verdict depend on the SOURCE
+/// ORDER of independent uses: the first use to widen the row fixed it, and a
+/// later use at the annotated width was then reported as the error. Quantifying
+/// the row gives every use its own copy, so uses cannot see each other.
+///
+/// The second is restricted to top-level bindings, and that restriction is a
+/// LOWERING bound rather than a typing one: a generalized row on a block-local
+/// binding reaches Monotype without the binding-scheme metadata a top-level one
+/// publishes, and `unifyTagRows` panics "instantiation widened a closed tag
+/// union" when a use instantiates it wider. That is reachable on main today by
+/// writing `x : [A, ..]` on a local, so it is a pre-existing lowering gap this
+/// rule declines to widen the reach of. A local annotated value therefore keeps
+/// the inferred behaviour of an unannotated one, which is also what design.md
+/// already said about local rows.
+///
+/// The annotation is the opt-in either way, honored regardless of whether the
+/// RHS does work (an expansive definition pays per-specialization—the cost the
+/// author chose by writing the scheme).
 fn isGeneralizableValueBinding(
     self: *const Self,
     annotation: ?CIR.Annotation.Idx,
     is_binding_rhs: bool,
+    is_top_level_binding_rhs: bool,
 ) bool {
     if (!is_binding_rhs) return false;
     const annotation_idx = annotation orelse return false;
-    return self.cir.store.getAnnotation(annotation_idx).mentions_type_var;
+    if (self.cir.store.getAnnotation(annotation_idx).mentions_type_var) return true;
+    return is_top_level_binding_rhs and self.annotationOpensValueRow(annotation_idx);
 }
 
 fn exprAlwaysCrashes(self: *const Self, expr_idx: CIR.Expr.Idx) bool {
@@ -24719,6 +24963,7 @@ fn checkBlockStatements(self: *Self, statements: CIR.Statement.Span, env: *Env, 
                     local_procedure_candidate_pushed = true;
                 }
                 self.checking_binding_rhs = true;
+                self.checking_top_level_binding_rhs = false;
                 self.checking_binding_rhs_pattern = decl_stmt.pattern;
                 // The frame's pattern var owns the scheme, so requirement
                 // candidates recorded while checking the RHS and at the
