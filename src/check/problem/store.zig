@@ -231,6 +231,8 @@ pub const Store = struct {
                     .annotation_only_value_use,
                     .unsupported_generated_method,
                     .hosted_unboxed_function,
+                    .hosted_function_not_effectful,
+                    .hosted_type_variable_not_boxed,
                     .host_boundary_open_row,
                     .host_boundary_optional_field,
                     .platform_def_not_found,

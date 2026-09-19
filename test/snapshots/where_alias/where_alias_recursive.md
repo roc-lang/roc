@@ -58,11 +58,11 @@ MISSING METHOD - where_alias_recursive.md:4:26:4:32
 			(line-break)
 			(annotated emphasis "Hint:")
 			(reflow " ")
-			(reflow "For this to work, the type would need to have a method named")
+			(reflow "Did you forget to specify")
 			(reflow " ")
 			(annotated code "to_str")
 			(reflow " ")
-			(reflow "associated with it in the type's declaration."))))
+			(reflow "in the type annotation?"))))
 ~~~
 # TOKENS
 ~~~zig

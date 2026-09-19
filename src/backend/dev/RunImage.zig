@@ -334,7 +334,10 @@ pub fn writeToSharedMemory(
     var name_entries = symbol_names.refs.iterator();
     while (name_entries.next()) |entry| {
         const ref = entry.value_ptr.ref;
-        @memcpy(symbol_names_copy[ref.offset..][0..ref.len], entry.key_ptr.*);
+        const start = try asBoundedOffset(ref.offset, symbol_names_copy.len);
+        const len = try asBoundedLen(ref.len);
+        if (len > symbol_names_copy.len - start) return error.InvalidDevRunImage;
+        @memcpy(symbol_names_copy[start..][0..len], entry.key_ptr.*);
     }
 
     const data_symbols_copy = try image_allocator.alloc(DataSymbol, data_symbols.items.len);
@@ -650,6 +653,15 @@ fn asBoundedOffset(offset: u64, bound: usize) ImageError!usize {
 fn asBoundedLen(len: u64) ImageError!usize {
     if (len > std.math.maxInt(usize)) return error.InvalidDevRunImage;
     return @intCast(len);
+}
+
+test "run image offsets reject values outside the host buffer" {
+    try std.testing.expectEqual(@as(usize, 3), try asBoundedOffset(3, 3));
+    try std.testing.expectError(error.InvalidDevRunImage, asBoundedOffset(4, 3));
+    try std.testing.expectError(error.InvalidDevRunImage, asBoundedOffset(@as(u64, 1) << 32, 3));
+    if (@sizeOf(usize) == 4) {
+        try std.testing.expectError(error.InvalidDevRunImage, asBoundedLen(@as(u64, 1) << 32));
+    }
 }
 
 fn bytesOf(ptr: anytype) []u8 {

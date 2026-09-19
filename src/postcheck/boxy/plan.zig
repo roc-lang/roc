@@ -337,6 +337,10 @@ pub const DirectCallHiddenDescriptorArg = struct {
     rep: TypeRepId,
     source_arg_index: ?u32 = null,
     source_value_rep: ?TypeRepId = null,
+    /// The call-side nominal whose backing `rep` belongs to. Such a `rep` names
+    /// the declaration's formals, so its descriptor is built under this
+    /// nominal's backing-argument substitutions.
+    backing_owner: ?TypeRepId = null,
 };
 
 /// Exact runtime source for one dictionary method worker descriptor.
@@ -656,6 +660,10 @@ pub const WorkerPlan = struct {
     hidden_dicts: Span = .{},
     body_hidden_dicts: Span = .{},
     erased_captures: Span = .{},
+    /// For a hosted worker, the host ABI signature of its extern boundary: the
+    /// hosted declaration's type, with each of its type variable slots
+    /// represented exactly as this worker represents it.
+    host_fn_rep: ?TypeRepId = null,
 };
 
 /// Exact producer for one explicit call argument.
@@ -1013,6 +1021,79 @@ pub const ProgramPlan = struct {
 
     pub fn tagVariantSlice(self: *const ProgramPlan, span: Span) []const TagVariant {
         return self.tag_variants.items[span.start .. span.start + span.len];
+    }
+
+    /// Whether two representations are the same representation under
+    /// different ids: equal kinds and storage metadata, with children and tag
+    /// payloads pairwise identical in turn. A value of one needs no conversion
+    /// to be a value of the other. Inspection demand is descriptor metadata,
+    /// not storage, so it does not distinguish them.
+    pub fn repsStructurallyIdentical(
+        self: *const ProgramPlan,
+        allocator: Allocator,
+        a: TypeRepId,
+        b: TypeRepId,
+    ) Allocator.Error!bool {
+        var assumed = std.AutoHashMap(u64, void).init(allocator);
+        defer assumed.deinit();
+        return try self.repsStructurallyIdenticalInner(a, b, &assumed);
+    }
+
+    fn repsStructurallyIdenticalInner(
+        self: *const ProgramPlan,
+        a: TypeRepId,
+        b: TypeRepId,
+        assumed: *std.AutoHashMap(u64, void),
+    ) Allocator.Error!bool {
+        if (a == b) return true;
+        // A pair already being compared is identical unless some other
+        // position proves otherwise, which is how recursive types terminate.
+        const pair_key = (@as(u64, @intFromEnum(a)) << 32) | @as(u64, @intFromEnum(b));
+        if ((try assumed.getOrPut(pair_key)).found_existing) return true;
+
+        const rep_a = self.representations.items[@intFromEnum(a)];
+        const rep_b = self.representations.items[@intFromEnum(b)];
+        if (!std.meta.eql(rep_a.kind, rep_b.kind)) return false;
+        if (rep_a.record_field_order != rep_b.record_field_order or
+            rep_a.contains_dynamic != rep_b.contains_dynamic or
+            rep_a.presence_slot_present_discriminant != rep_b.presence_slot_present_discriminant or
+            rep_a.inspect_opaque != rep_b.inspect_opaque or
+            rep_a.abi_boxed_backing != rep_b.abi_boxed_backing)
+        {
+            return false;
+        }
+        if (rep_a.declared_fields.len != 0 or rep_b.declared_fields.len != 0 or
+            rep_a.nominal_backing_arg_substitutions.len != 0 or rep_b.nominal_backing_arg_substitutions.len != 0 or
+            rep_a.dictionaries.len != 0 or rep_b.dictionaries.len != 0)
+        {
+            return false;
+        }
+        if (!try self.childrenStructurallyIdentical(rep_a.children, rep_b.children, assumed)) return false;
+
+        const variants_a = self.tagVariantSlice(rep_a.tag_variants);
+        const variants_b = self.tagVariantSlice(rep_b.tag_variants);
+        if (variants_a.len != variants_b.len) return false;
+        for (variants_a, variants_b) |variant_a, variant_b| {
+            if (variant_a.name != variant_b.name or !moduleKeyEqual(variant_a.name_module, variant_b.name_module)) return false;
+            if (!try self.childrenStructurallyIdentical(variant_a.payloads, variant_b.payloads, assumed)) return false;
+        }
+        return true;
+    }
+
+    fn childrenStructurallyIdentical(
+        self: *const ProgramPlan,
+        a: Span,
+        b: Span,
+        assumed: *std.AutoHashMap(u64, void),
+    ) Allocator.Error!bool {
+        const children_a = self.childSlice(a);
+        const children_b = self.childSlice(b);
+        if (children_a.len != children_b.len) return false;
+        for (children_a, children_b) |child_a, child_b| {
+            if (!std.meta.eql(child_a.role, child_b.role) or !std.meta.eql(child_a.record_field_kind, child_b.record_field_kind)) return false;
+            if (!try self.repsStructurallyIdenticalInner(child_a.rep, child_b.rep, assumed)) return false;
+        }
+        return true;
     }
 
     pub fn declaredFieldSlice(self: *const ProgramPlan, span: Span) []const DeclaredField {
@@ -1503,17 +1584,30 @@ const Builder = struct {
     scheme_dictionary_uses: std.ArrayList(struct { worker: WorkerPlanId, param: HiddenDictionaryParam }),
     active_worker: ?WorkerPlanId,
     inspect_demand_count: usize = 0,
-    host_requests: std.ArrayList(TypeRepId) = .empty,
+    hosted_host_requests: std.ArrayList(HostedHostRequest) = .empty,
     host_mode: bool = false,
     host_context: ?u32 = null,
+    host_context_count: u32 = 0,
+    /// While collecting a direct call's hidden descriptor arguments, the
+    /// call-side nominal whose backing the walk is inside.
+    call_descriptor_backing_owner: ?TypeRepId = null,
     host_types: std.AutoHashMapUnmanaged(HostTypeKey, TypeRepId) = .{},
     host_optional_slots: std.AutoHashMapUnmanaged(HostTypeKey, TypeRepId) = .{},
     host_bindings: std.AutoHashMapUnmanaged(HostTypeKey, HostTypeKey) = .{},
+    /// Variable slots of hosted declarations, each bound to the representation
+    /// its worker already uses for that slot.
+    host_slot_reps: std.AutoHashMapUnmanaged(HostTypeKey, TypeRepId) = .{},
     host_nominals: std.HashMapUnmanaged(HostNominalKey, HostNominalEntry, HostNominalKey.Context, 80) = .{},
 
     const HostTypeKey = struct {
         source: CheckedTypeIdentity,
         context: ?u32,
+    };
+    /// A hosted worker whose extern boundary needs its host ABI signature.
+    const HostedHostRequest = struct {
+        worker: WorkerPlanId,
+        declared: CheckedTypeIdentity,
+        declared_rep: TypeRepId,
     };
     const HostNominalEntry = struct { context: u32, rep: TypeRepId };
     const HostNominalKey = struct {
@@ -1575,9 +1669,10 @@ const Builder = struct {
         while (host_nominal_keys.next()) |key| self.allocator.free(key.args);
         self.host_nominals.deinit(self.allocator);
         self.host_bindings.deinit(self.allocator);
+        self.host_slot_reps.deinit(self.allocator);
         self.host_types.deinit(self.allocator);
         self.host_optional_slots.deinit(self.allocator);
-        self.host_requests.deinit(self.allocator);
+        self.hosted_host_requests.deinit(self.allocator);
         self.worker_dictionary_uses.deinit(self.allocator);
         var scheme_params = self.scheme_dictionary_params.valueIterator();
         while (scheme_params.next()) |params| self.allocator.free(params.*);
@@ -4275,8 +4370,79 @@ const Builder = struct {
         }
         const request_start = self.plan.roots.items.len;
         for (self.plan.root_reps.items[request_start..]) |rep| _ = try self.requestHostRep(rep);
-        for (self.host_requests.items) |rep| _ = try self.requestHostRep(rep);
+        for (self.hosted_host_requests.items) |request| try self.materializeHostedHostRep(request);
         try self.finalizeHostNominalStorage();
+    }
+
+    fn freshHostContext(self: *Builder) u32 {
+        const context = self.host_context_count;
+        self.host_context_count += 1;
+        return context;
+    }
+
+    /// A hosted declaration written with type variables is a scheme, and each
+    /// use instantiates it: the host's single C signature covers every
+    /// instantiation because the host never looks inside a variable slot, so
+    /// a slot crosses the boundary exactly as the worker represents it.
+    /// Analyze the declared signature in a context of its own where each
+    /// variable slot is bound to the worker's representation at the same
+    /// position, so no adapter converts a value the host cannot see.
+    fn materializeHostedHostRep(self: *Builder, request: HostedHostRequest) Allocator.Error!void {
+        const context = self.freshHostContext();
+        const worker_rep = self.plan.workers.items[@intFromEnum(request.worker)].rep;
+        var seen = std.AutoHashMap(u64, void).init(self.allocator);
+        defer seen.deinit();
+        try self.bindHostedVariableSlots(request.declared_rep, worker_rep, context, &seen);
+
+        const saved_mode = self.host_mode;
+        const saved_context = self.host_context;
+        self.host_mode = true;
+        self.host_context = null;
+        defer {
+            self.host_mode = saved_mode;
+            self.host_context = saved_context;
+        }
+        const host_rep = try self.analyzeHostType(.{ .source = request.declared, .context = context });
+        self.plan.workers.items[@intFromEnum(request.worker)].host_fn_rep = host_rep;
+    }
+
+    fn bindHostedVariableSlots(
+        self: *Builder,
+        declared_rep_id: TypeRepId,
+        worker_rep_id: TypeRepId,
+        context: u32,
+        seen: *std.AutoHashMap(u64, void),
+    ) Allocator.Error!void {
+        const pair_key = (@as(u64, @intFromEnum(declared_rep_id)) << 32) | @as(u64, @intFromEnum(worker_rep_id));
+        if ((try seen.getOrPut(pair_key)).found_existing) return;
+
+        const declared_rep = self.plan.representations.items[@intFromEnum(declared_rep_id)];
+        const worker_rep = self.plan.representations.items[@intFromEnum(worker_rep_id)];
+        if (declared_rep.kind == .dynamic) {
+            const view = self.moduleForId(declared_rep.source_type.module);
+            switch (view.checked_types.payload(declared_rep.source_type.ty)) {
+                .flex, .rigid => |variable| {
+                    // A defaulted variable lowers to the same type for every
+                    // use, so it is part of the declared signature itself.
+                    if (variable.numeric_default_phase != null or variable.row_default != null) return;
+                },
+                .pending, .err, .alias, .record, .record_unbound, .tuple, .nominal, .function, .empty_record, .tag_union, .empty_tag_union => return,
+            }
+            const slot: HostTypeKey = .{ .source = declared_rep.source_type, .context = context };
+            const entry = try self.host_slot_reps.getOrPut(self.allocator, slot);
+            if (entry.found_existing) {
+                if (entry.value_ptr.* != worker_rep_id) boxyPlanInvariant("one hosted type variable had two worker representations");
+            } else {
+                entry.value_ptr.* = worker_rep_id;
+            }
+            return;
+        }
+
+        const worker_children = self.plan.childSlice(worker_rep.children);
+        for (self.plan.childSlice(declared_rep.children)) |declared_child| {
+            const worker_child = self.namedQuery().findMatchingChildByRole(worker_children, declared_child) orelse continue;
+            try self.bindHostedVariableSlots(declared_child.rep, worker_child.rep, context, seen);
+        }
     }
 
     fn requestHostRep(self: *Builder, worker_rep: TypeRepId) Allocator.Error!TypeRepId {
@@ -4303,6 +4469,7 @@ const Builder = struct {
 
     fn analyzeHostType(self: *Builder, input: HostTypeKey) Allocator.Error!TypeRepId {
         const key = self.resolveHostBinding(input);
+        if (self.host_slot_reps.get(key)) |rep| return rep;
         if (self.host_types.get(key)) |rep| return rep;
         const saved_context = self.host_context;
         self.host_context = key.context;
@@ -4411,7 +4578,7 @@ const Builder = struct {
             try self.host_types.put(self.allocator, key, existing.rep);
             return existing.rep;
         }
-        const context: u32 = @intCast(self.host_nominals.count());
+        const context = self.freshHostContext();
         const rep: TypeRepId = @enumFromInt(@as(u32, @intCast(self.plan.representations.items.len)));
         try self.host_nominals.put(self.allocator, nominal_key, .{ .context = context, .rep = rep });
         args_owned = false;
@@ -6189,9 +6356,10 @@ const Builder = struct {
 
     fn materializeWorkerHiddenDescriptorParams(self: *Builder) Allocator.Error!void {
         for (self.plan.workers.items, 0..) |worker, worker_index| {
-            if (self.workerResolvesToHosted(worker.source) or
-                worker.source == .generated_field_iterator)
-            {
+            // A hosted worker's signature can hold its declaration's type
+            // variable slots, so its caller describes them like any other
+            // worker's; only the extern boundary it calls is descriptor-free.
+            if (worker.source == .generated_field_iterator) {
                 self.plan.workers.items[worker_index].hidden_descs = .{};
                 self.plan.workers.items[worker_index].body_hidden_descs = .{};
                 self.plan.workers.items[worker_index].evidence_only_descs = .{};
@@ -8487,6 +8655,7 @@ const Builder = struct {
                     .rep = desc_arg_rep_id,
                     .source_arg_index = source_arg_index,
                     .source_value_rep = source_value_rep,
+                    .backing_owner = self.call_descriptor_backing_owner,
                 });
             }
         }
@@ -8514,6 +8683,11 @@ const Builder = struct {
             const worker_child = self.plan.children.items[worker_rep.children.start + child_index];
             const call_children = self.plan.childSlice(call_rep.children);
             if (runtime_value_only and !childCarriesRuntimeDescriptor(worker_child.role)) continue;
+            const saved_backing_owner = self.call_descriptor_backing_owner;
+            defer self.call_descriptor_backing_owner = saved_backing_owner;
+            if (worker_child.role == .nominal_backing and call_rep.nominal_backing_arg_substitutions.len != 0) {
+                self.call_descriptor_backing_owner = aligned_call_rep_id;
+            }
             if (!try self.repQuery().repSubtreeHasDescriptor(worker_child.rep)) continue;
             // A generic argument reachable through an unwrapped sibling (e.g. an
             // alias's arg that also appears inside its backing) contributes its
@@ -10435,7 +10609,12 @@ const Builder = struct {
         if (host_function.args.len != worker_function.args.len) {
             boxyPlanInvariant("hosted host signature arity disagreed with worker signature");
         }
-        try self.host_requests.append(self.allocator, try self.analyzeType(view, host_capability.host_checked_fn_root));
+        const worker = self.active_worker orelse boxyPlanInvariant("hosted procedure types were analyzed outside a worker");
+        try self.hosted_host_requests.append(self.allocator, .{
+            .worker = worker,
+            .declared = typeRef(view, host_capability.host_checked_fn_root),
+            .declared_rep = try self.analyzeType(view, host_capability.host_checked_fn_root),
+        });
         for (host_function.args) |arg| {
             _ = try self.analyzeType(view, arg);
         }
@@ -13464,7 +13643,7 @@ test "boxy planner walks callable eval finalized const function bodies" {
     try std.testing.expect(plan.repForSourceType(.{ .module = root_key, .ty = @enumFromInt(fixtureTableIndex(0)) }) != null);
 }
 
-test "boxy planner does not add hidden descriptor params to imported hosted workers" {
+test "boxy planner describes an imported hosted worker's type variables on the Roc side of its extern" {
     const gpa = std.testing.allocator;
 
     var root_checked_module = minimalCheckedArtifact(gpa);
@@ -13662,8 +13841,22 @@ test "boxy planner does not add hidden descriptor params to imported hosted work
     try std.testing.expectEqual(plan.roots.items[0].worker, direct.caller);
     const callee_worker = plan.workers.items[@intFromEnum(direct.worker)];
     try std.testing.expectEqual(WorkerSource{ .procedure_use = imported_use }, callee_worker.source);
-    try std.testing.expectEqual(@as(usize, 0), plan.hiddenDescriptorParamSlice(callee_worker.hidden_descs).len);
-    try std.testing.expectEqual(@as(usize, 0), plan.directCallHiddenDescriptorArgSlice(direct.hidden_desc_args).len);
+    // The generic hosted worker is described by its caller like any other
+    // generic worker, so the direct call supplies every descriptor it takes.
+    const hidden_descs = plan.hiddenDescriptorParamSlice(callee_worker.hidden_descs);
+    try std.testing.expect(hidden_descs.len != 0);
+    try std.testing.expectEqual(hidden_descs.len, plan.directCallHiddenDescriptorArgSlice(direct.hidden_desc_args).len);
+    // The extern boundary's signature carries the worker's own representation
+    // in each type variable slot, so nothing converts a value on the way to
+    // the host.
+    const query = RepQuery{ .plan = &plan, .allocator = gpa };
+    const host_function = query.functionChildren(callee_worker.host_fn_rep orelse return error.TestUnexpectedResult) orelse
+        return error.TestUnexpectedResult;
+    const worker_function = query.functionChildren(callee_worker.rep) orelse return error.TestUnexpectedResult;
+    const host_children = plan.childSlice(plan.representations.items[@intFromEnum(host_function.rep)].children);
+    const worker_children = plan.childSlice(plan.representations.items[@intFromEnum(worker_function.rep)].children);
+    try std.testing.expectEqual(worker_children[worker_function.args_start].rep, host_children[host_function.args_start].rep);
+    try std.testing.expectEqual(worker_function.ret, host_function.ret);
     const substitutions = plan.callTypeSubstitutionSlice(direct.arg_substitutions);
     try std.testing.expectEqual(@as(usize, 1), substitutions.len);
     try expectTypeRef(root_checked_module.key, @enumFromInt(fixtureTableIndex(0)), substitutions[0].operand_type);
