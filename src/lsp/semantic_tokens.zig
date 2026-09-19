@@ -375,6 +375,16 @@ const CheckedClassifier = struct {
         }
     }
 
+    fn setLastIdent(self: *CheckedClassifier, region: Region, ident: base.Ident.Idx, class: Class) void {
+        const name = identTail(self.module_env.common.idents.getText(ident));
+        var matched: ?usize = null;
+        var i = self.firstTokenAtOrAfter(region.start.offset);
+        while (i < self.regions.len and self.regions[i].start.offset < region.end.offset) : (i += 1) {
+            if (std.mem.eql(u8, self.bareTokenText(i), name)) matched = i;
+        }
+        if (matched) |token_index| self.set(token_index, class);
+    }
+
     fn setFirstIdentifier(self: *CheckedClassifier, region: Region, class: Class) void {
         var i = self.firstTokenAtOrAfter(region.start.offset);
         while (i < self.regions.len and self.regions[i].start.offset < region.end.offset) : (i += 1) {
@@ -426,8 +436,9 @@ const CheckedClassifier = struct {
                 for (self.module_env.store.sliceExposedItems(import.exposes)) |item_idx| {
                     const item = self.module_env.store.getExposedItem(item_idx);
                     const item_region = self.nodeRegion(item_idx);
-                    self.setIdent(item_region, item.name, if (startsUpper(self.module_env.common.idents.getText(item.name))) .type else .variable);
-                    if (item.alias) |alias| self.setIdent(item_region, alias, if (startsUpper(self.module_env.common.idents.getText(alias))) .type else .variable);
+                    const class: Class = if (item.kind == .type) .type else .variable;
+                    self.setIdent(item_region, item.name, class);
+                    if (item.alias) |alias| self.setIdent(item_region, alias, class);
                 }
             },
             .s_alias_decl => |decl| self.classifyTypeHeader(decl.header),
@@ -488,9 +499,9 @@ const CheckedClassifier = struct {
         switch (expr) {
             .e_lookup_local => |lookup| self.setFirstIdentifier(region, self.patternClass(lookup.pattern_idx)),
             .e_lookup_external => |lookup| self.setIdent(lookup.region, lookup.ident_idx, self.exprClass(expr_idx)),
-            .e_lookup_associated_local => |lookup| self.setIdent(region, lookup.item_ident, self.exprClass(expr_idx)),
-            .e_lookup_associated => |lookup| self.setIdent(region, lookup.item_ident, self.exprClass(expr_idx)),
-            .e_lookup_associated_resolved => |lookup| self.setIdent(region, lookup.source_ident, self.exprClass(expr_idx)),
+            .e_lookup_associated_local => |lookup| self.setLastIdent(region, lookup.item_ident, self.exprClass(expr_idx)),
+            .e_lookup_associated => |lookup| self.setLastIdent(region, lookup.item_ident, self.exprClass(expr_idx)),
+            .e_lookup_associated_resolved => |lookup| self.setLastIdent(region, lookup.source_ident, self.exprClass(expr_idx)),
             .e_lookup_required => |lookup| {
                 const required = self.module_env.requires_types.items.items[@intFromEnum(lookup.requires_idx)];
                 self.setIdent(region, required.ident, self.exprClass(expr_idx));
@@ -632,10 +643,6 @@ fn isIdentifierTag(tag: Token.Tag) bool {
         tag == .NoSpaceDotQuestionLowerIdent or
         tag == .DotUpperIdent or
         tag == .NoSpaceDotUpperIdent;
-}
-
-fn startsUpper(text: []const u8) bool {
-    return text.len > 0 and std.ascii.isUpper(text[0]);
 }
 
 /// Bit of the `declaration` modifier, matching TOKEN_MODIFIERS in capabilities.zig.
@@ -854,23 +861,29 @@ const Classifier = struct {
 
     fn walkFile(self: *Classifier) Allocator.Error!void {
         const file = self.ast.store.getFile();
-        try self.walkStatements(file.statements);
+        try self.walkStatements(file.statements, true);
     }
 
-    fn walkStatements(self: *Classifier, span: AST.Statement.Span) Allocator.Error!void {
+    fn bindStatement(self: *Classifier, statement: AST.Statement) Allocator.Error!void {
+        if (statement == .decl) {
+            const d = statement.decl;
+            try self.walkPattern(d.pattern, if (self.isLambda(d.body)) .function else .variable);
+        } else if (statement == .type_anno and self.isFunctionType(statement.type_anno.anno)) {
+            try self.bind(statement.type_anno.name, .function);
+        }
+    }
+
+    fn walkStatements(self: *Classifier, span: AST.Statement.Span, hoist: bool) Allocator.Error!void {
         const statements = self.ast.store.statementSlice(span);
 
-        for (statements) |stmt_idx| {
-            const statement = self.ast.store.getStatement(stmt_idx);
-            if (statement == .decl) {
-                const d = statement.decl;
-                try self.walkPattern(d.pattern, if (self.isLambda(d.body)) .function else .variable);
-            } else if (statement == .type_anno and self.isFunctionType(statement.type_anno.anno)) {
-                try self.bind(statement.type_anno.name, .function);
-            }
+        if (hoist) {
+            for (statements) |stmt_idx| try self.bindStatement(self.ast.store.getStatement(stmt_idx));
         }
 
-        for (statements) |stmt_idx| try self.walkStatement(stmt_idx);
+        for (statements) |stmt_idx| {
+            if (!hoist) try self.bindStatement(self.ast.store.getStatement(stmt_idx));
+            try self.walkStatement(stmt_idx);
+        }
     }
 
     fn walkStatement(self: *Classifier, stmt_idx: AST.Statement.Idx) Allocator.Error!void {
@@ -932,7 +945,7 @@ const Classifier = struct {
                 if (t.associated) |associated| {
                     const mark = self.bindings.items.len;
                     defer self.bindings.shrinkRetainingCapacity(mark);
-                    try self.walkStatements(associated.statements);
+                    try self.walkStatements(associated.statements, false);
                 }
             },
             .type_anno => |a| {
@@ -1164,7 +1177,7 @@ const Classifier = struct {
             .block => |b| {
                 const mark = self.bindings.items.len;
                 defer self.bindings.shrinkRetainingCapacity(mark);
-                try self.walkStatements(b.statements);
+                try self.walkStatements(b.statements, false);
             },
             .for_expr => |f| try self.walkFor(f.patt, f.expr, f.body),
             .dbg => |e| try self.walkExpr(e.expr),

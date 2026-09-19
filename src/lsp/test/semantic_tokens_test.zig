@@ -568,6 +568,20 @@ test "a parameter does not leak out of its lambda" {
     });
 }
 
+test "fallback resolves local declarations in source order" {
+    try expectTokens(
+        \\helper = |n| n
+        \\result = {
+        \\    earlier = helper(1)
+        \\    helper = 0
+        \\    earlier
+        \\}
+    , &.{
+        .{ .line = 2, .at = "helper", .token = "helper", .type = .function },
+        .{ .line = 3, .at = "helper", .token = "helper", .type = .variable },
+    });
+}
+
 test "destructured parameters are parameters and their fields are properties" {
     try expectTokens(
         \\sum = |{ x, y: renamed }, (a, b), [first, .. as rest]| x
