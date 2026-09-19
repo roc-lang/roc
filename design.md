@@ -14821,7 +14821,10 @@ A hosted declaration written with type variables is a scheme rather than one
 type, and a use instantiates it. The host's single C signature covers every
 instantiation because a variable position is a pointer at runtime, so those
 slots are the declaration's own; every position the declaration made concrete
-is fixed for all uses exactly as above.
+is fixed for all uses exactly as above. Checking enforces that premise: a type
+variable of a hosted declaration may appear only inside a `Box`, either directly
+or as the argument of a nominal whose backing uses it only inside a `Box`, and
+any other occurrence is reported at the declaration.
 
 The host never looks inside a variable slot, so a slot crosses the boundary
 exactly as the calling Roc code represents it. In `.boxy` a hosted worker is

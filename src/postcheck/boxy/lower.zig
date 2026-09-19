@@ -1211,6 +1211,9 @@ const ProcedureBuilder = struct {
     erased_worker_procs: []?LIR.LirProcSpecId,
     hosted_external_procs: []?LIR.LirProcSpecId,
     type_desc_ids: []?LIR.BoxyTypeDescId,
+    /// Descriptors of nominal backing representations, each built under the
+    /// backing-argument substitutions of the nominal that owns it.
+    nominal_backing_type_desc_ids: std.AutoHashMapUnmanaged(NominalBackingDescKey, LIR.BoxyTypeDescId) = .{},
     generated_evidence_desc_ids: [4]?LIR.BoxyTypeDescId,
     static_dict_cache: std.ArrayList(StaticDictCacheEntry),
     static_inspect_method_cache: std.ArrayList(StaticInspectMethodCacheEntry),
@@ -1307,6 +1310,7 @@ const ProcedureBuilder = struct {
         self.static_dict_cache.deinit(self.allocator);
         self.allocator.free(self.hosted_catalog);
         self.allocator.free(self.type_desc_ids);
+        self.nominal_backing_type_desc_ids.deinit(self.allocator);
         self.allocator.free(self.hosted_external_procs);
         self.allocator.free(self.erased_worker_procs);
         self.allocator.free(self.worker_procs);
@@ -3735,6 +3739,47 @@ const ProcedureBuilder = struct {
             current = self.descriptorBackingShapeRep(current) orelse return;
         }
         boxyLowerInvariant("cyclic static descriptor storage wrapper");
+    }
+
+    const NominalBackingDescKey = struct {
+        rep: Plan.TypeRepId,
+        owner: Plan.TypeRepId,
+    };
+
+    /// Whether every backing-argument substitution of the nominal
+    /// `owner_rep_id` names a representation with no dynamic part, so the
+    /// substitutions alone describe everything its backing's formals stand for.
+    fn nominalBackingSubstitutionsAreStatic(self: *const ProcedureBuilder, owner_rep_id: Plan.TypeRepId) bool {
+        var current = owner_rep_id;
+        for (0..self.plan.representations.items.len) |_| {
+            const rep = self.plan.representations.items[@intFromEnum(current)];
+            var substitutions = self.plan.nominalBackingSubstitutions(rep.nominal_backing_arg_substitutions);
+            while (substitutions.next()) |substitution| {
+                if (self.plan.representations.items[@intFromEnum(substitution.actual_rep)].contains_dynamic) return false;
+            }
+            current = self.descriptorBackingShapeRep(current) orelse return true;
+        }
+        boxyLowerInvariant("cyclic static descriptor storage wrapper");
+    }
+
+    /// The descriptor of `rep_id`, a representation inside the backing of the
+    /// nominal `owner_rep_id`. The backing names the declaration's formals, so
+    /// the owner's backing-argument substitutions decide what they describe.
+    fn typeDescForRepInNominalBacking(
+        self: *ProcedureBuilder,
+        rep_id: Plan.TypeRepId,
+        owner_rep_id: Plan.TypeRepId,
+    ) Allocator.Error!LIR.BoxyTypeDescId {
+        const key = NominalBackingDescKey{ .rep = rep_id, .owner = owner_rep_id };
+        if (self.nominal_backing_type_desc_ids.get(key)) |existing| return existing;
+        var descriptor_sources = StaticDescriptorSourceMap{};
+        defer descriptor_sources.deinit(self.allocator);
+        try self.collectStaticNominalBackingDescriptorSources(owner_rep_id, &descriptor_sources);
+        var context = StaticDescInstantiationContext{};
+        defer context.deinit(self.allocator);
+        const desc_id = try self.typeDescForWorkerRepWithSourceMap(rep_id, rep_id, &descriptor_sources, &context);
+        try self.nominal_backing_type_desc_ids.put(self.allocator, key, desc_id);
+        return desc_id;
     }
 
     fn typeDescForRep(self: *ProcedureBuilder, rep_id: Plan.TypeRepId) Allocator.Error!LIR.BoxyTypeDescId {
@@ -12600,6 +12645,11 @@ const ProcBodyBuilder = struct {
                     continue;
                 }
                 const identity_rep = self.parent.descriptorIdentityRep(param.rep);
+                // A parameter whose representation shares its descriptor
+                // identity with another—a box stored exactly as its dynamic
+                // payload—describes that same identity. The parameter for the
+                // identity itself is the one that overrides it.
+                if (identity_rep != param.rep) continue;
                 for (overrides.items) |override| {
                     if (override.rep != identity_rep) continue;
                     if (override.local != local) {
@@ -12607,6 +12657,20 @@ const ProcBodyBuilder = struct {
                     }
                     break;
                 } else {
+                    try overrides.append(self.parent.allocator, .{ .rep = identity_rep, .local = local });
+                }
+            }
+            // A collapsed parameter still overrides an identity that has no
+            // parameter of its own.
+            for (params.items, 0..) |param, param_index| {
+                if (root_param_index == param_index) continue;
+                const identity_rep = self.parent.descriptorIdentityRep(param.rep);
+                if (identity_rep == param.rep) continue;
+                for (overrides.items) |override| {
+                    if (override.rep == identity_rep) break;
+                } else {
+                    const local = self.descriptorLocalForRequirementAndRepOrNull(param.desc, param.rep) orelse
+                        boxyLowerInvariant("boxy worker argument descriptor had no exact hidden parameter local");
                     try overrides.append(self.parent.allocator, .{ .rep = identity_rep, .local = local });
                 }
             }
@@ -26021,6 +26085,16 @@ const ProcBodyBuilder = struct {
                         if (bound_local != local.local) {
                             local.materialize = .{ .local = bound_local };
                         }
+                        continue;
+                    }
+                }
+                if (arg.backing_owner) |owner| {
+                    // A backing whose owner substitutes only static
+                    // representations for its formals has a static
+                    // descriptor; one whose formals stand for the caller's own
+                    // dynamic values is described from the caller's bindings.
+                    if (call_rep.contains_dynamic and self.parent.nominalBackingSubstitutionsAreStatic(owner)) {
+                        local.materialize = .{ .static = try self.parent.typeDescForRepInNominalBacking(identity_call_rep, owner) };
                         continue;
                     }
                 }

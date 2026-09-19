@@ -337,6 +337,10 @@ pub const DirectCallHiddenDescriptorArg = struct {
     rep: TypeRepId,
     source_arg_index: ?u32 = null,
     source_value_rep: ?TypeRepId = null,
+    /// The call-side nominal whose backing `rep` belongs to. Such a `rep` names
+    /// the declaration's formals, so its descriptor is built under this
+    /// nominal's backing-argument substitutions.
+    backing_owner: ?TypeRepId = null,
 };
 
 /// Exact runtime source for one dictionary method worker descriptor.
@@ -1020,9 +1024,10 @@ pub const ProgramPlan = struct {
     }
 
     /// Whether two representations are the same representation under
-    /// different ids: equal kinds and metadata, with children and tag payloads
-    /// pairwise identical in turn. A value of one needs no conversion to be a
-    /// value of the other.
+    /// different ids: equal kinds and storage metadata, with children and tag
+    /// payloads pairwise identical in turn. A value of one needs no conversion
+    /// to be a value of the other. Inspection demand is descriptor metadata,
+    /// not storage, so it does not distinguish them.
     pub fn repsStructurallyIdentical(
         self: *const ProgramPlan,
         allocator: Allocator,
@@ -1053,8 +1058,7 @@ pub const ProgramPlan = struct {
             rep_a.contains_dynamic != rep_b.contains_dynamic or
             rep_a.presence_slot_present_discriminant != rep_b.presence_slot_present_discriminant or
             rep_a.inspect_opaque != rep_b.inspect_opaque or
-            rep_a.abi_boxed_backing != rep_b.abi_boxed_backing or
-            rep_a.inspect_demanded != rep_b.inspect_demanded)
+            rep_a.abi_boxed_backing != rep_b.abi_boxed_backing)
         {
             return false;
         }
@@ -1584,6 +1588,9 @@ const Builder = struct {
     host_mode: bool = false,
     host_context: ?u32 = null,
     host_context_count: u32 = 0,
+    /// While collecting a direct call's hidden descriptor arguments, the
+    /// call-side nominal whose backing the walk is inside.
+    call_descriptor_backing_owner: ?TypeRepId = null,
     host_types: std.AutoHashMapUnmanaged(HostTypeKey, TypeRepId) = .{},
     host_optional_slots: std.AutoHashMapUnmanaged(HostTypeKey, TypeRepId) = .{},
     host_bindings: std.AutoHashMapUnmanaged(HostTypeKey, HostTypeKey) = .{},
@@ -8648,6 +8655,7 @@ const Builder = struct {
                     .rep = desc_arg_rep_id,
                     .source_arg_index = source_arg_index,
                     .source_value_rep = source_value_rep,
+                    .backing_owner = self.call_descriptor_backing_owner,
                 });
             }
         }
@@ -8675,6 +8683,11 @@ const Builder = struct {
             const worker_child = self.plan.children.items[worker_rep.children.start + child_index];
             const call_children = self.plan.childSlice(call_rep.children);
             if (runtime_value_only and !childCarriesRuntimeDescriptor(worker_child.role)) continue;
+            const saved_backing_owner = self.call_descriptor_backing_owner;
+            defer self.call_descriptor_backing_owner = saved_backing_owner;
+            if (worker_child.role == .nominal_backing and call_rep.nominal_backing_arg_substitutions.len != 0) {
+                self.call_descriptor_backing_owner = aligned_call_rep_id;
+            }
             if (!try self.repQuery().repSubtreeHasDescriptor(worker_child.rep)) continue;
             // A generic argument reachable through an unwrapped sibling (e.g. an
             // alias's arg that also appears inside its backing) contributes its
