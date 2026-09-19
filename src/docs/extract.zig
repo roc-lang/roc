@@ -367,8 +367,7 @@ pub fn extractModuleDocsWithOptions(
             if (!isUnderExposedName(&exposed_names, entry_name)) continue;
         }
         if (documented_region) |root_region| {
-            const def_region = module_env.store.getPatternRegion(module_env.store.getDef(def_idx).pattern);
-            if (!regionEncloses(root_region, def_region)) continue;
+            if (!regionEncloses(root_region, module_env.store.getNodeRegion(ModuleEnv.nodeIdxFrom(def_idx)))) continue;
         }
         if (try extractDefEntry(gpa, module_env, local_module_path, reference_routing, def_idx, source, line_index)) |entry| {
             var public_entry = entry;
