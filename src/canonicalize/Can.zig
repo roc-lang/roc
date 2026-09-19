@@ -3231,16 +3231,46 @@ fn findOrCreateAssocPattern(
             }
             return existing;
         }
+    }
+
+    const pattern_idx = if (try self.adoptAssocPlaceholderPattern(qualified_ident, decl_ident, type_qualified_ident, assoc_key)) |placeholder| blk: {
+        // The placeholder was created where the item was first referenced;
+        // from here on it is this declaration's binder.
+        self.env.store.setRegionAt(ModuleEnv.nodeIdxFrom(placeholder), pattern_region);
+        break :blk placeholder;
+    } else blk: {
+        const ident_pattern = Pattern{ .assign = .{ .ident = qualified_ident } };
+        const new_pattern_idx = try self.env.addPattern(ident_pattern, pattern_region);
+        _ = try self.scopeIntroduceInternal(self.env.gpa, .ident, qualified_ident, new_pattern_idx, true);
+        try self.registerAssocPatternQualifiers(qualified_ident, new_pattern_idx);
+        break :blk new_pattern_idx;
+    };
+    if (globally_resolvable) {
+        try self.markGloballyResolvablePattern(pattern_idx);
+    }
+    if (assoc_key) |key| {
+        try self.assoc_value_patterns.put(self.env.gpa, key, pattern_idx);
+    }
+    return pattern_idx;
+}
+
+/// Take the placeholder pattern that references ahead of an associated item
+/// created, under any of the names those references could have used, and bind
+/// it under the item's qualified name.
+fn adoptAssocPlaceholderPattern(
+    self: *Self,
+    qualified_ident: Ident.Idx,
+    decl_ident: Ident.Idx,
+    type_qualified_ident: ?Ident.Idx,
+    assoc_key: ?AST.DeclIndex.AssocValue,
+) std.mem.Allocator.Error!?CIR.Pattern.Idx {
+    if (assoc_key) |key| {
         if (self.assoc_forward_references.fetchRemove(key)) |kv| {
             const placeholder = kv.value.pattern_idx;
             var mut_regions = kv.value.reference_regions;
             mut_regions.deinit(self.env.gpa);
             self.rebindPlaceholderPatternIdent(placeholder, qualified_ident);
             try self.registerAssocPatternQualifiers(qualified_ident, placeholder);
-            if (globally_resolvable) {
-                try self.markGloballyResolvablePattern(placeholder);
-            }
-            try self.assoc_value_patterns.put(self.env.gpa, key, placeholder);
             return placeholder;
         }
     }
@@ -3248,22 +3278,10 @@ fn findOrCreateAssocPattern(
     if (self.scopeLookup(.ident, qualified_ident) == .found) {
         const found = self.scopeLookup(.ident, qualified_ident).found;
         if (try self.adoptAssocForwardReference(qualified_ident, type_qualified_ident, decl_ident)) |adopted| {
-            if (globally_resolvable) {
-                try self.markGloballyResolvablePattern(adopted);
-            }
-            if (assoc_key) |key| {
-                try self.assoc_value_patterns.put(self.env.gpa, key, adopted);
-            }
             return adopted;
         }
         self.drainForwardReferences(qualified_ident, type_qualified_ident, decl_ident);
         self.rebindPlaceholderPatternIdent(found, qualified_ident);
-        if (globally_resolvable) {
-            try self.markGloballyResolvablePattern(found);
-        }
-        if (assoc_key) |key| {
-            try self.assoc_value_patterns.put(self.env.gpa, key, found);
-        }
         return found;
     }
 
@@ -3277,12 +3295,6 @@ fn findOrCreateAssocPattern(
             mut_regions.deinit(self.env.gpa);
             self.rebindPlaceholderPatternIdent(placeholder, qualified_ident);
             try self.registerAssocPatternQualifiers(qualified_ident, placeholder);
-            if (globally_resolvable) {
-                try self.markGloballyResolvablePattern(placeholder);
-            }
-            if (assoc_key) |key| {
-                try self.assoc_value_patterns.put(self.env.gpa, key, placeholder);
-            }
             return placeholder;
         }
         if (type_qualified_ident) |tq| {
@@ -3293,12 +3305,6 @@ fn findOrCreateAssocPattern(
                 _ = scope.idents.remove(tq);
                 self.rebindPlaceholderPatternIdent(placeholder, qualified_ident);
                 try self.registerAssocPatternQualifiers(qualified_ident, placeholder);
-                if (globally_resolvable) {
-                    try self.markGloballyResolvablePattern(placeholder);
-                }
-                if (assoc_key) |key| {
-                    try self.assoc_value_patterns.put(self.env.gpa, key, placeholder);
-                }
                 return placeholder;
             }
         }
@@ -3308,27 +3314,11 @@ fn findOrCreateAssocPattern(
             mut_regions.deinit(self.env.gpa);
             self.rebindPlaceholderPatternIdent(placeholder, qualified_ident);
             try self.registerAssocPatternQualifiers(qualified_ident, placeholder);
-            if (globally_resolvable) {
-                try self.markGloballyResolvablePattern(placeholder);
-            }
-            if (assoc_key) |key| {
-                try self.assoc_value_patterns.put(self.env.gpa, key, placeholder);
-            }
             return placeholder;
         }
     }
 
-    const ident_pattern = Pattern{ .assign = .{ .ident = qualified_ident } };
-    const new_pattern_idx = try self.env.addPattern(ident_pattern, pattern_region);
-    _ = try self.scopeIntroduceInternal(self.env.gpa, .ident, qualified_ident, new_pattern_idx, true);
-    try self.registerAssocPatternQualifiers(qualified_ident, new_pattern_idx);
-    if (globally_resolvable) {
-        try self.markGloballyResolvablePattern(new_pattern_idx);
-    }
-    if (assoc_key) |key| {
-        try self.assoc_value_patterns.put(self.env.gpa, key, new_pattern_idx);
-    }
-    return new_pattern_idx;
+    return null;
 }
 
 /// Remove any forward_reference entries keyed by the names a definition
@@ -3831,6 +3821,7 @@ fn recordAssociatedValue(
         if (self.assoc_forward_pattern_keys.get(def.pattern)) |key| {
             if (self.assoc_local_statement_placeholders.fetchRemove(key)) |placeholder| {
                 try self.env.store.setStatementNode(placeholder.value, stmt);
+                self.env.store.setRegionAt(ModuleEnv.nodeIdxFrom(placeholder.value), region);
                 try self.propagateBlockStatementFreeVars(self.localAssociatedContext(block_context), associated_def.free_vars);
                 break :blk placeholder.value;
             }
@@ -5238,6 +5229,7 @@ fn createAnnotationDefWithPattern(
 ) std.mem.Allocator.Error!CIR.Def.Idx {
     try self.warnAboutBindingName(source_binding_ident, source_binding_region, .immutable);
     try self.scopes.items[self.scopes.items.len - 1].idents.put(self.env.gpa, ident, pattern_idx);
+    self.env.store.setRegionAt(ModuleEnv.nodeIdxFrom(pattern_idx), region);
 
     const annotation_expr = try self.addAnnotationExpr(ident, annotation_expr_kind, region);
 
