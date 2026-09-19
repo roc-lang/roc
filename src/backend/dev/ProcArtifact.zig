@@ -927,8 +927,9 @@ pub fn appendPrepared(
                 .proc => |identity| .{ .proc = procs_by_identity.get(identity) orelse return error.UnknownProcIdentity },
                 .rc_helper => |name| .{ .rc_helper = helper_keys.get(name) orelse return error.UnknownRcHelper },
                 .boxy_thunk => |identity| .{ .boxy_thunk = procs_by_identity.get(identity) orelse return error.UnknownProcIdentity },
-                .message_pool_run => .{ .message = ref.delta },
-                .entrypoint, .branch_island => .{ .message = 0 },
+                // Imported pools do not share the destination's message-ID
+                // domain. Preserve this exact placed target for later extraction.
+                .message_pool_run, .entrypoint, .branch_island => .{ .offset = starts[ref.target] + ref.delta },
             };
             try codegen.patchAssembledRef(
                 starts[index] + ref.site,
@@ -1231,6 +1232,49 @@ pub fn splice(
 
 fn testDataSymbol(index: usize) lir.Program.StaticDataSymbolId {
     return @enumFromInt(index);
+}
+
+test "independent message pools preserve their targets across repeated artifact assembly" {
+    const allocator = std.testing.allocator;
+    inline for (.{ @import("roc_target").RocTarget.x64linux, @import("roc_target").RocTarget.arm64linux }) |target| {
+        const CG = LirCodeGenMod.LirCodeGen(target);
+        var store = lir.LirStore.init(allocator);
+        defer store.deinit();
+        var layouts = try layout.Store.init(allocator, .u64);
+        defer layouts.deinit();
+        var procs: [2]lir.LIR.LirProcSpecId = undefined; // Filled by addProcSpec before emission.
+        for (&procs, [_][]const u8{ "first independent message", "second independent message" }, 0..) |*proc, message, index| {
+            const text = try store.insertString(message);
+            const body = try store.addCFStmt(.{ .crash = .{ .msg = .{ .literal = text } } });
+            proc.* = try store.addProcSpec(.{
+                .name = store.freshSyntheticSymbol(),
+                .identity = lir.ProcIdentity.forTest(@intCast(index)),
+                .args = .empty(),
+                .body = body,
+                .ret_layout = .zst,
+            });
+        }
+        var image = try CG.init(allocator, &store, &layouts, .{}, &.{}, .default);
+        defer image.deinit();
+        var helpers = HelperKeys.init(allocator);
+        defer helpers.deinit();
+        for (procs) |proc| {
+            var producer = try CG.init(allocator, &store, &layouts, .{}, &.{}, .default);
+            defer producer.deinit();
+            var fragment = try compileProcFragment(CG, allocator, &producer, proc, store.getProcSpecs(), &layouts, &.{}, &.{});
+            defer fragment.deinit();
+            try append(CG, allocator, &image, &fragment.set, store.getProcSpecs(), &helpers);
+        }
+        try image.finishImage();
+        var pools: usize = 0;
+        for (image.codeRegions()) |region| {
+            if (region.kind == .message_pool_run) pools += 1;
+        }
+        try std.testing.expectEqual(@as(usize, 2), pools);
+        var fresh = try CG.init(allocator, &store, &layouts, .{}, &.{}, .default);
+        defer fresh.deinit();
+        try verifyRoundTrip(CG, allocator, &image, &fresh, store.getProcSpecs(), &layouts, &.{});
+    }
 }
 
 test "artifact local calls reserve veneers before later regions exceed reach" {
