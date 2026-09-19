@@ -21946,6 +21946,104 @@ test "wasm backend fuses overflow predicate with matching wrapping result" {
     try std.testing.expectEqual(@as(usize, 1), codegen.precomputed_overflow_results.count());
 }
 
+/// Find the single relocation of `type_id`, failing if it is not unique.
+fn expectOneReloc(module: *const WasmModule, type_id: anytype) !WasmLinking.RelocationEntry {
+    var found: ?WasmLinking.RelocationEntry = null;
+    for (module.reloc_code.entries.items) |entry| {
+        const matches = switch (entry) {
+            .index => |idx| @TypeOf(type_id) == WasmLinking.IndexRelocType and idx.type_id == type_id,
+            .offset => |off| @TypeOf(type_id) == WasmLinking.OffsetRelocType and off.type_id == type_id,
+        };
+        if (!matches) continue;
+        if (found != null) return error.TestUnexpectedResult;
+        found = entry;
+    }
+    return found orelse error.TestUnexpectedResult;
+}
+
+test "relocatable object addresses static data relative to __memory_base" {
+    const allocator = std.testing.allocator;
+    const fake_store: *const LirStore = undefined;
+    const fake_layouts: *const LayoutStore = undefined;
+
+    var codegen = Self.init(allocator, fake_store, fake_layouts, &.{}, &.{}, &.{}, .default);
+    defer codegen.deinit();
+    codegen.configureRelocatableObject();
+
+    const type_idx = try codegen.module.addFuncType(&.{}, &.{});
+    const defined = try codegen.module.addDefinedFunction(type_idx);
+    const address = try codegen.addStaticDataSymbol(&.{ 'p', 'i', 'c' }, 4, ".rodata.pic", "pic.data", 0, 3);
+
+    try codegen.beginFunction(defined.local);
+    try codegen.emitDataAddressConst(address, 0);
+    try codegen.currentCode().append(allocator, Op.drop);
+    try codegen.currentCode().append(allocator, Op.end);
+    codegen.endFunction();
+    try codegen.flushPendingBodies();
+
+    // An absolute address here makes the object unlinkable as a shared module.
+    for (codegen.module.reloc_code.entries.items) |entry| {
+        if (entry == .offset) try std.testing.expect(entry.offset.type_id != .memory_addr_sleb);
+    }
+
+    const base_reloc = try expectOneReloc(&codegen.module, WasmLinking.IndexRelocType.global_index_leb);
+    const data = try expectOneReloc(&codegen.module, WasmLinking.OffsetRelocType.memory_addr_rel_sleb);
+
+    const memory_base = codegen.module.findSymbolByNameAndKind("__memory_base", .global) orelse
+        return error.TestUnexpectedResult;
+    try std.testing.expectEqual(memory_base, base_reloc.index.symbol_index);
+
+    // `global.get __memory_base; i32.const <relative>; i32.add`, with both
+    // operands written as padded 5-byte LEBs so the linker can patch them.
+    const code = codegen.module.code_bytes.items;
+    try std.testing.expectEqual(base_reloc.index.offset + 6, data.offset.offset);
+    try std.testing.expectEqual(Op.global_get, code[base_reloc.index.offset - 1]);
+    try std.testing.expectEqual(Op.i32_const, code[data.offset.offset - 1]);
+    try std.testing.expectEqual(Op.i32_add, code[data.offset.offset + 5]);
+}
+
+test "relocatable object addresses table entries relative to __table_base" {
+    const allocator = std.testing.allocator;
+    const fake_store: *const LirStore = undefined;
+    const fake_layouts: *const LayoutStore = undefined;
+
+    var codegen = Self.init(allocator, fake_store, fake_layouts, &.{}, &.{}, &.{}, .default);
+    defer codegen.deinit();
+    codegen.configureRelocatableObject();
+
+    // One function that takes its own address: every defined function needs a
+    // body, and bodies must be flushed in local-index order.
+    const type_idx = try codegen.module.addFuncType(&.{}, &.{});
+    const defined = try codegen.module.addDefinedFunction(type_idx);
+    const target_symbol = try codegen.addTrackedDefinedFunctionSymbol(defined, "table.target", 0);
+    const table_idx = try codegen.module.ensureTableElement(defined.function.raw());
+
+    try codegen.beginFunction(defined.local);
+    try codegen.emitFunctionTableIndexConst(table_idx);
+    try codegen.currentCode().append(allocator, Op.drop);
+    try codegen.currentCode().append(allocator, Op.end);
+    codegen.endFunction();
+    try codegen.flushPendingBodies();
+
+    for (codegen.module.reloc_code.entries.items) |entry| {
+        if (entry == .index) try std.testing.expect(entry.index.type_id != .table_index_sleb);
+    }
+
+    const base_reloc = try expectOneReloc(&codegen.module, WasmLinking.IndexRelocType.global_index_leb);
+    const slot = try expectOneReloc(&codegen.module, WasmLinking.IndexRelocType.table_index_rel_sleb);
+
+    const table_base = codegen.module.findSymbolByNameAndKind("__table_base", .global) orelse
+        return error.TestUnexpectedResult;
+    try std.testing.expectEqual(table_base, base_reloc.index.symbol_index);
+    try std.testing.expectEqual(target_symbol.raw(), slot.index.symbol_index);
+
+    const code = codegen.module.code_bytes.items;
+    try std.testing.expectEqual(base_reloc.index.offset + 6, slot.index.offset);
+    try std.testing.expectEqual(Op.global_get, code[base_reloc.index.offset - 1]);
+    try std.testing.expectEqual(Op.i32_const, code[slot.index.offset - 1]);
+    try std.testing.expectEqual(Op.i32_add, code[slot.index.offset + 5]);
+}
+
 test "final static data address tracking keeps referenced data through DCE" {
     const allocator = std.testing.allocator;
     const fake_store: *const LirStore = undefined;
