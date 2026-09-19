@@ -310,7 +310,7 @@ Secret :: {
 
 # Define a nominal type with a custom is_eq method
 Animal := [Dog(Str), Cat(Str)].{
-	# Usually you should  let the compiler derive the implementation using just the line below.
+	# Usually you should let the compiler derive the implementation using just the line below.
 	# is_eq : _
 
 	is_eq = |a, b| match (a, b) {
