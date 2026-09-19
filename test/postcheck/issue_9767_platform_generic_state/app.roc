@@ -18,7 +18,7 @@ init = |_| { count: 0 }
 
 init! = App.init(App.default, |_host| Ok(ProgramState(init({}))))
 
-render! : State(Model), Host => Try(State(Model), [Exit(I64), ..])
+render! : State(Model), Host => Try(State(Model), [Exit(I64)])
 render! = |state, _host| {
     Ok(state)
 }

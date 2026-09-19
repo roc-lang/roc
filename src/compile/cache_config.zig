@@ -199,7 +199,14 @@ pub const Constants = struct {
     ///     result type intact.
     /// 94: Hosted declarations must have effectful function types and keep
     ///     their hosted type variables intact.
-    pub const CACHE_VERSION = 94;
+    /// 95: Tag unions in annotation output positions are implicitly open
+    ///     (polarity): extensionless unions there carry an anonymous flex
+    ///     extension, while alias declaration bodies and where-method
+    ///     signatures store a rigid deferral marker resolved per use site.
+    ///     Scheme-use records distinguish per-use where-method signature
+    ///     copies from evidence-bearing instantiations, and checked dispatch
+    ///     plans retain independent-callable/nested-evidence-reuse flags.
+    pub const CACHE_VERSION = 95;
 };
 
 /// Configuration for the Roc cache system.

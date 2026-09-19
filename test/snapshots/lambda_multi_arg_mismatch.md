@@ -96,7 +96,7 @@ MISSING METHOD - lambda_multi_arg_mismatch.md:11:5:11:12
 			(line-break)
 			(annotation-start code-block)
 			(indent 1)
-			(text "[True, ..]")
+			(text "[True]")
 			(annotation-end)))
 	(report
 		(severity runtime_error)
@@ -120,7 +120,7 @@ MISSING METHOD - lambda_multi_arg_mismatch.md:11:5:11:12
 			(line-break)
 			(annotation-start code-block)
 			(indent 1)
-			(text "[True, ..]")
+			(text "[True]")
 			(annotation-end))))
 ~~~
 # TOKENS
@@ -284,8 +284,8 @@ result = multi_arg_fn(
 (inferred-types
 	(defs
 		(patt (type "a, b, a, c, a, d, a, e -> (a, b, c, d, e)"))
-		(patt (type "([True, ..], Str, Dec, List(Dec), Str)")))
+		(patt (type "([True], Str, Dec, List(Dec), Str)")))
 	(expressions
 		(expr (type "a, b, a, c, a, d, a, e -> (a, b, c, d, e)"))
-		(expr (type "([True, ..], Str, Dec, List(Dec), Str)"))))
+		(expr (type "([True], Str, Dec, List(Dec), Str)"))))
 ~~~

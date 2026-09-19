@@ -20760,7 +20760,7 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
             if (proc.hosted) |hosted| {
                 try self.generateHostedProcWrapper(hosted, proc);
             } else {
-                const body = requireProcBody(proc);
+                const body = requireProcBody(proc_id, proc);
                 try self.ensureStableLocationsForStmtLocals(body);
 
                 // Generate the body (control flow statements)
@@ -20981,10 +20981,10 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
             try self.maybeDrainRcHelpers();
         }
 
-        fn requireProcBody(proc: LirProcSpec) lir.LIR.CFStmtId {
+        fn requireProcBody(proc_id: lir.LIR.LirProcSpecId, proc: LirProcSpec) lir.LIR.CFStmtId {
             return proc.body orelse std.debug.panic(
-                "Dev/codegen invariant violated: non-hosted proc {d} missing statement body",
-                .{proc.name.raw()},
+                "Dev/codegen invariant violated: non-hosted proc {d} (symbol {d}) missing statement body",
+                .{ @intFromEnum(proc_id), proc.name.raw() },
             );
         }
 

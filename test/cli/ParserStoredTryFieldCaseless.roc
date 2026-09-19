@@ -4,7 +4,7 @@ Format := [Default].{
 	rename_field : Format, Str -> Str
 	rename_field = |_, name| underscores_to_dashes(name)
 
-	parse_str : Format, State -> Try({ value : Str, rest : State }, [FormatError, ..])
+	parse_str : Format, State -> Try({ value : Str, rest : State }, [FormatError])
 	parse_str = |_, state|
 		match state {
 			Value(value) => Ok({ value, rest: Done })
@@ -13,7 +13,7 @@ Format := [Default].{
 			Key(_, _) | Start | FooName | CacheName | ContentLengthName | ContentLengthValue | RequestCountName | RequestCountValue | Done => Err(FormatError)
 		}
 
-	parse_u64 : Format, State -> Try({ value : U64, rest : State }, [FormatError, ..])
+	parse_u64 : Format, State -> Try({ value : U64, rest : State }, [FormatError])
 	parse_u64 = |_, state|
 		match state {
 			ContentLengthValue => Ok({ value: 5, rest: RequestCountName })
@@ -21,7 +21,7 @@ Format := [Default].{
 			Key(_, _) | Value(_) | Start | FooName | FooValue | CacheName | CacheValue | ContentLengthName | RequestCountName | Done => Err(FormatError)
 		}
 
-	parse_record_start : Format, State -> Try([Counted({ len : U64, rest : State }), Uncounted(State)], [FormatError, ..])
+	parse_record_start : Format, State -> Try([Counted({ len : U64, rest : State }), Uncounted(State)], [FormatError])
 	parse_record_start = |_, state| Ok(Uncounted(state))
 
 	parse_record_field : Format,
@@ -34,7 +34,7 @@ Format := [Default].{
 			Continue(State),
 			Done(State),
 		],
-		[FormatError, ..],
+		[FormatError],
 	)
 	parse_record_field = |_, fields, state|
 		match state {
@@ -52,10 +52,10 @@ Format := [Default].{
 			Value(_) | FooValue | CacheValue | ContentLengthValue | RequestCountValue | Done => Ok(Done(Done))
 		}
 
-	parse_record_after_field : Format, State -> Try([Continue(State), Done(State)], [FormatError, ..])
+	parse_record_after_field : Format, State -> Try([Continue(State), Done(State)], [FormatError])
 	parse_record_after_field = |_, state| Ok(Continue(state))
 
-	skip_record_field : Format, State -> Try(State, [FormatError, ..])
+	skip_record_field : Format, State -> Try(State, [FormatError])
 	skip_record_field = |_, _| Ok(Done)
 }
 

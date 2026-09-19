@@ -5818,6 +5818,7 @@ const AppRootIdentity = struct {
     module_identity_hash: [32]u8,
     cache_hits: u32,
     platform_root_publish_count: u32,
+    where_method_scheme_use_count: usize,
     /// The executable root artifact serialized exactly as the checked-module
     /// cache stores it, so tests assert byte identity between fresh and
     /// cache-relocated publications rather than key identity alone.
@@ -5894,11 +5895,18 @@ fn compileAppRootIdentity(
     errdefer allocator.free(executable_root_bytes);
     const app_root_bytes = try serializedCheckedArtifactBytes(allocator, coord.appRootCheckedArtifact());
     errdefer allocator.free(app_root_bytes);
+    var where_method_scheme_use_count: usize = 0;
+    for (root.moduleEnvConst().scheme_uses.items.items) |record| {
+        if (record.slot_kind == @intFromEnum(can.ModuleEnv.SchemeUseRecord.Slot.where_method_use)) {
+            where_method_scheme_use_count += 1;
+        }
+    }
     return .{
         .artifact_key = root.key.bytes,
         .module_identity_hash = root.module_identity.stable_hash,
         .cache_hits = coord.getBuildStats().cache_hits,
         .platform_root_publish_count = coord.platform_root_publish_count,
+        .where_method_scheme_use_count = where_method_scheme_use_count,
         .executable_root_bytes = executable_root_bytes,
         .app_root_bytes = app_root_bytes,
     };
@@ -5930,6 +5938,17 @@ fn writeCacheKeyPurityFixture(tmp_dir: *std.testing.TmpDir, sub_dir: []const u8)
         \\    hosted { "roc_echo_line": Echo.line! }
         \\
         \\import Echo
+        \\
+        \\render_twice = |x| Str.concat(x.render(), x.render())
+        \\
+        \\min_copy : Iter(item) -> Try(item, [IterWasEmpty])
+        \\    where [item.min : item, item -> item]
+        \\min_copy = |iterator|
+        \\    match Iter.next(iterator) {
+        \\        Done => Err(IterWasEmpty)
+        \\        Skip({ rest }) => min_copy(rest)
+        \\        One({ item: first, rest }) => Ok(Iter.fold(rest, first, |best, item| best.min(item)))
+        \\    }
         \\
         \\main_for_host! : List(Str) => I8
         \\main_for_host! = |args|
@@ -6171,6 +6190,7 @@ test "warm build reloads the deferred platform root without republishing" {
     var cold = try compileAppRootIdentity(allocator, cache_dir, app_path);
     defer cold.deinit(allocator);
     try std.testing.expectEqual(@as(u32, 1), cold.platform_root_publish_count);
+    try std.testing.expect(cold.where_method_scheme_use_count > 0);
 
     // The warm build rechecks the deferred root to recreate its complete
     // publication continuation, then relocates the previously-republished root
@@ -6179,6 +6199,7 @@ test "warm build reloads the deferred platform root without republishing" {
     defer warm.deinit(allocator);
     try std.testing.expectEqual(@as(u32, 0), warm.platform_root_publish_count);
     try std.testing.expect(warm.cache_hits > 0);
+    try std.testing.expectEqual(cold.where_method_scheme_use_count, warm.where_method_scheme_use_count);
 
     // The republished executable root is content-addressed, so both runs produce
     // a byte-identical key—and byte-identical artifacts: the cache-relocated

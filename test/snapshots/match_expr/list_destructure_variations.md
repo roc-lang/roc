@@ -44,7 +44,7 @@ MISSING METHOD - list_destructure_variations.md:7:30:7:35
 			(line-break)
 			(annotation-start code-block)
 			(indent 1)
-			(text "[One, Two, ..]")
+			(text "[One, Two]")
 			(annotation-end)))
 	(report
 		(severity runtime_error)
@@ -68,7 +68,7 @@ MISSING METHOD - list_destructure_variations.md:7:30:7:35
 			(line-break)
 			(annotation-start code-block)
 			(indent 1)
-			(text "[One, Two, ..]")
+			(text "[One, Two]")
 			(annotation-end)))
 	(report
 		(severity runtime_error)
@@ -92,7 +92,7 @@ MISSING METHOD - list_destructure_variations.md:7:30:7:35
 			(line-break)
 			(annotation-start code-block)
 			(indent 1)
-			(text "[One, Two, ..]")
+			(text "[One, Two]")
 			(annotation-end)))
 	(report
 		(severity runtime_error)
@@ -116,7 +116,7 @@ MISSING METHOD - list_destructure_variations.md:7:30:7:35
 			(line-break)
 			(annotation-start code-block)
 			(indent 1)
-			(text "[One, Two, ..]")
+			(text "[One, Two]")
 			(annotation-end))))
 ~~~
 # TOKENS
@@ -259,5 +259,5 @@ match list {
 ~~~
 # TYPES
 ~~~clojure
-(expr (type "[One, Two, ..]"))
+(expr (type "[One, Two]"))
 ~~~

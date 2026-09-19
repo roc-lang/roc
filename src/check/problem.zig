@@ -68,6 +68,7 @@ pub const NotAWhereAlias = types.NotAWhereAlias;
 pub const WhereAliasInTypePosition = types.WhereAliasInTypePosition;
 pub const RecursiveWhereAlias = types.RecursiveWhereAlias;
 pub const WhereClauseReceiverNotIntroduced = types.WhereClauseReceiverNotIntroduced;
+pub const RedundantOpenTagUnion = types.RedundantOpenTagUnion;
 
 // Nominal type errors
 pub const CannotAccessOpaqueNominal = types.CannotAccessOpaqueNominal;

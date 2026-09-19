@@ -2837,6 +2837,7 @@ const Builder = struct {
                         .constructor = worker_id,
                         .runtime = runtime_worker,
                     });
+                    try self.alignConstructorReturnWithRuntimeWorker(function, runtime_worker);
                 },
                 .parser_runtime,
                 => {
@@ -2888,6 +2889,46 @@ const Builder = struct {
         }
 
         return worker_id;
+    }
+
+    /// Plan a generated codec constructor's result as the exact representation
+    /// of the runtime worker it packs.
+    ///
+    /// `generatedCodecContractForConstructor` has already established that the
+    /// constructor's result type and the checked derivation's record of the
+    /// runtime type are canonically the same checked type. They are not
+    /// necessarily the same `CheckedTypeId`: a checked root that contains an
+    /// identity variable - which includes a row whose extension the checker
+    /// closed to `[]` by default - reaches the checked store without being
+    /// deduplicated by identity key, so one type can arrive as two ids.
+    /// Representations are
+    /// interned by checked id, so those two ids own two representations and
+    /// therefore two descriptor requirements per dynamic position.
+    ///
+    /// The runtime worker must keep the derivation's checked id: its body is
+    /// planned by matching the derivation's recorded method calls against the
+    /// checked ids reachable from its representation. So the constructor is
+    /// the side that moves. Its hidden descriptor inputs are collected from
+    /// its own signature, and lowering satisfies each of the packed runtime
+    /// callable's descriptor captures from those inputs, so the constructor's
+    /// result must be the same representation the runtime worker declares.
+    fn alignConstructorReturnWithRuntimeWorker(
+        self: *Builder,
+        function: FunctionChildren,
+        runtime_worker: WorkerPlanId,
+    ) Allocator.Error!void {
+        const runtime_rep = self.plan.workers.items[@intFromEnum(runtime_worker)].rep;
+        if (runtime_rep == function.ret or runtime_rep == function.rep) return;
+
+        const children = self.plan.representations.items[@intFromEnum(function.rep)].children;
+        var index: u32 = children.start;
+        const end = children.start + children.len;
+        while (index < end) : (index += 1) {
+            if (self.plan.children.items[index].role != .function_ret) continue;
+            self.plan.children.items[index].rep = runtime_rep;
+            return;
+        }
+        boxyPlanInvariant("generated codec constructor representation had no return child");
     }
 
     fn ensureGeneratedCodecCall(

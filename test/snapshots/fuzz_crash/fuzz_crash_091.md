@@ -26,7 +26,7 @@ TYPE MISMATCH - fuzz_crash_091.md:1:4:1:8
 			(line-break)
 			(annotation-start code-block)
 			(indent 1)
-			(text "[X(b), ..] where [b.from_numeral : Numeral -> Try(b, [InvalidNumeral(Str)])]")
+			(text "[X(b)] where [b.from_numeral : Numeral -> Try(b, [InvalidNumeral(Str)])]")
 			(annotation-end)
 			(line-break)
 			(line-break)
