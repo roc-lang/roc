@@ -1182,6 +1182,10 @@ pub const LirProcSpec = struct {
     name: Symbol,
     /// Content identity; every symbol emitted for this procedure derives from it.
     identity: ProcIdentity,
+    /// Session-local code-generation provenance, not semantic identity.
+    /// Compare only inside the same LIR producer domain, with matching target
+    /// and emission policy; equal revisions across separate lowers prove nothing.
+    native_code_revision: u64 = 0,
     args: LocalSpan,
     /// Producer-authored provenance for a function normalized from an
     /// iterator pipeline. Dev-only structural fusion consumes this bit; it

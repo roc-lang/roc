@@ -27,6 +27,8 @@ const coff = @import("object/coff.zig");
 const ObjectWriter = @import("ObjectWriter.zig");
 const LirCodeGenMod = @import("LirCodeGen.zig");
 const ProcArtifact = @import("ProcArtifact.zig");
+const NativeProcCompiler = @import("NativeProcCompiler.zig");
+const Executor = @import("base").post_check_task_executor.Executor;
 const static_data_export = @import("StaticDataExport.zig");
 const collections = @import("collections");
 const SymbolTable = @import("SymbolTable.zig");
@@ -84,6 +86,9 @@ pub const ObjectFileCompiler = struct {
     allocator: Allocator,
     enable_default_platform_runtime: bool = false,
     timing: ?*Timing = null,
+    post_check_executor: ?Executor = null,
+    /// Borrowed artifacts from this exact LIR program, never an executable image.
+    reuse_same_program: ?*const NativeProcCompiler.Retained = null,
     /// Emit every procedure as a global symbol and emit the object even
     /// without host entrypoints: the object is a module pack, not an app.
     pack_mode: bool = false,
@@ -97,13 +102,16 @@ pub const ObjectFileCompiler = struct {
 
     pub const TimingSnapshot = struct {
         backend_setup_ns: u64 = 0,
+        /// Native artifact emission, including its RC-helper closure.
         procedure_instructions_ns: u64 = 0,
+        /// Kept for snapshot consumers; helpers are timed with procedures.
         rc_helper_instructions_ns: u64 = 0,
         entrypoint_instructions_ns: u64 = 0,
         symbol_relocations_ns: u64 = 0,
         dwarf_ns: u64 = 0,
         object_encoding_ns: u64 = 0,
         file_io_ns: u64 = 0,
+        native_emission: NativeProcCompiler.Metrics = .{},
     };
 
     pub const Timing = struct {
@@ -113,7 +121,6 @@ pub const ObjectFileCompiler = struct {
         const Phase = enum {
             backend_setup,
             procedure_instructions,
-            rc_helper_instructions,
             entrypoint_instructions,
             symbol_relocations,
             dwarf,
@@ -139,7 +146,6 @@ pub const ObjectFileCompiler = struct {
             switch (phase) {
                 .backend_setup => self.snapshot_value.backend_setup_ns += elapsed_ns,
                 .procedure_instructions => self.snapshot_value.procedure_instructions_ns += elapsed_ns,
-                .rc_helper_instructions => self.snapshot_value.rc_helper_instructions_ns += elapsed_ns,
                 .entrypoint_instructions => self.snapshot_value.entrypoint_instructions_ns += elapsed_ns,
                 .symbol_relocations => self.snapshot_value.symbol_relocations_ns += elapsed_ns,
                 .dwarf => self.snapshot_value.dwarf_ns += elapsed_ns,
@@ -178,7 +184,7 @@ pub const ObjectFileCompiler = struct {
         boxy_worker_procs: []const lir.LIR.LirProcSpecId,
         target: RocTarget,
     ) CompilationError!CompilationResult {
-        return crossCompileDispatch(self.allocator, lir_store, layout_store, entrypoints, static_data_exports, proc_specs, erased_arg_desc_offsets, erased_arg_desc_params, boxy_worker_procs, target, self.enable_default_platform_runtime, self.timing, self.pack_mode, self.splice_source, self.capture_artifacts);
+        return crossCompileDispatch(self.allocator, lir_store, layout_store, entrypoints, static_data_exports, proc_specs, erased_arg_desc_offsets, erased_arg_desc_params, boxy_worker_procs, target, self.enable_default_platform_runtime, self.timing, self.pack_mode, self.splice_source, self.capture_artifacts, self.post_check_executor, self.reuse_same_program);
     }
 
     /// Compile to an object file and write it to a path. Returns whether the
@@ -297,6 +303,8 @@ fn compileWithCodeGen(
     pack_mode: bool,
     splice_source: ?SpliceSource,
     capture_artifacts: bool,
+    executor: ?Executor,
+    reuse_same_program: ?*const NativeProcCompiler.Retained,
 ) CompilationError!CompilationResult {
     if (!pack_mode and entrypoints.len == 0 and static_data_exports.len == 0) {
         return CompilationError.NoEntrypoints;
@@ -332,7 +340,8 @@ fn compileWithCodeGen(
     defer allocator.free(static_rc_helpers);
     if (timing) |timings| timings.finish(backend_setup_started_ns, .backend_setup);
 
-    // Compile all procedures first
+    // Native emission includes the transitive RC-helper closure. Do not time
+    // or compile static-export helpers a second time.
     const procedure_instructions_started_ns = if (timing) |timings| timings.start() else 0;
     var spliced_data = std.ArrayList(ProcArtifact.DataItem).empty;
     defer spliced_data.deinit(allocator);
@@ -344,14 +353,29 @@ fn compileWithCodeGen(
         }
         spliceExternalProcs(CodeGen, allocator, &codegen, proc_specs, external_procs.items, source, &spliced_data) catch return CompilationError.OutOfMemory;
     }
-    if (proc_specs.len > 0) {
-        codegen.compileAllProcSpecs(proc_specs) catch return CompilationError.OutOfMemory;
+    var demand = std.ArrayList(lir.LIR.LirProcSpecId).empty;
+    defer demand.deinit(allocator);
+    for (proc_specs, 0..) |proc, index| {
+        if (proc.is_static_initializer or proc.external) continue;
+        demand.append(allocator, @enumFromInt(index)) catch return CompilationError.OutOfMemory;
     }
+    var native_metrics: NativeProcCompiler.Metrics = .{};
+    var retained = NativeProcCompiler.run(CodeGen, allocator, &codegen, demand.items, .{
+        .target = target,
+        .executor = executor,
+        .reuse_same_program = reuse_same_program,
+        .metrics_out = &native_metrics,
+        .static_helpers = static_rc_helpers,
+        .constant_exports = static_data_exports,
+    }) catch return CompilationError.OutOfMemory;
+    // Artifact data remains borrowed by the destination until object encoding
+    // and optional pack capture have finished.
+    defer retained.deinit();
+    const native_data = retained.dataItems(allocator) catch return CompilationError.OutOfMemory;
+    defer allocator.free(native_data);
+    spliced_data.appendSlice(allocator, native_data) catch return CompilationError.OutOfMemory;
+    if (timing) |timings| timings.snapshot_value.native_emission.add(native_metrics);
     if (timing) |timings| timings.finish(procedure_instructions_started_ns, .procedure_instructions);
-
-    const rc_helper_instructions_started_ns = if (timing) |timings| timings.start() else 0;
-    codegen.compileStaticDataRcHelpers(static_rc_helpers) catch return CompilationError.OutOfMemory;
-    if (timing) |timings| timings.finish(rc_helper_instructions_started_ns, .rc_helper_instructions);
 
     // Track symbols for object file generation
     var symbol_relocations_started_ns = if (timing) |timings| timings.start() else 0;
@@ -379,8 +403,8 @@ fn compileWithCodeGen(
     try appendStaticDataExports(allocator, &codegen.codegen.symbols, static_data_exports, &rodata, &rodata_relocations, &symbols);
     try appendStaticDataExports(allocator, &codegen.codegen.symbols, static_strings.exports, &rodata, &rodata_relocations, &symbols);
     {
-        // Readonly data that spliced object-cache code names and this program
-        // did not define itself.
+        // Readonly data named by native artifacts or spliced object-cache code
+        // that this program did not define itself.
         var defined = std.StringHashMap(void).init(allocator);
         defer defined.deinit();
         for (static_data_exports) |data_export| defined.put(data_export.symbol_name, {}) catch return CompilationError.OutOfMemory;
@@ -960,6 +984,8 @@ fn crossCompileDispatch(
     pack_mode: bool,
     splice_source: ?SpliceSource,
     capture_artifacts: bool,
+    executor: ?Executor,
+    reuse_same_program: ?*const NativeProcCompiler.Retained,
 ) CompilationError!CompilationResult {
     const enum_info = @typeInfo(RocTarget).@"enum";
     const default_target = target.defaultCpuTarget();
@@ -986,6 +1012,8 @@ fn crossCompileDispatch(
                     pack_mode,
                     splice_source,
                     capture_artifacts,
+                    executor,
+                    reuse_same_program,
                 );
             } else {
                 return CompilationError.UnsupportedTarget;
@@ -1001,11 +1029,198 @@ test "ObjectFileCompiler initialization" {
     const allocator = std.testing.allocator;
     const compiler = ObjectFileCompiler.init(allocator);
     try std.testing.expectEqual(allocator, compiler.allocator);
+    try std.testing.expect(compiler.post_check_executor == null);
+    try std.testing.expect(compiler.reuse_same_program == null);
 }
 
-// Note: Full integration tests for compileToObjectFile require complex setup
-// of mono stores and layout stores. These are tested via integration tests
-// in the CLI (roc build --opt=dev).
+test "ObjectFileCompiler native emission skips static initializers and captures packs" {
+    const allocator = std.testing.allocator;
+    var store = LirStore.init(allocator);
+    defer store.deinit();
+    var layouts = try layout.Store.init(allocator, @import("base").target.TargetUsize.native);
+    defer layouts.deinit();
+    const result_local = try store.addLocal(.{ .layout_idx = .i64 });
+    const ret = try store.addCFStmt(.{ .ret = .{ .value = result_local } });
+    const body = try store.addCFStmt(.{ .assign_literal = .{
+        .target = result_local,
+        .value = .{ .i64_literal = .{ .value = 42, .layout_idx = .i64 } },
+        .next = ret,
+    } });
+    _ = try store.addProcSpec(.{
+        .name = store.freshSyntheticSymbol(),
+        .identity = lir.LIR.ProcIdentity.forTest(1),
+        .args = lir.LIR.LocalSpan.empty(),
+        .body = body,
+        .ret_layout = .i64,
+    });
+    _ = try store.addProcSpec(.{
+        .name = store.freshSyntheticSymbol(),
+        .identity = lir.LIR.ProcIdentity.forTest(2),
+        .args = lir.LIR.LocalSpan.empty(),
+        .body = body,
+        .ret_layout = .i64,
+        .is_static_initializer = true,
+    });
+
+    var timing = ObjectFileCompiler.Timing.init(std.testing.io);
+    var compiler = ObjectFileCompiler.initForPack(allocator);
+    compiler.timing = &timing;
+    const targets = [_]RocTarget{ .x64linux, .arm64linux, .x64v1linux, .arm64v1linux, .x64v1musl, .arm64v1musl };
+    for (targets) |target| {
+        var result = try compiler.compileToObjectFile(
+            &store,
+            &layouts,
+            &.{},
+            &.{},
+            store.getProcSpecs(),
+            &.{},
+            &.{},
+            &.{},
+            target,
+        );
+        defer result.deinit();
+        try std.testing.expect(std.mem.startsWith(u8, result.object_bytes, "\x7fELF"));
+        try std.testing.expect(!result.uses_boxy);
+        try std.testing.expect(result.artifacts != null);
+        try std.testing.expect(result.artifacts.?.artifacts.len > 0);
+    }
+    const snapshot = timing.snapshot();
+    try std.testing.expectEqual(@as(u64, targets.len), snapshot.native_emission.procedures_emitted);
+    try std.testing.expectEqual(@as(u64, 0), snapshot.native_emission.procedures_reused);
+    try std.testing.expectEqual(@as(u64, 0), snapshot.rc_helper_instructions_ns);
+}
+
+test "ObjectFileCompiler runtime static-root pack owns only reachable canonical data" {
+    const allocator = std.testing.allocator;
+    const PackFile = @import("PackFile.zig");
+    const text = "immutable runtime data survives its producer";
+    const identity = lir.ProcIdentity.forTest(717);
+    inline for (.{ RocTarget.x64linux, RocTarget.arm64linux, comptime RocTarget.detectNative() }) |target| {
+        var result = producer: {
+            var arena = std.heap.ArenaAllocator.init(allocator);
+            defer arena.deinit();
+            const a = arena.allocator();
+            var store = LirStore.init(a);
+            defer store.deinit();
+            var layouts = try layout.Store.init(a, .u64);
+            defer layouts.deinit();
+            const local = try store.addLocal(.{ .layout_idx = .str });
+            const ret = try store.addCFStmt(.{ .ret = .{ .value = local } });
+            const body = try store.addCFStmt(.{ .assign_literal = .{
+                .target = local,
+                .value = .{ .static_data = @enumFromInt(7) },
+                .next = ret,
+            } });
+            _ = try store.addProcSpec(.{
+                .name = store.freshSyntheticSymbol(),
+                .identity = identity,
+                .args = .empty(),
+                .body = body,
+                .ret_layout = .str,
+            });
+            const descriptor = try a.alloc(u8, 24);
+            @memset(descriptor, 0);
+            std.mem.writeInt(u64, descriptor[8..16], text.len << 1, .little);
+            std.mem.writeInt(u64, descriptor[16..24], text.len, .little);
+            const backing = try a.alloc(u8, 16 + text.len);
+            @memset(backing[0..16], 0);
+            @memcpy(backing[16..], text);
+            const exports = try a.alloc(StaticDataExport, 3);
+            const relocation = try a.alloc(StaticDataRelocation, 1);
+            relocation[0] = .{
+                .offset = 0,
+                .target_symbol_name = try a.dupe(u8, "roc__static_producer_leaf"),
+                .target = .{ .data_symbol = @enumFromInt(1) },
+                .addend = 8,
+            };
+            exports[0] = .{
+                .symbol_name = try a.dupe(u8, "roc__static_producer_root"),
+                .value_id = @enumFromInt(7),
+                .bytes = descriptor,
+                .alignment = 8,
+                .is_exported = false,
+                .relocations = relocation,
+            };
+            exports[1] = .{
+                .symbol_name = try a.dupe(u8, "roc__static_producer_leaf"),
+                .bytes = backing,
+                .symbol_offset = 8,
+                .alignment = 8,
+                .is_exported = false,
+            };
+            exports[2] = .{
+                .symbol_name = try a.dupe(u8, "roc__static_unreachable"),
+                .bytes = try a.dupe(u8, "must not travel in the pack"),
+                .alignment = 1,
+                .is_exported = false,
+            };
+            var compiler = ObjectFileCompiler.initForPack(allocator);
+            break :producer try compiler.compileToObjectFile(&store, &layouts, &.{}, exports, store.getProcSpecs(), &.{}, &.{}, &.{}, target);
+        };
+        // No source descriptor, backing, symbol names, LIR or layout owners remain.
+        const bytes = serialized: {
+            defer result.deinit();
+            break :serialized try PackFile.write(allocator, &result.artifacts.?, &.{});
+        };
+        defer allocator.free(bytes);
+        var pack = try PackFile.read(allocator, bytes);
+        defer pack.deinit();
+        try std.testing.expectEqual(@as(usize, 1), pack.set.artifacts.len);
+        const artifact = pack.set.artifacts[0];
+        try std.testing.expectEqual(@as(usize, 2), artifact.data.len);
+        for (artifact.data) |item| {
+            try std.testing.expect(std.mem.startsWith(u8, item.name, ProcArtifact.content_data_prefix));
+            try std.testing.expect(!std.mem.eql(u8, item.name, "roc__static_producer_root"));
+            try std.testing.expect(!std.mem.eql(u8, item.name, "roc__static_producer_leaf"));
+            for (item.relocations) |relocation| {
+                try std.testing.expect(!relocation.external);
+                try std.testing.expect(std.mem.startsWith(u8, relocation.name, ProcArtifact.content_data_prefix));
+            }
+        }
+        var data_references: usize = 0;
+        for (artifact.relocations) |relocation| {
+            if (relocation.kind != .data) continue;
+            data_references += 1;
+            try std.testing.expect(std.mem.startsWith(u8, relocation.name, ProcArtifact.content_data_prefix));
+        }
+        try std.testing.expect(data_references > 0);
+        // A different consumer has neither the procedure ordinal nor any static table.
+        var store = LirStore.init(allocator);
+        defer store.deinit();
+        var layouts = try layout.Store.init(allocator, .u64);
+        defer layouts.deinit();
+        const CG = LirCodeGenMod.LirCodeGen(target);
+        var receiver = try CG.init(allocator, &store, &layouts, .{}, &.{}, .default);
+        defer receiver.deinit();
+        var procs = std.AutoHashMap(lir.ProcIdentity, lir.LIR.LirProcSpecId).init(allocator);
+        defer procs.deinit();
+        var placed = std.AutoHashMap(u32, usize).init(allocator);
+        defer placed.deinit();
+        var data = std.ArrayList(ProcArtifact.DataItem).empty;
+        defer data.deinit(allocator);
+        try ProcArtifact.splice(CG, allocator, &receiver, &pack.set, &.{0}, &procs, &placed, &data);
+        try receiver.finishImage();
+        if (comptime target == RocTarget.detectNative() and LirCodeGenMod.host_lir_codegen_available) {
+            var splice = @import("HostSplice.zig").HostSplice.init(allocator);
+            defer splice.deinit();
+            try splice.addDataItems(data.items);
+            var table: LirCodeGenMod.BoxyNativeFnTable = undefined;
+            @memset(&table, 0);
+            var executable = try splice.link(&receiver, &table);
+            defer executable.deinit();
+            const builtins = @import("builtins");
+            var host = builtins.utils.TestEnv.init(allocator);
+            defer host.deinit();
+            const saved_host = builtins.in_process_host.enter(host.getOps(), null);
+            defer builtins.in_process_host.leave(saved_host);
+            var output: [3]usize = @splat(0);
+            executable.callRocABIAt(placed.get(0).? + artifact.entry, @ptrCast(&output), null);
+            try std.testing.expectEqual(text.len, output[2]);
+            const value: [*]const u8 = @ptrFromInt(output[0]);
+            try std.testing.expectEqualStrings(text, value[0..output[2]]);
+        }
+    }
+}
 
 /// `ROC_DEV_ARTIFACT_ROUNDTRIP` makes every object compile also assemble the
 /// program from its own procedure artifacts and panic if the result differs.

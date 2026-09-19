@@ -8470,7 +8470,13 @@ test "shared CTFE and runtime requests specialize once across workers and target
     const builtin_modules = try sharedBuiltinModules();
     const other_width: base.target.TargetUsize = if (base.target.TargetUsize.native == .u64) .u32 else .u64;
     for ([_]usize{ 1, 4 }) |jobs| {
-        for ([_]base.target.TargetUsize{ .native, other_width }) |width| {
+        for ([_]lir.CheckedPipeline.TargetConfig{
+            .{ .target_usize = .native, .inline_expects = .run },
+            .{ .target_usize = other_width, .inline_expects = .run },
+            .{ .target_usize = .native, .inline_expects = .omit },
+        }) |consumer| {
+            const width = consumer.target_usize;
+            const same_domain = width == base.target.TargetUsize.native and consumer.inline_expects == .run;
             var coord = try Coordinator.init(
                 allocator,
                 .multi_threaded,
@@ -8500,7 +8506,7 @@ test "shared CTFE and runtime requests specialize once across workers and target
             var metrics = lir.CheckedPipeline.WorkMetrics{};
             const target: lir.CheckedPipeline.TargetConfig = .{
                 .target_usize = width,
-                .inline_expects = .run,
+                .inline_expects = consumer.inline_expects,
                 .work_metrics = &metrics,
                 .post_check_executor = coord.postCheckExecutor(),
             };
@@ -8509,18 +8515,22 @@ test "shared CTFE and runtime requests specialize once across workers and target
             try coord.finishCheckedProgram(.none);
             try std.testing.expect(!coord.hasUserErrors());
             try std.testing.expect(coord.program_session.?.compile_time_root_count > 0);
+            try std.testing.expect(coord.program_session.?.native_artifacts != null);
+            try std.testing.expect(coord.program_session.?.runtimeNativeArtifacts() == null);
+            try std.testing.expectEqual(!same_domain, coord.program_session.?.runtime_prepared != null);
             try std.testing.expectEqual(@as(u32, 1), metrics.monotype_runs);
             try std.testing.expectEqual(@as(u32, 1), metrics.solved_runs);
             try std.testing.expectEqual(@as(u32, 1), metrics.lir_continuations);
             var runtime = try coord.program_session.?.takeRuntime(allocator, requests, target);
             defer runtime.deinit();
+            try std.testing.expectEqual(same_domain, coord.program_session.?.runtimeNativeArtifacts() != null);
             try std.testing.expectEqual(@as(u32, 1), metrics.monotype_runs);
             try std.testing.expectEqual(@as(u32, 1), metrics.solved_runs);
-            try std.testing.expectEqual(@as(u32, if (width == base.target.TargetUsize.native) 1 else 2), metrics.lir_continuations);
+            try std.testing.expectEqual(@as(u32, if (same_domain) 1 else 2), metrics.lir_continuations);
             try std.testing.expectEqual(@as(usize, 1), runtime.lir_result.root_procs.items.len);
-            // The native width reuses the completed host program, whose
+            // The original host domain reuses the completed program, whose
             // accessor now returns the completed scalar as a literal; a
-            // forked width lowers its own continuation, where the read is
+            // forked consumer lowers its own continuation, where the read is
             // the literal. Either way no value slot survives.
             const frozen = runtime.frozen_static_data orelse return error.TestUnexpectedResult;
             var value_exports: usize = 0;

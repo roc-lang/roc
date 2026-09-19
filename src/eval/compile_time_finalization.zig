@@ -31,6 +31,7 @@ const FinalizeError = checked.CompileTimeFinalizer.Error;
 const LirProgram = lir.Program;
 const BoxyBuiltinFn = backend.LirCodeGenMod.BoxyBuiltinFn;
 const BoxyNativeFnTable = backend.LirCodeGenMod.BoxyNativeFnTable;
+const NativeProcCompiler = backend.dev.NativeProcCompiler;
 
 /// Borrowed compile-time `dbg` observation delivered while finalized roots are
 /// replayed in deterministic request order.
@@ -150,14 +151,24 @@ pub const ProgramSession = struct {
     host: ?lir.CheckedPipeline.LoweredProgram,
     runtime_prepared: ?lir.CheckedPipeline.PreparedSolved,
     compile_time_root_count: usize,
+    native_artifacts: ?NativeProcCompiler.Retained = null,
+    /// Only a successful transfer of the original host LIR establishes the
+    /// producer-domain proof required by native artifact reuse.
+    runtime_owns_native_domain: bool = false,
 
     pub fn deinit(self: *ProgramSession) void {
+        if (self.native_artifacts) |*artifacts| artifacts.deinit();
         if (self.host) |*host| host.deinit();
         if (self.runtime_prepared) |*prepared| prepared.deinit();
         self.allocator.free(self.modules.root.relation_modules);
         self.allocator.free(self.modules.imports);
         deinitRootRequests(self.allocator, self.runtime_roots);
         self.* = undefined;
+    }
+
+    pub fn runtimeNativeArtifacts(self: *const ProgramSession) ?*const NativeProcCompiler.Retained {
+        if (!self.runtime_owns_native_domain) return null;
+        return if (self.native_artifacts) |*artifacts| artifacts else null;
     }
 
     pub fn takeRuntime(
@@ -167,29 +178,27 @@ pub const ProgramSession = struct {
         target: lir.CheckedPipeline.TargetConfig,
     ) lir.CheckedPipeline.LowerResourceError!lir.CheckedPipeline.LoweredProgram {
         const configured = self.runtime_target orelse finalizationInvariant("check-only session has no runtime consumer");
-        inline for (@typeInfo(lir.CheckedPipeline.TargetConfig).@"struct".fields) |field| {
-            if (comptime std.mem.eql(u8, field.name, "timing") or
-                std.mem.eql(u8, field.name, "work_metrics") or
-                std.mem.eql(u8, field.name, "post_check_executor") or
-                std.mem.eql(u8, field.name, "debug_materialized_out") or
-                std.mem.eql(u8, field.name, "solved_lir_parallel_metrics_out") or
-                std.mem.eql(u8, field.name, "lifted_expr_count_out") or
-                std.mem.eql(u8, field.name, "completed_scalar_values"))
+        inline for (comptime std.meta.tags(std.meta.FieldEnum(lir.CheckedPipeline.TargetConfig))) |field| {
+            if (comptime field == .timing or
+                field == .work_metrics or
+                field == .post_check_executor or
+                field == .debug_materialized_out or
+                field == .solved_lir_parallel_metrics_out or
+                field == .lifted_expr_count_out or
+                field == .completed_scalar_values)
             {
                 // A completed host program has already published its outputs.
                 // Reusing it cannot silently redirect those results or count
                 // its producer work again in another metrics destination.
-                if (comptime !std.mem.eql(u8, field.name, "timing") and
-                    !std.mem.eql(u8, field.name, "post_check_executor"))
-                {
+                if (comptime field != .timing and field != .post_check_executor) {
                     const reuses_completed_host = target.specialization_strategy == .lss and
                         self.compile_time_root_count != 0 and self.runtime_prepared == null;
-                    if (reuses_completed_host and !std.meta.eql(@field(configured, field.name), @field(target, field.name)))
+                    if (reuses_completed_host and !std.meta.eql(@field(configured, @tagName(field)), @field(target, @tagName(field))))
                         finalizationInvariant("completed runtime program cannot redirect previously published lowering outputs");
                 }
                 continue;
             }
-            if (!std.meta.eql(@field(configured, field.name), @field(target, field.name)))
+            if (!std.meta.eql(@field(configured, @tagName(field)), @field(target, @tagName(field))))
                 finalizationInvariant("runtime policy differs from the compilation's declared consumer");
         }
         inline for (@typeInfo(lir.CheckedPipeline.RootRequestSet).@"struct".fields) |field| {
@@ -249,6 +258,7 @@ pub const ProgramSession = struct {
         for (runtime_indices, 0..) |*index, ordinal| index.* = @intCast(start + ordinal);
         try lir.CheckedPipeline.retainRuntimeRoots(&lowered, runtime_indices);
         self.runtime_target = null;
+        self.runtime_owns_native_domain = !needs_conversion;
         return lowered;
     }
 };
@@ -454,6 +464,8 @@ pub fn finalizeProgram(
         error.HostedFunctionNotBound => unreachable,
     };
     errdefer host.deinit();
+    var native_artifacts: ?NativeProcCompiler.Retained = null;
+    errdefer if (native_artifacts) |*artifacts| artifacts.deinit();
     var evaluation_options = options;
     evaluation_options.debug_events = &debug_events;
     if (compile_time_root_count != 0) {
@@ -469,6 +481,8 @@ pub fn finalizeProgram(
             native.codegen.static_strings = native.static_strings.view();
             try finalizeLoweredProgram(allocator, modules, &host, compile_time_root_count, &native, evaluation_options);
             host.frozen_static_data = try native.freezeCompleted();
+            native_artifacts = native.artifacts;
+            native.artifacts = null;
         }
     } else {
         for (modules) |entry| {
@@ -490,6 +504,7 @@ pub fn finalizeProgram(
         .host = host,
         .runtime_prepared = runtime_prepared,
         .compile_time_root_count = compile_time_root_count,
+        .native_artifacts = native_artifacts,
     };
 }
 
@@ -609,6 +624,8 @@ pub const Timing = struct {
     /// burst fold a footprint reading at the same points.
     mem_min: MemMinCounter = MemMinCounter.init(std.math.maxInt(u64)),
     mem_max: MemMaxCounter = .{},
+    native_emission_mutex: std.atomic.Mutex = .unlocked,
+    native_emission: NativeProcCompiler.Metrics = .{},
 
     pub fn init(std_io: std.Io) Timing {
         return .{
@@ -618,6 +635,9 @@ pub const Timing = struct {
     }
 
     pub fn snapshot(self: *const Timing) TimingSnapshot {
+        const mutable = @constCast(self);
+        while (!mutable.native_emission_mutex.tryLock()) std.atomic.spinLoopHint();
+        defer mutable.native_emission_mutex.unlock();
         return .{
             .total_ns = self.total_ns.load(),
             .lowering = self.lowering.snapshot(),
@@ -627,10 +647,18 @@ pub const Timing = struct {
             .store_results_ns = self.store_results_ns.load(),
             .mem_min = self.mem_min.load(),
             .mem_max = self.mem_max.load(),
+            .native_emission = self.native_emission,
         };
     }
 
+    fn addNativeEmission(self: *Timing, metrics: NativeProcCompiler.Metrics) void {
+        while (!self.native_emission_mutex.tryLock()) std.atomic.spinLoopHint();
+        defer self.native_emission_mutex.unlock();
+        self.native_emission.add(metrics);
+    }
+
     pub fn addSnapshot(self: *Timing, snapshot_value: TimingSnapshot) void {
+        self.addNativeEmission(snapshot_value.native_emission);
         self.lowering.addSnapshot(snapshot_value.lowering);
         self.total_ns.add(snapshot_value.total_ns);
         self.static_data_ns.add(snapshot_value.static_data_ns);
@@ -686,6 +714,7 @@ pub const TimingSnapshot = struct {
     store_results_ns: u64 = 0,
     mem_min: u64 = std.math.maxInt(u64),
     mem_max: u64 = 0,
+    native_emission: NativeProcCompiler.Metrics = .{},
 };
 
 test "shared lowering timing preserves full snapshots through aggregation" {
@@ -709,6 +738,7 @@ test "shared lowering timing preserves full snapshots through aggregation" {
         .store_results_ns = 113,
         .mem_min = 127,
         .mem_max = 131,
+        .native_emission = .{ .tasks_submitted = 3, .procedures_emitted = 5, .procedures_reused = 7, .peak_inflight_fragments = 2 },
     };
     var first = Timing.init(std.testing.io);
     first.addSnapshot(input);
@@ -725,6 +755,10 @@ test "shared lowering timing preserves full snapshots through aggregation" {
     try std.testing.expectEqual(@as(u64, 202), result.total_ns);
     try std.testing.expectEqual(@as(u64, 127), result.mem_min);
     try std.testing.expectEqual(@as(u64, 131), result.mem_max);
+    try std.testing.expectEqual(@as(u64, 6), result.native_emission.tasks_submitted);
+    try std.testing.expectEqual(@as(u64, 10), result.native_emission.procedures_emitted);
+    try std.testing.expectEqual(@as(u64, 14), result.native_emission.procedures_reused);
+    try std.testing.expectEqual(@as(u64, 2), result.native_emission.peak_inflight_fragments);
     try std.testing.expectEqualDeep(TimingSnapshot{}, Timing.init(std.testing.io).snapshot());
 }
 
@@ -2124,6 +2158,7 @@ const DevProgram = struct {
     splice: backend.dev.HostSplice,
     executable: backend.ExecutableMemory,
     entry_offsets: collections.DenseMap(lir.LIR.LirProcSpecId, usize),
+    artifacts: ?NativeProcCompiler.Retained,
 
     fn init(allocator: Allocator, modules: lir.CheckedPipeline.CheckedModuleSet, lowered: *lir.CheckedPipeline.LoweredProgram, options: Options) FinalizeError!DevProgram {
         const static_data_started_ns = if (options.timing) |timing| timing.start() else 0;
@@ -2150,14 +2185,16 @@ const DevProgram = struct {
         errdefer codegen.deinit();
         codegen.dict_seed_mode = .comptime_zero;
         codegen.setNativeStaticData(slots.addresses);
-        codegen.setComptimeHooks(.{
+        try codegen.setStaticDataSymbols(slots.materialized);
+        const hooks = backend.dev.LirCodeGenMod.ComptimeHooks{
             .branch_taken = CompileTimeHost.rocComptimeBranchTaken,
             .exhaustiveness_failed = CompileTimeHost.rocComptimeExhaustivenessFailed,
             .failure_region = CompileTimeHost.rocComptimeFailureRegion,
             .ensure_static_value = CompileTimeHost.rocComptimeEnsureStaticValue,
             .call_enter = CompileTimeHost.rocComptimeCallEnter,
             .call_exit = CompileTimeHost.rocComptimeCallExit,
-        });
+        };
+        codegen.setComptimeHooks(hooks);
         var native_fns = boxyNativeFnTable();
         codegen.boxy_native_fns = &native_fns;
         const evaluation_roots = try allocator.alloc(lir.LIR.LirProcSpecId, lowered.lir_result.const_roots.items.len);
@@ -2167,11 +2204,22 @@ const DevProgram = struct {
         defer allocator.free(evaluation_demand);
         var splice = backend.dev.HostSplice.init(allocator);
         errdefer splice.deinit();
+        splice.setComptimeHooks(hooks);
+        splice.bindStaticDataSymbols(slots.materialized, &slots.image) catch |err| switch (err) {
+            error.OutOfMemory => return error.OutOfMemory,
+            error.MissingStaticDataSymbol => finalizationInvariant("CTFE slot image omitted a declared static data symbol"),
+            error.DuplicateStaticDataSymbol => finalizationInvariant("CTFE slot image contains conflicting static data symbols"),
+        };
         if (options.splice_source) |source| try splice.spliceExternal(&codegen, evaluation_demand, source);
-        try codegen.compileSelectedProcSpecs(evaluation_demand);
         const static_rc_helpers = try static_data_exports.collectRequiredRcHelpers(allocator, slots.materialized);
         defer allocator.free(static_rc_helpers);
-        try codegen.compileStaticDataRcHelpers(static_rc_helpers);
+        var artifacts = try compileProcedures(allocator, &codegen, evaluation_demand, static_rc_helpers, options);
+        errdefer artifacts.deinit();
+        // Prepared fragments own their carried strings and pointer cells.
+        // The splice borrows those bytes until image placement completes.
+        const carried_data = try artifacts.dataItems(allocator);
+        defer allocator.free(carried_data);
+        try splice.addDataItems(carried_data);
 
         var entry_offsets = collections.DenseMap(lir.LIR.LirProcSpecId, usize).init(allocator);
         errdefer entry_offsets.deinit();
@@ -2235,7 +2283,20 @@ const DevProgram = struct {
             .splice = splice,
             .executable = executable,
             .entry_offsets = entry_offsets,
+            .artifacts = artifacts,
         };
+    }
+
+    fn compileProcedures(allocator: Allocator, codegen: *backend.HostLirCodeGen, demand: []const lir.LIR.LirProcSpecId, static_helpers: []const @import("layout").RcHelperKey, options: Options) Allocator.Error!NativeProcCompiler.Retained {
+        var metrics: NativeProcCompiler.Metrics = .{};
+        const artifacts = try NativeProcCompiler.run(backend.HostLirCodeGen, allocator, codegen, demand, .{
+            .target = backend.dev.LirCodeGenMod.host_lir_codegen_target,
+            .executor = options.post_check_executor,
+            .static_helpers = static_helpers,
+            .metrics_out = &metrics,
+        });
+        if (options.timing) |timing| timing.addNativeEmission(metrics);
+        return artifacts;
     }
 
     fn resolveCallable(raw: ?*anyopaque, data_ptr: [*]u8) error{RuntimeError}!NativeRootExport.CallableResolution {
@@ -2277,6 +2338,7 @@ const DevProgram = struct {
         self.executable.deinit();
         self.splice.deinit();
         self.codegen.deinit();
+        if (self.artifacts) |*artifacts| artifacts.deinit();
         self.slots.deinit();
         self.static_strings.deinit();
         self.* = undefined;
@@ -3512,6 +3574,116 @@ test "compile-time progress wait avoids timestamp wraparound" {
 
 test "compile-time finalization declarations are referenced" {
     std.testing.refAllDecls(@This());
+}
+
+test "CTFE native emission uses worker callbacks and retains reusable code without its image" {
+    if (comptime !backend.host_lir_codegen_available) return error.SkipZigTest;
+    const allocator = std.testing.allocator;
+    const tasks = base.post_check_task_executor;
+    const ExecutorFixture = struct {
+        lane: tasks.LaneState,
+        completions: std.ArrayList(tasks.Completion) = .empty,
+        callbacks: usize = 0,
+
+        fn begin(_: *anyopaque) void {}
+        fn end(_: *anyopaque) void {}
+        fn submit(raw: *anyopaque, task: tasks.Task) Allocator.Error!void {
+            const self: *@This() = @ptrCast(@alignCast(raw));
+            var scratch = std.heap.ArenaAllocator.init(std.testing.allocator);
+            defer scratch.deinit();
+            self.callbacks += 1;
+            const value = task.run(task.context, .{
+                .id = 0,
+                .allocator = std.testing.allocator,
+                .scratch = scratch.allocator(),
+                .lane_state = &self.lane,
+            });
+            try self.completions.append(std.testing.allocator, .{ .id = task.id, .worker_id = 0, .value = value });
+        }
+        fn receive(raw: *anyopaque) tasks.Completion {
+            const self: *@This() = @ptrCast(@alignCast(raw));
+            return self.completions.orderedRemove(0);
+        }
+        fn executor(self: *@This()) tasks.Executor {
+            return .{ .context = self, .worker_count = 1, .beginFn = begin, .submitFn = submit, .receiveFn = receive, .endFn = end };
+        }
+    };
+    var program = try LirProgram.Result.init(allocator, .native);
+    defer program.deinit();
+    const answer = try program.store.addLocal(.{ .layout_idx = .u64 });
+    const ret = try program.store.addCFStmt(.{ .ret = .{ .value = answer } });
+    const body = try program.store.addCFStmt(.{ .assign_literal = .{ .target = answer, .value = .{ .i64_literal = .{ .value = 42, .layout_idx = .u64 } }, .next = ret } });
+    const proc = try program.store.addProcSpec(.{
+        .name = .fromRaw(0),
+        .identity = lir.LIR.ProcIdentity.forTest(901),
+        .args = .empty(),
+        .frame_locals = try program.store.addLocalSpan(&.{answer}),
+        .body = body,
+        .ret_layout = .u64,
+    });
+    var timing = Timing.init(std.testing.io);
+    var retained = block: {
+        var executor = ExecutorFixture{ .lane = tasks.LaneState.init(allocator) };
+        defer executor.lane.deinit();
+        defer executor.completions.deinit(allocator);
+        var strings = try backend.StaticStringData.build(allocator, &program.store, backend.dev.LirCodeGenMod.host_lir_codegen_target);
+        defer strings.deinit();
+        var codegen = try backend.HostLirCodeGen.initWithBoxyMetadata(allocator, &program.store, &program.layouts, strings.view(), &.{}, &.{}, &.{}, roc_target.host_cpu.level());
+        defer codegen.deinit();
+        codegen.dict_seed_mode = .comptime_zero;
+        codegen.setComptimeHooks(.{
+            .branch_taken = CompileTimeHost.rocComptimeBranchTaken,
+            .exhaustiveness_failed = CompileTimeHost.rocComptimeExhaustivenessFailed,
+            .failure_region = CompileTimeHost.rocComptimeFailureRegion,
+            .ensure_static_value = CompileTimeHost.rocComptimeEnsureStaticValue,
+            .call_enter = CompileTimeHost.rocComptimeCallEnter,
+            .call_exit = CompileTimeHost.rocComptimeCallExit,
+        });
+        var artifacts = try DevProgram.compileProcedures(allocator, &codegen, &.{proc}, &.{}, .{ .post_check_executor = executor.executor(), .timing = &timing });
+        errdefer artifacts.deinit();
+        try std.testing.expect(executor.callbacks > 0);
+        try std.testing.expect(timing.snapshot().native_emission.procedures_emitted > 0);
+        const entry = try codegen.generateEntrypointWrapper("ctfe_retained_leaf", proc, &.{}, .u64);
+        try codegen.finishImage();
+        var image = try backend.ExecutableMemory.initWithEntryOffset(codegen.getGeneratedCode(), 0);
+        defer image.deinit();
+        var result: u64 = 0;
+        image.callRocABIAt(entry.offset, @ptrCast(&result), null);
+        try std.testing.expectEqual(@as(u64, 42), result);
+        break :block artifacts;
+    };
+    defer retained.deinit();
+    // Every producer workspace, string table, and executable mapping is dead.
+    // Only the same LIR domain and independently owned artifacts remain.
+    for (0..2) |iteration| {
+        if (iteration == 1) program.store.getProcSpecPtr(proc).native_code_revision += 1;
+        var strings = try backend.StaticStringData.build(allocator, &program.store, backend.dev.LirCodeGenMod.host_lir_codegen_target);
+        defer strings.deinit();
+        var codegen = try backend.HostLirCodeGen.initWithBoxyMetadata(allocator, &program.store, &program.layouts, strings.view(), &.{}, &.{}, &.{}, roc_target.host_cpu.level());
+        defer codegen.deinit();
+        var metrics: NativeProcCompiler.Metrics = .{};
+        var runtime_artifacts = try NativeProcCompiler.run(backend.HostLirCodeGen, allocator, &codegen, &.{proc}, .{
+            .target = backend.dev.LirCodeGenMod.host_lir_codegen_target,
+            .reuse_same_program = &retained,
+            .metrics_out = &metrics,
+        });
+        defer runtime_artifacts.deinit();
+        if (iteration == 0) {
+            try std.testing.expectEqual(@as(u64, 1), metrics.procedures_reused);
+            try std.testing.expectEqual(@as(u64, 0), metrics.procedures_emitted);
+        } else {
+            try std.testing.expectEqual(@as(u64, 0), metrics.procedures_reused);
+            try std.testing.expectEqual(@as(u64, 1), metrics.procedures_emitted);
+            try std.testing.expectEqual(@as(u64, 1), metrics.rejected_revision);
+        }
+        const entry = try codegen.generateEntrypointWrapper("runtime_retained_leaf", proc, &.{}, .u64);
+        try codegen.finishImage();
+        var image = try backend.ExecutableMemory.initWithEntryOffset(codegen.getGeneratedCode(), 0);
+        defer image.deinit();
+        var result: u64 = 0;
+        image.callRocABIAt(entry.offset, @ptrCast(&result), null);
+        try std.testing.expectEqual(@as(u64, 42), result);
+    }
 }
 
 test "shared compile-time debug replay sorts module root and event identities" {

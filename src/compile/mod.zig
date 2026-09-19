@@ -200,6 +200,8 @@ test "compile tests" {
     std.testing.refAllDecls(@import("test/specialization_epoch_test.zig"));
     std.testing.refAllDecls(@import("test/range_prove_test.zig"));
     std.testing.refAllDecls(@import("test/parallel_fusion_test.zig"));
+    std.testing.refAllDecls(@import("test/parallel_spec_constr_test.zig"));
+    std.testing.refAllDecls(@import("test/native_artifact_parallel_test.zig"));
     std.testing.refAllDecls(@import("test/match_corpus_test.zig"));
     std.testing.refAllDecls(@import("test/url_package_test.zig"));
     std.testing.refAllDecls(@import("test/dbg_runtime_error_test.zig"));

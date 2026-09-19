@@ -4626,7 +4626,7 @@ const Builder = struct {
                         break :body try self.program.addExpr(.{
                             .ty = ret_ty,
                             .data = .{ .comptime_value = .{
-                                .root = .{ .module = view.key, .root = root, .const_locator = request.const_locator },
+                                .root = try self.program.addComptimeValueRoot(.{ .module = view.key, .root = root, .const_locator = request.const_locator }),
                                 .initializer = initializer,
                             } },
                         });
@@ -13402,6 +13402,9 @@ const DraftComptimeSiteId = enum(u32) { _ };
 const DraftStringLiteralId = enum(u32) { _ };
 const DraftStaticDataId = enum(u32) { _ };
 
+/// Qualified by the owning BodyDraftStore, never by a worker Program.
+const DraftComptimeValueRootId = enum(u32) { _ };
+
 fn DraftSpan(comptime _: type) type {
     return extern struct {
         start: u32,
@@ -13688,7 +13691,7 @@ const DraftExprData = union(enum(u8)) {
     bytes_lit: DraftPackedListLiteral,
     static_data_candidate: DraftStaticDataCandidate,
     inline_expects_enabled: void,
-    comptime_value: struct { root: Common.ComptimeValueRoot, initializer: DraftExprId },
+    comptime_value: struct { root: DraftComptimeValueRootId, initializer: DraftExprId },
     list: DraftSpan(DraftExprId),
     tuple: DraftSpan(DraftExprId),
     record: DraftSpan(DraftFieldExpr),
@@ -15565,6 +15568,10 @@ const BodyDraftStore = struct {
     /// private-body boundary before ordered commit.
     static_data_requests: std.ArrayList(DraftStaticDataRequest),
     static_data_request_ids: std.AutoHashMap(DraftStaticDataRequestAddress, DraftStaticDataId),
+    /// Drafts outlive worker builders and seal into a different Program.
+    /// Keep exact descriptors append-only until ordered commit; abandoned
+    /// speculative expressions cannot invalidate ids held by surviving ones.
+    comptime_value_roots: std.ArrayList(Common.ComptimeValueRoot),
     /// These memoized TypeIds belong to this draft's graph, so their lifetime
     /// cannot exceed the body that owns that graph. Type-store entries are
     /// immutable snapshots: later graph refinement allocates a new TypeId
@@ -15671,6 +15678,7 @@ const BodyDraftStore = struct {
             .static_data_candidate_exprs = std.AutoHashMap(StaticDataCandidateAddress, DraftExprId).init(allocator),
             .static_data_requests = .empty,
             .static_data_request_ids = std.AutoHashMap(DraftStaticDataRequestAddress, DraftStaticDataId).init(allocator),
+            .comptime_value_roots = .empty,
             .parse_result_ok_types = std.AutoHashMap(GeneratedParseResultOkTypeAddress, Type.TypeId).init(allocator),
             .generated_try_types = std.AutoHashMap(GeneratedTryTypeAddress, Type.TypeId).init(allocator),
             .uninhabited_type_cache = collections.DenseMap(Type.TypeId, bool).init(allocator),
@@ -15821,6 +15829,7 @@ const BodyDraftStore = struct {
         self.parse_result_ok_types.deinit();
         self.static_data_request_ids.deinit();
         self.static_data_requests.deinit(self.allocator);
+        self.comptime_value_roots.deinit(self.allocator);
         self.static_data_candidate_exprs.deinit();
         self.stmt_regions.deinit(self.allocator);
         self.stmt_locs.deinit(self.allocator);
@@ -15963,6 +15972,24 @@ const BodyDraftStore = struct {
         const raw_kind = @intFromEnum(kind);
         if (index >= self.owner_starts[raw_kind]) return true;
         return std.meta.eql(self.ownerForCore(kind, index), self.current_owner);
+    }
+
+    fn addComptimeValueRoot(self: *BodyDraftStore, root: Common.ComptimeValueRoot) Allocator.Error!DraftComptimeValueRootId {
+        const id: DraftComptimeValueRootId = @enumFromInt(@as(u32, @intCast(self.comptime_value_roots.items.len)));
+        try self.comptime_value_roots.append(self.allocator, root);
+        return id;
+    }
+
+    fn commitComptimeValueRoot(
+        self: *const BodyDraftStore,
+        program: *Ast.Program,
+        roots: *collections.DenseMap(DraftComptimeValueRootId, Common.ComptimeValueRootId),
+        root: DraftComptimeValueRootId,
+    ) Allocator.Error!Common.ComptimeValueRootId {
+        if (roots.get(root)) |id| return id;
+        const id = try program.addComptimeValueRoot(self.comptime_value_roots.items[@intFromEnum(root)]);
+        try roots.put(root, id);
+        return id;
     }
 
     fn addExpr(self: *BodyDraftStore, expr: DraftExpr) Allocator.Error!DraftExprId {
@@ -16651,6 +16678,11 @@ const BodyDraftStore = struct {
         const evidence_span = try program.addConstFnEvidence(self.const_fn_evidence.items);
         const evidence_frames_span = try program.addConstFnEvidenceFrames(self.const_fn_evidence_frames.items);
 
+        // The map belongs to this import, not the worker lane: independent
+        // shards may use the same local ordinal for different checked roots.
+        var comptime_roots = collections.DenseMap(DraftComptimeValueRootId, Common.ComptimeValueRootId).init(program.allocator);
+        defer comptime_roots.deinit();
+
         for (self.string_literals.items, 0..) |literal, index| {
             if (!ids.retained(.string_literals, index)) continue;
             const id = if (literal.const_blob) |blob|
@@ -16816,6 +16848,7 @@ const BodyDraftStore = struct {
                 ids,
                 committed_types,
                 static_data_ids,
+                &comptime_roots,
                 expr.data,
             );
             const loc = ids.sourceLoc(self.expr_locs.items[index]);
@@ -17231,6 +17264,7 @@ const BodyDraftStore = struct {
         ids: FinalIdOffsets,
         committed_types: *CommittedGraphTypes,
         static_data_ids: []const Common.StaticDataId,
+        comptime_roots: *collections.DenseMap(DraftComptimeValueRootId, Common.ComptimeValueRootId),
         data: DraftExprData,
     ) Allocator.Error!Ast.ExprData {
         return switch (data) {
@@ -17249,7 +17283,7 @@ const BodyDraftStore = struct {
             } },
             .inline_expects_enabled => .{ .inline_expects_enabled = {} },
             .comptime_value => |value| .{ .comptime_value = .{
-                .root = value.root,
+                .root = try self.commitComptimeValueRoot(program, comptime_roots, value.root),
                 .initializer = ids.expr(value.initializer),
             } },
             .static_data_candidate => |candidate| blk: {
@@ -25425,7 +25459,7 @@ const BodyContext = struct {
             .args = .empty(),
         } });
         return try self.addExprWithTypeCell(cell, .{ .comptime_value = .{
-            .root = .{ .module = view.key, .root = root_id, .const_locator = const_locator },
+            .root = try self.draft.addComptimeValueRoot(.{ .module = view.key, .root = root_id, .const_locator = const_locator }),
             .initializer = initializer,
         } });
     }
@@ -61196,11 +61230,14 @@ test "body draft static data candidates use ordered commit ids" {
     const draft_static: DraftStaticDataId = @enumFromInt(@as(u32, @intCast(0)));
     const draft_runtime: DraftExprId = @enumFromInt(@as(u32, @intCast(0)));
     const committed_static: Common.StaticDataId = @enumFromInt(@as(u32, @intCast(17)));
+    var comptime_roots = collections.DenseMap(DraftComptimeValueRootId, Common.ComptimeValueRootId).init(allocator);
+    defer comptime_roots.deinit();
     const sealed = try draft.sealCoreExprData(
         &program,
         BodyDraftStore.finalIdOffsets(&program),
         &committed_types,
         &.{committed_static},
+        &comptime_roots,
         .{ .static_data_candidate = .{
             .storage = .{ .string_backing = 23 },
             .static_data = draft_static,
@@ -61622,6 +61659,69 @@ test "executor lane retains Monotype state within a run and resets it between ru
     try std.testing.expectEqual(first, next_run);
     try std.testing.expectEqual(@as(u64, 0), next_run.worker.tasks_started);
     try std.testing.expectEqual(inputs.run_id, next_run.run_id);
+}
+
+test "body draft comptime roots relocate independent shards and survive source destruction" {
+    const allocator = std.testing.allocator;
+    var program = Ast.Program.init(allocator);
+    defer program.deinit();
+    const descriptors = [_]Common.ComptimeValueRoot{
+        .{
+            .module = .{ .bytes = @splat(0x31) },
+            .root = @enumFromInt(7),
+            .const_locator = .{
+                .artifact = .{ .bytes = @splat(0x41) },
+                .owner = .{ .hoisted_expr = .{ .module_idx = 19, .expr = @enumFromInt(23) } },
+                .template = @enumFromInt(29),
+                .source_scheme = .{ .bytes = @splat(0x51) },
+            },
+        },
+        .{
+            .module = .{ .bytes = @splat(0x32) },
+            .root = @enumFromInt(11),
+            .const_locator = null,
+        },
+    };
+    var committed: [2]Common.ComptimeValueRootId = undefined;
+    for (descriptors, 0..) |descriptor, shard_index| {
+        // Each independently owned shard starts at ordinal zero. Only its
+        // retained draft, not a worker Program, supplies metadata at commit.
+        var draft = BodyDraftStore.init(allocator);
+        defer draft.deinit();
+        const root = try draft.addComptimeValueRoot(descriptor);
+        try std.testing.expectEqual(@as(u32, 0), @intFromEnum(root));
+        const graph = try InstGraph.create(allocator, &program.types, &program.names);
+        defer graph.destroy();
+        const unit_node = try graph.newNode(.zst);
+        const cell = DraftTypeCell.fromGraphNode(unit_node);
+        const initializer = try draft.addExpr(.{ .ty = cell, .data = .unit });
+        for (0..2) |_| {
+            _ = try draft.addExpr(.{ .ty = cell, .data = .{ .comptime_value = .{
+                .root = root,
+                .initializer = initializer,
+            } } });
+        }
+        try graph.freezeRelations();
+        var sealer = GraphTypeFinals.init(graph);
+        defer sealer.deinit();
+        try draft.sealTypeCellsInPlace(graph, &sealer);
+        draft.discardGraphStateAfterSeal();
+        draft.assertGraphStateDiscarded();
+        try draft.sealCoreIntoProgram(&program, graph, &sealer);
+        const first = program.getExprAt(shard_index * 3 + 1).data.comptime_value;
+        const second = program.getExprAt(shard_index * 3 + 2).data.comptime_value;
+        try std.testing.expectEqual(first.root, second.root);
+        try std.testing.expectEqual(first.initializer, second.initializer);
+        try std.testing.expectEqual(@as(u32, @intCast(shard_index * 3)), @intFromEnum(first.initializer));
+        committed[shard_index] = first.root;
+    }
+    // Both source owners are dead. Equal local ordinals must not alias, and
+    // duplicate references must have copied each exact descriptor only once.
+    try std.testing.expect(committed[0] != committed[1]);
+    try std.testing.expectEqual(@as(u32, 1), @intFromEnum(committed[1]));
+    for (descriptors, committed) |descriptor, root| {
+        try std.testing.expectEqualDeep(descriptor, program.getComptimeValueRoot(root));
+    }
 }
 
 test "body draft commit relocates core type and name fields out of private stores" {

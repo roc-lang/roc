@@ -345,6 +345,22 @@ pub const Store = struct {
     tags: StoreList(Tag, "tags"),
     declared_fields: StoreList(DeclaredField, "declared_fields"),
     frozen: bool,
+    /// Query-only stores borrow their graph and completed caches. Their owner
+    /// must remain alive and must not mutate any storage until all readers end.
+    borrowed_read_only: bool = false,
+    read_sharing_prepared: bool = false,
+    read_sharing_coverage: ReadSharingQueries = .{},
+
+    /// Workers declare their query needs so unrelated caches stay cold.
+    pub const ReadSharingQueries = struct {
+        full: bool = false,
+        equality: bool = false,
+        specialization: bool = false,
+        iterator: bool = false,
+
+        pub const spec_constr: ReadSharingQueries = .{ .full = true, .equality = true };
+        pub const all: ReadSharingQueries = .{ .full = true, .equality = true, .specialization = true, .iterator = true };
+    };
 
     pub fn init(allocator: std.mem.Allocator) Store {
         return .{
@@ -382,6 +398,11 @@ pub const Store = struct {
         inline for (.{ "types", "type_digests", "specialization_digests", "equality_digests", "constructing", "iterator_interface_cache", "spans", "fields", "tags", "declared_fields" }) |field| {
             try @field(result, field).appendSlice(allocator, @field(self, field).unsafeRawItemsForView());
         }
+        // Traversal history is local, but every cloned type still needs a slot
+        // for uncached queries, including when the source is a borrowed store.
+        const visit_epochs = try allocator.alloc(u32, result.types.len());
+        @memset(visit_epochs, 0);
+        result.iterator_interface_visit_epochs = @TypeOf(result.iterator_interface_visit_epochs).fromOwnedSlice(visit_epochs);
         var unfoldings = self.recursive_digest_unfoldings.iterator();
         while (unfoldings.next()) |entry| {
             try result.recursive_digest_unfoldings.put(entry.key_ptr.*, entry.value_ptr.*);
@@ -399,7 +420,65 @@ pub const Store = struct {
         return result;
     }
 
+    /// Complete query caches before sharing the graph between workers, without
+    /// changing the caller's frozen type graph. Partial preparation on OOM is
+    /// valid owned cache state; temporary digest scratch is released and
+    /// reusable iterator scratch remains owned by this store.
+    pub fn prepareForReadSharing(self: *Store, name_store: *const names.NameStore) std.mem.Allocator.Error!void {
+        return self.prepareForReadSharingQueries(name_store, .all);
+    }
+
+    /// Complete only explicitly requested modes. Coverage is recorded per
+    /// completed mode; an OOM retry reuses already finalized SCC caches.
+    pub fn prepareForReadSharingQueries(self: *Store, name_store: *const names.NameStore, queries: ReadSharingQueries) std.mem.Allocator.Error!void {
+        if (self.borrowed_read_only) Common.invariant("cannot prepare a borrowed Monotype type store");
+        if (self.hasSpeculativeConstruction()) Common.invariant("Monotype read sharing requires completed construction");
+        self.read_sharing_prepared = false;
+        inline for (.{ "full", "equality", "specialization", "iterator" }) |query| {
+            if (@field(queries, query) and !@field(self.read_sharing_coverage, query)) {
+                for (0..self.types.len()) |index| {
+                    const ty: TypeId = @enumFromInt(index);
+                    if (comptime std.mem.eql(u8, query, "iterator")) {
+                        _ = try self.containsIteratorInterface(ty);
+                    } else {
+                        const mode: NamedDigestMode = comptime if (std.mem.eql(u8, query, "full"))
+                            .full
+                        else if (std.mem.eql(u8, query, "equality"))
+                            .equality
+                        else
+                            .identity_only;
+                        const digest = try self.computeDigest(name_store, ty, mode, null);
+                        // Equality unwraps aliases before traversal, so also
+                        // cache the answer on the original query id.
+                        self.setCachedDigest(ty, mode, digest);
+                    }
+                }
+                @field(self.read_sharing_coverage, query) = true;
+            }
+        }
+        self.read_sharing_prepared = true;
+    }
+
+    /// Allocation-free query facade. Only equality's caller-supplied scratch
+    /// allocator may allocate; no cache miss may initiate shared writes. The
+    /// caller must prepare the query modes its workers will use.
+    pub fn borrowReadOnly(self: *const Store, allocator: std.mem.Allocator) Store {
+        if (!self.read_sharing_prepared) Common.invariant("Monotype read sharing requires prepared caches");
+        var result = self.*;
+        result.allocator = allocator;
+        result.digest_stats = null;
+        result.borrowed_read_only = true;
+        result.iterator_interface_pending = .empty;
+        result.iterator_interface_visited = .empty;
+        result.iterator_interface_visit_epochs = .empty;
+        return result;
+    }
+
     pub fn deinit(self: *Store) void {
+        if (self.borrowed_read_only) {
+            self.* = undefined;
+            return;
+        }
         self.declared_fields.deinit(self.allocator);
         self.tags.deinit(self.allocator);
         self.fields.deinit(self.allocator);
@@ -420,6 +499,7 @@ pub const Store = struct {
     }
 
     pub fn freeze(self: *Store) void {
+        if (self.borrowed_read_only) Common.invariant("cannot freeze a borrowed Monotype type store");
         if (self.hasSpeculativeConstruction()) {
             Common.compilerBug("cannot freeze Monotype types with an unfinished construction owner");
         }
@@ -454,6 +534,7 @@ pub const Store = struct {
 
     /// Normalize record fields by label text before appending a durable span.
     pub fn addRecordFields(self: *Store, name_store: *const names.NameStore, values: []const Field) std.mem.Allocator.Error!Span {
+        self.assertMutable();
         if (values.len == 0) return .empty();
         const normalized = try self.allocator.dupe(Field, values);
         defer self.allocator.free(normalized);
@@ -472,6 +553,7 @@ pub const Store = struct {
 
     /// Normalize tag-union variants by label text before appending a durable span.
     pub fn addTagVariants(self: *Store, name_store: *const names.NameStore, values: []const Tag) std.mem.Allocator.Error!Span {
+        self.assertMutable();
         if (values.len == 0) return .empty();
         const normalized = try self.allocator.dupe(Tag, values);
         defer self.allocator.free(normalized);
@@ -482,6 +564,7 @@ pub const Store = struct {
     /// Append a producer-normalized tag span without copying it to sorting
     /// scratch. The input must be sorted, unique, and owned outside this store.
     pub fn addSortedTagVariants(self: *Store, name_store: *const names.NameStore, values: []const Tag) std.mem.Allocator.Error!Span {
+        self.assertMutable();
         std.debug.assert(std.sort.isSorted(Tag, values, name_store, tagLessThan));
         assertNoDuplicateTags(name_store, values);
         return try self.addTags(values);
@@ -573,6 +656,7 @@ pub const Store = struct {
         self.requireConstructed(root);
         const root_index = @intFromEnum(root);
         if (self.iterator_interface_cache.unsafeRawItemsForView()[root_index]) |cached| return cached;
+        if (self.borrowed_read_only) Common.invariant("borrowed Monotype iterator cache miss");
 
         self.iterator_interface_pending.clearRetainingCapacity();
         self.iterator_interface_visited.clearRetainingCapacity();
@@ -792,6 +876,7 @@ pub const Store = struct {
             self: *const EpochDelta,
             destination: *Store,
         ) std.mem.Allocator.Error!void {
+            destination.assertMutable();
             std.debug.assert(std.meta.eql(destination.epochBoundary(), self.begin));
             try destination.spans.ensureTotalCapacity(destination.allocator, self.end.spans);
             try destination.fields.ensureTotalCapacity(destination.allocator, self.end.fields);
@@ -828,6 +913,7 @@ pub const Store = struct {
             self: *const EpochDelta,
             destination: *Store,
         ) void {
+            destination.assertMutable();
             std.debug.assert(std.meta.eql(destination.epochBoundary(), self.begin));
             destination.spans.appendSlice(destination.allocator, self.spans) catch unreachable;
             destination.fields.appendSlice(destination.allocator, self.fields) catch unreachable;
@@ -1396,6 +1482,7 @@ pub const Store = struct {
         relocation: *TypeRelocation,
         source_roots: []const TypeId,
     ) std.mem.Allocator.Error!ImportResult {
+        self.assertMutable();
         if (self == source) {
             Common.compilerBug("Monotype import source and destination stores must differ");
         }
@@ -2560,8 +2647,11 @@ pub const Store = struct {
         };
     }
 
-    fn assertMutable(self: *const Store) void {
+    fn assertMutable(self: *Store) void {
+        if (self.borrowed_read_only) Common.invariant("borrowed Monotype type store cannot be mutated");
         if (self.frozen) Common.invariant("frozen Monotype type store cannot be mutated");
+        self.read_sharing_prepared = false;
+        self.read_sharing_coverage = .{};
     }
 
     fn requireConstructed(self: *const Store, ty: TypeId) void {
@@ -2649,6 +2739,7 @@ pub const Store = struct {
     /// Sole writer of the digest caches. Digests are content-addressed, so a
     /// re-write must agree with the existing entry.
     fn setCachedDigest(self: *Store, ty: TypeId, mode: NamedDigestMode, digest: names.TypeDigest) void {
+        if (self.borrowed_read_only) Common.invariant("borrowed Monotype digest cache cannot be mutated");
         if (self.cachedDigest(ty, mode)) |existing| {
             std.debug.assert(std.mem.eql(u8, &existing.bytes, &digest.bytes));
         }
@@ -2697,6 +2788,7 @@ pub const Store = struct {
             if (stats) |s| s.cache_hits += 1;
             return digest;
         }
+        if (self.borrowed_read_only) Common.invariant("borrowed Monotype digest cache miss");
         var engine = DigestEngine.init(self, name_store, stats);
         defer engine.deinit();
         return try engine.run(ty, mode);
@@ -2898,10 +2990,9 @@ pub const Store = struct {
     /// finalized child digests, and each cyclic SCC is reduced by
     /// bisimulation refinement over content labels, rendered once with its
     /// reduced positions in label order and group-relative back-references,
-    /// and digested per reduced position. Every settled digest is cached unconditionally, and each
-    /// reduced position's one-step unfolding enters the store's unfolding
-    /// index so later rolled-out prefixes of the same group fold to the same
-    /// digests.
+    /// and digested per reduced position. Cyclic member digests and their
+    /// one-step unfolding index are committed together so OOM retries retain
+    /// correct folding of later rolled-out prefixes of the same group.
     ///
     /// Known conservative incompleteness: per-SCC reduction cannot identify
     /// an in-SCC position with an equivalent position outside its own SCC, so
@@ -3371,21 +3462,30 @@ pub const Store = struct {
                 block_digest[rank] = .{ .bytes = hasher.finalResult() };
             }
             for (members, 0..) |node_index, pos| {
-                self.finalizeNode(node_index, block_digest[rank_of_member[pos]]);
+                const node = &self.nodes.items[node_index];
+                std.debug.assert(!node.resolved);
+                node.digest = block_digest[rank_of_member[pos]];
+                node.resolved = true;
             }
 
-            // Record each reduced position's one-step unfolding in the
-            // store's unfolding index so later rolled-out prefixes of this
-            // group fold to the same digests. Members are finalized, so a
-            // plain rendering resolves in-SCC children to their new group
-            // digests.
+            // Stage unfoldings using only engine-local member digests. The
+            // store must commit the whole SCC and its unfolding index
+            // together: a cached member skips SCC discovery on an OOM retry.
+            const unfoldings = try self.gpa.alloc([32]u8, block_count);
+            defer self.gpa.free(unfoldings);
             for (block_rep, 0..) |rep_index, rank| {
                 self.render_buf.clearRetainingCapacity();
                 const sink = RenderSink{ .engine = self, .out = &self.render_buf, .scc = null };
                 try self.renderNode(rep_index, sink);
                 if (self.stats) |s| s.group_encodings += 1;
-                const unfolding = typeHashOf(self.render_buf.items);
-                const gop = try self.store.recursive_digest_unfoldings.getOrPut(unfolding);
+                unfoldings[rank] = typeHashOf(self.render_buf.items);
+            }
+            try self.store.recursive_digest_unfoldings.ensureUnusedCapacity(block_count);
+
+            // No fallible work remains; completed earlier SCCs remain reusable
+            // if any subsequent SCC fails.
+            for (unfoldings, 0..) |unfolding, rank| {
+                const gop = self.store.recursive_digest_unfoldings.getOrPutAssumeCapacity(unfolding);
                 if (gop.found_existing) {
                     // Reduced-group digests are intrinsic, so an equivalent
                     // group digested earlier must agree.
@@ -3393,6 +3493,10 @@ pub const Store = struct {
                 } else {
                     gop.value_ptr.* = block_digest[rank];
                 }
+            }
+            for (members) |node_index| {
+                const node = self.nodes.items[node_index];
+                self.store.setCachedDigest(node.ty, node.mode, node.digest);
             }
         }
     };
@@ -6012,6 +6116,290 @@ test "monotype named type digest includes padding backing" {
     const i64_digest = store.typeDigest(&name_store, named_i64);
     const str_digest = store.typeDigest(&name_store, named_str);
     try std.testing.expect(!std.mem.eql(u8, i64_digest.bytes[0..], str_digest.bytes[0..]));
+}
+
+test "frozen monotype clone owns fresh iterator traversal slots for uncached queries" {
+    const allocator = std.testing.allocator;
+    var source = Store.init(allocator);
+    defer source.deinit();
+    const recursive = try source.reserveSlot();
+    source.fillReservedSlot(recursive, .{ .list = recursive });
+    const cached = try source.add(.zst);
+    try std.testing.expect(!try source.containsIteratorInterface(cached));
+    source.freeze();
+
+    const Attempt = struct {
+        fn run(gpa: std.mem.Allocator, original: *const Store, root: TypeId) (std.mem.Allocator.Error || error{ TestExpectedEqual, TestUnexpectedResult })!void {
+            var copy = try original.cloneFrozen(gpa);
+            defer copy.deinit();
+            try std.testing.expectEqual(original.types.len(), copy.iterator_interface_visit_epochs.len());
+            for (copy.iterator_interface_visit_epochs.unsafeRawItemsForView()) |epoch| {
+                try std.testing.expectEqual(@as(u32, 0), epoch);
+            }
+            try std.testing.expect(!try copy.containsIteratorInterface(root));
+        }
+    };
+    try Attempt.run(allocator, &source, recursive);
+    try std.testing.checkAllAllocationFailures(allocator, Attempt.run, .{ &source, recursive });
+    try std.testing.expectEqual(@as(?bool, null), source.iterator_interface_cache.get(@intFromEnum(recursive)));
+}
+
+test "monotype read sharing borrows prepared recursive and alias queries without allocation" {
+    var name_store = names.NameStore.init(std.testing.allocator);
+    defer name_store.deinit();
+    var store = Store.init(std.testing.allocator);
+    defer store.deinit();
+    const module = try name_store.internModuleIdentity(&([_]u8{42} ** 32));
+    const type_name = try name_store.internTypeName("Alias");
+    const recursive = try store.reserveSlot();
+    store.fillReservedSlot(recursive, .{ .list = recursive });
+    const alias = try store.add(.{ .named = .{
+        .named_type = .{ .module = .{}, .ty = @enumFromInt(17) },
+        .def = .{ .module = module, .type_name = type_name },
+        .kind = .alias,
+        .args = Span.empty(),
+        .backing = .{ .ty = recursive, .use = .inspectable },
+    } });
+    // A worker querying two nodes must not copy unrelated program types.
+    for (0..4096) |_| _ = try store.add(.zst);
+    try store.prepareForReadSharing(&name_store);
+    try std.testing.expect(!store.isFrozen());
+    var stats: Store.DigestStats = .{};
+    store.digest_stats = &stats;
+    const boundary = store.epochBoundary();
+    const full_before = try std.testing.allocator.dupe(?names.TypeDigest, store.type_digests.unsafeRawItemsForView());
+    defer std.testing.allocator.free(full_before);
+    const equality_before = try std.testing.allocator.dupe(?names.TypeDigest, store.equality_digests.unsafeRawItemsForView());
+    defer std.testing.allocator.free(equality_before);
+    const identity_before = try std.testing.allocator.dupe(?names.TypeDigest, store.specialization_digests.unsafeRawItemsForView());
+    defer std.testing.allocator.free(identity_before);
+    const iterator_before = try std.testing.allocator.dupe(?bool, store.iterator_interface_cache.unsafeRawItemsForView());
+    defer std.testing.allocator.free(iterator_before);
+    var failing = std.testing.FailingAllocator.init(std.testing.allocator, .{ .fail_index = 0 });
+    {
+        var borrowed = store.borrowReadOnly(failing.allocator());
+        defer borrowed.deinit();
+        try std.testing.expect(borrowed.digest_stats == null);
+        try std.testing.expectEqual(store.types.unsafeRawItemsForView().ptr, borrowed.types.unsafeRawItemsForView().ptr);
+        for ([_]TypeId{ recursive, alias }) |ty| {
+            try std.testing.expectEqual(full_before[@intFromEnum(ty)].?, borrowed.typeDigest(&name_store, ty));
+            try std.testing.expectEqual(equality_before[@intFromEnum(ty)].?, borrowed.equalityDigest(&name_store, ty));
+            try std.testing.expectEqual(identity_before[@intFromEnum(ty)].?, borrowed.specializationDigest(&name_store, ty));
+            try std.testing.expect(!try borrowed.containsIteratorInterface(ty));
+        }
+        try std.testing.expect(try borrowed.view().typeEql(std.testing.allocator, &name_store, recursive, alias));
+    }
+    try std.testing.expectEqual(@as(usize, 0), failing.allocations);
+    try std.testing.expectEqualDeep(Store.DigestStats{}, stats);
+    try std.testing.expectEqualDeep(boundary, store.epochBoundary());
+    try std.testing.expectEqualDeep(Content{ .list = recursive }, store.get(recursive));
+    try std.testing.expectEqualDeep(full_before, store.type_digests.unsafeRawItemsForView());
+    try std.testing.expectEqualDeep(equality_before, store.equality_digests.unsafeRawItemsForView());
+    try std.testing.expectEqualDeep(identity_before, store.specialization_digests.unsafeRawItemsForView());
+    try std.testing.expectEqualDeep(iterator_before, store.iterator_interface_cache.unsafeRawItemsForView());
+    // Mutation after the borrow's lifetime invalidates preparation, and a
+    // separately owned frozen clone must never inherit borrowed ownership.
+    _ = try store.add(.{ .primitive = .str });
+    try std.testing.expect(!store.read_sharing_prepared);
+    store.freeze();
+    try store.prepareForReadSharing(&name_store);
+    try std.testing.expect(store.isFrozen());
+    var borrowed = store.borrowReadOnly(std.testing.allocator);
+    defer borrowed.deinit();
+    var owned = try borrowed.cloneFrozen(std.testing.allocator);
+    defer owned.deinit();
+    try std.testing.expect(!owned.borrowed_read_only);
+}
+
+test "monotype read sharing explicit queries leave omitted caches cold and invalidate coverage on mutation" {
+    var name_store = names.NameStore.init(std.testing.allocator);
+    defer name_store.deinit();
+    var store = Store.init(std.testing.allocator);
+    defer store.deinit();
+    const recursive = try store.reserveSlot();
+    store.fillReservedSlot(recursive, .{ .list = recursive });
+    const module = try name_store.internModuleIdentity(&([_]u8{42} ** 32));
+    const type_name = try name_store.internTypeName("Alias");
+    const alias = try store.add(.{ .named = .{
+        .named_type = .{ .module = .{}, .ty = @enumFromInt(17) },
+        .def = .{ .module = module, .type_name = type_name },
+        .kind = .alias,
+        .args = Span.empty(),
+        .backing = .{ .ty = recursive, .use = .inspectable },
+    } });
+    try store.prepareForReadSharingQueries(&name_store, .spec_constr);
+    try std.testing.expectEqualDeep(Store.ReadSharingQueries.spec_constr, store.read_sharing_coverage);
+    for (store.specialization_digests.unsafeRawItemsForView()) |digest| try std.testing.expect(digest == null);
+    for (store.iterator_interface_cache.unsafeRawItemsForView()) |answer| try std.testing.expect(answer == null);
+    try std.testing.expectEqual(@as(u32, 0), store.iterator_interface_visit_epoch);
+    var stats: Store.DigestStats = .{};
+    store.digest_stats = &stats;
+    try store.prepareForReadSharingQueries(&name_store, .spec_constr);
+    try store.prepareForReadSharingQueries(&name_store, .{ .full = true });
+    try std.testing.expectEqualDeep(Store.DigestStats{}, stats);
+    var failing = std.testing.FailingAllocator.init(std.testing.allocator, .{ .fail_index = 0 });
+    {
+        var borrowed = store.borrowReadOnly(failing.allocator());
+        defer borrowed.deinit();
+        for ([_]TypeId{ recursive, alias }) |ty| {
+            try std.testing.expectEqual(store.cachedDigest(ty, .full).?, borrowed.typeDigestCached(&name_store, ty, null));
+            try std.testing.expectEqual(store.cachedDigest(ty, .equality).?, borrowed.equalityDigest(&name_store, ty));
+        }
+        try std.testing.expect(try borrowed.view().typeEql(std.testing.allocator, &name_store, recursive, alias));
+    }
+    try std.testing.expectEqual(@as(usize, 0), failing.allocations);
+    // Extending coverage must not rescan the completed digest modes.
+    try store.prepareForReadSharingQueries(&name_store, .{ .iterator = true });
+    try std.testing.expectEqualDeep(Store.DigestStats{}, stats);
+    try store.prepareForReadSharing(&name_store);
+    try std.testing.expectEqualDeep(Store.ReadSharingQueries.all, store.read_sharing_coverage);
+    _ = try store.add(.zst);
+    try std.testing.expect(!store.read_sharing_prepared);
+    try std.testing.expectEqualDeep(Store.ReadSharingQueries{}, store.read_sharing_coverage);
+    try store.prepareForReadSharingQueries(&name_store, .spec_constr);
+    try std.testing.expectEqualDeep(Store.ReadSharingQueries.spec_constr, store.read_sharing_coverage);
+}
+
+test "monotype read sharing selected queries retry after every allocation failure" {
+    var name_store = names.NameStore.init(std.testing.allocator);
+    defer name_store.deinit();
+    var budget: usize = 0;
+    while (true) : (budget += 1) {
+        var failing = std.testing.FailingAllocator.init(std.testing.allocator, .{});
+        var store = Store.init(failing.allocator());
+        defer store.deinit();
+        const first = try store.reserveSlot();
+        const second = try store.reserveSlot();
+        store.fillReservedSlot(first, .{ .list = second });
+        store.fillReservedSlot(second, .{ .box = first });
+        const unfolded = try store.add(.{ .list = second });
+        failing.fail_index = failing.alloc_index + budget;
+        const completed = if (store.prepareForReadSharingQueries(&name_store, .spec_constr)) |_| true else |err| blk: {
+            try std.testing.expectEqual(error.OutOfMemory, err);
+            try std.testing.expect(!store.read_sharing_prepared);
+            const coverage = store.read_sharing_coverage;
+            var retry_stats: Store.DigestStats = .{};
+            store.digest_stats = &retry_stats;
+            failing.fail_index = std.math.maxInt(usize);
+            try store.prepareForReadSharingQueries(&name_store, .spec_constr);
+            store.digest_stats = null;
+            const remaining_modes = @as(usize, @intFromBool(!coverage.full)) + @intFromBool(!coverage.equality);
+            try std.testing.expectEqual(store.types.len() * remaining_modes, retry_stats.root_requests);
+            break :blk false;
+        };
+        try std.testing.expectEqualDeep(Store.ReadSharingQueries.spec_constr, store.read_sharing_coverage);
+        for (store.specialization_digests.unsafeRawItemsForView()) |digest| try std.testing.expect(digest == null);
+        for (store.iterator_interface_cache.unsafeRawItemsForView()) |answer| try std.testing.expect(answer == null);
+        failing.fail_index = failing.alloc_index;
+        var borrowed = store.borrowReadOnly(failing.allocator());
+        defer borrowed.deinit();
+        try std.testing.expectEqual(borrowed.typeDigest(&name_store, first), borrowed.typeDigest(&name_store, unfolded));
+        try std.testing.expectEqual(borrowed.equalityDigest(&name_store, first), borrowed.equalityDigest(&name_store, unfolded));
+        if (completed) break;
+    }
+}
+
+test "monotype read sharing preparation allocation failures retain valid owned state" {
+    try std.testing.checkAllAllocationFailures(std.testing.allocator, struct {
+        fn run(allocator: std.mem.Allocator) (std.mem.Allocator.Error || error{ TestExpectedEqual, TestUnexpectedResult })!void {
+            var name_store = names.NameStore.init(std.testing.allocator);
+            defer name_store.deinit();
+            var store = Store.init(allocator);
+            defer store.deinit();
+            const recursive = try store.reserveSlot();
+            store.fillReservedSlot(recursive, .{ .list = recursive });
+            store.freeze();
+            store.prepareForReadSharing(&name_store) catch |err| {
+                try std.testing.expect(!store.borrowed_read_only);
+                try std.testing.expect(!store.read_sharing_prepared);
+                try std.testing.expect(store.isFrozen());
+                try std.testing.expect(!store.hasSpeculativeConstruction());
+                try std.testing.expectEqualDeep(Content{ .list = recursive }, store.get(recursive));
+                return err;
+            };
+            var borrowed = store.borrowReadOnly(allocator);
+            defer borrowed.deinit();
+            try std.testing.expectEqual(store.typeDigest(&name_store, recursive), borrowed.typeDigest(&name_store, recursive));
+        }
+    }.run, .{});
+}
+
+test "monotype read sharing preparation retries recursive digest publication after every allocation failure" {
+    const Scenario = struct {
+        fn build(store: *Store) std.mem.Allocator.Error!void {
+            const recursive = try store.reserveSlot();
+            store.fillReservedSlot(recursive, .{ .list = recursive });
+            _ = try store.add(.{ .list = recursive });
+            // Two distinct reduced positions exercise complete publication,
+            // rather than only the first unfolding of a recursive group.
+            const first = try store.reserveSlot();
+            const second = try store.reserveSlot();
+            store.fillReservedSlot(first, .{ .list = second });
+            store.fillReservedSlot(second, .{ .box = first });
+            _ = try store.add(.{ .list = second });
+            _ = try store.add(.{ .box = first });
+            store.freeze();
+        }
+    };
+    var name_store = names.NameStore.init(std.testing.allocator);
+    defer name_store.deinit();
+    var expected = Store.init(std.testing.allocator);
+    defer expected.deinit();
+    try Scenario.build(&expected);
+    try expected.prepareForReadSharing(&name_store);
+
+    var budget: usize = 0;
+    while (true) : (budget += 1) {
+        var failing = std.testing.FailingAllocator.init(std.testing.allocator, .{});
+        var store = Store.init(failing.allocator());
+        defer store.deinit();
+        try Scenario.build(&store);
+        failing.fail_index = failing.alloc_index + budget;
+        const completed = if (store.prepareForReadSharing(&name_store)) |_| true else |err| blk: {
+            try std.testing.expectEqual(error.OutOfMemory, err);
+            try std.testing.expect(!store.read_sharing_prepared);
+            try std.testing.expect(!store.borrowed_read_only);
+            try std.testing.expect(store.isFrozen());
+            try std.testing.expect(!store.hasSpeculativeConstruction());
+            // Every answer published before failure must already be correct.
+            for (0..store.types.len()) |index| {
+                const ty: TypeId = @enumFromInt(index);
+                for ([_]Store.NamedDigestMode{ .full, .identity_only, .equality }) |mode| {
+                    if (store.cachedDigest(ty, mode)) |digest| {
+                        try std.testing.expectEqual(expected.cachedDigest(ty, mode).?, digest);
+                    }
+                }
+            }
+            failing.fail_index = std.math.maxInt(usize);
+            try store.prepareForReadSharing(&name_store);
+            break :blk false;
+        };
+        try std.testing.expect(store.read_sharing_prepared);
+        try std.testing.expectEqualDeep(expected.type_digests.unsafeRawItemsForView(), store.type_digests.unsafeRawItemsForView());
+        try std.testing.expectEqualDeep(expected.equality_digests.unsafeRawItemsForView(), store.equality_digests.unsafeRawItemsForView());
+        try std.testing.expectEqualDeep(expected.specialization_digests.unsafeRawItemsForView(), store.specialization_digests.unsafeRawItemsForView());
+        try std.testing.expectEqualDeep(expected.iterator_interface_cache.unsafeRawItemsForView(), store.iterator_interface_cache.unsafeRawItemsForView());
+        try std.testing.expectEqual(expected.recursive_digest_unfoldings.count(), store.recursive_digest_unfoldings.count());
+        var unfoldings = expected.recursive_digest_unfoldings.iterator();
+        while (unfoldings.next()) |entry| {
+            try std.testing.expectEqual(entry.value_ptr.*, store.recursive_digest_unfoldings.get(entry.key_ptr.*).?);
+        }
+        // The prepared worker view must answer every query without allocation,
+        // including each recursive root and its one-step unfolding.
+        failing.fail_index = failing.alloc_index;
+        var borrowed = store.borrowReadOnly(failing.allocator());
+        defer borrowed.deinit();
+        for ([_][2]u32{ .{ 0, 1 }, .{ 2, 4 }, .{ 3, 5 } }) |pair| {
+            const root: TypeId = @enumFromInt(pair[0]);
+            const unfolded: TypeId = @enumFromInt(pair[1]);
+            try std.testing.expectEqual(expected.typeDigest(&name_store, root), borrowed.typeDigest(&name_store, unfolded));
+            try std.testing.expectEqual(borrowed.typeDigest(&name_store, root), borrowed.typeDigest(&name_store, unfolded));
+            try std.testing.expectEqual(borrowed.equalityDigest(&name_store, root), borrowed.equalityDigest(&name_store, unfolded));
+            try std.testing.expectEqual(borrowed.specializationDigest(&name_store, root), borrowed.specializationDigest(&name_store, unfolded));
+            try std.testing.expect(!try borrowed.containsIteratorInterface(unfolded));
+        }
+        if (completed) break;
+    }
 }
 
 test "monotype digest byte fixtures preserve scalar and recursive encodings" {
