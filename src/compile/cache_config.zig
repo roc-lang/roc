@@ -194,17 +194,19 @@ pub const Constants = struct {
     ///     in a pattern-only context.
     /// 90: Scheme-use evidence belongs to explicit value and dispatch edges;
     ///     type applications no longer publish spurious value-use records.
-    /// 91: A mismatched `if`/`match` branch or return value is reported at and
+    /// 93: A mismatched `if`/`match` branch or return value is reported at and
     ///     poisons the expression producing its value, leaving the expected
     ///     result type intact.
-    /// 93: Tag unions in annotation output positions are implicitly open
+    /// 94: Hosted declarations must have effectful function types and keep
+    ///     their hosted type variables intact.
+    /// 95: Tag unions in annotation output positions are implicitly open
     ///     (polarity): extensionless unions there carry an anonymous flex
     ///     extension, while alias declaration bodies and where-method
     ///     signatures store a rigid deferral marker resolved per use site.
-    /// 94: Scheme-use records distinguish per-use where-method signature
+    ///     Scheme-use records distinguish per-use where-method signature
     ///     copies from evidence-bearing instantiations, and checked dispatch
     ///     plans retain independent-callable/nested-evidence-reuse flags.
-    pub const CACHE_VERSION = 94;
+    pub const CACHE_VERSION = 95;
 };
 
 /// Configuration for the Roc cache system.

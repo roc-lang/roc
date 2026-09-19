@@ -12141,13 +12141,6 @@ pub const CheckedBodyStore = struct {
             }
         }
 
-        const statement_diverges = try allocator.alloc(bool, statements.items.len);
-        errdefer allocator.free(statement_diverges);
-        @memset(statement_diverges, false);
-        const statement_diverges_without_inline_expects = try allocator.alloc(bool, statements.items.len);
-        errdefer allocator.free(statement_diverges_without_inline_expects);
-        @memset(statement_diverges_without_inline_expects, false);
-
         const pattern_binder_by_pattern = try allocator.alloc(?PatternBinderId, patterns.items.len);
         errdefer allocator.free(pattern_binder_by_pattern);
         @memset(pattern_binder_by_pattern, null);
@@ -12193,78 +12186,12 @@ pub const CheckedBodyStore = struct {
             }
         }
 
-        // Exact runtime operand dependencies for checked dispatch forms whose
-        // compact expression payload stores only the checker-produced plan id.
-        // Divergence publication consumes this producer-owned column directly.
-        const dispatch_operands = try allocator.alloc([]const CheckedExprId, exprs.items.len);
-        for (dispatch_operands) |*operands| operands.* = &.{};
-        defer {
-            for (dispatch_operands) |operands| if (operands.len > 0) allocator.free(operands);
-            allocator.free(dispatch_operands);
-        }
-        node_idx = 0;
-        while (node_idx < module.nodeCount()) : (node_idx += 1) {
-            const checked_expr = source_node_map.exprAtRawNode(node_idx) orelse continue;
-            const source_expr: CIR.Expr.Idx = @enumFromInt(node_idx);
-            const source_data = module.expr(source_expr).data;
-            dispatch_operands[@intFromEnum(checked_expr)] = if (source_data == .e_dispatch_call) blk: {
-                const call = source_data.e_dispatch_call;
-                const source_args = module.sliceExpr(call.args);
-                const operands = try allocator.alloc(CheckedExprId, source_args.len + 1);
-                operands[0] = source_node_map.expr(call.receiver) orelse checkedArtifactInvariant("checked dispatch receiver was not recorded in the source node map", .{});
-                for (source_args, 0..) |arg, index| {
-                    operands[index + 1] = source_node_map.expr(arg) orelse checkedArtifactInvariant("checked dispatch argument was not recorded in the source node map", .{});
-                }
-                break :blk operands;
-            } else if (source_data == .e_method_eq)
-                try allocator.dupe(CheckedExprId, &.{
-                    source_node_map.expr(source_data.e_method_eq.lhs) orelse checkedArtifactInvariant("checked method equality lhs was not recorded in the source node map", .{}),
-                    source_node_map.expr(source_data.e_method_eq.rhs) orelse checkedArtifactInvariant("checked method equality rhs was not recorded in the source node map", .{}),
-                })
-            else if (source_data == .e_type_dispatch_call) blk: {
-                const call = source_data.e_type_dispatch_call;
-                const source_args = module.sliceExpr(call.args);
-                const operands = try allocator.alloc(CheckedExprId, source_args.len);
-                for (source_args, 0..) |arg, index| {
-                    operands[index] = source_node_map.expr(arg) orelse checkedArtifactInvariant("checked type-dispatch argument was not recorded in the source node map", .{});
-                }
-                break :blk operands;
-            } else &.{};
-        }
-
-        for (literal_pattern_exprs.items) |literal| {
-            dispatch_operands[@intFromEnum(literal.equality)] = try allocator.dupe(CheckedExprId, &.{ literal.scrutinee, literal.expr });
-        }
-
         // Allocated after the copy pass because custom literal patterns append
         // their conversion and equality expressions.
-        const expr_diverges = try allocator.alloc(bool, exprs.items.len);
-        errdefer allocator.free(expr_diverges);
-        @memset(expr_diverges, false);
-        const expr_diverges_without_inline_expects = try allocator.alloc(bool, exprs.items.len);
-        errdefer allocator.free(expr_diverges_without_inline_expects);
-        @memset(expr_diverges_without_inline_expects, false);
         const expr_inspect_evaluation_may_be_elided = try allocator.alloc(bool, exprs.items.len);
         errdefer allocator.free(expr_inspect_evaluation_may_be_elided);
         @memset(expr_inspect_evaluation_may_be_elided, false);
-        const dispatch_crashes = try allocator.alloc(bool, exprs.items.len);
-        defer allocator.free(dispatch_crashes);
-        @memset(dispatch_crashes, false);
-        const dispatch_facts = DivergenceDispatchFacts{
-            .operands = dispatch_operands,
-            .crashes = dispatch_crashes,
-        };
 
-        try publishCheckedBodyDivergence(allocator, exprs.items, statements.items, dispatch_facts, expr_diverges, statement_diverges, .run);
-        try publishCheckedBodyDivergence(
-            allocator,
-            exprs.items,
-            statements.items,
-            dispatch_facts,
-            expr_diverges_without_inline_expects,
-            statement_diverges_without_inline_expects,
-            .omit,
-        );
         try publishCheckedInspectEvaluationElision(
             allocator,
             exprs.items,
@@ -12288,38 +12215,14 @@ pub const CheckedBodyStore = struct {
         try store.commitStatements(allocator, statements.items);
         try store.commitStringLiterals(allocator, string_builder.strings.items);
         try store.pattern_binders.appendSlice(allocator, pattern_binders.items);
-        // Stamp the divergence bit onto each stored expr/statement. `commitExprs`/
-        // `commitStatements` produce one stored element per build element in order, so
-        // the zip aligns by construction—this is the lockstep guarantee, replacing a
-        // parallel array that could fall out of sync.
-        for (store.stored_exprs.items, expr_diverges) |*stored, diverges| stored.diverges = diverges;
-        for (store.stored_statements.items, statement_diverges) |*stored, diverges| stored.diverges = diverges;
-        for (store.stored_exprs.items, expr_diverges_without_inline_expects) |*stored, diverges| stored.diverges_without_inline_expects = diverges;
-        for (store.stored_statements.items, statement_diverges_without_inline_expects) |*stored, diverges| stored.diverges_without_inline_expects = diverges;
+        // `commitExprs` produces one stored element per build element in order,
+        // so the zip aligns by construction.
         for (store.stored_exprs.items, expr_inspect_evaluation_may_be_elided) |*stored, may_be_elided| stored.evaluation_may_be_elided_for_inspect = may_be_elided;
-        const expr_contains_diagnostic_error = try allocator.alloc(bool, store.stored_exprs.items.len);
-        errdefer allocator.free(expr_contains_diagnostic_error);
-        @memset(expr_contains_diagnostic_error, false);
-        try publishCheckedBodyDiagnosticErrors(
-            allocator,
-            &checked_types.store,
-            store.view(),
-            dispatch_operands,
-            expr_contains_diagnostic_error,
-            false,
-            {},
-        );
-        for (store.stored_exprs.items, expr_contains_diagnostic_error) |*stored, contains_diagnostic_error| stored.contains_diagnostic_error = contains_diagnostic_error;
         try store.pattern_binder_by_pattern.appendSlice(allocator, pattern_binder_by_pattern);
         try store.literal_pattern_exprs.appendSlice(allocator, literal_pattern_exprs.items);
 
         // The build arrays' per-element owned slices are now copied into pools.
-        allocator.free(expr_diverges);
-        allocator.free(statement_diverges);
-        allocator.free(expr_diverges_without_inline_expects);
-        allocator.free(statement_diverges_without_inline_expects);
         allocator.free(expr_inspect_evaluation_may_be_elided);
-        allocator.free(expr_contains_diagnostic_error);
         allocator.free(pattern_binder_by_pattern);
         literal_pattern_exprs.deinit(allocator);
         deinitCheckedExprList(allocator, exprs.items);
@@ -12421,7 +12324,7 @@ pub const CheckedBodyStore = struct {
         };
     }
 
-    /// Republish runtime divergence after static dispatch resolutions are
+    /// Publish runtime divergence once static dispatch resolutions are
     /// final. Monotype emits an explicit runtime crash for a checked-error or
     /// unreachable dispatch, so the dispatch never returns a result value. Its
     /// divergence must propagate through the same CheckedBodyStore expression
@@ -12514,33 +12417,44 @@ pub const CheckedBodyStore = struct {
         }
     }
 
-    /// Rejection discovered when resolving a binding use or dispatch must reach
-    /// the same checked facts as a source runtime error before roots are requested.
-    /// Successful modules never allocate this recovery scratch.
-    fn republishDiagnosticErrorFacts(
+    /// Publish `contains_diagnostic_error` for every expression. The ordinary
+    /// publication runs once every source runtime error and rejected binding
+    /// use is explicit in the bodies. When total dispatch resolution records
+    /// rejected-dispatch seeds, a second publication propagates them through
+    /// the same dependencies and through resolved local constant references;
+    /// only that recovery path allocates the constant-reference graph.
+    fn publishDiagnosticErrorFacts(
         self: *CheckedBodyStore,
         allocator: Allocator,
         checked_types: *const CheckedTypeStore,
-        plans: *const static_dispatch.StaticDispatchPlanTable,
+        operands: []const []const CheckedExprId,
         bindings: ?DiagnosticErrorBindings,
     ) Allocator.Error!void {
-        const operands = try checkedDispatchOperands(allocator, self.exprCount(), plans, null);
-        defer freeCheckedDispatchOperands(allocator, operands);
         const errors = try allocator.alloc(bool, self.exprCount());
         defer allocator.free(errors);
+        @memset(errors, false);
         if (bindings) |resolved| {
             try publishCheckedBodyDiagnosticErrors(allocator, checked_types, self.view(), operands, errors, true, resolved);
         } else {
             try publishCheckedBodyDiagnosticErrors(allocator, checked_types, self.view(), operands, errors, false, {});
         }
         for (self.stored_exprs.items, errors) |*stored, contains_error| stored.contains_diagnostic_error = contains_error;
+    }
 
+    /// Rejected binding uses rewrite expressions to `runtime_error` after the
+    /// builder published inspect elision, so their elision facts are
+    /// recomputed from the rewritten bodies.
+    fn publishInspectEvaluationElisionAfterRejectedBindings(
+        self: *CheckedBodyStore,
+        allocator: Allocator,
+    ) Allocator.Error!void {
         const exprs = try allocator.alloc(CheckedExpr, self.exprCount());
         defer allocator.free(exprs);
         for (exprs, 0..) |*stored, i| stored.* = self.expr(@enumFromInt(i));
-        try publishCheckedInspectEvaluationElision(allocator, exprs, errors);
-        for (self.stored_exprs.items, errors) |*stored, may_elide| stored.evaluation_may_be_elided_for_inspect = may_elide;
-        try self.publishResolvedDispatchDivergence(allocator, plans);
+        const may_be_elided = try allocator.alloc(bool, self.exprCount());
+        defer allocator.free(may_be_elided);
+        try publishCheckedInspectEvaluationElision(allocator, exprs, may_be_elided);
+        for (self.stored_exprs.items, may_be_elided) |*stored, may_elide| stored.evaluation_may_be_elided_for_inspect = may_elide;
     }
 
     // --- Shared flat pool accessors (used by materialize functions). ---
@@ -26702,7 +26616,7 @@ pub const CompileTimeRootTable = struct {
             );
         }
 
-        try publishCompileTimeRootRequestEligibility(allocator, module, checked_types, checked_bodies, roots.items);
+        try publishCompileTimeRootRequestEligibility(allocator, module, checked_types, roots.items);
 
         return .{ .roots = try roots.toOwnedSlice(allocator) };
     }
@@ -26829,11 +26743,12 @@ pub const CompileTimeRootTable = struct {
     }
 };
 
+/// Request eligibility from each root's solved type. Diagnostic exclusion
+/// follows once the body diagnostic facts are published.
 fn publishCompileTimeRootRequestEligibility(
     allocator: Allocator,
     module: TypedCIR.Module,
     checked_types: *const CheckedTypePublication,
-    checked_bodies: *const CheckedBodyStore,
     roots: []CompileTimeRoot,
 ) Allocator.Error!void {
     for (roots) |*root| {
@@ -26857,15 +26772,14 @@ fn publishCompileTimeRootRequestEligibility(
             producer_callable_type_is_fixed,
             root.checked_type,
         );
-        // The checker already owns this diagnostic; evaluating the root would
-        // only add a secondary compile-time crash for its replacement node.
-        const eligible = context_free and !checked_bodies.exprContainsDiagnosticError(root.expr);
-        root.request_eligibility = if (eligible) .eligible else .ineligible;
+        root.request_eligibility = if (context_free) .eligible else .ineligible;
     }
 }
 
-/// Solved root types are unchanged by diagnostic propagation. Only remove
-/// newly erroneous requests; do not repeat context-free type traversal.
+/// The checker already owns the diagnostic for an erroneous root; evaluating it
+/// would only add a secondary compile-time crash for its replacement node.
+/// Solved root types are unchanged by diagnostic publication, so this only
+/// removes erroneous requests and never repeats the context-free traversal.
 fn excludeErroneousCompileTimeRootRequests(bodies: *const CheckedBodyStore, roots: []CompileTimeRoot) void {
     for (roots) |*root| {
         if (compileTimeRootRequestIsEligible(root.*) and bodies.exprContainsDiagnosticError(root.expr)) {
@@ -36126,9 +36040,13 @@ pub fn publishFromTypedModule(
 
     if (rejected_bindings) {
         try checked_bodies.propagateRejectedCallableBindings(allocator, artifact_key, &resolved_value_refs, &top_level_procedure_bindings, &callable_eval_templates, &compile_time_roots);
-        try checked_bodies.republishDiagnosticErrorFacts(allocator, checked_types, &static_dispatch_plans, null);
-        excludeErroneousCompileTimeRootRequests(checked_bodies, compile_time_roots.roots);
+        try checked_bodies.publishInspectEvaluationElisionAfterRejectedBindings(allocator);
     }
+
+    const dispatch_operands = try checkedDispatchOperands(allocator, checked_bodies.exprCount(), &static_dispatch_plans, null);
+    defer freeCheckedDispatchOperands(allocator, dispatch_operands);
+    try checked_bodies.publishDiagnosticErrorFacts(allocator, checked_types, dispatch_operands, null);
+    excludeErroneousCompileTimeRootRequests(checked_bodies, compile_time_roots.roots);
 
     var template_iterator_refs = TemplateIteratorRefs{};
     errdefer template_iterator_refs.deinit(allocator);
@@ -36199,16 +36117,15 @@ pub fn publishFromTypedModule(
         &checked_procedure_templates,
     );
     if (rejected_dispatches) {
-        try checked_bodies.republishDiagnosticErrorFacts(allocator, checked_types, &static_dispatch_plans, .{
+        try checked_bodies.publishDiagnosticErrorFacts(allocator, checked_types, dispatch_operands, .{
             .module = artifact_key,
             .refs = &resolved_value_refs,
             .roots = &compile_time_roots,
             .const_templates = &const_templates,
         });
         excludeErroneousCompileTimeRootRequests(checked_bodies, compile_time_roots.roots);
-    } else {
-        try checked_bodies.publishResolvedDispatchDivergence(allocator, &static_dispatch_plans);
     }
+    try checked_bodies.publishResolvedDispatchDivergence(allocator, &static_dispatch_plans);
     template_iterator_refs.deinit(allocator);
     plan_build_data.deinit(allocator);
 
