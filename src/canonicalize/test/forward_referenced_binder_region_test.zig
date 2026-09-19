@@ -12,7 +12,7 @@ const CoreCtx = @import("ctx").CoreCtx;
 
 /// Expect the binder of `qualified_name` to span the first `binder_len` bytes
 /// of `declaration`, which must occur exactly once in the source.
-fn expectBinderRegion(env: *const ModuleEnv, qualified_name: []const u8, declaration: []const u8, binder_len: usize) !void {
+fn expectBinderRegion(env: *const ModuleEnv, qualified_name: []const u8, declaration: []const u8, binder_len: usize) error{ TestExpectedEqual, TestDeclarationNotInSource, TestExpectedDefNotFound }!void {
     const source = env.getSourceAll();
     const start = std.mem.find(u8, source, declaration) orelse return error.TestDeclarationNotInSource;
     try std.testing.expectEqual(null, std.mem.findPos(u8, source, start + 1, declaration));
