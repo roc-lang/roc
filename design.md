@@ -923,6 +923,35 @@ hooks, deterministic dictionary seed, host CPU, and root-entry wrapper ABI are
 explicit execution policies. That machine emission does not repeat checked,
 Monotype, or host-compatible LIR lowering.
 
+Both native consumers emit procedure artifacts through the same bounded worker
+pipeline. Workers borrow frozen LIR and emit private code, explicit symbolic
+references, relative source lines, unwind metadata, and helper demands.
+Coordinator publication follows demand order, independently of completion order;
+helper closure, final placement, branch veneers, and object/image linking remain
+explicit coordinator responsibilities. Null-executor execution uses the same
+artifact boundary, not a separate monolithic implementation.
+
+The compilation session retains owned relocatable artifacts after compile-time
+evaluation, never its executable image. Reuse requires the same producer LIR
+domain, target/emission policy compatibility, and the procedure's recorded native
+code revision. Guard completion invalidates every recorded owner of a changed
+statement; accessor replacement advances its owner's revision once. These
+revisions survive compaction but are not cross-program identities. An independent
+target lowering cannot reuse code merely because its procedure identity matches.
+Actual hook, static-binding, dictionary-seed, and entry-initialization dependencies
+further restrict reuse across execution policies. Rejected artifacts are emitted
+from the consumer's explicit LIR; no body hashing or reconstruction proves reuse.
+
+Artifacts contain no process-local callback or slot addresses. Compile-time hooks
+use reserved symbolic names. Mutable root bindings use producer-declared pointer
+cells with external relocations; executable linking supplies the original slot
+address without copying its mutable storage. Immutable carried data is captured
+only from referenced export closure using one prepared catalog. Artifact ownership
+includes code, referenced data, names, and metadata, so image teardown and worker
+scratch reset cannot invalidate a later consumer. Source lines remain tied to
+their producer source-file domain; persistent cross-program packs must not
+interpret unbound file ordinals.
+
 Monotype records string backing length as explicit static-candidate storage
 metadata and does not apply a pointer-width threshold. Target LIR lowering
 compares that length with its three-word string representation; short strings

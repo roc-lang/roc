@@ -425,6 +425,8 @@ pub const StaticDataValue = struct {
     /// read until the root completes; a root that completed as a
     /// construction then rebuilds it there, without touching the callers.
     accessor: ?LIR.LirProcSpecId = null,
+    /// Successful construction replacement is performed only once per accessor.
+    accessor_rebuilt: bool = false,
     /// An evaluated root owns this slot. Its initializer is representation
     /// evidence; materialization must consume the completed root value.
     compile_time_root: ?struct {
@@ -445,6 +447,9 @@ pub const StaticDataValue = struct {
 
 /// Exact post-ARC guard identity consumed by successful-root completion.
 pub const ComptimeValueGuard = struct {
+    /// Shared statements have one record per owning procedure.
+    owner: LIR.LirProcSpecId,
+    completed: bool = false,
     crash: LIR.CFStmtId,
     entry: LIR.CFStmtId,
     success: LIR.CFStmtId,

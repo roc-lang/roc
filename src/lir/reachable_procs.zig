@@ -1296,6 +1296,7 @@ test "frozen runtime data prunes witnesses and remaps callable and data identiti
     const callable = try result.store.addProcSpec(.{
         .name = result.store.freshSyntheticSymbol(),
         .identity = LIR.ProcIdentity.forTest(2),
+        .native_code_revision = 7,
         .args = .empty(),
         .body = ret,
         .ret_layout = .zst,
@@ -1312,6 +1313,7 @@ test "frozen runtime data prunes witnesses and remaps callable and data identiti
     const runtime = try result.store.addProcSpec(.{
         .name = result.store.freshSyntheticSymbol(),
         .identity = LIR.ProcIdentity.forTest(1),
+        .native_code_revision = 11,
         .args = .empty(),
         .body = body,
         .ret_layout = .zst,
@@ -1358,6 +1360,8 @@ test "frozen runtime data prunes witnesses and remaps callable and data identiti
     exports[2].relocations = callable_relocations;
 
     try runWithFrozen(&result, &frozen);
+    try std.testing.expectEqual(@as(u64, 7), result.store.getProcSpec(@enumFromInt(0)).native_code_revision);
+    try std.testing.expectEqual(@as(u64, 11), result.store.getProcSpec(@enumFromInt(1)).native_code_revision);
     try std.testing.expectEqual(@as(usize, 2), result.store.procSpecCount());
     try std.testing.expectEqual(@as(usize, 1), result.static_data_values.items.len);
     try std.testing.expectEqual(@as(u32, 1), @intFromEnum(result.root_procs.items[0]));

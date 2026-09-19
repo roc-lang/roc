@@ -8573,6 +8573,7 @@ fn compileModulePack(
     errdefer compile.static_data_exports.deinitStaticData(ctx.gpa, static_data_exports);
 
     var object_compiler = backend.ObjectFileCompiler.initForPack(ctx.gpa);
+    object_compiler.post_check_executor = build_env.postCheckExecutor();
     const compiled = object_compiler.compileToObjectFile(
         &lowered.lir_result.store,
         &lowered.lir_result.layouts,
@@ -9708,6 +9709,35 @@ fn devBackendBreakdown(timing: backend.ObjectFileCompiler.TimingSnapshot) [8]pro
     };
 }
 
+fn nativeEmissionCounters(metrics: backend.dev.NativeProcCompiler.Metrics) [12]progress.Counter {
+    return .{
+        .{ .name = "Tasks submitted", .count = metrics.tasks_submitted },
+        .{ .name = "Tasks committed", .count = metrics.tasks_committed },
+        .{ .name = "Procedures emitted", .count = metrics.procedures_emitted },
+        .{ .name = "Procedures reused", .count = metrics.procedures_reused },
+        .{ .name = "Helpers emitted", .count = metrics.helpers_emitted },
+        .{ .name = "Helpers reused", .count = metrics.helpers_reused },
+        .{ .name = "Code bytes emitted", .count = metrics.code_bytes_emitted },
+        .{ .name = "Code bytes reused", .count = metrics.code_bytes_reused },
+        .{ .name = "Rejected revision", .count = metrics.rejected_revision },
+        .{ .name = "Rejected context", .count = metrics.rejected_context },
+        .{ .name = "Rejected target", .count = metrics.rejected_target },
+        .{ .name = "Peak inflight fragments", .count = metrics.peak_inflight_fragments },
+    };
+}
+
+test "native artifact counters preserve every measured field" {
+    var metrics: backend.dev.NativeProcCompiler.Metrics = .{};
+    inline for (std.meta.fields(@TypeOf(metrics)), 1..) |field, value| {
+        @field(metrics, field.name) = value;
+    }
+    const counters = nativeEmissionCounters(metrics);
+    try std.testing.expectEqual(std.meta.fields(@TypeOf(metrics)).len, counters.len);
+    for (counters, 1..) |counter, value| {
+        try std.testing.expectEqual(@as(u64, @intCast(value)), counter.count);
+    }
+}
+
 test "dev backend timing labels name the backend and emitted instruction format" {
     try std.testing.expectEqualStrings("x64 Backend", devBackendPhaseName(.x86_64));
     try std.testing.expectEqualStrings("arm64 Backend", devBackendPhaseName(.aarch64));
@@ -10675,6 +10705,11 @@ fn rocBuildNative(ctx: *CliCtx, args: cli_args.BuildArgs) CliMainError!BuildResu
     var object_compiler = backend.ObjectFileCompiler.init(ctx.gpa);
     var backend_timing = backend.ObjectFileCompiler.Timing.init(ctx.io.std_io);
     object_compiler.timing = &backend_timing;
+    object_compiler.post_check_executor = build_env.postCheckExecutor();
+    object_compiler.reuse_same_program = if (build_env.runtimeProgramSession()) |session|
+        session.runtimeNativeArtifacts()
+    else
+        null;
     if (loaded_packs) |*packs| object_compiler.splice_source = packs.spliceSource();
     object_compiler.capture_artifacts = object_cache_enabled;
     defer if (object_compiler.captured_artifacts) |*set| set.deinit();
@@ -10707,6 +10742,7 @@ fn rocBuildNative(ctx: *CliCtx, args: cli_args.BuildArgs) CliMainError!BuildResu
         return error.NativeCompilationFailed;
     };
     reporter.endWithBreakdown(&devBackendBreakdown(backend_timing.snapshot()));
+    reporter.recordCounters("Native artifact emission", &nativeEmissionCounters(backend_timing.snapshot().native_emission));
     try writePackObjects(ctx, &build_env, root_artifact, imported_artifacts, relation_artifacts, &lowered, args, target, final_output_path);
     if (object_store) |*store| {
         try writePacksToStore(ctx, &build_env, store, root_artifact, imported_artifacts, relation_artifacts, &lowered, if (object_compiler.captured_artifacts) |*set| set else null, args, target);
@@ -17004,7 +17040,9 @@ test "timings display every Monotype graph counter" {
 fn finishFrontEndPhase(reporter: *progress.Reporter, timing: anytype) void {
     reporter.endWithBreakdown(&frontEndBreakdown(timing));
     const compile_time = timing.compile_time_evaluation;
-    if (compile_time.total_ns == 0 and std.meta.eql(compile_time.lowering, lir.CheckedPipeline.TimingSnapshot{})) return;
+    if (compile_time.total_ns == 0 and
+        std.meta.eql(compile_time.lowering, lir.CheckedPipeline.TimingSnapshot{}) and
+        std.meta.eql(compile_time.native_emission, backend.dev.NativeProcCompiler.Metrics{})) return;
     reporter.recordCompletedWithBreakdown(
         "Shared Lowering and Compile-Time Evaluation",
         compile_time.total_ns,
@@ -17013,6 +17051,9 @@ fn finishFrontEndPhase(reporter: *progress.Reporter, timing: anytype) void {
     );
     if (!std.meta.eql(compile_time.lowering, lir.CheckedPipeline.TimingSnapshot{})) {
         recordLoweringCounters(reporter, compile_time.lowering, .lss, "Shared ");
+    }
+    if (!std.meta.eql(compile_time.native_emission, backend.dev.NativeProcCompiler.Metrics{})) {
+        reporter.recordCounters("Shared native artifact emission", &nativeEmissionCounters(compile_time.native_emission));
     }
 }
 
@@ -17037,6 +17078,7 @@ test "shared lowering reporting preserves counters for runtime reuse and continu
         .code_generation_ns = 10,
         .execution_ns = 11,
         .store_results_ns = 12,
+        .native_emission = .{ .procedures_emitted = 83 },
     };
     const rows = compileTimeEvaluationBreakdown(shared);
     for (rows, 1..) |row, index| try std.testing.expectEqual(@as(u64, @intCast(index)), row.ns);
@@ -17089,6 +17131,7 @@ test "shared lowering reporting preserves counters for runtime reuse and continu
         });
         reporter.begin("Specializing");
         finishPostCheckLowering(&reporter, &runtime, .lss);
+        reporter.recordCounters("Native artifact emission", &nativeEmissionCounters(.{ .procedures_reused = 89 }));
         reporter.recordCounters("Test result cache", &.{.{ .name = "Hits", .count = 79 }});
         reporter.finish();
         const output = buf.written();
@@ -17101,6 +17144,8 @@ test "shared lowering reporting preserves counters for runtime reuse and continu
             "Shared Solved-LIR parallel execution",
             "Shared LIR pass parallel execution",
             "Shared ARC parallel execution",
+            "Shared native artifact emission",
+            "Native artifact emission",
         }) |label| try std.testing.expectEqual(@as(usize, 1), std.mem.count(u8, output, label));
         try std.testing.expectEqual(@as(usize, 1), std.mem.count(u8, output, "Test result cache"));
         try std.testing.expect(std.mem.find(u8, output, "71") != null);

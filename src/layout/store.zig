@@ -116,9 +116,26 @@ pub const Store = struct {
         allocator: std.mem.Allocator,
         target_usize: target.TargetUsize,
     ) std.mem.Allocator.Error!Self {
-        var layouts = collections.SafeList(Layout){};
-        var tag_union_variants = try TagUnionVariant.SafeMultiList.initCapacity(allocator, 64);
-        var tag_union_data = try collections.SafeList(TagUnionData).initCapacity(allocator, 64);
+        var self = Self{
+            .allocator = allocator,
+            .layouts = .{},
+            .resolved_list_layouts = .empty,
+            .tuple_elems = .{},
+            .struct_fields = .{},
+            .struct_data = .{},
+            .tag_union_variants = .{},
+            .tag_union_data = .{},
+            .interned_layouts = std.StringHashMap(Idx).init(allocator),
+            .scratch_intern_key = .empty,
+            .interned_recursive_graphs = RecursiveGraphMap.init(allocator),
+            .target_usize = target_usize,
+        };
+        errdefer self.deinit();
+        self.tag_union_variants = try TagUnionVariant.SafeMultiList.initCapacity(allocator, 64);
+        self.tag_union_data = try collections.SafeList(TagUnionData).initCapacity(allocator, 64);
+        const layouts = &self.layouts;
+        const tag_union_variants = &self.tag_union_variants;
+        const tag_union_data = &self.tag_union_data;
 
         // Reserve canonical tag-union metadata index 0 for the shared two-nullary enum
         // representation. `layout.Idx.bool` is just a stable handle to this ordinary
@@ -245,20 +262,9 @@ pub const Store = struct {
 
         std.debug.assert(layouts.len() == num_primitives);
 
-        var self = Self{
-            .allocator = allocator,
-            .layouts = layouts,
-            .resolved_list_layouts = .empty,
-            .tuple_elems = try collections.SafeList(Idx).initCapacity(allocator, 512),
-            .struct_fields = try StructField.SafeMultiList.initCapacity(allocator, 512),
-            .struct_data = try collections.SafeList(StructData).initCapacity(allocator, 512),
-            .tag_union_variants = tag_union_variants,
-            .tag_union_data = tag_union_data,
-            .interned_layouts = std.StringHashMap(Idx).init(allocator),
-            .scratch_intern_key = .empty,
-            .interned_recursive_graphs = RecursiveGraphMap.init(allocator),
-            .target_usize = target_usize,
-        };
+        self.tuple_elems = try collections.SafeList(Idx).initCapacity(allocator, 512);
+        self.struct_fields = try StructField.SafeMultiList.initCapacity(allocator, 512);
+        self.struct_data = try collections.SafeList(StructData).initCapacity(allocator, 512);
 
         try self.buildExistingLayoutInternKey(Layout.boolType());
         try self.rememberScratchInternKey(.bool);

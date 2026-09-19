@@ -22,6 +22,8 @@ pub const Entry = struct {
 pub const View = struct {
     entries: []const Entry = &.{},
     index: ?*const Index = null,
+    /// Borrowed immutable backing records for owned native artifact capture.
+    exports: []const StaticDataExport = &.{},
 
     pub fn ordinal(self: View, id: base.StringLiteral.Idx) ?u32 {
         if (self.index) |index| return index.get(id);
@@ -66,7 +68,7 @@ pub const Table = struct {
     }
 
     pub fn view(self: *const Table) View {
-        return .{ .entries = self.entries, .index = &self.index };
+        return .{ .entries = self.entries, .index = &self.index, .exports = self.exports };
     }
 
     pub fn find(self: *const Table, id: base.StringLiteral.Idx) ?Entry {

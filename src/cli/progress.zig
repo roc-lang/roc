@@ -44,9 +44,9 @@ const name_width: usize = 37;
 /// Maximum number of top-level phases a single operation reports.
 const max_phases: usize = 16;
 const max_subphases: usize = 25;
-// Shared lowering and a runtime continuation each report eight groups; tests
-// also report result-cache counts on the same operation.
-const max_counter_groups: usize = 2 * 8 + 1;
+// Shared lowering and a runtime continuation each report eight lowering groups
+// and native emission; tests also report result-cache counts.
+const max_counter_groups: usize = 2 * 9 + 1;
 const max_counters_per_group: usize = 32;
 
 /// Wide enough for at least seven digits, their grouping underscores, and the ms suffix.
@@ -884,6 +884,26 @@ test "timings prints all 27 Monotype graph counters" {
     reporter.finish();
     try testing.expect(std.mem.find(u8, buf.written(), "Final counter") != null);
     try testing.expect(std.mem.find(u8, buf.written(), "987654321") != null);
+}
+
+test "counter capacity includes shared runtime native and test groups" {
+    var buf: std.Io.Writer.Allocating = .init(testing.allocator);
+    defer buf.deinit();
+    var reporter = Reporter.init(.{
+        .std_io = std.testing.io,
+        .writer = &buf.writer,
+        .op_label = "roc build",
+        .timings_flag = true,
+        .is_tty = false,
+    });
+    defer reporter.deinit();
+    reporter.start();
+    // Eight lowering groups plus native emission for each consumer.
+    for (0..18) |_| reporter.recordCounters("Compiler work", &.{.{ .name = "Count", .count = 1 }});
+    reporter.recordCounters("Final test cache", &.{.{ .name = "Hits", .count = 7 }});
+    reporter.finish();
+    try testing.expectEqual(@as(usize, 18), std.mem.count(u8, buf.written(), "Compiler work"));
+    try testing.expect(std.mem.find(u8, buf.written(), "Final test cache") != null);
 }
 
 test "static breakdown lists every phase with the timings flag" {

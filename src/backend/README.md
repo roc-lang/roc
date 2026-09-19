@@ -2,6 +2,19 @@
 
 This directory contains the code generation backends for Roc.
 
+## Native procedure artifacts
+
+The dev backend shares one procedure-emission pipeline between native compile-time
+evaluation and object generation. Workers borrow frozen LIR and return owned,
+relocatable artifacts; deterministic placement and linking belong to the coordinator.
+Executable images are execution resources, not reusable compiler output.
+
+Reuse requires an explicit same-program capability, producer revisions, and
+compatible emission policies. Compile-time hooks and mutable slot addresses cannot
+escape through cached code. Immutable runtime data travels with its referenced
+artifact closure; mutable CTFE slots remain external bindings. See `design.md` for
+the lifetime and placement invariants.
+
 ## Running Tests with Filters
 
 To run a specific eval test by name filter:
