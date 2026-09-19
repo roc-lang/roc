@@ -1277,3 +1277,71 @@ test "check - issue 11398 - returned block mismatch points at the block's final 
         \\}
     , "{}");
 }
+
+fn expectOneMismatchKeepsDefType(src: []const u8, def_name: []const u8, expected_type: []const u8) TestEnv.TestEnvError!void {
+    var test_env = try TestEnv.init("Test", src);
+    defer test_env.deinit();
+
+    try test_env.assertOneTypeError("Type Mismatch");
+
+    const def_type = try test_env.allocDefType(std.testing.allocator, def_name);
+    defer std.testing.allocator.free(def_type);
+    try std.testing.expectEqualStrings(expected_type, def_type);
+}
+
+test "check - mismatched if branch keeps the annotated function type" {
+    // A branch that fails the annotated return type becomes a runtime error on
+    // its own; the function keeps its annotated type rather than turning into
+    // an error type that poisons the whole definition.
+    try expectOneMismatchKeepsDefType(
+        \\pick : Bool -> { checked : U64 }
+        \\pick = |b| if b {
+        \\    {}
+        \\} else {
+        \\    { checked: 2 }
+        \\}
+    , "pick", "Bool -> { checked: U64 }");
+}
+
+test "check - mismatched match branch keeps the annotated function type" {
+    try expectOneMismatchKeepsDefType(
+        \\pick : Bool -> { checked : U64 }
+        \\pick = |b| match b {
+        \\    True => {}
+        \\    False => { checked: 2 }
+        \\}
+    , "pick", "Bool -> { checked: U64 }");
+}
+
+test "check - mismatched branch returning a parameter keeps the parameter's annotated type" {
+    // The rejected branch body shares its type with the parameter, and through
+    // it with the annotation's argument; neither may take the return type.
+    try expectOneMismatchKeepsDefType(
+        \\pick : Bool, {} -> { checked : U64 }
+        \\pick = |b, unit| if b {
+        \\    unit
+        \\} else {
+        \\    { checked: 2 }
+        \\}
+    , "pick", "Bool, {} -> { checked: U64 }");
+}
+
+test "check - branch whose type contains an already-reported error adds no type mismatch" {
+    // `nope` is reported as not in scope; the branch body `Ok(nope)` then
+    // carries that error inside its type, which must suppress a second report
+    // rather than count as a mismatch against the annotated return type.
+    const src =
+        \\pick : Bool -> Try(U64, Str)
+        \\pick = |b| if b {
+        \\    Ok(nope)
+        \\} else {
+        \\    Ok(1)
+        \\}
+    ;
+
+    var test_env = try TestEnv.init("Test", src);
+    defer test_env.deinit();
+
+    try test_env.assertOneCanError("Name Not In Scope");
+    try std.testing.expectEqual(@as(usize, 0), test_env.checker.problems.problems.items.len);
+}

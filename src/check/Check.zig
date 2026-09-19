@@ -25513,21 +25513,27 @@ fn probeUnifyWithoutRecordingProblems(
     expected: Var,
     actual: Var,
 ) Allocator.Error!bool {
+    return (try self.probeUnifyResultWithoutRecordingProblems(expected, actual)).isEstablished();
+}
+
+/// The raw unifier result of relating `expected` and `actual` against
+/// throwaway problem/snapshot stores, so a mismatch is neither recorded nor
+/// poisoned. Callers own any rollback of the type store.
+fn probeUnifyResultWithoutRecordingProblems(
+    self: *Self,
+    expected: Var,
+    actual: Var,
+) Allocator.Error!unifier.Result {
     var probe_problems = try ProblemStore.initCapacity(self.gpa, 1);
     defer probe_problems.deinit(self.gpa);
 
     var probe_snapshots = try SnapshotStore.initCapacity(self.gpa, 8);
     defer probe_snapshots.deinit();
 
-    // Probe against throwaway problem/snapshot stores so a mismatch here is
-    // neither recorded nor poisoned—only whether the relation was established
-    // matters.
     var env = self.unifyEnv();
     env.problems = &probe_problems;
     env.snapshots = &probe_snapshots;
-    const result = try unifier.unify(&env, expected, actual, .{ .on_mismatch = .write_no_report });
-
-    return result.isEstablished();
+    return try unifier.unify(&env, expected, actual, .{ .on_mismatch = .write_no_report });
 }
 
 /// Finalize still-open literal defaults at end of module checking, via the
@@ -39692,34 +39698,35 @@ fn recordBranchTypeMismatch(self: *Self, body_var: Var, expected_ret: Var, ctx: 
     } });
 }
 
-/// Probe whether `body_var` can unify with `target`, recording and committing
+/// Probe whether `body_var` can be used as `target`, recording and committing
 /// nothing: run the non-recording raw-unifier probe inside a `beginProbe` scope,
-/// then always roll back. Nothing in the live solver state is disturbed.
+/// then always roll back. Nothing in the live solver state is disturbed. A
+/// relation stopped by an already-reported `.err` inside either type is
+/// accepted: that error owns the diagnostic, so the branch adds none.
 fn probeBranchCompatible(self: *Self, body_var: Var, target: Var) std.mem.Allocator.Error!bool {
     var probe = try self.beginProbe(null);
     defer probe.rollback();
-    return try self.probeUnifyWithoutRecordingProblems(body_var, target);
+    return (try self.probeUnifyResultWithoutRecordingProblems(body_var, target)).isAccepted();
 }
 
 /// Record a branch-vs-`mismatch_against` diagnostic (actual = the expression
-/// producing the branch body's value, region on it) and locally poison that
-/// expression so it does not cascade. `mismatch_against` is rendered as "the
-/// previous branch(es) result"—either the annotated return type or the branch
-/// accumulator, whichever the body failed against. `expected_ret` is always
-/// used to mark the erroneous branch.
+/// producing the branch body's value, region on it) and queue that expression
+/// for replacement with a runtime error, so only taking this branch crashes.
+/// `mismatch_against` is rendered as "the previous branch(es) result"—either
+/// the annotated return type or the branch accumulator, whichever the body
+/// failed against. No solved type changes: the rejected body is never folded
+/// into the accumulator, so the expected return type and every class the body
+/// shares with other code keep the types they were checked at, and Monotype
+/// lowers the runtime error at the enclosing expression's result type.
 fn reportBranchMismatchAndPoison(
     self: *Self,
     body_expr_idx: CIR.Expr.Idx,
-    body_var: Var,
     mismatch_against: Var,
-    expected_ret: Var,
     ctx: problem.Context,
-    env: *Env,
 ) std.mem.Allocator.Error!void {
     const result_expr = self.resultValueExpr(body_expr_idx);
     try self.recordBranchTypeMismatch(ModuleEnv.varFrom(result_expr), mismatch_against, ctx);
-    try self.markErroneousBranchWithExpected(result_expr, expected_ret, env);
-    try self.markErroneous(body_var);
+    try self.erroneous_value_exprs.put(self.gpa, result_expr, {});
 }
 
 /// Check one if/match branch body against the shared expected return type, and
@@ -39742,8 +39749,9 @@ fn reportBranchMismatchAndPoison(
 ///      rolled-back probe—branches never merge into the shared annotation var
 ///      (see above).
 ///   2. One real unify against `acc` inside a `CommitProbe`: the fold and the
-///      compatibility check are the same operation. Success commits in place—the
-///      wrapper already propagated regions/rank/deferred-constraints into the live
+///      compatibility check are the same operation. Success, or a relation
+///      stopped by an already-reported `.err`, commits in place—the wrapper
+///      already propagated regions/rank/deferred-constraints into the live
 ///      `env`, so nothing is redone. Failure catches a body that matches the
 ///      annotation yet diverges from an earlier sibling already folded in—only
 ///      observable when the annotation is LOOSER than the accumulated branches,
@@ -39775,7 +39783,7 @@ fn checkBranchBodyAgainstExpected(
 
     // Probe (1): does the body match the annotated return type?
     if (!try self.probeBranchCompatible(body_var, expected_ret)) {
-        try self.reportBranchMismatchAndPoison(body_expr_idx, body_var, expected_ret, expected_ret, ctx, env);
+        try self.reportBranchMismatchAndPoison(body_expr_idx, expected_ret, ctx);
         return;
     }
 
@@ -39789,7 +39797,7 @@ fn checkBranchBodyAgainstExpected(
         defer if (!committed) commit_probe.rollback();
 
         const result = try commit_probe.unifyInContext(body_var, acc, ctx);
-        if (result.isEstablished()) {
+        if (result.isAccepted()) {
             committed = true;
             commit_probe.commit();
             return;
@@ -39800,20 +39808,7 @@ fn checkBranchBodyAgainstExpected(
     // already folded into `acc`; rollback has restored everything the failed unify
     // touched. (Distinct from a step-(1) failure only when the annotation is looser
     // than `acc`.)
-    try self.reportBranchMismatchAndPoison(body_expr_idx, body_var, acc, expected_ret, ctx, env);
-}
-
-fn markErroneousBranchWithExpected(self: *Self, expr_idx: CIR.Expr.Idx, expected_ret: Var, env: *Env) std.mem.Allocator.Error!void {
-    if (self.cir.store.getExpr(expr_idx) == .e_runtime_error) return;
-
-    try self.erroneous_value_exprs.put(self.gpa, expr_idx, {});
-
-    const expr_var = ModuleEnv.varFrom(expr_idx);
-    const region = self.cir.store.getExprRegion(expr_idx);
-    const redirected_ret = try self.fresh(env, region);
-    _ = try self.unifyInContext(redirected_ret, expected_ret, env, .none);
-
-    try self.types.dangerousSetVarRedirect(.diagnostic_recovery_reported_error, expr_var, redirected_ret);
+    try self.reportBranchMismatchAndPoison(body_expr_idx, acc, ctx);
 }
 
 /// Check if a type variable contains any error types anywhere in its structure.
