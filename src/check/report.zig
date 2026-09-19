@@ -78,6 +78,8 @@ const PlatformAliasNotFound = problem_mod.PlatformAliasNotFound;
 const PlatformDefNotFound = problem_mod.PlatformDefNotFound;
 const PlatformHostedSection = problem_mod.PlatformHostedSection;
 const HostedUnboxedFunction = problem_mod.HostedUnboxedFunction;
+const HostedFunctionNotEffectful = problem_mod.HostedFunctionNotEffectful;
+const HostedTypeVariableNotBoxed = problem_mod.HostedTypeVariableNotBoxed;
 const HostBoundaryOpenRow = problem_mod.HostBoundaryOpenRow;
 const HostBoundaryOptionalField = problem_mod.HostBoundaryOptionalField;
 const AnnotationOnlyValue = problem_mod.AnnotationOnlyValue;
@@ -1038,6 +1040,12 @@ pub const ReportBuilder = struct {
             },
             .hosted_unboxed_function => |data| {
                 return self.buildHostedUnboxedFunctionReport(data);
+            },
+            .hosted_function_not_effectful => |data| {
+                return self.buildHostedFunctionNotEffectfulReport(data);
+            },
+            .hosted_type_variable_not_boxed => |data| {
+                return self.buildHostedTypeVariableNotBoxedReport(data);
             },
             .host_boundary_open_row => |data| {
                 return self.buildHostBoundaryOpenRowReport(data);
@@ -4614,6 +4622,40 @@ pub const ReportBuilder = struct {
             D.bytes("Wrap function types in"),
             D.bytes("Box").withAnnotation(.inline_code),
             D.bytes("when crossing the host boundary."),
+        }, self, &report);
+        return report;
+    }
+
+    fn buildHostedFunctionNotEffectfulReport(self: *Self, data: HostedFunctionNotEffectful) Allocator.Error!Report {
+        var report = try Report.init(self.gpa, "Hosted Function Must Be Effectful", "Every function the host provides is effectful.", .runtime_error);
+        errdefer report.deinit();
+
+        try self.addSourceHighlightRegion(&report, data.region);
+
+        try report.document.addLineBreak();
+        try report.document.addLineBreak();
+        try D.renderSlice(&.{
+            D.bytes("Every use of it crashes at runtime until it is declared with"),
+            D.bytes("=>").withAnnotation(.inline_code),
+            D.bytes("instead of"),
+            D.bytes("->").withAnnotation(.inline_code),
+            D.bytes("like every other hosted function."),
+        }, self, &report);
+        return report;
+    }
+
+    fn buildHostedTypeVariableNotBoxedReport(self: *Self, data: HostedTypeVariableNotBoxed) Allocator.Error!Report {
+        var report = try Report.init(self.gpa, "Hosted Type Variable Must Be Boxed", "A hosted function's type variables can only appear inside a Box.", .runtime_error);
+        errdefer report.deinit();
+
+        try self.addSourceHighlightRegion(&report, data.region);
+
+        try report.document.addLineBreak();
+        try report.document.addLineBreak();
+        try D.renderSlice(&.{
+            D.bytes("The host has one C signature for every use of this function, so it can only receive or return a value of an unknown type through a pointer. Wrap each type variable in"),
+            D.bytes("Box").withAnnotation(.inline_code),
+            D.bytes("so the host only ever sees that pointer."),
         }, self, &report);
         return report;
     }

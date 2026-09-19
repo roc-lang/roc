@@ -492,7 +492,11 @@ Static-dispatch failures, type errors, and other checker-owned problems must
 feed this poison result explicitly through the same expression summary path.
 Poison is local to the expression or dependency region that owns the checking
 problem. It propagates only through explicit checked dependencies, such as a
-lookup of an erroneous local or top-level value. It must never become a module,
+lookup of an erroneous local or top-level value, or a call whose callee's body
+contains code checking replaced with a runtime error: the post-solve walk that
+confirms a root's dependencies already follows each callee's body, and a root
+whose evaluation can reach such code is not kept, so the crash that code lowers
+to is never reported a second time as a compile-time crash. It must never become a module,
 package, or program flag. A checked module or checked program may contain
 user-facing diagnostics and still produce hoisted roots for every independent
 expression whose own dependency region is resolved and otherwise eligible. This
@@ -1736,6 +1740,19 @@ than reading a surface that section never described. A module whose own
 checking has not finished has no bindings yet, and compile-time finalization
 lowers exactly such a module, so that entrance reads nothing into their absence
 there.
+
+Every function the host provides is effectful, because nothing about host code
+lets the compiler evaluate it while checking. A hosted declaration whose checked
+type is not an effectful function—one written with `->`, or a value that is not
+a function—is a checking error reported at its annotation. The declaration stays
+`e_hosted_lambda`, so the hosted section, its linker symbol, and its dispatch
+slot are exactly what they would be for the effectful declaration; every use of
+it instead becomes an erroneous expression without a second report, which code
+generation lowers to a crash. A call to the host is therefore always an
+effectful call, and compile-time root selection never selects an expression
+that could reach one. The check reads only the declaration's own annotation
+type: a hosted declaration has no dependencies, so it is checked before any
+definition that refers to it, and nothing about it needs recording elsewhere.
 
 An annotation-only declaration that no implementation supersedes names no value
 at all, whatever its annotation says, and `e_anno_only` is the body-free state
@@ -14805,6 +14822,18 @@ type, and a use instantiates it. The host's single C signature covers every
 instantiation because a variable position is a pointer at runtime, so those
 slots are the declaration's own; every position the declaration made concrete
 is fixed for all uses exactly as above.
+
+The host never looks inside a variable slot, so a slot crosses the boundary
+exactly as the calling Roc code represents it. In `.boxy` a hosted worker is
+generic in its declaration's variables. Its extern signature is the declared
+type analyzed with each variable slot bound to the worker's own representation
+of that slot, and a position whose host representation is structurally the
+worker's own needs no adapter at all. The worker takes hidden descriptor
+arguments from its caller like any other generic worker, which is what lets it
+describe a `Box(a)` the host hands back; the extern procedure it calls never
+takes a descriptor argument. A variable slot is never given a stand-in type
+such as `{}`: converting a value to a stand-in would discard it on the way to
+the host.
 
 Monotype lowering holds that boundary where extern specializations are
 produced: emitting a hosted procedure at any other type stops the build with a

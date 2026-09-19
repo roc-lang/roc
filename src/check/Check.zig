@@ -9456,7 +9456,6 @@ fn hoistedExprAllowsStoredConst(
         .e_empty_list,
         .e_empty_record,
         .e_zero_argument_tag,
-        .e_runtime_error,
         .e_ellipsis,
         .e_anno_only,
         .e_derived_method,
@@ -9500,6 +9499,10 @@ fn hoistedExprAllowsStoredConst(
         .e_expect,
         .e_break,
         => false,
+        // Checking already reported the problem this code has. Evaluating a
+        // root that reaches it would report that problem a second time, so
+        // the poison reaches every root whose evaluation can call into it.
+        .e_runtime_error => false,
         .e_for => |for_expr| (try self.hoistedExprAllowsStoredConst(module, for_expr.expr, context)) and
             try self.hoistedExprAllowsStoredConst(module, for_expr.body, context),
         .e_return => |ret| self.hoistedExprAllowsStoredConst(module, ret.expr, context),
@@ -18921,6 +18924,11 @@ fn checkExprWithFunctionOwner(self: *Self, expr_idx: CIR.Expr.Idx, env: *Env, ex
                 break :blk;
             }
 
+            if (self.localLookupIsNonEffectfulHostedDeclaration(lookup.pattern_idx)) {
+                try self.markNonEffectfulHostedDeclarationUse(expr_idx, expr_var);
+                break :blk;
+            }
+
             try self.value_lookup_tracking.append(self.gpa, .{
                 .expr_idx = expr_idx,
                 .pattern_idx = lookup.pattern_idx,
@@ -19185,6 +19193,8 @@ fn checkExprWithFunctionOwner(self: *Self, expr_idx: CIR.Expr.Idx, env: *Env, ex
                     try self.reportAnnotationOnlyValueUse(expr_var, expr_region, env);
                 } else if (target_is_def and annotationOnlyValueDef(ext_ref.other_cir, target_def)) {
                     try self.reportValuelessDeclarationUse(expr_var, expr_region);
+                } else if (target_is_def and hostedDeclarationIsNotEffectful(ext_ref.other_cir, target_def)) {
+                    try self.markNonEffectfulHostedDeclarationUse(expr_idx, expr_var);
                 } else {
                     const ext_instantiated_var = try self.instantiateImportedBindingVar(
                         ext_ref.local_var,
@@ -20357,10 +20367,20 @@ fn checkExprWithFunctionOwner(self: *Self, expr_idx: CIR.Expr.Idx, env: *Env, ex
             // This is similar to e_anno_only - the implementation is provided by the host.
             if (expected.annotation) |annotation_idx| {
                 const annotation_var = ModuleEnv.varFrom(annotation_idx);
+                if (!hostedAnnotationIsEffectful(self.cir, annotation_idx)) {
+                    _ = try self.problems.appendProblem(self.gpa, .{ .hosted_function_not_effectful = .{
+                        .region = self.cir.store.getAnnotationRegion(annotation_idx),
+                    } });
+                }
                 if (try self.varContainsUnboxedFunctionInHostedSignature(annotation_var)) {
                     const region = self.cir.store.getAnnotationRegion(annotation_idx);
                     _ = try self.problems.appendProblem(self.gpa, .{ .hosted_unboxed_function = .{
                         .region = region,
+                    } });
+                }
+                if (try self.varHasUnboxedTypeVariableInHostedSignature(annotation_var)) {
+                    _ = try self.problems.appendProblem(self.gpa, .{ .hosted_type_variable_not_boxed = .{
+                        .region = self.cir.store.getAnnotationRegion(annotation_idx),
                     } });
                 }
                 try self.checkHostBoundaryType(annotation_var, self.cir.store.getAnnotationRegion(annotation_idx));
@@ -20682,10 +20702,11 @@ fn staticDispatchBindingIsUnsupportedGeneratedMethod(lookup: StaticDispatchMetho
     return expr.e_anno_only.kind == .unsupported_generated_method;
 }
 
-/// Reject a dispatch whose method declaration names no value. A bare underscore
-/// requesting an unsupported generated method reports itself at the declaration;
-/// every other annotation without a body reports here, because the dispatch is
-/// the site with nothing to call.
+/// Reject a dispatch whose method declaration names no value, or is a hosted
+/// declaration that is not an effectful function. A bare underscore requesting
+/// an unsupported generated method, like such a hosted declaration, reports
+/// itself at the declaration; every other annotation without a body reports
+/// here, because the dispatch is the site with nothing to call.
 fn rejectValuelessMethodDispatch(
     self: *Self,
     lookup: StaticDispatchMethodBinding,
@@ -20694,6 +20715,11 @@ fn rejectValuelessMethodDispatch(
     env: *Env,
     failure_expr: ?CIR.Expr.Idx,
 ) Allocator.Error!bool {
+    if (hostedDeclarationIsNotEffectful(lookup.env, lookup.binding.def_idx)) {
+        try self.poisonConstraintFailure(dispatcher_var, constraint, env, failure_expr);
+        try self.markStaticDispatchRejected(constraint);
+        return true;
+    }
     if (!annotationOnlyValueDef(lookup.env, lookup.binding.def_idx)) return false;
     if (!staticDispatchBindingIsUnsupportedGeneratedMethod(lookup)) {
         if (failure_expr orelse self.constraintSourceExpr(dispatcher_var, constraint)) |expr_idx| {
@@ -20956,6 +20982,36 @@ fn annotationOnlyValueDef(module_env: *const ModuleEnv, def_idx: CIR.Def.Idx) bo
     if (expr != .e_anno_only) return false;
     return !can.BuiltinLowLevel.isBuiltinModule(module_env) or
         !can.BuiltinLowLevel.isIntrinsicAnnotation(module_env, expr.e_anno_only.ident);
+}
+
+/// A hosted declaration whose declared type is not an effectful function.
+/// Every function the host provides is effectful, so checking reports such a
+/// declaration where it is written, and every use of it is erroneous and
+/// therefore crashes. The declaration itself stays hosted, so the platform's
+/// hosted section and the host's dispatch slots do not depend on its type.
+///
+/// Definitions are checked in dependency order and a hosted declaration has
+/// no dependencies, so its annotation type is final wherever it is referenced.
+fn hostedDeclarationIsNotEffectful(module_env: *const ModuleEnv, def_idx: CIR.Def.Idx) bool {
+    const def = module_env.store.getDef(def_idx);
+    if (module_env.store.getExpr(def.expr) != .e_hosted_lambda) return false;
+    const annotation_idx = def.annotation orelse return false;
+    return !hostedAnnotationIsEffectful(module_env, annotation_idx);
+}
+
+/// Whether a hosted declaration's annotation is an effectful function type.
+/// An annotation that failed to resolve has already been reported, so it
+/// counts as effectful here rather than adding a second report.
+fn hostedAnnotationIsEffectful(module_env: *const ModuleEnv, annotation_idx: CIR.Annotation.Idx) bool {
+    var resolved = module_env.types.resolveVar(ModuleEnv.varFrom(annotation_idx));
+    while (true) {
+        switch (resolved.desc.content) {
+            .alias => |alias| resolved = module_env.types.resolveVar(module_env.types.getAliasBackingVar(alias)),
+            .err => return true,
+            .structure => |flat| return flat == .fn_effectful,
+            .flex, .rigid, .field_presence => return false,
+        }
+    }
 }
 
 fn isExprNodeTag(tag: CIR.Node.Tag) bool {
@@ -24709,6 +24765,11 @@ fn checkResolvedAssociatedTarget(
 
     if (annotationOnlyValueDef(target_env, target_def_idx)) {
         try self.reportValuelessDeclarationUse(expr_var, region);
+        return;
+    }
+
+    if (hostedDeclarationIsNotEffectful(target_env, target_def_idx)) {
+        try self.markNonEffectfulHostedDeclarationUse(expr_idx, expr_var);
         return;
     }
 
@@ -32712,6 +32773,144 @@ fn varContainsUnboxedFunctionInHostedSignature(self: *Self, var_: Var) std.mem.A
     return try self.varContainsUnboxedFunctionInHostedSignatureInternal(var_, true, &self.var_set);
 }
 
+/// Per nominal declaration, which of its formals its backing uses outside
+/// every `Box`: an argument in such a position is laid out where the host sees
+/// it, while an argument used only inside a `Box` is behind a pointer.
+const HostedUnboxedFormals = std.AutoHashMap(types_mod.NominalDecl.Idx, []bool);
+
+/// One walk over a hosted signature or a nominal declaration's backing
+/// template. A template walk records which of `formals` it reaches; a
+/// signature walk has no formals, and any type variable it reaches is one of
+/// the hosted declaration's own.
+const HostedVariableWalk = struct {
+    formals: []const Var,
+    formal_marks: []bool,
+    visited: std.AutoHashMap(Var, void),
+    unboxed_formals: *HostedUnboxedFormals,
+};
+
+/// Whether a hosted signature has a type variable outside every `Box`. A
+/// hosted declaration with type variables is a scheme whose one C signature
+/// covers every instantiation, which holds only where a variable's position is
+/// a pointer the host never looks through.
+fn varHasUnboxedTypeVariableInHostedSignature(self: *Self, var_: Var) std.mem.Allocator.Error!bool {
+    var unboxed_formals = HostedUnboxedFormals.init(self.gpa);
+    defer {
+        var marks = unboxed_formals.valueIterator();
+        while (marks.next()) |formal_marks| self.gpa.free(formal_marks.*);
+        unboxed_formals.deinit();
+    }
+    var walk = HostedVariableWalk{
+        .formals = &.{},
+        .formal_marks = &.{},
+        .visited = std.AutoHashMap(Var, void).init(self.gpa),
+        .unboxed_formals = &unboxed_formals,
+    };
+    defer walk.visited.deinit();
+    return try self.hostedWalkReachesUnboxedVariable(var_, &walk);
+}
+
+fn hostedWalkReachesUnboxedVariable(self: *Self, var_: Var, walk: *HostedVariableWalk) std.mem.Allocator.Error!bool {
+    const resolved = self.types.resolveVar(var_);
+    if ((try walk.visited.getOrPut(resolved.var_)).found_existing) return false;
+    switch (resolved.desc.content) {
+        .flex, .rigid => {
+            for (walk.formals, walk.formal_marks) |formal, *mark| {
+                if (self.types.resolveVar(formal).var_ == resolved.var_) {
+                    mark.* = true;
+                    return false;
+                }
+            }
+            return walk.formals.len == 0;
+        },
+        .err, .field_presence => return false,
+        .alias => |alias| return try self.hostedWalkReachesUnboxedVariable(self.types.getAliasBackingVar(alias), walk),
+        .structure => |flat| switch (flat) {
+            .fn_pure, .fn_effectful, .fn_unbound => |func| {
+                for (self.types.sliceVars(func.args)) |arg_var| {
+                    if (try self.hostedWalkReachesUnboxedVariable(arg_var, walk)) return true;
+                }
+                return try self.hostedWalkReachesUnboxedVariable(func.ret, walk);
+            },
+            .empty_record, .empty_tag_union => return false,
+            .record => |record| {
+                for (self.types.getRecordFieldsSlice(record.fields).items(.presence)) |presence| {
+                    if (try self.hostedWalkReachesUnboxedVariable(presence.typeVar(), walk)) return true;
+                }
+                return false;
+            },
+            .record_unbound => |fields| {
+                for (self.types.getRecordFieldsSlice(fields).items(.presence)) |presence| {
+                    if (try self.hostedWalkReachesUnboxedVariable(presence.typeVar(), walk)) return true;
+                }
+                return false;
+            },
+            .tuple => |tuple| {
+                for (self.types.sliceVars(tuple.elems)) |elem_var| {
+                    if (try self.hostedWalkReachesUnboxedVariable(elem_var, walk)) return true;
+                }
+                return false;
+            },
+            .tag_union => |tag_union| {
+                for (self.types.getTagsSlice(tag_union.tags).items(.args)) |tag_args| {
+                    for (self.types.sliceVars(tag_args)) |arg_var| {
+                        if (try self.hostedWalkReachesUnboxedVariable(arg_var, walk)) return true;
+                    }
+                }
+                return false;
+            },
+            .nominal_type => |nominal| {
+                if (self.nominalIsBoxType(nominal)) return false;
+                const args = self.types.sliceNominalArgs(nominal);
+                // Every other builtin lays its arguments out where the host
+                // reads them, and so does a declaration without a backing.
+                const formal_marks = if (nominal.originIsBuiltin())
+                    null
+                else
+                    try self.hostedUnboxedFormalsOfNominal(nominal, walk.unboxed_formals);
+                for (args, 0..) |arg_var, index| {
+                    if (formal_marks) |marks| {
+                        if (!marks[index]) continue;
+                    }
+                    if (try self.hostedWalkReachesUnboxedVariable(arg_var, walk)) return true;
+                }
+                return false;
+            },
+        },
+    }
+}
+
+/// Which formals of `nominal`'s declaration its backing uses outside every
+/// `Box`, or null when the declaration has no valid backing. A declaration
+/// being computed answers with what it has found so far, which is complete
+/// for the recursive use: a formal passed only back into its own declaration
+/// reaches the host through that declaration's other uses of it.
+fn hostedUnboxedFormalsOfNominal(
+    self: *Self,
+    nominal: types_mod.NominalType,
+    unboxed_formals: *HostedUnboxedFormals,
+) std.mem.Allocator.Error!?[]const bool {
+    const decl_idx = self.types.lookupNominalDecl(nominal) orelse return null;
+    if (unboxed_formals.get(decl_idx)) |marks| return marks;
+    const decl = self.types.getNominalDecl(decl_idx);
+    if (!decl.isValid()) return null;
+    const formals = self.types.sliceVars(decl.formals);
+    if (formals.len != self.types.sliceNominalArgs(nominal).len) return null;
+    try unboxed_formals.ensureUnusedCapacity(1);
+    const marks = try self.gpa.alloc(bool, formals.len);
+    @memset(marks, false);
+    unboxed_formals.putAssumeCapacityNoClobber(decl_idx, marks);
+    var walk = HostedVariableWalk{
+        .formals = formals,
+        .formal_marks = marks,
+        .visited = std.AutoHashMap(Var, void).init(self.gpa),
+        .unboxed_formals = unboxed_formals,
+    };
+    defer walk.visited.deinit();
+    _ = try self.hostedWalkReachesUnboxedVariable(decl.backing, &walk);
+    return marks;
+}
+
 const HostBoundaryRule = enum {
     closed_rows,
     no_optional_fields,
@@ -36593,6 +36792,11 @@ fn localLookupHasNoValue(self: *const Self, pattern_idx: CIR.Pattern.Idx) bool {
     return annotationOnlyValueDef(self.cir, processing_def.def_idx);
 }
 
+fn localLookupIsNonEffectfulHostedDeclaration(self: *const Self, pattern_idx: CIR.Pattern.Idx) bool {
+    const processing_def = self.topLevelPattern(pattern_idx) orelse return false;
+    return hostedDeclarationIsNotEffectful(self.cir, processing_def.def_idx);
+}
+
 fn reportValuelessDeclarationUse(
     self: *Self,
     expr_var: Var,
@@ -36600,6 +36804,14 @@ fn reportValuelessDeclarationUse(
 ) Allocator.Error!void {
     _ = try self.problems.appendProblem(self.gpa, .{ .annotation_only_value_use = .{ .region = region } });
     try self.markErroneous(expr_var);
+}
+
+/// A use of a hosted declaration that is not an effectful function. The
+/// declaration already reported the problem, so the use only becomes
+/// erroneous, which code generates it as a crash.
+fn markNonEffectfulHostedDeclarationUse(self: *Self, expr_idx: CIR.Expr.Idx, expr_var: Var) Allocator.Error!void {
+    try self.markErroneous(expr_var);
+    try self.erroneous_value_exprs.put(self.gpa, expr_idx, {});
 }
 
 fn reportAnnotationOnlyValueUse(
