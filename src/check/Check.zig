@@ -15393,6 +15393,24 @@ const GenTypeAnnoCtx = union(enum) {
         };
     }
 
+    /// Generate everything at and beneath this position with a different
+    /// opening behaviour. Used for an argument substituted for a formal whose
+    /// variance is UNKNOWN: opening must be refused at every depth, not just
+    /// at the argument's own root, because polarity FLIPS on the way down (a
+    /// function's parameters negate) and so a closing polarity reopens one
+    /// level in.
+    fn withOpening(self: GenTypeAnnoCtx, opening: AnnotationGenCtx.OpeningBehavior) GenTypeAnnoCtx {
+        return switch (self) {
+            .annotation => |anno_ctx| .{ .annotation = .{
+                .where = anno_ctx.where,
+                .opening = opening,
+                .adapter_reach = anno_ctx.adapter_reach,
+            } },
+            // A declaration body mints no implicitly open row of its own.
+            .type_decl => self,
+        };
+    }
+
     /// Where a referenced declaration's own root sits relative to the row the
     /// result-row widening adapter can re-tag. `.defer_open` carries the walk
     /// on from here, so a marker the referenced declaration mints under a
@@ -16283,10 +16301,19 @@ const ApplyDeclKnowledge = union(enum) {
     local: CIR.Statement.Idx,
     /// Compiler-owned, and covariant in every formal. Two kinds qualify: a
     /// `.builtin` application (`List`, `Box`, the numerics), and a reference
-    /// into the `Builtin` module, whose only parameterized declarations are
-    /// `Try(ok, err)` (`src/build/roc/Builtin.roc:5257`), `Dict(k, v)`
-    /// (`5557`) and `Set(item)` (`6231`)—each of which names its formals
-    /// only in output positions of its own body.
+    /// into the `Builtin` module.
+    ///
+    /// The second rests on a PROPERTY of `Builtin` rather than a list of
+    /// names: every parameterized declaration there is covariant in each of
+    /// its formals, or leaves that formal unused. The near misses are worth
+    /// knowing, because they are what a future declaration would have to
+    /// avoid: `Iter(item)` and `Stream(item)` each put their formal under an
+    /// arrow (`step : () -> [One({ item : item, ... }), ...]`) and are
+    /// covariant only because it lands in that arrow's RESULT, and
+    /// `Dict(k, v)` carries its formals inside a `List((k, v))` payload
+    /// rather than a function at all. A `Builtin` declaration placing a
+    /// formal in an arrow's ARGUMENT would be contravariant, and this class
+    /// would then answer it covariantly—reopening the hole `unknown` closes.
     covariant,
     /// Another module's declaration. Its CIR and its formal names live in
     /// stores this walk cannot read, so its variance is UNKNOWN, and unknown
@@ -17310,11 +17337,25 @@ fn generateAnnoTypeInPlace(self: *Self, anno_idx: CIR.TypeAnno.Idx, env: *Env, c
             const anno_args = self.cir.store.sliceTypeAnnos(a.args);
             var formal_variances: [max_tracked_alias_formals]FormalVariance = undefined;
             const formal_variances_len = self.applyFormalVariances(a, &formal_variances);
+            // An UNKNOWN variance cannot be expressed as a polarity. Polarity
+            // flips on the way down—a function's parameters negate—so the
+            // closing polarity an invariant formal composes to reopens one
+            // level in, and `Lib.Producer([A] -> Str)` would open the `[A]` it
+            // must keep as written. Refusing to open at every depth is the
+            // answer that stays conservative under descent.
+            const variance_unknown = switch (self.applyDeclKnowledge(a)) {
+                .unknown => true,
+                .local, .covariant => false,
+            };
             for (anno_args, 0..) |anno_arg, arg_index| {
-                const arg_ctx = if (try_error_row_reachable and arg_index == try_error_arg_index.?)
+                const reached_arg_ctx = if (try_error_row_reachable and arg_index == try_error_arg_index.?)
                     try_error_arg_ctx
                 else
                     nested_arg_ctx;
+                const arg_ctx = if (variance_unknown)
+                    reached_arg_ctx.withOpening(.as_written)
+                else
+                    reached_arg_ctx;
                 const arg_polarity = if (formal_variances_len == null)
                     polarity
                 else

@@ -9090,6 +9090,39 @@ test "check type - polarity - imported covariant alias closes the applied row to
     try main_env.assertOneTypeError("Type Mismatch");
 }
 
+test "check type - polarity - an unknown formal's row stays closed under a function argument" {
+    // Unknown variance is refused opening at EVERY depth, not just at the
+    // argument's own root, and this pins why that distinction is load-bearing.
+    //
+    // Polarity flips on the way down: a function's parameters negate. So an
+    // unknown formal answered as a closing POLARITY closes only the top row:
+    // one level into a function argument the polarity flips back to positive
+    // and the row opens again. Here `[A]` is the parameter of the function
+    // substituted for `Producer`'s formal, so a polarity-only answer would
+    // open it and accept `mk("s")(C)`, which both the direct spelling and the
+    // pre-rule behaviour reject. Answering with "generate rows as written"
+    // instead is stable under descent.
+    const source_lib =
+        \\module [Producer]
+        \\
+        \\Producer(e) : Str -> e
+    ;
+    var lib_env = try TestEnv.init("Lib", source_lib);
+    defer lib_env.deinit();
+
+    const source_main =
+        \\import Lib
+        \\
+        \\mk : Lib.Producer([A] -> Str)
+        \\mk = |_| |_tag| "x"
+        \\
+        \\bad = mk("s")(C)
+    ;
+    var main_env = try TestEnv.initWithImport("Main", source_main, "Lib", &lib_env);
+    defer main_env.deinit();
+    try main_env.assertOneTypeError("Type Mismatch");
+}
+
 test "check type - polarity - a builtin application's row still opens for callers" {
     // The regression guard for the rule above: compiler-owned declarations are
     // KNOWN covariant, not unknown. A `.builtin` application (`List`, `Box`,

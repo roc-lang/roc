@@ -5839,15 +5839,27 @@ Neither stop is free, and the DIRECTION each fails in is the rule. Both fail
 toward the closed row, which is the direction where the annotation keeps
 bounding and a rejected program is the worst outcome.
 
-The variance walk answers UNKNOWN variance as INVARIANT, and an invariant
-formal's argument is generated closed whatever the reference's own polarity
-is. Unknown must not be answered covariantly: covariance is the most
-permissive variance, and guessing it stops the annotation bounding the caller
-at all. `Handler(e) : e -> Str` declared beside the signature that uses it
-closes the `[A, B]` of `process : Handler([A, B])`, so `process(C)` is a
-mismatch; move that one declaration into an imported module, qualify the
-reference, change nothing else, and the closed answer must survive—which it
-does only because the importer treats what it cannot read as invariant. The
+The variance walk answers UNKNOWN variance by generating the argument, and
+everything beneath it, AS WRITTEN: no row under an unknown formal is
+implicitly opened, at any depth. Unknown must not be answered covariantly:
+covariance is the most permissive variance, and guessing it stops the
+annotation bounding the caller at all. `Handler(e) : e -> Str` declared beside
+the signature that uses it closes the `[A, B]` of `process : Handler([A, B])`,
+so `process(C)` is a mismatch; move that one declaration into an imported
+module, qualify the reference, change nothing else, and the closed answer must
+survive—which it does only because the importer refuses to open what it cannot
+read.
+
+Unknown is deliberately NOT expressed as a polarity, and that distinction is
+load-bearing rather than stylistic. Polarity FLIPS on the way down: a
+function's parameters negate the surrounding polarity. So answering unknown
+with the closing polarity an invariant formal composes to (`.neg`) closes only
+the argument's own top row, and one level in—inside a function argument—the
+polarity flips back to positive and the row opens again.
+`mk : Lib.Producer([A] -> Str)` is the witness: `[A]` is the parameter of the
+function substituted for the formal, so a polarity-only answer opens it and
+accepts `mk("s")(C)`, which both the direct spelling and a local `Producer`
+reject. An opening behaviour, unlike a polarity, is stable under descent. The
 cost is the covariant case: `Producer(e) : Str -> e` keeps `Producer([A, B])`
 open for callers when it is declared locally and closes it when it is
 imported. Two kinds of reference are exempt, because their variance is KNOWN
