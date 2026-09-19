@@ -9735,16 +9735,29 @@ fn llvmFeatureStringForTarget(allocator: Allocator, std_target: std.Target) Allo
     return roc_target.llvmFeatureString(allocator, std_target);
 }
 
-fn llvmObjectUsesPic(link_type: roc_target.OutputKind, fuzz: bool) bool {
+fn llvmObjectUsesPic(target: RocTarget, link_type: roc_target.OutputKind, fuzz: bool) bool {
+    // Every wasm32 output starts as a relocatable object that some linker
+    // consumes afterwards, and a shared link (`wasm-ld -shared`, emscripten
+    // SIDE_MODULE) rejects absolute data relocations. Emitting one flavour of
+    // wasm object keeps `output: Archive` linkable by a foreign linker; the
+    // final-link path resolves the PIC base globals to zero, so the wasm it
+    // produces still addresses data absolutely.
+    if (target.toCpuArch() == .wasm32) return true;
     return link_type == .shared or fuzz;
 }
 
 test "LLVM fuzz output uses position-independent code" {
-    try std.testing.expect(llvmObjectUsesPic(.archive, true));
-    try std.testing.expect(llvmObjectUsesPic(.exe, true));
-    try std.testing.expect(llvmObjectUsesPic(.shared, false));
-    try std.testing.expect(!llvmObjectUsesPic(.archive, false));
-    try std.testing.expect(!llvmObjectUsesPic(.exe, false));
+    try std.testing.expect(llvmObjectUsesPic(.x64musl, .archive, true));
+    try std.testing.expect(llvmObjectUsesPic(.x64musl, .exe, true));
+    try std.testing.expect(llvmObjectUsesPic(.x64musl, .shared, false));
+    try std.testing.expect(!llvmObjectUsesPic(.x64musl, .archive, false));
+    try std.testing.expect(!llvmObjectUsesPic(.x64musl, .exe, false));
+}
+
+test "wasm32 LLVM objects are always position-independent" {
+    try std.testing.expect(llvmObjectUsesPic(.wasm32, .archive, false));
+    try std.testing.expect(llvmObjectUsesPic(.wasm32, .exe, false));
+    try std.testing.expect(llvmObjectUsesPic(.wasm32, .shared, false));
 }
 
 fn compileLlvmAppObject(
@@ -9812,9 +9825,10 @@ fn compileLlvmAppObject(
 
     const target_name = @tagName(target);
     const opt_name = @tagName(args.opt);
-    // Shared libraries and fuzz hosts need position-independent code; keep
-    // their objects separate from ordinary exe/archive objects.
-    const pic = llvmObjectUsesPic(link_type, args.fuzz);
+    // Shared libraries, fuzz hosts and every wasm32 object need
+    // position-independent code; keep their objects separate from ordinary
+    // exe/archive objects.
+    const pic = llvmObjectUsesPic(target, link_type, args.fuzz);
     const kind_suffix: []const u8 = if (pic) "_pic" else "";
     const debug_suffix: []const u8 = if (emit_debug_info) "_debug" else "";
     var tuning_hash = std.hash.Crc32.init();
