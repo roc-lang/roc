@@ -7137,9 +7137,6 @@ site to any family below must classify it here.
 
 - `widenTryConditionForExpectedReturn`—policy: Hosted Try Question
   Widening (above).
-- `markErroneousBranchWithExpected`—mechanism: diagnostic recovery. The
-  expression already has a reported error; its var is redirected to a fresh
-  var unified with the expected return so checking can continue past it.
 
 Other solved-graph mutations:
 
