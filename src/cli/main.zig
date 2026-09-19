@@ -16649,7 +16649,7 @@ fn specConstrParallelCounters(parallel: lir.CheckedPipeline.SpecConstrParallelMe
     inline for (comptime std.meta.tags(lir.CheckedPipeline.SpecConstrPhase), 0..) |phase, index| {
         const name = comptime switch (phase) {
             .discovery => "Pattern discovery",
-            .loop_projection => "Loop-result projection",
+            .unused_loop_results => "Loop-result projection",
             .iterator_fusion => "Iterator fusion",
         };
         rows[7 + 2 * index] = .{ .name = name ++ " tasks", .count = parallel.committed_by_phase[index] };

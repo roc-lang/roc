@@ -1,7 +1,7 @@
-//! Private SpecConstr body storage and deterministic publication.
+//! Private SpecConstr body storage and ordered row commits.
 //!
 //! A worker's virtual IDs name a frozen prefix followed by owned suffixes.
-//! Publication relocates only suffix identities, retaining checked evidence,
+//! Committing rows relocates only suffix identities, retaining checked evidence,
 //! types, function identities, and capture/binder identities verbatim.
 
 const std = @import("std");
@@ -172,7 +172,7 @@ const Relocation = struct {
     }
 };
 
-/// All fallible preparation precedes logical publication. No source row is
+/// All fallible preparation precedes committing rows. No source row is
 /// borrowed here: a previous ordered append may already have reallocated it.
 pub fn append(destination: *ast.Program, worker: *const ast.Program, symbol_start: u32, symbol_offset: u32, join_start: u32, join_offset: u32) std.mem.Allocator.Error!void {
     std.debug.assert(destination.body_prefix == null);

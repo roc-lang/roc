@@ -233,7 +233,7 @@ const Allocator = std.mem.Allocator;
 const GuardedList = collections.GuardedList;
 const TaskExecutor = @import("base").post_check_task_executor;
 
-/// Identity exhaustion is a resource failure, checked before publishing a shard.
+/// Identity exhaustion is a resource failure, checked before committing shard rows.
 fn checkedIdentityTotal(start: u32, count: u32) Allocator.Error!u32 {
     return std.math.add(u32, start, count) catch error.OutOfMemory;
 }
@@ -346,7 +346,7 @@ pub const OwnedProcedureUsage = struct {
 pub const CloneInlining = enum { all_calls, iterator_fusion };
 
 /// Independent work separated by coordinator-owned graph mutation barriers.
-pub const Phase = enum { discovery, loop_projection, iterator_fusion };
+pub const Phase = enum { discovery, unused_loop_results, iterator_fusion };
 
 /// Callback counters count only executor submissions. Work totals also include
 /// inline execution, which uses exactly the same private-shard boundary.
@@ -459,7 +459,8 @@ const CallableShape = struct {
     captures: []const Shape,
 };
 
-/// Requests contain only semantic ids and trees, never worker-generated AST ids.
+/// Requests retain frozen type, name, and function identities in owned shape
+/// trees, never worker-generated AST identities.
 fn copyShape(allocator: Allocator, shape: Shape) Allocator.Error!Shape {
     return switch (shape) {
         .any => shape,
@@ -1133,7 +1134,7 @@ const Pass = struct {
         items: std.ArrayList(PatternRequest) = .empty,
     };
 
-    /// A bounded wave retains output independently of physical worker count.
+    /// A bounded wave retains output independently of executor worker count.
     /// Neither plans nor the source Program change until every callback drains.
     const wave_capacity = 32;
     const Work = struct {
@@ -1197,12 +1198,12 @@ const Pass = struct {
                     try pass.cloneFnBodyForIteratorFusion(self.fn_id);
                     output.changed = true;
                 },
-                .loop_projection => output.changed = try pass.projectUnusedLoopResultsInFn(self.fn_id),
+                .unused_loop_results => output.changed = try pass.projectUnusedLoopResultsInFn(self.fn_id),
             }
             output.symbol_count = pass.symbols.next - self.source.symbols.next;
             output.join_count = pass.next_join_point - self.source.next_join_point;
             if (self.phase == .discovery) {
-                // Discovery retains semantic requests, never its symbolic IR.
+                // Discovery retains function/pattern requests, never its generated AST.
                 output.program.deinit();
                 output.program_live = false;
             }
@@ -1240,7 +1241,7 @@ const Pass = struct {
             var count: usize = 0;
             while (next_fn < fn_count and count < wave_capacity) : (next_fn += 1) {
                 const fn_id: Ast.FnId = @enumFromInt(@as(u32, @intCast(next_fn)));
-                const body = if (phase == .loop_projection) self.program.getFn(fn_id).body else self.sourceBody(fn_id);
+                const body = if (phase == .unused_loop_results) self.program.getFn(fn_id).body else self.sourceBody(fn_id);
                 if (body == .hosted) continue;
                 if (phase == .iterator_fusion and !exprContainsIteratorProducer(self.program, body.roc)) continue;
                 work[count] = .{ .source = self, .fn_id = fn_id, .phase = phase, .discovery_admission = admission };
@@ -4186,7 +4187,7 @@ const Pass = struct {
     /// Calls and loop-carried state stay unchanged in this final pass; its sole
     /// authority is the producer-visible result binding and continuation.
     fn projectUnusedLoopResults(self: *Pass) Common.LowerError!void {
-        try self.runIndependentPhase(.loop_projection, self.program.fnCount());
+        try self.runIndependentPhase(.unused_loop_results, self.program.fnCount());
     }
 
     fn projectUnusedLoopResultsInFn(self: *Pass, fn_id: Ast.FnId) Common.LowerError!bool {
@@ -15523,7 +15524,7 @@ test "staged SpecConstr shard allocation failures release output and scratch own
     defer program.deinit();
     var pass = try Pass.init(allocator, program);
     defer pass.deinit();
-    for ([_]Phase{ .discovery, .iterator_fusion, .loop_projection }) |phase| {
+    for ([_]Phase{ .discovery, .iterator_fusion, .unused_loop_results }) |phase| {
         try std.testing.checkAllAllocationFailures(allocator, checkSpecConstrShardAllocationFailure, .{ &pass, fixture.fn_id, phase });
     }
 }
@@ -15539,7 +15540,7 @@ fn checkSpecConstrCommitAllocationFailure(allocator: Allocator) (Allocator.Error
     var executor: ReverseSpecConstrExecutor = .{ .worker_count = 2 };
     var metrics: ParallelMetrics = .{};
     pass.options = .{ .executor = executor.executor(), .metrics_out = &metrics };
-    try pass.runIndependentPhase(.loop_projection, program.fnCount());
+    try pass.runIndependentPhase(.unused_loop_results, program.fnCount());
     try std.testing.expectEqual(@as(u64, 1), metrics.bodies_committed);
 }
 

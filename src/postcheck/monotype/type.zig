@@ -421,14 +421,14 @@ pub const Store = struct {
     }
 
     /// Complete query caches before sharing the graph between workers, without
-    /// changing the caller's frozen semantics. Partial preparation on OOM is
+    /// changing the caller's frozen type graph. Partial preparation on OOM is
     /// valid owned cache state; temporary digest scratch is released and
     /// reusable iterator scratch remains owned by this store.
     pub fn prepareForReadSharing(self: *Store, name_store: *const names.NameStore) std.mem.Allocator.Error!void {
         return self.prepareForReadSharingQueries(name_store, .all);
     }
 
-    /// Complete only explicitly requested modes. Coverage is published per
+    /// Complete only explicitly requested modes. Coverage is recorded per
     /// completed mode; an OOM retry reuses already finalized SCC caches.
     pub fn prepareForReadSharingQueries(self: *Store, name_store: *const names.NameStore, queries: ReadSharingQueries) std.mem.Allocator.Error!void {
         if (self.borrowed_read_only) Common.invariant("cannot prepare a borrowed Monotype type store");
@@ -2984,7 +2984,7 @@ pub const Store = struct {
     /// bisimulation refinement over content labels, rendered once with its
     /// reduced positions in label order and group-relative back-references,
     /// and digested per reduced position. Cyclic member digests and their
-    /// one-step unfolding index publish atomically so OOM retries retain
+    /// one-step unfolding index are committed together so OOM retries retain
     /// correct folding of later rolled-out prefixes of the same group.
     ///
     /// Known conservative incompleteness: per-SCC reduction cannot identify
@@ -3462,7 +3462,7 @@ pub const Store = struct {
             }
 
             // Stage unfoldings using only engine-local member digests. The
-            // store must publish the whole SCC and its unfolding index
+            // store must commit the whole SCC and its unfolding index
             // together: a cached member skips SCC discovery on an OOM retry.
             const unfoldings = try self.gpa.alloc([32]u8, block_count);
             defer self.gpa.free(unfoldings);

@@ -108,9 +108,11 @@ pub const Retained = struct {
     }
 };
 
-fn invariant(err: anyerror) Allocator.Error {
-    if (err == error.OutOfMemory) return error.OutOfMemory;
-    std.debug.panic("native fragment compiler invariant: {s}", .{@errorName(err)});
+fn invariant(err: (Artifact.ExtractError || Artifact.AssembleError)) Allocator.Error {
+    return switch (err) {
+        error.OutOfMemory => error.OutOfMemory,
+        else => std.debug.panic("native fragment compiler invariant: {s}", .{@errorName(err)}),
+    };
 }
 
 fn reusable(source: Emitter.FragmentContract, target: Emitter.FragmentContract, deps: Emitter.FragmentContextDependencies, metrics: *Metrics) bool {
@@ -148,7 +150,9 @@ fn Job(comptime CG: type) type {
         fn execute(context: *anyopaque, worker: tasks.Worker) ?*anyopaque {
             const self: *@This() = @ptrCast(@alignCast(context));
             self.compile(worker) catch |err| {
-                self.oom = invariant(err) == error.OutOfMemory;
+                switch (invariant(err)) {
+                    error.OutOfMemory => self.oom = true,
+                }
             };
             return self;
         }

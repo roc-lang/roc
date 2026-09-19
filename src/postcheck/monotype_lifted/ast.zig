@@ -428,7 +428,7 @@ pub fn localDirectCallee(call: Mono.CallProc) ?FnId {
 /// Complete Monotype Lifted program plus side arrays.
 pub const Program = struct {
     /// A shard owns only its raw list suffixes. Source rows remain immutable
-    /// until all workers have stopped reading; publication uses saved boundaries.
+    /// until all workers have stopped reading; row commits use saved boundaries.
     body_prefix: ?BodyShard.Prefix = null,
     allocator: std.mem.Allocator,
     names: names.NameStore,
@@ -512,7 +512,7 @@ pub const Program = struct {
         return result;
     }
 
-    /// Publish one completed private body in coordinator order. Failure leaves
+    /// Commit one completed private body in coordinator order. Failure leaves
     /// all logical rows and the selected function unchanged.
     pub fn appendSpecConstrBody(self: *Program, worker: *const Program, source_symbol_start: u32, symbol_offset: u32, source_join_start: u32, join_offset: u32) std.mem.Allocator.Error!void {
         return BodyShard.append(self, worker, source_symbol_start, symbol_offset, source_join_start, join_offset);
@@ -544,7 +544,7 @@ pub const Program = struct {
             std.debug.assert(span_.len <= prefix_len - span_.start);
             return @field(self.body_prefix.?.source, field).borrowSpan(span_.start, span_.len);
         }
-        // Empty spans carry no identity and may use the canonical zero start.
+        // Empty spans carry no identity and may start at zero.
         const start = if (span_.len == 0) 0 else span_.start - prefix_len;
         return @field(self, field).borrowSpan(start, span_.len);
     }

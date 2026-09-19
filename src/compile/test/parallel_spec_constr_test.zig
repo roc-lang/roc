@@ -68,7 +68,7 @@ test "SpecConstr staged workers project loop results deterministically" {
         \\    }
         \\    Ok({})
         \\}
-    , .{ .inline_mode = .wrappers }, &.{.loop_projection});
+    , .{ .inline_mode = .wrappers }, &.{.unused_loop_results});
 }
 
 test "SpecConstr staged workers fuse iterator-only bodies deterministically" {

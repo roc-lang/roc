@@ -502,7 +502,7 @@ pub fn expectSpecConstrParallelismDeterministicLir(
     if (options.inline_mode == .none) {
         try std.testing.expectEqual(@as(u64, 0), serial.patterns_recorded);
         try std.testing.expectEqual(@as(u64, 0), serial.patterns_admitted);
-        inline for (.{ .discovery, .loop_projection }) |phase| {
+        inline for (.{ .discovery, .unused_loop_results }) |phase| {
             const typed_phase: lir.CheckedPipeline.SpecConstrPhase = phase;
             try std.testing.expectEqual(@as(u64, 0), serial.changed_by_phase[@intFromEnum(typed_phase)]);
         }

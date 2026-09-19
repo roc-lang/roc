@@ -190,8 +190,7 @@ pub const ProgramSession = struct {
                 // A completed host program has already published its outputs.
                 // Reusing it cannot silently redirect those results or count
                 // its producer work again in another metrics destination.
-                if (comptime field != .timing and field != .post_check_executor)
-                {
+                if (comptime field != .timing and field != .post_check_executor) {
                     const reuses_completed_host = target.specialization_strategy == .lss and
                         self.compile_time_root_count != 0 and self.runtime_prepared == null;
                     if (reuses_completed_host and !std.meta.eql(@field(configured, @tagName(field)), @field(target, @tagName(field))))
