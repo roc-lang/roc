@@ -428,6 +428,32 @@ test "where clause - discarded unpinned return type reports missing method" {
     try std.testing.expect(hasRuntimeErrorExpr(&test_env));
 }
 
+// repro for https://github.com/roc-lang/roc/issues/11427
+// `f0` passes an unconstrained rigid `a` to `f1`, whose annotation requires
+// `a.to_hash`. The violation belongs to the call `f1(a)` inside `f0`; `f1` and
+// `f2` are each correct in isolation and must not be blamed.
+test "where clause - unsatisfied annotated constraint is reported at the violating call" {
+    const source =
+        \\f0 : a -> a
+        \\f0 = |a| f1(a)
+        \\
+        \\f1 : a -> a where [a.to_hash : a, Hasher -> Hasher]
+        \\f1 = |a| f2(a)
+        \\
+        \\f2 : a -> a where [a.to_hash : a, Hasher -> Hasher]
+        \\f2 = |a| a
+    ;
+    var test_env = try TestEnv.init("Test", source);
+    defer test_env.deinit();
+
+    // Line 2 is `f0 = |a| f1(a)`; columns 10-15 span the call `f1(a)`.
+    try test_env.assertOneTypeErrorHighlightsWithin("Missing Method", .{
+        .line = 2,
+        .start_column = 10,
+        .end_column = 15,
+    });
+}
+
 // Let polymorphism with where clauses
 
 test "where clause - same type used multiple times with where constraint" {

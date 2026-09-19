@@ -17,22 +17,26 @@ test = |{}| {
 }
 ~~~
 # EXPECTED
-MISSING METHOD - nominal_local.md:9:5:9:15
+MISSING METHOD - nominal_local.md:9:5:9:26
 # PROBLEMS
 ~~~clojure
 (reports
 	(report
 		(severity runtime_error)
 		(title "Missing Method")
-		(region (start 9 5) (end 9 15))
+		(region (start 9 5) (end 9 26))
 		(headline
-			(reflow "This")
+			(reflow "A")
+			(reflow " ")
+			(annotated code "where")
+			(reflow " ")
+			(reflow "clause requires the")
 			(reflow " ")
 			(annotated code "encode_str")
 			(reflow " ")
-			(reflow "method is being called on a value whose type doesn't have that method."))
+			(reflow "method here, but the type being used doesn't have that method."))
 		(document
-			(source-region (file "nominal_local.md") (start 9 5) (end 9 15) (annotation error) (line-text "    Str.encode(\"hi\", fmt)"))
+			(source-region (file "nominal_local.md") (start 9 5) (end 9 26) (annotation error) (line-text "    Str.encode(\"hi\", fmt)"))
 			(line-break)
 			(reflow "The value's type, which does not have a method named ")
 			(annotated code "encode_str")

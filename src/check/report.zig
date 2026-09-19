@@ -2398,6 +2398,44 @@ pub const ReportBuilder = struct {
 
     // static dispatch //
 
+    /// Headline for a failed obligation that a use of an annotated value
+    /// created from its `where` clause: the violation is at that use.
+    fn renderOwnedObligationMissingMethodHeadline(
+        self: *Self,
+        report: *Report,
+        method_name: Ident.Idx,
+    ) Allocator.Error!void {
+        try D.renderSliceInto(&.{
+            D.bytes("A"),
+            D.bytes("where").withAnnotation(.inline_code),
+            D.bytes("clause requires the"),
+            D.ident(method_name).withAnnotation(.inline_code),
+            D.bytes("method here, but the type being used doesn't have that method."),
+        }, self, report, &report.headline);
+    }
+
+    /// Highlight where a static dispatch constraint failed: at the expression
+    /// that owns the failed obligation when there is one, and otherwise at the
+    /// constraint's own provenance.
+    fn addConstraintFailureHighlight(
+        self: *Self,
+        report: *Report,
+        owner_region: ?Region,
+        fn_var: Var,
+    ) Allocator.Error!void {
+        const region: Region = owner_region orelse
+            (self.getRegionSafe(@enumFromInt(@intFromEnum(fn_var))) orelse return).*;
+        const region_info = self.module_env.calcRegionInfo(region);
+        try report.document.addSourceRegion(
+            region_info,
+            .error_highlight,
+            self.filename,
+            self.source,
+            self.module_env.getLineStarts(),
+        );
+        try report.document.addLineBreak();
+    }
+
     /// Build a report for when a type is not nominal, but you're trying to
     /// static dispatch on it
     fn buildStaticDispatchDispatcherNotNominal(
@@ -2406,26 +2444,19 @@ pub const ReportBuilder = struct {
     ) Allocator.Error!Report {
         var report = try Report.init(self.gpa, "Missing Method", "", .runtime_error);
         errdefer report.deinit();
-        try D.renderSliceInto(&.{
-            D.bytes("This"),
-            D.ident(data.method_name).withAnnotation(.inline_code),
-            D.bytes("method is being called on a value whose type doesn't have that method."),
-        }, self, &report, &report.headline);
+        if (data.owner_region != null and data.origin == .where_clause) {
+            try self.renderOwnedObligationMissingMethodHeadline(&report, data.method_name);
+        } else {
+            try D.renderSliceInto(&.{
+                D.bytes("This"),
+                D.ident(data.method_name).withAnnotation(.inline_code),
+                D.bytes("method is being called on a value whose type doesn't have that method."),
+            }, self, &report, &report.headline);
+        }
 
         const snapshot_str = try report.addOwnedString(self.getFormattedString(data.dispatcher_snapshot));
 
-        // Add source region highlighting
-        if (self.getRegionSafe(@enumFromInt(@intFromEnum(data.fn_var)))) |region| {
-            const region_info = self.module_env.calcRegionInfo(region.*);
-            try report.document.addSourceRegion(
-                region_info,
-                .error_highlight,
-                self.filename,
-                self.source,
-                self.module_env.getLineStarts(),
-            );
-            try report.document.addLineBreak();
-        }
+        try self.addConstraintFailureHighlight(&report, data.owner_region, data.fn_var);
 
         try D.renderSlice(&.{
             D.bytes("The value's type, which does not have a method named "),
@@ -2481,6 +2512,8 @@ pub const ReportBuilder = struct {
                 D.ident(data.method_name).withAnnotation(.inline_code),
                 D.bytes("method."),
             }, self, &report, &report.headline);
+        } else if (data.owner_region != null and data.origin == .where_clause) {
+            try self.renderOwnedObligationMissingMethodHeadline(&report, data.method_name);
         } else {
             try D.renderSliceInto(&.{
                 D.bytes("This"),
@@ -2491,18 +2524,7 @@ pub const ReportBuilder = struct {
 
         const snapshot_str = try report.addOwnedString(self.getFormattedString(data.dispatcher_snapshot));
 
-        // Add source region highlighting
-        if (self.getRegionSafe(@enumFromInt(@intFromEnum(data.fn_var)))) |region| {
-            const region_info = self.module_env.calcRegionInfo(region.*);
-            try report.document.addSourceRegion(
-                region_info,
-                .error_highlight,
-                self.filename,
-                self.source,
-                self.module_env.getLineStarts(),
-            );
-            try report.document.addLineBreak();
-        }
+        try self.addConstraintFailureHighlight(&report, data.owner_region, data.fn_var);
 
         try D.renderSlice(&.{
             D.bytes("The value's type, which does not have a method named "),
