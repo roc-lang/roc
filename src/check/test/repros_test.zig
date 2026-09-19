@@ -1182,3 +1182,98 @@ test "check - repro - issue 10490 - standard library errors compose through open
 
     try test_env.assertNoErrors();
 }
+
+test "check - repro - issue 11398 - annotated lambda return mismatch points at the block's final expression" {
+    // Repro for https://github.com/roc-lang/roc/issues/11398: when a lambda's
+    // body block returns a value that does not satisfy the annotated return
+    // type, the Type Mismatch must be located at the block's final expression
+    // (the returned `{}`), not at the enclosing block.
+    const src =
+        \\Entry : { checked : U64 }
+        \\
+        \\make_entry : U64 -> Entry
+        \\make_entry = |_n| {
+        \\    {}
+        \\}
+    ;
+
+    var test_env = try TestEnv.init("Test", src);
+    defer test_env.deinit();
+
+    try test_env.assertOneTypeError("Type Mismatch");
+
+    const problem = test_env.checker.problems.problems.items[0];
+    const actual_var = problem.type_mismatch.types.actual_var;
+    const region = test_env.checker.regions.get(@enumFromInt(@intFromEnum(actual_var))).*;
+    try std.testing.expectEqualStrings("{}", test_env.module_env.getSource(region));
+}
+
+fn expectOneMismatchAt(src: []const u8, expected_region_text: []const u8) TestEnv.TestEnvError!void {
+    var test_env = try TestEnv.init("Test", src);
+    defer test_env.deinit();
+
+    try test_env.assertOneTypeError("Type Mismatch");
+
+    const problem = test_env.checker.problems.problems.items[0];
+    const actual_var = problem.type_mismatch.types.actual_var;
+    const region = test_env.checker.regions.get(@enumFromInt(@intFromEnum(actual_var))).*;
+    try std.testing.expectEqualStrings(expected_region_text, test_env.module_env.getSource(region));
+}
+
+test "check - issue 11398 - annotated return mismatch in a nested block points at the innermost final expression" {
+    try expectOneMismatchAt(
+        \\Entry : { checked : U64 }
+        \\
+        \\make_entry : U64 -> Entry
+        \\make_entry = |n| {
+        \\    m = n + 1
+        \\    {
+        \\        _k = m
+        \\        {}
+        \\    }
+        \\}
+    , "{}");
+}
+
+test "check - issue 11398 - if branch block mismatch points at the branch's final expression" {
+    try expectOneMismatchAt(
+        \\Entry : { checked : U64 }
+        \\
+        \\make_entry : Bool -> Entry
+        \\make_entry = |b| if b {
+        \\    {}
+        \\} else {
+        \\    { checked: 1 }
+        \\}
+    , "{}");
+}
+
+test "check - issue 11398 - match branch block mismatch points at the branch's final expression" {
+    try expectOneMismatchAt(
+        \\Entry : { checked : U64 }
+        \\
+        \\make_entry : Bool -> Entry
+        \\make_entry = |b| match b {
+        \\    True => {
+        \\        {}
+        \\    }
+        \\    False => { checked: 1 }
+        \\}
+    , "{}");
+}
+
+test "check - issue 11398 - returned block mismatch points at the block's final expression" {
+    try expectOneMismatchAt(
+        \\Entry : { checked : U64 }
+        \\
+        \\make_entry : Bool -> Entry
+        \\make_entry = |b| {
+        \\    if b {
+        \\        return {
+        \\            {}
+        \\        }
+        \\    }
+        \\    { checked: 1 }
+        \\}
+    , "{}");
+}

@@ -19446,7 +19446,9 @@ fn checkExprWithFunctionOwner(self: *Self, expr_idx: CIR.Expr.Idx, env: *Env, ex
                         const requirement_context = mismatch.context.platform_requirement;
                         mismatch.context = .{ .platform_requirement_return = requirement_context };
                     }
-                    try self.erroneous_value_exprs.put(self.gpa, lambda.body, {});
+                    const result_expr = self.resultValueExpr(lambda.body);
+                    mismatch.types.actual_var = ModuleEnv.varFrom(result_expr);
+                    try self.erroneous_value_exprs.put(self.gpa, result_expr, {});
                 }
                 break :blk lambda_body_does_fx;
             } else blk: {
@@ -29698,7 +29700,31 @@ fn checkReturnRelation(
 ) std.mem.Allocator.Error!void {
     const result = try self.unifyInContext(expected, ModuleEnv.varFrom(actual_expr), env, ctx);
     if (result.isProblem()) {
-        try self.erroneous_value_exprs.put(self.gpa, actual_expr, {});
+        std.debug.assert(result == .problem);
+        const result_expr = self.resultValueExpr(actual_expr);
+        self.problems.problems.items[@intFromEnum(result.problem)].type_mismatch.types.actual_var = ModuleEnv.varFrom(result_expr);
+        try self.erroneous_value_exprs.put(self.gpa, result_expr, {});
+    }
+}
+
+/// The expression that produces `expr_idx`'s value. A block whose type is its
+/// final expression's type yields that final expression's value; a diverging
+/// block's type is independent of its unreachable final expression, so the
+/// block itself is the result. Mismatch reports against an expected result
+/// locate and poison this expression. Callers invoke this only after a
+/// mismatch, so successful checking never pays for it.
+fn resultValueExpr(self: *Self, expr_idx: CIR.Expr.Idx) CIR.Expr.Idx {
+    var current = expr_idx;
+    var guard = types_mod.debug.IterationGuard.init("resultValueExpr");
+    while (true) {
+        guard.tick();
+        const expr = self.cir.store.getExpr(current);
+        if (expr != .e_block) return current;
+        const final_expr = expr.e_block.final_expr;
+        const block_root = self.types.resolveVar(ModuleEnv.varFrom(current)).var_;
+        const final_root = self.types.resolveVar(ModuleEnv.varFrom(final_expr)).var_;
+        if (block_root != final_root) return current;
+        current = final_expr;
     }
 }
 
@@ -39675,11 +39701,12 @@ fn probeBranchCompatible(self: *Self, body_var: Var, target: Var) std.mem.Alloca
     return try self.probeUnifyWithoutRecordingProblems(body_var, target);
 }
 
-/// Record a branch-vs-`mismatch_against` diagnostic (actual = branch body,
-/// region on it) and locally poison the branch so it does not cascade.
-/// `mismatch_against` is rendered as "the previous branch(es) result"—either
-/// the annotated return type or the branch accumulator, whichever the body
-/// failed against. `expected_ret` is always used to mark the erroneous branch.
+/// Record a branch-vs-`mismatch_against` diagnostic (actual = the expression
+/// producing the branch body's value, region on it) and locally poison that
+/// expression so it does not cascade. `mismatch_against` is rendered as "the
+/// previous branch(es) result"—either the annotated return type or the branch
+/// accumulator, whichever the body failed against. `expected_ret` is always
+/// used to mark the erroneous branch.
 fn reportBranchMismatchAndPoison(
     self: *Self,
     body_expr_idx: CIR.Expr.Idx,
@@ -39689,8 +39716,9 @@ fn reportBranchMismatchAndPoison(
     ctx: problem.Context,
     env: *Env,
 ) std.mem.Allocator.Error!void {
-    try self.recordBranchTypeMismatch(body_var, mismatch_against, ctx);
-    try self.markErroneousBranchWithExpected(body_expr_idx, expected_ret, env);
+    const result_expr = self.resultValueExpr(body_expr_idx);
+    try self.recordBranchTypeMismatch(ModuleEnv.varFrom(result_expr), mismatch_against, ctx);
+    try self.markErroneousBranchWithExpected(result_expr, expected_ret, env);
     try self.markErroneous(body_var);
 }
 
