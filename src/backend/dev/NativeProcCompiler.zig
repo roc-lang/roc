@@ -266,7 +266,9 @@ pub fn run(comptime CG: type, allocator: Allocator, destination: *CG, demand: []
         if (options.metrics_out) |out| out.* = metrics;
     }
     const contract = destination.getFragmentContract();
-    std.debug.assert(contract.target == options.target);
+    // Baseline targets share their platform's code generator. CPU-level reuse
+    // checks use the generator's explicit instruction floor, not this dispatch tag.
+    std.debug.assert(contract.target == options.target.defaultCpuTarget());
     var retained = Retained{ .allocator = allocator, .contract = contract };
     errdefer retained.deinit();
     // Index immutable backing once; workers capture only reached data. Execution

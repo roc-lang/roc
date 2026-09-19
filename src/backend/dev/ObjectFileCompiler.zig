@@ -1065,7 +1065,8 @@ test "ObjectFileCompiler native emission skips static initializers and captures 
     var timing = ObjectFileCompiler.Timing.init(std.testing.io);
     var compiler = ObjectFileCompiler.initForPack(allocator);
     compiler.timing = &timing;
-    for ([_]RocTarget{ .x64linux, .arm64linux }) |target| {
+    const targets = [_]RocTarget{ .x64linux, .arm64linux, .x64v1linux, .arm64v1linux, .x64v1musl, .arm64v1musl };
+    for (targets) |target| {
         var result = try compiler.compileToObjectFile(
             &store,
             &layouts,
@@ -1084,7 +1085,7 @@ test "ObjectFileCompiler native emission skips static initializers and captures 
         try std.testing.expect(result.artifacts.?.artifacts.len > 0);
     }
     const snapshot = timing.snapshot();
-    try std.testing.expectEqual(@as(u64, 2), snapshot.native_emission.procedures_emitted);
+    try std.testing.expectEqual(@as(u64, targets.len), snapshot.native_emission.procedures_emitted);
     try std.testing.expectEqual(@as(u64, 0), snapshot.native_emission.procedures_reused);
     try std.testing.expectEqual(@as(u64, 0), snapshot.rc_helper_instructions_ns);
 }

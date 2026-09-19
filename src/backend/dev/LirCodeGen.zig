@@ -335,6 +335,7 @@ pub const FragmentContextDependencies = struct {
 /// Dependency flags permit ignoring hook/seed/Boxy-init policy differences only
 /// when the emitted artifact proves it does not depend on that policy.
 pub const FragmentContract = struct {
+    /// Platform/codegen identity; the selected instruction floor is separate.
     target: RocTarget,
     cpu_level: CpuLevel,
     hot_reload: bool,
@@ -20635,7 +20636,7 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
         pub fn getFragmentContract(self: *const Self) FragmentContract {
             const mode = if (self.fragment_mode) self.fragment_source_mode else self.generation_mode;
             return .{
-                .target = target,
+                .target = target.defaultCpuTarget(),
                 .cpu_level = self.cpu_level,
                 .hot_reload = self.enable_hot_reload,
                 .default_platform_runtime = self.enable_default_platform_runtime,
