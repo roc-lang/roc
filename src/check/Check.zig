@@ -23611,7 +23611,7 @@ fn reportMissingNominalMethodForBinopConstraint(
         .origin = .{ .desugared_binop = .{ .negated = false } },
     };
 
-    try self.reportConstraintError(lhs_var, constraint, .{ .missing_method = .nominal }, env, false);
+    try self.reportConstraintError(lhs_var, constraint, .{ .missing_method = .nominal }, env, false, null);
     try self.markErroneous(expr_var);
 }
 
@@ -31415,9 +31415,10 @@ fn checkStaticDispatchConstraints(self: *Self, env: *Env, is_numeric_default_pas
                         try self.reportConstraintError(
                             deferred_constraint.var_,
                             constraint,
-                            .{ .missing_method = .nominal },
+                            .{ .missing_method = .rigid },
                             env,
                             is_numeric_default_pass,
+                            failure_expr,
                         );
                         continue;
                     }
@@ -31508,6 +31509,7 @@ fn checkStaticDispatchConstraints(self: *Self, env: *Env, is_numeric_default_pas
                             .{ .missing_method = .nominal },
                             env,
                             is_numeric_default_pass,
+                            failure_expr,
                         );
                         continue;
                     };
@@ -31539,6 +31541,7 @@ fn checkStaticDispatchConstraints(self: *Self, env: *Env, is_numeric_default_pas
                                     .{ .missing_method = .nominal },
                                     env,
                                     is_numeric_default_pass,
+                                    failure_expr,
                                 );
                                 continue;
                             }
@@ -31574,6 +31577,7 @@ fn checkStaticDispatchConstraints(self: *Self, env: *Env, is_numeric_default_pas
                                     .{ .missing_method = .nominal },
                                     env,
                                     is_numeric_default_pass,
+                                    failure_expr,
                                 ),
                             }
                             continue;
@@ -31587,6 +31591,7 @@ fn checkStaticDispatchConstraints(self: *Self, env: *Env, is_numeric_default_pas
                                     .not_nominal,
                                     env,
                                     is_numeric_default_pass,
+                                    failure_expr,
                                 );
                                 continue;
                             };
@@ -31598,6 +31603,7 @@ fn checkStaticDispatchConstraints(self: *Self, env: *Env, is_numeric_default_pas
                                         constraint.fn_var,
                                         env,
                                         region,
+                                        failure_expr,
                                     );
                                 },
                                 .unresolved => if (!is_numeric_default_pass or try self.deferredEncodeHasPendingOpenLiteral(deferred_constraint, env)) {
@@ -31610,6 +31616,7 @@ fn checkStaticDispatchConstraints(self: *Self, env: *Env, is_numeric_default_pas
                                     .{ .missing_method = .nominal },
                                     env,
                                     is_numeric_default_pass,
+                                    failure_expr,
                                 ),
                             }
                             continue;
@@ -31627,6 +31634,7 @@ fn checkStaticDispatchConstraints(self: *Self, env: *Env, is_numeric_default_pas
                                     deferred_constraint.var_,
                                     constraint,
                                     env,
+                                    failure_expr,
                                 ),
                             }
                             continue;
@@ -31911,6 +31919,7 @@ fn checkStaticDispatchConstraints(self: *Self, env: *Env, is_numeric_default_pas
                                     .{ .missing_method = .nominal },
                                     env,
                                     is_numeric_default_pass,
+                                    failure_expr,
                                 );
                             }
                             continue;
@@ -31967,6 +31976,7 @@ fn checkStaticDispatchConstraints(self: *Self, env: *Env, is_numeric_default_pas
                                     .not_nominal,
                                     env,
                                     is_numeric_default_pass,
+                                    failure_expr,
                                 );
                                 continue;
                             };
@@ -31979,6 +31989,7 @@ fn checkStaticDispatchConstraints(self: *Self, env: *Env, is_numeric_default_pas
                                             constraint.fn_var,
                                             env,
                                             region,
+                                            failure_expr,
                                         );
                                     }
                                     continue;
@@ -32013,6 +32024,7 @@ fn checkStaticDispatchConstraints(self: *Self, env: *Env, is_numeric_default_pas
                                 deferred_constraint.var_,
                                 constraint,
                                 env,
+                                failure_expr,
                             );
                             continue;
                         }
@@ -32030,6 +32042,7 @@ fn checkStaticDispatchConstraints(self: *Self, env: *Env, is_numeric_default_pas
                             .{ .missing_method = .nominal },
                             env,
                             is_numeric_default_pass,
+                            failure_expr,
                         );
                         continue;
                     };
@@ -32203,6 +32216,7 @@ fn checkStaticDispatchConstraints(self: *Self, env: *Env, is_numeric_default_pas
                                 .{ .missing_method = .nominal },
                                 env,
                                 is_numeric_default_pass,
+                                failure_expr,
                             );
                         }
                     } else if (constraint.fn_name.eql(self.cir.idents.map) or constraint.fn_name.eql(self.cir.idents.map_bang)) {
@@ -32219,6 +32233,7 @@ fn checkStaticDispatchConstraints(self: *Self, env: *Env, is_numeric_default_pas
                                 deferred_constraint.var_,
                                 constraint,
                                 env,
+                                failure_expr,
                             ),
                         }
                     } else if (constraint.fn_name.eql(self.cir.idents.parser_for)) {
@@ -32261,6 +32276,7 @@ fn checkStaticDispatchConstraints(self: *Self, env: *Env, is_numeric_default_pas
                                     .not_nominal,
                                     env,
                                     is_numeric_default_pass,
+                                    failure_expr,
                                 );
                             },
                             .unsupported => {
@@ -32270,6 +32286,7 @@ fn checkStaticDispatchConstraints(self: *Self, env: *Env, is_numeric_default_pas
                                     .not_nominal,
                                     env,
                                     is_numeric_default_pass,
+                                    failure_expr,
                                 );
                             },
                         }
@@ -32283,6 +32300,7 @@ fn checkStaticDispatchConstraints(self: *Self, env: *Env, is_numeric_default_pas
                                 .not_nominal,
                                 env,
                                 is_numeric_default_pass,
+                                failure_expr,
                             );
                             continue;
                         };
@@ -32295,6 +32313,7 @@ fn checkStaticDispatchConstraints(self: *Self, env: *Env, is_numeric_default_pas
                                         constraint.fn_var,
                                         env,
                                         region,
+                                        failure_expr,
                                     );
                                 }
                             },
@@ -32312,6 +32331,7 @@ fn checkStaticDispatchConstraints(self: *Self, env: *Env, is_numeric_default_pas
                                         constraint.fn_var,
                                         env,
                                         region,
+                                        failure_expr,
                                     );
                                     continue;
                                 }
@@ -32321,6 +32341,7 @@ fn checkStaticDispatchConstraints(self: *Self, env: *Env, is_numeric_default_pas
                                     .not_nominal,
                                     env,
                                     is_numeric_default_pass,
+                                    failure_expr,
                                 );
                             },
                             .unsupported => {
@@ -32330,6 +32351,7 @@ fn checkStaticDispatchConstraints(self: *Self, env: *Env, is_numeric_default_pas
                                     .not_nominal,
                                     env,
                                     is_numeric_default_pass,
+                                    failure_expr,
                                 );
                             },
                         }
@@ -32343,6 +32365,7 @@ fn checkStaticDispatchConstraints(self: *Self, env: *Env, is_numeric_default_pas
                             .not_nominal,
                             env,
                             is_numeric_default_pass,
+                            failure_expr,
                         );
                     }
                 }
@@ -32377,6 +32400,7 @@ fn checkStaticDispatchConstraints(self: *Self, env: *Env, is_numeric_default_pas
                                 .not_nominal,
                                 env,
                                 is_numeric_default_pass,
+                                failure_expr,
                             );
                         }
                     }
@@ -36097,13 +36121,13 @@ fn satisfyImplicitParserConstraint(
 ) Allocator.Error!void {
     const resolved_constraint = self.types.resolveVar(constraint_fn_var);
     const resolved_func = resolved_constraint.desc.content.unwrapFunc() orelse {
-        try self.reportConstraintErrorAt(dispatcher_var, constraint, .not_nominal, env, false, failure_expr);
+        try self.reportConstraintErrorAt(dispatcher_var, constraint, .not_nominal, env, false, failure_expr, failure_expr);
         return;
     };
 
     const args = self.types.sliceVars(resolved_func.args);
     if (args.len != 1) {
-        try self.reportConstraintErrorAt(dispatcher_var, constraint, .not_nominal, env, false, failure_expr);
+        try self.reportConstraintErrorAt(dispatcher_var, constraint, .not_nominal, env, false, failure_expr, failure_expr);
         return;
     }
 
@@ -36111,12 +36135,12 @@ fn satisfyImplicitParserConstraint(
     const encoding_var = args[0];
     const resolved_runtime_fn = self.types.resolveVar(resolved_func.ret);
     const runtime_func = resolved_runtime_fn.desc.content.unwrapFunc() orelse {
-        try self.reportConstraintErrorAt(dispatcher_var, constraint, .not_nominal, env, false, failure_expr);
+        try self.reportConstraintErrorAt(dispatcher_var, constraint, .not_nominal, env, false, failure_expr, failure_expr);
         return;
     };
     const runtime_args = self.types.sliceVars(runtime_func.args);
     if (runtime_args.len != 1) {
-        try self.reportConstraintErrorAt(dispatcher_var, constraint, .not_nominal, env, false, failure_expr);
+        try self.reportConstraintErrorAt(dispatcher_var, constraint, .not_nominal, env, false, failure_expr, failure_expr);
         return;
     }
 
@@ -36167,7 +36191,7 @@ fn satisfyImplicitParserConstraint(
             try self.poisonConstraintFailure(dispatcher_var, constraint, env, failure_expr);
             try self.markStaticDispatchRejected(constraint);
         },
-        .unsupported => try self.reportConstraintErrorAt(dispatcher_var, constraint, .not_nominal, env, false, failure_expr),
+        .unsupported => try self.reportConstraintErrorAt(dispatcher_var, constraint, .not_nominal, env, false, failure_expr, failure_expr),
     }
 }
 
@@ -36178,16 +36202,17 @@ fn satisfyImplicitEncoderForConstraint(
     constraint_fn_var: Var,
     env: *Env,
     region: Region,
+    owner_expr: ?CIR.Expr.Idx,
 ) Allocator.Error!void {
     const resolved_constraint = self.types.resolveVar(constraint_fn_var);
     const resolved_func = resolved_constraint.desc.content.unwrapFunc() orelse {
-        try self.reportConstraintError(dispatcher_var, constraint, .not_nominal, env, false);
+        try self.reportConstraintError(dispatcher_var, constraint, .not_nominal, env, false, owner_expr);
         return;
     };
 
     const args = self.types.sliceVars(resolved_func.args);
     if (args.len != 1) {
-        try self.reportConstraintError(dispatcher_var, constraint, .not_nominal, env, false);
+        try self.reportConstraintError(dispatcher_var, constraint, .not_nominal, env, false, owner_expr);
         return;
     }
 
@@ -36195,12 +36220,12 @@ fn satisfyImplicitEncoderForConstraint(
 
     const resolved_runtime_fn = self.types.resolveVar(resolved_func.ret);
     const runtime_func = resolved_runtime_fn.desc.content.unwrapFunc() orelse {
-        try self.reportConstraintError(dispatcher_var, constraint, .not_nominal, env, false);
+        try self.reportConstraintError(dispatcher_var, constraint, .not_nominal, env, false, owner_expr);
         return;
     };
     const runtime_args = self.types.sliceVars(runtime_func.args);
     if (runtime_args.len != 2) {
-        try self.reportConstraintError(dispatcher_var, constraint, .not_nominal, env, false);
+        try self.reportConstraintError(dispatcher_var, constraint, .not_nominal, env, false, owner_expr);
         return;
     }
 
@@ -36250,7 +36275,7 @@ fn satisfyImplicitEncoderForConstraint(
             try self.poisonConstraintFailure(dispatcher_var, constraint, env, null);
             try self.markStaticDispatchRejected(constraint);
         },
-        .unsupported => try self.reportConstraintError(dispatcher_var, constraint, .not_nominal, env, false),
+        .unsupported => try self.reportConstraintError(dispatcher_var, constraint, .not_nominal, env, false, owner_expr),
     }
 }
 
@@ -37301,7 +37326,7 @@ fn reportDerivedParseMissingMethodAt(
     };
     var derived_constraint = constraint;
     derived_constraint.fn_name = method_name;
-    try self.reportConstraintErrorAt(dispatcher_var, derived_constraint, .{ .missing_method = dispatcher_type }, env, false, failure_expr);
+    try self.reportConstraintErrorAt(dispatcher_var, derived_constraint, .{ .missing_method = dispatcher_type }, env, false, failure_expr, failure_expr);
     return .reported_error;
 }
 
@@ -39551,6 +39576,7 @@ fn checkFlexVarConstraintCompatibility(
                 env,
                 is_numeric_default_pass,
                 options.error_expr,
+                options.error_expr,
             );
             had_error = true;
             continue;
@@ -39904,7 +39930,10 @@ const ConstraintErrorKind = union(enum) {
     not_nominal,
 };
 
-/// Report a constraint validation error
+/// Report a constraint validation error. `owner_expr` is the expression that
+/// owns the failed obligation (a deferred check's `failure_expr`), which is
+/// where the violation is reported; null for an ownerless definition-site
+/// constraint.
 fn reportConstraintError(
     self: *Self,
     dispatcher_var: Var,
@@ -39912,6 +39941,7 @@ fn reportConstraintError(
     kind: ConstraintErrorKind,
     env: *Env,
     is_numeric_default_pass: bool,
+    owner_expr: ?CIR.Expr.Idx,
 ) Allocator.Error!void {
     return self.reportConstraintErrorAt(
         dispatcher_var,
@@ -39920,9 +39950,13 @@ fn reportConstraintError(
         env,
         is_numeric_default_pass,
         null,
+        owner_expr,
     );
 }
 
+/// Report a constraint validation error, poisoning `explicit_error_expr` when
+/// given (otherwise the obligation's recorded owners). The violation is
+/// reported at `owner_expr`, as in `reportConstraintError`.
 fn reportConstraintErrorAt(
     self: *Self,
     dispatcher_var: Var,
@@ -39931,19 +39965,12 @@ fn reportConstraintErrorAt(
     env: *Env,
     is_numeric_default_pass: bool,
     explicit_error_expr: ?CIR.Expr.Idx,
+    owner_expr: ?CIR.Expr.Idx,
 ) Allocator.Error!void {
-    const dedup_key = ReportedConstraintError{
-        .dispatcher = self.types.resolveVar(dispatcher_var).var_,
-        .fn_name = constraint.fn_name,
-    };
-    const dedup_entry = try self.reported_constraint_errors.getOrPut(dedup_key);
-    if (dedup_entry.found_existing) {
-        try self.poisonConstraintFailure(dispatcher_var, constraint, env, explicit_error_expr);
-        try self.markStaticDispatchRejected(constraint);
-        return;
-    }
+    if (try self.constraintErrorAlreadyReported(dispatcher_var, constraint, env, explicit_error_expr)) return;
 
     const snapshot = try self.snapshots.snapshotVarForError(self.types, &self.type_writer, dispatcher_var);
+    const owner_region = self.constraintOwnerRegion(owner_expr);
     const constraint_problem = switch (kind) {
         .missing_method => |dispatcher_type| problem.Problem{
             .static_dispatch = .{
@@ -39954,6 +39981,7 @@ fn reportConstraintErrorAt(
                     .fn_var = constraint.fn_var,
                     .method_name = constraint.fn_name,
                     .origin = constraint.origin,
+                    .owner_region = owner_region,
                     .num_literal = constraint.origin.numeralInfo(),
                     .quote_region = self.quoteLiteralRegionForDispatcher(constraint, dispatcher_var),
                     // Only a numeral literal defaulted to Dec earns the numeric hint.
@@ -39970,6 +39998,8 @@ fn reportConstraintErrorAt(
                 .dispatcher_snapshot = snapshot,
                 .fn_var = constraint.fn_var,
                 .method_name = constraint.fn_name,
+                .origin = constraint.origin,
+                .owner_region = owner_region,
             },
         } },
     };
@@ -39979,7 +40009,38 @@ fn reportConstraintErrorAt(
     try self.markStaticDispatchRejected(constraint);
 }
 
-/// Report an error when an anonymous type doesn't support equality
+/// A dispatcher/method pair fails once no matter how many deferred checks
+/// replay it (an instantiation can queue the same obligation for both the call
+/// and the callee lookup). When this pair was already reported, poison this
+/// replay's failure site and return true so the caller reports nothing new.
+fn constraintErrorAlreadyReported(
+    self: *Self,
+    dispatcher_var: Var,
+    constraint: StaticDispatchConstraint,
+    env: *Env,
+    explicit_error_expr: ?CIR.Expr.Idx,
+) Allocator.Error!bool {
+    const dedup_key = ReportedConstraintError{
+        .dispatcher = self.types.resolveVar(dispatcher_var).var_,
+        .fn_name = constraint.fn_name,
+    };
+    const dedup_entry = try self.reported_constraint_errors.getOrPut(dedup_key);
+    if (!dedup_entry.found_existing) return false;
+
+    try self.poisonConstraintFailure(dispatcher_var, constraint, env, explicit_error_expr);
+    try self.markStaticDispatchRejected(constraint);
+    return true;
+}
+
+/// The source region of a failed obligation's owning expression, where the
+/// violation is reported. Computed only once a failure is being reported.
+fn constraintOwnerRegion(self: *Self, owner_expr: ?CIR.Expr.Idx) ?Region {
+    const expr_idx = owner_expr orelse return null;
+    return self.cir.store.getExprRegion(expr_idx);
+}
+
+/// Report an error when an anonymous type doesn't support equality. The
+/// violation is reported at `failure_expr`, the obligation's owner, when given.
 fn reportEqualityError(
     self: *Self,
     dispatcher_var: Var,
@@ -39987,12 +40048,16 @@ fn reportEqualityError(
     env: *Env,
     failure_expr: ?CIR.Expr.Idx,
 ) Allocator.Error!void {
+    if (try self.constraintErrorAlreadyReported(dispatcher_var, constraint, env, failure_expr)) return;
+
     const snapshot = try self.snapshots.snapshotVarForError(self.types, &self.type_writer, dispatcher_var);
     const equality_problem = problem.Problem{ .static_dispatch = .{
         .type_does_not_support_equality = .{
             .dispatcher_var = dispatcher_var,
             .dispatcher_snapshot = snapshot,
             .fn_var = constraint.fn_var,
+            .origin = constraint.origin,
+            .owner_region = self.constraintOwnerRegion(failure_expr),
         },
     } };
     _ = try self.problems.appendProblem(self.cir.gpa, equality_problem);
@@ -40001,18 +40066,24 @@ fn reportEqualityError(
     try self.markStaticDispatchRejected(constraint);
 }
 
+/// Report a compiler-derived `map`/`map!` that has no unambiguous payload,
+/// at `owner_expr` (the obligation's owner) when given.
 fn reportDerivedMapError(
     self: *Self,
     dispatcher_var: Var,
     constraint: StaticDispatchConstraint,
     env: *Env,
+    owner_expr: ?CIR.Expr.Idx,
 ) Allocator.Error!void {
+    if (try self.constraintErrorAlreadyReported(dispatcher_var, constraint, env, null)) return;
+
     const snapshot = try self.snapshots.snapshotVarForError(self.types, &self.type_writer, dispatcher_var);
     _ = try self.problems.appendProblem(self.cir.gpa, .{ .static_dispatch = .{
         .type_does_not_support_map = .{
             .dispatcher_snapshot = snapshot,
             .fn_var = constraint.fn_var,
             .method_name = constraint.fn_name,
+            .owner_region = self.constraintOwnerRegion(owner_expr),
         },
     } });
 
