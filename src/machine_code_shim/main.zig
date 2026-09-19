@@ -24,6 +24,18 @@ pub const roc_disable_tracy = true;
 /// The platform host this shim is linked into defines the runtime symbols.
 pub const roc_host_role: builtins.host_abi.HostRole = .platform;
 
+/// Freestanding Linux has no TLS startup, including the TLS used by Zig's
+/// default panic handler. Its fatal errors use the existing host crash ABI.
+pub const panic = std.debug.FullPanic(if (builtin.os.tag == .linux and !builtin.link_libc)
+    panicThroughHost
+else
+    std.debug.defaultPanic);
+
+fn panicThroughHost(message: []const u8, _: ?usize) noreturn {
+    builtins.host_abi.extern_host.roc_crashed(message.ptr, message.len);
+    unreachable;
+}
+
 /// Route std.debug.print / std.debug.panic through the minimal shim_io vtable so
 /// the shim archive does not pull in `std.Io.Threaded`.
 pub const std_options_elf_debug_info_search_paths = shim_io.elfDebugInfoSearchPaths;
@@ -1000,6 +1012,9 @@ fn shimEntrypoint(
 
 fn shimDefaultMain(argc: usize, argv: [*][*:0]const u8) callconv(.c) usize {
     stack_probe.retain();
+    if (!builtin.is_test and builtin.os.tag == .linux and
+        (builtin.cpu.arch == .x86 or builtin.cpu.arch.isArm()))
+        @import("private_compiler_rt").retain();
     const ops = shim_host_abi.getOps();
     const app_args = if (argc > 1) argv[1..argc] else argv[0..0];
     var cli_args_list = shim_host_abi.buildDefaultRunCliArgs(app_args, allocator()) catch {

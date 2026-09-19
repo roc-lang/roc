@@ -4,14 +4,56 @@ const std = @import("std");
 
 const Allocator = std.mem.Allocator;
 
+/// Debug metrics count work, not addresses. Keep 64-bit counts even on hosts
+/// whose native atomics cannot update 64 bits; all reads share the same lock.
+pub const WorkCounter = WorkCounterFor(@sizeOf(usize) >= @sizeOf(u64));
+
+fn WorkCounterFor(comptime native_atomic: bool) type {
+    return struct {
+        const Self = @This();
+        value: u64 = 0,
+        mutex: std.atomic.Mutex = .unlocked,
+
+        pub fn increment(self: *Self) void {
+            if (native_atomic) {
+                _ = @atomicRmw(u64, &self.value, .Add, 1, .monotonic);
+            } else {
+                while (!self.mutex.tryLock()) std.atomic.spinLoopHint();
+                defer self.mutex.unlock();
+                self.value +%= 1;
+            }
+        }
+
+        pub fn read(self: *Self) u64 {
+            if (native_atomic) {
+                return @atomicLoad(u64, &self.value, .monotonic);
+            } else {
+                while (!self.mutex.tryLock()) std.atomic.spinLoopHint();
+                defer self.mutex.unlock();
+                return self.value;
+            }
+        }
+    };
+}
+
+test "work counters preserve wide counts and wrap consistently" {
+    inline for (.{ WorkCounter, WorkCounterFor(false) }) |Counter| {
+        for ([_]u64{ std.math.maxInt(u32), std.math.maxInt(u64) }) |initial| {
+            var counter: Counter = .{ .value = initial };
+            counter.increment();
+            try std.testing.expectEqual(initial +% 1, counter.read());
+        }
+    }
+}
+
 /// Debug-only work counter for exact sparse range queries.
-pub var range_query_node_visits: u64 = 0;
+pub var range_query_node_visits: WorkCounter = .{};
 
 /// Debug-only work counter for sparse enumeration, independent of ID width.
-pub var iterator_node_visits: u64 = 0;
+pub var iterator_node_visits: WorkCounter = .{};
 
 /// Debug-only count of non-shared, nonempty nodes examined by structural difference.
-pub var difference_node_visits: u64 = 0;
+pub var difference_node_visits: WorkCounter = .{};
 
 /// A bounded-depth radix tree whose absent entries have one caller-declared
 /// value. Copying a snapshot shares its root; changing one entry allocates
@@ -102,7 +144,7 @@ pub fn Snapshot(comptime T: type, comptime empty: T) type {
             reverse: bool,
 
             fn push(self: *Iterator, node: *const anyopaque, base: u32) void {
-                if (@import("builtin").mode == .Debug) _ = @atomicRmw(u64, &iterator_node_visits, .Add, 1, .monotonic);
+                if (@import("builtin").mode == .Debug) iterator_node_visits.increment();
                 self.frames[self.len] = .{ .node = node, .base = base };
                 self.len += 1;
             }
@@ -145,7 +187,7 @@ pub fn Snapshot(comptime T: type, comptime empty: T) type {
         }
 
         fn rangeHasValue(maybe_node: ?*const anyopaque, depth: u8, base: u64, start: u64, end: u64) bool {
-            if (@import("builtin").mode == .Debug) _ = @atomicRmw(u64, &range_query_node_visits, .Add, 1, .monotonic);
+            if (@import("builtin").mode == .Debug) range_query_node_visits.increment();
             const node = maybe_node orelse return false;
             const width = @as(u64, 1) << @as(u6, @intCast(leaf_bits + @as(usize, depth) * radix_bits));
             if (end <= base or start >= base + width) return false;
@@ -229,7 +271,7 @@ pub fn Snapshot(comptime T: type, comptime empty: T) type {
             comptime emitFn: fn (@TypeOf(context), u32, T, T) Allocator.Error!void,
         ) Allocator.Error!void {
             if (lhs == rhs or lhs == null) return;
-            if (@import("builtin").mode == .Debug) _ = @atomicRmw(u64, &difference_node_visits, .Add, 1, .monotonic);
+            if (@import("builtin").mode == .Debug) difference_node_visits.increment();
             if (depth == 0) {
                 const left: *const Leaf = @ptrCast(@alignCast(lhs.?));
                 const right: ?*const Leaf = @ptrCast(@alignCast(rhs));
@@ -536,10 +578,10 @@ test "sparse range queries are exact across tree boundaries and shared updates" 
         }
     }
     // A nearly full u32 range containing no entries must not scan its width.
-    const before = range_query_node_visits;
+    const before = range_query_node_visits.read();
     try std.testing.expect(!original.hasNonEmptyInRange(100000, std.math.maxInt(u32)));
     if (@import("builtin").mode == .Debug) {
-        try std.testing.expect(range_query_node_visits - before <= 2 * 8 * 11);
+        try std.testing.expect(range_query_node_visits.read() - before <= 2 * 8 * 11);
     }
     for (keys) |key| try changed.put(key, 0);
     try std.testing.expect(!changed.hasNonEmptyInRange(0, @as(u64, 1) << 32));
@@ -567,11 +609,11 @@ test "sparse iteration preserves forks and skips absent history" {
     }
     try std.testing.expectEqual(null, original_iter.next());
 
-    const before = iterator_node_visits;
+    const before = iterator_node_visits.read();
     var changed_iter = changed.iterator();
     try std.testing.expectEqual(Sparse.Iterator.Entry{ .index = 99999, .value = -1 }, changed_iter.next().?);
     try std.testing.expectEqual(null, changed_iter.next());
-    if (@import("builtin").mode == .Debug) try std.testing.expect(iterator_node_visits - before <= 11);
+    if (@import("builtin").mode == .Debug) try std.testing.expect(iterator_node_visits.read() - before <= 11);
 }
 
 test "sparse structural difference skips shared subtrees and preserves exact values" {
@@ -595,7 +637,7 @@ test "sparse structural difference skips shared subtrees and preserves exact val
     };
     var difference: Difference = .{};
     defer difference.entries.deinit(std.testing.allocator);
-    const before = difference_node_visits;
+    const before = difference_node_visits.read();
     try owned.differenceWith(&keep, &difference, Difference.emit);
     try std.testing.expectEqualSlices(Difference.Entry, &.{
         .{ .index = 3, .lhs = 15, .rhs = 5 },
@@ -604,7 +646,7 @@ test "sparse structural difference skips shared subtrees and preserves exact val
     // Only the changed leaf and its two ancestors are visited. All other
     // leaves share pointers, so even their callbacks are skipped.
     try std.testing.expectEqual(@as(usize, 8), difference.calls);
-    if (@import("builtin").mode == .Debug) try std.testing.expectEqual(@as(u64, 3), difference_node_visits - before);
+    if (@import("builtin").mode == .Debug) try std.testing.expectEqual(@as(u64, 3), difference_node_visits.read() - before);
 
     difference.entries.clearRetainingCapacity();
     difference.calls = 0;

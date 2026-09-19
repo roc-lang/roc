@@ -8260,10 +8260,10 @@ pub const MonoLlvmCodeGen = struct {
         if (data_export.relocations.len == 0) {
             return builder.stringConst(builder.string(data_export.bytes) catch return error.OutOfMemory) catch return error.OutOfMemory;
         }
-        const word: u64 = self.targetWordSize();
+        const word: usize = self.targetWordSize();
         for (data_export.relocations) |relocation| {
             if (relocation.kind != .address or relocation.rc_helper != null) return null;
-            if (relocation.offset % word != 0 or relocation.offset + word > data_export.bytes.len) return null;
+            if (relocation.offset % word != 0 or relocation.offset > data_export.bytes.len or word > data_export.bytes.len - relocation.offset) return null;
         }
         const sorted = self.allocator.dupe(lir.Program.StaticDataRelocation, data_export.relocations) catch return error.OutOfMemory;
         defer self.allocator.free(sorted);
@@ -8277,11 +8277,13 @@ pub const MonoLlvmCodeGen = struct {
         defer field_types.deinit(self.allocator);
         var field_values = std.ArrayList(LlvmBuilder.Constant).empty;
         defer field_values.deinit(self.allocator);
-        var cursor: u64 = 0;
+        var cursor: usize = 0;
         for (sorted) |relocation| {
-            if (relocation.offset < cursor) return null;
-            if (relocation.offset > cursor) {
-                const chunk = builder.stringConst(builder.string(data_export.bytes[cursor..relocation.offset]) catch return error.OutOfMemory) catch return error.OutOfMemory;
+            // The range check above proves this serialized offset fits the host buffer.
+            const offset: usize = @intCast(relocation.offset);
+            if (offset < cursor) return null;
+            if (offset > cursor) {
+                const chunk = builder.stringConst(builder.string(data_export.bytes[cursor..offset]) catch return error.OutOfMemory) catch return error.OutOfMemory;
                 try field_types.append(self.allocator, chunk.typeOf(builder));
                 try field_values.append(self.allocator, chunk);
             }
@@ -8290,7 +8292,7 @@ pub const MonoLlvmCodeGen = struct {
             const address = builder.gepConst(.normal, .i8, target, null, &.{addend}) catch return error.OutOfMemory;
             try field_types.append(self.allocator, try self.ptrType());
             try field_values.append(self.allocator, address);
-            cursor = relocation.offset + word;
+            cursor = offset + word;
         }
         if (cursor < data_export.bytes.len) {
             const tail = builder.stringConst(builder.string(data_export.bytes[cursor..]) catch return error.OutOfMemory) catch return error.OutOfMemory;
@@ -12067,7 +12069,8 @@ pub const MonoLlvmCodeGen = struct {
         };
     }
 
-    fn storeListFields(self: *MonoLlvmCodeGen, ptr: LlvmBuilder.Value, bytes: LlvmBuilder.Value, len: usize, cap: usize) Error!void {
+    // These are target words, not indices into a compiler-host allocation.
+    fn storeListFields(self: *MonoLlvmCodeGen, ptr: LlvmBuilder.Value, bytes: LlvmBuilder.Value, len: u64, cap: u64) Error!void {
         const builder = self.builder orelse return error.CompilationFailed;
         try self.storePointer(ptr, bytes);
         try self.storeListLen(ptr, builder.intValue(self.ptrSizedIntType(), len) catch return error.OutOfMemory);
@@ -13432,6 +13435,39 @@ test "static-data slots with constant images are internal constants and function
     const callable = builder.variables.items[builder.variables.items.len - 1];
     try std.testing.expectEqual(.external, callable.global.ptrConst(&builder).linkage);
     try std.testing.expect(callable.init == .no_init);
+}
+
+test "frozen relocation offsets are bounded before host indexing for either target width" {
+    const allocator = std.testing.allocator;
+    inline for (.{ std.Target.Cpu.Arch.wasm32, std.Target.Cpu.Arch.aarch64 }) |arch| {
+        var store = lir.LirStore.init(allocator);
+        defer store.deinit();
+        const target = try std.zig.system.resolveTargetQuery(std.testing.io, .{ .cpu_arch = arch, .os_tag = if (arch == .wasm32) .freestanding else .linux });
+        var codegen = MonoLlvmCodeGen.initForLinkedObject(allocator, &store, &.{}, &.{}, &.{}, target);
+        defer codegen.deinit();
+        var builder = try codegen.createBuilder("frozen_relocation_bounds");
+        defer builder.deinit();
+        codegen.builder = &builder;
+        defer codegen.builder = null;
+
+        const word = codegen.targetWordSize();
+        var relocation = [_]lir.Program.StaticDataRelocation{.{ .offset = 16 - word, .target_symbol_name = "frozen_target" }};
+        const data_export: lir.Program.StaticDataExport = .{
+            .symbol_name = "frozen_value",
+            .bytes = &([_]u8{0} ** 16),
+            .alignment = word,
+            .relocations = &relocation,
+        };
+        try std.testing.expect((try codegen.frozenExportConstant(data_export)) != null);
+        // Aligned but past the final complete target pointer.
+        relocation[0].offset = 16;
+        try std.testing.expect((try codegen.frozenExportConstant(data_export)) == null);
+        // Neither truncation to a 32-bit index nor wrapping offset + word is valid.
+        relocation[0].offset = @as(u64, 1) << 32;
+        try std.testing.expect((try codegen.frozenExportConstant(data_export)) == null);
+        relocation[0].offset = std.math.maxInt(u64) - (@as(u64, word) - 1);
+        try std.testing.expect((try codegen.frozenExportConstant(data_export)) == null);
+    }
 }
 
 test "frozen callable procedures and explicit drop helpers are DLL exports on Windows" {

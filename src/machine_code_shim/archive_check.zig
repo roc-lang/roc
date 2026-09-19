@@ -10,6 +10,7 @@ const ArchiveError = std.fmt.ParseIntError || error{
     DuplicateExport,
     UnexpectedExport,
     UnexpectedImport,
+    UnexpectedTls,
     NoObjectMembers,
     MissingExport,
     MalformedObject,
@@ -55,7 +56,9 @@ const c_imports = [_][]const u8{
     "memcpy", "memmove", "memset", "strlen", "sqrt", "sqrtf", "ceil", "ceilf", "floor", "floorf",
     "fmod",   "fmodf",   "trunc",  "truncf",
 };
-const linux_imports = c_imports ++ .{"__tls_get_addr"};
+// ELF's GOT anchor is supplied by the linker, not by a platform host.
+// The freestanding shim has no TLS startup and must not import a TLS resolver.
+const linux_imports = c_imports ++ .{"_GLOBAL_OFFSET_TABLE_"};
 const darwin_imports = [_][]const u8{
     // libSystem's IO, mapping, synchronization, TLS and stack-protector ABI.
     "bzero",                 "_NSGetExecutablePath", "__bzero",                "__error",               "__stack_chk_fail",
@@ -143,7 +146,7 @@ pub fn main(init: std.process.Init) MainError!void {
 
 // All byte access is checked. Truncated files, missing symbol tables, unknown
 // archive members and unsupported encodings must fail closed, never pass a
-// vacuous check. Shipped native targets are 64-bit little endian.
+// vacuous check. Object widths come from their headers, not the build host.
 fn slice(bytes: []const u8, offset: usize, len: usize) error{MalformedObject}![]const u8 {
     if (offset > bytes.len or len > bytes.len - offset) return error.MalformedObject;
     return bytes[offset..][0..len];
@@ -209,35 +212,57 @@ fn walkArchive(bytes: []const u8, os: Os, context: anytype, comptime visit: anyt
 
 fn scanElf(bytes: []const u8, check: *Check) ArchiveError!void {
     if (!std.mem.startsWith(u8, bytes, "\x7fELF")) return error.NotElf;
-    if (try int(u8, bytes, 4) != 2 or try int(u8, bytes, 5) != 1) return error.UnsupportedElf;
+    if (try int(u8, bytes, 5) != 1) return error.UnsupportedElf;
+    return switch (try int(u8, bytes, 4)) {
+        1 => scanElfClass(u32, bytes, check),
+        2 => scanElfClass(u64, bytes, check),
+        else => error.UnsupportedElf,
+    };
+}
+
+fn scanElfClass(comptime Word: type, bytes: []const u8, check: *Check) ArchiveError!void {
+    const wide = Word == u64;
+    const section_size = if (wide) 64 else 40;
+    const symbol_size = if (wide) 24 else 16;
     if (try int(u16, bytes, 16) != @intFromEnum(std.elf.ET.REL)) return error.NotRelocatable;
-    const shoff = try int(u64, bytes, 40);
-    const shsize = try int(u16, bytes, 58);
-    const shnum = try int(u16, bytes, 60);
-    if (shsize != 64 or shnum == 0) return error.MalformedObject;
+    const shoff = std.math.cast(usize, try int(Word, bytes, if (wide) 40 else 32)) orelse return error.MalformedObject;
+    const shsize = try int(u16, bytes, if (wide) 58 else 46);
+    const shnum = try int(u16, bytes, if (wide) 60 else 48);
+    if (shsize != section_size or shnum == 0) return error.MalformedObject;
     const sections = try slice(bytes, shoff, @as(usize, shnum) * shsize);
     var found_table = false;
     for (0..shnum) |i| {
-        const sh = sections[i * shsize ..][0..64];
+        const sh = sections[i * shsize ..][0..section_size];
+        if (try int(Word, sh, 8) & std.elf.SHF_TLS != 0) return error.UnexpectedTls;
         if (try int(u32, sh, 4) != std.elf.SHT_SYMTAB) continue;
         found_table = true;
-        const link = try int(u32, sh, 40);
+        const link = try int(u32, sh, if (wide) 40 else 24);
         if (link >= shnum) return error.MalformedObject;
-        const strsh = sections[@as(usize, link) * shsize ..][0..64];
+        const strsh = sections[@as(usize, link) * shsize ..][0..section_size];
         if (try int(u32, strsh, 4) != std.elf.SHT_STRTAB) return error.MalformedObject;
-        const strings = try slice(bytes, try int(u64, strsh, 24), try int(u64, strsh, 32));
-        if (try int(u64, sh, 56) != 24) return error.MalformedObject;
-        const table = try slice(bytes, try int(u64, sh, 24), try int(u64, sh, 32));
-        if (table.len == 0 or table.len % 24 != 0) return error.MalformedObject;
-        for (0..table.len / 24) |s| {
-            const sym = table[s * 24 ..][0..24];
-            const bind = sym[4] >> 4;
+        const strings = try elfSectionBytes(Word, bytes, strsh);
+        if (try int(Word, sh, if (wide) 56 else 36) != symbol_size) return error.MalformedObject;
+        const table = try elfSectionBytes(Word, bytes, sh);
+        if (table.len == 0 or table.len % symbol_size != 0) return error.MalformedObject;
+        for (0..table.len / symbol_size) |s| {
+            const sym = table[s * symbol_size ..][0..symbol_size];
+            const info = sym[if (wide) 4 else 12];
+            // Local TLS is equally invalid: it still needs the host to install
+            // a TLS image, even when codegen does not call a global resolver.
+            if (info & 0xf == std.elf.STT_TLS) return error.UnexpectedTls;
+            const bind = info >> 4;
             if (bind == std.elf.STB_LOCAL) continue;
             const name = try string(strings, try int(u32, sym, 0));
-            try check.symbol(name, try int(u16, sym, 6) != std.elf.SHN_UNDEF, true);
+            try check.symbol(name, try int(u16, sym, if (wide) 6 else 14) != std.elf.SHN_UNDEF, true);
         }
     }
     if (!found_table) return error.MissingSymbolTable;
+}
+
+fn elfSectionBytes(comptime Word: type, bytes: []const u8, section: []const u8) ArchiveError![]const u8 {
+    const offset = std.math.cast(usize, try int(Word, section, if (Word == u64) 24 else 16)) orelse return error.MalformedObject;
+    const len = std.math.cast(usize, try int(Word, section, if (Word == u64) 32 else 20)) orelse return error.MalformedObject;
+    return slice(bytes, offset, len);
 }
 
 fn scanMachO(bytes: []const u8, check: *Check) ArchiveError!void {
@@ -317,6 +342,11 @@ test "OS dependencies are explicit and target specific" {
     var linux: Check = .{ .os = .linux };
     var darwin: Check = .{ .os = .macos };
     var windows: Check = .{ .os = .windows };
+    try linux.symbol("_GLOBAL_OFFSET_TABLE_", false, true);
+    try std.testing.expectError(error.UnexpectedExport, linux.symbol("_GLOBAL_OFFSET_TABLE_", true, true));
+    try std.testing.expectError(error.UnexpectedImport, darwin.symbol("_GLOBAL_OFFSET_TABLE_", false, true));
+    try std.testing.expectError(error.UnexpectedImport, linux.symbol("__tls_get_addr", false, true));
+    try std.testing.expectError(error.UnexpectedImport, linux.symbol("___tls_get_addr", false, true));
     try std.testing.expectError(error.UnexpectedImport, linux.symbol("sys_icache_invalidate", false, true));
     try darwin.symbol("sys_icache_invalidate", false, true);
     try windows.symbol("__imp_FlushInstructionCache", false, true);
@@ -470,6 +500,57 @@ test "ELF parser checks weak imports, hidden exports, and missing tables" {
     try std.testing.expectError(error.UnexpectedExport, scanElf(&bytes, &check));
     bytes[sym + 4] = @as(u8, std.elf.STB_LOCAL) << 4;
     try scanElf(&bytes, &check);
+    bytes[sym + 4] |= std.elf.STT_TLS;
+    try std.testing.expectError(error.UnexpectedTls, scanElf(&bytes, &check));
+    bytes[sym + 4] = @as(u8, std.elf.STB_LOCAL) << 4;
+    putInt(u64, &bytes, 64 + 8, std.elf.SHF_TLS);
+    try std.testing.expectError(error.UnexpectedTls, scanElf(&bytes, &check));
+    putInt(u64, &bytes, 64 + 8, 0);
+    putInt(u32, &bytes, sym_section + 4, std.elf.SHT_NULL);
+    try std.testing.expectError(error.MissingSymbolTable, scanElf(&bytes, &check));
+}
+
+test "ELF32 parser preserves the symbol contract and rejects out-of-bounds sections" {
+    const name = "_GLOBAL_OFFSET_TABLE_";
+    const sym_section = 52 + 40;
+    const str_section = sym_section + 40;
+    const table = 52 + 3 * 40;
+    const sym = table + 16;
+    const strings = table + 32;
+    var bytes = [_]u8{0} ** (strings + name.len + 2);
+    @memcpy(bytes[0..6], "\x7fELF\x01\x01");
+    putInt(u16, &bytes, 16, 1); // ET_REL
+    putInt(u32, &bytes, 32, 52);
+    putInt(u16, &bytes, 46, 40);
+    putInt(u16, &bytes, 48, 3);
+    putInt(u32, &bytes, sym_section + 4, std.elf.SHT_SYMTAB);
+    putInt(u32, &bytes, sym_section + 16, table);
+    putInt(u32, &bytes, sym_section + 20, 32);
+    putInt(u32, &bytes, sym_section + 24, 2);
+    putInt(u32, &bytes, sym_section + 36, 16);
+    putInt(u32, &bytes, str_section + 4, std.elf.SHT_STRTAB);
+    putInt(u32, &bytes, str_section + 16, strings);
+    putInt(u32, &bytes, str_section + 20, name.len + 2);
+    putInt(u32, &bytes, sym, 1);
+    bytes[sym + 12] = @as(u8, std.elf.STB_WEAK) << 4;
+    @memcpy(bytes[strings + 1 ..][0..name.len], name);
+    var check: Check = .{ .os = .linux };
+    try scanElf(&bytes, &check);
+    putInt(u32, &bytes, 52 + 8, std.elf.SHF_TLS);
+    try std.testing.expectError(error.UnexpectedTls, scanElf(&bytes, &check));
+    putInt(u32, &bytes, 52 + 8, 0);
+    bytes[sym + 12] = std.elf.STT_TLS; // Local TLS is not a permitted private definition.
+    putInt(u16, &bytes, sym + 14, 1);
+    try std.testing.expectError(error.UnexpectedTls, scanElf(&bytes, &check));
+    bytes[sym + 12] = @as(u8, std.elf.STB_WEAK) << 4;
+    putInt(u16, &bytes, sym + 14, 1);
+    bytes[sym + 13] = 2; // STV_HIDDEN still exports.
+    try std.testing.expectError(error.UnexpectedExport, scanElf(&bytes, &check));
+    putInt(u16, &bytes, sym + 14, 0);
+    bytes[strings + 1] = 'X';
+    try std.testing.expectError(error.UnexpectedImport, scanElf(&bytes, &check));
+    putInt(u32, &bytes, str_section + 16, std.math.maxInt(u32));
+    try std.testing.expectError(error.MalformedObject, scanElf(&bytes, &check));
     putInt(u32, &bytes, sym_section + 4, std.elf.SHT_NULL);
     try std.testing.expectError(error.MissingSymbolTable, scanElf(&bytes, &check));
 }
