@@ -1296,6 +1296,7 @@ test "frozen runtime data prunes witnesses and remaps callable and data identiti
     const callable = try result.store.addProcSpec(.{
         .name = result.store.freshSyntheticSymbol(),
         .identity = LIR.ProcIdentity.forTest(2),
+        .native_code_revision = 7,
         .args = .empty(),
         .body = ret,
         .ret_layout = .zst,
@@ -1312,6 +1313,7 @@ test "frozen runtime data prunes witnesses and remaps callable and data identiti
     const runtime = try result.store.addProcSpec(.{
         .name = result.store.freshSyntheticSymbol(),
         .identity = LIR.ProcIdentity.forTest(1),
+        .native_code_revision = 11,
         .args = .empty(),
         .body = body,
         .ret_layout = .zst,
@@ -1369,6 +1371,8 @@ test "frozen runtime data prunes witnesses and remaps callable and data identiti
     try std.testing.expectEqual(@as(u32, 0), @intFromEnum(frozen.exports[1].relocations[0].procedure.?));
     try std.testing.expectEqualStrings("callable", frozen.exports[1].relocations[0].target_symbol_name);
     try std.testing.expect(frozen.exports[1].relocations[0].owns_target_symbol_name);
+    try std.testing.expectEqual(@as(u64, 7), result.store.getProcSpec(frozen.exports[1].relocations[0].procedure.?).native_code_revision);
+    try std.testing.expectEqual(@as(u64, 11), result.store.getProcSpec(result.root_procs.items[0]).native_code_revision);
     try std.testing.expectEqual(@as(u64, 17), frozen.exports[0].empty_list_capacities[0].capacity);
     try std.testing.expectEqual(@as(u64, 18), frozen.exports[1].empty_list_capacities[0].capacity);
 }

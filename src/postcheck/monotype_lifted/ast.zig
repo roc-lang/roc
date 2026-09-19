@@ -15,6 +15,7 @@ const Type = @import("../monotype/type.zig");
 const names = check.CheckedNames;
 const TypeDigestHasher = base.TypeDigestHasher;
 const GuardedList = collections.GuardedList;
+const BodyShard = @import("body_shard.zig");
 
 /// Guarded growable list for mutable Monotype Lifted program storage.
 pub fn ProgramList(comptime T: type, comptime field_name: []const u8) type {
@@ -208,6 +209,7 @@ pub const ProgramView = struct {
     layout_requests: []const LayoutRequest,
     runtime_schema_requests: []const RuntimeSchemaRequest,
     static_data_values: []const StaticDataValue,
+    comptime_value_roots: []const Common.ComptimeValueRoot,
     comptime_sites: []const ComptimeSite,
     source_files: []const base.SourceFileEntry,
     expr_locs: []const base.SourceLoc,
@@ -218,6 +220,10 @@ pub const ProgramView = struct {
     expr_inline_scopes: []const InlineScopeId,
     stmt_inline_scopes: []const InlineScopeId,
     local_names: []const []const u8,
+
+    pub fn getComptimeValueRoot(self: ProgramView, id: Common.ComptimeValueRootId) Common.ComptimeValueRoot {
+        return self.comptime_value_roots[@intFromEnum(id)];
+    }
 
     pub fn procDebugName(self: ProgramView, symbol: Common.Symbol) ?names.ExportNameId {
         return self.proc_debug_names.get(symbol);
@@ -421,6 +427,9 @@ pub fn localDirectCallee(call: Mono.CallProc) ?FnId {
 
 /// Complete Monotype Lifted program plus side arrays.
 pub const Program = struct {
+    /// A shard owns only its raw list suffixes. Source rows remain immutable
+    /// until all workers have stopped reading; row commits use saved boundaries.
+    body_prefix: ?BodyShard.Prefix = null,
     allocator: std.mem.Allocator,
     names: names.NameStore,
     next_symbol: u32,
@@ -454,6 +463,8 @@ pub const Program = struct {
     layout_requests: ProgramList(LayoutRequest, "layout_requests"),
     runtime_schema_requests: ProgramList(RuntimeSchemaRequest, "runtime_schema_requests"),
     static_data_values: ProgramList(StaticDataValue, "static_data_values"),
+    /// Frozen shared metadata for SpecConstr; workers never append descriptors.
+    comptime_value_roots: ProgramList(Common.ComptimeValueRoot, "comptime_value_roots") = .empty,
     comptime_sites: ProgramList(ComptimeSite, "comptime_sites"),
     /// Source file table for `SourceLoc.file` indices (moved from Monotype).
     source_files: ProgramList(base.SourceFileEntry, "source_files"),
@@ -481,6 +492,68 @@ pub const Program = struct {
     current_region: base.Region,
     /// Ambient virtual source frame recorded by `addExpr`/`addStmt`.
     current_inline_scope: InlineScopeId,
+
+    /// Borrow a frozen program without copying unrelated bodies or type/name stores.
+    /// The source must outlive the shard and remain frozen while it is queried.
+    pub fn cloneForSpecConstrBody(self: *const Program, allocator: std.mem.Allocator, source_fn: FnId) std.mem.Allocator.Error!Program {
+        std.debug.assert(self.body_prefix == null);
+        var result: Program = undefined;
+        inline for (BodyShard.all_fields) |field| @field(result, field) = .empty;
+        result.body_prefix = BodyShard.Prefix.init(self, source_fn);
+        result.allocator = allocator;
+        result.names = self.names.borrowReadOnly(allocator);
+        result.types = self.types.borrowReadOnly(allocator);
+        result.next_symbol = self.next_symbol;
+        result.next_lift_capture_id = self.next_lift_capture_id;
+        result.proc_debug_names = ProcDebugNameMap.init(allocator);
+        result.current_loc = self.current_loc;
+        result.current_region = self.current_region;
+        result.current_inline_scope = self.current_inline_scope;
+        return result;
+    }
+
+    /// Commit one completed private body in coordinator order. Failure leaves
+    /// all logical rows and the selected function unchanged.
+    pub fn appendSpecConstrBody(self: *Program, worker: *const Program, source_symbol_start: u32, symbol_offset: u32, source_join_start: u32, join_offset: u32) std.mem.Allocator.Error!void {
+        return BodyShard.append(self, worker, source_symbol_start, symbol_offset, source_join_start, join_offset);
+    }
+
+    fn prefixLen(self: *const Program, comptime field: []const u8) usize {
+        return if (self.body_prefix) |prefix| prefix.len(field) else 0;
+    }
+
+    fn rowCount(self: *const Program, comptime field: []const u8) usize {
+        return self.prefixLen(field) + @field(self, field).len();
+    }
+
+    fn row(self: *const Program, comptime field: []const u8, index: usize) @TypeOf(@field(self, field).get(0)) {
+        const prefix_len = self.prefixLen(field);
+        if (index < prefix_len) return @field(self.body_prefix.?.source, field).get(index);
+        return @field(self, field).get(index - prefix_len);
+    }
+
+    fn ownedIndex(self: *const Program, comptime field: []const u8, index: usize) usize {
+        const prefix_len = self.prefixLen(field);
+        if (index < prefix_len) Common.invariant("body shard attempted to mutate frozen source");
+        return index - prefix_len;
+    }
+
+    fn bodySpan(self: *const Program, comptime T: type, comptime field: []const u8, span_: Span(T)) ProgramSpanBorrow(T, field) {
+        const prefix_len = self.prefixLen(field);
+        if (span_.start < prefix_len) {
+            std.debug.assert(span_.len <= prefix_len - span_.start);
+            return @field(self.body_prefix.?.source, field).borrowSpan(span_.start, span_.len);
+        }
+        // Empty spans carry no identity and may start at zero.
+        const start = if (span_.len == 0) 0 else span_.start - prefix_len;
+        return @field(self, field).borrowSpan(start, span_.len);
+    }
+
+    fn appendBodySpan(self: *Program, comptime T: type, comptime field: []const u8, values: []const T) std.mem.Allocator.Error!Span(T) {
+        var span_ = try Common.appendSpan(T, &@field(self, field), self.allocator, values);
+        span_.start += @intCast(self.prefixLen(field));
+        return span_;
+    }
 
     /// Append-only section lengths at the start of speculative SpecConstr work.
     ///
@@ -513,6 +586,10 @@ pub const Program = struct {
         expr_inline_scopes: usize,
         stmt_inline_scopes: usize,
         local_names: usize,
+        string_literals: usize,
+        fn_def_captures: usize,
+        comptime_value_roots: usize,
+        body_patch: ?Fn = null,
     };
 
     pub fn init(
@@ -623,6 +700,7 @@ pub const Program = struct {
             self.allocator.free(site.branch_regions);
         }
         self.comptime_sites.deinit(self.allocator);
+        self.comptime_value_roots.deinit(self.allocator);
         self.static_data_values.deinit(self.allocator);
         self.runtime_schema_requests.deinit(self.allocator);
         self.layout_requests.deinit(self.allocator);
@@ -654,6 +732,7 @@ pub const Program = struct {
     }
 
     pub fn view(self: *const Program) ProgramView {
+        std.debug.assert(self.body_prefix == null);
         return .{
             .names = &self.names,
             .next_symbol = self.next_symbol,
@@ -683,6 +762,7 @@ pub const Program = struct {
             .layout_requests = self.layout_requests.unsafeRawItemsForView(),
             .runtime_schema_requests = self.runtime_schema_requests.unsafeRawItemsForView(),
             .static_data_values = self.static_data_values.unsafeRawItemsForView(),
+            .comptime_value_roots = self.comptime_value_roots.unsafeRawItemsForView(),
             .comptime_sites = self.comptime_sites.unsafeRawItemsForView(),
             .source_files = self.source_files.unsafeRawItemsForView(),
             .expr_locs = self.expr_locs.unsafeRawItemsForView(),
@@ -696,8 +776,19 @@ pub const Program = struct {
         };
     }
 
+    pub fn getComptimeValueRoot(self: *const Program, id: Common.ComptimeValueRootId) Common.ComptimeValueRoot {
+        return self.row("comptime_value_roots", @intFromEnum(id));
+    }
+
+    pub fn addComptimeValueRoot(self: *Program, root: Common.ComptimeValueRoot) std.mem.Allocator.Error!Common.ComptimeValueRootId {
+        if (self.body_prefix != null) Common.invariant("body shard attempted to append frozen compile-time metadata");
+        const id: Common.ComptimeValueRootId = @enumFromInt(@as(u32, @intCast(self.comptime_value_roots.len())));
+        try self.comptime_value_roots.append(self.allocator, root);
+        return id;
+    }
+
     pub fn markSpecConstrAnalysis(self: *const Program) SpecConstrAnalysisMark {
-        return .{
+        var mark: SpecConstrAnalysisMark = .{
             .fns = self.fns.len(),
             .exprs = self.exprs.len(),
             .pats = self.pats.len(),
@@ -722,14 +813,28 @@ pub const Program = struct {
             .expr_inline_scopes = self.expr_inline_scopes.len(),
             .stmt_inline_scopes = self.stmt_inline_scopes.len(),
             .local_names = self.local_names.len(),
+            .string_literals = self.string_literals.len(),
+            .fn_def_captures = self.fn_def_captures.len(),
+            .comptime_value_roots = self.comptime_value_roots.len(),
         };
+        inline for (std.meta.fields(SpecConstrAnalysisMark)) |field| {
+            if (comptime !std.mem.eql(u8, field.name, "body_patch")) {
+                @field(mark, field.name) += self.prefixLen(field.name);
+            }
+        }
+        if (self.body_prefix) |prefix| mark.body_patch = prefix.patch;
+        return mark;
     }
 
     /// Discard speculative SpecConstr appends while retaining their capacity for
     /// a retry or the next analysis walk.
-    pub fn rewindSpecConstrAnalysis(self: *Program, mark: SpecConstrAnalysisMark) void {
-        self.assertSpecConstrAnalysisMark(mark);
+    pub fn rewindSpecConstrAnalysis(self: *Program, virtual_mark: SpecConstrAnalysisMark) void {
+        const mark = self.ownedAnalysisMark(virtual_mark);
         self.freeAnalysisLocalNames(mark.local_names);
+        self.freeAnalysisStrings(mark.string_literals);
+        self.string_literals.restoreLen(mark.string_literals);
+        self.fn_def_captures.restoreLen(mark.fn_def_captures);
+        self.comptime_value_roots.restoreLen(mark.comptime_value_roots);
         self.exprs.restoreLen(mark.exprs);
         self.pats.restoreLen(mark.pats);
         self.stmts.restoreLen(mark.stmts);
@@ -757,9 +862,13 @@ pub const Program = struct {
 
     /// Finish a SpecConstr analysis transaction and release capacity used only
     /// by its temporary nodes.
-    pub fn finishSpecConstrAnalysis(self: *Program, mark: SpecConstrAnalysisMark) void {
-        self.assertSpecConstrAnalysisMark(mark);
+    pub fn finishSpecConstrAnalysis(self: *Program, virtual_mark: SpecConstrAnalysisMark) void {
+        const mark = self.ownedAnalysisMark(virtual_mark);
         self.freeAnalysisLocalNames(mark.local_names);
+        self.freeAnalysisStrings(mark.string_literals);
+        self.string_literals.shrinkAndFree(self.allocator, mark.string_literals);
+        self.fn_def_captures.shrinkAndFree(self.allocator, mark.fn_def_captures);
+        self.comptime_value_roots.shrinkAndFree(self.allocator, mark.comptime_value_roots);
         self.exprs.shrinkAndFree(self.allocator, mark.exprs);
         self.pats.shrinkAndFree(self.allocator, mark.pats);
         self.stmts.shrinkAndFree(self.allocator, mark.stmts);
@@ -785,10 +894,22 @@ pub const Program = struct {
         self.local_names.shrinkAndFree(self.allocator, mark.local_names);
     }
 
-    fn assertSpecConstrAnalysisMark(self: *const Program, mark: SpecConstrAnalysisMark) void {
-        if (self.fns.len() < mark.fns) {
+    fn ownedAnalysisMark(self: *Program, virtual_mark: SpecConstrAnalysisMark) SpecConstrAnalysisMark {
+        if (self.fnCount() < virtual_mark.fns) {
             Common.invariant("SpecConstr analysis removed a durable lifted function");
         }
+        var mark = virtual_mark;
+        inline for (std.meta.fields(SpecConstrAnalysisMark)) |field| {
+            if (comptime !std.mem.eql(u8, field.name, "body_patch")) {
+                @field(mark, field.name) = self.ownedIndex(field.name, @field(mark, field.name));
+            }
+        }
+        if (self.body_prefix) |*prefix| prefix.patch = mark.body_patch.?;
+        return mark;
+    }
+
+    fn freeAnalysisStrings(self: *Program, start: usize) void {
+        for (self.string_literals.unsafeRawItemsForView()[start..]) |literal| literal.deinit(self.allocator);
     }
 
     fn freeAnalysisLocalNames(self: *Program, start: usize) void {
@@ -798,39 +919,54 @@ pub const Program = struct {
     }
 
     pub fn addFn(self: *Program, fn_: Fn) std.mem.Allocator.Error!FnId {
+        std.debug.assert(self.body_prefix == null);
         const id: FnId = @enumFromInt(@as(u32, @intCast(self.fns.len())));
         try self.fns.append(self.allocator, fn_);
         return id;
     }
 
     pub fn reserveFnSlot(self: *Program) std.mem.Allocator.Error!FnId {
+        std.debug.assert(self.body_prefix == null);
         const id: FnId = @enumFromInt(@as(u32, @intCast(self.fns.len())));
         try self.fns.append(self.allocator, undefined);
         return id;
     }
 
     pub fn setFn(self: *Program, id: FnId, fn_: Fn) void {
+        if (self.body_prefix) |*prefix| {
+            if (id != prefix.source_fn) Common.invariant("body shard patched another function");
+            prefix.patch = fn_;
+            return;
+        }
         self.fns.set(@intFromEnum(id), fn_);
     }
 
     pub fn setFnAt(self: *Program, index: usize, fn_: Fn) void {
-        self.fns.set(index, fn_);
+        self.setFn(@enumFromInt(index), fn_);
     }
 
     pub fn setFnCaptures(self: *Program, id: FnId, captures: Span(TypedLocal)) void {
-        self.fns.getPtrImmediate(@intFromEnum(id)).captures = captures;
+        var fn_ = self.getFn(id);
+        fn_.captures = captures;
+        self.setFn(id, fn_);
     }
 
     pub fn setProcDebugName(self: *Program, symbol: Common.Symbol, name: names.ExportNameId) std.mem.Allocator.Error!void {
+        std.debug.assert(self.body_prefix == null);
         try self.proc_debug_names.put(symbol, name);
     }
 
     pub fn procDebugName(self: *const Program, symbol: Common.Symbol) ?names.ExportNameId {
+        if (self.body_prefix) |prefix| return prefix.source.procDebugName(symbol);
         return self.proc_debug_names.get(symbol);
     }
 
     pub fn addExpr(self: *Program, expr: Expr) std.mem.Allocator.Error!ExprId {
-        const id: ExprId = @enumFromInt(@as(u32, @intCast(self.exprs.len())));
+        const id: ExprId = @enumFromInt(@as(u32, @intCast(self.exprCount())));
+        try self.exprs.ensureUnusedCapacity(self.allocator, 1);
+        try self.expr_locs.ensureUnusedCapacity(self.allocator, 1);
+        try self.expr_regions.ensureUnusedCapacity(self.allocator, 1);
+        try self.expr_inline_scopes.ensureUnusedCapacity(self.allocator, 1);
         try self.exprs.append(self.allocator, expr);
         try self.expr_locs.append(self.allocator, self.current_loc);
         try self.expr_regions.append(self.allocator, self.current_region);
@@ -840,50 +976,54 @@ pub const Program = struct {
 
     /// Source location of an expression.
     pub fn exprLoc(self: *const Program, id: ExprId) base.SourceLoc {
-        return self.expr_locs.unsafeRawItemsForView()[@intFromEnum(id)];
+        return self.row("expr_locs", @intFromEnum(id));
     }
 
     /// Checked source region of an expression.
     pub fn exprRegion(self: *const Program, id: ExprId) base.Region {
-        return self.expr_regions.unsafeRawItemsForView()[@intFromEnum(id)];
+        return self.row("expr_regions", @intFromEnum(id));
     }
 
     /// Source location of a statement.
     pub fn stmtLoc(self: *const Program, id: StmtId) base.SourceLoc {
-        return self.stmt_locs.unsafeRawItemsForView()[@intFromEnum(id)];
+        return self.row("stmt_locs", @intFromEnum(id));
     }
 
     /// Checked source region of a statement.
     pub fn stmtRegion(self: *const Program, id: StmtId) base.Region {
-        return self.stmt_regions.unsafeRawItemsForView()[@intFromEnum(id)];
+        return self.row("stmt_regions", @intFromEnum(id));
     }
 
     pub fn exprInlineScope(self: *const Program, id: ExprId) InlineScopeId {
-        return self.expr_inline_scopes.unsafeRawItemsForView()[@intFromEnum(id)];
+        return self.row("expr_inline_scopes", @intFromEnum(id));
     }
 
     pub fn stmtInlineScope(self: *const Program, id: StmtId) InlineScopeId {
-        return self.stmt_inline_scopes.unsafeRawItemsForView()[@intFromEnum(id)];
+        return self.row("stmt_inline_scopes", @intFromEnum(id));
     }
 
     pub fn inlineScope(self: *const Program, id: InlineScopeId) InlineScope {
-        return self.inline_scopes.unsafeRawItemsForView()[@intFromEnum(id)];
+        return self.row("inline_scopes", @intFromEnum(id));
     }
 
     pub fn addInlineScope(self: *Program, scope: InlineScope) std.mem.Allocator.Error!InlineScopeId {
-        const id: InlineScopeId = @enumFromInt(@as(u32, @intCast(self.inline_scopes.len())));
+        const id: InlineScopeId = @enumFromInt(@as(u32, @intCast(self.rowCount("inline_scopes"))));
         try self.inline_scopes.append(self.allocator, scope);
         return id;
     }
 
     pub fn addPat(self: *Program, pat_: Pat) std.mem.Allocator.Error!PatId {
-        const id: PatId = @enumFromInt(@as(u32, @intCast(self.pats.len())));
+        const id: PatId = @enumFromInt(@as(u32, @intCast(self.patCount())));
         try self.pats.append(self.allocator, pat_);
         return id;
     }
 
     pub fn addStmt(self: *Program, stmt_: Stmt) std.mem.Allocator.Error!StmtId {
-        const id: StmtId = @enumFromInt(@as(u32, @intCast(self.stmts.len())));
+        const id: StmtId = @enumFromInt(@as(u32, @intCast(self.stmtCount())));
+        try self.stmts.ensureUnusedCapacity(self.allocator, 1);
+        try self.stmt_locs.ensureUnusedCapacity(self.allocator, 1);
+        try self.stmt_regions.ensureUnusedCapacity(self.allocator, 1);
+        try self.stmt_inline_scopes.ensureUnusedCapacity(self.allocator, 1);
         try self.stmts.append(self.allocator, stmt_);
         try self.stmt_locs.append(self.allocator, self.current_loc);
         try self.stmt_regions.append(self.allocator, self.current_region);
@@ -892,11 +1032,11 @@ pub const Program = struct {
     }
 
     pub fn comptimeSite(self: *const Program, id: ComptimeSiteId) ComptimeSite {
-        return self.comptime_sites.unsafeRawItemsForView()[@intFromEnum(id)];
+        return self.row("comptime_sites", @intFromEnum(id));
     }
 
     pub fn comptimeSiteCount(self: *const Program) usize {
-        return self.comptime_sites.len();
+        return self.rowCount("comptime_sites");
     }
 
     pub fn addLocal(self: *Program, symbol: Common.Symbol, ty: Type.TypeId) std.mem.Allocator.Error!LocalId {
@@ -905,43 +1045,61 @@ pub const Program = struct {
 
     /// Source-level name of a local; empty for compiler-generated temporaries.
     pub fn localName(self: *const Program, id: LocalId) []const u8 {
-        return self.local_names.unsafeRawItemsForView()[@intFromEnum(id)];
+        return self.row("local_names", @intFromEnum(id));
+    }
+
+    /// Replace a suffix local's diagnostic name with independently owned bytes.
+    pub fn setLocalName(self: *Program, id: LocalId, text: []const u8) std.mem.Allocator.Error!void {
+        const index = self.ownedIndex("local_names", @intFromEnum(id));
+        const owned = if (text.len == 0) "" else try self.allocator.dupe(u8, text);
+        const old = self.local_names.get(index);
+        if (old.len > 0) self.allocator.free(old);
+        self.local_names.set(index, owned);
     }
 
     pub fn sourceFiles(self: *const Program) []const base.SourceFileEntry {
+        if (self.body_prefix) |prefix| return prefix.source.sourceFiles();
         return self.source_files.unsafeRawItemsForView();
     }
 
     pub fn takeStringLiterals(self: *Program) std.ArrayList(Mono.StringLiteral) {
+        std.debug.assert(self.body_prefix == null);
         return self.string_literals.takeArrayList();
     }
 
     pub fn takeSourceFiles(self: *Program) std.ArrayList(base.SourceFileEntry) {
+        std.debug.assert(self.body_prefix == null);
         return self.source_files.takeArrayList();
     }
 
     pub fn takeStaticDataValues(self: *Program) std.ArrayList(StaticDataValue) {
+        std.debug.assert(self.body_prefix == null);
         return self.static_data_values.takeArrayList();
     }
 
     pub fn stringLiteralsView(self: *const Program) []const Mono.StringLiteral {
+        std.debug.assert(self.body_prefix == null);
         return self.string_literals.unsafeRawItemsForView();
     }
 
     pub fn rootCount(self: *const Program) usize {
-        return self.roots.len();
+        return self.rowCount("roots");
     }
 
     pub fn rootsView(self: *const Program) []const Root {
+        if (self.body_prefix) |prefix| return prefix.source.rootsView();
         return self.roots.unsafeRawItemsForView();
     }
 
     pub fn fnCount(self: *const Program) usize {
-        return self.fns.len();
+        return self.rowCount("fns");
     }
 
     pub fn getFn(self: *const Program, id: FnId) Fn {
-        return self.fns.unsafeRawItemsForView()[@intFromEnum(id)];
+        if (self.body_prefix) |prefix| {
+            if (id == prefix.source_fn) return prefix.patch;
+        }
+        return self.row("fns", @intFromEnum(id));
     }
 
     /// Content digest of a lifted function's checked source identity: which
@@ -981,75 +1139,79 @@ pub const Program = struct {
     }
 
     pub fn getFnAt(self: *const Program, index: usize) Fn {
-        return self.fns.get(index);
+        return self.getFn(@enumFromInt(index));
     }
 
     pub fn fnsView(self: *const Program) []const Fn {
+        std.debug.assert(self.body_prefix == null);
         return self.fns.unsafeRawItemsForView();
     }
 
     pub fn getExpr(self: *const Program, id: ExprId) Expr {
-        return self.exprs.unsafeRawItemsForView()[@intFromEnum(id)];
+        return self.row("exprs", @intFromEnum(id));
     }
 
     pub fn exprsView(self: *const Program) []const Expr {
+        std.debug.assert(self.body_prefix == null);
         return self.exprs.unsafeRawItemsForView();
     }
 
     pub fn setExpr(self: *Program, id: ExprId, expr: Expr) void {
-        self.exprs.set(@intFromEnum(id), expr);
+        self.exprs.set(self.ownedIndex("exprs", @intFromEnum(id)), expr);
     }
 
     pub fn getExprAt(self: *const Program, index: usize) Expr {
-        return self.exprs.get(index);
+        return self.row("exprs", index);
     }
 
     pub fn setExprData(self: *Program, id: ExprId, data: ExprData) void {
-        self.exprs.getPtrImmediate(@intFromEnum(id)).data = data;
+        self.setExprDataAt(@intFromEnum(id), data);
     }
 
     pub fn setExprDataAt(self: *Program, index: usize, data: ExprData) void {
-        self.exprs.getPtrImmediate(index).data = data;
+        self.exprs.getPtrImmediate(self.ownedIndex("exprs", index)).data = data;
     }
 
     pub fn getPat(self: *const Program, id: PatId) Pat {
-        return self.pats.unsafeRawItemsForView()[@intFromEnum(id)];
+        return self.row("pats", @intFromEnum(id));
     }
 
     pub fn getPatAt(self: *const Program, index: usize) Pat {
-        return self.pats.get(index);
+        return self.row("pats", index);
     }
 
     pub fn getStmt(self: *const Program, id: StmtId) Stmt {
-        return self.stmts.unsafeRawItemsForView()[@intFromEnum(id)];
+        return self.row("stmts", @intFromEnum(id));
     }
 
     pub fn getStmtAt(self: *const Program, index: usize) Stmt {
-        return self.stmts.get(index);
+        return self.row("stmts", index);
     }
 
     pub fn stmtsView(self: *const Program) []const Stmt {
+        std.debug.assert(self.body_prefix == null);
         return self.stmts.unsafeRawItemsForView();
     }
 
     pub fn getLocal(self: *const Program, id: LocalId) Local {
-        return self.locals.unsafeRawItemsForView()[@intFromEnum(id)];
+        return self.row("locals", @intFromEnum(id));
     }
 
     pub fn getLocalAt(self: *const Program, index: usize) Local {
-        return self.locals.get(index);
+        return self.row("locals", index);
     }
 
     pub fn localsView(self: *const Program) []const Local {
+        std.debug.assert(self.body_prefix == null);
         return self.locals.unsafeRawItemsForView();
     }
 
     pub fn getStringLiteral(self: *const Program, id: StringLiteralId) Mono.StringLiteral {
-        return self.string_literals.unsafeRawItemsForView()[@intFromEnum(id)];
+        return self.row("string_literals", @intFromEnum(id));
     }
 
     pub fn addStringLiteral(self: *Program, text: []const u8) std.mem.Allocator.Error!StringLiteralId {
-        const id: StringLiteralId = @enumFromInt(@as(u32, @intCast(self.string_literals.len())));
+        const id: StringLiteralId = @enumFromInt(@as(u32, @intCast(self.rowCount("string_literals"))));
         const owned = try self.allocator.dupe(u8, text);
         errdefer self.allocator.free(owned);
         try self.string_literals.append(self.allocator, .{
@@ -1061,14 +1223,17 @@ pub const Program = struct {
     }
 
     pub fn addRoot(self: *Program, root: Root) std.mem.Allocator.Error!void {
+        std.debug.assert(self.body_prefix == null);
         try self.roots.append(self.allocator, root);
     }
 
     pub fn addLayoutRequest(self: *Program, request: LayoutRequest) std.mem.Allocator.Error!void {
+        std.debug.assert(self.body_prefix == null);
         try self.layout_requests.append(self.allocator, request);
     }
 
     pub fn addRuntimeSchemaRequest(self: *Program, request: RuntimeSchemaRequest) std.mem.Allocator.Error!void {
+        std.debug.assert(self.body_prefix == null);
         try self.runtime_schema_requests.append(self.allocator, request);
     }
 
@@ -1078,7 +1243,9 @@ pub const Program = struct {
         ty: Type.TypeId,
         binder: ?check.CheckedModule.PatternBinderId,
     ) std.mem.Allocator.Error!LocalId {
-        const id: LocalId = @enumFromInt(@as(u32, @intCast(self.locals.len())));
+        const id: LocalId = @enumFromInt(@as(u32, @intCast(self.localCount())));
+        try self.locals.ensureUnusedCapacity(self.allocator, 1);
+        try self.local_names.ensureUnusedCapacity(self.allocator, 1);
         const checked_capture_id = if (binder) |b| check.CheckedModule.CaptureId.fromBinder(b) else null;
         try self.locals.append(self.allocator, .{
             .id = id,
@@ -1119,7 +1286,9 @@ pub const Program = struct {
             Common.invariant("capture replacement CaptureId had no checked binder");
         }
 
-        const id: LocalId = @enumFromInt(@as(u32, @intCast(self.locals.len())));
+        const id: LocalId = @enumFromInt(@as(u32, @intCast(self.localCount())));
+        try self.locals.ensureUnusedCapacity(self.allocator, 1);
+        try self.local_names.ensureUnusedCapacity(self.allocator, 1);
         try self.locals.append(self.allocator, .{
             .id = id,
             .symbol = symbol,
@@ -1137,6 +1306,7 @@ pub const Program = struct {
     /// program so the identity is stable across fixpoint rounds and unique
     /// within the program.
     pub fn nextLiftCaptureId(self: *Program) check.CheckedModule.CaptureId {
+        if (self.body_prefix != null) Common.invariant("body shard cannot generate capture identities");
         const index = self.next_lift_capture_id;
         if (index > check.CheckedModule.CaptureId.max_generated_index) {
             Common.invariant("lifted program exhausted durable capture identities");
@@ -1146,35 +1316,36 @@ pub const Program = struct {
     }
 
     pub fn addTypedLocalSpan(self: *Program, values: []const TypedLocal) std.mem.Allocator.Error!Span(TypedLocal) {
-        return try Common.appendSpan(TypedLocal, &self.typed_locals, self.allocator, values);
+        return self.appendBodySpan(TypedLocal, "typed_locals", values);
     }
 
     pub fn addExprSpan(self: *Program, ids: []const ExprId) std.mem.Allocator.Error!Span(ExprId) {
-        return try Common.appendSpan(ExprId, &self.expr_ids, self.allocator, ids);
+        return self.appendBodySpan(ExprId, "expr_ids", ids);
     }
 
     pub fn addPatSpan(self: *Program, ids: []const PatId) std.mem.Allocator.Error!Span(PatId) {
-        return try Common.appendSpan(PatId, &self.pat_ids, self.allocator, ids);
+        return self.appendBodySpan(PatId, "pat_ids", ids);
     }
 
     pub fn addStmtSpan(self: *Program, ids: []const StmtId) std.mem.Allocator.Error!Span(StmtId) {
-        return try Common.appendSpan(StmtId, &self.stmt_ids, self.allocator, ids);
+        return self.appendBodySpan(StmtId, "stmt_ids", ids);
     }
 
     pub fn addFieldExprSpan(self: *Program, values: []const FieldExpr) std.mem.Allocator.Error!Span(FieldExpr) {
-        return try Common.appendSpan(FieldExpr, &self.field_exprs, self.allocator, values);
+        return self.appendBodySpan(FieldExpr, "field_exprs", values);
     }
 
     pub fn addFieldAccessSegmentSpan(self: *Program, values: []const FieldAccessSegment) std.mem.Allocator.Error!Span(FieldAccessSegment) {
-        return try Common.appendNonemptySpan(FieldAccessSegment, &self.field_access_segments, self.allocator, values, "field access segment span must be nonempty");
+        if (values.len == 0) Common.invariant("field access segment span must be nonempty");
+        return self.appendBodySpan(FieldAccessSegment, "field_access_segments", values);
     }
 
     pub fn addFnDefCaptureSpan(self: *Program, values: []const FnDefCapture) std.mem.Allocator.Error!Span(FnDefCapture) {
-        return try Common.appendSpan(FnDefCapture, &self.fn_def_captures, self.allocator, values);
+        return self.appendBodySpan(FnDefCapture, "fn_def_captures", values);
     }
 
     pub fn addCaptureOperandSpan(self: *Program, values: []const CaptureOperand) std.mem.Allocator.Error!Span(CaptureOperand) {
-        return try Common.appendSpan(CaptureOperand, &self.capture_operands, self.allocator, values);
+        return self.appendBodySpan(CaptureOperand, "capture_operands", values);
     }
 
     /// Read one operand by value from a stable span identity. Unlike
@@ -1182,24 +1353,24 @@ pub const Program = struct {
     /// that may append to `capture_operands`.
     pub fn captureOperandAt(self: *const Program, span_: Span(CaptureOperand), index: usize) CaptureOperand {
         if (index >= span_.len) Common.invariant("capture operand index was outside span");
-        return self.capture_operands.get(span_.start + index);
+        return self.row("capture_operands", span_.start + index);
     }
 
     pub fn setCaptureOperandInSpan(self: *Program, span_: Span(CaptureOperand), index: usize, operand: CaptureOperand) void {
         if (index >= span_.len) Common.invariant("capture operand index was outside span");
-        self.capture_operands.set(span_.start + index, operand);
+        self.capture_operands.set(self.ownedIndex("capture_operands", span_.start + index), operand);
     }
 
     pub fn addRecordDestructSpan(self: *Program, values: []const RecordDestruct) std.mem.Allocator.Error!Span(RecordDestruct) {
-        return try Common.appendSpan(RecordDestruct, &self.record_destructs, self.allocator, values);
+        return self.appendBodySpan(RecordDestruct, "record_destructs", values);
     }
 
     pub fn addStrPatternStepSpan(self: *Program, values: []const Mono.StrPatternStep) std.mem.Allocator.Error!Span(Mono.StrPatternStep) {
-        return try Common.appendSpan(Mono.StrPatternStep, &self.str_pattern_steps, self.allocator, values);
+        return self.appendBodySpan(Mono.StrPatternStep, "str_pattern_steps", values);
     }
 
     pub fn addBranchSpan(self: *Program, values: []const Branch) std.mem.Allocator.Error!Span(Branch) {
-        return try Common.appendSpan(Branch, &self.branches, self.allocator, values);
+        return self.appendBodySpan(Branch, "branches", values);
     }
 
     /// Read one branch by value from a stable span identity. Unlike
@@ -1207,33 +1378,34 @@ pub const Program = struct {
     /// append to `branches`.
     pub fn branchAt(self: *const Program, span_: Span(Branch), index: usize) Branch {
         if (index >= span_.len) Common.invariant("branch index was outside span");
-        return self.branches.get(span_.start + index);
+        return self.row("branches", span_.start + index);
     }
 
     pub fn addIfBranchSpan(self: *Program, values: []const IfBranch) std.mem.Allocator.Error!Span(IfBranch) {
-        return try Common.appendSpan(IfBranch, &self.if_branches, self.allocator, values);
+        return self.appendBodySpan(IfBranch, "if_branches", values);
     }
 
     pub fn exprSpan(self: *const Program, span_: Span(ExprId)) ProgramSpanBorrow(ExprId, "expr_ids") {
-        return self.expr_ids.borrowSpan(span_.start, span_.len);
+        return self.bodySpan(ExprId, "expr_ids", span_);
     }
 
     pub fn patSpan(self: *const Program, span_: Span(PatId)) ProgramSpanBorrow(PatId, "pat_ids") {
-        return self.pat_ids.borrowSpan(span_.start, span_.len);
+        return self.bodySpan(PatId, "pat_ids", span_);
     }
 
     pub fn typedLocalSpan(self: *const Program, span_: Span(TypedLocal)) ProgramSpanBorrow(TypedLocal, "typed_locals") {
-        return self.typed_locals.borrowSpan(span_.start, span_.len);
+        return self.bodySpan(TypedLocal, "typed_locals", span_);
     }
 
     /// The CaptureId of a local. Every local that participates in a capture set
     /// carries one; asserts it is present.
     pub fn captureIdOfLocal(self: *const Program, id: LocalId) check.CheckedModule.CaptureId {
-        return self.locals.unsafeRawItemsForView()[@intFromEnum(id)].capture_id orelse
+        return self.getLocal(id).capture_id orelse
             Common.invariant("lifted capture local had no CaptureId");
     }
 
     pub fn ensureLiftCaptureId(self: *Program, id: LocalId) check.CheckedModule.CaptureId {
+        if (self.body_prefix != null) return self.captureIdOfLocal(id);
         const local = self.locals.getPtrImmediate(@intFromEnum(id));
         if (local.capture_id == null) {
             local.capture_id = self.nextLiftCaptureId();
@@ -1242,40 +1414,40 @@ pub const Program = struct {
     }
 
     pub fn stmtSpan(self: *const Program, span_: Span(StmtId)) ProgramSpanBorrow(StmtId, "stmt_ids") {
-        return self.stmt_ids.borrowSpan(span_.start, span_.len);
+        return self.bodySpan(StmtId, "stmt_ids", span_);
     }
 
     pub fn fieldExprSpan(self: *const Program, span_: Span(FieldExpr)) ProgramSpanBorrow(FieldExpr, "field_exprs") {
-        return self.field_exprs.borrowSpan(span_.start, span_.len);
+        return self.bodySpan(FieldExpr, "field_exprs", span_);
     }
 
     pub fn fieldAccessSegmentSpan(self: *const Program, span_: Span(FieldAccessSegment)) ProgramSpanBorrow(FieldAccessSegment, "field_access_segments") {
-        return self.field_access_segments.borrowSpan(span_.start, span_.len);
+        return self.bodySpan(FieldAccessSegment, "field_access_segments", span_);
     }
 
     pub fn fieldAccessSegmentAt(self: *const Program, span_: Span(FieldAccessSegment), index: usize) FieldAccessSegment {
         if (index >= span_.len) Common.invariant("field access segment index was outside span");
-        return self.field_access_segments.get(span_.start + index);
+        return self.row("field_access_segments", span_.start + index);
     }
 
     pub fn fnDefCaptureSpan(self: *const Program, span_: Span(FnDefCapture)) ProgramSpanBorrow(FnDefCapture, "fn_def_captures") {
-        return self.fn_def_captures.borrowSpan(span_.start, span_.len);
+        return self.bodySpan(FnDefCapture, "fn_def_captures", span_);
     }
 
     pub fn captureOperandSpan(self: *const Program, span_: Span(CaptureOperand)) ProgramSpanBorrow(CaptureOperand, "capture_operands") {
-        return self.capture_operands.borrowSpan(span_.start, span_.len);
+        return self.bodySpan(CaptureOperand, "capture_operands", span_);
     }
 
     pub fn recordDestructSpan(self: *const Program, span_: Span(RecordDestruct)) ProgramSpanBorrow(RecordDestruct, "record_destructs") {
-        return self.record_destructs.borrowSpan(span_.start, span_.len);
+        return self.bodySpan(RecordDestruct, "record_destructs", span_);
     }
 
     pub fn strPatternStepSpan(self: *const Program, span_: Span(Mono.StrPatternStep)) ProgramSpanBorrow(Mono.StrPatternStep, "str_pattern_steps") {
-        return self.str_pattern_steps.borrowSpan(span_.start, span_.len);
+        return self.bodySpan(Mono.StrPatternStep, "str_pattern_steps", span_);
     }
 
     pub fn branchSpan(self: *const Program, span_: Span(Branch)) ProgramSpanBorrow(Branch, "branches") {
-        return self.branches.borrowSpan(span_.start, span_.len);
+        return self.bodySpan(Branch, "branches", span_);
     }
 
     /// The two pieces direct LIR lowering needs to consider folding away the
@@ -1297,14 +1469,14 @@ pub const Program = struct {
         scrutinee: ExprId,
         branches_span: Span(Branch),
     ) ?ListMapCanReuseMatch {
-        const scrutinee_data = self.exprs.unsafeRawItemsForView()[@intFromEnum(scrutinee)].data;
+        const scrutinee_data = self.getExpr(scrutinee).data;
         if (std.meta.activeTag(scrutinee_data) != .call_proc) return null;
         const call = scrutinee_data.call_proc;
         const callee = switch (call.callee) {
             .lifted => |fn_id| fn_id,
             .func => return null,
         };
-        const callee_body = switch (self.fns.unsafeRawItemsForView()[@intFromEnum(callee)].body) {
+        const callee_body = switch (self.getFn(callee).body) {
             .roc => |body| body,
             .hosted => return null,
         };
@@ -1314,7 +1486,7 @@ pub const Program = struct {
         for (0..branches.len) |index| {
             const branch = GuardedList.at(branches, index);
             if (branch.guard != null or branch.bindings.len != 0) return null;
-            const pat_data = self.pats.unsafeRawItemsForView()[@intFromEnum(branch.pat)].data;
+            const pat_data = self.getPat(branch.pat).data;
             const tag = std.meta.activeTag(pat_data);
             if (tag == .wildcard or (tag == .int_lit and pat_data.int_lit.toI128() == 0)) {
                 return .{ .call_args = call.args, .zero_branch_body = branch.body };
@@ -1334,46 +1506,46 @@ pub const Program = struct {
     };
 
     fn exprIsListMapCanReuseOp(self: *const Program, expr_id: ExprId) bool {
-        const data = self.exprs.unsafeRawItemsForView()[@intFromEnum(expr_id)].data;
+        const data = self.getExpr(expr_id).data;
         const tag = std.meta.activeTag(data);
         if (tag == .low_level) return data.low_level.op == .list_map_can_reuse;
         return tag == .block and data.block.statements.len == 0 and self.exprIsListMapCanReuseOp(data.block.final_expr);
     }
 
     pub fn ifBranchSpan(self: *const Program, span_: Span(IfBranch)) ProgramSpanBorrow(IfBranch, "if_branches") {
-        return self.if_branches.borrowSpan(span_.start, span_.len);
+        return self.bodySpan(IfBranch, "if_branches", span_);
     }
 
     pub fn exprCount(self: *const Program) usize {
-        return self.exprs.len();
+        return self.rowCount("exprs");
     }
 
     pub fn patCount(self: *const Program) usize {
-        return self.pats.len();
+        return self.rowCount("pats");
     }
 
     pub fn stmtCount(self: *const Program) usize {
-        return self.stmts.len();
+        return self.rowCount("stmts");
     }
 
     pub fn localCount(self: *const Program) usize {
-        return self.locals.len();
+        return self.rowCount("locals");
     }
 
     pub fn exprTy(self: *const Program, id: ExprId) Type.TypeId {
-        return self.exprs.unsafeRawItemsForView()[@intFromEnum(id)].ty;
+        return self.getExpr(id).ty;
     }
 
     pub fn patTy(self: *const Program, id: PatId) Type.TypeId {
-        return self.pats.unsafeRawItemsForView()[@intFromEnum(id)].ty;
+        return self.getPat(id).ty;
     }
 
     pub fn pat(self: *const Program, id: PatId) Pat {
-        return self.pats.unsafeRawItemsForView()[@intFromEnum(id)];
+        return self.getPat(id);
     }
 
     pub fn stmt(self: *const Program, id: StmtId) Stmt {
-        return self.stmts.unsafeRawItemsForView()[@intFromEnum(id)];
+        return self.getStmt(id);
     }
 };
 
@@ -1441,6 +1613,7 @@ pub fn forEachBoundLocal(program: *const Program, pat_id: PatId, binder: anytype
 
 test "monotype lifted declarations are referenced" {
     std.testing.refAllDecls(@This());
+    _ = @import("body_shard_test.zig");
 }
 
 fn writeFnDefDigest(hasher: *TypeDigestHasher, name_store: *const names.NameStore, fn_def: Mono.FnDef) void {

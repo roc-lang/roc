@@ -230,7 +230,7 @@ pub const Expr = struct {
 /// An immutable root-slot read. The initializer supplies representation and
 /// lambda-set evidence; it is never evaluated by the read itself.
 pub const ComptimeValue = struct {
-    root: Common.ComptimeValueRoot,
+    root: Common.ComptimeValueRootId,
     initializer: ExprId,
 };
 
@@ -512,6 +512,8 @@ pub const Program = struct {
     runtime_schema_requests: ProgramList(RuntimeSchemaRequest, "runtime_schema_requests"),
     static_data_values: ProgramList(StaticDataValue, "static_data_values"),
     comptime_sites: ProgramList(ComptimeSite, "comptime_sites"),
+    /// Owned descriptors in the source Lifted ID domain; reads outlive that source.
+    comptime_value_roots: ProgramList(Common.ComptimeValueRoot, "comptime_value_roots"),
     /// Source file table for `SourceLoc.file` indices (copied from the lifted
     /// program; owned by this program).
     source_files: ProgramList(base.SourceFileEntry, "source_files"),
@@ -568,6 +570,7 @@ pub const Program = struct {
             .runtime_schema_requests = .empty,
             .static_data_values = .empty,
             .comptime_sites = .empty,
+            .comptime_value_roots = .empty,
             .source_files = .empty,
             .expr_locs = .empty,
             .expr_regions = .empty,
@@ -597,6 +600,7 @@ pub const Program = struct {
             self.allocator.free(site.branch_regions);
         }
         self.comptime_sites.deinit(self.allocator);
+        self.comptime_value_roots.deinit(self.allocator);
         self.static_data_values.deinit(self.allocator);
         self.runtime_schema_requests.deinit(self.allocator);
         self.layout_requests.deinit(self.allocator);
@@ -631,6 +635,16 @@ pub const Program = struct {
 
     pub fn constFnEvidenceFrames(self: *const Program, span: Mono.Span(check.ConstStore.ConstFnEvidenceFrame)) []const check.ConstStore.ConstFnEvidenceFrame {
         return self.const_fn_evidence_frames.unsafeRawItemsForView()[span.start..][0..span.len];
+    }
+
+    pub fn addComptimeValueRoot(self: *Program, root: Common.ComptimeValueRoot) std.mem.Allocator.Error!Common.ComptimeValueRootId {
+        const id: Common.ComptimeValueRootId = @enumFromInt(@as(u32, @intCast(self.comptime_value_roots.len())));
+        try self.comptime_value_roots.append(self.allocator, root);
+        return id;
+    }
+
+    pub fn getComptimeValueRoot(self: *const Program, id: Common.ComptimeValueRootId) Common.ComptimeValueRoot {
+        return self.comptime_value_roots.unsafeRawItemsForView()[@intFromEnum(id)];
     }
 
     pub fn addFn(self: *Program, fn_: Fn) std.mem.Allocator.Error!FnId {

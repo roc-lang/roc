@@ -5,6 +5,10 @@
 //! integers, length-prefixed bytes, artifacts in set order, specs in table
 //! order), so two builds of the same module write identical files and the
 //! store's rename-into-place protocol never has to compare contents.
+//!
+//! Line entries preserve exact SourceLoc values and order. Their file indices
+//! are meaningful only with the originating LIR source-file domain; a persistent
+//! consumer must bind that domain explicitly or omit lines from debug emission.
 
 const std = @import("std");
 const lir = @import("lir");
@@ -15,7 +19,7 @@ const Allocator = std.mem.Allocator;
 
 const magic = "RPCK";
 /// Format version; bump whenever the encoding or artifact contents change.
-pub const format_version: u32 = 2;
+pub const format_version: u32 = 3;
 
 /// One specialization the pack can serve: its reservation-time key, the
 /// artifact holding its procedure, and the ownership signature ARC solved
@@ -92,9 +96,42 @@ pub fn write(allocator: Allocator, set: *const ProcArtifact.Set, specs: []const 
             try writer.byte(switch (ref.form) {
                 .call => 0,
                 .addr => 1,
+                .inline_call => 2,
             });
             try writer.word(ref.target);
             try writer.word(ref.delta);
+            try writer.word(ref.veneer orelse std.math.maxInt(u32));
+        }
+        try writer.word(@intCast(artifact.symbolic_refs.len));
+        for (artifact.symbolic_refs) |ref| {
+            try writer.word(ref.site);
+            try writer.byte(switch (ref.form) {
+                .call => 0,
+                .addr => 1,
+                .inline_call => 2,
+            });
+            try writer.word(ref.veneer orelse std.math.maxInt(u32));
+            switch (ref.target) {
+                .proc => |identity| {
+                    try writer.byte(0);
+                    try writer.raw(&identity.bytes);
+                },
+                .rc_helper => |name| {
+                    try writer.byte(1);
+                    try writer.str(name);
+                },
+                .boxy_thunk => |identity| {
+                    try writer.byte(2);
+                    try writer.raw(&identity.bytes);
+                },
+            }
+        }
+        try writer.word(@intCast(artifact.lines.len));
+        for (artifact.lines) |line| {
+            try writer.word(line.offset);
+            try writer.word(line.loc.file);
+            try writer.word(line.loc.line);
+            try writer.word(line.loc.column);
         }
         try writer.word(@intCast(artifact.relocations.len));
         for (artifact.relocations) |relocation| {
@@ -122,6 +159,7 @@ pub fn write(allocator: Allocator, set: *const ProcArtifact.Set, specs: []const 
                 try writer.word(relocation.offset);
                 try writer.wide(@bitCast(relocation.addend));
                 try writer.byte(@intFromBool(relocation.function));
+                try writer.byte(@intFromBool(relocation.external));
                 try writer.str(relocation.name);
             }
         }
@@ -187,10 +225,44 @@ pub fn read(allocator: Allocator, bytes: []const u8) ReadError!Pack {
                 .form = switch (try reader.byte()) {
                     0 => .call,
                     1 => .addr,
+                    2 => .inline_call,
                     else => return error.MalformedPack,
                 },
                 .target = try reader.word(),
                 .delta = try reader.word(),
+                .veneer = veneer: {
+                    const value = try reader.word();
+                    break :veneer if (value == std.math.maxInt(u32)) null else value;
+                },
+            };
+        }
+        const symbolic_refs = try arena_allocator.alloc(ProcArtifact.SymbolicReference, try reader.word());
+        for (symbolic_refs) |*ref| {
+            ref.* = .{
+                .site = try reader.word(),
+                .form = switch (try reader.byte()) {
+                    0 => .call,
+                    1 => .addr,
+                    2 => .inline_call,
+                    else => return error.MalformedPack,
+                },
+                .veneer = veneer: {
+                    const value = try reader.word();
+                    break :veneer if (value == std.math.maxInt(u32)) null else value;
+                },
+                .target = switch (try reader.byte()) {
+                    0 => .{ .proc = .{ .bytes = (try reader.raw(32))[0..32].* } },
+                    1 => .{ .rc_helper = try reader.strOwned(arena_allocator) },
+                    2 => .{ .boxy_thunk = .{ .bytes = (try reader.raw(32))[0..32].* } },
+                    else => return error.MalformedPack,
+                },
+            };
+        }
+        const lines = try arena_allocator.alloc(ProcArtifact.LineEntry, try reader.word());
+        for (lines) |*line| {
+            line.* = .{
+                .offset = try reader.word(),
+                .loc = .{ .file = try reader.word(), .line = try reader.word(), .column = try reader.word() },
             };
         }
         const relocations = try arena_allocator.alloc(ProcArtifact.NamedRelocation, try reader.word());
@@ -224,11 +296,17 @@ pub fn read(allocator: Allocator, bytes: []const u8) ReadError!Pack {
                     1 => true,
                     else => return error.MalformedPack,
                 };
+                const external = switch (try reader.byte()) {
+                    0 => false,
+                    1 => true,
+                    else => return error.MalformedPack,
+                };
                 relocation.* = .{
                     .offset = offset,
                     .name = try reader.strOwned(arena_allocator),
                     .addend = addend,
                     .function = function,
+                    .external = external,
                 };
             }
             item.* = .{
@@ -245,6 +323,8 @@ pub fn read(allocator: Allocator, bytes: []const u8) ReadError!Pack {
             .entry = entry,
             .frame = frame,
             .refs = refs,
+            .symbolic_refs = symbolic_refs,
+            .lines = lines,
             .relocations = relocations,
             .data = data,
         };
@@ -335,6 +415,41 @@ const Reader = struct {
     }
 };
 
+test "pack ownership survives input destruction and allocation failure" {
+    try std.testing.checkAllAllocationFailures(std.testing.allocator, testOwnedPack, .{});
+}
+
+fn testOwnedPack(allocator: Allocator) (ReadError || error{TestExpectedEqual})!void {
+    const set = ProcArtifact.Set{
+        .arena = std.heap.ArenaAllocator.init(allocator),
+        .artifacts = &.{.{
+            .kind = .{ .rc_helper = "helper" },
+            .code = "code",
+            .entry = 0,
+            .frame = null,
+            .refs = &.{.{ .site = 0, .form = .call, .target = 0, .delta = 0, .veneer = 3 }},
+            .symbolic_refs = &.{.{ .site = 1, .form = .call, .target = .{ .rc_helper = "external" } }},
+            .lines = &.{.{ .offset = 0, .loc = .{ .file = 2, .line = 10, .column = 8 } }},
+            .relocations = &.{.{ .offset = 0, .name = "builtin", .kind = .function }},
+            .data = &.{.{
+                .name = "datum",
+                .bytes = "bytes",
+                .alignment = 8,
+                .symbol_offset = 1,
+                .relocations = &.{.{ .offset = 0, .name = "target", .addend = -2, .function = true, .external = true }},
+            }},
+        }},
+    };
+    const bytes = try write(allocator, &set, &.{});
+    var bytes_live = true;
+    defer if (bytes_live) allocator.free(bytes);
+    var pack = try read(allocator, bytes);
+    defer pack.deinit();
+    allocator.free(bytes);
+    bytes_live = false;
+    try std.testing.expectEqualDeep(set.artifacts, pack.set.artifacts);
+}
+
 test "pack bytes round-trip every artifact field and spec entry" {
     const testing = std.testing;
     var arena = std.heap.ArenaAllocator.init(testing.allocator);
@@ -354,6 +469,15 @@ test "pack bytes round-trip every artifact field and spec entry" {
             .entry = 0,
             .frame = .{ .prologue_size = 4, .stack_alloc = 16, .frame_size = 16, .callee_saved_mask = 0x1000, .epilogue_offset = 4, .uses_frame_pointer = true },
             .refs = refs,
+            .symbolic_refs = &.{
+                .{ .site = 0, .form = .call, .target = .{ .proc = lir.ProcIdentity.forTest(8) } },
+                .{ .site = 1, .form = .call, .veneer = 4, .target = .{ .rc_helper = "roc__rc_later" } },
+                .{ .site = 2, .form = .addr, .target = .{ .boxy_thunk = lir.ProcIdentity.forTest(9) } },
+            },
+            .lines = &.{
+                .{ .offset = 0, .loc = .{ .file = 3, .line = 42, .column = 7 } },
+                .{ .offset = 0, .loc = .{ .file = 3, .line = 43, .column = 9 } },
+            },
             .relocations = relocations,
             .data = try a.dupe(ProcArtifact.DataItem, &.{
                 .{ .name = try a.dupe(u8, "roc__static_str_ab"), .bytes = try a.dupe(u8, "\x00\x00hi"), .alignment = 8, .symbol_offset = 2 },
@@ -403,6 +527,9 @@ test "pack bytes round-trip every artifact field and spec entry" {
     try testing.expectEqualSlices(u8, &lir.ProcIdentity.forTest(7).bytes, &proc.kind.proc.bytes);
     try testing.expectEqualSlices(u8, artifacts[0].code, proc.code);
     try testing.expectEqual(@as(usize, 2), proc.refs.len);
+    try testing.expectEqual(@as(usize, 3), proc.symbolic_refs.len);
+    try testing.expectEqualDeep(artifacts[0].symbolic_refs, proc.symbolic_refs);
+    try testing.expectEqualDeep(artifacts[0].lines, proc.lines);
     try testing.expectEqual(ProcArtifact.Form.addr, proc.refs[1].form);
     try testing.expectEqual(@as(u32, 9), proc.relocations[1].offset);
     try testing.expectEqualStrings("roc__static_1", proc.relocations[1].name);

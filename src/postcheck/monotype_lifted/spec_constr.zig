@@ -231,6 +231,12 @@ const names = @import("check").CheckedNames;
 const ExitDemand = @import("loop_exit_demand.zig");
 const Allocator = std.mem.Allocator;
 const GuardedList = collections.GuardedList;
+const TaskExecutor = @import("base").post_check_task_executor;
+
+/// Identity exhaustion is a resource failure, checked before committing shard rows.
+fn checkedIdentityTotal(start: u32, count: u32) Allocator.Error!u32 {
+    return std.math.add(u32, start, count) catch error.OutOfMemory;
+}
 
 /// Whether a checker-stamped compiler procedure constructs an iterator value.
 /// The stamp is exact producer data; result type, callee spelling, and call
@@ -339,6 +345,42 @@ pub const OwnedProcedureUsage = struct {
 /// proportional to the iterator code the pass improves.
 pub const CloneInlining = enum { all_calls, iterator_fusion };
 
+/// Independent work separated by coordinator-owned graph mutation barriers.
+pub const Phase = enum { discovery, unused_loop_results, iterator_fusion };
+
+/// Callback counters count only executor submissions. Work totals also include
+/// inline execution, which uses exactly the same private-shard boundary.
+pub const ParallelMetrics = struct {
+    tasks_submitted: u64 = 0,
+    tasks_committed: u64 = 0,
+    patterns_recorded: u64 = 0,
+    patterns_admitted: u64 = 0,
+    bodies_committed: u64 = 0,
+    expressions_committed: u64 = 0,
+    peak_retained_shards: u64 = 0,
+    committed_by_phase: [3]u64 = .{ 0, 0, 0 },
+    changed_by_phase: [3]u64 = .{ 0, 0, 0 },
+
+    /// Accumulate independent pass totals without wrapping long-lived counters.
+    pub fn add(self: *ParallelMetrics, other: ParallelMetrics) void {
+        self.tasks_submitted +|= other.tasks_submitted;
+        self.tasks_committed +|= other.tasks_committed;
+        self.patterns_recorded +|= other.patterns_recorded;
+        self.patterns_admitted +|= other.patterns_admitted;
+        self.bodies_committed +|= other.bodies_committed;
+        self.expressions_committed +|= other.expressions_committed;
+        self.peak_retained_shards = @max(self.peak_retained_shards, other.peak_retained_shards);
+        for (&self.committed_by_phase, other.committed_by_phase) |*total, count| total.* +|= count;
+        for (&self.changed_by_phase, other.changed_by_phase) |*total, count| total.* +|= count;
+    }
+};
+
+/// Scheduling and observation only; neither changes optimization decisions.
+pub const Options = struct {
+    executor: ?TaskExecutor.Executor = null,
+    metrics_out: ?*ParallelMetrics = null,
+};
+
 /// Specialize recursive direct calls whose arguments are known constructor shapes.
 pub fn run(allocator: Allocator, program: *Ast.Program, clone_inlining: CloneInlining) Common.LowerError!void {
     var procedure_usage = try runAndCollectProcedureUsage(allocator, program, clone_inlining);
@@ -347,8 +389,15 @@ pub fn run(allocator: Allocator, program: *Ast.Program, clone_inlining: CloneInl
 
 /// Run SpecConstr and retain the exact use inventory from its final graph.
 pub fn runAndCollectProcedureUsage(allocator: Allocator, program: *Ast.Program, clone_inlining: CloneInlining) Common.LowerError!OwnedProcedureUsage {
+    return runAndCollectProcedureUsageWithOptions(allocator, program, clone_inlining, .{});
+}
+
+/// Run with optional independent-body scheduling and retain final graph usage.
+pub fn runAndCollectProcedureUsageWithOptions(allocator: Allocator, program: *Ast.Program, clone_inlining: CloneInlining, options: Options) Common.LowerError!OwnedProcedureUsage {
+    if (options.metrics_out) |metrics| metrics.* = .{};
     var pass = try Pass.init(allocator, program);
     defer pass.deinit();
+    pass.options = options;
     pass.clone_inlining = clone_inlining;
     return try pass.run();
 }
@@ -357,8 +406,15 @@ pub fn runAndCollectProcedureUsage(allocator: Allocator, program: *Ast.Program, 
 /// producer pipelines. This is the `.none`-mode subset of SpecConstr: it emits
 /// no call-pattern workers and does not admit unrelated calls for inlining.
 pub fn runIteratorFusion(allocator: Allocator, program: *Ast.Program) Common.LowerError!void {
+    return runIteratorFusionWithOptions(allocator, program, .{});
+}
+
+/// Normalize checker-stamped iterator pipelines with optional body scheduling.
+pub fn runIteratorFusionWithOptions(allocator: Allocator, program: *Ast.Program, options: Options) Common.LowerError!void {
+    if (options.metrics_out) |metrics| metrics.* = .{};
     var pass = try Pass.init(allocator, program);
     defer pass.deinit();
+    pass.options = options;
     try pass.runIteratorFusion();
 }
 
@@ -402,6 +458,35 @@ const CallableShape = struct {
     fn_id: Ast.FnId,
     captures: []const Shape,
 };
+
+/// Requests retain frozen type, name, and function identities in owned shape
+/// trees, never worker-generated AST identities.
+fn copyShape(allocator: Allocator, shape: Shape) Allocator.Error!Shape {
+    return switch (shape) {
+        .any => shape,
+        .tag => |tag| .{ .tag = .{ .ty = tag.ty, .name = tag.name, .payloads = try copyShapes(allocator, tag.payloads) } },
+        .tuple => |tuple| .{ .tuple = .{ .ty = tuple.ty, .items = try copyShapes(allocator, tuple.items) } },
+        .callable => |callable| .{ .callable = .{ .ty = callable.ty, .fn_id = callable.fn_id, .captures = try copyShapes(allocator, callable.captures) } },
+        .nominal => |nominal| blk: {
+            const backing = try allocator.create(Shape);
+            backing.* = try copyShape(allocator, nominal.backing.*);
+            break :blk .{ .nominal = .{ .ty = nominal.ty, .backing = backing } };
+        },
+        .record => |record| blk: {
+            const fields = try allocator.alloc(FieldShape, record.fields.len);
+            for (fields, record.fields) |*field, source| {
+                field.* = .{ .name = source.name, .shape = try copyShape(allocator, source.shape) };
+            }
+            break :blk .{ .record = .{ .ty = record.ty, .fields = fields } };
+        },
+    };
+}
+
+fn copyShapes(allocator: Allocator, shapes: []const Shape) Allocator.Error![]const Shape {
+    const copied = try allocator.alloc(Shape, shapes.len);
+    for (copied, shapes) |*copy, shape| copy.* = try copyShape(allocator, shape);
+    return copied;
+}
 
 const ShapeProof = union(enum) {
     proven: Shape,
@@ -1035,6 +1120,218 @@ const Pass = struct {
     /// speculative clones' arena rewinds. Binding expressions remain opaque,
     /// so initializer-private locals never become caller-visible leaves.
     static_data_structure: collections.DenseMap(Ast.ExprId, *const Value),
+    options: Options = .{},
+    /// Only symbolic discovery workers have a sink. Its arena survives the
+    /// callback; the coordinator alone admits and durably copies requests.
+    pattern_requests: ?*RequestSink = null,
+    /// Phase-entry eligibility is independent of coordinator admission in earlier waves.
+    discovery_admission: ?[]const SpecAdmission = null,
+    borrowed_worker: bool = false,
+
+    const PatternRequest = struct { fn_id: Ast.FnId, pattern: CallPattern };
+    const RequestSink = struct {
+        arena: std.heap.ArenaAllocator,
+        items: std.ArrayList(PatternRequest) = .empty,
+    };
+
+    /// A bounded wave retains output independently of executor worker count.
+    /// Neither plans nor the source Program change until every callback drains.
+    const wave_capacity = 32;
+    const Work = struct {
+        source: *Pass,
+        fn_id: Ast.FnId,
+        phase: Phase,
+        discovery_admission: ?[]const SpecAdmission = null,
+        output: ?*Output = null,
+        failure: ?Common.LowerError = null,
+
+        fn callback(context: *anyopaque, worker: TaskExecutor.Worker) ?*anyopaque {
+            const work: *Work = @ptrCast(@alignCast(context));
+            work.execute(worker.allocator, worker.scratch) catch |err| {
+                work.failure = err;
+            };
+            return null;
+        }
+
+        fn execute(self: *Work, allocator: Allocator, scratch: Allocator) Common.LowerError!void {
+            const output = try allocator.create(Output);
+            errdefer allocator.destroy(output);
+            output.* = .{
+                .allocator = allocator,
+                .program = try self.source.program.cloneForSpecConstrBody(allocator, self.fn_id),
+                .requests = .{ .arena = std.heap.ArenaAllocator.init(allocator) },
+            };
+            errdefer output.program.deinit();
+            errdefer output.requests.arena.deinit();
+            var pass: Pass = .{
+                .allocator = scratch,
+                .arena = std.heap.ArenaAllocator.init(scratch),
+                .program = &output.program,
+                .plans = self.source.plans,
+                .symbols = self.source.symbols,
+                .clone_inlining = self.source.clone_inlining,
+                .whole_body_cloned = self.source.whole_body_cloned,
+                .callable_workers = std.AutoHashMap(CallableWorkerIdentity, Ast.FnId).init(scratch),
+                .callable_sources = self.source.callable_sources,
+                .next_join_point = self.source.next_join_point,
+                .static_data_structure = .init(scratch),
+                .discovery_admission = self.discovery_admission,
+                .borrowed_worker = true,
+            };
+            defer pass.arena.deinit();
+            defer pass.static_data_structure.deinit();
+            defer pass.callable_workers.deinit();
+            if (self.phase == .discovery) pass.pattern_requests = &output.requests;
+            switch (self.phase) {
+                .discovery => {
+                    const mark = pass.markAnalysis();
+                    var cloner = Cloner.initForRewrite(&pass);
+                    defer cloner.deinit();
+                    cloner.rewrite_call_patterns = false;
+                    cloner.emit_callable_workers = false;
+                    cloner.inline_calls = .iterator_fusion;
+                    cloner.inline_direct_requires_known_arg = true;
+                    try cloner.collectCallPatternsInExpr(self.fn_id, pass.sourceBody(self.fn_id).roc);
+                    pass.rewindAnalysis(mark);
+                },
+                .iterator_fusion => {
+                    try pass.cloneFnBodyForIteratorFusion(self.fn_id);
+                    output.changed = true;
+                },
+                .unused_loop_results => output.changed = try pass.projectUnusedLoopResultsInFn(self.fn_id),
+            }
+            output.symbol_count = pass.symbols.next - self.source.symbols.next;
+            output.join_count = pass.next_join_point - self.source.next_join_point;
+            if (self.phase == .discovery) {
+                // Discovery retains function/pattern requests, never its generated AST.
+                output.program.deinit();
+                output.program_live = false;
+            }
+            self.output = output;
+        }
+    };
+
+    const Output = struct {
+        allocator: Allocator,
+        program: Ast.Program,
+        program_live: bool = true,
+        requests: RequestSink,
+        changed: bool = false,
+        symbol_count: u32 = 0,
+        join_count: u32 = 0,
+
+        fn deinit(self: *Output) void {
+            self.requests.arena.deinit();
+            if (self.program_live) self.program.deinit();
+            self.allocator.destroy(self);
+        }
+    };
+
+    fn runIndependentPhase(self: *Pass, phase: Phase, fn_count: usize) Common.LowerError!void {
+        try self.program.names.prepareForReadSharing();
+        try self.program.types.prepareForReadSharingQueries(&self.program.names, Type.Store.ReadSharingQueries.spec_constr);
+        const admission = if (phase == .discovery) try self.allocator.alloc(SpecAdmission, self.plans.len) else null;
+        defer if (admission) |snapshot| self.allocator.free(snapshot);
+        if (admission) |snapshot| {
+            for (snapshot, 0..) |*entry, raw| entry.* = self.newSpecAdmission(raw);
+        }
+        var next_fn: usize = 0;
+        while (next_fn < fn_count) {
+            var work: [wave_capacity]Work = undefined;
+            var count: usize = 0;
+            while (next_fn < fn_count and count < wave_capacity) : (next_fn += 1) {
+                const fn_id: Ast.FnId = @enumFromInt(@as(u32, @intCast(next_fn)));
+                const body = if (phase == .unused_loop_results) self.program.getFn(fn_id).body else self.sourceBody(fn_id);
+                if (body == .hosted) continue;
+                if (phase == .iterator_fusion and !exprContainsIteratorProducer(self.program, body.roc)) continue;
+                work[count] = .{ .source = self, .fn_id = fn_id, .phase = phase, .discovery_admission = admission };
+                count += 1;
+            }
+            defer for (work[0..count]) |item| {
+                if (item.output) |output| output.deinit();
+            };
+            if (count == 0) continue;
+            const symbol_start = self.symbols.next;
+            const join_start = self.next_join_point;
+            if (self.options.executor) |executor| {
+                var session = executor.begin();
+                var submitted: usize = 0;
+                var received: usize = 0;
+                var failure: ?Allocator.Error = null;
+                while (received < submitted or (failure == null and submitted < count)) {
+                    while (failure == null and submitted < count and session.canSubmit()) {
+                        session.submit(.{ .id = submitted, .context = &work[submitted], .run = Work.callback }) catch |err| {
+                            failure = err;
+                            break;
+                        };
+                        submitted += 1;
+                        if (self.options.metrics_out) |metrics| metrics.tasks_submitted += 1;
+                    }
+                    if (received < submitted) {
+                        const completion = session.receive();
+                        received += 1;
+                        if (work[completion.id].failure) |err| {
+                            if (failure == null) failure = err;
+                        }
+                    }
+                }
+                session.end();
+                if (failure) |err| return err;
+            } else {
+                for (work[0..count]) |*item| {
+                    var scratch = std.heap.ArenaAllocator.init(self.allocator);
+                    defer scratch.deinit();
+                    try item.execute(self.allocator, scratch.allocator());
+                }
+            }
+            if (self.options.metrics_out) |metrics| {
+                metrics.peak_retained_shards = @max(metrics.peak_retained_shards, count);
+            }
+            // Merge only after the read barrier, in source-function/request order.
+            for (work[0..count]) |item| {
+                if (item.failure) |err| return err;
+                const output = item.output orelse Common.invariant("SpecConstr task completed without output");
+                var admitted: usize = 0;
+                for (output.requests.items.items) |request| {
+                    if (try self.admitPatternRequest(request)) admitted += 1;
+                }
+                if (output.changed) {
+                    const symbol_end = try checkedIdentityTotal(self.symbols.next, output.symbol_count);
+                    const join_end = try checkedIdentityTotal(self.next_join_point, output.join_count);
+                    const before = self.program.exprCount();
+                    try self.program.appendSpecConstrBody(&output.program, symbol_start, self.symbols.next - symbol_start, join_start, self.next_join_point - join_start);
+                    self.symbols.next = symbol_end;
+                    self.next_join_point = join_end;
+                    if (phase == .iterator_fusion) self.whole_body_cloned[@intFromEnum(item.fn_id)] = true;
+                    if (self.options.metrics_out) |metrics| {
+                        metrics.bodies_committed += 1;
+                        metrics.expressions_committed += self.program.exprCount() - before;
+                    }
+                }
+                if (self.options.metrics_out) |metrics| {
+                    if (self.options.executor != null) {
+                        metrics.tasks_committed += 1;
+                        metrics.committed_by_phase[@intFromEnum(phase)] += 1;
+                    }
+                    metrics.patterns_recorded += output.requests.items.items.len;
+                    metrics.patterns_admitted += admitted;
+                    if (output.changed or admitted != 0) metrics.changed_by_phase[@intFromEnum(phase)] += 1;
+                }
+            }
+        }
+    }
+
+    fn admitPatternRequest(self: *Pass, request: PatternRequest) Allocator.Error!bool {
+        const raw = @intFromEnum(request.fn_id);
+        if (self.newSpecAdmission(raw) != .admitted) return false;
+        for (self.plans[raw].specs.items) |spec| {
+            if (patternEql(self.program, spec.pattern, request.pattern)) return false;
+        }
+        const args = try self.arena.allocator().alloc(Shape, request.pattern.args.len);
+        for (args, request.pattern.args) |*arg, source| arg.* = try copyShape(self.arena.allocator(), source);
+        try self.plans[raw].specs.append(self.allocator, .{ .pattern = .{ .args = args } });
+        return true;
+    }
 
     const AnalysisMark = struct {
         program: Ast.Program.SpecConstrAnalysisMark,
@@ -1047,6 +1344,8 @@ const Pass = struct {
 
         const plans = try allocator.alloc(FnPlan, program.fnCount());
         errdefer allocator.free(plans);
+        var initialized_plans: usize = 0;
+        errdefer for (plans[0..initialized_plans]) |plan| allocator.free(plan.used_args);
 
         for (plans, 0..) |*plan, index| {
             const fn_ = program.getFnAt(index);
@@ -1062,6 +1361,7 @@ const Pass = struct {
                 },
                 .specs = .empty,
             };
+            initialized_plans += 1;
         }
 
         const whole_body_cloned = try allocator.alloc(bool, program.fnCount());
@@ -1244,11 +1544,6 @@ const Pass = struct {
         self.next_join_point = mark.next_join_point;
     }
 
-    fn finishAnalysis(self: *Pass, mark: AnalysisMark) void {
-        self.program.finishSpecConstrAnalysis(mark.program);
-        self.restoreAnalysisIds(mark);
-    }
-
     fn deinit(self: *Pass) void {
         self.static_data_structure.deinit();
         self.callable_sources.deinit();
@@ -1296,15 +1591,7 @@ const Pass = struct {
             self.allocator.free(capture_snapshot);
         }
 
-        for (0..original_fn_count) |index| {
-            const fn_id: Ast.FnId = @enumFromInt(@as(u32, @intCast(index)));
-            const body = switch (self.sourceBody(fn_id)) {
-                .roc => |source| source,
-                .hosted => continue,
-            };
-            if (!exprContainsIteratorProducer(self.program, body)) continue;
-            try self.cloneFnBodyForIteratorFusion(fn_id);
-        }
+        try self.runIndependentPhase(.iterator_fusion, original_fn_count);
 
         try Lift.recomputeCaptures(self.allocator, self.program);
         self.verifyRewrittenCaptureGain(capture_snapshot);
@@ -1743,30 +2030,7 @@ const Pass = struct {
     /// argument is known when it is first named by a `let`. Walk with the
     /// cloner's substitution environment so those calls still reserve workers.
     fn collectValueAwareCallPatterns(self: *Pass, original_fn_count: usize) Common.LowerError!void {
-        const analysis_mark = self.markAnalysis();
-        defer self.finishAnalysis(analysis_mark);
-
-        var index: usize = 0;
-        while (index < original_fn_count) : (index += 1) {
-            const body = switch (self.plans[index].source.body) {
-                .roc => |body| body,
-                .hosted => continue,
-            };
-            const fn_id: Ast.FnId = @enumFromInt(@as(u32, @intCast(index)));
-            var cloner = Cloner.initForRewrite(self);
-            cloner.rewrite_call_patterns = false;
-            cloner.emit_callable_workers = false;
-            // Checker-stamped iterator producers enter an explicit fusion
-            // context. Their helper calls and generated-private step callables
-            // remain visible transitively so the complete iterator pipeline can
-            // seed fusion workers. Generic calls outside that context remain
-            // opaque until a production clone enforces emitted-code admission.
-            cloner.inline_calls = .iterator_fusion;
-            cloner.inline_direct_requires_known_arg = true;
-            defer cloner.deinit();
-            try cloner.collectCallPatternsInExpr(fn_id, body);
-            self.rewindAnalysis(analysis_mark);
-        }
+        try self.runIndependentPhase(.discovery, original_fn_count);
     }
 
     fn reserveSpecIds(self: *Pass) Allocator.Error!void {
@@ -2189,6 +2453,7 @@ const Pass = struct {
     }
 
     fn newSpecAdmission(self: *const Pass, raw: usize) SpecAdmission {
+        if (self.discovery_admission) |snapshot| return snapshot[raw];
         if (!self.plans[raw].source.size.admits()) return .denied_body_size;
         if (self.plans[raw].specs.items.len >= spec_constr_specialization_count) return .denied_spec_count;
         return .admitted;
@@ -2260,6 +2525,14 @@ const Pass = struct {
         if (self.newSpecAdmission(raw) != .admitted) return;
 
         const pattern = (try self.callPatternForValues(fn_id, values)) orelse return;
+        if (self.pattern_requests) |requests| {
+            const arena = requests.arena.allocator();
+            try requests.items.append(arena, .{
+                .fn_id = fn_id,
+                .pattern = .{ .args = try copyShapes(arena, pattern.args) },
+            });
+            return;
+        }
         for (self.plans[raw].specs.items) |spec| {
             if (patternEql(self.program, spec.pattern, pattern)) return;
         }
@@ -2270,6 +2543,7 @@ const Pass = struct {
     }
 
     fn ensureCallPatternForValues(self: *Pass, fn_id: Ast.FnId, values: []const Value) Common.LowerError!void {
+        if (self.borrowed_worker) Common.invariant("SpecConstr body worker attempted specialization admission");
         const raw = @intFromEnum(fn_id);
         if (raw >= self.plans.len) return;
         if (!self.plans[raw].source.size.admits()) return;
@@ -3905,7 +4179,7 @@ const Pass = struct {
             .body = .{ .roc = cloned },
             .ret = fn_.ret,
         });
-        self.whole_body_cloned[fn_index] = true;
+        if (!self.borrowed_worker) self.whole_body_cloned[fn_index] = true;
     }
 
     /// Once the specialization graph is complete, clone only functions whose
@@ -3913,35 +4187,36 @@ const Pass = struct {
     /// Calls and loop-carried state stay unchanged in this final pass; its sole
     /// authority is the producer-visible result binding and continuation.
     fn projectUnusedLoopResults(self: *Pass) Common.LowerError!void {
-        const fn_count = self.program.fnCount();
-        for (0..fn_count) |index| {
-            const fn_id: Ast.FnId = @enumFromInt(@as(u32, @intCast(index)));
-            const fn_ = self.program.getFn(fn_id);
-            const body = switch (fn_.body) {
-                .roc => |body| body,
-                .hosted => continue,
-            };
-            var demands = ExitDemand.Inventory.init(self.allocator, self.program);
-            defer demands.deinit();
-            try demands.collect(body);
-            if (!demands.hasSelection()) continue;
+        try self.runIndependentPhase(.unused_loop_results, self.program.fnCount());
+    }
 
-            var cloner = Cloner.initForLoopExitSelection(self);
-            defer cloner.deinit();
-            cloner.exit_demands = &demands;
-            const cloned = try cloner.cloneExpr(body);
-            self.program.setFn(fn_id, .{
-                .symbol = fn_.symbol,
-                .source = fn_.source,
-                .spec_constr_pattern = fn_.spec_constr_pattern,
-                .root_identity = fn_.root_identity,
-                .signature = fn_.signature,
-                .args = fn_.args,
-                .captures = fn_.captures,
-                .body = .{ .roc = cloned },
-                .ret = fn_.ret,
-            });
-        }
+    fn projectUnusedLoopResultsInFn(self: *Pass, fn_id: Ast.FnId) Common.LowerError!bool {
+        const fn_ = self.program.getFn(fn_id);
+        const body = switch (fn_.body) {
+            .roc => |body| body,
+            .hosted => return false,
+        };
+        var demands = ExitDemand.Inventory.init(self.allocator, self.program);
+        defer demands.deinit();
+        try demands.collect(body);
+        if (!demands.hasSelection()) return false;
+
+        var cloner = Cloner.initForLoopExitSelection(self);
+        defer cloner.deinit();
+        cloner.exit_demands = &demands;
+        const cloned = try cloner.cloneExpr(body);
+        self.program.setFn(fn_id, .{
+            .symbol = fn_.symbol,
+            .source = fn_.source,
+            .spec_constr_pattern = fn_.spec_constr_pattern,
+            .root_identity = fn_.root_identity,
+            .signature = fn_.signature,
+            .args = fn_.args,
+            .captures = fn_.captures,
+            .body = .{ .roc = cloned },
+            .ret = fn_.ret,
+        });
+        return true;
     }
 
     /// Collect outermost loops with an explicitly known constructor in their
@@ -10652,44 +10927,64 @@ const Cloner = struct {
     /// scalarized aggregate has no runtime aggregate local to retain, so keep
     /// its runtime leaf locals instead of rematerializing the aggregate.
     fn cloneRetainedLocals(self: *Cloner, span: Ast.Span(Ast.TypedLocal)) Common.LowerError!Ast.Span(Ast.TypedLocal) {
+        if (span.len == 0) return .empty();
         const source = self.pass.program.typedLocalSpan(span);
         var retained: std.ArrayList(Ast.TypedLocal) = .empty;
         defer retained.deinit(self.pass.allocator);
-        var seen = try std.bit_set.DynamicBitSetUnmanaged.initEmpty(self.pass.allocator, self.pass.program.localCount());
-        defer seen.deinit(self.pass.allocator);
         for (0..source.len) |index| {
             const typed = GuardedList.at(source, index);
             if (self.subst.getForClone(self.pass.program, typed.local)) |value| {
-                try self.appendRetainedValueLocals(value, &retained, &seen, 0);
+                try self.appendRetainedValueLocals(value, &retained, 0);
             } else {
-                try self.appendRetainedLocal(&retained, &seen, typed.local, typed.ty);
+                try retained.append(self.pass.allocator, typed);
             }
         }
+        try compactRetainedLocals(self.pass.allocator, &retained);
         return try self.pass.program.addTypedLocalSpan(retained.items);
     }
 
-    fn appendRetainedLocal(
-        self: *Cloner,
+    /// Compact touched ordinals, not the raw ID range: retained leaves can mix
+    /// old source locals with generated locals arbitrarily far away.
+    fn compactRetainedLocals(
+        allocator: Allocator,
         retained: *std.ArrayList(Ast.TypedLocal),
-        seen: *std.bit_set.DynamicBitSetUnmanaged,
-        local: Ast.LocalId,
-        ty: Type.TypeId,
     ) Allocator.Error!void {
-        const index = @intFromEnum(local);
-        if (seen.isSet(index)) return;
-        seen.set(index);
-        try retained.append(self.pass.allocator, .{ .local = local, .ty = ty });
+        if (retained.items.len < 2) return;
+        const ordinals = try allocator.alloc(usize, retained.items.len);
+        defer allocator.free(ordinals);
+        const duplicates = try allocator.alloc(bool, retained.items.len);
+        defer allocator.free(duplicates);
+        @memset(duplicates, false);
+        for (ordinals, 0..) |*ordinal, index| ordinal.* = index;
+        std.sort.heap(usize, ordinals, retained.items, struct {
+            fn lessThan(leaves: []const Ast.TypedLocal, lhs: usize, rhs: usize) bool {
+                const lhs_id = @intFromEnum(leaves[lhs].local);
+                const rhs_id = @intFromEnum(leaves[rhs].local);
+                return if (lhs_id == rhs_id) lhs < rhs else lhs_id < rhs_id;
+            }
+        }.lessThan);
+        for (ordinals[1..], ordinals[0 .. ordinals.len - 1]) |ordinal, previous| {
+            if (retained.items[ordinal].local == retained.items[previous].local) {
+                duplicates[ordinal] = true;
+            }
+        }
+        var len: usize = 0;
+        for (retained.items, duplicates) |typed, duplicate| {
+            if (duplicate) continue;
+            retained.items[len] = typed;
+            len += 1;
+        }
+        retained.items.len = len;
     }
 
     fn appendRetainedExprLocal(
         self: *Cloner,
         expr: Ast.ExprId,
         retained: *std.ArrayList(Ast.TypedLocal),
-        seen: *std.bit_set.DynamicBitSetUnmanaged,
     ) Common.LowerError!void {
         const value = self.pass.program.getExpr(expr);
         if (value.data == .local) {
-            return try self.appendRetainedLocal(retained, seen, value.data.local, value.ty);
+            return try retained.append(self.pass.allocator, .{ .local = value.data.local, .ty = value.ty });
         }
         if (value.data == .unit or
             value.data == .@"unreachable" or
@@ -10708,21 +11003,20 @@ const Cloner = struct {
         self: *Cloner,
         value: Value,
         retained: *std.ArrayList(Ast.TypedLocal),
-        seen: *std.bit_set.DynamicBitSetUnmanaged,
         depth: usize,
     ) Common.LowerError!void {
         if (depth >= value_wrapper_strip_cap) {
             Common.invariant("SpecConstr retained ownership followed a cyclic value");
         }
         switch (value) {
-            .expr => |expr| try self.appendRetainedExprLocal(expr, retained, seen),
-            .runtime_anchor => |anchor| try self.appendRetainedExprLocal(anchor.runtime, retained, seen),
+            .expr => |expr| try self.appendRetainedExprLocal(expr, retained),
+            .runtime_anchor => |anchor| try self.appendRetainedExprLocal(anchor.runtime, retained),
             .static_data_candidate => {}, // Closed static values retain no caller locals.
-            .tag => |tag| for (tag.payloads) |payload| try self.appendRetainedValueLocals(payload, retained, seen, depth),
-            .record => |record| for (record.fields) |field| try self.appendRetainedValueLocals(field.value, retained, seen, depth),
-            .tuple => |tuple| for (tuple.items) |item| try self.appendRetainedValueLocals(item, retained, seen, depth),
-            .nominal => |nominal| try self.appendRetainedValueLocals(nominal.backing.*, retained, seen, depth + 1),
-            .callable => |callable| for (callable.captures) |capture| try self.appendRetainedValueLocals(capture.value, retained, seen, depth),
+            .tag => |tag| for (tag.payloads) |payload| try self.appendRetainedValueLocals(payload, retained, depth),
+            .record => |record| for (record.fields) |field| try self.appendRetainedValueLocals(field.value, retained, depth),
+            .tuple => |tuple| for (tuple.items) |item| try self.appendRetainedValueLocals(item, retained, depth),
+            .nominal => |nominal| try self.appendRetainedValueLocals(nominal.backing.*, retained, depth + 1),
+            .callable => |callable| for (callable.captures) |capture| try self.appendRetainedValueLocals(capture.value, retained, depth),
         }
     }
 
@@ -11407,6 +11701,7 @@ const Cloner = struct {
     }
 
     fn materializeCallableWorker(self: *Cloner, callable: CallableValue) Common.LowerError!Ast.ExprId {
+        if (self.pass.borrowed_worker) Common.invariant("SpecConstr body worker attempted callable-worker creation");
         const source_fn_id = self.pass.callable_sources.get(callable.fn_id) orelse callable.fn_id;
         const source_fn = self.pass.program.getFn(source_fn_id);
         const source_captures = try GuardedList.dupe(self.pass.allocator, Ast.TypedLocal, self.pass.program.typedLocalSpan(source_fn.captures));
@@ -14160,17 +14455,19 @@ test "compile-time root reads remain opaque through specialization and cloning" 
     const tuple_ty = try program.types.add(.{ .tuple = try program.types.addSpan(&.{item_ty}) });
     const item = try program.addExpr(.{ .ty = item_ty, .data = .{ .int_lit = .{ .bytes = @bitCast(@as(u128, 7)), .kind = .u128 } } });
     const initializer = try program.addExpr(.{ .ty = tuple_ty, .data = .{ .tuple = try program.addExprSpan(&.{item}) } });
-    const read = try program.addExpr(.{ .ty = tuple_ty, .data = .{ .comptime_value = .{
-        .root = .{
-            .module = .{},
-            .root = @enumFromInt(1),
-            .const_locator = .{
-                .artifact = .{},
-                .owner = .{ .hoisted_expr = .{ .module_idx = 0, .expr = @enumFromInt(1) } },
-                .template = @enumFromInt(1),
-                .source_scheme = .{},
-            },
+    const root: Common.ComptimeValueRoot = .{
+        .module = .{},
+        .root = @enumFromInt(1),
+        .const_locator = .{
+            .artifact = .{},
+            .owner = .{ .hoisted_expr = .{ .module_idx = 0, .expr = @enumFromInt(1) } },
+            .template = @enumFromInt(1),
+            .source_scheme = .{},
         },
+    };
+    const root_id = try program.addComptimeValueRoot(root);
+    const read = try program.addExpr(.{ .ty = tuple_ty, .data = .{ .comptime_value = .{
+        .root = root_id,
         .initializer = initializer,
     } } });
     var pass = try Pass.init(allocator, &program);
@@ -14189,6 +14486,9 @@ test "compile-time root reads remain opaque through specialization and cloning" 
     defer renames.deinit();
     try std.testing.expectEqual(read, (try pass.cloneExprFresh(read, &renames)).?);
     try std.testing.expectEqual(initializer, program.getExpr(read).data.comptime_value.initializer);
+    try std.testing.expectEqual(root_id, program.getExpr(read).data.comptime_value.root);
+    try std.testing.expectEqualDeep(root, program.getComptimeValueRoot(root_id));
+    try std.testing.expectEqual(@as(usize, 1), program.comptime_value_roots.len());
 }
 
 test "static candidate clones share closed initializers without emitting caller work" {
@@ -14868,6 +15168,423 @@ test "call-pattern scans direct call and function reference capture operands" {
     try std.testing.expectEqual(@as(usize, 1), localUseCountInExpr(&program, local, fn_ref));
     try std.testing.expect(exprContainsReturn(&program, call_proc));
     try std.testing.expectEqual(@as(usize, 1), localUseCountInExpr(&program, local, call_proc));
+}
+
+/// Delays callbacks until receive and completes newest-first, including the
+/// single-lane case. Scratch is destroyed at callback return, not at merge.
+const ReverseSpecConstrExecutor = struct {
+    queued: [Pass.wave_capacity]TaskExecutor.Task = undefined,
+    len: usize = 0,
+    worker_count: usize,
+    fail_after: ?usize = null,
+    submitted: usize = 0,
+
+    fn executor(self: *@This()) TaskExecutor.Executor {
+        return .{ .context = self, .worker_count = self.worker_count, .beginFn = begin, .submitFn = submit, .receiveFn = receive, .endFn = end };
+    }
+    fn begin(context: *anyopaque) void {
+        const self: *@This() = @ptrCast(@alignCast(context));
+        std.debug.assert(self.len == 0);
+    }
+    fn submit(context: *anyopaque, task: TaskExecutor.Task) Allocator.Error!void {
+        const self: *@This() = @ptrCast(@alignCast(context));
+        if (self.fail_after == self.submitted) return error.OutOfMemory;
+        self.queued[self.len] = task;
+        self.len += 1;
+        self.submitted += 1;
+    }
+    fn receive(context: *anyopaque) TaskExecutor.Completion {
+        const self: *@This() = @ptrCast(@alignCast(context));
+        self.len -= 1;
+        const task = self.queued[self.len];
+        var scratch = std.heap.ArenaAllocator.init(std.testing.allocator);
+        defer scratch.deinit();
+        var lane = TaskExecutor.LaneState.init(std.testing.allocator);
+        defer lane.deinit();
+        return .{ .id = task.id, .worker_id = 0, .value = task.run(task.context, .{
+            .id = 0,
+            .allocator = std.testing.allocator,
+            .scratch = scratch.allocator(),
+            .lane_state = &lane,
+        }) };
+    }
+    fn end(context: *anyopaque) void {
+        const self: *@This() = @ptrCast(@alignCast(context));
+        std.debug.assert(self.len == 0);
+    }
+};
+
+test "staged SpecConstr discovery admits source order with duplicates and bounded reverse waves" {
+    const allocator = std.testing.allocator;
+    for ([_]usize{ 0, 1, 2, 4 }) |worker_count| {
+        var program = emptyLiftedProgramForTest(allocator);
+        defer program.deinit();
+        const unit_ty = try program.types.add(.zst);
+        const tag_ty = try program.types.add(.{ .tag_union = Type.Span.empty() });
+        const unit = try program.addExpr(.{ .ty = unit_ty, .data = .unit });
+        const arg = try program.addLocal(@enumFromInt(1), tag_ty);
+        const target = try program.addFn(.{
+            .symbol = @enumFromInt(2),
+            .args = try program.addTypedLocalSpan(&.{.{ .local = arg, .ty = tag_ty }}),
+            .captures = .empty(),
+            .body = .{ .roc = unit },
+            .ret = unit_ty,
+        });
+        const labels = [_]names.TagNameId{
+            try program.names.internTagLabel("First"),
+            try program.names.internTagLabel("Second"),
+            try program.names.internTagLabel("Third"),
+            try program.names.internTagLabel("Fourth"),
+        };
+        for (0..40) |index| {
+            const label_index = if (index == 0) 0 else @min(index - 1, 3);
+            const tag = try program.addExpr(.{ .ty = tag_ty, .data = .{ .tag = .{
+                .name = labels[label_index],
+                .payloads = .empty(),
+            } } });
+            const call = try program.addExpr(.{ .ty = unit_ty, .data = .{ .call_proc = .{
+                .callee = .{ .lifted = target },
+                .args = try program.addExprSpan(&.{tag}),
+                .captures = .empty(),
+            } } });
+            _ = try program.addFn(.{
+                .symbol = @enumFromInt(@as(u32, @intCast(index + 3))),
+                .args = .empty(),
+                .captures = .empty(),
+                .body = .{ .roc = call },
+                .ret = unit_ty,
+            });
+        }
+        var pass = try Pass.init(allocator, &program);
+        defer pass.deinit();
+        pass.plans[0].used_args[0] = true;
+        var executor: ReverseSpecConstrExecutor = .{ .worker_count = worker_count };
+        var metrics: ParallelMetrics = .{};
+        pass.options = .{ .executor = if (worker_count == 0) null else executor.executor(), .metrics_out = &metrics };
+        const before = program.markSpecConstrAnalysis();
+        try pass.collectValueAwareCallPatterns(program.fnCount());
+        try std.testing.expectEqualDeep(before, program.markSpecConstrAnalysis());
+        try std.testing.expectEqual(@as(usize, 3), pass.plans[0].specs.items.len);
+        for (pass.plans[0].specs.items, 0..) |spec, index| {
+            try std.testing.expectEqual(labels[index], spec.pattern.args[0].tag.name);
+        }
+        try std.testing.expectEqual(@as(u64, 3), metrics.patterns_admitted);
+        // All sources discover against phase-entry capacity, including the
+        // second wave after coordinator admission has saturated the target.
+        try std.testing.expectEqual(@as(u64, 40), metrics.patterns_recorded);
+        try std.testing.expectEqual(@as(u64, Pass.wave_capacity), metrics.peak_retained_shards);
+        try std.testing.expectEqual(@as(u64, if (worker_count == 0) 0 else 41), metrics.tasks_committed);
+        try std.testing.expectEqual(metrics.tasks_submitted, metrics.tasks_committed);
+    }
+}
+
+test "SpecConstr shard identity totals reject exhaustion before publication" {
+    const max = std.math.maxInt(u32);
+    try std.testing.expectEqual(max, try checkedIdentityTotal(max - 1, 1));
+    try std.testing.expectEqual(max, try checkedIdentityTotal(max, 0));
+    try std.testing.expectError(error.OutOfMemory, checkedIdentityTotal(max, 1));
+    try std.testing.expectError(error.OutOfMemory, checkedIdentityTotal(max - 1, 2));
+}
+
+test "staged SpecConstr phase entry capacity fixes discovery budgets across waves" {
+    const allocator = std.testing.allocator;
+    for ([_]usize{ 0, 1, 2, 4 }) |worker_count| {
+        var program = emptyLiftedProgramForTest(allocator);
+        defer program.deinit();
+        const ty = try program.types.add(.zst);
+        const tag_ty = try program.types.add(.{ .tag_union = Type.Span.empty() });
+        const unit = try program.addExpr(.{ .ty = ty, .data = .unit });
+        var consumers: [2]Ast.FnId = undefined;
+        for (&consumers, 0..) |*consumer, i| {
+            const arg = try program.addLocal(@enumFromInt(@as(u32, @intCast(i))), tag_ty);
+            consumer.* = try program.addFn(.{
+                .symbol = @enumFromInt(@as(u32, @intCast(i + 2))),
+                .args = try program.addTypedLocalSpan(&.{.{ .local = arg, .ty = tag_ty }}),
+                .captures = .empty(),
+                .body = .{ .roc = unit },
+                .ret = ty,
+            });
+        }
+        var tags: [3]Ast.ExprId = undefined;
+        for (&tags, [_][]const u8{ "A", "B", "C" }) |*tag, label| {
+            tag.* = try program.addExpr(.{ .ty = tag_ty, .data = .{ .tag = .{
+                .name = try program.names.internTagLabel(label),
+                .payloads = .empty(),
+            } } });
+        }
+        // Every demand of this argument spends 192 units of the body-wide
+        // inline budget, even when its consumer already has three requests.
+        const statement = try program.addStmt(.{ .expr = unit });
+        var expensive_statements: [190]Ast.StmtId = undefined;
+        @memset(&expensive_statements, statement);
+        const producer_body = try program.addExpr(.{ .ty = tag_ty, .data = .{ .block = .{
+            .statements = try program.addStmtSpan(&expensive_statements),
+            .final_expr = tags[0],
+        } } });
+        const producer = try program.addFn(.{
+            .symbol = @enumFromInt(4),
+            .args = .empty(),
+            .captures = .empty(),
+            .body = .{ .roc = producer_body },
+            .ret = tag_ty,
+        });
+        const expensive_arg = try program.addExpr(.{ .ty = tag_ty, .data = .{ .call_proc = .{
+            .callee = .{ .lifted = producer },
+            .args = .empty(),
+            .iterator_procedure = .iter_single,
+        } } });
+        const duplicate = try program.addExpr(.{ .ty = ty, .data = .{ .call_proc = .{
+            .callee = .{ .lifted = consumers[0] },
+            .args = try program.addExprSpan(&.{expensive_arg}),
+        } } });
+        const later = try program.addExpr(.{ .ty = ty, .data = .{ .call_proc = .{
+            .callee = .{ .lifted = consumers[1] },
+            .args = try program.addExprSpan(&.{expensive_arg}),
+        } } });
+        const repeated = try program.addStmt(.{ .expr = duplicate });
+        var repeats: [400]Ast.StmtId = undefined;
+        @memset(&repeats, repeated);
+        const budget_body = try program.addExpr(.{ .ty = ty, .data = .{ .block = .{
+            .statements = try program.addStmtSpan(&repeats),
+            .final_expr = later,
+        } } });
+        for (0..37) |i| {
+            const body = if (i == 36) budget_body else try program.addExpr(.{ .ty = ty, .data = .{ .call_proc = .{
+                .callee = .{ .lifted = consumers[0] },
+                .args = try program.addExprSpan(&.{tags[i % tags.len]}),
+            } } });
+            _ = try program.addFn(.{
+                .symbol = @enumFromInt(@as(u32, @intCast(i + 5))),
+                .args = .empty(),
+                .captures = .empty(),
+                .body = .{ .roc = body },
+                .ret = ty,
+            });
+        }
+        var pass = try Pass.init(allocator, &program);
+        defer pass.deinit();
+        pass.plans[0].used_args[0] = true;
+        pass.plans[1].used_args[0] = true;
+        var executor: ReverseSpecConstrExecutor = .{ .worker_count = worker_count };
+        pass.options.executor = if (worker_count == 0) null else executor.executor();
+        try pass.collectValueAwareCallPatterns(program.fnCount());
+        try std.testing.expectEqual(@as(usize, 3), pass.plans[0].specs.items.len);
+        // Admission in the first wave must not save inline budget for this
+        // distinct callee in the second wave.
+        try std.testing.expectEqual(@as(usize, 0), pass.plans[1].specs.items.len);
+        // A new phase observes the now-preexisting cap and legitimately skips
+        // the duplicate arguments, leaving budget for the later distinct call.
+        try pass.collectValueAwareCallPatterns(program.fnCount());
+        try std.testing.expectEqual(@as(usize, 1), pass.plans[1].specs.items.len);
+    }
+}
+
+test "SpecConstr retained local compaction ignores raw ID gaps and keeps first typed occurrences" {
+    var program = emptyLiftedProgramForTest(std.testing.allocator);
+    defer program.deinit();
+    const high: Ast.LocalId = @enumFromInt(0xffff_fffe);
+    const low: Ast.LocalId = @enumFromInt(1);
+    const middle: Ast.LocalId = @enumFromInt(100);
+    const first_ty = try program.types.add(.zst);
+    const later_ty = try program.types.add(.{ .tuple = try program.types.addSpan(&.{first_ty}) });
+    var leaves = [_]Ast.TypedLocal{
+        .{ .local = high, .ty = first_ty },
+        .{ .local = low, .ty = later_ty },
+        .{ .local = high, .ty = later_ty },
+        .{ .local = middle, .ty = first_ty },
+        .{ .local = low, .ty = first_ty },
+        .{ .local = high, .ty = later_ty },
+    };
+    // Only leaf-sized ordinal and duplicate columns fit here, regardless of
+    // the source/generated ID gap. Compaction never consults the type store.
+    var buffer: [128]u8 = undefined;
+    var bounded = std.heap.FixedBufferAllocator.init(&buffer);
+    var retained: std.ArrayList(Ast.TypedLocal) = .empty;
+    try Cloner.compactRetainedLocals(bounded.allocator(), &retained);
+    try std.testing.expectEqual(@as(usize, 0), bounded.end_index);
+    retained = .{ .items = &leaves, .capacity = leaves.len };
+    try Cloner.compactRetainedLocals(bounded.allocator(), &retained);
+    try std.testing.expectEqualSlices(Ast.TypedLocal, &.{
+        .{ .local = high, .ty = first_ty },
+        .{ .local = low, .ty = later_ty },
+        .{ .local = middle, .ty = first_ty },
+    }, retained.items);
+}
+
+test "SpecConstr retained locals allocate by exact leaves not unrelated prefix" {
+    const allocator = std.testing.allocator;
+    var program = emptyLiftedProgramForTest(allocator);
+    defer program.deinit();
+    const ty = try program.types.add(.zst);
+    for (0..100_000) |i| _ = try program.addLocal(@enumFromInt(@as(u32, @intCast(i))), ty);
+    const local: Ast.LocalId = @enumFromInt(99_999);
+    const span = try program.addTypedLocalSpan(&.{
+        .{ .local = local, .ty = ty },
+        .{ .local = local, .ty = ty },
+    });
+    var pass = try Pass.init(allocator, &program);
+    defer pass.deinit();
+    var buffer: [4096]u8 = undefined;
+    var bounded = std.heap.FixedBufferAllocator.init(&buffer);
+    pass.allocator = bounded.allocator();
+    defer pass.allocator = allocator;
+    var cloner = Cloner.initForRewrite(&pass);
+    defer cloner.deinit();
+    const before_empty = bounded.end_index;
+    try std.testing.expectEqualDeep(Ast.Span(Ast.TypedLocal).empty(), try cloner.cloneRetainedLocals(.empty()));
+    try std.testing.expectEqual(before_empty, bounded.end_index);
+    const result = try cloner.cloneRetainedLocals(span);
+    try std.testing.expectEqual(@as(u32, 1), result.len);
+    try std.testing.expectEqual(local, GuardedList.at(program.typedLocalSpan(result), 0).local);
+}
+
+test "staged SpecConstr submission failure drains accepted tasks" {
+    const allocator = std.testing.allocator;
+    var program = emptyLiftedProgramForTest(allocator);
+    defer program.deinit();
+    const unit_ty = try program.types.add(.zst);
+    const unit = try program.addExpr(.{ .ty = unit_ty, .data = .unit });
+    for (0..4) |index| {
+        _ = try program.addFn(.{
+            .symbol = @enumFromInt(@as(u32, @intCast(index))),
+            .args = .empty(),
+            .captures = .empty(),
+            .body = .{ .roc = unit },
+            .ret = unit_ty,
+        });
+    }
+    var pass = try Pass.init(allocator, &program);
+    defer pass.deinit();
+    var executor: ReverseSpecConstrExecutor = .{ .worker_count = 4, .fail_after = 2 };
+    pass.options.executor = executor.executor();
+    try std.testing.expectError(error.OutOfMemory, pass.collectValueAwareCallPatterns(4));
+    try std.testing.expectEqual(@as(usize, 0), executor.len);
+}
+
+fn checkSpecConstrShardAllocationFailure(allocator: Allocator, source: *Pass, fn_id: Ast.FnId, phase: Phase) Common.LowerError!void {
+    var work: Pass.Work = .{ .source = source, .fn_id = fn_id, .phase = phase };
+    var lane = TaskExecutor.LaneState.init(allocator);
+    defer lane.deinit();
+    _ = Pass.Work.callback(&work, .{
+        .id = 0,
+        .allocator = allocator,
+        .scratch = allocator,
+        .lane_state = &lane,
+    });
+    if (work.failure) |err| {
+        std.debug.assert(work.output == null);
+        return err;
+    }
+    const output = work.output.?;
+    defer output.deinit();
+    if (phase != .discovery) std.debug.assert(output.changed);
+}
+
+fn specConstrSelectionProgramForTest(allocator: Allocator) Allocator.Error!struct { program: Ast.Program, fn_id: Ast.FnId } {
+    var program = emptyLiftedProgramForTest(allocator);
+    errdefer program.deinit();
+    var symbols: Common.SymbolGen = .{};
+    const unit_ty = try program.types.add(.zst);
+    const unit = try program.addExpr(.{ .ty = unit_ty, .data = .unit });
+    const tuple_ty = try program.types.add(.{ .tuple = try program.types.addSpan(&.{ unit_ty, unit_ty }) });
+    const tuple = try program.addExpr(.{ .ty = tuple_ty, .data = .{ .tuple = try program.addExprSpan(&.{ unit, unit }) } });
+    const exit = try program.addExpr(.{ .ty = tuple_ty, .data = .{ .break_ = tuple } });
+    const loop = try program.addExpr(.{ .ty = tuple_ty, .data = .{ .loop_ = .{
+        .params = .empty(),
+        .initial_values = .empty(),
+        .body = exit,
+    } } });
+    const local = try program.addLocal(symbols.fresh(), unit_ty);
+    const local_ref = try program.addExpr(.{ .ty = unit_ty, .data = .{ .local = local } });
+    const first_pat = try program.addPat(.{ .ty = unit_ty, .data = .{ .bind = local } });
+    const second_local = try program.addLocal(symbols.fresh(), unit_ty);
+    const second_pat = try program.addPat(.{ .ty = unit_ty, .data = .{ .bind = second_local } });
+    const body = try program.addExpr(.{ .ty = unit_ty, .data = .{ .let_ = .{
+        .bind = try program.addPat(.{ .ty = tuple_ty, .data = .{ .tuple = try program.addPatSpan(&.{ first_pat, second_pat }) } }),
+        .value = loop,
+        .rest = local_ref,
+    } } });
+    const fn_id = try program.addFn(.{
+        .symbol = symbols.fresh(),
+        .args = .empty(),
+        .captures = .empty(),
+        .body = .{ .roc = body },
+        .ret = unit_ty,
+    });
+    program.next_symbol = symbols.next;
+    try program.names.prepareForReadSharing();
+    try program.types.prepareForReadSharing(&program.names);
+    return .{ .program = program, .fn_id = fn_id };
+}
+
+test "staged SpecConstr shard allocation failures release output and scratch owners" {
+    const allocator = std.testing.allocator;
+    var fixture = try specConstrSelectionProgramForTest(allocator);
+    const program = &fixture.program;
+    defer program.deinit();
+    var pass = try Pass.init(allocator, program);
+    defer pass.deinit();
+    for ([_]Phase{ .discovery, .iterator_fusion, .unused_loop_results }) |phase| {
+        try std.testing.checkAllAllocationFailures(allocator, checkSpecConstrShardAllocationFailure, .{ &pass, fixture.fn_id, phase });
+    }
+}
+
+fn checkSpecConstrCommitAllocationFailure(allocator: Allocator) (Allocator.Error || error{TestExpectedEqual})!void {
+    var fixture = try specConstrSelectionProgramForTest(allocator);
+    const program = &fixture.program;
+    defer program.deinit();
+    var pass = try Pass.init(allocator, program);
+    defer pass.deinit();
+    // Callback allocations succeed, so the sweep reaches coordinator commit
+    // with a live changed shard whose ownership must also be released on OOM.
+    var executor: ReverseSpecConstrExecutor = .{ .worker_count = 2 };
+    var metrics: ParallelMetrics = .{};
+    pass.options = .{ .executor = executor.executor(), .metrics_out = &metrics };
+    try pass.runIndependentPhase(.unused_loop_results, program.fnCount());
+    try std.testing.expectEqual(@as(u64, 1), metrics.bodies_committed);
+}
+
+test "staged SpecConstr changed shard commit allocation failures release owners" {
+    try std.testing.checkAllAllocationFailures(std.testing.allocator, checkSpecConstrCommitAllocationFailure, .{});
+}
+
+fn checkSpecConstrRequestAllocationFailure(allocator: Allocator) (Allocator.Error || error{ TestExpectedEqual, TestUnexpectedResult })!void {
+    var program = emptyLiftedProgramForTest(allocator);
+    defer program.deinit();
+    var symbols: Common.SymbolGen = .{};
+    const ty = try program.types.add(.zst);
+    const tuple_ty = try program.types.add(.{ .tuple = try program.types.addSpan(&.{ty}) });
+    const unit = try program.addExpr(.{ .ty = ty, .data = .unit });
+    const tuple = try program.addExpr(.{ .ty = tuple_ty, .data = .{ .tuple = try program.addExprSpan(&.{unit}) } });
+    const arg = try program.addLocal(symbols.fresh(), tuple_ty);
+    const target = try program.addFn(.{
+        .symbol = symbols.fresh(),
+        .args = try program.addTypedLocalSpan(&.{.{ .local = arg, .ty = tuple_ty }}),
+        .captures = .empty(),
+        .body = .{ .roc = unit },
+        .ret = ty,
+    });
+    const call = try program.addExpr(.{ .ty = ty, .data = .{ .call_proc = .{
+        .callee = .{ .lifted = target },
+        .args = try program.addExprSpan(&.{tuple}),
+    } } });
+    _ = try program.addFn(.{
+        .symbol = symbols.fresh(),
+        .args = .empty(),
+        .captures = .empty(),
+        .body = .{ .roc = call },
+        .ret = ty,
+    });
+    program.next_symbol = symbols.next;
+    var pass = try Pass.init(allocator, &program);
+    defer pass.deinit();
+    pass.plans[0].used_args[0] = true;
+    try pass.collectValueAwareCallPatterns(program.fnCount());
+    try std.testing.expectEqual(@as(usize, 1), pass.plans[0].specs.items.len);
+}
+
+test "staged SpecConstr request copying and admission allocation failures release owners" {
+    try std.testing.checkAllAllocationFailures(std.testing.allocator, checkSpecConstrRequestAllocationFailure, .{});
 }
 
 test "issue 10313 value-aware call-pattern collection does not append lifted IR" {
