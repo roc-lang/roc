@@ -1267,7 +1267,7 @@ pub const Payload = extern union {
     pub const ExposedItem = extern struct {
         name: u32,
         alias: u32,
-        is_wildcard: u32,
+        flags: u32,
     };
 
     pub const IfBranch = extern struct {
