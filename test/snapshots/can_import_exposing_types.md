@@ -89,7 +89,6 @@ UNDECLARED TYPE - can_import_exposing_types.md:47:34:47:40
 UNDECLARED TYPE - can_import_exposing_types.md:47:48:47:56
 UNDECLARED TYPE - can_import_exposing_types.md:47:58:47:63
 NAME NOT IN SCOPE - can_import_exposing_types.md:50:33:50:44
-TYPE MISMATCH - can_import_exposing_types.md:50:22:50:74
 # PROBLEMS
 ~~~clojure
 (reports
@@ -433,67 +432,7 @@ TYPE MISMATCH - can_import_exposing_types.md:50:22:50:74
 			(reflow "Is it misspelled, or is there an import missing?")
 			(line-break)
 			(line-break)
-			(source-region (file "can_import_exposing_types.md") (start 50 33) (end 50 44) (annotation error) (line-text "        Ok(value) => Ok({ body: Json.to_str(value), status: httpStatus })"))))
-	(report
-		(severity runtime_error)
-		(title "Type Mismatch")
-		(region (start 50 22) (end 50 74))
-		(headline
-			(reflow "The")
-			(reflow " ")
-			(reflow "first")
-			(reflow " ")
-			(reflow "branch of this")
-			(reflow " ")
-			(annotated code "match")
-			(reflow " ")
-			(reflow "does not match the previous")
-			(reflow " ")
-			(reflow "branch")
-			(reflow " ")
-			(reflow "."))
-		(document
-			(source-region (file "can_import_exposing_types.md") (start 50 22) (end 50 74) (annotation error) (line-text "        Ok(value) => Ok({ body: Json.to_str(value), status: httpStatus })"))
-			(line-break)
-			(reflow "The")
-			(reflow " ")
-			(reflow "first")
-			(reflow " ")
-			(reflow "branch is:")
-			(line-break)
-			(line-break)
-			(annotation-start code-block)
-			(indent 1)
-			(text "[Ok({ body: Error, status: Error }), ..]")
-			(annotation-end)
-			(line-break)
-			(line-break)
-			(reflow "But the previous")
-			(reflow " ")
-			(reflow "branch results")
-			(reflow " ")
-			(reflow "in:")
-			(line-break)
-			(line-break)
-			(annotation-start code-block)
-			(indent 1)
-			(text "Try(Error, Error)")
-			(annotation-end)
-			(line-break)
-			(line-break)
-			(reflow "All branches in a")
-			(reflow " ")
-			(annotated code "match")
-			(reflow " ")
-			(reflow "must have compatible types.")
-			(line-break)
-			(annotated underline "Note:")
-			(reflow " ")
-			(reflow "You can wrap branches values in a tag to make them compatible.")
-			(line-break)
-			(reflow "To learn about tags, see")
-			(reflow " ")
-			(link "https://www.roc-lang.org/tutorial#tags"))))
+			(source-region (file "can_import_exposing_types.md") (start 50 33) (end 50 44) (annotation error) (line-text "        Ok(value) => Ok({ body: Json.to_str(value), status: httpStatus })")))))
 ~~~
 # TOKENS
 ~~~zig

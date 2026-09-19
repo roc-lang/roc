@@ -128,6 +128,7 @@ pub const rc_conformance = @import("rc_conformance.zig");
 
 test "eval tests" {
     std.testing.refAllDecls(@This());
+    std.testing.refAllDecls(@import("vendor_relocatable_loader"));
     std.testing.refAllDecls(@import("BuiltinModules.zig"));
     std.testing.refAllDecls(@import("builtins.zig"));
     std.testing.refAllDecls(@import("crash_context.zig"));

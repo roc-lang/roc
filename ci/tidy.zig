@@ -1180,6 +1180,15 @@ const DeadFilesDetector = struct {
                 // isolated work directory after `roc glue` writes it.
                 continue;
             }
+            if (!require_repo_path and
+                std.mem.eql(u8, file_path, "src/machine_code_shim/compiler_rt.zig") and
+                std.mem.startsWith(u8, path, "compiler_rt/"))
+            {
+                // The private runtime root is copied beside the toolchain's
+                // compiler-rt sources by build.zig. Those imports belong to
+                // the installed Zig toolchain, not this repository.
+                continue;
+            }
             if (require_repo_path and
                 !std.mem.startsWith(u8, path, "src/") and
                 !std.mem.startsWith(u8, path, "test/"))
@@ -1234,6 +1243,30 @@ const DeadFilesDetector = struct {
         return false;
     }
 };
+
+test "dead files detector distinguishes private toolchain imports from repository files" {
+    const gpa = std.testing.allocator;
+    var detector = DeadFilesDetector.init(gpa);
+    defer detector.deinit(gpa);
+
+    try detector.visit(gpa, .{
+        .path = "src/machine_code_shim/compiler_rt.zig",
+        .text = "const int = @import(\"compiler_rt/int.zig\");\n" ++
+            "const helper = @import(\"helper.zig\");\n",
+    });
+    try std.testing.expect(!detector.files.contains(DeadFilesDetector.pathToName("int.zig")));
+    const helper = detector.files.get(DeadFilesDetector.pathToName("helper.zig")).?;
+    try std.testing.expectEqual(@as(u32, 1), helper.import_count);
+    try std.testing.expectEqual(@as(u32, 0), helper.definition_count);
+
+    try detector.visit(gpa, .{
+        .path = "src/other.zig",
+        .text = "const int = @import(\"compiler_rt/int.zig\");\n",
+    });
+    const int = detector.files.get(DeadFilesDetector.pathToName("int.zig")).?;
+    try std.testing.expectEqual(@as(u32, 1), int.import_count);
+    try std.testing.expectEqual(@as(u32, 0), int.definition_count);
+}
 
 /// Lists all files in the repository.
 ///

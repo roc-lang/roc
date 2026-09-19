@@ -7402,6 +7402,12 @@ fn addMachineCodeShimLib(
         .linkage = .static,
     });
     configureBackend(machine_code_shim_lib, target);
+    if (target.result.os.tag == .linux and target.result.cpu.arch.isArm()) {
+        // RocOps crash aborts in platform hosts; no foreign exceptions cross
+        // this boundary. Stack tracing is disabled by shim_io as well. Do not
+        // emit EHABI personality dependencies or substitute no-op personalities.
+        machine_code_shim_lib.root_module.unwind_tables = .none;
+    }
     // Only the modules the shim actually imports. The full compiler module set
     // would put libc in the shim's dependency graph (the bundle module links
     // zstd), and `link_libc` is resolved over the whole graph regardless of
@@ -7426,6 +7432,30 @@ fn addMachineCodeShimLib(
     machine_code_shim_lib.root_module.addImport("shim_host_abi", shim_host_abi_module);
     machine_code_shim_lib.root_module.addImport("compiled_builtins", compiled_builtins_module);
     machine_code_shim_lib.step.dependOn(&write_compiled_builtins.step);
+    if (target.result.os.tag == .linux and
+        (target.result.cpu.arch == .x86 or target.result.cpu.arch.isArm()))
+    {
+        // Reuse the toolchain's arithmetic and AAPCS implementations without
+        // importing its public compiler-rt root (which exports every helper).
+        const private_rt = b.addWriteFiles();
+        const root = private_rt.addCopyFile(b.path("src/machine_code_shim/compiler_rt.zig"), "compiler_rt.zig");
+        const zig_lib_path = b.fmt("{f}", .{b.graph.zig_lib_directory});
+        for ([_][]const u8{
+            "int.zig",                 "udivmod.zig",             "arm.zig",
+            "udivmoddi4_test.zig",     "udivmodti4_test.zig",     "divti3_test.zig",
+            "modti3_test.zig",         "floatundidf.zig",         "floatundisf.zig",
+            "fixdfdi.zig",             "fixunsdfdi.zig",          "fixsfdi.zig",
+            "fixunssfdi.zig",          "float_from_int.zig",      "int_from_float.zig",
+            "float_from_int_test.zig", "int_from_float_test.zig",
+        }) |file| {
+            _ = private_rt.addCopyFile(.{ .cwd_relative = b.pathJoin(&.{ zig_lib_path, "compiler_rt", file }) }, b.pathJoin(&.{ "compiler_rt", file }));
+        }
+        machine_code_shim_lib.root_module.addImport("private_compiler_rt", b.createModule(.{
+            .root_source_file = root,
+            .target = target,
+            .optimize = .ReleaseFast,
+        }));
+    }
     // The shim defines its compiler-private stack probe internally. Do not
     // bundle the complete compiler-rt object: its broad set of weak definitions
     // can participate in platform symbol resolution, and COFF rejects duplicate
@@ -7437,6 +7467,50 @@ fn addMachineCodeShimLib(
     if (target.result.os.tag == .linux) machine_code_shim_lib.root_module.link_libc = false;
 
     return machine_code_shim_lib;
+}
+
+/// Link the checked archive against a platform that owns colliding compiler-rt
+/// names. This verifies actual relocation closure, not just symbol spelling.
+fn addMachineCodeShimLinkCheck(
+    b: *std.Build,
+    roc_modules: modules.RocModules,
+    target: ResolvedTarget,
+    optimize: OptimizeMode,
+    archive: std.Build.LazyPath,
+) *Step.Compile {
+    const host = b.addObject(.{
+        .name = "machine_code_shim_link_host",
+        .root_module = b.createModule(.{
+            .root_source_file = b.path("src/machine_code_shim/test_host.zig"),
+            .target = target,
+            .optimize = optimize,
+        }),
+    });
+    host.root_module.addImport("builtins", roc_modules.builtins);
+    configureBackend(host, target);
+    const options = b.addOptions();
+    options.addOption(bool, "is_interpreter", false);
+    const consumer = b.addTest(.{
+        .name = "machine_code_shim_checked_link",
+        .root_module = b.createModule(.{
+            .root_source_file = b.path("src/machine_code_shim/boundary_link_test.zig"),
+            .target = target,
+            .optimize = optimize,
+            .link_libc = true,
+        }),
+    });
+    configureBackend(consumer, target);
+    consumer.root_module.addImport("builtins", roc_modules.builtins);
+    consumer.root_module.addOptions("boundary_test_options", options);
+    consumer.root_module.addObject(host);
+    consumer.root_module.addObjectFile(archive);
+    consumer.root_module.addCSourceFile(.{ .file = b.path("src/machine_code_shim/test/compiler_rt_collisions.c") });
+    // Keep every shim relocation live, even if this minimal host does not call
+    // the image loader. The deliberately poisoned platform helpers are link
+    // fixtures, not a runnable test runtime.
+    consumer.link_gc_sections = false;
+    _ = consumer.getEmittedBin();
+    return consumer;
 }
 
 const MainExeResult = struct {
@@ -7756,6 +7830,16 @@ fn addMainExe(
     const machine_code_shim_filename = if (target.result.os.tag == .windows) "roc_machine_code_shim.lib" else "libroc_machine_code_shim.a";
     const checked_machine_code_shim = check_archive.addOutputFileArg(machine_code_shim_filename);
     machine_code_shim_archive_check_for_registry = &check_archive.step;
+    if (add_machine_code_shim_test) {
+        const selected_check = b.step("check-selected-machine-code-shim", "Check the selected target's shim symbol contract");
+        selected_check.dependOn(&check_archive.step);
+        if (target.result.os.tag == .linux and
+            (target.result.cpu.arch == .x86 or target.result.cpu.arch.isArm()))
+        {
+            const link_check = addMachineCodeShimLinkCheck(b, roc_modules, target, optimize, checked_machine_code_shim);
+            selected_check.dependOn(&link_check.step);
+        }
+    }
     const strip_machine_code_shim_names = b.addRunArtifact(archive_member_names_tool);
     strip_machine_code_shim_names.addArg(@tagName(target.result.os.tag));
     strip_machine_code_shim_names.addFileArg(checked_machine_code_shim);
@@ -7767,6 +7851,8 @@ fn addMainExe(
         const checks = b.step("check-machine-code-shim-targets", "Check all shipped shim symbol contracts");
         checks.dependOn(&check_archive.step);
         const queries = [_]std.Target.Query{
+            .{ .cpu_arch = .x86, .os_tag = .linux, .abi = .musl },
+            .{ .cpu_arch = .arm, .os_tag = .linux, .abi = .musleabihf },
             .{ .cpu_arch = .x86_64, .os_tag = .linux, .abi = .musl },
             .{ .cpu_arch = .aarch64, .os_tag = .linux, .abi = .musl },
             .{ .cpu_arch = .x86_64, .os_tag = .linux, .abi = .gnu },
@@ -7787,8 +7873,14 @@ fn addMainExe(
             const check_cross = b.addRunArtifact(archive_checker);
             check_cross.addArg(@tagName(cross_target.result.os.tag));
             check_cross.addFileArg(cross_shim.getEmittedBin());
-            _ = check_cross.addOutputFileArg(if (cross_target.result.os.tag == .windows) "roc_machine_code_shim.lib" else "libroc_machine_code_shim.a");
+            const checked_cross = check_cross.addOutputFileArg(if (cross_target.result.os.tag == .windows) "roc_machine_code_shim.lib" else "libroc_machine_code_shim.a");
             checks.dependOn(&check_cross.step);
+            if (cross_target.result.os.tag == .linux and
+                (cross_target.result.cpu.arch == .x86 or cross_target.result.cpu.arch.isArm()))
+            {
+                const link_check = addMachineCodeShimLinkCheck(b, roc_modules, cross_target, optimize, checked_cross);
+                checks.dependOn(&link_check.step);
+            }
         }
         // Link real COFF consumers with deliberate platform/private collisions.
         // Both target ABIs must accept the prepared archive and its rebuilt index.

@@ -19456,7 +19456,9 @@ fn checkExprWithFunctionOwner(self: *Self, expr_idx: CIR.Expr.Idx, env: *Env, ex
                         const requirement_context = mismatch.context.platform_requirement;
                         mismatch.context = .{ .platform_requirement_return = requirement_context };
                     }
-                    try self.erroneous_value_exprs.put(self.gpa, lambda.body, {});
+                    const result_expr = self.resultValueExpr(lambda.body);
+                    mismatch.types.actual_var = ModuleEnv.varFrom(result_expr);
+                    try self.erroneous_value_exprs.put(self.gpa, result_expr, {});
                 }
                 break :blk lambda_body_does_fx;
             } else blk: {
@@ -23667,7 +23669,7 @@ fn reportMissingNominalMethodForBinopConstraint(
         .origin = .{ .desugared_binop = .{ .negated = false } },
     };
 
-    try self.reportConstraintError(lhs_var, constraint, .{ .missing_method = .nominal }, env, false);
+    try self.reportConstraintError(lhs_var, constraint, .{ .missing_method = .nominal }, env, false, null);
     try self.markErroneous(expr_var);
 }
 
@@ -25572,21 +25574,27 @@ fn probeUnifyWithoutRecordingProblems(
     expected: Var,
     actual: Var,
 ) Allocator.Error!bool {
+    return (try self.probeUnifyResultWithoutRecordingProblems(expected, actual)).isEstablished();
+}
+
+/// The raw unifier result of relating `expected` and `actual` against
+/// throwaway problem/snapshot stores, so a mismatch is neither recorded nor
+/// poisoned. Callers own any rollback of the type store.
+fn probeUnifyResultWithoutRecordingProblems(
+    self: *Self,
+    expected: Var,
+    actual: Var,
+) Allocator.Error!unifier.Result {
     var probe_problems = try ProblemStore.initCapacity(self.gpa, 1);
     defer probe_problems.deinit(self.gpa);
 
     var probe_snapshots = try SnapshotStore.initCapacity(self.gpa, 8);
     defer probe_snapshots.deinit();
 
-    // Probe against throwaway problem/snapshot stores so a mismatch here is
-    // neither recorded nor poisoned—only whether the relation was established
-    // matters.
     var env = self.unifyEnv();
     env.problems = &probe_problems;
     env.snapshots = &probe_snapshots;
-    const result = try unifier.unify(&env, expected, actual, .{ .on_mismatch = .write_no_report });
-
-    return result.isEstablished();
+    return try unifier.unify(&env, expected, actual, .{ .on_mismatch = .write_no_report });
 }
 
 /// Finalize still-open literal defaults at end of module checking, via the
@@ -29759,7 +29767,31 @@ fn checkReturnRelation(
 ) std.mem.Allocator.Error!void {
     const result = try self.unifyInContext(expected, ModuleEnv.varFrom(actual_expr), env, ctx);
     if (result.isProblem()) {
-        try self.erroneous_value_exprs.put(self.gpa, actual_expr, {});
+        std.debug.assert(result == .problem);
+        const result_expr = self.resultValueExpr(actual_expr);
+        self.problems.problems.items[@intFromEnum(result.problem)].type_mismatch.types.actual_var = ModuleEnv.varFrom(result_expr);
+        try self.erroneous_value_exprs.put(self.gpa, result_expr, {});
+    }
+}
+
+/// The expression that produces `expr_idx`'s value. A block whose type is its
+/// final expression's type yields that final expression's value; a diverging
+/// block's type is independent of its unreachable final expression, so the
+/// block itself is the result. Mismatch reports against an expected result
+/// locate and poison this expression. Callers invoke this only after a
+/// mismatch, so successful checking never pays for it.
+fn resultValueExpr(self: *Self, expr_idx: CIR.Expr.Idx) CIR.Expr.Idx {
+    var current = expr_idx;
+    var guard = types_mod.debug.IterationGuard.init("resultValueExpr");
+    while (true) {
+        guard.tick();
+        const expr = self.cir.store.getExpr(current);
+        if (expr != .e_block) return current;
+        const final_expr = expr.e_block.final_expr;
+        const block_root = self.types.resolveVar(ModuleEnv.varFrom(current)).var_;
+        const final_root = self.types.resolveVar(ModuleEnv.varFrom(final_expr)).var_;
+        if (block_root != final_root) return current;
+        current = final_expr;
     }
 }
 
@@ -31476,9 +31508,10 @@ fn checkStaticDispatchConstraints(self: *Self, env: *Env, is_numeric_default_pas
                         try self.reportConstraintError(
                             deferred_constraint.var_,
                             constraint,
-                            .{ .missing_method = .nominal },
+                            .{ .missing_method = .rigid },
                             env,
                             is_numeric_default_pass,
+                            failure_expr,
                         );
                         continue;
                     }
@@ -31569,6 +31602,7 @@ fn checkStaticDispatchConstraints(self: *Self, env: *Env, is_numeric_default_pas
                             .{ .missing_method = .nominal },
                             env,
                             is_numeric_default_pass,
+                            failure_expr,
                         );
                         continue;
                     };
@@ -31600,6 +31634,7 @@ fn checkStaticDispatchConstraints(self: *Self, env: *Env, is_numeric_default_pas
                                     .{ .missing_method = .nominal },
                                     env,
                                     is_numeric_default_pass,
+                                    failure_expr,
                                 );
                                 continue;
                             }
@@ -31635,6 +31670,7 @@ fn checkStaticDispatchConstraints(self: *Self, env: *Env, is_numeric_default_pas
                                     .{ .missing_method = .nominal },
                                     env,
                                     is_numeric_default_pass,
+                                    failure_expr,
                                 ),
                             }
                             continue;
@@ -31648,6 +31684,7 @@ fn checkStaticDispatchConstraints(self: *Self, env: *Env, is_numeric_default_pas
                                     .not_nominal,
                                     env,
                                     is_numeric_default_pass,
+                                    failure_expr,
                                 );
                                 continue;
                             };
@@ -31659,6 +31696,7 @@ fn checkStaticDispatchConstraints(self: *Self, env: *Env, is_numeric_default_pas
                                         constraint.fn_var,
                                         env,
                                         region,
+                                        failure_expr,
                                     );
                                 },
                                 .unresolved => if (!is_numeric_default_pass or try self.deferredEncodeHasPendingOpenLiteral(deferred_constraint, env)) {
@@ -31671,6 +31709,7 @@ fn checkStaticDispatchConstraints(self: *Self, env: *Env, is_numeric_default_pas
                                     .{ .missing_method = .nominal },
                                     env,
                                     is_numeric_default_pass,
+                                    failure_expr,
                                 ),
                             }
                             continue;
@@ -31688,6 +31727,7 @@ fn checkStaticDispatchConstraints(self: *Self, env: *Env, is_numeric_default_pas
                                     deferred_constraint.var_,
                                     constraint,
                                     env,
+                                    failure_expr,
                                 ),
                             }
                             continue;
@@ -31972,6 +32012,7 @@ fn checkStaticDispatchConstraints(self: *Self, env: *Env, is_numeric_default_pas
                                     .{ .missing_method = .nominal },
                                     env,
                                     is_numeric_default_pass,
+                                    failure_expr,
                                 );
                             }
                             continue;
@@ -32028,6 +32069,7 @@ fn checkStaticDispatchConstraints(self: *Self, env: *Env, is_numeric_default_pas
                                     .not_nominal,
                                     env,
                                     is_numeric_default_pass,
+                                    failure_expr,
                                 );
                                 continue;
                             };
@@ -32040,6 +32082,7 @@ fn checkStaticDispatchConstraints(self: *Self, env: *Env, is_numeric_default_pas
                                             constraint.fn_var,
                                             env,
                                             region,
+                                            failure_expr,
                                         );
                                     }
                                     continue;
@@ -32074,6 +32117,7 @@ fn checkStaticDispatchConstraints(self: *Self, env: *Env, is_numeric_default_pas
                                 deferred_constraint.var_,
                                 constraint,
                                 env,
+                                failure_expr,
                             );
                             continue;
                         }
@@ -32091,6 +32135,7 @@ fn checkStaticDispatchConstraints(self: *Self, env: *Env, is_numeric_default_pas
                             .{ .missing_method = .nominal },
                             env,
                             is_numeric_default_pass,
+                            failure_expr,
                         );
                         continue;
                     };
@@ -32264,6 +32309,7 @@ fn checkStaticDispatchConstraints(self: *Self, env: *Env, is_numeric_default_pas
                                 .{ .missing_method = .nominal },
                                 env,
                                 is_numeric_default_pass,
+                                failure_expr,
                             );
                         }
                     } else if (constraint.fn_name.eql(self.cir.idents.map) or constraint.fn_name.eql(self.cir.idents.map_bang)) {
@@ -32280,6 +32326,7 @@ fn checkStaticDispatchConstraints(self: *Self, env: *Env, is_numeric_default_pas
                                 deferred_constraint.var_,
                                 constraint,
                                 env,
+                                failure_expr,
                             ),
                         }
                     } else if (constraint.fn_name.eql(self.cir.idents.parser_for)) {
@@ -32322,6 +32369,7 @@ fn checkStaticDispatchConstraints(self: *Self, env: *Env, is_numeric_default_pas
                                     .not_nominal,
                                     env,
                                     is_numeric_default_pass,
+                                    failure_expr,
                                 );
                             },
                             .unsupported => {
@@ -32331,6 +32379,7 @@ fn checkStaticDispatchConstraints(self: *Self, env: *Env, is_numeric_default_pas
                                     .not_nominal,
                                     env,
                                     is_numeric_default_pass,
+                                    failure_expr,
                                 );
                             },
                         }
@@ -32344,6 +32393,7 @@ fn checkStaticDispatchConstraints(self: *Self, env: *Env, is_numeric_default_pas
                                 .not_nominal,
                                 env,
                                 is_numeric_default_pass,
+                                failure_expr,
                             );
                             continue;
                         };
@@ -32356,6 +32406,7 @@ fn checkStaticDispatchConstraints(self: *Self, env: *Env, is_numeric_default_pas
                                         constraint.fn_var,
                                         env,
                                         region,
+                                        failure_expr,
                                     );
                                 }
                             },
@@ -32373,6 +32424,7 @@ fn checkStaticDispatchConstraints(self: *Self, env: *Env, is_numeric_default_pas
                                         constraint.fn_var,
                                         env,
                                         region,
+                                        failure_expr,
                                     );
                                     continue;
                                 }
@@ -32382,6 +32434,7 @@ fn checkStaticDispatchConstraints(self: *Self, env: *Env, is_numeric_default_pas
                                     .not_nominal,
                                     env,
                                     is_numeric_default_pass,
+                                    failure_expr,
                                 );
                             },
                             .unsupported => {
@@ -32391,6 +32444,7 @@ fn checkStaticDispatchConstraints(self: *Self, env: *Env, is_numeric_default_pas
                                     .not_nominal,
                                     env,
                                     is_numeric_default_pass,
+                                    failure_expr,
                                 );
                             },
                         }
@@ -32404,6 +32458,7 @@ fn checkStaticDispatchConstraints(self: *Self, env: *Env, is_numeric_default_pas
                             .not_nominal,
                             env,
                             is_numeric_default_pass,
+                            failure_expr,
                         );
                     }
                 }
@@ -32438,6 +32493,7 @@ fn checkStaticDispatchConstraints(self: *Self, env: *Env, is_numeric_default_pas
                                 .not_nominal,
                                 env,
                                 is_numeric_default_pass,
+                                failure_expr,
                             );
                         }
                     }
@@ -36296,13 +36352,13 @@ fn satisfyImplicitParserConstraint(
 ) Allocator.Error!void {
     const resolved_constraint = self.types.resolveVar(constraint_fn_var);
     const resolved_func = resolved_constraint.desc.content.unwrapFunc() orelse {
-        try self.reportConstraintErrorAt(dispatcher_var, constraint, .not_nominal, env, false, failure_expr);
+        try self.reportConstraintErrorAt(dispatcher_var, constraint, .not_nominal, env, false, failure_expr, failure_expr);
         return;
     };
 
     const args = self.types.sliceVars(resolved_func.args);
     if (args.len != 1) {
-        try self.reportConstraintErrorAt(dispatcher_var, constraint, .not_nominal, env, false, failure_expr);
+        try self.reportConstraintErrorAt(dispatcher_var, constraint, .not_nominal, env, false, failure_expr, failure_expr);
         return;
     }
 
@@ -36310,12 +36366,12 @@ fn satisfyImplicitParserConstraint(
     const encoding_var = args[0];
     const resolved_runtime_fn = self.types.resolveVar(resolved_func.ret);
     const runtime_func = resolved_runtime_fn.desc.content.unwrapFunc() orelse {
-        try self.reportConstraintErrorAt(dispatcher_var, constraint, .not_nominal, env, false, failure_expr);
+        try self.reportConstraintErrorAt(dispatcher_var, constraint, .not_nominal, env, false, failure_expr, failure_expr);
         return;
     };
     const runtime_args = self.types.sliceVars(runtime_func.args);
     if (runtime_args.len != 1) {
-        try self.reportConstraintErrorAt(dispatcher_var, constraint, .not_nominal, env, false, failure_expr);
+        try self.reportConstraintErrorAt(dispatcher_var, constraint, .not_nominal, env, false, failure_expr, failure_expr);
         return;
     }
 
@@ -36366,7 +36422,7 @@ fn satisfyImplicitParserConstraint(
             try self.poisonConstraintFailure(dispatcher_var, constraint, env, failure_expr);
             try self.markStaticDispatchRejected(constraint);
         },
-        .unsupported => try self.reportConstraintErrorAt(dispatcher_var, constraint, .not_nominal, env, false, failure_expr),
+        .unsupported => try self.reportConstraintErrorAt(dispatcher_var, constraint, .not_nominal, env, false, failure_expr, failure_expr),
     }
 }
 
@@ -36377,16 +36433,17 @@ fn satisfyImplicitEncoderForConstraint(
     constraint_fn_var: Var,
     env: *Env,
     region: Region,
+    owner_expr: ?CIR.Expr.Idx,
 ) Allocator.Error!void {
     const resolved_constraint = self.types.resolveVar(constraint_fn_var);
     const resolved_func = resolved_constraint.desc.content.unwrapFunc() orelse {
-        try self.reportConstraintError(dispatcher_var, constraint, .not_nominal, env, false);
+        try self.reportConstraintError(dispatcher_var, constraint, .not_nominal, env, false, owner_expr);
         return;
     };
 
     const args = self.types.sliceVars(resolved_func.args);
     if (args.len != 1) {
-        try self.reportConstraintError(dispatcher_var, constraint, .not_nominal, env, false);
+        try self.reportConstraintError(dispatcher_var, constraint, .not_nominal, env, false, owner_expr);
         return;
     }
 
@@ -36394,12 +36451,12 @@ fn satisfyImplicitEncoderForConstraint(
 
     const resolved_runtime_fn = self.types.resolveVar(resolved_func.ret);
     const runtime_func = resolved_runtime_fn.desc.content.unwrapFunc() orelse {
-        try self.reportConstraintError(dispatcher_var, constraint, .not_nominal, env, false);
+        try self.reportConstraintError(dispatcher_var, constraint, .not_nominal, env, false, owner_expr);
         return;
     };
     const runtime_args = self.types.sliceVars(runtime_func.args);
     if (runtime_args.len != 2) {
-        try self.reportConstraintError(dispatcher_var, constraint, .not_nominal, env, false);
+        try self.reportConstraintError(dispatcher_var, constraint, .not_nominal, env, false, owner_expr);
         return;
     }
 
@@ -36449,7 +36506,7 @@ fn satisfyImplicitEncoderForConstraint(
             try self.poisonConstraintFailure(dispatcher_var, constraint, env, null);
             try self.markStaticDispatchRejected(constraint);
         },
-        .unsupported => try self.reportConstraintError(dispatcher_var, constraint, .not_nominal, env, false),
+        .unsupported => try self.reportConstraintError(dispatcher_var, constraint, .not_nominal, env, false, owner_expr),
     }
 }
 
@@ -37513,7 +37570,7 @@ fn reportDerivedParseMissingMethodAt(
     };
     var derived_constraint = constraint;
     derived_constraint.fn_name = method_name;
-    try self.reportConstraintErrorAt(dispatcher_var, derived_constraint, .{ .missing_method = dispatcher_type }, env, false, failure_expr);
+    try self.reportConstraintErrorAt(dispatcher_var, derived_constraint, .{ .missing_method = dispatcher_type }, env, false, failure_expr, failure_expr);
     return .reported_error;
 }
 
@@ -39763,6 +39820,7 @@ fn checkFlexVarConstraintCompatibility(
                 env,
                 is_numeric_default_pass,
                 options.error_expr,
+                options.error_expr,
             );
             had_error = true;
             continue;
@@ -39878,32 +39936,35 @@ fn recordBranchTypeMismatch(self: *Self, body_var: Var, expected_ret: Var, ctx: 
     } });
 }
 
-/// Probe whether `body_var` can unify with `target`, recording and committing
+/// Probe whether `body_var` can be used as `target`, recording and committing
 /// nothing: run the non-recording raw-unifier probe inside a `beginProbe` scope,
-/// then always roll back. Nothing in the live solver state is disturbed.
+/// then always roll back. Nothing in the live solver state is disturbed. A
+/// relation stopped by an already-reported `.err` inside either type is
+/// accepted: that error owns the diagnostic, so the branch adds none.
 fn probeBranchCompatible(self: *Self, body_var: Var, target: Var) std.mem.Allocator.Error!bool {
     var probe = try self.beginProbe(null);
     defer probe.rollback();
-    return try self.probeUnifyWithoutRecordingProblems(body_var, target);
+    return (try self.probeUnifyResultWithoutRecordingProblems(body_var, target)).isAccepted();
 }
 
-/// Record a branch-vs-`mismatch_against` diagnostic (actual = branch body,
-/// region on it) and locally poison the branch so it does not cascade.
+/// Record a branch-vs-`mismatch_against` diagnostic (actual = the expression
+/// producing the branch body's value, region on it) and queue that expression
+/// for replacement with a runtime error, so only taking this branch crashes.
 /// `mismatch_against` is rendered as "the previous branch(es) result"—either
 /// the annotated return type or the branch accumulator, whichever the body
-/// failed against. `expected_ret` is always used to mark the erroneous branch.
+/// failed against. No solved type changes: the rejected body is never folded
+/// into the accumulator, so the expected return type and every class the body
+/// shares with other code keep the types they were checked at, and Monotype
+/// lowers the runtime error at the enclosing expression's result type.
 fn reportBranchMismatchAndPoison(
     self: *Self,
     body_expr_idx: CIR.Expr.Idx,
-    body_var: Var,
     mismatch_against: Var,
-    expected_ret: Var,
     ctx: problem.Context,
-    env: *Env,
 ) std.mem.Allocator.Error!void {
-    try self.recordBranchTypeMismatch(body_var, mismatch_against, ctx);
-    try self.markErroneousBranchWithExpected(body_expr_idx, expected_ret, env);
-    try self.markErroneous(body_var);
+    const result_expr = self.resultValueExpr(body_expr_idx);
+    try self.recordBranchTypeMismatch(ModuleEnv.varFrom(result_expr), mismatch_against, ctx);
+    try self.erroneous_value_exprs.put(self.gpa, result_expr, {});
 }
 
 /// Check one if/match branch body against the shared expected return type, and
@@ -39926,8 +39987,9 @@ fn reportBranchMismatchAndPoison(
 ///      rolled-back probe—branches never merge into the shared annotation var
 ///      (see above).
 ///   2. One real unify against `acc` inside a `CommitProbe`: the fold and the
-///      compatibility check are the same operation. Success commits in place—the
-///      wrapper already propagated regions/rank/deferred-constraints into the live
+///      compatibility check are the same operation. Success, or a relation
+///      stopped by an already-reported `.err`, commits in place—the wrapper
+///      already propagated regions/rank/deferred-constraints into the live
 ///      `env`, so nothing is redone. Failure catches a body that matches the
 ///      annotation yet diverges from an earlier sibling already folded in—only
 ///      observable when the annotation is LOOSER than the accumulated branches,
@@ -39959,7 +40021,7 @@ fn checkBranchBodyAgainstExpected(
 
     // Probe (1): does the body match the annotated return type?
     if (!try self.probeBranchCompatible(body_var, expected_ret)) {
-        try self.reportBranchMismatchAndPoison(body_expr_idx, body_var, expected_ret, expected_ret, ctx, env);
+        try self.reportBranchMismatchAndPoison(body_expr_idx, expected_ret, ctx);
         return;
     }
 
@@ -39973,7 +40035,7 @@ fn checkBranchBodyAgainstExpected(
         defer if (!committed) commit_probe.rollback();
 
         const result = try commit_probe.unifyInContext(body_var, acc, ctx);
-        if (result.isEstablished()) {
+        if (result.isAccepted()) {
             committed = true;
             commit_probe.commit();
             return;
@@ -39984,20 +40046,7 @@ fn checkBranchBodyAgainstExpected(
     // already folded into `acc`; rollback has restored everything the failed unify
     // touched. (Distinct from a step-(1) failure only when the annotation is looser
     // than `acc`.)
-    try self.reportBranchMismatchAndPoison(body_expr_idx, body_var, acc, expected_ret, ctx, env);
-}
-
-fn markErroneousBranchWithExpected(self: *Self, expr_idx: CIR.Expr.Idx, expected_ret: Var, env: *Env) std.mem.Allocator.Error!void {
-    if (self.cir.store.getExpr(expr_idx) == .e_runtime_error) return;
-
-    try self.erroneous_value_exprs.put(self.gpa, expr_idx, {});
-
-    const expr_var = ModuleEnv.varFrom(expr_idx);
-    const region = self.cir.store.getExprRegion(expr_idx);
-    const redirected_ret = try self.fresh(env, region);
-    _ = try self.unifyInContext(redirected_ret, expected_ret, env, .none);
-
-    try self.types.dangerousSetVarRedirect(.diagnostic_recovery_reported_error, expr_var, redirected_ret);
+    try self.reportBranchMismatchAndPoison(body_expr_idx, acc, ctx);
 }
 
 /// Check if a type variable contains any error types anywhere in its structure.
@@ -40116,7 +40165,10 @@ const ConstraintErrorKind = union(enum) {
     not_nominal,
 };
 
-/// Report a constraint validation error
+/// Report a constraint validation error. `owner_expr` is the expression that
+/// owns the failed obligation (a deferred check's `failure_expr`), which is
+/// where the violation is reported; null for an ownerless definition-site
+/// constraint.
 fn reportConstraintError(
     self: *Self,
     dispatcher_var: Var,
@@ -40124,6 +40176,7 @@ fn reportConstraintError(
     kind: ConstraintErrorKind,
     env: *Env,
     is_numeric_default_pass: bool,
+    owner_expr: ?CIR.Expr.Idx,
 ) Allocator.Error!void {
     return self.reportConstraintErrorAt(
         dispatcher_var,
@@ -40132,9 +40185,13 @@ fn reportConstraintError(
         env,
         is_numeric_default_pass,
         null,
+        owner_expr,
     );
 }
 
+/// Report a constraint validation error, poisoning `explicit_error_expr` when
+/// given (otherwise the obligation's recorded owners). The violation is
+/// reported at `owner_expr`, as in `reportConstraintError`.
 fn reportConstraintErrorAt(
     self: *Self,
     dispatcher_var: Var,
@@ -40143,19 +40200,12 @@ fn reportConstraintErrorAt(
     env: *Env,
     is_numeric_default_pass: bool,
     explicit_error_expr: ?CIR.Expr.Idx,
+    owner_expr: ?CIR.Expr.Idx,
 ) Allocator.Error!void {
-    const dedup_key = ReportedConstraintError{
-        .dispatcher = self.types.resolveVar(dispatcher_var).var_,
-        .fn_name = constraint.fn_name,
-    };
-    const dedup_entry = try self.reported_constraint_errors.getOrPut(dedup_key);
-    if (dedup_entry.found_existing) {
-        try self.poisonConstraintFailure(dispatcher_var, constraint, env, explicit_error_expr);
-        try self.markStaticDispatchRejected(constraint);
-        return;
-    }
+    if (try self.constraintErrorAlreadyReported(dispatcher_var, constraint, env, explicit_error_expr)) return;
 
     const snapshot = try self.snapshots.snapshotVarForError(self.types, &self.type_writer, dispatcher_var);
+    const owner_region = self.constraintOwnerRegion(owner_expr);
     const constraint_problem = switch (kind) {
         .missing_method => |dispatcher_type| problem.Problem{
             .static_dispatch = .{
@@ -40166,6 +40216,7 @@ fn reportConstraintErrorAt(
                     .fn_var = constraint.fn_var,
                     .method_name = constraint.fn_name,
                     .origin = constraint.origin,
+                    .owner_region = owner_region,
                     .num_literal = constraint.origin.numeralInfo(),
                     .quote_region = self.quoteLiteralRegionForDispatcher(constraint, dispatcher_var),
                     // Only a numeral literal defaulted to Dec earns the numeric hint.
@@ -40182,6 +40233,8 @@ fn reportConstraintErrorAt(
                 .dispatcher_snapshot = snapshot,
                 .fn_var = constraint.fn_var,
                 .method_name = constraint.fn_name,
+                .origin = constraint.origin,
+                .owner_region = owner_region,
             },
         } },
     };
@@ -40191,7 +40244,38 @@ fn reportConstraintErrorAt(
     try self.markStaticDispatchRejected(constraint);
 }
 
-/// Report an error when an anonymous type doesn't support equality
+/// A dispatcher/method pair fails once no matter how many deferred checks
+/// replay it (an instantiation can queue the same obligation for both the call
+/// and the callee lookup). When this pair was already reported, poison this
+/// replay's failure site and return true so the caller reports nothing new.
+fn constraintErrorAlreadyReported(
+    self: *Self,
+    dispatcher_var: Var,
+    constraint: StaticDispatchConstraint,
+    env: *Env,
+    explicit_error_expr: ?CIR.Expr.Idx,
+) Allocator.Error!bool {
+    const dedup_key = ReportedConstraintError{
+        .dispatcher = self.types.resolveVar(dispatcher_var).var_,
+        .fn_name = constraint.fn_name,
+    };
+    const dedup_entry = try self.reported_constraint_errors.getOrPut(dedup_key);
+    if (!dedup_entry.found_existing) return false;
+
+    try self.poisonConstraintFailure(dispatcher_var, constraint, env, explicit_error_expr);
+    try self.markStaticDispatchRejected(constraint);
+    return true;
+}
+
+/// The source region of a failed obligation's owning expression, where the
+/// violation is reported. Computed only once a failure is being reported.
+fn constraintOwnerRegion(self: *Self, owner_expr: ?CIR.Expr.Idx) ?Region {
+    const expr_idx = owner_expr orelse return null;
+    return self.cir.store.getExprRegion(expr_idx);
+}
+
+/// Report an error when an anonymous type doesn't support equality. The
+/// violation is reported at `failure_expr`, the obligation's owner, when given.
 fn reportEqualityError(
     self: *Self,
     dispatcher_var: Var,
@@ -40199,12 +40283,16 @@ fn reportEqualityError(
     env: *Env,
     failure_expr: ?CIR.Expr.Idx,
 ) Allocator.Error!void {
+    if (try self.constraintErrorAlreadyReported(dispatcher_var, constraint, env, failure_expr)) return;
+
     const snapshot = try self.snapshots.snapshotVarForError(self.types, &self.type_writer, dispatcher_var);
     const equality_problem = problem.Problem{ .static_dispatch = .{
         .type_does_not_support_equality = .{
             .dispatcher_var = dispatcher_var,
             .dispatcher_snapshot = snapshot,
             .fn_var = constraint.fn_var,
+            .origin = constraint.origin,
+            .owner_region = self.constraintOwnerRegion(failure_expr),
         },
     } };
     _ = try self.problems.appendProblem(self.cir.gpa, equality_problem);
@@ -40213,18 +40301,24 @@ fn reportEqualityError(
     try self.markStaticDispatchRejected(constraint);
 }
 
+/// Report a compiler-derived `map`/`map!` that has no unambiguous payload,
+/// at `owner_expr` (the obligation's owner) when given.
 fn reportDerivedMapError(
     self: *Self,
     dispatcher_var: Var,
     constraint: StaticDispatchConstraint,
     env: *Env,
+    owner_expr: ?CIR.Expr.Idx,
 ) Allocator.Error!void {
+    if (try self.constraintErrorAlreadyReported(dispatcher_var, constraint, env, null)) return;
+
     const snapshot = try self.snapshots.snapshotVarForError(self.types, &self.type_writer, dispatcher_var);
     _ = try self.problems.appendProblem(self.cir.gpa, .{ .static_dispatch = .{
         .type_does_not_support_map = .{
             .dispatcher_snapshot = snapshot,
             .fn_var = constraint.fn_var,
             .method_name = constraint.fn_name,
+            .owner_region = self.constraintOwnerRegion(owner_expr),
         },
     } });
 

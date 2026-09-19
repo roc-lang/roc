@@ -38,10 +38,10 @@ pub const ResourceError = std.mem.Allocator.Error;
 
 /// Debug-only count of join-summary solver work items, for scaling tests
 /// and profiling. Not updated in release builds.
-pub var solver_iterations: u64 = 0;
+pub var solver_iterations: @import("arc_state.zig").WorkCounter = .{};
 
 /// Debug-only count of locals examined by borrow-group liveness queries.
-pub var group_liveness_member_visits: u64 = 0;
+pub var group_liveness_member_visits: @import("arc_state.zig").WorkCounter = .{};
 
 /// Options for ARC insertion.
 pub const InsertOptions = struct {
@@ -423,7 +423,7 @@ const GroupLivenessIndex = struct {
         else {
             if (leader == except) return false;
             const bit = self.rawBitOf(domain, leader) orelse return false;
-            if (builtin.mode == .Debug) _ = @atomicRmw(u64, &group_liveness_member_visits, .Add, 1, .monotonic);
+            if (builtin.mode == .Debug) group_liveness_member_visits.increment();
             return reads.isSet(bit);
         };
         if (self.rawBitOf(domain, except)) |bit| {
@@ -2508,7 +2508,7 @@ const Inserter = struct {
         try self.pushSolveSegment(&tasks, body, entry_owned, .{}, root_plan);
         while (true) {
             while (tasks.pop()) |task| {
-                if (builtin.mode == .Debug) _ = @atomicRmw(u64, &solver_iterations, .Add, 1, .monotonic);
+                if (builtin.mode == .Debug) solver_iterations.increment();
                 switch (task) {
                     .segment => |segment| try self.processSolveSegment(&tasks, segment),
                     .join_process => |join_index| try self.processSolveJoin(&tasks, join_index),
@@ -9749,9 +9749,9 @@ test "ARC raw-liveness ranges exclude boundary bits without scanning wide empty 
             try testing.expectEqual(expected, reads.anySetInRange(start, end));
         }
     }
-    const before = @import("arc_state.zig").range_query_node_visits;
+    const before = @import("arc_state.zig").range_query_node_visits.read();
     try testing.expect(!reads.anySetInRange(513, 999999));
-    if (builtin.mode == .Debug) try testing.expect(@import("arc_state.zig").range_query_node_visits - before <= 2 * 8 * 11);
+    if (builtin.mode == .Debug) try testing.expect(@import("arc_state.zig").range_query_node_visits.read() - before <= 2 * 8 * 11);
 }
 
 test "RC pass-through: non-refcounted i64 block unchanged" {
@@ -11285,9 +11285,9 @@ fn chainedJoinSolveWork(join_count: usize) Allocator.Error!u64 {
     // The delta over the process-global counter is meaningful because the
     // test runner executes tests in one thread; nothing else runs `insert`
     // between the two reads.
-    const before = solver_iterations;
+    const before = solver_iterations.read();
     try f.run();
-    return solver_iterations - before;
+    return solver_iterations.read() - before;
 }
 
 test "RC join summary solver work grows linearly with chained joins" {
@@ -11328,9 +11328,9 @@ fn strConcatChainGroupLivenessWork(chain_len: usize) Allocator.Error!u64 {
     }
     const body = try f.assignStr(seed, "seed", current);
     _ = try f.addProc(&.{}, body, .str);
-    const before = group_liveness_member_visits;
+    const before = group_liveness_member_visits.read();
     try f.run();
-    return group_liveness_member_visits - before;
+    return group_liveness_member_visits.read() - before;
 }
 
 test "RC borrow-group liveness work grows linearly with chained string concats" {
@@ -16170,11 +16170,11 @@ test "ARC ownership iteration skips absent resources and preserves release order
     var owned = try OwnedSet.init(allocator, &domain);
     const keys = [_]usize{ 7, 512, width - 1 };
     for (keys) |key| try owned.set(locals[key]);
-    const before = @import("arc_state.zig").iterator_node_visits;
+    const before = @import("arc_state.zig").iterator_node_visits.read();
     var reverse = owned.iterator(.{ .direction = .reverse });
     for (0..keys.len) |index| try testing.expectEqual(keys[keys.len - 1 - index], reverse.next().?);
     try testing.expectEqual(null, reverse.next());
-    if (builtin.mode == .Debug) try testing.expect(@import("arc_state.zig").iterator_node_visits - before <= keys.len * 11);
+    if (builtin.mode == .Debug) try testing.expect(@import("arc_state.zig").iterator_node_visits.read() - before <= keys.len * 11);
     // The solver filters a persistent fork by removing each visited resource.
     var filtered = try cloneOwnedSetWith(allocator, &owned);
     var forward = filtered.iterator(.{});

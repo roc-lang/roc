@@ -3778,16 +3778,15 @@ test "check type - nominal - local record value - fail" {
         \\  Str.encode("hi", fmt)
         \\}
     ;
-    // TODO: Figure out why the arg `fmt` is not highlighted
     try checkTypesModule(
         source,
         .fail_with,
         \\**Missing Method**
-        \\This `encode_str` method is being called on a value whose type doesn't have that method.
+        \\A `where` clause requires the `encode_str` method here, but the type being used doesn't have that method.
         \\```roc
         \\  Str.encode("hi", fmt)
         \\```
-        \\  ^^^^^^^^^^
+        \\  ^^^^^^^^^^^^^^^^^^^^^
         \\
         \\The value's type, which does not have a method named `encode_str`, is:
         \\

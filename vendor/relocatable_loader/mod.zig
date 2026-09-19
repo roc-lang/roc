@@ -112,6 +112,23 @@ pub const Target = union(enum) {
     section: struct { index: u32, offset: u64 },
 };
 
+test "relocation target keys retain the complete section identity" {
+    const targets = [_]Target{
+        .{ .symbol = 1 },
+        .{ .section = .{ .index = 1, .offset = 0 } },
+        .{ .section = .{ .index = 1, .offset = @as(u64, 1) << 40 } },
+        .{ .section = .{ .index = 1 + (1 << 22), .offset = 0 } },
+        .{ .section = .{ .index = 1, .offset = std.math.maxInt(u64) } },
+    };
+    inline for (.{ "got_slots", "stubs" }) |field| {
+        var keys: @FieldType(Loader, field) = .empty;
+        defer keys.deinit(std.testing.allocator);
+        for (targets, 0..) |target, i| try keys.put(std.testing.allocator, target, i);
+        try std.testing.expectEqual(targets.len, keys.count());
+        for (targets, 0..) |target, i| try std.testing.expectEqual(i, keys.get(target).?);
+    }
+}
+
 pub const Relocation = struct {
     /// The section being patched and the offset within it.
     section: u32,
@@ -270,11 +287,11 @@ pub const Loader = struct {
     got_base: usize = 0,
     got_count: usize = 0,
     got_capacity: usize = 0,
-    got_slots: std.AutoHashMapUnmanaged(usize, usize) = .empty,
+    got_slots: std.AutoHashMapUnmanaged(Target, usize) = .empty,
     stub_base: usize = 0,
     stub_count: usize = 0,
     stub_capacity: usize = 0,
-    stubs: std.AutoHashMapUnmanaged(usize, usize) = .empty,
+    stubs: std.AutoHashMapUnmanaged(Target, usize) = .empty,
 
     fn load(self: *Loader) LoadError!Image {
         defer self.got_slots.deinit(self.gpa);
@@ -439,7 +456,7 @@ pub const Loader = struct {
 
     /// The GOT slot for `target`, created on first use.
     fn gotSlotFor(self: *Loader, target: Target, address: usize) LoadError!usize {
-        const key = targetKey(target);
+        const key = target;
         if (self.got_slots.get(key)) |slot| return slot;
         if (self.got_count >= self.got_capacity) return error.MalformedObject;
         const slot = self.got_base + self.got_count * got_slot_size;
@@ -452,7 +469,7 @@ pub const Loader = struct {
 
     /// The stub jumping to `target`, created on first use.
     fn stubFor(self: *Loader, target: Target, address: usize) LoadError!usize {
-        const key = targetKey(target);
+        const key = target;
         if (self.stubs.get(key)) |stub| return stub;
         if (self.stub_count >= self.stub_capacity) return error.MalformedObject;
         const stub = self.stub_base + self.stub_count * stub_size;
@@ -477,13 +494,6 @@ pub const Loader = struct {
         return stub;
     }
 };
-
-fn targetKey(target: Target) usize {
-    return switch (target) {
-        .symbol => |index| index,
-        .section => |section| (@as(usize, 1) << 62) | (@as(usize, section.index) << 40) | @as(usize, @intCast(section.offset & 0xff_ffff_ffff)),
-    };
-}
 
 fn needsGot(parsed: Parsed, reloc: Relocation) bool {
     return switch (parsed.format) {
