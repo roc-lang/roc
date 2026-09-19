@@ -9263,11 +9263,24 @@ declaration, so the distinction lives in the lookup result, not in
 `MethodTargetKind`. `EvidencePass` resolves a `rejected` lookup to
 `checked_error` and adds no second diagnostic at the dispatch site.
 
+Checked-module construction computes the `contains_diagnostic_error` column
+once every source runtime error and rejected binding use is explicit in the
+bodies: after rejected procedure uses are rewritten to `runtime_error` and
+before template references are sealed, because sealing excludes erroneous sites
+from the specialization-interface relation table. Compile-time roots take their
+context-free request eligibility from solved types when the root table is
+built, and each computation of the column only removes eligibility. Runtime
+divergence is computed once, after total dispatch resolution, because rejected
+and unreachable dispatch resolutions diverge.
+
 Total dispatch resolution also records a diagnostic-error seed on that exact
 checked expression. A literal's earlier `custom_dispatch` selection proves its
 callable relation, but its selected declaration can subsequently be rejected,
-including by final strict-demand cycle checking. Once all plans are resolved,
-checked-module construction propagates these seeds through the existing body
+including by final strict-demand cycle checking. These seeds cannot join the
+ordinary computation: a generic-codec requirement forwarded through the
+enclosing templates' evidence chains takes precedence over a rejected concrete
+target, and those chains come from sealing, which consumes the ordinary column.
+Once all plans are resolved, checked-module construction propagates these seeds through the existing body
 diagnostic analysis and updates `CompileTimeRoot.request_eligibility` before
 creating compile-time root requests. Both the conversion root and any enclosing
 constant roots are
