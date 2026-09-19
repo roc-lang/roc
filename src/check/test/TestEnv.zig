@@ -731,13 +731,25 @@ pub const SourceSpan = struct {
 pub fn assertOneTypeErrorHighlightsWithin(self: *TestEnv, expected_title: []const u8, within: SourceSpan) TestEnvError!void {
     try self.assertNoParseProblems();
 
-    try testing.expectEqual(1, self.checker.problems.problems.items.len);
-    const problem = self.checker.problems.problems.items[0];
-
     var report_builder = try self.initReportBuilder();
     defer report_builder.deinit();
 
-    var report = try report_builder.build(problem);
+    if (self.checker.problems.problems.items.len != 1) {
+        std.debug.print("expected exactly one type problem, but found {d}:\n", .{self.checker.problems.problems.items.len});
+        for (self.checker.problems.problems.items) |problem| {
+            var report = try report_builder.build(problem);
+            defer report.deinit();
+
+            var report_buf = try std.array_list.Managed(u8).initCapacity(self.gpa, 256);
+            defer report_buf.deinit();
+
+            try renderReportToMarkdownBuffer(&report_buf, &report);
+            std.debug.print("{s}\n", .{report_buf.items});
+        }
+        return error.TestUnexpectedResult;
+    }
+
+    var report = try report_builder.build(self.checker.problems.problems.items[0]);
     defer report.deinit();
 
     try testing.expectEqualStrings(expected_title, report.title);

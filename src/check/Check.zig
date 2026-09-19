@@ -31634,6 +31634,7 @@ fn checkStaticDispatchConstraints(self: *Self, env: *Env, is_numeric_default_pas
                                     deferred_constraint.var_,
                                     constraint,
                                     env,
+                                    failure_expr,
                                 ),
                             }
                             continue;
@@ -32023,6 +32024,7 @@ fn checkStaticDispatchConstraints(self: *Self, env: *Env, is_numeric_default_pas
                                 deferred_constraint.var_,
                                 constraint,
                                 env,
+                                failure_expr,
                             );
                             continue;
                         }
@@ -32231,6 +32233,7 @@ fn checkStaticDispatchConstraints(self: *Self, env: *Env, is_numeric_default_pas
                                 deferred_constraint.var_,
                                 constraint,
                                 env,
+                                failure_expr,
                             ),
                         }
                     } else if (constraint.fn_name.eql(self.cir.idents.parser_for)) {
@@ -39964,19 +39967,10 @@ fn reportConstraintErrorAt(
     explicit_error_expr: ?CIR.Expr.Idx,
     owner_expr: ?CIR.Expr.Idx,
 ) Allocator.Error!void {
-    const dedup_key = ReportedConstraintError{
-        .dispatcher = self.types.resolveVar(dispatcher_var).var_,
-        .fn_name = constraint.fn_name,
-    };
-    const dedup_entry = try self.reported_constraint_errors.getOrPut(dedup_key);
-    if (dedup_entry.found_existing) {
-        try self.poisonConstraintFailure(dispatcher_var, constraint, env, explicit_error_expr);
-        try self.markStaticDispatchRejected(constraint);
-        return;
-    }
+    if (try self.constraintErrorAlreadyReported(dispatcher_var, constraint, env, explicit_error_expr)) return;
 
     const snapshot = try self.snapshots.snapshotVarForError(self.types, &self.type_writer, dispatcher_var);
-    const owner_region: ?Region = if (owner_expr) |expr_idx| self.cir.store.getExprRegion(expr_idx) else null;
+    const owner_region = self.constraintOwnerRegion(owner_expr);
     const constraint_problem = switch (kind) {
         .missing_method => |dispatcher_type| problem.Problem{
             .static_dispatch = .{
@@ -40015,7 +40009,38 @@ fn reportConstraintErrorAt(
     try self.markStaticDispatchRejected(constraint);
 }
 
-/// Report an error when an anonymous type doesn't support equality
+/// A dispatcher/method pair fails once no matter how many deferred checks
+/// replay it (an instantiation can queue the same obligation for both the call
+/// and the callee lookup). When this pair was already reported, poison this
+/// replay's failure site and return true so the caller reports nothing new.
+fn constraintErrorAlreadyReported(
+    self: *Self,
+    dispatcher_var: Var,
+    constraint: StaticDispatchConstraint,
+    env: *Env,
+    explicit_error_expr: ?CIR.Expr.Idx,
+) Allocator.Error!bool {
+    const dedup_key = ReportedConstraintError{
+        .dispatcher = self.types.resolveVar(dispatcher_var).var_,
+        .fn_name = constraint.fn_name,
+    };
+    const dedup_entry = try self.reported_constraint_errors.getOrPut(dedup_key);
+    if (!dedup_entry.found_existing) return false;
+
+    try self.poisonConstraintFailure(dispatcher_var, constraint, env, explicit_error_expr);
+    try self.markStaticDispatchRejected(constraint);
+    return true;
+}
+
+/// The source region of a failed obligation's owning expression, where the
+/// violation is reported. Computed only once a failure is being reported.
+fn constraintOwnerRegion(self: *Self, owner_expr: ?CIR.Expr.Idx) ?Region {
+    const expr_idx = owner_expr orelse return null;
+    return self.cir.store.getExprRegion(expr_idx);
+}
+
+/// Report an error when an anonymous type doesn't support equality. The
+/// violation is reported at `failure_expr`, the obligation's owner, when given.
 fn reportEqualityError(
     self: *Self,
     dispatcher_var: Var,
@@ -40023,12 +40048,16 @@ fn reportEqualityError(
     env: *Env,
     failure_expr: ?CIR.Expr.Idx,
 ) Allocator.Error!void {
+    if (try self.constraintErrorAlreadyReported(dispatcher_var, constraint, env, failure_expr)) return;
+
     const snapshot = try self.snapshots.snapshotVarForError(self.types, &self.type_writer, dispatcher_var);
     const equality_problem = problem.Problem{ .static_dispatch = .{
         .type_does_not_support_equality = .{
             .dispatcher_var = dispatcher_var,
             .dispatcher_snapshot = snapshot,
             .fn_var = constraint.fn_var,
+            .origin = constraint.origin,
+            .owner_region = self.constraintOwnerRegion(failure_expr),
         },
     } };
     _ = try self.problems.appendProblem(self.cir.gpa, equality_problem);
@@ -40037,18 +40066,24 @@ fn reportEqualityError(
     try self.markStaticDispatchRejected(constraint);
 }
 
+/// Report a compiler-derived `map`/`map!` that has no unambiguous payload,
+/// at `owner_expr` (the obligation's owner) when given.
 fn reportDerivedMapError(
     self: *Self,
     dispatcher_var: Var,
     constraint: StaticDispatchConstraint,
     env: *Env,
+    owner_expr: ?CIR.Expr.Idx,
 ) Allocator.Error!void {
+    if (try self.constraintErrorAlreadyReported(dispatcher_var, constraint, env, null)) return;
+
     const snapshot = try self.snapshots.snapshotVarForError(self.types, &self.type_writer, dispatcher_var);
     _ = try self.problems.appendProblem(self.cir.gpa, .{ .static_dispatch = .{
         .type_does_not_support_map = .{
             .dispatcher_snapshot = snapshot,
             .fn_var = constraint.fn_var,
             .method_name = constraint.fn_name,
+            .owner_region = self.constraintOwnerRegion(owner_expr),
         },
     } });
 

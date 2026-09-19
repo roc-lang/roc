@@ -3014,22 +3014,23 @@ pub const ReportBuilder = struct {
         self: *Self,
         data: TypeDoesNotSupportEquality,
     ) Allocator.Error!Report {
-        var report = try Report.init(self.gpa, "Type Does Not Support Equality", "This expression is doing an equality check on a type that doesn't support equality.", .runtime_error);
+        var report = try Report.init(self.gpa, "Type Does Not Support Equality", "", .runtime_error);
         errdefer report.deinit();
+        if (data.owner_region != null and data.origin == .where_clause) {
+            try D.renderSliceInto(&.{
+                D.bytes("A"),
+                D.bytes("where").withAnnotation(.inline_code),
+                D.bytes("clause requires equality here, but the type being used doesn't support equality."),
+            }, self, &report, &report.headline);
+        } else {
+            try D.renderSliceInto(&.{
+                D.bytes("This expression is doing an equality check on a type that doesn't support equality."),
+            }, self, &report, &report.headline);
+        }
 
         const snapshot_str = try report.addOwnedString(self.getFormattedString(data.dispatcher_snapshot));
 
-        if (self.getRegionSafe(@enumFromInt(@intFromEnum(data.fn_var)))) |region| {
-            const region_info = self.module_env.calcRegionInfo(region.*);
-            try report.document.addSourceRegion(
-                region_info,
-                .error_highlight,
-                self.filename,
-                self.source,
-                self.module_env.getLineStarts(),
-            );
-            try report.document.addLineBreak();
-        }
+        try self.addConstraintFailureHighlight(&report, data.owner_region, data.fn_var);
 
         try D.renderSlice(&.{
             D.bytes("The type is:"),
@@ -3078,17 +3079,7 @@ pub const ReportBuilder = struct {
         var report = try Report.init(self.gpa, "Type Does Not Support Map", "This type does not have an unambiguous direct tag payload for compiler-derived mapping.", .runtime_error);
         errdefer report.deinit();
 
-        if (self.getRegionSafe(@enumFromInt(@intFromEnum(data.fn_var)))) |region| {
-            const region_info = self.module_env.calcRegionInfo(region.*);
-            try report.document.addSourceRegion(
-                region_info,
-                .error_highlight,
-                self.filename,
-                self.source,
-                self.module_env.getLineStarts(),
-            );
-            try report.document.addLineBreak();
-        }
+        try self.addConstraintFailureHighlight(&report, data.owner_region, data.fn_var);
 
         const snapshot_str = try report.addOwnedString(self.getFormattedString(data.dispatcher_snapshot));
         try D.renderSlice(&.{D.bytes("The type is:")}, self, &report);

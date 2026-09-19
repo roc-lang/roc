@@ -454,6 +454,45 @@ test "where clause - unsatisfied annotated constraint is reported at the violati
     });
 }
 
+test "where clause - unsatisfied equality constraint is reported at the violating call" {
+    const source =
+        \\eq : a -> Bool where [a.is_eq : a, a -> Bool]
+        \\eq = |x| x == x
+        \\
+        \\main = eq({ f: |y| y })
+    ;
+    var test_env = try TestEnv.init("Test", source);
+    defer test_env.deinit();
+
+    // Line 4 is `main = eq({ f: |y| y })`; columns 8-24 span the call.
+    try test_env.assertOneTypeErrorHighlightsWithin("Type Does Not Support Equality", .{
+        .line = 4,
+        .start_column = 8,
+        .end_column = 24,
+    });
+}
+
+test "where clause - unsatisfied derived map constraint is reported at the violating call" {
+    const source =
+        \\mapper : a -> a where [a.map : a, (U8 -> U8) -> a]
+        \\mapper = |x| x.map(|n| n)
+        \\
+        \\value : [A(U8), B(U8)]
+        \\value = A(1)
+        \\
+        \\main = mapper(value)
+    ;
+    var test_env = try TestEnv.init("Test", source);
+    defer test_env.deinit();
+
+    // Line 7 is `main = mapper(value)`; columns 8-21 span the call.
+    try test_env.assertOneTypeErrorHighlightsWithin("Type Does Not Support Map", .{
+        .line = 7,
+        .start_column = 8,
+        .end_column = 21,
+    });
+}
+
 // Let polymorphism with where clauses
 
 test "where clause - same type used multiple times with where constraint" {

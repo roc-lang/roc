@@ -630,6 +630,10 @@ pub const TypeDoesNotSupportEquality = struct {
     dispatcher_var: Var,
     dispatcher_snapshot: SnapshotContentIdx,
     fn_var: Var,
+    origin: types_mod.StaticDispatchConstraint.Origin,
+    /// Region of the expression that owns the failed obligation (see
+    /// `DispatcherDoesNotImplMethod.owner_region`).
+    owner_region: ?base.Region = null,
 };
 
 /// Error when compiler-derived `map`/`map!` cannot select one direct tag
@@ -638,6 +642,9 @@ pub const TypeDoesNotSupportMap = struct {
     dispatcher_snapshot: SnapshotContentIdx,
     fn_var: Var,
     method_name: Ident.Idx,
+    /// Region of the expression that owns the failed obligation (see
+    /// `DispatcherDoesNotImplMethod.owner_region`).
+    owner_region: ?base.Region = null,
 };
 
 /// Error when satisfying a static-dispatch constraint immediately requires the
