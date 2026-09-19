@@ -243,10 +243,10 @@ fn assertMetadataAligned(program: *const ast.Program) void {
 test "body shard relocation distinguishes typed pools and preserves frozen IDs" {
     var relocation: Relocation = .{
         .prefix = .{
-            .source = undefined,
+            .source = undefined, // Relocation reads only the prefix lengths.
             .lengths = @splat(2),
-            .source_fn = @enumFromInt(0),
-            .patch = undefined,
+            .source_fn = undefined, // Function publication is not exercised here.
+            .patch = undefined, // Function publication is not exercised here.
         },
         .offsets = @splat(10),
         .symbol_start = 50,
@@ -280,10 +280,10 @@ test "body shard relocation distinguishes typed pools and preserves frozen IDs" 
 test "body shard relocation preserves metadata sentinels and donor values" {
     const relocation: Relocation = .{
         .prefix = .{
-            .source = undefined,
+            .source = undefined, // Relocation reads only the prefix lengths.
             .lengths = @splat(2),
-            .source_fn = @enumFromInt(0),
-            .patch = undefined,
+            .source_fn = undefined, // Function publication is not exercised here.
+            .patch = undefined, // Function publication is not exercised here.
         },
         .offsets = @splat(10),
         .symbol_start = 50,

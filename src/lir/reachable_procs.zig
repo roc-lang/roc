@@ -1360,8 +1360,6 @@ test "frozen runtime data prunes witnesses and remaps callable and data identiti
     exports[2].relocations = callable_relocations;
 
     try runWithFrozen(&result, &frozen);
-    try std.testing.expectEqual(@as(u64, 7), result.store.getProcSpec(@enumFromInt(0)).native_code_revision);
-    try std.testing.expectEqual(@as(u64, 11), result.store.getProcSpec(@enumFromInt(1)).native_code_revision);
     try std.testing.expectEqual(@as(usize, 2), result.store.procSpecCount());
     try std.testing.expectEqual(@as(usize, 1), result.static_data_values.items.len);
     try std.testing.expectEqual(@as(u32, 1), @intFromEnum(result.root_procs.items[0]));
@@ -1373,6 +1371,8 @@ test "frozen runtime data prunes witnesses and remaps callable and data identiti
     try std.testing.expectEqual(@as(u32, 0), @intFromEnum(frozen.exports[1].relocations[0].procedure.?));
     try std.testing.expectEqualStrings("callable", frozen.exports[1].relocations[0].target_symbol_name);
     try std.testing.expect(frozen.exports[1].relocations[0].owns_target_symbol_name);
+    try std.testing.expectEqual(@as(u64, 7), result.store.getProcSpec(frozen.exports[1].relocations[0].procedure.?).native_code_revision);
+    try std.testing.expectEqual(@as(u64, 11), result.store.getProcSpec(result.root_procs.items[0]).native_code_revision);
     try std.testing.expectEqual(@as(u64, 17), frozen.exports[0].empty_list_capacities[0].capacity);
     try std.testing.expectEqual(@as(u64, 18), frozen.exports[1].empty_list_capacities[0].capacity);
 }

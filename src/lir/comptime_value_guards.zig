@@ -183,8 +183,9 @@ fn testSharedGuards(allocator: std.mem.Allocator) (std.mem.Allocator.Error || er
     const ret = try program.store.addCFStmt(.{ .ret = .{ .value = target } });
     const load = try program.store.addCFStmt(.{ .assign_literal = .{ .target = target, .value = .{ .static_data = slot }, .next = ret } });
     const frame = try program.store.addLocalSpan(&.{target});
-    for (0..2) |i| {
-        _ = try program.store.addProcSpec(.{ .name = .fromRaw(i), .identity = LIR.ProcIdentity.forTest(1), .args = .empty(), .frame_locals = frame, .body = load, .ret_layout = .u8 });
+    var owners: [2]LIR.LirProcSpecId = undefined; // Both entries are assigned by addProcSpec before use.
+    for (&owners, 0..) |*owner, i| {
+        owner.* = try program.store.addProcSpec(.{ .name = .fromRaw(i), .identity = LIR.ProcIdentity.forTest(1), .args = .empty(), .frame_locals = frame, .body = load, .ret_layout = .u8 });
     }
     const unrelated = try program.store.addProcSpec(.{ .name = .fromRaw(2), .identity = LIR.ProcIdentity.forTest(2), .args = .empty(), .frame_locals = frame, .body = ret, .ret_layout = .u8 });
     try insert(allocator, &program);
@@ -192,8 +193,8 @@ fn testSharedGuards(allocator: std.mem.Allocator) (std.mem.Allocator.Error || er
     const guard = program.comptime_value_guards.items[0];
     try std.testing.expectEqual(load, guard.entry);
     try std.testing.expectEqual(load, program.comptime_value_guards.items[1].entry);
-    for (0..2) |i| {
-        const proc = program.store.getProcSpec(@enumFromInt(@as(u32, @intCast(i))));
+    for (owners) |owner| {
+        const proc = program.store.getProcSpec(owner);
         try std.testing.expectEqual(@as(u64, 0), proc.native_code_revision);
         const locals = program.store.getLocalSpan(proc.frame_locals);
         try std.testing.expectEqual(@as(usize, 4), locals.len);
@@ -207,13 +208,13 @@ fn testSharedGuards(allocator: std.mem.Allocator) (std.mem.Allocator.Error || er
     try std.testing.expectEqual(slot, restored.value.static_data);
     try std.testing.expectEqual(ret, restored.next);
     completeSuccessfulSlot(&program, slot);
-    for (0..2) |i| {
-        const proc = program.store.getProcSpec(@enumFromInt(@as(u32, @intCast(i))));
+    for (owners) |owner| {
+        const proc = program.store.getProcSpec(owner);
         try std.testing.expectEqual(@as(u64, 1), proc.native_code_revision);
         try std.testing.expectEqual(LIR.ProcIdentity.forTest(1), proc.identity);
     }
     try std.testing.expectEqual(@as(u64, 0), program.store.getProcSpec(unrelated).native_code_revision);
-    var clone = try program.store.cloneForProcRewrite(allocator, @enumFromInt(0));
+    var clone = try program.store.cloneForProcRewrite(allocator, owners[0]);
     defer clone.deinit();
-    try std.testing.expectEqual(@as(u64, 1), clone.getProcSpec(@enumFromInt(0)).native_code_revision);
+    try std.testing.expectEqual(@as(u64, 1), clone.getProcSpec(owners[0]).native_code_revision);
 }

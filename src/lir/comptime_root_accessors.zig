@@ -111,26 +111,35 @@ fn testRebuild(allocator: Allocator) (Allocator.Error || error{ TestExpectedEqua
     const failed_offset = program.layouts.getStructFieldOffsetByOriginalIndex(struct_idx, 0);
     const message_offset = program.layouts.getStructFieldOffsetByOriginalIndex(struct_idx, 1);
     const list_layout = try program.layouts.insertList(.u32);
+    const scalar_plan: Program.ConstPlanId = @enumFromInt(program.const_plans.items.len);
     try program.const_plans.append(allocator, .scalar);
-    try program.const_plans.append(allocator, .{ .list = @enumFromInt(0) });
-    for (0..2) |index| {
-        try program.static_data_values.append(allocator, .{
-            .initializer = null,
-            .layout_idx = if (index == 0) failure_layout else list_layout,
-            .compile_time_root = .{
-                .module = .{},
-                .root = @enumFromInt(index),
-                .const_locator = null,
-                .role = if (index == 0)
-                    .{ .failure_message = .{ .failed_field = 0, .message_field = 1, .failed_offset = failed_offset, .message_offset = message_offset } }
-                else
-                    .{ .value = .{ .failure_slot = @enumFromInt(0), .plan = @enumFromInt(1) } },
-            },
-        });
-    }
+    const list_plan: Program.ConstPlanId = @enumFromInt(program.const_plans.items.len);
+    try program.const_plans.append(allocator, .{ .list = scalar_plan });
+    const failure_slot: LIR.StaticDataId = @enumFromInt(program.static_data_values.items.len);
+    try program.static_data_values.append(allocator, .{
+        .initializer = null,
+        .layout_idx = failure_layout,
+        .compile_time_root = .{
+            .module = .{},
+            .root = undefined, // Accessor reconstruction reads slot roles, not checked-root identity.
+            .const_locator = null,
+            .role = .{ .failure_message = .{ .failed_field = 0, .message_field = 1, .failed_offset = failed_offset, .message_offset = message_offset } },
+        },
+    });
+    const value_slot: LIR.StaticDataId = @enumFromInt(program.static_data_values.items.len);
+    try program.static_data_values.append(allocator, .{
+        .initializer = null,
+        .layout_idx = list_layout,
+        .compile_time_root = .{
+            .module = .{},
+            .root = undefined, // Accessor reconstruction reads slot roles, not checked-root identity.
+            .const_locator = null,
+            .role = .{ .value = .{ .failure_slot = failure_slot, .plan = list_plan } },
+        },
+    });
     const value = try program.store.addLocal(.{ .layout_idx = list_layout });
     const ret = try program.store.addCFStmt(.{ .ret = .{ .value = value } });
-    const body = try program.store.addCFStmt(.{ .assign_literal = .{ .target = value, .value = .{ .static_data = @enumFromInt(1) }, .next = ret } });
+    const body = try program.store.addCFStmt(.{ .assign_literal = .{ .target = value, .value = .{ .static_data = value_slot }, .next = ret } });
     const accessor = try program.store.addProcSpec(.{
         .name = .fromRaw(1),
         .identity = LIR.ProcIdentity.forTest(1),
@@ -139,21 +148,21 @@ fn testRebuild(allocator: Allocator) (Allocator.Error || error{ TestExpectedEqua
         .body = body,
         .ret_layout = list_layout,
     });
-    program.static_data_values.items[1].accessor = accessor;
+    program.static_data_values.items[@intFromEnum(value_slot)].accessor = accessor;
     try @import("comptime_value_guards.zig").insert(allocator, &program);
     var failure_record = [_]u8{0} ** 32;
     failure_record[failed_offset] = 1;
     const descriptor = [_]u8{0} ** 24;
     var exports = [_]Program.StaticDataExport{
-        .{ .symbol_name = "failure", .value_id = @enumFromInt(0), .bytes = &failure_record, .alignment = 8 },
-        .{ .symbol_name = "value", .value_id = @enumFromInt(1), .bytes = &descriptor, .alignment = 8, .empty_list_capacities = &.{.{ .offset = 0, .capacity = 16 }} },
+        .{ .symbol_name = "failure", .value_id = failure_slot, .bytes = &failure_record, .alignment = 8 },
+        .{ .symbol_name = "value", .value_id = value_slot, .bytes = &descriptor, .alignment = 8, .empty_list_capacities = &.{.{ .offset = 0, .capacity = 16 }} },
     };
     const frozen = Program.FrozenStaticData{ .allocator = allocator, .exports = &exports };
     try rebuild(allocator, &program, &frozen);
     try std.testing.expectEqual(body, program.store.getProcSpec(accessor).body.?);
     try std.testing.expectEqual(@as(u64, 0), program.store.getProcSpec(accessor).native_code_revision);
     try std.testing.expect(!program.comptime_value_guards.items[0].completed);
-    try std.testing.expectEqual(@as(u32, 0), @intFromEnum(program.store.getCFStmt(body).assign_literal.value.static_data));
+    try std.testing.expectEqual(failure_slot, program.store.getCFStmt(body).assign_literal.value.static_data);
     failure_record[failed_offset] = 0;
     try rebuild(allocator, &program, &frozen);
     const rebuilt = program.store.getProcSpec(accessor);

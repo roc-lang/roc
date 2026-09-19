@@ -15379,11 +15379,13 @@ test "staged SpecConstr phase entry capacity fixes discovery budgets across wave
 }
 
 test "SpecConstr retained local compaction ignores raw ID gaps and keeps first typed occurrences" {
+    var program = emptyLiftedProgramForTest(std.testing.allocator);
+    defer program.deinit();
     const high: Ast.LocalId = @enumFromInt(0xffff_fffe);
     const low: Ast.LocalId = @enumFromInt(1);
     const middle: Ast.LocalId = @enumFromInt(100);
-    const first_ty: Type.TypeId = @enumFromInt(0);
-    const later_ty: Type.TypeId = @enumFromInt(1);
+    const first_ty = try program.types.add(.zst);
+    const later_ty = try program.types.add(.{ .tuple = try program.types.addSpan(&.{first_ty}) });
     var leaves = [_]Ast.TypedLocal{
         .{ .local = high, .ty = first_ty },
         .{ .local = low, .ty = later_ty },
@@ -15393,7 +15395,7 @@ test "SpecConstr retained local compaction ignores raw ID gaps and keeps first t
         .{ .local = high, .ty = later_ty },
     };
     // Only leaf-sized ordinal and duplicate columns fit here, regardless of
-    // the source/generated ID gap. No owning store is needed for compaction.
+    // the source/generated ID gap. Compaction never consults the type store.
     var buffer: [128]u8 = undefined;
     var bounded = std.heap.FixedBufferAllocator.init(&buffer);
     var retained: std.ArrayList(Ast.TypedLocal) = .empty;
@@ -15458,8 +15460,8 @@ test "staged SpecConstr submission failure drains accepted tasks" {
     try std.testing.expectEqual(@as(usize, 0), executor.len);
 }
 
-fn checkSpecConstrShardAllocationFailure(allocator: Allocator, source: *Pass, phase: Phase) Common.LowerError!void {
-    var work: Pass.Work = .{ .source = source, .fn_id = @enumFromInt(0), .phase = phase };
+fn checkSpecConstrShardAllocationFailure(allocator: Allocator, source: *Pass, fn_id: Ast.FnId, phase: Phase) Common.LowerError!void {
+    var work: Pass.Work = .{ .source = source, .fn_id = fn_id, .phase = phase };
     var lane = TaskExecutor.LaneState.init(allocator);
     defer lane.deinit();
     _ = Pass.Work.callback(&work, .{
@@ -15477,9 +15479,10 @@ fn checkSpecConstrShardAllocationFailure(allocator: Allocator, source: *Pass, ph
     if (phase != .discovery) std.debug.assert(output.changed);
 }
 
-fn specConstrSelectionProgramForTest(allocator: Allocator) Allocator.Error!Ast.Program {
+fn specConstrSelectionProgramForTest(allocator: Allocator) Allocator.Error!struct { program: Ast.Program, fn_id: Ast.FnId } {
     var program = emptyLiftedProgramForTest(allocator);
     errdefer program.deinit();
+    var symbols: Common.SymbolGen = .{};
     const unit_ty = try program.types.add(.zst);
     const unit = try program.addExpr(.{ .ty = unit_ty, .data = .unit });
     const tuple_ty = try program.types.add(.{ .tuple = try program.types.addSpan(&.{ unit_ty, unit_ty }) });
@@ -15490,43 +15493,46 @@ fn specConstrSelectionProgramForTest(allocator: Allocator) Allocator.Error!Ast.P
         .initial_values = .empty(),
         .body = exit,
     } } });
-    const local = try program.addLocal(@enumFromInt(0), unit_ty);
+    const local = try program.addLocal(symbols.fresh(), unit_ty);
     const local_ref = try program.addExpr(.{ .ty = unit_ty, .data = .{ .local = local } });
     const first_pat = try program.addPat(.{ .ty = unit_ty, .data = .{ .bind = local } });
-    const second_local = try program.addLocal(@enumFromInt(2), unit_ty);
+    const second_local = try program.addLocal(symbols.fresh(), unit_ty);
     const second_pat = try program.addPat(.{ .ty = unit_ty, .data = .{ .bind = second_local } });
     const body = try program.addExpr(.{ .ty = unit_ty, .data = .{ .let_ = .{
         .bind = try program.addPat(.{ .ty = tuple_ty, .data = .{ .tuple = try program.addPatSpan(&.{ first_pat, second_pat }) } }),
         .value = loop,
         .rest = local_ref,
     } } });
-    _ = try program.addFn(.{
-        .symbol = @enumFromInt(1),
+    const fn_id = try program.addFn(.{
+        .symbol = symbols.fresh(),
         .args = .empty(),
         .captures = .empty(),
         .body = .{ .roc = body },
         .ret = unit_ty,
     });
+    program.next_symbol = symbols.next;
     try program.names.prepareForReadSharing();
     try program.types.prepareForReadSharing(&program.names);
-    return program;
+    return .{ .program = program, .fn_id = fn_id };
 }
 
 test "staged SpecConstr shard allocation failures release output and scratch owners" {
     const allocator = std.testing.allocator;
-    var program = try specConstrSelectionProgramForTest(allocator);
+    var fixture = try specConstrSelectionProgramForTest(allocator);
+    const program = &fixture.program;
     defer program.deinit();
-    var pass = try Pass.init(allocator, &program);
+    var pass = try Pass.init(allocator, program);
     defer pass.deinit();
     for ([_]Phase{ .discovery, .iterator_fusion, .loop_projection }) |phase| {
-        try std.testing.checkAllAllocationFailures(allocator, checkSpecConstrShardAllocationFailure, .{ &pass, phase });
+        try std.testing.checkAllAllocationFailures(allocator, checkSpecConstrShardAllocationFailure, .{ &pass, fixture.fn_id, phase });
     }
 }
 
 fn checkSpecConstrCommitAllocationFailure(allocator: Allocator) (Allocator.Error || error{TestExpectedEqual})!void {
-    var program = try specConstrSelectionProgramForTest(allocator);
+    var fixture = try specConstrSelectionProgramForTest(allocator);
+    const program = &fixture.program;
     defer program.deinit();
-    var pass = try Pass.init(allocator, &program);
+    var pass = try Pass.init(allocator, program);
     defer pass.deinit();
     // Callback allocations succeed, so the sweep reaches coordinator commit
     // with a live changed shard whose ownership must also be released on OOM.
@@ -15544,13 +15550,14 @@ test "staged SpecConstr changed shard commit allocation failures release owners"
 fn checkSpecConstrRequestAllocationFailure(allocator: Allocator) (Allocator.Error || error{ TestExpectedEqual, TestUnexpectedResult })!void {
     var program = emptyLiftedProgramForTest(allocator);
     defer program.deinit();
+    var symbols: Common.SymbolGen = .{};
     const ty = try program.types.add(.zst);
     const tuple_ty = try program.types.add(.{ .tuple = try program.types.addSpan(&.{ty}) });
     const unit = try program.addExpr(.{ .ty = ty, .data = .unit });
     const tuple = try program.addExpr(.{ .ty = tuple_ty, .data = .{ .tuple = try program.addExprSpan(&.{unit}) } });
-    const arg = try program.addLocal(@enumFromInt(0), tuple_ty);
+    const arg = try program.addLocal(symbols.fresh(), tuple_ty);
     const target = try program.addFn(.{
-        .symbol = @enumFromInt(1),
+        .symbol = symbols.fresh(),
         .args = try program.addTypedLocalSpan(&.{.{ .local = arg, .ty = tuple_ty }}),
         .captures = .empty(),
         .body = .{ .roc = unit },
@@ -15561,12 +15568,13 @@ fn checkSpecConstrRequestAllocationFailure(allocator: Allocator) (Allocator.Erro
         .args = try program.addExprSpan(&.{tuple}),
     } } });
     _ = try program.addFn(.{
-        .symbol = @enumFromInt(2),
+        .symbol = symbols.fresh(),
         .args = .empty(),
         .captures = .empty(),
         .body = .{ .roc = call },
         .ret = ty,
     });
+    program.next_symbol = symbols.next;
     var pass = try Pass.init(allocator, &program);
     defer pass.deinit();
     pass.plans[0].used_args[0] = true;

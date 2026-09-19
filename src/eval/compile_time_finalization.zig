@@ -178,29 +178,28 @@ pub const ProgramSession = struct {
         target: lir.CheckedPipeline.TargetConfig,
     ) lir.CheckedPipeline.LowerResourceError!lir.CheckedPipeline.LoweredProgram {
         const configured = self.runtime_target orelse finalizationInvariant("check-only session has no runtime consumer");
-        inline for (@typeInfo(lir.CheckedPipeline.TargetConfig).@"struct".fields) |field| {
-            if (comptime std.mem.eql(u8, field.name, "timing") or
-                std.mem.eql(u8, field.name, "work_metrics") or
-                std.mem.eql(u8, field.name, "post_check_executor") or
-                std.mem.eql(u8, field.name, "debug_materialized_out") or
-                std.mem.eql(u8, field.name, "solved_lir_parallel_metrics_out") or
-                std.mem.eql(u8, field.name, "lifted_expr_count_out") or
-                std.mem.eql(u8, field.name, "completed_scalar_values"))
+        inline for (comptime std.meta.tags(std.meta.FieldEnum(lir.CheckedPipeline.TargetConfig))) |field| {
+            if (comptime field == .timing or
+                field == .work_metrics or
+                field == .post_check_executor or
+                field == .debug_materialized_out or
+                field == .solved_lir_parallel_metrics_out or
+                field == .lifted_expr_count_out or
+                field == .completed_scalar_values)
             {
                 // A completed host program has already published its outputs.
                 // Reusing it cannot silently redirect those results or count
                 // its producer work again in another metrics destination.
-                if (comptime !std.mem.eql(u8, field.name, "timing") and
-                    !std.mem.eql(u8, field.name, "post_check_executor"))
+                if (comptime field != .timing and field != .post_check_executor)
                 {
                     const reuses_completed_host = target.specialization_strategy == .lss and
                         self.compile_time_root_count != 0 and self.runtime_prepared == null;
-                    if (reuses_completed_host and !std.meta.eql(@field(configured, field.name), @field(target, field.name)))
+                    if (reuses_completed_host and !std.meta.eql(@field(configured, @tagName(field)), @field(target, @tagName(field))))
                         finalizationInvariant("completed runtime program cannot redirect previously published lowering outputs");
                 }
                 continue;
             }
-            if (!std.meta.eql(@field(configured, field.name), @field(target, field.name)))
+            if (!std.meta.eql(@field(configured, @tagName(field)), @field(target, @tagName(field))))
                 finalizationInvariant("runtime policy differs from the compilation's declared consumer");
         }
         inline for (@typeInfo(lir.CheckedPipeline.RootRequestSet).@"struct".fields) |field| {

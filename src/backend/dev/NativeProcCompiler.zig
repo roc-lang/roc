@@ -561,24 +561,25 @@ test "native driver reuse contract is directional and dependency sensitive" {
 test "native driver reuse survives procedure compaction and rejects changed revisions" {
     if (comptime !Emitter.host_lir_codegen_available) return error.SkipZigTest;
     const a = std.testing.allocator;
-    var store = lir.LirStore.init(a);
-    defer store.deinit();
-    var layouts = try layout.Store.init(a, .u64);
-    defer layouts.deinit();
-    _ = try testProc(&store, 11);
-    const original = try testProc(&store, 42);
+    var program = try lir.Program.Result.init(a, .u64);
+    defer program.deinit();
+    const store = &program.store;
+    _ = try testProc(store, 11);
+    const original = try testProc(store, 42);
+    try program.root_procs.append(a, original);
     const CG = Emitter.HostLirCodeGen;
     var cache = blk: {
-        var cg = try CG.init(a, &store, &layouts, .{}, &.{}, .default);
+        var cg = try CG.init(a, store, &program.layouts, .{}, &.{}, .default);
         defer cg.deinit();
         break :blk try run(CG, a, &cg, &.{original}, .{ .target = cg.getFragmentContract().target });
     };
     defer cache.deinit();
-    store.compactProcSpecs(&.{ false, true });
-    const compacted: ProcId = @enumFromInt(0);
+    try lir.ReachableProcs.run(&program);
+    const compacted = program.root_procs.items[0];
+    try std.testing.expect(compacted != original);
     for (0..2) |revision| {
         store.getProcSpecPtr(compacted).native_code_revision = revision;
-        var cg = try CG.init(a, &store, &layouts, .{}, &.{}, .default);
+        var cg = try CG.init(a, store, &program.layouts, .{}, &.{}, .default);
         defer cg.deinit();
         var metrics: Metrics = .{};
         var retained = try run(CG, a, &cg, &.{ compacted, compacted }, .{
