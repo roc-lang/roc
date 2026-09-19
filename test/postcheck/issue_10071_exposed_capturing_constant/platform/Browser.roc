@@ -16,17 +16,17 @@ Browser := [].{
         location_cap = Capability.new({})
         payload_cap = Capability.new({})
 
-        from_payload : HostValue -> HostValue
-        from_payload = |payload_hv| {
+        from_payload! : HostValue => HostValue
+        from_payload! = |payload_hv| {
             payload_bytes : List(U8)
-            payload_bytes = Box.unbox(Capability.take(payload_hv, payload_cap))
-            Capability.store(Box.box(decode_location_payload(payload_bytes)), location_cap)
+            payload_bytes = Box.unbox(Capability.take!(payload_hv, payload_cap))
+            Capability.store!(Box.box(decode_location_payload(payload_bytes)), location_cap)
         }
 
         Signal.from_expr(
             Node.SignalExpr.LocationSource(
                 token,
-                Box.box(from_payload),
+                Box.box(from_payload!),
                 Capability.handle(location_cap),
                 Capability.handle(payload_cap),
             ),
