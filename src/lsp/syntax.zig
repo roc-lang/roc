@@ -767,6 +767,23 @@ pub const SyntaxChecker = struct {
         return self.getModuleEnvByPathInEnv(env, path);
     }
 
+    /// Return checked CIR only when a retained build was produced from these
+    /// exact document bytes.
+    pub fn getCheckedModuleForDocument(
+        self: *SyntaxChecker,
+        uri: []const u8,
+        text: []const u8,
+    ) Allocator.Error!?*ModuleEnv {
+        self.mutex.lockUncancelable(self.std_io);
+        defer self.mutex.unlock(self.std_io);
+
+        var document = try self.documentIdentityFromText(uri, text);
+        defer document.deinit(self.allocator);
+
+        const handle = self.matchingBuildEnvHandle(document.absolute_path, document.content_hash) orelse return null;
+        return self.getModuleEnvByPathInEnv(handle.envPtr(), document.absolute_path);
+    }
+
     /// Look up a ModuleEnv by its file path from a specific BuildEnv.
     fn getModuleEnvByPathInEnv(_: *SyntaxChecker, env: *BuildEnv, path: []const u8) ?*ModuleEnv {
         const module_state = env.findModuleByPath(path) orelse return null;

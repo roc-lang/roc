@@ -87,6 +87,10 @@ pub const TestSyntaxDriver = struct {
         return null;
     }
 
+    pub fn getCheckedModuleForDocument(_: *TestSyntaxDriver, _: []const u8, _: []const u8) std.mem.Allocator.Error!?*can.ModuleEnv {
+        return null;
+    }
+
     pub fn getTypeAtPosition(
         self: *TestSyntaxDriver,
         _: []const u8,

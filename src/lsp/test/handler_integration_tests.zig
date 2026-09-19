@@ -4510,7 +4510,7 @@ pub fn semanticTokensHandlerHandlesFileImportsWithoutCrashing() integration_spec
     defer allocator.free(initialized_msg);
 
     const open_main_body = try std.fmt.allocPrint(allocator,
-        \\{{"jsonrpc":"2.0","method":"textDocument/didOpen","params":{{"textDocument":{{"uri":"{s}","version":1,"text":"app [main!] {{ pf: platform \"{s}\" }}\n\nimport \"input.txt\" as input : Str\n\nmain! = |_|\n    echo!(input)"}}}}}}
+        \\{{"jsonrpc":"2.0","method":"textDocument/didOpen","params":{{"textDocument":{{"uri":"{s}","version":1,"text":"app [main!] {{ pf: platform \"{s}\" }}\n\nimport \"input.txt\" as input : Str\n\nalias = main!\nmain! = |_|\n    echo!(input)"}}}}}}
     , .{ main_uri, platform_path });
     defer allocator.free(open_main_body);
     const open_main_msg = try frame(allocator, open_main_body);
@@ -4571,6 +4571,25 @@ pub fn semanticTokensHandlerHandlesFileImportsWithoutCrashing() integration_spec
     const data_val = try objectField(result, "data");
     try std.testing.expect(data_val == .array);
     try std.testing.expect(data_val.array.items.len > 0);
+
+    // The alias RHS is a lookup rather than a lambda. Its checked type is the
+    // authoritative reason the declaration is a function.
+    var line: u32 = 0;
+    var column: u32 = 0;
+    var found_checked_function = false;
+    var i: usize = 0;
+    while (i + 4 < data_val.array.items.len) : (i += 5) {
+        const delta_line: u32 = @intCast(data_val.array.items[i].integer);
+        const delta_column: u32 = @intCast(data_val.array.items[i + 1].integer);
+        line += delta_line;
+        column = if (delta_line == 0) column + delta_column else delta_column;
+        const token_type: u32 = @intCast(data_val.array.items[i + 3].integer);
+        if (line == 4 and column == 0 and token_type == 6) {
+            found_checked_function = true;
+            break;
+        }
+    }
+    try std.testing.expect(found_checked_function);
 }
 
 /// Verifies goto definition on a file import path (`import "input.txt" as input : Str`) navigates to the imported file.

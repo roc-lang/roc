@@ -3,23 +3,24 @@
 //! This module provides functionality to extract semantic tokens from Roc source code
 //! and encode them in the LSP delta-encoded format for syntax highlighting.
 //!
-//! Every token is classified from the parse tree, which records the token of each
-//! name it contains. That tells a tag from a type, a parameter from a local, a
-//! function from a value and a record field from a variable, and it keeps working
-//! while the document has errors. Tokens the tree does not name keep the category
-//! of their token tag.
+//! For a checked document, tokenization supplies source spans and lexical classes;
+//! CIR supplies resolved identity and role, and checked types distinguish functions
+//! from other values. A parse-tree-only path preserves highlighting for documents
+//! which do not have checked CIR because parsing or error reporting rejected them.
 
 const std = @import("std");
 const Allocator = std.mem.Allocator;
 const tokenize = @import("parse").tokenize;
 const parse = @import("parse");
 const can = @import("can");
+const cir_queries = @import("cir_queries.zig");
 const line_info = @import("line_info.zig");
 
 const Token = tokenize.Token;
 const LineInfo = line_info.LineInfo;
 const ModuleEnv = can.ModuleEnv;
 const AST = parse.AST;
+const CIR = can.CIR;
 
 /// Semantic token indices matching TOKEN_TYPES in capabilities.zig.
 pub const SemanticType = enum(u32) {
@@ -143,6 +144,107 @@ pub fn extractSemanticTokensWithImports(
     errdefer tokens.deinit(allocator);
     try emitTokens(allocator, parse_ast, classes, source, info, &tokens);
     return tokens.toOwnedSlice(allocator);
+}
+
+/// Extract semantic tokens from the checked module retained by the LSP build.
+///
+/// The token stream owns spelling and exact source extents. CIR owns identifier
+/// identity and role, and the checked type store owns value-vs-function
+/// classification. The parse tree is used only to retain useful highlighting
+/// for source which did not reach CIR because parsing or canonicalization
+/// reported an error.
+pub fn extractSemanticTokensFromChecked(
+    allocator: std.mem.Allocator,
+    source: []const u8,
+    info: *const LineInfo,
+    module_env: *ModuleEnv,
+) Allocator.Error![]SemanticToken {
+    var parse_env = ModuleEnv.init(allocator, source) catch return error.OutOfMemory;
+    defer parse_env.deinit();
+
+    const parse_ast = try parse.file(allocator, &parse_env.common);
+    defer parse_ast.deinit();
+
+    const token_count = parse_ast.tokens.tokens.len;
+    const classes = try allocator.alloc(Class, token_count);
+    defer allocator.free(classes);
+    @memset(classes, .default);
+
+    const tags = parse_ast.tokens.tokens.items(.tag);
+    const regions = parse_ast.tokens.tokens.items(.region);
+    for (tags, regions, 0..) |tag, region, token_index| {
+        if (!isIdentifierTag(tag)) continue;
+        const name_offset = region.start.offset + namePrefixLen(tag);
+        if (name_offset >= region.end.offset) continue;
+
+        if (cir_queries.findTagAtOffset(module_env, name_offset) != null) {
+            classes[token_index] = .enum_member;
+            continue;
+        }
+
+        if (cir_queries.findTypeAnnotationRoleAtOffset(module_env, name_offset)) |role| {
+            classes[token_index] = switch (role) {
+                .type_name => .type,
+                .type_parameter => .type_parameter,
+                .tag => .enum_member,
+            };
+            continue;
+        }
+
+        if (cir_queries.findLookupAtOffset(module_env, name_offset)) |lookup| {
+            classes[token_index] = switch (lookup) {
+                .field_access => .property,
+                .expr => |expr_idx| classifyCheckedExpr(module_env, expr_idx),
+            };
+            continue;
+        }
+
+        if (cir_queries.findPatternAtOffset(module_env, name_offset)) |pattern_idx| {
+            classes[token_index] = classifyCheckedPattern(module_env, pattern_idx);
+        }
+    }
+
+    var tokens: std.ArrayListUnmanaged(SemanticToken) = .empty;
+    errdefer tokens.deinit(allocator);
+    try emitTokens(allocator, parse_ast, classes, source, info, &tokens);
+    return tokens.toOwnedSlice(allocator);
+}
+
+fn isIdentifierTag(tag: Token.Tag) bool {
+    return tag == .LowerIdent or
+        tag == .UpperIdent or
+        tag == .DotLowerIdent or
+        tag == .NoSpaceDotLowerIdent or
+        tag == .DotQuestionLowerIdent or
+        tag == .NoSpaceDotQuestionLowerIdent or
+        tag == .DotUpperIdent or
+        tag == .NoSpaceDotUpperIdent;
+}
+
+fn classifyCheckedPattern(
+    module_env: *ModuleEnv,
+    pattern_idx: CIR.Pattern.Idx,
+) Class {
+    if (cir_queries.isParameterPattern(module_env, pattern_idx)) return .parameter;
+    if (module_env.types.varResolvesToFunction(ModuleEnv.varFrom(pattern_idx))) return .function;
+    return .variable;
+}
+
+fn classifyCheckedExpr(
+    module_env: *ModuleEnv,
+    expr_idx: CIR.Expr.Idx,
+) Class {
+    const expr = module_env.store.getExpr(expr_idx);
+    if (expr == .e_lookup_local) return classifyCheckedPattern(module_env, expr.e_lookup_local.pattern_idx);
+    const tag = std.meta.activeTag(expr);
+    if (tag == .e_method_call or
+        tag == .e_dispatch_call or
+        tag == .e_type_method_call or
+        tag == .e_type_dispatch_call or
+        tag == .e_lookup_associated_local or
+        tag == .e_lookup_associated or
+        tag == .e_lookup_associated_resolved) return .function;
+    return if (module_env.types.varResolvesToFunction(ModuleEnv.varFrom(expr_idx))) .function else .variable;
 }
 
 /// What the parse tree says about a token. `.default` leaves the token to the
