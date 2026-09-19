@@ -1940,10 +1940,20 @@ const StaticSlotEnvironment = struct {
         for (lowered.lir_result.static_data_values.items, 0..) |entry, index| {
             const root = entry.compile_time_root orelse continue;
             if (!std.meta.eql(root.module, module) or root.root != root_id or root.role != .value) continue;
+            // The slot may hold a pointer to the value rather than the value:
+            // a constant folded into a recursive tag's payload lands in a
+            // pointer slot, while the root's own procedure returns the union
+            // unboxed. Both describe the same value, and the freezer emits the
+            // payload as its own node with a relocation into the slot.
             const destination_layout = entry.layout_idx;
-            if (destination_layout != plan.ret_layout) finalizationInvariant("evaluated root requires its explicit instance conversion");
+            if (destination_layout != plan.ret_layout) {
+                const destination = lowered.lir_result.layouts.getLayout(destination_layout);
+                if (destination.tag != .box or destination.getIdx() != plan.ret_layout) {
+                    finalizationInvariant("evaluated root requires its explicit instance conversion");
+                }
+            }
             const slot: lir.LIR.StaticDataId = @enumFromInt(index);
-            const exports = try NativeRootExport.freezeRoot(self.allocator, &lowered.lir_result, slot, plan, value, callables);
+            const exports = try NativeRootExport.freezeRootIntoSlot(self.allocator, &lowered.lir_result, slot, plan, value, callables, destination_layout);
             try self.installExports(lowered, slot, exports, functions);
             lir.ComptimeValueGuards.completeSuccessfulSlot(&lowered.lir_result, slot);
         }

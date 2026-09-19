@@ -194,7 +194,12 @@ pub const Constants = struct {
     ///     in a pattern-only context.
     /// 90: Scheme-use evidence belongs to explicit value and dispatch edges;
     ///     type applications no longer publish spurious value-use records.
-    pub const CACHE_VERSION = 92;
+    /// 93: A mismatched `if`/`match` branch or return value is reported at and
+    ///     poisons the expression producing its value, leaving the expected
+    ///     result type intact.
+    /// 94: Hosted declarations must have effectful function types and keep
+    ///     their hosted type variables intact.
+    pub const CACHE_VERSION = 94;
 };
 
 /// Configuration for the Roc cache system.
