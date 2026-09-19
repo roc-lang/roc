@@ -62,7 +62,6 @@ MOD NOT FOUND - can_import_type_annotations.md:24:29:24:36
 MOD NOT FOUND - can_import_type_annotations.md:24:53:24:59
 MOD NOT FOUND - can_import_type_annotations.md:24:72:24:78
 NAME NOT IN SCOPE - can_import_type_annotations.md:25:40:25:61
-TYPE MISMATCH - can_import_type_annotations.md:15:21:15:43
 # PROBLEMS
 ~~~clojure
 (reports
@@ -294,67 +293,7 @@ TYPE MISMATCH - can_import_type_annotations.md:15:21:15:43
 			(reflow "Is it misspelled, or is there an import missing?")
 			(line-break)
 			(line-break)
-			(source-region (file "can_import_type_annotations.md") (start 25 40) (end 25 61) (annotation error) (line-text "advancedParser = |parserConfig, input| Json.Parser.parseWith(parserConfig, input)"))))
-	(report
-		(severity runtime_error)
-		(title "Type Mismatch")
-		(region (start 15 21) (end 15 43))
-		(headline
-			(reflow "The")
-			(reflow " ")
-			(reflow "first")
-			(reflow " ")
-			(reflow "branch of this")
-			(reflow " ")
-			(annotated code "match")
-			(reflow " ")
-			(reflow "does not match the previous")
-			(reflow " ")
-			(reflow "branch")
-			(reflow " ")
-			(reflow "."))
-		(document
-			(source-region (file "can_import_type_annotations.md") (start 15 21) (end 15 43) (annotation error) (line-text "        Ok(data) => Ok(Http.success(data))"))
-			(line-break)
-			(reflow "The")
-			(reflow " ")
-			(reflow "first")
-			(reflow " ")
-			(reflow "branch is:")
-			(line-break)
-			(line-break)
-			(annotation-start code-block)
-			(indent 1)
-			(text "[Ok(Error), ..]")
-			(annotation-end)
-			(line-break)
-			(line-break)
-			(reflow "But the previous")
-			(reflow " ")
-			(reflow "branch results")
-			(reflow " ")
-			(reflow "in:")
-			(line-break)
-			(line-break)
-			(annotation-start code-block)
-			(indent 1)
-			(text "Try(Error, Error)")
-			(annotation-end)
-			(line-break)
-			(line-break)
-			(reflow "All branches in a")
-			(reflow " ")
-			(annotated code "match")
-			(reflow " ")
-			(reflow "must have compatible types.")
-			(line-break)
-			(annotated underline "Note:")
-			(reflow " ")
-			(reflow "You can wrap branches values in a tag to make them compatible.")
-			(line-break)
-			(reflow "To learn about tags, see")
-			(reflow " ")
-			(link "https://www.roc-lang.org/tutorial#tags"))))
+			(source-region (file "can_import_type_annotations.md") (start 25 40) (end 25 61) (annotation error) (line-text "advancedParser = |parserConfig, input| Json.Parser.parseWith(parserConfig, input)")))))
 ~~~
 # TOKENS
 ~~~zig

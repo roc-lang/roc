@@ -62,11 +62,11 @@ MISSING METHOD - lambda_currying_constraint.md:3:21:3:26
 			(reflow " ")
 			(annotated operator "+")
 			(reflow " ")
-			(reflow "operator calls a method named")
+			(reflow "operator requires the type to have a")
 			(reflow " ")
 			(annotated code "plus")
 			(reflow " ")
-			(reflow "on the value preceding it, passing the value after the operator as the one argument."))))
+			(reflow "method. Did you forget to specify it in the type annotation?"))))
 ~~~
 # TOKENS
 ~~~zig

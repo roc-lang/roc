@@ -12,6 +12,13 @@ pub fn flush(memory: []const u8) Error!void {
     if (memory.len == 0) return;
     switch (builtin.cpu.arch) {
         .x86, .x86_64 => {}, // Hardware maintains instruction/data cache coherence.
+        .arm, .armeb => {
+            if (builtin.os.tag != .linux)
+                @compileError("instruction-cache synchronization is not implemented for this OS");
+            const result = std.os.linux.syscall3(.cacheflush, @intFromPtr(memory.ptr), @intFromPtr(memory.ptr) + memory.len, 0);
+            if (std.os.linux.errno(result) != .SUCCESS)
+                return error.FlushInstructionCacheFailed;
+        },
         .aarch64, .aarch64_be => switch (builtin.os.tag) {
             .linux => flushLinuxAarch64(memory),
             .macos => darwin.sys_icache_invalidate(memory.ptr, memory.len),
@@ -64,8 +71,6 @@ pub fn flush(memory: []const u8) Error!void {
         .amdgcn,
         .arc,
         .arceb,
-        .arm,
-        .armeb,
         .avr,
         .bpfeb,
         .bpfel,
@@ -163,7 +168,9 @@ fn flushLinuxAarch64(memory: []const u8) void {
 }
 
 test "new instructions execute after repeated writes to reused addresses" {
-    if (builtin.os.tag != .linux or builtin.cpu.arch != .aarch64) return error.SkipZigTest;
+    if (builtin.os.tag != .linux or
+        (builtin.cpu.arch != .aarch64 and builtin.cpu.arch != .arm))
+        return error.SkipZigTest;
     const linux = std.os.linux;
     const page_size = std.heap.pageSize();
     const length = 2 * page_size;
@@ -179,8 +186,12 @@ test "new instructions execute after repeated writes to reused addresses" {
     const call: *const fn () callconv(.c) u32 = @ptrCast(@alignCast(code.ptr));
     for (0..128) |generation| {
         const value: u32 = @intCast(generation + 1);
-        std.mem.writeInt(u32, code[0..4], 0x52800000 | (value << 5), .little); // mov w0, value
-        std.mem.writeInt(u32, code[4..8], 0xd65f03c0, .little); // ret
+        const instructions: [2]u32 = if (builtin.cpu.arch == .arm)
+            .{ 0xe3a00000 | value, 0xe12fff1e } // mov r0, value; bx lr
+        else
+            .{ 0x52800000 | (value << 5), 0xd65f03c0 }; // mov w0, value; ret
+        std.mem.writeInt(u32, code[0..4], instructions[0], .little);
+        std.mem.writeInt(u32, code[4..8], instructions[1], .little);
         try flush(code);
         try std.testing.expectEqual(value, call());
     }

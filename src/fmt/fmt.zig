@@ -1974,6 +1974,14 @@ const Formatter = struct {
             },
             .unary_op => |op| {
                 try fmt.pushTokenText(op.operator);
+                // Bare line breaks after the operator normalize away, but a
+                // comment there must be kept, with the operand moved below it.
+                const operand_start = fmt.nodeRegion(@intFromEnum(op.expr)).start;
+                if (fmt.hasCommentBefore(operand_start)) {
+                    fmt.curr_indent += 1;
+                    _ = try fmt.flushCommentsBefore(operand_start);
+                    try fmt.pushIndent();
+                }
                 try fmt.formatExprDiscard(op.expr);
             },
             .bin_op => |op| {
@@ -6339,4 +6347,31 @@ test "where method annotations preserve whole holes parentheses and nullary arro
     const result = try moduleFmtsStable(std.testing.allocator, source, false);
     defer std.testing.allocator.free(result);
     try std.testing.expectEqualStrings(source, result);
+}
+
+test "issue 11298: comment between unary ! and its operand inside parens formats idempotently" {
+    // Repro for https://github.com/roc-lang/roc/issues/11298
+    // The comment between `!` and its operand expands the enclosing parens,
+    // so formatting must emit that comment rather than drop it; otherwise the
+    // second pass sees no comment and collapses the parens.
+    const result = try moduleFmtsStable(std.testing.allocator, "n={(!#\n0)}", false);
+    defer std.testing.allocator.free(result);
+
+    const commented = try moduleFmtsStable(std.testing.allocator, "n={(!# keep me\n0)}", false);
+    defer std.testing.allocator.free(commented);
+    try std.testing.expectEqual(@as(usize, 1), std.mem.count(u8, commented, "# keep me"));
+}
+
+test "comments after a unary operator stay above its indented operand" {
+    const result = try moduleFmtsStable(std.testing.allocator, "x = !# a\n  # b\n  !# c\n    y\n", false);
+    defer std.testing.allocator.free(result);
+
+    try std.testing.expectEqualStrings("x = ! # a\n\t# b\n\t! # c\n\t\ty\n", result);
+}
+
+test "a bare line break after a unary operator normalizes away" {
+    const result = try moduleFmtsStable(std.testing.allocator, "x = !\n    y\n", false);
+    defer std.testing.allocator.free(result);
+
+    try std.testing.expectEqualStrings("x = !y\n", result);
 }

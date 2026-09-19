@@ -54,6 +54,8 @@ pub const Problem = union(enum) {
     unsupported_generated_method: UnsupportedGeneratedMethod,
     associated_item_not_found: AssociatedItemNotFound,
     hosted_unboxed_function: HostedUnboxedFunction,
+    hosted_function_not_effectful: HostedFunctionNotEffectful,
+    hosted_type_variable_not_boxed: HostedTypeVariableNotBoxed,
     host_boundary_open_row: HostBoundaryOpenRow,
     host_boundary_optional_field: HostBoundaryOptionalField,
     platform_def_not_found: PlatformDefNotFound,
@@ -132,6 +134,18 @@ pub const PlatformDefNotFound = struct {
 
 /// Hosted functions cannot accept or return unboxed functions.
 pub const HostedUnboxedFunction = struct {
+    region: base.Region,
+};
+
+/// Every function the host provides is effectful, so a hosted declaration
+/// must have an effectful function type (`=>`).
+pub const HostedFunctionNotEffectful = struct {
+    region: base.Region,
+};
+
+/// A hosted declaration's one C signature covers every use of it, so its type
+/// variables may appear only where the host sees a pointer: inside a `Box`.
+pub const HostedTypeVariableNotBoxed = struct {
     region: base.Region,
 };
 
@@ -592,6 +606,10 @@ pub const DispatcherNotNominal = struct {
     dispatcher_snapshot: SnapshotContentIdx,
     fn_var: Var,
     method_name: Ident.Idx,
+    origin: types_mod.StaticDispatchConstraint.Origin,
+    /// Region of the expression that owns the failed obligation (see
+    /// `DispatcherDoesNotImplMethod.owner_region`).
+    owner_region: ?base.Region = null,
 };
 
 /// Error when you try to static dispatch but the dispatcher does not have that method
@@ -602,6 +620,12 @@ pub const DispatcherDoesNotImplMethod = struct {
     fn_var: Var,
     method_name: Ident.Idx,
     origin: types_mod.StaticDispatchConstraint.Origin,
+    /// Region of the expression that owns the failed obligation: the use of a
+    /// scheme whose instantiation created it (for example the call `f(x)` that
+    /// passes `x` to a function whose `where` clause `x`'s type violates). The
+    /// violation is reported there. Null for an ownerless definition-site
+    /// constraint, which is reported at its own provenance.
+    owner_region: ?base.Region = null,
     /// Optional numeric literal info for `from_literal` constraints of kind `numeral`
     num_literal: ?types_mod.NumeralInfo = null,
     /// Source region of the string literal for `from_literal` constraints of kind `quote`
@@ -620,6 +644,10 @@ pub const TypeDoesNotSupportEquality = struct {
     dispatcher_var: Var,
     dispatcher_snapshot: SnapshotContentIdx,
     fn_var: Var,
+    origin: types_mod.StaticDispatchConstraint.Origin,
+    /// Region of the expression that owns the failed obligation (see
+    /// `DispatcherDoesNotImplMethod.owner_region`).
+    owner_region: ?base.Region = null,
 };
 
 /// Error when compiler-derived `map`/`map!` cannot select one direct tag
@@ -628,6 +656,9 @@ pub const TypeDoesNotSupportMap = struct {
     dispatcher_snapshot: SnapshotContentIdx,
     fn_var: Var,
     method_name: Ident.Idx,
+    /// Region of the expression that owns the failed obligation (see
+    /// `DispatcherDoesNotImplMethod.owner_region`).
+    owner_region: ?base.Region = null,
 };
 
 /// Error when satisfying a static-dispatch constraint immediately requires the
