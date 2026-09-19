@@ -85,39 +85,6 @@ pub const TypeAtOffsetResult = struct {
     region: Region,
 };
 
-/// The checked CIR role of a name appearing in a type annotation.
-pub const TypeAnnotationRole = enum {
-    type_name,
-    type_parameter,
-    tag,
-};
-
-const FindTypeAnnotationRoleContext = struct {
-    store: *const NodeStore,
-    target_offset: u32,
-    best_size: u32 = std.math.maxInt(u32),
-    result: ?TypeAnnotationRole = null,
-
-    fn visitTypeAnnoPre(ctx: *@This(), anno_idx: CIR.TypeAnno.Idx, anno: CIR.TypeAnno) VisitAction {
-        const region = ctx.store.getTypeAnnoRegion(anno_idx);
-        if (!regionContainsOffset(region, ctx.target_offset)) return .skip_children;
-        const size = region.end.offset - region.start.offset;
-        if (size > ctx.best_size) return .continue_traversal;
-
-        const role: ?TypeAnnotationRole = switch (anno) {
-            .apply, .lookup => .type_name,
-            .rigid_var, .rigid_var_lookup => .type_parameter,
-            .tag => .tag,
-            .underscore, .tag_union, .tuple, .record, .@"fn", .parens, .malformed => null,
-        };
-        if (role) |value| {
-            ctx.best_size = size;
-            ctx.result = value;
-        }
-        return .continue_traversal;
-    }
-};
-
 /// LSP position (0-based line and character).
 pub const LspPosition = struct {
     line: u32,
@@ -639,26 +606,6 @@ pub fn findTypeAtOffset(module_env: *ModuleEnv, offset: u32) ?TypeAtOffsetResult
         visitor.walkModule(&module_env.store, module_env.all_statements);
     }
 
-    return ctx.result;
-}
-
-/// Classify a name in a checked type annotation from its CIR node.
-pub fn findTypeAnnotationRoleAtOffset(module_env: *ModuleEnv, offset: u32) ?TypeAnnotationRole {
-    var ctx = FindTypeAnnotationRoleContext{
-        .store = &module_env.store,
-        .target_offset = offset,
-    };
-    var visitor = CirVisitor(FindTypeAnnotationRoleContext).init(&ctx, .{
-        .visit_type_anno_pre = FindTypeAnnotationRoleContext.visitTypeAnnoPre,
-    });
-
-    for (module_env.store.sliceDefs(module_env.all_defs)) |def_idx| {
-        const def = module_env.store.getDef(def_idx);
-        if (def.annotation) |annotation_idx| {
-            visitor.walkTypeAnno(&module_env.store, module_env.store.getAnnotation(annotation_idx).anno);
-        }
-    }
-    if (!visitor.stopped) visitor.walkModule(&module_env.store, module_env.all_statements);
     return ctx.result;
 }
 
@@ -1726,66 +1673,6 @@ pub fn findPatternAtOffset(module_env: *ModuleEnv, offset: u32) ?CIR.Pattern.Idx
     }
 
     return ctx.result;
-}
-
-/// Whether a binding pattern is explicitly owned by a lambda argument.
-/// Pattern identity comes from CIR; this does not reconstruct lexical scopes.
-pub fn isParameterPattern(module_env: *ModuleEnv, target: CIR.Pattern.Idx) bool {
-    const PatternContext = struct {
-        target: CIR.Pattern.Idx,
-        found: bool = false,
-
-        fn visitPatternPre(ctx: *@This(), pattern_idx: CIR.Pattern.Idx, _: CIR.Pattern) VisitAction {
-            if (pattern_idx == ctx.target) {
-                ctx.found = true;
-                return .stop;
-            }
-            return .continue_traversal;
-        }
-    };
-
-    const ExprContext = struct {
-        store: *const NodeStore,
-        target: CIR.Pattern.Idx,
-        found: bool = false,
-
-        fn argumentContains(ctx: *@This(), argument: CIR.Pattern.Idx) bool {
-            var pattern_ctx = PatternContext{ .target = ctx.target };
-            var visitor = CirVisitor(PatternContext).init(&pattern_ctx, .{
-                .visit_pattern_pre = PatternContext.visitPatternPre,
-            });
-            visitor.walkPattern(ctx.store, argument);
-            return pattern_ctx.found;
-        }
-
-        fn visitExprPre(ctx: *@This(), _: CIR.Expr.Idx, expr: CIR.Expr) VisitAction {
-            const arguments = if (expr == .e_lambda)
-                expr.e_lambda.args
-            else if (expr == .e_hosted_lambda)
-                expr.e_hosted_lambda.args
-            else
-                return .continue_traversal;
-            for (ctx.store.slicePatterns(arguments)) |argument| {
-                if (ctx.argumentContains(argument)) {
-                    ctx.found = true;
-                    return .stop;
-                }
-            }
-            return .continue_traversal;
-        }
-    };
-
-    var ctx = ExprContext{ .store = &module_env.store, .target = target };
-    var visitor = CirVisitor(ExprContext).init(&ctx, .{
-        .visit_expr_pre = ExprContext.visitExprPre,
-    });
-
-    for (module_env.store.sliceDefs(module_env.all_defs)) |def_idx| {
-        visitor.walkExpr(&module_env.store, module_env.store.getDef(def_idx).expr);
-        if (ctx.found) return true;
-    }
-    if (!visitor.stopped) visitor.walkModule(&module_env.store, module_env.all_statements);
-    return ctx.found;
 }
 
 /// Find the type variable of a field access receiver at the given offset.

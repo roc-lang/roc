@@ -4510,7 +4510,7 @@ pub fn semanticTokensHandlerHandlesFileImportsWithoutCrashing() integration_spec
     defer allocator.free(initialized_msg);
 
     const open_main_body = try std.fmt.allocPrint(allocator,
-        \\{{"jsonrpc":"2.0","method":"textDocument/didOpen","params":{{"textDocument":{{"uri":"{s}","version":1,"text":"app [main!] {{ pf: platform \"{s}\" }}\n\nimport \"input.txt\" as input : Str\n\nalias = main!\nmain! = |_|\n    echo!(input)"}}}}}}
+        \\{{"jsonrpc":"2.0","method":"textDocument/didOpen","params":{{"textDocument":{{"uri":"{s}","version":1,"text":"app [main!] {{ pf: platform \"{s}\" }}\n\nimport \"input.txt\" as input : Str\n\nChoice(a) : [Some(a), None]\nConfig : {{ host : Str }}\nidentity : a -> a\nidentity = |value| value\nalias = identity\nconfig = {{ host: \"x\" }}\nhost = config.host\nmain! = |_|\n    echo!(input)"}}}}}}
     , .{ main_uri, platform_path });
     defer allocator.free(open_main_body);
     const open_main_msg = try frame(allocator, open_main_body);
@@ -4572,11 +4572,20 @@ pub fn semanticTokensHandlerHandlesFileImportsWithoutCrashing() integration_spec
     try std.testing.expect(data_val == .array);
     try std.testing.expect(data_val.array.items.len > 0);
 
-    // The alias RHS is a lookup rather than a lambda. Its checked type is the
-    // authoritative reason the declaration is a function.
+    const Expected = struct { line: u32, column: u32, token_type: u32, modifiers: u32 = 0 };
+    const expected_tokens = [_]Expected{
+        .{ .line = 4, .column = 0, .token_type = 1, .modifiers = 1 }, // type declaration
+        .{ .line = 4, .column = 7, .token_type = 12 }, // type parameter in the header
+        .{ .line = 4, .column = 13, .token_type = 5 }, // tag in the annotation
+        .{ .line = 5, .column = 11, .token_type = 4 }, // annotation record field
+        .{ .line = 7, .column = 12, .token_type = 2 }, // lambda parameter
+        .{ .line = 8, .column = 0, .token_type = 6 }, // function-valued declaration
+        .{ .line = 9, .column = 11, .token_type = 4 }, // record literal field
+        .{ .line = 10, .column = 14, .token_type = 4 }, // field access
+    };
+    var found = [_]bool{false} ** expected_tokens.len;
     var line: u32 = 0;
     var column: u32 = 0;
-    var found_checked_function = false;
     var i: usize = 0;
     while (i + 4 < data_val.array.items.len) : (i += 5) {
         const delta_line: u32 = @intCast(data_val.array.items[i].integer);
@@ -4584,12 +4593,19 @@ pub fn semanticTokensHandlerHandlesFileImportsWithoutCrashing() integration_spec
         line += delta_line;
         column = if (delta_line == 0) column + delta_column else delta_column;
         const token_type: u32 = @intCast(data_val.array.items[i + 3].integer);
-        if (line == 4 and column == 0 and token_type == 6) {
-            found_checked_function = true;
-            break;
+        const modifiers: u32 = @intCast(data_val.array.items[i + 4].integer);
+        for (expected_tokens, 0..) |expected, expected_idx| {
+            if (line == expected.line and column == expected.column and
+                token_type == expected.token_type and modifiers == expected.modifiers)
+            {
+                found[expected_idx] = true;
+            }
         }
     }
-    try std.testing.expect(found_checked_function);
+    for (found, 0..) |was_found, expected_idx| {
+        if (!was_found) std.debug.print("missing checked semantic token: {any}\n", .{expected_tokens[expected_idx]});
+        try std.testing.expect(was_found);
+    }
 }
 
 /// Verifies goto definition on a file import path (`import "input.txt" as input : Str`) navigates to the imported file.

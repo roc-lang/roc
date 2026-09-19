@@ -111,6 +111,7 @@ pub const SyntaxChecker = struct {
     const owner_build = "build_env";
     const owner_previous = "previous_build_env";
     const owner_snapshot = "snapshot";
+    const owner_semantic_tokens = "semantic_tokens";
     pub const CheckError = SyntaxCheckError;
     pub const QueryError = SyntaxQueryError;
 
@@ -769,11 +770,20 @@ pub const SyntaxChecker = struct {
 
     /// Return checked CIR only when a retained build was produced from these
     /// exact document bytes.
+    pub const CheckedModule = struct {
+        module_env: *ModuleEnv,
+        handle: *BuildEnvHandle,
+
+        pub fn deinit(self: CheckedModule) void {
+            self.handle.release(owner_semantic_tokens);
+        }
+    };
+
     pub fn getCheckedModuleForDocument(
         self: *SyntaxChecker,
         uri: []const u8,
         text: []const u8,
-    ) Allocator.Error!?*ModuleEnv {
+    ) Allocator.Error!?CheckedModule {
         self.mutex.lockUncancelable(self.std_io);
         defer self.mutex.unlock(self.std_io);
 
@@ -781,7 +791,9 @@ pub const SyntaxChecker = struct {
         defer document.deinit(self.allocator);
 
         const handle = self.matchingBuildEnvHandle(document.absolute_path, document.content_hash) orelse return null;
-        return self.getModuleEnvByPathInEnv(handle.envPtr(), document.absolute_path);
+        const module_env = self.getModuleEnvByPathInEnv(handle.envPtr(), document.absolute_path) orelse return null;
+        handle.retain(owner_semantic_tokens);
+        return .{ .module_env = module_env, .handle = handle };
     }
 
     /// Look up a ModuleEnv by its file path from a specific BuildEnv.

@@ -40,9 +40,10 @@ pub fn handler(comptime ServerType: type) type {
             defer info.deinit();
 
             const checked_module = try self.syntax_checker.getCheckedModuleForDocument(params.textDocument.uri, doc.text);
+            defer if (checked_module) |module| module.deinit();
 
-            const tokens = if (checked_module) |module_env|
-                try semantic_tokens.extractSemanticTokensFromChecked(self.allocator, doc.text, &info, module_env)
+            const tokens = if (checked_module) |module|
+                try semantic_tokens.extractSemanticTokensFromChecked(self.allocator, doc.text, &info, module.module_env)
             else
                 try semantic_tokens.extractSemanticTokens(self.allocator, doc.text, &info);
             defer self.allocator.free(tokens);
