@@ -32,10 +32,13 @@ test "body shards borrow compile-time descriptors through publication and rollba
     };
     const a = try source.addComptimeValueRoot(root_a);
     const b = try source.addComptimeValueRoot(root_b);
+    try source.addComptimeValueRead(root_b);
     {
         var worker = try source.cloneForSpecConstrBody(testing.allocator, ids.functions[0]);
         defer worker.deinit();
         try testing.expectEqual(@as(usize, 0), worker.comptime_value_roots.len());
+        try testing.expectEqual(@as(usize, 0), worker.comptime_value_reads.len());
+        try testing.expectEqual(@as(usize, 1), worker.body_prefix.?.len("comptime_value_reads"));
         try testing.expectEqualDeep(root_a, worker.getComptimeValueRoot(a));
         try testing.expectEqualDeep(root_b, worker.getComptimeValueRoot(b));
         const mark = worker.markSpecConstrAnalysis();
@@ -51,6 +54,7 @@ test "body shards borrow compile-time descriptors through publication and rollba
         _ = try expr(&source, ids.ty, .unit);
         try source.appendSpecConstrBody(&worker, 100, 17, 50, 23);
     }
+    try testing.expectEqualDeep(&[_]Common.ComptimeValueRoot{root_b}, source.comptimeValueReadsView());
     const published = source.getExpr(source.getFn(ids.functions[0]).body.roc).data.comptime_value;
     try testing.expectEqual(b, published.root);
     try testing.expectEqualDeep(root_b, source.getComptimeValueRoot(published.root));
