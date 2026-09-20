@@ -419,6 +419,7 @@ const CustomCase = enum {
     build_int_interpreter_output_runs,
     build_int_dev_output_runs,
     issue_10492_build_default_app_args,
+    issue_11453_nested_alias_json_encode,
     build_default_app_interpreter_args,
     build_glibc_target_non_linux_error,
     build_windows_shared_library,
@@ -878,6 +879,7 @@ else
 const issue_11217_size_expected_stdout = if (builtin.os.tag == .windows) "ok\r\n" else "ok\n";
 
 const echo_cases = [_]CliCase{
+    .{ .id = 0, .suite = .echo, .name = "echo platform: issue 11453 method encodes a record reached through three record aliases (dev, object cache on)", .backend = .dev, .body = .{ .custom = .issue_11453_nested_alias_json_encode } },
     .{ .id = 0, .suite = .echo, .name = "issue 11130: record versions and eager effects (interpreter)", .backend = .interpreter, .body = .{ .command = .{ .args = &.{ "--opt=interpreter", "--no-cache" }, .roc_file = "test/echo/issue_11130_record_versions.roc", .stdout_exact = issue_11130_expected_stdout } } },
     .{ .id = 0, .suite = .echo, .name = "issue 11130: record versions and eager effects (dev)", .backend = .dev, .body = .{ .command = .{ .args = &.{ "--opt=dev", "--no-cache" }, .roc_file = "test/echo/issue_11130_record_versions.roc", .stdout_exact = issue_11130_expected_stdout } } },
     .{ .id = 0, .suite = .echo, .name = "issue 11130: record versions and eager effects (speed)", .backend = .speed, .body = .{ .command = .{ .args = &.{ "--opt=speed", "--no-cache" }, .roc_file = "test/echo/issue_11130_record_versions.roc", .stdout_exact = issue_11130_speed_expected_stdout } } },
@@ -3216,6 +3218,7 @@ fn runCustomCase(
         .build_int_interpreter_output_runs => customBuildIntOutputRuns(io, allocator, &env, &timer, timeout_ms, .interpreter),
         .build_int_dev_output_runs => customBuildIntOutputRuns(io, allocator, &env, &timer, timeout_ms, .dev),
         .issue_10492_build_default_app_args => customBuildDefaultAppArgs(io, allocator, &env, &timer, timeout_ms, .dev),
+        .issue_11453_nested_alias_json_encode => customIssue11453NestedAliasJsonEncode(io, allocator, &env, &timer, timeout_ms),
         .build_default_app_interpreter_args => customBuildDefaultAppArgs(io, allocator, &env, &timer, timeout_ms, .interpreter),
         .build_glibc_target_non_linux_error => customGlibcTargetNonLinux(io, allocator, &env, &timer, timeout_ms),
         .build_windows_shared_library => customWindowsSharedLibrary(io, allocator, &env, &timer, timeout_ms),
@@ -7027,6 +7030,38 @@ fn customBuildDefaultAppArgs(
     if (runRawAndCheck(io, allocator, env, timer, timeout_ms, &.{ executable_path, "aaa", "bbb", "ccc" }, env.dirs.work_dir, .{
         .args = &.{},
         .stdout_exact = "[aaa][bbb][ccc]",
+        .stderr_exact = "",
+    })) |failure| return failure;
+
+    return null;
+}
+
+/// Building the module's object-cache pack must preserve alias transparency.
+fn customIssue11453NestedAliasJsonEncode(
+    io: std.Io,
+    allocator: Allocator,
+    env: *const CaseEnv,
+    timer: *harness.Timer,
+    timeout_ms: u64,
+) ?TestResult {
+    const output_path = std.fs.path.join(allocator, &.{ env.dirs.work_dir, "issue_11453" }) catch |err|
+        return customInfraFailure(allocator, timer, "failed to allocate output path: {}", .{err});
+    const out_arg = outputArg(allocator, output_path) catch |err|
+        return customInfraFailure(allocator, timer, "failed to allocate output arg: {}", .{err});
+
+    if (runRocAndCheck(io, allocator, env, timer, timeout_ms, .{
+        .args = &.{ "build", "--opt=dev", out_arg },
+        .roc_file = "test/echo/issue_11453_nested_alias_json_encode.roc",
+        .contains = &.{.{ .stream = .stdout, .text = "successfully building" }},
+        .not_contains = &.{ .{ .stream = .stderr, .text = "panic" }, .{ .stream = .stderr, .text = "invariant violated" } },
+    })) |failure| return failure;
+
+    const executable_path = runnableOutputPath(io, allocator, output_path) catch |err|
+        return customInfraFailure(allocator, timer, "failed to find built executable: {}", .{err});
+
+    if (runRawAndCheck(io, allocator, env, timer, timeout_ms, &.{executable_path}, env.dirs.work_dir, .{
+        .args = &.{},
+        .stdout_exact = "{\"area\":{\"office\":{\"url\":\"u\"}}}",
         .stderr_exact = "",
     })) |failure| return failure;
 
