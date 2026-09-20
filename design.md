@@ -2190,8 +2190,8 @@ available; execution crashes only if it reaches a recorded checked error.
 Import resolution is one of those producer boundaries. It selects exactly one
 outcome per import identity—an accepted target with its module environment, or
 a rejection—and records that outcome where it is decided: a package module the
-target package does not publish, a relative import that escapes the package
-source root, a source path whose spelling or physical identity is not the one
+target package does not make public, a relative import that escapes the package
+source root, a source path whose spelling or file identity is not the one
 the logical name selects. A rejected import is a user diagnostic, so it neither
 completes the importing module with failure nor propagates to that module's
 dependents. The importing module keeps its complete path through
