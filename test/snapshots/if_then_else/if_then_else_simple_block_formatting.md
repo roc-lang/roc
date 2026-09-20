@@ -36,7 +36,7 @@ MISSING METHOD - if_then_else_simple_block_formatting.md:3:8:3:9
 			(line-break)
 			(annotation-start code-block)
 			(indent 1)
-			(text "[A, ..]")
+			(text "[A]")
 			(annotation-end))))
 ~~~
 # TOKENS
@@ -72,5 +72,5 @@ NO CHANGE
 ~~~
 # TYPES
 ~~~clojure
-(expr (type "[A, ..]"))
+(expr (type "[A]"))
 ~~~

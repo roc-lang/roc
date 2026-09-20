@@ -3,6 +3,7 @@
 const std = @import("std");
 const collections = @import("collections");
 const base = @import("base");
+const can = @import("can");
 const check = @import("check");
 const eval = @import("eval");
 const lir = @import("lir");
@@ -5419,6 +5420,229 @@ test "nested iterator results retain the callee-authored representation" {
     }
 }
 
+/// Whether every dispatch plan for `method` in the lowered module (at least
+/// one) is `direct_parametric` (true) or every one is `direct_closed`
+/// (false); mixed or non-direct plans fail the test.
+fn directDispatchPlanIsParametric(
+    resources: *const helpers.ParsedResources,
+    method: []const u8,
+) TestError!bool {
+    var found: ?bool = null;
+    for (resources.checked_artifact.static_dispatch_plans.plans) |plan| {
+        if (!std.mem.eql(u8, resources.checked_artifact.canonical_names.methodNameText(plan.method), method)) continue;
+        const parametric = switch (plan.resolution) {
+            .direct_parametric => true,
+            .direct_closed => false,
+            .direct_pending,
+            .evidence_dependent,
+            .structural,
+            .checked_error,
+            .@"unreachable",
+            => {
+                std.debug.print("dispatch plan for {s} is not direct: {s}\n", .{ method, @tagName(plan.resolution) });
+                return error.TestUnexpectedResult;
+            },
+        };
+        if (found) |previous| {
+            if (previous != parametric) {
+                std.debug.print("dispatch plans for {s} classify differently\n", .{method});
+                return error.TestUnexpectedResult;
+            }
+        }
+        found = parametric;
+    }
+    return found orelse error.TestUnexpectedResult;
+}
+
+test "polarity: a method row tail is a closed direct plan only when no enclosing scheme quantifies it" {
+    // `wrapped`'s annotated error row is implicitly
+    // open, so every call instantiates it with a defaultable flex tail. The
+    // dispatch in `wrap` shares that tail with `wrap`'s own return row: it is
+    // an identity variable of the enclosing template, so the plan stays
+    // `direct_parametric` whether or not a caller widens it (the first two
+    // cases) and a named extension is a rigid (the third). A tail the body
+    // matches away is quantified by nothing and is `direct_closed`, sealed to
+    // its row default exactly as it was before polarity. A direct dispatch
+    // inside a generalized local (its receiver is concrete; a dispatch on the
+    // local's own parameter would be evidence-dependent) is quantified by the
+    // local's scheme (scope-chain arm), and a recursive method's
+    // self-dispatch shares its tail with the enclosing template's return row:
+    // the surviving plan-side clone of that tail maps back to the template
+    // root through the store's identity origins (which clone survives is
+    // pinned by the checked_artifact.zig unit test "direct dispatch
+    // classification follows instantiation clones to the scheme that
+    // quantifies them").
+    const allocator = std.testing.allocator;
+    const cases = [_]struct { name: []const u8, source: []const u8, parametric: bool }{
+        .{ .name = "widened caller", .parametric = true, .source =
+        \\Rows := {}.{
+        \\    wrapped : Rows -> Try(Str, [Unavailable])
+        \\    wrapped = |_| Ok("x")
+        \\}
+        \\
+        \\wrap : Rows -> Try(Str, [Unavailable])
+        \\wrap = |rows| rows.wrapped()
+        \\
+        \\use : Rows -> Try(Str, [Unavailable, Other])
+        \\use = |rows| {
+        \\    s = wrap(rows)?
+        \\    Ok(s)
+        \\}
+        \\
+        \\main : Str
+        \\main = {
+        \\    s = match use(Rows.{}) {
+        \\        Ok(v) => v
+        \\        Err(_) => "err"
+        \\    }
+        \\    dbg s
+        \\    s
+        \\}
+        },
+        .{ .name = "own-row caller", .parametric = true, .source =
+        \\Rows := {}.{
+        \\    wrapped : Rows -> Try(Str, [Unavailable])
+        \\    wrapped = |_| Ok("x")
+        \\}
+        \\
+        \\wrap : Rows -> Try(Str, [Unavailable])
+        \\wrap = |rows| rows.wrapped()
+        \\
+        \\use : Rows -> Try(Str, [Unavailable])
+        \\use = |rows| {
+        \\    s = wrap(rows)?
+        \\    Ok(s)
+        \\}
+        \\
+        \\main : Str
+        \\main = {
+        \\    s = match use(Rows.{}) {
+        \\        Ok(v) => v
+        \\        Err(_) => "err"
+        \\    }
+        \\    dbg s
+        \\    s
+        \\}
+        },
+        .{ .name = "named extension", .parametric = true, .source =
+        \\Rows := {}.{
+        \\    wrapped : Rows -> Try(Str, [Unavailable, Missing, ..others])
+        \\    wrapped = |_| Ok("x")
+        \\}
+        \\
+        \\wrap : Rows -> Try(Str, [Unavailable, Missing, ..others])
+        \\wrap = |rows| rows.wrapped()
+        \\
+        \\use : Rows -> Try(Str, [Unavailable, Missing, Other])
+        \\use = |rows| {
+        \\    s = wrap(rows)?
+        \\    Ok(s)
+        \\}
+        \\
+        \\main : Str
+        \\main = {
+        \\    s = match use(Rows.{}) {
+        \\        Ok(v) => v
+        \\        Err(_) => "err"
+        \\    }
+        \\    dbg s
+        \\    s
+        \\}
+        },
+        .{ .name = "body-local tail", .parametric = false, .source =
+        \\Rows := {}.{
+        \\    wrapped : Rows -> Try(Str, [Unavailable])
+        \\    wrapped = |_| Ok("x")
+        \\}
+        \\
+        \\describe : Rows -> Str
+        \\describe = |rows| {
+        \\    wrapped = rows.wrapped()
+        \\    match wrapped {
+        \\        Ok(s) => s
+        \\        Err(_) => "err"
+        \\    }
+        \\}
+        \\
+        \\main : Str
+        \\main = {
+        \\    s = describe(Rows.{})
+        \\    dbg s
+        \\    s
+        \\}
+        },
+        .{ .name = "nested generalized local", .parametric = true, .source =
+        \\Rows := {}.{
+        \\    wrapped : Rows -> Try(Str, [Unavailable])
+        \\    wrapped = |_| Ok("x")
+        \\}
+        \\
+        \\use : Rows -> Try(Str, [Unavailable, Other])
+        \\use = |rows| {
+        \\    helper = |r| {
+        \\        rows2 : Rows
+        \\        rows2 = r
+        \\        rows2.wrapped()
+        \\    }
+        \\    s = helper(rows)?
+        \\    Ok(s)
+        \\}
+        \\
+        \\main : Str
+        \\main = {
+        \\    s = match use(Rows.{}) {
+        \\        Ok(v) => v
+        \\        Err(_) => "err"
+        \\    }
+        \\    dbg s
+        \\    s
+        \\}
+        },
+        .{ .name = "recursive method", .parametric = true, .source =
+        \\Rows := { n : U64 }.{
+        \\    wrapped : Rows -> Try(Str, [Unavailable])
+        \\    wrapped = |rows| if rows.n == 0 Ok("x") else Rows.{ n: rows.n - 1 }.wrapped()
+        \\}
+        \\
+        \\use : Rows -> Try(Str, [Unavailable, Other])
+        \\use = |rows| {
+        \\    s = rows.wrapped()?
+        \\    Ok(s)
+        \\}
+        \\
+        \\main : Str
+        \\main = {
+        \\    s = match use(Rows.{ n: 2 }) {
+        \\        Ok(v) => v
+        \\        Err(_) => "err"
+        \\    }
+        \\    dbg s
+        \\    s
+        \\}
+        },
+    };
+
+    for (cases) |case| {
+        var optimized = try lowerModule(allocator, case.source, .wrappers);
+        defer optimized.deinit(allocator);
+
+        const parametric = try directDispatchPlanIsParametric(&optimized.resources, "wrapped");
+        if (parametric != case.parametric) {
+            std.debug.print("direct plan classification differed for {s}: expected parametric={}\n", .{ case.name, case.parametric });
+            return error.TestUnexpectedResult;
+        }
+
+        var run = try runLoweredWithHostEvents(allocator, &optimized.lowered);
+        defer run.deinit(allocator);
+        try std.testing.expectEqual(eval.RuntimeHostEnv.Termination.returned, run.termination);
+        try std.testing.expectEqual(@as(usize, 1), run.events.len);
+        switch (run.events[0]) {
+            .dbg => |msg| try std.testing.expectEqualStrings("\"x\"", msg),
+            .expect_failed, .crashed, .effect => return error.TestUnexpectedResult,
+        }
+    }
+}
+
 test "completed iterator method specs refresh their public lookup keys" {
     const allocator = std.testing.allocator;
     const single_source =
@@ -8442,6 +8666,653 @@ test "compiler-generated dispatch classes lower via checked evidence" {
     try std.testing.expectEqualStrings("True", output);
 }
 
+test "W6a open where-method widening and nested evidence lower through explicit per-use provenance" {
+    const allocator = std.testing.allocator;
+    const source =
+        \\describe_wide : a -> [Ok(Str), Err(Str), Extra] where [a.status : a -> [Ok(Str), Err(Str)]]
+        \\describe_wide = |x| x.status()
+        \\
+        \\Job := [Pending, Failed].{
+        \\    status : Job -> [Ok(Str), Err(Str)]
+        \\    status = |job| match job { Pending => Ok("p"), Failed => Err("f") }
+        \\}
+        \\
+        \\load : a -> Try(Str, [NotFound, Other]) where [a.fetch : a -> Try(Str, [NotFound])]
+        \\load = |x| {
+        \\    value = x.fetch()?
+        \\    Ok(value)
+        \\}
+        \\
+        \\Src := [S].{
+        \\    fetch : Src -> Try(Str, [NotFound])
+        \\    fetch = |_| Ok("hit")
+        \\}
+        \\
+        \\both : a -> [Ok(Str), Err(Str), Extra] where [a.status : a -> [Ok(Str), Err(Str)]]
+        \\both = |x| {
+        \\    first = match x.status() { Ok(s) => s, Err(e) => e }
+        \\    if Str.is_empty(first) Extra else x.status()
+        \\}
+        \\
+        \\Named := [N].{
+        \\    name : Named -> Str
+        \\    name = |_| "named"
+        \\}
+        \\
+        \\Nested(a) := [Wrap(a)].{
+        \\    status : Nested(a) -> [Ok(Str), Err(Str)] where [a.name : a -> Str]
+        \\    status = |Nested.Wrap(inner)| Ok(inner.name())
+        \\}
+        \\
+        \\nested_wide : a -> [Ok(Str), Err(Str), Extra] where [a.status : a -> [Ok(Str), Err(Str)]]
+        \\nested_wide = |x| x.status()
+        \\
+        \\nested_closed : a -> Str where [a.status : a -> [Ok(Str), Err(Str)]]
+        \\nested_closed = |x| match x.status() { Ok(s) => s, Err(e) => e }
+        \\
+        \\Subset := [Only].{
+        \\    status : Subset -> [Ok(Str)]
+        \\    status = |_| Ok("subset")
+        \\}
+        \\
+        \\subset_closed : a -> Str where [a.status : a -> [Ok(Str), Err(Str)]]
+        \\subset_closed = |x| match x.status() { Ok(s) => s, Err(e) => e }
+        \\
+        \\Mid := [M].{
+        \\    name : Mid -> Str
+        \\    name = |_| "mid"
+        \\}
+        \\
+        \\Source := [SourceValue].{
+        \\    step : Source -> Mid
+        \\    step = |_| Mid.M
+        \\}
+        \\
+        \\RequiresRecord(a) := [R(a)].{
+        \\    plus : RequiresRecord(a), RequiresRecord(a) -> RequiresRecord(a)
+        \\        where [a.step : a -> b, b.name : b -> Str]
+        \\    plus = |left, _| match left {
+        \\        R(inner) => {
+        \\            stepped = inner.step()
+        \\            _ = stepped.name()
+        \\            left
+        \\        }
+        \\    }
+        \\}
+        \\
+        \\repeat_plus : a, U64 -> a where [a.plus : a, a -> a]
+        \\repeat_plus = |x, n|
+        \\    if n == 0 { x.plus(x) } else { repeat_plus(x, n - 1) }
+        \\
+        \\main : Bool
+        \\main = {
+        \\    pending_ok = match describe_wide(Job.Pending) { Ok(s) => s == "p", Err(_) => False, Extra => False }
+        \\    failed_ok = match describe_wide(Job.Failed) { Ok(_) => False, Err(s) => s == "f", Extra => False }
+        \\    question_ok = match load(Src.S) { Ok(s) => s == "hit", Err(_) => False }
+        \\    both_ok = match both(Job.Pending) { Ok(s) => s == "p", Err(_) => False, Extra => False }
+        \\    nested = Nested.Wrap(Named.N)
+        \\    nested_wide_ok = match nested_wide(nested) { Ok(s) => s == "named", Err(_) => False, Extra => False }
+        \\    nested_closed_ok = nested_closed(nested) == "named"
+        \\    subset_ok = subset_closed(Subset.Only) == "subset"
+        \\    required = repeat_plus(RequiresRecord.R(Source.SourceValue), 1)
+        \\    required_ok = match required { RequiresRecord.R(Source.SourceValue) => True }
+        \\    pending_ok and failed_ok and question_ok and both_ok and nested_wide_ok and nested_closed_ok and subset_ok and required_ok
+        \\}
+    ;
+
+    var compiled = try helpers.compileInspectedProgramForTargetWithBuiltin(
+        allocator,
+        std.testing.io,
+        .module,
+        source,
+        &.{},
+        .native,
+        try sharedPrePublishedBuiltin(),
+        null,
+        .lss,
+    );
+    defer compiled.deinit(allocator);
+    try std.testing.expectEqual(@as(usize, 0), compiled.resources.checker.problems.problems.items.len);
+
+    // `RequiresRecord.plus` has constraint-callable-only nested evidence,
+    // so its target cannot be rebuilt from the independent callable. The raw
+    // where-use complete map must preserve the enclosing slot's resolved
+    // nested vector through checked-artifact construction and Monotype lowering.
+    var found_requires_record_reuse = false;
+    for (compiled.resources.checked_artifact.static_dispatch_plans.plans) |plan| {
+        if (!std.mem.eql(
+            u8,
+            compiled.resources.checked_artifact.canonical_names.methodNameText(plan.method),
+            "plus",
+        )) continue;
+        switch (plan.resolution) {
+            .evidence_dependent => |dependent| {
+                if (dependent.independent_callable and dependent.reuse_slot_nested_evidence) {
+                    found_requires_record_reuse = true;
+                }
+            },
+            .direct_pending,
+            .direct_closed,
+            .direct_parametric,
+            .structural,
+            .checked_error,
+            .@"unreachable",
+            => {},
+        }
+    }
+    try std.testing.expect(found_requires_record_reuse);
+
+    const output = try helpers.lirInterpreterInspectedStr(allocator, &compiled.lowered);
+    defer allocator.free(output);
+    try std.testing.expectEqualStrings("True", output);
+}
+
+/// Monotype functions defined as generated adapters. The result-row widening
+/// adapter is the only producer of `.checked_generated` in a plain Roc module,
+/// so this count is the mechanism witness: a program that compiles the impl at
+/// the caller's wide row instead reports zero while still running correctly.
+fn checkedGeneratedFnCount(program: *const MonoAst.Program) usize {
+    var count: usize = 0;
+    for (program.view().fns) |function| {
+        switch (function.source.fn_def) {
+            .checked_generated => count += 1,
+            .local_template,
+            .imported_template,
+            .nested,
+            .local_hosted,
+            .imported_hosted,
+            .parser_runtime,
+            .encoder_for_runtime,
+            => {},
+        }
+    }
+    return count;
+}
+
+test "W6b widened closed where-method impl is reached through a generated adapter" {
+    const allocator = std.testing.allocator;
+    // `status` is published at the closed row `[Ok(Str), Err(Str)]` while
+    // `describe` requests `[Ok(Str), Err(Str), Extra]`. The impl must stay
+    // specialized at its declared row and be reached through a generated
+    // adapter that re-tags into the requested row (design.md "Result-Row
+    // Widening Adapter"). Running the program proves neither: it produces the
+    // same answer whether the impl was adapted or simply specialized wide, so
+    // the adapter count is the only witness.
+    const widened =
+        \\describe : a -> [Ok(Str), Err(Str), Extra] where [a.status : a -> [Ok(Str), Err(Str)]]
+        \\describe = |x| x.status()
+        \\
+        \\closed_value : [Ok(Str), Err(Str)]
+        \\closed_value = Ok("cv")
+        \\
+        \\Job := [Pending].{
+        \\    status : Job -> [Ok(Str), Err(Str)]
+        \\    status = |_| closed_value
+        \\}
+        \\
+        \\show : [Ok(Str), Err(Str), Extra] -> Str
+        \\show = |v| match v { Ok(s) => "Ok(${s})", Err(e) => "Err(${e})", Extra => "Extra" }
+        \\
+        \\expect show(describe(Job.Pending)) == "Ok(cv)"
+        \\
+        \\main = 0
+    ;
+    var widened_lowered = try lowerMonotypeModuleWithOptions(allocator, widened, .{
+        .root_selection = .test_expects,
+    });
+    defer widened_lowered.deinit(allocator);
+    try std.testing.expectEqual(@as(usize, 1), checkedGeneratedFnCount(&widened_lowered.mono));
+
+    // The control: the same dispatch requested at the impl's own row. Nothing
+    // is widened, so no adapter may be minted.
+    const exact =
+        \\describe : a -> [Ok(Str), Err(Str)] where [a.status : a -> [Ok(Str), Err(Str)]]
+        \\describe = |x| x.status()
+        \\
+        \\closed_value : [Ok(Str), Err(Str)]
+        \\closed_value = Ok("cv")
+        \\
+        \\Job := [Pending].{
+        \\    status : Job -> [Ok(Str), Err(Str)]
+        \\    status = |_| closed_value
+        \\}
+        \\
+        \\show : [Ok(Str), Err(Str)] -> Str
+        \\show = |v| match v { Ok(s) => "Ok(${s})", Err(e) => "Err(${e})" }
+        \\
+        \\expect show(describe(Job.Pending)) == "Ok(cv)"
+        \\
+        \\main = 0
+    ;
+    var exact_lowered = try lowerMonotypeModuleWithOptions(allocator, exact, .{
+        .root_selection = .test_expects,
+    });
+    defer exact_lowered.deinit(allocator);
+    try std.testing.expectEqual(@as(usize, 0), checkedGeneratedFnCount(&exact_lowered.mono));
+}
+
+test "W6b question-widened closed Try impl is reached through a generated adapter" {
+    const allocator = std.testing.allocator;
+    // The `Try` instance of the same mechanism: `fetch` publishes the closed
+    // error row `[NotFound]` and `?` requests `[NotFound, Other]`, so the
+    // adapter unwraps the declared-row `Try` and re-wraps its error into the
+    // wider row.
+    const source =
+        \\load : a -> Try(Str, [NotFound, Other]) where [a.fetch : a -> Try(Str, [NotFound])]
+        \\load = |x| {
+        \\    s = x.fetch()?
+        \\    Ok(s)
+        \\}
+        \\
+        \\closed_try : Try(Str, [NotFound])
+        \\closed_try = Ok("hit")
+        \\
+        \\Src := [S].{
+        \\    fetch : Src -> Try(Str, [NotFound])
+        \\    fetch = |_| closed_try
+        \\}
+        \\
+        \\expect match load(Src.S) { Ok(s) => s == "hit", Err(_) => False }
+        \\
+        \\main = 0
+    ;
+    var lowered = try lowerMonotypeModuleWithOptions(allocator, source, .{
+        .root_selection = .test_expects,
+    });
+    defer lowered.deinit(allocator);
+    try std.testing.expectEqual(@as(usize, 1), checkedGeneratedFnCount(&lowered.mono));
+}
+
+test "W6b closed impl reached through nested evidence is adapted" {
+    const allocator = std.testing.allocator;
+    // `Wrap.status` carries its OWN where-clause, so the obligation that
+    // reaches it drags a second requirement along, and its published result
+    // row is still closed by `closed_ok` / `closed_err`. `describe` uses the
+    // method twice in one body—exhaustively at the declared row and widened—so
+    // the adapter is minted beside an ordinary declared-row
+    // specialization of the same template. `test/cli`'s
+    // `WidenNestedEvidenceClosedImpl.roc` runs this program on both backends
+    // and only proves it computes the right answer; the adapter count is what
+    // proves the mechanism.
+    const source =
+        \\closed_ok : [Ok(Str), Err(Str)]
+        \\closed_ok = Ok("ok")
+        \\
+        \\closed_err : [Ok(Str), Err(Str)]
+        \\closed_err = Err("err")
+        \\
+        \\Wrap(a) := [W(a)].{
+        \\    status : Wrap(a) -> [Ok(Str), Err(Str)] where [a.name : a -> Str]
+        \\    status = |w| match w { W(inner) => if inner.name() == "thing" closed_ok else closed_err }
+        \\}
+        \\
+        \\Thing := [T].{
+        \\    name : Thing -> Str
+        \\    name = |_| "thing"
+        \\}
+        \\
+        \\Other := [O].{
+        \\    name : Other -> Str
+        \\    name = |_| "other"
+        \\}
+        \\
+        \\describe : x -> [Ok(Str), Err(Str), Extra] where [x.status : x -> [Ok(Str), Err(Str)]]
+        \\describe = |x| {
+        \\    first = match x.status() {
+        \\        Ok(s) => s
+        \\        Err(e) => e
+        \\    }
+        \\    if first == "" Extra else x.status()
+        \\}
+        \\
+        \\show : [Ok(Str), Err(Str), Extra] -> Str
+        \\show = |v| match v { Ok(s) => "Ok(${s})", Err(e) => "Err(${e})", Extra => "Extra" }
+        \\
+        \\expect show(describe(Wrap.W(Thing.T))) == "Ok(ok)"
+        \\expect show(describe(Wrap.W(Other.O))) == "Err(err)"
+        \\
+        \\main = 0
+    ;
+    var lowered = try lowerMonotypeModuleWithOptions(allocator, source, .{
+        .root_selection = .test_expects,
+    });
+    defer lowered.deinit(allocator);
+    // One adapter per (template specialization, requested type): `Wrap(Thing)`
+    // and `Wrap(Other)` are distinct specializations of `status`, so each
+    // widened request gets its own.
+    try std.testing.expectEqual(@as(usize, 2), checkedGeneratedFnCount(&lowered.mono));
+}
+
+test "W6b closed impl with rigid payloads is adapted at the requested payloads" {
+    const allocator = std.testing.allocator;
+    // `Relay(a).route` publishes the closed row `[Ok(a), Err(a)]`—closed
+    // because it returns its own input-position parameter—with RIGID
+    // payloads. `lowerCheckedTypeVariable` seals a rigid to the empty tag
+    // union, so the adapter's narrowed source type must take its payloads
+    // from the REQUEST rather than from `lowerType` of the checked root
+    // (`resultRowWideningAdapterOrNull`'s doc comment). Both constructors go
+    // through the adapter, so a payload taken from the declared type would
+    // be a zero-sized representation rather than a `Str`.
+    const source =
+        \\Relay(a) := [R(a)].{
+        \\    route : Relay(a), [Ok(a), Err(a)] -> [Ok(a), Err(a)]
+        \\    route = |_, v| v
+        \\}
+        \\
+        \\describe : r, [Ok(Str), Err(Str)] -> [Ok(Str), Err(Str), Extra] where [r.route : r, [Ok(Str), Err(Str)] -> [Ok(Str), Err(Str)]]
+        \\describe = |x, v| x.route(v)
+        \\
+        \\show : [Ok(Str), Err(Str), Extra] -> Str
+        \\show = |v| match v { Ok(s) => "Ok(${s})", Err(e) => "Err(${e})", Extra => "Extra" }
+        \\
+        \\expect show(describe(Relay.R("seed"), Ok("arg"))) == "Ok(arg)"
+        \\expect show(describe(Relay.R("seed"), Err("bad"))) == "Err(bad)"
+        \\
+        \\main = 0
+    ;
+    var lowered = try lowerMonotypeModuleWithOptions(allocator, source, .{
+        .root_selection = .test_expects,
+    });
+    defer lowered.deinit(allocator);
+    // Both expects request `Relay(Str).route` at the same widened type, so
+    // the adapter is keyed once.
+    try std.testing.expectEqual(@as(usize, 1), checkedGeneratedFnCount(&lowered.mono));
+}
+
+test "W6b direct-result widening adapter re-tags into the requested row at run time" {
+    const allocator = std.testing.allocator;
+    // The executing half of "W6b widened closed where-method impl ...", which
+    // only lowers. `Extra` is chosen because it SORTS BETWEEN the declared
+    // labels: tags are ordered by name, so the declared row numbers
+    // `Err` 0, `Ok` 1 while the requested row numbers `Err` 0, `Extra` 1,
+    // `Ok` 2. An adapter that forwarded the callee's result unchanged, or that
+    // mapped the labels in the wrong order, would therefore read the `Ok`
+    // payload out of a payload-less `Extra`—which only running the program
+    // can catch. (`Err` maps 0 to 0 and proves nothing on its own; it is here
+    // so both constructors travel through the adapter.)
+    const source =
+        \\closed_ok : [Ok(Str), Err(Str)]
+        \\closed_ok = Ok("ok")
+        \\
+        \\closed_err : [Ok(Str), Err(Str)]
+        \\closed_err = Err("bad")
+        \\
+        \\Job := [Pending, Failed].{
+        \\    status : Job -> [Ok(Str), Err(Str)]
+        \\    status = |job| match job { Pending => closed_ok, Failed => closed_err }
+        \\}
+        \\
+        \\describe : a -> [Ok(Str), Err(Str), Extra] where [a.status : a -> [Ok(Str), Err(Str)]]
+        \\describe = |x| x.status()
+        \\
+        \\show : [Ok(Str), Err(Str), Extra] -> Str
+        \\show = |v| match v { Ok(s) => "Ok(${s})", Err(e) => "Err(${e})", Extra => "Extra" }
+        \\
+        \\main : Bool
+        \\main = {
+        \\    pending_ok = show(describe(Job.Pending)) == "Ok(ok)"
+        \\    failed_ok = show(describe(Job.Failed)) == "Err(bad)"
+        \\    pending_ok and failed_ok
+        \\}
+    ;
+
+    // The mechanism witness: the value below is the same either way, so pin
+    // that an adapter really is what produced it.
+    var lowered = try lowerMonotypeModule(allocator, source);
+    defer lowered.deinit(allocator);
+    try std.testing.expectEqual(@as(usize, 1), checkedGeneratedFnCount(&lowered.mono));
+
+    var compiled = try helpers.compileInspectedProgramForTargetWithBuiltin(
+        allocator,
+        std.testing.io,
+        .module,
+        source,
+        &.{},
+        .native,
+        try sharedPrePublishedBuiltin(),
+        null,
+        .lss,
+    );
+    defer compiled.deinit(allocator);
+    try std.testing.expectEqual(@as(usize, 0), compiled.resources.checker.problems.problems.items.len);
+
+    const output = try helpers.lirInterpreterInspectedStr(allocator, &compiled.lowered);
+    defer allocator.free(output);
+    try std.testing.expectEqualStrings("True", output);
+}
+
+test "W6b Try error-row widening adapter re-tags into the requested row at run time" {
+    const allocator = std.testing.allocator;
+    // The `Try` instance, executed. The extra label is `Gone` rather than the
+    // `Other` the lowering-only test uses, because `Other` sorts AFTER
+    // `NotFound` and leaves it at discriminant 0 in both rows—an adapter that
+    // injected nothing at all would still produce the right answer. `Gone`
+    // sorts first, so the declared row numbers `NotFound` 0 while the requested
+    // row numbers `Gone` 0 and `NotFound` 1, and a missing or misordered
+    // injection reports `Gone` where the callee returned `NotFound`.
+    const source =
+        \\closed_hit : Try(Str, [NotFound])
+        \\closed_hit = Ok("hit")
+        \\
+        \\closed_miss : Try(Str, [NotFound])
+        \\closed_miss = Err(NotFound)
+        \\
+        \\Src := [Found, Missing].{
+        \\    fetch : Src -> Try(Str, [NotFound])
+        \\    fetch = |src| match src { Found => closed_hit, Missing => closed_miss }
+        \\}
+        \\
+        \\load : a -> Try(Str, [Gone, NotFound]) where [a.fetch : a -> Try(Str, [NotFound])]
+        \\load = |x| {
+        \\    s = x.fetch()?
+        \\    Ok(s)
+        \\}
+        \\
+        \\show : Try(Str, [Gone, NotFound]) -> Str
+        \\show = |v| match v { Ok(s) => "Ok(${s})", Err(Gone) => "Gone", Err(NotFound) => "NotFound" }
+        \\
+        \\main : Bool
+        \\main = {
+        \\    found_ok = show(load(Src.Found)) == "Ok(hit)"
+        \\    missing_ok = show(load(Src.Missing)) == "NotFound"
+        \\    found_ok and missing_ok
+        \\}
+    ;
+
+    var lowered = try lowerMonotypeModule(allocator, source);
+    defer lowered.deinit(allocator);
+    try std.testing.expectEqual(@as(usize, 1), checkedGeneratedFnCount(&lowered.mono));
+
+    var compiled = try helpers.compileInspectedProgramForTargetWithBuiltin(
+        allocator,
+        std.testing.io,
+        .module,
+        source,
+        &.{},
+        .native,
+        try sharedPrePublishedBuiltin(),
+        null,
+        .lss,
+    );
+    defer compiled.deinit(allocator);
+    try std.testing.expectEqual(@as(usize, 0), compiled.resources.checker.problems.problems.items.len);
+
+    const output = try helpers.lirInterpreterInspectedStr(allocator, &compiled.lowered);
+    defer allocator.free(output);
+    try std.testing.expectEqualStrings("True", output);
+}
+
+test "W6b alias-wrapped closed Try error row is adapted and re-tagged at run time" {
+    const allocator = std.testing.allocator;
+    // The declared `Try` reached through a transparent alias. The checked side
+    // crosses alias layers when it publishes the `Try` capability and records
+    // the widening, so the mono side has to cross them too: reading
+    // `IoResult(Str)` as-is finds an `.alias` named node whose def is not
+    // `Try`'s, which declined the adapter after the relation had already
+    // committed to it. `test/cli/WidenAliasTryClosedImpl.roc` runs the same
+    // shape end to end on both backends; the count below is what proves an
+    // adapter—not a specialization at the wide row—serves the request.
+    //
+    // `Gone` sorts before `NotFound`, so the declared row numbers `NotFound` 0
+    // while the requested row numbers `Gone` 0 and `NotFound` 1: a missing or
+    // misordered injection reports `Gone` where the callee returned
+    // `NotFound`.
+    const source =
+        \\IoResult(a) : Try(a, [NotFound])
+        \\
+        \\closed_hit : IoResult(Str)
+        \\closed_hit = Ok("hit")
+        \\
+        \\closed_miss : IoResult(Str)
+        \\closed_miss = Err(NotFound)
+        \\
+        \\Src := [Found, Missing].{
+        \\    fetch : Src -> IoResult(Str)
+        \\    fetch = |src| match src { Found => closed_hit, Missing => closed_miss }
+        \\}
+        \\
+        \\load : a -> Try(Str, [Gone, NotFound]) where [a.fetch : a -> IoResult(Str)]
+        \\load = |x| {
+        \\    s = x.fetch()?
+        \\    Ok(s)
+        \\}
+        \\
+        \\show : Try(Str, [Gone, NotFound]) -> Str
+        \\show = |v| match v { Ok(s) => "Ok(${s})", Err(Gone) => "Gone", Err(NotFound) => "NotFound" }
+        \\
+        \\main : Bool
+        \\main = {
+        \\    found_ok = show(load(Src.Found)) == "Ok(hit)"
+        \\    missing_ok = show(load(Src.Missing)) == "NotFound"
+        \\    found_ok and missing_ok
+        \\}
+    ;
+
+    var lowered = try lowerMonotypeModule(allocator, source);
+    defer lowered.deinit(allocator);
+    try std.testing.expectEqual(@as(usize, 1), checkedGeneratedFnCount(&lowered.mono));
+
+    var compiled = try helpers.compileInspectedProgramForTargetWithBuiltin(
+        allocator,
+        std.testing.io,
+        .module,
+        source,
+        &.{},
+        .native,
+        try sharedPrePublishedBuiltin(),
+        null,
+        .lss,
+    );
+    defer compiled.deinit(allocator);
+    try std.testing.expectEqual(@as(usize, 0), compiled.resources.checker.problems.problems.items.len);
+
+    const output = try helpers.lirInterpreterInspectedStr(allocator, &compiled.lowered);
+    defer allocator.free(output);
+    try std.testing.expectEqualStrings("True", output);
+}
+
+test "polarity W3 open-method widening adapter counts" {
+    const allocator = std.testing.allocator;
+    // `test/cli/OpenMethodWidenedCaller.roc` and `OpenMethodOwnRowCaller.roc`
+    // are mechanism-blind: they assert exit status, the pass line and the
+    // absence of panic needles, so they pass whether the program compiles to
+    // one wide specialization or to an adapter plus a narrow one. These
+    // counts are what makes a change to their specialization strategy visible.
+    const widened =
+        \\Rows := {}.{
+        \\    wrapped : Rows -> Try(Str, [Unavailable])
+        \\    wrapped = |_| Ok("x")
+        \\}
+        \\
+        \\wrap : Rows -> Try(Str, [Unavailable])
+        \\wrap = |rows| rows.wrapped()
+        \\
+        \\use : Rows -> Try(Str, [Unavailable, Other])
+        \\use = |rows| {
+        \\    s = wrap(rows)?
+        \\    Ok(s)
+        \\}
+        \\
+        \\expect use(Rows.{}) == Ok("x")
+        \\
+        \\main = 0
+    ;
+    var widened_lowered = try lowerMonotypeModuleWithOptions(allocator, widened, .{
+        .root_selection = .test_expects,
+    });
+    defer widened_lowered.deinit(allocator);
+
+    // `OpenMethodOwnRowCaller.roc`: the same program with nothing widened.
+    const own_row =
+        \\Rows := {}.{
+        \\    wrapped : Rows -> Try(Str, [Unavailable])
+        \\    wrapped = |_| Ok("x")
+        \\}
+        \\
+        \\wrap : Rows -> Try(Str, [Unavailable])
+        \\wrap = |rows| rows.wrapped()
+        \\
+        \\use : Rows -> Try(Str, [Unavailable])
+        \\use = |rows| {
+        \\    s = wrap(rows)?
+        \\    Ok(s)
+        \\}
+        \\
+        \\expect use(Rows.{}) == Ok("x")
+        \\
+        \\main = 0
+    ;
+    var own_row_lowered = try lowerMonotypeModuleWithOptions(allocator, own_row, .{
+        .root_selection = .test_expects,
+    });
+    defer own_row_lowered.deinit(allocator);
+
+    // The widened program without the intermediate `wrap`: `?` widens the
+    // method's own published row directly.
+    const direct =
+        \\Rows := {}.{
+        \\    wrapped : Rows -> Try(Str, [Unavailable])
+        \\    wrapped = |_| Ok("x")
+        \\}
+        \\
+        \\use : Rows -> Try(Str, [Unavailable, Other])
+        \\use = |rows| {
+        \\    s = rows.wrapped()?
+        \\    Ok(s)
+        \\}
+        \\
+        \\expect use(Rows.{}) == Ok("x")
+        \\
+        \\main = 0
+    ;
+    var direct_lowered = try lowerMonotypeModuleWithOptions(allocator, direct, .{
+        .root_selection = .test_expects,
+    });
+    defer direct_lowered.deinit(allocator);
+
+    // No adapters in any of the three. Every row `?` widens here belongs to an
+    // ORDINARY ANNOTATED signature—`wrap`'s in the first program, the method
+    // `wrapped`'s own in the third—and an ordinary annotated result row is
+    // implicitly open: its extension is an unresolved flex the request relation
+    // unifies with the wider row like any other. Nothing declined to unify, so
+    // nothing is owed an adapter; each specialization simply lowers at the row
+    // it was requested at. The `W6b ...` tests above hold the positive witness,
+    // where the implementation's published row really is closed.
+    //
+    // The first and third counted 1 before template completion consumed the
+    // relation's own answer. Completion used to re-derive "is this row closed"
+    // from the checked root, where `variableSealsToRowDefault` reports a flex
+    // tail defaulting to the empty tag union as closed—the right answer for a
+    // where-method's per-use marker, the wrong one for an ordinary annotated
+    // row. Each spurious adapter also added a second, narrow specialization of
+    // the same template and pulled it off the parallel body shards onto the
+    // coordinator (`specJobCompletesOnCoordinator`).
+    try std.testing.expectEqual(@as(usize, 0), checkedGeneratedFnCount(&widened_lowered.mono));
+    // Nothing is requested wider than it was published, so no adapter exists.
+    try std.testing.expectEqual(@as(usize, 0), checkedGeneratedFnCount(&own_row_lowered.mono));
+    try std.testing.expectEqual(@as(usize, 0), checkedGeneratedFnCount(&direct_lowered.mono));
+}
+
 // Repro for https://github.com/roc-lang/roc/issues/10301: a list produced by an
 // opaque effectful expression and iterated by `for` must scalarize into a raw
 // indexed loop in the root proc, leaving no per-element iterator-step calls in
@@ -10373,4 +11244,234 @@ test "issue 11376: packed products survive Boxy boundaries and copy-on-write" {
         }
         try runtime_env.checkForLeaks();
     }
+}
+
+/// A stored parser constant (`parse_stored = { Shape.parser_for(...) }`),
+/// mirroring test/cli/ParserTopLevelStoredParser.roc without its module
+/// header. This body is emitted in Phase B, behind the graph freeze; no
+/// snapshot anywhere carries lowered output, so the Monotype footprint below
+/// is the gate that the deferred body is the same body the eager restore used
+/// to emit.
+const stored_parser_gate_source =
+    \\Format := [Default].{
+    \\    rename_field : Format, Str -> Str
+    \\    rename_field = |_, name| name
+    \\
+    \\    parse_str : Format, State -> Try({ value : Str, rest : State }, [FormatError])
+    \\    parse_str = |_, state|
+    \\        match state {
+    \\            Present(value) => Ok({ value, rest: Done })
+    \\            Done => Err(FormatError)
+    \\        }
+    \\
+    \\    parse_record_start : Format, State -> Try([Counted({ len : U64, rest : State }), Uncounted(State)], [FormatError])
+    \\    parse_record_start = |_, state| Ok(Uncounted(state))
+    \\
+    \\    parse_record_field : Format,
+    \\    Encoding.FieldName.FieldNames(_shape),
+    \\    State -> Try(
+    \\        [
+    \\            Field({ field : Encoding.FieldName(_shape), rest : State }),
+    \\            TryField({ name : Str, rest : State }),
+    \\            TryFieldCaseless({ name : Str, rest : State }),
+    \\            Continue(State),
+    \\            Done(State),
+    \\        ],
+    \\        [FormatError],
+    \\    )
+    \\    parse_record_field = |_, _, state|
+    \\        match state {
+    \\            Present(_) => Ok(TryField({ name: "foo", rest: state }))
+    \\            Done => Ok(Done(state))
+    \\        }
+    \\
+    \\    parse_record_after_field : Format, State -> Try([Continue(State), Done(State)], [FormatError])
+    \\    parse_record_after_field = |_, state| Ok(Continue(state))
+    \\
+    \\    skip_record_field : Format, State -> Try(State, [FormatError])
+    \\    skip_record_field = |_, _| Ok(Done)
+    \\}
+    \\
+    \\State := [Present(Str), Done]
+    \\
+    \\parse_stored : State -> Try({ value : { foo : Str }, rest : State }, [FormatError, MissingRequiredField(Str)])
+    \\parse_stored = {
+    \\    Shape : { foo : Str }
+    \\    Shape.parser_for(Format.Default)
+    \\}
+    \\
+    \\main : State -> Try({ value : { foo : Str }, rest : State }, [FormatError, MissingRequiredField(Str)])
+    \\main = |state| parse_stored(state)
+;
+
+test "stored codec restore emits the same Monotype shape from Phase B" {
+    // This body's generation sits behind the graph freeze, in Phase B. No
+    // snapshot anywhere carries lowered output, so these are the numbers that
+    // stand in for "the sealed body is the body the eager restore used to
+    // emit". Measured on the compiler that still restored eagerly:
+    //   fns=10 defs=11 exprs=535 locals=108 template_misses=14 nested_misses=0
+    // and re-measured after the 2026-09-15 rebase onto upstream's codec
+    // contract machinery, which the eager restore no longer exists to be
+    // compared against, so the reference is this compiler itself:
+    //   fns=10 defs=11 exprs=597 locals=121 template_misses=14 nested_misses=0
+    // Every count is exact, including expressions and locals. The reserve-
+    // and-copy that Phase-B emission ends in is the same reserve-and-copy the
+    // eager restore already performed (it too filled a reservation with a
+    // lowered expression), so deferring orphans no expression the eager path
+    // kept and the predicted delta is zero. A window here would hide exactly
+    // the drift this gate exists to catch. Specialization misses may only
+    // fall: the eager restore keyed the callee spec as an open request, and
+    // Phase-B emission removes that cause.
+    const allocator = std.testing.allocator;
+    const stats = try structuralJsonMonotypeStatsForSource(allocator, stored_parser_gate_source);
+    try std.testing.expectEqual(@as(usize, 10), stats.functions);
+    try std.testing.expectEqual(@as(usize, 11), stats.definitions);
+    try std.testing.expectEqual(@as(usize, 597), stats.expressions);
+    try std.testing.expectEqual(@as(usize, 121), stats.locals);
+    try std.testing.expect(stats.template_misses <= 14);
+    try std.testing.expectEqual(@as(u64, 0), stats.nested_misses);
+}
+
+/// `stored_parser_gate_source` over a shape whose field KIND is decided at the
+/// freeze (`bar ?: Str`). This program panicked while the restore was still
+/// eager ("resolved Monotype view requested for an unresolved instantiation
+/// node"), so it has no earlier baseline: its numbers are Phase-B emission's
+/// own, pinned as a regression gate rather than as an equivalence gate. It is
+/// the case the two-phase restore exists for.
+const stored_parser_optional_gate_source =
+    \\Format := [Default].{
+    \\    rename_field : Format, Str -> Str
+    \\    rename_field = |_, name| name
+    \\
+    \\    parse_str : Format, State -> Try({ value : Str, rest : State }, [FormatError])
+    \\    parse_str = |_, state|
+    \\        match state {
+    \\            Present(value) => Ok({ value, rest: Done })
+    \\            Done => Err(FormatError)
+    \\        }
+    \\
+    \\    parse_record_start : Format, State -> Try([Counted({ len : U64, rest : State }), Uncounted(State)], [FormatError])
+    \\    parse_record_start = |_, state| Ok(Uncounted(state))
+    \\
+    \\    parse_record_field : Format,
+    \\    Encoding.FieldName.FieldNames(_shape),
+    \\    State -> Try(
+    \\        [
+    \\            Field({ field : Encoding.FieldName(_shape), rest : State }),
+    \\            TryField({ name : Str, rest : State }),
+    \\            TryFieldCaseless({ name : Str, rest : State }),
+    \\            Continue(State),
+    \\            Done(State),
+    \\        ],
+    \\        [FormatError],
+    \\    )
+    \\    parse_record_field = |_, _, state|
+    \\        match state {
+    \\            Present(_) => Ok(TryField({ name: "foo", rest: state }))
+    \\            Done => Ok(Done(state))
+    \\        }
+    \\
+    \\    parse_record_after_field : Format, State -> Try([Continue(State), Done(State)], [FormatError])
+    \\    parse_record_after_field = |_, state| Ok(Continue(state))
+    \\
+    \\    skip_record_field : Format, State -> Try(State, [FormatError])
+    \\    skip_record_field = |_, _| Ok(Done)
+    \\}
+    \\
+    \\State := [Present(Str), Done]
+    \\
+    \\parse_stored : State -> Try({ value : { foo : Str, bar ?: Str }, rest : State }, [FormatError, MissingRequiredField(Str)])
+    \\parse_stored = {
+    \\    Shape : { foo : Str, bar ?: Str }
+    \\    Shape.parser_for(Format.Default)
+    \\}
+    \\
+    \\main : State -> Try({ value : { foo : Str, bar ?: Str }, rest : State }, [FormatError, MissingRequiredField(Str)])
+    \\main = |state| parse_stored(state)
+;
+
+/// A stored `encoder_for` constant over a shape with an optional field, the
+/// encoder twin of `stored_parser_optional_gate_source`. Mirrors
+/// test/cli/EncoderForTopLevelStoredOptionalField.roc without its module
+/// header. `emitStoredEncoderForRuntimeBody` has no other counter gate.
+const stored_encoder_optional_gate_source =
+    \\Format := [Default].{
+    \\    rename_field : Format, Str -> Str
+    \\    rename_field = |_, name|
+    \\        if Str.is_eq(name, "foo_bar") {
+    \\            "foo-bar"
+    \\        } else {
+    \\            name
+    \\        }
+    \\
+    \\    encode_record : List(Str), U64, (List(Str), (List(Str), Str, (List(Str) -> Try(List(Str), [])) -> Try(List(Str), [])) -> Try(List(Str), [])) -> Try(List(Str), [])
+    \\    encode_record = |state, _, write_fields| {
+    \\        started = List.append(state, "record")
+    \\        finished = write_fields(
+    \\            started,
+    \\            |field_state, name, write_value| write_value(List.append(field_state, name)),
+    \\        )?
+    \\        Ok(List.append(finished, "end"))
+    \\    }
+    \\
+    \\    encode_str : Str, List(Str) -> Try(List(Str), [])
+    \\    encode_str = |value, state| Ok(List.append(state, value))
+    \\
+    \\    encode_u64 : U64, List(Str) -> Try(List(Str), [])
+    \\    encode_u64 = |value, state| Ok(List.append(state, value.to_str()))
+    \\}
+    \\
+    \\Value : { count : U64, foo_bar : Str, note ?: Str }
+    \\
+    \\value : Value
+    \\value = { count: 7, foo_bar: "abc" }
+    \\
+    \\encoder_for_value : value -> (value, List(Str) -> Try(List(Str), []))
+    \\    where [
+    \\        value.encoder_for : Format -> (value, List(Str) -> Try(List(Str), [])),
+    \\    ]
+    \\encoder_for_value = |_| {
+    \\    Shape : value
+    \\    Shape.encoder_for(Format.Default)
+    \\}
+    \\
+    \\encode_stored : Value, List(Str) -> Try(List(Str), [])
+    \\encode_stored = encoder_for_value(value)
+    \\
+    \\main : List(Str) -> Try(List(Str), [])
+    \\main = |state| encode_stored(value, state)
+;
+
+test "stored parser restore lowers a shape with an optional field" {
+    // Not an equivalence gate: this program panicked before W2b
+    // ("resolved Monotype view requested for an unresolved instantiation
+    // node"), so there is no pre-W2b number to compare against. These are
+    // W2b's own, measured 2026-09-15, and they exist so a later change that
+    // silently drops or duplicates part of the generated optional-field
+    // parser is caught. That it lowers at all is the primary assertion.
+    // Re-measured after the 2026-09-15 rebase onto upstream's codec contract
+    // machinery (exprs 669 -> 731, locals 127 -> 140).
+    const allocator = std.testing.allocator;
+    const stats = try structuralJsonMonotypeStatsForSource(allocator, stored_parser_optional_gate_source);
+    try std.testing.expectEqual(@as(usize, 10), stats.functions);
+    try std.testing.expectEqual(@as(usize, 11), stats.definitions);
+    try std.testing.expectEqual(@as(usize, 731), stats.expressions);
+    try std.testing.expectEqual(@as(usize, 140), stats.locals);
+    try std.testing.expectEqual(@as(u64, 14), stats.template_misses);
+    try std.testing.expectEqual(@as(u64, 0), stats.nested_misses);
+}
+
+test "stored encoder_for restore lowers a shape with an optional field" {
+    // The encoder twin of the test above, and the only Monotype-level gate on
+    // `emitStoredEncoderForRuntimeBody`. Same status: W2b's own baseline,
+    // measured 2026-09-15, not a pre/post comparison; locals re-measured
+    // after the 2026-09-15 rebase (72 -> 73).
+    const allocator = std.testing.allocator;
+    const stats = try structuralJsonMonotypeStatsForSource(allocator, stored_encoder_optional_gate_source);
+    try std.testing.expectEqual(@as(usize, 24), stats.functions);
+    try std.testing.expectEqual(@as(usize, 17), stats.definitions);
+    try std.testing.expectEqual(@as(usize, 213), stats.expressions);
+    try std.testing.expectEqual(@as(usize, 73), stats.locals);
+    try std.testing.expectEqual(@as(u64, 19), stats.template_misses);
+    try std.testing.expectEqual(@as(u64, 1), stats.nested_misses);
 }

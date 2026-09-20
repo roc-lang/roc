@@ -47,7 +47,7 @@ MISSING METHOD - nominal_local.md:9:5:9:26
 			(line-break)
 			(annotation-start code-block)
 			(indent 1)
-			(text "[Utf8Format, ..]")
+			(text "[Utf8Format]")
 			(annotation-end))))
 ~~~
 # TOKENS

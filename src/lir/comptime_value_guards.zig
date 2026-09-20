@@ -8,7 +8,7 @@ const Body = @import("body_clone.zig");
 const GuardedList = core.LirStore.GuardedList;
 
 const Use = struct { proc: LIR.LirProcSpecId, stmt: LIR.CFStmtId, slot: LIR.StaticDataId };
-const Guard = struct { locals: [3]LIR.LocalId };
+const Guard = struct { locals: [3]LIR.LocalId, success: LIR.CFStmtId, crash: LIR.CFStmtId };
 
 /// Insert explicit failure checks before each compile-time value slot read.
 pub fn insert(allocator: std.mem.Allocator, program: *Program.Result) std.mem.Allocator.Error!void {
@@ -50,6 +50,7 @@ pub fn insert(allocator: std.mem.Allocator, program: *Program.Result) std.mem.Al
     }
     var guards = DenseMap(LIR.CFStmtId, Guard).init(allocator);
     defer guards.deinit();
+    try program.comptime_value_guards.ensureUnusedCapacity(allocator, uses.items.len);
     for (uses.items) |use| {
         if (guards.contains(use.stmt)) continue;
         const root = program.static_data_values.items[@intFromEnum(use.slot)].compile_time_root.?;
@@ -82,8 +83,18 @@ pub fn insert(allocator: std.mem.Allocator, program: *Program.Result) std.mem.Al
             .value = .{ .static_data = failure_slot },
             .next = load_failed,
         } };
-        try program.comptime_value_guards.append(allocator, .{ .entry = use.stmt, .success = success, .value_slot = use.slot, .crash = crash });
-        try guards.put(use.stmt, .{ .locals = .{ record, failed, message } });
+        try guards.put(use.stmt, .{ .locals = .{ record, failed, message }, .success = success, .crash = crash });
+    }
+    // Preserve each owner discovered before rewriting shared statements.
+    for (uses.items) |use| {
+        const guard = guards.get(use.stmt).?;
+        program.comptime_value_guards.appendAssumeCapacity(.{
+            .owner = use.proc,
+            .entry = use.stmt,
+            .success = guard.success,
+            .value_slot = use.slot,
+            .crash = guard.crash,
+        });
     }
     var locals: std.ArrayList(LIR.LocalId) = .empty;
     defer locals.deinit(allocator);
@@ -118,13 +129,23 @@ fn localLessThan(_: void, a: LIR.LocalId, b: LIR.LocalId) bool {
 
 /// Caller has explicit successful evaluation evidence for this root's slot.
 pub fn completeSuccessfulSlot(program: *Program.Result, slot: LIR.StaticDataId) void {
-    for (program.comptime_value_guards.items) |guard| {
-        if (guard.value_slot == slot) program.store.getCFStmtPtr(guard.entry).* = program.store.getCFStmt(guard.success);
+    for (program.comptime_value_guards.items) |*guard| {
+        if (guard.value_slot != slot or guard.completed) continue;
+        program.store.getCFStmtPtr(guard.entry).* = program.store.getCFStmt(guard.success);
+        program.store.getProcSpecPtr(guard.owner).native_code_revision += 1;
+        guard.completed = true;
     }
 }
 
 test "shared compile-time failure guards preserve exact success and shared frame inventory" {
-    const allocator = std.testing.allocator;
+    try testSharedGuards(std.testing.allocator);
+}
+
+test "shared compile-time guard owner metadata allocation failure cleanup" {
+    try std.testing.checkAllAllocationFailures(std.testing.allocator, testSharedGuards, .{});
+}
+
+fn testSharedGuards(allocator: std.mem.Allocator) (std.mem.Allocator.Error || error{ TestExpectedEqual, TestUnexpectedResult })!void {
     var program = try Program.Result.init(allocator, .u64);
     defer program.deinit();
     const record_layout = try program.layouts.putStructFields(&.{ .{ .index = 0, .layout = .u8 }, .{ .index = 1, .layout = .str } });
@@ -162,15 +183,19 @@ test "shared compile-time failure guards preserve exact success and shared frame
     const ret = try program.store.addCFStmt(.{ .ret = .{ .value = target } });
     const load = try program.store.addCFStmt(.{ .assign_literal = .{ .target = target, .value = .{ .static_data = slot }, .next = ret } });
     const frame = try program.store.addLocalSpan(&.{target});
-    for (0..2) |i| {
-        _ = try program.store.addProcSpec(.{ .name = .fromRaw(i), .identity = LIR.ProcIdentity.forTest(1), .args = .empty(), .frame_locals = frame, .body = load, .ret_layout = .u8 });
+    var owners: [2]LIR.LirProcSpecId = undefined; // Both entries are assigned by addProcSpec before use.
+    for (&owners, 0..) |*owner, i| {
+        owner.* = try program.store.addProcSpec(.{ .name = .fromRaw(i), .identity = LIR.ProcIdentity.forTest(1), .args = .empty(), .frame_locals = frame, .body = load, .ret_layout = .u8 });
     }
+    const unrelated = try program.store.addProcSpec(.{ .name = .fromRaw(2), .identity = LIR.ProcIdentity.forTest(2), .args = .empty(), .frame_locals = frame, .body = ret, .ret_layout = .u8 });
     try insert(allocator, &program);
-    try std.testing.expectEqual(@as(usize, 1), program.comptime_value_guards.items.len);
+    try std.testing.expectEqual(@as(usize, 2), program.comptime_value_guards.items.len);
     const guard = program.comptime_value_guards.items[0];
     try std.testing.expectEqual(load, guard.entry);
-    for (0..2) |i| {
-        const proc = program.store.getProcSpec(@enumFromInt(@as(u32, @intCast(i))));
+    try std.testing.expectEqual(load, program.comptime_value_guards.items[1].entry);
+    for (owners) |owner| {
+        const proc = program.store.getProcSpec(owner);
+        try std.testing.expectEqual(@as(u64, 0), proc.native_code_revision);
         const locals = program.store.getLocalSpan(proc.frame_locals);
         try std.testing.expectEqual(@as(usize, 4), locals.len);
         for (1..locals.len) |j| try std.testing.expect(localLessThan({}, GuardedList.at(locals, j - 1), GuardedList.at(locals, j)));
@@ -182,4 +207,14 @@ test "shared compile-time failure guards preserve exact success and shared frame
     try std.testing.expectEqual(target, restored.target);
     try std.testing.expectEqual(slot, restored.value.static_data);
     try std.testing.expectEqual(ret, restored.next);
+    completeSuccessfulSlot(&program, slot);
+    for (owners) |owner| {
+        const proc = program.store.getProcSpec(owner);
+        try std.testing.expectEqual(@as(u64, 1), proc.native_code_revision);
+        try std.testing.expectEqual(LIR.ProcIdentity.forTest(1), proc.identity);
+    }
+    try std.testing.expectEqual(@as(u64, 0), program.store.getProcSpec(unrelated).native_code_revision);
+    var clone = try program.store.cloneForProcRewrite(allocator, owners[0]);
+    defer clone.deinit();
+    try std.testing.expectEqual(@as(u64, 1), clone.getProcSpec(owners[0]).native_code_revision);
 }

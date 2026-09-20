@@ -1006,7 +1006,7 @@ MISSING METHOD - syntax_grab_bag.md:189:26:189:66
 			(line-break)
 			(annotation-start code-block)
 			(indent 1)
-			(text "[Blue, Green, Red, ..]")
+			(text "[Blue, Green, Red]")
 			(annotation-end)))
 	(report
 		(severity runtime_error)
@@ -1030,7 +1030,7 @@ MISSING METHOD - syntax_grab_bag.md:189:26:189:66
 			(line-break)
 			(annotation-start code-block)
 			(indent 1)
-			(text "[Blue, Green, Red, ..]")
+			(text "[Blue, Green, Red]")
 			(annotation-end)))
 	(report
 		(severity runtime_error)
@@ -1085,7 +1085,7 @@ MISSING METHOD - syntax_grab_bag.md:189:26:189:66
 			(line-break)
 			(annotation-start code-block)
 			(indent 1)
-			(text "[Blue, Green, Red, ..]")
+			(text "[Blue, Green, Red]")
 			(annotation-end)
 			(line-break)
 			(line-break)

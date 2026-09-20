@@ -1919,7 +1919,22 @@ pub const MonoLlvmCodeGen = struct {
         if (proc.hosted) |hosted| {
             try self.emitHostedProcBody(hosted, proc);
         } else {
-            const body = proc.body orelse return error.CompilationFailed;
+            // A missing body is a lowering defect, not a compilation failure the
+            // user can act on, and returning the bare error made every such
+            // defect surface as "CompilationFailed but did not say why". Say
+            // why. The error itself stays recoverable: a failed module has to
+            // leave this instance reusable, which the issue-11132 scratch test
+            // pins by injecting exactly this condition.
+            const body = proc.body orelse {
+                // Silenced under `zig test` only because the scratch test
+                // injects this exact condition on purpose; a real compilation
+                // never reaches here without a defect worth printing.
+                if (!builtin.is_test) std.debug.print(
+                    "LLVM codegen invariant violated: non-hosted proc {d} (symbol {d}) missing statement body\n",
+                    .{ @intFromEnum(proc_id), proc.name.raw() },
+                );
+                return error.CompilationFailed;
+            };
             try self.collectStmtIncomingCounts(body);
             const compiled_direct_tce_loop = try self.compileDirectEntryTceLoop(proc, body);
             if (!compiled_direct_tce_loop) {

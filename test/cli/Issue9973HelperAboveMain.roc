@@ -5,10 +5,10 @@ Cmd := { name : Str }.{
     new : Str -> Cmd
     new = |n| { name: n }
 
-    spawn : Cmd -> Try({}, [SpawnFailed, ..])
+    spawn : Cmd -> Try({}, [SpawnFailed])
     spawn = |_c| Ok({})
 
-    wait : Cmd -> Try({}, [WaitFailed, ..])
+    wait : Cmd -> Try({}, [WaitFailed])
     wait = |_c| Ok({})
 }
 

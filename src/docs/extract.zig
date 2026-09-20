@@ -325,6 +325,11 @@ pub fn extractModuleDocsWithOptions(
         .checked_artifact = options.checked_artifact,
     };
 
+    const documented_region: ?base.Region = if (documentedRootDecl(module_env, options.public_type)) |root|
+        module_env.store.getStatementRegion(root)
+    else
+        null;
+
     // Collect entries from exported defs
     var entries_list = std.ArrayList(DocModel.DocEntry).empty;
     defer {
@@ -361,9 +366,8 @@ pub fn extractModuleDocsWithOptions(
             const entry_name = defEntryName(module_env, def_idx) orelse continue;
             if (!isUnderExposedName(&exposed_names, entry_name)) continue;
         }
-        if (options.public_type) |projection| {
-            const entry_name = defEntryName(module_env, def_idx) orelse continue;
-            if (!nameBelongsToProjection(module_env, projection, entry_name)) continue;
+        if (documented_region) |root_region| {
+            if (!regionEncloses(root_region, module_env.store.getNodeRegion(ModuleEnv.nodeIdxFrom(def_idx)))) continue;
         }
         if (try extractDefEntry(gpa, module_env, local_module_path, reference_routing, def_idx, source, line_index)) |entry| {
             var public_entry = entry;
@@ -393,8 +397,8 @@ pub fn extractModuleDocsWithOptions(
                 const header = module_env.store.getTypeHeader(decl.header);
                 const entry_name = module_env.getIdentText(header.relative_name);
                 if (options.exposed_names != null and !isUnderExposedName(&exposed_names, entry_name)) continue;
-                if (options.public_type) |projection| {
-                    if (!statementBelongsToProjection(module_env, projection, stmt_idx, entry_name)) continue;
+                if (documented_region) |root_region| {
+                    if (!regionEncloses(root_region, module_env.store.getStatementRegion(stmt_idx))) continue;
                 }
                 // Skip if already in entries
                 if (findProjectedEntryByName(entries_list.items, module_env, options.public_type, entry_name)) continue;
@@ -430,8 +434,8 @@ pub fn extractModuleDocsWithOptions(
                 const header = module_env.store.getTypeHeader(decl.header);
                 const entry_name = module_env.getIdentText(header.relative_name);
                 if (options.exposed_names != null and !isUnderExposedName(&exposed_names, entry_name)) continue;
-                if (options.public_type) |projection| {
-                    if (!statementBelongsToProjection(module_env, projection, stmt_idx, entry_name)) continue;
+                if (documented_region) |root_region| {
+                    if (!regionEncloses(root_region, module_env.store.getStatementRegion(stmt_idx))) continue;
                 }
                 if (findProjectedEntryByName(entries_list.items, module_env, options.public_type, entry_name)) continue;
                 // Skip internal Builtin types
@@ -470,8 +474,8 @@ pub fn extractModuleDocsWithOptions(
                 const header = module_env.store.getTypeHeader(decl.header);
                 const entry_name = module_env.getIdentText(header.relative_name);
                 if (options.exposed_names != null and !isUnderExposedName(&exposed_names, entry_name)) continue;
-                if (options.public_type) |projection| {
-                    if (!statementBelongsToProjection(module_env, projection, stmt_idx, entry_name)) continue;
+                if (documented_region) |root_region| {
+                    if (!regionEncloses(root_region, module_env.store.getStatementRegion(stmt_idx))) continue;
                 }
                 if (findProjectedEntryByName(entries_list.items, module_env, options.public_type, entry_name)) continue;
                 if (entryIsUndocumented(package_name, module_env.module_name, entry_name)) continue;
@@ -541,14 +545,6 @@ pub fn extractModuleDocsWithOptions(
             .s_runtime_error,
             => {},
         }
-    }
-
-    // Type modules expose only their main type and its associated namespace.
-    // Filter before re-parenting so declaration ownership is still explicit in
-    // every entry's name. Builtin follows the same visibility rule; its public
-    // children are promoted to separate documentation pages afterwards.
-    if (module_env.module_kind == .type_module) {
-        try filterTypeModuleEntries(gpa, &entries_list, local_module_name);
     }
 
     // Build hierarchical structure: move methods under their parent types
@@ -651,21 +647,25 @@ fn nameIsAtOrUnder(root: []const u8, name: []const u8) bool {
         (std.mem.startsWith(u8, name, root) and name.len > root.len and name[root.len] == '.');
 }
 
-fn nameBelongsToProjection(
-    module_env: *const ModuleEnv,
-    projection: PublicTypeProjection,
-    name: []const u8,
-) bool {
-    return nameIsAtOrUnder(projectionRootName(module_env, projection), name);
+/// The type declaration whose namespace one module's docs present, if the docs
+/// are restricted to one: a public projection documents its source declaration,
+/// and a type module documents its main type.
+fn documentedRootDecl(module_env: *const ModuleEnv, public_type: ?PublicTypeProjection) ?CIR.Statement.Idx {
+    if (public_type) |projection| return projection.source_decl;
+    return switch (module_env.module_kind) {
+        .type_module => |main_type_ident| @enumFromInt(module_env.getExposedTypeNodeIndexById(main_type_ident) orelse unreachable),
+        .default_app, .app, .package, .platform, .hosted, .module, .malformed => null,
+    };
 }
 
-fn statementBelongsToProjection(
-    module_env: *const ModuleEnv,
-    projection: PublicTypeProjection,
-    statement: CIR.Statement.Idx,
-    name: []const u8,
-) bool {
-    return statement == projection.source_decl or nameBelongsToProjection(module_env, projection, name);
+/// Whether `inner` lies within `outer`. Given a type declaration's region as
+/// `outer`, this selects exactly the declaration and everything it owns,
+/// transitively: the region covers the associated block, and an associated
+/// block is the only place a declaration can appear inside another type
+/// declaration. Sibling types in the same module lie outside it regardless of
+/// how their items' qualified names are spelled.
+fn regionEncloses(outer: base.Region, inner: base.Region) bool {
+    return inner.start.offset >= outer.start.offset and inner.end.offset <= outer.end.offset;
 }
 
 fn projectedEntryName(
@@ -823,38 +823,13 @@ fn projectionContainsIdentityAndStatement(
     statement: CIR.Statement.Idx,
 ) bool {
     if (!std.mem.eql(u8, projection.source_identity, identity)) return false;
-    const type_name = typeDeclName(projection.source_env, statement) orelse return false;
-    return statementBelongsToProjection(projection.source_env, projection, statement, type_name);
+    const store = &projection.source_env.store;
+    return regionEncloses(store.getStatementRegion(projection.source_decl), store.getStatementRegion(statement));
 }
 
 fn isUnderExposedName(exposed_names: *const std.StringHashMapUnmanaged(void), name: []const u8) bool {
     const root_name = if (std.mem.findScalar(u8, name, '.')) |dot| name[0..dot] else name;
     return exposed_names.contains(root_name);
-}
-
-/// Filter entries in a type module to only include the main type and its children.
-///
-/// In a type module (e.g. `Color.roc`), only the entry whose name matches the
-/// module name is public. All other top-level entries—helper functions, internal
-/// types, etc.—are private to the module and excluded from documentation.
-/// Associated entries still have their qualified names (e.g. `Color.to_str`)
-/// because this runs before the hierarchical pass.
-fn filterTypeModuleEntries(
-    gpa: Allocator,
-    entries_list: *std.ArrayList(DocModel.DocEntry),
-    module_name: []const u8,
-) Allocator.Error!void {
-    var idx: usize = 0;
-    while (idx < entries_list.items.len) {
-        const entry = &entries_list.items[idx];
-        const root_name = if (std.mem.findScalar(u8, entry.name, '.')) |dot| entry.name[0..dot] else entry.name;
-        if (std.mem.eql(u8, root_name, module_name)) {
-            idx += 1;
-        } else {
-            var removed = entries_list.orderedRemove(idx);
-            removed.deinit(gpa);
-        }
-    }
 }
 
 test "Builtin docs exclude private sibling types and preserve public nested types" {
@@ -886,6 +861,7 @@ test "Builtin docs exclude private sibling types and preserve public nested type
     var can = try @import("can").Can.initBuiltin(@import("can").CoreCtx.testing(gpa, gpa), &env, ast);
     defer can.deinit();
     try can.canonicalizeFile();
+    try can.validateForChecking();
     const diagnostics = try env.getDiagnostics();
     defer gpa.free(diagnostics);
     try std.testing.expectEqual(0, diagnostics.len);

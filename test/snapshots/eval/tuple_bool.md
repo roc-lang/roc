@@ -53,10 +53,10 @@ NO CHANGE
 			(builtin)
 			(e-tag (name "False")))
 		(e-call (constraint-fn-var 250)
-			(e-lookup-associated-resolved (source "Bool.not") (builtin) (target-node "17337") (target-def "17337"))
+			(e-lookup-associated-resolved (source "Bool.not") (builtin) (target-node "17185") (target-def "17185"))
 			(e-tag (name "True")))
 		(e-call (constraint-fn-var 255)
-			(e-lookup-associated-resolved (source "Bool.not") (builtin) (target-node "17337") (target-def "17337"))
+			(e-lookup-associated-resolved (source "Bool.not") (builtin) (target-node "17185") (target-def "17185"))
 			(e-tag (name "False")))
 		(e-if
 			(if-branches
@@ -71,17 +71,17 @@ NO CHANGE
 			(if-branches
 				(if-branch
 					(e-call (constraint-fn-var 270)
-						(e-lookup-associated-resolved (source "Bool.not") (builtin) (target-node "17337") (target-def "17337"))
+						(e-lookup-associated-resolved (source "Bool.not") (builtin) (target-node "17185") (target-def "17185"))
 						(e-tag (name "True")))
 					(e-nominal-external
 						(builtin)
 						(e-tag (name "True")))))
 			(if-else
 				(e-call (constraint-fn-var 281)
-					(e-lookup-associated-resolved (source "Bool.not") (builtin) (target-node "17337") (target-def "17337"))
+					(e-lookup-associated-resolved (source "Bool.not") (builtin) (target-node "17185") (target-def "17185"))
 					(e-tag (name "True")))))))
 ~~~
 # TYPES
 ~~~clojure
-(expr (type "([True, ..], [False, ..], Bool, Bool, Bool, Bool, Bool, Bool)"))
+(expr (type "([True], [False], Bool, Bool, Bool, Bool, Bool, Bool)"))
 ~~~
