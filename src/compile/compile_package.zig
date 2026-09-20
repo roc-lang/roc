@@ -43,11 +43,13 @@ pub fn compileTimeFinalizationOptions(
     max_threads: usize,
     roc_ctx: *CoreCtx,
     timing: ?*eval.CompileTimeFinalization.Timing,
+    lazy_comptime_roots: bool,
 ) eval.CompileTimeFinalization.Options {
     return .{
         .max_threads = max_threads,
         .std_io = roc_ctx.std_io,
         .timing = timing,
+        .lazy_comptime_roots = lazy_comptime_roots,
         .stderr = .{
             .context = @ptrCast(roc_ctx),
             .write = writeCtfeStderr,

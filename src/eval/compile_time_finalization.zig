@@ -63,6 +63,11 @@ pub const Options = struct {
     };
 
     max_threads: usize = 0,
+    /// Lower and evaluate only the compile-time roots the runtime program
+    /// reads (see `Monotype.Lower.Options.lazy_comptime_roots`). Only valid
+    /// when no checked-module cache will publish the evaluated modules, since
+    /// roots nothing read stay unevaluated.
+    lazy_comptime_roots: bool = false,
     /// Borrow the coordinator's workers after all frontend tasks have finished.
     /// Standalone finalizers without a coordinator lower on their calling thread.
     post_check_executor: ?base.post_check_task_executor.Executor = null,
@@ -441,6 +446,11 @@ pub fn finalizeProgram(
     host_target.specialization_strategy = .lss;
     host_target.checked_module_state = .checking_finalization;
     host_target.comptime_value_reads = true;
+    // Test roots are addressed by their position in the union request list,
+    // which lazy roots would leave behind, so they keep eager evaluation.
+    host_target.lazy_comptime_roots = options.lazy_comptime_roots and share_runtime and
+        lowering_runtime_roots.requests.len != 0 and union_test_metadata.len == 0;
+    const lazy_roots = host_target.lazy_comptime_roots;
     host_target.inline_expects = .run;
     host_target.post_check_executor = options.post_check_executor;
     host_target.timing = if (options.timing) |timing| &timing.lowering else null;
@@ -472,14 +482,14 @@ pub fn finalizeProgram(
         if (comptime compilerHostMustUseInterpreterForCtfe()) {
             const interpreted = try InterpreterProgram.init(allocator, lowering_modules, &host, evaluation_options);
             defer interpreted.deinit();
-            try finalizeLoweredProgram(allocator, modules, &host, compile_time_root_count, interpreted, evaluation_options);
+            try finalizeLoweredProgram(allocator, modules, &host, lazy_roots, interpreted, evaluation_options);
             host.frozen_static_data = try interpreted.slots.freezeCompleted();
         } else {
             if (comptime !backend.host_lir_codegen_available) return error.UnsupportedPlatform;
             var native = try DevProgram.init(allocator, lowering_modules, &host, options);
             defer native.deinit();
             native.codegen.static_strings = native.static_strings.view();
-            try finalizeLoweredProgram(allocator, modules, &host, compile_time_root_count, &native, evaluation_options);
+            try finalizeLoweredProgram(allocator, modules, &host, lazy_roots, &native, evaluation_options);
             host.frozen_static_data = try native.freezeCompleted();
             native_artifacts = native.artifacts;
             native.artifacts = null;
@@ -515,10 +525,33 @@ fn finalizeLoweredProgram(
     allocator: Allocator,
     modules: []const ProgramModule,
     lowered: *lir.CheckedPipeline.LoweredProgram,
-    root_count: usize,
+    lazy_roots: bool,
     program: anytype,
     options: Options,
 ) FinalizeError!void {
+    // The requests each module evaluates: its whole request table, or with
+    // lazy roots the demanded subset, which the lowered const roots list in
+    // module order.
+    const requests_by_module = try allocator.alloc([]const checked.RootRequest, modules.len);
+    defer allocator.free(requests_by_module);
+    var demanded_storage = std.ArrayList(checked.RootRequest).empty;
+    defer demanded_storage.deinit(allocator);
+    if (lazy_roots) {
+        try demanded_storage.ensureTotalCapacity(allocator, lowered.lir_result.const_roots.items.len);
+        for (lowered.lir_result.const_roots.items) |root| demanded_storage.appendAssumeCapacity(root.request);
+        var cursor: usize = 0;
+        for (modules, requests_by_module) |entry, *requests| {
+            const start = cursor;
+            while (cursor < lowered.lir_result.const_roots.items.len and
+                std.mem.eql(u8, &lowered.lir_result.const_roots.items[cursor].module.bytes, &entry.module.key.bytes)) : (cursor += 1)
+            {}
+            requests.* = demanded_storage.items[start..cursor];
+        }
+        if (cursor != lowered.lir_result.const_roots.items.len) finalizationInvariant("lowered const roots are not grouped by module in evaluation order");
+    } else {
+        for (modules, requests_by_module) |entry, *requests| requests.* = entry.module.root_requests.compile_time_requests;
+    }
+    const root_count = lowered.lir_result.const_roots.items.len;
     const Driver = struct {
         const Self = @This();
         const State = struct {
@@ -529,6 +562,7 @@ fn finalizeLoweredProgram(
         const Root = struct { module: usize, request: usize };
         allocator: Allocator,
         modules: []const ProgramModule,
+        requests_by_module: []const []const checked.RootRequest,
         lowered: *lir.CheckedPipeline.LoweredProgram,
         program: @TypeOf(program),
         options: Options,
@@ -552,7 +586,7 @@ fn finalizeLoweredProgram(
             if (self.active[ordinal]) return error.CompileTimeDependencyCycle;
             self.active[ordinal] = true;
             defer self.active[ordinal] = false;
-            const requests = entry.module.root_requests.compile_time_requests;
+            const requests = self.requests_by_module[root.module];
             _ = try evalProgramRoots(self.allocator, entry.module, requests[root.request..][0..1], state.completion.request_root_ids[root.request..][0..1], &state.completion, entry.problem_store, &state.coverage, self.options, self.lowered, self.lowered.lir_result.const_roots.items[ordinal..][0..1], self.program);
             if (!state.completion.isDone(id)) finalizationInvariant("demanded compile-time producer did not complete");
         }
@@ -579,7 +613,7 @@ fn finalizeLoweredProgram(
     defer root_indices.deinit();
     var offset: usize = 0;
     for (modules, states, 0..) |entry, *state, module_index| {
-        state.* = .{ .completion = try RootCompletionState.init(allocator, entry.module), .coverage = ComptimeCoverage.init(allocator), .offset = offset };
+        state.* = .{ .completion = try RootCompletionState.init(allocator, entry.module, requests_by_module[module_index]), .coverage = ComptimeCoverage.init(allocator), .offset = offset };
         initialized += 1;
         for (state.completion.request_root_ids, 0..) |id, request_index| {
             roots[offset] = .{ .module = module_index, .request = request_index };
@@ -593,7 +627,7 @@ fn finalizeLoweredProgram(
         owner.* = root_indices.get(.{ .module = root.module, .root = root.root }) orelse
             finalizationInvariant("compile-time slot has no declared producer");
     }
-    var driver: Driver = .{ .allocator = allocator, .modules = modules, .lowered = lowered, .program = program, .options = options, .states = states, .roots = roots, .active = active, .slot_roots = slot_roots };
+    var driver: Driver = .{ .allocator = allocator, .modules = modules, .requests_by_module = requests_by_module, .lowered = lowered, .program = program, .options = options, .states = states, .roots = roots, .active = active, .slot_roots = slot_roots };
     program.slot_demand = .{ .context = &driver, .ensure = Driver.ensure };
     defer program.slot_demand = null;
     for (0..root_count) |ordinal| {
@@ -605,7 +639,8 @@ fn finalizeLoweredProgram(
     for (modules, states) |entry, *state| {
         try state.coverage.reportUnusedBranches(allocator, entry.problem_store);
         if (entry.problem_store) |store| _ = try store.flushPendingStaticExhaustiveness(allocator);
-        try entry.module.const_store.verifyComplete();
+        // With lazy roots, values nothing read stay pending by design.
+        if (!lazy_roots) try entry.module.const_store.verifyComplete();
     }
 }
 
@@ -886,7 +921,7 @@ fn finalize(
         const lowering_imports = try finalizationImports(allocator, checked.importedView(module), imports, available_modules);
         defer allocator.free(lowering_imports);
 
-        var state = try RootCompletionState.init(allocator, module);
+        var state = try RootCompletionState.init(allocator, module, requests);
         defer state.deinit();
 
         var batch_requests = std.ArrayList(checked.RootRequest).empty;
@@ -970,6 +1005,7 @@ const RootCompletionState = struct {
     fn init(
         allocator: Allocator,
         module: *checked.CheckedModuleArtifact,
+        requests: []const checked.RootRequest,
     ) Allocator.Error!RootCompletionState {
         const statuses = try allocator.alloc(RootStatus, module.compile_time_roots.roots.len);
         errdefer allocator.free(statuses);
@@ -979,9 +1015,9 @@ const RootCompletionState = struct {
         errdefer allocator.free(requested_roots);
         @memset(requested_roots, false);
 
-        const request_root_ids = try allocator.alloc(checked.ComptimeRootId, module.root_requests.compile_time_requests.len);
+        const request_root_ids = try allocator.alloc(checked.ComptimeRootId, requests.len);
         errdefer allocator.free(request_root_ids);
-        for (module.root_requests.compile_time_requests, 0..) |request, i| {
+        for (requests, 0..) |request, i| {
             const root_id = compileTimeRootForRequest(module, request);
             const raw = @intFromEnum(root_id);
             if (requested_roots[raw]) {
@@ -3915,6 +3951,7 @@ fn testInterpreterSlot(failure_message: ?[]const u8, nested: bool, cycle: bool) 
                     defer child.interpreter.dropValue(value.value, .str);
                     try child.publishRoot(self.lowered, .{}, self.root_id, .{
                         .root_order = 0,
+                        .module = undefined,
                         .request = .{ .order = 0, .module_idx = 0, .kind = .compile_time_constant, .source = undefined, .checked_type = undefined, .abi = .compile_time, .exposure = .private },
                         .proc = self.proc,
                         .ret_layout = .str,
@@ -3960,6 +3997,7 @@ fn testInterpreterSlot(failure_message: ?[]const u8, nested: bool, cycle: bool) 
         const value = try owner.interpreter.eval(.{ .proc_id = source_proc, .ret_layout = .str });
         try owner.publishRoot(&lowered, .{}, root_id, .{
             .root_order = 0,
+            .module = undefined,
             .request = .{ .order = 0, .module_idx = 0, .kind = .compile_time_constant, .source = undefined, .checked_type = undefined, .abi = .compile_time, .exposure = .private },
             .proc = source_proc,
             .ret_layout = .str,
@@ -4023,6 +4061,7 @@ fn testNativeSlotDemand(lowered: *lir.CheckedPipeline.LoweredProgram, slots: *St
             if (child.termination != .returned) return error.Unexpected;
             try self.slots.publishRoot(self.lowered, .{}, self.root_id, .{
                 .root_order = 0,
+                .module = undefined,
                 .request = .{ .order = 0, .module_idx = 0, .kind = .compile_time_constant, .source = undefined, .checked_type = undefined, .abi = .compile_time, .exposure = .private },
                 .proc = self.producer,
                 .ret_layout = .str,
@@ -4156,6 +4195,7 @@ test "shared frozen erased callables execute on interpreter dev and LLVM" {
     };
     const copied = try NativeRootExport.freezeRoot(allocator, &program, closure_slot, .{
         .root_order = 0,
+        .module = undefined,
         .request = .{ .order = 0, .module_idx = 0, .kind = .compile_time_constant, .source = undefined, .checked_type = undefined, .abi = .compile_time, .exposure = .private },
         .proc = caller,
         .ret_layout = erased_layout,

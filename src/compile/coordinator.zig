@@ -3077,7 +3077,9 @@ pub const Coordinator = struct {
             .include_provided_data_exports = config.include_provided_data_exports,
             .include_internal_static_data = config.include_internal_static_data,
         } else .{};
-        var options = compile_package.compileTimeFinalizationOptions(self.max_threads, &self.roc_ctx, &self.ctfe_timing);
+        // Without a checked-module cache no later build can read a root this
+        // one skipped, so evaluation follows the runtime program's demand.
+        var options = compile_package.compileTimeFinalizationOptions(self.max_threads, &self.roc_ctx, &self.ctfe_timing, self.cache_manager == null);
         options.post_check_executor = self.postCheckExecutor();
         options.cached_debug_modules = cached_debug_modules.items;
         options.splice_source = if (self.runtime_lowering) |config| config.splice_source else null;
@@ -5478,7 +5480,7 @@ pub const Coordinator = struct {
         const check_alloc = result_alloc;
         var local_ctfe_timing = eval.CompileTimeFinalization.Timing.init(self.roc_ctx.std_io);
         const ctfe_timing = if (task.defer_publication) &self.ctfe_timing else &local_ctfe_timing;
-        const ctfe_options = compile_package.compileTimeFinalizationOptions(self.max_threads, &self.roc_ctx, ctfe_timing);
+        const ctfe_options = compile_package.compileTimeFinalizationOptions(self.max_threads, &self.roc_ctx, ctfe_timing, false);
         var typecheck_output = try compile_package.typeCheckModule(
             check_alloc,
             result_alloc,

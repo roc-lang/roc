@@ -434,6 +434,7 @@ const FnBodyTaskContext = struct {
 const RootEntry = struct {
     fn_id: Type.FnId,
     request: check.CheckedModule.RootRequest,
+    source_module: check.CheckedModule.ModuleId,
 };
 
 const LayoutRequest = struct {
@@ -1102,6 +1103,7 @@ const Lowerer = struct {
             try self.roots.append(self.allocator, .{
                 .fn_id = fn_id,
                 .request = root.request,
+                .source_module = root.source_module,
             });
         }
         // The compile-time roots' closure lowers first, so that a procedure
@@ -3480,6 +3482,7 @@ const Lowerer = struct {
                 try self.result.const_roots.append(self.allocator, .{
                     .root_order = root.request.order,
                     .request = root.request,
+                    .module = root.source_module,
                     .proc = proc,
                     .ret_layout = try self.layoutOfType(entry.ret),
                     .ret_type = try self.constTypeOfType(entry.ret),
@@ -12625,7 +12628,7 @@ test "compact comptime root descriptors survive solved teardown and direct LIR l
             .body = .{ .roc = body },
             .ret = bool_ty,
         });
-        try solved.lifted.addRoot(.{ .fn_id = fn_id, .request = undefined });
+        try solved.lifted.addRoot(.{ .fn_id = fn_id, .request = undefined, .source_module = undefined });
     }
     solved.lifted.next_symbol = 2;
     const field = try solved.lifted.names.internRecordFieldLabel("field");

@@ -499,6 +499,7 @@ fn testSlot(program: *Program.Result, idx: layout.Idx) Allocator.Error!lir.LIR.S
 fn testRoot(plan: Program.ConstPlanId, ret_layout: layout.Idx) Program.ConstRootPlan {
     return .{
         .root_order = 0,
+        .module = undefined,
         .request = .{
             .order = 0,
             .module_idx = 0,

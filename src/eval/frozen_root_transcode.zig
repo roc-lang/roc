@@ -394,7 +394,7 @@ fn testRootSymbol(exports: []const static_data.StaticDataExport) SymbolId {
 
 // These graph-only tests do not read request provenance or solved return types.
 fn testRoot(plan: Program.ConstPlanId, idx: layout.Idx) Program.ConstRootPlan {
-    return .{ .root_order = 0, .request = .{ .order = 0, .module_idx = 0, .kind = .compile_time_constant, .source = undefined, .checked_type = undefined, .abi = .compile_time, .exposure = .private }, .proc = undefined, .ret_layout = idx, .ret_type = undefined, .plan = plan };
+    return .{ .root_order = 0, .module = undefined, .request = .{ .order = 0, .module_idx = 0, .kind = .compile_time_constant, .source = undefined, .checked_type = undefined, .abi = .compile_time, .exposure = .private }, .proc = undefined, .ret_layout = idx, .ret_type = undefined, .plan = plan };
 }
 
 test "frozen root transcode preserves shared list strings across pointer widths" {

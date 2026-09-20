@@ -1299,6 +1299,8 @@ fn procDebugNameInSlice(entries: []const ProcDebugName, symbol: Common.Symbol) ?
 pub const Root = struct {
     def: DefId,
     request: checked.RootRequest,
+    /// Checked module that owns `request`.
+    source_module: checked.ModuleId,
 };
 
 /// Runtime layout requested for a checked data value.
