@@ -12924,6 +12924,17 @@ per-statement group counters or additional membership sets are maintained.
 Solver-only resource anchors participate exactly like concrete RC resources in
 these queries. Group-extension bits are not substitutes for raw member bits:
 their read-before-rebind kill equations differ.
+Join keep-set seeding inverts the exact group-use predicate instead of scanning
+the procedure's resource inventory per join. Source preparation builds the
+inverse alongside raw liveness numbering only for procedures with joins and
+multi-member groups. Singleton-only frames retain their allocation-free identity
+mapping. The inverse names concrete refcounted resources, excluding solver-only
+anchors, and is shared by all ownership variants. Sparse range enumeration reads
+only singleton raw bits and group-extension bits; grouped raw-member bits and
+borrowed-result bits do not select seed units. Absent and out-of-range subtrees
+are skipped. Each emission supplies its own committed residual masks and places
+the existing retained resources and join parameters, preserving the exact
+descending ownership fixed point.
 Consequently neither ownership nor liveness rows are widened by locals from
 other procedures. Unrelated scalar locals are not ARC resources and never
 receive raw liveness bits. This distinction is load-bearing for wide static
