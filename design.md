@@ -12974,7 +12974,13 @@ edges are excluded from the general meet because they conform at emission by
 releasing down to the keep, but a parameter a back edge leaves alone re-enters
 the body still holding the value the previous iteration released, so the back
 edges maintain their own shrinking meet over the parameters and the body keep
-places only what survives it. A site contribution that shrinks without
+places only what survives it. Before any jump has arrived the body keep is
+seeded from the body's read row alone, which is the tightest superset available
+without site states. The seed enumerates that row's set bits rather than the
+procedure's refcounted-local inventory: a raw bit names one resource, a group
+bit names every member of its group, and the walk ends at the value-use bits
+above them. Seeding therefore costs what it places, so a procedure's join count
+and its frame width never multiply. A site contribution that shrinks without
 changing the global meet cannot schedule downstream work. Each loop identity
 records whether its solved rows consumed any keep bits. A keep change that
 supplied no boundary bits schedules no liveness work.

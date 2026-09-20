@@ -43,6 +43,12 @@ pub var solver_iterations: @import("arc_state.zig").WorkCounter = .{};
 /// Debug-only count of locals examined by borrow-group liveness queries.
 pub var group_liveness_member_visits: @import("arc_state.zig").WorkCounter = .{};
 
+/// Debug-only count of resources examined while seeding a join's body keep.
+/// The seed consults the units the join body reads, so this counter stays
+/// linear in a procedure. Consulting the procedure's whole refcounted-local
+/// inventory once per join instead makes it quadratic in the procedure.
+pub var body_keep_seed_visits: @import("arc_state.zig").WorkCounter = .{};
+
 /// Options for ARC insertion.
 pub const InsertOptions = struct {
     /// Root procs whose ownership signature is pinned all-owned by ABI.
@@ -143,6 +149,10 @@ const ProcArcDomain = struct {
     /// resources; zero for ordinary whole-value resources.
     resource_full_masks: []u64,
     refcounted_locals: []const LIR.LocalId,
+    /// Indexed by ownership resource bit: whether that resource local is one
+    /// of `refcounted_locals`. A query driven by liveness bits recovers the
+    /// same membership the inventory carries, without scanning it.
+    resource_refcounted: []const bool,
     group_bit_index: []const u32,
     group_leaders: []const LIR.LocalId,
     value_use_bit_index: []const u32,
@@ -219,6 +229,10 @@ const ProcArcDomain = struct {
         }
         const resource_full_masks = try allocator.alloc(u64, resource_count);
         @memset(resource_full_masks, 0);
+        const resource_refcounted = try allocator.alloc(bool, resource_count);
+        for (resource_locals_buffer[0..resource_count], resource_refcounted) |local, *flag| {
+            flag.* = local_contains_refcounted[@intFromEnum(local)];
+        }
 
         // A solved borrow group may have members in several proc specs when
         // ownership-neutral bodies share locals. Liveness rows are proc-local,
@@ -257,6 +271,7 @@ const ProcArcDomain = struct {
             .resource_locals = resource_locals_buffer[0..resource_count],
             .resource_full_masks = resource_full_masks,
             .refcounted_locals = refcounted_locals_buffer[0..refcounted_count],
+            .resource_refcounted = resource_refcounted,
             .group_bit_index = group_bit_index,
             .group_leaders = group_leaders_buffer[0..group_count],
             .value_use_bit_index = value_use_bit_index,
@@ -377,6 +392,13 @@ const GroupLivenessIndex = struct {
     /// Indexed by the domain's existing multi-member group ordinal. Groups
     /// containing only non-resource locals have empty ranges.
     ranges: []const Range = &.{},
+    /// Raw liveness bit -> ownership resource index, the exact inverse of
+    /// `raw_bits`. Empty means identity, for the same reason `raw_bits` is.
+    raw_resources: []const u32 = &.{},
+    /// Raw bits below this belong to resources outside any multi-member
+    /// group; the numbering places those first and every group's members
+    /// after them, so one comparison decides which query governs a bit.
+    singleton_end: u32 = 0,
 
     fn init(allocator: Allocator, domain: *const ProcArcDomain, solution: *const arc_solve.Solution) ResourceError!GroupLivenessIndex {
         if (domain.group_leaders.len == 0) return .{};
@@ -409,7 +431,29 @@ const GroupLivenessIndex = struct {
                 singleton_bit += 1;
             }
         }
-        return .{ .raw_bits = raw_bits, .ranges = ranges };
+        // Both loops partition by the same query, so the singletons occupy
+        // exactly the bits below every group's range. `rawBitStandsAlone`
+        // decides membership from that boundary alone.
+        std.debug.assert(singleton_bit == singletons);
+        const raw_resources = try allocator.alloc(u32, domain.resource_locals.len);
+        for (raw_bits, 0..) |raw_bit, resource_index| raw_resources[raw_bit] = @intCast(resource_index);
+        return .{
+            .raw_bits = raw_bits,
+            .ranges = ranges,
+            .raw_resources = raw_resources,
+            .singleton_end = singletons,
+        };
+    }
+
+    /// Ownership resource index that owns a raw liveness bit.
+    fn resourceOfRawBit(self: *const GroupLivenessIndex, bit: usize) usize {
+        return if (self.raw_resources.len == 0) bit else self.raw_resources[bit];
+    }
+
+    /// Whether a raw bit's resource stands alone, so its own bit answers for
+    /// it. Members of a multi-member group are answered by the group bit.
+    fn rawBitStandsAlone(self: *const GroupLivenessIndex, bit: usize) bool {
+        return self.raw_bits.len == 0 or bit < self.singleton_end;
     }
 
     fn rawBitOf(self: *const GroupLivenessIndex, domain: *const ProcArcDomain, local: LIR.LocalId) ?usize {
@@ -1212,6 +1256,32 @@ const ExactBitSet = struct {
         const word_len = std.math.divCeil(usize, self.bit_len, 64) catch unreachable;
         for (0..word_len) |word_index| total += @popCount(self.words.get(@intCast(word_index)));
         return total;
+    }
+
+    /// Ascending set bits, visiting only populated words. The backing
+    /// snapshot skips absent subtrees, so enumeration costs the population
+    /// rather than the domain's width.
+    const SetBitIterator = struct {
+        words: ArcSnapshot(u64, 0).Iterator,
+        base: usize = 0,
+        pending: u64 = 0,
+
+        fn next(self: *SetBitIterator) ?usize {
+            while (true) {
+                if (self.pending != 0) {
+                    const word_bit: usize = @intCast(@ctz(self.pending));
+                    self.pending &= self.pending - 1;
+                    return self.base + word_bit;
+                }
+                const entry = self.words.next() orelse return null;
+                self.base = @as(usize, entry.index) * 64;
+                self.pending = entry.value;
+            }
+        }
+    };
+
+    fn setBits(self: *const ExactBitSet) SetBitIterator {
+        return .{ .words = self.words.iterator() };
     }
 
     fn Iterator(comptime options: std.bit_set.IteratorOptions) type {
@@ -3936,13 +4006,46 @@ const Inserter = struct {
     /// Seeds a join's body keep from above: every refcounted unit whose
     /// group is read in the body, plus the join params. Always a superset of
     /// the final keep, so the fixpoint descends monotonically.
+    ///
+    /// The read row names the units the body observes, so the seed reads it
+    /// forwards. A raw bit names one resource directly; a group bit names
+    /// every member of that group, because one member's read keeps the whole
+    /// group. Value-use bits sit above both and place nothing, and the
+    /// enumeration is ascending, so they end the walk.
     fn seedSolveBodyKeep(self: *Inserter, summary: *JoinSummary) ResourceError!void {
         const reads = try self.computeReadsBeforeRebind(summary.body, null, 0);
-        for (self.domain().refcounted_locals) |local| {
-            if (self.groupUsedFromTable(reads, local)) try summary.body_keep.set(local);
+        const proc_domain = self.domain();
+        const liveness = self.groupLivenessIndex();
+        const resource_count = proc_domain.resource_locals.len;
+        const group_end = resource_count + proc_domain.group_leaders.len;
+        var read_bits = reads.setBits();
+        while (read_bits.next()) |bit| {
+            if (bit >= group_end) break;
+            if (bit < resource_count) {
+                // A member of a multi-member group is placed through that
+                // group's bit, exactly as the group query decides it.
+                if (!liveness.rawBitStandsAlone(bit)) continue;
+                try placeSeededResource(summary, proc_domain, liveness.resourceOfRawBit(bit));
+            } else {
+                const range = liveness.ranges[bit - resource_count];
+                for (range.start..range.end) |member_bit| {
+                    try placeSeededResource(summary, proc_domain, liveness.resourceOfRawBit(member_bit));
+                }
+            }
         }
         try self.placeJoinRetainedInto(summary, null, &summary.body_keep);
         try self.placeSolveJoinParamsInto(summary, &summary.body_keep);
+    }
+
+    /// Places one resource the body reads, when it carries a unit of its own.
+    fn placeSeededResource(
+        summary: *JoinSummary,
+        proc_domain: *const ProcArcDomain,
+        resource: usize,
+    ) ResourceError!void {
+        if (builtin.mode == .Debug) body_keep_seed_visits.increment();
+        if (!proc_domain.resource_refcounted[resource]) return;
+        try summary.body_keep.set(proc_domain.resource_locals[resource]);
     }
 
     /// Add the producer-declared ownership environment of a shared body. When
@@ -11333,6 +11436,58 @@ fn strConcatChainGroupLivenessWork(chain_len: usize) Allocator.Error!u64 {
     return group_liveness_member_visits.read() - before;
 }
 
+/// One procedure holding `join_count` join points and `join_count` refcounted
+/// locals, the shape a large dispatch procedure takes in
+/// https://github.com/roc-lang/roc/issues/11321. Each join body reads one
+/// string, so the body keep of every join is settled by a constant number of
+/// units no matter how large the procedure grows.
+fn joinBodyKeepSeedWork(join_count: usize) Allocator.Error!u64 {
+    var f = try ArcTest.init(testing.allocator);
+    defer f.deinit();
+    const carried = try f.local(.str);
+    const region_strings = try testing.allocator.alloc(LIR.LocalId, join_count);
+    defer testing.allocator.free(region_strings);
+    for (region_strings) |*region_string| region_string.* = try f.local(.str);
+
+    var current = try f.ret(carried);
+    for (region_strings) |region_string| {
+        current = try f.assignStr(region_string, "region", current);
+        const id = f.freshJoinPointId();
+        const jump = try f.store.addCFStmt(.{ .jump = .{ .target = id } });
+        current = try f.store.addCFStmt(.{ .join = .{
+            .id = id,
+            .params = LIR.LocalSpan.empty(),
+            .body = current,
+            .remainder = jump,
+        } });
+    }
+    const start = try f.assignStr(carried, "chained", current);
+
+    _ = try f.addProc(&.{}, start, .str);
+    // The delta over the process-global counter is meaningful because the
+    // test runner executes tests in one thread; nothing else runs `insert`
+    // between the two reads.
+    const before = body_keep_seed_visits.read();
+    try f.run();
+    return body_keep_seed_visits.read() - before;
+}
+
+test "RC join body keep seeding grows linearly with a procedure's joins and locals" {
+    if (builtin.mode != .Debug) return;
+    const small = try joinBodyKeepSeedWork(64);
+    const large = try joinBodyKeepSeedWork(128);
+    // Doubling a procedure's join count and refcounted-local count together
+    // must stay near double the seeding work; consulting every refcounted
+    // local of the procedure once per join grows it quadratically.
+    if (large > small * 3) {
+        std.debug.print(
+            "join body keep seeding grew nonlinearly: {d} resource visits at 64 joins, {d} at 128\n",
+            .{ small, large },
+        );
+    }
+    try testing.expect(large <= small * 3);
+}
+
 test "RC borrow-group liveness work grows linearly with chained string concats" {
     if (builtin.mode != .Debug) return;
     const small = try strConcatChainGroupLivenessWork(32);
@@ -16146,6 +16301,7 @@ test "ARC ownership iteration skips absent resources and preserves release order
     const indices = try allocator.alloc(u32, width);
     const absent = try allocator.alloc(u32, width);
     const masks = try allocator.alloc(u64, width);
+    const refcounted = try allocator.alloc(bool, width);
     var global_local_index = collections.DenseMap(LIR.LocalId, u32).init(allocator);
     defer global_local_index.deinit();
     for (locals, indices, 0..) |*local, *index, ordinal| {
@@ -16155,6 +16311,7 @@ test "ARC ownership iteration skips absent resources and preserves release order
     }
     @memset(absent, no_arc_bit);
     @memset(masks, 0);
+    @memset(refcounted, true);
     const domain: ProcArcDomain = .{
         .global_local_index = &global_local_index,
         .frame_locals = locals,
@@ -16162,6 +16319,7 @@ test "ARC ownership iteration skips absent resources and preserves release order
         .resource_locals = locals,
         .resource_full_masks = masks,
         .refcounted_locals = locals,
+        .resource_refcounted = refcounted,
         .group_bit_index = absent,
         .group_leaders = &.{},
         .value_use_bit_index = absent,
