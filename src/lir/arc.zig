@@ -7535,6 +7535,7 @@ const Inserter = struct {
         return switch (op) {
             .incref => .incref,
             .decref, .free => .decref,
+            .host_drop => arcInvariant("ARC RC statement carried a host-shaped drop adapter"),
         };
     }
 

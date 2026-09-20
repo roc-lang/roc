@@ -548,7 +548,7 @@ test "frozen root transcode maps erased worker and drop identities across target
     const capture = Program.CaptureSlot{ .id = @enumFromInt(5), .slot = 0, .ty = undefined, .plan = str_plan, .storage = .value };
     const source_captures = try allocator.dupe(Program.CaptureSlot, &.{capture});
     const target_captures = try allocator.dupe(Program.CaptureSlot, &.{capture});
-    const drop = lir.LIR.ErasedCallableOnDrop{ .rc_helper = .{ .op = .decref, .layout_idx = .str } };
+    const drop = lir.LIR.ErasedCallableOnDrop{ .rc_helper = .{ .op = .host_drop, .layout_idx = .str } };
     const source_entries = try allocator.dupe(Program.ErasedFn, &.{.{ .entry = source_proc, .capture_layout = .str, .template = template, .captures = source_captures, .on_drop = drop }});
     const target_entries = try allocator.dupe(Program.ErasedFn, &.{
         .{ .entry = other_proc, .template = other_template },

@@ -6418,7 +6418,9 @@ const Lowerer = struct {
 
     fn erasedCallableOnDrop(self: *Lowerer, capture_layout: ?layout.Idx) LIR.ErasedCallableOnDrop {
         const layout_idx = capture_layout orelse return .none;
-        const helper_key = layout.RcHelper{ .op = .decref, .layout_idx = layout_idx };
+        // The payload's `on_drop` slot is a host-facing ABI, so it names the
+        // host-shaped adapter rather than the plain decref helper.
+        const helper_key = layout.RcHelper{ .op = .host_drop, .layout_idx = layout_idx };
         return if (self.result.layouts.rcHelperPlan(helper_key) == .noop)
             .none
         else

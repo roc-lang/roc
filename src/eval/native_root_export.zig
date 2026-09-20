@@ -705,7 +705,7 @@ test "native root export preserves erased callable procedure and drop helper ide
     const fn_plan: Program.ConstPlanId = @enumFromInt(program.const_plans.items.len);
     try program.const_plans.append(allocator, .{ .erased_fn = @enumFromInt(program.erased_fns.items.len) });
     const captures = try allocator.dupe(Program.CaptureSlot, &.{testCapture(str_plan, .value)});
-    const entries = try allocator.dupe(Program.ErasedFn, &.{.{ .entry = proc, .capture_layout = .str, .template = testTemplate(), .captures = captures, .on_drop = .{ .rc_helper = .{ .op = .decref, .layout_idx = .str } } }});
+    const entries = try allocator.dupe(Program.ErasedFn, &.{.{ .entry = proc, .capture_layout = .str, .template = testTemplate(), .captures = captures, .on_drop = .{ .rc_helper = .{ .op = .host_drop, .layout_idx = .str } } }});
     try program.erased_fns.append(allocator, .{ .layout = fn_layout, .entries = entries });
     const text = "an erased callable retains this exact native capture";
     var str = builtins.str.RocStr{ .bytes = @constCast(text.ptr), .length = text.len, .capacity_or_alloc_ptr = builtins.str.RocStr.encodeCapacity(text.len) };
@@ -731,7 +731,7 @@ test "native root export preserves erased callable procedure and drop helper ide
     try std.testing.expectEqual(@as(usize, 3), payload_export.relocations.len);
     try std.testing.expectEqual(proc, payload_export.relocations[0].procedure.?);
     try std.testing.expectEqual(builtins.erased_callable.capture_offset, payload_export.relocations[0].callable_capture_offset.?);
-    try std.testing.expectEqual(layout.RcHelperKey{ .op = .decref, .layout_idx = .str }, payload_export.relocations[1].rc_helper.?);
+    try std.testing.expectEqual(layout.RcHelperKey{ .op = .host_drop, .layout_idx = .str }, payload_export.relocations[1].rc_helper.?);
     const copied_header = payload_export.bytes[@intCast(payload_pointer.addend)..][0 .. 2 * word_size];
     try std.testing.expectEqualSlices(u8, &(@as([2 * word_size]u8, @splat(0))), copied_header);
     const capture_pointer = payload_export.relocations[2];

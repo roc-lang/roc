@@ -5668,6 +5668,12 @@ pub const Interpreter = struct {
             .free => {
                 try self.performBoxyLayoutDrop(frame, val, value_layout, desc, .free, count, atomicity);
             },
+            // `host_drop` names a generated adapter's signature, not an
+            // operation the interpreter performs, so no RC statement carries it.
+            .host_drop => return self.invariantFailedError(
+                "LIR/interpreter invariant violated: RC statement carried a host-shaped drop adapter",
+                .{},
+            ),
         }
     }
 

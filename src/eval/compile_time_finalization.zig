@@ -4184,7 +4184,7 @@ test "shared frozen erased callables execute on interpreter dev and LLVM" {
         .capture_layout = .str,
         .template = .{ .fn_def = undefined, .source_fn_ty = undefined, .source_fn_key = undefined },
         .captures = captures,
-        .on_drop = .{ .rc_helper = .{ .op = .decref, .layout_idx = .str } },
+        .on_drop = .{ .rc_helper = .{ .op = .host_drop, .layout_idx = .str } },
     }});
     try program.erased_fns.append(allocator, .{ .layout = erased_layout, .entries = entries });
     const slot_name = try LirProgram.staticDataSymbolName(allocator, closure_slot);
@@ -4195,11 +4195,11 @@ test "shared frozen erased callables execute on interpreter dev and LLVM" {
     var payload_bytes: [4 * word + @sizeOf(builtins.str.RocStr)]u8 = @splat(0);
     const capture_str = builtins.str.RocStr.fromSliceSmall("capture");
     @memcpy(payload_bytes[4 * word ..], std.mem.asBytes(&capture_str));
-    const drop_name = try static_data_exports.atomicRcHelperSymbolName(allocator, &program.layouts, .{ .op = .decref, .layout_idx = .str });
+    const drop_name = try static_data_exports.atomicRcHelperSymbolName(allocator, &program.layouts, .{ .op = .host_drop, .layout_idx = .str });
     defer allocator.free(drop_name);
     const exports = try static_data_exports.cloneStaticData(allocator, &.{
         .{ .symbol_name = slot_name, .value_id = closure_slot, .bytes = &(@as([word]u8, @splat(0))), .alignment = @alignOf(usize), .relocations = &.{.{ .offset = 0, .target_symbol_name = "closure_payload", .target = .{ .data_symbol = @enumFromInt(1) }, .addend = 2 * word }} },
-        .{ .symbol_name = "closure_payload", .bytes = &payload_bytes, .alignment = builtins.erased_callable.payload_alignment, .relocations = &.{ .{ .offset = 2 * word, .target_symbol_name = proc_name, .kind = .function_pointer, .procedure = worker, .callable_capture_offset = builtins.erased_callable.capture_offset }, .{ .offset = 3 * word, .target_symbol_name = drop_name, .kind = .function_pointer, .rc_helper = .{ .op = .decref, .layout_idx = .str } } } },
+        .{ .symbol_name = "closure_payload", .bytes = &payload_bytes, .alignment = builtins.erased_callable.payload_alignment, .relocations = &.{ .{ .offset = 2 * word, .target_symbol_name = proc_name, .kind = .function_pointer, .procedure = worker, .callable_capture_offset = builtins.erased_callable.capture_offset }, .{ .offset = 3 * word, .target_symbol_name = drop_name, .kind = .function_pointer, .rc_helper = .{ .op = .host_drop, .layout_idx = .str } } } },
     });
     defer static_data_exports.deinitStaticData(allocator, exports);
     const StaticInterpreterData = @import("interpreter_static_data.zig").InterpreterStaticData;
