@@ -54,6 +54,7 @@ fn RewriteColumn(comptime T: type, comptime field: []const u8) type {
         ids: std.ArrayList(u32) = .empty,
         rows: GuardedList.List(T, "LirStore." ++ field) = .empty,
         dirty: std.ArrayList(bool) = .empty,
+        materialized: bool = false,
 
         const Column = @This();
 
@@ -76,13 +77,26 @@ fn RewriteColumn(comptime T: type, comptime field: []const u8) type {
             return true;
         }
 
-        fn finish(self: *Column, allocator: Allocator, source: *const Self) Allocator.Error!void {
+        /// Rows are copied from the coordinator only when first borrowed
+        /// mutably (see `mark`), so a pass that leaves a procedure untouched
+        /// never copies its body. Until then a prepared row reads through to
+        /// the frozen coordinator.
+        fn finish(self: *Column, allocator: Allocator, _: *const Self) Allocator.Error!void {
             std.mem.sort(u32, self.ids.items, {}, std.sort.asc(u32));
+            try self.rows.ensureTotalCapacity(allocator, self.ids.items.len);
+            try self.dirty.ensureTotalCapacity(allocator, self.ids.items.len);
             for (self.ids.items, 0..) |id, dense_index| {
                 self.indices.getPtr(id).?.* = @intCast(dense_index);
-                try self.rows.append(allocator, @field(source, field).get(id));
+                try self.rows.append(allocator, undefined);
                 try self.dirty.append(allocator, false);
             }
+        }
+        /// Whether this column's prepared rows hold private copies. Spans may
+        /// overlap and a read may cover more rows than an earlier write, so
+        /// the first mutable borrow copies the whole column: every read of
+        /// the column then sees one owner.
+        fn owned(self: *const Column, _: u32) bool {
+            return self.materialized;
         }
 
         fn index(self: *const Column, start: u32, len: u32) ?u32 {
@@ -97,9 +111,17 @@ fn RewriteColumn(comptime T: type, comptime field: []const u8) type {
             return first;
         }
 
-        fn mark(self: *Column, start: u32, len: u32) u32 {
+        /// Materialize the column from the coordinator on its first mutable
+        /// borrow, then record the span as written.
+        fn mark(self: *Column, source: *const Self, start: u32, len: u32) u32 {
             const first = self.index(start, len) orelse
                 @panic("LirStore invariant violated: unprepared prefix mutation");
+            if (!self.materialized) {
+                for (self.ids.items, 0..) |id, dense_index| {
+                    self.rows.getPtrImmediate(dense_index).* = @field(source, field).get(id);
+                }
+                self.materialized = true;
+            }
             @memset(self.dirty.items[first..][0..len], true);
             return first;
         }
@@ -1480,7 +1502,9 @@ pub fn getCFStmt(self: *const Self, id: CFStmtId) CFStmt {
     self.verifyCFStmtId(id);
     const index = @intFromEnum(id);
     if (self.proc_rewrite) |*rewrite| {
-        if (rewrite.cf_stmts.indices.get(index)) |private| return rewrite.cf_stmts.rows.get(private);
+        if (rewrite.cf_stmts.indices.get(index)) |private| {
+            if (rewrite.cf_stmts.owned(private)) return rewrite.cf_stmts.rows.get(private);
+        }
     }
     if (self.body_coordinator) |coordinator| {
         if (index < self.body_prefix.cf_stmts) return coordinator.getCFStmt(id);
@@ -1495,7 +1519,7 @@ pub fn getCFStmtPtr(self: *Self, id: CFStmtId) *CFStmt {
     const index = @intFromEnum(id);
     if (self.body_coordinator != null and index < self.body_prefix.cf_stmts) {
         if (self.proc_rewrite) |*rewrite| {
-            return rewrite.cf_stmts.rows.getPtrImmediate(rewrite.cf_stmts.mark(index, 1));
+            return rewrite.cf_stmts.rows.getPtrImmediate(rewrite.cf_stmts.mark(self.body_coordinator.?, index, 1));
         }
         self.assertBodyMetadataImmutable();
     }
@@ -1526,8 +1550,9 @@ pub fn addCFSwitchBranches(self: *Self, branches: []const CFSwitchBranch) Alloca
 /// Resolves a switch-branch span to its stored slice.
 pub fn getCFSwitchBranches(self: *const Self, span: CFSwitchBranchSpan) StoreSpanBorrow(CFSwitchBranch, "cf_switch_branches") {
     if (self.proc_rewrite) |*rewrite| {
-        if (rewrite.cf_switch_branches.index(span.start, span.len)) |private|
-            return rewrite.cf_switch_branches.rows.borrowSpan(private, span.len);
+        if (rewrite.cf_switch_branches.index(span.start, span.len)) |private| {
+            if (rewrite.cf_switch_branches.owned(private)) return rewrite.cf_switch_branches.rows.borrowSpan(private, span.len);
+        }
     }
     if (self.body_coordinator) |coordinator| {
         if (span.start < self.body_prefix.cf_switch_branches) return coordinator.getCFSwitchBranches(span);
@@ -1541,7 +1566,7 @@ pub fn getCFSwitchBranchesMut(self: *Self, span: CFSwitchBranchSpan) StoreSpanBo
     if (span.len == 0) return self.cf_switch_branches.borrowSpanMut(0, 0);
     if (self.body_coordinator != null and span.start < self.body_prefix.cf_switch_branches) {
         if (self.proc_rewrite) |*rewrite| {
-            const private = rewrite.cf_switch_branches.mark(span.start, span.len);
+            const private = rewrite.cf_switch_branches.mark(self.body_coordinator.?, span.start, span.len);
             return rewrite.cf_switch_branches.rows.borrowSpanMut(private, span.len);
         }
         self.assertBodyMetadataImmutable();
@@ -1579,8 +1604,9 @@ pub fn addStrMatchArms(self: *Self, arms: []const StrMatchArm) Allocator.Error!S
 /// Resolves a string-match-arm span to its stored slice.
 pub fn getStrMatchArms(self: *const Self, span: StrMatchArmSpan) StoreSpanBorrow(StrMatchArm, "str_match_arms") {
     if (self.proc_rewrite) |*rewrite| {
-        if (rewrite.str_match_arms.index(span.start, span.len)) |private|
-            return rewrite.str_match_arms.rows.borrowSpan(private, span.len);
+        if (rewrite.str_match_arms.index(span.start, span.len)) |private| {
+            if (rewrite.str_match_arms.owned(private)) return rewrite.str_match_arms.rows.borrowSpan(private, span.len);
+        }
     }
     if (self.body_coordinator) |coordinator| {
         if (span.start < self.body_prefix.str_match_arms) return coordinator.getStrMatchArms(span);
@@ -1594,7 +1620,7 @@ pub fn getStrMatchArmsMut(self: *Self, span: StrMatchArmSpan) StoreSpanBorrowMut
     if (span.len == 0) return self.str_match_arms.borrowSpanMut(0, 0);
     if (self.body_coordinator != null and span.start < self.body_prefix.str_match_arms) {
         if (self.proc_rewrite) |*rewrite| {
-            const private = rewrite.str_match_arms.mark(span.start, span.len);
+            const private = rewrite.str_match_arms.mark(self.body_coordinator.?, span.start, span.len);
             return rewrite.str_match_arms.rows.borrowSpanMut(private, span.len);
         }
         self.assertBodyMetadataImmutable();
@@ -1614,8 +1640,9 @@ pub fn addJoinPointSpan(self: *Self, join_points: []const JoinPoint) Allocator.E
 /// Resolves a join-point span to its stored slice.
 pub fn getJoinPointSpan(self: *const Self, span: JoinPointSpan) StoreSpanBorrow(JoinPoint, "join_points") {
     if (self.proc_rewrite) |*rewrite| {
-        if (rewrite.join_points.index(span.start, span.len)) |private|
-            return rewrite.join_points.rows.borrowSpan(private, span.len);
+        if (rewrite.join_points.index(span.start, span.len)) |private| {
+            if (rewrite.join_points.owned(private)) return rewrite.join_points.rows.borrowSpan(private, span.len);
+        }
     }
     if (self.body_coordinator) |coordinator| {
         if (span.start < self.body_prefix.join_points) return coordinator.getJoinPointSpan(span);
@@ -1629,7 +1656,7 @@ pub fn getJoinPointSpanMut(self: *Self, span: JoinPointSpan) StoreSpanBorrowMut(
     if (span.len == 0) return self.join_points.borrowSpanMut(0, 0);
     if (self.body_coordinator != null and span.start < self.body_prefix.join_points) {
         if (self.proc_rewrite) |*rewrite| {
-            const private = rewrite.join_points.mark(span.start, span.len);
+            const private = rewrite.join_points.mark(self.body_coordinator.?, span.start, span.len);
             return rewrite.join_points.rows.borrowSpanMut(private, span.len);
         }
         self.assertBodyMetadataImmutable();
