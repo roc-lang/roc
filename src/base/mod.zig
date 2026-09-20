@@ -65,10 +65,19 @@ pub const byte_encoding = @import("byte_encoding.zig");
 /// it's the allocator LLVM already uses)—except on musl, whose malloc is slow,
 /// where smp_allocator wins. Falls back to smp_allocator without libc, and to
 /// wasm_allocator on freestanding.
-pub fn defaultGpa() std.mem.Allocator {
-    if (builtin.target.os.tag == .freestanding) return std.heap.wasm_allocator;
+pub const LargeBlockAllocator = @import("LargeBlockAllocator.zig");
+pub const cpu_count = @import("cpu_count.zig");
+
+var default_large_blocks: LargeBlockAllocator = LargeBlockAllocator.init(defaultBackingGpa());
+
+fn defaultBackingGpa() std.mem.Allocator {
     if (builtin.link_libc and !builtin.target.abi.isMusl()) return std.heap.c_allocator;
     return std.heap.smp_allocator;
+}
+
+pub fn defaultGpa() std.mem.Allocator {
+    if (builtin.target.os.tag == .freestanding) return std.heap.wasm_allocator;
+    return default_large_blocks.allocator();
 }
 
 test {
@@ -76,6 +85,8 @@ test {
     const module_path_mod = @import("module_path.zig");
     std.testing.refAllDecls(ident);
     std.testing.refAllDecls(TextRankCache);
+    std.testing.refAllDecls(LargeBlockAllocator);
+    std.testing.refAllDecls(cpu_count);
     std.testing.refAllDecls(TypeDigestHasher);
     std.testing.refAllDecls(module_path_mod);
     std.testing.refAllDecls(@import("roc_version.zig"));
