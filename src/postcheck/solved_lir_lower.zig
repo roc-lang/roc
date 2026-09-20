@@ -130,7 +130,7 @@ pub const DictSeedMode = enum {
 
 /// One evaluated root a consumer asks to have materialized, named by its
 /// position in the producer's root plan and by the checked identity the
-/// evaluation publishes it under.
+/// evaluation records it under.
 pub const CompletedValueRequest = struct {
     root: u32,
     value: Common.ComptimeValueRoot,
@@ -148,7 +148,7 @@ pub const CompletedValueRequest = struct {
 pub const RootManifest = struct {
     roots: ?[]const u32 = null,
     /// Evaluated roots whose completed values this consumer materializes, by
-    /// the producer root position each one names. The evaluation publishes
+    /// the producer root position each one names. The evaluation records
     /// each value into the slot its root declares, which is what a later
     /// consumer transcodes into its own representation.
     completed_values: []const CompletedValueRequest = &.{},

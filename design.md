@@ -921,7 +921,7 @@ Each consumer names its share of the producer program in an explicit root
 manifest, applied before LIR demand discovery. A manifest names producer root
 positions in the consumer's emitted order, states whether the consumer
 materializes the producer's layout, static-data and runtime-schema requests,
-and names the evaluated roots whose completed values the consumer publishes.
+and names the evaluated roots whose completed values the consumer records.
 Selected roots keep the producer's request metadata and the producer position
 that command-level root metadata is keyed by. Demand discovery then starts
 from the named roots alone: a consumer generates no procedure, layout, static
@@ -947,8 +947,8 @@ program reads, once per root. A root-slot read is that stage's own explicit
 statement of the demand, so later stages consume the record instead of
 rediscovering it. When consumers split, the compile-time consumer's manifest
 names exactly the roots in that record that this compilation evaluates, each
-under the checked identity the evaluation publishes it with, and the root
-declares the one slot its value is published into; that declaration keeps the
+under the checked identity the evaluation records it with, and the root
+declares the one slot its value is recorded into; that declaration keeps the
 slot through procedure and slot compaction even though no code in that program
 reads it. One root has one completed value, and two demands for it are the same
 demand when they name the same concrete type: the structural type digest
