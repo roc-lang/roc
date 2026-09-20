@@ -3,6 +3,8 @@
 
 const TestEnv = @import("TestEnv.zig");
 
+/// A module defining one codec whose two methods take their arguments through
+/// different call syntaxes, so importers exercise both against one scheme.
 pub const codec_source =
     \\Codec := {}.{
     \\    encode = |_self, a, b| Json.to_str({ a, b })
