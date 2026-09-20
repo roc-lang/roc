@@ -398,30 +398,40 @@ test "versioned maps match independent copies across branching mutations" {
 }
 
 test "versioned map allocation failures and reserved cleanup preserve snapshots" {
-    const Scenario = struct {
-        fn run(allocator: Allocator) (Allocator.Error || error{ TestUnexpectedResult, TestExpectedEqual })!void {
-            const Map = VersionedHashMap(u32, u32);
-            var parent = Map.init(allocator);
-            defer parent.deinit();
-            try parent.put(1, 10);
-            var child = parent.fork();
-            defer child.deinit();
-            child.put(1, 20) catch |err| {
+    inline for (.{ VersionedDenseMap(u32, u32), VersionedHashMap(u32, u32) }) |Map| {
+        const Scenario = struct {
+            fn run(allocator: Allocator) (Allocator.Error || error{ TestUnexpectedResult, TestExpectedEqual })!void {
+                var parent = Map.init(allocator);
+                defer parent.deinit();
+                try parent.put(1, 10);
+                var child = parent.fork();
+                defer child.deinit();
+                child.put(1, 20) catch |err| {
+                    try std.testing.expectEqual(@as(?u32, 10), child.get(1));
+                    return err;
+                };
+                for (2..34) |index| {
+                    const key: u32 = @intCast(index * 64);
+                    child.put(key, key) catch |err| {
+                        try std.testing.expectEqual(@as(?u32, null), child.get(key));
+                        try std.testing.expectEqual(@as(?u32, 10), parent.get(1));
+                        try std.testing.expectEqual(@as(?u32, 20), child.get(1));
+                        return err;
+                    };
+                }
+                var snapshot = child.fork();
+                defer snapshot.deinit();
+                const store = child.store.?;
+                const saved_allocator = store.allocator;
+                store.allocator = std.testing.failing_allocator;
+                defer store.allocator = saved_allocator;
+                child.restore(1, 10);
                 try std.testing.expectEqual(@as(?u32, 10), child.get(1));
-                return err;
-            };
-            var snapshot = child.fork();
-            defer snapshot.deinit();
-            const store = child.store.?;
-            const saved_allocator = store.allocator;
-            store.allocator = std.testing.failing_allocator;
-            defer store.allocator = saved_allocator;
-            child.restore(1, 10);
-            try std.testing.expectEqual(@as(?u32, 10), child.get(1));
-            try std.testing.expectEqual(@as(?u32, 20), snapshot.get(1));
-            try std.testing.expectEqual(@as(?u32, 10), parent.get(1));
-        }
-    };
-    try Scenario.run(std.testing.allocator);
-    try std.testing.checkAllAllocationFailures(std.testing.allocator, Scenario.run, .{});
+                try std.testing.expectEqual(@as(?u32, 20), snapshot.get(1));
+                try std.testing.expectEqual(@as(?u32, 10), parent.get(1));
+            }
+        };
+        try Scenario.run(std.testing.allocator);
+        try std.testing.checkAllAllocationFailures(std.testing.allocator, Scenario.run, .{});
+    }
 }
