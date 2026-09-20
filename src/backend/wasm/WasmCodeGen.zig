@@ -847,6 +847,35 @@ fn emitI32Const(self: *Self, value: i32) Allocator.Error!void {
     WasmModule.leb128WriteI32(self.allocator, self.currentCode(), value) catch return error.OutOfMemory;
 }
 
+/// Emit the zero constant of a wasm value type.
+///
+/// A zero-sized value has no bits to load, so the low-level ops that produce
+/// one push this constant and read no operand at all. Reading the operand
+/// would leave it stranded on the wasm operand stack: `emitProcLocal` is a
+/// real `local.get` even for a zero-sized layout, which `WasmLayout` maps to a
+/// dummy `i32`.
+fn emitZeroConst(self: *Self, val_type: ValType) Allocator.Error!void {
+    switch (val_type) {
+        .i32 => try self.emitI32Const(0),
+        .i64 => {
+            self.currentCode().append(self.allocator, Op.i64_const) catch return error.OutOfMemory;
+            WasmModule.leb128WriteI64(self.allocator, self.currentCode(), 0) catch return error.OutOfMemory;
+        },
+        .f32 => {
+            self.currentCode().append(self.allocator, Op.f32_const) catch return error.OutOfMemory;
+            try self.currentCode().appendSlice(self.allocator, std.mem.asBytes(&@as(f32, 0)));
+        },
+        .f64 => {
+            self.currentCode().append(self.allocator, Op.f64_const) catch return error.OutOfMemory;
+            try self.currentCode().appendSlice(self.allocator, std.mem.asBytes(&@as(f64, 0)));
+        },
+        .v128 => wasmInvariantFmt(
+            "WasmCodeGen invariant violated: zero-sized value resolved to a v128 result",
+            .{},
+        ),
+    }
+}
+
 /// Emit the final-link table address of a function already placed in this
 /// module's element segment. A relocatable object cannot embed its current
 /// table offset: LLD may reserve slot zero or place another object's elements
@@ -14390,9 +14419,9 @@ fn generateLowLevel(self: *Self, ll: anytype) Allocator.Error!void {
             const ret_layout = ls.getLayout(ll.ret_layout);
 
             if (ret_layout.tag == .box_of_zst) {
-                _ = try self.emitProcLocal(value_expr);
-                self.currentCode().append(self.allocator, Op.i32_const) catch return error.OutOfMemory;
-                WasmModule.leb128WriteI32(self.allocator, self.currentCode(), 0) catch return error.OutOfMemory;
+                // A zero-sized payload has nothing to allocate or copy, so the
+                // box is the null pointer and the payload operand is not read.
+                try self.emitI32Const(0);
             } else {
                 const box_abi = ls.builtinBoxAbi(ll.ret_layout);
                 const value_size = box_abi.elem_size;
@@ -14406,9 +14435,7 @@ fn generateLowLevel(self: *Self, ll: anytype) Allocator.Error!void {
                     .primitive => false,
                 };
                 if (value_size == 0) {
-                    _ = try self.emitProcLocal(value_expr);
-                    self.currentCode().append(self.allocator, Op.i32_const) catch return error.OutOfMemory;
-                    WasmModule.leb128WriteI32(self.allocator, self.currentCode(), 0) catch return error.OutOfMemory;
+                    try self.emitI32Const(0);
                 } else {
                     const alignment: u32 = box_abi.elem_alignment;
 
@@ -14510,26 +14537,7 @@ fn generateLowLevel(self: *Self, ll: anytype) Allocator.Error!void {
                 // The input is an already-evaluated LIR local. A zero-sized
                 // payload needs no load; pushing its pointer here would leave
                 // an extra operand beneath the result. ARC owns its release.
-                const result_vt = try self.resolveValType(ll.ret_layout);
-                switch (result_vt) {
-                    .i32 => {
-                        self.currentCode().append(self.allocator, Op.i32_const) catch return error.OutOfMemory;
-                        WasmModule.leb128WriteI32(self.allocator, self.currentCode(), 0) catch return error.OutOfMemory;
-                    },
-                    .i64 => {
-                        self.currentCode().append(self.allocator, Op.i64_const) catch return error.OutOfMemory;
-                        WasmModule.leb128WriteI32(self.allocator, self.currentCode(), 0) catch return error.OutOfMemory;
-                    },
-                    .f32 => {
-                        self.currentCode().append(self.allocator, Op.f32_const) catch return error.OutOfMemory;
-                        try self.currentCode().appendSlice(self.allocator, std.mem.asBytes(&@as(f32, 0)));
-                    },
-                    .f64 => {
-                        self.currentCode().append(self.allocator, Op.f64_const) catch return error.OutOfMemory;
-                        try self.currentCode().appendSlice(self.allocator, std.mem.asBytes(&@as(f64, 0)));
-                    },
-                    .v128 => unreachable,
-                }
+                try self.emitZeroConst(try self.resolveValType(ll.ret_layout));
             } else {
                 const elem_size = if (erased_box_ptr)
                     try self.layoutByteSize(ll.ret_layout)
@@ -14538,26 +14546,7 @@ fn generateLowLevel(self: *Self, ll: anytype) Allocator.Error!void {
                 if (elem_size == 0) {
                     // Only the result belongs on the operand stack for an
                     // empty payload; the box local needs no dereference.
-                    const result_vt = try self.resolveValType(ll.ret_layout);
-                    switch (result_vt) {
-                        .i32 => {
-                            self.currentCode().append(self.allocator, Op.i32_const) catch return error.OutOfMemory;
-                            WasmModule.leb128WriteI32(self.allocator, self.currentCode(), 0) catch return error.OutOfMemory;
-                        },
-                        .i64 => {
-                            self.currentCode().append(self.allocator, Op.i64_const) catch return error.OutOfMemory;
-                            WasmModule.leb128WriteI64(self.allocator, self.currentCode(), 0) catch return error.OutOfMemory;
-                        },
-                        .f32 => {
-                            self.currentCode().append(self.allocator, Op.f32_const) catch return error.OutOfMemory;
-                            try self.currentCode().appendSlice(self.allocator, std.mem.asBytes(&@as(f32, 0)));
-                        },
-                        .f64 => {
-                            self.currentCode().append(self.allocator, Op.f64_const) catch return error.OutOfMemory;
-                            try self.currentCode().appendSlice(self.allocator, std.mem.asBytes(&@as(f64, 0)));
-                        },
-                        .v128 => unreachable,
-                    }
+                    try self.emitZeroConst(try self.resolveValType(ll.ret_layout));
                 } else {
                     try self.emitProcLocal(box_expr);
 
@@ -14629,15 +14618,13 @@ fn generateLowLevel(self: *Self, ll: anytype) Allocator.Error!void {
             const ret_layout = ls.getLayout(ll.ret_layout);
 
             if (ret_layout.tag == .box_of_zst) {
-                _ = try self.emitProcLocal(box_expr);
-                self.currentCode().append(self.allocator, Op.drop) catch return error.OutOfMemory;
+                // A null pointer is already unique, so there is nothing to
+                // copy and the box operand is not read.
                 try self.emitI32Const(0);
             } else {
                 const box_abi = ls.builtinBoxAbi(ll.ret_layout);
                 const elem_size = box_abi.elem_size;
                 if (elem_size == 0) {
-                    _ = try self.emitProcLocal(box_expr);
-                    self.currentCode().append(self.allocator, Op.drop) catch return error.OutOfMemory;
                     try self.emitI32Const(0);
                 } else {
                     try self.emitProcLocal(box_expr);
@@ -14710,26 +14697,7 @@ fn generateLowLevel(self: *Self, ll: anytype) Allocator.Error!void {
             const result_vt = try self.resolveValType(ll.ret_layout);
 
             if (result_size == 0) {
-                _ = try self.emitProcLocal(capture_ptr_expr);
-                switch (result_vt) {
-                    .i32 => {
-                        self.currentCode().append(self.allocator, Op.i32_const) catch return error.OutOfMemory;
-                        WasmModule.leb128WriteI32(self.allocator, self.currentCode(), 0) catch return error.OutOfMemory;
-                    },
-                    .i64 => {
-                        self.currentCode().append(self.allocator, Op.i64_const) catch return error.OutOfMemory;
-                        WasmModule.leb128WriteI64(self.allocator, self.currentCode(), 0) catch return error.OutOfMemory;
-                    },
-                    .f32 => {
-                        self.currentCode().append(self.allocator, Op.f32_const) catch return error.OutOfMemory;
-                        try self.currentCode().appendSlice(self.allocator, std.mem.asBytes(&@as(f32, 0)));
-                    },
-                    .f64 => {
-                        self.currentCode().append(self.allocator, Op.f64_const) catch return error.OutOfMemory;
-                        try self.currentCode().appendSlice(self.allocator, std.mem.asBytes(&@as(f64, 0)));
-                    },
-                    .v128 => unreachable,
-                }
+                try self.emitZeroConst(result_vt);
             } else {
                 try self.emitProcLocal(capture_ptr_expr);
                 const capture_ptr = self.storage.allocAnonymousLocal(.i32) catch return error.OutOfMemory;
@@ -14808,10 +14776,7 @@ fn generateLowLevel(self: *Self, ll: anytype) Allocator.Error!void {
                 .primitive => false,
             };
 
-            if (value_size == 0) {
-                _ = try self.emitProcLocal(GuardedList.at(args, 0));
-                self.currentCode().append(self.allocator, Op.drop) catch return error.OutOfMemory;
-            } else {
+            if (value_size != 0) {
                 try self.emitProcLocal(GuardedList.at(args, 0));
                 const ptr_local = self.storage.allocAnonymousLocal(.i32) catch return error.OutOfMemory;
                 try self.emitLocalSet(ptr_local);
@@ -14825,8 +14790,7 @@ fn generateLowLevel(self: *Self, ll: anytype) Allocator.Error!void {
                     try self.emitStoreToMemSized(ptr_local, 0, value_vt, value_size);
                 }
             }
-            self.currentCode().append(self.allocator, Op.i32_const) catch return error.OutOfMemory;
-            WasmModule.leb128WriteI32(self.allocator, self.currentCode(), 0) catch return error.OutOfMemory;
+            try self.emitI32Const(0);
         },
         .ptr_load => {
             // ptr_load: (Ptr(T)) -> T. Copy sizeOf(T) bytes out of *ptr.
@@ -14843,10 +14807,7 @@ fn generateLowLevel(self: *Self, ll: anytype) Allocator.Error!void {
             };
 
             if (result_size == 0) {
-                _ = try self.emitProcLocal(GuardedList.at(args, 0));
-                self.currentCode().append(self.allocator, Op.drop) catch return error.OutOfMemory;
-                self.currentCode().append(self.allocator, Op.i32_const) catch return error.OutOfMemory;
-                WasmModule.leb128WriteI32(self.allocator, self.currentCode(), 0) catch return error.OutOfMemory;
+                try self.emitZeroConst(result_vt);
             } else {
                 try self.emitProcLocal(GuardedList.at(args, 0));
                 const src_ptr = self.storage.allocAnonymousLocal(.i32) catch return error.OutOfMemory;
