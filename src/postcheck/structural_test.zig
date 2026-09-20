@@ -582,7 +582,7 @@ test "Monotype dispatch result modes retain graph-backed result types" {
     const lower_source = @embedFile("monotype/lower.zig");
     const parametric_low_level = sourceSliceBetween(
         lower_source,
-        "if (direct_parametric_low_level) |op| {",
+        "if (low_level_target) |op| {",
         "const call_data = if (direct_graph_call)",
     );
     try expectContains(parametric_low_level, "applyDispatchResultMode(plan.result_mode, call_expr)");
