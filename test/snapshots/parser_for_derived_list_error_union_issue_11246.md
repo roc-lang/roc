@@ -467,7 +467,7 @@ expect {
 						(args
 							(e-nominal (nominal "Parser")
 								(e-empty_record)))))
-				(e-call (constraint-fn-var 563)
+				(e-call (constraint-fn-var 571)
 					(e-lookup-local
 						(p-assign (ident "parse_")))
 					(e-nominal (nominal "parser_for_derived_list_error_union_issue_11246.Parser.State")
@@ -528,7 +528,7 @@ expect {
 							(e-match
 								(match
 									(cond
-										(e-call (constraint-fn-var 576)
+										(e-call (constraint-fn-var 586)
 											(e-lookup-local
 												(p-assign (ident "parser_for_derived_list_error_union_issue_11246.Rvn.parse")))
 											(e-empty_list)))
@@ -560,8 +560,8 @@ expect {
 		(patt (type "Parser, Parser.State -> Try({ rest: Parser.State, value: U8 }, _b)"))
 		(patt (type "Parser, Parser.State -> Try([Counted({ len: U64, rest: Parser.State }), Uncounted(Parser.State)], _b)"))
 		(patt (type "Parser, Parser.State -> Try([Done(Parser.State), Item(Parser.State)], [])"))
-		(patt (type "Parser, Parser.State -> Try([Continue(Parser.State), Done(Parser.State)], [UnexpectedByte, ..])"))
-		(patt (type "List(U8) -> Try({ rest: Parser.State, value: a }, _b) where [a.parser_for : Parser -> (Parser.State -> Try({ rest: Parser.State, value: a }, _c))]")))
+		(patt (type "Parser, Parser.State -> Try([Continue(Parser.State), Done(Parser.State)], [UnexpectedByte])"))
+		(patt (type "List(U8) -> Try({ rest: Parser.State, value: a }, b) where [a.parser_for : Parser -> (Parser.State -> Try({ rest: Parser.State, value: a }, b))]")))
 	(type_decls
 		(nominal (type "Parser")
 			(ty-header (name "Parser")))
@@ -573,6 +573,6 @@ expect {
 		(expr (type "Parser, Parser.State -> Try({ rest: Parser.State, value: U8 }, _b)"))
 		(expr (type "Parser, Parser.State -> Try([Counted({ len: U64, rest: Parser.State }), Uncounted(Parser.State)], _b)"))
 		(expr (type "Parser, Parser.State -> Try([Done(Parser.State), Item(Parser.State)], [])"))
-		(expr (type "Parser, Parser.State -> Try([Continue(Parser.State), Done(Parser.State)], [UnexpectedByte, ..])"))
-		(expr (type "List(U8) -> Try({ rest: Parser.State, value: a }, _b) where [a.parser_for : Parser -> (Parser.State -> Try({ rest: Parser.State, value: a }, _c))]"))))
+		(expr (type "Parser, Parser.State -> Try([Continue(Parser.State), Done(Parser.State)], [UnexpectedByte])"))
+		(expr (type "List(U8) -> Try({ rest: Parser.State, value: a }, b) where [a.parser_for : Parser -> (Parser.State -> Try({ rest: Parser.State, value: a }, b))]"))))
 ~~~

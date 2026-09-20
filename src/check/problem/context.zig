@@ -54,6 +54,13 @@ pub const Context = union(enum) {
     /// From a type annotation
     type_annotation,
 
+    /// The post-body polarity audit: the definition produced a tag its
+    /// implicitly opened annotation row does not list (design.md "Polarity").
+    /// Carries the annotated union's region directly, because the producing
+    /// expression is unknown once unification absorbed the tag into the
+    /// opened extension.
+    tag_not_in_annotation: TagNotInAnnotationContext,
+
     /// A record-destructure pattern binding (e.g. `{ x, y } = ...`). Tracked so
     /// the report can suggest `field: _` or `..` when the pattern is too narrow.
     record_destructure,
@@ -311,6 +318,14 @@ pub const Context = union(enum) {
     };
 
     /// Context for method type mismatch (where clause)
+    /// Context for a tag the definition produced beyond its annotation
+    pub const TagNotInAnnotationContext = struct {
+        /// The region of the annotated tag union
+        region: base.Region,
+        /// The first tag the definition produced beyond the annotation
+        tag_name: Ident.Idx,
+    };
+
     pub const RecursiveDef = struct {
         /// The def name
         def_name: ?Ident.Idx,

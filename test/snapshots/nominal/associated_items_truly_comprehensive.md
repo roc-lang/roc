@@ -482,8 +482,8 @@ anno2 = Annotated.L2.alsoTyped                  # 889
 NAME NOT IN SCOPE - associated_items_truly_comprehensive.md:382:20:382:24
 NAME NOT IN SCOPE - associated_items_truly_comprehensive.md:388:12:388:16
 CIRCULAR VALUE DEFINITION - associated_items_truly_comprehensive.md:167:13:167:17
-CIRCULAR VALUE DEFINITION - associated_items_truly_comprehensive.md:167:20:167:24
-CIRCULAR VALUE DEFINITION - associated_items_truly_comprehensive.md:167:27:167:31
+CIRCULAR VALUE DEFINITION - associated_items_truly_comprehensive.md:170:9:170:13
+CIRCULAR VALUE DEFINITION - associated_items_truly_comprehensive.md:173:5:173:9
 # PROBLEMS
 ~~~clojure
 (reports
@@ -529,7 +529,7 @@ CIRCULAR VALUE DEFINITION - associated_items_truly_comprehensive.md:167:27:167:3
 	(report
 		(severity runtime_error)
 		(title "Circular Value Definition")
-		(region (start 167 20) (end 167 24))
+		(region (start 170 9) (end 170 13))
 		(headline
 			(reflow "The value ")
 			(annotated symbol-unqualified "associated_items_truly_comprehensive.D3_Pattern2.L2.val2")
@@ -538,11 +538,11 @@ CIRCULAR VALUE DEFINITION - associated_items_truly_comprehensive.md:167:27:167:3
 			(reflow "Only functions can be recursive. Non-function top-level values must be fully computable without depending on themselves through other values.")
 			(line-break)
 			(line-break)
-			(source-region (file "associated_items_truly_comprehensive.md") (start 167 20) (end 167 24) (annotation error) (line-text "            val3 = val2 + val1                  # Forward refs to L2 and L1 vals (unqualified)"))))
+			(source-region (file "associated_items_truly_comprehensive.md") (start 170 9) (end 170 13) (annotation error) (line-text "        val2 = D3_Pattern2.L2.L3.val3 + 10      # Forward ref to L3 val (qualified)"))))
 	(report
 		(severity runtime_error)
 		(title "Circular Value Definition")
-		(region (start 167 27) (end 167 31))
+		(region (start 173 5) (end 173 9))
 		(headline
 			(reflow "The value ")
 			(annotated symbol-unqualified "associated_items_truly_comprehensive.D3_Pattern2.val1")
@@ -551,7 +551,7 @@ CIRCULAR VALUE DEFINITION - associated_items_truly_comprehensive.md:167:27:167:3
 			(reflow "Only functions can be recursive. Non-function top-level values must be fully computable without depending on themselves through other values.")
 			(line-break)
 			(line-break)
-			(source-region (file "associated_items_truly_comprehensive.md") (start 167 27) (end 167 31) (annotation error) (line-text "            val3 = val2 + val1                  # Forward refs to L2 and L1 vals (unqualified)")))))
+			(source-region (file "associated_items_truly_comprehensive.md") (start 173 5) (end 173 9) (annotation error) (line-text "    val1 = D3_Pattern2.L2.val2 + 5              # Forward ref to L2 val (qualified)")))))
 ~~~
 # TOKENS
 ~~~zig

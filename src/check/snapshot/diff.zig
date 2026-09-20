@@ -179,6 +179,9 @@ fn isLikelyTypo(typo_len: usize, correct_len: usize, dist: u32) bool {
 }
 
 /// Find the best typo suggestion from a slice of identifier indices.
+///
+/// Used by the tag-union and record-field diffs below, so every typo hint a
+/// Type Mismatch renders agrees on what counts as a close match.
 fn findBestTypoSuggestion(
     typo: Ident.Idx,
     candidates: []const Ident.Idx,

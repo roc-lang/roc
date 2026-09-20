@@ -54,7 +54,7 @@ TYPE MISMATCH - issue8738_question_on_non_try.md:9:7:9:30
 			(line-break)
 			(annotation-start code-block)
 			(indent 1)
-			(text "[Exit(a), ..] where [a.from_numeral : Numeral -> Try(a, [InvalidNumeral(Str)])]")
+			(text "[Exit(a)] where [a.from_numeral : Numeral -> Try(a, [InvalidNumeral(Str)])]")
 			(annotation-end)
 			(line-break)
 			(line-break)

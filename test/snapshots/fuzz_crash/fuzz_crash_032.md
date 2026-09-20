@@ -32,6 +32,7 @@ INVALID PATTERN - :0:0:0:0
 UNDECLARED TYPE - fuzz_crash_032.md:8:3:8:4
 EXPECTED NOMINAL TYPE - fuzz_crash_032.md:8:13:8:24
 TYPE MISMATCH - fuzz_crash_032.md:7:10:7:21
+TYPE MISMATCH - fuzz_crash_032.md:7:22:7:30
 # PROBLEMS
 ~~~clojure
 (reports
@@ -332,7 +333,67 @@ TYPE MISMATCH - fuzz_crash_032.md:7:10:7:21
 			(line-break)
 			(annotation-start code-block)
 			(indent 1)
-			(text "[LocalStatus, ..]")
+			(text "[LocalStatus]")
+			(annotation-end)
+			(line-break)
+			(line-break)
+			(reflow "But the previous")
+			(reflow " ")
+			(reflow "branches result")
+			(reflow " ")
+			(reflow "in:")
+			(line-break)
+			(line-break)
+			(annotation-start code-block)
+			(indent 1)
+			(text "tus")
+			(annotation-end)
+			(line-break)
+			(line-break)
+			(reflow "All branches in a")
+			(reflow " ")
+			(annotated code "match")
+			(reflow " ")
+			(reflow "must have compatible types.")
+			(line-break)
+			(annotated underline "Note:")
+			(reflow " ")
+			(reflow "You can wrap branches values in a tag to make them compatible.")
+			(line-break)
+			(reflow "To learn about tags, see")
+			(reflow " ")
+			(link "https://www.roc-lang.org/tutorial#tags")))
+	(report
+		(severity runtime_error)
+		(title "Type Mismatch")
+		(region (start 7 22) (end 7 30))
+		(headline
+			(reflow "The")
+			(reflow " ")
+			(reflow "third")
+			(reflow " ")
+			(reflow "branch of this")
+			(reflow " ")
+			(annotated code "match")
+			(reflow " ")
+			(reflow "does not match the previous")
+			(reflow " ")
+			(reflow "branches")
+			(reflow " ")
+			(reflow "."))
+		(document
+			(source-region (file "fuzz_crash_032.md") (start 7 22) (end 7 30) (annotation error) (line-text "Green => LocalStatus-Complete"))
+			(line-break)
+			(reflow "The")
+			(reflow " ")
+			(reflow "third")
+			(reflow " ")
+			(reflow "branch is:")
+			(line-break)
+			(line-break)
+			(annotation-start code-block)
+			(indent 1)
+			(text "[Complete]")
 			(annotation-end)
 			(line-break)
 			(line-break)
@@ -441,7 +502,13 @@ olor = |color| {
 (can-ir
 	(d-let
 		(p-assign (ident "olor"))
-		(e-runtime-error (tag "erroneous_value_expr"))
+		(e-lambda
+			(args
+				(p-assign (ident "color")))
+			(e-block
+				(s-expr
+					(e-runtime-error (tag "undeclared_type")))
+				(e-runtime-error (tag "erroneous_value_expr"))))
 		(annotation
 			(ty-fn (effectful false)
 				(ty-underscore)
@@ -456,10 +523,10 @@ olor = |color| {
 ~~~clojure
 (inferred-types
 	(defs
-		(patt (type "_arg -> tus")))
+		(patt (type "[Green, RGB, ..] -> tus")))
 	(type_decls
 		(alias (type "Error")
 			(ty-header (name "LocalStatus"))))
 	(expressions
-		(expr (type "_arg -> tus"))))
+		(expr (type "[Green, RGB, ..] -> tus"))))
 ~~~

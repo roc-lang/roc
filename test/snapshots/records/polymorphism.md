@@ -40,7 +40,7 @@ MISSING METHOD - polymorphism.md:6:29:6:35
 			(line-break)
 			(annotation-start code-block)
 			(indent 1)
-			(text "{ pair1: { first: a, second: b }, pair2: { first: c, second: d }, pair3: { first: [True, ..], second: [False, ..] } }")
+			(text "{ pair1: { first: a, second: b }, pair2: { first: c, second: d }, pair3: { first: [True], second: [False] } }")
 			(line-break)
 			(indent 1)
 			(text "  where [")

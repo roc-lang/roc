@@ -194,11 +194,23 @@ pub const Constants = struct {
     ///     in a pattern-only context.
     /// 90: Scheme-use evidence belongs to explicit value and dispatch edges;
     ///     type applications no longer publish spurious value-use records.
-    /// 93: Serialized `SafeMultiList` columns hold live rows only (capacity ==
+    /// 93: A mismatched `if`/`match` branch or return value is reported at and
+    ///     poisons the expression producing its value, leaving the expected
+    ///     result type intact.
+    /// 94: Hosted declarations must have effectful function types and keep
+    ///     their hosted type variables intact.
+    /// 95: Tag unions in annotation output positions are implicitly open
+    ///     (polarity): extensionless unions there carry an anonymous flex
+    ///     extension, while alias declaration bodies and where-method
+    ///     signatures store a rigid deferral marker resolved per use site.
+    ///     Scheme-use records distinguish per-use where-method signature
+    ///     copies from evidence-bearing instantiations, and checked dispatch
+    ///     plans retain independent-callable/nested-evidence-reuse flags.
+    /// 96: Serialized `SafeMultiList` columns hold live rows only (capacity ==
     ///     len) instead of a capacity-sized region, and every persisted byte is
     ///     declared: `Node.Payload` variants fill the union exactly and
     ///     `NumeralLiteral` declares its trailing bytes.
-    pub const CACHE_VERSION = 93;
+    pub const CACHE_VERSION = 96;
 };
 
 /// Configuration for the Roc cache system.

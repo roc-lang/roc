@@ -190,6 +190,7 @@ test "compile tests" {
     std.testing.refAllDecls(@import("test/issue_11310_test.zig"));
     std.testing.refAllDecls(@import("test/issue_11311_test.zig"));
     std.testing.refAllDecls(@import("test/issue_11338_test.zig"));
+    std.testing.refAllDecls(@import("test/issue_11387_test.zig"));
     std.testing.refAllDecls(@import("test/package_effect_boundary_test.zig"));
     std.testing.refAllDecls(@import("test/tce_capture_test.zig"));
     std.testing.refAllDecls(@import("test/list_map_target_independent_lir_test.zig"));
@@ -199,6 +200,8 @@ test "compile tests" {
     std.testing.refAllDecls(@import("test/specialization_epoch_test.zig"));
     std.testing.refAllDecls(@import("test/range_prove_test.zig"));
     std.testing.refAllDecls(@import("test/parallel_fusion_test.zig"));
+    std.testing.refAllDecls(@import("test/parallel_spec_constr_test.zig"));
+    std.testing.refAllDecls(@import("test/native_artifact_parallel_test.zig"));
     std.testing.refAllDecls(@import("test/match_corpus_test.zig"));
     std.testing.refAllDecls(@import("test/url_package_test.zig"));
     std.testing.refAllDecls(@import("test/dbg_runtime_error_test.zig"));

@@ -177,7 +177,7 @@ main = run(Wrap.W(42.U8))
 		(e-lambda
 			(args
 				(p-assign (ident "v")))
-			(e-dispatch-call (method "unwrap") (constraint-fn-var 294)
+			(e-dispatch-call (method "unwrap") (constraint-fn-var 296)
 				(receiver
 					(e-lookup-local
 						(p-assign (ident "v"))))

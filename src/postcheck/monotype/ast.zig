@@ -983,7 +983,7 @@ pub const Expr = struct {
 /// An immutable root-slot read. The initializer supplies representation and
 /// lambda-set evidence; it is never evaluated by the read itself.
 pub const ComptimeValue = struct {
-    root: Common.ComptimeValueRoot,
+    root: Common.ComptimeValueRootId,
     initializer: ExprId,
 };
 
@@ -1377,6 +1377,7 @@ pub const ProgramView = struct {
     layout_requests: []const LayoutRequest,
     runtime_schema_requests: []const RuntimeSchemaRequest,
     static_data_values: []const StaticDataValue,
+    comptime_value_roots: []const Common.ComptimeValueRoot,
     comptime_sites: []const ComptimeSite,
     source_files: []const base.SourceFileEntry,
     expr_locs: []const base.SourceLoc,
@@ -1385,6 +1386,10 @@ pub const ProgramView = struct {
     stmt_regions: []const base.Region,
     local_names: []const []const u8,
     next_symbol: u32,
+
+    pub fn getComptimeValueRoot(self: ProgramView, id: Common.ComptimeValueRootId) Common.ComptimeValueRoot {
+        return self.comptime_value_roots[@intFromEnum(id)];
+    }
 
     pub fn fnSource(self: ProgramView, id: FnId) FnTemplate {
         const raw = @intFromEnum(id);
@@ -1554,6 +1559,8 @@ pub const ProgramBuilder = struct {
     layout_requests: ProgramList(LayoutRequest, "layout_requests"),
     runtime_schema_requests: ProgramList(RuntimeSchemaRequest, "runtime_schema_requests"),
     static_data_values: ProgramList(StaticDataValue, "static_data_values"),
+    /// Immutable descriptors live outside hot expression rows.
+    comptime_value_roots: ProgramList(Common.ComptimeValueRoot, "comptime_value_roots") = .empty,
     comptime_sites: ProgramList(ComptimeSite, "comptime_sites"),
     /// Source file table for `SourceLoc.file` indices (module display and
     /// package-qualified names, owned by this program).
@@ -1630,6 +1637,7 @@ pub const ProgramBuilder = struct {
         errdefer result.deinit();
         result.names = try self.names.clone(allocator);
         result.types = try self.types.cloneFrozen(allocator);
+        try result.comptime_value_roots.appendSlice(allocator, self.comptime_value_roots.unsafeRawItemsForView());
         inline for (.{ "specs", "fns", "const_fn_evidence", "const_fn_evidence_frames", "defs", "nested_defs", "exprs", "pats", "stmts", "locals", "expr_ids", "pat_ids", "typed_locals", "stmt_ids", "field_exprs", "field_access_segments", "fn_def_captures", "capture_operands", "record_destructs", "str_pattern_steps", "branches", "if_branches", "roots", "layout_requests", "runtime_schema_requests", "static_data_values", "expr_locs", "expr_regions", "stmt_locs", "stmt_regions" }) |field| {
             try @field(result, field).appendSlice(allocator, @field(self, field).unsafeRawItemsForView());
         }
@@ -1694,6 +1702,7 @@ pub const ProgramBuilder = struct {
             self.allocator.free(site.branch_regions);
         }
         self.comptime_sites.deinit(self.allocator);
+        self.comptime_value_roots.deinit(self.allocator);
         self.static_data_values.deinit(self.allocator);
         self.runtime_schema_requests.deinit(self.allocator);
         self.layout_requests.deinit(self.allocator);
@@ -1882,6 +1891,7 @@ pub const ProgramBuilder = struct {
             .layout_requests = self.layout_requests.unsafeRawItemsForView(),
             .runtime_schema_requests = self.runtime_schema_requests.unsafeRawItemsForView(),
             .static_data_values = self.static_data_values.unsafeRawItemsForView(),
+            .comptime_value_roots = self.comptime_value_roots.unsafeRawItemsForView(),
             .comptime_sites = self.comptime_sites.unsafeRawItemsForView(),
             .source_files = self.source_files.unsafeRawItemsForView(),
             .expr_locs = self.expr_locs.unsafeRawItemsForView(),
@@ -1891,6 +1901,16 @@ pub const ProgramBuilder = struct {
             .local_names = self.local_names.unsafeRawItemsForView(),
             .next_symbol = self.next_symbol,
         };
+    }
+
+    pub fn getComptimeValueRoot(self: *const ProgramBuilder, id: Common.ComptimeValueRootId) Common.ComptimeValueRoot {
+        return self.comptime_value_roots.get(@intFromEnum(id));
+    }
+
+    pub fn addComptimeValueRoot(self: *ProgramBuilder, root: Common.ComptimeValueRoot) std.mem.Allocator.Error!Common.ComptimeValueRootId {
+        const id: Common.ComptimeValueRootId = @enumFromInt(@as(u32, @intCast(self.comptime_value_roots.len())));
+        try self.comptime_value_roots.append(self.allocator, root);
+        return id;
     }
 
     pub fn addExpr(self: *ProgramBuilder, expr: Expr) std.mem.Allocator.Error!ExprId {
@@ -2799,6 +2819,13 @@ fn cloneFrozenForAllocationTest(allocator: std.mem.Allocator, source: *const Pro
     defer copy.deinit();
 }
 
+test "compile-time descriptors stay outside compact expression rows" {
+    comptime {
+        std.debug.assert(@sizeOf(Expr) <= 64);
+        std.debug.assert(@sizeOf(ExprData) <= 64);
+    }
+}
+
 test "frozen Monotype forks retain identities and own literal and diagnostic storage" {
     const allocator = std.testing.allocator;
     var source = Program.init(allocator);
@@ -2813,13 +2840,34 @@ test "frozen Monotype forks retain identities and own literal and diagnostic sto
     const site = try source.addComptimeSite(.if_, .zero(), null, &.{.zero()});
     const name = try source.names.internExportName("entry");
     try source.proc_debug_names.put(@enumFromInt(1), name);
+    const root_a: Common.ComptimeValueRoot = .{
+        .module = std.mem.zeroes(check.CheckedModule.ModuleId),
+        .root = @enumFromInt(7),
+        .const_locator = null,
+    };
+    var root_b = root_a;
+    root_b.module.bytes[0] = 1;
+    root_b.const_locator = .{
+        .artifact = root_b.module,
+        .owner = .{ .hoisted_expr = .{ .module_idx = 1, .expr = @enumFromInt(2) } },
+        .template = @enumFromInt(3),
+        .source_scheme = std.mem.zeroes(@FieldType(check.CheckedModule.ConstLocator, "source_scheme")),
+    };
+    const root_a_id = try source.addComptimeValueRoot(root_a);
+    const root_b_id = try source.addComptimeValueRoot(root_b);
+    try std.testing.expect(root_a_id != root_b_id);
+    try std.testing.expectEqualDeep(root_a, source.view().getComptimeValueRoot(root_a_id));
+    try std.testing.expectEqualDeep(root_b, source.getComptimeValueRoot(root_b_id));
     source.freeze();
     try std.testing.checkAllAllocationFailures(allocator, cloneFrozenForAllocationTest, .{&source});
     var copy = try source.cloneFrozen(allocator);
     defer copy.deinit();
+    try std.testing.expect(source.view().comptime_value_roots.ptr != copy.view().comptime_value_roots.ptr);
     try std.testing.expect(source.stringLiteral(literal).backing.ptr != copy.stringLiteral(literal).backing.ptr);
     source.deinit();
     source_owned = false;
+    try std.testing.expectEqualDeep(root_a, copy.getComptimeValueRoot(root_a_id));
+    try std.testing.expectEqualDeep(root_b, copy.view().getComptimeValueRoot(root_b_id));
     try std.testing.expectEqual(ty, copy.getExpr(expr).ty);
     try std.testing.expectEqual(literal, copy.getExpr(expr).data.str_lit);
     try std.testing.expectEqualStrings("value", copy.stringLiteralText(literal));

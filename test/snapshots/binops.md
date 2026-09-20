@@ -61,7 +61,7 @@ TYPE MISMATCH - binops.md:16:5:16:5
 			(line-break)
 			(annotation-start code-block)
 			(indent 1)
-			(text "[None, ..]")
+			(text "[None]")
 			(annotation-end)
 			(line-break)
 			(line-break)
