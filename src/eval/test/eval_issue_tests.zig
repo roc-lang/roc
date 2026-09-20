@@ -203,6 +203,101 @@ const issue10703DualAliasSource =
 /// Public value `tests`.
 pub const tests = [_]TestCase{
     .{
+        .name = "issue 11471: generic alias chains preserve parser and encoder element types",
+        .source_kind = .module,
+        .source =
+        \\Item(a) : { uri : a }
+        \\Entry : Item(Str)
+        \\Envelope : { items : List(Entry) }
+        \\roundtrip : Str -> (U64, Str)
+        \\roundtrip = |json| {
+        \\    parsed : Try(Envelope, _)
+        \\    parsed = Json.parse(json)
+        \\    match parsed {
+        \\        Ok(record) => (record.items.len(), Json.to_str(record))
+        \\        Err(_) => (0, "failed")
+        \\    }
+        \\}
+        \\main = roundtrip("{\"items\":[{\"uri\":\"a\"}]}")
+        ,
+        .expected = .{ .inspect_str = "(1, \"{\\\"items\\\":[{\\\"uri\\\":\\\"a\\\"}]}\")" },
+    },
+    .{
+        .name = "issue 11471: primitive alias list elements retain their parser",
+        .source_kind = .module,
+        .source =
+        \\Item : U64
+        \\count : Str -> U64
+        \\count = |json| {
+        \\    parsed : Try({ items : List(Item) }, _)
+        \\    parsed = Json.parse(json)
+        \\    match parsed {
+        \\        Ok(record) => record.items.len()
+        \\        Err(_) => 0
+        \\    }
+        \\}
+        \\main = count("{\"items\":[1,2]}")
+        ,
+        .expected = .{ .inspect_str = "2" },
+    },
+    .{
+        .name = "issue 11471: captured aliases preserve distinct nominal method dispatch",
+        .source_kind = .module,
+        .source =
+        \\First := { value : U64 }.{
+        \\    score : First -> U64
+        \\    score = |x| x.value + 1
+        \\}
+        \\Second := { value : U64 }.{
+        \\    score : Second -> U64
+        \\    score = |x| x.value + 2
+        \\}
+        \\A : First
+        \\B : Second
+        \\capture : A, B -> ({} -> U64)
+        \\capture = |a, b| |{}| a.score() + b.score()
+        \\saved = capture(First.{ value: 10 }, Second.{ value: 10 })
+        \\main = saved({})
+        ,
+        .expected = .{ .inspect_str = "23" },
+    },
+    .{
+        .name = "issue 11471: alias over a recursive nominal preserves recursion and values",
+        .source_kind = .module,
+        .source =
+        \\Chain := [End, Next(Str, Chain)]
+        \\Link : Chain
+        \\length : Link -> U64
+        \\length = |link| match link {
+        \\    End => 0
+        \\    Next(_, rest) => 1 + length(rest)
+        \\}
+        \\stored : Link
+        \\stored = Chain.Next("a", Chain.Next("b", Chain.End))
+        \\main = length(stored)
+        ,
+        .expected = .{ .inspect_str = "2" },
+    },
+    .{
+        .name = "issue 11471: a length method call on a parsed list field of an aliased element type",
+        .source_kind = .module,
+        .source =
+        \\Item : { uri : Str }
+        \\count : Str -> U64
+        \\count = |json| {
+        \\    parsed : Try({ items : List(Item) }, _)
+        \\    parsed = Json.parse(json)
+        \\    match parsed {
+        \\        Ok(record) => record.items.len()
+        \\        Err(_) => 0
+        \\    }
+        \\}
+        \\main : U64
+        \\main = count("{\"items\":[{\"uri\":\"a\"}]}")
+        ,
+        .expected = .{ .inspect_str = "1" },
+    },
+    .{
         .name = "issue 11376: packed record constants preserve field order and mixed widths",
         .source_kind = .module,
         .source =

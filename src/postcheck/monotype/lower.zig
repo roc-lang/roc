@@ -4407,10 +4407,6 @@ const Builder = struct {
         };
     }
 
-    fn declaredModuleForAlias(_: *Builder, _: ModuleView, alias: checked.CheckedAliasType) names.CheckedModuleDigest {
-        return moduleDigestFromId(alias.owner_module);
-    }
-
     fn declaredModuleForNominal(_: *Builder, _: ModuleView, nominal: checked.CheckedNominalType) names.CheckedModuleDigest {
         return moduleDigestFromId(nominal.owner_module);
     }
@@ -7778,6 +7774,16 @@ const Builder = struct {
         const raw = @intFromEnum(checked_ty);
         if (raw >= view.types.payloadCount()) Common.invariant("checked type id outside checked type store");
 
+        // Aliases have no runtime identity. Resolve them before reserving a
+        // type slot, matching BodyContext.instNodeContent. Checking rejects
+        // recursive aliases; any recursive nominal backing reserves its own
+        // slot before visiting children, so alias chains preserve that knot.
+        if (view.types.payload(checked_ty) == .alias) {
+            const backing = try self.lowerType(view, view.types.payload(checked_ty).alias.backing);
+            try cache.put(address, backing);
+            return backing;
+        }
+
         const Context = struct {
             builder: *Builder,
             address: CheckedTypeAddress,
@@ -7821,20 +7827,7 @@ const Builder = struct {
                     .ret = try self.lowerType(view, fn_ty.ret),
                 } };
             },
-            .alias => |alias| blk: {
-                const args = try self.lowerTypeSlice(view, alias.args);
-                defer self.allocator.free(args);
-                break :blk .{ .named = .{
-                    .named_type = .{ .module = self.declaredModuleForAlias(view, alias), .ty = checked_ty },
-                    .def = try self.typeDef(view, alias.origin_module, alias.name, alias.source_decl),
-                    .kind = .alias,
-                    .args = try self.activeTypeStore().addSpan(args),
-                    .backing = .{
-                        .ty = try self.lowerType(view, alias.backing),
-                        .use = .inspectable,
-                    },
-                } };
-            },
+            .alias => Common.invariant("transparent alias reached Monotype type-slot construction"),
             .nominal => |nominal| blk: {
                 switch (nominal.representation) {
                     .builtin => |builtin| switch (checked.builtinRuntimeEncoding(builtin)) {
@@ -36266,6 +36259,14 @@ const BodyContext = struct {
         map: *collections.DenseMap(check.ConstStore.ConstTypeId, Type.TypeId),
     ) Allocator.Error!Type.TypeId {
         if (map.get(ty)) |existing| return existing;
+        const stored = store_view.const_store.type_store.get(ty);
+        if (stored == .named and stored.named.kind == .alias) {
+            const backing = stored.named.backing orelse
+                Common.invariant("stored transparent alias had no backing type");
+            const lowered = try self.lowerConstCaptureTypeInner(store_view, backing.ty, map);
+            try map.put(ty, lowered);
+            return lowered;
+        }
         const context = ConstTypeLowerContext{
             .body = self,
             .store_view = store_view,
@@ -59677,7 +59678,7 @@ fn monotypeNamedKind(kind: check.ConstStore.TypeNamedKind) Type.NamedKind {
     return switch (kind) {
         .nominal => .nominal,
         .@"opaque" => .@"opaque",
-        .alias => .alias,
+        .alias => Common.invariant("stored transparent alias reached Monotype type-slot construction"),
     };
 }
 
@@ -62294,6 +62295,58 @@ test "function context identity excludes draft local allocation ids" {
     restored[0].binder += 1;
     const different_binder_key = BodyContext.lexicalContextKeyFromEntries(base_key, &restored);
     try std.testing.expect(!std.mem.eql(u8, &original_key.bytes, &different_binder_key.bytes));
+}
+
+test "issue 11471: stored capture alias chains share their backing identity" {
+    const gpa = std.testing.allocator;
+    var program = Ast.Program.init(gpa);
+    defer program.deinit();
+    const graph = try InstGraph.create(gpa, &program.types, &program.names);
+    defer graph.destroy();
+    var draft = BodyDraftStore.init(gpa);
+    defer draft.deinit();
+    var source_names = names.NameStore.init(gpa);
+    defer source_names.deinit();
+    var stored = checked.ConstStore.init(gpa);
+    defer stored.deinit();
+    const backing = try stored.type_store.append(.{ .primitive = .u64 });
+    const first = try stored.type_store.append(.{ .named = .{
+        .named_type = .{ .module = .{}, .ty = @enumFromInt(1) },
+        .def = .{
+            .module = try source_names.internModuleIdentity(&([_]u8{0} ** 32)),
+            .type_name = try source_names.internTypeName("Count"),
+        },
+        .kind = .alias,
+        .args = .{},
+        .backing = .{ .ty = backing, .use = .inspectable },
+    } });
+    var second_type = stored.type_store.get(first);
+    second_type.named.named_type.ty = @enumFromInt(2);
+    second_type.named.def.type_name = try source_names.internTypeName("OtherCount");
+    second_type.named.backing.?.ty = first;
+    const second = try stored.type_store.append(second_type);
+    const tuple = try stored.type_store.append(.{
+        .tuple = try stored.type_store.appendTypeSpan(&.{ first, second, backing }),
+    });
+    var view: ModuleView = undefined;
+    view.const_store = &stored;
+    view.names = &source_names;
+    var builder: Builder = undefined;
+    builder.program = &program;
+    var ctx: BodyContext = undefined;
+    ctx.allocator = gpa;
+    ctx.builder = &builder;
+    ctx.graph = graph;
+    ctx.draft = &draft;
+    var map = collections.DenseMap(check.ConstStore.ConstTypeId, Type.TypeId).init(gpa);
+    defer map.deinit();
+
+    const lowered = try ctx.lowerConstCaptureTypeInner(view, tuple, &map);
+    const items = program.types.span(program.types.get(lowered).tuple);
+    try std.testing.expectEqual(GuardedList.at(items, 0), GuardedList.at(items, 1));
+    try std.testing.expectEqual(GuardedList.at(items, 1), GuardedList.at(items, 2));
+    try std.testing.expectEqual(GuardedList.at(items, 0), try ctx.lowerConstCaptureTypeInner(view, second, &map));
+    try std.testing.expectEqual(@as(usize, 2), program.types.typeCount());
 }
 
 test "issue 11362: checked instantiation allocates placeholders only for recursive lookups" {
