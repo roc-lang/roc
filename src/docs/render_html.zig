@@ -199,8 +199,10 @@ const RenderContext = struct {
     pub const ActiveDoc = struct {
         /// Full doc-comment string currently being walked.
         doc: []const u8 = "",
-        /// Resolved shorthand references in `doc`.
+        /// Resolved shorthand references in `doc`, in the order they appear.
         refs: []const DocModel.DocRef = &.{},
+        /// How far `takeActiveDocRef` has consumed `refs`.
+        next_ref: usize = 0,
         /// 1-based source line of the first character of `doc`. Zero
         /// when unknown—broken-link reports then get `source_line = 0`.
         start_line: u32 = 0,
@@ -269,15 +271,15 @@ const RenderContext = struct {
         return self.builtin_modules.contains(module_name);
     }
 
-    /// Record a broken `[Name]` reference. `bracket_offset` is the byte
-    /// offset of the `[` within the active doc comment; together with
+    /// Record a broken `[Name]` reference. `byte_offset` is the byte offset
+    /// of the `[` within the active doc comment; together with
     /// `active_doc.start_line` it pins the report to a source line.
     /// No-op when collection is disabled.
     fn reportBrokenLink(
         self: *const RenderContext,
         label: []const u8,
         resolved_anchor: []const u8,
-        bracket_offset: usize,
+        byte_offset: u32,
     ) Allocator.Error!void {
         const list = self.broken_links orelse return;
         const gpa = self.broken_links_gpa orelse return;
@@ -287,7 +289,7 @@ const RenderContext = struct {
         const source_line: u32 = if (active.start_line == 0)
             0
         else blk: {
-            const end = @min(bracket_offset, active.doc.len);
+            const end = @min(@as(usize, byte_offset), active.doc.len);
             var newlines: u32 = 0;
             for (active.doc[0..end]) |c| {
                 if (c == '\n') newlines += 1;
@@ -822,7 +824,7 @@ fn writeModulePageToDir(ctx: *const RenderContext, gpa: Allocator, io: std.Io, d
         null;
     if (doc_with_line) |dwl| {
         try w.writeAll("        <div class=\"module-doc\">\n");
-        try renderDocComment(w, ctx, dwl.doc, dwl.refs, dwl.start_line);
+        try renderDocComment(w, ctx, gpa, dwl.doc, dwl.refs, dwl.start_line);
         try w.writeAll("        </div>\n");
         try writeDocsStreamChunk(w);
     }
@@ -1285,7 +1287,7 @@ fn renderEntryTree(
             if (entry.doc_comment) |doc| {
                 try writeIndent(w, base + 1);
                 try w.writeAll("<div class=\"entry-doc\">\n");
-                try renderDocComment(w, ctx, doc, entry.doc_refs, entry.doc_comment_start_line);
+                try renderDocComment(w, ctx, gpa, doc, entry.doc_refs, entry.doc_comment_start_line);
                 try writeIndent(w, base + 1);
                 try w.writeAll("</div>\n");
             }
@@ -1772,199 +1774,70 @@ fn renderEntrySignature(w: Writer, ctx: *const RenderContext, gpa: Allocator, en
 fn renderDocComment(
     w: Writer,
     ctx: *const RenderContext,
+    gpa: Allocator,
     doc: []const u8,
     refs: []const DocModel.DocRef,
     start_line: u32,
 ) (Allocator.Error || error{WriteFailed})!void {
-    // Track the active doc so writeDocRefHref can resolve a `[label]` byte
-    // offset within `doc` back to a 1-based source line. Restored on exit
-    // to support nested rendering (e.g. a module doc above an entry doc).
+    // Track the active doc so `renderShorthandRef` can match each `[label]`
+    // it encounters against the refs the resolver collected from this same
+    // doc. Restored on exit to support nested rendering (e.g. a module doc
+    // above an entry doc).
     const previous = ctx.active_doc.*;
     defer ctx.active_doc.* = previous;
     ctx.active_doc.* = .{ .doc = doc, .refs = refs, .start_line = start_line };
 
-    var pos: usize = 0;
+    try render_markdown.renderDocComment(w, gpa, doc, doc_comment_indent, .{
+        .ctx = ctx,
+        .render = renderShorthandRef,
+    });
+}
 
-    while (true) {
-        const fence_pos = findCodeFence(doc, pos) orelse {
-            // No more code fences; render the rest as paragraphs
-            try renderParagraphs(w, ctx, doc[pos..]);
-            break;
-        };
+/// Indent written before each block element of a rendered doc comment.
+const doc_comment_indent = "                ";
 
-        // Render text before the code fence as paragraphs
-        if (fence_pos > pos) {
-            try renderParagraphs(w, ctx, doc[pos..fence_pos]);
+/// Renders a `[Str]`/`[Str.reserve]` shorthand reference as a link to the
+/// entry it names. Installed as the Markdown renderer's doc-comment hook, so
+/// it is called for every `[` that isn't a `[label](url)` link; returns null
+/// when the bracket isn't a shorthand reference either.
+fn renderShorthandRef(
+    erased_ctx: *const anyopaque,
+    w: Writer,
+    text: []const u8,
+    start: usize,
+) (Allocator.Error || error{WriteFailed})!?usize {
+    const ctx: *const RenderContext = @ptrCast(@alignCast(erased_ctx));
+    const ref = DocModel.parseDocRef(text, start) orelse return null;
+
+    try w.writeAll("<a href=\"");
+    if (takeActiveDocRef(ctx, ref.label)) |resolved| {
+        try writeDocRefHref(w, ctx, resolved);
+    } else {
+        try writeMissingDocRefHref(w, ctx, ref.label);
+    }
+    try w.writeAll("\"><code>");
+    try writeHtmlEscaped(w, ref.label);
+    try w.writeAll("</code></a>");
+    return ref.end;
+}
+
+/// Finds the resolved reference for the `[label]` the renderer just reached.
+///
+/// A label always resolves to the same target (`resolveLabel` is a function of
+/// the label alone), so any ref with a matching label carries the right link.
+/// The refs were collected in the order they appear in the doc and the
+/// renderer walks them in that same order, so consuming them with a cursor
+/// also pins down *which* occurrence this is—and with it the source line to
+/// report if the target turns out not to exist. Refs the resolver never saw
+/// (a shorthand nested inside a Markdown link label, which it skips over) find
+/// no match and are reported as broken.
+fn takeActiveDocRef(ctx: *const RenderContext, label: []const u8) ?*const DocModel.DocRef {
+    const active = ctx.active_doc;
+    for (active.refs[active.next_ref..], active.next_ref..) |*ref, i| {
+        if (std.mem.eql(u8, ref.label, label)) {
+            active.next_ref = i + 1;
+            return ref;
         }
-
-        // Skip past the opening fence line (```roc, ```, etc.)
-        pos = skipLine(doc, fence_pos);
-
-        // Find the closing fence
-        const close_pos = findCodeFence(doc, pos) orelse {
-            // Unclosed fence; render the rest as a code block
-            const code = std.mem.trimEnd(u8, doc[pos..], "\n\r");
-            if (code.len > 0) {
-                try w.writeAll("                <pre><code>");
-                try writeHtmlEscaped(w, code);
-                try w.writeAll("</code></pre>\n");
-            }
-            break;
-        };
-
-        // Render the code block content
-        const code = std.mem.trimEnd(u8, doc[pos..close_pos], "\n\r");
-        if (code.len > 0) {
-            try w.writeAll("                <pre><code>");
-            try writeHtmlEscaped(w, code);
-            try w.writeAll("</code></pre>\n");
-        }
-
-        // Skip past the closing fence line
-        pos = skipLine(doc, close_pos);
-    }
-}
-
-/// Returns the byte position of the next ``` that starts at a line boundary,
-/// searching from `start`. Returns null if none is found.
-fn findCodeFence(doc: []const u8, start: usize) ?usize {
-    var i = start;
-    // Ensure we begin at a line boundary; if not, advance to the next one
-    if (i > 0 and (i >= doc.len or doc[i - 1] != '\n')) {
-        while (i < doc.len and doc[i] != '\n') i += 1;
-        if (i < doc.len) i += 1;
-    }
-    while (i + 2 < doc.len) {
-        if (doc[i] == '`' and doc[i + 1] == '`' and doc[i + 2] == '`') {
-            return i;
-        }
-        // Advance to the next line
-        while (i < doc.len and doc[i] != '\n') i += 1;
-        if (i < doc.len) i += 1;
-    }
-    return null;
-}
-
-/// Returns the position right after the newline that ends the line starting at `pos`.
-fn skipLine(doc: []const u8, pos: usize) usize {
-    var i = pos;
-    while (i < doc.len and doc[i] != '\n') i += 1;
-    if (i < doc.len) i += 1;
-    return i;
-}
-
-/// Splits `text` on blank lines and emits each non-empty paragraph as a `<p>` element.
-fn renderParagraphs(w: Writer, ctx: *const RenderContext, text: []const u8) (Allocator.Error || error{WriteFailed})!void {
-    var start: usize = 0;
-    var i: usize = 0;
-    while (i < text.len) {
-        if (i + 1 < text.len and text[i] == '\n' and text[i + 1] == '\n') {
-            // Found a blank line—emit the accumulated paragraph
-            const para = std.mem.trim(u8, text[start..i], " \t\n\r");
-            if (para.len > 0) {
-                try w.writeAll("                <p>");
-                try writeDocText(w, ctx, para);
-                try w.writeAll("</p>\n");
-            }
-            // Skip past all consecutive blank lines
-            while (i < text.len and (text[i] == '\n' or text[i] == '\r')) {
-                i += 1;
-            }
-            start = i;
-        } else {
-            i += 1;
-        }
-    }
-    // Final paragraph (no trailing blank line)
-    const para = std.mem.trim(u8, text[start..], " \t\n\r");
-    if (para.len > 0) {
-        try w.writeAll("                <p>");
-        try writeDocText(w, ctx, para);
-        try w.writeAll("</p>\n");
-    }
-}
-
-/// Writes HTML-escaped text, rendering `inline code` spans as <code> elements,
-/// [label](url) markdown links as <a href> elements, and [ref] shorthand links
-/// to other doc entries (e.g. [Str], [Str.reserve]) as same-page or cross-module
-/// anchors.
-fn writeDocText(w: Writer, ctx: *const RenderContext, text: []const u8) (Allocator.Error || error{WriteFailed})!void {
-    var i: usize = 0;
-    var plain_start: usize = 0;
-    while (i < text.len) {
-        if (text[i] == '`') {
-            // Flush any plain text accumulated before this backtick
-            try writeHtmlEscaped(w, text[plain_start..i]);
-            i += 1;
-            // Find the closing backtick
-            const code_start = i;
-            while (i < text.len and text[i] != '`') i += 1;
-            if (i < text.len) {
-                // Found closing backtick—render as <code>
-                try w.writeAll("<code>");
-                try writeHtmlEscaped(w, text[code_start..i]);
-                try w.writeAll("</code>");
-                i += 1; // skip closing backtick
-            } else {
-                // No closing backtick—treat the opening backtick as literal text
-                try writeHtmlEscaped(w, text[code_start - 1 .. i]);
-            }
-            plain_start = i;
-        } else if (text[i] == '[') {
-            if (DocModel.parseMarkdownLink(text, i)) |link| {
-                try writeHtmlEscaped(w, text[plain_start..i]);
-                try w.writeAll("<a href=\"");
-                try writeHtmlEscaped(w, link.url);
-                try w.writeAll("\">");
-                // Recurse so inline code inside the label still renders
-                try writeDocText(w, ctx, link.label);
-                try w.writeAll("</a>");
-                i = link.end;
-                plain_start = i;
-            } else if (DocModel.parseDocRef(text, i)) |ref| {
-                try writeHtmlEscaped(w, text[plain_start..i]);
-                try w.writeAll("<a href=\"");
-                const bracket_offset = bracketOffsetInActiveDoc(ctx, text, i);
-                if (lookupActiveDocRef(ctx, bracket_offset)) |resolved_ref| {
-                    try writeDocRefHref(w, ctx, resolved_ref, bracket_offset);
-                } else {
-                    try writeMissingDocRefHref(w, ctx, ref.label, bracket_offset);
-                }
-                try w.writeAll("\"><code>");
-                try writeHtmlEscaped(w, ref.label);
-                try w.writeAll("</code></a>");
-                i = ref.end;
-                plain_start = i;
-            } else {
-                i += 1;
-            }
-        } else {
-            i += 1;
-        }
-    }
-    // Flush any remaining plain text
-    try writeHtmlEscaped(w, text[plain_start..]);
-}
-
-/// Compute the byte offset of `text[i]` within `active_doc.doc`, when `text`
-/// is a slice into that doc. Returns the offset, or 0 if the slice is not
-/// inside the active doc (e.g. unit tests that bypass `renderDocComment`).
-fn bracketOffsetInActiveDoc(ctx: *const RenderContext, text: []const u8, i: usize) usize {
-    const doc = ctx.active_doc.doc;
-    if (doc.len == 0 or text.len == 0) return 0;
-    const text_addr = @intFromPtr(text.ptr);
-    const doc_addr = @intFromPtr(doc.ptr);
-    if (text_addr < doc_addr) return 0;
-    const text_offset = text_addr - doc_addr;
-    if (text_offset >= doc.len) return 0;
-    return text_offset + i;
-}
-
-fn lookupActiveDocRef(ctx: *const RenderContext, bracket_offset: usize) ?*const DocModel.DocRef {
-    if (bracket_offset > std.math.maxInt(u32)) return null;
-    const offset: u32 = @intCast(bracket_offset);
-    for (ctx.active_doc.refs) |*ref| {
-        if (ref.byte_offset == offset) return ref;
     }
     return null;
 }
@@ -1975,13 +1848,12 @@ fn writeDocRefHref(
     w: Writer,
     ctx: *const RenderContext,
     ref: *const DocModel.DocRef,
-    bracket_offset: usize,
 ) (Allocator.Error || error{WriteFailed})!void {
     switch (ref.target) {
         .local_anchor => |anchor| {
             try w.writeAll("#");
             try writeHtmlEscaped(w, anchor);
-            try validateAnchor(ctx, ref.label, anchor, false, bracket_offset);
+            try validateAnchor(ctx, ref.label, anchor, ref.byte_offset);
         },
         .module_page => |module| {
             try writeModuleRefPrefix(w, ctx, module);
@@ -1989,7 +1861,7 @@ fn writeDocRefHref(
         .module_anchor => |target| {
             try writeModuleAnchorPrefix(w, ctx, target.module);
             try writeHtmlEscaped(w, target.anchor);
-            try validateAnchor(ctx, ref.label, target.anchor, false, bracket_offset);
+            try validateAnchor(ctx, ref.label, target.anchor, ref.byte_offset);
         },
         .builtin_type => |builtin_ref| {
             try writeBuiltinDocRefUrl(w, builtin_ref);
@@ -1997,20 +1869,23 @@ fn writeDocRefHref(
         .unresolved_anchor => |anchor| {
             try w.writeAll("#");
             try writeHtmlEscaped(w, anchor);
-            try validateAnchor(ctx, ref.label, anchor, false, bracket_offset);
+            try validateAnchor(ctx, ref.label, anchor, ref.byte_offset);
         },
     }
 }
 
+/// Writes the href for a shorthand reference that has no resolved counterpart,
+/// and reports it as broken. The resolver collected a ref for every shorthand
+/// in the doc except those nested inside a Markdown link label, so there is no
+/// recorded position to report; the diagnostic points at the doc's first line.
 fn writeMissingDocRefHref(
     w: Writer,
     ctx: *const RenderContext,
     label: []const u8,
-    bracket_offset: usize,
 ) (Allocator.Error || error{WriteFailed})!void {
     try w.writeAll("#");
     try writeHtmlEscaped(w, label);
-    try ctx.reportBrokenLink(label, label, bracket_offset);
+    try ctx.reportBrokenLink(label, label, 0);
 }
 
 fn writeModuleRefPrefix(w: Writer, ctx: *const RenderContext, module: []const u8) (Allocator.Error || error{WriteFailed})!void {
@@ -2066,20 +1941,15 @@ fn writeBuiltinDocRefUrl(w: Writer, builtin_ref: []const u8) (Allocator.Error ||
 }
 
 /// Report `label` as broken when its resolved anchor isn't in `all_anchors`.
-/// Anchors longer than the stack buffer (`overflow`) are skipped—those are
-/// far longer than any real Roc identifier path, so a false negative there
-/// is preferable to truncating and reporting a phantom mismatch.
 fn validateAnchor(
     ctx: *const RenderContext,
     label: []const u8,
     anchor: []const u8,
-    overflow: bool,
-    bracket_offset: usize,
+    byte_offset: u32,
 ) Allocator.Error!void {
-    if (overflow) return;
     if (anchor.len == 0) return;
     if (ctx.all_anchors.contains(anchor)) return;
-    try ctx.reportBrokenLink(label, anchor, bracket_offset);
+    try ctx.reportBrokenLink(label, anchor, byte_offset);
 }
 
 const MultilineLayoutSet = struct {

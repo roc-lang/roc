@@ -1,16 +1,23 @@
-//! Markdown -> HTML renderer for the language reference ("langref") articles.
+//! Markdown -> HTML renderer for the documentation site: both the language
+//! reference ("langref") articles and the Markdown inside Roc doc comments.
 //!
 //! The langref lives as a directory of CommonMark-ish `.md` files (see
 //! `docs/langref`). When `roc docs --with-lang-ref` is used, those files are
 //! read from disk, ordered to match the README outline, and rendered into the
 //! generated documentation site using the same page chrome as module pages.
+//! Doc comments come from `##` lines in `.roc` sources and are rendered into
+//! the module pages by `render_html.zig`.
 //!
-//! This renderer deliberately supports only the Markdown subset the langref
-//! actually uses: ATX headings (with GitHub-style anchor slugs), fenced code
-//! blocks, ordered/unordered nested lists, GitHub pipe tables, blockquotes,
-//! and inline code/emphasis/links. Relative links between articles (e.g.
-//! `functions#effectful-functions` or `types.md#nominal-types`) are rewritten
-//! to point at the generated article pages.
+//! This renderer supports the Markdown subset the docs actually use: ATX
+//! headings, fenced code blocks, ordered/unordered nested lists, GitHub pipe
+//! tables, blockquotes, and inline code/emphasis/links.
+//!
+//! The two flavors differ only where they must: langref articles get
+//! GitHub-style anchor slugs on their headings and have relative links (e.g.
+//! `functions#effectful-functions` or `types.md#nominal-types`) rewritten to
+//! point at the generated article pages, while doc comments pass their link
+//! URLs through untouched and resolve `[Str.reserve]` shorthand references
+//! through the `DocCommentRefs` hook their caller supplies.
 
 const std = @import("std");
 const Allocator = std.mem.Allocator;
@@ -277,11 +284,35 @@ fn isValidAttrId(id: []const u8) bool {
 
 // Rendering
 
+/// Renders the `[Str.reserve]` shorthand references that appear in Roc doc
+/// comments. Doc comments are the only Markdown here that has them, and
+/// resolving one needs the surrounding module's entry anchors, so both the
+/// parsing and the rendering are left to the caller.
+pub const DocCommentRefs = struct {
+    ctx: *const anyopaque,
+    /// Called for a `[` that did not parse as a `[label](url)` link. Returns
+    /// the index just past the reference it rendered, or null to leave the
+    /// bracket as literal text.
+    render: *const fn (ctx: *const anyopaque, w: Writer, text: []const u8, start: usize) RenderError!?usize,
+};
+
 const RenderCtx = struct {
     w: Writer,
     gpa: Allocator,
     articles: []const Article,
-    slugger: *Slugger,
+    /// Assigns each heading its anchor id. Null for doc comments, whose
+    /// headings get no ids.
+    slugger: ?*Slugger,
+    /// Written before every block-level element, so the generated HTML nests
+    /// under whatever chrome the caller has already opened.
+    block_indent: []const u8 = "            ",
+    /// Non-null when rendering a Roc doc comment rather than a langref
+    /// article. Besides supplying the shorthand-reference hook, it selects the
+    /// doc-comment behavior for the two constructs the flavors disagree on:
+    /// link URLs pass through unrewritten, and headings get no `id` (a module
+    /// page's anchors belong to the doc entries, and the same heading text
+    /// recurs across entries).
+    doc_comment: ?DocCommentRefs = null,
     /// Relative path from the current page to the `langref/` directory, used to
     /// build links to other articles. Empty for the README landing page (served
     /// at `/langref/`, so siblings are bare slugs); "../" for an article page
@@ -290,6 +321,14 @@ const RenderCtx = struct {
     /// Set once the first level-1 heading is skipped (it is rendered as the
     /// page title by `renderArticleBody`).
     h1_consumed: bool = false,
+
+    /// Writes the block indent followed by `rest`, which carries both the
+    /// extra spaces of any nesting inside another block element and the
+    /// markup that opens or closes this one.
+    fn indent(self: *const RenderCtx, rest: []const u8) RenderError!void {
+        try self.w.writeAll(self.block_indent);
+        try self.w.writeAll(rest);
+    }
 };
 
 /// Returns the article's title as plain text (inline formatting removed), for
@@ -355,6 +394,33 @@ pub fn renderArticleBody(
     try w.writeAll("        </section>\n");
 }
 
+/// Renders the Markdown of a Roc doc comment (the text of its `##` lines,
+/// with the `##` prefixes already stripped). Unlike `renderArticleBody` this
+/// emits no page chrome of its own—just the converted blocks, each prefixed
+/// with `block_indent`—because the caller has already opened the element the
+/// doc comment belongs to.
+pub fn renderDocComment(
+    w: Writer,
+    gpa: Allocator,
+    doc: []const u8,
+    block_indent: []const u8,
+    refs: DocCommentRefs,
+) RenderError!void {
+    var lines = std.ArrayList([]const u8).empty;
+    defer lines.deinit(gpa);
+    try splitLines(gpa, doc, &lines);
+
+    var rctx = RenderCtx{
+        .w = w,
+        .gpa = gpa,
+        .articles = &.{},
+        .slugger = null,
+        .block_indent = block_indent,
+        .doc_comment = refs,
+    };
+    try renderBlocks(&rctx, lines.items);
+}
+
 fn splitLines(gpa: Allocator, text: []const u8, out: *std.ArrayList([]const u8)) Allocator.Error!void {
     var start: usize = 0;
     var i: usize = 0;
@@ -391,7 +457,10 @@ fn renderBlocks(rctx: *RenderCtx, lines: []const []const u8) RenderError!void {
 
         // ATX heading.
         if (headingInfo(line)) |h| {
-            if (h.level == 1 and !rctx.h1_consumed) {
+            // An article's first level-1 heading is its page title, rendered
+            // separately by `renderArticleBody`. A doc comment has no title
+            // line of its own, so its `# ` headings all render here.
+            if (h.level == 1 and rctx.doc_comment == null and !rctx.h1_consumed) {
                 rctx.h1_consumed = true;
                 i += 1;
                 continue;
@@ -456,45 +525,49 @@ fn renderParagraph(rctx: *RenderCtx, lines: []const []const u8) RenderError!void
         if (idx > 0) try buf.append(rctx.gpa, '\n');
         try buf.appendSlice(rctx.gpa, std.mem.trim(u8, ln, " \t"));
     }
-    try rctx.w.writeAll("            <p>");
+    try rctx.indent("<p>");
     try renderInline(rctx, buf.items);
     try rctx.w.writeAll("</p>\n");
 }
 
 fn renderHeading(rctx: *RenderCtx, level: u8, text: []const u8, explicit_id: ?[]const u8) RenderError!void {
     const w = rctx.w;
+    const tag: [2]u8 = .{ 'h', '0' + level };
 
-    // An explicit `{#id}` attribute wins; otherwise derive a GitHub-style slug
-    // from the heading text. Either way the id is recorded with the slugger so
-    // later auto-generated slugs don't collide with it.
-    var owned_slug: ?[]u8 = null;
-    defer if (owned_slug) |s| rctx.gpa.free(s);
-    const id: []const u8 = if (explicit_id) |eid| blk: {
-        try rctx.slugger.reserve(eid);
-        break :blk eid;
-    } else blk: {
-        const plain = try plainText(rctx.gpa, text);
-        defer rctx.gpa.free(plain);
-        const slug = try rctx.slugger.makeSlug(plain);
-        owned_slug = slug;
-        break :blk slug;
-    };
+    try rctx.indent("<");
+    try w.writeAll(&tag);
+    if (rctx.doc_comment == null) {
+        // An explicit `{#id}` attribute wins; otherwise derive a GitHub-style
+        // slug from the heading text. Either way the id is recorded with the
+        // slugger so later auto-generated slugs don't collide with it.
+        const slugger = rctx.slugger.?;
+        var owned_slug: ?[]u8 = null;
+        defer if (owned_slug) |s| rctx.gpa.free(s);
+        const id: []const u8 = if (explicit_id) |eid| blk: {
+            try slugger.reserve(eid);
+            break :blk eid;
+        } else blk: {
+            const plain = try plainText(rctx.gpa, text);
+            defer rctx.gpa.free(plain);
+            const slug = try slugger.makeSlug(plain);
+            owned_slug = slug;
+            break :blk slug;
+        };
 
-    var tag: [3]u8 = .{ 'h', '0' + level, 0 };
-    try w.writeAll("            <");
-    try w.writeAll(tag[0..2]);
-    try w.writeAll(" id=\"");
-    try writeEscaped(w, id);
-    try w.writeAll("\">");
+        try w.writeAll(" id=\"");
+        try writeEscaped(w, id);
+        try w.writeAll("\"");
+    }
+    try w.writeAll(">");
     try renderInline(rctx, text);
     try w.writeAll("</");
-    try w.writeAll(tag[0..2]);
+    try w.writeAll(&tag);
     try w.writeAll(">\n");
 }
 
 fn renderCodeBlock(rctx: *RenderCtx, lines: []const []const u8) RenderError!void {
     const w = rctx.w;
-    try w.writeAll("            <pre><code>");
+    try rctx.indent("<pre><code>");
     for (lines, 0..) |ln, idx| {
         if (idx > 0) try w.writeAll("\n");
         try writeEscaped(w, ln);
@@ -503,8 +576,6 @@ fn renderCodeBlock(rctx: *RenderCtx, lines: []const []const u8) RenderError!void
 }
 
 fn renderBlockquote(rctx: *RenderCtx, lines: []const []const u8) RenderError!void {
-    const w = rctx.w;
-
     var inner = std.ArrayList([]const u8).empty;
     defer inner.deinit(rctx.gpa);
     for (lines) |ln| {
@@ -514,42 +585,51 @@ fn renderBlockquote(rctx: *RenderCtx, lines: []const []const u8) RenderError!voi
         try inner.append(rctx.gpa, content);
     }
 
-    try w.writeAll("            <blockquote>\n");
+    try rctx.indent("<blockquote>\n");
     try renderBlocks(rctx, inner.items);
-    try w.writeAll("            </blockquote>\n");
+    try rctx.indent("</blockquote>\n");
 }
 
 fn renderTable(rctx: *RenderCtx, lines: []const []const u8) RenderError!void {
     const w = rctx.w;
     std.debug.assert(lines.len >= 2);
 
-    try w.writeAll("            <table>\n");
+    try rctx.indent("<table>\n");
 
-    // Header row.
-    try w.writeAll("                <thead><tr>");
-    try renderTableCells(rctx, lines[0], "th");
+    // Header row. Its width is what every body row is padded out to.
+    try rctx.indent("    <thead><tr>");
+    const columns = try renderTableCells(rctx, lines[0], "th", 0);
     try w.writeAll("</tr></thead>\n");
 
     // Body rows (lines[1] is the delimiter; further delimiter-looking rows,
     // as used by the numbers table's grid separators, are skipped).
-    try w.writeAll("                <tbody>\n");
+    try rctx.indent("    <tbody>\n");
     for (lines[2..]) |row| {
         if (isTableDelimiter(row)) continue;
-        try w.writeAll("                    <tr>");
-        try renderTableCells(rctx, row, "td");
+        try rctx.indent("        <tr>");
+        _ = try renderTableCells(rctx, row, "td", columns);
         try w.writeAll("</tr>\n");
     }
-    try w.writeAll("                </tbody>\n");
-    try w.writeAll("            </table>\n");
+    try rctx.indent("    </tbody>\n");
+    try rctx.indent("</table>\n");
 }
 
-fn renderTableCells(rctx: *RenderCtx, row: []const u8, comptime cell_tag: []const u8) RenderError!void {
+/// Renders one table row's cells, emitting at least `min_cells` of them so a
+/// row that trails off short of the header still lines up under it. Returns
+/// the number of cells written.
+fn renderTableCells(
+    rctx: *RenderCtx,
+    row: []const u8,
+    comptime cell_tag: []const u8,
+    min_cells: usize,
+) RenderError!usize {
     const w = rctx.w;
     var trimmed = std.mem.trim(u8, row, " \t");
     // Strip the outer pipes if present.
     if (trimmed.len > 0 and trimmed[0] == '|') trimmed = trimmed[1..];
     if (trimmed.len > 0 and trimmed[trimmed.len - 1] == '|') trimmed = trimmed[0 .. trimmed.len - 1];
 
+    var cells: usize = 0;
     var start: usize = 0;
     var i: usize = 0;
     var in_code = false;
@@ -561,9 +641,15 @@ fn renderTableCells(rctx: *RenderCtx, row: []const u8, comptime cell_tag: []cons
             try w.writeAll("<" ++ cell_tag ++ ">");
             try renderInline(rctx, cell);
             try w.writeAll("</" ++ cell_tag ++ ">");
+            cells += 1;
             start = i + 1;
         }
     }
+
+    while (cells < min_cells) : (cells += 1) {
+        try w.writeAll("<" ++ cell_tag ++ "></" ++ cell_tag ++ ">");
+    }
+    return cells;
 }
 
 /// Renders a list starting at `lines[start]` whose items are indented by
@@ -573,7 +659,7 @@ fn renderList(rctx: *RenderCtx, lines: []const []const u8, start: usize, list_in
     const first = listItemInfo(lines[start]).?;
     const ordered = first.ordered;
 
-    try w.writeAll(if (ordered) "            <ol>\n" else "            <ul>\n");
+    try rctx.indent(if (ordered) "<ol>\n" else "<ul>\n");
 
     var i = start;
     while (i < lines.len) {
@@ -592,7 +678,7 @@ fn renderList(rctx: *RenderCtx, lines: []const []const u8, start: usize, list_in
         if (info.indent > list_indent) break; // defensive; nested lists handled below
         if (info.ordered != ordered) break; // a different list type starts a new list
 
-        try w.writeAll("                <li>");
+        try rctx.indent("    <li>");
         try renderInline(rctx, lines[i][info.content_start..]);
         i += 1;
 
@@ -624,7 +710,7 @@ fn renderList(rctx: *RenderCtx, lines: []const []const u8, start: usize, list_in
         try w.writeAll("</li>\n");
     }
 
-    try w.writeAll(if (ordered) "            </ol>\n" else "            </ul>\n");
+    try rctx.indent(if (ordered) "</ol>\n" else "</ul>\n");
     return i;
 }
 
@@ -678,6 +764,18 @@ fn renderInline(rctx: *RenderCtx, text: []const u8) RenderError!void {
                     try w.writeAll("</a>");
                     i = link.end;
                     plain_start = i;
+                } else if (rctx.doc_comment) |refs| {
+                    // The hook writes as it goes, so flush the pending plain
+                    // text first. Resuming from `plain_start = i` leaves the
+                    // `[` itself for the next flush when the hook declines.
+                    try writeEscaped(w, text[plain_start..i]);
+                    plain_start = i;
+                    if (try refs.render(refs.ctx, w, text, i)) |end| {
+                        i = end;
+                        plain_start = i;
+                    } else {
+                        i += 1;
+                    }
                 } else {
                     i += 1;
                 }
@@ -818,6 +916,13 @@ fn parseEmphasis(text: []const u8, start: usize) ?Emphasis {
 fn writeLinkHref(rctx: *RenderCtx, url: []const u8) RenderError!void {
     const w = rctx.w;
     if (url.len == 0) return;
+
+    // Only langref articles have sibling pages to resolve against; a doc
+    // comment's URLs are written to be used as-is.
+    if (rctx.doc_comment != null) {
+        try writeEscaped(w, url);
+        return;
+    }
 
     // Anchors, absolute paths, and external/scheme URLs pass through unchanged.
     if (url[0] == '#' or url[0] == '/') {
@@ -1359,6 +1464,20 @@ test "conditionals links resolve to the if-else page" {
     try testing.expectEqualStrings("if-else", linkTargetSlug("conditionals.md#if").?);
 }
 
+test "renderArticleBody pads a short row out to the header's width" {
+    const gpa = testing.allocator;
+    const md =
+        "# T\n\nA | B | C\n:-: | :-: | :-:\n0 |  |\n";
+    const article = Article{
+        .slug = "t",
+        .title = "T",
+        .source_path = "",
+        .markdown = md,
+        .is_index = false,
+    };
+    try expectBody(gpa, &article, "<tr><td>0</td><td></td><td></td></tr>");
+}
+
 test "renderArticleBody renders a pipe table" {
     const gpa = testing.allocator;
     const md =
@@ -1372,4 +1491,92 @@ test "renderArticleBody renders a pipe table" {
     };
     try expectBody(gpa, &article, "<thead><tr><th>A</th><th>B</th></tr></thead>");
     try expectBody(gpa, &article, "<td>1</td><td>2</td>");
+}
+
+/// Stands in for `render_html.zig`'s shorthand-ref hook: renders `[Label]` as
+/// a bare link so the doc-comment tests can check that block constructs reach
+/// the hook, without pulling in a whole `RenderContext`.
+fn testShorthandRef(_: *const anyopaque, w: Writer, text: []const u8, start: usize) RenderError!?usize {
+    const close = std.mem.findScalarPos(u8, text, start, ']') orelse return null;
+    const label = text[start + 1 .. close];
+    if (label.len == 0 or std.mem.findScalar(u8, label, ' ') != null) return null;
+    try w.writeAll("<a href=\"#");
+    try writeEscaped(w, label);
+    try w.writeAll("\"><code>");
+    try writeEscaped(w, label);
+    try w.writeAll("</code></a>");
+    return close + 1;
+}
+
+fn renderDocCommentForTest(gpa: Allocator, doc: []const u8) Allocator.Error![]u8 {
+    var aw = std.Io.Writer.Allocating.init(gpa);
+    errdefer aw.deinit();
+    renderDocComment(&aw.writer, gpa, doc, "", .{
+        .ctx = undefined, // testShorthandRef needs no context
+
+        .render = testShorthandRef,
+    }) catch |err| switch (err) {
+        error.OutOfMemory => return error.OutOfMemory,
+        error.WriteFailed => unreachable, // Allocating writer only fails on OOM
+    };
+    return aw.toOwnedSlice();
+}
+
+fn expectDocComment(gpa: Allocator, doc: []const u8, expected: []const u8) !void {
+    const html = try renderDocCommentForTest(gpa, doc);
+    defer gpa.free(html);
+    testing.expect(std.mem.find(u8, html, expected) != null) catch |err| {
+        std.debug.print("expected to find:\n{s}\nin:\n{s}\n", .{ expected, html });
+        return err;
+    };
+}
+
+test "renderDocComment converts ATX headings" {
+    const gpa = testing.allocator;
+    const doc =
+        \\Run the given function on each item.
+        \\
+        \\## Performance Details
+        \\
+        \\It allocates once.
+    ;
+    try expectDocComment(gpa, doc, "<p>Run the given function on each item.</p>");
+    try expectDocComment(gpa, doc, "<h2>Performance Details</h2>");
+    try expectDocComment(gpa, doc, "<p>It allocates once.</p>");
+
+    // Doc-comment headings carry no id: a module page's anchors belong to its
+    // doc entries, and the same heading text recurs across them.
+    const html = try renderDocCommentForTest(gpa, doc);
+    defer gpa.free(html);
+    try testing.expect(std.mem.find(u8, html, "id=") == null);
+
+    // A level-1 heading is not swallowed as a title the way an article's is.
+    try expectDocComment(gpa, "# Top\n\nbody\n", "<h1>Top</h1>");
+}
+
+test "renderDocComment converts the rest of the Markdown block set" {
+    const gpa = testing.allocator;
+    try expectDocComment(gpa, "- one\n- two\n", "<ul>\n    <li>one</li>\n    <li>two</li>\n</ul>");
+    try expectDocComment(gpa, "1. first\n", "<ol>\n    <li>first</li>\n</ol>");
+    try expectDocComment(gpa, "> quoted\n", "<blockquote>\n<p>quoted</p>\n</blockquote>");
+    try expectDocComment(gpa, "```roc\nList.len([1])\n```\n", "<pre><code>List.len([1])</code></pre>");
+    try expectDocComment(gpa, "| A | B |\n|---|---|\n| 1 | 2 |\n", "<th>A</th><th>B</th>");
+    try expectDocComment(gpa, "Uses _emphasis_ and `code`.\n", "<p>Uses <em>emphasis</em> and <code>code</code>.</p>");
+    // Roc identifiers are full of underscores, and those are not emphasis.
+    try expectDocComment(gpa, "Calls keep_if and drop_if.\n", "<p>Calls keep_if and drop_if.</p>");
+}
+
+test "renderDocComment passes link URLs through and hands brackets to the hook" {
+    const gpa = testing.allocator;
+    // Doc comments have no sibling articles to resolve against, so a URL is
+    // written exactly as the author typed it.
+    try expectDocComment(gpa, "See [the guide](tutorial.md#lists).\n", "<a href=\"tutorial.md#lists\">the guide</a>");
+
+    // Shorthand refs reach the hook from inside every block construct, not
+    // just paragraphs.
+    try expectDocComment(gpa, "## See [List.keep_if]\n", "<h2>See <a href=\"#List.keep_if\"><code>List.keep_if</code></a></h2>");
+    try expectDocComment(gpa, "- see [Str.reserve]\n", "<li>see <a href=\"#Str.reserve\"><code>Str.reserve</code></a></li>");
+
+    // A bracket the hook declines stays literal text.
+    try expectDocComment(gpa, "An [unclosed bracket.\n", "<p>An [unclosed bracket.</p>");
 }
