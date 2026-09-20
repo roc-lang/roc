@@ -11632,7 +11632,7 @@ conventions discard the surplus argument silently, while a Wasm `call_indirect`
 compares the signature and traps.
 
 The erased-callable `Payload.on_drop` slot is the one exception, because glue
-publishes it to Zig, Rust, and C hosts as `(capture, ops)`. The `host_drop`
+presents it to Zig, Rust, and C hosts as `(capture, ops)`. The `host_drop`
 operation names the generated adapter that presents that signature and performs
 the layout's `decref`. It is a calling convention rather than an operation over
 a layout: it plans exactly as its layout's `decref`, it is selected only where
