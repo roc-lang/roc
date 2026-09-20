@@ -6731,6 +6731,17 @@ uses that scheme root to rehydrate the same alias-indexed TypeScheme before
 source checking starts. No import stage infers a codec relation from the solved
 receiver shape or from method-name heuristics.
 
+Ordinary value imports and selected method targets share one lazy cache keyed
+by source environment and source node. A cache entry owns the complete pristine
+scheme: its callable graph, binding classification, and captured codec
+requirements. Each use instantiates that complete scheme independently. Cache
+hits return the scheme root directly. Only imports created in a speculative
+probe enter its rollback journal; rollback removes those cache entries together
+with their TypeScheme indices and synthetic binding classifications. Commit
+keeps the entries and discards their journal rows. Cached schemes from before
+the probe remain valid. Failed import construction likewise discards its scheme
+metadata.
+
 Boundary literal defaulting protects variables in the callable relation but
 does not protect the receiver solely because it is the callable's first
 argument. A receiver owned by the current definition therefore defaults at that
