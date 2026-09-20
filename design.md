@@ -2913,9 +2913,9 @@ successful compile-time root requests. The presence of diagnostics is not an
 module-level root-selection failure.
 
 `roc test` counts each diagnostic-blocked top-level expect from the existing
-compile-time root table and its published body diagnostic fact. Executable root
-requests intentionally exclude these expects; their absence is not a test
-inventory. Blocked expects produce one compiler-error test result each, even
+compile-time root table and the body diagnostic recorded with it.
+`runtime_entrypoint` root requests intentionally exclude these expects; their
+absence is not a test inventory. Blocked expects produce one compiler-error test result each, even
 when several diagnostics belong to one expect or one diagnostic blocks several
 expects. Independent roots still execute and may reuse cached results. Checking
 diagnostics are rendered once and are counted separately from test outcomes;
