@@ -23225,7 +23225,7 @@ fn checkPatternExhaustiveness(
         const empirical_region = self.cir.store.getNodeRegion(ModuleEnv.nodeIdxFrom(pattern_idx));
         try self.problems.appendPendingStaticExhaustiveness(self.gpa, .destructure, self.pendingExhaustivenessMode(), .{ .destructure_pattern = pattern_idx }, empirical_region, .{ .non_exhaustive_destructure = .{
             .pattern = pattern_idx,
-            .value_snapshot = value_snapshot,
+            .value_type = try self.problems.putExtraString(self.snapshots.getFormattedString(value_snapshot) orelse unreachable),
             .missing_patterns = missing_patterns_range,
         } });
         return true;
@@ -24985,7 +24985,7 @@ fn checkMatchExpr(
 
             try self.problems.appendPendingStaticExhaustiveness(self.gpa, .match, self.pendingExhaustivenessMode(), .{ .match_expr = expr_idx }, match_region, .{ .non_exhaustive_match = .{
                 .match_expr = expr_idx,
-                .condition_snapshot = condition_snapshot,
+                .condition_type = try self.problems.putExtraString(self.snapshots.getFormattedString(condition_snapshot) orelse unreachable),
                 .missing_patterns = missing_patterns_range,
             } });
         }

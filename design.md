@@ -2173,10 +2173,13 @@ retired with its explicit subtree invalidation state.
 The compile coordinator records phase progress separately from user diagnostics.
 A source module that reaches checking has no user-error `Failure` outcome. It
 must produce its complete `ModuleEnv`, final content identity, and CheckedModule
-data required by importers. The Check type-check result carries exactly one of:
+data required by importers. After rendering static diagnostics, checking releases its solver state. The
+coordinator retains only the problem store, source-name display mapping, and
+selected hoisted roots needed for publication and evaluation. The type-check
+result carries exactly one of:
 
 - the complete CheckedModule
-- the complete checker-owned continuation for platform/app relation
+- the explicit selected roots and diagnostic data for platform/app relation
   construction, which waits for both CheckedModule inputs
 
 User diagnostics never select a third outcome and never propagate dependency
@@ -2531,6 +2534,14 @@ part of the checked source module.
 Those forms do not survive runtime lowering. The `.lss` strategy removes them
 while producing Monotype IR. The `.boxy` strategy removes them while producing
 LIR directly from checked data.
+
+Platform requirement declarations also publish their checked type roots, the
+canonical order of requirement identity variables, and each for-clause alias's
+checked identity and backing roots. Pairing consumes these exact rows and the
+app's recorded solution rows; it must not revisit source annotations or rebuild
+identity order. Deferred exhaustiveness diagnostics retain the checked display
+text, missing patterns, source region, and checked site ID as serializable data.
+Their eventual evaluation outcome never requires a solver snapshot.
 
 The checked boundary outputs immutable checked modules. A checked module is
 either complete or unavailable to later stages. Later stages may read checked

@@ -21,6 +21,7 @@ const canonical_type_keys = @import("canonical_type_keys.zig");
 const hoist_roots = @import("hoist_roots.zig");
 const const_store = @import("const_store.zig");
 const problem = @import("problem.zig");
+pub const EvaluationDiagnostics = @import("evaluation_diagnostics.zig").Templates;
 const requirement_solution = @import("requirement_solution.zig");
 const artifact_serialize = @import("artifact_serialize.zig");
 const SerializedSlice = artifact_serialize.SerializedSlice;
@@ -22860,6 +22861,89 @@ pub const PlatformAppRelation = struct {
     }
 };
 
+/// Checked identities used to instantiate a platform against an app. These
+/// rows are produced while source-to-checked mappings are alive; pairing never
+/// walks source annotations or rediscovers identity-variable order.
+pub const PlatformTypeInputs = struct {
+    pub const Requirement = struct {
+        declaration: PlatformRequiredDeclarationId,
+        root: CheckedTypeId,
+        identities: artifact_serialize.Span,
+        aliases: artifact_serialize.Span,
+    };
+    pub const Alias = struct {
+        root: CheckedTypeId,
+        backing: CheckedTypeId,
+        identity: CheckedTypeId,
+    };
+    requirements: []Requirement = &.{},
+    identities: []CheckedTypeId = &.{},
+    aliases: []Alias = &.{},
+
+    fn fromModule(
+        allocator: Allocator,
+        module: TypedCIR.Module,
+        names: *const canonical.CanonicalNameStore,
+        checked_types: *const CheckedTypePublication,
+        declarations: *const PlatformRequiredDeclarationTable,
+    ) Allocator.Error!PlatformTypeInputs {
+        const rows = try allocator.alloc(Requirement, declarations.declarations.len);
+        errdefer allocator.free(rows);
+        var identities = std.ArrayList(CheckedTypeId).empty;
+        errdefer identities.deinit(allocator);
+        var aliases = std.ArrayList(Alias).empty;
+        errdefer aliases.deinit(allocator);
+        const env = module.moduleEnvConst();
+        for (declarations.declarations, rows) |declaration, *row| {
+            const root = platformRequiredPayloadForDeclaration(module, checked_types, declaration);
+            const formals = try collectCheckedIdentityRootsInKeyOrder(allocator, &checked_types.store, names, root);
+            defer allocator.free(formals);
+            const identity_start: u32 = @intCast(identities.items.len);
+            try identities.appendSlice(allocator, formals);
+            const alias_start: u32 = @intCast(aliases.items.len);
+            const required_type = env.requires_types.items.items[declaration.requires_idx];
+            for (env.for_clause_aliases.sliceRange(required_type.type_aliases)) |alias| {
+                const anno = env.store.getStatement(alias.alias_stmt_idx).s_alias_decl.anno;
+                const identity = checked_types.rootForSourceVar(module, ModuleEnv.varFrom(anno)) orelse
+                    checkedArtifactInvariant("platform alias identity has no checked root", .{});
+                const alias_root = checked_types.rootForSourceVar(module, ModuleEnv.varFrom(alias.alias_stmt_idx)) orelse
+                    checkedArtifactInvariant("platform alias has no checked root", .{});
+                const payload = checked_types.store.payload(alias_root);
+                try aliases.append(allocator, .{
+                    .root = alias_root,
+                    .backing = if (payload == .alias) payload.alias.backing else alias_root,
+                    .identity = identity,
+                });
+            }
+            row.* = .{
+                .declaration = declaration.id,
+                .root = root,
+                .identities = .{ .start = identity_start, .len = @intCast(formals.len) },
+                .aliases = .{ .start = alias_start, .len = @intCast(aliases.items.len - alias_start) },
+            };
+        }
+        const owned_identities = try identities.toOwnedSlice(allocator);
+        errdefer allocator.free(owned_identities);
+        return .{ .requirements = rows, .identities = owned_identities, .aliases = try aliases.toOwnedSlice(allocator) };
+    }
+
+    pub fn deinit(self: *PlatformTypeInputs, allocator: Allocator) void {
+        allocator.free(self.requirements);
+        allocator.free(self.identities);
+        allocator.free(self.aliases);
+        self.* = .{};
+    }
+
+    pub const Serialized = extern struct {
+        requirements: SerializedSlice(Requirement) = .{},
+        identities: SerializedSlice(CheckedTypeId) = .{},
+        aliases: SerializedSlice(Alias) = .{},
+        const Serde = artifact_serialize.SliceStoreSerde(PlatformTypeInputs, @This());
+        pub const serialize = Serde.serialize;
+        pub const deserialize = Serde.deserialize;
+    };
+};
+
 const PlatformRelationTypeSubstitutions = struct {
     formals: []CheckedTypeId = &.{},
     actuals: []CheckedTypeId = &.{},
@@ -22871,6 +22955,7 @@ const PlatformRelationTypeSubstitutions = struct {
         names: *canonical.CanonicalNameStore,
         checked_types: *CheckedTypePublication,
         declarations: *const PlatformRequiredDeclarationTable,
+        type_inputs: *const PlatformTypeInputs,
         relation_artifacts: []const ImportedModuleView,
         relation: ?PlatformAppRelation,
     ) Allocator.Error!PlatformRelationTypeSubstitutions {
@@ -22893,16 +22978,9 @@ const PlatformRelationTypeSubstitutions = struct {
         errdefer actuals.deinit(allocator);
 
         for (active_relation.relations) |input| {
-            const declaration = declarations.lookupByDeclarationId(input.declaration) orelse {
-                checkedArtifactInvariant("platform/app relation substitution referenced unknown requirement declaration", .{});
-            };
-
-            // Each requirement identity variable's platform-owned checked
-            // payload, in the same canonical slot order the checker recorded its
-            // solved app types under. Slot i's formal pairs with slot i's actual.
-            const platform_root = platformRequiredPayloadForDeclaration(module, checked_types, declaration);
-            const identity_formals = try collectCheckedIdentityRootsInKeyOrder(allocator, &checked_types.store, names, platform_root);
-            defer allocator.free(identity_formals);
+            const required = type_inputs.requirements[@intFromEnum(input.declaration)];
+            std.debug.assert(required.declaration == input.declaration);
+            const identity_formals = type_inputs.identities[required.identities.start..][0..required.identities.len];
             if (identity_formals.len != input.identity_len) {
                 checkedArtifactInvariant("platform/app relation substitution identity slot count disagrees with the recorded solution", .{});
             }
@@ -22920,15 +22998,12 @@ const PlatformRelationTypeSubstitutions = struct {
                 try recordRelationSubstitution(allocator, names, &checked_types.store, &formals, &actuals, formal, actual);
             }
 
-            try appendForClauseAliasSubstitutions(
-                allocator,
-                module,
-                names,
-                checked_types,
-                declaration,
-                &formals,
-                &actuals,
-            );
+            for (type_inputs.aliases[required.aliases.start..][0..required.aliases.len]) |alias| {
+                const actual = relationSubstitutionActual(formals.items, actuals.items, alias.identity) orelse continue;
+                try recordRelationSubstitution(allocator, names, &checked_types.store, &formals, &actuals, alias.root, actual);
+                try recordRelationSubstitution(allocator, names, &checked_types.store, &formals, &actuals, alias.backing, actual);
+                try recordRelationSubstitution(allocator, names, &checked_types.store, &formals, &actuals, alias.identity, actual);
+            }
         }
 
         return .{
@@ -22989,49 +23064,6 @@ fn relationSubstitutionActual(
         if (existing == formal) return actual;
     }
     return null;
-}
-
-/// Record substitutions for a requirement's for-clause type aliases: a use of a
-/// for-clause alias name (e.g. `Model` in `[Model : model]`) inside a
-/// provided-export root specializes to whatever its backing identity variable
-/// solved to. The alias declaration root, its backing, and the alias annotation
-/// root all map to the identity's recorded actual.
-fn appendForClauseAliasSubstitutions(
-    allocator: Allocator,
-    module: TypedCIR.Module,
-    names: *const canonical.CanonicalNameStore,
-    checked_types: *const CheckedTypePublication,
-    declaration: PlatformRequiredDeclaration,
-    formals: *std.ArrayList(CheckedTypeId),
-    actuals: *std.ArrayList(CheckedTypeId),
-) Allocator.Error!void {
-    const module_env = module.moduleEnvConst();
-    if (declaration.requires_idx >= module_env.requires_types.items.items.len) {
-        checkedArtifactInvariant("platform/app relation alias substitution referenced an out-of-range requirement", .{});
-    }
-    const required_type = module_env.requires_types.items.items[declaration.requires_idx];
-    const aliases = module_env.for_clause_aliases.sliceRange(required_type.type_aliases);
-    for (aliases) |alias| {
-        const alias_statement = module_env.store.getStatement(alias.alias_stmt_idx);
-        if (alias_statement != .s_alias_decl) {
-            checkedArtifactInvariant("platform/app relation alias substitution referenced a non-alias statement", .{});
-        }
-        const alias_anno = alias_statement.s_alias_decl.anno;
-        const alias_anno_root = checked_types.rootForSourceVar(module, ModuleEnv.varFrom(alias_anno)) orelse {
-            checkedArtifactInvariant("platform/app relation alias substitution could not find alias backing checked root", .{});
-        };
-        const resolved = relationSubstitutionActual(formals.items, actuals.items, alias_anno_root) orelse continue;
-
-        const alias_root = checked_types.rootForSourceVar(module, ModuleEnv.varFrom(alias.alias_stmt_idx)) orelse {
-            checkedArtifactInvariant("platform/app relation alias substitution could not find alias checked root", .{});
-        };
-        try recordRelationSubstitution(allocator, names, &checked_types.store, formals, actuals, alias_root, resolved);
-        const alias_payload = checked_types.store.payload(alias_root);
-        if (alias_payload == .alias) {
-            try recordRelationSubstitution(allocator, names, &checked_types.store, formals, actuals, alias_payload.alias.backing, resolved);
-        }
-        try recordRelationSubstitution(allocator, names, &checked_types.store, formals, actuals, alias_anno_root, resolved);
-    }
 }
 
 /// Public `PlatformRequirementRelation` declaration.
@@ -31606,6 +31638,7 @@ pub const CheckedModuleArtifact = struct {
     checked_types: CheckedTypeStore = .{},
     checked_bodies: CheckedBodyStore = .{},
     exhaustiveness_sites: CheckedExhaustivenessSiteTable = .{},
+    evaluation_diagnostics: EvaluationDiagnostics = .{},
     checked_const_bodies: CheckedConstBodyTable = .{},
     exported_procedure_templates: ExportedProcedureTemplateTable = .{},
     exported_procedure_bindings: ExportedProcedureBindingTable = .{},
@@ -31625,6 +31658,7 @@ pub const CheckedModuleArtifact = struct {
     hosted_procs: HostedProcTable,
     hosted_bindings: HostedBindingTable = .{},
     platform_required_declarations: PlatformRequiredDeclarationTable,
+    platform_type_inputs: PlatformTypeInputs = .{},
     platform_requirement_relations: PlatformRequirementRelationTable = .{},
     platform_requirement_solutions: PlatformRequirementSolutionTable = .{},
     platform_required_bindings: PlatformRequiredBindingTable,
@@ -31750,6 +31784,7 @@ pub const CheckedModuleArtifact = struct {
         checked_bodies: CheckedBodyStore.Serialized,
         checked_const_bodies: CheckedConstBodyTable.Serialized,
         exhaustiveness_sites: CheckedExhaustivenessSiteTable.Serialized,
+        evaluation_diagnostics: EvaluationDiagnostics.Serialized,
         exported_procedure_templates: ExportedProcedureTemplateTable.Serialized,
         exported_procedure_bindings: ExportedProcedureBindingTable.Serialized,
         exported_const_templates: ExportedConstTemplateTable.Serialized,
@@ -31768,6 +31803,7 @@ pub const CheckedModuleArtifact = struct {
         hosted_procs: HostedProcTable.Serialized,
         hosted_bindings: HostedBindingTable.Serialized,
         platform_required_declarations: PlatformRequiredDeclarationTable.Serialized,
+        platform_type_inputs: PlatformTypeInputs.Serialized,
         platform_requirement_relations: PlatformRequirementRelationTable.Serialized,
         platform_requirement_solutions: PlatformRequirementSolutionTable.Serialized,
         platform_required_bindings: PlatformRequiredBindingTable.Serialized,
@@ -31803,7 +31839,7 @@ pub const CheckedModuleArtifact = struct {
             // add three pointers beyond the current-main count, and the
             // record-unset label pool one more. Ordered debug entries and their
             // byte pool add two explicit relocation pointers.
-            std.debug.assert(artifact_serialize.relocatablePointerCount(Serialized) == 220);
+            std.debug.assert(artifact_serialize.relocatablePointerCount(Serialized) == 226);
         }
 
         /// Append every sub-store's bytes to `writer` in field order, recording
@@ -31829,6 +31865,7 @@ pub const CheckedModuleArtifact = struct {
             try self.checked_bodies.serialize(&artifact.checked_bodies, gpa, writer);
             try self.checked_const_bodies.serialize(&artifact.checked_const_bodies, gpa, writer);
             try self.exhaustiveness_sites.serialize(&artifact.exhaustiveness_sites, gpa, writer);
+            try self.evaluation_diagnostics.serialize(&artifact.evaluation_diagnostics, gpa, writer);
             try self.exported_procedure_templates.serialize(&artifact.exported_procedure_templates, gpa, writer);
             try self.exported_procedure_bindings.serialize(&artifact.exported_procedure_bindings, gpa, writer);
             try self.exported_const_templates.serialize(&artifact.exported_const_templates, gpa, writer);
@@ -31847,6 +31884,7 @@ pub const CheckedModuleArtifact = struct {
             try self.hosted_procs.serialize(&artifact.hosted_procs, gpa, writer);
             try self.hosted_bindings.serialize(&artifact.hosted_bindings, gpa, writer);
             try self.platform_required_declarations.serialize(&artifact.platform_required_declarations, gpa, writer);
+            try self.platform_type_inputs.serialize(&artifact.platform_type_inputs, gpa, writer);
             try self.platform_requirement_relations.serialize(&artifact.platform_requirement_relations, gpa, writer);
             try self.platform_requirement_solutions.serialize(&artifact.platform_requirement_solutions, gpa, writer);
             try self.platform_required_bindings.serialize(&artifact.platform_required_bindings, gpa, writer);
@@ -31925,6 +31963,7 @@ pub const CheckedModuleArtifact = struct {
                 .checked_bodies = self.checked_bodies.deserialize(base_addr),
                 .checked_const_bodies = self.checked_const_bodies.deserialize(base_addr),
                 .exhaustiveness_sites = self.exhaustiveness_sites.deserialize(base_addr),
+                .evaluation_diagnostics = self.evaluation_diagnostics.deserialize(base_addr),
                 .exported_procedure_templates = self.exported_procedure_templates.deserialize(base_addr),
                 .exported_procedure_bindings = self.exported_procedure_bindings.deserialize(base_addr),
                 .exported_const_templates = self.exported_const_templates.deserialize(base_addr),
@@ -31943,6 +31982,7 @@ pub const CheckedModuleArtifact = struct {
                 .hosted_procs = self.hosted_procs.deserialize(base_addr),
                 .hosted_bindings = self.hosted_bindings.deserialize(base_addr),
                 .platform_required_declarations = self.platform_required_declarations.deserialize(base_addr),
+                .platform_type_inputs = self.platform_type_inputs.deserialize(base_addr),
                 .platform_requirement_relations = self.platform_requirement_relations.deserialize(base_addr),
                 .platform_requirement_solutions = self.platform_requirement_solutions.deserialize(base_addr),
                 .platform_required_bindings = self.platform_required_bindings.deserialize(base_addr),
@@ -32062,7 +32102,8 @@ pub const CheckedModuleArtifact = struct {
     // procedure template whose result row is closed, not only hosted ones, so
     // a Roc implementation requested at a row that includes its own can be
     // adapted (design.md "Result-Row Widening Adapter").
-    const serialized_layout_version: u32 = 101;
+    // Version 102 preserves solver-independent deferred evaluation diagnostics.
+    const serialized_layout_version: u32 = 102;
 
     /// Comptime fingerprint of `Serialized`'s layout, mirroring
     /// `cache_module.MODULE_ENV_VERSION_HASH`. It is appended to the baked builtin
@@ -32161,6 +32202,7 @@ pub const CheckedModuleArtifact = struct {
         self.platform_requirement_solutions.deinit(allocator);
         self.platform_requirement_relations.deinit(allocator);
         self.platform_required_declarations.deinit(allocator);
+        self.platform_type_inputs.deinit(allocator);
         self.hosted_bindings.deinit(allocator);
         self.hosted_procs.deinit(allocator);
         self.root_requests.deinit(allocator);
@@ -32180,6 +32222,7 @@ pub const CheckedModuleArtifact = struct {
         self.exported_procedure_templates.deinit(allocator);
         self.checked_const_bodies.deinit(allocator);
         self.exhaustiveness_sites.deinit(allocator);
+        self.evaluation_diagnostics.deinit(allocator);
         self.checked_bodies.deinit(allocator);
         self.checked_types.deinit(allocator);
         self.exports.deinit(allocator);
@@ -35763,6 +35806,8 @@ pub fn publishFromTypedModule(
     defer checked_type_publication.deinitIndex(allocator);
     errdefer checked_type_publication.store.deinit(allocator);
     const checked_types = &checked_type_publication.store;
+    var platform_type_inputs = try PlatformTypeInputs.fromModule(allocator, module, &canonical_names, &checked_type_publication, &platform_required_declarations);
+    errdefer platform_type_inputs.deinit(allocator);
 
     var checked_body_builder = try CheckedBodyStoreBuilder.fromModule(allocator, module, &canonical_names, &checked_type_publication, &source_nodes);
     errdefer checked_body_builder.deinit(allocator);
@@ -35778,6 +35823,7 @@ pub fn publishFromTypedModule(
         &canonical_names,
         &checked_type_publication,
         &platform_required_declarations,
+        &platform_type_inputs,
         inputs.relation_artifacts,
         inputs.platform_app_relation,
     );
@@ -36132,6 +36178,12 @@ pub fn publishFromTypedModule(
     );
     errdefer exhaustiveness_sites.deinit(allocator);
 
+    var evaluation_diagnostics = if (module_env.module_kind == .platform and inputs.problem_store != null)
+        try EvaluationDiagnostics.fromStore(allocator, inputs.problem_store.?)
+    else
+        EvaluationDiagnostics{};
+    errdefer evaluation_diagnostics.deinit(allocator);
+
     var exported_procedure_templates = try ExportedProcedureTemplateTable.fromModule(
         allocator,
         module,
@@ -36305,6 +36357,7 @@ pub fn publishFromTypedModule(
         .checked_types = checked_types.*,
         .checked_bodies = frozen_checked_bodies,
         .exhaustiveness_sites = exhaustiveness_sites,
+        .evaluation_diagnostics = evaluation_diagnostics,
         .checked_const_bodies = checked_const_bodies,
         .exported_procedure_templates = exported_procedure_templates,
         .exported_procedure_bindings = exported_procedure_bindings,
@@ -36327,6 +36380,7 @@ pub fn publishFromTypedModule(
         .hosted_procs = hosted_procs,
         .hosted_bindings = hosted_bindings,
         .platform_required_declarations = platform_required_declarations,
+        .platform_type_inputs = platform_type_inputs,
         .platform_requirement_relations = platform_requirement_relations,
         .platform_requirement_solutions = platform_requirement_solutions,
         .platform_required_bindings = platform_required_bindings,
@@ -38720,8 +38774,8 @@ test "SERIALIZED_VERSION_HASH golden value" {
     // `serialized_layout_version` only for semantic changes the structural hash
     // cannot observe, as documented at that discriminant.
     const golden: [32]u8 = .{
-        0xA7, 0xC4, 0xC1, 0xF5, 0x26, 0xD1, 0x49, 0xCB, 0x2E, 0x9B, 0x9E, 0x91, 0x8E, 0x15, 0x90, 0x62,
-        0x5C, 0xF4, 0x39, 0xE3, 0xA3, 0x1B, 0x38, 0xE1, 0x73, 0x6E, 0x3D, 0xF5, 0x35, 0x52, 0x16, 0x42,
+        0x04, 0x44, 0x65, 0xF3, 0x4D, 0xA1, 0x75, 0x6D, 0x1E, 0xB5, 0xAB, 0x7C, 0xE0, 0x48, 0xC4, 0x2B,
+        0xC2, 0x6D, 0xBF, 0x01, 0x60, 0x8E, 0x58, 0xB4, 0xA0, 0x1D, 0x55, 0x66, 0x72, 0xF3, 0x3B, 0xCF,
     };
     try std.testing.expectEqualSlices(u8, &golden, &CheckedModuleArtifact.SERIALIZED_VERSION_HASH);
 }

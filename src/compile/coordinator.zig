@@ -2388,14 +2388,14 @@ pub const Coordinator = struct {
 
         var publication_with_state = publication;
         if (mod.deferred_publication) |state| {
-            publication_with_state.hoisted_roots = state.checker.selectedHoistedRoots();
-            publication_with_state.problem_store = &state.checker.problems;
+            publication_with_state.hoisted_roots = state.hoisted_roots;
+            publication_with_state.problem_store = &state.problems;
             publication_with_state.ctfe_options = state.ctfe_options;
         } else if (mod.pending_evaluation) |state| {
             // Requires signatures containing errors publish during checking,
             // but still retain the exact checker outputs used by finalization.
-            publication_with_state.hoisted_roots = state.checker.selectedHoistedRoots();
-            publication_with_state.problem_store = &state.checker.problems;
+            publication_with_state.hoisted_roots = state.hoisted_roots;
+            publication_with_state.problem_store = &state.problems;
         } else {
             coordinatorInvariant("platform publication requires its checker continuation", .{});
         }
@@ -2467,16 +2467,17 @@ pub const Coordinator = struct {
             const pending = try state.allocator.create(messages.PendingEvaluationState);
             pending.* = .{
                 .allocator = state.allocator,
-                .checker = state.checker,
+                .problems = state.problems,
+                .import_mapping = state.import_mapping,
+                .hoisted_roots = state.hoisted_roots,
                 .imported_envs = state.imported_envs,
                 .reported_problem_count = state.reported_problem_count,
             };
-            pending.checker.fixupTypeWriter();
             mod.pending_evaluation = pending;
             mod.deferred_publication = null;
             state.allocator.destroy(state);
         }
-        if (mod.pending_evaluation == null) coordinatorInvariant("prepared platform publication lost its checker continuation", .{});
+        if (mod.pending_evaluation == null) coordinatorInvariant("prepared platform publication lost its evaluation diagnostics", .{});
         // This is an actual publication (the pairing-cache probe above missed).
         // Finalization publishes the platform root exactly once.
         if (self.moduleIsPlatformRoot(mod)) self.platform_root_publish_count += 1;
@@ -2495,24 +2496,20 @@ pub const Coordinator = struct {
 
     fn appendDeferredPublicationReports(self: *Coordinator, mod: *ModuleState) Allocator.Error!void {
         const state = mod.deferred_publication orelse return;
-        const problems = state.checker.problems.problems.items;
+        const problems = state.problems.problems.items;
         if (state.reported_problem_count > problems.len) {
             coordinatorInvariant("deferred publication problem count moved backwards", .{});
         }
         if (state.reported_problem_count == problems.len) return;
 
         const env = mod.moduleEnv() orelse coordinatorInvariant("deferred publication diagnostics lost their module env", .{});
-        var rb = try check.ReportBuilder.init(
+        var rb = try check.ReportBuilder.initEvaluation(
             self.gpa,
             env,
-            env,
-            &state.checker.snapshots,
-            &state.checker.problems,
+            &state.problems,
             mod.path,
             state.imported_envs,
-            &state.checker.import_mapping,
-            &state.checker.regions,
-            null,
+            &state.import_mapping,
         );
         defer rb.deinit();
 
@@ -2917,7 +2914,7 @@ pub const Coordinator = struct {
                 }
                 try output.append(coord.gpa, .{
                     .module = artifact,
-                    .problem_store = &entry.mod.pending_evaluation.?.checker.problems,
+                    .problem_store = &entry.mod.pending_evaluation.?.problems,
                 });
                 states[index] = .complete;
             }
@@ -2993,20 +2990,16 @@ pub const Coordinator = struct {
         try artifact.verifyComplete();
 
         const env = mod.moduleEnv().?;
-        var rb = try check.ReportBuilder.init(
+        var rb = try check.ReportBuilder.initEvaluation(
             self.gpa,
             env,
-            env,
-            &state.checker.snapshots,
-            &state.checker.problems,
+            &state.problems,
             mod.path,
             state.imported_envs,
-            &state.checker.import_mapping,
-            &state.checker.regions,
-            null,
+            &state.import_mapping,
         );
         defer rb.deinit();
-        const problems = state.checker.problems.problems.items;
+        const problems = state.problems.problems.items;
         for (problems[state.reported_problem_count..]) |problem| {
             try mod.reports.append(self.gpa, try rb.build(problem));
         }
@@ -5440,14 +5433,16 @@ pub const Coordinator = struct {
             const state = try result_alloc.create(DeferredPublicationState);
             state.* = .{
                 .allocator = result_alloc,
-                .checker = typecheck_output.takeChecker(),
+                .problems = typecheck_output.checker.problems,
+                .import_mapping = typecheck_output.checker.import_mapping,
+                .hoisted_roots = try typecheck_output.checker.selected_hoisted_roots.toOwnedSlice(result_alloc),
                 .imported_envs = imported_envs,
                 .ctfe_options = ctfe_options,
                 .requirement_context = requirement_context,
                 .reported_problem_count = typecheck_output.checker.problems.problems.items.len,
             };
-            state.checker.imported_modules = imported_envs;
-            state.checker.fixupTypeWriter();
+            typecheck_output.checker.problems = check.problem.Store.initEmpty(result_alloc);
+            typecheck_output.checker.import_mapping = @import("types").import_mapping.ImportMapping.init(result_alloc);
             break :blk .{ .deferred = state };
         } else .{ .published = typecheck_output.takeCheckedArtifact() };
         var publication_owned = true;
@@ -5464,12 +5459,14 @@ pub const Coordinator = struct {
             const state = try result_alloc.create(messages.PendingEvaluationState);
             state.* = .{
                 .allocator = result_alloc,
-                .checker = typecheck_output.takeChecker(),
+                .problems = typecheck_output.checker.problems,
+                .import_mapping = typecheck_output.checker.import_mapping,
+                .hoisted_roots = try typecheck_output.checker.selected_hoisted_roots.toOwnedSlice(result_alloc),
                 .imported_envs = retained_envs,
                 .reported_problem_count = typecheck_output.checker.problems.problems.items.len,
             };
-            state.checker.imported_modules = retained_envs;
-            state.checker.fixupTypeWriter();
+            typecheck_output.checker.problems = check.problem.Store.initEmpty(result_alloc);
+            typecheck_output.checker.import_mapping = @import("types").import_mapping.ImportMapping.init(result_alloc);
             pending_evaluation = state;
         }
         const semantic = try createOwnedSemanticResult(result_alloc, env, publication);

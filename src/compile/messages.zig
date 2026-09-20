@@ -310,22 +310,28 @@ pub const TypeCheckedResult = struct {
 /// Diagnostic ownership retained between checking and post-frontend evaluation.
 pub const PendingEvaluationState = struct {
     allocator: Allocator,
-    checker: check.Check,
+    problems: check.problem.Store,
+    import_mapping: @import("types").import_mapping.ImportMapping,
+    hoisted_roots: []const check.HoistRoots.SelectedHoistedRoot,
     imported_envs: []const *ModuleEnv,
     reported_problem_count: usize,
 
     pub fn deinit(self: *PendingEvaluationState) void {
-        self.checker.deinit();
+        self.problems.deinit(self.allocator);
+        self.import_mapping.deinit();
+        self.allocator.free(self.hoisted_roots);
         self.allocator.free(self.imported_envs);
         self.allocator.destroy(self);
     }
 };
 
-/// Complete checker-owned continuation for a module whose checked artifact is
+/// Explicit checked outputs for a module whose checked artifact is
 /// intentionally published during executable finalization.
 pub const DeferredPublicationState = struct {
     allocator: Allocator,
-    checker: check.Check,
+    problems: check.problem.Store,
+    import_mapping: @import("types").import_mapping.ImportMapping,
+    hoisted_roots: []const check.HoistRoots.SelectedHoistedRoot,
     /// Stable copy of the imported-env pointer slice needed to render any
     /// diagnostics produced during deferred compile-time finalization.
     imported_envs: []const *ModuleEnv,
@@ -334,7 +340,9 @@ pub const DeferredPublicationState = struct {
     reported_problem_count: usize,
 
     pub fn deinit(self: *DeferredPublicationState) void {
-        self.checker.deinit();
+        self.problems.deinit(self.allocator);
+        self.import_mapping.deinit();
+        self.allocator.free(self.hoisted_roots);
         self.allocator.free(self.imported_envs);
         self.allocator.destroy(self);
     }

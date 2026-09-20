@@ -61,6 +61,14 @@ pub const Store = struct {
     /// Backing storage for missing patterns index arrays
     missing_patterns_backing: std.array_list.Managed(ExtraStringIdx),
 
+    /// Allocation-free empty store, including after ownership transfer.
+    pub fn initEmpty(gpa: Allocator) Self {
+        return .{
+            .extra_strings_backing = ByteList.init(gpa),
+            .missing_patterns_backing = std.array_list.Managed(ExtraStringIdx).init(gpa),
+        };
+    }
+
     pub fn init(gpa: Allocator) std.mem.Allocator.Error!Self {
         return .{
             .problems = try std.ArrayListAligned(Problem, ALIGNMENT).initCapacity(gpa, 16),
