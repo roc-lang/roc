@@ -8729,6 +8729,28 @@ Specialization body scheduling may deduplicate global deferred work, but never
 authorizes importing a checked node or root-owned graph state from another
 root.
 
+Lexical environments have independent versions over lane-confined indexed
+storage. Forking an environment copies no inherited bindings. Reads use the
+active direct index; switching retained versions undoes and replays only the
+changes between them, preserving each version's iteration order. Sibling match
+contexts remain independent across relation production, binder projection,
+result selection, body emission, and pattern emission. Parent mutation after a
+fork never changes a child's inherited bindings. These versions cover runtime
+binders, typed binders, local-procedure contexts, and completed checked-type
+instantiations. In-progress checked-type placeholders remain private to their
+exact instantiation scope and are never inherited. Fresh instantiation scopes,
+field-kind scope routing, shared graph relations, and relation order are
+unchanged by environment storage.
+
+Writes reserve their allocation-free cleanup change before publishing a binding.
+Restoring a temporary binding records its exact prior value without allocating,
+including when another retained version still observes the temporary value.
+Only live bindings are enumerated; neither first insertion nor a fork initializes
+a module-sized binder column. A version family owns its index and change storage
+until its final context is released, including on allocation failure. When only
+one version remains, mutation updates the active view directly and discards
+unobservable history; standalone type memo tables need no change records.
+
 Instantiation can expose an overlapping tag through a generic extension even
 when the checked call's row was already normalized. Graph row composition
 preserves the checked unifier's head-before-extension precedence: the first
@@ -8759,6 +8781,10 @@ shards strictly in request order and immediately makes discovered requests
 available to free lanes. Running and completed-but-unaccepted tasks share the
 same bounded window. Each immutable lane suffix is absorbed even when its body
 is discarded after an earlier shard committed its reservation, preserving cumulative lane ids.
+The pending FIFO is a reusable geometrically growing ring. Dispatch consumes
+its head without moving the undispatched suffix; ordered acceptance never
+compacts that suffix. Queue capacity follows the peak outstanding work, not
+the total number of jobs submitted during a lowering run.
 All accepted tasks are joined before releasing their contexts, including on OOM.
 
 Workers never borrow the mutable coordinator Program. Their captured input

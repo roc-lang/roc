@@ -2471,77 +2471,56 @@ const HostedBindingView = struct {
     names: *const names.NameStore,
 };
 
-/// Pattern binders are dense IDs allocated by `CheckedBodyStore`. Most
-/// short-lived contexts only instantiate types and never bind a pattern, so
-/// defer materializing the dense table until the first binding is installed.
+/// Each lexical environment has its own version. Forks share inherited bindings;
+/// the active indexed view replays only changes when retained branches switch.
 const BinderMap = struct {
-    allocator: Allocator,
+    const Map = collections.VersionedDenseMap(checked.PatternBinderId, DraftLocalId);
+    values: Map,
     binder_count: usize,
-    locals: ?[]?DraftLocalId = null,
-    active_count: usize = 0,
 
-    const Entry = struct {
-        binder: checked.PatternBinderId,
-        local: DraftLocalId,
-    };
-
+    const Entry = struct { binder: checked.PatternBinderId, local: DraftLocalId };
     const Iterator = struct {
-        locals: []const ?DraftLocalId,
-        index: usize = 0,
-
+        inner: Map.Iterator,
         fn next(self: *Iterator) ?Entry {
-            while (self.index < self.locals.len) {
-                const binder_index = self.index;
-                self.index += 1;
-                if (self.locals[binder_index]) |local| {
-                    return .{ .binder = @enumFromInt(@as(u32, @intCast(binder_index))), .local = local };
-                }
-            }
-            return null;
+            const entry = self.inner.next() orelse return null;
+            return .{ .binder = entry.key_ptr.*, .local = entry.value_ptr.* };
         }
     };
 
     fn init(allocator: Allocator, binder_count: usize) Allocator.Error!BinderMap {
-        return .{ .allocator = allocator, .binder_count = binder_count };
+        return .{ .values = Map.init(allocator), .binder_count = binder_count };
     }
 
     fn deinit(self: *BinderMap) void {
-        if (self.locals) |locals| self.allocator.free(locals);
-        self.* = undefined;
+        self.values.deinit();
     }
 
-    fn index(self: *const BinderMap, binder: checked.PatternBinderId) usize {
-        const raw = @intFromEnum(binder);
-        if (raw >= self.binder_count) Common.invariant("pattern binder was outside its checked body store");
-        return raw;
+    fn fork(self: *const BinderMap) BinderMap {
+        return .{ .values = self.values.fork(), .binder_count = self.binder_count };
+    }
+
+    fn checkBinder(self: *const BinderMap, binder: checked.PatternBinderId) void {
+        if (@intFromEnum(binder) >= self.binder_count) Common.invariant("pattern binder was outside its checked body store");
     }
 
     fn get(self: *const BinderMap, binder: checked.PatternBinderId) ?DraftLocalId {
-        const index_ = self.index(binder);
-        const locals = self.locals orelse return null;
-        return locals[index_];
+        self.checkBinder(binder);
+        return self.values.get(binder);
     }
 
     fn put(self: *BinderMap, binder: checked.PatternBinderId, local: DraftLocalId) Allocator.Error!void {
-        const index_ = self.index(binder);
-        if (self.locals == null) {
-            const locals = try self.allocator.alloc(?DraftLocalId, self.binder_count);
-            @memset(locals, null);
-            self.locals = locals;
-        }
-        const slot = &self.locals.?[index_];
-        if (slot.* == null) self.active_count += 1;
-        slot.* = local;
+        self.checkBinder(binder);
+        try self.values.put(binder, local);
+    }
+
+    fn restore(self: *BinderMap, binder: checked.PatternBinderId, previous: ?DraftLocalId) void {
+        self.checkBinder(binder);
+        self.values.restore(binder, previous);
     }
 
     fn remove(self: *BinderMap, binder: checked.PatternBinderId) bool {
-        const index_ = self.index(binder);
-        const locals = self.locals orelse return false;
-        const slot = &locals[index_];
-        if (slot.* == null) return false;
-        slot.* = null;
-        self.active_count -= 1;
-        return true;
+        self.checkBinder(binder);
+        return self.values.remove(binder);
     }
 
     fn contains(self: *const BinderMap, binder: checked.PatternBinderId) bool {
@@ -2549,18 +2528,31 @@ const BinderMap = struct {
     }
 
     fn count(self: *const BinderMap) usize {
-        return self.active_count;
+        return self.values.count();
     }
 
     fn iterator(self: *const BinderMap) Iterator {
-        return .{ .locals = self.locals orelse &.{} };
+        return .{ .inner = self.values.iterator() };
+    }
+
+    fn sortedEntries(self: *const BinderMap, allocator: Allocator) Allocator.Error![]Entry {
+        const entries = try allocator.alloc(Entry, self.count());
+        var iter = self.iterator();
+        for (entries) |*entry| entry.* = iter.next().?;
+        std.mem.sort(Entry, entries, {}, struct {
+            fn lessThan(_: void, left: Entry, right: Entry) bool {
+                return @intFromEnum(left.binder) < @intFromEnum(right.binder);
+            }
+        }.lessThan);
+        return entries;
     }
 };
 const TypedBinder = struct {
     binder: checked.PatternBinderId,
     type_digest: names.TypeDigest,
 };
-const TypedBinders = std.AutoHashMap(TypedBinder, DraftLocalId);
+const TypedBinders = collections.VersionedHashMap(TypedBinder, DraftLocalId);
+const LocalProcContexts = collections.VersionedHashMap(DraftLocalProcAddress, DraftLocalProcContextId);
 const LexicalBinderEntry = struct {
     kind: u8,
     binder: u32,
@@ -3492,8 +3484,7 @@ const Builder = struct {
     /// Deterministic FIFO of reserved specializations awaiting body lowering.
     /// Wave drains execute entries in dispatch order; an executing body may
     /// append new entries, which the same drain then reaches.
-    pending_spec_jobs: std.ArrayList(PendingSpecJob) = .empty,
-    pending_spec_jobs_head: usize = 0,
+    pending_spec_jobs: collections.RingQueue(PendingSpecJob) = .empty,
     next_spec_dispatch_index: u64 = 0,
     /// Next logical queue entry the coordinator may accept. This first boundary
     /// validates FIFO accounting; later worker results also buffer ordinary
@@ -6101,7 +6092,8 @@ const Builder = struct {
     /// iterator-inline occurrences), so a linear scan of the outstanding
     /// window is cheaper than an index.
     fn pendingSpecJobFor(self: *Builder, fn_id: Ast.FnId) ?PendingSpecJob {
-        for (self.pending_spec_jobs.items[self.pending_spec_jobs_head..]) |job| {
+        for (0..self.pending_spec_jobs.len) |index| {
+            const job = self.pending_spec_jobs.get(index);
             if (job.reservation.fn_id == fn_id) return job;
         }
         return null;
@@ -6135,9 +6127,8 @@ const Builder = struct {
     fn drainPendingSpecJobs(self: *Builder) Allocator.Error!void {
         const executor = self.post_check_executor orelse return self.drainPendingSpecJobsSerial();
         if (executor.worker_count <= 1) return self.drainPendingSpecJobsSerial();
-        if (self.pending_spec_jobs_head == self.pending_spec_jobs.items.len) {
+        if (self.pending_spec_jobs.len == 0) {
             self.pending_spec_jobs.clearRetainingCapacity();
-            self.pending_spec_jobs_head = 0;
             self.requirePendingSpecJobsDrained();
             return;
         }
@@ -6167,11 +6158,11 @@ const Builder = struct {
             timing.parallel.task_waves +%= 1;
             timing.parallel.peak_worker_lanes_available = @max(timing.parallel.peak_worker_lanes_available, @as(u64, @intCast(executor.worker_count)));
         }
-        while (self.pending_spec_jobs_head < self.pending_spec_jobs.items.len or accepted < submitted) {
+        while (self.pending_spec_jobs.len != 0 or accepted < submitted) {
             if (running < executor.worker_count and submitted - accepted < capacity and
-                self.pending_spec_jobs_head < self.pending_spec_jobs.items.len)
+                self.pending_spec_jobs.len != 0)
             {
-                const job = self.pending_spec_jobs.items[self.pending_spec_jobs_head];
+                const job = self.pending_spec_jobs.get(0);
                 if (job.dispatch_index != self.next_spec_accept_index + submitted - accepted) {
                     Common.compilerBug("Monotype streaming dispatch was not contiguous");
                 }
@@ -6181,9 +6172,8 @@ const Builder = struct {
                     // Coordinator-only entries still wait their exact acceptance
                     // turn, but need not wait for any later worker task.
                     if (accepted == submitted) {
-                        self.pending_spec_jobs_head += 1;
+                        _ = self.pending_spec_jobs.pop();
                         try self.executePendingSpecJob(job);
-                        self.compactAcceptedPendingSpecJobs();
                         continue;
                     }
                 } else {
@@ -6213,7 +6203,7 @@ const Builder = struct {
                         .prepared = .{ .job = job, .view = view, .method_scope = self.moduleForId(job.method_scope), .template = template },
                     };
                     try session.submit(.{ .id = slot, .context = context, .run = runSpecJobTask });
-                    self.pending_spec_jobs_head += 1;
+                    _ = self.pending_spec_jobs.pop();
                     submitted += 1;
                     running += 1;
                     if (self.timing) |timing| timing.parallel.specialization_tasks_submitted +%= 1;
@@ -6228,7 +6218,6 @@ const Builder = struct {
                 defer commit_scope.end();
                 try self.acceptCompletedSpecJob(context);
                 accepted += 1;
-                self.compactAcceptedPendingSpecJobs();
                 continue;
             }
             if (running == 0) Common.compilerBug("Monotype streaming drain made no progress");
@@ -6241,7 +6230,6 @@ const Builder = struct {
             self.receiveSpecJobCompletion(contexts, completion, accepted, submitted);
         }
         self.pending_spec_jobs.clearRetainingCapacity();
-        self.pending_spec_jobs_head = 0;
         self.requirePendingSpecJobsDrained();
     }
 
@@ -6304,13 +6292,12 @@ const Builder = struct {
     }
 
     fn drainPendingSpecJobsSerial(self: *Builder) Allocator.Error!void {
-        while (self.pending_spec_jobs_head < self.pending_spec_jobs.items.len) {
-            const job = self.pending_spec_jobs.items[self.pending_spec_jobs_head];
-            self.pending_spec_jobs_head += 1;
+        while (self.pending_spec_jobs.len != 0) {
+            const job = self.pending_spec_jobs.get(0);
+            _ = self.pending_spec_jobs.pop();
             try self.executePendingSpecJob(job);
         }
         self.pending_spec_jobs.clearRetainingCapacity();
-        self.pending_spec_jobs_head = 0;
         self.requirePendingSpecJobsDrained();
     }
 
@@ -6416,7 +6403,7 @@ const Builder = struct {
     }
 
     fn requirePendingSpecJobsDrained(self: *Builder) void {
-        if (self.pending_spec_jobs_head != self.pending_spec_jobs.items.len) {
+        if (self.pending_spec_jobs.len != 0) {
             Common.compilerBug("Monotype specialization queue was not drained at a wave boundary");
         }
         if (self.next_spec_accept_index != self.next_spec_dispatch_index) {
@@ -6534,7 +6521,7 @@ const Builder = struct {
         const timing = self.timing orelse return;
         timing.parallel.peak_specialization_jobs_pending = @max(
             timing.parallel.peak_specialization_jobs_pending,
-            @as(u64, @intCast(self.pending_spec_jobs.items.len - self.pending_spec_jobs_head)),
+            @as(u64, @intCast(self.pending_spec_jobs.len)),
         );
     }
 
@@ -6549,19 +6536,6 @@ const Builder = struct {
             timing.parallel.peak_specialization_shards_retained,
             retained,
         );
-    }
-
-    fn compactAcceptedPendingSpecJobs(self: *Builder) void {
-        const accepted = self.pending_spec_jobs_head;
-        if (accepted == 0) return;
-        const remaining = self.pending_spec_jobs.items.len - accepted;
-        std.mem.copyForwards(
-            PendingSpecJob,
-            self.pending_spec_jobs.items[0..remaining],
-            self.pending_spec_jobs.items[accepted..],
-        );
-        self.pending_spec_jobs.items.len = remaining;
-        self.pending_spec_jobs_head = 0;
     }
 
     fn ensureSpecJobTaskBuffers(self: *Builder, capacity: usize) Allocator.Error!*SpecJobTaskBuffers {
@@ -11713,9 +11687,7 @@ const Builder = struct {
             const capture = captures.items[index];
             fn_ctx.restoreTypedBinder(capture.binder, capture.ty, capture.previous_typed);
             if (capture.previous) |previous| {
-                fn_ctx.binders.put(capture.binder, previous) catch |err| switch (err) {
-                    error.OutOfMemory => Common.invariant("restoring a previously inserted binder cannot reallocate"),
-                };
+                fn_ctx.binders.restore(capture.binder, previous);
             } else {
                 _ = fn_ctx.binders.remove(capture.binder);
             }
@@ -12276,9 +12248,7 @@ const Builder = struct {
                 initialized -= 1;
                 if (captures[initialized].previous) |previous| {
                     fn_ctx.restoreTypedBinder(captures[initialized].binder, captures[initialized].ty, captures[initialized].previous_typed);
-                    fn_ctx.binders.put(captures[initialized].binder, previous) catch |err| switch (err) {
-                        error.OutOfMemory => Common.invariant("restoring a previously inserted binder cannot reallocate"),
-                    };
+                    fn_ctx.binders.restore(captures[initialized].binder, previous);
                 } else {
                     fn_ctx.restoreTypedBinder(captures[initialized].binder, captures[initialized].ty, captures[initialized].previous_typed);
                     _ = fn_ctx.binders.remove(captures[initialized].binder);
@@ -12326,9 +12296,7 @@ const Builder = struct {
                 index -= 1;
                 fn_ctx.restoreTypedBinder(captures[index].binder, captures[index].ty, captures[index].previous_typed);
                 if (captures[index].previous) |previous| {
-                    fn_ctx.binders.put(captures[index].binder, previous) catch |err| switch (err) {
-                        error.OutOfMemory => Common.invariant("restoring a previously inserted binder cannot reallocate"),
-                    };
+                    fn_ctx.binders.restore(captures[index].binder, previous);
                 } else {
                     _ = fn_ctx.binders.remove(captures[index].binder);
                 }
@@ -18004,6 +17972,79 @@ const InstantiatingNode = union(enum) {
     }
 };
 
+/// Completed instantiations can be inherited by branch contexts. Construction
+/// placeholders belong only to the exact instantiation scope that created them.
+const InstantiatingNodeMap = struct {
+    const Completed = collections.VersionedDenseMap(checked.CheckedTypeId, NodeId);
+    completed: Completed,
+    building: collections.DenseMap(checked.CheckedTypeId, ?NodeId),
+
+    fn init(allocator: Allocator) InstantiatingNodeMap {
+        return .{
+            .completed = Completed.init(allocator),
+            .building = collections.DenseMap(checked.CheckedTypeId, ?NodeId).init(allocator),
+        };
+    }
+
+    fn deinit(self: *InstantiatingNodeMap) void {
+        self.building.deinit();
+        self.completed.deinit();
+    }
+
+    fn forkCompleted(self: *const InstantiatingNodeMap) InstantiatingNodeMap {
+        return .{
+            .completed = self.completed.fork(),
+            .building = collections.DenseMap(checked.CheckedTypeId, ?NodeId).init(self.completed.allocator),
+        };
+    }
+
+    fn get(self: *const InstantiatingNodeMap, key: checked.CheckedTypeId) ?InstantiatingNode {
+        if (self.building.get(key)) |reserved| return .{ .building = reserved };
+        return .{ .node = self.completed.get(key) orelse return null };
+    }
+
+    fn contains(self: *const InstantiatingNodeMap, key: checked.CheckedTypeId) bool {
+        return self.get(key) != null;
+    }
+
+    fn put(self: *InstantiatingNodeMap, key: checked.CheckedTypeId, value: InstantiatingNode) Allocator.Error!void {
+        switch (value) {
+            .building => |reserved| {
+                std.debug.assert(!self.completed.contains(key));
+                try self.building.put(key, reserved);
+            },
+            .node => |node| {
+                try self.completed.putPermanent(key, node);
+                _ = self.building.remove(key);
+            },
+        }
+    }
+
+    fn remove(self: *InstantiatingNodeMap, key: checked.CheckedTypeId) bool {
+        std.debug.assert(!self.completed.contains(key));
+        return self.building.remove(key);
+    }
+
+    const ValueIterator = struct {
+        completed: Completed.Iterator,
+        building: collections.DenseMap(checked.CheckedTypeId, ?NodeId).ValueIterator,
+        value: InstantiatingNode = undefined,
+
+        fn next(self: *ValueIterator) ?*const InstantiatingNode {
+            if (self.completed.next()) |entry| {
+                self.value = .{ .node = entry.value_ptr.* };
+            } else if (self.building.next()) |entry| {
+                self.value = .{ .building = entry.* };
+            } else return null;
+            return &self.value;
+        }
+    };
+
+    fn valueIterator(self: *InstantiatingNodeMap) ValueIterator {
+        return .{ .completed = self.completed.iterator(), .building = self.building.valueIterator() };
+    }
+};
+
 /// The complete mutable state for one checked-type instantiation scope. Body
 /// lowering state remains on `BodyContext`; operations that only need a fresh
 /// type instantiation can swap this small state without constructing another
@@ -18012,11 +18053,11 @@ const TypeInstantiationContext = struct {
     allocator: Allocator,
     id: InstantiationScopeId,
     module_bytes: [32]u8,
-    node_map: collections.DenseMap(checked.CheckedTypeId, InstantiatingNode),
+    node_map: InstantiatingNodeMap,
     field_kind_map: collections.DenseMap(checked.CheckedTypeId, InstantiatedFieldKind),
     /// Innermost-last stack of nominal-instance instantiation scopes; see
     /// instNominalBackingNode.
-    decl_scopes: std.ArrayList(*collections.DenseMap(checked.CheckedTypeId, InstantiatingNode)) = .empty,
+    decl_scopes: std.ArrayList(*InstantiatingNodeMap) = .empty,
     field_kind_decl_scopes: std.ArrayList(*collections.DenseMap(checked.CheckedTypeId, InstantiatedFieldKind)) = .empty,
 
     fn init(
@@ -18028,7 +18069,7 @@ const TypeInstantiationContext = struct {
             .allocator = allocator,
             .id = id,
             .module_bytes = module_bytes,
-            .node_map = collections.DenseMap(checked.CheckedTypeId, InstantiatingNode).init(allocator),
+            .node_map = InstantiatingNodeMap.init(allocator),
             .field_kind_map = collections.DenseMap(checked.CheckedTypeId, InstantiatedFieldKind).init(allocator),
         };
     }
@@ -18066,7 +18107,7 @@ const BodyContext = struct {
     generated_encoder_lambda_index: u64,
     binders: BinderMap,
     typed_binders: TypedBinders,
-    local_proc_contexts: std.AutoHashMap(DraftLocalProcAddress, DraftLocalProcContextId),
+    local_proc_contexts: LocalProcContexts,
     restored_local_proc_scope: ?RestoredLocalProcScope = null,
     /// True while this context lowers a defaulted-field expression (design.md
     /// "Defaulted Fields"). Checking records nested-function sites for
@@ -19010,9 +19051,7 @@ const BodyContext = struct {
     ) void {
         const key = self.typedBinder(binder, ty);
         if (previous) |local| {
-            self.typed_binders.put(key, local) catch |err| switch (err) {
-                error.OutOfMemory => Common.invariant("restoring a previously inserted typed binder cannot reallocate"),
-            };
+            self.typed_binders.restore(key, local);
         } else {
             _ = self.typed_binders.remove(key);
         }
@@ -19072,7 +19111,7 @@ const BodyContext = struct {
             .generated_encoder_lambda_index = 0,
             .binders = try BinderMap.init(allocator, view.bodies.patternBinderCount()),
             .typed_binders = TypedBinders.init(allocator),
-            .local_proc_contexts = std.AutoHashMap(DraftLocalProcAddress, DraftLocalProcContextId).init(allocator),
+            .local_proc_contexts = LocalProcContexts.init(allocator),
             .graph = graph,
             .inhabitation_visiting = .{},
             .draft = draft,
@@ -20671,29 +20710,16 @@ const BodyContext = struct {
         child.owns_specialization_dispatch_crashes = false;
         child.borrowed_specialization_dispatch_divergence = self.specializationDispatchDivergence();
 
-        var binder_iter = self.binders.iterator();
-        while (binder_iter.next()) |entry| {
-            try child.binders.put(entry.binder, entry.local);
-        }
-
-        var typed_binder_iter = self.typed_binders.iterator();
-        while (typed_binder_iter.next()) |entry| {
-            try child.typed_binders.put(entry.key_ptr.*, entry.value_ptr.*);
-        }
-
-        var proc_iter = self.local_proc_contexts.iterator();
-        while (proc_iter.next()) |entry| {
-            try child.local_proc_contexts.put(entry.key_ptr.*, entry.value_ptr.*);
-        }
+        child.binders.deinit();
+        child.binders = self.binders.fork();
+        child.typed_binders.deinit();
+        child.typed_binders = self.typed_binders.fork();
+        child.local_proc_contexts.deinit();
+        child.local_proc_contexts = self.local_proc_contexts.fork();
 
         if (copy_type_cells) {
-            var node_iter = self.instantiation.node_map.iterator();
-            while (node_iter.next()) |entry| {
-                switch (entry.value_ptr.*) {
-                    .node => try child.instantiation.node_map.put(entry.key_ptr.*, entry.value_ptr.*),
-                    .building => continue,
-                }
-            }
+            child.instantiation.node_map.deinit();
+            child.instantiation.node_map = self.instantiation.node_map.forkCompleted();
         }
 
         try child.loop_contexts.appendSlice(child.allocator, self.loop_contexts.items);
@@ -20702,8 +20728,11 @@ const BodyContext = struct {
     }
 
     fn constrainCopiedBinderTypes(self: *BodyContext) Allocator.Error!void {
-        var binder_iter = self.binders.iterator();
-        while (binder_iter.next()) |entry| {
+        // Relation production preserves checked binder order independently of
+        // the environment's insertion/removal history.
+        const entries = try self.binders.sortedEntries(self.allocator);
+        defer self.allocator.free(entries);
+        for (entries) |entry| {
             const local = entry.local;
             const local_ty = self.localTypeCell(local);
             try self.constrainCheckedInterfaceToCell(checkedBinderType(self.view, entry.binder), local_ty);
@@ -20809,7 +20838,7 @@ const BodyContext = struct {
             };
         }
         for (lexical.local_procs) |proc| {
-            try self.local_proc_contexts.put(proc.declaration, proc.context);
+            try self.local_proc_contexts.putPermanent(proc.declaration, proc.context);
         }
     }
 
@@ -21843,8 +21872,10 @@ const BodyContext = struct {
             std.debug.assert(removed);
         }
         const built = try self.instNodeContent(checked_ty);
-        // Nested instantiation can grow the dense map, so reacquire its entry.
-        return try map.getPtr(scoped_ty).?.finish(self.graph, built);
+        var entry = map.get(scoped_ty).?;
+        const node = try entry.finish(self.graph, built);
+        try map.put(scoped_ty, entry);
+        return node;
     }
 
     fn freshInstNode(self: *BodyContext, checked_ty: checked.CheckedTypeId) Allocator.Error!NodeId {
@@ -21869,7 +21900,7 @@ const BodyContext = struct {
     /// lookup: the same open checked type mentioned at two nesting levels of
     /// a recursive declaration expansion binds the formals differently, and
     /// an outer answer would collapse those distinct types into one node.
-    fn scopedNodeMap(self: *BodyContext, checked_ty: checked.CheckedTypeId) *collections.DenseMap(checked.CheckedTypeId, InstantiatingNode) {
+    fn scopedNodeMap(self: *BodyContext, checked_ty: checked.CheckedTypeId) *InstantiatingNodeMap {
         const scopes = self.instantiation.decl_scopes.items;
         if (scopes.len == 0 or self.checkedTypeIsClosed(checked_ty)) {
             return &self.instantiation.node_map;
@@ -21878,8 +21909,12 @@ const BodyContext = struct {
     }
 
     fn scopedNode(self: *BodyContext, checked_ty: checked.CheckedTypeId) Allocator.Error!?NodeId {
-        const entry = self.scopedNodeMap(checked_ty).getPtr(checked_ty) orelse return null;
-        return try entry.get(self.graph);
+        const map = self.scopedNodeMap(checked_ty);
+        var entry = map.get(checked_ty) orelse return null;
+        if (entry == .node) return entry.node;
+        const node = try entry.get(self.graph);
+        try map.put(checked_ty, entry);
+        return node;
     }
 
     fn putScopedNode(self: *BodyContext, checked_ty: checked.CheckedTypeId, node: NodeId) Allocator.Error!void {
@@ -22207,7 +22242,7 @@ const BodyContext = struct {
         if (formal_args.len != args.len) {
             Common.invariant("checked nominal declaration arity differed from nominal type use");
         }
-        var scope = collections.DenseMap(checked.CheckedTypeId, InstantiatingNode).init(self.allocator);
+        var scope = InstantiatingNodeMap.init(self.allocator);
         defer scope.deinit();
         var field_kind_scope = collections.DenseMap(checked.CheckedTypeId, InstantiatedFieldKind).init(self.allocator);
         defer field_kind_scope.deinit();
@@ -34643,9 +34678,7 @@ const BodyContext = struct {
         if (!scope.entered) return;
         if (scope.bound_in_current_view) {
             if (scope.previous_local) |previous| {
-                self.binders.put(scope.binder, previous) catch |err| switch (err) {
-                    error.OutOfMemory => Common.invariant("restoring a previously inserted const binder cannot reallocate"),
-                };
+                self.binders.restore(scope.binder, previous);
             } else {
                 _ = self.binders.remove(scope.binder);
             }
@@ -36640,9 +36673,7 @@ const BodyContext = struct {
                     captures[initialized].previous_typed,
                 );
                 if (captures[initialized].previous) |previous| {
-                    fn_ctx.binders.put(captures[initialized].binder, previous) catch |err| switch (err) {
-                        error.OutOfMemory => Common.invariant("restoring a previously inserted binder cannot reallocate"),
-                    };
+                    fn_ctx.binders.restore(captures[initialized].binder, previous);
                 } else {
                     _ = fn_ctx.binders.remove(captures[initialized].binder);
                 }
@@ -36705,9 +36736,7 @@ const BodyContext = struct {
                 index -= 1;
                 fn_ctx.restoreTypedBinder(captures[index].binder, captures[index].ty, captures[index].previous_typed);
                 if (captures[index].previous) |previous| {
-                    fn_ctx.binders.put(captures[index].binder, previous) catch |err| switch (err) {
-                        error.OutOfMemory => Common.invariant("restoring a previously inserted binder cannot reallocate"),
-                    };
+                    fn_ctx.binders.restore(captures[index].binder, previous);
                 } else {
                     _ = fn_ctx.binders.remove(captures[index].binder);
                 }
@@ -36836,9 +36865,7 @@ const BodyContext = struct {
                 initialized -= 1;
                 if (captures[initialized].previous) |previous| {
                     fn_ctx.restoreTypedBinder(captures[initialized].binder, captures[initialized].ty, captures[initialized].previous_typed);
-                    fn_ctx.binders.put(captures[initialized].binder, previous) catch |err| switch (err) {
-                        error.OutOfMemory => Common.invariant("restoring a previously inserted binder cannot reallocate"),
-                    };
+                    fn_ctx.binders.restore(captures[initialized].binder, previous);
                 } else {
                     fn_ctx.restoreTypedBinder(captures[initialized].binder, captures[initialized].ty, captures[initialized].previous_typed);
                     _ = fn_ctx.binders.remove(captures[initialized].binder);
@@ -36887,9 +36914,7 @@ const BodyContext = struct {
                 index -= 1;
                 fn_ctx.restoreTypedBinder(captures[index].binder, captures[index].ty, captures[index].previous_typed);
                 if (captures[index].previous) |previous| {
-                    fn_ctx.binders.put(captures[index].binder, previous) catch |err| switch (err) {
-                        error.OutOfMemory => Common.invariant("restoring a previously inserted binder cannot reallocate"),
-                    };
+                    fn_ctx.binders.restore(captures[index].binder, previous);
                 } else {
                     _ = fn_ctx.binders.remove(captures[index].binder);
                 }
@@ -53376,9 +53401,7 @@ const BodyContext = struct {
         while (index > 0) {
             index -= 1;
             if (saved[index].previous) |previous| {
-                self.binders.put(saved[index].binder, previous) catch |err| switch (err) {
-                    error.OutOfMemory => Common.invariant("restoring a previously inserted binder cannot reallocate"),
-                };
+                self.binders.restore(saved[index].binder, previous);
             } else {
                 _ = self.binders.remove(saved[index].binder);
             }
@@ -56502,7 +56525,7 @@ const BodyContext = struct {
         } else {
             const context_id: DraftLocalProcContextId = @enumFromInt(@as(u32, @intCast(self.draft.local_proc_contexts.items.len)));
             try self.draft.local_proc_contexts.append(self.allocator, try self.cloneLocalProcContext(current));
-            try self.local_proc_contexts.put(address, context_id);
+            try self.local_proc_contexts.putPermanent(address, context_id);
         }
     }
 
@@ -56550,7 +56573,7 @@ const BodyContext = struct {
             self.allocator.free(entries);
             return err;
         };
-        try self.local_proc_contexts.put(address, context_id);
+        try self.local_proc_contexts.putPermanent(address, context_id);
         return context_id;
     }
 
@@ -57737,7 +57760,6 @@ test "queued specialization skips a body claimed immediately before dispatch" {
     builder.post_check_executor = null;
     builder.pending_spec_jobs = .empty;
     defer builder.pending_spec_jobs.deinit(allocator);
-    builder.pending_spec_jobs_head = 0;
     builder.next_spec_dispatch_index = 0;
     builder.next_spec_accept_index = 0;
     builder.counters = null;
@@ -57836,8 +57858,7 @@ test "queued specialization skips a body claimed immediately before dispatch" {
     try builder.drainPendingSpecJobs();
 
     try std.testing.expectEqual(@as(u64, 2), builder.next_spec_accept_index);
-    try std.testing.expectEqual(@as(usize, 0), builder.pending_spec_jobs.items.len);
-    try std.testing.expectEqual(@as(usize, 0), builder.pending_spec_jobs_head);
+    try std.testing.expectEqual(@as(usize, 0), builder.pending_spec_jobs.len);
     try std.testing.expectEqual(@as(u64, 2), diagnostics.body.spec_jobs_enqueued);
     try std.testing.expectEqual(@as(u64, 2), diagnostics.body.spec_jobs_skipped_ready);
     try std.testing.expectEqual(@as(u64, 0), diagnostics.body.spec_jobs_executed);
@@ -61973,21 +61994,86 @@ test "record parser presence words cover fields wider than one u64" {
     try std.testing.expectEqual(@as(u64, 1), BodyContext.recordPresenceMask(128));
 }
 
-test "binder map materializes dense storage only on first binding" {
-    var binders = try BinderMap.init(std.testing.allocator, 4);
+test "binder map initializes only touched IDs in a large checked module" {
+    var binders = try BinderMap.init(std.testing.allocator, 1_000_000);
     defer binders.deinit();
 
     const binder: checked.PatternBinderId = @enumFromInt(2);
     const local: DraftLocalId = @enumFromInt(7);
-    try std.testing.expect(binders.locals == null);
+    try std.testing.expect(binders.values.store == null);
     try std.testing.expectEqual(@as(?DraftLocalId, null), binders.get(binder));
     try std.testing.expect(!binders.remove(binder));
-    try std.testing.expect(binders.locals == null);
+    try std.testing.expect(binders.values.store == null);
 
     try binders.put(binder, local);
-    try std.testing.expect(binders.locals != null);
+    try std.testing.expect(binders.values.store != null);
     try std.testing.expectEqual(@as(?DraftLocalId, local), binders.get(binder));
     try std.testing.expectEqual(@as(usize, 1), binders.count());
+}
+
+test "issue 11322: independent binder versions never initialize the checked module domain" {
+    var parent = try BinderMap.init(std.testing.allocator, 1_000_000);
+    defer parent.deinit();
+    const binder: checked.PatternBinderId = @enumFromInt(999_999);
+    try parent.put(binder, @enumFromInt(1));
+    const store = parent.values.store.?;
+    try std.testing.expectEqual(@as(usize, 1), store.index.sparse_chunks.items.len);
+    var siblings: [50]BinderMap = undefined;
+    for (&siblings) |*sibling| sibling.* = parent.fork();
+    defer for (&siblings) |*sibling| sibling.deinit();
+    try std.testing.expectEqual(@as(usize, 0), store.changes.items.len);
+    for (&siblings, 0..) |*sibling, index| try sibling.put(binder, @enumFromInt(@as(u32, @intCast(index + 2))));
+    try parent.put(binder, @enumFromInt(100));
+    for (0..4) |_| {
+        for (&siblings, 0..) |*sibling, index| {
+            try std.testing.expectEqual(@as(DraftLocalId, @enumFromInt(@as(u32, @intCast(index + 2)))), sibling.get(binder).?);
+            var iterator = sibling.iterator();
+            try std.testing.expectEqual(binder, iterator.next().?.binder);
+            try std.testing.expect(iterator.next() == null);
+        }
+        try std.testing.expectEqual(@as(DraftLocalId, @enumFromInt(100)), parent.get(binder).?);
+    }
+    try std.testing.expectEqual(@as(usize, 1), store.slots.items.len);
+    try std.testing.expectEqual(@as(usize, 51), store.changes.items.len);
+    try std.testing.expect(store.replayed_changes <= 2 * 51 * 5);
+}
+
+test "copied binder relations keep checked binder order after branch mutation" {
+    const allocator = std.testing.allocator;
+    var parent = try BinderMap.init(allocator, 100);
+    defer parent.deinit();
+    try parent.put(@enumFromInt(90), @enumFromInt(9));
+    try parent.put(@enumFromInt(2), @enumFromInt(1));
+    try parent.put(@enumFromInt(20), @enumFromInt(2));
+    var child = parent.fork();
+    defer child.deinit();
+    try child.put(@enumFromInt(2), @enumFromInt(10));
+    try std.testing.expect(child.remove(@enumFromInt(2)));
+    try child.put(@enumFromInt(2), @enumFromInt(11));
+    const entries = try child.sortedEntries(allocator);
+    defer allocator.free(entries);
+    for (entries, [_]u32{ 2, 20, 90 }, [_]u32{ 11, 2, 9 }) |entry, binder, local| {
+        try std.testing.expectEqual(binder, @intFromEnum(entry.binder));
+        try std.testing.expectEqual(local, @intFromEnum(entry.local));
+    }
+}
+
+test "branch type versions inherit completed nodes without construction placeholders" {
+    const allocator = std.testing.allocator;
+    var parent = InstantiatingNodeMap.init(allocator);
+    defer parent.deinit();
+    const ready: checked.CheckedTypeId = @enumFromInt(10);
+    const unfinished: checked.CheckedTypeId = @enumFromInt(11);
+    try parent.put(ready, .{ .node = @enumFromInt(100) });
+    try parent.put(unfinished, .{ .building = null });
+    var child = parent.forkCompleted();
+    defer child.deinit();
+    try std.testing.expectEqual(@as(NodeId, @enumFromInt(100)), child.get(ready).?.node);
+    try std.testing.expect(child.get(unfinished) == null);
+    try parent.put(unfinished, .{ .node = @enumFromInt(101) });
+    try child.put(unfinished, .{ .node = @enumFromInt(102) });
+    try std.testing.expectEqual(@as(NodeId, @enumFromInt(101)), parent.get(unfinished).?.node);
+    try std.testing.expectEqual(@as(NodeId, @enumFromInt(102)), child.get(unfinished).?.node);
 }
 
 test "checked string literal cache is shared only within one draft owner" {
@@ -62068,9 +62154,9 @@ test "issue 11362: checked instantiation reserves only recursive node identities
     try std.testing.expectEqual(function_node, try ctx.instNode(function));
 
     // An inner open lookup must not reuse the outer declaration's binding.
-    var outer = collections.DenseMap(checked.CheckedTypeId, InstantiatingNode).init(gpa);
+    var outer = InstantiatingNodeMap.init(gpa);
     defer outer.deinit();
-    var inner = collections.DenseMap(checked.CheckedTypeId, InstantiatingNode).init(gpa);
+    var inner = InstantiatingNodeMap.init(gpa);
     defer inner.deinit();
     try outer.put(variable, .{ .node = function_node });
     try ctx.instantiation.decl_scopes.append(gpa, &outer);
@@ -62282,9 +62368,9 @@ fn testLazyCheckedInstantiationAliases(gpa: Allocator) (Allocator.Error || error
     try std.testing.expect(!graph.sameClass(fresh, recursive_node));
     try std.testing.expectEqual(recursive_node, try ctx.instNode(recursive));
 
-    var outer = collections.DenseMap(checked.CheckedTypeId, InstantiatingNode).init(gpa);
+    var outer = InstantiatingNodeMap.init(gpa);
     defer outer.deinit();
-    var inner = collections.DenseMap(checked.CheckedTypeId, InstantiatingNode).init(gpa);
+    var inner = InstantiatingNodeMap.init(gpa);
     defer inner.deinit();
     try ctx.instantiation.decl_scopes.append(gpa, &outer);
     defer _ = ctx.instantiation.decl_scopes.pop();
@@ -62456,9 +62542,9 @@ fn testLazyCheckedInstantiation(allocator: Allocator, recursive: bool) (Allocato
     const closed_node = try ctx.instNode(closed);
 
     // An open type consults only the innermost declaration's bindings.
-    var outer = collections.DenseMap(checked.CheckedTypeId, InstantiatingNode).init(allocator);
+    var outer = InstantiatingNodeMap.init(allocator);
     defer outer.deinit();
-    var inner = collections.DenseMap(checked.CheckedTypeId, InstantiatingNode).init(allocator);
+    var inner = InstantiatingNodeMap.init(allocator);
     defer inner.deinit();
     try outer.put(leaf, .{ .node = node });
     try ctx.instantiation.decl_scopes.append(allocator, &outer);
@@ -62576,9 +62662,9 @@ test "lazy checked placeholders obey closed and innermost declaration scopes" {
     ctx.view.types = checked_types.view();
     ctx.instantiation = TypeInstantiationContext.init(gpa, builder.allocateInstantiationScope(), @splat(0));
     defer ctx.instantiation.deinit();
-    var outer = collections.DenseMap(checked.CheckedTypeId, InstantiatingNode).init(gpa);
+    var outer = InstantiatingNodeMap.init(gpa);
     defer outer.deinit();
-    var inner = collections.DenseMap(checked.CheckedTypeId, InstantiatingNode).init(gpa);
+    var inner = InstantiatingNodeMap.init(gpa);
     defer inner.deinit();
     try ctx.instantiation.node_map.put(closed, .{ .building = null });
     try outer.put(open, .{ .building = null });
