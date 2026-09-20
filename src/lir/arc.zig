@@ -1273,64 +1273,18 @@ const ExactBitSet = struct {
         _ = try self.words.meetWith(&other.words, {}, intersectWord);
     }
 
+    /// Whether any bit is set. The snapshot answers from its structure, so
+    /// this costs the tree depth rather than the domain's width.
+    fn isEmpty(self: *const ExactBitSet) bool {
+        const word_len = std.math.divCeil(usize, self.bit_len, 64) catch unreachable;
+        return !self.words.hasNonEmptyInRange(0, word_len);
+    }
+
     fn count(self: *const ExactBitSet) usize {
         var total: usize = 0;
         const word_len = std.math.divCeil(usize, self.bit_len, 64) catch unreachable;
         for (0..word_len) |word_index| total += @popCount(self.words.get(@intCast(word_index)));
         return total;
-    }
-
-    fn Iterator(comptime options: std.bit_set.IteratorOptions) type {
-        if (options.kind != .set) @compileError("ARC exact sets iterate only set bits");
-        return struct {
-            set: *const ExactBitSet,
-            word_cursor: usize,
-            word_base: usize = 0,
-            pending: u64 = 0,
-
-            fn next(self: *@This()) ?usize {
-                return switch (options.direction) {
-                    .forward => {
-                        const word_len = std.math.divCeil(usize, self.set.bit_len, 64) catch unreachable;
-                        while (true) {
-                            if (self.pending != 0) {
-                                const word_bit: usize = @intCast(@ctz(self.pending));
-                                self.pending &= self.pending - 1;
-                                return self.word_base + word_bit;
-                            }
-                            if (self.word_cursor >= word_len) return null;
-                            self.word_base = self.word_cursor * 64;
-                            self.pending = self.set.words.get(@intCast(self.word_cursor));
-                            self.word_cursor += 1;
-                        }
-                    },
-                    .reverse => {
-                        while (true) {
-                            if (self.pending != 0) {
-                                const word_bit: usize = @intCast(63 - @clz(self.pending));
-                                self.pending &= ~(@as(u64, 1) << @intCast(word_bit));
-                                const bit = self.word_base + word_bit;
-                                if (bit < self.set.bit_len) return bit;
-                            }
-                            if (self.word_cursor == 0) return null;
-                            self.word_cursor -= 1;
-                            self.word_base = self.word_cursor * 64;
-                            self.pending = self.set.words.get(@intCast(self.word_cursor));
-                        }
-                    },
-                };
-            }
-        };
-    }
-
-    fn iterator(self: *const ExactBitSet, comptime options: std.bit_set.IteratorOptions) Iterator(options) {
-        return .{
-            .set = self,
-            .word_cursor = switch (options.direction) {
-                .forward => 0,
-                .reverse => std.math.divCeil(usize, self.bit_len, 64) catch unreachable,
-            },
-        };
     }
 
     const RangeIterator = struct {
@@ -6918,7 +6872,7 @@ const Inserter = struct {
 
         var keep_reads = try ExactBitSet.initEmpty(allocator, self.domain().livenessBitLen());
         try self.noteLivenessLoopKeep(&keep_reads, keep.set);
-        cache.consumed_keep_bits = keep_reads.count() != 0;
+        cache.consumed_keep_bits = !keep_reads.isEmpty();
 
         const rows = try allocator.alloc(?ExactBitSet, node_count);
         @memset(rows, null);
@@ -7014,13 +6968,13 @@ const Inserter = struct {
         const allocator = self.emission_allocator;
         var new_keep_reads = try ExactBitSet.initEmpty(allocator, self.domain().livenessBitLen());
         try self.noteLivenessLoopKeep(&new_keep_reads, keep.set);
-        var new_iter = new_keep_reads.iterator(.{});
+        var new_iter = new_keep_reads.iteratorRange(0, new_keep_reads.bit_len);
         while (new_iter.next()) |bit| {
             if (!old_keep_reads.isSet(bit)) arcInvariant("ARC loop boundary facts grew after their monotone keep-set shrank");
         }
         if (old_keep_reads.eql(new_keep_reads)) {
             cache.dirty = false;
-            cache.consumed_keep_bits = new_keep_reads.count() != 0;
+            cache.consumed_keep_bits = !new_keep_reads.isEmpty();
             if (builtin.mode == .Debug) try self.certifyLoopReadsBeforeRebind(cache);
             return;
         }
@@ -7088,7 +7042,7 @@ const Inserter = struct {
 
         old_keep_reads.unsetAll();
         try old_keep_reads.setUnion(new_keep_reads);
-        cache.consumed_keep_bits = new_keep_reads.count() != 0;
+        cache.consumed_keep_bits = !new_keep_reads.isEmpty();
         cache.dirty = false;
         if (builtin.mode == .Debug) try self.certifyLoopReadsBeforeRebind(cache);
     }
@@ -7535,6 +7489,7 @@ const Inserter = struct {
         return switch (op) {
             .incref => .incref,
             .decref, .free => .decref,
+            .host_drop => arcInvariant("ARC RC statement carried a host-shaped drop adapter"),
         };
     }
 
@@ -7789,7 +7744,9 @@ test "exact ARC sets preserve operations across persistent forks" {
 
         var cloned = try left.clone(arena.allocator());
         try testing.expect(cloned.eql(left));
-        var iter = cloned.iterator(.{ .direction = .reverse });
+        // A domain whose width is not a whole number of words must not
+        // enumerate the padding bits above it.
+        var iter = cloned.iteratorRange(0, cloned.bit_len);
         try testing.expectEqual(bit_len - 1, iter.next().?);
         try testing.expectEqual(@as(?usize, null), iter.next());
     }

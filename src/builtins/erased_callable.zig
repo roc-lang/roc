@@ -8,6 +8,7 @@
 const std = @import("std");
 
 const utils = @import("utils.zig");
+const rc_callback_abi = @import("rc_callback_abi.zig");
 
 pub const RocOps = utils.RocOps;
 
@@ -55,7 +56,12 @@ pub const CallableFnPtr = ErasedCallableFn;
 /// code carries no RocOps under the symbol ABI and passes null here, so a
 /// host-installed callback must reach the host's RocOps through the host's
 /// own storage, never through this parameter.
-pub const OnDropFn = *const fn (?[*]u8, *RocOps) callconv(.c) void;
+///
+/// This is the one generated-callback slot that keeps the ops argument, because
+/// glue publishes it to Zig, Rust, and C hosts. A compiler-generated helper
+/// installed here is the layout's `host_drop` adapter, which carries this
+/// signature and ignores the slot.
+pub const OnDropFn = rc_callback_abi.HostDropFn;
 
 /// Fixed header at the beginning of a boxed erased callable payload.
 pub const Payload = extern struct {

@@ -19,6 +19,7 @@ pub const hash = @import("hash.zig");
 pub const list = @import("list.zig");
 pub const num = @import("num.zig");
 pub const numeric_conversions = @import("numeric_conversions.zig");
+pub const rc_callback_abi = @import("rc_callback_abi.zig");
 pub const sort = @import("sort.zig");
 pub const simd = @import("simd.zig");
 pub const str = @import("str.zig");
@@ -43,6 +44,7 @@ test "builtins tests" {
     std.testing.refAllDecls(@import("native_runtime_libcalls.zig"));
     std.testing.refAllDecls(@import("num.zig"));
     std.testing.refAllDecls(@import("numeric_conversions.zig"));
+    std.testing.refAllDecls(@import("rc_callback_abi.zig"));
     std.testing.refAllDecls(@import("sort.zig"));
     std.testing.refAllDecls(@import("simd.zig"));
     std.testing.refAllDecls(@import("str.zig"));

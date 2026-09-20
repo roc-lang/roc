@@ -275,8 +275,20 @@ pub const CallableIdentity = union(enum(u8)) {
     generated: GeneratedId,
 };
 
-/// Full specialization identity: callable plus source function type and the
-/// closed monomorphic function type the reserving call site REQUESTED.
+/// Full specialization identity: the checked callable, the scope and context
+/// its body resolves dispatch in, and the closed monomorphic function type
+/// the reserving call site REQUESTED.
+///
+/// The checked source function type a call site instantiated the callable
+/// from is deliberately absent. The callable says which checked body to
+/// lower; that type is the requesting graph's instantiation context, which
+/// the graph may memoize by. Two call sites reaching the same callable at the
+/// same closed Monotype type, evidence, codec context, and method scope name
+/// ONE specialization even when their checked source types differ—as they do
+/// when one is annotated with a transparent alias of the other's type
+/// (`design.md`). No identity derived from the record may reintroduce that
+/// provenance either: the record keeps whichever requester reserved it, so a
+/// derived identity that read it would disagree between programs.
 ///
 /// The identity is immutable: it is written once when the record is reserved
 /// and never rewritten. Body evidence that refines the requested type is data
@@ -285,7 +297,6 @@ pub const CallableIdentity = union(enum(u8)) {
 pub const SpecIdentity = struct {
     callable: CallableIdentity,
     method_scope: names.CheckedModuleDigest,
-    source_fn_ty_digest: names.TypeDigest,
     evidence_digest: EvidenceDigest,
     /// Exact lowering-only context required by generated codec method bodies.
     /// Zero for ordinary specializations.
@@ -306,9 +317,12 @@ pub const SpecIdentity = struct {
 /// of whichever module's store lowered it, and the same type lowered from
 /// two modules would otherwise get two keys. Identical for the same request
 /// in every program, and computable the moment the request is reserved.
+/// Because the identity carries no caller provenance, neither does this key:
+/// a call site that reaches this specialization through a transparent alias
+/// computes the same key as one that names the backing type.
 pub fn specIdentityKey(identity: SpecIdentity, request_equality: names.TypeDigest) names.TypeDigest {
     var hasher = TypeDigestHasher.init();
-    hasher.update("roc.monotype.spec-key.v2");
+    hasher.update("roc.monotype.spec-key.v3");
     switch (identity.callable) {
         .proc_template => |template| {
             hasher.update("proc_template");
@@ -339,7 +353,6 @@ pub fn specIdentityKey(identity: SpecIdentity, request_equality: names.TypeDiges
             writeU32(&hasher, @intFromEnum(generated));
         },
     }
-    hasher.update(&identity.source_fn_ty_digest.bytes);
     hasher.update(&identity.evidence_digest.bytes);
     hasher.update(&identity.codec_contract_digest.bytes);
     hasher.update(&request_equality.bytes);
@@ -371,20 +384,67 @@ pub const SpecRecord = struct {
     status: SpecStatus,
 };
 
-/// Compare the fields that make two function templates identical for Monotype.
+/// The body key `source_fn_key` holds for a compiler-generated callable, or
+/// null when `fn_def` already names the body.
+///
+/// The slot has two readings, decided by callable kind (`design.md`). For a
+/// checked template, nested function, or hosted procedure it is the checked
+/// type the REQUESTER instantiated the callable from: caller provenance, which
+/// identity must drop, since a record keeps whichever requester reserved it.
+/// For a generated body—an interpolation or field-names step, a parser or
+/// encoder runtime, a generated encoder callback—the producer has no checked
+/// declaration to name and writes the body's own identity there instead;
+/// several such bodies share one `fn_def`, evidence, and Monotype type, so
+/// identity must keep it.
+///
+/// `checked_generated` also covers an unavailable-hosted crash stub and a
+/// result-row widening adapter, whose slot is provenance. Keying that kind
+/// here keeps those two conservatively distinct per requester: it costs reuse
+/// and cannot lose a distinction, and neither is an object-cache entry, so no
+/// key can disagree with their identity.
+pub fn generatedBodyKey(template: FnTemplate) ?names.TypeDigest {
+    return switch (template.fn_def) {
+        .checked_generated,
+        .parser_runtime,
+        .encoder_for_runtime,
+        => template.source_fn_key,
+        .local_template,
+        .imported_template,
+        .nested,
+        .local_hosted,
+        .imported_hosted,
+        => null,
+    };
+}
+
+/// Compare the fields that make two function templates identical for Monotype:
+/// the checked callable, the generated-body key when the callable has one, its
+/// dispatch evidence, and the Monotype type it was requested at. Caller
+/// provenance is deliberately absent (see `generatedBodyKey`).
 pub fn fnTemplateIdentityEql(lhs: FnTemplate, rhs: FnTemplate) bool {
-    return std.meta.eql(lhs.fn_def, rhs.fn_def) and
-        std.mem.eql(u8, lhs.source_fn_key.bytes[0..], rhs.source_fn_key.bytes[0..]) and
-        std.mem.eql(u8, lhs.evidence_digest.bytes[0..], rhs.evidence_digest.bytes[0..]) and
+    if (!std.meta.eql(lhs.fn_def, rhs.fn_def)) return false;
+    const lhs_body = generatedBodyKey(lhs);
+    const rhs_body = generatedBodyKey(rhs);
+    if ((lhs_body == null) != (rhs_body == null)) return false;
+    if (lhs_body) |lhs_key| {
+        if (!std.mem.eql(u8, lhs_key.bytes[0..], rhs_body.?.bytes[0..])) return false;
+    }
+    return std.mem.eql(u8, lhs.evidence_digest.bytes[0..], rhs.evidence_digest.bytes[0..]) and
         lhs.mono_fn_ty == rhs.mono_fn_ty;
 }
 
-/// Compute a digest for a Monotype function template. Takes the type store
-/// mutable because type digests are computed through the store's cache.
+/// Compute a digest for a Monotype function template, over exactly the fields
+/// `fnTemplateIdentityEql` compares. Takes the type store mutable because type
+/// digests are computed through the store's cache.
 pub fn fnTemplateDigest(template: FnTemplate, types: *Type.Store, name_store: *const names.NameStore) names.TypeDigest {
     var hasher = TypeDigestHasher.init();
     writeFnDef(&hasher, name_store, template.fn_def);
-    writeBytes(&hasher, &template.source_fn_key.bytes);
+    if (generatedBodyKey(template)) |body_key| {
+        writeBytes(&hasher, "generated_body");
+        writeBytes(&hasher, &body_key.bytes);
+    } else {
+        writeBytes(&hasher, "no_generated_body");
+    }
     writeBytes(&hasher, &template.evidence_digest.bytes);
     const mono_digest = types.specializationDigest(name_store, template.mono_fn_ty);
     writeBytes(&hasher, &mono_digest.bytes);
@@ -1375,6 +1435,10 @@ pub const ProgramView = struct {
     proc_debug_names: []const ProcDebugName,
     roots: []const Root,
     layout_requests: []const LayoutRequest,
+    /// Evaluated roots this program reads a completed value of, recorded once
+    /// each. Whoever materializes those values consumes this instead of
+    /// rediscovering the reads.
+    comptime_value_reads: []const Common.ComptimeValueRoot,
     runtime_schema_requests: []const RuntimeSchemaRequest,
     static_data_values: []const StaticDataValue,
     comptime_value_roots: []const Common.ComptimeValueRoot,
@@ -1557,6 +1621,8 @@ pub const ProgramBuilder = struct {
     proc_debug_names: ProcDebugNameMap,
     roots: ProgramList(Root, "roots"),
     layout_requests: ProgramList(LayoutRequest, "layout_requests"),
+    /// See `ProgramView.comptime_value_reads`.
+    comptime_value_reads: ProgramList(Common.ComptimeValueRoot, "comptime_value_reads"),
     runtime_schema_requests: ProgramList(RuntimeSchemaRequest, "runtime_schema_requests"),
     static_data_values: ProgramList(StaticDataValue, "static_data_values"),
     /// Immutable descriptors live outside hot expression rows.
@@ -1615,6 +1681,7 @@ pub const ProgramBuilder = struct {
             .proc_debug_names = ProcDebugNameMap.init(allocator),
             .roots = .empty,
             .layout_requests = .empty,
+            .comptime_value_reads = .empty,
             .runtime_schema_requests = .empty,
             .static_data_values = .empty,
             .comptime_sites = .empty,
@@ -1638,7 +1705,7 @@ pub const ProgramBuilder = struct {
         result.names = try self.names.clone(allocator);
         result.types = try self.types.cloneFrozen(allocator);
         try result.comptime_value_roots.appendSlice(allocator, self.comptime_value_roots.unsafeRawItemsForView());
-        inline for (.{ "specs", "fns", "const_fn_evidence", "const_fn_evidence_frames", "defs", "nested_defs", "exprs", "pats", "stmts", "locals", "expr_ids", "pat_ids", "typed_locals", "stmt_ids", "field_exprs", "field_access_segments", "fn_def_captures", "capture_operands", "record_destructs", "str_pattern_steps", "branches", "if_branches", "roots", "layout_requests", "runtime_schema_requests", "static_data_values", "expr_locs", "expr_regions", "stmt_locs", "stmt_regions" }) |field| {
+        inline for (.{ "specs", "fns", "const_fn_evidence", "const_fn_evidence_frames", "defs", "nested_defs", "exprs", "pats", "stmts", "locals", "expr_ids", "pat_ids", "typed_locals", "stmt_ids", "field_exprs", "field_access_segments", "fn_def_captures", "capture_operands", "record_destructs", "str_pattern_steps", "branches", "if_branches", "roots", "layout_requests", "comptime_value_reads", "runtime_schema_requests", "static_data_values", "expr_locs", "expr_regions", "stmt_locs", "stmt_regions" }) |field| {
             try @field(result, field).appendSlice(allocator, @field(self, field).unsafeRawItemsForView());
         }
         try result.proc_debug_names.items.appendSlice(allocator, self.proc_debug_names.view());
@@ -1705,6 +1772,7 @@ pub const ProgramBuilder = struct {
         self.comptime_value_roots.deinit(self.allocator);
         self.static_data_values.deinit(self.allocator);
         self.runtime_schema_requests.deinit(self.allocator);
+        self.comptime_value_reads.deinit(self.allocator);
         self.layout_requests.deinit(self.allocator);
         self.roots.deinit(self.allocator);
         self.proc_debug_names.deinit();
@@ -1889,6 +1957,7 @@ pub const ProgramBuilder = struct {
             .proc_debug_names = self.proc_debug_names.view(),
             .roots = self.roots.unsafeRawItemsForView(),
             .layout_requests = self.layout_requests.unsafeRawItemsForView(),
+            .comptime_value_reads = self.comptime_value_reads.unsafeRawItemsForView(),
             .runtime_schema_requests = self.runtime_schema_requests.unsafeRawItemsForView(),
             .static_data_values = self.static_data_values.unsafeRawItemsForView(),
             .comptime_value_roots = self.comptime_value_roots.unsafeRawItemsForView(),
@@ -2194,6 +2263,17 @@ pub const ProgramBuilder = struct {
 
     pub fn addLayoutRequest(self: *ProgramBuilder, request: LayoutRequest) std.mem.Allocator.Error!void {
         try self.layout_requests.append(self.allocator, request);
+    }
+
+    pub fn comptimeValueReadsView(self: *const ProgramBuilder) []const Common.ComptimeValueRoot {
+        return self.comptime_value_reads.unsafeRawItemsForView();
+    }
+
+    /// Record that this program reads one evaluated root's completed value.
+    /// One root is recorded once however many reads it has, which the caller
+    /// owns deciding.
+    pub fn addComptimeValueRead(self: *ProgramBuilder, root: Common.ComptimeValueRoot) std.mem.Allocator.Error!void {
+        try self.comptime_value_reads.append(self.allocator, root);
     }
 
     pub fn runtimeSchemaRequestCount(self: *const ProgramBuilder) usize {
@@ -2508,7 +2588,6 @@ test "monotype program view exposes read-only side arrays" {
         .identity = .{
             .callable = .{ .proc_template = .{ .module = .{}, .proc_base = 0, .template = 0 } },
             .method_scope = .{},
-            .source_fn_ty_digest = .{},
             .evidence_digest = fnEvidenceDigest(&.{}, &.{}, null),
             .codec_contract_digest = .{},
             .codec_contract = null,
@@ -2749,6 +2828,116 @@ fn testFnSource(mono_fn_ty: Type.TypeId) FnTemplate {
         .source_fn_key = .{},
         .mono_fn_ty = mono_fn_ty,
     };
+}
+
+fn testProcTemplate(name_store: *names.NameStore, template_id: u32) std.mem.Allocator.Error!names.ProcTemplate {
+    return .{
+        .artifact = .{},
+        .proc_base = try name_store.internProcBase(.{
+            .module_name = try name_store.internModuleName("SourceDigest"),
+            .export_name = null,
+            .kind = .checked_source,
+            .ordinal = 0,
+        }),
+        .template = @enumFromInt(template_id),
+    };
+}
+
+fn testTemplateDigestKey(comptime byte: u8) names.TypeDigest {
+    var digest: names.TypeDigest = .{};
+    digest.bytes[0] = byte;
+    return digest;
+}
+
+test "function template identity ignores the requester's checked source type" {
+    var name_store = names.NameStore.init(std.testing.allocator);
+    defer name_store.deinit();
+    var types = Type.Store.init(std.testing.allocator);
+    defer types.deinit();
+
+    // Two call sites reserved the same checked template at the same closed
+    // type with the same evidence; only the checked type each instantiated it
+    // from differs, which is caller provenance and not identity.
+    const mono_fn_ty = try types.add(.zst);
+    const first: FnTemplate = .{
+        .fn_def = .{ .local_template = try testProcTemplate(&name_store, 1) },
+        .source_fn_ty = @enumFromInt(7),
+        .source_fn_key = testTemplateDigestKey(1),
+        .mono_fn_ty = mono_fn_ty,
+    };
+    var second = first;
+    second.source_fn_ty = @enumFromInt(9);
+    second.source_fn_key = testTemplateDigestKey(2);
+
+    try std.testing.expect(fnTemplateIdentityEql(first, second));
+    try std.testing.expectEqual(
+        fnTemplateDigest(first, &types, &name_store),
+        fnTemplateDigest(second, &types, &name_store),
+    );
+
+    // The identity still separates a different callable and a different type.
+    var other_callable = first;
+    other_callable.fn_def = .{ .local_template = try testProcTemplate(&name_store, 2) };
+    try std.testing.expect(!fnTemplateIdentityEql(first, other_callable));
+    var other_type = first;
+    other_type.mono_fn_ty = try types.add(.{ .primitive = .str });
+    try std.testing.expect(!fnTemplateIdentityEql(first, other_type));
+    var other_evidence = first;
+    other_evidence.evidence_digest = .{ .bytes = testTemplateDigestKey(5).bytes };
+    try std.testing.expect(!fnTemplateIdentityEql(first, other_evidence));
+}
+
+test "function template identity keeps generated bodies of one owner apart" {
+    var name_store = names.NameStore.init(std.testing.allocator);
+    defer name_store.deinit();
+    var types = Type.Store.init(std.testing.allocator);
+    defer types.deinit();
+
+    // Every interpolation step of one expression, and every callback of one
+    // generated encoder, shares its owner, its (empty) evidence, and its
+    // Monotype type. The producer's generated-body key is the only thing that
+    // says they are different code, so identity must carry it.
+    const mono_fn_ty = try types.add(.zst);
+    const first_step: FnTemplate = .{
+        .fn_def = .{ .checked_generated = try testProcTemplate(&name_store, 1) },
+        .source_fn_ty = @enumFromInt(7),
+        .source_fn_key = testTemplateDigestKey(1),
+        .mono_fn_ty = mono_fn_ty,
+    };
+    var second_step = first_step;
+    second_step.source_fn_key = testTemplateDigestKey(2);
+
+    try std.testing.expect(!fnTemplateIdentityEql(first_step, second_step));
+    try std.testing.expect(!std.meta.eql(
+        fnTemplateDigest(first_step, &types, &name_store),
+        fnTemplateDigest(second_step, &types, &name_store),
+    ));
+
+    // The same generated body reached twice is one callable.
+    const repeated_step = first_step;
+    try std.testing.expect(fnTemplateIdentityEql(first_step, repeated_step));
+    try std.testing.expectEqual(
+        fnTemplateDigest(first_step, &types, &name_store),
+        fnTemplateDigest(repeated_step, &types, &name_store),
+    );
+
+    // Generated runtime callables carry the key the same way.
+    const first_callback: FnTemplate = .{
+        .fn_def = .{ .encoder_for_runtime = .{
+            .owner = try testProcTemplate(&name_store, 1),
+            .expr = @enumFromInt(3),
+        } },
+        .source_fn_ty = @enumFromInt(7),
+        .source_fn_key = testTemplateDigestKey(1),
+        .mono_fn_ty = mono_fn_ty,
+    };
+    var second_callback = first_callback;
+    second_callback.source_fn_key = testTemplateDigestKey(2);
+    try std.testing.expect(!fnTemplateIdentityEql(first_callback, second_callback));
+    try std.testing.expect(!std.meta.eql(
+        fnTemplateDigest(first_callback, &types, &name_store),
+        fnTemplateDigest(second_callback, &types, &name_store),
+    ));
 }
 
 test "codec function evidence identity excludes per-use replay addresses" {
