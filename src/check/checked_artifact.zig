@@ -22838,20 +22838,15 @@ pub const PlatformAppRelation = struct {
     /// indices lower to a runtime crash, while successful sibling bindings
     /// remain fully linked.
     checked_error_requires: []const u32,
-    /// The app-store checked roots the checker solved requirement identity
-    /// variables to, flattened in canonical identity-slot order and indexed by
-    /// each relation's `identity_start`/`identity_len` range.
+    /// Borrowed app-store roots in the checker's canonical identity-slot order.
+    /// The app artifact owns these roots and each binding's template closure;
+    /// it must outlive the relation and publication that consume them.
     identity_solutions_app: []const CheckedTypeId,
 
     pub fn deinit(self: *PlatformAppRelation, allocator: Allocator) void {
-        for (self.bindings) |*binding| {
-            var value_use = binding.value_use;
-            deinitPlatformRequiredValueUse(allocator, &value_use);
-        }
         allocator.free(self.relations);
         allocator.free(self.bindings);
         allocator.free(self.checked_error_requires);
-        allocator.free(self.identity_solutions_app);
         self.* = .{
             .key = .{},
             .requirement_context = .{},
@@ -23482,10 +23477,8 @@ pub const PlatformRequiredBindingTable = struct {
                 unreachable;
             };
             validatePlatformBindingRelation(binding.declaration, binding.requires_idx, binding.app_value, binding.value_use.tag(), checked_relation, i);
-            var value_use = try clonePlatformRequiredValueUseWithRelation(allocator, binding.value_use, checked_relation);
-            errdefer deinitPlatformRequiredValueUse(allocator, &value_use);
-            const stored_value_use = try commitPlatformRequiredValueUse(&closure_pool, allocator, value_use);
-            value_use = undefined;
+            const value_use = platformRequiredValueUseWithRelation(binding.value_use, checked_relation);
+            const stored_value_use = try copyPlatformRequiredValueUse(&closure_pool, allocator, value_use);
             bindings[i] = .{
                 .id = @enumFromInt(@as(u32, @intCast(i))),
                 .relation = active_relation.key,
@@ -25179,11 +25172,10 @@ fn validatePlatformBindingRelation(
     }
 }
 
-fn clonePlatformRequiredValueUseWithRelation(
-    allocator: Allocator,
+fn platformRequiredValueUseWithRelation(
     value_use: PlatformRequiredValueUse,
     relation: PlatformRequirementRelation,
-) Allocator.Error!PlatformRequiredValueUse {
+) PlatformRequiredValueUse {
     return switch (value_use) {
         .const_value => |const_use| .{ .const_value = .{
             .const_use = .{
@@ -25191,7 +25183,7 @@ fn clonePlatformRequiredValueUseWithRelation(
                 .requested_source_ty_template = relation.requested_source_ty,
                 .requested_source_ty_payload = relation.requested_source_ty_payload,
             },
-            .relation_template_closure = try cloneImportedTemplateClosure(allocator, const_use.relation_template_closure),
+            .relation_template_closure = const_use.relation_template_closure,
         } },
         .procedure_value => |proc_use| .{ .procedure_value = .{
             .procedure = .{
@@ -25206,15 +25198,13 @@ fn clonePlatformRequiredValueUseWithRelation(
                 .checked_module = relation.app_value.artifact,
                 .span = relation.root_evidence,
             },
-            .relation_template_closure = try cloneImportedTemplateClosure(allocator, proc_use.relation_template_closure),
+            .relation_template_closure = proc_use.relation_template_closure,
         } },
     };
 }
 
-/// Commit a slice-form `PlatformRequiredValueUse` into `pool`, returning the POD
-/// stored form. Takes ownership of the value_use's closure slices (copied into
-/// the pool and freed), mirroring `deinitPlatformRequiredValueUse`.
-fn commitPlatformRequiredValueUse(
+/// Copy borrowed closure slices directly into the final publication's pool.
+fn copyPlatformRequiredValueUse(
     pool: *ClosurePool,
     allocator: Allocator,
     value_use: PlatformRequiredValueUse,
@@ -25223,14 +25213,14 @@ fn commitPlatformRequiredValueUse(
         .const_value => |const_use| .{
             .const_value = .{
                 .const_use = const_use.const_use,
-                .relation_template_closure = try pool.commit(allocator, const_use.relation_template_closure),
+                .relation_template_closure = try pool.appendBorrowed(allocator, const_use.relation_template_closure),
             },
         },
         .procedure_value => |proc_use| .{
             .procedure_value = .{
                 .procedure = proc_use.procedure,
                 .root_evidence = proc_use.root_evidence,
-                .relation_template_closure = try pool.commit(allocator, proc_use.relation_template_closure),
+                .relation_template_closure = try pool.appendBorrowed(allocator, proc_use.relation_template_closure),
             },
         },
     };
@@ -25265,15 +25255,9 @@ pub fn buildPlatformAppRelation(
     var relations = std.ArrayList(PlatformRequirementRelationInput).empty;
     errdefer relations.deinit(allocator);
     var bindings = std.ArrayList(PlatformRequiredBindingInput).empty;
-    errdefer {
-        for (bindings.items) |*binding| deinitPlatformRequiredValueUse(allocator, &binding.value_use);
-        bindings.deinit(allocator);
-    }
+    errdefer bindings.deinit(allocator);
     var checked_error_requires = std.ArrayList(u32).empty;
     errdefer checked_error_requires.deinit(allocator);
-
-    var identity_solutions_app = std.ArrayList(CheckedTypeId).empty;
-    errdefer identity_solutions_app.deinit(allocator);
 
     const requirement_context = PlatformRequirementContextKey.computeFromParts(
         computeStableModuleIdentityHash(platform_module_env),
@@ -25312,11 +25296,6 @@ pub fn buildPlatformAppRelation(
             std.debug.assert(top_level.pattern == solution.pattern);
         }
 
-        const app_identity_slice = app_artifact.platform_requirement_solutions.identitySlice(solution);
-        const identity_start: u32 = @intCast(identity_solutions_app.items.len);
-        try identity_solutions_app.appendSlice(allocator, app_identity_slice);
-        const identity_len: u32 = @intCast(app_identity_slice.len);
-
         const relation_id: PlatformRequirementRelationId = @enumFromInt(@as(u32, @intCast(relations.items.len)));
         try relations.append(allocator, .{
             .id = relation_id,
@@ -25327,8 +25306,8 @@ pub fn buildPlatformAppRelation(
             .value_kind = value_kind,
             .solved_root_app = solution.solved_root,
             .root_evidence = solution.root_evidence,
-            .identity_start = identity_start,
-            .identity_len = identity_len,
+            .identity_start = solution.identity_start,
+            .identity_len = solution.identity_len,
         });
 
         try bindings.append(allocator, .{
@@ -25347,11 +25326,7 @@ pub fn buildPlatformAppRelation(
                     app_artifact.exported_procedure_bindings.view(),
                     top_level,
                 );
-                var template_closure = try cloneImportedTemplateClosure(
-                    allocator,
-                    exportedProcedureBindingClosureForAppValue(app_artifact, exported_binding),
-                );
-                errdefer deinitImportedTemplateClosure(allocator, &template_closure);
+                const template_closure = exportedProcedureBindingClosureForAppValue(app_artifact, exported_binding);
 
                 break :blk .{ .procedure_value = .{
                     .procedure = platformRequiredProcedureUse(
@@ -25372,11 +25347,7 @@ pub fn buildPlatformAppRelation(
                     .const_ref => |ref| ref,
                     .procedure_binding => checkedArtifactInvariant("platform requirement solution needs a const but the app value is a procedure", .{}),
                 };
-                var template_closure = try cloneImportedTemplateClosure(
-                    allocator,
-                    exportedConstTemplateClosureForAppValue(app_artifact, app_value_ref, const_ref),
-                );
-                errdefer deinitImportedTemplateClosure(allocator, &template_closure);
+                const template_closure = exportedConstTemplateClosureForAppValue(app_artifact, app_value_ref, const_ref);
 
                 break :blk .{ .const_value = .{
                     .const_use = .{
@@ -25393,14 +25364,9 @@ pub fn buildPlatformAppRelation(
     const owned_relations = try relations.toOwnedSlice(allocator);
     errdefer allocator.free(owned_relations);
     const owned_bindings = try bindings.toOwnedSlice(allocator);
-    errdefer {
-        for (owned_bindings) |*binding| deinitPlatformRequiredValueUse(allocator, &binding.value_use);
-        allocator.free(owned_bindings);
-    }
+    errdefer allocator.free(owned_bindings);
     const owned_checked_errors = try checked_error_requires.toOwnedSlice(allocator);
     errdefer allocator.free(owned_checked_errors);
-    const owned_identity_solutions = try identity_solutions_app.toOwnedSlice(allocator);
-    errdefer allocator.free(owned_identity_solutions);
 
     return .{
         .key = relation_key,
@@ -25410,7 +25376,7 @@ pub fn buildPlatformAppRelation(
         .relations = owned_relations,
         .bindings = owned_bindings,
         .checked_error_requires = owned_checked_errors,
-        .identity_solutions_app = owned_identity_solutions,
+        .identity_solutions_app = app_artifact.platform_requirement_solutions.identity_solutions,
     };
 }
 
@@ -28534,6 +28500,15 @@ pub const ClosurePool = struct {
     ) Allocator.Error!StoredImportedTemplateClosure {
         var owned = closure;
         defer deinitImportedTemplateClosure(allocator, &owned);
+        return self.appendBorrowed(allocator, closure);
+    }
+
+    /// Append borrowed closure refs without allocating temporary owned slices.
+    pub fn appendBorrowed(
+        self: *ClosurePool,
+        allocator: Allocator,
+        closure: ImportedTemplateClosureView,
+    ) Allocator.Error!StoredImportedTemplateClosure {
         return .{
             .checked_bodies = try appendPool(ArtifactCheckedBodyRef, &self.checked_bodies, allocator, closure.checked_bodies),
             .checked_type_roots = try appendPool(ArtifactCheckedTypeRef, &self.checked_type_roots, allocator, closure.checked_type_roots),
@@ -28742,7 +28717,7 @@ test "platform relation procedure use preserves exported runtime result provenan
 
     var table = PlatformRequiredBindingTable{};
     defer table.deinit(gpa);
-    const stored_use = try commitPlatformRequiredValueUse(&table.closure_pool, gpa, .{
+    const stored_use = try copyPlatformRequiredValueUse(&table.closure_pool, gpa, .{
         .procedure_value = .{ .procedure = procedure },
     });
     table.bindings = try gpa.dupe(PlatformRequiredBinding, &.{.{
@@ -30713,51 +30688,6 @@ pub fn deinitImportedTemplateClosure(
     freeConstSlice(allocator, closure.method_registry_entries);
     freeConstSlice(allocator, closure.interface_capabilities);
     closure.* = .{};
-}
-
-/// Clone an imported-template closure view so it can be owned by a new artifact record.
-pub fn cloneImportedTemplateClosure(
-    allocator: Allocator,
-    closure: ImportedTemplateClosureView,
-) Allocator.Error!ImportedTemplateClosureView {
-    var out = ImportedTemplateClosureView{};
-    errdefer deinitImportedTemplateClosure(allocator, &out);
-
-    out.checked_bodies = try cloneConstSlice(allocator, ArtifactCheckedBodyRef, closure.checked_bodies);
-    out.checked_type_roots = try cloneConstSlice(allocator, ArtifactCheckedTypeRef, closure.checked_type_roots);
-    out.checked_type_schemes = try cloneConstSlice(allocator, ArtifactCheckedTypeSchemeRef, closure.checked_type_schemes);
-    out.checked_callable_bodies = try cloneConstSlice(allocator, ArtifactCheckedCallableBodyRef, closure.checked_callable_bodies);
-    out.checked_const_bodies = try cloneConstSlice(allocator, ArtifactCheckedConstBodyRef, closure.checked_const_bodies);
-    out.checked_procedure_templates = try cloneConstSlice(allocator, ArtifactProcedureTemplateRef, closure.checked_procedure_templates);
-    out.callable_eval_templates = try cloneConstSlice(allocator, ArtifactCallableEvalTemplateRef, closure.callable_eval_templates);
-    out.const_templates = try cloneConstSlice(allocator, ConstRef, closure.const_templates);
-    out.nested_proc_sites = try cloneConstSlice(allocator, ArtifactNestedProcSiteTableRef, closure.nested_proc_sites);
-    out.resolved_value_refs = try cloneConstSlice(allocator, ArtifactResolvedValueRefTableRef, closure.resolved_value_refs);
-    out.static_dispatch_plans = try cloneConstSlice(allocator, ArtifactStaticDispatchPlanTableRef, closure.static_dispatch_plans);
-    out.method_registry_entries = try cloneConstSlice(allocator, MethodRegistryEntryRef, closure.method_registry_entries);
-    out.interface_capabilities = try cloneConstSlice(allocator, ArtifactModuleInterfaceCapabilitiesRef, closure.interface_capabilities);
-
-    return out;
-}
-
-fn cloneConstSlice(
-    allocator: Allocator,
-    comptime T: type,
-    slice: []const T,
-) Allocator.Error![]const T {
-    if (slice.len == 0) return &.{};
-    return try allocator.dupe(T, slice);
-}
-
-fn deinitPlatformRequiredValueUse(
-    allocator: Allocator,
-    value_use: *PlatformRequiredValueUse,
-) void {
-    switch (value_use.*) {
-        .const_value => |*const_use| deinitImportedTemplateClosure(allocator, &const_use.relation_template_closure),
-        .procedure_value => |*procedure| deinitImportedTemplateClosure(allocator, &procedure.relation_template_closure),
-    }
-    value_use.* = undefined;
 }
 
 /// Public `ImportedProcedureBindingBody` declaration.

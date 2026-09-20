@@ -2799,6 +2799,14 @@ problem store, selected hoisted roots,
 requirement context, imported diagnostic environments, and CTFE options. A
 checked module cache entry contains both `ModuleEnv` bytes and `CheckedModule`
 bytes; `ModuleEnv` bytes alone cannot stand in for the retained `Check` data.
+An executable build must not admit a relation-less platform cache entry through
+the ordinary completed-module path: that output does not contain a publication
+continuation. The platform is checked with deferral enabled, and finalization
+probes only the exact pairing-keyed completed artifact. A hit releases the
+continuation; a miss consumes its selected roots and diagnostic store directly.
+Publication never reconstructs checker inputs from a completed artifact. This
+also applies to erroneous requirement signatures, whose early publication keeps
+the checker alive for evaluation and finalization.
 
 A relation-less platform output preserves its complete `provides` metadata for
 glue and interface consumers. If it also declares app requirements, it does not

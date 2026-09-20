@@ -2241,7 +2241,7 @@ pub const Coordinator = struct {
             .relation_artifacts = &relation_artifacts,
             .platform_app_relation = relation,
             .evaluation_phase = .post_frontend,
-        }, false);
+        }, platform_import_artifacts, explicit_roots);
     }
 
     pub fn hasUserErrors(self: *const Coordinator) bool {
@@ -2374,7 +2374,8 @@ pub const Coordinator = struct {
         mod: *ModuleState,
         typed: *CheckedModules.RootModules,
         publication: compile_package.ArtifactPublicationInputs,
-        probe_cache: bool,
+        imported_artifacts: []const CheckedArtifact.PublishImportArtifact,
+        explicit_roots: []const CheckedArtifact.ExplicitRootRequestInput,
     ) compile_package.PublishError!void {
         const module_env_storage = mod.moduleEnvStorage() orelse {
             if (builtin.mode == .Debug) {
@@ -2382,55 +2383,27 @@ pub const Coordinator = struct {
             }
             unreachable;
         };
-        const imported_artifacts = try self.buildTypecheckImportedArtifacts(pkg, mod, self.gpa);
-        defer self.gpa.free(imported_artifacts);
         const available_artifacts = try self.collectTypecheckAvailableArtifactViews(self.gpa, imported_artifacts);
         defer self.gpa.free(available_artifacts);
-        const explicit_roots = try buildExplicitRootRequests(mod, self.gpa);
-        defer self.gpa.free(explicit_roots);
 
         var publication_with_state = publication;
         if (mod.deferred_publication) |state| {
             publication_with_state.hoisted_roots = state.checker.selectedHoistedRoots();
             publication_with_state.problem_store = &state.checker.problems;
             publication_with_state.ctfe_options = state.ctfe_options;
+        } else if (mod.pending_evaluation) |state| {
+            // Requires signatures containing errors publish during checking,
+            // but still retain the exact checker outputs used by finalization.
+            publication_with_state.hoisted_roots = state.checker.selectedHoistedRoots();
+            publication_with_state.problem_store = &state.checker.problems;
+        } else {
+            coordinatorInvariant("platform publication requires its checker continuation", .{});
         }
 
         if (self.frontend_complete) publication_with_state.ctfe_options.post_check_executor = self.postCheckExecutor();
 
-        // The root module graph was built ONCE by the caller and is reused here: it
-        // both determines the republished artifact's cache key (a hit relocates the
-        // previously-republished root artifact and skips the expensive republish) and,
-        // on a miss, feeds the publish below—so the graph (and its per-env
-        // `prepareRuntimeEnv` pass) is never built twice. A key failure (OOM) just
-        // falls through to a normal republish.
-        if (probe_cache) {
-            if (check.CheckedArtifact.checkedModuleKeyFromTypedModule(self.gpa, &typed.modules, typed.module_idx, .{
-                .imports = imported_artifacts,
-                .explicit_roots = explicit_roots,
-                .platform_requirement_context = publication_with_state.platform_requirement_context,
-                .platform_app_relation = if (publication_with_state.platform_app_relation) |relation| relation.key else null,
-                .validation = mod.validation,
-            })) |republished_key| {
-                if (self.tryLoadCachedRepublishedRoot(pkg, mod, republished_key)) {
-                    self.releaseDeferredPublication(mod);
-                    return;
-                }
-            } else |_| {}
-        }
-
         var publication_with_availability = publication_with_state;
         publication_with_availability.explicit_roots = explicit_roots;
-        const current_artifact = mod.checkedArtifact();
-        const republish_hoisted_roots = if (publication_with_availability.hoisted_roots.len == 0 and current_artifact != null)
-            try selectedHoistedRootInputsFromArtifact(self.gpa, current_artifact.?)
-        else
-            &.{};
-        defer check.HoistRoots.freeSelectedRootSlice(self.gpa, republish_hoisted_roots);
-        if (publication_with_availability.hoisted_roots.len == 0) {
-            publication_with_availability.hoisted_roots = republish_hoisted_roots;
-        }
-
         const base_available_artifacts = available_artifacts;
 
         var relation_available_artifacts: []CheckedArtifact.ImportedModuleView = &.{};
@@ -2554,88 +2527,6 @@ pub const Coordinator = struct {
             state.deinit();
             mod.deferred_publication = null;
         }
-    }
-
-    fn selectedHoistedRootInputsFromArtifact(
-        allocator: Allocator,
-        artifact: *const CheckedArtifact.CheckedModuleArtifact,
-    ) Allocator.Error![]const check.HoistRoots.SelectedHoistedRoot {
-        var count: usize = 0;
-        for (artifact.compile_time_roots.roots) |root| {
-            switch (root.kind) {
-                .hoisted_constant,
-                .hoisted_validation,
-                => count += 1,
-                .callable_binding => switch (root.source) {
-                    .hoisted => count += 1,
-                    .def, .expr, .statement, .required_binding => {},
-                },
-                .constant,
-                .expect,
-                .numeral_conversion,
-                .quote_conversion,
-                .repl_expr,
-                => {},
-            }
-        }
-        if (count == 0) return &.{};
-
-        const roots = try allocator.alloc(check.HoistRoots.SelectedHoistedRoot, count);
-        var initialized: usize = 0;
-        errdefer {
-            check.HoistRoots.deinitSelectedRootBodies(allocator, roots[0..initialized]);
-            allocator.free(roots);
-        }
-
-        var i: usize = 0;
-        for (artifact.compile_time_roots.roots) |root| {
-            switch (root.kind) {
-                .hoisted_constant,
-                .hoisted_validation,
-                => {},
-                .callable_binding => switch (root.source) {
-                    .hoisted => {},
-                    .def, .expr, .statement, .required_binding => continue,
-                },
-                .constant,
-                .expect,
-                .numeral_conversion,
-                .quote_conversion,
-                .repl_expr,
-                => continue,
-            }
-            const source_expr = switch (root.source) {
-                .hoisted => |hoisted| hoisted.expr,
-                .def,
-                .expr,
-                .statement,
-                .required_binding,
-                => coordinatorInvariant("selected hoisted root had non-expression source", .{}),
-            };
-            const body = root.hoisted_body orelse
-                coordinatorInvariant("selected hoisted root was missing its body", .{});
-            roots[i] = .{
-                .expr = source_expr,
-                .pattern = root.source_pattern,
-                .body = try check.HoistRoots.cloneBody(allocator, body),
-                .value_kind = switch (root.kind) {
-                    .hoisted_constant => .data_constant,
-                    .hoisted_validation => .discarded,
-                    .callable_binding => .callable_binding,
-                    .constant,
-                    .expect,
-                    .numeral_conversion,
-                    .quote_conversion,
-                    .repl_expr,
-                    => unreachable,
-                },
-            };
-            initialized += 1;
-            i += 1;
-        }
-        std.debug.assert(i == count);
-
-        return roots;
     }
 
     const RootModuleRef = struct {
@@ -3416,6 +3307,10 @@ pub const Coordinator = struct {
         platform_requirement_context: ?check.CheckedArtifact.PlatformRequirementContextKey,
         explicit_roots: []const check.CheckedArtifact.ExplicitRootRequestInput,
     ) bool {
+        // A completed relation-less platform artifact cannot supply the
+        // publication continuation an app build needs. Its only completed-cache
+        // boundary is the exact platform/app pairing probed at finalization.
+        if (self.moduleDefersPublication(mod)) return false;
         const manager = self.cache_manager orelse return false;
         if (!manager.config.enabled) return false;
 
@@ -5858,6 +5753,15 @@ fn compileAppRootIdentity(
     cache_dir: []const u8,
     app_path: []const u8,
 ) CheckedModuleCacheRunError!AppRootIdentity {
+    return compileAppRootIdentityForMode(allocator, cache_dir, app_path, .executable_artifacts);
+}
+
+fn compileAppRootIdentityForMode(
+    allocator: Allocator,
+    cache_dir: []const u8,
+    app_path: []const u8,
+    mode: compile_build.PostCheckPublicationMode,
+) CheckedModuleCacheRunError!AppRootIdentity {
     const roc_ctx = CoreCtx.os(allocator, allocator, std.testing.io);
     var cache_manager = CacheManager.init(allocator, .{
         .enabled = true,
@@ -5878,6 +5782,7 @@ fn compileAppRootIdentity(
     );
     defer coord.deinit();
     coord.enable_hosted_transform = true;
+    coord.setExecutableFinalizationEnabled(mode == .executable_artifacts);
 
     var arena_impl = base.SingleThreadArena.init(allocator);
     defer arena_impl.deinit();
@@ -5887,7 +5792,7 @@ fn compileAppRootIdentity(
     try coord.discoverAppFromPath(arena, .{ .entry_path = app_path });
     try coord.coordinatorLoop();
     try std.testing.expect(!coord.hasUserErrors());
-    try coord.finishCheckedProgram(.executable_artifacts);
+    try coord.finishCheckedProgram(mode);
     try std.testing.expect(!coord.hasUserErrors());
 
     const root = coord.executableRootCheckedArtifact();
@@ -6210,6 +6115,43 @@ test "warm build reloads the deferred platform root without republishing" {
     try std.testing.expectEqualSlices(u8, &cold.artifact_key, &warm.artifact_key);
     try std.testing.expectEqualSlices(u8, cold.executable_root_bytes, warm.executable_root_bytes);
     try std.testing.expectEqualSlices(u8, cold.app_root_bytes, warm.app_root_bytes);
+}
+
+test "issue 11389 partial platform cache preserves checked output and pairing cache hits" {
+    const allocator = std.testing.allocator;
+    var tmp_dir = std.testing.tmpDir(.{});
+    defer tmp_dir.cleanup();
+    try tmp_dir.dir.createDirPath(std.testing.io, "cold-cache");
+    try tmp_dir.dir.createDirPath(std.testing.io, "shared-cache");
+    const cold_cache = try tmp_dir.dir.realPathFileAlloc(std.testing.io, "cold-cache", allocator);
+    defer allocator.free(cold_cache);
+    const shared_cache = try tmp_dir.dir.realPathFileAlloc(std.testing.io, "shared-cache", allocator);
+    defer allocator.free(shared_cache);
+    try writeCacheKeyPurityFixture(&tmp_dir, "partial");
+    const app = try tmp_dir.dir.realPathFileAlloc(std.testing.io, "partial/app/main.roc", allocator);
+    defer allocator.free(app);
+
+    var cold = try compileAppRootIdentity(allocator, cold_cache, app);
+    defer cold.deinit(allocator);
+
+    // This is the publication mode used by `roc test`: the platform is
+    // completed and cached without an app relation or retained checker.
+    var unpaired = try compileAppRootIdentityForMode(allocator, shared_cache, app, .none);
+    defer unpaired.deinit(allocator);
+    try std.testing.expectEqual(@as(u32, 1), unpaired.platform_root_publish_count);
+
+    var paired = try compileAppRootIdentity(allocator, shared_cache, app);
+    defer paired.deinit(allocator);
+    try std.testing.expect(paired.cache_hits > 0);
+    try std.testing.expectEqual(@as(u32, 1), paired.platform_root_publish_count);
+    try std.testing.expectEqualSlices(u8, cold.executable_root_bytes, paired.executable_root_bytes);
+    try std.testing.expectEqualSlices(u8, cold.app_root_bytes, paired.app_root_bytes);
+
+    var warm = try compileAppRootIdentity(allocator, shared_cache, app);
+    defer warm.deinit(allocator);
+    try std.testing.expectEqual(@as(u32, 0), warm.platform_root_publish_count);
+    try std.testing.expectEqualSlices(u8, paired.executable_root_bytes, warm.executable_root_bytes);
+    try std.testing.expectEqualSlices(u8, paired.app_root_bytes, warm.app_root_bytes);
 }
 
 fn writeRequirementSolutionFixture(tmp_dir: *std.testing.TmpDir) (std.Io.Dir.CreateDirPathError || std.Io.Dir.WriteFileError)!void {
