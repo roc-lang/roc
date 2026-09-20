@@ -2201,6 +2201,22 @@ requirement. Importers and every post-check stage consume that data normally.
 Independent definitions, imports, compile-time roots, and runtime paths remain
 available; execution crashes only if it reaches a recorded checked error.
 
+Import resolution is one of those producer boundaries. It selects exactly one
+outcome per import identity—an accepted target with its module environment, or
+a rejection—and records that outcome where it is decided: a package module the
+target package does not make public, a relative import that escapes the package
+source root, a source path whose spelling or file identity is not the one
+the logical name selects. A rejected import is a user diagnostic, so it neither
+completes the importing module with failure nor propagates to that module's
+dependents. The importing module keeps its complete path through
+canonicalization and checking; canonicalization consumes the recorded rejection
+and binds the import as missing, so uses of it are checked-error data. A
+rejected import carries no dependency edge and no environment, so it never
+reaches the module its name spelled, and the importing module's other imports,
+definitions, and compile-time roots stay available. Failing to read the source
+the import selected—a missing file, an I/O error—is not one of these outcomes;
+it is an operational failure and aborts the operation, as below.
+
 Parsing and error reporting may recover malformed source in order to construct
 the explicit malformed/runtime-error nodes that later stages consume. I/O,
 allocation failure, unsupported compiler hosts, corrupt serialized CheckedModule
