@@ -180,7 +180,7 @@ pub fn Snapshot(comptime T: type, comptime empty: T) type {
                 return self.nextInRange(false, 0, 0);
             }
 
-            fn nextInRange(self: *Iterator, comptime bounded: bool, start: u32, end: u64) ?Entry {
+            inline fn nextInRange(self: *Iterator, comptime bounded: bool, start: u32, end: u64) ?Entry {
                 while (self.len != 0) {
                     const frame = &self.frames[self.len - 1];
                     if (frame.slot == radix) {
