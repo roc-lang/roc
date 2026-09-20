@@ -30,8 +30,10 @@ const min_class_log2: u6 = std.math.log2_int(usize, large_threshold);
 /// Largest cached class; bigger blocks are mapped and unmapped directly.
 const max_class_log2: u6 = 30; // 1 GiB
 const class_count = max_class_log2 - min_class_log2 + 1;
-/// Cached blocks per class beyond which a freed block is unmapped.
-const max_cached_per_class: usize = 64;
+/// Bytes retained per class beyond which a freed block is unmapped, so the
+/// cache bounds peak memory at a few times the live set rather than growing
+/// with every block the compiler ever freed.
+const max_cached_bytes_per_class: usize = 128 * 1024 * 1024;
 const huge_page_threshold: usize = 2 * 1024 * 1024;
 
 const FreeBlock = struct {
@@ -172,7 +174,7 @@ fn free(ctx: *anyopaque, memory: []u8, alignment: Alignment, ret_addr: usize) vo
     if (class > max_class_log2) return unmapBlock(memory.ptr, memory.len);
     const cache = &self.classes[class - min_class_log2];
     cache.lock();
-    if (cache.count >= max_cached_per_class) {
+    if ((cache.count + 1) * classCapacity(class) > max_cached_bytes_per_class) {
         cache.unlock();
         return unmapBlock(memory.ptr, classCapacity(class));
     }
