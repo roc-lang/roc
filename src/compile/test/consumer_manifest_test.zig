@@ -40,7 +40,7 @@ const echo_platform = [_]struct { path: []const u8, source: []const u8 }{
     },
 };
 
-fn writeEchoPlatform(dir: std.Io.Dir, io: std.Io) !void {
+fn writeEchoPlatform(dir: std.Io.Dir, io: std.Io) (std.Io.Dir.CreateDirPathError || std.Io.Dir.WriteFileError)!void {
     try dir.createDirPath(io, ".roc_echo_platform");
     for (echo_platform) |file| try dir.writeFile(io, .{ .sub_path = file.path, .data = file.source });
 }
@@ -148,7 +148,7 @@ fn rootIdentity(request: CheckedArtifact.RootRequest) CheckedArtifact.ComptimeRo
 }
 
 /// The request for the root declared at `order` in its module.
-fn rootWithOrder(requests: []const CheckedArtifact.RootRequest, order: u32) !CheckedArtifact.RootRequest {
+fn rootWithOrder(requests: []const CheckedArtifact.RootRequest, order: u32) error{TestUnexpectedResult}!CheckedArtifact.RootRequest {
     for (requests) |request| {
         if (request.order == order) return request;
     }
