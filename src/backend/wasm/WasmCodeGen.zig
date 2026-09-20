@@ -21745,7 +21745,7 @@ fn procCompileBindingRowsVisited(allocator: Allocator, proc_count: usize) Alloca
 }
 
 /// The instruction subset these fixtures emit, so a scan that meets anything
-/// else reports it rather than silently mis-decoding the rest of the body.
+/// else reports it rather than silently misreading the rest of the body.
 const ScanOp = enum(u8) {
     block = Op.block,
     loop_ = Op.loop_,
