@@ -51,29 +51,39 @@ test "platform boxed model with wrapper inlining consumes each dead Box" {
 }
 
 fn expectNoInlineOwnership(store: *const lir.LirStore, layouts: *const layout.Store) harness.LowerToLirHarnessError!void {
+    const unbox_proc = findNamedProc(store, "Builtin.Box.unbox") orelse return error.TestUnexpectedResult;
     var total = Counts{};
+    var found_unbox_body = false;
+    var found_list_set_body = false;
 
     for (store.getProcSpecs(), 0..) |_, index| {
         const proc_id: lir.LIR.LirProcSpecId = @enumFromInt(@as(u32, @intCast(index)));
-        const counts = try countProc(store, layouts, proc_id, null, null);
+        const counts = try countProc(store, layouts, proc_id, unbox_proc, null);
         total.add(counts);
+
+        if (store.procDebugName(proc_id)) |name| {
+            if (std.mem.eql(u8, name, "Builtin.Box.unbox")) {
+                try std.testing.expectEqual(@as(usize, 0), counts.owned_unbox);
+                try std.testing.expectEqual(@as(usize, 1), counts.borrowed_unbox);
+                try std.testing.expectEqual(@as(usize, 0), counts.box_retain);
+                try std.testing.expectEqual(@as(usize, 1), counts.box_release);
+                found_unbox_body = true;
+            } else if (std.mem.eql(u8, name, "list_set_unsafe")) {
+                try std.testing.expectEqual(@as(usize, 1), counts.list_set);
+                found_list_set_body = true;
+            }
+        }
     }
 
-    // Box.unbox and the unsafe list mutations are low-level operations that
-    // Monotype emits at their call sites, so no procedure boundary stands
-    // between a platform wrapper and the operation its Box is transferred
-    // into. Every wrapper carries its own borrowed unboxes, one per control
-    // path that reads the model, and each checked list mutation appears once
-    // in every specialization of the builtin procedure that performs it:
-    // List.set twice, List.replace twice plus List.update, and List.append
-    // plus List.repeat.
+    try std.testing.expect(found_unbox_body);
+    try std.testing.expect(found_list_set_body);
     try std.testing.expectEqual(@as(usize, 0), total.prepare_update);
     try std.testing.expectEqual(@as(usize, 0), total.owned_unbox);
-    try std.testing.expectEqual(@as(usize, 8), total.borrowed_unbox);
+    try std.testing.expect(total.borrowed_unbox >= 1);
     try std.testing.expect(total.box_release >= total.borrowed_unbox);
-    try std.testing.expectEqual(@as(usize, 2), total.list_set);
-    try std.testing.expectEqual(@as(usize, 3), total.list_replace);
-    try std.testing.expectEqual(@as(usize, 2), total.list_append);
+    try std.testing.expectEqual(@as(usize, 1), total.list_set);
+    try std.testing.expectEqual(@as(usize, 1), total.list_replace);
+    try std.testing.expectEqual(@as(usize, 1), total.list_append);
 
     const wrapper_names = [_][]const u8{
         "update_straight_for_host",
@@ -85,17 +95,14 @@ fn expectNoInlineOwnership(store: *const lir.LirStore, layouts: *const layout.St
     };
     for (&wrapper_names) |name| {
         const root = findNamedProc(store, name) orelse return error.TestUnexpectedResult;
-        const root_counts = try countProc(store, layouts, root, null, null);
-        try std.testing.expect(root_counts.borrowed_unbox >= 1);
-        try std.testing.expect(root_counts.box_release >= root_counts.borrowed_unbox);
-        try std.testing.expectEqual(@as(usize, 0), root_counts.owned_unbox);
-        try std.testing.expectEqual(@as(usize, 0), root_counts.box_retain);
+        const root_counts = try countProc(store, layouts, root, unbox_proc, null);
+        try std.testing.expect(root_counts.calls_to_unbox_proc >= 1);
     }
 
-    // With no inlining, the platform wrappers transfer their Box straight
-    // into the borrowed unbox. In particular, there is no Box retain
-    // extending the lender across the update call. Retains elsewhere belong
-    // to checked-list ownership schedules, not to the Box lender.
+    // With no inlining, the four platform wrappers transfer their Box into
+    // the one concrete Box.unbox procedure. In particular, there is no Box
+    // retain extending the lender across the update call. Retains elsewhere
+    // belong to checked-list ownership schedules, not to the Box lender.
     try std.testing.expectEqual(@as(usize, 0), total.box_retain);
     try std.testing.expect(total.list_retain > 0);
 
@@ -106,7 +113,7 @@ fn expectNoInlineOwnership(store: *const lir.LirStore, layouts: *const layout.St
     const active = try countReachableNamed(
         store,
         layouts,
-        null,
+        unbox_proc,
         &.{ "update_straight_for_host", "update_adapter_for_host!", "cursor_for_host" },
     );
 
@@ -116,7 +123,7 @@ fn expectNoInlineOwnership(store: *const lir.LirStore, layouts: *const layout.St
     const pattern_active = try countReachableNamed(
         store,
         layouts,
-        null,
+        unbox_proc,
         &.{"update_pattern_for_host!"},
     );
     try std.testing.expectEqual(@as(usize, 0), active.box_retain);
@@ -131,12 +138,11 @@ fn expectNoInlineOwnership(store: *const lir.LirStore, layouts: *const layout.St
     const append_active = try countReachableNamed(
         store,
         layouts,
-        null,
+        unbox_proc,
         &.{"update_append_for_host!"},
     );
     try std.testing.expectEqual(@as(usize, 0), append_active.box_retain);
-    // The replace op is reached through both List.replace and List.update.
-    try std.testing.expectEqual(@as(usize, 2), append_active.list_replace);
+    try std.testing.expectEqual(@as(usize, 1), append_active.list_replace);
     try std.testing.expectEqual(@as(usize, 1), append_active.list_append);
 }
 
