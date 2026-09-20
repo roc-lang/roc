@@ -2551,7 +2551,9 @@ graph transitively, including captured values; it is distinct from strict
 evaluation demand, which determines scheduling.
 Its reusable module cache contains only context-independent evaluation results;
 app-dependent requests and diagnostic obligations remain explicit checked data.
-Program composition activates those recorded requests. It borrows the platform's
+Program composition activates those recorded requests. Exact procedure aliases
+whose required bindings are now known use the existing checked forwarding rule
+and require no compile-time evaluator. Composition borrows the platform's
 bodies, dispatch plans, declaration tables and closure inventories, and owns the
 projected types, bindings, root manifests and evaluation results in a session.
 Completed independent roots are consumed as stored values and never evaluated

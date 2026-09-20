@@ -5363,6 +5363,7 @@ fn compileAppWithCheckedModuleCache(
 }
 
 const AppRootIdentity = struct {
+    compile_time_request_count: usize,
     artifact_key: [32]u8,
     module_identity_hash: [32]u8,
     cache_hits: u32,
@@ -5508,6 +5509,7 @@ fn compileAppRootIdentityExpecting(
         }
     }
     return .{
+        .compile_time_request_count = root.root_requests.compile_time_requests.len,
         .artifact_key = root.codeGenerationKey().bytes,
         .module_identity_hash = root.module_identity.stable_hash,
         .cache_hits = coord.getBuildStats().cache_hits,
@@ -5896,6 +5898,71 @@ test "issue 11389 cached platform evaluates app-dependent constants for each bin
     var again = try compileAppRootIdentityWithConstants(allocator, cache, app, .executable_artifacts, &.{.{ .name = "twice", .value = 42 }});
     defer again.deinit(allocator);
     try std.testing.expectEqualSlices(u8, first.executable_root_bytes, again.executable_root_bytes);
+}
+
+test "issue 11389 required procedure aliases forward without compile-time evaluation" {
+    const allocator = std.testing.allocator;
+    var tmp = std.testing.tmpDir(.{});
+    defer tmp.cleanup();
+    try tmp.dir.createDirPath(std.testing.io, "cache");
+    try tmp.dir.writeFile(std.testing.io, .{ .sub_path = "platform.roc", .data =
+        \\platform ""
+        \\    requires {} { main : {} -> I64 }
+        \\    exposes []
+        \\    packages {}
+        \\    provides { "roc_entry": entry }
+        \\entry = main
+    });
+    try tmp.dir.writeFile(std.testing.io, .{ .sub_path = "app.roc", .data =
+        \\app [main] { pf: platform "./platform.roc" }
+        \\main = |_| 42.I64
+    });
+    const cache = try tmp.dir.realPathFileAlloc(std.testing.io, "cache", allocator);
+    defer allocator.free(cache);
+    const app = try tmp.dir.realPathFileAlloc(std.testing.io, "app.roc", allocator);
+    defer allocator.free(app);
+    var unpaired = try compileAppRootIdentityForMode(allocator, cache, app, .none);
+    defer unpaired.deinit(allocator);
+    for (0..2) |_| {
+        var paired = try compileAppRootIdentityForMode(allocator, cache, app, .executable_artifacts);
+        defer paired.deinit(allocator);
+        try std.testing.expect(paired.platform_root_publish_count == 0);
+        try std.testing.expect(paired.compile_time_request_count == 0);
+    }
+}
+
+test "issue 11389 pairing specializes wrapper types for required identity values" {
+    const allocator = std.testing.allocator;
+    var tmp = std.testing.tmpDir(.{});
+    defer tmp.cleanup();
+    try tmp.dir.createDirPath(std.testing.io, "cache");
+    try tmp.dir.writeFile(std.testing.io, .{ .sub_path = "platform.roc", .data =
+        \\platform ""
+        \\    requires { [Model : model] for prog : { value : model } }
+        \\    exposes []
+        \\    packages {}
+        \\    provides { "roc_entry": entry }
+        \\
+        \\value : Model
+        \\value = prog.value
+        \\entry : {} -> Model
+        \\entry = |_| value
+    });
+    try tmp.dir.writeFile(std.testing.io, .{ .sub_path = "app.roc", .data =
+        \\app [Model, prog] { pf: platform "./platform.roc" }
+        \\Model : I64
+        \\prog : { value : Model }
+        \\prog = { value: 42 }
+    });
+    const cache = try tmp.dir.realPathFileAlloc(std.testing.io, "cache", allocator);
+    defer allocator.free(cache);
+    const app = try tmp.dir.realPathFileAlloc(std.testing.io, "app.roc", allocator);
+    defer allocator.free(app);
+    var unpaired = try compileAppRootIdentityForMode(allocator, cache, app, .none);
+    defer unpaired.deinit(allocator);
+    var paired = try compileAppRootIdentityForMode(allocator, cache, app, .executable_artifacts);
+    defer paired.deinit(allocator);
+    try std.testing.expect(paired.platform_root_publish_count == 0);
 }
 
 test "issue 11389 cached platform retains app-dependent exhaustiveness diagnostics" {

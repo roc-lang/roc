@@ -25315,12 +25315,31 @@ pub fn pairCheckedPlatform(
         }
     }
     result.checked_procedure_templates.templates = try copyPairingColumns(@TypeOf(platform.checked_procedure_templates.templates), platform.checked_procedure_templates.templates, session);
+    var copied_entry_wrappers = false;
+    var copied_intrinsic_wrappers = false;
     for (result.checked_procedure_templates.templates.items) |*template| {
         const source_root = template.checked_fn_root;
         template.checked_fn_root = try substitutions.specializeRoot(session, &result.canonical_names, &result.checked_types, source_root);
         if (template.checked_fn_root != source_root) {
             template.checked_fn_scheme = syntheticSchemeKeyForType(result.checked_types.roots.items[@intFromEnum(template.checked_fn_root)].key);
             template.hosted_try_adapter = try hostedTryAdapterCapabilityForCheckedRoot(&result.canonical_names, &result.checked_types, template.checked_fn_root);
+            switch (template.body) {
+                .entry_wrapper => |id| {
+                    if (!copied_entry_wrappers) {
+                        result.entry_wrappers = try copyPairingColumns(EntryWrapperTable, platform.entry_wrappers, session);
+                        copied_entry_wrappers = true;
+                    }
+                    result.entry_wrappers.wrappers.items[@intFromEnum(id)].checked_fn_root = template.checked_fn_root;
+                },
+                .intrinsic_wrapper => |id| {
+                    if (!copied_intrinsic_wrappers) {
+                        result.intrinsic_wrappers = try copyPairingColumns(IntrinsicWrapperTable, platform.intrinsic_wrappers, session);
+                        copied_intrinsic_wrappers = true;
+                    }
+                    result.intrinsic_wrappers.wrappers.items[@intFromEnum(id)].checked_fn_root = template.checked_fn_root;
+                },
+                .checked_body, .unimplemented => {},
+            }
         }
     }
     result.provided_exports = try copyPairingColumns(ProvidedExportTable, platform.provided_exports, session);
@@ -25328,7 +25347,16 @@ pub fn pairCheckedPlatform(
         inline else => |*value| value.checked_type = try substitutions.specializeRoot(session, &result.canonical_names, &result.checked_types, value.checked_type),
     };
     var roots = std.ArrayList(RootRequest).empty;
-    try roots.appendSlice(session, platform.root_requests.requests);
+    for (platform.root_requests.requests) |request| {
+        // Once a required procedure is bound, an exact callable alias uses the
+        // same forwarding rule as publication with already-resolved imports.
+        // Runtime demand consumes its checked lookup; no evaluator is needed.
+        if (request.requires_pairing and request.compile_time_root != null and
+            compileTimeCallableRootIsProcedureReference(&result.checked_bodies, &result.resolved_value_refs, result.compile_time_roots.root(request.compile_time_root.?))) continue;
+        var selected = request;
+        selected.order = @intCast(roots.items.len);
+        try roots.append(session, selected);
+    }
     for (roots.items) |*request| {
         request.evaluation_complete = request.abi == .compile_time and !request.requires_pairing;
         request.requires_pairing = false;
