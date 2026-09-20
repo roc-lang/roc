@@ -194,6 +194,9 @@ const Pass = struct {
         for (self.result.const_roots.items) |root| {
             try self.markProc(root.proc);
             try self.markConstPlan(root.plan);
+            // The evaluation publishes into this slot, so the slot outlives
+            // having no reader in this program.
+            if (root.value_slot) |slot| try self.markStaticData(slot);
         }
         for (self.result.requested_layouts.items) |request| {
             try self.markConstPlan(request.plan);
@@ -639,6 +642,7 @@ const Pass = struct {
     fn remapConstRoots(self: *Pass) void {
         for (self.result.const_roots.items) |*root| {
             root.proc = self.remapProc(root.proc);
+            if (root.value_slot) |slot| root.value_slot = self.remapStaticData(slot);
         }
     }
 
