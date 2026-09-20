@@ -3414,10 +3414,11 @@ const Builder = struct {
     modules: Common.CheckedModules,
     root_view: checked.ImportedModuleView,
     /// Program source-file id of every checked module in the lowering input,
-    /// keyed by module index. The table is seeded once in module-name and content-identity order
+    /// keyed by source-module identity. The table is seeded once in module-name
+    /// and content-identity order
     /// before any body is lowered, so the ids written into source locations
     /// are final and independent of specialization scheduling.
-    source_file_ids: std.AutoHashMap(u32, u32),
+    source_file_ids: std.AutoHashMap([32]u8, u32),
     program: *Ast.Program,
     current_loc: base.SourceLoc,
     current_region: base.Region,
@@ -3621,7 +3622,7 @@ const Builder = struct {
             .spec_job_run_id = @enumFromInt(raw_spec_job_run_id),
             .modules = modules,
             .root_view = checked.importedView(modules.root.module),
-            .source_file_ids = std.AutoHashMap(u32, u32).init(allocator),
+            .source_file_ids = std.AutoHashMap([32]u8, u32).init(allocator),
             .program = program,
             .current_loc = program.current_loc,
             .current_region = program.current_region,
@@ -3654,7 +3655,6 @@ const Builder = struct {
     }
 
     const SourceFileSeed = struct {
-        module_idx: u32,
         name: []const u8,
         qualified_name: []const u8,
         identity: [32]u8,
@@ -3665,12 +3665,7 @@ const Builder = struct {
                 .gt => return false,
                 .eq => {},
             }
-            switch (std.mem.order(u8, &left.identity, &right.identity)) {
-                .lt => return true,
-                .gt => return false,
-                .eq => {},
-            }
-            return left.module_idx < right.module_idx;
+            return std.mem.lessThan(u8, &left.identity, &right.identity);
         }
     };
 
@@ -3682,7 +3677,7 @@ const Builder = struct {
     fn canonicalSourceFiles(self: *Builder) Allocator.Error![]SourceFileSeed {
         var seeds = std.ArrayList(SourceFileSeed).empty;
         errdefer seeds.deinit(self.allocator);
-        var seen = std.AutoHashMap(u32, void).init(self.allocator);
+        var seen = std.AutoHashMap([32]u8, void).init(self.allocator);
         defer seen.deinit();
         try appendSourceFileSeed(self.allocator, &seeds, &seen, moduleView(self.root_view));
         for (self.modules.imports) |imported| {
@@ -3698,13 +3693,12 @@ const Builder = struct {
     fn appendSourceFileSeed(
         allocator: Allocator,
         seeds: *std.ArrayList(SourceFileSeed),
-        seen: *std.AutoHashMap(u32, void),
+        seen: *std.AutoHashMap([32]u8, void),
         view: ModuleView,
     ) Allocator.Error!void {
-        const gop = try seen.getOrPut(view.module_identity.module_idx);
+        const gop = try seen.getOrPut(view.module_identity.stable_hash);
         if (gop.found_existing) return;
         try seeds.append(allocator, .{
-            .module_idx = view.module_identity.module_idx,
             .name = view.module_env.module_name,
             .qualified_name = view.module_env.qualifiedModuleName(),
             .identity = view.module_identity.stable_hash,
@@ -3724,7 +3718,7 @@ const Builder = struct {
         for (seeds, 0..) |seed, index| {
             const id = try self.program.addSourceFile(.{ .name = seed.name, .qualified_name = seed.qualified_name });
             if (id != index) Common.invariant("Monotype program source file id did not match its sorted position");
-            self.source_file_ids.putAssumeCapacity(seed.module_idx, id);
+            self.source_file_ids.putAssumeCapacity(seed.identity, id);
         }
     }
 
@@ -3735,13 +3729,13 @@ const Builder = struct {
         defer self.allocator.free(seeds);
         try self.source_file_ids.ensureTotalCapacity(@intCast(seeds.len));
         for (seeds, 0..) |seed, index| {
-            self.source_file_ids.putAssumeCapacity(seed.module_idx, @intCast(index));
+            self.source_file_ids.putAssumeCapacity(seed.identity, @intCast(index));
         }
     }
 
     /// Final program source-file id of a checked module's source locations.
     fn sourceFileId(self: *const Builder, view: ModuleView) u32 {
-        return self.source_file_ids.get(view.module_identity.module_idx) orelse
+        return self.source_file_ids.get(view.module_identity.stable_hash) orelse
             Common.invariant("checked module reached body lowering without an assigned source file id");
     }
 

@@ -25407,6 +25407,7 @@ pub const PlatformPairing = struct {
         root_requests: RootRequestTable.Serialized,
         exhaustiveness_sites: CheckedExhaustivenessSiteTable.Serialized,
         lowering_visibility: LoweringVisibility.Serialized,
+        method_lookup_scope: MethodLookupScope.Serialized,
         entry_wrappers: EntryWrapperTable.Serialized,
         intrinsic_wrappers: IntrinsicWrapperTable.Serialized,
         compile_time_roots: CompileTimeRootTable.Serialized,
@@ -25437,6 +25438,7 @@ pub const PlatformPairing = struct {
             try self.root_requests.serialize(&artifact.root_requests, gpa, writer);
             try self.exhaustiveness_sites.serialize(&artifact.exhaustiveness_sites, gpa, writer);
             try self.lowering_visibility.serialize(&artifact.lowering_visibility, gpa, writer);
+            try self.method_lookup_scope.serialize(&artifact.method_lookup_scope, gpa, writer);
             try self.entry_wrappers.serialize(&artifact.entry_wrappers, gpa, writer);
             try self.intrinsic_wrappers.serialize(&artifact.intrinsic_wrappers, gpa, writer);
             const compile_time_roots_empty: CompileTimeRootTable = .{};
@@ -25479,6 +25481,7 @@ pub const PlatformPairing = struct {
             result.root_requests = self.root_requests.deserialize(address);
             result.exhaustiveness_sites = self.exhaustiveness_sites.deserialize(address);
             result.lowering_visibility = self.lowering_visibility.deserialize(address);
+            result.method_lookup_scope = self.method_lookup_scope.deserialize(address);
             result.entry_wrappers = self.entry_wrappers.deserialize(address);
             result.intrinsic_wrappers = self.intrinsic_wrappers.deserialize(address);
             if (self.has_dependent_evaluation) result.compile_time_roots = self.compile_time_roots.deserialize(address);
@@ -25521,6 +25524,14 @@ pub fn pairCheckedPlatform(
     const relation = try buildPlatformAppRelationFromDeclarations(session, platform.module_identity.module_idx, platform.platformRequirementContextKey(), platform.platform_required_declarations.declarations, type_keys, app);
     result.checking_context_identity.platform_app_relation = relation.key;
     const relations = [_]ImportedModuleView{importedView(app)};
+    // Pairing extends the platform's checked scope with the app and its scope.
+    // Keep each producer's order and retain the result in the pairing cache.
+    var method_scope = MethodLookupScopeBuilder.init(session, result.key);
+    defer method_scope.deinit();
+    for (platform.method_lookup_scope.module_ids) |key| try method_scope.append(key);
+    try method_scope.append(app.key);
+    for (app.method_lookup_scope.module_ids) |key| try method_scope.append(key);
+    result.method_lookup_scope = try method_scope.finish();
     var substitutions = try PlatformRelationTypeSubstitutions.fromRelation(session, result.module_identity, &result.canonical_names, &result.checked_types, &result.platform_required_declarations, &result.platform_type_inputs, &relations, relation);
     result.platform_requirement_relations = try PlatformRequirementRelationTable.fromRelation(session, result.module_identity, &result.canonical_names, &result.checked_types, &result.platform_required_declarations, &relations, relation);
     result.platform_required_bindings = try PlatformRequiredBindingTable.fromRelation(session, result.module_identity, &result.canonical_names, &result.platform_required_declarations, &result.platform_requirement_relations, relation);

@@ -2697,12 +2697,16 @@ and require no compile-time evaluator. Composition borrows the platform's
 bodies, dispatch plans, declaration tables and closure inventories, and owns the
 projected types, bindings, root manifests and evaluation results in a session.
 Completed independent roots are consumed as stored values and never evaluated
-again. Both lowering strategies consume this same checked view. A session view
+again. Both lowering strategies consume this same checked view. Pairing extends the
+platform's ordered method scope with the app and its recorded scope, retaining
+the first occurrence of each checked module. The composition cache carries this
+combined scope so generated helpers can consume the app's exact checked method
+targets on both fresh and cached pairings. A session view
 cannot be serialized into the reusable module cache. Its completed changed
 columns may be persisted in the separate composition cache described above.
 Type columns borrow the immutable platform until their first write; ownership
 is explicit for every column, and a write copies that column before mutation.
-The checked root index is published alongside the scheme index, preserving the
+The checked root index accompanies the scheme index, preserving the
 first representative even when distinct identity roots share a key. Pairing
 borrows those indexes and never reconstructs them from root rows.
 
@@ -2998,6 +3002,10 @@ dependencies are all available without runtime arguments, mutable runtime state,
 host interaction, or observable runtime effects. Its value is computed during
 checking finalization and stored in `ConstStore`; later lowering restores that
 checked value instead of emitting runtime work for the original expression.
+
+Source-file IDs are assigned by source-module identity. Discovery indices are
+local to each independently checked module graph and cannot identify files
+when a program combines cached app and platform modules.
 
 Hoisting does not move source syntax. A hoisted root points at the existing
 checked expression and its source region. User-facing compile-time diagnostics,
