@@ -141,7 +141,8 @@ produces its output, including when procedure templates are extended with
 compile-time entry wrappers. Known batch sizes reserve capacity once;
 incremental appends grow amortized. Producing checked module data must not
 repeatedly copy a completed prefix, and serialization writes only live rows,
-never spare capacity.
+never spare capacity. This holds for column-per-field stores too; see
+"Fully Defined Persisted Bytes".
 
 Checked source schemes are interned by their complete structural keys. The
 owning table retains the first representative root and assigns dense scheme
@@ -2201,6 +2202,22 @@ requirement. Importers and every post-check stage consume that data normally.
 Independent definitions, imports, compile-time roots, and runtime paths remain
 available; execution crashes only if it reaches a recorded checked error.
 
+Import resolution is one of those producer boundaries. It selects exactly one
+outcome per import identity—an accepted target with its module environment, or
+a rejection—and records that outcome where it is decided: a package module the
+target package does not make public, a relative import that escapes the package
+source root, a source path whose spelling or file identity is not the one
+the logical name selects. A rejected import is a user diagnostic, so it neither
+completes the importing module with failure nor propagates to that module's
+dependents. The importing module keeps its complete path through
+canonicalization and checking; canonicalization consumes the recorded rejection
+and binds the import as missing, so uses of it are checked-error data. A
+rejected import carries no dependency edge and no environment, so it never
+reaches the module its name spelled, and the importing module's other imports,
+definitions, and compile-time roots stay available. Failing to read the source
+the import selected—a missing file, an I/O error—is not one of these outcomes;
+it is an operational failure and aborts the operation, as below.
+
 Parsing and error reporting may recover malformed source in order to construct
 the explicit malformed/runtime-error nodes that later stages consume. I/O,
 allocation failure, unsupported compiler hosts, corrupt serialized CheckedModule
@@ -2272,6 +2289,54 @@ Runtime static string layout is generated later by the target-specific static
 data emitter. The checked cache must not store native pointer-width padding,
 static refcount words, allocation headers, or any other runtime `RocStr` layout
 bytes.
+
+### Fully Defined Persisted Bytes
+
+This section governs the raw-byte boundaries: the paths that persist a value by
+copying its in-memory representation rather than encoding it field by field, which
+is how the checked module cache, the baked builtin `CheckedModule` blob, and the
+`SafeList` and `SafeMultiList` tables they hold are written. Other serialized forms
+in the compiler encode explicitly and are not bound by the rules here.
+
+Every byte such a boundary writes is a function of the logical contents alone. A
+byte no declaration accounts for holds whatever that memory held before—allocator-
+and address-layout-dependent garbage that makes otherwise identical compilations
+produce different bytes.
+
+An item type reaching a raw-byte boundary must therefore be one of two kinds,
+decided at compile time; anything else is a compile error at the boundary rather
+than a silent writer of undefined bytes:
+
+- *Fully defined*: every byte of the type's size belongs to a declared field, for
+  every value. Serialization gathers the live bytes directly, with no scratch copy
+  and no scan.
+- *Scrubbable*: undefined bytes or bits exist, but the value itself identifies
+  every one of them—a tagged union's discriminant names the live variant, an
+  optional's null bit names an empty payload, a narrow scalar's declared width
+  names its value bits. Those are canonicalized into a writer-owned copy; the
+  source is never modified, so a frozen or shared store may be serialized.
+
+A fixed layout is the author's byte map, so an `extern struct` must declare the
+bytes its alignment adds, as an explicitly zero-defaulted reserved field, and every
+variant of an `extern union` must fill the union exactly. A union whose
+discriminant lives outside it—`Node.Payload`, tagged by the sibling `Node.tag`
+column—carries nothing that could identify its own dead bytes, so a short variant
+is rejected outright rather than scrubbed. Within a fixed layout, a field that is
+itself scrubbable is still permitted; what is rejected is a gap between fields, or
+a variant that stops short.
+
+Compiler-chosen (`auto`) layouts are checked the same way rather than assumed
+safe: their inter-field gaps are scrubbable, but a member whose undefined bytes
+nothing identifies makes the whole type a compile error, exactly as a fixed layout
+would be. A checked store may keep an ergonomic in-memory shape, but not an
+unrepresentable one.
+
+Serialization never writes spare capacity. A `SafeMultiList` persists its live
+rows as `std.MultiArrayList`'s own column layout with capacity equal to length, so
+both the blob's contents and its size depend on what the list holds and not on how
+it was grown. There is one column-writing implementation behind every
+`SafeMultiList` serialization entry point, so no two entry points can drift into
+different formats for the same store.
 
 The string-literal builder must reject impossible `u32` length or content-offset
 overflow as a compiler invariant: debug builds assert or panic with the
@@ -8754,6 +8819,28 @@ Specialization body scheduling may deduplicate global deferred work, but never
 authorizes importing a checked node or root-owned graph state from another
 root.
 
+Lexical environments have independent versions over lane-confined indexed
+storage. Forking an environment copies no inherited bindings. Reads use the
+active direct index; switching retained versions undoes and replays only the
+changes between them, preserving each version's iteration order. Sibling match
+contexts remain independent across relation production, binder reads,
+result selection, body emission, and pattern emission. Parent mutation after a
+fork never changes a child's inherited bindings. These versions cover runtime
+binders, typed binders, local-procedure contexts, and completed checked-type
+instantiations. In-progress checked-type placeholders remain private to their
+exact instantiation scope and are never inherited. Fresh instantiation scopes,
+field-kind scope routing, shared graph relations, and relation order are
+unchanged by environment storage.
+
+Writes reserve their allocation-free cleanup change before recording a binding.
+Restoring a temporary binding records its exact prior value without allocating,
+including when another retained version still observes the temporary value.
+Only live bindings are enumerated; neither first insertion nor a fork initializes
+a module-sized binder column. A version family owns its index and change storage
+until its final context is released, including on allocation failure. When only
+one version remains, mutation updates the active view directly and discards
+unobservable history; standalone type memo tables need no change records.
+
 Instantiation can expose an overlapping tag through a generic extension even
 when the checked call's row was already normalized. Graph row composition
 preserves the checked unifier's head-before-extension precedence: the first
@@ -8784,6 +8871,10 @@ shards strictly in request order and immediately makes discovered requests
 available to free lanes. Running and completed-but-unaccepted tasks share the
 same bounded window. Each immutable lane suffix is absorbed even when its body
 is discarded after an earlier shard committed its reservation, preserving cumulative lane ids.
+The pending FIFO is a reusable geometrically growing ring. Dispatch consumes
+its head without moving the undispatched suffix; ordered acceptance never
+compacts that suffix. Queue capacity follows the peak outstanding work, not
+the total number of jobs submitted during a lowering run.
 All accepted tasks are joined before releasing their contexts, including on OOM.
 
 Workers never borrow the mutable coordinator Program. Their captured input

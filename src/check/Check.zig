@@ -33157,8 +33157,9 @@ fn closeConcreteRecursiveDispatch(
         predeclared_scheme_for_method orelse ModuleEnv.varFrom(method_lookup.binding.type_node_idx)
     else
         try self.importedMethodScheme(method_lookup);
-    // Explicit requirements have no callable path. A recursive recipe cannot
-    // reconstruct them from the callable, even when its surface is concrete.
+    // Explicit requirements have no callable path. A recursive recipe reads
+    // only what the callable states, so it cannot serve an explicit
+    // requirement, even when the callable's surface is concrete.
     if (self.schemeHasExplicitRequirements(scheme_root)) return null;
     var scratch: dispatch_evidence.Scratch = .{};
     defer scratch.deinit(self.gpa);
