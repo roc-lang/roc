@@ -13168,7 +13168,8 @@ the body still holding the value the previous iteration released, so the back
 edges maintain their own shrinking meet over the parameters and the body keep
 places only what survives it. A site contribution that shrinks without
 changing the global meet cannot schedule downstream work. Each loop identity
-records whether its solved rows consumed any keep bits. A keep change that
+records whether its solved rows consumed any keep bits, answered from the
+row's structure rather than by counting its set bits. A keep change that
 supplied no boundary bits schedules no liveness work.
 
 Join, jump-site, and continuation-switch identities are compact indices
