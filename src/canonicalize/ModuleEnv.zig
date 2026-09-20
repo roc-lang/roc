@@ -652,6 +652,11 @@ pub const NumeralLiteral = extern struct {
     after_len: u32,
     after_decimal_digit_count: u64,
     flags: u32,
+    /// The bytes the 8-byte alignment of `after_decimal_digit_count` adds after
+    /// `flags`. Declared rather than implicit so every byte this struct persists
+    /// has a defined value: the checked cache writes its representation verbatim,
+    /// and an implicit gap would write whatever happened to be in that memory.
+    _reserved: u32 = 0,
 
     pub const negative_flag: u32 = 1;
     pub const fractional_flag: u32 = 2;
@@ -673,6 +678,15 @@ pub const NumeralLiteral = extern struct {
 
     pub fn isMaterialized(self: NumeralLiteral) bool {
         return (self.flags & materialized_flag) != 0;
+    }
+
+    comptime {
+        // Every byte this struct persists must belong to a declared field. The checked
+        // cache and the baked builtin artifact copy its representation verbatim, so an
+        // implicit gap here writes whatever that memory happened to hold. This is the
+        // same proof the serialization boundary runs; asserting it beside the
+        // declaration points at this file when a field is added or reordered.
+        collections.serde_validation.assertFullyDefined(@This(), "ModuleEnv.NumeralLiteral");
     }
 };
 
@@ -5837,4 +5851,76 @@ pub fn lookupMethodBindingFromOwnerAndMethodEnvsConst(
 /// Each element represents the byte offset where a new line begins.
 pub fn getLineStarts(self: *const Self) []const u32 {
     return self.common.getLineStartsAll();
+}
+
+test "NumeralLiteral: serialized bytes are a function of the recorded literals" {
+    // The numeral pool is copied verbatim into `Builtin.bin` and into every checked
+    // module cache entry, so its bytes must depend on the literals alone. Before this
+    // struct declared the bytes its 8-byte alignment adds after `flags`, those four
+    // bytes carried whatever the pool's storage last held, and two runs of the same
+    // compilation disagreed there.
+    const gpa = std.testing.allocator;
+
+    const Build = struct {
+        fn pool(allocator: std.mem.Allocator, poison: u8) std.mem.Allocator.Error!NumeralLiteral.SafeList {
+            var list = try NumeralLiteral.SafeList.initCapacity(allocator, 8);
+            errdefer list.deinit(allocator);
+            for (0..5) |_| _ = try list.append(allocator, std.mem.zeroes(NumeralLiteral));
+            // Poison each row, then write its fields one at a time. A whole-struct store
+            // may overwrite an undeclared gap with the temporary's own bytes, so putting
+            // the stale bytes in deliberately is what makes this test able to fail.
+            for (list.items.items, 0..) |*slot, i| {
+                @memset(std.mem.asBytes(slot), poison);
+                slot.node_idx = @intCast(i);
+                slot.digits_start = @intCast(i * 4);
+                slot.before_len = @intCast(i);
+                slot.after_len = @intCast(i + 1);
+                slot.after_decimal_digit_count = i;
+                slot.flags = NumeralLiteral.materialized_flag;
+                slot._reserved = 0;
+            }
+            return list;
+        }
+
+        fn serialize(
+            allocator: std.mem.Allocator,
+            list: *const NumeralLiteral.SafeList,
+        ) (std.mem.Allocator.Error || error{BufferTooSmall})![]align(CompactWriter.SERIALIZATION_ALIGNMENT.toByteUnits()) u8 {
+            var writer = CompactWriter.init();
+            defer writer.deinit(allocator);
+            const serialized = try writer.appendAlloc(allocator, NumeralLiteral.SafeList.Serialized);
+            try serialized.serialize(list, allocator, &writer);
+            const buffer = try allocator.alignedAlloc(u8, CompactWriter.SERIALIZATION_ALIGNMENT, writer.total_bytes);
+            errdefer allocator.free(buffer);
+            _ = try writer.writeToBuffer(buffer);
+            return buffer;
+        }
+    };
+
+    var over_ones = try Build.pool(gpa, 0xAA);
+    defer over_ones.deinit(gpa);
+    var over_fives = try Build.pool(gpa, 0x55);
+    defer over_fives.deinit(gpa);
+
+    const ones_bytes = try Build.serialize(gpa, &over_ones);
+    defer gpa.free(ones_bytes);
+    const fives_bytes = try Build.serialize(gpa, &over_fives);
+    defer gpa.free(fives_bytes);
+
+    try std.testing.expectEqualSlices(u8, ones_bytes, fives_bytes);
+
+    // No poison survives anywhere in the output, including the bytes after `flags`.
+    try std.testing.expect(std.mem.findScalar(u8, ones_bytes, 0xAA) == null);
+    try std.testing.expect(std.mem.findScalar(u8, ones_bytes, 0x55) == null);
+
+    // And the literals themselves round-trip.
+    const serialized: *const NumeralLiteral.SafeList.Serialized = @ptrCast(@alignCast(ones_bytes.ptr));
+    const loaded = serialized.deserializeInto(@intFromPtr(ones_bytes.ptr));
+    try std.testing.expectEqual(@as(u64, 5), loaded.len());
+    for (0..5) |i| {
+        const literal = loaded.get(@enumFromInt(@as(u32, @intCast(i)))).*;
+        try std.testing.expectEqual(@as(u32, @intCast(i)), literal.node_idx);
+        try std.testing.expectEqual(@as(u64, i), literal.after_decimal_digit_count);
+        try std.testing.expect(literal.isMaterialized());
+    }
 }
