@@ -6931,6 +6931,47 @@ test "qualified imports don't produce MODULE NOT FOUND during canonicalization" 
 
 // Try with match and error propagation //
 
+test "check type - issue 11470 rejects wrapper overlap after instantiation" {
+    const source =
+        \\find = |query| {
+        \\    value = query({})?
+        \\    if value == 0 { Err(NotFound) } else { Ok(value) }
+        \\}
+        \\show = |query| {
+        \\    first = find(query)?
+        \\    second = find(query) ? Wrapped
+        \\    Ok(first + second)
+        \\}
+        \\use = show(|_| Err(Wrapped(NotFound)))
+    ;
+    try checkTypesModule(source, .fail_first, "Type Mismatch");
+}
+
+test "check type - issue 11470 rejects incompatible shared tag payloads" {
+    const source =
+        \\first = || Err(Conflict(1.U64))
+        \\second = || Err(Conflict("different"))
+        \\use = || {
+        \\    _ = first()?
+        \\    _ = second()?
+        \\    Ok({})
+        \\}
+    ;
+    try checkTypesModule(source, .fail_first, "Type Mismatch");
+}
+
+test "check type - issue 11470 rejects annotation omits wrapper" {
+    const source =
+        \\show : (Str -> Try(U64, [NotFound])) -> Try(U64, [NotFound])
+        \\show = |query| {
+        \\    first = query("first")?
+        \\    second = query("second") ? Wrapped
+        \\    Ok(first + second)
+        \\}
+    ;
+    try checkTypesModule(source, .fail_first, "Type Mismatch");
+}
+
 test "check type - try return with match and error propagation should type-check" {
     // This tests that a function returning Try(Str, _) with a wildcard error type
     // should accept both error propagation (?) and explicit Err tags in match branches.

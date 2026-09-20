@@ -189,6 +189,8 @@ return_constraints: std.ArrayListUnmanaged(ReturnConstraint),
 return_value_exprs: std.ArrayListUnmanaged(CIR.Expr.Idx),
 /// Stack of active lambda-owned return constraint ranges.
 return_constraint_frames: std.ArrayListUnmanaged(ReturnConstraintFrame),
+/// Lambda-local inventory and projections for directed error-row composition.
+try_return_rows: TryReturnRows,
 /// A map from one var to another. Used in instantiation and var copying
 var_map: collections.DenseMap(Var, Var),
 /// A map from one var to another. Used in instantiation and var copying
@@ -2308,10 +2310,53 @@ const ReturnConstraintKind = enum(u8) {
     }
 };
 
-const TryReturnErrorContribution = union(enum) {
-    none,
-    tagged,
-    tail: Var,
+const TryReturnRows = struct {
+    const Use = struct { var_: Var, nested: bool };
+    const Projection = struct { row: Var, tail: Var };
+    const Plan = struct {
+        expr: CIR.Expr.Idx,
+        ok: Var,
+        err: Var,
+        relation: union(enum) {
+            none,
+            whole,
+            tail: struct { var_: Var, nested: bool },
+            projected: Projection,
+        } = .none,
+    };
+
+    uses: collections.DenseMap(Var, u2),
+    projections: collections.DenseMap(Var, Projection),
+    work: std.ArrayListUnmanaged(Use) = .empty,
+    plans: std.ArrayListUnmanaged(Plan) = .empty,
+    tags: std.ArrayListUnmanaged(types_mod.Tag) = .empty,
+
+    fn init(gpa: Allocator) TryReturnRows {
+        return .{
+            .uses = collections.DenseMap(Var, u2).init(gpa),
+            .projections = collections.DenseMap(Var, Projection).init(gpa),
+        };
+    }
+
+    fn clear(self: *TryReturnRows) void {
+        self.uses.clearRetainingCapacity();
+        self.projections.clearRetainingCapacity();
+        self.work.clearRetainingCapacity();
+        self.plans.clearRetainingCapacity();
+        self.tags.clearRetainingCapacity();
+    }
+
+    fn deinit(self: *TryReturnRows, gpa: Allocator) void {
+        self.uses.deinit();
+        self.projections.deinit();
+        self.work.deinit(gpa);
+        self.plans.deinit(gpa);
+        self.tags.deinit(gpa);
+    }
+
+    fn appendVars(self: *TryReturnRows, gpa: Allocator, vars: []const Var, nested: bool) Allocator.Error!void {
+        for (vars) |var_| try self.work.append(gpa, .{ .var_ = var_, .nested = nested });
+    }
 };
 
 const ReturnConstraintFrame = struct {
@@ -2625,6 +2670,7 @@ fn initAssumePrepared(
         .return_constraints = .empty,
         .return_value_exprs = .empty,
         .return_constraint_frames = .empty,
+        .try_return_rows = TryReturnRows.init(gpa),
         .var_set = std.AutoHashMap(Var, void).init(gpa),
         .inspect_type_visits = std.AutoHashMap(Var, u8).init(gpa),
         .type_visit_stack = .empty,
@@ -2847,6 +2893,7 @@ pub fn deinit(self: *Self) void {
     self.return_constraints.deinit(self.gpa);
     self.return_value_exprs.deinit(self.gpa);
     self.return_constraint_frames.deinit(self.gpa);
+    self.try_return_rows.deinit(self.gpa);
     self.var_set.deinit();
     self.inspect_type_visits.deinit();
     self.type_visit_stack.deinit(self.gpa);
@@ -31742,24 +31789,79 @@ fn resultValueExpr(self: *Self, expr_idx: CIR.Expr.Idx) CIR.Expr.Idx {
     }
 }
 
-/// Classify one inferred `?` error contribution for return-row composition.
-/// A tag-bearing row participates in the ordinary row merge. A tagless row is
-/// the residual tail contributed by a bare `?`; it is related to the merged
-/// row's extension only after all visible tags have been collected.
-fn tryReturnErrorContribution(self: *Self, error_var: Var) TryReturnErrorContribution {
-    var current = error_var;
-    var guard = types_mod.debug.IterationGuard.init("tryReturnErrorContribution");
+/// Inventory the complete batch before any error rows are related. Row spines
+/// retain row position; payloads and all of their descendants are nested. A
+/// root is visited once per position, even when many contributions share it.
+fn collectTryReturnRowUses(self: *Self) Allocator.Error!void {
+    const rows = &self.try_return_rows;
+    while (rows.work.pop()) |item| {
+        const resolved = self.types.resolveVar(item.var_);
+        const bit: u2 = if (item.nested) 2 else 1;
+        const entry = try rows.uses.getOrPut(resolved.var_);
+        if (!entry.found_existing) entry.value_ptr.* = 0;
+        if (entry.value_ptr.* & bit != 0) continue;
+        entry.value_ptr.* |= bit;
+
+        switch (resolved.desc.content) {
+            .flex, .rigid, .field_presence, .err => {},
+            .alias => |alias| {
+                try rows.work.append(self.gpa, .{ .var_ = self.types.getAliasBackingVar(alias), .nested = item.nested });
+                if (item.nested) try rows.appendVars(self.gpa, self.types.sliceAliasArgs(alias), true);
+            },
+            .structure => |flat| switch (flat) {
+                .tag_union => |row| {
+                    try rows.work.append(self.gpa, .{ .var_ = row.ext, .nested = item.nested });
+                    for (self.types.getTagsSlice(row.tags).items(.args)) |args| {
+                        try rows.appendVars(self.gpa, self.types.sliceVars(args), true);
+                    }
+                },
+                .tuple => |tuple| try rows.appendVars(self.gpa, self.types.sliceVars(tuple.elems), true),
+                .nominal_type => |nominal| try rows.appendVars(self.gpa, self.types.sliceNominalArgs(nominal), true),
+                .fn_pure, .fn_effectful, .fn_unbound => |func| {
+                    try rows.appendVars(self.gpa, self.types.sliceVars(func.args), true);
+                    try rows.work.append(self.gpa, .{ .var_ = func.ret, .nested = true });
+                },
+                .record, .record_unbound => {
+                    const range = if (flat == .record) flat.record.fields else flat.record_unbound;
+                    for (self.types.getRecordFieldsSlice(range).items(.presence)) |presence| {
+                        try rows.work.append(self.gpa, .{ .var_ = presence.typeVar(), .nested = true });
+                        if (presence.presenceVar()) |var_| try rows.work.append(self.gpa, .{ .var_ = var_, .nested = true });
+                    }
+                    if (flat == .record) try rows.work.append(self.gpa, .{ .var_ = flat.record.ext, .nested = true });
+                },
+                .empty_record, .empty_tag_union => {},
+            },
+        }
+    }
+}
+
+/// Gather just a row spine, retaining every payload's original type variable.
+/// `tags` is scratch owned by this request and must be consumed before the next
+/// gather. Nestedness is from the pre-relation inventory, never a cycle repair.
+fn gatherTryReturnRow(self: *Self, start: Var, comptime collect_tags: bool) Allocator.Error!struct { tail: Var, nested: bool, has_tags: bool } {
+    const rows = &self.try_return_rows;
+    rows.tags.clearRetainingCapacity();
+    var current = start;
+    var nested = false;
+    var has_tags = false;
+    var guard = types_mod.debug.IterationGuard.init("gatherTryReturnRow");
     while (true) {
         guard.tick();
         const resolved = self.types.resolveVar(current);
+        nested = nested or ((rows.uses.get(resolved.var_) orelse 0) & 2 != 0);
         switch (resolved.desc.content) {
             .alias => |alias| current = self.types.getAliasBackingVar(alias),
             .structure => |flat| switch (flat) {
-                .tag_union => |tag_union| {
-                    if (tag_union.tags.len() > 0) return .tagged;
-                    current = tag_union.ext;
+                .tag_union => |row| {
+                    has_tags = has_tags or row.tags.len() > 0;
+                    if (collect_tags) {
+                        const tags = self.types.getTagsSlice(row.tags);
+                        for (tags.items(.name), tags.items(.args)) |name, args| {
+                            try rows.tags.append(self.gpa, .{ .name = name, .args = args });
+                        }
+                    }
+                    current = row.ext;
                 },
-                .empty_tag_union => return .none,
                 .record,
                 .record_unbound,
                 .tuple,
@@ -31768,17 +31870,25 @@ fn tryReturnErrorContribution(self: *Self, error_var: Var) TryReturnErrorContrib
                 .fn_effectful,
                 .fn_unbound,
                 .empty_record,
-                => return .{ .tail = resolved.var_ },
+                .empty_tag_union,
+                => return .{ .tail = resolved.var_, .nested = nested, .has_tags = has_tags },
             },
-            .err => return .none,
-            .flex, .rigid, .field_presence => return .{ .tail = resolved.var_ },
+            .flex, .rigid, .field_presence, .err => return .{ .tail = resolved.var_, .nested = nested, .has_tags = has_tags },
         }
     }
 }
 
-/// The residual extension of a composed inferred `?` return row. This walk is
-/// over explicit row topology produced by checking; it does not inspect source
-/// syntax or choose a representation.
+/// A directed contribution of the gathered heads. The fresh extension is an
+/// accumulator variable, while `tail` remains the source's residual dependency.
+/// This implements design.md's Try Return-Row Composition rule, not a copy of
+/// the source type: all payload identities and the source tail are preserved.
+fn projectTryReturnRow(self: *Self, tail: Var, env: *Env, region: Region) Allocator.Error!TryReturnRows.Projection {
+    const ext = try self.fresh(env, region);
+    const content = try self.types.mkTagUnion(self.try_return_rows.tags.items, ext);
+    return .{ .row = try self.freshFromContent(content, env, region), .tail = tail };
+}
+
+/// The residual extension after ordinary unification has merged visible tags.
 fn tryReturnErrorTail(self: *Self, error_var: Var) Var {
     var current = error_var;
     var guard = types_mod.debug.IterationGuard.init("tryReturnErrorTail");
@@ -31788,7 +31898,7 @@ fn tryReturnErrorTail(self: *Self, error_var: Var) Var {
         switch (resolved.desc.content) {
             .alias => |alias| current = self.types.getAliasBackingVar(alias),
             .structure => |flat| switch (flat) {
-                .tag_union => |tag_union| current = tag_union.ext,
+                .tag_union => |row| current = row.ext,
                 .record,
                 .record_unbound,
                 .tuple,
@@ -31805,67 +31915,14 @@ fn tryReturnErrorTail(self: *Self, error_var: Var) Var {
     }
 }
 
-/// Whether `needle` is already a structural part of `root`. Static-dispatch
-/// constraints on flex/rigid variables are deliberately not structure: the
-/// occurs check permits them to be self-referential, and ordinary unification
-/// does not turn them into children of the variable's type.
-fn typeStructurallyContainsVar(self: *Self, root: Var, needle: Var) std.mem.Allocator.Error!bool {
-    const needle_root = self.types.resolveVar(needle).var_;
-    self.var_set.clearRetainingCapacity();
-    defer self.var_set.clearRetainingCapacity();
-
-    const stack = &self.type_visit_stack;
-    const stack_base = stack.items.len;
-    defer stack.items.len = stack_base;
-    try stack.append(self.gpa, root);
-
-    while (stack.items.len > stack_base) {
-        const current = stack.pop().?;
-        const resolved = self.types.resolveVar(current);
-        if (resolved.var_ == needle_root) return true;
-        if (self.var_set.contains(resolved.var_)) continue;
-        try self.var_set.put(resolved.var_, {});
-
-        switch (resolved.desc.content) {
-            .flex, .rigid, .field_presence, .err => {},
-            .alias => |alias| {
-                try stack.append(self.gpa, self.types.getAliasBackingVar(alias));
-                try stack.appendSlice(self.gpa, self.types.sliceAliasArgs(alias));
-            },
-            .structure => |flat_type| switch (flat_type) {
-                .tuple => |tuple| try stack.appendSlice(self.gpa, self.types.sliceVars(tuple.elems)),
-                .nominal_type => |nominal| try stack.appendSlice(self.gpa, self.types.sliceNominalArgs(nominal)),
-                .fn_pure, .fn_effectful, .fn_unbound => |func| {
-                    try stack.appendSlice(self.gpa, self.types.sliceVars(func.args));
-                    try stack.append(self.gpa, func.ret);
-                },
-                .record => |record| {
-                    const fields = self.types.getRecordFieldsSlice(record.fields);
-                    for (fields.items(.presence)) |presence| {
-                        try stack.append(self.gpa, presence.typeVar());
-                        if (presence.presenceVar()) |presence_var| try stack.append(self.gpa, presence_var);
-                    }
-                    try stack.append(self.gpa, record.ext);
-                },
-                .record_unbound => |fields_range| {
-                    const fields = self.types.getRecordFieldsSlice(fields_range);
-                    for (fields.items(.presence)) |presence| {
-                        try stack.append(self.gpa, presence.typeVar());
-                        if (presence.presenceVar()) |presence_var| try stack.append(self.gpa, presence_var);
-                    }
-                },
-                .tag_union => |tag_union| {
-                    const tags = self.types.getTagsSlice(tag_union.tags);
-                    for (tags.items(.args)) |args| {
-                        try stack.appendSlice(self.gpa, self.types.sliceVars(args));
-                    }
-                    try stack.append(self.gpa, tag_union.ext);
-                },
-                .empty_record, .empty_tag_union => {},
-            },
-        }
+fn checkProjectedTryReturn(self: *Self, expected: Var, plan: TryReturnRows.Plan, row: Var, env: *Env, ctx: problem.Context) Allocator.Error!void {
+    const region = self.cir.store.getExprRegion(plan.expr);
+    const actual = try self.freshFromContent(try self.mkTryContent(plan.ok, row), env, region);
+    const result = try self.unifyInContext(expected, actual, env, ctx);
+    if (result.isProblem()) {
+        self.problems.problems.items[@intFromEnum(result.problem)].type_mismatch.types.actual_var = ModuleEnv.varFrom(plan.expr);
+        try self.erroneous_value_exprs.put(self.gpa, plan.expr, {});
     }
-    return false;
 }
 
 /// The first `?` that produces the value of `expr_idx`, following tail
@@ -31999,66 +32056,94 @@ fn processReturnConstraints(self: *Self, env: *Env, lambda_idx: CIR.Expr.Idx) st
         }
     }
     if (expected_try) |expected| {
-        // First merge every contribution with visible tags. Ordinary tag-row
-        // unification collects those tags and leaves one residual extension.
+        const rows = &self.try_return_rows;
+        rows.clear();
+        defer rows.clear();
+
+        // Success equality can reveal sharing. Establish it before inventorying
+        // the error graph, then keep the complete batch stable until planned.
         for (constraints) |constraint| {
             if (constraint.kind != .try_suffix) continue;
             const actual = self.tryArgsFromVar(ModuleEnv.varFrom(constraint.actual_expr)) orelse {
-                try self.checkReturnRelation(
-                    frame.body_result,
-                    constraint.actual_expr,
-                    constraint.kind.problemContext(body_tail_try),
-                    env,
-                );
+                try self.checkReturnRelation(frame.body_result, constraint.actual_expr, constraint.kind.problemContext(body_tail_try), env);
                 continue;
             };
-            if (self.tryReturnErrorContribution(actual.err) == .tagged) {
-                // This is the ordinary whole-Try relation. Keep its roots
-                // intact so a mismatch report can name both complete error
-                // payloads, rather than receiving only the nested row pair.
-                try self.checkReturnRelation(
-                    frame.body_result,
-                    constraint.actual_expr,
-                    constraint.kind.problemContext(body_tail_try),
-                    env,
-                );
-            } else if ((try self.unifyInContext(
-                expected.ok,
-                actual.ok,
-                env,
-                constraint.kind.problemContext(body_tail_try),
-            )).isProblem()) {
+            try rows.plans.append(self.gpa, .{ .expr = constraint.actual_expr, .ok = actual.ok, .err = actual.err });
+            if ((try self.unifyInContext(expected.ok, actual.ok, env, constraint.kind.problemContext(body_tail_try))).isProblem()) {
                 try self.erroneous_value_exprs.put(self.gpa, constraint.actual_expr, {});
             }
         }
+        // No propagated errors means no graph inventory or projection work.
+        if (rows.plans.items.len > 0) {
+            try rows.work.append(self.gpa, .{ .var_ = expected.err, .nested = false });
+            for (rows.plans.items) |plan| try rows.work.append(self.gpa, .{ .var_ = plan.err, .nested = false });
+            try self.collectTryReturnRowUses();
+        }
+        for (rows.plans.items) |*plan| {
+            const root = self.types.resolveVar(plan.err).var_;
+            if (rows.projections.get(root)) |projection| {
+                plan.relation = .{ .projected = projection };
+                continue;
+            }
+            const gathered = try self.gatherTryReturnRow(root, false);
+            if (gathered.has_tags) {
+                if (gathered.nested) {
+                    _ = try self.gatherTryReturnRow(root, true);
+                    const projection = try self.projectTryReturnRow(gathered.tail, env, self.cir.store.getExprRegion(plan.expr));
+                    try rows.projections.put(root, projection);
+                    plan.relation = .{ .projected = projection };
+                } else {
+                    plan.relation = .whole;
+                }
+            } else {
+                const content = self.types.resolveVar(gathered.tail).desc.content;
+                if (content == .err or (content == .structure and content.structure == .empty_tag_union)) continue;
+                plan.relation = .{ .tail = .{ .var_ = gathered.tail, .nested = gathered.nested } };
+            }
+        }
 
-        // Preserve the ordinary full-row equality for a bare `?` unless its
-        // error is already embedded in the composed row. Only that latter
-        // relation would form `e = [Wrapped(e), ..]`; its exact non-recursive
-        // representation relates `e` to the residual extension instead.
-        for (constraints) |constraint| {
-            if (constraint.kind != .try_suffix) continue;
-            const actual = self.tryArgsFromVar(ModuleEnv.varFrom(constraint.actual_expr)) orelse continue;
-            const contribution = self.tryReturnErrorContribution(actual.err);
-            const tail = switch (contribution) {
-                .none, .tagged => continue,
-                .tail => |tail_var| tail_var,
-            };
-            const expected_root = self.types.resolveVar(expected.err).var_;
-            const tail_root = self.types.resolveVar(tail).var_;
-            const relation_target = if (expected_root != tail_root and
-                try self.typeStructurallyContainsVar(expected.err, tail))
-                self.tryReturnErrorTail(expected.err)
-            else
-                expected.err;
-            const result = try self.unifyInContext(
-                relation_target,
-                tail,
-                env,
-                constraint.kind.problemContext(body_tail_try),
-            );
-            if (result.isProblem()) {
-                try self.erroneous_value_exprs.put(self.gpa, constraint.actual_expr, {});
+        // Only the explicit plans survive error-row mutations. The inventory
+        // and projection lookup describe the pre-relation graph exclusively.
+        rows.uses.clearRetainingCapacity();
+        rows.projections.clearRetainingCapacity();
+        const ctx = ReturnConstraintKind.try_suffix.problemContext(body_tail_try);
+        for (rows.plans.items) |plan| switch (plan.relation) {
+            .whole => try self.checkReturnRelation(frame.body_result, plan.expr, ctx, env),
+            .projected => |projection| try self.checkProjectedTryReturn(frame.body_result, plan, projection.row, env, ctx),
+            .none, .tail => {},
+        };
+
+        // Source tails are related only after all visible heads. A shared tag
+        // payload relation may have exposed more heads in a source tail; these
+        // contribute through the same directed relation before its terminal tail.
+        for (rows.plans.items) |plan| {
+            var tail: Var = undefined;
+            switch (plan.relation) {
+                .none, .whole => continue,
+                .tail => |residual| {
+                    tail = residual.var_;
+                    if (!residual.nested) {
+                        // An explicitly shared result tail already includes
+                        // this source. Equating it with the whole row would
+                        // push the result's heads backwards into the source.
+                        if (self.types.resolveVar(tail).var_ == self.types.resolveVar(self.tryReturnErrorTail(expected.err)).var_) continue;
+                        if ((try self.unifyInContext(expected.err, tail, env, ctx)).isProblem()) {
+                            try self.erroneous_value_exprs.put(self.gpa, plan.expr, {});
+                        }
+                        continue;
+                    }
+                },
+                .projected => |projection| tail = projection.tail,
+            }
+            if (self.types.resolveVar(tail).var_ == self.types.resolveVar(expected.err).var_) continue;
+            const gathered = try self.gatherTryReturnRow(tail, true);
+            if (rows.tags.items.len > 0) {
+                const projection = try self.projectTryReturnRow(gathered.tail, env, self.cir.store.getExprRegion(plan.expr));
+                try self.checkProjectedTryReturn(frame.body_result, plan, projection.row, env, ctx);
+            }
+            tail = gathered.tail;
+            if ((try self.unifyInContext(self.tryReturnErrorTail(expected.err), tail, env, ctx)).isProblem()) {
+                try self.erroneous_value_exprs.put(self.gpa, plan.expr, {});
             }
         }
     } else {

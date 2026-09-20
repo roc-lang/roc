@@ -203,6 +203,29 @@ const issue10703DualAliasSource =
 /// Public value `tests`.
 pub const tests = [_]TestCase{
     .{
+        .name = "issue 11470: imported polymorphic error composition preserves shared tails",
+        .source_kind = .module,
+        .imports = &.{.{
+            .name = "Lookup",
+            .source = "Lookup := [].{ call = show }\n" ++ @import("issue_11470_source.zig").source,
+        }},
+        .source =
+        \\import Lookup
+        \\main = (
+        \\    Lookup.call(|_| Ok(21.U64)),
+        \\    Lookup.call(|key| if key == 0 { Ok(1.U64) } else { Err(QueryFailed("owned imported error payload")) }),
+        \\)
+        ,
+        .expected = .{ .inspect_str = "(Ok(42), Err(Wrapped(QueryFailed(\"owned imported error payload\"))))" },
+    },
+    .{
+        .name = "issue 11470: bare and wrapped shared tagged errors preserve values",
+        .source_kind = .module,
+        .source = @import("issue_11470_source.zig").source ++
+            "\nmain = (run(0), run(1), run(2), run(3), run(4))\n",
+        .expected = .{ .inspect_str = "(40, 1, 2, 3, 4)" },
+    },
+    .{
         .name = "issue 11376: packed record constants preserve field order and mixed widths",
         .source_kind = .module,
         .source =
