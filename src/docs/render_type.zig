@@ -119,8 +119,15 @@ pub fn renderTypeAnno(
             try buf.append(gpa, ')');
         },
         .record => |r| {
-            try buf.appendSlice(gpa, "{ ");
             const fields_slice = module_env.store.sliceAnnoRecordFields(r.fields);
+            if (fields_slice.len == 0) {
+                try buf.appendSlice(gpa, "{}");
+                if (r.ext) |ext_idx| {
+                    try renderTypeAnno(buf, gpa, module_env, ext_idx, false);
+                }
+                return;
+            }
+            try buf.appendSlice(gpa, "{ ");
             for (fields_slice, 0..) |field_idx, i| {
                 if (i > 0) try buf.appendSlice(gpa, ", ");
                 const field = module_env.store.getAnnoRecordField(field_idx);
