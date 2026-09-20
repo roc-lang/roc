@@ -8499,8 +8499,8 @@ test "shared CTFE and runtime requests specialize once across workers and target
             try std.testing.expectEqual(@as(usize, 1), runtime.lir_result.root_procs.items.len);
             // The native width reuses the completed host program, whose
             // accessor now returns the completed scalar as a literal; a
-            // forked width lowers its own continuation, where the read is
-            // the literal. Either way no value slot survives.
+            // separate-width consumer lowers its own continuation, where the
+            // read is the literal. Either way no value slot survives.
             const frozen = runtime.frozen_static_data orelse return error.TestUnexpectedResult;
             var value_exports: usize = 0;
             for (frozen.exports) |item| {

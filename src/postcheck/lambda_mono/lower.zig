@@ -129,6 +129,7 @@ fn movedSolvedView(source: *const Solved.Program, moved: *const Ast.Program) Sol
             .proc_debug_names = lifted.proc_debug_names,
             .roots = lifted.roots,
             .layout_requests = lifted.layout_requests,
+            .comptime_value_reads = lifted.comptime_value_reads,
             .runtime_schema_requests = lifted.runtime_schema_requests,
             .static_data_values = moved.static_data_values.unsafeRawItemsForView(),
             .comptime_sites = lifted.comptime_sites,

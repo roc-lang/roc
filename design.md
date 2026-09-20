@@ -841,8 +841,9 @@ no ownership transfers. The pass extends each affected procedure's sorted frame
 local inventory and recomputes its stack-probe requirement. Backends consume
 only these explicit ordinary LIR operations.
 
-A runtime program forked from the completed host program receives the
-completed values in two forms. Its lowering carries the host's completed
+A runtime program continued from the shared producer program after the
+compile-time consumer completed, rather than reusing that consumer's own
+program, receives the completed values in two forms. Its lowering carries the host's completed
 successful scalar roots, decoded from the host's frozen image and keyed by
 checked root identity as transcoding matches slots, and emits each such read
 as the scalar literal rather than a slot read, so range proving, loop
@@ -900,15 +901,67 @@ solving, including callable identities stored in compile-time results. The
 consumer input is opaque to value folding until target LIR lowering supplies the
 configured run/omit Boolean. No specialization is repeated.
 
-A cross-target continuation forks one frozen Solved program after Monotype
-lowering, lifting, SpecConstr, lambda solving, and inline analysis. It copies
-the owned arrays, checked name identities, immutable type graphs, literal and
-diagnostic bytes, and inline plan exactly. Every producer id and specialization
-identity stays unchanged. The fork does not rerun any of those stages. Each
-fork is consumed independently by target LIR lowering; target width and the
-explicitly shared expect consumer mode may change, while specialization options
-remain captured. Callable correspondence therefore compares ids from one
-producer domain, never ids allocated by separate solver runs.
+Monotype lowering, lifting, SpecConstr, lambda solving, and inline analysis
+run once over the union of the compilation's compile-time and runtime root
+requests, and the frozen Solved program they produce is one immutable producer
+identity domain. Every consumer continuation borrows that one program: none
+copies it, and none reruns any of those stages. A consumer chooses its target
+width, the explicitly shared expect consumer mode, and the completed
+compile-time values it reads as literals; every other specialization option is
+captured by preparation and cannot differ between consumers, because the
+specializations were already lowered under it. Callable correspondence
+therefore compares ids from one producer domain, never ids allocated by
+separate solver runs. The producer program is released after its last consumer.
+
+Each consumer names its share of the producer program in an explicit root
+manifest, applied before LIR demand discovery. A manifest names producer root
+positions in the consumer's emitted order, states whether the consumer
+materializes the producer's layout, static-data and runtime-schema requests,
+and names the evaluated roots whose completed values the consumer publishes.
+Selected roots keep the producer's request metadata and the producer position
+that command-level root metadata is keyed by. Demand discovery then starts
+from the named roots alone: a consumer generates no procedure, layout, static
+data, or ARC for another consumer's roots, and no consumer prunes another's
+code after lowering it.
+
+Two consumers share one program exactly when the code they would lower is the
+same code. The compile-time consumer lowers at the host's width with expects
+run, so a runtime consumer that asks for the same two answers names the union
+of both root sets in one manifest: that program evaluates the compile-time
+roots and is then the runtime program, with its own roots selected out of it
+and its completed values read through the accessors it already had. A runtime
+consumer that asks for a different target width or expect mode cannot read
+that code, so each consumer names only its own roots: a runtime root request
+is then never lowered while checking finalizes, and a compile-time root's own
+body never reaches the runtime program, which reads each compile-time value
+through a slot the evaluation filled, whose frozen bytes are the value's
+definition there. Whether one program or two, no consumer lowers code only
+another consumer runs.
+
+Monotype lowering records the evaluated roots whose completed values the
+program reads, once per root. A root-slot read is that stage's own explicit
+statement of the demand, so later stages consume the record instead of
+rediscovering it. When consumers split, the compile-time consumer's manifest
+names exactly the roots in that record that this compilation evaluates, each
+under the checked identity the evaluation publishes it with, and the root
+declares the one slot its value is published into; that declaration keeps the
+slot through procedure and slot compaction even though no code in that program
+reads it. One root has one completed value, and two demands for it are the same
+demand when they name the same concrete type: the structural type digest
+selects the candidate and exact representation equivalence, private backings
+and callable members included, confirms it. Neither a stage-local type id nor
+an agreeing layout is that proof. A root the program never
+reads materializes nothing: it is still evaluated, and reports its `crash`,
+`dbg` and `expect` behavior, but its value is retained only by the checked
+module data that asked for it.
+
+A producer program is released as soon as its last consumer stops reading it,
+which is when that consumer's LIR generation finishes rather than when its
+whole continuation does: the procedure passes, ARC and emitted program that
+follow consult no producer, and they are where a continuation's footprint
+peaks. A completed compile-time program's procedures are likewise released
+once the values they produced have been read: what stays consulted is those
+values, their representation metadata, and the procedures' own identities.
 
 Boxy runtime lowering is a distinct declared specialization strategy. Compile-
 time evaluation remains LSS, so that consumer's runtime roots are excluded from
@@ -917,8 +970,9 @@ This split follows the selected strategy, never a failed specialization attempt.
 
 Native compile-time instruction generation consumes an explicit, read-only LIR
 demand closure seeded by compile-time root procedures and materialized callable
-relocations. Runtime-only procedures remain in the shared program without being
-JIT-compiled. Runtime machine emission is a distinct consumer: compile-time
+relocations. Runtime-only procedures are in that program only when the runtime
+consumer shares it, and are then left un-JIT-compiled. Runtime
+machine emission is a distinct consumer: compile-time
 hooks, deterministic dictionary seed, host CPU, and root-entry wrapper ABI are
 explicit execution policies. That machine emission does not repeat checked,
 Monotype, or host-compatible LIR lowering.
