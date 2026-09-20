@@ -55,7 +55,7 @@ MISSING METHOD - if_then_else_simple_file.md:4:2:4:9
 			(line-break)
 			(annotation-start code-block)
 			(indent 1)
-			(text "[A, ..]")
+			(text "[A]")
 			(annotation-end))))
 ~~~
 # TOKENS
@@ -107,7 +107,7 @@ foo = if 1 A
 ~~~clojure
 (inferred-types
 	(defs
-		(patt (type "[A, ..]")))
+		(patt (type "[A]")))
 	(expressions
-		(expr (type "[A, ..]"))))
+		(expr (type "[A]"))))
 ~~~

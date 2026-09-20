@@ -4313,7 +4313,7 @@ fn collectProcLocals(
     }
 }
 
-fn prebindProcLocals(self: *Self, proc: LirProcSpec) Allocator.Error!void {
+fn prebindProcLocals(self: *Self, proc_id: LIR.LirProcSpecId, proc: LirProcSpec) Allocator.Error!void {
     var locals = std.AutoHashMap(u64, void).init(self.allocator);
     defer locals.deinit();
     var visited = std.AutoHashMap(u32, void).init(self.allocator);
@@ -4321,7 +4321,7 @@ fn prebindProcLocals(self: *Self, proc: LirProcSpec) Allocator.Error!void {
 
     const args = self.store.getLocalSpan(proc.args);
     for (0..args.len) |i| try recordProcLocal(&locals, GuardedList.at(args, i));
-    try self.collectProcLocals(requireProcBody(proc), &locals, &visited);
+    try self.collectProcLocals(requireProcBody(proc_id, proc), &locals, &visited);
 
     // A value's dynamic descriptor is part of its explicit LIR metadata even
     // when no statement names that descriptor separately (for example a Boxy
@@ -8735,7 +8735,7 @@ fn compileProcSpecBody(self: *Self, proc_id: LIR.LirProcSpecId, proc: LirProcSpe
     };
 
     if (proc.hosted == null) {
-        try self.prebindProcLocals(proc);
+        try self.prebindProcLocals(proc_id, proc);
     }
     if (proc.boxy_runtime_entry) try self.emitBoxyRuntimeInit();
 
@@ -8761,7 +8761,7 @@ fn compileProcSpecBody(self: *Self, proc_id: LIR.LirProcSpecId, proc: LirProcSpe
         self.currentCode().append(self.allocator, @intFromEnum(BlockType.void)) catch return error.OutOfMemory;
         self.cf_depth = 1; // inside the ret block
 
-        self.generateCFStmt(requireProcBody(proc)) catch |err| {
+        self.generateCFStmt(requireProcBody(proc_id, proc)) catch |err| {
             self.endFunction();
             self.restoreState(saved);
             return err;
@@ -8837,10 +8837,10 @@ fn compileProcSpecBody(self: *Self, proc_id: LIR.LirProcSpecId, proc: LirProcSpe
     if (proc_used_stack_memory) self.uses_stack_memory = true;
 }
 
-fn requireProcBody(proc: LirProcSpec) LIR.CFStmtId {
+fn requireProcBody(proc_id: LIR.LirProcSpecId, proc: LirProcSpec) LIR.CFStmtId {
     return proc.body orelse wasmInvariantFmt(
-        "WASM/codegen invariant violated: non-hosted proc {d} missing statement body",
-        .{proc.name.raw()},
+        "WASM/codegen invariant violated: non-hosted proc {d} (symbol {d}) missing statement body",
+        .{ @intFromEnum(proc_id), proc.name.raw() },
     );
 }
 

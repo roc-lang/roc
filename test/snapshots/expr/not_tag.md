@@ -30,7 +30,7 @@ TYPE MISMATCH - not_tag.md:1:3:1:7
 			(line-break)
 			(annotation-start code-block)
 			(indent 1)
-			(text "[C(a), ..] where [a.from_numeral : Numeral -> Try(a, [InvalidNumeral(Str)])]")
+			(text "[C(a)] where [a.from_numeral : Numeral -> Try(a, [InvalidNumeral(Str)])]")
 			(annotation-end)
 			(line-break)
 			(line-break)
@@ -66,7 +66,7 @@ NO CHANGE
 # CANONICALIZE
 ~~~clojure
 (e-call
-	(e-lookup-associated-resolved (source "Bool.not") (builtin) (target-node "17337") (target-def "17337"))
+	(e-lookup-associated-resolved (source "Bool.not") (builtin) (target-node "17185") (target-def "17185"))
 	(e-tag (name "C")
 		(args
 			(e-num (value "2")))))

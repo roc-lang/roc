@@ -4638,16 +4638,17 @@ const Lowerer = struct {
         ty: Type.TypeId,
         next: LIR.CFStmtId,
     ) Common.LowerError!LIR.CFStmtId {
+        const root = self.solved.lifted.getComptimeValueRoot(value.root);
         const layout_idx = self.result.store.getLocal(target).layout_idx;
         const proc_id = self.current_proc orelse Common.invariant("compile-time value lowering ran without a current procedure");
         const is_static_initializer = self.result.store.getProcSpec(proc_id).is_static_initializer;
         const runtime_values = if (is_static_initializer) null else self.completed_scalar_values;
         if (runtime_values) |values| {
-            if (values.constructionFor(value.root.module, value.root.root, layout_idx)) |construction| {
+            if (values.constructionFor(root.module, root.root, layout_idx)) |construction| {
                 if (try self.lowerConstructionInto(target, construction, next)) |built| return built;
             }
         }
-        const id = try self.comptimeValueSlot(value.root, ty, layout_idx);
+        const id = try self.comptimeValueSlot(root, ty, layout_idx);
         // A program lowered before its roots are evaluated reads each root
         // through an accessor, so the slot has one guarded read however many
         // places read it, and the evaluation's slot demand is raised from one
@@ -12261,6 +12262,8 @@ fn cloneLiftedProgram(allocator: std.mem.Allocator, program: *const Lifted.Progr
     errdefer runtime_schema_requests.deinit(allocator);
     var static_data_values = try clonedLiftedProgramList(Lifted.StaticDataValue, "static_data_values", allocator, view.static_data_values);
     errdefer static_data_values.deinit(allocator);
+    var comptime_value_roots = try clonedLiftedProgramList(Common.ComptimeValueRoot, "comptime_value_roots", allocator, view.comptime_value_roots);
+    errdefer comptime_value_roots.deinit(allocator);
     var expr_locs = try clonedLiftedProgramList(base.SourceLoc, "expr_locs", allocator, view.expr_locs);
     errdefer expr_locs.deinit(allocator);
     var expr_regions = try clonedLiftedProgramList(base.Region, "expr_regions", allocator, view.expr_regions);
@@ -12315,6 +12318,7 @@ fn cloneLiftedProgram(allocator: std.mem.Allocator, program: *const Lifted.Progr
         .comptime_value_reads = comptime_value_reads,
         .runtime_schema_requests = runtime_schema_requests,
         .static_data_values = static_data_values,
+        .comptime_value_roots = comptime_value_roots,
         .comptime_sites = Lifted.ProgramList(Lifted.ComptimeSite, "comptime_sites").fromArrayList(comptime_sites),
         .source_files = Lifted.ProgramList(base.SourceFileEntry, "source_files").fromArrayList(source_files),
         .expr_locs = expr_locs,
@@ -12741,8 +12745,12 @@ test "frozen solved clone preserves producer IDs and releases partial allocation
     try source.expr_tys.append(allocator, ty);
     try source.pat_tys.append(allocator, ty);
     try source.fn_tys.append(allocator, ty);
+    const root: Common.ComptimeValueRoot = .{ .module = .{}, .root = @enumFromInt(91), .const_locator = null };
+    const root_id = try source.lifted.addComptimeValueRoot(root);
     var cloned = try cloneSolvedProgram(allocator, &source);
     defer cloned.deinit();
+    try std.testing.expectEqualDeep(root, cloned.lifted.getComptimeValueRoot(root_id));
+    try std.testing.expect(source.lifted.view().comptime_value_roots.ptr != cloned.lifted.view().comptime_value_roots.ptr);
     try std.testing.expectEqual(source.types.memberItem(members, 0).captures, cloned.types.memberItem(members, 0).captures);
     try std.testing.expectEqual(source.types.captureItem(captures, 0).local, cloned.types.captureItem(captures, 0).local);
     try std.testing.expectEqualSlices(u8, names.moduleIdentityBytes(identity), cloned.lifted.names.moduleIdentityBytes(identity));
@@ -12761,6 +12769,121 @@ test "frozen solved clone preserves producer IDs and releases partial allocation
         }
     };
     try std.testing.checkAllAllocationFailures(allocator, Attempt.run, .{&source});
+}
+
+test "compact comptime root descriptors survive solved teardown and direct LIR lowering" {
+    const allocator = std.testing.allocator;
+    var solved = emptySolvedProgramForTest(allocator);
+    // Lambda Mono lowering consumes and destroys this source on every path.
+    var source_consumed = false;
+    defer if (!source_consumed) solved.deinit();
+    const roots = [_]Common.ComptimeValueRoot{
+        .{ .module = .{}, .root = @enumFromInt(91), .const_locator = null },
+        .{
+            .module = .{ .bytes = @splat(1) },
+            .root = @enumFromInt(91),
+            .const_locator = .{
+                .artifact = .{ .bytes = @splat(1) },
+                .owner = .{ .hoisted_expr = .{ .module_idx = 7, .expr = @enumFromInt(31) } },
+                .template = @enumFromInt(47),
+                .source_scheme = .{ .bytes = @splat(3) },
+            },
+        },
+    };
+    for (roots) |root| _ = try solved.lifted.addComptimeValueRoot(root);
+    const bool_ty = try solved.lifted.types.add(.{ .primitive = .bool });
+    const policy = try solved.lifted.addExpr(.{ .ty = bool_ty, .data = .{ .inline_expects_enabled = {} } });
+    const witness = try solved.lifted.addExpr(.{ .ty = bool_ty, .data = .@"unreachable" });
+    const read = try solved.lifted.addExpr(.{ .ty = bool_ty, .data = .{ .comptime_value = .{ .root = @enumFromInt(1), .initializer = witness } } });
+    for ([_]Lifted.ExprId{ policy, read }, 0..) |body, index| {
+        const fn_id = try solved.lifted.addFn(.{
+            .symbol = @enumFromInt(@as(u32, @intCast(index))),
+            .args = .empty(),
+            .captures = .empty(),
+            .body = .{ .roc = body },
+            .ret = bool_ty,
+        });
+        try solved.lifted.addRoot(.{ .fn_id = fn_id, .request = undefined });
+    }
+    solved.lifted.next_symbol = 2;
+    const field = try solved.lifted.names.internRecordFieldLabel("field");
+    _ = try solved.lifted.addFieldAccessSegmentSpan(&.{.{ .field = field }});
+    {
+        const name = try allocator.dupe(u8, "Fixture.roc");
+        errdefer allocator.free(name);
+        const qualified_name = try allocator.dupe(u8, "Fixture");
+        errdefer allocator.free(qualified_name);
+        try solved.lifted.source_files.append(allocator, .{ .name = name, .qualified_name = qualified_name });
+    }
+    // Derive real function and expression types, rather than synthesizing a
+    // materialized read after lowering has already finished.
+    const inferred = try @import("lambda_solved/solve.zig").run(allocator, try cloneLiftedProgram(allocator, &solved.lifted));
+    solved.deinit();
+    solved = inferred;
+
+    const Attempt = struct {
+        fn run(failing: std.mem.Allocator, original: *const Solved.Program, folded: Lifted.Program.FoldedMatch) std.mem.Allocator.Error!void {
+            const copy = try cloneSolvedProgram(failing, original);
+            // run consumes the clone on success AND failure; no clone errdefer.
+            var result = try LambdaMonoLower.run(failing, copy, &.{folded}, .{});
+            defer result.deinit();
+        }
+    };
+    try std.testing.checkAllAllocationFailures(allocator, Attempt.run, .{ &solved, Lifted.Program.FoldedMatch{ .scrutinee = policy, .body = read } });
+    {
+        var lowerer = try Lowerer.init(allocator, .u64, &solved, .{});
+        defer lowerer.deinit();
+        const ty = try lowerer.types.add(.{ .primitive = .u8 });
+        const target = try lowerer.result.store.addLocal(.{ .layout_idx = .u8 });
+        const next = try lowerer.result.store.addCFStmt(.{ .runtime_error = {} });
+        // Root-slot initialization is a procedure-owned operation. Runtime
+        // consumers may instead use an accessor to a completed construction.
+        lowerer.current_proc = try lowerer.result.store.addProcSpec(.{
+            .name = lirSymbol(lowerer.symbols.fresh()),
+            .identity = LIR.ProcIdentity.forTest(0),
+            .args = LIR.LocalSpan.empty(),
+            .frame_locals = try lowerer.result.store.addLocalSpan(&.{target}),
+            .body = next,
+            .ret_layout = .u8,
+            .is_static_initializer = true,
+        });
+        for (roots, 0..) |root, index| {
+            const id: Common.ComptimeValueRootId = @enumFromInt(@as(u32, @intCast(index)));
+            // Representation witnesses are not consulted by root-slot lowering.
+            _ = try lowerer.lowerComptimeValueInto(target, .{ .root = id, .initializer = undefined }, ty, next);
+            const slot = lowerer.result.static_data_values.items[index * 2 + 1].compile_time_root.?;
+            try std.testing.expectEqualDeep(root.module, slot.module);
+            try std.testing.expectEqual(root.root, slot.root);
+            try std.testing.expectEqualDeep(root.const_locator, slot.const_locator);
+        }
+        // A second table entry for the same descriptor must reuse the semantic slot.
+        const duplicate = try solved.lifted.addComptimeValueRoot(roots[1]);
+        _ = try lowerer.lowerComptimeValueInto(target, .{ .root = duplicate, .initializer = undefined }, ty, next);
+        try std.testing.expectEqual(@as(usize, 4), lowerer.result.static_data_values.items.len);
+    }
+    source_consumed = true;
+    var materialized = try LambdaMonoLower.run(allocator, solved, &.{}, .{});
+    defer materialized.deinit();
+    for (roots, 0..) |root, index| {
+        try std.testing.expectEqualDeep(root, materialized.getComptimeValueRoot(@enumFromInt(@as(u32, @intCast(index)))));
+    }
+    // Evaluate a read after both lowering and source teardown. Producer order is
+    // deliberately unrelated to the descriptor ID and checked root number.
+    const Eval = @import("lambda_mono/eval.zig");
+    const consumer = materialized.getFn(materialized.rootsView()[1].fn_id);
+    const lowered_read = materialized.getExpr(consumer.body.roc).data.comptime_value;
+    try std.testing.expectEqual(@as(Common.ComptimeValueRootId, @enumFromInt(1)), lowered_read.root);
+    try std.testing.expectEqualDeep(roots[1], materialized.getComptimeValueRoot(lowered_read.root));
+    try std.testing.expect(materialized.getExpr(lowered_read.initializer).data == .@"unreachable");
+    var evaluator = try Eval.Evaluator.init(allocator, &materialized, .{
+        .inline_expects_enabled = false,
+        .comptime_producers = &.{
+            .{ .root = roots[0], .root_index = 1 },
+            .{ .root = roots[1], .root_index = 0 },
+        },
+    });
+    defer evaluator.deinit();
+    try std.testing.expect((try evaluator.runRoot(1)).value.bool_);
 }
 
 test "layout lowering accepts tag payload alias backed by primitive" {

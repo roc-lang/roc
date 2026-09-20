@@ -3255,7 +3255,10 @@ pub const InstGraph = struct {
         if (self.rowAdditionConflicts(flat_public.ext, only_private.items.len, .tag_union) or
             self.rowAdditionConflicts(flat_private.ext, only_public.items.len, .tag_union))
         {
-            Common.invariant("opaque interface relation widened a closed tag union");
+            // Not `invariant`: a closed tag union that grows here changes the tag
+            // discriminants the backend emits, so a release build would silently
+            // read the wrong variant instead of hitting undefined behavior.
+            Common.compilerBug("opaque interface relation widened a closed tag union");
         }
         if (only_public.items.len == 0 and only_private.items.len == 0) {
             try self.relateOpaqueChild(flat_public.ext, flat_private.ext, row_width, pending);
@@ -5314,7 +5317,10 @@ pub const InstGraph = struct {
         if (self.rowAdditionConflicts(flat_left.ext, only_right.items.len, .tag_union) or
             self.rowAdditionConflicts(flat_right.ext, only_left.items.len, .tag_union))
         {
-            Common.invariant("instantiation widened a closed tag union");
+            // Not `invariant`: see the opaque-interface check above. Widening a
+            // closed tag union renumbers its discriminants, which changes emitted
+            // code, so this has to hold in release builds too.
+            Common.compilerBug("instantiation widened a closed tag union");
         }
 
         var merged_ext = flat_left.ext;

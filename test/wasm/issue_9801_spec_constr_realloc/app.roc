@@ -15,8 +15,8 @@ import pf.Stdout
 
 Expr := [
 	Ref(Box(U64)),
-	ConstValue(Box(U64), Box(({} -> AnyValue)), Box((AnyValue, AnyValue -> Bool)), Box((AnyValue -> {}))),
-	Map(Box(U64), Box(Expr), Box((AnyValue -> AnyValue)), Box((AnyValue, AnyValue -> Bool)), Box((AnyValue -> {}))),
+	ConstValue(Box(U64), Box(({} => AnyValue)), Box((AnyValue, AnyValue => Bool)), Box((AnyValue => {}))),
+	Map(Box(U64), Box(Expr), Box((AnyValue => AnyValue)), Box((AnyValue, AnyValue => Bool)), Box((AnyValue => {}))),
 ]
 
 Cell(a) := { expr : Box(Expr), tag : Box(AnyValue.TypeTag(a)) }.{
@@ -34,24 +34,24 @@ Cell(a) := { expr : Box(Expr), tag : Box(AnyValue.TypeTag(a)) }.{
 	const = |value| {
 		token = Box.box(0)
 		tag = AnyValue.new_tag({})
-		init : {} -> AnyValue
-		init = |_| AnyValue.store_tagged(Box.box(value), tag)
-		eq : AnyValue, AnyValue -> Bool
-		eq = |left_hv, right_hv| {
+		init! : {} => AnyValue
+		init! = |_| AnyValue.store_tagged!(Box.box(value), tag)
+		eq! : AnyValue, AnyValue => Bool
+		eq! = |left_hv, right_hv| {
 			left : a
-			left = Box.unbox(AnyValue.get_tagged(left_hv, tag))
+			left = Box.unbox(AnyValue.get_tagged!(left_hv, tag))
 			right : a
-			right = Box.unbox(AnyValue.get_tagged(right_hv, tag))
+			right = Box.unbox(AnyValue.get_tagged!(right_hv, tag))
 			left.is_eq(right)
 		}
-		drop : AnyValue -> {}
-		drop = |host_value| {
+		drop! : AnyValue => {}
+		drop! = |host_value| {
 			boxed : Box(a)
-			boxed = AnyValue.take(host_value)
+			boxed = AnyValue.take!(host_value)
 			_ = boxed
 			{}
 		}
-		{ expr: Box.box(ConstValue(token, Box.box(init), Box.box(eq), Box.box(drop))), tag }
+		{ expr: Box.box(ConstValue(token, Box.box(init!), Box.box(eq!), Box.box(drop!))), tag }
 	}
 
 	map :
@@ -62,35 +62,35 @@ Cell(a) := { expr : Box(Expr), tag : Box(AnyValue.TypeTag(a)) }.{
 	map = |cell, f| {
 		token = Box.box(0)
 		output_tag = AnyValue.new_tag({})
-		wrapped : AnyValue -> AnyValue
-		wrapped = |input_hv| {
+		wrapped! : AnyValue => AnyValue
+		wrapped! = |input_hv| {
 			typed_input : a
-			typed_input = Box.unbox(AnyValue.get_tagged(input_hv, cell.tag))
+			typed_input = Box.unbox(AnyValue.get_tagged!(input_hv, cell.tag))
 			typed_output : b
 			typed_output = f(typed_input)
-			AnyValue.store_tagged(Box.box(typed_output), output_tag)
+			AnyValue.store_tagged!(Box.box(typed_output), output_tag)
 		}
-		eq : AnyValue, AnyValue -> Bool
-		eq = |left_hv, right_hv| {
+		eq! : AnyValue, AnyValue => Bool
+		eq! = |left_hv, right_hv| {
 			left : b
-			left = Box.unbox(AnyValue.get_tagged(left_hv, output_tag))
+			left = Box.unbox(AnyValue.get_tagged!(left_hv, output_tag))
 			right : b
-			right = Box.unbox(AnyValue.get_tagged(right_hv, output_tag))
+			right = Box.unbox(AnyValue.get_tagged!(right_hv, output_tag))
 			left.is_eq(right)
 		}
-		drop : AnyValue -> {}
-		drop = |host_value| {
+		drop! : AnyValue => {}
+		drop! = |host_value| {
 			boxed : Box(b)
-			boxed = AnyValue.take(host_value)
+			boxed = AnyValue.take!(host_value)
 			_ = boxed
 			{}
 		}
-		{ expr: Box.box(Map(token, cell.expr, Box.box(wrapped), Box.box(eq), Box.box(drop))), tag: output_tag }
+		{ expr: Box.box(Map(token, cell.expr, Box.box(wrapped!), Box.box(eq!), Box.box(drop!))), tag: output_tag }
 	}
 }
 
 Msg : {
-	transform : Box((AnyValue, AnyValue -> AnyValue)),
+	transform : Box((AnyValue, AnyValue => AnyValue)),
 }
 
 Node(a) := { tag : Box(AnyValue.TypeTag(a)) }.{
@@ -100,26 +100,26 @@ Node(a) := { tag : Box(AnyValue.TypeTag(a)) }.{
 	on_unit : Node(a), (a -> a) -> Msg
 	on_unit = |node, f| {
 		current_tag = node.tag
-		wrapped : AnyValue, AnyValue -> AnyValue
-		wrapped = |current_hv, _payload_hv| {
+		wrapped! : AnyValue, AnyValue => AnyValue
+		wrapped! = |current_hv, _payload_hv| {
 			current : a
-			current = Box.unbox(AnyValue.get_tagged(current_hv, current_tag))
+			current = Box.unbox(AnyValue.get_tagged!(current_hv, current_tag))
 			next : a
 			next = f(current)
-			AnyValue.store_tagged(Box.box(next), current_tag)
+			AnyValue.store_tagged!(Box.box(next), current_tag)
 		}
-		{ transform: Box.box(wrapped) }
+		{ transform: Box.box(wrapped!) }
 	}
 }
 
 Tree := [
 	Branch({ children : List(Tree) }),
 	Button({ label : Str, msg : Msg }),
-	EachNode({ items : Box(Expr), items_to_values : Box((AnyValue -> List(AnyValue))), row : Box((AnyValue, AnyValue -> Tree)) }),
-	StateNode({ initial : Box(({} -> AnyValue)), child : Box(Tree) }),
+	EachNode({ items : Box(Expr), items_to_values : Box((AnyValue => List(AnyValue))), row : Box((AnyValue, AnyValue => Tree)) }),
+	StateNode({ initial : Box(({} => AnyValue)), child : Box(Tree) }),
 	Text(Str),
-	TextCell({ cell : Box(Expr), read : Box((AnyValue -> Str)) }),
-	WhenNode({ condition : Box(Expr), read : Box((AnyValue -> Bool)), when_true : Box(Tree), when_false : Box(Tree) }),
+	TextCell({ cell : Box(Expr), read : Box((AnyValue => Str)) }),
+	WhenNode({ condition : Box(Expr), read : Box((AnyValue => Bool)), when_true : Box(Tree), when_false : Box(Tree) }),
 ]
 
 branch : List(Tree) -> Tree
@@ -131,9 +131,9 @@ paragraph = |text| Text(text)
 text_cell : Cell(Str) -> Tree
 text_cell = |cell| {
 	tag = cell.tag
-	read : AnyValue -> Str
-	read = |value| Box.unbox(AnyValue.get_tagged(value, tag))
-	TextCell({ cell: Cell.to_expr(cell), read: Box.box(read) })
+	read! : AnyValue => Str
+	read! = |value| Box.unbox(AnyValue.get_tagged!(value, tag))
+	TextCell({ cell: Cell.to_expr(cell), read: Box.box(read!) })
 }
 
 button : Str, Msg -> Tree
@@ -146,23 +146,23 @@ state :
 		]
 state = |init, body| {
 	tag = AnyValue.new_tag({})
-	initial : {} -> AnyValue
-	initial = |_| AnyValue.store_tagged(Box.box(init), tag)
+	initial! : {} => AnyValue
+	initial! = |_| AnyValue.store_tagged!(Box.box(init), tag)
 	handle : Node(a)
 	handle = { tag: tag }
 	child = body(handle)
-	StateNode({ initial: Box.box(initial), child: Box.box(child) })
+	StateNode({ initial: Box.box(initial!), child: Box.box(child) })
 }
 
 when : Cell(Bool), ({} -> Tree), ({} -> Tree) -> Tree
 when = |condition, when_true, when_false| {
 	condition_tag = condition.tag
-	read_condition : AnyValue -> Bool
-	read_condition = |value| Box.unbox(AnyValue.get_tagged(value, condition_tag))
+	read_condition! : AnyValue => Bool
+	read_condition! = |value| Box.unbox(AnyValue.get_tagged!(value, condition_tag))
 	WhenNode(
 		{
 			condition: Cell.to_expr(condition),
-			read: Box.box(read_condition),
+			read: Box.box(read_condition!),
 			when_true: Box.box(when_true({})),
 			when_false: Box.box(when_false({})),
 		},
@@ -179,24 +179,28 @@ each = |items, key_of, row| {
 	items_tag = items.tag
 	item_tag = AnyValue.new_tag({})
 
-	items_to_values : AnyValue -> List(AnyValue)
-	items_to_values = |items_hv| {
+	items_to_values! : AnyValue => List(AnyValue)
+	items_to_values! = |items_hv| {
 		typed_items : List(item)
-		typed_items = Box.unbox(AnyValue.get_tagged(items_hv, items_tag))
-		List.map(typed_items, |item| AnyValue.store_tagged(Box.box(item), item_tag))
+		typed_items = Box.unbox(AnyValue.get_tagged!(items_hv, items_tag))
+		var $values = []
+		for item in typed_items {
+			$values = $values.append(AnyValue.store_tagged!(Box.box(item), item_tag))
+		}
+		$values
 	}
 
-	row_hv : AnyValue, AnyValue -> Tree
-	row_hv = |_key_hv, item_hv| {
+	row_hv! : AnyValue, AnyValue => Tree
+	row_hv! = |_key_hv, item_hv| {
 		item : item
-		item = Box.unbox(AnyValue.get_tagged(item_hv, item_tag))
-		row_item : {} -> AnyValue
-		row_item = |_| AnyValue.clone(item_hv)
-		row_signal = Cell.from_expr(ConstValue(Box.box(0), Box.box(row_item), Box.box(|_, _| True), Box.box(|_| {})), item_tag)
+		item = Box.unbox(AnyValue.get_tagged!(item_hv, item_tag))
+		row_item! : {} => AnyValue
+		row_item! = |_| AnyValue.clone!(item_hv)
+		row_signal = Cell.from_expr(ConstValue(Box.box(0), Box.box(row_item!), Box.box(|_, _| True), Box.box(|_| {})), item_tag)
 		row(key_of(item), row_signal)
 	}
 
-	EachNode({ items: Cell.to_expr(items), items_to_values: Box.box(items_to_values), row: Box.box(row_hv) })
+	EachNode({ items: Cell.to_expr(items), items_to_values: Box.box(items_to_values!), row: Box.box(row_hv!) })
 }
 
 render : Tree -> Str

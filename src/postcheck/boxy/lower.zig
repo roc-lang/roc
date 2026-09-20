@@ -714,18 +714,6 @@ fn hostedProcForTemplate(module: ProcedureModuleView, template_ref: names.Proced
     boxyLowerInvariant("hosted procedure template was missing from the checked hosted proc table");
 }
 
-fn hostedRepresentationForTemplate(
-    module: ProcedureModuleView,
-    template_ref: names.ProcedureTemplateRef,
-) checked.HostedRepresentationCapability {
-    for (module.interface_capabilities.hosted_representations) |hosted| {
-        if (names.procedureTemplateRefEql(hosted.template, template_ref)) {
-            return hosted;
-        }
-    }
-    boxyLowerInvariant("hosted procedure template was missing from the interface hosted representation table");
-}
-
 fn rootProcedureModule(modules: Common.CheckedModules) ProcedureModuleView {
     const checked_module = modules.root.module;
     return .{
@@ -1223,6 +1211,9 @@ const ProcedureBuilder = struct {
     erased_worker_procs: []?LIR.LirProcSpecId,
     hosted_external_procs: []?LIR.LirProcSpecId,
     type_desc_ids: []?LIR.BoxyTypeDescId,
+    /// Descriptors of nominal backing representations, each built under the
+    /// backing-argument substitutions of the nominal that owns it.
+    nominal_backing_type_desc_ids: std.AutoHashMapUnmanaged(NominalBackingDescKey, LIR.BoxyTypeDescId) = .{},
     generated_evidence_desc_ids: [4]?LIR.BoxyTypeDescId,
     static_dict_cache: std.ArrayList(StaticDictCacheEntry),
     static_inspect_method_cache: std.ArrayList(StaticInspectMethodCacheEntry),
@@ -1319,6 +1310,7 @@ const ProcedureBuilder = struct {
         self.static_dict_cache.deinit(self.allocator);
         self.allocator.free(self.hosted_catalog);
         self.allocator.free(self.type_desc_ids);
+        self.nominal_backing_type_desc_ids.deinit(self.allocator);
         self.allocator.free(self.hosted_external_procs);
         self.allocator.free(self.erased_worker_procs);
         self.allocator.free(self.worker_procs);
@@ -3749,6 +3741,47 @@ const ProcedureBuilder = struct {
         boxyLowerInvariant("cyclic static descriptor storage wrapper");
     }
 
+    const NominalBackingDescKey = struct {
+        rep: Plan.TypeRepId,
+        owner: Plan.TypeRepId,
+    };
+
+    /// Whether every backing-argument substitution of the nominal
+    /// `owner_rep_id` names a representation with no dynamic part, so the
+    /// substitutions alone describe everything its backing's formals stand for.
+    fn nominalBackingSubstitutionsAreStatic(self: *const ProcedureBuilder, owner_rep_id: Plan.TypeRepId) bool {
+        var current = owner_rep_id;
+        for (0..self.plan.representations.items.len) |_| {
+            const rep = self.plan.representations.items[@intFromEnum(current)];
+            var substitutions = self.plan.nominalBackingSubstitutions(rep.nominal_backing_arg_substitutions);
+            while (substitutions.next()) |substitution| {
+                if (self.plan.representations.items[@intFromEnum(substitution.actual_rep)].contains_dynamic) return false;
+            }
+            current = self.descriptorBackingShapeRep(current) orelse return true;
+        }
+        boxyLowerInvariant("cyclic static descriptor storage wrapper");
+    }
+
+    /// The descriptor of `rep_id`, a representation inside the backing of the
+    /// nominal `owner_rep_id`. The backing names the declaration's formals, so
+    /// the owner's backing-argument substitutions decide what they describe.
+    fn typeDescForRepInNominalBacking(
+        self: *ProcedureBuilder,
+        rep_id: Plan.TypeRepId,
+        owner_rep_id: Plan.TypeRepId,
+    ) Allocator.Error!LIR.BoxyTypeDescId {
+        const key = NominalBackingDescKey{ .rep = rep_id, .owner = owner_rep_id };
+        if (self.nominal_backing_type_desc_ids.get(key)) |existing| return existing;
+        var descriptor_sources = StaticDescriptorSourceMap{};
+        defer descriptor_sources.deinit(self.allocator);
+        try self.collectStaticNominalBackingDescriptorSources(owner_rep_id, &descriptor_sources);
+        var context = StaticDescInstantiationContext{};
+        defer context.deinit(self.allocator);
+        const desc_id = try self.typeDescForWorkerRepWithSourceMap(rep_id, rep_id, &descriptor_sources, &context);
+        try self.nominal_backing_type_desc_ids.put(self.allocator, key, desc_id);
+        return desc_id;
+    }
+
     fn typeDescForRep(self: *ProcedureBuilder, rep_id: Plan.TypeRepId) Allocator.Error!LIR.BoxyTypeDescId {
         try self.ensureTypeDescIds();
         const rep_index = @intFromEnum(rep_id);
@@ -5013,9 +5046,6 @@ const ProcedureBuilder = struct {
         }
 
         const worker_layout = self.layout_plan.workerLayoutFor(worker_id);
-        if (worker_layout.hidden_descs.len != 0) {
-            boxyLowerInvariant("hosted procedure worker tried to expose hidden descriptor arguments through worker ABI");
-        }
         if (worker_layout.hidden_dicts.len != 0) {
             boxyLowerInvariant("hosted procedure worker tried to expose hidden dictionary arguments through worker ABI");
         }
@@ -5024,10 +5054,9 @@ const ProcedureBuilder = struct {
             boxyLowerInvariant("hosted worker had no checked procedure template identity");
         const template = resolved.template orelse
             boxyLowerInvariant("hosted worker had no checked procedure template");
-        const host_capability = hostedRepresentationForTemplate(resolved.module, template_ref);
-        const source_fn_rep = self.plan.repForSourceType(.{ .module = resolved.module.key, .ty = host_capability.host_checked_fn_root }) orelse
-            boxyLowerInvariant("hosted checked signature has no representation");
-        const host_function = (Plan.RepQuery{ .plan = self.plan, .allocator = self.allocator }).functionChildren(self.plan.hostRepFor(source_fn_rep)) orelse
+        const host_fn_rep = self.plan.workers.items[index].host_fn_rep orelse
+            boxyLowerInvariant("hosted worker had no host ABI signature");
+        const host_function = (Plan.RepQuery{ .plan = self.plan, .allocator = self.allocator }).functionChildren(host_fn_rep) orelse
             boxyLowerInvariant("hosted ABI signature is not a function");
         const worker_function = checkedFunctionPayload(resolved.module, template.checked_fn_root);
         if (host_function.arg_count != worker_function.args.len) {
@@ -5038,7 +5067,13 @@ const ProcedureBuilder = struct {
         defer self.allocator.free(arg_locals);
         for (children[host_function.args_start..][0..host_function.arg_count], arg_locals) |child, *local| {
             const runtime = self.layout_plan.rep_layouts[@intFromEnum(child.rep)].worker;
-            local.* = try self.addLocalWithBoxyDesc(runtime.layoutIdx(), try self.staticDescRefForRepIfNeeded(child.rep));
+            // The host never sees a descriptor, and a type variable slot has no
+            // static one: its caller describes it on the Roc side of the call.
+            const desc = if (self.plan.representations.items[@intFromEnum(child.rep)].contains_dynamic)
+                null
+            else
+                try self.staticDescRefForRepIfNeeded(child.rep);
+            local.* = try self.addLocalWithBoxyDesc(runtime.layoutIdx(), desc);
         }
         const ret_layout = self.layout_plan.rep_layouts[@intFromEnum(host_function.ret)].worker.layoutIdx();
 
@@ -5104,7 +5139,7 @@ const ProcedureBuilder = struct {
                 break :blk .{ .checked_expr = lambda.body };
             },
             .intrinsic => |intrinsic| try self.bodySourceForIntrinsic(resolved, proc, intrinsic),
-            .hosted => try self.bodySourceForHosted(resolved, proc),
+            .hosted => try self.bodySourceForHosted(proc),
             .unimplemented => try self.bodySourceForUnimplemented(proc),
             .generated_codec => |source| try self.bodySourceForGeneratedCodec(proc, source),
             .generated_field_iterator => |source| try self.bodySourceForGeneratedFieldIterator(proc, source),
@@ -5177,26 +5212,25 @@ const ProcedureBuilder = struct {
         return .unimplemented;
     }
 
+    /// Bind a hosted worker's arguments at the worker's own representation.
+    /// `lowerHostedWorkerBodyInto` adapts them and the result across the
+    /// extern boundary, whose host ABI signature can differ from the worker's.
     fn bodySourceForHosted(
-        _: *ProcedureBuilder,
-        resolved: ResolvedWorker,
+        self: *ProcedureBuilder,
         proc: *ProcBodyBuilder,
     ) Allocator.Error!WorkerBodySource {
-        const template = resolved.template orelse
-            boxyLowerInvariant("hosted worker had no checked procedure template");
-        const function = checkedFunctionPayload(resolved.module, template.checked_fn_root);
-        const worker_args = proc.parent.layout_plan.workerLayoutSlice(proc.worker_layout.args);
-        if (function.args.len != worker_args.len) {
+        const worker = self.plan.workers.items[@intFromEnum(proc.worker_layout.worker)];
+        const function = proc.functionChildrenForRep(worker.rep) orelse
+            boxyLowerInvariant("hosted procedure worker did not have a function representation");
+        const worker_args = self.layout_plan.workerLayoutSlice(proc.worker_layout.args);
+        if (function.arg_count != worker_args.len) {
             boxyLowerInvariant("hosted procedure worker arity disagreed with worker root layout");
         }
-        // Worker layouts can legitimately differ from the hosted signature's
-        // checked-type layouts when the hosted procedure is used through an
-        // erased callable; lowerHostedWorkerBodyInto adapts arguments and the
-        // result across that boundary.
-        for (function.args, worker_args) |arg_ty, arg_layout| {
-            const local = try proc.addArgLocal(arg_layout.layoutIdx());
-            if (proc.workerRuntimeLayoutForType(arg_ty).layoutIdx() == arg_layout.layoutIdx()) {
-                try proc.markLocalDescriptorForType(local, arg_ty);
+        const children = self.plan.childSlice(self.plan.representations.items[@intFromEnum(function.rep)].children);
+        for (worker_args, children[function.args_start..][0..function.arg_count]) |arg_layout, child| {
+            const local = try proc.addArgLocalForRep(child.rep);
+            if (self.result.store.getLocal(local).layout_idx != arg_layout.layoutIdx()) {
+                boxyLowerInvariant("hosted procedure argument layout disagreed with its representation");
             }
         }
         return .hosted;
@@ -11283,13 +11317,11 @@ const ProcedureBuilder = struct {
         ret_local: LIR.LocalId,
         ret_stmt: LIR.CFStmtId,
     ) Allocator.Error!LIR.CFStmtId {
-        const template_ref = resolved.template_ref orelse
-            boxyLowerInvariant("hosted worker had no checked procedure template identity");
-        const host_capability = hostedRepresentationForTemplate(resolved.module, template_ref);
-        const host_fn_rep = self.plan.hostRepFor(proc.repForModuleType(resolved.module, host_capability.host_checked_fn_root));
+        const worker_plan = self.plan.workers.items[@intFromEnum(proc.worker_layout.worker)];
+        const host_fn_rep = worker_plan.host_fn_rep orelse
+            boxyLowerInvariant("hosted worker had no host ABI signature");
         const host_function = proc.functionChildrenForRep(host_fn_rep) orelse
             boxyLowerInvariant("hosted host signature was not a function");
-        const worker_plan = self.plan.workers.items[@intFromEnum(proc.worker_layout.worker)];
         const worker_function = proc.functionChildrenForRep(worker_plan.rep) orelse
             boxyLowerInvariant("hosted worker signature was not a function");
         if (host_function.arg_count != worker_function.arg_count) {
@@ -11301,15 +11333,25 @@ const ProcedureBuilder = struct {
         const host_arg_children = host_children[host_function.args_start..][0..host_function.arg_count];
         const worker_arg_children = worker_children[worker_function.args_start..][0..worker_function.arg_count];
 
+        // A position whose host representation is structurally the worker's
+        // own crosses the boundary unchanged: the host sees the same bytes,
+        // and the worker's descriptors keep describing them on the Roc side.
         const worker_arg_locals = proc.arg_locals.items[0..host_function.arg_count];
         const host_arg_locals = try self.allocator.alloc(LIR.LocalId, host_function.arg_count);
         defer self.allocator.free(host_arg_locals);
-        for (host_arg_children, host_arg_locals) |host_child, *local| {
-            local.* = try proc.addFrameLocalForRuntimeRep(proc.hostRuntimeLayoutForRep(host_child.rep), host_child.rep);
+        for (host_arg_children, worker_arg_children, worker_arg_locals, host_arg_locals) |host_child, worker_child, worker_local, *local| {
+            local.* = if (try self.plan.repsStructurallyIdentical(self.allocator, host_child.rep, worker_child.rep))
+                worker_local
+            else
+                try proc.addFrameLocalForRuntimeRep(proc.hostRuntimeLayoutForRep(host_child.rep), host_child.rep);
         }
 
+        const host_ret_rep = if (try self.plan.repsStructurallyIdentical(self.allocator, host_function.ret, worker_function.ret))
+            worker_function.ret
+        else
+            host_function.ret;
         const host_ret_layout = proc.hostRuntimeLayoutForRep(host_function.ret);
-        const host_result_desc = try proc.descriptorRefForRepIfNeeded(host_function.ret);
+        const host_result_desc = try proc.descriptorRefForRepIfNeeded(host_ret_rep);
         const host_ret_local = try proc.addFrameLocal(host_ret_layout.layoutIdx());
         // The hosted call produces this exact descriptor. Generic frame-local
         // allocation can reserve a runtime descriptor for nested dynamic data,
@@ -11324,7 +11366,7 @@ const ProcedureBuilder = struct {
                 ret_local,
                 host_ret_local,
                 worker_function.ret,
-                host_function.ret,
+                host_ret_rep,
                 continuation,
             );
         }
@@ -11339,6 +11381,7 @@ const ProcedureBuilder = struct {
         var index = host_function.arg_count;
         while (index > 0) {
             index -= 1;
+            if (host_arg_locals[index] == worker_arg_locals[index]) continue;
             continuation = try proc.assignRepresentationBoundary(
                 host_arg_locals[index],
                 worker_arg_locals[index],
@@ -12602,6 +12645,11 @@ const ProcBodyBuilder = struct {
                     continue;
                 }
                 const identity_rep = self.parent.descriptorIdentityRep(param.rep);
+                // A parameter whose representation shares its descriptor
+                // identity with another—a box stored exactly as its dynamic
+                // payload—describes that same identity. The parameter for the
+                // identity itself is the one that overrides it.
+                if (identity_rep != param.rep) continue;
                 for (overrides.items) |override| {
                     if (override.rep != identity_rep) continue;
                     if (override.local != local) {
@@ -12609,6 +12657,20 @@ const ProcBodyBuilder = struct {
                     }
                     break;
                 } else {
+                    try overrides.append(self.parent.allocator, .{ .rep = identity_rep, .local = local });
+                }
+            }
+            // A collapsed parameter still overrides an identity that has no
+            // parameter of its own.
+            for (params.items, 0..) |param, param_index| {
+                if (root_param_index == param_index) continue;
+                const identity_rep = self.parent.descriptorIdentityRep(param.rep);
+                if (identity_rep == param.rep) continue;
+                for (overrides.items) |override| {
+                    if (override.rep == identity_rep) break;
+                } else {
+                    const local = self.descriptorLocalForRequirementAndRepOrNull(param.desc, param.rep) orelse
+                        boxyLowerInvariant("boxy worker argument descriptor had no exact hidden parameter local");
                     try overrides.append(self.parent.allocator, .{ .rep = identity_rep, .local = local });
                 }
             }
@@ -26023,6 +26085,16 @@ const ProcBodyBuilder = struct {
                         if (bound_local != local.local) {
                             local.materialize = .{ .local = bound_local };
                         }
+                        continue;
+                    }
+                }
+                if (arg.backing_owner) |owner| {
+                    // A backing whose owner substitutes only static
+                    // representations for its formals has a static
+                    // descriptor; one whose formals stand for the caller's own
+                    // dynamic values is described from the caller's bindings.
+                    if (call_rep.contains_dynamic and self.parent.nominalBackingSubstitutionsAreStatic(owner)) {
+                        local.materialize = .{ .static = try self.parent.typeDescForRepInNominalBacking(identity_call_rep, owner) };
                         continue;
                     }
                 }

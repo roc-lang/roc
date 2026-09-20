@@ -40,6 +40,7 @@ pub const Problem = union(enum) {
     where_alias_in_type_position: WhereAliasInTypePosition,
     recursive_where_alias: RecursiveWhereAlias,
     where_clause_receiver_not_introduced: WhereClauseReceiverNotIntroduced,
+    redundant_open_tag_union: RedundantOpenTagUnion,
     invalid_nominal_decl_recursion: InvalidNominalDeclRecursion,
     infinite_recursion: VarWithSnapshot,
     anonymous_recursion: VarWithSnapshot,
@@ -54,6 +55,8 @@ pub const Problem = union(enum) {
     unsupported_generated_method: UnsupportedGeneratedMethod,
     associated_item_not_found: AssociatedItemNotFound,
     hosted_unboxed_function: HostedUnboxedFunction,
+    hosted_function_not_effectful: HostedFunctionNotEffectful,
+    hosted_type_variable_not_boxed: HostedTypeVariableNotBoxed,
     host_boundary_open_row: HostBoundaryOpenRow,
     host_boundary_optional_field: HostBoundaryOptionalField,
     platform_def_not_found: PlatformDefNotFound,
@@ -132,6 +135,18 @@ pub const PlatformDefNotFound = struct {
 
 /// Hosted functions cannot accept or return unboxed functions.
 pub const HostedUnboxedFunction = struct {
+    region: base.Region,
+};
+
+/// Every function the host provides is effectful, so a hosted declaration
+/// must have an effectful function type (`=>`).
+pub const HostedFunctionNotEffectful = struct {
+    region: base.Region,
+};
+
+/// A hosted declaration's one C signature covers every use of it, so its type
+/// variables may appear only where the host sees a pointer: inside a `Box`.
+pub const HostedTypeVariableNotBoxed = struct {
     region: base.Region,
 };
 
@@ -720,5 +735,14 @@ pub const RecursiveWhereAlias = struct {
 pub const WhereClauseReceiverNotIntroduced = struct {
     type_var_name: base.Ident.Idx,
     method_name: base.Ident.Idx,
+    region: base.Region,
+};
+
+/// Warning for an explicit anonymous `..` on a tag union in an output position
+/// of an annotation whose binding generalizes regardless (a function, a pure
+/// signature, a value alias). Tag unions there are implicitly open, so the
+/// `..` is redundant.
+pub const RedundantOpenTagUnion = struct {
+    /// The region of the `..` itself
     region: base.Region,
 };

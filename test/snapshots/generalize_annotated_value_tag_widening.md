@@ -16,9 +16,30 @@ g = f
 main! = |_| {}
 ~~~
 # EXPECTED
-NIL
+REDUNDANT OPEN TAG UNION - generalize_annotated_value_tag_widening.md:6:24:6:26
 # PROBLEMS
-NIL
+~~~clojure
+(reports
+	(report
+		(severity warning)
+		(title "Redundant Open Tag Union")
+		(region (start 6 24) (end 6 26))
+		(headline
+			(reflow "This tag union has an explicit `..`, but it is already implicitly open."))
+		(document
+			(source-region (file "generalize_annotated_value_tag_widening.md") (start 6 24) (end 6 26) (annotation warning) (line-text "g : [Red, Green, Blue, ..]"))
+			(line-break)
+			(line-break)
+			(reflow "Tag unions in output positions, like the return type of a function, are automatically open. Remove the")
+			(reflow " ")
+			(annotated code "..")
+			(reflow " ")
+			(reflow "or bind it to a named type variable like")
+			(reflow " ")
+			(annotated code "..others")
+			(reflow " ")
+			(reflow "if you want to refer to the extension elsewhere."))))
+~~~
 # TOKENS
 ~~~zig
 KwApp,OpenSquare,LowerIdent,CloseSquare,OpenCurly,LowerIdent,OpColon,KwPlatform,StringStart,StringPart,StringEnd,CloseCurly,
@@ -106,11 +127,11 @@ NO CHANGE
 ~~~clojure
 (inferred-types
 	(defs
-		(patt (type "[Green, Red, ..]"))
-		(patt (type "[Blue, Green, Red, ..]"))
+		(patt (type "[Green, Red]"))
+		(patt (type "[Blue, Green, Red]"))
 		(patt (type "_arg -> {}")))
 	(expressions
-		(expr (type "[Green, Red, ..]"))
-		(expr (type "[Blue, Green, Red, ..]"))
+		(expr (type "[Green, Red]"))
+		(expr (type "[Blue, Green, Red]"))
 		(expr (type "_arg -> {}"))))
 ~~~

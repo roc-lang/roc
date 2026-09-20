@@ -5,7 +5,7 @@ import pf.Host
 
 Model : { count : U64 }
 
-render! : Model, Host.Host => Try(Model, [Exit(I64), ..])
+render! : Model, Host.Host => Try(Model, [Exit(I64)])
 render! = |_model, host| {
     runtime = host.get_greeting!()
     runtime_len = Str.count_utf8_bytes(runtime)

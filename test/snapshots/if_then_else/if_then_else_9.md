@@ -73,7 +73,7 @@ MISSING METHOD - if_then_else_9.md:6:2:6:3
 			(line-break)
 			(annotation-start code-block)
 			(indent 1)
-			(text "[A, ..]")
+			(text "[A]")
 			(annotation-end)))
 	(report
 		(severity runtime_error)
@@ -97,7 +97,7 @@ MISSING METHOD - if_then_else_9.md:6:2:6:3
 			(line-break)
 			(annotation-start code-block)
 			(indent 1)
-			(text "[A, ..]")
+			(text "[A]")
 			(annotation-end))))
 ~~~
 # TOKENS
@@ -149,5 +149,5 @@ NO CHANGE
 ~~~
 # TYPES
 ~~~clojure
-(expr (type "[A, ..]"))
+(expr (type "[A]"))
 ~~~

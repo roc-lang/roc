@@ -70,6 +70,8 @@ pub fn CodeGen(comptime target: RocTarget) type {
         stack_offset: i32,
         relocations: std.ArrayList(Relocation),
         symbols: SymbolTable.Table = .{},
+        /// Logical calls survive retiring the placement-specific BL relocation.
+        extern_stubs: std.ArrayList(ExternStub) = .empty,
         free_general: u32,
         free_float: u32,
         callee_saved_used: u32, // Bitmask of callee-saved regs we used
@@ -81,6 +83,9 @@ pub fn CodeGen(comptime target: RocTarget) type {
         branch_sites: std.ArrayList(BranchSite),
         /// Patch location -> index into `branch_sites`.
         branch_site_index: std.AutoHashMapUnmanaged(usize, u32),
+        /// Finished bodies may discard branch worklists, but artifact capture
+        /// still needs their exact in-body call reservations.
+        retired_call_veneers: std.AutoHashMapUnmanaged(usize, usize) = .empty,
         /// Every site before this index is resolved or has a veneer.
         branch_open_scan: u32,
         /// Open sites without a veneer.
@@ -89,6 +94,13 @@ pub fn CodeGen(comptime target: RocTarget) type {
         branch_resolved: usize,
         /// Direct reach assumed for island decisions; tests lower it.
         branch_reach_limit: usize,
+
+        pub const ExternStub = struct {
+            call: usize,
+            symbol: SymbolTable.Id,
+            original_relocation: u32,
+            page_relocation: usize,
+        };
 
         pub fn init(allocator: Allocator) Self {
             return Self{
@@ -112,14 +124,17 @@ pub fn CodeGen(comptime target: RocTarget) type {
         pub fn deinit(self: *Self) void {
             self.emit.deinit();
             self.relocations.deinit(self.allocator);
+            self.extern_stubs.deinit(self.allocator);
             self.symbols.deinit(self.allocator);
             self.branch_sites.deinit(self.allocator);
             self.branch_site_index.deinit(self.allocator);
+            self.retired_call_veneers.deinit(self.allocator);
         }
 
         pub fn reset(self: *Self) void {
             self.emit.buf.clearRetainingCapacity();
             self.relocations.clearRetainingCapacity();
+            self.extern_stubs.clearRetainingCapacity();
             self.symbols.clearRetainingCapacity();
             self.stack_offset = 0;
             self.free_general = CC.CALLER_SAVED_GENERAL_MASK;
@@ -128,6 +143,7 @@ pub fn CodeGen(comptime target: RocTarget) type {
             self.callee_saved_available = CALLEE_SAVED_GENERAL_MASK;
             self.branch_sites.clearRetainingCapacity();
             self.branch_site_index.clearRetainingCapacity();
+            self.retired_call_veneers.clearRetainingCapacity();
             self.branch_open_scan = 0;
             self.branch_open_unveneered = 0;
             self.branch_resolved = 0;
@@ -731,6 +747,41 @@ pub fn CodeGen(comptime target: RocTarget) type {
             try self.registerBranchSite(.{ .loc = loc, .kind = .call });
         }
 
+        /// Import the producer's exact reachable veneer reservation. A large
+        /// body may put it far from its end, so it cannot be reconstructed at
+        /// the consumer's current emission point.
+        pub fn registerAssembledCallVeneer(self: *Self, loc: usize, veneer: ?usize) Allocator.Error!void {
+            try self.registerAssembledCallSite(loc);
+            if (veneer) |reserved| {
+                const index = self.branchSiteIndex(loc);
+                if (self.branch_sites.items[index].veneer == null) self.attachVeneer(index, reserved);
+            }
+        }
+
+        pub fn callVeneer(self: *const Self, loc: usize) ?usize {
+            const index = self.branch_site_index.get(loc) orelse return self.retired_call_veneers.get(loc);
+            return self.branch_sites.items[index].veneer;
+        }
+
+        /// Appended regions have no instruction-boundary callbacks. Reserve
+        /// reachable islands before crossing that gap, using the real append
+        /// length and the existing branch reach contract.
+        pub fn prepareForAppend(self: *Self, byte_count: usize) Allocator.Error!void {
+            const oldest = self.oldestOpenUnveneeredSite() orelse return;
+            const age = self.currentOffset() - oldest.loc;
+            if (age + byte_count + self.branch_open_unveneered * pcrel_veneer_bytes + self.islandGapMargin() + self.branchShiftMargin() < self.branch_reach_limit) return;
+            var bytes: usize = 0;
+            for (self.branch_sites.items) |site| {
+                if (site.needsVeneer()) bytes += site.veneerBytes();
+            }
+            if (bytes == 0) return;
+            try self.emit.b(@intCast(4 + bytes));
+            var index: u32 = 0;
+            while (index < self.branch_sites.items.len) : (index += 1) {
+                if (self.branch_sites.items[index].needsVeneer()) try self.placeVeneer(index);
+            }
+        }
+
         /// Register a BL to a linked symbol inside assembled artifact bytes,
         /// so a far image redirects it to a stub exactly as `emitExternCall`
         /// sites are.
@@ -760,15 +811,16 @@ pub fn CodeGen(comptime target: RocTarget) type {
         /// Call a target whose code offset is already known: a direct BL when
         /// it is in reach, otherwise the inline PC-relative address sequence
         /// followed by BLR. `patchDirectCall` re-encodes either form.
-        pub fn emitDirectCall(self: *Self, target_loc: usize) Allocator.Error!void {
+        pub fn emitDirectCall(self: *Self, target_loc: usize) Allocator.Error!enum { call, inline_call } {
             const loc = self.currentOffset();
             if (self.directBranchFits(loc, target_loc)) {
                 try self.emit.bl(@intCast(branchByteOffset(loc, target_loc)));
-                return;
+                return .call;
             }
             const parts = pcRelParts(loc, target_loc);
             try self.emit.pcRelAddrSequence(.IP0, .IP1, parts.lo16, parts.hi16, parts.subtract);
             try self.emit.blrReg(.IP0);
+            return .inline_call;
         }
 
         /// Re-encode a call emitted by `emitDirectCall` after its site or its
@@ -874,6 +926,12 @@ pub fn CodeGen(comptime target: RocTarget) type {
             try self.emit.adrp(.IP0);
             try self.emit.addRegRegImm12(.w64, .IP0, .IP0, 0);
             try self.emit.brReg(.IP0);
+            try self.extern_stubs.append(self.allocator, .{
+                .call = site.loc,
+                .symbol = symbol,
+                .original_relocation = site.reloc_index,
+                .page_relocation = self.relocations.items.len,
+            });
             self.relocations.items[site.reloc_index] = .retired;
             try self.relocations.append(self.allocator, .{ .linked_data = .{ .offset = @intCast(stub), .symbol = symbol, .kind = .page21 } });
             try self.relocations.append(self.allocator, .{ .linked_data = .{ .offset = @intCast(stub + 4), .symbol = symbol, .kind = .pageoff12 } });
@@ -989,6 +1047,9 @@ pub fn CodeGen(comptime target: RocTarget) type {
         /// moves only for a site inside the body: from outside, that offset
         /// names the entry, which the prepended prologue now occupies.
         pub fn shiftBranchSites(self: *Self, body_start: usize, body_end: usize, delta: usize) Allocator.Error!void {
+            for (self.extern_stubs.items) |*stub| {
+                if (stub.call >= body_start and stub.call < body_end) stub.call += delta;
+            }
             const items = self.branch_sites.items;
             for (items) |site| {
                 if (site.loc >= body_start and site.loc < body_end) _ = self.branch_site_index.remove(site.loc);
@@ -1041,6 +1102,11 @@ pub fn CodeGen(comptime target: RocTarget) type {
         pub fn compactBranchSites(self: *Self) Allocator.Error!void {
             const items = self.branch_sites.items;
             if (self.branch_resolved < 4096 or self.branch_resolved * 2 < items.len) return;
+            for (items) |site| {
+                if (site.target != null and site.kind == .call) {
+                    if (site.veneer) |veneer| try self.retired_call_veneers.put(self.allocator, site.loc, veneer);
+                }
+            }
             self.branch_site_index.clearRetainingCapacity();
             var kept: usize = 0;
             for (items) |site| {
@@ -1364,13 +1430,13 @@ test "direct call uses BL within reach and an address sequence beyond it" {
 
     try testPad(&cg, 16);
     const near = cg.currentOffset();
-    try cg.emitDirectCall(0);
+    try std.testing.expectEqual(.call, try cg.emitDirectCall(0));
     try std.testing.expectEqual(near + 4, cg.currentOffset());
     try expectDirectBranch(0b100101, testInst(&cg, near), near, 0);
 
     try testPad(&cg, 8192);
     const far = cg.currentOffset();
-    try cg.emitDirectCall(0);
+    try std.testing.expectEqual(.inline_call, try cg.emitDirectCall(0));
     try std.testing.expectEqual(far + test_veneer_bytes, cg.currentOffset());
     const parts = LinuxCodeGen.pcRelParts(far, 0);
     try std.testing.expectEqual(TestEmit.encodeAdrZero(.IP0), testInst(&cg, far));
@@ -1465,6 +1531,33 @@ test "shift rekeys the sites inside the moved body" {
     try expectDirectBranch(0b000101, testInst(&cg, patch + 16), patch + 16, target);
 }
 
+test "independent fragment append reserves far calls but keeps near calls direct" {
+    var cg = LinuxCodeGen.init(std.testing.allocator);
+    defer cg.deinit();
+    cg.branch_reach_limit = 65536;
+    const call = try cg.emitCallPlaceholder();
+    try cg.prepareForAppend(64);
+    try std.testing.expectEqual(@as(usize, 4), cg.currentOffset());
+    try std.testing.expect(cg.callVeneer(call) == null);
+    try cg.prepareForAppend(131072);
+    const veneer = cg.callVeneer(call).?;
+    try testPad(&cg, 131072);
+    const target = cg.currentOffset();
+    try cg.patchCall(call, target);
+    try expectDirectBranch(0b100101, testInst(&cg, call), call, veneer);
+
+    var imported = LinuxCodeGen.init(std.testing.allocator);
+    defer imported.deinit();
+    imported.branch_reach_limit = cg.branch_reach_limit;
+    try imported.emit.buf.appendSlice(std.testing.allocator, cg.emit.buf.items);
+    try imported.registerAssembledCallVeneer(call, veneer);
+    try imported.patchCall(call, target);
+    try std.testing.expectEqualSlices(u8, cg.emit.buf.items, imported.emit.buf.items);
+    // A reserved veneer never forces an indirect call if placement is near.
+    try imported.patchCall(call, 4);
+    try expectDirectBranch(0b100101, testInst(&imported, call), call, 4);
+}
+
 test "compaction drops resolved sites and keeps open ones findable" {
     var cg = LinuxCodeGen.init(std.testing.allocator);
     defer cg.deinit();
@@ -1481,6 +1574,26 @@ test "compaction drops resolved sites and keeps open ones findable" {
     const target = cg.currentOffset();
     try cg.patchCall(call, target);
     try expectDirectBranch(0b100101, testInst(&cg, call), call, target);
+}
+
+test "compaction preserves artifact call reservations in finished bodies" {
+    var cg = LinuxCodeGen.init(std.testing.allocator);
+    defer cg.deinit();
+    cg.branch_reach_limit = 4096;
+    const call = try cg.emitCallPlaceholder();
+    try cg.prepareForAppend(8192);
+    const veneer = cg.callVeneer(call).?;
+    try testPad(&cg, 8192);
+    try cg.patchCall(call, cg.currentOffset());
+    for (0..4096) |_| {
+        const patch = try cg.emitJump();
+        try cg.patchJump(patch, patch + 4);
+    }
+    try cg.compactBranchSites();
+    try std.testing.expectEqual(@as(usize, 0), cg.branch_sites.items.len);
+    try std.testing.expectEqual(@as(?usize, veneer), cg.callVeneer(call));
+    cg.reset();
+    try std.testing.expectEqual(@as(?usize, null), cg.callVeneer(call));
 }
 
 const TestDataRelocationKind = @import("../Relocation.zig").DataRelocationKind;

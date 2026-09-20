@@ -27,7 +27,7 @@ NON EXHAUSTIVE DESTRUCTURE - for_loop_refutable_tag_pattern.md:2:9:2:19
 			(reflow "The value being destructured has type:")
 			(line-break)
 			(text "        ")
-			(annotated type "[Err(Str), Ok(Dec), ..]")
+			(annotated type "[Err(Str), Ok(Dec)]")
 			(line-break)
 			(line-break)
 			(reflow "Missing patterns:")
@@ -121,8 +121,8 @@ main! = |_args| {
 (inferred-types
 	(defs
 		(patt (type "Str => {}"))
-		(patt (type "_arg -> [Ok({}), ..]")))
+		(patt (type "_arg -> [Ok({})]")))
 	(expressions
 		(expr (type "Str => {}"))
-		(expr (type "_arg -> [Ok({}), ..]"))))
+		(expr (type "_arg -> [Ok({})]"))))
 ~~~

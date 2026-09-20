@@ -378,7 +378,7 @@ pub const Evaluator = struct {
             },
             .unit => return .unit,
             .inline_expects_enabled => return .{ .bool_ = self.executing_comptime or self.inputs.inline_expects_enabled },
-            .comptime_value => |value| return self.readComptimeValue(value.root),
+            .comptime_value => |value| return self.readComptimeValue(self.program.getComptimeValueRoot(value.root)),
             .@"unreachable" => return self.unsupported_("unreachable marker escaped its terminated block-final position"),
             .int_lit => |int_value| {
                 const prim = self.primitiveOf(expr.ty) orelse return self.unsupported_("int literal without primitive type");
@@ -3438,12 +3438,14 @@ test "oracle demands declared roots once without executing representation witnes
     const policy = try program.addExpr(.{ .ty = bool_ty, .data = .{ .inline_expects_enabled = {} } });
     const witness = try program.addExpr(.{ .ty = bool_ty, .data = .@"unreachable" });
     const producer_index = program.rootCount();
-    const root: Common.ComptimeValueRoot = .{ .module = .{}, .root = @enumFromInt(producer_index), .const_locator = null };
-    // The fixture's root declarations issue the checked and materialized ordinal together.
+    const root: Common.ComptimeValueRoot = .{ .module = .{}, .root = @enumFromInt(91), .const_locator = null };
+    // Neither checked identity nor descriptor-table ordinal is a producer index.
+    _ = try program.addComptimeValueRoot(.{ .module = .{ .bytes = @splat(1) }, .root = root.root, .const_locator = null });
     const producer_fn = try program.addFn(.{ .symbol = undefined, .args = .empty(), .body = .{ .roc = policy }, .ret = bool_ty });
     // Oracle execution consumes fn_id; source requests and linker symbols are unread.
     try program.roots.append(allocator, .{ .fn_id = producer_fn, .request = undefined });
-    const read = try program.addExpr(.{ .ty = bool_ty, .data = .{ .comptime_value = .{ .root = root, .initializer = witness } } });
+    const root_id = try program.addComptimeValueRoot(root);
+    const read = try program.addExpr(.{ .ty = bool_ty, .data = .{ .comptime_value = .{ .root = root_id, .initializer = witness } } });
     const consumer_index = program.rootCount();
     const consumer_fn = try program.addFn(.{ .symbol = undefined, .args = .empty(), .body = .{ .roc = read }, .ret = bool_ty });
     try program.roots.append(allocator, .{ .fn_id = consumer_fn, .request = undefined });

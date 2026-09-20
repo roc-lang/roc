@@ -12,7 +12,7 @@ const field_mismatch =
     \\
     \\You are trying to update the `bar` field to be the type:
     \\
-    \\    [True, ..]
+    \\    [True]
     \\
     \\But the `config` record needs it to be
     \\

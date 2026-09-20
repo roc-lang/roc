@@ -7,12 +7,12 @@ import pf.Stdout
 ## Err(_) wildcard match produces zero instead of the expected value
 
 # Simulates a hosted effect that returns Try with open error type
-read_something! : {} => Try(Str, [NotFound, ..])
+read_something! : {} => Try(Str, [NotFound])
 read_something! = |{}| Err(NotFound)
 
 # Simulates an init function with its own error types plus open extension
 # This is like: init! : Host => Try(Model, [Exit(I64), ..])
-do_init! : {} => Try(Str, [Exit(I64), NotFound, ..])
+do_init! : {} => Try(Str, [Exit(I64), NotFound])
 do_init! = |{}| {
     result = read_something!({})?
     Ok(result)

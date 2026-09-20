@@ -5818,6 +5818,7 @@ const AppRootIdentity = struct {
     module_identity_hash: [32]u8,
     cache_hits: u32,
     platform_root_publish_count: u32,
+    where_method_scheme_use_count: usize,
     /// The executable root artifact serialized exactly as the checked-module
     /// cache stores it, so tests assert byte identity between fresh and
     /// cache-relocated publications rather than key identity alone.
@@ -5894,11 +5895,18 @@ fn compileAppRootIdentity(
     errdefer allocator.free(executable_root_bytes);
     const app_root_bytes = try serializedCheckedArtifactBytes(allocator, coord.appRootCheckedArtifact());
     errdefer allocator.free(app_root_bytes);
+    var where_method_scheme_use_count: usize = 0;
+    for (root.moduleEnvConst().scheme_uses.items.items) |record| {
+        if (record.slot_kind == @intFromEnum(can.ModuleEnv.SchemeUseRecord.Slot.where_method_use)) {
+            where_method_scheme_use_count += 1;
+        }
+    }
     return .{
         .artifact_key = root.key.bytes,
         .module_identity_hash = root.module_identity.stable_hash,
         .cache_hits = coord.getBuildStats().cache_hits,
         .platform_root_publish_count = coord.platform_root_publish_count,
+        .where_method_scheme_use_count = where_method_scheme_use_count,
         .executable_root_bytes = executable_root_bytes,
         .app_root_bytes = app_root_bytes,
     };
@@ -5930,6 +5938,17 @@ fn writeCacheKeyPurityFixture(tmp_dir: *std.testing.TmpDir, sub_dir: []const u8)
         \\    hosted { "roc_echo_line": Echo.line! }
         \\
         \\import Echo
+        \\
+        \\render_twice = |x| Str.concat(x.render(), x.render())
+        \\
+        \\min_copy : Iter(item) -> Try(item, [IterWasEmpty])
+        \\    where [item.min : item, item -> item]
+        \\min_copy = |iterator|
+        \\    match Iter.next(iterator) {
+        \\        Done => Err(IterWasEmpty)
+        \\        Skip({ rest }) => min_copy(rest)
+        \\        One({ item: first, rest }) => Ok(Iter.fold(rest, first, |best, item| best.min(item)))
+        \\    }
         \\
         \\main_for_host! : List(Str) => I8
         \\main_for_host! = |args|
@@ -6171,6 +6190,7 @@ test "warm build reloads the deferred platform root without republishing" {
     var cold = try compileAppRootIdentity(allocator, cache_dir, app_path);
     defer cold.deinit(allocator);
     try std.testing.expectEqual(@as(u32, 1), cold.platform_root_publish_count);
+    try std.testing.expect(cold.where_method_scheme_use_count > 0);
 
     // The warm build rechecks the deferred root to recreate its complete
     // publication continuation, then relocates the previously-republished root
@@ -6179,6 +6199,7 @@ test "warm build reloads the deferred platform root without republishing" {
     defer warm.deinit(allocator);
     try std.testing.expectEqual(@as(u32, 0), warm.platform_root_publish_count);
     try std.testing.expect(warm.cache_hits > 0);
+    try std.testing.expectEqual(cold.where_method_scheme_use_count, warm.where_method_scheme_use_count);
 
     // The republished executable root is content-addressed, so both runs produce
     // a byte-identical key—and byte-identical artifacts: the cache-relocated
@@ -8449,7 +8470,13 @@ test "shared CTFE and runtime requests specialize once across workers and target
     const builtin_modules = try sharedBuiltinModules();
     const other_width: base.target.TargetUsize = if (base.target.TargetUsize.native == .u64) .u32 else .u64;
     for ([_]usize{ 1, 4 }) |jobs| {
-        for ([_]base.target.TargetUsize{ .native, other_width }) |width| {
+        for ([_]lir.CheckedPipeline.TargetConfig{
+            .{ .target_usize = .native, .inline_expects = .run },
+            .{ .target_usize = other_width, .inline_expects = .run },
+            .{ .target_usize = .native, .inline_expects = .omit },
+        }) |consumer| {
+            const width = consumer.target_usize;
+            const same_domain = width == base.target.TargetUsize.native and consumer.inline_expects == .run;
             var coord = try Coordinator.init(
                 allocator,
                 .multi_threaded,
@@ -8479,7 +8506,7 @@ test "shared CTFE and runtime requests specialize once across workers and target
             var metrics = lir.CheckedPipeline.WorkMetrics{};
             const target: lir.CheckedPipeline.TargetConfig = .{
                 .target_usize = width,
-                .inline_expects = .run,
+                .inline_expects = consumer.inline_expects,
                 .work_metrics = &metrics,
                 .post_check_executor = coord.postCheckExecutor(),
             };
@@ -8488,19 +8515,23 @@ test "shared CTFE and runtime requests specialize once across workers and target
             try coord.finishCheckedProgram(.none);
             try std.testing.expect(!coord.hasUserErrors());
             try std.testing.expect(coord.program_session.?.compile_time_root_count > 0);
+            try std.testing.expect(coord.program_session.?.native_artifacts != null);
+            try std.testing.expect(coord.program_session.?.runtimeNativeArtifacts() == null);
+            try std.testing.expectEqual(!same_domain, coord.program_session.?.runtime_prepared != null);
             try std.testing.expectEqual(@as(u32, 1), metrics.monotype_runs);
             try std.testing.expectEqual(@as(u32, 1), metrics.solved_runs);
             try std.testing.expectEqual(@as(u32, 1), metrics.lir_continuations);
             var runtime = try coord.program_session.?.takeRuntime(allocator, requests, target);
             defer runtime.deinit();
+            try std.testing.expectEqual(same_domain, coord.program_session.?.runtimeNativeArtifacts() != null);
             try std.testing.expectEqual(@as(u32, 1), metrics.monotype_runs);
             try std.testing.expectEqual(@as(u32, 1), metrics.solved_runs);
-            try std.testing.expectEqual(@as(u32, if (width == base.target.TargetUsize.native) 1 else 2), metrics.lir_continuations);
+            try std.testing.expectEqual(@as(u32, if (same_domain) 1 else 2), metrics.lir_continuations);
             try std.testing.expectEqual(@as(usize, 1), runtime.lir_result.root_procs.items.len);
-            // The native width reuses the completed host program, whose
+            // The original host domain reuses the completed program, whose
             // accessor now returns the completed scalar as a literal; a
-            // separate-width consumer lowers its own continuation, where the
-            // read is the literal. Either way no value slot survives.
+            // separate consumer lowers its own continuation, where the read is
+            // the literal. Either way no value slot survives.
             const frozen = runtime.frozen_static_data orelse return error.TestUnexpectedResult;
             var value_exports: usize = 0;
             for (frozen.exports) |item| {

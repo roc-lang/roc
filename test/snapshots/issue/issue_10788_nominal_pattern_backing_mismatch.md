@@ -39,7 +39,7 @@ TYPE MISMATCH - issue_10788_nominal_pattern_backing_mismatch.md:4:10:4:10
 			(line-break)
 			(annotation-start code-block)
 			(indent 1)
-			(text "[Pt(List(_b)), ..]")
+			(text "[Pt(List(_b))]")
 			(annotation-end)
 			(line-break)
 			(line-break)

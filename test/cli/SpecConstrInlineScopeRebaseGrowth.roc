@@ -12,7 +12,7 @@ import pf.Fallible
 import pf.Stdout
 
 Reader := { label : Str }.{
-	read_line! : Reader => Try(List(U8), [HostErr(Str), ..])
+	read_line! : Reader => Try(List(U8), [HostErr(Str)])
 	read_line! = |reader| {
 		raw = Fallible.via_question!({})?
 		Ok(decorate(reader, raw).to_utf8())
@@ -22,7 +22,7 @@ Reader := { label : Str }.{
 	decorate = |reader, raw| "${reader.label}${raw}"
 }
 
-main! : List(Str) => Try({}, [Exit(I32), HostErr(Str), ..])
+main! : List(Str) => Try({}, [Exit(I32), HostErr(Str)])
 main! = |_args| {
 	reader = Reader.{ label: "x" }
 	summary = read_all!(reader, { lines_read: 0, bytes_read: 0 })?
