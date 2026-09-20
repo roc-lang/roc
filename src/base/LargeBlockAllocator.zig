@@ -13,20 +13,10 @@
 //! which cuts the fault count of a fresh block by a factor of 512 where the
 //! kernel honors the advice.
 //!
-//! A helper thread, started on the first request the cache cannot serve,
-//! maps and faults in replacement blocks ahead of demand: each request that
-//! had to map a fresh block asks the helper for one more block of that size
-//! class, and the helper keeps a small reserve per class. The compute threads
-//! then find already-faulted memory in the cache instead of taking the fault
-//! per page themselves. The helper is pinned to the slow cores of a hybrid
-//! CPU, so the faulting work runs on cores the compiler would otherwise leave
-//! idle.
-//!
 //! Requests below the threshold, and requests with an alignment above the page
 //! size, go to the backing allocator unchanged.
 const std = @import("std");
 const builtin = @import("builtin");
-const cpu_count = @import("cpu_count.zig");
 const Allocator = std.mem.Allocator;
 const Alignment = std.mem.Alignment;
 const PageAllocator = std.heap.PageAllocator;
@@ -45,19 +35,6 @@ const class_count = max_class_log2 - min_class_log2 + 1;
 /// with every block the compiler ever freed.
 const max_cached_bytes_per_class: usize = 128 * 1024 * 1024;
 const huge_page_threshold: usize = 2 * 1024 * 1024;
-/// Largest class the helper thread faults in ahead of demand; a reserve of
-/// bigger blocks would cost more memory than the faults it saves.
-const max_prefault_class_log2: u6 = 26; // 64 MiB
-const prefault_class_count = max_prefault_class_log2 - min_class_log2 + 1;
-/// Bytes of prefaulted reserve the helper keeps per class, so small classes
-/// hold a few blocks and large classes hold one.
-const prefault_reserve_bytes: usize = 32 * 1024 * 1024;
-const max_prefault_reserve_blocks: usize = 4;
-/// `madvise` advice that faults a range in for writing (Linux 5.14+).
-const madv_populate_write: u32 = 23;
-
-const prefault_supported = !builtin.single_threaded and
-    builtin.os.tag != .freestanding and !builtin.cpu.arch.isWasm();
 
 const FreeBlock = struct {
     next: ?*FreeBlock,
@@ -67,9 +44,6 @@ const ClassCache = struct {
     mutex: std.atomic.Mutex = .unlocked,
     head: ?*FreeBlock = null,
     count: usize = 0,
-    /// Fresh mappings this class had to make that the helper thread has not
-    /// yet answered with a prefaulted block.
-    wanted: std.atomic.Value(u32) = .init(0),
 
     /// Critical sections here are a few instructions, so spinning is cheaper
     /// than a blocking lock, and it keeps the allocator free of `std.Io`.
@@ -82,30 +56,11 @@ const ClassCache = struct {
     }
 };
 
-/// Lifecycle of the prefaulting helper thread.
-const HelperState = enum(u8) { disabled, not_started, running };
-
-/// Futex word the helper sleeps on: `working` while it drains requests,
-/// `sleeping` once it has parked, `signaled` when a request arrived.
-const HelperSignal = enum(u32) { working, sleeping, signaled };
-
 backing: Allocator,
 classes: [class_count]ClassCache = @splat(.{}),
-helper_state: std.atomic.Value(HelperState) = .init(.disabled),
-helper_signal: std.atomic.Value(HelperSignal) = .init(.working),
 
 pub fn init(backing: Allocator) Self {
     return .{ .backing = backing };
-}
-
-/// Like `init`, but a helper thread faults in replacement blocks ahead of
-/// demand. Only for an allocator that lives as long as the process: the
-/// helper is never joined.
-pub fn initPrefaulting(backing: Allocator) Self {
-    return .{
-        .backing = backing,
-        .helper_state = .init(if (prefault_supported) .not_started else .disabled),
-    };
 }
 
 pub fn allocator(self: *Self) Allocator {
@@ -156,109 +111,11 @@ fn alloc(ctx: *anyopaque, len: usize, alignment: Alignment, ret_addr: usize) ?[*
     if (cache.head) |block| {
         cache.head = block.next;
         cache.count -= 1;
-        const remaining = cache.count;
         cache.unlock();
-        if (remaining < reserveTarget(class) and cache.wanted.load(.monotonic) != 0) self.signalHelper();
         return @ptrCast(block);
     }
     cache.unlock();
-    self.noteMiss(class);
     return mapBlock(classCapacity(class));
-}
-
-/// Number of prefaulted blocks the helper keeps ready in a class.
-fn reserveTarget(class: u6) usize {
-    return @max(1, @min(max_prefault_reserve_blocks, prefault_reserve_bytes / classCapacity(class)));
-}
-
-/// A request in `class` had to map a fresh block: ask the helper for a
-/// prefaulted replacement, starting it on the first such request.
-fn noteMiss(self: *Self, class: u6) void {
-    if (class > max_prefault_class_log2) return;
-    switch (self.helper_state.load(.acquire)) {
-        .disabled => return,
-        .not_started => self.startHelper(),
-        .running => {},
-    }
-    _ = self.classes[class - min_class_log2].wanted.fetchAdd(1, .monotonic);
-    self.signalHelper();
-}
-
-fn startHelper(self: *Self) void {
-    if (!prefault_supported) return;
-    if (self.helper_state.cmpxchgStrong(.not_started, .running, .acq_rel, .acquire) != null) return;
-    const thread = std.Thread.spawn(.{ .stack_size = 256 * 1024 }, helperMain, .{self}) catch {
-        self.helper_state.store(.disabled, .release);
-        return;
-    };
-    thread.setName(helperIo(), "roc-prefault") catch {};
-    thread.detach();
-}
-
-fn helperIo() std.Io {
-    return std.Io.Threaded.global_single_threaded.io();
-}
-
-fn signalHelper(self: *Self) void {
-    if (!prefault_supported) return;
-    if (self.helper_signal.swap(.signaled, .release) == .sleeping) {
-        helperIo().futexWake(HelperSignal, &self.helper_signal.raw, 1);
-    }
-}
-
-fn helperMain(self: *Self) void {
-    cpu_count.pinCurrentThreadToEfficiencyCores();
-    while (true) {
-        self.helper_signal.store(.working, .monotonic);
-        var produced = true;
-        while (produced) {
-            produced = false;
-            var index: usize = 0;
-            while (index < prefault_class_count) : (index += 1) {
-                if (self.prefaultOne(index)) produced = true;
-            }
-        }
-        if (self.helper_signal.cmpxchgStrong(.working, .sleeping, .acq_rel, .acquire) == null) {
-            helperIo().futexWaitUncancelable(HelperSignal, &self.helper_signal.raw, .sleeping);
-        }
-    }
-}
-
-/// Fault in one block for the class at `index` if it has an unanswered
-/// request and its reserve is below target. Returns whether a block was added.
-fn prefaultOne(self: *Self, index: usize) bool {
-    const cache = &self.classes[index];
-    if (cache.wanted.load(.monotonic) == 0) return false;
-    const class: u6 = @intCast(index + min_class_log2);
-    cache.lock();
-    const count = cache.count;
-    cache.unlock();
-    if (count >= reserveTarget(class)) return false;
-    const capacity = classCapacity(class);
-    const ptr = mapBlock(capacity) orelse return false;
-    populate(ptr, capacity);
-    const block: *FreeBlock = @ptrCast(@alignCast(ptr));
-    cache.lock();
-    block.* = .{ .next = cache.head };
-    cache.head = block;
-    cache.count += 1;
-    cache.unlock();
-    _ = cache.wanted.fetchSub(1, .monotonic);
-    return true;
-}
-
-/// Fault every page of a fresh mapping in for writing.
-fn populate(ptr: [*]u8, capacity: usize) void {
-    if (builtin.os.tag == .linux) {
-        const aligned: [*]align(std.heap.page_size_min) u8 = @alignCast(ptr);
-        if (std.os.linux.errno(std.os.linux.madvise(aligned, capacity, madv_populate_write)) == .SUCCESS) return;
-    }
-    const page_size = std.heap.pageSize();
-    var offset: usize = 0;
-    while (offset < capacity) : (offset += page_size) {
-        const page: *volatile u8 = &ptr[offset];
-        page.* = 0;
-    }
 }
 
 /// Growth and shrinkage stay in place while the class, and therefore the
@@ -302,7 +159,6 @@ fn remap(ctx: *anyopaque, memory: []u8, alignment: Alignment, new_len: usize, re
         free(ctx, memory, alignment, ret_addr);
         return dst;
     }
-    self.noteMiss(new_class);
     const old_aligned: []align(std.heap.page_size_min) u8 = @alignCast(memory.ptr[0..classCapacity(old_class)]);
     const moved = PageAllocator.realloc(old_aligned, alignment, classCapacity(new_class), true) orelse return null;
     if (builtin.os.tag == .linux and classCapacity(new_class) >= huge_page_threshold) {
@@ -366,57 +222,6 @@ test "remap grows across classes and preserves contents" {
     while (i < 1_000_000) : (i += 100_003) try std.testing.expectEqual(i, list.items[@intCast(i)]);
     list.clearAndFree(a);
     try std.testing.expectEqual(@as(usize, 0), list.capacity);
-}
-
-test "a prefaulted block answers the next request in its class" {
-    var wrapper = Self.init(std.testing.allocator);
-    const a = wrapper.allocator();
-    const class = classOf(large_threshold);
-    const cache = &wrapper.classes[class - min_class_log2];
-    try std.testing.expect(!wrapper.prefaultOne(class - min_class_log2));
-    cache.wanted.store(1, .monotonic);
-    try std.testing.expect(wrapper.prefaultOne(class - min_class_log2));
-    try std.testing.expectEqual(@as(usize, 1), cache.count);
-    try std.testing.expectEqual(@as(u32, 0), cache.wanted.load(.monotonic));
-    const ready = cache.head.?;
-    const block = try a.alloc(u8, large_threshold);
-    defer a.free(block);
-    try std.testing.expectEqual(@as(*FreeBlock, ready), @as(*FreeBlock, @ptrCast(@alignCast(block.ptr))));
-    try std.testing.expectEqual(@as(usize, 0), cache.count);
-}
-
-test "the prefault reserve stops at its target" {
-    var wrapper = Self.init(std.testing.allocator);
-    const a = wrapper.allocator();
-    const class: u6 = max_prefault_class_log2 - 1;
-    const index = class - min_class_log2;
-    const cache = &wrapper.classes[index];
-    try std.testing.expectEqual(@as(usize, 1), reserveTarget(class));
-    try std.testing.expectEqual(@as(usize, 4), reserveTarget(min_class_log2));
-    cache.wanted.store(3, .monotonic);
-    try std.testing.expect(wrapper.prefaultOne(index));
-    try std.testing.expect(!wrapper.prefaultOne(index));
-    try std.testing.expectEqual(@as(usize, 1), cache.count);
-    try std.testing.expectEqual(@as(u32, 2), cache.wanted.load(.monotonic));
-    const block = try a.alloc(u8, classCapacity(class));
-    a.free(block);
-    try std.testing.expectEqual(@as(usize, 1), cache.count);
-    while (cache.head) |head| {
-        cache.head = head.next;
-        cache.count -= 1;
-        unmapBlock(@ptrCast(head), classCapacity(class));
-    }
-}
-
-test "populate leaves every page mapped and zeroed" {
-    const capacity = large_threshold;
-    const ptr = mapBlock(capacity).?;
-    defer unmapBlock(ptr, capacity);
-    populate(ptr, capacity);
-    var offset: usize = 0;
-    while (offset < capacity) : (offset += std.heap.pageSize()) {
-        try std.testing.expectEqual(@as(u8, 0), ptr[offset]);
-    }
 }
 
 test "small requests pass through to the backing allocator" {

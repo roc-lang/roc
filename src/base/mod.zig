@@ -68,7 +68,7 @@ pub const byte_encoding = @import("byte_encoding.zig");
 pub const LargeBlockAllocator = @import("LargeBlockAllocator.zig");
 pub const cpu_count = @import("cpu_count.zig");
 
-var default_large_blocks: LargeBlockAllocator = LargeBlockAllocator.initPrefaulting(defaultBackingGpa());
+var default_large_blocks: LargeBlockAllocator = LargeBlockAllocator.init(defaultBackingGpa());
 
 fn defaultBackingGpa() std.mem.Allocator {
     if (builtin.link_libc and !builtin.target.abi.isMusl()) return std.heap.c_allocator;

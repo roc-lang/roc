@@ -1,5 +1,4 @@
-//! CPU topology for parallel compilation: how many worker threads to run and
-//! where to put background helper threads.
+//! CPU topology for parallel compilation: how many worker threads to run.
 //!
 //! Hybrid CPUs mix fast cores with slower, more efficient ones. Measured on a
 //! 12900KS (8 performance cores with SMT, 8 efficiency cores), running the
@@ -7,17 +6,12 @@
 //! performance-core thread (16): the efficiency cores stretch the tail of
 //! every parallel wave and the extra threads contend on the kernel's
 //! address-space lock while mapping memory. So the worker count is the number
-//! of logical CPUs on the fastest core type, and background helpers such as
-//! the allocator's page prefaulter are pinned to the slow cores, where they
-//! never steal time from the workers.
+//! of logical CPUs on the fastest core type.
 //!
 //! Each platform names the core types differently:
-//! - Linux exposes them as `/sys/devices/cpu_core/cpus` (fast) and
-//!   `/sys/devices/cpu_atom/cpus` (slow) on Intel hybrid parts.
+//! - Linux exposes the fast cores as `/sys/devices/cpu_core/cpus` on Intel
+//!   hybrid parts.
 //! - macOS reports performance levels through `sysctl`; level 0 is the fastest.
-//!   There is no thread affinity API, so helpers are demoted to the
-//!   background quality-of-service class, which the scheduler runs on the
-//!   efficiency cores.
 //! - Windows reports an efficiency class per core through
 //!   `GetLogicalProcessorInformationEx`; a higher class is a faster core.
 //!
@@ -41,19 +35,6 @@ fn fastCoreLogicalCount() ?usize {
         .windows => windows_topology.fastCoreLogicalCount(),
         else => null,
     };
-}
-
-/// Move the calling thread onto the slow cores of a hybrid CPU so that it
-/// never competes with compiler workers for a fast core. Does nothing on a
-/// machine whose cores are all the same type or on platforms without a way
-/// to express the preference.
-pub fn pinCurrentThreadToEfficiencyCores() void {
-    switch (builtin.os.tag) {
-        .linux => linux_topology.pinCurrentThreadToEfficiencyCores(),
-        .macos => darwin_topology.pinCurrentThreadToEfficiencyCores(),
-        .windows => windows_topology.pinCurrentThreadToEfficiencyCores(),
-        else => {},
-    }
 }
 
 /// Bit set over CPU numbers with the layout of Linux's `cpu_set_t`.
@@ -104,13 +85,6 @@ const linux_topology = struct {
         return if (count == 0) null else count;
     }
 
-    fn pinCurrentThreadToEfficiencyCores() void {
-        var set: CpuSet = undefined;
-        const count = readCpuList("/sys/devices/cpu_atom/cpus", &set) orelse return;
-        if (count == 0) return;
-        linux.sched_setaffinity(0, &set) catch {};
-    }
-
     fn readCpuList(path: [*:0]const u8, set: *CpuSet) ?usize {
         const fd_raw = linux.open(path, .{ .ACCMODE = .RDONLY, .CLOEXEC = true }, 0);
         if (linux.errno(fd_raw) != .SUCCESS) return null;
@@ -129,11 +103,6 @@ const darwin_topology = struct {
         if (levels < 2) return null;
         const fast = sysctlInt("hw.perflevel0.logicalcpu") orelse return null;
         return if (fast == 0) null else fast;
-    }
-
-    fn pinCurrentThreadToEfficiencyCores() void {
-        if (darwin_topology.fastCoreLogicalCount() == null) return;
-        _ = std.c.pthread_set_qos_class_self_np(.BACKGROUND, 0);
     }
 
     fn sysctlInt(name: [*:0]const u8) ?usize {
@@ -176,18 +145,9 @@ const windows_topology = struct {
         returned_length: *windows.DWORD,
     ) callconv(.winapi) windows.BOOL;
 
-    extern "kernel32" fn GetCurrentThread() callconv(.winapi) windows.HANDLE;
-
-    extern "kernel32" fn SetThreadGroupAffinity(
-        thread: windows.HANDLE,
-        group_affinity: *const GroupAffinity,
-        previous_group_affinity: ?*GroupAffinity,
-    ) callconv(.winapi) windows.BOOL;
-
     /// One entry per physical core in `GetLogicalProcessorInformationEx`'s
-    /// output, with the group masks flattened to a single group: cores on a
-    /// hybrid part all live in group 0 on any machine small enough to have
-    /// only one processor group, and helper pinning only needs one group.
+    /// output, counted through its first group mask: a hybrid part small
+    /// enough to have one processor group keeps every core in group 0.
     const Core = struct {
         efficiency_class: u8,
         group: u16,
@@ -253,25 +213,6 @@ const windows_topology = struct {
             if (core.efficiency_class == range.highest) count += @popCount(core.mask);
         }
         return if (count == 0) null else count;
-    }
-
-    fn pinCurrentThreadToEfficiencyCores() void {
-        var buffer: [max_buffer_len]u8 align(8) = undefined;
-        const bytes = readCores(&buffer);
-        const range = classRange(bytes) orelse return;
-        if (range.lowest == range.highest) return;
-        var walker = CoreWalker{ .buffer = bytes };
-        var affinity: ?GroupAffinity = null;
-        while (walker.next()) |core| {
-            if (core.efficiency_class != range.lowest) continue;
-            if (affinity) |*a| {
-                if (a.group == core.group) a.mask |= core.mask;
-            } else {
-                affinity = .{ .mask = core.mask, .group = core.group, .reserved = @splat(0) };
-            }
-        }
-        const chosen = affinity orelse return;
-        _ = SetThreadGroupAffinity(GetCurrentThread(), &chosen, null);
     }
 };
 
