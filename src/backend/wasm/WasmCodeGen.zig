@@ -1474,11 +1474,9 @@ fn compileBuiltinInternalIncrefCallback(self: *Self, helper_key: RcHelperKey) Al
     _ = try self.addOwnedLocalFunctionSymbol(defined, "roc_rc_incref_callback", rcHelperCacheKey(helper_key, .atomic));
 
     const saved = try self.saveState();
+    errdefer self.abandonState(saved);
 
     try self.beginFunction(defined.local);
-    self.storage.locals = std.AutoHashMap(u64, Storage.LocalInfo).init(self.allocator);
-    self.storage.next_local_idx = 0;
-    self.storage.local_types = .empty;
     self.stack_frame_size = 0;
     self.uses_stack_memory = false;
     self.fp_local = 0;
@@ -1647,7 +1645,7 @@ fn addLirProcFunctionSymbol(
     defined: index_types.DefinedFunction,
     identity: LIR.ProcIdentity,
 ) Allocator.Error!SymbolIndex {
-    const name = std.fmt.allocPrint(self.allocator, "roc__proc_{s}", .{&identity.symbolHex()}) catch return error.OutOfMemory;
+    const name = identity.symbolName(self.allocator) catch return error.OutOfMemory;
     errdefer self.allocator.free(name);
     try self.function_symbol_names.append(self.allocator, name);
     return try self.addTrackedDefinedFunctionSymbol(
@@ -2275,10 +2273,8 @@ pub fn generateEntrypointWrapper(
     _ = try self.addTrackedDefinedFunctionSymbol(defined, symbol_name, 0);
 
     const saved = self.saveState() catch return error.OutOfMemory;
+    errdefer self.abandonState(saved);
     try self.beginFunction(defined.local);
-    self.storage.locals = std.AutoHashMap(u64, Storage.LocalInfo).init(self.allocator);
-    self.storage.next_local_idx = 0;
-    self.storage.local_types = .empty;
     self.stack_frame_size = 0;
     self.uses_stack_memory = false;
     self.fp_local = 0;
@@ -2534,7 +2530,8 @@ pub fn generateModule(
     const func_idx = defined.function.raw();
 
     try self.beginFunction(defined.local);
-    self.storage.reset();
+    const wrapper_scope = self.storage.beginScope();
+    defer self.storage.endScope(wrapper_scope);
     self.stack_frame_size = 0;
     self.uses_stack_memory = false;
 
@@ -2632,7 +2629,7 @@ pub fn generateModule(
 /// Groups consecutive locals of the same type: (count, type)*
 /// `skip_count` is the number of leading locals to skip (e.g., function parameters).
 fn encodeLocalsDecl(self: *Self, func_body: *std.ArrayList(u8), skip_count: u32) Allocator.Error!void {
-    const all_types = self.storage.local_types.items;
+    const all_types = self.storage.currentTypes();
     if (all_types.len <= skip_count) {
         WasmModule.leb128WriteU32(self.allocator, func_body, 0) catch return error.OutOfMemory;
         return;
@@ -2667,24 +2664,12 @@ fn encodeLocalsDecl(self: *Self, func_body: *std.ArrayList(u8), skip_count: u32)
     }
 }
 
-/// Generate wasm instructions for an already-bound local value.
+/// Generate wasm instructions for a local value.
 fn emitProcLocal(self: *Self, value: ProcLocalId) Allocator.Error!void {
-    const local_info = self.storage.getLocalInfo(value) orelse {
-        if (builtin.mode == .Debug) {
-            std.debug.panic(
-                "WASM/codegen invariant violated: missing local binding for LIR local {d}",
-                .{@intFromEnum(value)},
-            );
-        }
-        unreachable;
-    };
-
+    // `procLocalBinding` guarantees the slot holds the value type this local's
+    // layout requires, so reading it needs no representation conversion.
+    const local_info = try self.procLocalBinding(value);
     try self.emitLocalGet(local_info.idx);
-
-    const expected_vt = try self.resolveValType(self.procLocalLayoutIdx(value));
-    if (local_info.val_type != expected_vt) {
-        try self.emitConversion(local_info.val_type, expected_vt);
-    }
     try self.emitCanonicalizeScalarForLayout(self.procLocalLayoutIdx(value));
 }
 
@@ -3907,11 +3892,9 @@ fn emitRcHelperBody(self: *Self, helper_key: RcHelperKey, atomicity: RcAtomicity
     };
 
     const saved = try self.saveState();
+    errdefer self.abandonState(saved);
 
     try self.beginFunction(defined_local);
-    self.storage.locals = std.AutoHashMap(u64, Storage.LocalInfo).init(self.allocator);
-    self.storage.next_local_idx = 0;
-    self.storage.local_types = .empty;
     self.stack_frame_size = 0;
     self.uses_stack_memory = false;
     self.fp_local = 0;
@@ -3980,371 +3963,74 @@ fn isUnsignedLayout(layout_idx: layout.Idx) bool {
     };
 }
 
-fn getOrAllocTypedLocal(self: *Self, local_id: ProcLocalId, val_type: ValType) Allocator.Error!u32 {
-    if (self.storage.getLocalInfo(local_id)) |info| {
-        if (info.val_type == val_type) {
-            return info.idx;
+/// The one wasm local holding an explicit LIR local, bound on first encounter.
+///
+/// LIR states a local's representation in its own `layout_idx`, so the wasm
+/// value type a slot must have is explicit data: it is the same at every site
+/// that names the local, whether that site reads the local or writes it. Each
+/// `LocalId` therefore gets exactly one index for the whole procedure scope,
+/// and whichever emission site reaches it first assigns that index.
+///
+/// First encounter is an *emission-order* event, not a runtime one. Emission
+/// walks the control-flow graph, and that walk can reach a use lexically ahead
+/// of the definition that dominates it at runtime: a join body is emitted
+/// before the remainder that jumps into it, so a local the remainder assigns is
+/// read in already-emitted code. Assigning the index there is not a claim that
+/// the value is initialized; it reserves the storage that the later-emitted
+/// definition writes on the runtime path that reaches the use. LIR whose
+/// runtime path really does read an undefined local is invalid, and this
+/// backend neither detects nor compensates for that: the certifier and the
+/// debug boundary checks over emitted LIR own that property.
+///
+/// Parameters keep the indices their ABI assigned, because every entry point
+/// binds them before it emits a single body statement.
+fn procLocalBinding(self: *Self, value: ProcLocalId) Allocator.Error!Storage.LocalInfo {
+    if (self.storage.getLocalInfo(value)) |info| {
+        // The binding already carries the value type its layout resolved to,
+        // so the common case—every use after the first—costs one column read
+        // and no layout traversal. Debug builds re-resolve to prove they agree.
+        if (builtin.mode == .Debug) {
+            const expected = try self.procLocalValType(value);
+            if (info.val_type != expected) {
+                std.debug.panic(
+                    "WASM/codegen invariant violated: LIR local {d} is bound as {s} but its layout requires {s}",
+                    .{ @intFromEnum(value), @tagName(info.val_type), @tagName(expected) },
+                );
+            }
         }
+        return info;
     }
-
-    return self.storage.allocLocal(local_id, val_type);
+    const val_type = try self.procLocalValType(value);
+    const idx = self.storage.allocLocal(value, val_type) catch return error.OutOfMemory;
+    return .{ .idx = idx, .val_type = val_type };
 }
 
-fn recordProcLocal(locals: *std.AutoHashMap(u64, void), local: ProcLocalId) Allocator.Error!void {
-    _ = try locals.getOrPut(@intFromEnum(local));
+/// Bind a procedure parameter to the next wasm local index.
+///
+/// Parameter indices are positional: the wasm function signature fixes them, so
+/// each parameter takes a fresh index in declaration order instead of resolving
+/// through `procLocalBinding`. Every entry point does this before emitting any
+/// body statement, which is what lets body emission bind on first encounter
+/// without disturbing the ABI's index assignment.
+fn bindProcParamLocal(self: *Self, param: ProcLocalId) Allocator.Error!Storage.LocalInfo {
+    const val_type = try self.procLocalValType(param);
+    const idx = self.storage.allocLocal(param, val_type) catch return error.OutOfMemory;
+    return .{ .idx = idx, .val_type = val_type };
 }
 
-fn recordRefOpLocals(locals: *std.AutoHashMap(u64, void), op: RefOp) Allocator.Error!void {
-    switch (op) {
-        .local => |local| try recordProcLocal(locals, local),
-        .discriminant => |disc| try recordProcLocal(locals, disc.source),
-        .field => |field| try recordProcLocal(locals, field.source),
-        .tag_payload => |payload| try recordProcLocal(locals, payload.source),
-        .tag_payload_struct => |payload| try recordProcLocal(locals, payload.source),
-        .list_reinterpret => |list_reinterpret| try recordProcLocal(locals, list_reinterpret.backing_ref),
-        .nominal => |nominal| try recordProcLocal(locals, nominal.backing_ref),
+/// Bind a parameter the surrounding ABI unpacking code reads as a fixed wasm
+/// value type. The slot's type still comes from LIR's layout for that local;
+/// `expected` states the agreement the producer is required to have already
+/// established, so only debug builds check it.
+fn bindProcParamLocalAs(self: *Self, param: ProcLocalId, expected: ValType) Allocator.Error!u32 {
+    const binding = try self.bindProcParamLocal(param);
+    if (builtin.mode == .Debug and binding.val_type != expected) {
+        std.debug.panic(
+            "WASM/codegen invariant violated: ABI parameter {d} is read as {s} but its LIR layout is {s}",
+            .{ @intFromEnum(param), @tagName(expected), @tagName(binding.val_type) },
+        );
     }
-}
-
-fn recordRcHelperLocals(locals: *std.AutoHashMap(u64, void), helper: LIR.RcHelper) Allocator.Error!void {
-    switch (helper) {
-        .concrete => {},
-        .boxy => |desc| if (desc.localOrNull()) |local| try recordProcLocal(locals, local),
-    }
-}
-
-fn recordBoxyDescRefLocal(locals: *std.AutoHashMap(u64, void), desc: ?LIR.BoxyDescRef) Allocator.Error!void {
-    if (desc) |ref| switch (ref) {
-        .local => |local| try recordProcLocal(locals, local),
-        .dict_method_arg => |projection| try recordProcLocal(locals, projection.dict),
-        .dict_method_hidden => |projection| try recordProcLocal(locals, projection.dict),
-        .static, .runtime => {},
-    };
-}
-
-fn recordLiteralLocals(locals: *std.AutoHashMap(u64, void), literal: LIR.LiteralValue) Allocator.Error!void {
-    if (literal == .boxy_dynamic_num_literal) {
-        try recordBoxyDescRefLocal(locals, literal.boxy_dynamic_num_literal.desc);
-    } else if (literal == .boxy_dynamic_frac_literal) {
-        try recordBoxyDescRefLocal(locals, literal.boxy_dynamic_frac_literal.desc);
-    }
-}
-
-fn collectProcLocals(
-    self: *Self,
-    stmt_id: CFStmtId,
-    locals: *std.AutoHashMap(u64, void),
-    visited: *std.AutoHashMap(u32, void),
-) Allocator.Error!void {
-    // Order-independent traversal of the CFStmt graph: a simple worklist over
-    // statement ids, guarded by the `visited` set to handle join/jump cycles.
-    var sfa = std.heap.stackFallback(64 * @sizeOf(CFStmtId), self.allocator);
-    const wa = sfa.get();
-    var work = std.ArrayList(CFStmtId).empty;
-    defer work.deinit(wa);
-    try work.append(wa, stmt_id);
-
-    while (work.pop()) |current| {
-        const gop = try visited.getOrPut(@intFromEnum(current));
-        if (gop.found_existing) continue;
-
-        switch (self.store.getCFStmt(current)) {
-            .assign_ref => |assign| {
-                try recordProcLocal(locals, assign.target);
-                try recordRefOpLocals(locals, assign.op);
-                try work.append(wa, assign.next);
-            },
-            .assign_literal => |assign| {
-                try recordProcLocal(locals, assign.target);
-                try recordLiteralLocals(locals, assign.value);
-                try work.append(wa, assign.next);
-            },
-            .init_uninitialized => |uninit| {
-                try recordProcLocal(locals, uninit.target);
-                try work.append(wa, uninit.next);
-            },
-            .assign_call => |assign| {
-                try recordProcLocal(locals, assign.target);
-                const args = self.store.getLocalSpan(assign.args);
-                for (0..args.len) |i| try recordProcLocal(locals, GuardedList.at(args, i));
-                try work.append(wa, assign.next);
-            },
-            .assign_call_erased => |assign| {
-                try recordProcLocal(locals, assign.target);
-                try recordProcLocal(locals, assign.closure);
-                if (assign.result_desc) |result_desc| {
-                    if (result_desc.localOrNull()) |local| try recordProcLocal(locals, local);
-                }
-                if (assign.out_desc) |out_desc| try recordProcLocal(locals, out_desc);
-                if (assign.reuse_source) |reuse_source| try recordProcLocal(locals, reuse_source);
-                const args = self.store.getLocalSpan(assign.args);
-                for (0..args.len) |i| try recordProcLocal(locals, GuardedList.at(args, i));
-                try work.append(wa, assign.next);
-            },
-            .assign_packed_erased_fn => |assign| {
-                try recordProcLocal(locals, assign.target);
-                if (assign.capture) |capture| try recordProcLocal(locals, capture);
-                try recordBoxyDescRefLocal(locals, assign.result_desc);
-                try work.append(wa, assign.next);
-            },
-            .assign_boxy_desc_ref => |assign| {
-                try recordProcLocal(locals, assign.target);
-                if (assign.desc.localOrNull()) |local| try recordProcLocal(locals, local);
-                if (assign.tag_residual_for) |desc| if (desc.localOrNull()) |local| try recordProcLocal(locals, local);
-                const captures = self.store.getLocalSpan(assign.captures);
-                for (0..captures.len) |i| try recordProcLocal(locals, GuardedList.at(captures, i));
-                try work.append(wa, assign.next);
-            },
-            .assign_boxy_dict_ref => |assign| {
-                try recordProcLocal(locals, assign.target);
-                if (assign.dict.localOrNull()) |local| try recordProcLocal(locals, local);
-                try work.append(wa, assign.next);
-            },
-            .assign_boxy_box => |assign| {
-                try recordProcLocal(locals, assign.target);
-                try recordProcLocal(locals, assign.payload);
-                try recordBoxyDescRefLocal(locals, assign.source_desc);
-                if (assign.payload_desc) |desc| {
-                    if (desc.localOrNull()) |local| try recordProcLocal(locals, local);
-                }
-                try work.append(wa, assign.next);
-            },
-            .assign_boxy_reuse_box => |assign| {
-                try recordProcLocal(locals, assign.target);
-                try recordProcLocal(locals, assign.source);
-                if (assign.desc.localOrNull()) |local| try recordProcLocal(locals, local);
-                try work.append(wa, assign.next);
-            },
-            .assign_boxy_unbox => |assign| {
-                try recordProcLocal(locals, assign.target);
-                try recordProcLocal(locals, assign.source);
-                if (assign.source_desc.localOrNull()) |local| try recordProcLocal(locals, local);
-                if (assign.target_desc) |desc| if (desc.localOrNull()) |local| try recordProcLocal(locals, local);
-                try work.append(wa, assign.next);
-            },
-            .assign_boxy_adapt => |assign| {
-                try recordProcLocal(locals, assign.target);
-                try recordProcLocal(locals, assign.source);
-                try recordBoxyDescRefLocal(locals, assign.source_desc);
-                try recordBoxyDescRefLocal(locals, assign.target_desc);
-                try work.append(wa, assign.next);
-            },
-            .assign_boxy_inspect => |assign| {
-                try recordProcLocal(locals, assign.target);
-                try recordProcLocal(locals, assign.source);
-                if (assign.source_desc.localOrNull()) |local| try recordProcLocal(locals, local);
-                try work.append(wa, assign.next);
-            },
-            .assign_boxy_eq => |assign| {
-                try recordProcLocal(locals, assign.target);
-                try recordProcLocal(locals, assign.lhs);
-                try recordProcLocal(locals, assign.rhs);
-                if (assign.source_desc.localOrNull()) |local| try recordProcLocal(locals, local);
-                try work.append(wa, assign.next);
-            },
-            .assign_boxy_tag => |assign| {
-                try recordProcLocal(locals, assign.target);
-                if (assign.target_desc.localOrNull()) |local| try recordProcLocal(locals, local);
-                if (assign.payload) |payload| try recordProcLocal(locals, payload);
-                if (assign.payload_desc) |desc| {
-                    if (desc.localOrNull()) |local| try recordProcLocal(locals, local);
-                }
-                try work.append(wa, assign.next);
-            },
-            .assign_boxy_tag_payload => |assign| {
-                try recordProcLocal(locals, assign.target);
-                if (assign.target_desc) |target_desc| try recordProcLocal(locals, target_desc);
-                try recordProcLocal(locals, assign.source);
-                if (assign.source_desc.localOrNull()) |local| try recordProcLocal(locals, local);
-                try work.append(wa, assign.next);
-            },
-            .boxy_tag_match => |tag_match| {
-                try recordProcLocal(locals, tag_match.source);
-                if (tag_match.source_desc.localOrNull()) |local| try recordProcLocal(locals, local);
-                try work.append(wa, tag_match.on_match);
-                try work.append(wa, tag_match.on_miss);
-            },
-            .assign_call_dict => |assign| {
-                try recordProcLocal(locals, assign.target);
-                if (assign.dict.localOrNull()) |local| try recordProcLocal(locals, local);
-                if (assign.result_desc) |result_desc| {
-                    if (result_desc.localOrNull()) |local| try recordProcLocal(locals, local);
-                }
-                const args = self.store.getLocalSpan(assign.args);
-                for (0..args.len) |i| try recordProcLocal(locals, GuardedList.at(args, i));
-                const arg_descs = self.store.getLocalSpan(assign.arg_descs);
-                for (0..arg_descs.len) |i| try recordProcLocal(locals, GuardedList.at(arg_descs, i));
-                const hidden_args = self.store.getLocalSpan(assign.hidden_args);
-                for (0..hidden_args.len) |i| try recordProcLocal(locals, GuardedList.at(hidden_args, i));
-                try work.append(wa, assign.next);
-            },
-            .assign_low_level => |assign| {
-                try recordProcLocal(locals, assign.target);
-                const args = self.store.getLocalSpan(assign.args);
-                for (0..args.len) |i| try recordProcLocal(locals, GuardedList.at(args, i));
-                try work.append(wa, assign.next);
-            },
-            .assign_list => |assign| {
-                try recordProcLocal(locals, assign.target);
-                const elems = self.store.getLocalSpan(assign.elems);
-                for (0..elems.len) |i| try recordProcLocal(locals, GuardedList.at(elems, i));
-                try work.append(wa, assign.next);
-            },
-            .assign_struct => |assign| {
-                try recordProcLocal(locals, assign.target);
-                const fields = self.store.getLocalSpan(assign.fields);
-                for (0..fields.len) |i| try recordProcLocal(locals, GuardedList.at(fields, i));
-                try work.append(wa, assign.next);
-            },
-            .assign_tag => |assign| {
-                try recordProcLocal(locals, assign.target);
-                if (assign.payload) |payload| {
-                    try recordProcLocal(locals, payload);
-                }
-                try work.append(wa, assign.next);
-            },
-            .store_struct => |assign| {
-                try recordProcLocal(locals, assign.dest);
-                const fields = self.store.getLocalSpan(assign.fields);
-                for (0..fields.len) |index| try recordProcLocal(locals, GuardedList.at(fields, index));
-                try work.append(wa, assign.next);
-            },
-            .store_tag => |assign| {
-                try recordProcLocal(locals, assign.dest);
-                if (assign.payload) |payload| try recordProcLocal(locals, payload);
-                try work.append(wa, assign.next);
-            },
-            .set_local => |assign| {
-                try recordProcLocal(locals, assign.target);
-                try recordProcLocal(locals, assign.value);
-                try work.append(wa, assign.next);
-            },
-            .debug => |debug_stmt| {
-                try recordProcLocal(locals, debug_stmt.message);
-                try work.append(wa, debug_stmt.next);
-            },
-            .expect_err => |expect_err_stmt| {
-                try recordProcLocal(locals, expect_err_stmt.message);
-            },
-            .expect => |expect_stmt| {
-                try recordProcLocal(locals, expect_stmt.condition);
-                try work.append(wa, expect_stmt.next);
-            },
-            .comptime_branch_taken => |marker| try work.append(wa, marker.next),
-            .runtime_error, .comptime_exhaustiveness_failed => {},
-            .switch_stmt => |switch_stmt| {
-                try recordProcLocal(locals, switch_stmt.cond);
-                const branches = self.store.getCFSwitchBranches(switch_stmt.branches);
-                for (0..branches.len) |i| {
-                    const branch = GuardedList.at(branches, i);
-                    try work.append(wa, branch.body);
-                }
-                try work.append(wa, switch_stmt.default_branch);
-            },
-            .switch_initialized_payload => |switch_stmt| {
-                try recordProcLocal(locals, switch_stmt.cond);
-                try recordProcLocal(locals, switch_stmt.payload);
-                try work.append(wa, switch_stmt.initialized_branch);
-                try work.append(wa, switch_stmt.uninitialized_branch);
-            },
-            .str_match => |str_match| {
-                try recordProcLocal(locals, str_match.source);
-                const steps = self.store.getStrMatchSteps(str_match.steps);
-                for (0..steps.len) |i| {
-                    const step = GuardedList.at(steps, i);
-                    switch (step.capture) {
-                        .discard => {},
-                        .view => |local| try recordProcLocal(locals, local),
-                    }
-                }
-                try work.append(wa, str_match.on_match);
-                try work.append(wa, str_match.on_miss);
-            },
-            .str_match_set => |str_match_set| {
-                try recordProcLocal(locals, str_match_set.source);
-                const arms = self.store.getStrMatchArms(str_match_set.arms);
-                for (0..arms.len) |arm_i| {
-                    const arm = GuardedList.at(arms, arm_i);
-                    const steps = self.store.getStrMatchSteps(arm.steps);
-                    for (0..steps.len) |step_i| {
-                        const step = GuardedList.at(steps, step_i);
-                        switch (step.capture) {
-                            .discard => {},
-                            .view => |local| try recordProcLocal(locals, local),
-                        }
-                    }
-                    try work.append(wa, arm.on_match);
-                }
-                try work.append(wa, str_match_set.on_miss);
-            },
-            .join => |join_stmt| {
-                const params = self.store.getLocalSpan(join_stmt.params);
-                for (0..params.len) |i| try recordProcLocal(locals, GuardedList.at(params, i));
-                try work.append(wa, join_stmt.body);
-                try work.append(wa, join_stmt.remainder);
-            },
-            .jump => {},
-            .loop_break => {},
-            .ret => |ret_stmt| try recordProcLocal(locals, ret_stmt.value),
-            .incref => |inc| {
-                try recordProcLocal(locals, inc.value);
-                try recordRcHelperLocals(locals, inc.rc);
-                try work.append(wa, inc.next);
-            },
-            .decref => |dec| {
-                try recordProcLocal(locals, dec.value);
-                try recordRcHelperLocals(locals, dec.rc);
-                try work.append(wa, dec.next);
-            },
-            .decref_if_initialized => |dec| {
-                try recordProcLocal(locals, dec.cond);
-                try recordProcLocal(locals, dec.value);
-                try recordRcHelperLocals(locals, dec.rc);
-                try work.append(wa, dec.next);
-            },
-            .free => |free_stmt| {
-                try recordProcLocal(locals, free_stmt.value);
-                try recordRcHelperLocals(locals, free_stmt.rc);
-                try work.append(wa, free_stmt.next);
-            },
-            .crash => |crash| if (crash.msg.localId()) |message| try recordProcLocal(locals, message),
-            .loop_continue => {},
-        }
-    }
-}
-
-fn prebindProcLocals(self: *Self, proc_id: LIR.LirProcSpecId, proc: LirProcSpec) Allocator.Error!void {
-    var locals = std.AutoHashMap(u64, void).init(self.allocator);
-    defer locals.deinit();
-    var visited = std.AutoHashMap(u32, void).init(self.allocator);
-    defer visited.deinit();
-
-    const args = self.store.getLocalSpan(proc.args);
-    for (0..args.len) |i| try recordProcLocal(&locals, GuardedList.at(args, i));
-    try self.collectProcLocals(requireProcBody(proc_id, proc), &locals, &visited);
-
-    // A value's dynamic descriptor is part of its explicit LIR metadata even
-    // when no statement names that descriptor separately (for example a Boxy
-    // result descriptor initialized through an out parameter). Close the set
-    // transitively because descriptor locals can themselves carry metadata.
-    var added = true;
-    while (added) {
-        added = false;
-        for (self.store.getLocals(), 0..) |local, i| {
-            if (!locals.contains(@intCast(i))) continue;
-            const desc_local = (local.boxy_desc orelse continue).localOrNull() orelse continue;
-            const gop = try locals.getOrPut(@intFromEnum(desc_local));
-            if (!gop.found_existing) added = true;
-        }
-    }
-
-    var it = locals.iterator();
-    while (it.next()) |entry| {
-        const local_id: ProcLocalId = @enumFromInt(@as(u32, @intCast(entry.key_ptr.*)));
-        if (self.storage.getLocal(local_id) != null) continue;
-        const vt = try self.procLocalValType(local_id);
-        _ = try self.storage.allocLocal(local_id, vt);
-    }
+    return binding.idx;
 }
 
 fn procLocalLayoutIdx(self: *Self, value: ProcLocalId) layout.Idx {
@@ -8507,10 +8193,8 @@ fn generateBoxyDictProcThunk(self: *Self, proc_id: LIR.LirProcSpecId, proc: LirP
     try self.boxy_dict_thunk_table_indices.put(@intFromEnum(proc_id), table_idx);
 
     const saved = self.saveState() catch return error.OutOfMemory;
+    errdefer self.abandonState(saved);
     try self.beginFunction(defined.local);
-    self.storage.locals = std.AutoHashMap(u64, Storage.LocalInfo).init(self.allocator);
-    self.storage.next_local_idx = 0;
-    self.storage.local_types = .empty;
     self.stack_frame_size = 0;
     self.uses_stack_memory = false;
     self.fp_local = 0;
@@ -8679,12 +8363,10 @@ fn compileProcSpecBody(self: *Self, proc_id: LIR.LirProcSpecId, proc: LirProcSpe
 
     // Save current codegen state
     const saved = self.saveState() catch return error.OutOfMemory;
+    errdefer self.abandonState(saved);
 
     // Initialize fresh state with ALL registered proc_specs (for mutual recursion)
     try self.beginFunction(self.localFunctionIndexFromGlobal(func_idx));
-    self.storage.locals = std.AutoHashMap(u64, Storage.LocalInfo).init(self.allocator);
-    self.storage.next_local_idx = 0;
-    self.storage.local_types = .empty;
     self.current_proc_id = proc_id;
     // Note: registered_procs is NOT cleared—all pre-registered proc_specs remain
     // visible. This is critical for mutual recursion: when compiling is_even's
@@ -8724,9 +8406,7 @@ fn compileProcSpecBody(self: *Self, proc_id: LIR.LirProcSpecId, proc: LirProcSpe
         // Bind parameters to locals.
         for (0..args.len) |i| {
             const arg = GuardedList.at(args, i);
-            const local = self.store.getLocal(arg);
-            const vt = try self.resolveValType(local.layout_idx);
-            _ = self.storage.allocLocal(arg, vt) catch return error.OutOfMemory;
+            _ = try self.bindProcParamLocal(arg);
         }
         if (proc.runtime_ret_desc != null) {
             self.erased_ret_desc_ptr_local = self.storage.allocAnonymousLocal(.i32) catch return error.OutOfMemory;
@@ -8734,9 +8414,6 @@ fn compileProcSpecBody(self: *Self, proc_id: LIR.LirProcSpecId, proc: LirProcSpe
         break :blk null;
     };
 
-    if (proc.hosted == null) {
-        try self.prebindProcLocals(proc_id, proc);
-    }
     if (proc.boxy_runtime_entry) try self.emitBoxyRuntimeInit();
 
     // Pre-allocate frame pointer local (after params, so it doesn't conflict).
@@ -8761,11 +8438,7 @@ fn compileProcSpecBody(self: *Self, proc_id: LIR.LirProcSpecId, proc: LirProcSpe
         self.currentCode().append(self.allocator, @intFromEnum(BlockType.void)) catch return error.OutOfMemory;
         self.cf_depth = 1; // inside the ret block
 
-        self.generateCFStmt(requireProcBody(proc_id, proc)) catch |err| {
-            self.endFunction();
-            self.restoreState(saved);
-            return err;
-        };
+        try self.generateCFStmt(requireProcBody(proc_id, proc));
 
         // End of ret block
         self.currentCode().append(self.allocator, Op.end) catch return error.OutOfMemory;
@@ -9607,8 +9280,9 @@ fn bindErasedCallableAdapterParams(
         const arg_align: u32 = @intCast(@max(size_align.alignment.toByteUnits(), 1));
         const arg_offset = GuardedList.at(arg_offsets, i);
 
-        const vt = try self.resolveValType(local_layout);
-        const local_idx = self.storage.allocLocal(arg, vt) catch return error.OutOfMemory;
+        const binding = try self.bindProcParamLocal(arg);
+        const vt = binding.val_type;
+        const local_idx = binding.idx;
         if (size_align.size == 0) {
             switch (vt) {
                 .i32 => {
@@ -9655,7 +9329,7 @@ fn bindErasedCallableAdapterParams(
         }
     }
 
-    const hidden_local = self.storage.allocLocal(hidden_capture_arg, .i32) catch return error.OutOfMemory;
+    const hidden_local = try self.bindProcParamLocalAs(hidden_capture_arg, .i32);
     try self.emitLocalGet(capture_ptr_local);
     try self.emitLocalSet(hidden_local);
 
@@ -9669,7 +9343,7 @@ fn bindErasedCallableAdapterParams(
     }
     const desc_params = self.erased_arg_desc_params[params_start..params_end];
     for (desc_params, 0..) |param, param_index| {
-        const desc_local = self.storage.allocLocal(param.local, .i32) catch return error.OutOfMemory;
+        const desc_local = try self.bindProcParamLocalAs(param.local, .i32);
         if (self.erasedArgDescOffsetForKey(proc.erased_arg_desc_offsets, param.key)) |offset| {
             try self.emitLocalGet(capture_ptr_local);
             try self.emitLoadOpSized(.i32, @sizeOf(u32), offset);
@@ -9700,7 +9374,7 @@ fn bindErasedCallableAdapterParams(
         try self.emitLocalSet(desc_local);
     }
     const hidden_reuse_arg = GuardedList.at(args, explicit_count + 1);
-    const reuse_local = self.storage.allocLocal(hidden_reuse_arg, .i32) catch return error.OutOfMemory;
+    const reuse_local = try self.bindProcParamLocalAs(hidden_reuse_arg, .i32);
     try self.emitLocalGet(reuse_ptr_local);
     try self.emitLocalSet(reuse_local);
 }
@@ -9741,12 +9415,10 @@ fn emitErasedCallableAdapterReturnStore(
     }
 }
 
-/// Saved codegen state for restoring after compiling a nested function.
+/// Saved codegen state for restoring after compiling a nested function,
+/// including the wasm-local binding scope the nested function runs in.
 const SavedState = struct {
-    locals: std.AutoHashMap(u64, Storage.LocalInfo),
-    next_local_idx: u32,
-    local_types_items: []ValType,
-    local_types_capacity: usize,
+    storage_scope: Storage.Scope,
     active_fn_stack_len: usize,
     // Note: registered_procs is NOT saved/restored—once a proc is registered,
     // its entry persists globally since the wasm function code is already emitted.
@@ -9760,13 +9432,14 @@ const SavedState = struct {
     current_proc_id: ?LIR.LirProcSpecId,
 };
 
-/// Capture current codegen state for later restoration.
+/// Capture current codegen state and enter a fresh wasm-local binding scope.
+///
+/// The nested function gets its own local indices and its own bindings, so it
+/// may bind the same `LocalId`s as the function it interrupts without either
+/// one observing the other's slots.
 fn saveState(self: *Self) Allocator.Error!SavedState {
     return .{
-        .locals = self.storage.locals,
-        .next_local_idx = self.storage.next_local_idx,
-        .local_types_items = self.storage.local_types.items,
-        .local_types_capacity = self.storage.local_types.capacity,
+        .storage_scope = self.storage.beginScope(),
         .active_fn_stack_len = self.active_fn_stack.items.len,
         .stack_frame_size = self.stack_frame_size,
         .uses_stack_memory = self.uses_stack_memory,
@@ -9779,7 +9452,7 @@ fn saveState(self: *Self) Allocator.Error!SavedState {
     };
 }
 
-/// Restore codegen state after compiling a nested function.
+/// Restore codegen state, and the caller's binding scope, after a nested function.
 fn restoreState(self: *Self, saved: SavedState) void {
     if (self.active_fn_stack.items.len != saved.active_fn_stack_len) {
         if (builtin.mode == .Debug) {
@@ -9790,12 +9463,28 @@ fn restoreState(self: *Self, saved: SavedState) void {
         }
         unreachable;
     }
-    self.storage.locals.deinit();
-    self.storage.locals = saved.locals;
-    self.storage.next_local_idx = saved.next_local_idx;
-    self.storage.local_types.deinit(self.allocator);
-    self.storage.local_types.items = saved.local_types_items;
-    self.storage.local_types.capacity = saved.local_types_capacity;
+    self.restoreSavedFields(saved);
+}
+
+/// Unwind after a nested compilation failed partway through.
+///
+/// The failed attempt may have left its function body active and its binding
+/// scope open at any point between `saveState` and its own `restoreState`:
+/// while unpacking ABI parameters, while generating the body, or while
+/// encoding the locals declaration and prologue. Every one of those states is
+/// undone here, so the caller resumes with exactly the binding scope, local
+/// index sequence, and frame state it had. The partially emitted body stays in
+/// `pending_bodies`, which `deinit` frees; a failure here fails the whole
+/// compilation, so that body is never encoded.
+fn abandonState(self: *Self, saved: SavedState) void {
+    while (self.active_fn_stack.items.len > saved.active_fn_stack_len) {
+        _ = self.active_fn_stack.pop();
+    }
+    self.restoreSavedFields(saved);
+}
+
+fn restoreSavedFields(self: *Self, saved: SavedState) void {
+    self.storage.endScope(saved.storage_scope);
     // Note: registered_procs is NOT restored—entries added during nested
     // compilation must persist since the wasm function code is already emitted.
     self.stack_frame_size = saved.stack_frame_size;
@@ -10314,9 +10003,7 @@ fn generateCFStmtNode(self: *Self, work: *std.ArrayList(StmtWork), wa: Allocator
 
             for (0..jp_params.len) |i| {
                 const param = GuardedList.at(jp_params, i);
-                const vt = try self.procLocalValType(param);
-                const local_idx = self.getOrAllocTypedLocal(param, vt) catch return error.OutOfMemory;
-                param_locals[i] = local_idx;
+                param_locals[i] = (try self.procLocalBinding(param)).idx;
             }
             self.join_point_param_locals.put(jp_key, param_locals) catch return error.OutOfMemory;
             const state_local = self.storage.allocAnonymousLocal(.i32) catch return error.OutOfMemory;
@@ -10734,8 +10421,7 @@ fn bindLocalFromWasmStack(self: *Self, target: ProcLocalId) Allocator.Error!void
         },
         .primitive => {},
     }
-    const vt = try self.procLocalValType(target);
-    const local_idx = self.getOrAllocTypedLocal(target, vt) catch return error.OutOfMemory;
+    const local_idx = (try self.procLocalBinding(target)).idx;
     try self.emitLocalSet(local_idx);
 }
 
@@ -11278,10 +10964,8 @@ fn boxyCaptureDropTableIndex(self: *Self, capture_layout: layout.Idx, desc_field
     try self.boxy_capture_drop_table_indices.put(key, table_idx);
 
     const saved = try self.saveState();
+    errdefer self.abandonState(saved);
     try self.beginFunction(defined.local);
-    self.storage.locals = std.AutoHashMap(u64, Storage.LocalInfo).init(self.allocator);
-    self.storage.next_local_idx = 0;
-    self.storage.local_types = .empty;
     self.stack_frame_size = 0;
     self.uses_stack_memory = false;
     self.fp_local = 0;
@@ -20090,14 +19774,14 @@ fn emitStrMatchCapture(
             }
             self.currentCode().append(self.allocator, Op.end) catch return error.OutOfMemory;
 
-            const target_vt = try self.procLocalValType(target);
-            if (target_vt != .i32) {
+            const target_binding = try self.procLocalBinding(target);
+            if (target_binding.val_type != .i32) {
                 wasmInvariantFmt(
                     "WASM/codegen invariant violated: string-pattern capture local {d} was not represented as i32",
                     .{@intFromEnum(target)},
                 );
             }
-            const target_local = try self.getOrAllocTypedLocal(target, target_vt);
+            const target_local = target_binding.idx;
             try self.emitLocalGet(result_ptr);
             try self.emitLocalSet(target_local);
         },
@@ -21931,4 +21615,617 @@ test "final static data address tracking keeps referenced data through DCE" {
     try std.testing.expectEqual(@as(usize, 1), codegen.module.data_segments.items.len);
     try std.testing.expect(std.mem.find(u8, codegen.module.data_segments.items[0].data, "live") != null);
     try std.testing.expect(std.mem.find(u8, codegen.module.data_segments.items[0].data, "dead") == null);
+}
+
+test "wasm bytecode generation cost grows with procs, not procs times store locals" {
+    const allocator = std.testing.allocator;
+    const small_count = 250;
+    const large_count = 4000;
+    const growth = large_count / small_count;
+    const budget_factor = growth * 4;
+    const small_ns = @max(1, try fastestProcCompileNs(allocator, small_count));
+    const large_ns = try fastestProcCompileNs(allocator, large_count);
+    if (large_ns > small_ns * budget_factor) {
+        std.debug.print("growing the program {d}x grew wasm bytecode generation {d}x ({d} ns for {d} procs, {d} ns for {d} procs): each proc is scanning every local in the store\n", .{ growth, large_ns / small_ns, small_ns, small_count, large_ns, large_count });
+        return error.WasmCodeGenScalesWithProcsTimesStoreLocals;
+    }
+}
+
+fn fastestProcCompileNs(allocator: Allocator, proc_count: usize) Allocator.Error!u64 {
+    var fastest: u64 = std.math.maxInt(u64);
+    for (0..3) |_| fastest = @min(fastest, try timeProcCompileNs(allocator, proc_count));
+    return fastest;
+}
+
+fn timeProcCompileNs(allocator: Allocator, proc_count: usize) Allocator.Error!u64 {
+    var store = LirStore.init(allocator);
+    defer store.deinit();
+    var layouts = try layout.Store.init(allocator, .u32);
+    defer layouts.deinit();
+    for (0..proc_count) |i| {
+        const lhs = try store.addLocal(.{ .layout_idx = .u64 });
+        const rhs = try store.addLocal(.{ .layout_idx = .u64 });
+        const sum = try store.addLocal(.{ .layout_idx = .u64 });
+        const ret = try store.addCFStmt(.{ .ret = .{ .value = sum } });
+        const add = try store.addCFStmt(.{ .assign_low_level = .{
+            .target = sum,
+            .op = .num_int_add_wrap,
+            .rc_effect = LIR.LowLevel.num_int_add_wrap.rcEffect(),
+            .args = try store.addLocalSpan(&.{ lhs, rhs }),
+            .next = ret,
+        } });
+        const rhs_literal = try store.addCFStmt(.{ .assign_literal = .{
+            .target = rhs,
+            .value = .{ .i64_literal = .{ .value = @intCast(i), .layout_idx = .u64 } },
+            .next = add,
+        } });
+        const lhs_literal = try store.addCFStmt(.{ .assign_literal = .{
+            .target = lhs,
+            .value = .{ .i64_literal = .{ .value = 40, .layout_idx = .u64 } },
+            .next = rhs_literal,
+        } });
+        _ = try store.addProcSpec(.{
+            .name = store.freshSyntheticSymbol(),
+            .identity = LIR.ProcIdentity.forTest(@intCast(i)),
+            .args = LIR.LocalSpan.empty(),
+            .body = lhs_literal,
+            .ret_layout = .u64,
+        });
+    }
+    var codegen = Self.init(allocator, &store, &layouts, &.{}, &.{}, &.{}, .default);
+    defer codegen.deinit();
+    const io = std.testing.io;
+    const started_ns = std.Io.Timestamp.now(io, .awake).nanoseconds;
+    try codegen.compileAllProcSpecs(store.getProcSpecs());
+    const finished_ns = std.Io.Timestamp.now(io, .awake).nanoseconds;
+    return @intCast(@max(0, finished_ns - started_ns));
+}
+
+test "wasm local binding work grows with named locals, not procs times store locals" {
+    const allocator = std.testing.allocator;
+    const small_count = 250;
+    const large_count = 4000;
+    const growth = large_count / small_count;
+
+    const small_rows = @max(1, try procCompileBindingRowsVisited(allocator, small_count));
+    const large_rows = try procCompileBindingRowsVisited(allocator, large_count);
+
+    // Every procedure here names the same three locals, so the binding column's
+    // work is a function of how many locals the emitted code reaches, not of
+    // how many locals the whole store holds. Timing alone cannot separate those
+    // two; this counts the rows the column actually reads, writes, and
+    // initializes. The slack covers the one-time initialization of each new
+    // row, which the small program pays proportionally more of.
+    if (large_rows > small_rows * growth * 2) {
+        std.debug.print("growing the program {d}x grew wasm local-binding row visits {d}x ({d} rows for {d} procs, {d} rows for {d} procs)\n", .{ growth, large_rows / small_rows, small_rows, small_count, large_rows, large_count });
+        return error.WasmLocalBindingScalesWithStoreLocals;
+    }
+}
+
+fn procCompileBindingRowsVisited(allocator: Allocator, proc_count: usize) Allocator.Error!usize {
+    var store = LirStore.init(allocator);
+    defer store.deinit();
+    var layouts = try layout.Store.init(allocator, .u32);
+    defer layouts.deinit();
+    for (0..proc_count) |i| {
+        const lhs = try store.addLocal(.{ .layout_idx = .u64 });
+        const rhs = try store.addLocal(.{ .layout_idx = .u64 });
+        const sum = try store.addLocal(.{ .layout_idx = .u64 });
+        const ret = try store.addCFStmt(.{ .ret = .{ .value = sum } });
+        const add = try store.addCFStmt(.{ .assign_low_level = .{
+            .target = sum,
+            .op = .num_int_add_wrap,
+            .rc_effect = LIR.LowLevel.num_int_add_wrap.rcEffect(),
+            .args = try store.addLocalSpan(&.{ lhs, rhs }),
+            .next = ret,
+        } });
+        const rhs_literal = try store.addCFStmt(.{ .assign_literal = .{
+            .target = rhs,
+            .value = .{ .i64_literal = .{ .value = @intCast(i), .layout_idx = .u64 } },
+            .next = add,
+        } });
+        const lhs_literal = try store.addCFStmt(.{ .assign_literal = .{
+            .target = lhs,
+            .value = .{ .i64_literal = .{ .value = 40, .layout_idx = .u64 } },
+            .next = rhs_literal,
+        } });
+        _ = try store.addProcSpec(.{
+            .name = store.freshSyntheticSymbol(),
+            .identity = LIR.ProcIdentity.forTest(@intCast(i)),
+            .args = LIR.LocalSpan.empty(),
+            .body = lhs_literal,
+            .ret_layout = .u64,
+        });
+    }
+
+    var codegen = Self.init(allocator, &store, &layouts, &.{}, &.{}, &.{}, .default);
+    defer codegen.deinit();
+    try codegen.compileAllProcSpecs(store.getProcSpecs());
+    return codegen.storage.rows_visited;
+}
+
+/// The instruction subset these fixtures emit, so a scan that meets anything
+/// else reports it rather than silently mis-decoding the rest of the body.
+const ScanOp = enum(u8) {
+    block = Op.block,
+    loop_ = Op.loop_,
+    @"if" = Op.@"if",
+    @"else" = Op.@"else",
+    end = Op.end,
+    br = Op.br,
+    br_if = Op.br_if,
+    @"return" = Op.@"return",
+    drop = Op.drop,
+    local_get = Op.local_get,
+    local_set = Op.local_set,
+    local_tee = Op.local_tee,
+    i32_const = Op.i32_const,
+    i64_const = Op.i64_const,
+    i32_eqz = Op.i32_eqz,
+    _,
+};
+
+const LocalOpKind = enum { get, set, tee };
+
+/// One local-variable instruction the emitted body performed.
+const LocalOp = struct {
+    kind: LocalOpKind,
+    idx: u32,
+};
+
+/// What a scan of a single emitted function body recovered.
+const BodyScan = struct {
+    declared_locals: usize,
+    ops: std.ArrayList(LocalOp),
+    /// Position in `ops` of the store that consumed the fixture's `i64.const`.
+    literal_store: ?usize,
+
+    fn deinit(self: *BodyScan, allocator: Allocator) void {
+        self.ops.deinit(allocator);
+    }
+};
+
+const ScanError = error{ OutOfMemory, UnsupportedOpcode, TruncatedBody };
+
+/// Decode one emitted function body.
+///
+/// The body is `[byte length][locals declaration][instructions]`, and the
+/// locals declaration is `[group count]([count][type])*`. Decoding every
+/// instruction—rather than searching for opcode bytes—is what makes the
+/// recovered local indices trustworthy, since an immediate can hold any byte.
+/// The decoder covers exactly the instruction set these fixtures emit and
+/// rejects anything else, so a fixture that grows new instructions fails here
+/// instead of silently reporting a partial scan.
+fn scanBody(allocator: Allocator, body: []const u8, literal: i64) ScanError!BodyScan {
+    var cursor: usize = 0;
+    const declared_body_len = try readUleb(body, &cursor);
+    if (cursor + declared_body_len != body.len) return error.TruncatedBody;
+
+    const group_count = try readUleb(body, &cursor);
+    var declared_locals: usize = 0;
+    for (0..group_count) |_| {
+        declared_locals += try readUleb(body, &cursor);
+        if (cursor >= body.len) return error.TruncatedBody;
+        cursor += 1;
+    }
+
+    var scan: BodyScan = .{ .declared_locals = declared_locals, .ops = .empty, .literal_store = null };
+    errdefer scan.ops.deinit(allocator);
+
+    var saw_literal = false;
+    while (cursor < body.len) {
+        const op: ScanOp = @enumFromInt(body[cursor]);
+        cursor += 1;
+        switch (op) {
+            .block, .loop_, .@"if" => {
+                if (cursor >= body.len) return error.TruncatedBody;
+                cursor += 1; // block type
+            },
+            .@"else", .end, .drop, .@"return", .i32_eqz => {},
+            .br, .br_if => _ = try readUleb(body, &cursor),
+            .local_get, .local_set, .local_tee => {
+                const idx: u32 = @intCast(try readUleb(body, &cursor));
+                const kind: LocalOpKind = if (op == .local_get)
+                    .get
+                else if (op == .local_set)
+                    .set
+                else
+                    .tee;
+                if (saw_literal and kind != .get) {
+                    scan.literal_store = scan.ops.items.len;
+                    saw_literal = false;
+                }
+                try scan.ops.append(allocator, .{ .kind = kind, .idx = idx });
+            },
+            .i32_const => _ = try readSleb(body, &cursor),
+            .i64_const => {
+                const value = try readSleb(body, &cursor);
+                if (value == literal) saw_literal = true;
+            },
+            _ => return error.UnsupportedOpcode,
+        }
+    }
+    return scan;
+}
+
+fn readUleb(bytes: []const u8, cursor: *usize) ScanError!usize {
+    var result: usize = 0;
+    var shift: u6 = 0;
+    while (true) {
+        if (cursor.* >= bytes.len) return error.TruncatedBody;
+        const byte = bytes[cursor.*];
+        cursor.* += 1;
+        result |= @as(usize, byte & 0x7f) << shift;
+        if (byte & 0x80 == 0) return result;
+        shift += 7;
+    }
+}
+
+fn readSleb(bytes: []const u8, cursor: *usize) ScanError!i64 {
+    var result: i64 = 0;
+    var shift: u7 = 0;
+    while (true) {
+        if (cursor.* >= bytes.len) return error.TruncatedBody;
+        const byte = bytes[cursor.*];
+        cursor.* += 1;
+        result |= @as(i64, byte & 0x7f) << @intCast(shift);
+        shift += 7;
+        if (byte & 0x80 == 0) {
+            if (shift < 64 and byte & 0x40 != 0) result |= @as(i64, -1) << @intCast(shift);
+            return result;
+        }
+    }
+}
+
+/// Bytes of one emitted function body, including its length prefix.
+fn emittedBody(module: *const WasmModule, index: usize) []const u8 {
+    const offsets = module.function_offsets.items;
+    const start = offsets[index];
+    const end = if (index + 1 < offsets.len) offsets[index + 1] else @as(u32, @intCast(module.code_bytes.items.len));
+    return module.code_bytes.items[start..end];
+}
+
+const join_fixture_literal: i64 = 7;
+
+/// Where the join fixture produces the value its join body returns.
+const JoinFixtureShape = enum {
+    /// `join j = ret late in (late = 7; jump j)`. The remainder runs first, so
+    /// the assignment dominates the read, but the emitter writes the join body
+    /// before the remainder, so the read is emitted first.
+    assign_in_remainder,
+    /// `late = 7; join j = ret late in jump j`. Same runtime path, but the
+    /// assignment is also emitted first.
+    assign_before_join,
+};
+
+fn compileJoinFixture(allocator: Allocator, shape: JoinFixtureShape) ScanError!BodyScan {
+    var store = LirStore.init(allocator);
+    defer store.deinit();
+    var layouts = try layout.Store.init(allocator, .u32);
+    defer layouts.deinit();
+
+    const late = try store.addLocal(.{ .layout_idx = .u64 });
+    const join_id: LIR.JoinPointId = @enumFromInt(0);
+
+    const body_ret = try store.addCFStmt(.{ .ret = .{ .value = late } });
+    const jump_back = try store.addCFStmt(.{ .jump = .{ .target = join_id } });
+
+    const proc_body = switch (shape) {
+        .assign_in_remainder => blk: {
+            const assign = try store.addCFStmt(.{ .assign_literal = .{
+                .target = late,
+                .value = .{ .i64_literal = .{ .value = join_fixture_literal, .layout_idx = .u64 } },
+                .next = jump_back,
+            } });
+            break :blk try store.addCFStmt(.{ .join = .{
+                .id = join_id,
+                .params = LIR.LocalSpan.empty(),
+                .body = body_ret,
+                .remainder = assign,
+            } });
+        },
+        .assign_before_join => blk: {
+            const join_stmt = try store.addCFStmt(.{ .join = .{
+                .id = join_id,
+                .params = LIR.LocalSpan.empty(),
+                .body = body_ret,
+                .remainder = jump_back,
+            } });
+            break :blk try store.addCFStmt(.{ .assign_literal = .{
+                .target = late,
+                .value = .{ .i64_literal = .{ .value = join_fixture_literal, .layout_idx = .u64 } },
+                .next = join_stmt,
+            } });
+        },
+    };
+
+    _ = try store.addProcSpec(.{
+        .name = store.freshSyntheticSymbol(),
+        .identity = LIR.ProcIdentity.forTest(1),
+        .args = LIR.LocalSpan.empty(),
+        .body = proc_body,
+        .ret_layout = .u64,
+    });
+
+    var codegen = Self.init(allocator, &store, &layouts, &.{}, &.{}, &.{}, .default);
+    defer codegen.deinit();
+    try codegen.compileAllProcSpecs(store.getProcSpecs());
+    try codegen.flushPendingBodies();
+    return scanBody(allocator, emittedBody(&codegen.module, 0), join_fixture_literal);
+}
+
+test "a join body emitted before the remainder that assigns its value uses one slot" {
+    const allocator = std.testing.allocator;
+
+    var read_first = try compileJoinFixture(allocator, .assign_in_remainder);
+    defer read_first.deinit(allocator);
+    var assign_first = try compileJoinFixture(allocator, .assign_before_join);
+    defer assign_first.deinit(allocator);
+
+    // Same locals named, so the same wasm locals must be declared: an emitted
+    // read must not take a slot that the later-emitted assignment abandons.
+    try std.testing.expectEqual(assign_first.declared_locals, read_first.declared_locals);
+
+    const store_pos = read_first.literal_store orelse return error.FixtureStoredNoLiteral;
+    const slot = read_first.ops.items[store_pos].idx;
+
+    // The read really is emitted before the assignment, and it reads the slot
+    // the assignment writes—so the runtime path (remainder, then join body)
+    // returns the assigned value.
+    var read_before_store = false;
+    for (read_first.ops.items[0..store_pos]) |op| {
+        if (op.kind == .get and op.idx == slot) read_before_store = true;
+    }
+    try std.testing.expect(read_before_store);
+}
+
+test "procedure parameters keep their ABI local indices when the body reads them" {
+    const allocator = std.testing.allocator;
+    var store = LirStore.init(allocator);
+    defer store.deinit();
+    var layouts = try layout.Store.init(allocator, .u32);
+    defer layouts.deinit();
+
+    const first = try store.addLocal(.{ .layout_idx = .u64 });
+    const second = try store.addLocal(.{ .layout_idx = .u64 });
+    const ret = try store.addCFStmt(.{ .ret = .{ .value = second } });
+    _ = try store.addProcSpec(.{
+        .name = store.freshSyntheticSymbol(),
+        .identity = LIR.ProcIdentity.forTest(1),
+        .args = try store.addLocalSpan(&.{ first, second }),
+        .body = ret,
+        .ret_layout = .u64,
+    });
+
+    var codegen = Self.init(allocator, &store, &layouts, &.{}, &.{}, &.{}, .default);
+    defer codegen.deinit();
+    try codegen.compileAllProcSpecs(store.getProcSpecs());
+    try codegen.flushPendingBodies();
+
+    var scan = try scanBody(allocator, emittedBody(&codegen.module, 0), join_fixture_literal);
+    defer scan.deinit(allocator);
+
+    // Declared locals exclude parameters: only the frame pointer and the
+    // return slot. A parameter re-bound by the body would add a third.
+    try std.testing.expectEqual(@as(usize, 2), scan.declared_locals);
+
+    // The returned value is read out of parameter index 1, not a copy.
+    var read_second = false;
+    for (scan.ops.items) |op| {
+        if (op.kind == .get and op.idx == 1) read_second = true;
+    }
+    try std.testing.expect(read_second);
+}
+
+test "sibling procedures that share LocalIds emit identical independent bodies" {
+    const allocator = std.testing.allocator;
+    var store = LirStore.init(allocator);
+    defer store.deinit();
+    var layouts = try layout.Store.init(allocator, .u32);
+    defer layouts.deinit();
+
+    const value = try store.addLocal(.{ .layout_idx = .u64 });
+    const ret = try store.addCFStmt(.{ .ret = .{ .value = value } });
+    const assign = try store.addCFStmt(.{ .assign_literal = .{
+        .target = value,
+        .value = .{ .i64_literal = .{ .value = join_fixture_literal, .layout_idx = .u64 } },
+        .next = ret,
+    } });
+    for (0..2) |i| {
+        _ = try store.addProcSpec(.{
+            .name = store.freshSyntheticSymbol(),
+            .identity = LIR.ProcIdentity.forTest(@intCast(i)),
+            .args = LIR.LocalSpan.empty(),
+            .body = assign,
+            .ret_layout = .u64,
+        });
+    }
+
+    var codegen = Self.init(allocator, &store, &layouts, &.{}, &.{}, &.{}, .default);
+    defer codegen.deinit();
+    try codegen.compileAllProcSpecs(store.getProcSpecs());
+    try codegen.flushPendingBodies();
+
+    // Each procedure binds the shared LocalId in its own scope, so the second
+    // must allocate its own slots rather than inherit the first's.
+    try std.testing.expectEqualSlices(
+        u8,
+        emittedBody(&codegen.module, 0),
+        emittedBody(&codegen.module, 1),
+    );
+}
+
+fn frameInventoryDeclaredLocals(allocator: Allocator, obsolete_locals: usize) ScanError!usize {
+    var store = LirStore.init(allocator);
+    defer store.deinit();
+    var layouts = try layout.Store.init(allocator, .u32);
+    defer layouts.deinit();
+
+    const value = try store.addLocal(.{ .layout_idx = .u64 });
+    const ret = try store.addCFStmt(.{ .ret = .{ .value = value } });
+    const assign = try store.addCFStmt(.{ .assign_literal = .{
+        .target = value,
+        .value = .{ .i64_literal = .{ .value = join_fixture_literal, .layout_idx = .u64 } },
+        .next = ret,
+    } });
+
+    var inventory = std.ArrayList(LIR.LocalId).empty;
+    defer inventory.deinit(allocator);
+    try inventory.append(allocator, value);
+    for (0..obsolete_locals) |_| {
+        const stale = try store.addLocal(.{ .layout_idx = .u64 });
+        try inventory.append(allocator, stale);
+    }
+
+    _ = try store.addProcSpec(.{
+        .name = store.freshSyntheticSymbol(),
+        .identity = LIR.ProcIdentity.forTest(1),
+        .args = LIR.LocalSpan.empty(),
+        .frame_locals = try store.addLocalSpan(inventory.items),
+        .body = assign,
+        .ret_layout = .u64,
+    });
+
+    var codegen = Self.init(allocator, &store, &layouts, &.{}, &.{}, &.{}, .default);
+    defer codegen.deinit();
+    try codegen.compileAllProcSpecs(store.getProcSpecs());
+    try codegen.flushPendingBodies();
+
+    var scan = try scanBody(allocator, emittedBody(&codegen.module, 0), join_fixture_literal);
+    defer scan.deinit(allocator);
+    return scan.declared_locals;
+}
+
+test "frame-inventory locals the emitted code never names take no wasm local" {
+    const allocator = std.testing.allocator;
+    // A procedure's frame inventory is complete but may retain locals that
+    // later rewrites left unreferenced; those must not reach the output.
+    try std.testing.expectEqual(
+        try frameInventoryDeclaredLocals(allocator, 0),
+        try frameInventoryDeclaredLocals(allocator, 32),
+    );
+}
+
+test "a metadata-only descriptor out local binds once and reads back that slot" {
+    const allocator = std.testing.allocator;
+    var store = LirStore.init(allocator);
+    defer store.deinit();
+    var layouts = try layout.Store.init(allocator, .u32);
+    defer layouts.deinit();
+
+    // A descriptor named only by its value's metadata: no statement mentions it.
+    const desc = try store.addLocal(.{ .layout_idx = .opaque_ptr });
+    const target = try store.addLocal(.{ .layout_idx = .u64, .boxy_desc = .{ .local = desc } });
+
+    var codegen = Self.init(allocator, &store, &layouts, &.{}, &.{}, &.{}, .default);
+    defer codegen.deinit();
+
+    const type_idx = try codegen.module.addFuncType(&.{}, &.{});
+    const defined = try codegen.module.addDefinedFunction(type_idx);
+    const saved = try codegen.saveState();
+    try codegen.beginFunction(defined.local);
+
+    try std.testing.expectEqual(@as(?Storage.LocalInfo, null), codegen.storage.getLocalInfo(desc));
+
+    const out_desc_ptr = try codegen.storage.allocAnonymousLocal(.i32);
+    try codegen.bindBoxyOutDesc(target, out_desc_ptr);
+
+    const bound = codegen.storage.getLocalInfo(desc) orelse return error.DescriptorNeverBound;
+    const locals_after_bind = codegen.storage.nextLocalIdx();
+
+    // Reading the descriptor resolves the slot the out-parameter write created.
+    try codegen.emitProcLocal(desc);
+    try std.testing.expectEqual(bound, codegen.storage.getLocalInfo(desc).?);
+    try std.testing.expectEqual(locals_after_bind, codegen.storage.nextLocalIdx());
+
+    codegen.endFunction();
+    codegen.restoreState(saved);
+}
+
+/// Compile-scope harness for the nested-helper tests: a codegen holding one
+/// LIR local plus two module functions to open scopes with.
+const NestedScopeFixture = struct {
+    store: LirStore,
+    layouts: LayoutStore,
+    codegen: Self,
+
+    fn init(allocator: Allocator) Allocator.Error!*NestedScopeFixture {
+        const self = try allocator.create(NestedScopeFixture);
+        self.store = LirStore.init(allocator);
+        self.layouts = try layout.Store.init(allocator, .u32);
+        _ = try self.store.addLocal(.{ .layout_idx = .u64 });
+        self.codegen = Self.init(allocator, &self.store, &self.layouts, &.{}, &.{}, &.{}, .default);
+        return self;
+    }
+
+    fn deinit(self: *NestedScopeFixture, allocator: Allocator) void {
+        self.codegen.deinit();
+        self.layouts.deinit();
+        self.store.deinit();
+        allocator.destroy(self);
+    }
+
+    fn openFunction(self: *NestedScopeFixture) Allocator.Error!void {
+        const type_idx = try self.codegen.module.addFuncType(&.{}, &.{});
+        const defined = try self.codegen.module.addDefinedFunction(type_idx);
+        try self.codegen.beginFunction(defined.local);
+    }
+};
+
+test "a nested function scope restores the caller's binding for a shared local" {
+    const allocator = std.testing.allocator;
+    const fixture = try NestedScopeFixture.init(allocator);
+    defer fixture.deinit(allocator);
+    const codegen = &fixture.codegen;
+    const shared: ProcLocalId = @enumFromInt(0);
+
+    const outer = try codegen.saveState();
+    try fixture.openFunction();
+    const outer_binding = try codegen.procLocalBinding(shared);
+    _ = try codegen.storage.allocAnonymousLocal(.i32);
+    const outer_next = codegen.storage.nextLocalIdx();
+
+    // A helper compiled in the middle of that body binds the same LocalId.
+    const inner = try codegen.saveState();
+    try fixture.openFunction();
+    try std.testing.expectEqual(@as(?Storage.LocalInfo, null), codegen.storage.getLocalInfo(shared));
+    const inner_binding = try codegen.procLocalBinding(shared);
+    try std.testing.expectEqual(@as(u32, 0), inner_binding.idx);
+    codegen.endFunction();
+    codegen.restoreState(inner);
+
+    try std.testing.expectEqual(outer_binding, codegen.storage.getLocalInfo(shared).?);
+    try std.testing.expectEqual(outer_next, codegen.storage.nextLocalIdx());
+
+    codegen.endFunction();
+    codegen.restoreState(outer);
+}
+
+test "abandoning a failed nested compilation restores the caller's binding scope" {
+    const allocator = std.testing.allocator;
+    const fixture = try NestedScopeFixture.init(allocator);
+    defer fixture.deinit(allocator);
+    const codegen = &fixture.codegen;
+    const shared: ProcLocalId = @enumFromInt(0);
+
+    const outer = try codegen.saveState();
+    try fixture.openFunction();
+    const outer_binding = try codegen.procLocalBinding(shared);
+    const outer_next = codegen.storage.nextLocalIdx();
+    const outer_depth = codegen.active_fn_stack.items.len;
+
+    // A nested compilation that fails after opening its function and binding
+    // locals: the error path runs `abandonState` instead of `restoreState`.
+    const inner = try codegen.saveState();
+    try fixture.openFunction();
+    _ = try codegen.procLocalBinding(shared);
+    _ = try codegen.storage.allocAnonymousLocal(.i64);
+    codegen.abandonState(inner);
+
+    try std.testing.expectEqual(outer_depth, codegen.active_fn_stack.items.len);
+    try std.testing.expectEqual(outer_binding, codegen.storage.getLocalInfo(shared).?);
+    try std.testing.expectEqual(outer_next, codegen.storage.nextLocalIdx());
+
+    codegen.endFunction();
+    codegen.restoreState(outer);
 }
