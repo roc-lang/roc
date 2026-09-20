@@ -147,7 +147,7 @@ const TimingInfo = compile.package.TimingInfo;
 /// the single- vs multi-threaded compilation mode from it. Returned as a
 /// `{ thread_count, mode }` tuple for destructuring at the call site.
 fn resolveThreadDefaults(max_threads: ?usize) struct { usize, Mode } {
-    const thread_count: usize = max_threads orelse (std.Thread.getCpuCount() catch 1);
+    const thread_count: usize = max_threads orelse base.cpu_count.workerCount();
     return .{ thread_count, if (thread_count <= 1) .single_threaded else .multi_threaded };
 }
 
