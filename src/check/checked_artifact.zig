@@ -2646,17 +2646,6 @@ fn iteratorProcedureForDef(module: TypedCIR.Module, def_idx: CIR.Def.Idx) ?Itera
 /// BuiltinLowLevel transform while the explicit CIR low-level node is still
 /// available. Post-check stages consume this field directly from procedure
 /// uses.
-/// The low-level operation a builtin procedure definition is implemented by,
-/// under the same precedence as its dispatch runtime target: an intrinsic or
-/// iterator procedure takes the call site instead.
-fn lowLevelForProcedureDef(module: TypedCIR.Module, def_idx: CIR.Def.Idx) ?base.LowLevel {
-    if (intrinsicForProcedureDef(module, def_idx)) |intrinsic| {
-        if (intrinsic.callsiteArity() != null) return null;
-    }
-    if (iteratorProcedureForDef(module, def_idx) != null) return null;
-    return module.moduleEnvConst().providedLowLevelForDef(def_idx);
-}
-
 fn runtimeResultProvenanceForProcedureDef(
     module: TypedCIR.Module,
     def_idx: CIR.Def.Idx,
@@ -16157,11 +16146,6 @@ pub const ProcedureUseTemplate = struct {
     intrinsic: ?IntrinsicId = null,
     /// Producer-recorded semantic role for compiler-owned iterator procedures.
     iterator_procedure: ?IteratorProcedureId = null,
-    /// Producer-authored low-level operation implementing this procedure.
-    /// Monotype emits the operation at the call site instead of requesting a
-    /// procedure specialization, exactly as it does for a low-level dispatch
-    /// target.
-    low_level: ?base.LowLevel = null,
     /// Producer-owned reachability fact for a compiler-provided result.
     runtime_result_provenance: ?RuntimeResultProvenance,
 };
@@ -16891,7 +16875,6 @@ fn categorizeTopLevelValueRef(
                 .source_fn_ty_template = .{},
                 .intrinsic = intrinsicForProcedureDef(module, entry.def),
                 .iterator_procedure = iteratorProcedureForDef(module, entry.def),
-                .low_level = lowLevelForProcedureDef(module, entry.def),
                 .runtime_result_provenance = runtimeResultProvenanceForProcedureDef(module, entry.def),
             } },
     };
@@ -16942,7 +16925,6 @@ fn categorizeImportedValueRef(
             .source_fn_ty_template = .{},
             .intrinsic = binding.intrinsic,
             .iterator_procedure = binding.iterator_procedure,
-            .low_level = binding.low_level,
             .runtime_result_provenance = binding.runtime_result_provenance,
         } };
     }
@@ -16989,7 +16971,6 @@ fn categorizeResolvedAssociatedValueRef(
             .source_fn_ty_template = .{},
             .intrinsic = binding.intrinsic,
             .iterator_procedure = binding.iterator_procedure,
-            .low_level = binding.low_level,
             .runtime_result_provenance = binding.runtime_result_provenance,
         } };
     }
@@ -25219,7 +25200,6 @@ fn clonePlatformRequiredValueUseWithRelation(
                 .source_fn_ty_payload = relation.requested_source_ty_payload,
                 .intrinsic = proc_use.procedure.intrinsic,
                 .iterator_procedure = proc_use.procedure.iterator_procedure,
-                .low_level = proc_use.procedure.low_level,
                 .runtime_result_provenance = proc_use.procedure.runtime_result_provenance,
             },
             .root_evidence = .{
@@ -25681,7 +25661,6 @@ fn platformRequiredProcedureUse(
         .source_fn_ty_payload = null,
         .intrinsic = null,
         .iterator_procedure = exported_binding.iterator_procedure,
-        .low_level = exported_binding.low_level,
         .runtime_result_provenance = exported_binding.runtime_result_provenance,
     };
 }
@@ -28695,7 +28674,6 @@ test "ExportedProcedureBindingTable: serialize/relocate preserves rows and closu
         .body = .{ .callable_eval_template = @enumFromInt(3) },
         .intrinsic = .str_inspect,
         .iterator_procedure = .iter_map,
-        .low_level = .list_len,
         .runtime_result_provenance = .list_element_read,
         .template_closure = stored,
     });
@@ -28709,7 +28687,6 @@ test "ExportedProcedureBindingTable: serialize/relocate preserves rows and closu
     try std.testing.expectEqual(@as(usize, 1), rt.loaded.bindings.len);
     try std.testing.expectEqual(IntrinsicId.str_inspect, rt.loaded.bindings[0].intrinsic.?);
     try std.testing.expectEqual(IteratorProcedureId.iter_map, rt.loaded.bindings[0].iterator_procedure.?);
-    try std.testing.expectEqual(base.LowLevel.list_len, rt.loaded.bindings[0].low_level.?);
     try std.testing.expectEqual(
         RuntimeResultProvenance.list_element_read,
         rt.loaded.bindings[0].runtime_result_provenance.?,
@@ -28737,7 +28714,6 @@ test "platform relation procedure use preserves exported runtime result provenan
         },
         .source_scheme = .{},
         .body = .{ .callable_eval_template = @enumFromInt(4) },
-        .low_level = .list_get_unsafe,
         .runtime_result_provenance = .list_element_read,
     };
     const app_value = TopLevelValueEntry{
@@ -28795,7 +28771,6 @@ test "platform relation procedure use preserves exported runtime result provenan
         RuntimeResultProvenance.list_element_read,
         loaded_procedure.runtime_result_provenance.?,
     );
-    try std.testing.expectEqual(base.LowLevel.list_get_unsafe, loaded_procedure.low_level.?);
 }
 
 /// Public `appendImportedTemplateClosureArtifactKeys` function.
@@ -30800,7 +30775,6 @@ pub const ImportedProcedureBindingView = struct {
     body: ImportedProcedureBindingBody,
     intrinsic: ?IntrinsicId = null,
     iterator_procedure: ?IteratorProcedureId = null,
-    low_level: ?base.LowLevel = null,
     runtime_result_provenance: ?RuntimeResultProvenance,
     template_closure: StoredImportedTemplateClosure = .{},
 };
@@ -30937,7 +30911,6 @@ pub const ExportedProcedureBindingTable = struct {
                 .body = body,
                 .intrinsic = intrinsicForProcedureDef(module, def_idx),
                 .iterator_procedure = iteratorProcedureForDef(module, def_idx),
-                .low_level = lowLevelForProcedureDef(module, def_idx),
                 .runtime_result_provenance = runtimeResultProvenanceForProcedureDef(module, def_idx),
                 .template_closure = stored_closure,
             });
@@ -38817,8 +38790,8 @@ test "SERIALIZED_VERSION_HASH golden value" {
     // `serialized_layout_version` only for semantic changes the structural hash
     // cannot observe, as documented at that discriminant.
     const golden: [32]u8 = .{
-        0x0F, 0x30, 0x5D, 0x08, 0xFE, 0xAC, 0xAA, 0x3F, 0x81, 0x0B, 0x7F, 0xD7, 0xF0, 0x22, 0xAF, 0xF7,
-        0xB9, 0xC1, 0x7F, 0xFE, 0x61, 0xF4, 0x9D, 0xFA, 0xA5, 0x83, 0x6E, 0x83, 0x66, 0x58, 0xC3, 0x9E,
+        0xA7, 0xC4, 0xC1, 0xF5, 0x26, 0xD1, 0x49, 0xCB, 0x2E, 0x9B, 0x9E, 0x91, 0x8E, 0x15, 0x90, 0x62,
+        0x5C, 0xF4, 0x39, 0xE3, 0xA3, 0x1B, 0x38, 0xE1, 0x73, 0x6E, 0x3D, 0xF5, 0x35, 0x52, 0x16, 0x42,
     };
     try std.testing.expectEqualSlices(u8, &golden, &CheckedModuleArtifact.SERIALIZED_VERSION_HASH);
 }

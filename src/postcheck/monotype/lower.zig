@@ -25913,25 +25913,6 @@ const BodyContext = struct {
         return if (intrinsic.callsiteArity() != null) intrinsic else null;
     }
 
-    /// The low-level operation implementing a direct call's resolved
-    /// procedure target, when the producer recorded one. Such a call lowers to
-    /// the operation itself and never requests a procedure specialization.
-    fn lowLevelForResolvedTarget(self: *BodyContext, target: checked.ResolvedValueId) ?can.CIR.Expr.LowLevel {
-        const raw = @intFromEnum(target);
-        if (raw >= self.view.resolved_refs.records.len) {
-            Common.invariant("checked direct call target is outside resolved value table");
-        }
-        return switch (self.view.resolved_refs.records[raw].ref) {
-            .top_level_proc,
-            .imported_proc,
-            .hosted_proc,
-            .promoted_top_level_proc,
-            => |proc| proc.low_level,
-            .platform_required_proc => |proc| proc.procedure.low_level,
-            .local_param, .local_value, .local_mutable_version, .pattern_binder, .local_proc, .selected_hoisted_const, .top_level_const, .imported_const, .platform_required_declaration, .platform_required_checked_error, .platform_required_const => null,
-        };
-    }
-
     fn lowerFieldNamesRenameFieldNames(
         self: *BodyContext,
         args: []const checked.CheckedExprId,
@@ -32676,15 +32657,6 @@ const BodyContext = struct {
             if (try self.lowerDirectCallWithUninhabitedArgument(call.args, fn_nodes)) |lowered| return lowered;
             if (iterator_procedure) |procedure| {
                 if (try self.lowerGeneratedIteratorNextCall(procedure, call.args, fn_nodes)) |lowered| return lowered;
-            }
-            if (self.lowLevelForResolvedTarget(target)) |op| {
-                return .{
-                    .ret_ty = DraftTypeCell.fromGraphNode(fn_nodes.ret),
-                    .data = .{ .low_level = .{
-                        .op = op,
-                        .args = try self.lowerPreparedExprSpanAtNodes(call.args, fn_nodes.args),
-                    } },
-                };
             }
             const source_fn_key = self.view.types.rootKey(source_fn_ty);
             if (self.resolvedTargetIsStrInspect(target)) {
@@ -40892,7 +40864,7 @@ const BodyContext = struct {
         self.builder.countBodyDiagnostic("dispatch_expressions");
         const plan_id = maybe_plan orelse Common.invariant("checked dispatch expression reached Monotype without a dispatch plan");
         const plan = self.view.static_dispatch_plans.plans[@intFromEnum(plan_id)];
-        var low_level_target: ?can.CIR.Expr.LowLevel = null;
+        var direct_parametric_low_level: ?can.CIR.Expr.LowLevel = null;
         const direct_graph_call = self.dispatchUsesDirectGraphCallee(plan);
         switch (plan.resolution) {
             .direct_closed => |direct| {
@@ -40922,7 +40894,7 @@ const BodyContext = struct {
                 const node = self.view.static_dispatch_plans.evidenceNode(direct.evidence);
                 switch (node.target.kind) {
                     .procedure => |procedure| switch (procedure.runtime_target) {
-                        .low_level => |op| low_level_target = op,
+                        .low_level => |op| direct_parametric_low_level = op,
                         .procedure => {},
                         .intrinsic, .graph_participating => {},
                     },
@@ -40965,26 +40937,10 @@ const BodyContext = struct {
         );
         const resolution = self.evidenceResolution(plan) orelse
             Common.invariant("runtime method call had no CheckedCallResolution evidence");
-        // A target that the specialization's evidence resolves to a low-level
-        // operation lowers to that operation directly, exactly as a parametric
-        // direct call does: the operation takes its argument types from the
-        // call, so the builtin's template is never instantiated for it.
-        if (low_level_target == null) {
-            switch (resolution) {
-                .target => |lookup| switch (lookup.target.kind) {
-                    .procedure => |procedure| switch (procedure.runtime_target) {
-                        .low_level => |op| low_level_target = op,
-                        .procedure, .intrinsic, .graph_participating => {},
-                    },
-                    .local_proc, .structural => {},
-                },
-                .structural => {},
-            }
-        }
         switch (resolution) {
             .target => |initial_lookup| {
                 const relation_lookup = initial_lookup;
-                if (low_level_target == null and !direct_graph_call) {
+                if (direct_parametric_low_level == null and !direct_graph_call) {
                     const target_node = try self.methodTargetNodeFromPlan(relation_lookup, &call_ctx, plan.callable_ty);
                     try self.relateDispatchTargetRequestInterface(relation_lookup, target_node, callable_node);
                     if (try self.generatedIteratorMethodRequestNode(
@@ -41099,7 +41055,7 @@ const BodyContext = struct {
         else
             try self.lowerTypeNode(checked_ret_ty);
         _ = try checkedMonoRequestNode(self.graph, checked_result_node, plan_ret_node, .exact);
-        if (low_level_target) |op| {
+        if (direct_parametric_low_level) |op| {
             const args = try self.lowerDispatchOperandsAtNodes(
                 plan_args,
                 callable_graph.args,

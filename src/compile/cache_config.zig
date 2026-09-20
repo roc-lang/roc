@@ -206,9 +206,7 @@ pub const Constants = struct {
     ///     Scheme-use records distinguish per-use where-method signature
     ///     copies from evidence-bearing instantiations, and checked dispatch
     ///     plans retain independent-callable/nested-evidence-reuse flags.
-    /// 96: Procedure-use records and exported procedure bindings carry the
-    ///     low-level operation implementing a builtin procedure.
-    pub const CACHE_VERSION = 96;
+    pub const CACHE_VERSION = 95;
 };
 
 /// Configuration for the Roc cache system.
