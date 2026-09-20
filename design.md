@@ -11896,6 +11896,15 @@ lifetime and is not the shared-memory IPC transport.
 
 ### Layout Selection
 
+Recursive layout commitment interns unrolled copies of recursive nodes
+before selecting boxed slots. Once a recursive component has exact structural
+keys, its nodes also record their one-step encodings with settled child digests.
+An acyclic node with that same encoding inherits the recursive node's key and
+representation. Thus an unrolled record and its recursive counterpart commit
+the same field storage; graph sharing cannot make one inline and the other
+boxed. Procedure reuse by solved type identity consumes this consistent layout
+commitment.
+
 Layout selection is the first stage that chooses runtime encodings:
 
 - struct field order
