@@ -8733,7 +8733,7 @@ Lexical environments have independent versions over lane-confined indexed
 storage. Forking an environment copies no inherited bindings. Reads use the
 active direct index; switching retained versions undoes and replays only the
 changes between them, preserving each version's iteration order. Sibling match
-contexts remain independent across relation production, binder projection,
+contexts remain independent across relation production, binder reads,
 result selection, body emission, and pattern emission. Parent mutation after a
 fork never changes a child's inherited bindings. These versions cover runtime
 binders, typed binders, local-procedure contexts, and completed checked-type
@@ -8742,7 +8742,7 @@ exact instantiation scope and are never inherited. Fresh instantiation scopes,
 field-kind scope routing, shared graph relations, and relation order are
 unchanged by environment storage.
 
-Writes reserve their allocation-free cleanup change before publishing a binding.
+Writes reserve their allocation-free cleanup change before recording a binding.
 Restoring a temporary binding records its exact prior value without allocating,
 including when another retained version still observes the temporary value.
 Only live bindings are enumerated; neither first insertion nor a fork initializes
