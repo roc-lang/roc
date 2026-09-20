@@ -5194,6 +5194,21 @@ pub fn build(b: *std.Build) void {
         build_wasm_on_drop_dev_app.step.dependOn(build_test_hosts_step);
         build_test_wasm_static_lib_runner_step.dependOn(&build_wasm_on_drop_dev_app.step);
 
+        // A nominal tag union carrying `Box({})`, a box of a zero-sized
+        // payload, as the payload of a multi-variant tag union matched at a
+        // runtime value. The dev wasm backend must emit a module that
+        // validates and runs (#11455).
+        const build_wasm_issue_11455_app = b.addRunArtifact(roc_exe);
+        build_wasm_issue_11455_app.addArgs(&.{
+            "build",
+            "test/wasm/issue_11455_boxed_zst_nominal_payload_static_lib_app.roc",
+            "--opt=dev",
+            "--target=wasm32",
+            "--output=test/wasm/issue_11455_boxed_zst_nominal_payload_static_lib_app.wasm",
+        });
+        build_wasm_issue_11455_app.step.dependOn(build_test_hosts_step);
+        build_test_wasm_static_lib_runner_step.dependOn(&build_wasm_issue_11455_app.step);
+
         const wasm_test_exe = b.addExecutable(.{
             .name = "wasm_static_lib_test",
             .root_module = b.createModule(.{
@@ -5506,6 +5521,16 @@ pub fn build(b: *std.Build) void {
             });
             run_wasm_on_drop_dev_test.step.dependOn(build_test_wasm_static_lib_runner_step);
             run_test_wasm_static_lib_step.dependOn(&run_wasm_on_drop_dev_test.step);
+
+            const run_wasm_issue_11455_test = b.addRunArtifact(wasm_test_exe);
+            run_wasm_issue_11455_test.addArgs(&.{
+                "--wasm-path",
+                "test/wasm/issue_11455_boxed_zst_nominal_payload_static_lib_app.wasm",
+                "--expected",
+                "{\"favoritesCount\":14}",
+            });
+            run_wasm_issue_11455_test.step.dependOn(build_test_wasm_static_lib_runner_step);
+            run_test_wasm_static_lib_step.dependOn(&run_wasm_issue_11455_test.step);
         }
         run_wasm_test.step.dependOn(build_test_wasm_static_lib_runner_step);
         run_test_wasm_static_lib_step.dependOn(&run_wasm_test.step);
