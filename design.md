@@ -11462,6 +11462,61 @@ Optional store-scoped digest diagnostics count requests outside specialization
 lookup too, and report transaction and interface replay work separately. No
 digest encoding or cache identity changes at this boundary.
 
+#### Digest Domains
+
+A Monotype type node is digested under one of three versioned domains, and the
+domain answers a different question in each:
+
+```text
+roc.monotype.type.identity.v3   full       stored-node identity (interning)
+roc.monotype.type.interface.v4  interface  specialization identity
+roc.monotype.type.equality.v3   equality   the byte form of exact equality
+```
+
+The full digest is the identity of a STORED NODE, so it records checked-side
+provenance: the originating `CheckedTypeId`, the checked tag label beside the
+runtime one, and the declared type name even when a source declaration already
+names it. That provenance survives into the const store and can re-enter the
+checked store, so the full digest must be able to tell two stored nodes apart
+by it.
+
+The interface digest is the SPECIALIZATION key, and it is a digest over
+Monotypes. It must therefore observe nothing exact equality ignores: two types
+the store calls equal must share one procedure. The three provenance fields
+above are exactly what exact equality ignores, because lowering erases the
+distinctions they record (it seals a quantified row, it picks the runtime tag
+label, it resolves the declaration), so equal Monotypes routinely disagree
+about them.
+
+Narrowing the interface digest can never merge two specializations that must
+stay apart, because every digest comparison on the reuse path is a PRE-FILTER
+in front of exact structural equality: a candidate must match on digest and
+then be confirmed by `typeEql` before it is reused. So the digest decides how
+much work the lookup does, while exact equality decides what may be reused.
+A key that observes MORE than exact equality does not make reuse safer; it only
+splits procedures that were already allowed to be one.
+
+That is not a hypothetical. The checked type store is hash-consed, but consing
+is skipped for any graph containing an identity variable, and a quantified row
+is an identity variable. So one nominal written with a quantified row and the
+same nominal written closed reach Monotype under two different
+`CheckedTypeId`s. Lowering seals the row and both become one Monotype. While
+the interface digest still encoded that id, the two spellings asked for two
+specializations of a procedure whose own type never mentioned the row.
+Version 4 of the interface domain stops encoding all three fields. It is a
+narrowing of the key, so a domain bump makes the change to specialization
+identity explicit rather than silent.
+
+None of this is a license to drop more. A nominal's `args` are encoded in every
+domain and stay discriminating; a `generated_private` backing keeps digesting
+in FULL mode inside an interface digest, because a generated backing is a
+stored type identity the generated body reads (declared field order included);
+and an alias keeps digesting opaquely rather than as its backing, so a declared
+name stays its own specialization identity. The last two are the only places
+the interface digest still observes more than exact equality does, and both are
+deliberate: narrowing them would merge procedures that must stay apart, which
+is a miscompile rather than a repair.
+
 A child digest is cached only when that child's traversal introduced no cycle
 edge. The traversal tracks a monotonically increasing cycle count rather than a
 boolean "saw a cycle": after one branch reaches a recursive ancestor, a second

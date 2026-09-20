@@ -2228,14 +2228,26 @@ pub const Store = struct {
     ///
     /// Aliases with backing compare as their backing, non-alias named types
     /// compare by named identity and arguments, and structural rows compare by
-    /// label text and ordered children. Equal full digests imply equality
-    /// here—the direction interning relies on. The converse can fail one way:
-    /// aliases digest as opaque nodes (deliberately), and the digest observes
-    /// identity fields this comparison does not (`named_type.ty`,
-    /// `tag.checked_name`, `type_name` under a `source_decl`, checked-public
-    /// backing content). Equality digests omit those provenance distinctions.
-    /// This is the authoritative check before one specialization can
-    /// reuse another.
+    /// label text and ordered children. Equal FULL digests imply equality
+    /// here—the direction interning relies on. The converse fails for the full
+    /// digest, deliberately: aliases digest as opaque nodes, and full mode also
+    /// observes checked-side provenance this comparison ignores
+    /// (`named_type.ty`, `tag.checked_name`, `type_name` under a
+    /// `source_decl`, checked-public backing content). A full digest is a
+    /// stored-node identity, so recording provenance there is correct.
+    ///
+    /// The SPECIALIZATION digest (`.identity_only`) is held to the stronger
+    /// rule instead: equality here implies equal specialization digests, so
+    /// two types this comparison calls equal always share one specialization.
+    /// It is not enough for production to "construct provenance
+    /// consistently": it does not, and cannot. The same nominal reaches
+    /// Monotype from two different `CheckedTypeId`s whenever one spelling
+    /// carried a quantified row.
+    /// The only field `.identity_only` observes beyond this comparison is
+    /// a `generated_private` backing, documented at `encodeTypeNode`.
+    ///
+    /// This is the authoritative check before one specialization can reuse
+    /// another.
     pub fn typeEql(
         self: *const Store,
         name_store: *const names.NameStore,
@@ -2651,6 +2663,21 @@ pub const Store = struct {
 
     /// Which digest question is being answered. The two modes are separate
     /// versioned domains and must never produce byte-confusable answers.
+    ///
+    /// `.identity_only` is the SPECIALIZATION key, and it is a digest over
+    /// Monotypes. It therefore may not observe anything `.equality` (the byte
+    /// form of `typeEql`) ignores: two types the store calls equal must share
+    /// one specialization. Two deliberate exceptions remain and are documented
+    /// where they are written: an alias digests opaquely instead of as its
+    /// backing (`digestType`), and a `generated_private` backing digests in
+    /// full mode whatever the enclosing mode is (`encodeTypeNode`).
+    ///
+    /// Narrowing `.identity_only` cannot merge specializations that must stay
+    /// apart. Every digest comparison on the reuse path is a PRE-FILTER in
+    /// front of exact equality (`specialize.zig`'s `localViewMatches` and
+    /// `localCodecContractMatches` both confirm a digest match with
+    /// `typeEql`), so the digest decides how much work a lookup does while
+    /// exact equality decides what may be reused.
     const NamedDigestMode = enum {
         full,
         identity_only,
@@ -2660,10 +2687,14 @@ pub const Store = struct {
     /// Versioned digest-domain prefix written at the start of every node
     /// encoding. Changing a domain or encoding detail changes specialization
     /// identity.
+    ///
+    /// `interface.v4` (from `v3`) dropped the three checked-provenance fields
+    /// `.equality` does not observe (`named_type.ty`, `tag.checked_name`, and
+    /// `type_name` under a `source_decl`) from the specialization key.
     fn digestDomain(mode: NamedDigestMode) []const u8 {
         return switch (mode) {
             .full => "roc.monotype.type.identity.v3",
-            .identity_only => "roc.monotype.type.interface.v3",
+            .identity_only => "roc.monotype.type.interface.v4",
             .equality => "roc.monotype.type.equality.v3",
         };
     }
@@ -2775,6 +2806,15 @@ pub const Store = struct {
         }
     }
 
+    /// Which node a digest request actually digests. Only `.equality` walks an
+    /// alias through to its backing, matching `typeViewEqlInner`; the other two
+    /// modes digest an alias opaquely.
+    ///
+    /// This is the second deliberate place `.identity_only` observes more than
+    /// exact equality does (see `NamedDigestMode`): an alias and its backing
+    /// are one Monotype to `typeEql` but two specialization keys. It is left
+    /// as it is because an alias is a declared name that specialization treats
+    /// as its own identity, not because the distinction is free.
     fn digestType(self: *const Store, raw_ty: TypeId, mode: NamedDigestMode) TypeId {
         if (mode != .equality) return raw_ty;
         var ty = raw_ty;
@@ -2840,12 +2880,29 @@ pub const Store = struct {
     /// `sink.child`.
     ///
     /// Aliases are opaque named nodes rather than digesting as their backing.
-    /// `def.type_name` text is always hashed (also when `source_decl` is
-    /// present), `named_type.ty` is hashed because it survives into
-    /// `ConstStore`, and `tag.checked_name` is hashed in addition to
-    /// `tag.name`. The interface mode omits exactly declared field order and
-    /// checked-public backing details; backing children always digest in full
-    /// mode because a backing is a stored type identity, not an interface.
+    ///
+    /// Three fields are CHECKED-SIDE PROVENANCE: `named_type.ty` (the
+    /// pre-lowering `CheckedTypeId`), `tag.checked_name`, and `def.type_name`
+    /// once a `source_decl` already names the declaration. Full mode hashes
+    /// all three because a full digest is a stored-node identity that survives
+    /// into `ConstStore` and must be able to re-enter the checked store.
+    /// Neither `.identity_only` nor `.equality` hashes them: lowering erases
+    /// the distinctions they record (it seals a quantified row, it picks the
+    /// runtime tag label, it resolves the declaration), so two Monotypes that
+    /// `typeEql` calls equal can still carry different values for them, and a
+    /// specialization key that observed them would split one procedure in two.
+    /// That is not hypothetical: the checked type store skips hash-consing for
+    /// any graph that contains an identity variable, and a quantified row is
+    /// one, so the same nominal spelled with a quantified row and with a closed
+    /// row gets two `CheckedTypeId`s.
+    ///
+    /// `.identity_only` also omits declared field order and checked-public
+    /// backing details. It stays STRICTER than `.equality` in exactly one place
+    /// here: a `generated_private` backing, whose child digests in full mode in
+    /// every enclosing mode. A generated backing is a stored type identity that
+    /// the generated body reads (declared field order included), so narrowing
+    /// it to the interface would weaken specialization identity rather than
+    /// repair it. (`digestType` holds the other such place, aliases.)
     fn encodeTypeNode(
         self: *const Store,
         name_store: *const names.NameStore,
@@ -2862,10 +2919,10 @@ pub const Store = struct {
             .named => |named| {
                 try sink.writeBytes("named");
                 try sink.writeBytes(&named.named_type.module.bytes);
-                if (mode != .equality) try sink.writeU32(@intFromEnum(named.named_type.ty));
+                if (mode == .full) try sink.writeU32(@intFromEnum(named.named_type.ty));
                 try sink.writeBytes(name_store.moduleIdentityBytes(named.def.module));
                 try sinkOptionalU32(sink, named.def.source_decl);
-                if (mode != .equality or named.def.source_decl == null) {
+                if (mode == .full or named.def.source_decl == null) {
                     try sink.writeBytes(name_store.typeNameText(named.def.type_name));
                 }
                 try sinkOptionalDigest(sink, named.def.generated);
@@ -2932,7 +2989,7 @@ pub const Store = struct {
                 for (0..tag_slice.len) |index| {
                     const tag = GuardedList.at(tag_slice, index);
                     try sink.writeBytes(name_store.tagLabelText(tag.name));
-                    if (mode != .equality) try sink.writeBytes(name_store.tagLabelText(tag.checked_name));
+                    if (mode == .full) try sink.writeBytes(name_store.tagLabelText(tag.checked_name));
                     try self.encodeTypeSpan(sink, tag.payloads, mode);
                 }
             },
@@ -6010,7 +6067,12 @@ test "monotype digest keeps entangled equivalent knots conservatively distinct" 
     try std.testing.expectEqualSlices(u8, b1_digest.bytes[0..], b1_again.bytes[0..]);
 }
 
-test "monotype digest separates tag unions by checked name" {
+test "monotype checked tag name is stored identity, not specialization identity" {
+    // A checked tag label is checked-side provenance: `typeEql` compares only
+    // the RUNTIME label (`tagSpanViewEql`). The full digest keeps the checked
+    // label because a full digest is a stored-node identity; the
+    // specialization digest must not, or the two tag unions below would be one
+    // Monotype asking for two procedures.
     var name_store = names.NameStore.init(std.testing.allocator);
     defer name_store.deinit();
 
@@ -6028,12 +6090,14 @@ test "monotype digest separates tag unions by checked name" {
         .{ .name = runtime_name, .checked_name = second_checked, .payloads = Span.empty() },
     }) });
 
+    try std.testing.expect(try store.typeEql(&name_store, first, second));
+
     const first_digest = store.typeDigest(&name_store, first);
     const second_digest = store.typeDigest(&name_store, second);
     try std.testing.expect(!std.mem.eql(u8, first_digest.bytes[0..], second_digest.bytes[0..]));
     const first_spec = store.specializationDigest(&name_store, first);
     const second_spec = store.specializationDigest(&name_store, second);
-    try std.testing.expect(!std.mem.eql(u8, first_spec.bytes[0..], second_spec.bytes[0..]));
+    try std.testing.expectEqualSlices(u8, first_spec.bytes[0..], second_spec.bytes[0..]);
 }
 
 test "monotype equality digest caches alias queries without rehashing their backing" {
@@ -6074,9 +6138,15 @@ test "monotype equality digest caches alias queries without rehashing their back
     try std.testing.expectEqual(@as(u64, 0), warm.cache_misses);
 }
 
-test "monotype digest separates named types by checked type id" {
-    // `named_type.ty` survives into `ConstStore` and is later used to
-    // re-enter the checked store, so it is part of the identity.
+test "monotype checked type id is stored identity, not specialization identity" {
+    // `named_type.ty` survives into `ConstStore` and is later used to re-enter
+    // the checked store, so the FULL digest keeps it. It is also the field
+    // that split one `rename_field` procedure in two: the checked store skips
+    // hash-consing for a graph containing an identity variable, so the same
+    // nominal spelled with a quantified row and with a closed row arrives at
+    // Monotype under two `CheckedTypeId`s. Lowering then seals the row and
+    // both become ONE Monotype, which `typeEql` confirms below, so the
+    // specialization digest may not keep it.
     var name_store = names.NameStore.init(std.testing.allocator);
     defer name_store.deinit();
 
@@ -6099,9 +6169,122 @@ test "monotype digest separates named types by checked type id" {
         .args = Span.empty(),
     } });
 
+    try std.testing.expect(try store.typeEql(&name_store, first, second));
+
     const first_digest = store.typeDigest(&name_store, first);
     const second_digest = store.typeDigest(&name_store, second);
     try std.testing.expect(!std.mem.eql(u8, first_digest.bytes[0..], second_digest.bytes[0..]));
+    const first_spec = store.specializationDigest(&name_store, first);
+    const second_spec = store.specializationDigest(&name_store, second);
+    try std.testing.expectEqualSlices(u8, first_spec.bytes[0..], second_spec.bytes[0..]);
+}
+
+test "monotype declared type name under a source decl is not specialization identity" {
+    // The third field of the same class. Once `source_decl` names the
+    // declaration, `namedTypeViewEql` stops comparing `type_name` text, so the
+    // specialization digest must stop observing it too.
+    var name_store = names.NameStore.init(std.testing.allocator);
+    defer name_store.deinit();
+
+    var store = Store.init(std.testing.allocator);
+    defer store.deinit();
+
+    const module_identity = try name_store.internModuleIdentity(&([_]u8{0xCD} ** 32));
+    const first_name = try name_store.internTypeName("FirstSpelling");
+    const second_name = try name_store.internTypeName("SecondSpelling");
+
+    const first = try store.add(.{ .named = .{
+        .named_type = .{ .module = .{}, .ty = @enumFromInt(1) },
+        .def = .{ .module = module_identity, .type_name = first_name, .source_decl = 7 },
+        .kind = .nominal,
+        .args = Span.empty(),
+    } });
+    const second = try store.add(.{ .named = .{
+        .named_type = .{ .module = .{}, .ty = @enumFromInt(1) },
+        .def = .{ .module = module_identity, .type_name = second_name, .source_decl = 7 },
+        .kind = .nominal,
+        .args = Span.empty(),
+    } });
+
+    try std.testing.expect(try store.typeEql(&name_store, first, second));
+
+    const first_digest = store.typeDigest(&name_store, first);
+    const second_digest = store.typeDigest(&name_store, second);
+    try std.testing.expect(!std.mem.eql(u8, first_digest.bytes[0..], second_digest.bytes[0..]));
+    const first_spec = store.specializationDigest(&name_store, first);
+    const second_spec = store.specializationDigest(&name_store, second);
+    try std.testing.expectEqualSlices(u8, first_spec.bytes[0..], second_spec.bytes[0..]);
+}
+
+test "monotype declared type name without a source decl stays specialization identity" {
+    // The guard's other half. With no `source_decl`, `namedTypeViewEql` DOES
+    // compare the name text, so the specialization digest must keep observing
+    // it. Narrowing the whole guard to full mode would have dropped this and
+    // merged two genuinely different nominals.
+    var name_store = names.NameStore.init(std.testing.allocator);
+    defer name_store.deinit();
+
+    var store = Store.init(std.testing.allocator);
+    defer store.deinit();
+
+    const module_identity = try name_store.internModuleIdentity(&([_]u8{0xCD} ** 32));
+    const first_name = try name_store.internTypeName("FirstSpelling");
+    const second_name = try name_store.internTypeName("SecondSpelling");
+
+    const first = try store.add(.{ .named = .{
+        .named_type = .{ .module = .{}, .ty = @enumFromInt(1) },
+        .def = .{ .module = module_identity, .type_name = first_name },
+        .kind = .nominal,
+        .args = Span.empty(),
+    } });
+    const second = try store.add(.{ .named = .{
+        .named_type = .{ .module = .{}, .ty = @enumFromInt(1) },
+        .def = .{ .module = module_identity, .type_name = second_name },
+        .kind = .nominal,
+        .args = Span.empty(),
+    } });
+
+    try std.testing.expect(!try store.typeEql(&name_store, first, second));
+
+    const first_spec = store.specializationDigest(&name_store, first);
+    const second_spec = store.specializationDigest(&name_store, second);
+    try std.testing.expect(!std.mem.eql(u8, first_spec.bytes[0..], second_spec.bytes[0..]));
+}
+
+test "monotype specialization digest still separates named types by arguments" {
+    // FALSIFICATION GATE for the `interface.v4` narrowing, at the digest
+    // level. `args` are encoded in EVERY mode, and for a nominal whose backing
+    // is not generated they are the only thing separating two instantiations
+    // of one declaration. If dropping checked provenance ever took this pair
+    // with it, generic code would collapse to a single procedure at two
+    // different argument types, which is a miscompile rather than a repair.
+    var name_store = names.NameStore.init(std.testing.allocator);
+    defer name_store.deinit();
+
+    var store = Store.init(std.testing.allocator);
+    defer store.deinit();
+
+    const module_identity = try name_store.internModuleIdentity(&([_]u8{0xEF} ** 32));
+    const type_name = try name_store.internTypeName("Holder");
+    const str = try store.add(.{ .primitive = .str });
+    const int = try store.add(.{ .primitive = .i64 });
+
+    // Same `named_type.ty`, same module, same declaration: only `args` differ.
+    const first = try store.add(.{ .named = .{
+        .named_type = .{ .module = .{}, .ty = @enumFromInt(3) },
+        .def = .{ .module = module_identity, .type_name = type_name, .source_decl = 11 },
+        .kind = .nominal,
+        .args = try store.addSpan(&.{str}),
+    } });
+    const second = try store.add(.{ .named = .{
+        .named_type = .{ .module = .{}, .ty = @enumFromInt(3) },
+        .def = .{ .module = module_identity, .type_name = type_name, .source_decl = 11 },
+        .kind = .nominal,
+        .args = try store.addSpan(&.{int}),
+    } });
+
+    try std.testing.expect(!try store.typeEql(&name_store, first, second));
+
     const first_spec = store.specializationDigest(&name_store, first);
     const second_spec = store.specializationDigest(&name_store, second);
     try std.testing.expect(!std.mem.eql(u8, first_spec.bytes[0..], second_spec.bytes[0..]));
@@ -6496,10 +6679,14 @@ test "monotype digest byte fixtures preserve scalar and recursive encodings" {
         .backing = .{ .ty = record, .use = .inspectable },
     } });
     const function = try store.add(.{ .func = .{ .args = try store.addSpan(&.{ tree, scalar, list }), .ret = record } });
-    // Digests captured on main after the v3 format change, before scalar-byte reuse.
+    // Digests captured on main after the v3 format change, before scalar-byte
+    // reuse. The INTERFACE fixture was re-captured for `interface.v4`, which
+    // stopped the specialization digest observing `named_type.ty` (17 here).
+    // The full and equality fixtures are unchanged, which is the check that
+    // the narrowing reached only the specialization domain.
     const expected = [_][]const u8{
         "1df6f2a1d02b6dfbe99e3aa18c8d0cc4084570de26f69072ec8bf1c621dc948c",
-        "8732a616baee8db689c7952a5f23672cd0c1316d16c2a7f6e5a0f0803682dbdb",
+        "a911f76d419c2781fbad12875b7ca03ebe347eb62120d331b1ab2b36344043dc",
         "51999cf46a730a706829bbdcb8d7dfab9c4457ddf5d8ea11d297e896f4a3cafb",
     };
     for ([_]Store.NamedDigestMode{ .full, .identity_only, .equality }, expected) |mode, hex| {

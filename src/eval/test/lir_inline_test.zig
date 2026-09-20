@@ -11582,6 +11582,81 @@ test "stored codec restore emits the same Monotype shape from Phase B" {
     try std.testing.expectEqual(@as(u64, 0), stats.nested_misses);
 }
 
+/// `stored_parser_gate_source` with the stored constant's error row written
+/// OPEN. An explicitly opened row is quantified whatever the value-binding
+/// generalization rules say about an implicitly opened one, so this spelling
+/// reaches the identity-variable path on its own.
+///
+/// The checked type store skips hash-consing for a graph containing an
+/// identity variable, so `Try(…)` over the quantified row got a different
+/// `CheckedTypeId` from the same `Try(…)` written closed. Lowering seals the
+/// row and both become one Monotype, but while the specialization digest still
+/// encoded that id, this program emitted ELEVEN procedures where the closed
+/// spelling emitted ten, splitting `rename_field : Format, Str -> Str`, whose
+/// own type never mentions the row. This probe is the direct gate on that
+/// defect; it is independent of how any binding came to be generalized.
+const stored_parser_open_error_row_gate_source =
+    \\Format := [Default].{
+    \\    rename_field : Format, Str -> Str
+    \\    rename_field = |_, name| name
+    \\
+    \\    parse_str : Format, State -> Try({ value : Str, rest : State }, [FormatError])
+    \\    parse_str = |_, state|
+    \\        match state {
+    \\            Present(value) => Ok({ value, rest: Done })
+    \\            Done => Err(FormatError)
+    \\        }
+    \\
+    \\    parse_record_start : Format, State -> Try([Counted({ len : U64, rest : State }), Uncounted(State)], [FormatError])
+    \\    parse_record_start = |_, state| Ok(Uncounted(state))
+    \\
+    \\    parse_record_field : Format,
+    \\    Encoding.FieldName.FieldNames(_shape),
+    \\    State -> Try(
+    \\        [
+    \\            Field({ field : Encoding.FieldName(_shape), rest : State }),
+    \\            TryField({ name : Str, rest : State }),
+    \\            TryFieldCaseless({ name : Str, rest : State }),
+    \\            Continue(State),
+    \\            Done(State),
+    \\        ],
+    \\        [FormatError],
+    \\    )
+    \\    parse_record_field = |_, _, state|
+    \\        match state {
+    \\            Present(_) => Ok(TryField({ name: "foo", rest: state }))
+    \\            Done => Ok(Done(state))
+    \\        }
+    \\
+    \\    parse_record_after_field : Format, State -> Try([Continue(State), Done(State)], [FormatError])
+    \\    parse_record_after_field = |_, state| Ok(Continue(state))
+    \\
+    \\    skip_record_field : Format, State -> Try(State, [FormatError])
+    \\    skip_record_field = |_, _| Ok(Done)
+    \\}
+    \\
+    \\State := [Present(Str), Done]
+    \\
+    \\parse_stored : State -> Try({ value : { foo : Str }, rest : State }, [FormatError, MissingRequiredField(Str), ..])
+    \\parse_stored = {
+    \\    Shape : { foo : Str }
+    \\    Shape.parser_for(Format.Default)
+    \\}
+    \\
+    \\main : State -> Try({ value : { foo : Str }, rest : State }, [FormatError, MissingRequiredField(Str)])
+    \\main = |state| parse_stored(state)
+;
+
+test "stored codec restore does not split on an open error row" {
+    // Same procedure count as the closed spelling above. How the constant's
+    // error row was written is a CHECKED-side distinction that lowering erases
+    // by sealing the row, so it must not reach specialization identity.
+    const allocator = std.testing.allocator;
+    const stats = try structuralJsonMonotypeStatsForSource(allocator, stored_parser_open_error_row_gate_source);
+    try std.testing.expectEqual(@as(usize, 10), stats.functions);
+    try std.testing.expectEqual(@as(usize, 11), stats.definitions);
+}
+
 /// `stored_parser_gate_source` over a shape whose field KIND is decided at the
 /// freeze (`bar ?: Str`). This program panicked while the restore was still
 /// eager ("resolved Monotype view requested for an unresolved instantiation
@@ -11941,4 +12016,100 @@ test "provenance: an overflow inside a TCE loop reports the overflowing line" {
         return;
     };
     return error.TestUnexpectedResult;
+}
+
+/// Falsification pair for the `roc.monotype.type.interface.v4` narrowing, which
+/// stopped the specialization digest from observing checked-side provenance
+/// that lowering erases (`monotype/type.zig` `encodeTypeNode`).
+///
+/// `Holder(a).describe` dispatches on its argument, so `Holder(Marker)` and
+/// `Holder(Other)` MUST stay two specializations. The two nominals are both
+/// zero-sized single-tag unions, so no layout difference can re-split them
+/// downstream: the only thing separating the two requests is the `args` span of
+/// the `named` node, whose `def` is identical in both. `args` are encoded in
+/// every digest mode and must stay discriminating. Collapsing this pair would
+/// make one of the two `expect`s print the other's answer.
+///
+/// The base program calls `describe` twice at the SAME nominal argument, so
+/// both programs lower both `label` impls and both call `describe` twice; the
+/// only difference is the nominal in the final call.
+const nominal_arg_specialization_base_source =
+    \\Marker := [M].{
+    \\    label : Marker -> Str
+    \\    label = |_| "marker"
+    \\}
+    \\
+    \\Other := [O].{
+    \\    label : Other -> Str
+    \\    label = |_| "other"
+    \\}
+    \\
+    \\Holder(a) := [H(a)].{
+    \\    describe : Holder(a) -> Str where [a.label : a -> Str]
+    \\    describe = |h| match h { H(inner) => inner.label() }
+    \\}
+    \\
+    \\expect Marker.M.label() == "marker"
+    \\expect Other.O.label() == "other"
+    \\expect Holder.H(Marker.M).describe() == "marker"
+    \\expect Holder.H(Marker.M).describe() == "marker"
+    \\
+    \\main = 0
+;
+
+/// `nominal_arg_specialization_base_source` with the last call moved to the
+/// other nominal argument.
+const nominal_arg_specialization_split_source =
+    \\Marker := [M].{
+    \\    label : Marker -> Str
+    \\    label = |_| "marker"
+    \\}
+    \\
+    \\Other := [O].{
+    \\    label : Other -> Str
+    \\    label = |_| "other"
+    \\}
+    \\
+    \\Holder(a) := [H(a)].{
+    \\    describe : Holder(a) -> Str where [a.label : a -> Str]
+    \\    describe = |h| match h { H(inner) => inner.label() }
+    \\}
+    \\
+    \\expect Marker.M.label() == "marker"
+    \\expect Other.O.label() == "other"
+    \\expect Holder.H(Marker.M).describe() == "marker"
+    \\expect Holder.H(Other.O).describe() == "other"
+    \\
+    \\main = 0
+;
+
+test "nominal arguments still split a specialization after the interface.v4 narrowing" {
+    const allocator = std.testing.allocator;
+
+    var one_nominal = try lowerMonotypeModuleWithOptions(allocator, nominal_arg_specialization_base_source, .{
+        .root_selection = .test_expects,
+    });
+    defer one_nominal.deinit(allocator);
+
+    var two_nominals = try lowerMonotypeModuleWithOptions(allocator, nominal_arg_specialization_split_source, .{
+        .root_selection = .test_expects,
+    });
+    defer two_nominals.deinit(allocator);
+
+    // Measured 2026-09-20. The two programs differ only in the nominal
+    // argument of the last call, so every procedure the second one adds is
+    // attributable to that argument: `describe` at `Holder(Other)` and the
+    // `label` impl its where-clause dispatch reaches.
+    try std.testing.expectEqual(@as(usize, 4), one_nominal.mono.view().fns.len);
+    try std.testing.expectEqual(@as(usize, 6), two_nominals.mono.view().fns.len);
+
+    // The load-bearing assertion, and the reason this test exists: the second
+    // nominal argument must buy procedures at all. If the specialization
+    // digest ever stops observing `args`, `Holder(Marker)` and `Holder(Other)`
+    // key one specialization, both counts match, and one of the two `expect`s
+    // gets the other's answer. That is a miscompile, not an over-specialization
+    // win, so a change that flattens this pair must be reverted rather than
+    // re-measured.
+    try std.testing.expect(two_nominals.mono.view().fns.len > one_nominal.mono.view().fns.len);
+    try std.testing.expect(two_nominals.mono.view().specs.len > one_nominal.mono.view().specs.len);
 }
