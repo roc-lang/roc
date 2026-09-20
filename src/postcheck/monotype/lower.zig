@@ -734,6 +734,12 @@ fn verifyMonotypeSpecsReady(program: *const Ast.Program) void {
     }
 }
 
+const ModuleIndexSlot = union(enum) {
+    root,
+    import: u32,
+    relation: u32,
+};
+
 const ModuleView = struct {
     key: checked.ModuleId,
     module_env: *const can.ModuleEnv,
@@ -3458,6 +3464,9 @@ const Builder = struct {
     spec_job_run_id: SpecJobRunId,
     modules: Common.CheckedModules,
     root_view: checked.ImportedModuleView,
+    /// Checked module key -> position in the lowering input; built lazily on
+    /// first lookup (see `buildModuleIndex`).
+    module_index: std.AutoHashMap([32]u8, ModuleIndexSlot),
     /// Program source-file id of every checked module in the lowering input,
     /// keyed by module index. The table is seeded once in module-name and content-identity order
     /// before any body is lowered, so the ids written into source locations
@@ -3667,6 +3676,7 @@ const Builder = struct {
             .spec_job_run_id = @enumFromInt(raw_spec_job_run_id),
             .modules = modules,
             .root_view = checked.importedView(modules.root.module),
+            .module_index = std.AutoHashMap([32]u8, ModuleIndexSlot).init(allocator),
             .source_file_ids = std.AutoHashMap(u32, u32).init(allocator),
             .program = program,
             .current_loc = program.current_loc,
@@ -3875,6 +3885,7 @@ const Builder = struct {
     fn deinit(self: *Builder) void {
         self.source_file_ids.deinit();
         self.declared_comptime_root_functions.deinit();
+        self.module_index.deinit();
         self.spec_job_task_buffers.deinit(self.allocator);
         if (self.spec_job_commit_domain) |*domain| domain.deinit();
         if (self.spec_job_worker) |*worker| worker.deinit();
@@ -8427,14 +8438,36 @@ const Builder = struct {
     }
 
     fn moduleForDigest(self: *Builder, module_digest: names.CheckedModuleDigest) ModuleView {
-        if (moduleBytesEqual(module_digest.bytes, self.root_view.key.bytes)) return moduleView(self.root_view);
-        for (self.modules.imports) |imported| {
-            if (moduleBytesEqual(module_digest.bytes, imported.key.bytes)) return moduleView(imported);
+        return self.moduleForKeyBytes(module_digest.bytes) orelse
+            Common.invariant("procedure template referenced a checked module that is not in the lowering input");
+    }
+
+    /// Resolve a module by its checked key. The index is built once from the
+    /// lowering input, which never changes for the builder's lifetime.
+    fn moduleForKeyBytes(self: *Builder, key: [32]u8) ?ModuleView {
+        if (self.module_index.count() == 0) self.buildModuleIndex();
+        const slot = self.module_index.get(key) orelse return null;
+        return switch (slot) {
+            .root => moduleView(self.root_view),
+            .import => |index| moduleView(self.modules.imports[index]),
+            .relation => |index| moduleView(self.modules.root.relation_modules[index]),
+        };
+    }
+
+    fn buildModuleIndex(self: *Builder) void {
+        // Lookups happen on the coordinator before any worker borrows the
+        // builder, so the index is complete before it is shared.
+        self.module_index.ensureTotalCapacity(@intCast(1 + self.modules.imports.len + self.modules.root.relation_modules.len)) catch
+            Common.compilerBug("module index allocation failed");
+        // Later entries never override earlier ones so the search order of the
+        // lowering input (root, imports, relations) is preserved exactly.
+        for (self.modules.root.relation_modules, 0..) |relation, index| {
+            self.module_index.putAssumeCapacity(relation.key.bytes, .{ .relation = @intCast(index) });
         }
-        for (self.modules.root.relation_modules) |relation| {
-            if (moduleBytesEqual(module_digest.bytes, relation.key.bytes)) return moduleView(relation);
+        for (self.modules.imports, 0..) |imported, index| {
+            self.module_index.putAssumeCapacity(imported.key.bytes, .{ .import = @intCast(index) });
         }
-        Common.invariant("procedure template referenced a checked module that is not in the lowering input");
+        self.module_index.putAssumeCapacity(self.root_view.key.bytes, .root);
     }
 
     /// The module view whose content identity matches `origin_hash`, or null
@@ -8455,14 +8488,8 @@ const Builder = struct {
     }
 
     fn moduleForId(self: *Builder, module_id: checked.ModuleId) ModuleView {
-        if (moduleBytesEqual(module_id.bytes, self.root_view.key.bytes)) return moduleView(self.root_view);
-        for (self.modules.imports) |imported| {
-            if (moduleBytesEqual(module_id.bytes, imported.key.bytes)) return moduleView(imported);
-        }
-        for (self.modules.root.relation_modules) |relation| {
-            if (moduleBytesEqual(module_id.bytes, relation.key.bytes)) return moduleView(relation);
-        }
-        Common.invariant("procedure binding referenced a checked module that is not in the lowering input");
+        return self.moduleForKeyBytes(module_id.bytes) orelse
+            Common.invariant("procedure binding referenced a checked module that is not in the lowering input");
     }
 
     const NominalDeclLookup = struct {

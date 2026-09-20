@@ -154,7 +154,14 @@ const TargetFileNodeTag = enum {
 };
 
 fn narrowNodeTag(comptime T: type, tag: Node.Tag) ?T {
-    return std.meta.stringToEnum(T, @tagName(tag));
+    // Resolved per tag at compile time, so this is a jump table rather than
+    // a string lookup at runtime.
+    switch (tag) {
+        inline else => |t| {
+            if (@hasField(T, @tagName(t))) return @field(T, @tagName(t));
+            return null;
+        },
+    }
 }
 
 /// Packed optional indices store null as 0 and non-null values as value + 1.
