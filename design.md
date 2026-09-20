@@ -141,7 +141,8 @@ produces its output, including when procedure templates are extended with
 compile-time entry wrappers. Known batch sizes reserve capacity once;
 incremental appends grow amortized. Producing checked module data must not
 repeatedly copy a completed prefix, and serialization writes only live rows,
-never spare capacity.
+never spare capacity. This holds for column-per-field stores too; see
+"Fully Defined Persisted Bytes".
 
 Checked source schemes are interned by their complete structural keys. The
 owning table retains the first representative root and assigns dense scheme
@@ -2288,6 +2289,54 @@ Runtime static string layout is generated later by the target-specific static
 data emitter. The checked cache must not store native pointer-width padding,
 static refcount words, allocation headers, or any other runtime `RocStr` layout
 bytes.
+
+### Fully Defined Persisted Bytes
+
+This section governs the raw-byte boundaries: the paths that persist a value by
+copying its in-memory representation rather than encoding it field by field, which
+is how the checked module cache, the baked builtin `CheckedModule` blob, and the
+`SafeList` and `SafeMultiList` tables they hold are written. Other serialized forms
+in the compiler encode explicitly and are not bound by the rules here.
+
+Every byte such a boundary writes is a function of the logical contents alone. A
+byte no declaration accounts for holds whatever that memory held before—allocator-
+and address-layout-dependent garbage that makes otherwise identical compilations
+produce different bytes.
+
+An item type reaching a raw-byte boundary must therefore be one of two kinds,
+decided at compile time; anything else is a compile error at the boundary rather
+than a silent writer of undefined bytes:
+
+- *Fully defined*: every byte of the type's size belongs to a declared field, for
+  every value. Serialization gathers the live bytes directly, with no scratch copy
+  and no scan.
+- *Scrubbable*: undefined bytes or bits exist, but the value itself identifies
+  every one of them—a tagged union's discriminant names the live variant, an
+  optional's null bit names an empty payload, a narrow scalar's declared width
+  names its value bits. Those are canonicalized into a writer-owned copy; the
+  source is never modified, so a frozen or shared store may be serialized.
+
+A fixed layout is the author's byte map, so an `extern struct` must declare the
+bytes its alignment adds, as an explicitly zero-defaulted reserved field, and every
+variant of an `extern union` must fill the union exactly. A union whose
+discriminant lives outside it—`Node.Payload`, tagged by the sibling `Node.tag`
+column—carries nothing that could identify its own dead bytes, so a short variant
+is rejected outright rather than scrubbed. Within a fixed layout, a field that is
+itself scrubbable is still permitted; what is rejected is a gap between fields, or
+a variant that stops short.
+
+Compiler-chosen (`auto`) layouts are checked the same way rather than assumed
+safe: their inter-field gaps are scrubbable, but a member whose undefined bytes
+nothing identifies makes the whole type a compile error, exactly as a fixed layout
+would be. A checked store may keep an ergonomic in-memory shape, but not an
+unrepresentable one.
+
+Serialization never writes spare capacity. A `SafeMultiList` persists its live
+rows as `std.MultiArrayList`'s own column layout with capacity equal to length, so
+both the blob's contents and its size depend on what the list holds and not on how
+it was grown. There is one column-writing implementation behind every
+`SafeMultiList` serialization entry point, so no two entry points can drift into
+different formats for the same store.
 
 The string-literal builder must reject impossible `u32` length or content-offset
 overflow as a compiler invariant: debug builds assert or panic with the
