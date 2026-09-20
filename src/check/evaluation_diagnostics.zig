@@ -10,6 +10,7 @@ const Allocator = std.mem.Allocator;
 const ImportMapping = @import("types").import_mapping.ImportMapping;
 const ImportName = struct { qualified: base.Ident.Idx, display: base.Ident.Idx };
 
+/// Solver-independent recipe for a deferred exhaustiveness diagnostic.
 pub const Exhaustiveness = struct {
     kind: problem.Store.EmpiricalSiteKind,
     mode: problem.Store.PendingStaticExhaustivenessMode,
@@ -22,6 +23,7 @@ pub const Exhaustiveness = struct {
     reported: bool,
 };
 
+/// Serializable diagnostics and names retained until checked evaluation finishes.
 pub const Templates = struct {
     import_names: []ImportName = &.{},
     exhaustiveness: []Exhaustiveness = &.{},
@@ -39,10 +41,13 @@ pub const Templates = struct {
             out.* = .{ .start = @intCast(input.start), .len = @intCast(input.count) };
         }
         for (result.exhaustiveness, store.pending_static_exhaustiveness.items) |*out, input| {
-            const fields: struct { type_display: problem.ExtraStringIdx, missing: problem.MissingPatternsRange, empirical: bool } = switch (input.problem) {
-                .non_exhaustive_match => |value| .{ .type_display = value.condition_type, .missing = value.missing_patterns, .empirical = value.empirical },
-                .non_exhaustive_destructure => |value| .{ .type_display = value.value_type, .missing = value.missing_patterns, .empirical = value.empirical },
-                else => unreachable,
+            std.debug.assert(input.problem == .non_exhaustive_match or input.problem == .non_exhaustive_destructure);
+            const fields: struct { type_display: problem.ExtraStringIdx, missing: problem.MissingPatternsRange, empirical: bool } = if (input.problem == .non_exhaustive_match) blk: {
+                const value = input.problem.non_exhaustive_match;
+                break :blk .{ .type_display = value.condition_type, .missing = value.missing_patterns, .empirical = value.empirical };
+            } else blk: {
+                const value = input.problem.non_exhaustive_destructure;
+                break :blk .{ .type_display = value.value_type, .missing = value.missing_patterns, .empirical = value.empirical };
             };
             out.* = .{
                 .kind = input.kind,

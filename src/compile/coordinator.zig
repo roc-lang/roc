@@ -297,7 +297,7 @@ fn writeCheckedModuleCacheHeader(
     std.mem.writeInt(u64, dest[offset..][0..8], artifact_len, .little);
 }
 
-fn decodeCheckedModuleCacheEntry(
+fn decodeCheckedCacheEnvelope(
     key: check.CheckedArtifact.CheckedModuleArtifactKey,
     bytes: []const u8,
 ) ?CheckedModuleCacheBodies {
@@ -329,12 +329,17 @@ fn decodeCheckedModuleCacheEntry(
     offset += env_len;
     const artifact_body = bytes[offset..][0..artifact_len];
 
-    if (env_body.len < @sizeOf(ModuleEnv.Serialized)) return null;
-    if (artifact_body.len < @sizeOf(check.CheckedArtifact.CheckedModuleArtifact.Serialized)) return null;
     return .{
         .env_body = env_body,
         .artifact_body = artifact_body,
     };
+}
+
+fn decodeCheckedModuleCacheEntry(key: CheckedArtifact.CheckedModuleArtifactKey, bytes: []const u8) ?CheckedModuleCacheBodies {
+    const bodies = decodeCheckedCacheEnvelope(key, bytes) orelse return null;
+    if (bodies.env_body.len < @sizeOf(ModuleEnv.Serialized)) return null;
+    if (bodies.artifact_body.len < @sizeOf(CheckedArtifact.CheckedModuleArtifact.Serialized)) return null;
+    return bodies;
 }
 
 fn checkedModuleCacheTestKey(byte: u8) check.CheckedArtifact.CheckedModuleArtifactKey {
@@ -1170,6 +1175,7 @@ pub const Coordinator = struct {
     /// Source publications of the parametric platform. Session composition
     /// consumes its checked output without publishing another module.
     platform_root_publish_count: u32 = 0,
+    platform_pairing_count: u32 = 0,
     /// Module compile time tracking (min/max/sum for computing avg)
     module_time_min_ns: u64,
     module_time_max_ns: u64,
@@ -2122,6 +2128,21 @@ pub const Coordinator = struct {
         const platform_root = self.findRootModule(.platform) orelse return;
         const app = app_root.mod.checkedArtifact().?;
         const platform = platform_root.mod.checkedArtifact().?;
+        if (self.tryLoadCachedPlatformPairing(platform, app)) |loaded| {
+            var paired = loaded;
+            const paired_ptr = allocateCheckedArtifact(paired) catch |err| {
+                paired.deinitRetainingModuleEnv(self.gpa);
+                return err;
+            };
+            var owned = true;
+            errdefer if (owned) destroyCheckedArtifact(paired_ptr, true);
+            self.unregisterCheckedArtifact(platform_root.mod);
+            try platform_root.mod.replaceWithPairedCheckedArtifact(paired_ptr, &self.retired_checked_artifacts, self.gpa);
+            owned = false;
+            try self.registerCheckedArtifact(platform_root.pkg, platform_root.mod);
+            return;
+        }
+        self.platform_pairing_count += 1;
         var available = std.ArrayList(CheckedArtifact.ImportedModuleView).empty;
         defer available.deinit(self.gpa);
         try available.append(self.gpa, CheckedArtifact.importedView(&self.builtin_modules.checked_artifact));
@@ -2787,7 +2808,9 @@ pub const Coordinator = struct {
             artifact.evaluation_diagnostics.deinit(artifact.canonical_names.allocator);
             artifact.evaluation_diagnostics = diagnostics;
         }
-        if (mod.reports.items.len == 0 and artifact.pairing_arena == null) self.storeCheckedModuleInCache(artifact);
+        if (mod.reports.items.len == 0) {
+            if (artifact.pairing_arena == null) self.storeCheckedModuleInCache(artifact) else self.storePlatformPairingInCache(artifact);
+        }
         state.deinit();
         mod.pending_evaluation = null;
     }
@@ -3019,6 +3042,72 @@ pub const Coordinator = struct {
         }
 
         return true;
+    }
+
+    fn storePlatformPairingInCache(self: *Coordinator, artifact: *const CheckedArtifact.CheckedModuleArtifact) void {
+        const manager = self.cache_manager orelse return;
+        if (!manager.config.enabled) return;
+        const app_root = self.findRootModule(.app) orelse self.findRootModule(.default_app).?;
+        const app = app_root.mod.checkedArtifact().?;
+        const key = CheckedArtifact.PlatformPairing.cacheKey(artifact.key, app.key);
+        const directory = manager.config.getPlatformPairingCacheDir(manager.allocator) catch {
+            manager.recordStoreFailure();
+            return;
+        };
+        defer manager.allocator.free(directory);
+        var arena = std.heap.ArenaAllocator.init(manager.allocator);
+        defer arena.deinit();
+        const allocator = arena.allocator();
+        var writer = CompactWriter.init();
+        const header = writer.appendAlloc(allocator, CheckedArtifact.PlatformPairing.Serialized) catch {
+            manager.recordStoreFailure();
+            return;
+        };
+        header.serialize(artifact, allocator, &writer) catch {
+            manager.recordStoreFailure();
+            return;
+        };
+        const bytes = allocator.alloc(u8, checked_module_cache_header_len + writer.total_bytes) catch {
+            manager.recordStoreFailure();
+            return;
+        };
+        writeCheckedModuleCacheHeader(bytes[0..checked_module_cache_header_len], key, 0, writer.total_bytes);
+        _ = writer.writeToBuffer(bytes[checked_module_cache_header_len..]) catch unreachable;
+        manager.storeRawBytes(key.bytes, bytes, directory);
+    }
+
+    fn tryLoadCachedPlatformPairing(self: *Coordinator, platform: *const CheckedArtifact.CheckedModuleArtifact, app: *const CheckedArtifact.CheckedModuleArtifact) ?CheckedArtifact.CheckedModuleArtifact {
+        const manager = self.cache_manager orelse return null;
+        if (!manager.config.enabled) return null;
+        const directory = manager.config.getPlatformPairingCacheDir(manager.allocator) catch return null;
+        defer manager.allocator.free(directory);
+        const key = CheckedArtifact.PlatformPairing.cacheKey(platform.key, app.key);
+        const data = manager.loadRawBytesMapped(key.bytes, directory) orelse return null;
+        defer data.deinit(manager.allocator);
+        const bodies = decodeCheckedCacheEnvelope(key, data.data()) orelse {
+            manager.stats.recordInvalidation();
+            return null;
+        };
+        if (bodies.env_body.len != 0 or bodies.artifact_body.len < @sizeOf(CheckedArtifact.PlatformPairing.Serialized)) {
+            manager.stats.recordInvalidation();
+            return null;
+        }
+        const arena = self.gpa.create(std.heap.ArenaAllocator) catch return null;
+        arena.* = std.heap.ArenaAllocator.init(self.gpa);
+        var installed = false;
+        defer if (!installed) {
+            arena.deinit();
+            self.gpa.destroy(arena);
+        };
+        const buffer = arena.allocator().alignedAlloc(u8, CompactWriter.SERIALIZATION_ALIGNMENT, bodies.artifact_body.len) catch return null;
+        @memcpy(buffer, bodies.artifact_body);
+        const header: *const CheckedArtifact.PlatformPairing.Serialized = @ptrCast(buffer.ptr);
+        header.validate(buffer.len) catch {
+            manager.stats.recordInvalidation();
+            return null;
+        };
+        installed = true;
+        return header.install(platform, arena);
     }
 
     fn storeCheckedModuleInCache(self: *Coordinator, artifact: *const check.CheckedArtifact.CheckedModuleArtifact) void {
@@ -5416,10 +5505,12 @@ fn compileAppWithCheckedModuleCache(
 
 const AppRootIdentity = struct {
     compile_time_request_count: usize,
+    compile_time_debug_count: usize,
     artifact_key: [32]u8,
     module_identity_hash: [32]u8,
     cache_hits: u32,
     platform_root_publish_count: u32,
+    platform_pairing_count: u32,
     where_method_scheme_use_count: usize,
     /// The executable root artifact serialized exactly as the checked-module
     /// cache stores it, so tests assert byte identity between fresh and
@@ -5562,10 +5653,12 @@ fn compileAppRootIdentityExpecting(
     }
     return .{
         .compile_time_request_count = root.root_requests.compile_time_requests.len,
+        .compile_time_debug_count = root.compile_time_debug.entries.len,
         .artifact_key = root.codeGenerationKey().bytes,
         .module_identity_hash = root.module_identity.stable_hash,
         .cache_hits = coord.getBuildStats().cache_hits,
         .platform_root_publish_count = coord.platform_root_publish_count,
+        .platform_pairing_count = coord.platform_pairing_count,
         .where_method_scheme_use_count = where_method_scheme_use_count,
         .executable_root_bytes = executable_root_bytes,
         .app_root_bytes = app_root_bytes,
@@ -5851,10 +5944,11 @@ test "warm build reloads the immutable platform without checking or republishing
     try std.testing.expectEqual(@as(u32, 1), cold.platform_root_publish_count);
     try std.testing.expect(cold.where_method_scheme_use_count > 0);
 
-    // A warm build composes directly from the cached parametric platform.
+    // A warm build installs the completed composition without pairing again.
     var warm = try compileAppRootIdentity(allocator, cache_dir, app_path);
     defer warm.deinit(allocator);
     try std.testing.expectEqual(@as(u32, 0), warm.platform_root_publish_count);
+    try std.testing.expectEqual(@as(u32, 0), warm.platform_pairing_count);
     try std.testing.expect(warm.cache_hits > 0);
     try std.testing.expectEqual(cold.where_method_scheme_use_count, warm.where_method_scheme_use_count);
 
@@ -5863,6 +5957,35 @@ test "warm build reloads the immutable platform without checking or republishing
     try std.testing.expectEqualSlices(u8, &cold.artifact_key, &warm.artifact_key);
     try std.testing.expectEqualSlices(u8, cold.executable_root_bytes, warm.executable_root_bytes);
     try std.testing.expectEqualSlices(u8, cold.app_root_bytes, warm.app_root_bytes);
+}
+
+test "issue 11389 invalid pairing cache recomposes from immutable modules" {
+    const allocator = std.testing.allocator;
+    var tmp = std.testing.tmpDir(.{});
+    defer tmp.cleanup();
+    try tmp.dir.createDirPath(std.testing.io, "cache");
+    const cache = try tmp.dir.realPathFileAlloc(std.testing.io, "cache", allocator);
+    defer allocator.free(cache);
+    try writeCacheKeyPurityFixture(&tmp, "corrupt");
+    const app = try tmp.dir.realPathFileAlloc(std.testing.io, "corrupt/app/main.roc", allocator);
+    defer allocator.free(app);
+    var cold = try compileAppRootIdentity(allocator, cache, app);
+    defer cold.deinit(allocator);
+    try std.testing.expectEqual(@as(u32, 1), cold.platform_pairing_count);
+    const config = CacheConfig{ .enabled = true, .cache_dir = cache };
+    const pair_directory = try config.getPlatformPairingCacheDir(allocator);
+    defer allocator.free(pair_directory);
+    const corrupted = try overwriteFilesUnderDir(allocator, pair_directory, "invalid pairing");
+    try std.testing.expectEqual(@as(usize, 1), corrupted);
+    var repaired = try compileAppRootIdentity(allocator, cache, app);
+    defer repaired.deinit(allocator);
+    try std.testing.expectEqual(@as(u32, 1), repaired.platform_pairing_count);
+    try std.testing.expectEqual(@as(u32, 0), repaired.platform_root_publish_count);
+    try std.testing.expectEqualSlices(u8, cold.executable_root_bytes, repaired.executable_root_bytes);
+    var warm = try compileAppRootIdentity(allocator, cache, app);
+    defer warm.deinit(allocator);
+    try std.testing.expectEqual(@as(u32, 0), warm.platform_pairing_count);
+    try std.testing.expectEqualSlices(u8, cold.executable_root_bytes, warm.executable_root_bytes);
 }
 
 test "issue 11389 partial platform cache pairs without checking or republication" {
@@ -5898,6 +6021,7 @@ test "issue 11389 partial platform cache pairs without checking or republication
     var warm = try compileAppRootIdentity(allocator, shared_cache, app);
     defer warm.deinit(allocator);
     try std.testing.expectEqual(@as(u32, 0), warm.platform_root_publish_count);
+    try std.testing.expectEqual(@as(u32, 0), warm.platform_pairing_count);
     try std.testing.expectEqualSlices(u8, paired.executable_root_bytes, warm.executable_root_bytes);
     try std.testing.expectEqualSlices(u8, paired.app_root_bytes, warm.app_root_bytes);
 }
@@ -5937,10 +6061,12 @@ test "issue 11389 cached platform evaluates app-dependent constants for each bin
     var first = try compileAppRootIdentityWithConstants(allocator, cache, app, .executable_artifacts, &.{.{ .name = "twice", .value = 42 }});
     defer first.deinit(allocator);
     try std.testing.expectEqual(@as(u32, 0), first.platform_root_publish_count);
+    try std.testing.expectEqual(@as(u32, 1), first.platform_pairing_count);
     try tmp.dir.writeFile(std.testing.io, .{ .sub_path = "app.roc", .data = apps[1] });
     var second = try compileAppRootIdentityWithConstants(allocator, cache, app, .executable_artifacts, &.{.{ .name = "twice", .value = 44 }});
     defer second.deinit(allocator);
     try std.testing.expectEqual(@as(u32, 0), second.platform_root_publish_count);
+    try std.testing.expectEqual(@as(u32, 1), second.platform_pairing_count);
     try std.testing.expect(!std.mem.eql(u8, &first.artifact_key, &second.artifact_key));
     try std.testing.expectEqualSlices(u8, &first.module_identity_hash, &second.module_identity_hash);
     var still_unpaired = try compileAppRootIdentityForMode(allocator, cache, app, .none);
@@ -5950,6 +6076,42 @@ test "issue 11389 cached platform evaluates app-dependent constants for each bin
     var again = try compileAppRootIdentityWithConstants(allocator, cache, app, .executable_artifacts, &.{.{ .name = "twice", .value = 42 }});
     defer again.deinit(allocator);
     try std.testing.expectEqualSlices(u8, first.executable_root_bytes, again.executable_root_bytes);
+    try std.testing.expectEqual(@as(u32, 0), again.platform_pairing_count);
+}
+
+test "issue 11389 pairing cache retains exported constants and debug observations" {
+    const allocator = std.testing.allocator;
+    var tmp = std.testing.tmpDir(.{});
+    defer tmp.cleanup();
+    try tmp.dir.createDirPath(std.testing.io, "cache");
+    try tmp.dir.writeFile(std.testing.io, .{ .sub_path = "platform.roc", .data =
+        \\platform ""
+        \\    requires {} { answer : I64 }
+        \\    exposes [value]
+        \\    packages {}
+        \\    provides { "roc_entry": entry }
+        \\value = {
+        \\    dbg answer
+        \\    answer + 1
+        \\}
+        \\entry : {} -> I64
+        \\entry = |_| value
+    });
+    try tmp.dir.writeFile(std.testing.io, .{ .sub_path = "app.roc", .data =
+        \\app [answer] { pf: platform "./platform.roc" }
+        \\answer = 41.I64
+    });
+    const cache = try tmp.dir.realPathFileAlloc(std.testing.io, "cache", allocator);
+    defer allocator.free(cache);
+    const app = try tmp.dir.realPathFileAlloc(std.testing.io, "app.roc", allocator);
+    defer allocator.free(app);
+    var cold = try compileAppRootIdentityWithConstants(allocator, cache, app, .executable_artifacts, &.{.{ .name = "value", .value = 42 }});
+    defer cold.deinit(allocator);
+    try std.testing.expectEqual(@as(usize, 1), cold.compile_time_debug_count);
+    var warm = try compileAppRootIdentityWithConstants(allocator, cache, app, .executable_artifacts, &.{.{ .name = "value", .value = 42 }});
+    defer warm.deinit(allocator);
+    try std.testing.expectEqual(@as(u32, 0), warm.platform_pairing_count);
+    try std.testing.expectEqualSlices(u8, cold.executable_root_bytes, warm.executable_root_bytes);
 }
 
 test "issue 11389 required procedure aliases forward without compile-time evaluation" {

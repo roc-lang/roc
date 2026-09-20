@@ -2289,7 +2289,14 @@ retain an owning AST pointer while a worker consumes it.
 
 ## Cache Boundary
 
-The checked module cache is the only checked cache boundary in this design.
+Reusable modules and exact platform/app compositions are distinct checked cache
+entries. A composition entry is keyed by both immutable module identities and
+the compiler's checked and composition format versions. It contains only the
+pairing's changed metadata columns and completed app-dependent evaluation
+results, never source environments, bodies, or a live checker continuation.
+Unchanged columns borrow the exact platform identified by the key. Only a
+completed composition without diagnostics may be cached; a hit consumes its
+stored outcomes and replays its recorded debug observations without evaluation.
 Checked module cache entries are trusted compiler-produced cache entries, not
 adversarial inputs. Cache reads validate only the cache header,
 entry-version hash, key, serialized layout, and ordinary binary decoding. They must
@@ -2691,7 +2698,13 @@ bodies, dispatch plans, declaration tables and closure inventories, and owns the
 projected types, bindings, root manifests and evaluation results in a session.
 Completed independent roots are consumed as stored values and never evaluated
 again. Both lowering strategies consume this same checked view. A session view
-cannot be serialized into the reusable module cache.
+cannot be serialized into the reusable module cache. Its completed changed
+columns may be persisted in the separate composition cache described above.
+Type columns borrow the immutable platform until their first write; ownership
+is explicit for every column, and a write copies that column before mutation.
+The checked root index is published alongside the scheme index, preserving the
+first representative even when distinct identity roots share a key. Pairing
+borrows those indexes and never reconstructs them from root rows.
 
 The checked boundary outputs immutable checked modules. A checked module is
 either complete or unavailable to later stages. Later stages may read checked
