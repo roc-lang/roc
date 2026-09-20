@@ -3,9 +3,9 @@
 //! that root's imports.
 //! repro for https://github.com/roc-lang/roc/issues/11392
 //!
-//! A rejected import — a package module that is not public, a relative import
+//! A rejected import—a package module that is not public, a relative import
 //! that escapes the package source root, an import whose source path is not
-//! the one its logical name selects — is a user diagnostic. Per design.md's
+//! the one its logical name selects—is a user diagnostic. Per design.md's
 //! "Module Completion Boundary", a user diagnostic never selects a module
 //! `Failure` and never propagates dependency failure: the importing module
 //! still produces its complete `ModuleEnv` and CheckedModule, uses of the
