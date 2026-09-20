@@ -140,6 +140,7 @@ const jobs = [_]Job{
     .{ .name = "run-test-playground", .kind = .harness },
     .{ .name = "run-test-cli", .kind = .harness },
     .{ .name = "run-test-serialization-sizes" },
+    .{ .name = "run-test-builtin-bake-reproducible" },
     .{ .name = "run-test-wasm-static-lib" },
     .{ .name = "run-test-dylib" },
     .{ .name = "run-test-archive" },

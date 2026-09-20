@@ -94,12 +94,19 @@ pub fn isUnsigned(layout_idx: layout_mod.Idx) bool {
         layout_idx == .u64 or layout_idx == .u128;
 }
 
+/// `host_drop` names a generated adapter's signature, not an operation the
+/// runtime performs, so an RC statement can never carry it.
+fn hostDropInRcStatement() noreturn {
+    @panic("LIR/interpreter invariant violated: RC statement carried a host-shaped drop adapter");
+}
+
 /// The nested op an aggregate's children receive when the parent is released:
 /// releasing the parent releases exactly one reference to each child.
 pub fn nestedDropOp(op: RcOp) RcOp {
     return switch (op) {
         .incref => .incref,
         .decref, .free => .decref,
+        .host_drop => hostDropInRcStatement(),
     };
 }
 
@@ -2163,6 +2170,7 @@ pub const BoxyRuntime = struct {
             .incref => false,
             .decref => builtins.utils.isUnique(data_ptr, self.roc_ops),
             .free => true,
+            .host_drop => hostDropInRcStatement(),
         };
         if (should_drop_payload) {
             try self.performBoxyPayloadDrop(hooks, payload_desc, data_ptr, count, atomicity);
@@ -2171,6 +2179,7 @@ pub const BoxyRuntime = struct {
             .incref => builtins.utils.increfDataPtr(data_ptr, @intCast(count), atomicity, self.roc_ops),
             .decref => builtins.utils.decrefDataPtr(data_ptr, payload_alignment, allocation_contains_refcounted, atomicity, self.roc_ops),
             .free => builtins.utils.freeDataPtrC(data_ptr, payload_alignment, allocation_contains_refcounted, self.roc_ops),
+            .host_drop => hostDropInRcStatement(),
         }
     }
 
@@ -2219,6 +2228,7 @@ pub const BoxyRuntime = struct {
             .incref => unreachable,
             .decref => rl.isUnique(self.roc_ops),
             .free => true,
+            .host_drop => hostDropInRcStatement(),
         };
         if (should_drop_elements) {
             if (rl.getAllocationDataPtr(self.roc_ops)) |source| {
