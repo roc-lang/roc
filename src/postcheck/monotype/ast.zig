@@ -391,8 +391,8 @@ pub const SpecRecord = struct {
 /// checked template, nested function, or hosted procedure it is the checked
 /// type the REQUESTER instantiated the callable from: caller provenance, which
 /// identity must drop, since a record keeps whichever requester reserved it.
-/// For a generated body — an interpolation or field-names step, a parser or
-/// encoder runtime, a generated encoder callback — the producer has no checked
+/// For a generated body—an interpolation or field-names step, a parser or
+/// encoder runtime, a generated encoder callback—the producer has no checked
 /// declaration to name and writes the body's own identity there instead;
 /// several such bodies share one `fn_def`, evidence, and Monotype type, so
 /// identity must keep it.
