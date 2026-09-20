@@ -444,11 +444,26 @@ pub fn canonicalizeModuleWithSiblings(
     };
     var resolved_import_envs = std.StringHashMap(ResolvedImport).init(gpa);
     defer resolved_import_envs.deinit();
+    // Import identities resolution rejected. These name no module, so they are
+    // kept out of the env map and handed to canonicalization as the explicit
+    // evidence that the import is missing.
+    var rejected_import_idents = std.AutoHashMap(base.Ident.Idx, void).init(gpa);
+    defer rejected_import_idents.deinit();
     for (pre_resolved_imports) |pre| {
+        const available = switch (pre.resolution) {
+            // Keyed by the exact source import name: that is the identity a
+            // module alias resolves to, and the identity the import statement
+            // is canonicalized under.
+            .rejected => {
+                try rejected_import_idents.put(try env.insertIdent(base.Ident.for_text(pre.import_name)), {});
+                continue;
+            },
+            .available => |available| available,
+        };
         const result = try resolved_import_envs.getOrPut(pre.import_name);
         if (result.found_existing) {
             const existing = result.value_ptr.*;
-            if (existing.env != pre.module_env or existing.selected_type_decl != pre.selected_type_decl) {
+            if (existing.env != available.module_env or existing.selected_type_decl != available.selected_type_decl) {
                 if (builtin.mode == .Debug) {
                     std.debug.panic(
                         "canonicalization received conflicting environments for exact import '{s}'",
@@ -458,7 +473,7 @@ pub fn canonicalizeModuleWithSiblings(
                 unreachable;
             }
         } else {
-            result.value_ptr.* = .{ .env = pre.module_env, .selected_type_decl = pre.selected_type_decl };
+            result.value_ptr.* = .{ .env = available.module_env, .selected_type_decl = available.selected_type_decl };
         }
     }
 
@@ -551,6 +566,7 @@ pub fn canonicalizeModuleWithSiblings(
             .builtin_indices = builtin_indices,
         },
         .imported_modules = &module_envs_map,
+        .rejected_imports = &rejected_import_idents,
         .compiler_version = build_options.compiler_version,
         .validation = validation,
         .is_entry_module = is_entry_module,

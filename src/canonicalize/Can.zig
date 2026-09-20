@@ -63,6 +63,15 @@ pub const BuiltinTypeContext = struct {
 pub const ModuleInitContext = struct {
     builtin_types: BuiltinTypeContext,
     imported_modules: ?*const std.AutoHashMap(Ident.Idx, AutoImportedType) = null,
+    /// Import identities that import resolution rejected for this module,
+    /// keyed by their exact source spelling (e.g. `pf.Stdout`).
+    ///
+    /// Only the workspace resolver can say whether a package-qualified import
+    /// names a real public module, so canonicalization cannot judge one by
+    /// itself. This is that judgement, carried explicitly: a rejected import
+    /// names no module, and every use of it becomes checked-error data instead
+    /// of reaching whatever module the import spelled.
+    rejected_imports: ?*const std.AutoHashMap(Ident.Idx, void) = null,
     /// Skip reading file-import contents when canonicalizing for inspection only.
     /// Ordinary compilation keeps the default and validates the imported file.
     skip_file_import_contents: bool = false,
@@ -333,6 +342,9 @@ used_patterns: std.AutoHashMapUnmanaged(Pattern.Idx, void),
 globally_resolvable_patterns: std.AutoHashMapUnmanaged(Pattern.Idx, void),
 /// Map of explicit imported module identifiers to their type information for import validation.
 explicit_module_envs: ?*const std.AutoHashMap(Ident.Idx, AutoImportedType),
+/// Import identities that import resolution rejected. See
+/// `ModuleInitContext.rejected_imports`.
+rejected_imports: ?*const std.AutoHashMap(Ident.Idx, void),
 /// Builtin types that are automatically available in every non-Builtin module.
 builtin_auto_imported_types: std.AutoHashMapUnmanaged(Ident.Idx, AutoImportedType) = .{},
 /// Map from module identifier to Import.Idx for tracking unique imports.
@@ -785,6 +797,7 @@ fn initInternal(
         .used_patterns = std.AutoHashMapUnmanaged(Pattern.Idx, void){},
         .globally_resolvable_patterns = std.AutoHashMapUnmanaged(Pattern.Idx, void){},
         .explicit_module_envs = if (maybe_context) |context| context.imported_modules else null,
+        .rejected_imports = if (maybe_context) |context| context.rejected_imports else null,
         .skip_file_import_contents = if (maybe_context) |context| context.skip_file_import_contents else false,
         .compiler_version = if (maybe_context) |context| context.compiler_version else null,
         .validation = if (maybe_context) |context| context.validation else .checking,
@@ -858,6 +871,14 @@ fn lookupExplicitModuleEnv(self: *const Self, ident: Ident.Idx) ?AutoImportedTyp
 
 fn lookupAvailableModuleEnv(self: *const Self, ident: Ident.Idx) ?AutoImportedType {
     return self.lookupExplicitModuleEnv(ident) orelse self.builtin_auto_imported_types.get(ident);
+}
+
+/// Whether import resolution rejected this import identity. A rejected import
+/// has no environment, so its exposed items bind as missing-module items and
+/// every use of them is checked-error data.
+fn importWasRejected(self: *const Self, ident: Ident.Idx) bool {
+    const rejected = self.rejected_imports orelse return false;
+    return rejected.contains(ident);
 }
 
 fn autoImportedTypeUsesCompilerBuiltinImport(info: AutoImportedType) bool {
@@ -7117,7 +7138,10 @@ fn importAliased(
     // imports that are resolved by the workspace resolver
     if (self.explicit_module_envs) |envs_map| {
         if (!envs_map.contains(module_name)) {
-            if (!is_package_qualified) {
+            // Import resolution already reported why a rejected import names no
+            // module, and named the exact reason. Canonicalization consumes
+            // that outcome to bind the import; it does not restate it.
+            if (!is_package_qualified and !self.importWasRejected(module_name)) {
                 try self.env.pushDiagnostic(Diagnostic{ .module_not_found = .{
                     .module_name = module_name,
                     .region = import_region,
@@ -7186,7 +7210,10 @@ fn importUnaliased(
     // imports that are resolved by the workspace resolver
     if (self.explicit_module_envs) |envs_map| {
         if (!envs_map.contains(module_name)) {
-            if (!is_package_qualified) {
+            // Import resolution already reported why a rejected import names no
+            // module, and named the exact reason. Canonicalization consumes
+            // that outcome to bind the import; it does not restate it.
+            if (!is_package_qualified and !self.importWasRejected(module_name)) {
                 try self.env.pushDiagnostic(Diagnostic{ .module_not_found = .{
                     .module_name = module_name,
                     .region = import_region,
@@ -7632,6 +7659,52 @@ fn convertASTExposesToCIR(
     }
 }
 
+/// Bind the exposed items of a rejected import as missing-module items.
+///
+/// Import resolution rejected this import, so it names no module and none of
+/// these items has a target. They are still bound, under this import, so that
+/// every use of one is checked-error data naming the missing module rather
+/// than a bare unresolved identifier, and so that no use can reach past the
+/// rejected import to a same-named binding it was meant to introduce.
+fn introduceRejectedImportItems(
+    self: *Self,
+    exposed_items_span: CIR.ExposedItem.Span,
+    module_name: Ident.Idx,
+    import_region: Region,
+    module_import_idx: CIR.Import.Idx,
+) std.mem.Allocator.Error!void {
+    const exposed_items_slice = self.env.store.sliceExposedItems(exposed_items_span);
+    const current_scope_idx = self.scopes.items.len - 1;
+
+    for (exposed_items_slice) |exposed_item_idx| {
+        const exposed_item = self.env.store.getExposedItem(exposed_item_idx);
+        const local_ident = exposed_item.alias orelse exposed_item.name;
+
+        try self.scopeIntroduceExposedItem(local_ident, Scope.ExposedItemInfo{
+            .module_name = module_name,
+            .original_name = exposed_item.name,
+            .target = null,
+        }, import_region);
+
+        if (!self.isSourceTagIdent(local_ident)) continue;
+
+        // The ident text must be fetched fresh here: the binding below interns
+        // new idents, which can move the interner's byte buffer.
+        const original_type_name = self.env.getIdent(exposed_item.name);
+        try self.setExternalTypeBinding(
+            current_scope_idx,
+            local_ident,
+            module_name,
+            exposed_item.name,
+            original_type_name,
+            null,
+            module_import_idx,
+            import_region,
+            .module_not_found,
+        );
+    }
+}
+
 /// Introduce converted exposed items into scope for aliased imports
 /// For imports like `import json.Parser exposing [Config]`, this will:
 /// 1. Auto-expose the module's main type if it's a type module
@@ -7650,6 +7723,17 @@ fn introduceItemsAliased(
 
     if (self.explicit_module_envs) |envs_map| {
         const module_entry = envs_map.get(module_name) orelse {
+            // Import resolution rejected this import, so the module is known to
+            // be unavailable rather than merely absent from this map.
+            if (self.importWasRejected(module_name)) {
+                return try self.introduceRejectedImportItems(
+                    exposed_items_span,
+                    module_name,
+                    import_region,
+                    module_import_idx,
+                );
+            }
+
             // Module not found, but still check for duplicate type names with auto-imports
             // This ensures we report DUPLICATE DEFINITION even for non-existent modules
             for (exposed_items_slice) |exposed_item_idx| {
@@ -7828,6 +7912,17 @@ fn introduceItemsUnaliased(
 
     if (self.explicit_module_envs) |envs_map| {
         const module_entry = envs_map.get(module_name) orelse {
+            // Import resolution rejected this import, so the module is known to
+            // be unavailable rather than merely absent from this map.
+            if (self.importWasRejected(module_name)) {
+                return try self.introduceRejectedImportItems(
+                    exposed_items_span,
+                    module_name,
+                    import_region,
+                    module_import_idx,
+                );
+            }
+
             // Module not found, but still check for duplicate type names with auto-imports
             // This ensures we report DUPLICATE DEFINITION even for non-existent modules
             for (exposed_items_slice) |exposed_item_idx| {
@@ -8693,7 +8788,20 @@ fn canonicalizeModuleQualifiedIdent(
     } else null;
 
     const target_node_idx = target_node_idx_opt orelse {
-        const auto_imported_type = auto_imported_type_info orelse return null;
+        const auto_imported_type = auto_imported_type_info orelse {
+            // Import resolution rejected this import, so the qualifier names no
+            // module and this reference has a settled answer: it does not
+            // exist. Without that evidence the reference is only unresolved
+            // here, and the caller keeps looking for another meaning.
+            if (self.importWasRejected(module_name)) {
+                const qualified_ident = try self.joinedQualifiedIdent(qualifier_tokens, ident);
+                return try self.canonicalizedMalformedExpr(Diagnostic{ .qualified_ident_does_not_exist = .{
+                    .ident = qualified_ident,
+                    .region = region,
+                } });
+            }
+            return null;
+        };
 
         if (try self.addAutoImportedNominalTagExpr(auto_imported_type, import_idx, ident, region)) |expr_idx| {
             return CanonicalizedExpr{
