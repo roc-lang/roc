@@ -8610,10 +8610,10 @@ fn writePacksToStore(
 ) CliMainError!void {
     if (app_artifacts) |set| {
         if (build_env.packPlacementForArtifactKey(root_artifact.key)) |placement| {
-            if (!try store.has(placement.origin, placement.identity, root_artifact.key.bytes)) {
+            if (!try store.has(placement.origin, placement.identity, root_artifact.codeGenerationKey().bytes)) {
                 const bytes = try packFileBytes(ctx.gpa, set, app_lowered);
                 defer ctx.gpa.free(bytes);
-                store.write(placement.origin, placement.identity, root_artifact.key.bytes, bytes) catch |err| {
+                store.write(placement.origin, placement.identity, root_artifact.codeGenerationKey().bytes, bytes) catch |err| {
                     std.log.warn("object cache could not store the program's pack: {}", .{err});
                 };
             }
@@ -8625,7 +8625,7 @@ fn writePacksToStore(
         const placement = build_env.packPlacementForArtifactKey(artifact.key) orelse continue;
         const origin = placement.origin;
         const identity = placement.identity;
-        if (try store.has(origin, identity, artifact.key.bytes)) continue;
+        if (try store.has(origin, identity, artifact.codeGenerationKey().bytes)) continue;
         const roots = try lir.PackProgram.closedExportRoots(ctx.gpa, artifact);
         defer ctx.gpa.free(roots);
         if (roots.len == 0) continue;
@@ -8634,7 +8634,7 @@ fn writePacksToStore(
         const set = &(pack.compiled.artifacts orelse continue);
         const bytes = try packFileBytes(ctx.gpa, set, &pack.lowered);
         defer ctx.gpa.free(bytes);
-        store.write(origin, identity, artifact.key.bytes, bytes) catch |err| {
+        store.write(origin, identity, artifact.codeGenerationKey().bytes, bytes) catch |err| {
             std.log.warn("object cache could not store a module's pack: {}", .{err});
         };
     }

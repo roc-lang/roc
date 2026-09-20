@@ -72,48 +72,21 @@ pub const SemanticModuleData = struct {
     checked_artifact: ?*const CheckedArtifact.CheckedModuleArtifact,
 };
 
-/// Checked metadata is prepared now or retained for platform/app relation construction.
-pub const TypeCheckPublication = union(enum) {
-    published: CheckedArtifact.CheckedModuleArtifact,
-    deferred,
-};
-
-/// Owned output from type checking before module state takes retained facts.
+/// Owned output from type checking before the coordinator takes publication.
 pub const TypeCheckOutput = struct {
     checker: Check,
-    checker_owned: bool = true,
-    publication: TypeCheckPublication,
+    publication: CheckedArtifact.CheckedModuleArtifact,
     publication_owned: bool = true,
 
     pub fn deinit(self: *TypeCheckOutput) void {
-        if (self.publication_owned) {
-            switch (self.publication) {
-                .published => |*artifact| artifact.deinit(artifact.canonical_names.allocator),
-                .deferred => {},
-            }
-        }
-        if (self.checker_owned) self.checker.deinit();
+        if (self.publication_owned) self.publication.deinit(self.publication.canonical_names.allocator);
+        self.checker.deinit();
     }
 
     pub fn takeCheckedArtifact(self: *TypeCheckOutput) CheckedArtifact.CheckedModuleArtifact {
         std.debug.assert(self.publication_owned);
-        return switch (self.publication) {
-            .published => |artifact| blk: {
-                self.publication_owned = false;
-                break :blk artifact;
-            },
-            .deferred => std.debug.panic("compile.typeCheckOutput publication is deferred", .{}),
-        };
-    }
-
-    pub fn publicationDeferred(self: *const TypeCheckOutput) bool {
-        return self.publication == .deferred;
-    }
-
-    pub fn takeChecker(self: *TypeCheckOutput) Check {
-        std.debug.assert(self.checker_owned);
-        self.checker_owned = false;
-        return self.checker;
+        self.publication_owned = false;
+        return self.publication;
     }
 };
 
@@ -579,7 +552,6 @@ pub fn typeCheckModule(
     explicit_roots: []const CheckedArtifact.ExplicitRootRequestInput,
     validation: Can.Validation,
     ctfe_options: eval.CompileTimeFinalization.Options,
-    defer_publication: bool,
 ) TypeCheckModuleError!TypeCheckOutput {
     const builtin_indices = compiled_builtins.builtinIndices(can.CIR);
 
@@ -631,20 +603,6 @@ pub fn typeCheckModule(
         std.debug.panic("compile.typeCheckModule received an imported module environment without its checked artifact", .{});
     }
 
-    // The platform root of an app build does not publish here: finalization
-    // publishes the relation-bearing platform root once, so a check-time
-    // publish would be immediately superseded. The one exception is a
-    // requires signature that still carries erroneous type content—the
-    // env-derived requirement context a deferred root needs is a canonical
-    // key digest, and erroneous content has no canonical key, so those
-    // shapes keep the check-time publish and its diagnostics.
-    if (defer_publication and !(try checker.requiresTypesContainError())) {
-        return .{
-            .checker = checker,
-            .publication = .deferred,
-        };
-    }
-
     var checked_artifact = try publishCheckedArtifactFromCheckedModule(
         artifact_alloc,
         env,
@@ -667,7 +625,7 @@ pub fn typeCheckModule(
 
     return .{
         .checker = checker,
-        .publication = .{ .published = checked_artifact },
+        .publication = checked_artifact,
     };
 }
 

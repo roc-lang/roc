@@ -69,6 +69,9 @@ pub const Options = struct {
     stderr: ?StderrWriter = null,
     event_callback: ?EventCallback = null,
     debug_events: ?*DebugEvents = null,
+    /// A coordinator may persist an early dependency batch, then replay all
+    /// stored and new observations together with the complete program.
+    defer_debug_replay: bool = false,
     /// Completed checked artifacts contribute stored observations, without
     /// evaluating their roots again. Borrowed only for finalization.
     cached_debug_modules: []const *const checked.CheckedModuleArtifact = &.{},
@@ -410,11 +413,11 @@ pub fn finalizeProgram(
     const owned_runtime_requests = owned_runtime_roots.requests;
     if (compile_time_root_count == 0) {
         for (modules) |entry| {
-            if (entry.problem_store) |store| _ = try store.flushPendingStaticExhaustiveness(allocator);
+            if (entry.problem_store) |store| try finishPendingExhaustiveness(allocator, entry.module, store);
             try entry.module.const_store.verifyComplete();
         }
         try debug_events.persist(modules);
-        try debug_events.replay(options);
+        if (!options.defer_debug_replay) try debug_events.replay(options);
         var retained_root = lowering_modules.root;
         retained_root.relation_modules = owned_relations;
         const retained_roots = owned_runtime_roots;
@@ -486,12 +489,12 @@ pub fn finalizeProgram(
         }
     } else {
         for (modules) |entry| {
-            if (entry.problem_store) |store| _ = try store.flushPendingStaticExhaustiveness(allocator);
+            if (entry.problem_store) |store| try finishPendingExhaustiveness(allocator, entry.module, store);
             try entry.module.const_store.verifyComplete();
         }
     }
     try debug_events.persist(modules);
-    try debug_events.replay(options);
+    if (!options.defer_debug_replay) try debug_events.replay(options);
     var retained_root = lowering_modules.root;
     retained_root.relation_modules = owned_relations;
     const retained_roots = owned_runtime_roots;
@@ -604,7 +607,7 @@ fn finalizeLoweredProgram(
     }
     for (modules, states) |entry, *state| {
         try state.coverage.reportUnusedBranches(allocator, entry.problem_store);
-        if (entry.problem_store) |store| _ = try store.flushPendingStaticExhaustiveness(allocator);
+        if (entry.problem_store) |store| try finishPendingExhaustiveness(allocator, entry.module, store);
         try entry.module.const_store.verifyComplete();
     }
 }
@@ -943,7 +946,7 @@ fn finalize(
     }
 
     if (problem_store) |store| {
-        _ = try store.flushPendingStaticExhaustiveness(allocator);
+        try finishPendingExhaustiveness(allocator, module, store);
     }
 
     try module.const_store.verifyComplete();
@@ -3174,15 +3177,15 @@ fn appendCompileTimeExhaustivenessProblem(
     discardUnreachedRootComptimeSites(problem_store, lir_result, root_proc, checked_site, module, site_id);
     if (!comptimeSiteMayResolvePending(module, root.id, checked_site)) {
         const site_record = module.exhaustiveness_sites.get(checked_site);
-        switch (site_record.policy) {
+        if (!site_record.requires_pairing) switch (site_record.policy) {
             .runtime_reachable => {},
             .not_pending,
             .compile_time_only,
             .compile_time_replaced_by_root,
             => finalizationInvariant("compile-time exhaustiveness failure had an impossible site policy"),
-        }
+        };
     }
-    const matched = try problem_store.appendEmpiricalExhaustivenessFailure(allocator, checked_site);
+    const matched = try problem_store.appendEmpiricalExhaustivenessFailureRetaining(allocator, checked_site, module.exhaustiveness_sites.get(checked_site).requires_pairing);
     if (!matched) {
         finalizationInvariant("empirical exhaustiveness failure had no pending static diagnostic");
     }
@@ -3203,6 +3206,7 @@ fn discardUnreachedRootComptimeSites(
         const checked_site = root_site.checked_site orelse continue;
         if (checked_site == failed_checked_site) continue;
         const site = module.exhaustiveness_sites.get(checked_site);
+        if (site.requires_pairing) continue;
         switch (site.policy) {
             .compile_time_replaced_by_root,
             .compile_time_only,
@@ -3214,12 +3218,28 @@ fn discardUnreachedRootComptimeSites(
     }
 }
 
+/// Complete only diagnostics whose checked evaluation context is available.
+/// A generic platform carries the remaining recipes into its cache entry.
+pub fn finishPendingExhaustiveness(allocator: Allocator, module: *const checked.CheckedModuleArtifact, store: *check.problem.Store) Allocator.Error!void {
+    var retained: usize = 0;
+    for (store.pending_static_exhaustiveness.items) |pending| {
+        if (pending.site != null and module.exhaustiveness_sites.get(pending.site.?).requires_pairing) {
+            store.pending_static_exhaustiveness.items[retained] = pending;
+            retained += 1;
+        } else if (pending.mode == .static and !pending.reported) {
+            _ = try store.appendProblem(allocator, pending.problem);
+        }
+    }
+    store.pending_static_exhaustiveness.items.len = retained;
+}
+
 fn comptimeSiteMayResolvePending(
     module: *const checked.CheckedModuleArtifact,
     root_id: checked.ComptimeRootId,
     checked_site: checked.CheckedExhaustivenessSiteId,
 ) bool {
     const site = module.exhaustiveness_sites.get(checked_site);
+    if (site.requires_pairing) return false;
     return switch (site.policy) {
         .compile_time_replaced_by_root => |owner_root| owner_root == root_id,
         .compile_time_only => true,

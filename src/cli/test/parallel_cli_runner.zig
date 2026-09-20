@@ -7359,14 +7359,13 @@ fn customPipelineParitySharedCache(io: std.Io, allocator: Allocator, env: *const
         return customFailure(allocator, timer, "expected roc check to populate checked-module cache entries, found 0", .{});
     }
 
-    // The first executable-mode compile may add finalized platform-relation
-    // artifacts on top of check's entries; afterwards every pipeline must hit
-    // the shared cache with zero new checked-module writes (issue 9788).
+    // Runtime composition reuses the same immutable platform module; every
+    // executable pipeline hits check's entries without extra module writes.
     if (runRocAndCheck(io, allocator, env, timer, timeout_ms, .{ .args = &.{}, .roc_file = fixture, .contains = &.{.{ .stream = .stdout, .text = "alpha[beta:parity]" }} })) |failure| return failure;
     const after_first_run = countCheckedModuleCacheFiles(io, allocator, env.dirs.roc_cache_dir) catch |err|
         return customInfraFailure(allocator, timer, "failed to count module cache files after run: {}", .{err});
-    if (after_first_run < after_check) {
-        return customFailure(allocator, timer, "run lost checked-module cache entries: {d} -> {d}", .{ after_check, after_first_run });
+    if (after_first_run != after_check) {
+        return customFailure(allocator, timer, "run changed checked-module cache entries: {d} -> {d}", .{ after_check, after_first_run });
     }
 
     const follow_ups = [_]struct {
@@ -7377,14 +7376,13 @@ fn customPipelineParitySharedCache(io: std.Io, allocator: Allocator, env: *const
         /// wrote, so they add nothing. `roc test` links no program: it checks
         /// the root under explicitly requested roots rather than its app
         /// entrypoint contract, and publishes no executable artifacts, so its
-        /// root and platform root are two checked modules the other pipelines
-        /// do not have. Both are written once and reused afterwards, by the
-        /// later pipelines too.
+        /// app root has a distinct checking context. Its parametric platform
+        /// root is shared by every pipeline, so only the app entry is added.
         added_entries: usize,
     }{
         .{ .name = "run (second)", .args = &.{}, .added_entries = 0 },
         .{ .name = "build", .args = &.{ "build", build_out_arg }, .added_entries = 0 },
-        .{ .name = "test", .args = &.{"test"}, .added_entries = 2 },
+        .{ .name = "test", .args = &.{"test"}, .added_entries = 1 },
         .{ .name = "test (second)", .args = &.{"test"}, .added_entries = 0 },
         .{ .name = "check (second)", .args = &.{"check"}, .added_entries = 0 },
         .{ .name = "run (third)", .args = &.{}, .added_entries = 0 },

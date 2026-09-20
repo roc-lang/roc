@@ -968,6 +968,12 @@ pub const RootSource = union(enum(u8)) {
 /// Public `RootRequest` declaration.
 pub const RootRequest = struct {
     order: u32,
+    /// Producer-selected root withheld until the platform has its app bindings.
+    requires_pairing: bool = false,
+    /// This session borrows a previously evaluated root from its platform.
+    evaluation_complete: bool = false,
+    /// Full same-module evaluation order, including withheld roots.
+    evaluation_order: ?u32 = null,
     module_idx: u32,
     kind: RootRequestKind,
     source: RootSource,
@@ -1038,10 +1044,6 @@ pub const RootRequestTable = struct {
         var requests = std.ArrayList(RootRequest).empty;
         errdefer requests.deinit(allocator);
 
-        const relation_blocked_exprs = try allocator.alloc(?bool, checked_bodies.exprCount());
-        defer allocator.free(relation_blocked_exprs);
-        @memset(relation_blocked_exprs, null);
-
         for (explicit_roots) |root| {
             if (!explicitRootMatchesCheckedRootKind(procedure_templates, compile_time_roots, root)) continue;
             if (!explicitCompileTimeRootRequestIsEligible(compile_time_roots, root)) continue;
@@ -1102,14 +1104,6 @@ pub const RootRequestTable = struct {
             if (compileTimeCallableRootIsProcedureReference(checked_bodies, resolved_value_refs, root)) {
                 continue;
             }
-            if (compileTimeRootDependsOnUnboundPlatformRequirement(
-                checked_bodies,
-                resolved_value_refs,
-                root,
-                relation_blocked_exprs,
-            )) {
-                continue;
-            }
             if (compileTimeRootHasRootRequest(requests.items, root)) {
                 continue;
             }
@@ -1158,7 +1152,7 @@ pub const RootRequestTable = struct {
         if (!module.moduleEnvConst().topLevelDemandDependenciesReady()) {
             checkedArtifactInvariant("checked module had no top-level demand dependencies", .{});
         }
-        const compile_time_requests = try collectCompileTimeRootRequests(
+        const full_schedule = try collectCompileTimeRootRequests(
             allocator,
             all_requests,
             module.moduleIndex(),
@@ -1173,7 +1167,16 @@ pub const RootRequestTable = struct {
             hoisted_constants,
             const_templates,
         );
-        verifyCompileTimeRequestsScheduled(compile_time_requests, compile_time_roots);
+        defer allocator.free(full_schedule);
+        verifyCompileTimeRequestsScheduled(full_schedule, compile_time_roots);
+        var active_schedule = std.ArrayList(RootRequest).empty;
+        errdefer active_schedule.deinit(allocator);
+        for (full_schedule, 0..) |request, i| {
+            all_requests[request.order].evaluation_order = @intCast(i);
+            all_requests[request.order].requires_pairing = request.requires_pairing;
+            if (!request.requires_pairing) try active_schedule.append(allocator, all_requests[request.order]);
+        }
+        const compile_time_requests = try active_schedule.toOwnedSlice(allocator);
 
         return .{
             .requests = all_requests,
@@ -1232,7 +1235,7 @@ fn collectRuntimeRootRequests(
     errdefer runtime_requests.deinit(allocator);
 
     for (requests) |request| {
-        if (request.abi == .compile_time) continue;
+        if (request.abi == .compile_time or request.requires_pairing) continue;
         try runtime_requests.append(allocator, request);
     }
 
@@ -1306,9 +1309,10 @@ const CompileTimeRequestScheduler = struct {
     callable_eval_templates: *const CallableEvalTemplateTable,
     hoisted_constants: *const HoistedConstTable,
     const_templates: *const ConstTemplateTable,
-    entries: []const CompileTimeRequestScheduleEntry,
+    entries: []CompileTimeRequestScheduleEntry,
     root_to_request_index: []?usize,
     dependents: []std.ArrayList(usize),
+    pairing_dependents: []std.ArrayList(usize),
     indegrees: []u32,
     emitted: []bool,
     visited_templates: []u32,
@@ -1330,7 +1334,7 @@ const CompileTimeRequestScheduler = struct {
         callable_eval_templates: *const CallableEvalTemplateTable,
         hoisted_constants: *const HoistedConstTable,
         const_templates: *const ConstTemplateTable,
-        entries: []const CompileTimeRequestScheduleEntry,
+        entries: []CompileTimeRequestScheduleEntry,
     ) Allocator.Error!CompileTimeRequestScheduler {
         const root_to_request_index = try allocator.alloc(?usize, compile_time_roots.roots.len);
         errdefer allocator.free(root_to_request_index);
@@ -1339,6 +1343,10 @@ const CompileTimeRequestScheduler = struct {
         const dependents = try allocator.alloc(std.ArrayList(usize), entries.len);
         errdefer allocator.free(dependents);
         for (dependents) |*list| list.* = .empty;
+
+        const pairing_dependents = try allocator.alloc(std.ArrayList(usize), entries.len);
+        errdefer allocator.free(pairing_dependents);
+        for (pairing_dependents) |*list| list.* = .empty;
 
         const indegrees = try allocator.alloc(u32, entries.len);
         errdefer allocator.free(indegrees);
@@ -1379,6 +1387,7 @@ const CompileTimeRequestScheduler = struct {
             .entries = entries,
             .root_to_request_index = root_to_request_index,
             .dependents = dependents,
+            .pairing_dependents = pairing_dependents,
             .indegrees = indegrees,
             .emitted = emitted,
             .visited_templates = visited_templates,
@@ -1391,6 +1400,8 @@ const CompileTimeRequestScheduler = struct {
         self.allocator.free(self.visited_templates);
         self.allocator.free(self.emitted);
         self.allocator.free(self.indegrees);
+        for (self.pairing_dependents) |*list| list.deinit(self.allocator);
+        self.allocator.free(self.pairing_dependents);
         for (self.dependents) |*list| list.deinit(self.allocator);
         self.allocator.free(self.dependents);
         self.allocator.free(self.root_to_request_index);
@@ -1399,6 +1410,21 @@ const CompileTimeRequestScheduler = struct {
 
     fn sortedRequests(self: *CompileTimeRequestScheduler) Allocator.Error![]RootRequest {
         try self.buildEdges();
+        // Binding dependence includes captured values as well as strict demand
+        // edges. Propagate it separately from the acyclic evaluation schedule.
+        var pending = std.ArrayList(usize).empty;
+        defer pending.deinit(self.allocator);
+        for (self.entries, 0..) |entry, i| {
+            if (entry.request.requires_pairing) try pending.append(self.allocator, i);
+        }
+        var pending_index: usize = 0;
+        while (pending_index < pending.items.len) : (pending_index += 1) {
+            for (self.pairing_dependents[pending.items[pending_index]].items) |dependent| {
+                if (self.entries[dependent].request.requires_pairing) continue;
+                self.entries[dependent].request.requires_pairing = true;
+                try pending.append(self.allocator, dependent);
+            }
+        }
 
         var sorted = std.ArrayList(RootRequest).empty;
         errdefer sorted.deinit(self.allocator);
@@ -1488,6 +1514,7 @@ const CompileTimeRequestScheduler = struct {
         ref: ResolvedValueRef,
     ) Allocator.Error!void {
         switch (ref) {
+            .platform_required_declaration => self.entries[self.current_request_index].request.requires_pairing = true,
             .top_level_const => |const_use| try self.addConstUseDependency(const_use),
             .selected_hoisted_const => |selected| try self.addConstUseDependency(selected.const_use),
             .top_level_proc,
@@ -1503,7 +1530,6 @@ const CompileTimeRequestScheduler = struct {
             .imported_const,
             .imported_proc,
             .hosted_proc,
-            .platform_required_declaration,
             .platform_required_checked_error,
             => {},
         }
@@ -1616,6 +1642,9 @@ const CompileTimeRequestScheduler = struct {
         dependency_root: ComptimeRootId,
     ) Allocator.Error!void {
         if (dependency_root == self.current_root_id) return;
+        if (self.root_to_request_index[@intFromEnum(dependency_root)]) |dependency_index| {
+            try self.pairing_dependents[dependency_index].append(self.allocator, self.current_request_index);
+        }
         if (!self.rootDependencyIsStrict(dependency_root)) return;
         try self.addUnconditionalRootDependency(dependency_root);
     }
@@ -2042,8 +2071,9 @@ fn verifyRootRequestSubsets(root_requests: RootRequestTable) void {
     var compile_time_count: usize = 0;
 
     for (root_requests.requests) |request| {
+        if (request.requires_pairing) continue;
         if (request.abi == .compile_time) {
-            compile_time_count += 1;
+            if (!request.evaluation_complete) compile_time_count += 1;
         } else {
             if (runtime_index >= root_requests.runtime_requests.len) {
                 std.debug.panic("checked artifact invariant violated: runtime root request subset is missing an entry", .{});
@@ -2089,217 +2119,6 @@ fn rootSourceMatches(a: RootSource, b: RootSource) bool {
     };
 }
 
-fn compileTimeRootDependsOnUnboundPlatformRequirement(
-    checked_bodies: *const CheckedBodyStore,
-    resolved_value_refs: *const ResolvedValueRefTable,
-    root: CompileTimeRoot,
-    relation_blocked_exprs: []?bool,
-) bool {
-    return switch (root.kind) {
-        .constant,
-        .hoisted_constant,
-        .hoisted_validation,
-        .callable_binding,
-        .numeral_conversion,
-        .quote_conversion,
-        .repl_expr,
-        => exprDependsOnUnboundPlatformRequirement(
-            checked_bodies,
-            resolved_value_refs,
-            root.expr,
-            relation_blocked_exprs,
-        ),
-        .expect => false,
-    };
-}
-
-fn exprDependsOnUnboundPlatformRequirement(
-    checked_bodies: *const CheckedBodyStore,
-    resolved_value_refs: *const ResolvedValueRefTable,
-    expr_id: CheckedExprId,
-    relation_blocked_exprs: []?bool,
-) bool {
-    const index = @intFromEnum(expr_id);
-    if (relation_blocked_exprs[index]) |cached| return cached;
-
-    const data = checked_bodies.expr(@enumFromInt(index)).data;
-    const result = switch (data) {
-        .lookup_local => |lookup| resolvedRefIsUnboundPlatformRequirement(resolved_value_refs, lookup.resolved),
-        .lookup_external,
-        .lookup_required,
-        => |ref_id| resolvedRefIsUnboundPlatformRequirement(resolved_value_refs, ref_id),
-        .str,
-        .list,
-        .tuple,
-        => |items| exprSpanDependsOnUnboundPlatformRequirement(checked_bodies, resolved_value_refs, items, relation_blocked_exprs),
-        .match_ => |match| blk: {
-            if (exprDependsOnUnboundPlatformRequirement(checked_bodies, resolved_value_refs, match.cond, relation_blocked_exprs)) break :blk true;
-            for (match.branches) |branch| {
-                if (branch.guard) |guard| {
-                    if (exprDependsOnUnboundPlatformRequirement(checked_bodies, resolved_value_refs, guard, relation_blocked_exprs)) break :blk true;
-                }
-                if (exprDependsOnUnboundPlatformRequirement(checked_bodies, resolved_value_refs, branch.value, relation_blocked_exprs)) break :blk true;
-            }
-            break :blk false;
-        },
-        .if_ => |if_| blk: {
-            for (if_.branches) |branch| {
-                if (exprDependsOnUnboundPlatformRequirement(checked_bodies, resolved_value_refs, branch.cond, relation_blocked_exprs)) break :blk true;
-                if (exprDependsOnUnboundPlatformRequirement(checked_bodies, resolved_value_refs, branch.body, relation_blocked_exprs)) break :blk true;
-            }
-            break :blk exprDependsOnUnboundPlatformRequirement(checked_bodies, resolved_value_refs, if_.final_else, relation_blocked_exprs);
-        },
-        .call => |call| blk: {
-            if (exprDependsOnUnboundPlatformRequirement(checked_bodies, resolved_value_refs, call.func, relation_blocked_exprs)) break :blk true;
-            break :blk exprSpanDependsOnUnboundPlatformRequirement(checked_bodies, resolved_value_refs, call.args, relation_blocked_exprs);
-        },
-        .record => |record| blk: {
-            if (record.ext) |ext| {
-                if (exprDependsOnUnboundPlatformRequirement(checked_bodies, resolved_value_refs, ext, relation_blocked_exprs)) break :blk true;
-            }
-            for (record.fields) |field| {
-                if (exprDependsOnUnboundPlatformRequirement(checked_bodies, resolved_value_refs, field.value, relation_blocked_exprs)) break :blk true;
-            }
-            break :blk false;
-        },
-        .block => |block| blk: {
-            for (block.statements) |statement| {
-                if (statementDependsOnUnboundPlatformRequirement(checked_bodies, resolved_value_refs, statement, relation_blocked_exprs)) break :blk true;
-            }
-            break :blk exprDependsOnUnboundPlatformRequirement(checked_bodies, resolved_value_refs, block.final_expr, relation_blocked_exprs);
-        },
-        .tag => |tag| exprSpanDependsOnUnboundPlatformRequirement(checked_bodies, resolved_value_refs, tag.args, relation_blocked_exprs),
-        .nominal => |nominal| exprDependsOnUnboundPlatformRequirement(checked_bodies, resolved_value_refs, nominal.backing_expr, relation_blocked_exprs),
-        .closure => |closure| exprDependsOnUnboundPlatformRequirement(checked_bodies, resolved_value_refs, closure.lambda, relation_blocked_exprs),
-        .lambda => |lambda| exprDependsOnUnboundPlatformRequirement(checked_bodies, resolved_value_refs, lambda.body, relation_blocked_exprs),
-        .interpolation => |interpolation| blk: {
-            if (exprDependsOnUnboundPlatformRequirement(checked_bodies, resolved_value_refs, interpolation.first, relation_blocked_exprs)) break :blk true;
-            for (interpolation.parts) |part| {
-                if (exprDependsOnUnboundPlatformRequirement(checked_bodies, resolved_value_refs, part.value, relation_blocked_exprs)) break :blk true;
-                if (exprDependsOnUnboundPlatformRequirement(checked_bodies, resolved_value_refs, part.following_segment, relation_blocked_exprs)) break :blk true;
-            }
-            break :blk false;
-        },
-        .binop => |binop| exprDependsOnUnboundPlatformRequirement(checked_bodies, resolved_value_refs, binop.lhs, relation_blocked_exprs) or
-            exprDependsOnUnboundPlatformRequirement(checked_bodies, resolved_value_refs, binop.rhs, relation_blocked_exprs),
-        .unary_minus,
-        .unary_not,
-        .dbg,
-        .expect,
-        => |child| exprDependsOnUnboundPlatformRequirement(checked_bodies, resolved_value_refs, child, relation_blocked_exprs),
-        .expect_err => |expect_err| exprDependsOnUnboundPlatformRequirement(checked_bodies, resolved_value_refs, expect_err.expr, relation_blocked_exprs),
-        .field_access => |access| exprDependsOnUnboundPlatformRequirement(checked_bodies, resolved_value_refs, access.receiver, relation_blocked_exprs),
-        .structural_eq => |eq| exprDependsOnUnboundPlatformRequirement(checked_bodies, resolved_value_refs, eq.lhs, relation_blocked_exprs) or
-            exprDependsOnUnboundPlatformRequirement(checked_bodies, resolved_value_refs, eq.rhs, relation_blocked_exprs),
-        .structural_hash => |h| exprDependsOnUnboundPlatformRequirement(checked_bodies, resolved_value_refs, h.value, relation_blocked_exprs) or
-            exprDependsOnUnboundPlatformRequirement(checked_bodies, resolved_value_refs, h.hasher, relation_blocked_exprs),
-        .tuple_access => |access| exprDependsOnUnboundPlatformRequirement(checked_bodies, resolved_value_refs, access.tuple, relation_blocked_exprs),
-        .break_ => false,
-        .return_ => |ret| exprDependsOnUnboundPlatformRequirement(checked_bodies, resolved_value_refs, ret.expr, relation_blocked_exprs),
-        .for_ => |for_| exprDependsOnUnboundPlatformRequirement(checked_bodies, resolved_value_refs, for_.expr, relation_blocked_exprs) or
-            exprDependsOnUnboundPlatformRequirement(checked_bodies, resolved_value_refs, for_.body, relation_blocked_exprs),
-        .run_low_level => |run| exprSpanDependsOnUnboundPlatformRequirement(checked_bodies, resolved_value_refs, run.args, relation_blocked_exprs),
-        .pending,
-        .numeral,
-        .str_from_quote,
-        .str_segment,
-        .bytes_literal,
-        .empty_list,
-        .empty_record,
-        .zero_argument_tag,
-        .dispatch_call,
-        .method_eq,
-        .type_dispatch_call,
-        .hosted_lambda,
-        .runtime_error,
-        .crash,
-        .ellipsis,
-        .anno_only,
-        => false,
-    };
-
-    relation_blocked_exprs[index] = result;
-    return result;
-}
-
-fn exprSpanDependsOnUnboundPlatformRequirement(
-    checked_bodies: *const CheckedBodyStore,
-    resolved_value_refs: *const ResolvedValueRefTable,
-    exprs: []const CheckedExprId,
-    relation_blocked_exprs: []?bool,
-) bool {
-    for (exprs) |expr_id| {
-        if (exprDependsOnUnboundPlatformRequirement(checked_bodies, resolved_value_refs, expr_id, relation_blocked_exprs)) return true;
-    }
-    return false;
-}
-
-fn statementDependsOnUnboundPlatformRequirement(
-    checked_bodies: *const CheckedBodyStore,
-    resolved_value_refs: *const ResolvedValueRefTable,
-    statement_id: CheckedStatementId,
-    relation_blocked_exprs: []?bool,
-) bool {
-    return switch (checked_bodies.statement(statement_id).data) {
-        .decl => |statement| exprDependsOnUnboundPlatformRequirement(checked_bodies, resolved_value_refs, statement.expr, relation_blocked_exprs),
-        .var_ => |statement| exprDependsOnUnboundPlatformRequirement(checked_bodies, resolved_value_refs, statement.expr, relation_blocked_exprs),
-        .var_uninitialized => false,
-        .reassign => |statement| exprDependsOnUnboundPlatformRequirement(checked_bodies, resolved_value_refs, statement.expr, relation_blocked_exprs),
-        .dbg,
-        .expr,
-        .expect,
-        => |expr| exprDependsOnUnboundPlatformRequirement(checked_bodies, resolved_value_refs, expr, relation_blocked_exprs),
-        .for_ => |for_| exprDependsOnUnboundPlatformRequirement(checked_bodies, resolved_value_refs, for_.expr, relation_blocked_exprs) or
-            exprDependsOnUnboundPlatformRequirement(checked_bodies, resolved_value_refs, for_.body, relation_blocked_exprs),
-        .while_ => |while_| exprDependsOnUnboundPlatformRequirement(checked_bodies, resolved_value_refs, while_.cond, relation_blocked_exprs) or
-            exprDependsOnUnboundPlatformRequirement(checked_bodies, resolved_value_refs, while_.body, relation_blocked_exprs),
-        .infinite_loop => |loop| exprDependsOnUnboundPlatformRequirement(checked_bodies, resolved_value_refs, loop.cond, relation_blocked_exprs) or
-            exprDependsOnUnboundPlatformRequirement(checked_bodies, resolved_value_refs, loop.body, relation_blocked_exprs),
-        .breakable_loop => |loop| exprDependsOnUnboundPlatformRequirement(checked_bodies, resolved_value_refs, loop.cond, relation_blocked_exprs) or
-            exprDependsOnUnboundPlatformRequirement(checked_bodies, resolved_value_refs, loop.body, relation_blocked_exprs),
-        .return_ => |ret| exprDependsOnUnboundPlatformRequirement(checked_bodies, resolved_value_refs, ret.expr, relation_blocked_exprs),
-        .pending,
-        .crash,
-        .break_,
-        .import_,
-        .alias_decl,
-        .where_alias_decl,
-        .nominal_decl,
-        .type_anno,
-        .type_var_alias,
-        .runtime_error,
-        => false,
-    };
-}
-
-fn resolvedRefIsUnboundPlatformRequirement(
-    resolved_value_refs: *const ResolvedValueRefTable,
-    maybe_ref: ?ResolvedValueRefId,
-) bool {
-    const ref_id = maybe_ref orelse return false;
-    const index = @intFromEnum(ref_id);
-    std.debug.assert(index < resolved_value_refs.records.len);
-    return switch (resolved_value_refs.records[index].ref) {
-        .platform_required_declaration => true,
-        .local_param,
-        .local_value,
-        .local_mutable_version,
-        .pattern_binder,
-        .local_proc,
-        .selected_hoisted_const,
-        .top_level_const,
-        .imported_const,
-        .top_level_proc,
-        .imported_proc,
-        .hosted_proc,
-        .platform_required_checked_error,
-        .platform_required_const,
-        .platform_required_proc,
-        .promoted_top_level_proc,
-        => false,
-    };
-}
-
 fn appendPublishedEntrypointRoots(
     requests: *std.ArrayList(RootRequest),
     allocator: Allocator,
@@ -2319,7 +2138,7 @@ fn appendPublishedEntrypointRoots(
     const provided_runtime_roots_ready = module_env.module_kind != .platform or
         platform_required_declarations.declarations.len == 0 or
         platform_app_relation != null;
-    if (provided_runtime_roots_ready) {
+    {
         for (provided_exports.exports, 0..) |provided, export_index| {
             switch (provided) {
                 .procedure => |procedure| {
@@ -2332,6 +2151,7 @@ fn appendPublishedEntrypointRoots(
                     try appendRoot(requests, allocator, .{
                         .module_idx = module.moduleIndex(),
                         .kind = .provided_export,
+                        .requires_pairing = !provided_runtime_roots_ready,
                         .provided_export = @enumFromInt(export_index),
                         .source = .{ .def = procedure.def },
                         .checked_type = checked_type,
@@ -2558,6 +2378,7 @@ fn checkedTypeIdForVar(
 }
 
 const RootRequestWithoutOrder = struct {
+    requires_pairing: bool = false,
     module_idx: u32,
     kind: RootRequestKind,
     source: RootSource,
@@ -2580,6 +2401,7 @@ fn appendRoot(
 ) Allocator.Error!void {
     try requests.append(allocator, .{
         .order = @intCast(requests.items.len),
+        .requires_pairing = request.requires_pairing,
         .module_idx = request.module_idx,
         .kind = request.kind,
         .source = request.source,
@@ -10440,6 +10262,7 @@ pub const CheckedExhaustivenessSite = struct {
     checked_expr: ?CheckedExprId = null,
     checked_pattern: ?CheckedPatternId = null,
     policy: ExhaustivenessResolutionPolicy,
+    requires_pairing: bool = false,
 };
 
 /// Table of checked exhaustiveness sites keyed by checked expressions or patterns.
@@ -21277,6 +21100,15 @@ fn hostedTryAdapterCapabilityForRoot(
     checked_types: *const CheckedTypeStore,
     checked_fn_root: CheckedTypeId,
 ) Allocator.Error!?HostedTryAdapterCapability {
+    _ = module;
+    return hostedTryAdapterCapabilityForCheckedRoot(names, checked_types, checked_fn_root);
+}
+
+fn hostedTryAdapterCapabilityForCheckedRoot(
+    names: *canonical.CanonicalNameStore,
+    checked_types: *const CheckedTypeStore,
+    checked_fn_root: CheckedTypeId,
+) Allocator.Error!?HostedTryAdapterCapability {
     var remaining = checked_types.payloads.items.len;
     var current = checked_fn_root;
     const function = while (true) {
@@ -21330,11 +21162,10 @@ fn hostedTryAdapterCapabilityForRoot(
         checkedArtifactInvariant("Builtin.Try checked type did not have exactly two type arguments", .{});
     }
     if (!checkedTypeIsClosedTagRow(checked_types, nominal.args[1])) return null;
-    const idents = module.commonIdents();
     return .{
         .nominal = checkedNominalTypeKey(nominal),
-        .ok_tag = try names.internTagIdent(module.identStoreConst(), idents.ok),
-        .err_tag = try names.internTagIdent(module.identStoreConst(), idents.err),
+        .ok_tag = try names.internTagLabel("Ok"),
+        .err_tag = try names.internTagLabel("Err"),
         .ok_type_arg_index = 0,
         .err_type_arg_index = 1,
     };
@@ -22950,10 +22781,9 @@ const PlatformRelationTypeSubstitutions = struct {
 
     fn fromRelation(
         allocator: Allocator,
-        module: TypedCIR.Module,
         module_identity: ModuleIdentity,
         names: *canonical.CanonicalNameStore,
-        checked_types: *CheckedTypePublication,
+        checked_types: *CheckedTypeStore,
         declarations: *const PlatformRequiredDeclarationTable,
         type_inputs: *const PlatformTypeInputs,
         relation_artifacts: []const ImportedModuleView,
@@ -22961,7 +22791,6 @@ const PlatformRelationTypeSubstitutions = struct {
     ) Allocator.Error!PlatformRelationTypeSubstitutions {
         const active_relation = relation orelse return .{};
         validatePlatformAppRelationForModule(
-            module,
             module_identity,
             names,
             declarations,
@@ -22987,22 +22816,22 @@ const PlatformRelationTypeSubstitutions = struct {
 
             const app_identity_roots = active_relation.identity_solutions_app[input.identity_start .. input.identity_start + input.identity_len];
 
-            var projector = CheckedTypeStoreImportProjector.initPreservingSourceInstance(allocator, &checked_types.store, names, app_view);
+            var projector = CheckedTypeStoreImportProjector.initPreservingSourceInstance(allocator, checked_types, names, app_view);
             defer projector.deinit();
 
             for (identity_formals, app_identity_roots) |formal, app_identity_root| {
                 if (builtin.mode == .Debug) {
-                    std.debug.assert(checkedTypePayloadIsIdentity(checked_types.store.payload(formal)));
+                    std.debug.assert(checkedTypePayloadIsIdentity(checked_types.payload(formal)));
                 }
                 const actual = try projector.project(app_identity_root);
-                try recordRelationSubstitution(allocator, names, &checked_types.store, &formals, &actuals, formal, actual);
+                try recordRelationSubstitution(allocator, names, checked_types, &formals, &actuals, formal, actual);
             }
 
             for (type_inputs.aliases[required.aliases.start..][0..required.aliases.len]) |alias| {
                 const actual = relationSubstitutionActual(formals.items, actuals.items, alias.identity) orelse continue;
-                try recordRelationSubstitution(allocator, names, &checked_types.store, &formals, &actuals, alias.root, actual);
-                try recordRelationSubstitution(allocator, names, &checked_types.store, &formals, &actuals, alias.backing, actual);
-                try recordRelationSubstitution(allocator, names, &checked_types.store, &formals, &actuals, alias.identity, actual);
+                try recordRelationSubstitution(allocator, names, checked_types, &formals, &actuals, alias.root, actual);
+                try recordRelationSubstitution(allocator, names, checked_types, &formals, &actuals, alias.backing, actual);
+                try recordRelationSubstitution(allocator, names, checked_types, &formals, &actuals, alias.identity, actual);
             }
         }
 
@@ -23094,17 +22923,15 @@ pub const PlatformRequirementRelationTable = struct {
 
     pub fn fromRelation(
         allocator: Allocator,
-        module: TypedCIR.Module,
         module_identity: ModuleIdentity,
         names: *canonical.CanonicalNameStore,
-        checked_types: *CheckedTypePublication,
+        checked_types: *CheckedTypeStore,
         declarations: *const PlatformRequiredDeclarationTable,
         relation_artifacts: []const ImportedModuleView,
         relation: ?PlatformAppRelation,
     ) Allocator.Error!PlatformRequirementRelationTable {
         const active_relation = relation orelse return .{};
         validatePlatformAppRelationForModule(
-            module,
             module_identity,
             names,
             declarations,
@@ -23176,15 +23003,15 @@ pub const PlatformRequirementRelationTable = struct {
             }
             // The requirement type as the checker solved it, recorded on the
             // app's artifact and projected into this publication's store.
-            var projector = CheckedTypeStoreImportProjector.initPreservingSourceInstance(allocator, &checked_types.store, names, app_view);
+            var projector = CheckedTypeStoreImportProjector.initPreservingSourceInstance(allocator, checked_types, names, app_view);
             defer projector.deinit();
             const payload = try projector.project(input.solved_root_app);
-            const payload_key = checked_types.store.roots.items[@intFromEnum(payload)].key;
+            const payload_key = checked_types.roots.items[@intFromEnum(payload)].key;
 
             rows[i] = .{
                 .id = input.id,
                 .relation = active_relation.key,
-                .module_idx = module.moduleIndex(),
+                .module_idx = module_identity.module_idx,
                 .declaration = input.declaration,
                 .requires_idx = input.requires_idx,
                 .app_value = input.app_value,
@@ -23400,7 +23227,6 @@ pub const PlatformRequiredBindingTable = struct {
 
     pub fn fromRelation(
         allocator: Allocator,
-        module: TypedCIR.Module,
         module_identity: ModuleIdentity,
         names: *const canonical.CanonicalNameStore,
         declarations: *const PlatformRequiredDeclarationTable,
@@ -23409,7 +23235,6 @@ pub const PlatformRequiredBindingTable = struct {
     ) Allocator.Error!PlatformRequiredBindingTable {
         const active_relation = relation orelse return .{};
         validatePlatformAppRelationForModule(
-            module,
             module_identity,
             names,
             declarations,
@@ -23514,7 +23339,7 @@ pub const PlatformRequiredBindingTable = struct {
             bindings[i] = .{
                 .id = @enumFromInt(@as(u32, @intCast(i))),
                 .relation = active_relation.key,
-                .module_idx = module.moduleIndex(),
+                .module_idx = module_identity.module_idx,
                 .declaration = binding.declaration,
                 .requires_idx = binding.requires_idx,
                 .app_value = binding.app_value,
@@ -23584,17 +23409,16 @@ pub const PlatformRequiredBindingTable = struct {
 };
 
 fn validatePlatformAppRelationForModule(
-    module: TypedCIR.Module,
     module_identity: ModuleIdentity,
     names: *const canonical.CanonicalNameStore,
     declarations: *const PlatformRequiredDeclarationTable,
     active_relation: PlatformAppRelation,
 ) void {
-    if (active_relation.platform_module_idx != module.moduleIndex()) {
+    if (active_relation.platform_module_idx != module_identity.module_idx) {
         if (builtin.mode == .Debug) {
             std.debug.panic(
                 "checked artifact invariant violated: platform/app relation belongs to module {d}, not platform module {d}",
-                .{ active_relation.platform_module_idx, module.moduleIndex() },
+                .{ active_relation.platform_module_idx, module_identity.module_idx },
             );
         }
         unreachable;
@@ -25266,24 +25090,14 @@ pub fn platformRequirementContextKey(artifact: *const CheckedModuleArtifact) Pla
     );
 }
 
-/// Public `buildPlatformAppRelation` function.
-pub fn buildPlatformAppRelation(
+fn buildPlatformAppRelationFromDeclarations(
     allocator: Allocator,
-    platform_module: TypedCIR.Module,
+    module_idx: u32,
+    requirement_context: PlatformRequirementContextKey,
+    declarations: []const PlatformRequiredDeclaration,
+    required_type_keys: []const canonical.CanonicalTypeKey,
     app_artifact: *const CheckedModuleArtifact,
 ) Allocator.Error!PlatformAppRelation {
-    const platform_module_env = platform_module.moduleEnvConst();
-
-    // Derive the platform's required declarations and requirement context from the
-    // typed platform module directly (a scratch name store the table interns into),
-    // so finalization consumes the platform root's checked module rather than a
-    // previously-published declaration artifact.
-    var declaration_names = canonical.CanonicalNameStore.init(allocator);
-    defer declaration_names.deinit();
-    var declaration_table = try PlatformRequiredDeclarationTable.fromModule(allocator, platform_module, &declaration_names);
-    defer declaration_table.deinit(allocator);
-    const declarations = declaration_table.declarations;
-
     var relations = std.ArrayList(PlatformRequirementRelationInput).empty;
     errdefer relations.deinit(allocator);
     var bindings = std.ArrayList(PlatformRequiredBindingInput).empty;
@@ -25291,13 +25105,7 @@ pub fn buildPlatformAppRelation(
     var checked_error_requires = std.ArrayList(u32).empty;
     errdefer checked_error_requires.deinit(allocator);
 
-    const requirement_context = PlatformRequirementContextKey.computeFromParts(
-        computeStableModuleIdentityHash(platform_module_env),
-        declaration_table.identityHash(&declaration_names),
-    );
     const relation_key = PlatformAppRelationKey.compute(app_artifact.key, requirement_context);
-    var key_writer = canonical_type_keys.TypeWriter.init(allocator, &platform_module_env.types, platform_module_env);
-    defer key_writer.deinit();
 
     for (declarations) |declaration| {
         // The checker records successful solutions as exact app value/type
@@ -25308,17 +25116,12 @@ pub fn buildPlatformAppRelation(
             continue;
         };
 
-        const requested_source_ty = (try key_writer.fromVar(ModuleEnv.varFrom(declaration.type_anno))).key;
+        const requested_source_ty = required_type_keys[@intFromEnum(declaration.id)];
         const app_value_ref = TopLevelValueRef{
             .artifact = app_artifact.key,
             .pattern = solution.pattern,
         };
 
-        const required_ty_is_function = platform_module_env.types.varResolvesToFunction(ModuleEnv.varFrom(declaration.type_anno));
-        if (builtin.mode == .Debug) {
-            const derived_kind: PlatformRequiredValueKind = if (required_ty_is_function) .procedure_value else .const_value;
-            std.debug.assert(derived_kind == solution.value_kind);
-        }
         const value_kind = solution.value_kind;
 
         const top_level = app_artifact.top_level_values.lookupByDef(solution.def) orelse {
@@ -25403,13 +25206,177 @@ pub fn buildPlatformAppRelation(
     return .{
         .key = relation_key,
         .requirement_context = requirement_context,
-        .platform_module_idx = platform_module.moduleIndex(),
+        .platform_module_idx = module_idx,
         .app_artifact = app_artifact.key,
         .relations = owned_relations,
         .bindings = owned_bindings,
         .checked_error_requires = owned_checked_errors,
         .identity_solutions_app = app_artifact.platform_requirement_solutions.identity_solutions,
     };
+}
+
+/// Copy the compact mutable columns of a pairing session. Checked expression
+/// bodies, dispatch plans, declaration tables and closure inventories stay in
+/// their immutable module. This allocator must be the session's arena.
+fn copyPairingColumns(comptime T: type, source: T, allocator: Allocator) Allocator.Error!T {
+    if (comptime @typeInfo(T) == .pointer) {
+        const pointer = @typeInfo(T).pointer;
+        comptime std.debug.assert(pointer.size == .slice);
+        artifact_serialize.assertRelocatablePod(pointer.child);
+        const result = try allocator.alignedAlloc(pointer.child, .fromByteUnits(pointer.alignment orelse @alignOf(pointer.child)), source.len);
+        @memcpy(result, source);
+        return result;
+    } else if (comptime @typeInfo(T) == .@"struct") {
+        if (comptime @hasField(T, "items") and @hasField(T, "capacity")) {
+            var result = source;
+            result.items = try copyPairingColumns(@TypeOf(source.items), source.items, allocator);
+            result.capacity = result.items.len;
+            return result;
+        } else if (comptime @hasDecl(T, "Serialized")) {
+            var result: T = source;
+            inline for (@typeInfo(T).@"struct".fields) |field| {
+                const transient = comptime blk: {
+                    if (@hasDecl(T, "serde_transient_fields")) for (T.serde_transient_fields) |name| {
+                        if (pairingFieldNameEql(name, field.name)) break :blk true;
+                    };
+                    break :blk false;
+                };
+                if (comptime transient) {
+                    @field(result, field.name) = if (field.defaultValue()) |value| value else field.type.init(allocator);
+                } else if (comptime field.type == Allocator) {
+                    @field(result, field.name) = allocator;
+                } else if (comptime pairingFieldNameEql(field.name, "serialized")) {
+                    @field(result, field.name) = false;
+                } else if (comptime pairingFieldNameEql(field.name, "supports_inserts")) {
+                    @field(result, field.name) = true;
+                } else {
+                    @field(result, field.name) = try copyPairingColumns(field.type, @field(source, field.name), allocator);
+                }
+            }
+            return result;
+        } else {
+            artifact_serialize.assertRelocatablePod(T);
+            return source;
+        }
+    } else {
+        artifact_serialize.assertRelocatablePod(T);
+        return source;
+    }
+}
+
+fn pairingFieldNameEql(comptime a: []const u8, comptime b: []const u8) bool {
+    if (a.len != b.len) return false;
+    for (a, b) |x, y| if (x != y) return false;
+    return true;
+}
+
+/// Instantiate only pairing-owned metadata from already checked modules. Both
+/// lowering strategies consume this view; neither sees a solver or source map.
+pub fn pairCheckedPlatform(
+    allocator: Allocator,
+    platform: *const CheckedModuleArtifact,
+    app: *const CheckedModuleArtifact,
+    available_artifacts: []const ImportedModuleView,
+) Allocator.Error!CheckedModuleArtifact {
+    std.debug.assert(platform.evaluation_state == .finalized);
+    std.debug.assert(platform.checking_context_identity.platform_app_relation == null);
+    const arena = try allocator.create(std.heap.ArenaAllocator);
+    arena.* = std.heap.ArenaAllocator.init(allocator);
+    errdefer {
+        arena.deinit();
+        allocator.destroy(arena);
+    }
+    const session = arena.allocator();
+    var result = platform.*;
+    result.serialized_backing = null;
+    result.serialized_backing_is_static = false;
+    result.pairing_arena = arena;
+    result.evaluation_state = .prepared;
+    result.compile_time_debug = .{};
+    result.canonical_names = try platform.canonical_names.clone(session);
+    result.checked_types = try copyPairingColumns(CheckedTypeStore, platform.checked_types, session);
+    for (result.checked_types.roots.items) |root| {
+        const entry = try result.checked_types.root_index.getOrPut(session, root.key);
+        if (!entry.found_existing) entry.value_ptr.* = root.id;
+    }
+    const type_keys = try session.alloc(canonical.CanonicalTypeKey, platform.platform_type_inputs.requirements.len);
+    for (platform.platform_type_inputs.requirements, type_keys) |required, *key| key.* = platform.checked_types.roots.items[@intFromEnum(required.root)].key;
+    const relation = try buildPlatformAppRelationFromDeclarations(session, platform.module_identity.module_idx, platform.platformRequirementContextKey(), platform.platform_required_declarations.declarations, type_keys, app);
+    result.checking_context_identity.platform_app_relation = relation.key;
+    const relations = [_]ImportedModuleView{importedView(app)};
+    var substitutions = try PlatformRelationTypeSubstitutions.fromRelation(session, result.module_identity, &result.canonical_names, &result.checked_types, &result.platform_required_declarations, &result.platform_type_inputs, &relations, relation);
+    result.platform_requirement_relations = try PlatformRequirementRelationTable.fromRelation(session, result.module_identity, &result.canonical_names, &result.checked_types, &result.platform_required_declarations, &relations, relation);
+    result.platform_required_bindings = try PlatformRequiredBindingTable.fromRelation(session, result.module_identity, &result.canonical_names, &result.platform_required_declarations, &result.platform_requirement_relations, relation);
+    result.resolved_value_refs.records = try session.dupe(ResolvedValueRefRecord, platform.resolved_value_refs.records);
+    for (result.resolved_value_refs.records) |*record| {
+        if (record.ref == .platform_required_declaration) {
+            const required = platform.platform_required_declarations.lookupByDeclarationId(record.ref.platform_required_declaration).?;
+            record.ref = categorizeRequiredValueRef(required.requires_idx, &result.platform_required_declarations, &result.platform_required_bindings);
+        }
+    }
+    result.checked_procedure_templates.templates = try copyPairingColumns(@TypeOf(platform.checked_procedure_templates.templates), platform.checked_procedure_templates.templates, session);
+    for (result.checked_procedure_templates.templates.items) |*template| {
+        const source_root = template.checked_fn_root;
+        template.checked_fn_root = try substitutions.specializeRoot(session, &result.canonical_names, &result.checked_types, source_root);
+        if (template.checked_fn_root != source_root) {
+            template.checked_fn_scheme = syntheticSchemeKeyForType(result.checked_types.roots.items[@intFromEnum(template.checked_fn_root)].key);
+            template.hosted_try_adapter = try hostedTryAdapterCapabilityForCheckedRoot(&result.canonical_names, &result.checked_types, template.checked_fn_root);
+        }
+    }
+    result.provided_exports = try copyPairingColumns(ProvidedExportTable, platform.provided_exports, session);
+    for (result.provided_exports.exports) |*provided| switch (provided.*) {
+        inline else => |*value| value.checked_type = try substitutions.specializeRoot(session, &result.canonical_names, &result.checked_types, value.checked_type),
+    };
+    var roots = std.ArrayList(RootRequest).empty;
+    try roots.appendSlice(session, platform.root_requests.requests);
+    for (roots.items) |*request| {
+        request.evaluation_complete = request.abi == .compile_time and !request.requires_pairing;
+        request.requires_pairing = false;
+        request.checked_type = try substitutions.specializeRoot(session, &result.canonical_names, &result.checked_types, request.checked_type);
+    }
+    for (result.platform_required_bindings.bindings, 0..) |binding, i| switch (binding.value_use) {
+        .procedure_value => |procedure| try appendRoot(&roots, session, .{
+            .module_idx = result.module_identity.module_idx,
+            .kind = .platform_required_binding,
+            .source = .{ .required_binding = @intCast(i) },
+            .checked_type = platformRequiredBindingCheckedType(binding),
+            .abi = .platform,
+            .exposure = .platform_required,
+            .procedure_use = procedure.procedure,
+            .root_evidence = procedure.root_evidence,
+        }),
+        .const_value => {},
+    };
+    result.root_requests.requests = try roots.toOwnedSlice(session);
+    result.root_requests.runtime_requests = try collectRuntimeRootRequests(session, result.root_requests.requests);
+    var schedule = std.ArrayList(RootRequest).empty;
+    for (result.root_requests.requests) |request| {
+        if (request.evaluation_order != null and !request.evaluation_complete) try schedule.append(session, request);
+    }
+    std.mem.sort(RootRequest, schedule.items, {}, struct {
+        fn lessThan(_: void, a: RootRequest, b: RootRequest) bool {
+            return a.evaluation_order.? < b.evaluation_order.?;
+        }
+    }.lessThan);
+    result.root_requests.compile_time_requests = try schedule.toOwnedSlice(session);
+    if (result.root_requests.compile_time_requests.len != 0) {
+        result.compile_time_roots = try copyPairingColumns(CompileTimeRootTable, platform.compile_time_roots, session);
+        result.const_templates = try copyPairingColumns(ConstTemplateTable, platform.const_templates, session);
+        result.const_store = try copyPairingColumns(ConstStore, platform.const_store, session);
+    }
+    result.exhaustiveness_sites = try copyPairingColumns(CheckedExhaustivenessSiteTable, platform.exhaustiveness_sites, session);
+    var reachability = try ExhaustivenessTemplateReachability.build(session, result.key, &result.root_requests, &result.checked_procedure_templates, &result.entry_wrappers, &result.callable_eval_templates, &result.top_level_procedure_bindings, &result.platform_required_bindings, &result.resolved_value_refs);
+    for (result.exhaustiveness_sites.sites) |*site| {
+        site.requires_pairing = false;
+        if (site.owner) |owner| switch (owner) {
+            .procedure_template => |template| {
+                if (reachability.templateIsRuntimeReachable(template)) site.policy = .runtime_reachable else if (reachability.templateIsCompileTimeReachable(template)) site.policy = .compile_time_only;
+            },
+            .root => {},
+        };
+    }
+    result.lowering_visibility = try collectLoweringVisibility(session, result.key, result.direct_import_artifact_keys, result.method_lookup_scope, result.public_api_dependencies, &result.checked_types, &result.checked_procedure_templates, &result.callable_eval_templates, &result.entry_wrappers, &result.const_templates, &result.resolved_value_refs, &result.top_level_procedure_bindings, &result.platform_required_bindings, &result.root_requests, &.{}, available_artifacts, &relations, &result.exported_procedure_templates, &result.exported_procedure_bindings, &result.exported_const_templates);
+    return result;
 }
 
 const FlattenedPlatformRequirementRecordRow = struct {
@@ -26859,6 +26826,7 @@ const ExhaustivenessTemplateReachability = struct {
     resolved_value_refs: *const ResolvedValueRefTable,
     runtime_templates: []bool,
     compile_time_templates: []bool,
+    pairing_templates: []bool,
 
     fn init(
         allocator: Allocator,
@@ -26874,6 +26842,8 @@ const ExhaustivenessTemplateReachability = struct {
         errdefer allocator.free(runtime_templates);
         const compile_time_templates = try allocator.alloc(bool, procedure_templates.templates.items.len);
         errdefer allocator.free(compile_time_templates);
+        const pairing_templates = try allocator.alloc(bool, procedure_templates.templates.items.len);
+        @memset(pairing_templates, false);
         @memset(runtime_templates, false);
         @memset(compile_time_templates, false);
         return .{
@@ -26887,10 +26857,12 @@ const ExhaustivenessTemplateReachability = struct {
             .resolved_value_refs = resolved_value_refs,
             .runtime_templates = runtime_templates,
             .compile_time_templates = compile_time_templates,
+            .pairing_templates = pairing_templates,
         };
     }
 
     fn deinit(self: *ExhaustivenessTemplateReachability) void {
+        self.allocator.free(self.pairing_templates);
         self.allocator.free(self.compile_time_templates);
         self.allocator.free(self.runtime_templates);
         self.* = undefined;
@@ -26919,11 +26891,9 @@ const ExhaustivenessTemplateReachability = struct {
         );
         errdefer reachability.deinit();
 
-        for (root_requests.runtime_requests) |request| {
-            try reachability.markRootRequest(.runtime, request);
-        }
-        for (root_requests.compile_time_requests) |request| {
-            try reachability.markRootRequest(.compile_time, request);
+        for (root_requests.requests) |request| {
+            try reachability.markRootRequest(if (request.abi == .compile_time) .compile_time else .runtime, request);
+            if (request.abi == .compile_time and request.requires_pairing) try reachability.markRootRequest(.pairing, request);
         }
 
         return reachability;
@@ -26942,6 +26912,7 @@ const ExhaustivenessTemplateReachability = struct {
     const ReachabilityKind = enum {
         runtime,
         compile_time,
+        pairing,
     };
 
     fn markRootRequest(
@@ -26980,6 +26951,7 @@ const ExhaustivenessTemplateReachability = struct {
         const seen = switch (kind) {
             .runtime => &self.runtime_templates[idx],
             .compile_time => &self.compile_time_templates[idx],
+            .pairing => &self.pairing_templates[idx],
         };
         if (seen.*) return;
         seen.* = true;
@@ -27147,6 +27119,7 @@ fn publishCheckedExhaustivenessSites(
     maybe_problem_store: ?*problem.Store,
     checked_bodies: *const CheckedBodyStore,
     compile_time_roots: *const CompileTimeRootTable,
+    root_requests: *const RootRequestTable,
     reachability: *const ExhaustivenessTemplateReachability,
 ) Allocator.Error!CheckedExhaustivenessSiteTable {
     const problem_store = maybe_problem_store orelse return .{};
@@ -27186,6 +27159,15 @@ fn publishCheckedExhaustivenessSites(
             .empirical => .compile_time_only,
             .static => .runtime_reachable,
         };
+        const requires_pairing = if (replacing_root) |root| blk: {
+            for (root_requests.requests) |request| {
+                if (request.compile_time_root == root.id) break :blk request.requires_pairing;
+            }
+            break :blk false;
+        } else if (owner_template) |template| blk: {
+            const index = reachability.localTemplateIndex(template).?;
+            break :blk reachability.pairing_templates[index] and !reachability.runtime_templates[index];
+        } else false;
         const owner: ?CheckedExhaustivenessSiteOwner = if (replacing_root) |root|
             .{ .root = root.id }
         else if (owner_template) |template_ref|
@@ -27202,6 +27184,7 @@ fn publishCheckedExhaustivenessSites(
                     .owner = owner,
                     .checked_expr = checked_expr,
                     .policy = policy,
+                    .requires_pairing = requires_pairing,
                 };
             },
             .destructure_pattern => |source_pattern| blk: {
@@ -27213,6 +27196,7 @@ fn publishCheckedExhaustivenessSites(
                     .owner = owner,
                     .checked_pattern = checked_pattern,
                     .policy = policy,
+                    .requires_pairing = requires_pairing,
                 };
             },
         };
@@ -31679,6 +31663,19 @@ pub const CheckedModuleArtifact = struct {
     /// published artifacts, which own their sub-store allocations individually.
     serialized_backing: ?[]align(CompactWriter.SERIALIZATION_ALIGNMENT.toByteUnits()) u8 = null,
     serialized_backing_is_static: bool = false,
+    /// Session-owned metadata overlay borrowing an immutable platform artifact.
+    pairing_arena: ?*std.heap.ArenaAllocator = null,
+
+    pub fn owningAllocator(self: *const CheckedModuleArtifact) Allocator {
+        return if (self.pairing_arena) |arena| arena.child_allocator else self.canonical_names.allocator;
+    }
+
+    /// Semantic identity of executable code, including the session's exact
+    /// app binding environment. Local checked IDs retain the module's key.
+    pub fn codeGenerationKey(self: *const CheckedModuleArtifact) CheckedModuleArtifactKey {
+        if (self.pairing_arena == null) return self.key;
+        return CheckedModuleArtifactKey.computeFromSourceHash(self.key.source_hash, self.module_identity, self.checking_context_identity, self.direct_import_artifact_keys);
+    }
 
     pub fn moduleEnv(self: *CheckedModuleArtifact) *ModuleEnv {
         return self.module_env.env();
@@ -31819,6 +31816,7 @@ pub const CheckedModuleArtifact = struct {
             const owner_only_fields = [_][]const u8{
                 "module_env", // Written as the checked-cache env blob and injected during artifact deserialize.
                 "serialized_backing", // Runtime ownership for relocated cache/static bytes, not checked data.
+                "pairing_arena",
                 "evaluation_state", // Process-local preparation state; cached output is finalized.
                 "serialized_backing_is_static", // Runtime ownership mode for `serialized_backing`.
             };
@@ -31839,7 +31837,7 @@ pub const CheckedModuleArtifact = struct {
             // add three pointers beyond the current-main count, and the
             // record-unset label pool one more. Ordered debug entries and their
             // byte pool add two explicit relocation pointers.
-            std.debug.assert(artifact_serialize.relocatablePointerCount(Serialized) == 226);
+            std.debug.assert(artifact_serialize.relocatablePointerCount(Serialized) == 227);
         }
 
         /// Append every sub-store's bytes to `writer` in field order, recording
@@ -31851,6 +31849,7 @@ pub const CheckedModuleArtifact = struct {
             gpa: Allocator,
             writer: *CompactWriter,
         ) Allocator.Error!void {
+            if (artifact.pairing_arena != null) checkedArtifactInvariant("pairing session cannot be cached as a module", .{});
             if (artifact.evaluation_state != .finalized) checkedArtifactInvariant("cannot serialize prepared checked module", .{});
             self.key = artifact.key;
             self.module_identity = ModuleIdentitySerialized.encode(artifact.module_identity);
@@ -32167,6 +32166,14 @@ pub const CheckedModuleArtifact = struct {
     }
 
     fn deinitInternal(self: *CheckedModuleArtifact, allocator: Allocator, comptime deinit_module_env: bool) void {
+        if (self.pairing_arena) |arena| {
+            const owner = arena.child_allocator;
+            if (deinit_module_env) self.module_env.deinit();
+            arena.deinit();
+            owner.destroy(arena);
+            self.* = undefined;
+            return;
+        }
         if (self.serialized_backing) |backing| {
             // Frozen artifact: every sub-store aliases `backing`, so running the
             // per-sub-store frees would free into the buffer (and the unconditional
@@ -33317,7 +33324,12 @@ pub const CheckedModuleArtifact = struct {
                 }
                 continue;
             }
-            const has_request = compileTimeRootHasRootRequest(self.root_requests.requests, root);
+            const has_request = blk: {
+                for (self.root_requests.requests) |request| {
+                    if (!request.requires_pairing and compileTimeRootHasRootRequest(&.{request}, root)) break :blk true;
+                }
+                break :blk false;
+            };
             switch (root.payload) {
                 .pending => {
                     if (has_request) {
@@ -33857,6 +33869,7 @@ fn verifyPlatformRequiredValueUse(self: *const CheckedModuleArtifact, binding: P
 
 /// Public `ImportedModuleView` declaration.
 pub const ImportedModuleView = struct {
+    code_generation_key: ?CheckedModuleArtifactKey = null,
     key: CheckedModuleArtifactKey,
     module_env: *const ModuleEnv,
     canonical_names: *const canonical.CanonicalNameStore,
@@ -33904,6 +33917,7 @@ pub const LoweringModuleView = struct {
 /// Public `importedView` function.
 pub fn importedView(artifact: *const CheckedModuleArtifact) ImportedModuleView {
     return .{
+        .code_generation_key = if (artifact.pairing_arena != null) artifact.codeGenerationKey() else null,
         .key = artifact.key,
         .module_env = artifact.moduleEnvConst(),
         .canonical_names = &artifact.canonical_names,
@@ -35818,10 +35832,9 @@ pub fn publishFromTypedModule(
 
     var relation_type_substitutions = try PlatformRelationTypeSubstitutions.fromRelation(
         allocator,
-        module,
         module_identity,
         &canonical_names,
-        &checked_type_publication,
+        &checked_type_publication.store,
         &platform_required_declarations,
         &platform_type_inputs,
         inputs.relation_artifacts,
@@ -35831,10 +35844,9 @@ pub fn publishFromTypedModule(
 
     var platform_requirement_relations = try PlatformRequirementRelationTable.fromRelation(
         allocator,
-        module,
         module_identity,
         &canonical_names,
-        &checked_type_publication,
+        &checked_type_publication.store,
         &platform_required_declarations,
         inputs.relation_artifacts,
         inputs.platform_app_relation,
@@ -35899,7 +35911,6 @@ pub fn publishFromTypedModule(
 
     var platform_required_bindings = try PlatformRequiredBindingTable.fromRelation(
         allocator,
-        module,
         module_identity,
         &canonical_names,
         &platform_required_declarations,
@@ -36174,6 +36185,7 @@ pub fn publishFromTypedModule(
         inputs.problem_store,
         checked_bodies,
         &compile_time_roots,
+        &root_requests,
         &exhaustiveness_reachability,
     );
     errdefer exhaustiveness_sites.deinit(allocator);
@@ -36659,10 +36671,9 @@ fn expectProvidedExportKind(
 
     var platform_requirement_relations = try PlatformRequirementRelationTable.fromRelation(
         allocator,
-        module,
         module_identity,
         &canonical_names,
-        &checked_type_publication,
+        &checked_type_publication.store,
         &platform_required_declarations,
         &.{},
         null,
@@ -36671,7 +36682,6 @@ fn expectProvidedExportKind(
 
     var platform_required_bindings = try PlatformRequiredBindingTable.fromRelation(
         allocator,
-        module,
         module_identity,
         &canonical_names,
         &platform_required_declarations,
@@ -38774,8 +38784,8 @@ test "SERIALIZED_VERSION_HASH golden value" {
     // `serialized_layout_version` only for semantic changes the structural hash
     // cannot observe, as documented at that discriminant.
     const golden: [32]u8 = .{
-        0x04, 0x44, 0x65, 0xF3, 0x4D, 0xA1, 0x75, 0x6D, 0x1E, 0xB5, 0xAB, 0x7C, 0xE0, 0x48, 0xC4, 0x2B,
-        0xC2, 0x6D, 0xBF, 0x01, 0x60, 0x8E, 0x58, 0xB4, 0xA0, 0x1D, 0x55, 0x66, 0x72, 0xF3, 0x3B, 0xCF,
+        0xFA, 0x66, 0xA3, 0x62, 0x5B, 0xCE, 0x63, 0x13, 0xEE, 0x6A, 0xE0, 0x53, 0x2C, 0xE0, 0xE6, 0x50,
+        0xA2, 0xE9, 0x28, 0x1B, 0x42, 0x0B, 0x64, 0xD0, 0x45, 0x48, 0x10, 0x6E, 0x04, 0xFF, 0xD9, 0x19,
     };
     try std.testing.expectEqualSlices(u8, &golden, &CheckedModuleArtifact.SERIALIZED_VERSION_HASH);
 }

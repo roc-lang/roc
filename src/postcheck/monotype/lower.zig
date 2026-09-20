@@ -735,6 +735,7 @@ fn verifyMonotypeSpecsReady(program: *const Ast.Program) void {
 }
 
 const ModuleView = struct {
+    code_generation_key: ?checked.ModuleId = null,
     key: checked.ModuleId,
     module_env: *const can.ModuleEnv,
     module_identity: checked.ModuleIdentity,
@@ -3327,64 +3328,6 @@ const DraftGeneratedHelperDefEntry = union(enum) {
     }
 };
 
-fn templateSpecIdentity(
-    template_ref: names.ProcTemplate,
-    method_scope: checked.ModuleId,
-    source_fn_key: names.TypeDigest,
-    evidence_digest: Ast.EvidenceDigest,
-    codec_contract: ?Ast.CodecContractIdentity,
-    request_fn_ty: Type.TypeId,
-    request_fn_ty_digest: names.TypeDigest,
-) Ast.SpecIdentity {
-    return .{
-        .callable = .{ .proc_template = .{
-            .module = names.procTemplateModuleDigest(template_ref),
-            .proc_base = @intFromEnum(template_ref.proc_base),
-            .template = @intFromEnum(template_ref.template),
-        } },
-        .method_scope = moduleDigestFromId(method_scope),
-        .source_fn_ty_digest = source_fn_key,
-        .evidence_digest = evidence_digest,
-        .codec_contract_digest = codecContractIdentityDigest(codec_contract),
-        .codec_contract = codec_contract,
-        .request_fn_ty_digest = request_fn_ty_digest,
-        .request_fn_ty = request_fn_ty,
-    };
-}
-
-fn nestedSpecIdentity(
-    nested: Ast.NestedFn,
-    method_scope: checked.ModuleId,
-    source_fn_key: names.TypeDigest,
-    evidence_digest: Ast.EvidenceDigest,
-    capture_abi_digest: names.TypeDigest,
-    codec_contract: ?Ast.CodecContractIdentity,
-    request_fn_ty: Type.TypeId,
-    request_fn_ty_digest: names.TypeDigest,
-) Ast.SpecIdentity {
-    var context_hasher = TypeDigestHasher.init();
-    context_hasher.update("roc.monotype.nested_capture_abi");
-    context_hasher.update(&nested.context_fn_key.bytes);
-    context_hasher.update(&capture_abi_digest.bytes);
-    return .{
-        .callable = .{ .nested_site = .{
-            .module = names.procTemplateModuleDigest(nested.owner),
-            .owner_proc_base = @intFromEnum(nested.owner.proc_base),
-            .owner_template = @intFromEnum(nested.owner.template),
-            .owner_fn_digest = .{ .bytes = context_hasher.finalResult() },
-            .site = @intFromEnum(nested.site),
-            .default_root_module = nested.default_root,
-        } },
-        .method_scope = moduleDigestFromId(method_scope),
-        .source_fn_ty_digest = source_fn_key,
-        .evidence_digest = evidence_digest,
-        .codec_contract_digest = codecContractIdentityDigest(codec_contract),
-        .codec_contract = codec_contract,
-        .request_fn_ty_digest = request_fn_ty_digest,
-        .request_fn_ty = request_fn_ty,
-    };
-}
-
 fn codecContractIdentityDigest(contract: ?Ast.CodecContractIdentity) names.TypeDigest {
     const actual = contract orelse return .{};
     var hasher = TypeDigestHasher.init();
@@ -5427,7 +5370,7 @@ const Builder = struct {
         const evidence_digest = Ast.fnEvidenceDigest(identity_evidence.nodes, identity_evidence.frames, identity_evidence.head);
         const stored_source_topology = if (source_topology != null) identity_evidence else null;
         const request_digest = precomputed_request_digest orelse self.specializationTypeDigest(fn_ty);
-        const spec_identity = templateSpecIdentity(
+        const spec_identity = self.templateSpecIdentity(
             template_ref,
             method_scope.key,
             source_fn_key,
@@ -7652,7 +7595,7 @@ const Builder = struct {
     ) Allocator.Error!Ast.SpecId {
         const evidence_digest = Ast.fnEvidenceDigest(evidence.nodes, evidence.frames, evidence.head);
         return try self.addSpecRecord(
-            templateSpecIdentity(
+            self.templateSpecIdentity(
                 template_ref,
                 method_scope,
                 source_fn_key,
@@ -7681,7 +7624,7 @@ const Builder = struct {
     ) Allocator.Error!Ast.SpecId {
         const evidence_digest = Ast.fnEvidenceDigest(evidence.nodes, evidence.frames, evidence.head);
         return try self.addSpecRecord(
-            nestedSpecIdentity(nested, method_scope, source_fn_key, evidence_digest, capture_abi_digest, codec_contract, request_fn_ty, request_fn_ty_digest),
+            self.nestedSpecIdentity(nested, method_scope, source_fn_key, evidence_digest, capture_abi_digest, codec_contract, request_fn_ty, request_fn_ty_digest),
             evidence,
             fn_id,
             .lowering,
@@ -8452,6 +8395,68 @@ const Builder = struct {
             if (moduleViewIdentityMatches(view, origin_hash)) return view;
         }
         return null;
+    }
+
+    fn templateSpecIdentity(
+        self: *Builder,
+        template_ref: names.ProcTemplate,
+        method_scope: checked.ModuleId,
+        source_fn_key: names.TypeDigest,
+        evidence_digest: Ast.EvidenceDigest,
+        codec_contract: ?Ast.CodecContractIdentity,
+        request_fn_ty: Type.TypeId,
+        request_fn_ty_digest: names.TypeDigest,
+    ) Ast.SpecIdentity {
+        const view = self.moduleForDigest(names.procTemplateModuleDigest(template_ref));
+        return .{
+            .callable = .{ .proc_template = .{
+                .module = moduleDigestFromId(view.code_generation_key orelse view.key),
+                .proc_base = @intFromEnum(template_ref.proc_base),
+                .template = @intFromEnum(template_ref.template),
+            } },
+            .method_scope = moduleDigestFromId(self.moduleForId(method_scope).code_generation_key orelse method_scope),
+            .source_fn_ty_digest = source_fn_key,
+            .evidence_digest = evidence_digest,
+            .codec_contract_digest = codecContractIdentityDigest(codec_contract),
+            .codec_contract = codec_contract,
+            .request_fn_ty_digest = request_fn_ty_digest,
+            .request_fn_ty = request_fn_ty,
+        };
+    }
+
+    fn nestedSpecIdentity(
+        self: *Builder,
+        nested: Ast.NestedFn,
+        method_scope: checked.ModuleId,
+        source_fn_key: names.TypeDigest,
+        evidence_digest: Ast.EvidenceDigest,
+        capture_abi_digest: names.TypeDigest,
+        codec_contract: ?Ast.CodecContractIdentity,
+        request_fn_ty: Type.TypeId,
+        request_fn_ty_digest: names.TypeDigest,
+    ) Ast.SpecIdentity {
+        const view = self.moduleForDigest(names.procTemplateModuleDigest(nested.owner));
+        var context_hasher = TypeDigestHasher.init();
+        context_hasher.update("roc.monotype.nested_capture_abi");
+        context_hasher.update(&nested.context_fn_key.bytes);
+        context_hasher.update(&capture_abi_digest.bytes);
+        return .{
+            .callable = .{ .nested_site = .{
+                .module = moduleDigestFromId(view.code_generation_key orelse view.key),
+                .owner_proc_base = @intFromEnum(nested.owner.proc_base),
+                .owner_template = @intFromEnum(nested.owner.template),
+                .owner_fn_digest = .{ .bytes = context_hasher.finalResult() },
+                .site = @intFromEnum(nested.site),
+                .default_root_module = nested.default_root,
+            } },
+            .method_scope = moduleDigestFromId(self.moduleForId(method_scope).code_generation_key orelse method_scope),
+            .source_fn_ty_digest = source_fn_key,
+            .evidence_digest = evidence_digest,
+            .codec_contract_digest = codecContractIdentityDigest(codec_contract),
+            .codec_contract = codec_contract,
+            .request_fn_ty_digest = request_fn_ty_digest,
+            .request_fn_ty = request_fn_ty,
+        };
     }
 
     fn moduleForId(self: *Builder, module_id: checked.ModuleId) ModuleView {
@@ -10632,7 +10637,7 @@ const Builder = struct {
             .head = draft_fn.source.const_evidence_frame_head,
         };
         const request_digest = self.specializationTypeDigest(coordinator_fn_ty);
-        const identity = templateSpecIdentity(
+        const identity = self.templateSpecIdentity(
             spec.template_ref,
             spec.method_scope,
             spec.source_fn_key,
@@ -10872,7 +10877,7 @@ const Builder = struct {
                     const request_fn_ty = spec.committed_request_fn_ty orelse
                         Common.compilerBug("template specialization request type was not committed");
                     const request_digest = self.specializationTypeDigest(request_fn_ty);
-                    identity = templateSpecIdentity(
+                    identity = self.templateSpecIdentity(
                         spec.template_ref,
                         spec.method_scope,
                         spec.source_fn_key,
@@ -10889,7 +10894,7 @@ const Builder = struct {
                 if (nested_by_fn.get(draft_id)) |spec| {
                     if (!spec.local_context_dependent) {
                         const solved_digest = self.specializationTypeDigest(fn_ty);
-                        identity = nestedSpecIdentity(
+                        identity = self.nestedSpecIdentity(
                             spec.nested,
                             spec.method_scope,
                             spec.source_fn_key,
@@ -11454,7 +11459,7 @@ const Builder = struct {
                 Common.compilerBug("eager template request type was not committed");
             const request_digest = self.specializationTypeDigest(request_fn_ty);
             const evidence = programViewFnEvidence(self.program.view(), fn_template);
-            const identity = templateSpecIdentity(
+            const identity = self.templateSpecIdentity(
                 spec.template_ref,
                 spec.method_scope,
                 spec.source_fn_key,
@@ -11516,7 +11521,7 @@ const Builder = struct {
             const evidence = programViewFnEvidence(self.program.view(), fn_template);
             const capture_abi_digest = spec.capture_abi_digest;
             if (try self.spec_store.findLocal(
-                nestedSpecIdentity(spec.nested, spec.method_scope, spec.source_fn_key, fn_template.evidence_digest, capture_abi_digest, spec.sealed_codec_contract, fn_ty, digest),
+                self.nestedSpecIdentity(spec.nested, spec.method_scope, spec.source_fn_key, fn_template.evidence_digest, capture_abi_digest, spec.sealed_codec_contract, fn_ty, digest),
                 specializationEvidenceView(evidence),
             )) |_| continue;
             const spec_id = try self.addNestedSpecRecord(
@@ -59154,6 +59159,7 @@ fn bindLocalName(
 
 fn moduleView(view: checked.ImportedModuleView) ModuleView {
     return .{
+        .code_generation_key = view.code_generation_key,
         .key = view.key,
         .module_env = view.module_env,
         .module_identity = view.module_identity,

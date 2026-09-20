@@ -7,6 +7,8 @@ const base = @import("base");
 const problem = @import("problem.zig");
 const serde = @import("artifact_serialize.zig");
 const Allocator = std.mem.Allocator;
+const ImportMapping = @import("types").import_mapping.ImportMapping;
+const ImportName = struct { qualified: base.Ident.Idx, display: base.Ident.Idx };
 
 pub const Exhaustiveness = struct {
     kind: problem.Store.EmpiricalSiteKind,
@@ -17,9 +19,11 @@ pub const Exhaustiveness = struct {
     type_display: serde.Span,
     missing_patterns: serde.Span,
     empirical: bool,
+    reported: bool,
 };
 
 pub const Templates = struct {
+    import_names: []ImportName = &.{},
     exhaustiveness: []Exhaustiveness = &.{},
     strings: []u8 = &.{},
     missing_patterns: []serde.Span = &.{},
@@ -49,9 +53,32 @@ pub const Templates = struct {
                 .type_display = .{ .start = @intCast(fields.type_display.start), .len = @intCast(fields.type_display.count) },
                 .missing_patterns = .{ .start = @intCast(fields.missing.start), .len = @intCast(fields.missing.count) },
                 .empirical = fields.empirical,
+                .reported = input.reported,
             };
         }
         return result;
+    }
+
+    pub fn setImportMapping(self: *Templates, allocator: Allocator, mapping: *const ImportMapping) Allocator.Error!void {
+        const rows = try allocator.alloc(ImportName, mapping.count());
+        var entries = mapping.iterator();
+        var i: usize = 0;
+        while (entries.next()) |entry| : (i += 1) rows[i] = .{ .qualified = entry.key_ptr.*, .display = entry.value_ptr.* };
+        std.mem.sort(ImportName, rows, {}, struct {
+            fn lessThan(_: void, a: ImportName, b: ImportName) bool {
+                return @as(u32, @bitCast(a.qualified)) < @as(u32, @bitCast(b.qualified));
+            }
+        }.lessThan);
+        allocator.free(self.import_names);
+        self.import_names = rows;
+    }
+
+    pub fn instantiateImportMapping(self: *const Templates, allocator: Allocator) Allocator.Error!ImportMapping {
+        var mapping = ImportMapping.init(allocator);
+        errdefer mapping.deinit();
+        try mapping.ensureTotalCapacity(@intCast(self.import_names.len));
+        for (self.import_names) |row| mapping.putAssumeCapacity(row.qualified, row.display);
+        return mapping;
     }
 
     pub fn instantiate(self: *const Templates, allocator: Allocator) Allocator.Error!problem.Store {
@@ -68,6 +95,7 @@ pub const Templates = struct {
                 .source = input.source,
                 .site = input.site,
                 .region = input.region,
+                .reported = input.reported,
                 .problem = switch (input.source) {
                     .match_expr => |expr| .{ .non_exhaustive_match = .{
                         .match_expr = expr,
@@ -88,6 +116,7 @@ pub const Templates = struct {
     }
 
     pub fn deinit(self: *Templates, allocator: Allocator) void {
+        allocator.free(self.import_names);
         allocator.free(self.exhaustiveness);
         allocator.free(self.strings);
         allocator.free(self.missing_patterns);
@@ -95,6 +124,7 @@ pub const Templates = struct {
     }
 
     pub const Serialized = extern struct {
+        import_names: serde.SerializedSlice(ImportName) = .{},
         exhaustiveness: serde.SerializedSlice(Exhaustiveness) = .{},
         strings: serde.SerializedSlice(u8) = .{},
         missing_patterns: serde.SerializedSlice(serde.Span) = .{},
@@ -121,11 +151,28 @@ test "evaluation diagnostics retain exact checked text across serialization" {
         break :blk try Templates.fromStore(allocator, &source);
     };
     defer templates.deinit(allocator);
+    var names = ImportMapping.init(allocator);
+    defer names.deinit();
+    const qualified: base.Ident.Idx = @bitCast(@as(u32, 7));
+    const display: base.Ident.Idx = @bitCast(@as(u32, 3));
+    try names.put(qualified, display);
+    try templates.setImportMapping(allocator, &names);
     var round_trip = try serde.roundTripForTest(allocator, Templates, &templates);
     defer allocator.free(round_trip.buffer);
+    var restored_names = try round_trip.loaded.instantiateImportMapping(allocator);
+    defer restored_names.deinit();
+    try std.testing.expectEqual(display, restored_names.get(qualified).?);
     var evaluation = try round_trip.loaded.instantiate(allocator);
     defer evaluation.deinit(allocator);
-    try std.testing.expect(try evaluation.appendEmpiricalExhaustivenessFailure(allocator, @enumFromInt(2)));
+    try std.testing.expect(try evaluation.appendEmpiricalExhaustivenessFailureRetaining(allocator, @enumFromInt(2), true));
+    try std.testing.expectEqual(@as(usize, 1), evaluation.pending_static_exhaustiveness.items.len);
+    var retained = try Templates.fromStore(allocator, &evaluation);
+    defer retained.deinit(allocator);
+    var second = try retained.instantiate(allocator);
+    defer second.deinit(allocator);
+    try std.testing.expect(try second.appendEmpiricalExhaustivenessFailure(allocator, @enumFromInt(2)));
+    try std.testing.expectEqual(@as(usize, 0), second.problems.items.len);
+    try std.testing.expectEqual(@as(usize, 0), second.pending_static_exhaustiveness.items.len);
     const diagnostic = evaluation.problems.items[0].non_exhaustive_match;
     try std.testing.expect(diagnostic.empirical);
     try std.testing.expectEqualStrings("[Left(Str), Right(U64)]", evaluation.getExtraString(diagnostic.condition_type));
