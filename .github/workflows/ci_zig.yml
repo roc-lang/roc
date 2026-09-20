@@ -87,6 +87,9 @@ jobs:
       - name: Verify Serialized Type Sizes
         run: zig build run-test-serialization-sizes
 
+      - name: Verify the builtin bake is reproducible
+        run: zig build run-test-builtin-bake-reproducible
+
       - name: Check that test is actually wired up
         run: |
           zig build run-check-test-wiring

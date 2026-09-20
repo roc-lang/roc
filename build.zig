@@ -2167,7 +2167,65 @@ const CheckTestAssetCoverageStep = struct {
     }
 };
 
+/// Separate processes are essential: ASLR-dependent data can remain stable
+/// across multiple bakes within a single process.
+const CheckBuiltinBakeReproducibleStep = struct {
+    step: Step,
+    exe: *Step.Compile,
+
+    fn create(b: *std.Build, exe: *Step.Compile) *CheckBuiltinBakeReproducibleStep {
+        const self = b.allocator.create(CheckBuiltinBakeReproducibleStep) catch @panic("OOM");
+        self.* = .{
+            .step = Step.init(.{
+                .id = .custom,
+                .name = "check-builtin-bake-reproducible",
+                .owner = b,
+                .makeFn = make,
+            }),
+            .exe = exe,
+        };
+        self.step.dependOn(&exe.step);
+        return self;
+    }
+
+    fn make(step: *Step, _: Step.MakeOptions) !void {
+        const self: *CheckBuiltinBakeReproducibleStep = @fieldParentPtr("step", step);
+        const b = step.owner;
+        const io = b.graph.io;
+        const names = [_][]const u8{ "Builtin.bin", "builtin_indices.zig", "Builtin.artifact.bin" };
+        var baseline: [names.len][]const u8 = undefined;
+        for (0..3) |bake| {
+            const dir = b.pathJoin(&.{ b.cache_root.path orelse ".zig-cache", "tmp", "builtin-bake-reproducible", b.fmt("{d}", .{bake}) });
+            var paths: [names.len][]const u8 = undefined;
+            for (names, &paths) |name, *path| path.* = b.pathJoin(&.{ dir, name });
+            var child = try std.process.spawn(io, .{
+                .argv = &.{ self.exe.getEmittedBin().getPath2(b, step), b.pathFromRoot("src/build/roc/Builtin.roc"), paths[0], paths[1], paths[2] },
+                .environ_map = &b.graph.environ_map,
+            });
+            switch (try child.wait(io)) {
+                .exited => |code| if (code != 0) return step.fail("builtin bake {d} exited with {d}", .{ bake, code }),
+                .signal => |sig| return step.fail("builtin bake {d} was killed by signal {d}", .{ bake, @intFromEnum(sig) }),
+                .stopped => |sig| return step.fail("builtin bake {d} was stopped by signal {d}", .{ bake, @intFromEnum(sig) }),
+                .unknown => |code| return step.fail("builtin bake {d} terminated abnormally ({d})", .{ bake, code }),
+            }
+            for (names, paths, 0..) |name, path, index| {
+                const bytes = try std.Io.Dir.cwd().readFileAlloc(io, path, b.allocator, .limited(256 * 1024 * 1024));
+                if (bake == 0) {
+                    baseline[index] = bytes;
+                } else {
+                    const expected = baseline[index];
+                    if (expected.len != bytes.len) return step.fail("{s} size differs: bake 0 has {d} bytes, bake {d} has {d}", .{ name, expected.len, bake, bytes.len });
+                    for (expected, bytes, 0..) |a, c, offset| {
+                        if (a != c) return step.fail("{s} is not reproducible: bake 0 and bake {d} first differ at byte {d} of {d} (0x{x:0>2} vs 0x{x:0>2})", .{ name, bake, offset, bytes.len, a, c });
+                    }
+                }
+            }
+        }
+    }
+};
+
 const BuiltinCompilerRun = struct {
+    exe: *Step.Compile,
     run: *Step.Run,
     builtin_bin: std.Build.LazyPath,
     builtin_indices_zig: std.Build.LazyPath,
@@ -2259,6 +2317,7 @@ fn createAndRunBuiltinCompiler(
     const builtin_artifact_bin = run_builtin_compiler.addOutputFileArg("Builtin.artifact.bin");
 
     return .{
+        .exe = builtin_compiler_exe,
         .run = run_builtin_compiler,
         .builtin_bin = builtin_bin,
         .builtin_indices_zig = builtin_indices_zig,
@@ -3033,6 +3092,8 @@ pub fn build(b: *std.Build) void {
     const run_test_cli_step = b.step("run-test-cli", "Run all CLI integration tests (platforms + subcommands + echo + glue)");
     const build_test_serialization_sizes_step = b.step("build-test-serialization-sizes", "Build serialization size checks");
     const run_test_serialization_sizes_step = b.step("run-test-serialization-sizes", "Verify Serialized types have platform-independent sizes");
+    const build_test_builtin_bake_reproducible_step = b.step("build-test-builtin-bake-reproducible", "Build the builtin compiler the bake reproducibility check runs");
+    const run_test_builtin_bake_reproducible_step = b.step("run-test-builtin-bake-reproducible", "Bake the builtins in three separate processes and compare every output byte");
     const build_test_wasm_static_lib_runner_step = b.step("build-test-wasm-static-lib-runner", "Build WASM static library test runner");
     const run_test_wasm_static_lib_step = b.step("run-test-wasm-static-lib", "Run WASM static library test runner");
     const run_test_dylib_step = b.step("run-test-dylib", "Build a Roc shared library and run it through the loader test");
@@ -3306,6 +3367,10 @@ pub fn build(b: *std.Build) void {
 
     // Always regenerate .bin files to ensure they match the current compiler
     const builtin_compiler = createAndRunBuiltinCompiler(b, roc_modules, flag_enable_tracy, &.{builtin_roc_path});
+    const bake_repro = CheckBuiltinBakeReproducibleStep.create(b, builtin_compiler.exe);
+    build_test_builtin_bake_reproducible_step.dependOn(&builtin_compiler.exe.step);
+    run_test_builtin_bake_reproducible_step.dependOn(build_test_builtin_bake_reproducible_step);
+    run_test_builtin_bake_reproducible_step.dependOn(&bake_repro.step);
     write_compiled_builtins.step.dependOn(&builtin_compiler.run.step);
 
     // Copy tracked outputs from the builtin compiler run step.
@@ -6623,6 +6688,7 @@ pub fn build(b: *std.Build) void {
     build_ci_step.dependOn(build_test_cli_runners_step);
     build_ci_step.dependOn(build_test_hosts_step);
     build_ci_step.dependOn(build_test_serialization_sizes_step);
+    build_ci_step.dependOn(build_test_builtin_bake_reproducible_step);
     build_ci_step.dependOn(build_test_wasm_static_lib_runner_step);
     build_ci_step.dependOn(build_coverage_tools_step);
 

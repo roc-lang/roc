@@ -194,7 +194,11 @@ pub const Constants = struct {
     ///     in a pattern-only context.
     /// 90: Scheme-use evidence belongs to explicit value and dispatch edges;
     ///     type applications no longer publish spurious value-use records.
-    pub const CACHE_VERSION = 92;
+    /// 93: Serialized `SafeMultiList` columns hold live rows only (capacity ==
+    ///     len) instead of a capacity-sized region, and every persisted byte is
+    ///     declared: `Node.Payload` variants fill the union exactly and
+    ///     `NumeralLiteral` declares its trailing bytes.
+    pub const CACHE_VERSION = 93;
 };
 
 /// Configuration for the Roc cache system.
