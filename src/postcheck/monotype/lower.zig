@@ -708,6 +708,7 @@ pub fn run(
         defer finalization_timing_scope.end();
         program.next_symbol = builder.symbols.coordinator.next;
         try program.sealRemainingCaptureIdentities();
+        try recordComptimeValueReads(allocator, &program);
         program.freeze();
 
         if (@import("builtin").mode == .Debug) {
@@ -721,6 +722,25 @@ pub fn run(
 
     program.types.digest_stats = null;
     return program;
+}
+
+/// Record the evaluated roots this program reads a completed value of.
+///
+/// A root-slot read is this stage's own explicit record of that demand, so
+/// the program states it once here instead of leaving every later consumer to
+/// rediscover it. Whoever materializes completed values materializes exactly
+/// these: a root nothing reads is still evaluated for its diagnostics, and its
+/// value is retained only by the checked module data that asked for it.
+fn recordComptimeValueReads(allocator: Allocator, program: *Ast.Program) Allocator.Error!void {
+    var recorded = std.AutoHashMap(EntryRoot, void).init(allocator);
+    defer recorded.deinit();
+    for (program.exprsView()) |expr| {
+        if (expr.data != .comptime_value) continue;
+        const root = program.getComptimeValueRoot(expr.data.comptime_value.root);
+        const entry = try recorded.getOrPut(.{ .module = root.module, .root = root.root });
+        if (entry.found_existing) continue;
+        try program.addComptimeValueRead(root);
+    }
 }
 
 /// Every specialization record must have finished lowering by the time the

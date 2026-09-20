@@ -128,6 +128,37 @@ pub const DictSeedMode = enum {
     comptime_zero,
 };
 
+/// One evaluated root a consumer asks to have materialized, named by its
+/// position in the producer's root plan and by the checked identity the
+/// evaluation records it under.
+pub const CompletedValueRequest = struct {
+    root: u32,
+    value: Common.ComptimeValueRoot,
+};
+
+/// One consumer's explicit share of a shared producer program.
+///
+/// `roots` names positions in the producer's root plan, in this consumer's
+/// emitted order; the selected roots keep the producer's request metadata and
+/// their position in it, so test-plan metadata and root order stay the
+/// producer's. Null names the whole producer root plan in producer order,
+/// which needs no list to say so. The manifest is applied before demand
+/// discovery, so a consumer lowers exactly the closure of what it names and
+/// nothing else.
+pub const RootManifest = struct {
+    roots: ?[]const u32 = null,
+    /// Evaluated roots whose completed values this consumer materializes, by
+    /// the producer root position each one names. The evaluation records
+    /// each value into the slot its root declares, which is what a later
+    /// consumer transcodes into its own representation.
+    completed_values: []const CompletedValueRequest = &.{},
+    /// Whether this consumer materializes the producer's layout and
+    /// static-data requests.
+    layout_requests: bool = true,
+    /// Whether this consumer emits the producer's runtime value schemas.
+    runtime_schema_requests: bool = true,
+};
+
 /// Configuration for direct solved-to-LIR lowering.
 pub const Options = struct {
     /// The object cache asked for closed specializations.
@@ -168,6 +199,9 @@ pub const Options = struct {
     /// Optional deterministic task counts for parallel solved-LIR lowering.
     /// `run` resets this destination before doing any work.
     parallel_metrics: ?*ParallelMetrics = null,
+    /// This consumer's explicit share of the producer's roots and requests.
+    /// `null` lowers the whole producer program.
+    root_manifest: ?RootManifest = null,
 };
 
 /// Scheduling outcomes for solved-LIR body shards. These counts deliberately
@@ -192,28 +226,44 @@ pub const ParallelMetrics = struct {
     worker_loop_tasks_committed: u64 = 0,
 };
 
-/// Lower Lambda Solved directly into LIR.
+/// Lower Lambda Solved directly into LIR, consuming the solved program.
 pub fn run(
     allocator: std.mem.Allocator,
     target_usize: base.target.TargetUsize,
     solved: Solved.Program,
     options: Options,
 ) Common.LowerError!Output {
-    if (options.parallel_metrics) |metrics| metrics.* = .{};
     var owned = solved;
-    errdefer owned.deinit();
+    defer owned.deinit();
+    return runBorrowed(allocator, target_usize, &owned, options);
+}
 
-    const source_digests = try allocator.alloc(?proc_identity.Identity, owned.lifted.fnCount());
+/// Lower one consumer's share of a borrowed solved program.
+///
+/// The solved program is the producer's identity domain: no consumer changes
+/// a decision recorded in it, so several consumers lower from one program
+/// without copying it and without re-running any producer stage. The caller
+/// owns it and must keep it alive for the whole call. The borrow is mutable
+/// only because the producer's type store memoizes the digests read here.
+pub fn runBorrowed(
+    allocator: std.mem.Allocator,
+    target_usize: base.target.TargetUsize,
+    solved: *Solved.Program,
+    options: Options,
+) Common.LowerError!Output {
+    if (options.parallel_metrics) |metrics| metrics.* = .{};
+
+    const source_digests = try allocator.alloc(?proc_identity.Identity, solved.lifted.fnCount());
     defer allocator.free(source_digests);
     for (source_digests, 0..) |*digest, index| {
-        digest.* = owned.lifted.fnSourceDigest(@enumFromInt(@as(u32, @intCast(index))));
+        digest.* = solved.lifted.fnSourceDigest(@enumFromInt(@as(u32, @intCast(index))));
     }
 
-    var lowerer = try Lowerer.init(allocator, target_usize, &owned, options);
+    var lowerer = try Lowerer.init(allocator, target_usize, solved, options);
     errdefer lowerer.deinit();
     lowerer.source_digests = source_digests;
 
-    try lowerer.result.store.setSourceFiles(owned.lifted.sourceFiles());
+    try lowerer.result.store.setSourceFiles(solved.lifted.sourceFiles());
     try lowerer.prepareExpectSites();
     try lowerer.lowerInlineScopes();
     try lowerer.lower();
@@ -225,7 +275,6 @@ pub fn run(
         try lowerer.verifyMaterializedDecisions();
     }
 
-    owned.deinit();
     return lowerer.finish();
 }
 
@@ -434,6 +483,10 @@ const FnBodyTaskContext = struct {
 const RootEntry = struct {
     fn_id: Type.FnId,
     request: check.CheckedModule.RootRequest,
+    /// Position of this root in the producer's root plan. A consumer that
+    /// lowers a subset keeps the producer's positions, which is what
+    /// command-level root metadata is keyed by.
+    request_index: u32,
 };
 
 const LayoutRequest = struct {
@@ -453,6 +506,25 @@ const ComptimeValueRequest = struct {
     root: check.CheckedModule.ComptimeRootId,
     ty: Type.TypeId,
     layout_idx: layout.Idx,
+};
+
+/// An evaluated root's checked identity together with the concrete
+/// representation it is demanded at. Stage-local type ids are not identity:
+/// two of them can denote one concrete type, and one layout can serve
+/// distinct types, so neither is what decides whether two demands are the
+/// same demand. The structural digest selects the candidate and exact
+/// representation equivalence confirms it.
+const ComptimeRootKey = struct {
+    module: check.CheckedModule.ModuleId,
+    root: check.CheckedModule.ComptimeRootId,
+    ty: check.CanonicalNames.TypeDigest,
+};
+
+/// The slot holding one root's completed value, and the exact type it was
+/// committed at.
+const ComptimeRootSlot = struct {
+    ty: Type.TypeId,
+    slot: LIR.StaticDataId,
 };
 
 const StaticInitializerEntry = struct {
@@ -582,6 +654,8 @@ const Lowerer = struct {
     proc_debug_names: bool,
     spec_cache: ?Common.SpecCacheLookup,
     comptime_closure_hits: bool,
+    /// This consumer's explicit share of the producer's roots and requests.
+    root_manifest: ?RootManifest,
     /// True while the closure of the compile-time roots is being lowered.
     /// Those procedures run in the compile-time evaluator, which takes
     /// object-cache entries only under `comptime_closure_hits`; procedures
@@ -621,6 +695,8 @@ const Lowerer = struct {
     callable_source_fn_map: collections.DenseMap(Type.TypeId, SolvedType.TypeVarId),
     static_initializer_map: std.AutoHashMap(StaticInitializerRequest, LIR.StaticDataId),
     comptime_value_map: std.AutoHashMap(ComptimeValueRequest, LIR.StaticDataId),
+    /// The one slot holding each evaluated root's completed value.
+    comptime_root_slots: std.AutoHashMap(ComptimeRootKey, ComptimeRootSlot),
     static_initializer_queue: std.ArrayList(StaticInitializerEntry),
     packed_plans: collections.DenseMap(layout.Idx, lir_core.PackedData.Plan),
     packed_literals: std.AutoHashMap(PackedLiteralKey, LIR.ListLiteral),
@@ -835,6 +911,7 @@ const Lowerer = struct {
             .proc_debug_names = options.proc_debug_names,
             .spec_cache = options.spec_cache,
             .comptime_closure_hits = options.comptime_closure_hits,
+            .root_manifest = options.root_manifest,
             .comptime_phase = true,
             .fn_queue_index = 0,
             .initializer_queue_index = 0,
@@ -864,6 +941,7 @@ const Lowerer = struct {
             .callable_source_fn_map = collections.DenseMap(Type.TypeId, SolvedType.TypeVarId).init(allocator),
             .static_initializer_map = std.AutoHashMap(StaticInitializerRequest, LIR.StaticDataId).init(allocator),
             .comptime_value_map = std.AutoHashMap(ComptimeValueRequest, LIR.StaticDataId).init(allocator),
+            .comptime_root_slots = std.AutoHashMap(ComptimeRootKey, ComptimeRootSlot).init(allocator),
             .static_initializer_queue = .empty,
             .packed_plans = collections.DenseMap(layout.Idx, lir_core.PackedData.Plan).init(allocator),
             .packed_literals = std.AutoHashMap(PackedLiteralKey, LIR.ListLiteral).init(allocator),
@@ -979,6 +1057,7 @@ const Lowerer = struct {
         self.static_initializer_queue.deinit(self.allocator);
         self.static_initializer_map.deinit();
         self.comptime_value_map.deinit();
+        self.comptime_root_slots.deinit();
         self.layout_owner_types.deinit();
         self.deinitNamedLayoutIndex();
         self.type_layouts.deinit();
@@ -1038,6 +1117,7 @@ const Lowerer = struct {
         self.static_initializer_queue.deinit(self.allocator);
         self.static_initializer_map.deinit();
         self.comptime_value_map.deinit();
+        self.comptime_root_slots.deinit();
         self.layout_owner_types.deinit();
         self.deinitNamedLayoutIndex();
         self.type_layouts.deinit();
@@ -1079,6 +1159,7 @@ const Lowerer = struct {
         self.packed_literals = std.AutoHashMap(PackedLiteralKey, LIR.ListLiteral).init(self.allocator);
         self.static_initializer_map = std.AutoHashMap(StaticInitializerRequest, LIR.StaticDataId).init(self.allocator);
         self.comptime_value_map = std.AutoHashMap(ComptimeValueRequest, LIR.StaticDataId).init(self.allocator);
+        self.comptime_root_slots = std.AutoHashMap(ComptimeRootKey, ComptimeRootSlot).init(self.allocator);
         self.comptime_site_map = &.{};
         self.loop_stack = .empty;
         self.join_stack = .empty;
@@ -1096,13 +1177,29 @@ const Lowerer = struct {
     fn lower(self: *Lowerer) Common.LowerError!void {
         try self.indexSourceFns();
 
-        try self.roots.ensureTotalCapacity(self.allocator, self.solved.lifted.rootCount());
-        for (self.solved.lifted.rootsView()) |root| {
-            const fn_id = try self.ensureOwnFnSpec(root.fn_id, .finite);
-            try self.roots.append(self.allocator, .{
-                .fn_id = fn_id,
-                .request = root.request,
-            });
+        const produced_roots = self.solved.lifted.rootsView();
+        if (if (self.root_manifest) |manifest| manifest.roots else null) |selected| {
+            try self.roots.ensureTotalCapacity(self.allocator, selected.len);
+            for (selected) |position| {
+                if (position >= produced_roots.len) Common.invariant("consumer root manifest named a position outside the producer's root plan");
+                const root = produced_roots[position];
+                const fn_id = try self.ensureOwnFnSpec(root.fn_id, .finite);
+                try self.roots.append(self.allocator, .{
+                    .fn_id = fn_id,
+                    .request = root.request,
+                    .request_index = position,
+                });
+            }
+        } else {
+            try self.roots.ensureTotalCapacity(self.allocator, produced_roots.len);
+            for (produced_roots, 0..) |root, position| {
+                const fn_id = try self.ensureOwnFnSpec(root.fn_id, .finite);
+                try self.roots.append(self.allocator, .{
+                    .fn_id = fn_id,
+                    .request = root.request,
+                    .request_index = @intCast(position),
+                });
+            }
         }
         // The compile-time roots' closure lowers first, so that a procedure
         // the evaluator runs is known as such when the object cache is
@@ -1119,6 +1216,24 @@ const Lowerer = struct {
             _ = try self.markReachableFn(root.fn_id);
         }
 
+        if (self.lowersLayoutRequests()) try self.lowerLayoutRequests();
+        if (self.lowersRuntimeSchemaRequests()) try self.lowerRuntimeSchemaRequests();
+    }
+
+    /// Whether this consumer materializes the producer's layout and
+    /// static-data requests.
+    fn lowersLayoutRequests(self: *const Lowerer) bool {
+        const manifest = self.root_manifest orelse return true;
+        return manifest.layout_requests;
+    }
+
+    /// Whether this consumer emits the producer's runtime value schemas.
+    fn lowersRuntimeSchemaRequests(self: *const Lowerer) bool {
+        const manifest = self.root_manifest orelse return true;
+        return manifest.runtime_schema_requests;
+    }
+
+    fn lowerLayoutRequests(self: *Lowerer) Common.LowerError!void {
         try self.layout_requests.ensureTotalCapacity(self.allocator, self.solved.layout_requests.items.len);
         for (self.solved.layout_requests.items) |request| {
             try self.layout_requests.append(self.allocator, .{
@@ -1128,7 +1243,9 @@ const Lowerer = struct {
                 .const_locator = request.const_locator,
             });
         }
+    }
 
+    fn lowerRuntimeSchemaRequests(self: *Lowerer) Common.LowerError!void {
         try self.runtime_schema_requests.ensureTotalCapacity(self.allocator, self.solved.runtime_schema_requests.items.len);
         for (self.solved.runtime_schema_requests.items) |request| {
             try self.runtime_schema_requests.append(self.allocator, .{
@@ -3469,21 +3586,36 @@ const Lowerer = struct {
     }
 
     fn bindRoots(self: *Lowerer) Common.LowerError!void {
-        for (self.roots.items, 0..) |root, request_index| {
+        var completed_values = std.AutoHashMap(u32, Common.ComptimeValueRoot).init(self.allocator);
+        defer completed_values.deinit();
+        if (self.root_manifest) |manifest| {
+            try completed_values.ensureTotalCapacity(@intCast(manifest.completed_values.len));
+            for (manifest.completed_values) |request| {
+                const entry = completed_values.getOrPutAssumeCapacity(request.root);
+                if (entry.found_existing) Common.invariant("consumer asked to materialize one root's completed value twice");
+                entry.value_ptr.* = request.value;
+            }
+        }
+        for (self.roots.items) |root| {
             const entry = self.fn_entries.items[@intFromEnum(root.fn_id)];
             const proc = try self.markReachableFn(root.fn_id);
             try self.result.root_procs.append(self.allocator, proc);
             var metadata = RootMetadata.fromCheckedRoot(root.request);
-            metadata.test_plan = Common.testPlanMetadataForRoot(self.root_requests, root.request, request_index);
+            metadata.test_plan = Common.testPlanMetadataForRoot(self.root_requests, root.request, root.request_index);
             try self.result.root_metadata.append(self.allocator, metadata);
             if (root.request.abi == .compile_time) {
+                const ret_layout = try self.layoutOfType(entry.ret);
                 try self.result.const_roots.append(self.allocator, .{
                     .root_order = root.request.order,
                     .request = root.request,
                     .proc = proc,
-                    .ret_layout = try self.layoutOfType(entry.ret),
+                    .ret_layout = ret_layout,
                     .ret_type = try self.constTypeOfType(entry.ret),
                     .plan = try self.constPlanOfType(entry.ret),
+                    .value_slot = if (completed_values.get(root.request_index)) |value_root|
+                        try self.comptimeValueSlot(value_root, entry.ret, ret_layout)
+                    else
+                        null,
                 });
             }
         }
@@ -4333,11 +4465,18 @@ const Lowerer = struct {
         materialized: *const LambdaMono.Program,
         identities: []const LambdaMonoLower.SpecializationIdentity,
     ) Common.LowerError!void {
+        // The materializer lowers the whole producer program, so each root
+        // this consumer took is compared against the producer position it
+        // was taken from.
         const roots = materialized.rootsView();
-        if (self.roots.items.len != roots.len) {
+        if (self.roots.items.len > roots.len) {
             Common.invariant("debug Lambda Mono verifier saw a root count mismatch");
         }
-        for (self.roots.items, roots) |direct, expected| {
+        for (self.roots.items) |direct| {
+            if (direct.request_index >= roots.len) {
+                Common.invariant("debug Lambda Mono verifier saw a root count mismatch");
+            }
+            const expected = roots[direct.request_index];
             if (!std.meta.eql(direct.request, expected.request)) {
                 Common.invariant("debug Lambda Mono verifier saw a root mismatch");
             }
@@ -4355,6 +4494,7 @@ const Lowerer = struct {
     }
 
     fn verifyLayoutRequestsMatch(self: *Lowerer, materialized: *const LambdaMono.Program, type_equivalence: *TypeEquivalence) Common.LowerError!void {
+        if (!self.lowersLayoutRequests()) return;
         const requests = materialized.layoutRequestsView();
         if (self.layout_requests.items.len != requests.len) {
             Common.invariant("debug Lambda Mono verifier saw a layout request count mismatch");
@@ -4370,6 +4510,7 @@ const Lowerer = struct {
     }
 
     fn verifyRuntimeSchemaRequestsMatch(self: *Lowerer, materialized: *const LambdaMono.Program, type_equivalence: *TypeEquivalence) Common.LowerError!void {
+        if (!self.lowersRuntimeSchemaRequests()) return;
         const requests = materialized.runtimeSchemaRequestsView();
         if (self.runtime_schema_requests.items.len != requests.len) {
             Common.invariant("debug Lambda Mono verifier saw a runtime schema request count mismatch");
@@ -4405,6 +4546,63 @@ const Lowerer = struct {
             .value = .{ .i64_literal = .{ .value = if (self.inline_expects == .run) 1 else 0, .layout_idx = self.result.store.getLocal(target).layout_idx } },
             .next = next,
         } });
+    }
+
+    /// The slot holding one evaluated root's completed value, created on its
+    /// first demand. A root's value has one representation, so every read of
+    /// it and the root's own completed-value materialization share one slot.
+    fn comptimeValueSlot(
+        self: *Lowerer,
+        value_root: Common.ComptimeValueRoot,
+        ty: Type.TypeId,
+        layout_idx: layout.Idx,
+    ) Common.LowerError!LIR.StaticDataId {
+        const request = ComptimeValueRequest{
+            .module = value_root.module,
+            .root = value_root.root,
+            .ty = ty,
+            .layout_idx = layout_idx,
+        };
+        if (self.comptime_value_map.get(request)) |existing| return existing;
+        if (self.worker_callback) self.missingWorkerPreparation("Solved-LIR worker referenced an unprepared compile-time value");
+        const key = ComptimeRootKey{
+            .module = value_root.module,
+            .root = value_root.root,
+            .ty = self.types.typeDigest(&self.solved.lifted.names, ty),
+        };
+        if (self.comptime_root_slots.get(key)) |existing| {
+            // The digest selects the candidate; equivalence decides. Sharing
+            // a slot is sharing a representation, so it happens only when the
+            // two types are exactly equivalent as representations, private
+            // backings and callable members included.
+            var visited = std.AutoHashMap(u64, void).init(self.allocator);
+            defer visited.deinit();
+            if (!try self.representationTypesEquivalent(ty, existing.ty, &visited)) {
+                Common.invariant("one compile-time value digest named two distinct representations");
+            }
+            // A representation commits one layout, so a second one here would
+            // mean the committed layout did not follow from the type.
+            if (self.result.static_data_values.items[@intFromEnum(existing.slot)].layout_idx != layout_idx) {
+                Common.invariant("one concrete compile-time value committed two layouts");
+            }
+            try self.comptime_value_map.put(request, existing.slot);
+            return existing.slot;
+        }
+        const failure_slot = try self.createComptimeFailureMessageSlot(value_root);
+        const id: LIR.StaticDataId = @enumFromInt(@as(u32, @intCast(self.result.static_data_values.items.len)));
+        try self.result.static_data_values.append(self.allocator, .{
+            .initializer = null,
+            .layout_idx = layout_idx,
+            .compile_time_root = .{
+                .module = value_root.module,
+                .root = value_root.root,
+                .const_locator = value_root.const_locator,
+                .role = .{ .value = .{ .failure_slot = failure_slot, .plan = try self.constPlanOfType(ty) } },
+            },
+        });
+        try self.comptime_value_map.put(request, id);
+        try self.comptime_root_slots.put(key, .{ .ty = ty, .slot = id });
+        return id;
     }
 
     fn createComptimeFailureMessageSlot(self: *Lowerer, root: Common.ComptimeValueRoot) Common.LowerError!LIR.StaticDataId {
@@ -4450,34 +4648,11 @@ const Lowerer = struct {
                 if (try self.lowerConstructionInto(target, construction, next)) |built| return built;
             }
         }
-        const request = ComptimeValueRequest{
-            .module = root.module,
-            .root = root.root,
-            .ty = ty,
-            .layout_idx = layout_idx,
-        };
-        const id = self.comptime_value_map.get(request) orelse slot: {
-            if (self.worker_callback) self.missingWorkerPreparation("Solved-LIR worker referenced an unprepared compile-time value");
-            const failure_slot = try self.createComptimeFailureMessageSlot(root);
-            const id: LIR.StaticDataId = @enumFromInt(@as(u32, @intCast(self.result.static_data_values.items.len)));
-            try self.result.static_data_values.append(self.allocator, .{
-                .initializer = null,
-                .layout_idx = layout_idx,
-                .compile_time_root = .{
-                    .module = root.module,
-                    .root = root.root,
-                    .const_locator = root.const_locator,
-                    .role = .{ .value = .{ .failure_slot = failure_slot, .plan = try self.constPlanOfType(ty) } },
-                },
-            });
-            try self.comptime_value_map.put(request, id);
-            break :slot id;
-        };
-        // A program lowered before its roots are evaluated may be reused as
-        // the runtime program once they are, so it reads each root through
-        // an accessor: a root that completes as a construction then rebuilds
-        // it in the accessor's body, while every call site stays as it is.
-        // A program lowered after evaluation reads its slots directly.
+        const id = try self.comptimeValueSlot(root, ty, layout_idx);
+        // A program lowered before its roots are evaluated reads each root
+        // through an accessor, so the slot has one guarded read however many
+        // places read it, and the evaluation's slot demand is raised from one
+        // place. A program lowered after evaluation reads its slots directly.
         if (!is_static_initializer and self.completed_scalar_values == null) {
             const accessor = try self.comptimeRootAccessor(id, layout_idx);
             return try self.result.store.addCFStmt(.{ .assign_call = .{
@@ -12081,6 +12256,8 @@ fn cloneLiftedProgram(allocator: std.mem.Allocator, program: *const Lifted.Progr
     errdefer roots.deinit(allocator);
     var layout_requests = try clonedLiftedProgramList(Lifted.LayoutRequest, "layout_requests", allocator, view.layout_requests);
     errdefer layout_requests.deinit(allocator);
+    var comptime_value_reads = try clonedLiftedProgramList(Common.ComptimeValueRoot, "comptime_value_reads", allocator, view.comptime_value_reads);
+    errdefer comptime_value_reads.deinit(allocator);
     var runtime_schema_requests = try clonedLiftedProgramList(Lifted.RuntimeSchemaRequest, "runtime_schema_requests", allocator, view.runtime_schema_requests);
     errdefer runtime_schema_requests.deinit(allocator);
     var static_data_values = try clonedLiftedProgramList(Lifted.StaticDataValue, "static_data_values", allocator, view.static_data_values);
@@ -12138,6 +12315,7 @@ fn cloneLiftedProgram(allocator: std.mem.Allocator, program: *const Lifted.Progr
         .proc_debug_names = proc_debug_names,
         .roots = roots,
         .layout_requests = layout_requests,
+        .comptime_value_reads = comptime_value_reads,
         .runtime_schema_requests = runtime_schema_requests,
         .static_data_values = static_data_values,
         .comptime_value_roots = comptime_value_roots,

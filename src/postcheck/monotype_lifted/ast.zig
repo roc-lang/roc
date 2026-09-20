@@ -207,6 +207,9 @@ pub const ProgramView = struct {
     proc_debug_names: *const ProcDebugNameMap,
     roots: []const Root,
     layout_requests: []const LayoutRequest,
+    /// Evaluated roots this program reads a completed value of, recorded once
+    /// each by Monotype lowering and carried unchanged.
+    comptime_value_reads: []const Common.ComptimeValueRoot,
     runtime_schema_requests: []const RuntimeSchemaRequest,
     static_data_values: []const StaticDataValue,
     comptime_value_roots: []const Common.ComptimeValueRoot,
@@ -461,6 +464,8 @@ pub const Program = struct {
     next_lift_capture_id: u32,
     roots: ProgramList(Root, "roots"),
     layout_requests: ProgramList(LayoutRequest, "layout_requests"),
+    /// See `ProgramView.comptime_value_reads`.
+    comptime_value_reads: ProgramList(Common.ComptimeValueRoot, "comptime_value_reads"),
     runtime_schema_requests: ProgramList(RuntimeSchemaRequest, "runtime_schema_requests"),
     static_data_values: ProgramList(StaticDataValue, "static_data_values"),
     /// Frozen shared metadata for SpecConstr; workers never append descriptors.
@@ -661,6 +666,7 @@ pub const Program = struct {
             .next_lift_capture_id = first_synthesized_capture_index,
             .roots = .empty,
             .layout_requests = .empty,
+            .comptime_value_reads = .empty,
             .runtime_schema_requests = .empty,
             .static_data_values = ProgramList(StaticDataValue, "static_data_values").fromArrayList(static_data_values),
             .comptime_sites = ProgramList(ComptimeSite, "comptime_sites").fromArrayList(comptime_sites),
@@ -703,6 +709,7 @@ pub const Program = struct {
         self.comptime_value_roots.deinit(self.allocator);
         self.static_data_values.deinit(self.allocator);
         self.runtime_schema_requests.deinit(self.allocator);
+        self.comptime_value_reads.deinit(self.allocator);
         self.layout_requests.deinit(self.allocator);
         self.roots.deinit(self.allocator);
         self.proc_debug_names.deinit();
@@ -760,6 +767,7 @@ pub const Program = struct {
             .proc_debug_names = &self.proc_debug_names,
             .roots = self.roots.unsafeRawItemsForView(),
             .layout_requests = self.layout_requests.unsafeRawItemsForView(),
+            .comptime_value_reads = self.comptime_value_reads.unsafeRawItemsForView(),
             .runtime_schema_requests = self.runtime_schema_requests.unsafeRawItemsForView(),
             .static_data_values = self.static_data_values.unsafeRawItemsForView(),
             .comptime_value_roots = self.comptime_value_roots.unsafeRawItemsForView(),
@@ -1230,6 +1238,14 @@ pub const Program = struct {
     pub fn addLayoutRequest(self: *Program, request: LayoutRequest) std.mem.Allocator.Error!void {
         std.debug.assert(self.body_prefix == null);
         try self.layout_requests.append(self.allocator, request);
+    }
+
+    pub fn comptimeValueReadsView(self: *const Program) []const Common.ComptimeValueRoot {
+        return self.comptime_value_reads.unsafeRawItemsForView();
+    }
+
+    pub fn addComptimeValueRead(self: *Program, root: Common.ComptimeValueRoot) std.mem.Allocator.Error!void {
+        try self.comptime_value_reads.append(self.allocator, root);
     }
 
     pub fn addRuntimeSchemaRequest(self: *Program, request: RuntimeSchemaRequest) std.mem.Allocator.Error!void {

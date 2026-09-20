@@ -413,6 +413,10 @@ pub const ConstRootPlan = struct {
     /// representation evidence from the public checked type.
     ret_type: const_store.ConstTypeId,
     plan: ConstPlanId,
+    /// The slot the evaluation publishes this root's completed value into,
+    /// when a consumer asked for the value to be materialized. Null when no
+    /// consumer of this program reads the value.
+    value_slot: ?LIR.StaticDataId = null,
 };
 
 /// One exact LIR value construction that is frozen as readonly target data.
