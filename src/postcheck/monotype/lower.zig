@@ -27,16 +27,18 @@ const InstVariable = solve.InstVariable;
 const GraphTypeFinals = solve.GraphTypeFinals;
 const EntryRoot = solve.EntryRoot;
 
-/// Placeholder function id for a compile-time root declared lazily (see
-/// `Options.lazy_comptime_roots`); never a real function.
-const lazy_root_fn_id: Ast.FnId = @enumFromInt(std.math.maxInt(u32));
-
-/// What a read of a lazily declared root needs to request its template.
-/// Filled before any body lowers and never mutated afterwards, so worker
-/// bodies may read it while the coordinator commits.
-const LazyRootRequest = struct {
+/// A compile-time root declared lazily (see `Options.lazy_comptime_roots`).
+/// Its entry template is reserved up front like any root's, so reads bind a
+/// real function id, but the queued body is parked here until a committed
+/// read promotes it into the specialization queue.
+const LazyRoot = struct {
     request: checked.RootRequest,
     source_module: checked.ModuleId,
+    def: Ast.DefId,
+    /// The reservation's queued body while nothing has read the root. Null
+    /// once promoted, or when the template was already requested elsewhere.
+    job: ?PendingSpecJob,
+    demanded: bool,
 };
 const FunctionNodes = solve.FunctionNodes;
 const ArgumentClassSnapshot = solve.InstGraph.ArgumentClassSnapshot;
@@ -718,11 +720,10 @@ pub fn run(
             try builder.lowerStaticDataRequest(request);
         }
         try builder.drainPendingSpecJobs();
-        // Bodies drained above requested the lazy roots they read; publishing
-        // those roots resolves to the same definitions, and any request the
-        // coordinator makes with a different identity drains here.
-        try builder.addDemandedLazyRoots();
-        try builder.drainPendingSpecJobs();
+        // Every read a drained body committed promoted its lazy root into the
+        // queue the drain above emptied; the rest are finished bodiless.
+        try builder.finishLazyRoots();
+        builder.requirePendingSpecJobsDrained();
     }
 
     {
@@ -3511,13 +3512,19 @@ const Builder = struct {
     declared_comptime_root_functions: DeclaredComptimeRootFunctions,
     borrowed_comptime_root_functions: ?*const DeclaredComptimeRootFunctions = null,
     lazy_comptime_roots: bool,
-    /// Compile-time roots declared lazily. A read requests the root's entry
-    /// template like any deferred direct call, so the template is reserved
-    /// and queued only once a lowered body reads the value.
-    lazy_roots: std.AutoHashMap(EntryRoot, LazyRootRequest),
+    /// Compile-time roots declared lazily, keyed by root. Coordinator-only.
+    lazy_roots: std.AutoHashMap(EntryRoot, LazyRoot),
     /// Lazy roots in request order, so the roots added after the final drain
     /// keep the order the finalizer partitions const roots by.
     lazy_root_order: std.ArrayList(EntryRoot),
+    /// Set while a lazy root's entry template is being reserved: the queued
+    /// body is parked in `parked_lazy_job` instead of entering the queue.
+    parking_lazy_root: ?EntryRoot = null,
+    parked_lazy_job: ?PendingSpecJob = null,
+    /// With lazy roots, every other root waits here so the program's roots
+    /// keep compile-time roots first: runtime consumers slice their roots
+    /// after the compile-time count.
+    deferred_eager_roots: std.ArrayList(Ast.Root) = .empty,
     post_check_executor: ?base.post_check_task_executor.Executor,
     timing: ?*Timing,
     /// Marks callbacks that must leave coordinator-owned stores unchanged.
@@ -3721,7 +3728,7 @@ const Builder = struct {
             .comptime_value_reads = options.comptime_value_reads,
             .declared_comptime_root_functions = DeclaredComptimeRootFunctions.init(allocator),
             .lazy_comptime_roots = options.lazy_comptime_roots,
-            .lazy_roots = std.AutoHashMap(EntryRoot, LazyRootRequest).init(allocator),
+            .lazy_roots = std.AutoHashMap(EntryRoot, LazyRoot).init(allocator),
             .lazy_root_order = .empty,
             .post_check_executor = options.post_check_executor,
             .timing = options.timing,
@@ -3920,6 +3927,7 @@ const Builder = struct {
         self.declared_comptime_root_functions.deinit();
         self.lazy_roots.deinit();
         self.lazy_root_order.deinit(self.allocator);
+        self.deferred_eager_roots.deinit(self.allocator);
         self.module_index.deinit();
         self.spec_job_task_buffers.deinit(self.allocator);
         if (self.spec_job_commit_domain) |*domain| domain.deinit();
@@ -4481,39 +4489,78 @@ const Builder = struct {
         else
             Common.invariant("root request reached Monotype without a checked procedure template or procedure source");
         try self.appendRuntimeSchemaRequestsForDef(def);
-        try self.program.addRoot(.{ .def = def, .request = request, .source_module = source_module });
+        try self.publishRoot(.{ .def = def, .request = request, .source_module = source_module });
     }
 
-    /// The lazily declared root's entry template, requested at its declared
-    /// type. Reserves and queues the template the first time; later calls
-    /// return the same definition.
-    fn lazyRootTemplateDef(self: *Builder, key: EntryRoot) Allocator.Error!Ast.DefId {
-        const entry = self.lazy_roots.get(key) orelse
-            Common.invariant("compile-time value read named a root that was not declared lazily");
-        const source_view = self.moduleForId(entry.source_module);
-        const template = entry.request.procedure_template orelse
-            Common.invariant("lazily declared compile-time root lacked its declared entry template");
-        return try self.lowerTemplate(template, source_view, entry.request.checked_type, null);
+    /// Roots enter the program in request order; with lazy roots the
+    /// compile-time ones are published first by `finishLazyRoots`.
+    fn publishRoot(self: *Builder, root: Ast.Root) Allocator.Error!void {
+        if (self.lazy_comptime_roots) return self.deferred_eager_roots.append(self.allocator, root);
+        try self.program.addRoot(root);
     }
 
-    /// After the last drain, publish the lazily declared roots whose value a
-    /// lowered body read, in request order. Roots nothing read are omitted.
-    /// A read's deferred request already reserved and lowered the template;
-    /// the coordinator request here resolves to that same definition.
-    fn addDemandedLazyRoots(self: *Builder) Allocator.Error!void {
+    fn enqueueSpecJob(self: *Builder, job: PendingSpecJob) Allocator.Error!void {
+        std.debug.assert(job.dispatch_index == self.next_spec_dispatch_index);
+        try self.pending_spec_jobs.append(self.allocator, job);
+        self.next_spec_dispatch_index += 1;
+        self.countCoordinatorBodyDiagnostic("spec_jobs_enqueued");
+        self.recordPendingSpecJobPeak();
+    }
+
+    /// A committed read of a lazily declared root: the root will be evaluated,
+    /// and its parked body enters the specialization queue now.
+    fn promoteLazyRoot(self: *Builder, key: EntryRoot) Allocator.Error!void {
+        const entry = self.lazy_roots.getPtr(key) orelse return;
+        entry.demanded = true;
+        if (entry.job) |parked| {
+            var job = parked;
+            job.dispatch_index = self.next_spec_dispatch_index;
+            try self.enqueueSpecJob(job);
+            entry.job = null;
+        }
+    }
+
+    /// Promote every lazily declared root a just-sealed draft reads.
+    fn promoteLazyRootReads(self: *Builder, body_draft: *const BodyDraftStore) Allocator.Error!void {
         if (!self.lazy_comptime_roots) return;
-        var demanded = std.AutoHashMap(EntryRoot, void).init(self.allocator);
-        defer demanded.deinit();
-        for (self.program.comptime_value_roots.unsafeRawItemsForView()) |root| {
-            try demanded.put(.{ .module = root.module, .root = root.root }, {});
+        for (body_draft.comptime_value_roots.items) |root| {
+            try self.promoteLazyRoot(.{ .module = root.module, .root = root.root });
         }
+    }
+
+    /// After the last drain, publish the demanded lazy roots in request order
+    /// and finish every undemanded reservation. An undemanded root keeps its
+    /// declared shape with a body that only crashes: nothing calls it, it is
+    /// not a root, and reachability drops it from every consumer.
+    fn finishLazyRoots(self: *Builder) Allocator.Error!void {
+        if (!self.lazy_comptime_roots) return;
         for (self.lazy_root_order.items) |key| {
-            if (!demanded.contains(key)) continue;
             const entry = self.lazy_roots.get(key).?;
-            const def = try self.lazyRootTemplateDef(key);
-            try self.appendRuntimeSchemaRequestsForDef(def);
-            try self.program.addRoot(.{ .def = def, .request = entry.request, .source_module = entry.source_module });
+            if (entry.demanded) {
+                try self.appendRuntimeSchemaRequestsForDef(entry.def);
+                try self.program.addRoot(.{ .def = entry.def, .request = entry.request, .source_module = entry.source_module });
+                continue;
+            }
+            const job = entry.job orelse continue;
+            const fn_data = self.programFunctionShape(job.fn_ty, "lazy compile-time root template root type was not a function");
+            const args = try self.typedLocalsForArgs(self.program.types.span(fn_data.args));
+            const body = try self.program.addExpr(.{
+                .ty = fn_data.ret,
+                .data = .{ .crash = try self.program.addStringLiteral("compile-time root was not evaluated") },
+            });
+            self.program.setDef(job.reservation.def, .{
+                .symbol = job.reservation.symbol,
+                .fn_def = job.fn_template,
+                .fn_id = job.reservation.fn_id,
+                .args = args,
+                .body = .{ .roc = body },
+                .ret = fn_data.ret,
+            });
+            self.program.setFnSource(job.reservation.fn_id, job.fn_template);
+            try self.markTemplateReady(job.reservation.fn_id, job.fn_ty);
         }
+        for (self.deferred_eager_roots.items) |root| try self.program.addRoot(root);
+        self.deferred_eager_roots.clearRetainingCapacity();
     }
 
     /// Procedure-use runs are the only isolated roots without an ordered
@@ -4533,17 +4580,27 @@ const Builder = struct {
             // eager list; everything else is lowered exactly as before.
             for (all_requests, 0..) |request, i| {
                 const source_module = self.rootSourceModule(all_source_modules, i);
-                // A root whose entry template carries dispatch evidence is
-                // requested with that evidence materialized on the coordinator,
-                // which a worker body cannot do, so it stays eager.
-                if (request.abi == .compile_time and request.root_evidence == null) {
+                if (request.abi == .compile_time) {
                     const root_id = request.compile_time_root orelse
                         Common.invariant("shared compile-time request lacked its checked root identity");
                     const key = EntryRoot{ .module = source_module, .root = root_id };
-                    try self.declared_comptime_root_functions.put(key, lazy_root_fn_id);
+                    const source_view = self.moduleForId(source_module);
+                    const template = request.procedure_template orelse
+                        Common.invariant("shared compile-time root lacked its declared entry template");
+                    self.parking_lazy_root = key;
+                    self.parked_lazy_job = null;
+                    const def = try self.lowerTemplate(template, source_view, request.checked_type, request.root_evidence);
+                    self.parking_lazy_root = null;
+                    const fn_id = self.defFnId(def);
+                    const declared = try self.declared_comptime_root_functions.getOrPut(key);
+                    if (declared.found_existing and declared.value_ptr.* != fn_id) {
+                        Common.invariant("checked compile-time root reserved different functions for one declared root");
+                    }
+                    declared.value_ptr.* = fn_id;
                     const entry = try self.lazy_roots.getOrPut(key);
                     if (entry.found_existing) Common.invariant("checked compile-time root was declared lazily more than once");
-                    entry.value_ptr.* = .{ .request = request, .source_module = source_module };
+                    entry.value_ptr.* = .{ .request = request, .source_module = source_module, .def = def, .job = self.parked_lazy_job, .demanded = false };
+                    self.parked_lazy_job = null;
                     try self.lazy_root_order.append(self.allocator, key);
                     continue;
                 }
@@ -4695,7 +4752,7 @@ const Builder = struct {
         for (contexts) |*context| {
             const def = try self.commitCompletedProcedureRootShard(&context.shard.?);
             try self.appendRuntimeSchemaRequestsForDef(def);
-            try self.program.addRoot(.{ .def = def, .request = context.request, .source_module = context.source_module });
+            try self.publishRoot(.{ .def = def, .request = context.request, .source_module = context.source_module });
             if (self.timing) |timing| timing.parallel.root_tasks_committed +%= 1;
             context.shard.?.deinit();
             context.shard = null;
@@ -4727,11 +4784,8 @@ const Builder = struct {
                 if (root_id) |root| {
                     if (self.comptimeValueReadDeclared(view, root)) {
                         const owners = self.borrowed_comptime_root_functions orelse &self.declared_comptime_root_functions;
-                        const declared_fn_id = owners.get(.{ .module = view.key, .root = root }).?;
-                        const fn_id = if (declared_fn_id == lazy_root_fn_id)
-                            self.defFnId(try self.lazyRootTemplateDef(.{ .module = view.key, .root = root }))
-                        else
-                            declared_fn_id;
+                        const fn_id = owners.get(.{ .module = view.key, .root = root }).?;
+                        try self.promoteLazyRoot(.{ .module = view.key, .root = root });
                         const initializer = try self.program.addExpr(.{
                             .ty = ret_ty,
                             .data = .{ .call_proc = .{ .callee = Ast.localProcCallee(fn_id), .args = .empty() } },
@@ -5589,7 +5643,7 @@ const Builder = struct {
                         // seed. The queued job later observes the ready
                         // record and is skipped instead of re-lowered.
                         .immediate => {
-                            const job = self.pendingSpecJobFor(hit.fn_id) orelse
+                            const job = (try self.pendingSpecJobFor(hit.fn_id)) orelse
                                 Common.invariant("reserved Monotype specialization had no queued body to claim");
                             self.spec_store.markLowering(job.spec);
                             try self.completeTemplateReservation(
@@ -5702,9 +5756,8 @@ const Builder = struct {
                 if (retained_topology != null) {
                     Common.invariant("queued Monotype specialization request cannot carry a retained lexical topology");
                 }
-                const dispatch_index = self.next_spec_dispatch_index;
-                try self.pending_spec_jobs.append(self.allocator, .{
-                    .dispatch_index = dispatch_index,
+                const job = PendingSpecJob{
+                    .dispatch_index = self.next_spec_dispatch_index,
                     .spec = reserved.spec,
                     .reservation = reservation,
                     .fn_template = fn_template,
@@ -5718,10 +5771,15 @@ const Builder = struct {
                     .signature_relation = signature_relation,
                     .codec_contract = codec_contract,
                     .widened_result_row = widened_result_row,
-                });
-                self.next_spec_dispatch_index += 1;
-                self.countCoordinatorBodyDiagnostic("spec_jobs_enqueued");
-                self.recordPendingSpecJobPeak();
+                };
+                if (self.parking_lazy_root != null) {
+                    // A lazily declared root's body waits for a read to
+                    // promote it (see `promoteLazyRoot`); its dispatch index
+                    // is assigned then.
+                    self.parked_lazy_job = job;
+                    return reservation.def;
+                }
+                try self.enqueueSpecJob(job);
                 return reservation.def;
             },
         }
@@ -6213,9 +6271,18 @@ const Builder = struct {
     /// has already been claimed and completed. Claims are rare (bounded by
     /// iterator-inline occurrences), so a linear scan of the outstanding
     /// window is cheaper than an index.
-    fn pendingSpecJobFor(self: *Builder, fn_id: Ast.FnId) ?PendingSpecJob {
+    fn pendingSpecJobFor(self: *Builder, fn_id: Ast.FnId) Allocator.Error!?PendingSpecJob {
         for (self.pending_spec_jobs.items[self.pending_spec_jobs_head..]) |job| {
             if (job.reservation.fn_id == fn_id) return job;
+        }
+        // A parked lazy root body claimed by an immediate request is promoted
+        // first, so the claim is recorded in the queue like any other.
+        var lazy = self.lazy_roots.iterator();
+        while (lazy.next()) |item| {
+            const parked = item.value_ptr.job orelse continue;
+            if (parked.reservation.fn_id != fn_id) continue;
+            try self.promoteLazyRoot(item.key_ptr.*);
+            return self.pending_spec_jobs.items[self.pending_spec_jobs.items.len - 1];
         }
         return null;
     }
@@ -11459,6 +11526,7 @@ const Builder = struct {
             commit_map.emit_nested_defs,
         );
         self.final_body_output_allowance.addDelta(output_before, FinalBodyOutputCounts.fromProgram(self.program));
+        try self.promoteLazyRootReads(body_draft);
         const sealed_extra = if (extra_ty) |ty| blk: {
             break :blk try committed_types.sealType(ty);
         } else null;
@@ -11518,6 +11586,7 @@ const Builder = struct {
             commit_map.emit_nested_defs,
         );
         self.final_body_output_allowance.addDelta(output_before, FinalBodyOutputCounts.fromProgram(self.program));
+        try self.promoteLazyRootReads(body_draft);
         try self.markDraftNestedReady(body_draft, body_ids);
         try self.finalizeDraftTemplateSpecs(body_draft, body_ids);
         verifyDraftTemplateSpecsResolved(body_draft);
@@ -25585,33 +25654,7 @@ const BodyContext = struct {
         const owners = self.builder.borrowed_comptime_root_functions orelse &self.builder.declared_comptime_root_functions;
         const fn_id = owners.get(.{ .module = view.key, .root = root_id }) orelse
             Common.invariant("shared root read lacked a declared root function");
-        const callee: DraftProcCallee = if (fn_id == lazy_root_fn_id) blk: {
-            // A lazily declared root has no function yet. Its entry template
-            // is requested at its declared type exactly like a direct call to
-            // a not-yet-specialized procedure: the request is resolved when
-            // this draft commits, which reserves and queues the template.
-            const lazy = self.builder.lazy_roots.get(.{ .module = view.key, .root = root_id }) orelse
-                Common.invariant("lazily declared compile-time root lacked its request");
-            const template = lazy.request.procedure_template orelse
-                Common.invariant("lazily declared compile-time root lacked its declared entry template");
-            const value_node = switch (cell) {
-                .graph_node => |node| node,
-                .sealed => Common.invariant("lazy compile-time value read reached a sealed type cell"),
-            };
-            const request_fn_node = try self.graphFunctionNode(&.{}, value_node);
-            const slot = try self.builder.lowerDraftTemplateFromContext(
-                self,
-                template,
-                lazy.request.checked_type,
-                view.types.rootKey(lazy.request.checked_type),
-                request_fn_node,
-                EdgeEvidence{ .subst = &.{}, .vector = &.{} },
-                .instantiation,
-                .independent_roots,
-                .inherit,
-            );
-            break :blk draftProcCalleeForSlot(slot);
-        } else .{ .func = .{ .local = .{ .final = fn_id } } };
+        const callee: DraftProcCallee = .{ .func = .{ .local = .{ .final = fn_id } } };
         const initializer = try self.addExprWithTypeCell(cell, .{ .call_proc = .{
             .callee = callee,
             .args = .empty(),
