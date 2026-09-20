@@ -3342,7 +3342,6 @@ const DraftGeneratedHelperDefEntry = union(enum) {
 fn templateSpecIdentity(
     template_ref: names.ProcTemplate,
     method_scope: checked.ModuleId,
-    source_fn_key: names.TypeDigest,
     evidence_digest: Ast.EvidenceDigest,
     codec_contract: ?Ast.CodecContractIdentity,
     request_fn_ty: Type.TypeId,
@@ -3355,7 +3354,6 @@ fn templateSpecIdentity(
             .template = @intFromEnum(template_ref.template),
         } },
         .method_scope = moduleDigestFromId(method_scope),
-        .source_fn_ty_digest = source_fn_key,
         .evidence_digest = evidence_digest,
         .codec_contract_digest = codecContractIdentityDigest(codec_contract),
         .codec_contract = codec_contract,
@@ -3367,7 +3365,6 @@ fn templateSpecIdentity(
 fn nestedSpecIdentity(
     nested: Ast.NestedFn,
     method_scope: checked.ModuleId,
-    source_fn_key: names.TypeDigest,
     evidence_digest: Ast.EvidenceDigest,
     capture_abi_digest: names.TypeDigest,
     codec_contract: ?Ast.CodecContractIdentity,
@@ -3388,7 +3385,6 @@ fn nestedSpecIdentity(
             .default_root_module = nested.default_root,
         } },
         .method_scope = moduleDigestFromId(method_scope),
-        .source_fn_ty_digest = source_fn_key,
         .evidence_digest = evidence_digest,
         .codec_contract_digest = codecContractIdentityDigest(codec_contract),
         .codec_contract = codec_contract,
@@ -5441,7 +5437,6 @@ const Builder = struct {
         const spec_identity = templateSpecIdentity(
             template_ref,
             method_scope.key,
-            source_fn_key,
             evidence_digest,
             self.codecContractIdentity(codec_contract),
             fn_ty,
@@ -5527,7 +5522,7 @@ const Builder = struct {
             if (@import("builtin").link_libc and std.c.getenv("ROC_SPEC_CENSUS") != null) {
                 const proc_base = view.names.procBase(template_ref.proc_base);
                 const name: []const u8 = if (proc_base.export_name) |e| view.names.exportNameText(e) else "?";
-                std.debug.print("CENSUS_KEY\t{s}\t{x}\tsrc={x}\tev={x}\tcodec={x}\treq={x}\tcallable={s}\n", .{ name, key.bytes[0..8], spec_identity.source_fn_ty_digest.bytes[0..6], spec_identity.evidence_digest.bytes[0..6], spec_identity.codec_contract_digest.bytes[0..6], spec_identity.request_fn_ty_digest.bytes[0..6], @tagName(spec_identity.callable) });
+                std.debug.print("CENSUS_KEY\t{s}\t{x}\tev={x}\tcodec={x}\treq={x}\tcallable={s}\n", .{ name, key.bytes[0..8], spec_identity.evidence_digest.bytes[0..6], spec_identity.codec_contract_digest.bytes[0..6], spec_identity.request_fn_ty_digest.bytes[0..6], @tagName(spec_identity.callable) });
             }
             if (self.spec_cache) |cache| {
                 if (cache.lookup(key.bytes)) |hit| {
@@ -5565,7 +5560,6 @@ const Builder = struct {
             const spec = try self.addTemplateSpecRecord(
                 template_ref,
                 method_scope.key,
-                source_fn_key,
                 identity_evidence,
                 lower_fn_ty,
                 request_digest,
@@ -7636,7 +7630,6 @@ const Builder = struct {
         self: *Builder,
         template_ref: names.ProcTemplate,
         method_scope: checked.ModuleId,
-        source_fn_key: names.TypeDigest,
         evidence: StoredConstFnEvidence,
         request_fn_ty: Type.TypeId,
         request_fn_ty_digest: names.TypeDigest,
@@ -7649,7 +7642,6 @@ const Builder = struct {
             templateSpecIdentity(
                 template_ref,
                 method_scope,
-                source_fn_key,
                 evidence_digest,
                 codec_contract,
                 request_fn_ty,
@@ -7665,7 +7657,6 @@ const Builder = struct {
         self: *Builder,
         nested: Ast.NestedFn,
         method_scope: checked.ModuleId,
-        source_fn_key: names.TypeDigest,
         evidence: StoredConstFnEvidence,
         capture_abi_digest: names.TypeDigest,
         codec_contract: ?Ast.CodecContractIdentity,
@@ -7675,7 +7666,7 @@ const Builder = struct {
     ) Allocator.Error!Ast.SpecId {
         const evidence_digest = Ast.fnEvidenceDigest(evidence.nodes, evidence.frames, evidence.head);
         return try self.addSpecRecord(
-            nestedSpecIdentity(nested, method_scope, source_fn_key, evidence_digest, capture_abi_digest, codec_contract, request_fn_ty, request_fn_ty_digest),
+            nestedSpecIdentity(nested, method_scope, evidence_digest, capture_abi_digest, codec_contract, request_fn_ty, request_fn_ty_digest),
             evidence,
             fn_id,
             .lowering,
@@ -9719,7 +9710,6 @@ const Builder = struct {
     fn draftSpecIdentityEql(self: *Builder, left: Ast.SpecIdentity, right: Ast.SpecIdentity) Allocator.Error!bool {
         if (!std.meta.eql(left.callable, right.callable)) return false;
         if (!std.mem.eql(u8, left.method_scope.bytes[0..], right.method_scope.bytes[0..])) return false;
-        if (!std.mem.eql(u8, left.source_fn_ty_digest.bytes[0..], right.source_fn_ty_digest.bytes[0..])) return false;
         if (!std.meta.eql(left.evidence_digest, right.evidence_digest)) return false;
         if (!std.mem.eql(u8, left.codec_contract_digest.bytes[0..], right.codec_contract_digest.bytes[0..])) return false;
         if ((left.codec_contract == null) != (right.codec_contract == null)) return false;
@@ -10629,7 +10619,6 @@ const Builder = struct {
         const identity = templateSpecIdentity(
             spec.template_ref,
             spec.method_scope,
-            spec.source_fn_key,
             draft_fn.source.evidence_digest,
             self.codecContractIdentity(codec_contract),
             coordinator_fn_ty,
@@ -10869,7 +10858,6 @@ const Builder = struct {
                     identity = templateSpecIdentity(
                         spec.template_ref,
                         spec.method_scope,
-                        spec.source_fn_key,
                         sealed_template.evidence_digest,
                         spec.committed_codec_contract,
                         request_fn_ty,
@@ -10886,7 +10874,6 @@ const Builder = struct {
                         identity = nestedSpecIdentity(
                             spec.nested,
                             spec.method_scope,
-                            spec.source_fn_key,
                             sealed_template.evidence_digest,
                             spec.capture_abi_digest,
                             spec.sealed_codec_contract,
@@ -11451,7 +11438,6 @@ const Builder = struct {
             const identity = templateSpecIdentity(
                 spec.template_ref,
                 spec.method_scope,
-                spec.source_fn_key,
                 fn_template.evidence_digest,
                 spec.committed_codec_contract,
                 request_fn_ty,
@@ -11474,7 +11460,6 @@ const Builder = struct {
             const spec_id = try self.addTemplateSpecRecord(
                 spec.template_ref,
                 spec.method_scope,
-                spec.source_fn_key,
                 evidence,
                 request_fn_ty,
                 request_digest,
@@ -11510,13 +11495,12 @@ const Builder = struct {
             const evidence = programViewFnEvidence(self.program.view(), fn_template);
             const capture_abi_digest = spec.capture_abi_digest;
             if (try self.spec_store.findLocal(
-                nestedSpecIdentity(spec.nested, spec.method_scope, spec.source_fn_key, fn_template.evidence_digest, capture_abi_digest, spec.sealed_codec_contract, fn_ty, digest),
+                nestedSpecIdentity(spec.nested, spec.method_scope, fn_template.evidence_digest, capture_abi_digest, spec.sealed_codec_contract, fn_ty, digest),
                 specializationEvidenceView(evidence),
             )) |_| continue;
             const spec_id = try self.addNestedSpecRecord(
                 spec.nested,
                 spec.method_scope,
-                spec.source_fn_key,
                 evidence,
                 capture_abi_digest,
                 spec.sealed_codec_contract,
@@ -57809,7 +57793,6 @@ test "queued specialization skips a body claimed immediately before dispatch" {
             const identity = Ast.SpecIdentity{
                 .callable = .{ .generated = @enumFromInt(@as(u32, @intCast(dispatch_index))) },
                 .method_scope = .{},
-                .source_fn_ty_digest = .{},
                 .evidence_digest = .{},
                 .codec_contract_digest = .{},
                 .codec_contract = null,
