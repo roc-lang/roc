@@ -1003,3 +1003,11 @@ fn assertNoTypeProblems(self: *TestEnv) TestEnvError!void {
 
     try testing.expectEqual(0, self.checker.problems.problems.items.len);
 }
+
+/// The CIR node this module exposes under `name`, for tests that reach an
+/// exposed binding by the name its source declares.
+pub fn exposedValueNode(self: *const TestEnv, name: []const u8) ?CIR.Node.Idx {
+    const ident = self.module_env.common.findIdent(name) orelse return null;
+    const node_idx = self.module_env.getExposedValueNodeIndexById(ident) orelse return null;
+    return @enumFromInt(node_idx);
+}

@@ -37598,10 +37598,8 @@ test "imported codec schemes roll back their metadata and survive committed impo
     );
     defer source.deinit();
     try std.testing.expectEqual(@as(usize, 0), try source.typeProblemCount());
-    const json_ident = source.module_env.common.findIdent("to_json").?;
-    const json_node: CIR.Node.Idx = @enumFromInt(source.module_env.getExposedValueNodeIndexById(json_ident).?);
-    const identity_ident = source.module_env.common.findIdent("identity").?;
-    const identity_node: CIR.Node.Idx = @enumFromInt(source.module_env.getExposedValueNodeIndexById(identity_ident).?);
+    const json_node = source.exposedValueNode("to_json").?;
+    const identity_node = source.exposedValueNode("identity").?;
     try std.testing.expect(source.module_env.bindingSchemeCodecRequirementsForNode(json_node).len > 0);
 
     var destination = try TestEnv.init("Consumer", "value = {}");
