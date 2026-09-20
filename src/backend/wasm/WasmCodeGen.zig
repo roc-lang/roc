@@ -21898,6 +21898,12 @@ const JoinFixtureShape = enum {
     assign_before_join,
 };
 
+fn freshJoinFixtureJoinPointId(next_join_point: *u32) LIR.JoinPointId {
+    const id: LIR.JoinPointId = @enumFromInt(next_join_point.*);
+    next_join_point.* += 1;
+    return id;
+}
+
 fn compileJoinFixture(allocator: Allocator, shape: JoinFixtureShape) ScanError!BodyScan {
     var store = LirStore.init(allocator);
     defer store.deinit();
@@ -21905,7 +21911,8 @@ fn compileJoinFixture(allocator: Allocator, shape: JoinFixtureShape) ScanError!B
     defer layouts.deinit();
 
     const late = try store.addLocal(.{ .layout_idx = .u64 });
-    const join_id: LIR.JoinPointId = @enumFromInt(0);
+    var next_join_point: u32 = 0;
+    const join_id = freshJoinFixtureJoinPointId(&next_join_point);
 
     const body_ret = try store.addCFStmt(.{ .ret = .{ .value = late } });
     const jump_back = try store.addCFStmt(.{ .jump = .{ .target = join_id } });
@@ -22148,12 +22155,14 @@ const NestedScopeFixture = struct {
     store: LirStore,
     layouts: LayoutStore,
     codegen: Self,
+    /// The one LIR local the nested scopes share.
+    shared: ProcLocalId,
 
     fn init(allocator: Allocator) Allocator.Error!*NestedScopeFixture {
         const self = try allocator.create(NestedScopeFixture);
         self.store = LirStore.init(allocator);
         self.layouts = try layout.Store.init(allocator, .u32);
-        _ = try self.store.addLocal(.{ .layout_idx = .u64 });
+        self.shared = try self.store.addLocal(.{ .layout_idx = .u64 });
         self.codegen = Self.init(allocator, &self.store, &self.layouts, &.{}, &.{}, &.{}, .default);
         return self;
     }
@@ -22177,7 +22186,7 @@ test "a nested function scope restores the caller's binding for a shared local" 
     const fixture = try NestedScopeFixture.init(allocator);
     defer fixture.deinit(allocator);
     const codegen = &fixture.codegen;
-    const shared: ProcLocalId = @enumFromInt(0);
+    const shared = fixture.shared;
 
     const outer = try codegen.saveState();
     try fixture.openFunction();
@@ -22206,7 +22215,7 @@ test "abandoning a failed nested compilation restores the caller's binding scope
     const fixture = try NestedScopeFixture.init(allocator);
     defer fixture.deinit(allocator);
     const codegen = &fixture.codegen;
-    const shared: ProcLocalId = @enumFromInt(0);
+    const shared = fixture.shared;
 
     const outer = try codegen.saveState();
     try fixture.openFunction();
