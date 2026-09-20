@@ -9683,8 +9683,8 @@ lowering a body. A specialization request is identified by:
 const SpecIdentity = struct {
     callable: CallableIdentity,
     method_scope: CheckedModuleDigest,
-    source_fn_ty_digest: TypeDigest,
     evidence_digest: EvidenceDigest,
+    codec_contract_digest: TypeDigest,
     request_fn_ty_digest: TypeDigest,
     request_fn_ty: TypeId,
 };
@@ -9723,15 +9723,57 @@ const SpecRecord = struct {
 
 `method_scope` records the exact checked registry scope that selected static
 dispatch inside the body; it participates in both draft and durable lookup
-keys. `source_fn_ty_digest` records the checked source function type after
-instantiation into the requesting graph. `evidence_digest` accelerates lookup
-of the exact retained dispatch-evidence topology. `request_fn_ty_digest`
+keys. `evidence_digest` accelerates lookup of the exact retained
+dispatch-evidence topology, and `codec_contract_digest` the exact
+lowering-only context a generated codec body requires. `request_fn_ty_digest`
 records the closed function type REQUESTED by the call site that reserved the
 record. The digests make lookup fast, but they are not the only correctness
 check. When a digest match is found, the store must also verify the checked
-callable identity, method scope, exact evidence topology, and exact structural
-equality of the closed Monotype function type. Digest collisions are therefore
-harmless.
+callable identity, method scope, exact evidence topology, exact codec
+contract, and exact structural equality of the closed Monotype function type.
+Digest collisions are therefore harmless.
+
+The checked source function type a call site instantiated the callable from is
+NOT part of this identity. The callable says which checked body a request
+lowers; the checked source type is the requesting graph's instantiation and
+replay context—the root a fresh instantiation constrains to the requested
+Monotype type—so the requesting graph may key its own instantiation and draft
+memos by it. It does not name the resulting specialization, because two call
+sites can instantiate one callable from checked types that differ at the
+checked level and seal to the same closed Monotype request. The confirmed case
+is a transparent alias: with `Count : U64`, a call site under `Count -> Count`
+and one under `U64 -> U64` carry different checked type keys—the canonical key
+retains alias provenance deliberately—and both requests seal to one Monotype
+function type. (Monotype does retain some alias-named types; what is required
+here is the sealed request type, whatever shape it has.)
+
+Two requests that agree on the checked callable, method scope, exact evidence
+topology, codec contract, and closed Monotype function type lower the same body
+and must reuse ONE record. Caller provenance must not split them, in the
+durable store, in the draft-commit index, or in the object-cache content key.
+Every content identity derived from a specialization obeys the same rule
+because they are compared against each other: an object-cache entry is filed
+under `specIdentityKey` and carries the procedure identity the writing program
+lowered, which the reading program re-derives from the lifted function's
+checked source identity. A record keeps whichever requester reserved it, so a
+requester-derived component in either identity would make two programs that
+reach one specialization through differently annotated call sites disagree—one
+key naming two procedure identities.
+
+A compiler-generated body retains its own semantic key. An interpolation or
+field-names iterator step, a structural parser or encoder runtime, and a
+generated encoder callback have no checked declaration to name, so the producer
+synthesizes the body's identity—owner context, source expression, site ordinal
+and mode—into the same template slot the caller's checked type would otherwise
+occupy. Several such bodies share one `FnDef`, their evidence, and their
+Monotype type, so every identity derived from the template must carry that key.
+Which reading the slot holds is decided by the callable kind, never inferred
+from names, types, or layouts: the generated kinds keep it, the rest drop it.
+`checked_generated` is also worn by an unavailable-hosted crash stub and a
+result-row widening adapter, whose slot is ordinary caller provenance, so that
+kind is keyed conservatively—those two stay distinct per requester, which costs
+reuse and cannot lose a distinction. Neither is an object-cache entry, so no
+key can disagree with their identity.
 
 Checked callable type ids inside dispatch evidence are relation-replay payload,
 not specialization identity: separate generalized scheme uses deliberately
