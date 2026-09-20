@@ -12205,6 +12205,16 @@ fn tagReachabilityForOpt(opt: cli_args.OptLevel) bool {
     };
 }
 
+/// Whether the LIR rewrites that only speed up the produced program run.
+/// Dev builds exist to compile fast; `--opt=speed` and `--opt=size` are where
+/// the program's own speed is bought.
+fn optimizeLirForOpt(opt: cli_args.OptLevel) bool {
+    return switch (opt) {
+        .size, .speed => true,
+        .dev, .interpreter => false,
+    };
+}
+
 fn proveRangesForOpt(opt: cli_args.OptLevel) bool {
     return switch (opt) {
         .size, .speed => true,
@@ -12286,6 +12296,9 @@ fn checkedRuntimeLoweringConfig(
             .list_in_place_map = listInPlaceMapForOpt(opt),
             .tag_reachability = tagReachabilityForOpt(opt),
             .prove_ranges = proveRangesForOpt(opt),
+            .fuse_tag_cases = optimizeLirForOpt(opt),
+            .scalarize_joins = optimizeLirForOpt(opt),
+            .reuse_boxes = optimizeLirForOpt(opt),
             .proc_debug_names = proc_debug_names,
         },
     };
