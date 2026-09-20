@@ -2314,6 +2314,12 @@ fn renderDocTypeHtml(
                         if (item.needs_parens) try frames.append(gpa, .{ .html = "(" });
                     },
                     .record => |rec| {
+                        // The empty record type is spelled `{}`, with no
+                        // interior space to separate fields that aren't there.
+                        if (rec.fields.len == 0 and !rec.is_open) {
+                            try frames.append(gpa, .{ .html = "{}" });
+                            continue;
+                        }
                         const multiline = !ctx.single_line_signatures and multiline_layouts.contains(item.value);
                         if (multiline) {
                             try frames.append(gpa, .{ .html = "}" });
@@ -3235,6 +3241,49 @@ test "renderDocTypeHtml renders required, optional, and defaulted record fields"
         "{ req : <span class=\"type\">U8</span>, " ++
             "opt ?: <span class=\"type\">Str</span>, " ++
             "def : <span class=\"type\">U8</span> ?? 3 }",
+        output.written(),
+    );
+}
+
+test "renderDocTypeHtml renders the empty record without an interior space" {
+    const testing = std.testing;
+    const gpa = testing.allocator;
+
+    const empty = try gpa.create(DocType);
+    empty.* = .{ .record = .{
+        .fields = try gpa.alloc(DocModel.DocType.Field, 0),
+        .ext = null,
+        .is_open = false,
+    } };
+    const root = try gpa.create(DocType);
+    root.* = .{ .function = .{
+        .args = try gpa.dupe(*const DocType, &[_]*const DocType{empty}),
+        .ret = empty,
+        .effectful = true,
+    } };
+    defer {
+        // `empty` is shared between the argument and the return position, so
+        // free the function's own allocations without recursing into it twice.
+        empty.deinit(gpa);
+        gpa.destroy(empty);
+        gpa.free(root.function.args);
+        gpa.destroy(root);
+    }
+
+    const package_docs = DocModel.PackageDocs{
+        .name = "Test",
+        .modules = &[_]DocModel.ModuleDocs{},
+    };
+    var ctx = try RenderContext.init(&package_docs, gpa);
+    defer ctx.deinit(gpa);
+    ctx.suppress_type_links = true;
+
+    var output: std.Io.Writer.Allocating = .init(gpa);
+    defer output.deinit();
+
+    try renderDocTypeHtml(&output.writer, &ctx, gpa, root, false);
+    try testing.expectEqualStrings(
+        "{}<span class=\"sig-arrow\"> =&gt; </span>{}",
         output.written(),
     );
 }
