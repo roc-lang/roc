@@ -21240,19 +21240,12 @@ fn checkExprWithFunctionOwner(self: *Self, expr_idx: CIR.Expr.Idx, env: *Env, ex
             const body_does_fx = if (mb_anno_func) |expected_func| blk: {
                 const lambda_body_does_fx = try self.checkExpr(lambda.body, env, lambda_body_expected.withBranchResult(expected_func.ret));
                 try self.closeAbsentConstructedPayloadVarsForLambda(expr_idx, lambda.body, body_var);
-                const body_result = try self.unifyInContext(expected_func.ret, body_var, env, anno_context);
-                if (body_result.isProblem()) {
-                    // Preserve platform unification's exact relation, and refine
-                    // only the recorded diagnostic with the position we checked.
-                    std.debug.assert(body_result == .problem);
-                    const mismatch = &self.problems.problems.items[@intFromEnum(body_result.problem)].type_mismatch;
-                    if (mismatch.context == .platform_requirement) {
-                        const requirement_context = mismatch.context.platform_requirement;
-                        mismatch.context = .{ .platform_requirement_return = requirement_context };
-                    }
-                    const result_expr = self.resultValueExpr(lambda.body);
-                    mismatch.types.actual_var = ModuleEnv.varFrom(result_expr);
-                    try self.erroneous_value_exprs.put(self.gpa, result_expr, {});
+                // A `?` return composes the annotated result from the body's
+                // result and its own contributions; that composition relates
+                // the body below. Without one the body simply is the result.
+                if (!self.returnFrameHasTrySuffix()) {
+                    const body_result = try self.unifyInContext(expected_func.ret, body_var, env, anno_context);
+                    try self.refineAnnotatedBodyMismatch(body_result, lambda.body);
                 }
                 break :blk lambda_body_does_fx;
             } else blk: {
@@ -21266,7 +21259,7 @@ fn checkExprWithFunctionOwner(self: *Self, expr_idx: CIR.Expr.Idx, env: *Env, ex
             // (for correct error reporting) but before the function type is generalized
             // (so instantiated copies at call sites have the complete type, including
             // both Ok and Err variants from the ? operator).
-            try self.processReturnConstraints(env, expr_idx);
+            const ret_var = try self.processReturnConstraints(env, expr_idx, anno_context);
             return_constraints_processed = true;
 
             // NOTE: no occurs check here. Infinite/anonymous-recursive types
@@ -21293,13 +21286,13 @@ fn checkExprWithFunctionOwner(self: *Self, expr_idx: CIR.Expr.Idx, env: *Env, ex
             // Create the function type
             if (body_is_effectful) {
                 try self.effectful_lambda_bodies.put(expr_idx, {});
-                try self.unifyWith(expr_var, try self.types.mkFuncEffectful(arg_vars, body_var), env);
+                try self.unifyWith(expr_var, try self.types.mkFuncEffectful(arg_vars, ret_var), env);
             } else {
                 try self.unifyWith(
                     expr_var,
                     try self.types.mkFuncUnboundWithEffectDeps(
                         arg_vars,
-                        body_var,
+                        ret_var,
                         self.pending_function_effect_dependencies.items[effect_dependencies_start..],
                     ),
                     env,
@@ -31882,32 +31875,161 @@ fn tailTrySuffixExpr(self: *const Self, expr_idx: CIR.Expr.Idx) ?CIR.Expr.Idx {
     }
 }
 
+/// Whether the innermost return frame owns a `?` return. Such a lambda's
+/// result is composed (see `processReturnConstraints`) rather than being its
+/// body's result, so the body relates to the composed result there instead of
+/// by direct equality.
+fn returnFrameHasTrySuffix(self: *const Self) bool {
+    std.debug.assert(self.return_constraint_frames.items.len > 0);
+    const frame = self.return_constraint_frames.items[self.return_constraint_frames.items.len - 1];
+    for (self.return_constraints.items[frame.start..]) |constraint| {
+        if (constraint.kind == .try_suffix) return true;
+    }
+    return false;
+}
+
+/// Refine a rejected annotated-body relation: keep platform unification's
+/// exact relation, and point the recorded diagnostic at the expression that
+/// produced the body's value.
+fn refineAnnotatedBodyMismatch(self: *Self, body_result: unifier.Result, body: CIR.Expr.Idx) std.mem.Allocator.Error!void {
+    if (!body_result.isProblem()) return;
+    std.debug.assert(body_result == .problem);
+    const mismatch = &self.problems.problems.items[@intFromEnum(body_result.problem)].type_mismatch;
+    if (mismatch.context == .platform_requirement) {
+        const requirement_context = mismatch.context.platform_requirement;
+        mismatch.context = .{ .platform_requirement_return = requirement_context };
+    }
+    const result_expr = self.resultValueExpr(body);
+    mismatch.types.actual_var = ModuleEnv.varFrom(result_expr);
+    try self.erroneous_value_exprs.put(self.gpa, result_expr, {});
+}
+
+/// Relate a lambda's body result into the `Try` its `?` returns compose. The
+/// success parameters are equal. The body's error row is INCLUDED in the
+/// composed row rather than equal to it: its visible tags merge in through
+/// ordinary row unification, and a tagless row becomes the composed row's
+/// residual extension. Equating the rows instead would write every composed
+/// tag back into whatever produced the body's value—for a tail call, the
+/// callee's own error row—which no caller sharing that callee's errors could
+/// then satisfy without a recursive row.
+fn relateComposedBodyResult(
+    self: *Self,
+    composed: TryArgs,
+    body: TryArgs,
+    body_expr: CIR.Expr.Idx,
+    ctx: problem.Context,
+    annotated: bool,
+    env: *Env,
+) std.mem.Allocator.Error!void {
+    const ok_result = try self.unifyInContext(composed.ok, body.ok, env, ctx);
+    try self.noteComposedBodyRelation(ok_result, body_expr, annotated);
+    switch (self.tryReturnErrorContribution(body.err)) {
+        .none => {},
+        .tagged => {
+            const err_result = try self.unifyInContext(composed.err, body.err, env, ctx);
+            try self.noteComposedBodyRelation(err_result, body_expr, annotated);
+        },
+        .tail => |tail| {
+            const residual = self.tryReturnErrorTail(composed.err);
+            const tail_result = try self.unifyInContext(residual, tail, env, ctx);
+            try self.noteComposedBodyRelation(tail_result, body_expr, annotated);
+        },
+    }
+}
+
+/// Record a rejected body relation against the expression that produced the
+/// body's value. An annotated relation keeps the annotated-body refinement.
+fn noteComposedBodyRelation(self: *Self, result: unifier.Result, body_expr: CIR.Expr.Idx, annotated: bool) std.mem.Allocator.Error!void {
+    if (!result.isProblem()) return;
+    if (annotated) {
+        try self.refineAnnotatedBodyMismatch(result, body_expr);
+    } else {
+        try self.erroneous_value_exprs.put(self.gpa, self.resultValueExpr(body_expr), {});
+    }
+}
+
 /// Process the return-flow constraints owned by this lambda. Called at the end
-/// of e_lambda to ensure return type information is unified with the body type
-/// before the function type is generalized.
-fn processReturnConstraints(self: *Self, env: *Env, lambda_idx: CIR.Expr.Idx) std.mem.Allocator.Error!void {
+/// of e_lambda, after the body is fully checked and before the function type
+/// is generalized. Returns the var the lambda's function type carries as its
+/// result.
+///
+/// Without a `?` return that is the body result itself. With one, the result
+/// is a `Try` of its own—the annotated result when there is one, otherwise a
+/// fresh `Try` sharing the body's success type—into which the body result and
+/// every `?` contribution compose (design.md "Inferred Try Return-Row
+/// Composition").
+fn processReturnConstraints(self: *Self, env: *Env, lambda_idx: CIR.Expr.Idx, anno_context: problem.Context) std.mem.Allocator.Error!Var {
     std.debug.assert(self.return_constraint_frames.items.len > 0);
     const frame_idx = self.return_constraint_frames.items.len - 1;
     const frame = self.return_constraint_frames.items[frame_idx];
     std.debug.assert(frame.lambda == lambda_idx);
-
-    const constraints = self.return_constraints.items[frame.start..];
-    const body_tail_try = self.tailTrySuffixExpr(self.cir.store.getExpr(lambda_idx).e_lambda.body);
-
-    // Ordinary returns remain equality constraints and settle the inferred
-    // body result before `?` composes any propagated error rows into it.
-    for (constraints) |constraint| {
-        if (constraint.kind != .return_expr) continue;
-        try self.checkReturnRelation(
-            frame.body_result,
-            constraint.actual_expr,
-            constraint.kind.problemContext(body_tail_try),
-            env,
-        );
+    defer {
+        self.return_constraints.shrinkRetainingCapacity(frame.start);
+        self.return_value_exprs.shrinkRetainingCapacity(frame.returns_start);
+        self.return_constraint_frames.shrinkRetainingCapacity(frame_idx);
     }
 
-    var expected_try = self.tryArgsFromVar(frame.body_result);
-    if (expected_try == null) {
+    const constraints = self.return_constraints.items[frame.start..];
+    const lambda_body = self.cir.store.getExpr(lambda_idx).e_lambda.body;
+    const body_tail_try = self.tailTrySuffixExpr(lambda_body);
+
+    var has_try_suffix = false;
+    for (constraints) |constraint| {
+        if (constraint.kind == .try_suffix) {
+            has_try_suffix = true;
+            break;
+        }
+    }
+
+    if (!has_try_suffix) {
+        // Ordinary returns remain equality constraints on the body result.
+        for (constraints) |constraint| {
+            std.debug.assert(constraint.kind == .return_expr);
+            try self.checkReturnRelation(
+                frame.body_result,
+                constraint.actual_expr,
+                constraint.kind.problemContext(body_tail_try),
+                env,
+            );
+        }
+        return frame.body_result;
+    }
+
+    // An annotated result that is not a `Try` cannot compose. Relate the body
+    // to it directly, as a lambda without `?` does, and let the contributions
+    // below report against that settled body.
+    if (frame.expected_result) |annotated_result| {
+        if (self.tryArgsFromVar(annotated_result) == null) {
+            const body_result = try self.unifyInContext(annotated_result, frame.body_result, env, anno_context);
+            try self.refineAnnotatedBodyMismatch(body_result, lambda_body);
+        }
+    }
+
+    var body_try = self.tryArgsFromVar(frame.body_result);
+    // Whether ordinary returns related to the body result here rather than to
+    // the composed result below.
+    var returns_settled_body = false;
+    if (body_try == null) {
+        // The inferred body has not yet lifted to `Try`. Ordinary returns
+        // settle it first, as they do for a lambda without `?`; a body they
+        // settle to a `Try` composes below, and any other body reports
+        // against what they settled.
+        for (constraints) |constraint| {
+            if (constraint.kind != .return_expr) continue;
+            returns_settled_body = true;
+            try self.checkReturnRelation(
+                frame.body_result,
+                constraint.actual_expr,
+                constraint.kind.problemContext(body_tail_try),
+                env,
+            );
+        }
+        body_try = self.tryArgsFromVar(frame.body_result);
+    }
+    if (body_try == null) {
+        // Still not a `Try`: commit-probe a seed from the first concrete `?`
+        // success parameter and a fresh error row. A rejected probe leaves the
+        // body and its diagnostics untouched.
         for (constraints) |constraint| {
             if (constraint.kind != .try_suffix) continue;
             const actual = self.tryArgsFromVar(ModuleEnv.varFrom(constraint.actual_expr)) orelse continue;
@@ -31930,76 +32052,14 @@ fn processReturnConstraints(self: *Self, env: *Env, lambda_idx: CIR.Expr.Idx) st
             if (!result.isEstablished()) break;
             committed = true;
             commit_probe.commit();
-            expected_try = self.tryArgsFromVar(frame.body_result);
+            body_try = self.tryArgsFromVar(frame.body_result);
             break;
         }
     }
-    if (expected_try) |expected| {
-        // First merge every contribution with visible tags. Ordinary tag-row
-        // unification collects those tags and leaves one residual extension.
-        for (constraints) |constraint| {
-            if (constraint.kind != .try_suffix) continue;
-            const actual = self.tryArgsFromVar(ModuleEnv.varFrom(constraint.actual_expr)) orelse {
-                try self.checkReturnRelation(
-                    frame.body_result,
-                    constraint.actual_expr,
-                    constraint.kind.problemContext(body_tail_try),
-                    env,
-                );
-                continue;
-            };
-            if (self.tryReturnErrorContribution(actual.err) == .tagged) {
-                // This is the ordinary whole-Try relation. Keep its roots
-                // intact so a mismatch report can name both complete error
-                // payloads, rather than receiving only the nested row pair.
-                try self.checkReturnRelation(
-                    frame.body_result,
-                    constraint.actual_expr,
-                    constraint.kind.problemContext(body_tail_try),
-                    env,
-                );
-            } else if ((try self.unifyInContext(
-                expected.ok,
-                actual.ok,
-                env,
-                constraint.kind.problemContext(body_tail_try),
-            )).isProblem()) {
-                try self.erroneous_value_exprs.put(self.gpa, constraint.actual_expr, {});
-            }
-        }
 
-        // Preserve the ordinary full-row equality for a bare `?` unless its
-        // error is already embedded in the composed row. Only that latter
-        // relation would form `e = [Wrapped(e), ..]`; its exact non-recursive
-        // representation relates `e` to the residual extension instead.
-        for (constraints) |constraint| {
-            if (constraint.kind != .try_suffix) continue;
-            const actual = self.tryArgsFromVar(ModuleEnv.varFrom(constraint.actual_expr)) orelse continue;
-            const contribution = self.tryReturnErrorContribution(actual.err);
-            const tail = switch (contribution) {
-                .none, .tagged => continue,
-                .tail => |tail_var| tail_var,
-            };
-            const expected_root = self.types.resolveVar(expected.err).var_;
-            const tail_root = self.types.resolveVar(tail).var_;
-            const relation_target = if (expected_root != tail_root and
-                try self.typeStructurallyContainsVar(expected.err, tail))
-                self.tryReturnErrorTail(expected.err)
-            else
-                expected.err;
-            const result = try self.unifyInContext(
-                relation_target,
-                tail,
-                env,
-                constraint.kind.problemContext(body_tail_try),
-            );
-            if (result.isProblem()) {
-                try self.erroneous_value_exprs.put(self.gpa, constraint.actual_expr, {});
-            }
-        }
-    } else {
-        // Preserve the existing diagnostic when the inferred function result is
-        // not a `Try` at all.
+    const body = body_try orelse {
+        // The body result is not a `Try` at all. Every `?` return relates to
+        // it directly so the existing diagnostics name the body.
         for (constraints) |constraint| {
             if (constraint.kind != .try_suffix) continue;
             try self.checkReturnRelation(
@@ -32009,11 +32069,111 @@ fn processReturnConstraints(self: *Self, env: *Env, lambda_idx: CIR.Expr.Idx) st
                 env,
             );
         }
+        return frame.body_result;
+    };
+
+    // The composed result. An annotated `Try` is the composition itself;
+    // otherwise the composition shares the body's success type and owns a
+    // fresh error row that the contributions and the body's row compose into.
+    const composed_var = if (frame.expected_result) |annotated_result|
+        // An annotated result that is not a `Try` was related to the body
+        // above; the body remains the composition target so every `?`
+        // contribution reports against it.
+        (if (self.tryArgsFromVar(annotated_result) != null) annotated_result else frame.body_result)
+    else composed: {
+        const region = self.cir.store.getExprRegion(lambda_idx);
+        const composed_err = try self.fresh(env, region);
+        break :composed try self.freshFromContent(try self.mkTryContent(body.ok, composed_err), env, region);
+    };
+    const composed = self.tryArgsFromVar(composed_var) orelse unreachable;
+    const body_ctx: problem.Context = if (frame.expected_result != null)
+        anno_context
+    else
+        ReturnConstraintKind.try_suffix.problemContext(body_tail_try);
+
+    // Ordinary returns remain equality constraints on the composed result and
+    // settle it before `?` composes any propagated error rows into it.
+    if (!returns_settled_body) {
+        for (constraints) |constraint| {
+            if (constraint.kind != .return_expr) continue;
+            try self.checkReturnRelation(
+                composed_var,
+                constraint.actual_expr,
+                constraint.kind.problemContext(body_tail_try),
+                env,
+            );
+        }
     }
 
-    self.return_constraints.shrinkRetainingCapacity(frame.start);
-    self.return_value_exprs.shrinkRetainingCapacity(frame.returns_start);
-    self.return_constraint_frames.shrinkRetainingCapacity(frame_idx);
+    // First merge every contribution with visible tags. Ordinary tag-row
+    // unification collects those tags and leaves one residual extension.
+    for (constraints) |constraint| {
+        if (constraint.kind != .try_suffix) continue;
+        const actual = self.tryArgsFromVar(ModuleEnv.varFrom(constraint.actual_expr)) orelse {
+            try self.checkReturnRelation(
+                composed_var,
+                constraint.actual_expr,
+                constraint.kind.problemContext(body_tail_try),
+                env,
+            );
+            continue;
+        };
+        if (self.tryReturnErrorContribution(actual.err) == .tagged) {
+            // This is the ordinary whole-Try relation. Keep its roots
+            // intact so a mismatch report can name both complete error
+            // payloads, rather than receiving only the nested row pair.
+            try self.checkReturnRelation(
+                composed_var,
+                constraint.actual_expr,
+                constraint.kind.problemContext(body_tail_try),
+                env,
+            );
+        } else if ((try self.unifyInContext(
+            composed.ok,
+            actual.ok,
+            env,
+            constraint.kind.problemContext(body_tail_try),
+        )).isProblem()) {
+            try self.erroneous_value_exprs.put(self.gpa, constraint.actual_expr, {});
+        }
+    }
+
+    // The body's own result is included in the composed result.
+    if (self.types.resolveVar(composed_var).var_ != self.types.resolveVar(frame.body_result).var_) {
+        try self.relateComposedBodyResult(composed, body, lambda_body, body_ctx, frame.expected_result != null, env);
+    }
+
+    // Preserve the ordinary full-row equality for a bare `?` unless its
+    // error is already embedded in the composed row. Only that latter
+    // relation would form `e = [Wrapped(e), ..]`; its exact non-recursive
+    // representation relates `e` to the residual extension instead.
+    for (constraints) |constraint| {
+        if (constraint.kind != .try_suffix) continue;
+        const actual = self.tryArgsFromVar(ModuleEnv.varFrom(constraint.actual_expr)) orelse continue;
+        const contribution = self.tryReturnErrorContribution(actual.err);
+        const tail = switch (contribution) {
+            .none, .tagged => continue,
+            .tail => |tail_var| tail_var,
+        };
+        const composed_root = self.types.resolveVar(composed.err).var_;
+        const tail_root = self.types.resolveVar(tail).var_;
+        const relation_target = if (composed_root != tail_root and
+            try self.typeStructurallyContainsVar(composed.err, tail))
+            self.tryReturnErrorTail(composed.err)
+        else
+            composed.err;
+        const result = try self.unifyInContext(
+            relation_target,
+            tail,
+            env,
+            constraint.kind.problemContext(body_tail_try),
+        );
+        if (result.isProblem()) {
+            try self.erroneous_value_exprs.put(self.gpa, constraint.actual_expr, {});
+        }
+    }
+
+    return composed_var;
 }
 
 /// Resolve one `eql` constraint.

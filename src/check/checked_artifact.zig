@@ -17425,6 +17425,11 @@ pub const SpecializationInterfaceRelation = struct {
         },
         procedure: struct {
             fn_ty: CheckedTypeId,
+            /// The type the body delivers at the function's return: the
+            /// body's own type, or the composed `Try` when a `?` return
+            /// composes the result and the body's value crosses the explicit
+            /// return boundary into it (design.md "Inferred Try Return-Row
+            /// Composition").
             body_ret_ty: CheckedTypeId,
             owns_scope: bool,
         },
@@ -20444,6 +20449,21 @@ const CheckedTemplateRefCollector = struct {
         try self.dispatch_ref_scopes.append(self.allocator, self.currentScope());
     }
 
+    /// The type a lambda's body delivers at its function's return. A body
+    /// whose type is the function's result delivers it directly. A body whose
+    /// type differs is a composed `?` result: its value crosses the explicit
+    /// return boundary into the function's `Try`, so what reaches the return
+    /// is that `Try`, never the body's narrower row.
+    fn lambdaDeliveredReturnType(
+        self: *const CheckedTemplateRefCollector,
+        fn_ty: CheckedTypeId,
+        body: CheckedExprId,
+    ) CheckedTypeId {
+        const body_ty = self.checked_bodies.expr(body).ty;
+        const ret_ty = checkedFunctionPayload(&self.checked_types.store, fn_ty, "checked lambda specialization relation").ret;
+        return if (body_ty == ret_ty) body_ty else ret_ty;
+    }
+
     fn appendProcedureRelation(
         self: *CheckedTemplateRefCollector,
         expr_id: CheckedExprId,
@@ -20535,12 +20555,14 @@ const CheckedTemplateRefCollector = struct {
         }
 
         const expr = self.checked_bodies.expr(expr_id);
+        // An erroneous callable publishes no procedure relation, and its type
+        // need not be a function.
+        const publishes_procedure = !self.checked_bodies.exprContainsDiagnosticError(expr_id);
         if (expr.data == .lambda) {
-            const lambda = expr.data.lambda;
-            try self.appendProcedureRelation(
+            if (publishes_procedure) try self.appendProcedureRelation(
                 expr_id,
                 expr.ty,
-                self.checked_bodies.expr(lambda.body).ty,
+                self.lambdaDeliveredReturnType(expr.ty, expr.data.lambda.body),
                 self.template_root_expr == expr_id or local_scheme != null,
             );
         } else if (expr.data == .closure) {
@@ -20549,10 +20571,10 @@ const CheckedTemplateRefCollector = struct {
             if (lambda_data != .lambda) {
                 checkedArtifactInvariant("checked closure specialization relation did not reference a lambda", .{});
             }
-            try self.appendProcedureRelation(
+            if (publishes_procedure) try self.appendProcedureRelation(
                 expr_id,
                 expr.ty,
-                self.checked_bodies.expr(lambda_data.lambda.body).ty,
+                self.lambdaDeliveredReturnType(expr.ty, lambda_data.lambda.body),
                 self.template_root_expr == expr_id or local_scheme != null,
             );
         }
