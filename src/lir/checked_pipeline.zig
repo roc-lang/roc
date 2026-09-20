@@ -130,9 +130,6 @@ pub const TargetConfig = struct {
     checked_module_state: CheckedModuleState = .complete,
     /// The compilation session supplies evaluated root slots for these reads.
     comptime_value_reads: bool = false,
-    /// Lower and evaluate a compile-time root only once a lowered body reads
-    /// its value (see `Monotype.Lower.Options.lazy_comptime_roots`).
-    lazy_comptime_roots: bool = false,
     inline_mode: InlineMode = .none,
     /// Direct-call inlining scope for SpecConstr's value-aware clones.
     /// Optimized builds use `.all_calls`; dev builds use `.iterator_fusion`
@@ -1128,7 +1125,6 @@ pub fn prepareCheckedModulesMonotype(
                 .post_check_executor = target.post_check_executor,
                 .static_data_literals = target.checked_module_state == .checking_finalization or roots.include_internal_static_data,
                 .comptime_value_reads = target.comptime_value_reads,
-                .lazy_comptime_roots = target.lazy_comptime_roots,
                 .target_usize = target.target_usize,
                 .inline_expects = if (target.comptime_value_reads) .shared else switch (target.inline_expects) {
                     .run => .run,

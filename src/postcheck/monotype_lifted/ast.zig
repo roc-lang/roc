@@ -147,8 +147,6 @@ pub const FnBody = union(enum) {
 pub const Root = struct {
     fn_id: FnId,
     request: check.CheckedModule.RootRequest,
-    /// Checked module that owns `request`.
-    source_module: check.CheckedModule.ModuleId,
 };
 
 /// Runtime layout requested for a checked data value.

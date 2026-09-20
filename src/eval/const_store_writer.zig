@@ -1260,7 +1260,6 @@ fn deinitTestArtifact(artifact: *checked.CheckedModuleArtifact, allocator: Alloc
 fn testConstRoot(plan: LirProgram.ConstPlanId, ret_layout: layout.Idx) LirProgram.ConstRootPlan {
     return .{
         .root_order = 0,
-        .module = undefined,
         .request = .{
             .order = 0,
             .module_idx = 0,

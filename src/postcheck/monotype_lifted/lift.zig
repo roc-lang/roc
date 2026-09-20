@@ -477,7 +477,6 @@ const Lifter = struct {
             try self.output.addRoot(.{
                 .fn_id = fn_id,
                 .request = root.request,
-                .source_module = root.source_module,
             });
         }
 

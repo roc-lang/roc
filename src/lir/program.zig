@@ -406,8 +406,6 @@ pub const ConstPlan = union(enum) {
 pub const ConstRootPlan = struct {
     root_order: u32,
     request: check.CheckedModule.RootRequest,
-    /// Checked module that owns `request`.
-    module: checked.ModuleId,
     proc: LIR.LirProcSpecId,
     ret_layout: layout.Idx,
     /// Exact producer-owned Monotype representation of the evaluated root.
