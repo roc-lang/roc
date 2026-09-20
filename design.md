@@ -211,6 +211,20 @@ the whole store. Specialized procedures may share `LocalId`s, but their LLVM
 slot values must never survive into another procedure. These columns preserve
 direct indexing without introducing a remapping lookup on every local access.
 
+Wasm's local bindings use a store-indexed column of their own, scoped by a
+stamp. A row records the function scope that wrote it and is live only for
+that scope, so a nested helper compiled in the middle of a procedure body
+neither reads the procedure's bindings nor leaves its own behind. Every write
+records the row it replaced, so leaving a scope restores exactly the rows that
+scope bound, including after an allocation failure. Entering a scope allocates
+nothing and clears nothing, and scope entry and exit cost is proportional to
+the locals that scope bound. Growing the column initializes each row exactly
+once for the whole module: the procedure that first reaches a high `LocalId`
+initializes the rows below it as well, and no later procedure repeats that
+work. A module's total initialization is therefore the highest `LocalId` any
+procedure binds, and each procedure's own cost on top of it is the locals it
+emits.
+
 The suffix `...Key` is reserved for structural or composite identity for which
 a dense owner-relative ID cannot preserve the required identity. Examples
 include identities which must remain stable before or across serialization,
@@ -14418,6 +14432,49 @@ one newly allocated architecture register per recursive layout, control-flow nod
 list item layer, or tag payload layer. Register-pool exhaustion is therefore
 an internal lifetime-invariant failure, not a source-program condition and not
 an invitation for an architecture-specific best-effort spill.
+
+## Wasm Local Binding
+
+`WasmCodeGen` binds each explicit LIR local to one wasm local index, and it
+binds it on the first emission site that names it. The wasm value type that
+slot must have comes from the `layout_idx` LIR already states for the local, so
+every site that names it agrees on the type whether it reads the local or
+writes it, and no site has to know whether some earlier site got there first.
+The index itself is not derived from the layout: it is the next index in the
+scope, assigned in the order emission reaches locals, after the parameters
+take the positional indices the wasm function signature fixes for them. Every
+entry point binds parameters before emitting a body statement, which is what
+keeps first-encounter binding from disturbing the ABI's assignment.
+
+First encounter is an event in emission order, not in runtime order. Emission
+walks the control-flow graph, and that walk reaches some uses ahead of the
+definitions that dominate them at runtime: a join's body is emitted before the
+remainder that jumps into it, so a local the remainder assigns is read in
+already-emitted code. Binding the local there reserves the storage the
+later-emitted definition writes; it asserts nothing about initialization, and a
+binding is stable for the rest of the scope, so both sites name the same index.
+LIR whose runtime path actually reads an undefined local is invalid LIR, and
+the ARC certifier and the debug checks over emitted LIR own that property—the
+backend neither detects nor compensates for it, and wasm's zero-initialized
+locals are not a stand-in for a definition the producer failed to emit. Because
+the locals declaration is encoded after the body, first-encounter binding needs
+no separate declaration pass.
+
+The wasm backend therefore has no pre-pass that inventories a procedure's
+locals, and no pass that closes a local set over descriptor metadata. A
+descriptor local is bound by the site that emits it—`bindBoxyOutDesc`, a
+dictionary method's descriptor argument read, an erased-ABI descriptor
+parameter, a runtime return descriptor—because each of those sites already
+reads the explicit LIR descriptor data that names it. Nothing searches the
+store for locals that some site might want, so each procedure's own binding
+cost is a function of the code it emits rather than of how many locals the
+whole store holds, and locals that a procedure's emitted code never
+names—including entries its `frame_locals` inventory retains—occupy no index,
+no declared type, and no output bytes. The binding column's one-time growth to
+the highest `LocalId` any procedure reaches is the only store-proportional
+cost, and it is paid once for the module. The same rule forbids reintroducing
+that search at the producer: a whole-module finalization pass whose only
+consumer is wasm local binding trades one redundant traversal for another.
 
 ## Compile-Time Constants
 
