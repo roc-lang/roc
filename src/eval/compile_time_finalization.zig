@@ -513,9 +513,7 @@ pub fn finalizeProgram(
         .runtime_target = runtime_target,
         .host = host,
         .runtime_prepared = runtime_prepared,
-        // Runtime consumers slice the roots that follow the compile-time
-        // ones, so the count is the roots the program actually carries.
-        .compile_time_root_count = if (lazy_roots) host.lir_result.const_roots.items.len else compile_time_root_count,
+        .compile_time_root_count = compile_time_root_count,
         .native_artifacts = native_artifacts,
     };
 }
