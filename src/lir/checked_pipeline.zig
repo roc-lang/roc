@@ -1953,12 +1953,13 @@ test "adopting completed compile-time values drops their initializers and identi
         .abi = .roc,
         .exposure = .private,
     });
+    const completed_slot: LIR.StaticDataId = @enumFromInt(lowered.lir_result.static_data_values.items.len);
     try lowered.lir_result.static_data_values.append(allocator, .{
         .initializer = procs[1],
         .layout_idx = .zst,
         .compile_time_root = .{
             .module = .{ .bytes = @splat(0) },
-            .root = @enumFromInt(0),
+            .root = undefined, // Adoption reads the slot's initializer and role, never its checked-root identity.
             .const_locator = null,
             .role = .{ .failure_message = .{ .failed_field = 0, .message_field = 1, .failed_offset = 0, .message_offset = 0 } },
         },
@@ -1966,7 +1967,7 @@ test "adopting completed compile-time values drops their initializers and identi
     const exports = try allocator.alloc(LirProgram.StaticDataExport, 1);
     exports[0] = .{
         .symbol_name = try allocator.dupe(u8, "roc__completed"),
-        .value_id = @enumFromInt(0),
+        .value_id = completed_slot,
         .bytes = try allocator.alloc(u8, 0),
         .alignment = 1,
         .relocations = try allocator.alloc(LirProgram.StaticDataRelocation, 0),
