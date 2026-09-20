@@ -96,6 +96,8 @@ pub fn Schema(comptime Image: type) type {
                         .decref
                     else if (reloc.rc_op == @intFromEnum(layout.RcOp.free))
                         .free
+                    else if (reloc.rc_op == @intFromEnum(layout.RcOp.host_drop))
+                        .host_drop
                     else
                         return error.InvalidLirImage;
 

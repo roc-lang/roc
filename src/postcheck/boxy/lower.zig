@@ -17217,7 +17217,9 @@ const ProcBodyBuilder = struct {
 
     fn erasedCallableOnDrop(self: *ProcBodyBuilder, maybe_capture_layout: ?layout.Idx) LIR.ErasedCallableOnDrop {
         const capture_layout = maybe_capture_layout orelse return .none;
-        const helper_key = layout.RcHelper{ .op = .decref, .layout_idx = capture_layout };
+        // The payload's `on_drop` slot is a published host ABI, so it names the
+        // host-shaped adapter rather than the plain decref helper.
+        const helper_key = layout.RcHelper{ .op = .host_drop, .layout_idx = capture_layout };
         return if (self.parent.result.layouts.rcHelperPlan(helper_key) == .noop)
             .none
         else

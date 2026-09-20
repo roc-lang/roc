@@ -1456,56 +1456,6 @@ fn emitCryptoLowLevel(self: *Self, op: CryptoLowLevel, args: anytype) Allocator.
     try self.emitFpOffset(result_offset);
 }
 
-fn compileBuiltinInternalIncrefCallback(self: *Self, helper_key: RcHelperKey) Allocator.Error!u32 {
-    if (helper_key.op != .incref) {
-        wasmInvariantFmt(
-            "WASM/codegen invariant violated: incref callback requested for {s} helper",
-            .{@tagName(helper_key.op)},
-        );
-    }
-
-    // These callbacks serve runtime-checked list ops, whose RC is internal to
-    // the op and makes no thread-confinement claim, so they always use the
-    // atomic helper family.
-    const helper_func_idx = try self.compileBuiltinInternalRcHelper(helper_key, .atomic);
-    const type_idx = try self.internFuncType(&.{ .i32, .i32, .i32 }, &.{});
-    const defined = self.module.addDefinedFunction(type_idx) catch return error.OutOfMemory;
-    const func_idx = defined.function.raw();
-    _ = try self.addOwnedLocalFunctionSymbol(defined, "roc_rc_incref_callback", rcHelperCacheKey(helper_key, .atomic));
-
-    const saved = try self.saveState();
-
-    try self.beginFunction(defined.local);
-    self.storage.locals = std.AutoHashMap(u64, Storage.LocalInfo).init(self.allocator);
-    self.storage.next_local_idx = 0;
-    self.storage.local_types = .empty;
-    self.stack_frame_size = 0;
-    self.uses_stack_memory = false;
-    self.fp_local = 0;
-    self.proc_return_local = 0;
-    self.erased_ret_desc_ptr_local = null;
-    self.cf_depth = 0;
-    self.in_proc = false;
-    self.current_proc_id = null;
-
-    const value_ptr_local = self.storage.allocAnonymousLocal(.i32) catch return error.OutOfMemory;
-    const count_local = self.storage.allocAnonymousLocal(.i32) catch return error.OutOfMemory;
-    // The callback ABI's ops slot, which generated helpers ignore.
-    _ = self.storage.allocAnonymousLocal(.i32) catch return error.OutOfMemory;
-
-    try self.emitLocalGet(value_ptr_local);
-    try self.emitLocalGet(count_local);
-    try self.emitNullPtr();
-    try self.emitCall(helper_func_idx);
-
-    try self.encodeLocalsDecl(&self.currentBody().preamble, 3);
-    self.currentCode().append(self.allocator, Op.end) catch return error.OutOfMemory;
-
-    self.endFunction();
-    self.restoreState(saved);
-    return func_idx;
-}
-
 fn builtinInternalRcHelperTableIndex(self: *Self, helper_key: RcHelperKey) Allocator.Error!u32 {
     const helper_plan = self.getLayoutStore().rcHelperPlan(helper_key);
     if (helper_plan == .noop) return 0;
@@ -1516,10 +1466,7 @@ fn builtinInternalRcHelperTableIndex(self: *Self, helper_key: RcHelperKey) Alloc
     // Table entries serve runtime-checked list ops, whose RC is internal to
     // the op and makes no thread-confinement claim, so they always use the
     // atomic helper family.
-    const func_idx = switch (helper_key.op) {
-        .incref => try self.compileBuiltinInternalIncrefCallback(helper_key),
-        .decref, .free => try self.compileBuiltinInternalRcHelper(helper_key, .atomic),
-    };
+    const func_idx = try self.compileBuiltinInternalRcHelper(helper_key, .atomic);
     const table_idx = self.module.addTableElement(func_idx) catch return error.OutOfMemory;
     try self.rc_helper_table_indices.put(cache_key, table_idx);
     return table_idx;
@@ -1861,8 +1808,9 @@ fn localFunctionIndexFromGlobal(self: *const Self, global_func_idx: u32) LocalFu
 pub fn registerIndirectCallTypes(self: *Self) Allocator.Error!void {
     if (self.indirect_call_types_registered) return;
 
+    var on_drop_param_buf: [max_rc_helper_params]ValType = undefined;
     self.on_drop_type_idx = try self.module.addFuncType(
-        &.{ .i32, .i32 },
+        rcHelperParamTypes(.host_drop, &on_drop_param_buf),
         &.{},
     );
     self.module.enableTable();
@@ -2891,9 +2839,11 @@ fn emitExplicitRcHelperCallForValuePtr(
             WasmModule.leb128WriteI32(self.allocator, self.currentCode(), @intCast(inc_count)) catch return error.OutOfMemory;
         },
         .decref, .free => {},
+        .host_drop => wasmInvariantFmt(
+            "WASM/codegen invariant violated: RC statement used a host-shaped drop adapter",
+            .{},
+        ),
     }
-    // The callback ABI's ops slot, which generated helpers ignore.
-    try self.emitNullPtr();
     try self.emitCall(helper_func_idx);
 }
 
@@ -3473,8 +3423,11 @@ fn emitRawRcHelperCallByKey(
             try self.emitLocalGet(count_local.?);
         },
         .decref, .free => {},
+        .host_drop => wasmInvariantFmt(
+            "WASM/codegen invariant violated: RC statement used a host-shaped drop adapter",
+            .{},
+        ),
     }
-    try self.emitNullPtr();
     try self.emitCall(helper_func_idx);
 }
 
@@ -3785,6 +3738,22 @@ fn appendRcHelperChildKeys(self: *Self, helper_plan: RcHelperPlan, out: *std.Arr
     }
 }
 
+/// Largest parameter count any RC helper ABI uses, for stack-allocated lists.
+const max_rc_helper_params = 3;
+
+/// Build the wasm parameter types for `op` from the canonical RC callback ABI,
+/// so a generated helper always matches the type its `call_indirect` sites use.
+fn rcHelperParamTypes(op: layout.RcOp, buf: *[max_rc_helper_params]ValType) []const ValType {
+    const roles = layout.rc_helper.abiParams(op);
+    for (roles, 0..) |role, i| {
+        buf[i] = switch (role) {
+            // wasm32 pointers and the pointer-sized count are both i32.
+            .value_ptr, .count, .ops_ptr => .i32,
+        };
+    }
+    return buf[0..roles.len];
+}
+
 /// Reserve a module function slot for an RC helper (no body emitted yet), caching
 /// its global function index. Returns the reserved index.
 fn reserveRcHelperFunc(self: *Self, helper_key: RcHelperKey, atomicity: RcAtomicity) Allocator.Error!u32 {
@@ -3795,10 +3764,8 @@ fn reserveRcHelperFunc(self: *Self, helper_key: RcHelperKey, atomicity: RcAtomic
         }
         unreachable;
     }
-    const param_types: []const ValType = switch (helper_key.op) {
-        .incref => &.{ .i32, .i32, .i32 },
-        .decref, .free => &.{ .i32, .i32 },
-    };
+    var param_buf: [max_rc_helper_params]ValType = undefined;
+    const param_types = rcHelperParamTypes(helper_key.op, &param_buf);
     const type_idx = try self.internFuncType(param_types, &.{});
     const defined = self.module.addDefinedFunction(type_idx) catch return error.OutOfMemory;
     const func_idx = defined.function.raw();
@@ -3901,10 +3868,8 @@ fn emitRcHelperBody(self: *Self, helper_key: RcHelperKey, atomicity: RcAtomicity
     const func_idx = self.rc_helper_funcs.get(rcHelperCacheKey(helper_key, atomicity)).?;
     const defined_local = self.localFunctionIndexFromGlobal(func_idx);
 
-    const param_types: []const ValType = switch (helper_key.op) {
-        .incref => &.{ .i32, .i32, .i32 },
-        .decref, .free => &.{ .i32, .i32 },
-    };
+    var param_buf: [max_rc_helper_params]ValType = undefined;
+    const param_types = rcHelperParamTypes(helper_key.op, &param_buf);
 
     const saved = try self.saveState();
 
@@ -3924,10 +3889,12 @@ fn emitRcHelperBody(self: *Self, helper_key: RcHelperKey, atomicity: RcAtomicity
     const value_ptr_local = self.storage.allocAnonymousLocal(.i32) catch return error.OutOfMemory;
     const count_local = switch (helper_key.op) {
         .incref => self.storage.allocAnonymousLocal(.i32) catch return error.OutOfMemory,
-        .decref, .free => null,
+        .decref, .free, .host_drop => null,
     };
-    // The callback ABI's ops slot, which generated helpers ignore.
-    _ = self.storage.allocAnonymousLocal(.i32) catch return error.OutOfMemory;
+    if (helper_key.op == .host_drop) {
+        // The published on-drop ABI's ops slot, which generated adapters ignore.
+        _ = self.storage.allocAnonymousLocal(.i32) catch return error.OutOfMemory;
+    }
     self.fp_local = self.storage.allocAnonymousLocal(.i32) catch return error.OutOfMemory;
 
     self.currentCode().append(self.allocator, Op.block) catch return error.OutOfMemory;
@@ -11271,7 +11238,8 @@ fn boxyCaptureDropTableIndex(self: *Self, capture_layout: layout.Idx, desc_field
     const key = boxyCaptureDropKey(capture_layout, desc_field_offset);
     if (self.boxy_capture_drop_table_indices.get(key)) |table_idx| return table_idx;
 
-    const type_idx = try self.internFuncType(&.{ .i32, .i32 }, &.{});
+    var param_buf: [max_rc_helper_params]ValType = undefined;
+    const type_idx = try self.internFuncType(rcHelperParamTypes(.host_drop, &param_buf), &.{});
     const defined = self.module.addDefinedFunction(type_idx) catch return error.OutOfMemory;
     _ = try self.addOwnedLocalFunctionSymbol(defined, "roc_boxy_capture_drop", key);
     const table_idx = self.module.addTableElement(defined.function.raw()) catch return error.OutOfMemory;

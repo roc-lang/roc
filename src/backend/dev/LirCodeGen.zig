@@ -142,6 +142,15 @@ const BitCountOp = enum(u16) {
 /// Identity of one compiled RC helper: the canonical layout plan plus the
 /// count-update atomicity the helper's own updates use. Atomic and
 /// single-thread helpers are compiled separately, so a helper's body never
+/// `host_drop` names a generated adapter's signature, not an operation the
+/// backend performs, so an RC statement can never carry it.
+fn hostDropInRcStatement() noreturn {
+    if (builtin.mode == .Debug) {
+        std.debug.panic("Dev/codegen invariant violated: RC statement used a host-shaped drop adapter", .{});
+    }
+    unreachable;
+}
+
 /// has to branch on atomicity at runtime. The element/payload callback ABIs
 /// carry no atomicity parameter, so the statement's atomicity is baked into
 /// which helper variant a teardown callback pointer names; callbacks for
@@ -14957,6 +14966,7 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
                     try self.emitLoad(.w64, arg1, frame_ptr, count_slot.?);
                 },
                 .decref, .free => {},
+                .host_drop => hostDropInRcStatement(),
             }
 
             try self.emitPendingRcCall(helper);
@@ -14991,6 +15001,7 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
                 .decref, .free => {
                     try self.emitCallRcHelperFromStackSlots(helper, ptr_slot, null);
                 },
+                .host_drop => hostDropInRcStatement(),
             }
         }
 
@@ -15788,7 +15799,9 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
                     count_slot = self.codegen.allocStackSlot(8);
                     try self.codegen.emitStoreStack(.w64, count_slot.?, count_arg_reg);
                 },
-                .decref, .free => {},
+                // A `host_drop` adapter's second argument is the published
+                // on-drop ABI's ops slot, which the generated body ignores.
+                .decref, .free, .host_drop => {},
             }
 
             const ptr_reg = try self.allocTempGeneral();

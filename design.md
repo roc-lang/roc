@@ -11620,6 +11620,25 @@ callback from erased storage, or inspect a descriptor to choose RC behavior.
 An erased-box list that reaches such an operation without its explicit list
 descriptor is a producer invariant failure.
 
+Generated RC helpers have one ABI, declared once in
+`builtins/rc_callback_abi.zig`: `incref` takes the value pointer and the amount,
+and `decref` and `free` take the value pointer alone. Compiled Roc code reaches
+its host through fixed runtime symbols, so a generated helper carries no host
+pointer. Every backend builds its helper signature from that declaration rather
+than spelling the parameter list itself, and the builtins call item and
+payload callbacks through the same types. A backend that spells a different
+parameter list produces a helper the builtins cannot call: native calling
+conventions discard the surplus argument silently, while a Wasm `call_indirect`
+compares the signature and traps.
+
+The erased-callable `Payload.on_drop` slot is the one exception, because glue
+publishes it to Zig, Rust, and C hosts as `(capture, ops)`. The `host_drop`
+operation names the generated adapter that presents that signature and performs
+the layout's `decref`. It is a calling convention rather than an operation over
+a layout: it plans exactly as its layout's `decref`, it is selected only where
+lowering fills a final-drop slot, and an RC statement that carries it is a
+producer invariant failure.
+
 Every linked Wasm image has exactly one provider for compiler runtime libcalls.
 Standalone Wasm obtains them from the builtins object and the standalone Boxy
 runtime suppresses its copies. Evaluator Wasm has no companion builtins object,

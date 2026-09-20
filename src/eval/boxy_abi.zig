@@ -1436,6 +1436,9 @@ pub fn roc_boxy_drop(
             count,
             rc_atomicity,
         ) catch abiCrash(g, "drop"),
+        // `host_drop` names a generated adapter's signature, not an operation
+        // the runtime performs, so it is never a valid boxy RC op.
+        .host_drop => abiCrash(g, "rc with host-shaped drop adapter"),
     }
 }
 
