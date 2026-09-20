@@ -1522,7 +1522,7 @@ fn renderDocCommentForTest(gpa: Allocator, doc: []const u8) Allocator.Error![]u8
     return aw.toOwnedSlice();
 }
 
-fn expectDocComment(gpa: Allocator, doc: []const u8, expected: []const u8) !void {
+fn expectDocComment(gpa: Allocator, doc: []const u8, expected: []const u8) (Allocator.Error || error{TestUnexpectedResult})!void {
     const html = try renderDocCommentForTest(gpa, doc);
     defer gpa.free(html);
     testing.expect(std.mem.find(u8, html, expected) != null) catch |err| {
