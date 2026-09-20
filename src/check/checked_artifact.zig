@@ -1691,20 +1691,56 @@ fn verifyCompileTimeRequestsScheduled(
 /// already checked at the application, so they count as concrete).
 const ConcreteRootWalk = enum { value_graph, decl_template };
 
+/// Where in the type the walk currently stands. A `.row_extension` is the tail
+/// of a record or tag union; every other position is a `.value` position.
+///
+/// The distinction exists because an unbound row tail has one runtime
+/// representation the whole compiler already agrees on and an unbound value
+/// does not. Monotype seals an undecided checked variable to the empty row
+/// (`lowerCheckedTypeVariable`, src/postcheck/monotype/lower.zig:7917-7932);
+/// in a row tail that adds nothing to it (the row is exactly its listed
+/// fields or tags), so the constant the interpreter evaluates is the value's
+/// representation at its SEALED row. In a value position `[]` is an arbitrary
+/// pick, so the root stays ineligible there.
+///
+/// A use that instantiates the row differently does not share that
+/// representation. Such a root therefore records `.sealed_row`
+/// (`CompileTimeRootRepresentation`) and keeps its eval template beside the
+/// stored value; see `StoredConstTemplate.other_row_template`. Lowering
+/// selects between those two explicit alternatives by comparing the use's
+/// settled Monotype against the stored representation.
+///
+/// The checker's own concreteness walk (`varIsConcreteHoistedConstType`,
+/// src/check/Check.zig) keeps the stricter rule on purpose: it decides whether
+/// a sub-expression becomes a root at all, and admitting an unbound tail there
+/// would hoist expressions that are not hoisted today. See its doc comment.
+const ConcreteRootPosition = enum { value, row_extension };
+
 fn checkedTypeIsConcreteCompileTimeRoot(
     allocator: Allocator,
     checked_types: *const CheckedTypeStore,
     root: CheckedTypeId,
+    quantified_row: *bool,
 ) Allocator.Error!bool {
     var active = collections.DenseMap(CheckedTypeId, void).init(allocator);
     defer active.deinit();
-    return try checkedTypeIsConcreteCompileTimeRootInner(.value_graph, checked_types, root, &active);
+    return try checkedTypeIsConcreteCompileTimeRootInner(.value_graph, .value, checked_types, root, quantified_row, &active);
+}
+
+/// Whether this published variable is an undecided row tail that Monotype will
+/// seal to the empty row. A variable carrying static-dispatch constraints has
+/// an undecided method table rather than an undecided row, and a numeric
+/// defaulting phase is a value default, so neither is sealable here.
+fn checkedTypeVariableSealsToCanonicalRow(variable: CheckedTypeVariable) bool {
+    return variable.constraints.len == 0 and variable.numeric_default_phase == null;
 }
 
 fn checkedTypeIsConcreteCompileTimeRootInner(
     comptime walk: ConcreteRootWalk,
+    position: ConcreteRootPosition,
     checked_types: *const CheckedTypeStore,
     root: CheckedTypeId,
+    quantified_row: *bool,
     active: *collections.DenseMap(CheckedTypeId, void),
 ) Allocator.Error!bool {
     if (active.contains(root)) return true;
@@ -1718,18 +1754,26 @@ fn checkedTypeIsConcreteCompileTimeRootInner(
     return switch (checked_types.payload(@enumFromInt(index))) {
         .pending => checkedArtifactInvariant("compile-time root checked type was pending", .{}),
         .err => false,
-        .flex => false,
+        // An undecided row tail seals to the empty row, which is the row's
+        // adds nothing to it, so the root is concrete AT ITS SEALED ROW. The
+        // caller records that so the stored representation can say so.
+        .flex => |variable| blk: {
+            if (position != .row_extension) break :blk false;
+            if (!checkedTypeVariableSealsToCanonicalRow(variable)) break :blk false;
+            quantified_row.* = true;
+            break :blk true;
+        },
         .rigid => walk == .decl_template,
         .empty_record,
         .empty_tag_union,
         => true,
-        .alias => |alias| (try checkedTypeSpanIsConcreteCompileTimeRoot(walk, checked_types, alias.args, active)) and
-            try checkedTypeIsConcreteCompileTimeRootInner(walk, checked_types, alias.backing, active),
-        .record => |record| (try checkedFieldTypesAreConcreteCompileTimeRoots(walk, checked_types, record.fields, active)) and
-            try checkedTypeIsConcreteCompileTimeRootInner(walk, checked_types, record.ext, active),
-        .tuple => |items| checkedTypeSpanIsConcreteCompileTimeRoot(walk, checked_types, items, active),
+        .alias => |alias| (try checkedTypeSpanIsConcreteCompileTimeRoot(walk, checked_types, alias.args, quantified_row, active)) and
+            try checkedTypeIsConcreteCompileTimeRootInner(walk, position, checked_types, alias.backing, quantified_row, active),
+        .record => |record| (try checkedFieldTypesAreConcreteCompileTimeRoots(walk, checked_types, record.fields, quantified_row, active)) and
+            try checkedTypeIsConcreteCompileTimeRootInner(walk, .row_extension, checked_types, record.ext, quantified_row, active),
+        .tuple => |items| checkedTypeSpanIsConcreteCompileTimeRoot(walk, checked_types, items, quantified_row, active),
         .nominal => |nominal| blk: {
-            if (!try checkedTypeSpanIsConcreteCompileTimeRoot(walk, checked_types, nominal.args, active)) break :blk false;
+            if (!try checkedTypeSpanIsConcreteCompileTimeRoot(walk, checked_types, nominal.args, quantified_row, active)) break :blk false;
             switch (nominal.representation) {
                 .builtin => |builtin_type| switch (builtinRuntimeEncoding(builtin_type)) {
                     .primitive,
@@ -1760,14 +1804,14 @@ fn checkedTypeIsConcreteCompileTimeRootInner(
             const backing = checked_types.nominalBackingTemplateForPayload(nominal) orelse break :blk true;
             // Declaration formals stand for the args checked above, so they
             // count as concrete while walking the backing template.
-            break :blk try checkedTypeIsConcreteCompileTimeRootInner(.decl_template, checked_types, backing, active);
+            break :blk try checkedTypeIsConcreteCompileTimeRootInner(.decl_template, .value, checked_types, backing, quantified_row, active);
         },
         // A function scheme is a concrete compile-time root exactly when its
         // args and return contain no identity variables.
-        .function => |function| (try checkedTypeSpanIsConcreteCompileTimeRoot(walk, checked_types, function.args, active)) and
-            try checkedTypeIsConcreteCompileTimeRootInner(walk, checked_types, function.ret, active),
-        .tag_union => |tag_union| (try checkedTagsAreConcreteCompileTimeRoots(walk, checked_types, tag_union.tags, active)) and
-            try checkedTypeIsConcreteCompileTimeRootInner(walk, checked_types, tag_union.ext, active),
+        .function => |function| (try checkedTypeSpanIsConcreteCompileTimeRoot(walk, checked_types, function.args, quantified_row, active)) and
+            try checkedTypeIsConcreteCompileTimeRootInner(walk, .value, checked_types, function.ret, quantified_row, active),
+        .tag_union => |tag_union| (try checkedTagsAreConcreteCompileTimeRoots(walk, checked_types, tag_union.tags, quantified_row, active)) and
+            try checkedTypeIsConcreteCompileTimeRootInner(walk, .row_extension, checked_types, tag_union.ext, quantified_row, active),
     };
 }
 
@@ -1775,10 +1819,11 @@ fn checkedTypeSpanIsConcreteCompileTimeRoot(
     comptime walk: ConcreteRootWalk,
     checked_types: *const CheckedTypeStore,
     items: []const CheckedTypeId,
+    quantified_row: *bool,
     active: *collections.DenseMap(CheckedTypeId, void),
 ) Allocator.Error!bool {
     for (items) |item| {
-        if (!try checkedTypeIsConcreteCompileTimeRootInner(walk, checked_types, item, active)) return false;
+        if (!try checkedTypeIsConcreteCompileTimeRootInner(walk, .value, checked_types, item, quantified_row, active)) return false;
     }
     return true;
 }
@@ -1787,11 +1832,12 @@ fn checkedFieldTypesAreConcreteCompileTimeRoots(
     comptime walk: ConcreteRootWalk,
     checked_types: *const CheckedTypeStore,
     fields: []const CheckedRecordField,
+    quantified_row: *bool,
     active: *collections.DenseMap(CheckedTypeId, void),
 ) Allocator.Error!bool {
     for (fields) |field| {
         if (field.kind.tag == .undetermined) return false;
-        if (!try checkedTypeIsConcreteCompileTimeRootInner(walk, checked_types, field.ty, active)) return false;
+        if (!try checkedTypeIsConcreteCompileTimeRootInner(walk, .value, checked_types, field.ty, quantified_row, active)) return false;
     }
     return true;
 }
@@ -1813,7 +1859,41 @@ test "compile-time roots reject undetermined record field kinds" {
     };
     try store.payloads.append(allocator, try store.commitPayload(allocator, .{ .record = .{ .fields = fields, .ext = leaf } }));
 
-    try std.testing.expect(!try checkedTypeIsConcreteCompileTimeRoot(allocator, &store, root));
+    var quantified_row = false;
+    try std.testing.expect(!try checkedTypeIsConcreteCompileTimeRoot(allocator, &store, root, &quantified_row));
+}
+
+test "compile-time roots accept a quantified row extension and report it" {
+    const allocator = std.testing.allocator;
+    var store = CheckedTypeStore{};
+    defer store.deinit(allocator);
+
+    const ext: CheckedTypeId = @enumFromInt(@as(u32, @intCast(store.payloads.items.len)));
+    try store.payloads.append(allocator, try store.commitPayload(allocator, .{ .flex = .{} }));
+
+    const tags = try allocator.alloc(CheckedTagBuild, 1);
+    tags[0] = .{ .name = testIndexId(canonical.TagLabelId, 3) };
+
+    const row: CheckedTypeId = @enumFromInt(@as(u32, @intCast(store.payloads.items.len)));
+    try store.payloads.append(allocator, try store.commitPayload(allocator, .{ .tag_union = .{
+        .tags = tags,
+        .ext = ext,
+    } }));
+
+    var quantified_row = false;
+    try std.testing.expect(try checkedTypeIsConcreteCompileTimeRoot(allocator, &store, row, &quantified_row));
+    try std.testing.expect(quantified_row);
+
+    // The same variable in a VALUE position stays ineligible: the empty row
+    // adds nothing only in a row tail.
+    const elems = try allocator.alloc(CheckedTypeId, 1);
+    elems[0] = ext;
+    const value_position: CheckedTypeId = @enumFromInt(@as(u32, @intCast(store.payloads.items.len)));
+    try store.payloads.append(allocator, try store.commitPayload(allocator, .{ .tuple = elems }));
+
+    var value_quantified_row = false;
+    try std.testing.expect(!try checkedTypeIsConcreteCompileTimeRoot(allocator, &store, value_position, &value_quantified_row));
+    try std.testing.expect(!value_quantified_row);
 }
 
 test "compile-time data roots with reachable callables require producer type evidence" {
@@ -1842,18 +1922,20 @@ test "compile-time data roots with reachable callables require producer type evi
         .ext = leaf,
     } }));
 
-    try std.testing.expect(!try checkedTypeIsContextFreeCompileTimeRoot(allocator, &store, false, root));
-    try std.testing.expect(try checkedTypeIsContextFreeCompileTimeRoot(allocator, &store, true, root));
+    var quantified_row = false;
+    try std.testing.expect(!try checkedTypeIsContextFreeCompileTimeRoot(allocator, &store, false, root, &quantified_row));
+    try std.testing.expect(try checkedTypeIsContextFreeCompileTimeRoot(allocator, &store, true, root, &quantified_row));
 }
 
 fn checkedTagsAreConcreteCompileTimeRoots(
     comptime walk: ConcreteRootWalk,
     checked_types: *const CheckedTypeStore,
     tags: []const CheckedTag,
+    quantified_row: *bool,
     active: *collections.DenseMap(CheckedTypeId, void),
 ) Allocator.Error!bool {
     for (tags) |tag| {
-        if (!try checkedTypeSpanIsConcreteCompileTimeRoot(walk, checked_types, tag.argsSlice(checked_types), active)) return false;
+        if (!try checkedTypeSpanIsConcreteCompileTimeRoot(walk, checked_types, tag.argsSlice(checked_types), quantified_row, active)) return false;
     }
     return true;
 }
@@ -27093,6 +27175,30 @@ pub const CompileTimeRootRequestEligibility = enum(u8) {
     ineligible,
 };
 
+/// What the root's evaluated value is a representation OF.
+///
+/// `exact`: the root's solved type leaves no row tail unbound, so the stored
+/// value is the representation every use asks for.
+///
+/// `sealed_row`: the solved type leaves at least one row extension unbound
+/// (`ConcreteRootPosition.row_extension`), so the value was evaluated with
+/// each such tail sealed to the empty row. A use that instantiates one of
+/// those rows differently does not share that representation, and lowering
+/// gives it the root's eval template instead
+/// (`StoredConstTemplate.other_row_template`). Both alternatives are explicit
+/// output of this stage; lowering selects between them by comparing the use's
+/// settled Monotype against `StoredConstTemplate.root_type`.
+///
+/// One constant per instantiation is not expressible here. This decision is
+/// made for one module with no importer in view (`CompileTimeRootTable.fromModule`),
+/// and `copy_import` stamps every imported descriptor generalized, so the
+/// defining module can never bound the set of rows its constant will be asked
+/// for.
+pub const CompileTimeRootRepresentation = enum(u8) {
+    exact,
+    sealed_row,
+};
+
 /// Public `CompileTimeRoot` declaration.
 pub const CompileTimeRoot = struct {
     id: ComptimeRootId,
@@ -27105,6 +27211,7 @@ pub const CompileTimeRoot = struct {
     expr: CheckedExprId,
     checked_type: CheckedTypeId,
     request_eligibility: CompileTimeRootRequestEligibility,
+    representation: CompileTimeRootRepresentation = .exact,
     payload: CompileTimeRootPayload,
 
     pub fn literalConversionKind(self: CompileTimeRoot) ?CompileTimeLiteralConversionKind {
@@ -27488,13 +27595,16 @@ fn publishCompileTimeRootRequestEligibility(
             .repl_expr,
             => false,
         };
+        var quantified_row = false;
         const context_free = try checkedTypeIsContextFreeCompileTimeRoot(
             allocator,
             &checked_types.store,
             producer_callable_type_is_fixed,
             root.checked_type,
+            &quantified_row,
         );
         root.request_eligibility = if (context_free) .eligible else .ineligible;
+        root.representation = if (context_free and quantified_row) .sealed_row else .exact;
     }
 }
 
@@ -27783,8 +27893,9 @@ fn checkedTypeIsContextFreeCompileTimeRoot(
     checked_types: *const CheckedTypeStore,
     producer_callable_type_is_fixed: bool,
     root: CheckedTypeId,
+    quantified_row: *bool,
 ) Allocator.Error!bool {
-    if (!try checkedTypeIsConcreteCompileTimeRoot(allocator, checked_types, root)) return false;
+    if (!try checkedTypeIsConcreteCompileTimeRoot(allocator, checked_types, root, quantified_row)) return false;
 
     // A callable root or an annotated data producer fixes its callable graph at
     // the producer. An unannotated data root can instead receive callable type
@@ -32039,6 +32150,15 @@ pub const StoredConstTemplate = struct {
     /// Exact producer-owned Monotype representation used to evaluate `node`.
     /// This is explicit post-check evidence, stored in `ConstStore.type_store`.
     root_type: const_store.ConstTypeId,
+    /// Present exactly when the producing root published
+    /// `CompileTimeRootRepresentation.sealed_row`: `root_type` is then the
+    /// representation with every quantified row tail sealed to the empty row,
+    /// and a use whose own checked type seals to a DIFFERENT representation
+    /// re-lowers this eval template at that type instead of reading the stored
+    /// value. Null means `root_type` is the exact representation of every use,
+    /// which is the only case that existed before quantified rows could be
+    /// compile-time roots; those uses keep the unconditional stored path.
+    other_row_template: ?ConstEvalTemplate = null,
 };
 
 /// Public `ConstTemplateState` declaration.
@@ -39912,9 +40032,13 @@ test "SERIALIZED_VERSION_HASH golden value" {
     // change, replace the golden bytes below with the assertion output. Bump
     // `serialized_layout_version` only for semantic changes the structural hash
     // cannot observe, as documented at that discriminant.
+    // Updated for the intentional layout change that gave `CompileTimeRoot` a
+    // `representation` and `StoredConstTemplate` an `other_row_template`, so a
+    // constant evaluated at its sealed row can say so and keep the eval
+    // template a use at another row lowers instead.
     const golden: [32]u8 = .{
-        0x55, 0xF3, 0x96, 0x56, 0xD4, 0x62, 0x21, 0x1D, 0x04, 0x9C, 0xE2, 0x23, 0x95, 0x2D, 0x80, 0xB4,
-        0x25, 0xEA, 0x1E, 0x63, 0xD9, 0x15, 0x71, 0x6E, 0xA8, 0xCC, 0xCD, 0xC5, 0xAA, 0x2C, 0xAA, 0x5B,
+        0xD1, 0xCF, 0xC2, 0x96, 0xE2, 0xA8, 0x66, 0x65, 0xA6, 0x26, 0x13, 0x4C, 0x69, 0x3B, 0xFA, 0x2D,
+        0x6B, 0x1E, 0x5A, 0xF4, 0xCE, 0x14, 0x22, 0xAD, 0x32, 0x34, 0xA4, 0x4F, 0x2C, 0xB5, 0xA7, 0x2A,
     };
     try std.testing.expectEqualSlices(u8, &golden, &CheckedModuleArtifact.SERIALIZED_VERSION_HASH);
 }

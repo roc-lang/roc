@@ -15805,7 +15805,16 @@ const ProcBodyBuilder = struct {
             .unimplemented => return try self.parent.result.store.addCFStmt(.{ .crash = .{
                 .msg = .{ .literal = try self.parent.result.store.insertString(Common.unimplemented_declaration_crash) },
             } }, self.scaffoldOrigin()),
-            .stored_const => {},
+            // A sealed-row constant's stored value is its representation at
+            // one row only, and boxy has no instantiation graph to decide
+            // whether THIS use asks for that row. It therefore always takes the
+            // retained eval template, which is exactly what boxy emitted for
+            // such a constant before a quantified row could be a compile-time
+            // root at all, so no boxy output moves. `plan.zig` makes the same
+            // choice so the planned worker and the emitted call agree.
+            .stored_const => |stored| if (stored.other_row_template) |eval| {
+                return try self.lowerConstEvalTemplateUseInto(target, checked_ty, requested_ty, eval, next);
+            },
         }
         const stored = template.state.stored_const;
         const producer_rep = self.parent.plan.repForStoredType(.{

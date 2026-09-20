@@ -12180,43 +12180,55 @@ const Builder = struct {
         // a compile-time-stored value) is produced at runtime by calling the
         // constant's entry-wrapper thunk. Plan that thunk as a worker so the
         // lowerer can emit the call.
+        var eval_template: ?checked.ConstEvalTemplate = null;
         var stored_template: ?checked.StoredConstTemplate = null;
         if (store_view.const_templates) |const_templates| {
             switch (const_templates.get(const_use.const_ref).state) {
-                .eval_template => |eval| {
-                    const worker = try self.ensureWorker(
-                        .{ .procedure_template = eval.entry_template },
-                        self.checkedTypeForTemplate(eval.entry_template),
-                        null,
-                    );
-                    if (const_use.requested_source_ty_payload) |requested_ty| {
-                        const ret_type = typeRef(view, requested_ty);
-                        if (self.plan.constEvalCallFor(worker, ret_type) == null) {
-                            const worker_plan = self.plan.workers.items[@intFromEnum(worker)];
-                            const worker_function = (self.repQuery().functionChildren(worker_plan.rep)) orelse
-                                boxyPlanInvariant("boxy const-eval worker was not a function");
-                            if (worker_function.arg_count != 0) {
-                                boxyPlanInvariant("boxy const-eval worker had explicit arguments");
-                            }
-                            const call_rep = try self.analyzeType(view, requested_ty);
-                            try self.plan.const_eval_calls.append(self.allocator, .{
-                                .worker = worker,
-                                .ret_type = ret_type,
-                                .ret_substitution = .{
-                                    .operand_type = self.plan.representations.items[@intFromEnum(worker_function.ret)].source_type,
-                                    .operand_rep = worker_function.ret,
-                                    .call_type = ret_type,
-                                    .call_rep = call_rep,
-                                    .worker_rep = worker_function.ret,
-                                },
-                            });
-                        }
-                    }
+                .eval_template => |eval| eval_template = eval,
+                // A sealed-row constant's stored value is its representation
+                // at one row only, and boxy has no instantiation graph to
+                // decide whether THIS use asks for that row, so it plans the
+                // retained eval template exactly as it did before such a root
+                // could be compile-time evaluated. `lower.zig` makes the same
+                // choice, so the planned worker is the one the body calls.
+                .stored_const => |stored| if (stored.other_row_template) |eval| {
+                    eval_template = eval;
+                } else {
+                    stored_template = stored;
                 },
-                .stored_const => |stored| stored_template = stored,
                 // Neither a reserved template nor a declaration without an
                 // implementation contributes a value to plan for.
                 .reserved, .unimplemented => {},
+            }
+        }
+        if (eval_template) |eval| {
+            const worker = try self.ensureWorker(
+                .{ .procedure_template = eval.entry_template },
+                self.checkedTypeForTemplate(eval.entry_template),
+                null,
+            );
+            if (const_use.requested_source_ty_payload) |requested_ty| {
+                const ret_type = typeRef(view, requested_ty);
+                if (self.plan.constEvalCallFor(worker, ret_type) == null) {
+                    const worker_plan = self.plan.workers.items[@intFromEnum(worker)];
+                    const worker_function = (self.repQuery().functionChildren(worker_plan.rep)) orelse
+                        boxyPlanInvariant("boxy const-eval worker was not a function");
+                    if (worker_function.arg_count != 0) {
+                        boxyPlanInvariant("boxy const-eval worker had explicit arguments");
+                    }
+                    const call_rep = try self.analyzeType(view, requested_ty);
+                    try self.plan.const_eval_calls.append(self.allocator, .{
+                        .worker = worker,
+                        .ret_type = ret_type,
+                        .ret_substitution = .{
+                            .operand_type = self.plan.representations.items[@intFromEnum(worker_function.ret)].source_type,
+                            .operand_rep = worker_function.ret,
+                            .call_type = ret_type,
+                            .call_rep = call_rep,
+                            .worker_rep = worker_function.ret,
+                        },
+                    });
+                }
             }
         }
         if (stored_template) |stored| {

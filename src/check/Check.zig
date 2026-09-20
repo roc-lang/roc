@@ -10168,6 +10168,19 @@ fn debugVerifyKeptHoistedRootDependencies(self: *Self) Allocator.Error!void {
     }
 }
 
+/// Whether a hoisted constant's complete value type is fixed.
+///
+/// This is the checker-side relative of `checkedTypeIsConcreteCompileTimeRoot`
+/// (src/check/checked_artifact.zig), but it answers a DIFFERENT question and
+/// deliberately keeps the stricter rule. That one decides whether a root the
+/// checker already selected may be requested, and admits an unbound row tail
+/// by publishing the value's representation at its sealed row. This one
+/// decides whether a sub-expression becomes a root at all: admitting an
+/// unbound tail here would hoist expressions that are not hoisted today (every
+/// `Try`-returning call carries one), which changes what a program with no
+/// quantified row of its own emits. A sub-expression left unhoisted stays
+/// inline, which is what it does today, so the two rules cannot disagree about
+/// any root that exists.
 fn varIsConcreteHoistedConstType(self: *Self, var_: Var) Allocator.Error!bool {
     self.var_set.clearRetainingCapacity();
     return try self.varIsConcreteHoistedConstTypeInternal(.value_graph, .data_constant, var_, &self.var_set);

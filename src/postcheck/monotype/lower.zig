@@ -25044,6 +25044,12 @@ const BodyContext = struct {
         const source_region = self.hoistedConstSourceRegion(entry);
         return switch (template.state) {
             .stored_const => |stored| blk: {
+                if (stored.other_row_template) |row_template| {
+                    if (!try self.storedConstRepresentationMatchesType(self.view, stored, ty)) {
+                        try self.constrainTypeToMono(entry.checked_type, ty);
+                        break :blk try self.lowerConstEvalTemplateUse(self.view, row_template, entry.const_ref, ty, source_region, .{ .module = self.view.key, .root = entry.root });
+                    }
+                }
                 const stored_ty = try self.storedConstRootMonoType(self.view, stored, entry.checked_type);
                 if (!self.sameType(ty, stored_ty)) {
                     Common.invariant("stored hoisted const representation differed from its expected Monotype type");
@@ -25082,6 +25088,19 @@ const BodyContext = struct {
         const source_region = self.hoistedConstSourceRegion(entry);
         return switch (template.state) {
             .stored_const => |stored| blk: {
+                if (stored.other_row_template) |row_template| {
+                    if (!try self.storedConstRepresentationMatchesNode(self.view, stored, request_node)) {
+                        try self.graph.unify(try self.instNode(entry.checked_type), request_node);
+                        break :blk try self.lowerConstEvalTemplateUseAtNode(
+                            self.view,
+                            row_template,
+                            entry.const_ref,
+                            request_node,
+                            source_region,
+                            .{ .module = self.view.key, .root = entry.root },
+                        );
+                    }
+                }
                 const stored_node = try self.storedConstRootTypeNode(self.view, stored, entry.checked_type);
                 try relateRequestComponent(self.graph, request_node, stored_node);
                 const saved_loc = self.builder.current_loc;
@@ -25172,7 +25191,10 @@ const BodyContext = struct {
         if (self.loweringOwnHoistedConstRoot(entry)) return null;
         const template = self.view.const_templates.get(entry.const_ref);
         const hoisted_ty = switch (template.state) {
-            .stored_const => |stored| try self.storedConstRootMonoType(self.view, stored, entry.checked_type),
+            .stored_const => |stored| if (storedConstIsExactRepresentation(stored))
+                try self.storedConstRootMonoType(self.view, stored, entry.checked_type)
+            else
+                try self.graph.specializationTypeViewForNode(try self.instNode(entry.checked_type)),
             // Dispatch requires one concrete specialization type for this
             // selected const use. A generalized field whose presence has no
             // other evidence takes the declared required default in an
@@ -36177,7 +36199,13 @@ const BodyContext = struct {
         const store_view = self.builder.moduleForId(checked.constModuleId(const_use.const_ref));
         const template = store_view.const_templates.get(const_use.const_ref);
         return switch (template.state) {
-            .stored_const => |stored| try self.storedConstRootMonoType(store_view, stored, requested_ty),
+            // A sealed-row template answers only a settled request, which
+            // this site cannot see, so it selects the request's own type here
+            // exactly as an eval-template constant does.
+            .stored_const => |stored| if (storedConstIsExactRepresentation(stored))
+                try self.storedConstRootMonoType(store_view, stored, requested_ty)
+            else
+                try self.lowerTypeView(requested_ty),
             // An unimplemented declaration keeps its declared type; only the
             // value is missing, and reaching it crashes.
             .eval_template, .unimplemented => try self.lowerTypeView(requested_ty),
@@ -36195,7 +36223,14 @@ const BodyContext = struct {
         const store_view = self.builder.moduleForId(checked.constModuleId(const_use.const_ref));
         const template = store_view.const_templates.get(const_use.const_ref);
         const requested_node = switch (template.state) {
-            .stored_const => |stored| try self.storedConstRootTypeNode(store_view, stored, requested_ty),
+            // Relating an open request to a sealed-row constant's stored
+            // representation would force the request narrow rather than
+            // observe that it already is, so this site contributes only the
+            // request's own node and the restore decides.
+            .stored_const => |stored| if (storedConstIsExactRepresentation(stored))
+                try self.storedConstRootTypeNode(store_view, stored, requested_ty)
+            else
+                try self.instNode(requested_ty),
             .eval_template, .unimplemented => try self.instNode(requested_ty),
             .reserved => Common.invariant("reserved checked const template reached Monotype type selection"),
         };
@@ -36218,6 +36253,12 @@ const BodyContext = struct {
         const template = store_view.const_templates.get(const_use.const_ref);
         return switch (template.state) {
             .stored_const => |stored| blk: {
+                if (stored.other_row_template) |row_template| {
+                    if (!try self.storedConstRepresentationMatchesType(store_view, stored, ty)) {
+                        try self.constrainTypeToMono(requested_ty, ty);
+                        break :blk try self.lowerConstEvalTemplateUse(store_view, row_template, const_use.const_ref, ty, null, null);
+                    }
+                }
                 const stored_ty = try self.storedConstRootMonoType(store_view, stored, requested_ty);
                 if (!self.sameType(ty, stored_ty)) {
                     Common.invariant("stored const representation differed from its expected Monotype type");
@@ -36279,6 +36320,19 @@ const BodyContext = struct {
         const template = store_view.const_templates.get(const_use.const_ref);
         return switch (template.state) {
             .stored_const => |stored| blk: {
+                if (stored.other_row_template) |row_template| {
+                    if (!try self.storedConstRepresentationMatchesNode(store_view, stored, request_node)) {
+                        try self.graph.unify(try self.instNode(requested_ty), request_node);
+                        break :blk try self.lowerConstEvalTemplateUseAtNode(
+                            store_view,
+                            row_template,
+                            const_use.const_ref,
+                            request_node,
+                            null,
+                            null,
+                        );
+                    }
+                }
                 const stored_node = try self.storedConstRootTypeNode(store_view, stored, requested_ty);
                 const interface_node = try self.instNode(requested_ty);
                 try relateRequestComponent(self.graph, request_node, stored_node);
@@ -36328,6 +36382,49 @@ const BodyContext = struct {
                 );
             },
         };
+    }
+
+    /// Whether this template's stored value is the representation of EVERY
+    /// use. That is true of every stored constant that could exist before a
+    /// root with an unbound row tail could be compile-time evaluated: its
+    /// producer's solved type fixed one representation and each use was
+    /// checked against that type. Those uses keep the unconditional stored
+    /// path, so nothing about them moves.
+    ///
+    /// A sealed-row template instead answers only the request that resolved
+    /// to the row it was evaluated at, and behaves like an eval-template
+    /// constant everywhere else: it forces nothing while the request is still
+    /// open, and upgrades to the stored value only at the restore, once the
+    /// request has settled on exactly that representation.
+    fn storedConstIsExactRepresentation(stored: checked.StoredConstTemplate) bool {
+        return stored.other_row_template == null;
+    }
+
+    /// Whether a sealed-row constant's stored value is the representation
+    /// this SETTLED request asks for.
+    fn storedConstRepresentationMatchesType(
+        self: *BodyContext,
+        store_view: ModuleView,
+        stored: checked.StoredConstTemplate,
+        ty: Type.TypeId,
+    ) Allocator.Error!bool {
+        return self.sameType(ty, try self.lowerConstCaptureType(store_view, stored.root_type));
+    }
+
+    /// The same question where the request is still a live graph node. The node
+    /// is READ, never related: relating it to the stored representation would
+    /// force the request narrow rather than observe that it already is, which
+    /// is what the restore's own comment forbids. A node that has not resolved
+    /// has not committed to the stored representation, so the constant
+    /// re-lowers its body exactly as an eval-template constant would.
+    fn storedConstRepresentationMatchesNode(
+        self: *BodyContext,
+        store_view: ModuleView,
+        stored: checked.StoredConstTemplate,
+        request_node: NodeId,
+    ) Allocator.Error!bool {
+        if (!try self.graph.typeIsResolved(request_node)) return false;
+        return try self.storedConstRepresentationMatchesType(store_view, stored, try self.activeTypeFromNode(request_node));
     }
 
     /// Return the exact producer-owned runtime representation stored beside a
@@ -36390,6 +36487,23 @@ const BodyContext = struct {
         };
     }
 
+    /// Whether a const use reads its root's declared function instead of
+    /// lowering the root's body. The read calls the root's one function at
+    /// the use's type, so it is sound only for an `.exact` root, whose solved
+    /// type every use shares. A `.sealed_row` root is evaluated at its sealed
+    /// row (`CompileTimeRootRepresentation`); a use that instantiates that row
+    /// differently would make the read relate the root's own function to the
+    /// use's row and evaluate the root at it, so such a use lowers the body at
+    /// its own type, as `StoredConstTemplate.other_row_template` does once
+    /// the root is stored.
+    fn constRootReadDeclared(self: *BodyContext, store_view: ModuleView, root_id: checked.ComptimeRootId) bool {
+        if (!self.builder.comptimeValueReadDeclared(store_view, root_id)) return false;
+        return switch (store_view.compile_time_roots.root(root_id).representation) {
+            .exact => true,
+            .sealed_row => false,
+        };
+    }
+
     fn lowerConstEvalTemplateUse(
         self: *BodyContext,
         store_view: ModuleView,
@@ -36419,7 +36533,7 @@ const BodyContext = struct {
         current_entry_root: ?EntryRoot,
     ) Allocator.Error!DraftExprId {
         const body = store_view.checked_const_bodies.get(eval.body);
-        if (self.builder.comptimeValueReadDeclared(store_view, body.root)) {
+        if (self.constRootReadDeclared(store_view, body.root)) {
             return self.declaredComptimeValueRead(store_view, body.root, DraftTypeCell.fromGraphNode(request_node), const_use);
         }
         const entry_template = store_view.templates.get(eval.entry_template.template);
@@ -43597,13 +43711,23 @@ const BodyContext = struct {
     }
 
     /// The schema of the entry template a const use evaluates through; a
-    /// stored or unimplemented const lowers no template body.
+    /// stored or unimplemented const lowers no template body. A sealed-row
+    /// const that this use cannot read the stored value of DOES lower one, and
+    /// its evidence is supplied by this use site like any other eval-template
+    /// const, so it reports the same schema they do.
     fn constUseSchema(self: *BodyContext, const_use: checked.ConstUseTemplate) SchemeRequirements {
         const store_view = self.builder.moduleForId(checked.constModuleId(const_use.const_ref));
         const template = store_view.const_templates.get(const_use.const_ref);
         return switch (template.state) {
             .eval_template => |eval| self.templateSchema(eval.entry_template),
-            .stored_const, .reserved, .unimplemented => emptySchema(store_view),
+            // Whether a sealed-row constant reads its stored value is not
+            // decided until the restore, so its use site reports the schema of
+            // the template it may still lower, like any eval-template const.
+            .stored_const => |stored| if (stored.other_row_template) |row_template|
+                self.templateSchema(row_template.entry_template)
+            else
+                emptySchema(store_view),
+            .reserved, .unimplemented => emptySchema(store_view),
         };
     }
 

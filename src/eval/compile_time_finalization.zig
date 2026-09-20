@@ -4560,6 +4560,23 @@ fn finishConstRoot(
     const stored = checked.StoredConstTemplate{
         .node = node,
         .root_type = root_type orelse finalizationInvariant("constant root finalized without exact Monotype representation evidence"),
+        // A root whose solved type left a row tail unbound was evaluated with
+        // each such tail sealed to the empty row, so the stored value is its
+        // representation at the sealed row only. Keep the eval template beside
+        // it so a use that instantiated one of those rows differently lowers
+        // the body at its own type instead of reading a representation that is
+        // not its own. Every const-body root is sealed with an eval template
+        // before finalization (`sealConstEvalTemplatesForRoots`), so the
+        // template this selects is always present.
+        .other_row_template = switch (root.representation) {
+            .exact => null,
+            .sealed_row => switch (module.const_templates.get(const_ref).state) {
+                .eval_template => |eval| eval,
+                .reserved, .stored_const, .unimplemented => finalizationInvariant(
+                    "sealed-row constant root had no eval template beside its stored value",
+                ),
+            },
+        },
     };
     module.const_templates.fillStoredConst(const_ref, stored);
     if (root.kind == .constant) {

@@ -3784,6 +3784,54 @@ callable graph; it cannot cross Monotype's relation-freeze boundary as a
 context-free compile-time request. Data roots with no reachable callable slots
 continue to use the ordinary concreteness proof.
 
+#### Roots Whose Row Tail Is Unbound
+
+A root's concreteness proof treats an unbound row extension differently from an
+unbound value. A row extension is the tail of a record or tag union, and
+Monotype already seals an undecided checked variable there to the empty row,
+which adds nothing to it: the row is exactly its listed fields or
+tags. So a root whose solved type leaves only row tails unbound is concrete at
+its SEALED row, and compile-time evaluation produces that value. An unbound
+variable in any other position has no such agreed representation and keeps the
+root ineligible. This is what lets a top-level value written with `..`, or one
+whose implicitly opened output row joined a generalized scheme, keep
+compile-time evaluation instead of degrading to runtime construction.
+
+Such a root records the representation its value stands for. `exact` means the
+stored value is the representation every use asks for, which is the only case
+that exists when no row tail was left unbound. `sealed_row` means the value was
+evaluated with each unbound tail sealed to the empty row, and the checked
+module keeps the root's eval template beside the stored value. Lowering then
+selects between two explicit alternatives per use by comparing the use's
+settled Monotype against the stored representation: equal selects the stored
+value, otherwise the use lowers the eval template at its own type. Both are the
+same value at the same type; only the work differs.
+
+The comparison is made where the use's representation has settled. While the
+request is a live instantiation graph node, lowering reads that node and never
+relates it to the stored representation, because relating would force the
+request to the stored row rather than observe that it already is that row; an
+unsettled request therefore lowers the eval template, exactly as an ordinary
+eval-template constant does. Type selection for such a use contributes only the
+request's own type for the same reason.
+
+The same holds while the root itself is being evaluated. A use in the
+compile-time program that reads the root's declared function calls that one
+function at the use's type, so only an `exact` root is read that way; a use of
+a `sealed_row` root lowers the eval template at its own type, and no use can
+make the root evaluate at a row other than its sealed one.
+
+One constant per instantiation is not expressible: the decision is made for one
+module with no importer in view, and `copy_import` stamps every imported
+descriptor generalized, so a defining module can never bound the set of rows
+its constant will be asked for.
+
+The checker's own hoisted-root concreteness walk keeps the stricter rule. It
+decides whether a sub-expression becomes a root at all, and admitting an
+unbound tail there would hoist expressions that are not hoisted today. A
+sub-expression that is not hoisted stays inline, so the two rules cannot
+disagree about any root that exists.
+
 Runtime lowering restores a selected hoisted root by checked expression id. While
 lowering the synthetic compile-time wrapper for that same root, lowering must
 suppress restoration of the root currently being evaluated so the original
