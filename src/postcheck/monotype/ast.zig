@@ -2810,10 +2810,15 @@ fn testFnSource(mono_fn_ty: Type.TypeId) FnTemplate {
     };
 }
 
-fn testProcTemplate(template_id: u32) names.ProcTemplate {
+fn testProcTemplate(name_store: *names.NameStore, template_id: u32) std.mem.Allocator.Error!names.ProcTemplate {
     return .{
         .artifact = .{},
-        .proc_base = @enumFromInt(0),
+        .proc_base = try name_store.internProcBase(.{
+            .module_name = try name_store.internModuleName("SourceDigest"),
+            .export_name = null,
+            .kind = .checked_source,
+            .ordinal = 0,
+        }),
         .template = @enumFromInt(template_id),
     };
 }
@@ -2835,7 +2840,7 @@ test "function template identity ignores the requester's checked source type" {
     // from differs, which is caller provenance and not identity.
     const mono_fn_ty = try types.add(.zst);
     const first: FnTemplate = .{
-        .fn_def = .{ .local_template = testProcTemplate(1) },
+        .fn_def = .{ .local_template = try testProcTemplate(&name_store, 1) },
         .source_fn_ty = @enumFromInt(7),
         .source_fn_key = testTemplateDigestKey(1),
         .mono_fn_ty = mono_fn_ty,
@@ -2852,7 +2857,7 @@ test "function template identity ignores the requester's checked source type" {
 
     // The identity still separates a different callable and a different type.
     var other_callable = first;
-    other_callable.fn_def = .{ .local_template = testProcTemplate(2) };
+    other_callable.fn_def = .{ .local_template = try testProcTemplate(&name_store, 2) };
     try std.testing.expect(!fnTemplateIdentityEql(first, other_callable));
     var other_type = first;
     other_type.mono_fn_ty = try types.add(.{ .primitive = .str });
@@ -2874,7 +2879,7 @@ test "function template identity keeps generated bodies of one owner apart" {
     // says they are different code, so identity must carry it.
     const mono_fn_ty = try types.add(.zst);
     const first_step: FnTemplate = .{
-        .fn_def = .{ .checked_generated = testProcTemplate(1) },
+        .fn_def = .{ .checked_generated = try testProcTemplate(&name_store, 1) },
         .source_fn_ty = @enumFromInt(7),
         .source_fn_key = testTemplateDigestKey(1),
         .mono_fn_ty = mono_fn_ty,
@@ -2899,7 +2904,7 @@ test "function template identity keeps generated bodies of one owner apart" {
     // Generated runtime callables carry the key the same way.
     const first_callback: FnTemplate = .{
         .fn_def = .{ .encoder_for_runtime = .{
-            .owner = testProcTemplate(1),
+            .owner = try testProcTemplate(&name_store, 1),
             .expr = @enumFromInt(3),
         } },
         .source_fn_ty = @enumFromInt(7),

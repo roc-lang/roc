@@ -1665,8 +1665,17 @@ fn testLiftedProgram(allocator: std.mem.Allocator) Program {
     );
 }
 
-fn testSourceDigestTemplate(template_id: u32) names.ProcTemplate {
-    return .{ .artifact = .{}, .proc_base = @enumFromInt(0), .template = @enumFromInt(template_id) };
+fn testSourceDigestTemplate(name_store: *names.NameStore, template_id: u32) std.mem.Allocator.Error!names.ProcTemplate {
+    return .{
+        .artifact = .{},
+        .proc_base = try name_store.internProcBase(.{
+            .module_name = try name_store.internModuleName("SourceDigest"),
+            .export_name = null,
+            .kind = .checked_source,
+            .ordinal = 0,
+        }),
+        .template = @enumFromInt(template_id),
+    };
 }
 
 fn testSourceDigestKey(comptime byte: u8) names.TypeDigest {
@@ -1679,11 +1688,12 @@ fn testSourceDigestKey(comptime byte: u8) names.TypeDigest {
 /// digest reads the template, the clone pattern, and the fusion scope only.
 fn addSourceDigestFn(
     program: *Program,
+    symbols: *Common.SymbolGen,
     source: Mono.FnTemplate,
     ret_ty: Type.TypeId,
 ) std.mem.Allocator.Error!FnId {
     return program.addFn(.{
-        .symbol = @enumFromInt(0),
+        .symbol = symbols.fresh(),
         .source = source,
         .args = Span(TypedLocal).empty(),
         .captures = Span(TypedLocal).empty(),
@@ -1693,11 +1703,13 @@ fn addSourceDigestFn(
 }
 
 test "lifted source digest drops caller provenance and keeps generated bodies apart" {
+    // Distinct allocated symbols prove the digest ignores per-program identity.
+    var symbols: Common.SymbolGen = .{};
     var program = testLiftedProgram(std.testing.allocator);
     defer program.deinit();
 
     const ret_ty = try program.types.add(.zst);
-    const template = testSourceDigestTemplate(1);
+    const template = try testSourceDigestTemplate(&program.names, 1);
 
     // Two requesters reserved one specialization of one checked template at
     // one closed type. They instantiated it from different checked types, and
@@ -1715,8 +1727,8 @@ test "lifted source digest drops caller provenance and keeps generated bodies ap
     other_requester.source_fn_ty = @enumFromInt(9);
     other_requester.source_fn_key = testSourceDigestKey(2);
 
-    const ordinary_fn = try addSourceDigestFn(&program, ordinary, ret_ty);
-    const other_requester_fn = try addSourceDigestFn(&program, other_requester, ret_ty);
+    const ordinary_fn = try addSourceDigestFn(&program, &symbols, ordinary, ret_ty);
+    const other_requester_fn = try addSourceDigestFn(&program, &symbols, other_requester, ret_ty);
     const ordinary_digest = program.fnSourceDigest(ordinary_fn) orelse return error.TestUnexpectedResult;
     const other_requester_digest = program.fnSourceDigest(other_requester_fn) orelse return error.TestUnexpectedResult;
     try std.testing.expectEqualSlices(u8, ordinary_digest[0..], other_requester_digest[0..]);
@@ -1732,8 +1744,8 @@ test "lifted source digest drops caller provenance and keeps generated bodies ap
     };
     var second_step = first_step;
     second_step.source_fn_key = testSourceDigestKey(2);
-    const first_step_fn = try addSourceDigestFn(&program, first_step, ret_ty);
-    const second_step_fn = try addSourceDigestFn(&program, second_step, ret_ty);
+    const first_step_fn = try addSourceDigestFn(&program, &symbols, first_step, ret_ty);
+    const second_step_fn = try addSourceDigestFn(&program, &symbols, second_step, ret_ty);
     const first_step_digest = program.fnSourceDigest(first_step_fn) orelse return error.TestUnexpectedResult;
     const second_step_digest = program.fnSourceDigest(second_step_fn) orelse return error.TestUnexpectedResult;
     try std.testing.expect(!std.mem.eql(u8, first_step_digest[0..], second_step_digest[0..]));
@@ -1747,21 +1759,21 @@ test "lifted source digest drops caller provenance and keeps generated bodies ap
     };
     var second_callback = first_callback;
     second_callback.source_fn_key = testSourceDigestKey(2);
-    const first_callback_fn = try addSourceDigestFn(&program, first_callback, ret_ty);
-    const second_callback_fn = try addSourceDigestFn(&program, second_callback, ret_ty);
+    const first_callback_fn = try addSourceDigestFn(&program, &symbols, first_callback, ret_ty);
+    const second_callback_fn = try addSourceDigestFn(&program, &symbols, second_callback, ret_ty);
     const first_callback_digest = program.fnSourceDigest(first_callback_fn) orelse return error.TestUnexpectedResult;
     const second_callback_digest = program.fnSourceDigest(second_callback_fn) orelse return error.TestUnexpectedResult;
     try std.testing.expect(!std.mem.eql(u8, first_callback_digest[0..], second_callback_digest[0..]));
 
     // What the digest does name still separates procedures.
     var other_callable = ordinary;
-    other_callable.fn_def = .{ .local_template = testSourceDigestTemplate(2) };
+    other_callable.fn_def = .{ .local_template = try testSourceDigestTemplate(&program.names, 2) };
     var other_evidence = ordinary;
     other_evidence.evidence_digest = .{ .bytes = testSourceDigestKey(5).bytes };
     var other_type = ordinary;
     other_type.mono_fn_ty = try program.types.add(.{ .primitive = .str });
     for ([_]Mono.FnTemplate{ other_callable, other_evidence, other_type }) |distinct| {
-        const distinct_fn = try addSourceDigestFn(&program, distinct, ret_ty);
+        const distinct_fn = try addSourceDigestFn(&program, &symbols, distinct, ret_ty);
         const distinct_digest = program.fnSourceDigest(distinct_fn) orelse return error.TestUnexpectedResult;
         try std.testing.expect(!std.mem.eql(u8, ordinary_digest[0..], distinct_digest[0..]));
     }
@@ -1769,7 +1781,7 @@ test "lifted source digest drops caller provenance and keeps generated bodies ap
     // A SpecConstr clone shares its source's template and is a distinct
     // procedure at a distinct call pattern.
     const clone_fn = try program.addFn(.{
-        .symbol = @enumFromInt(0),
+        .symbol = symbols.fresh(),
         .source = ordinary,
         .spec_constr_pattern = testSourceDigestKey(9),
         .args = Span(TypedLocal).empty(),
@@ -1777,6 +1789,7 @@ test "lifted source digest drops caller provenance and keeps generated bodies ap
         .body = .hosted,
         .ret = ret_ty,
     });
+    program.next_symbol = symbols.next;
     const clone_digest = program.fnSourceDigest(clone_fn) orelse return error.TestUnexpectedResult;
     try std.testing.expect(!std.mem.eql(u8, ordinary_digest[0..], clone_digest[0..]));
 }
