@@ -326,7 +326,7 @@ pub fn containsError(
     env: *const ModuleEnv,
     var_: Var,
 ) Allocator.Error!bool {
-    var builder = Builder.init(allocator, store, env);
+    var builder = Inspector.init(allocator, store, env);
     defer builder.deinit();
     builder.detect_errors = true;
     try builder.writeVar(var_);
@@ -1931,10 +1931,96 @@ test "inspection visits shared graphs once and observes mutations between reques
     defer gpa.free(identities);
     try std.testing.expectEqualSlices(Var, &.{identity}, identities);
     try std.testing.expect(!try writer.containsError(root));
+    try std.testing.expect(!try containsError(gpa, &store, &env, root));
 
     try store.setVarContent(identity, .err);
     try std.testing.expect(try writer.containsError(root));
+    try std.testing.expect(try containsError(gpa, &store, &env, root));
     const after = try writer.identityVarsFromVar(root);
     defer gpa.free(after);
     try std.testing.expectEqual(@as(usize, 0), after.len);
+}
+
+test "issue 11350 inspection preserves identity slots through constraints and cyclic row extensions" {
+    const gpa = std.testing.allocator;
+    var env = try ModuleEnv.init(gpa, "");
+    defer env.deinit();
+    try env.setContentIdentity([_]u8{0xA5} ** 32);
+    const rigid_name = try env.insertIdent(Ident.for_text("a"));
+    const method_name = try env.insertIdent(Ident.for_text("method"));
+    const nominal_name = try env.insertIdent(Ident.for_text("Box"));
+    const z_name = try env.insertIdent(Ident.for_text("z"));
+    const m_name = try env.insertIdent(Ident.for_text("m"));
+    const a_name = try env.insertIdent(Ident.for_text("a_field"));
+    var store = try TypeStore.initCapacity(gpa, 32, 16);
+    defer store.deinit();
+
+    const rigid_private = try store.fresh();
+    const flex_private = try store.fresh();
+    const rigid = try store.freshFromContent(.{ .rigid = types.Rigid.init(rigid_name).withConstraints(
+        try store.appendStaticDispatchConstraints(&.{.{
+            .fn_name = method_name,
+            .fn_var = rigid_private,
+            .origin = .method_call,
+        }}),
+    ) });
+    const flex = try store.freshFromContent(.{ .flex = types.Flex.init().withConstraints(
+        try store.appendStaticDispatchConstraints(&.{.{
+            .fn_name = method_name,
+            .fn_var = flex_private,
+            .origin = .method_call,
+        }}),
+    ) });
+    const nominal_arg = try store.fresh();
+    const nominal = try store.freshFromContent(try store.mkNominal(
+        .{ .ident_idx = nominal_name },
+        &.{ flex, nominal_arg },
+        env.selfModuleIdentity(),
+        false,
+    ));
+    const tuple = try store.freshFromContent(.{ .structure = .{ .tuple = .{
+        .elems = try store.appendVars(&.{ rigid, nominal }),
+    } } });
+    const root = try store.fresh();
+    const empty = try store.freshFromContent(.{ .structure = .empty_record });
+    // Normalization must bring the extension's a_field before the head's z.
+    // Its m field points back to the active record, exercising cycle handling.
+    const tail = try store.freshFromContent(.{ .structure = .{ .record = .{
+        .fields = try store.appendRecordFields(&.{
+            .{ .name = m_name, .presence = .required(root) },
+            .{ .name = a_name, .presence = .required(tuple) },
+        }),
+        .ext = empty,
+    } } });
+    try store.setVarContent(root, .{ .structure = .{ .record = .{
+        .fields = try store.appendRecordFields(&.{.{ .name = z_name, .presence = .required(flex) }}),
+        .ext = tail,
+    } } });
+
+    var writer = TypeWriter.init(gpa, &store, &env);
+    defer writer.deinit();
+    inline for (.{ true, false }) |walk_constraints| {
+        var digest = Builder.init(gpa, &store, &env);
+        defer digest.deinit();
+        digest.walk_identity_constraints = walk_constraints;
+        try digest.writeVar(root);
+        const expected = digest.identity_variables.entries.items;
+        const slots: []const Var = if (walk_constraints)
+            &.{ rigid, rigid_private, flex, flex_private, nominal_arg }
+        else
+            &.{ rigid, flex, nominal_arg };
+        try std.testing.expectEqualSlices(Var, slots, expected);
+        const actual = if (walk_constraints)
+            try identityVarsFromVar(gpa, &store, &env, root)
+        else
+            try identityVarsFromVarIgnoringConstraints(gpa, &store, &env, root);
+        defer gpa.free(actual);
+        try std.testing.expectEqualSlices(Var, expected, actual);
+        const reused = if (walk_constraints)
+            try writer.identityVarsFromVar(root)
+        else
+            try writer.identityVarsFromVarIgnoringConstraints(root);
+        defer gpa.free(reused);
+        try std.testing.expectEqualSlices(Var, expected, reused);
+    }
 }
