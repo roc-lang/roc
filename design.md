@@ -10184,6 +10184,20 @@ records the target's substitution the same way, so a direct target specializes
 under the exact substitution checking applied rather than under a re-derived
 one.
 
+An evidence-dependent dispatch whose checked plan authorizes nested-contract
+reuse consumes the already-materialized contract directly. Its targets and
+terminal verdicts were selected at the checked edge; composite requirements
+have no substitution slot from which to derive them again. Monotype applies
+every selected target's callable relation once, including variables reached
+only through its constraint signature, then removes the consumed edge-local
+callable identities from its targets. Nested contracts retain their
+own relations until their respective targets specialize. Normalization borrows
+the immutable vector when unchanged and copies it once on the first changed
+entry, allocating only targets whose callable identity is removed. It does not
+repeat method lookup or run the compiler-generated requirement fixpoint.
+Independent callables without the checked reuse proof still derive evidence
+against their own callable relation.
+
 Requirement forwarding carries the method ID's owning checked name store.
 Raw method IDs are comparable only within the same store; cross-module
 lookups translate the exact method name through the evidence frame's existing

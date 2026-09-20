@@ -191,6 +191,7 @@ test "compile tests" {
     std.testing.refAllDecls(@import("test/issue_11311_test.zig"));
     std.testing.refAllDecls(@import("test/issue_11338_test.zig"));
     std.testing.refAllDecls(@import("test/issue_11387_test.zig"));
+    std.testing.refAllDecls(@import("test/issue_11441_test.zig"));
     std.testing.refAllDecls(@import("test/package_effect_boundary_test.zig"));
     std.testing.refAllDecls(@import("test/tce_capture_test.zig"));
     std.testing.refAllDecls(@import("test/list_map_target_independent_lir_test.zig"));
