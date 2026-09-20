@@ -1427,7 +1427,16 @@ test "Node.List: serialization round-trips full-width payloads and ignores alloc
     const CompactWriter = collections.CompactWriter;
 
     const Build = struct {
-        fn list(allocator: std.mem.Allocator, reserve: usize) std.mem.Allocator.Error!List {
+        /// The list plus the index each row was appended at, so the read-back
+        /// below addresses rows by the identity the append produced.
+        const Built = struct {
+            nodes: List,
+            call: Idx,
+            var_node: Idx,
+            annotation: Idx,
+        };
+
+        fn list(allocator: std.mem.Allocator, reserve: usize) std.mem.Allocator.Error!Built {
             var nodes = List{};
             errdefer nodes.deinit(allocator);
             if (reserve > 0) try nodes.ensureTotalCapacity(allocator, reserve);
@@ -1440,11 +1449,11 @@ test "Node.List: serialization round-trips full-width payloads and ignores alloc
                 .called_via = 0x33333333,
                 .constraint_fn_var_plus_one = 0x44444444,
             } });
-            _ = try nodes.append(allocator, call);
+            const call_idx = try nodes.append(allocator, call);
             // A one-word payload, whose reserved tail must serialize as zeros.
             var var_node = init(.expr_var);
             var_node.setPayload(.{ .expr_var = .{ .pattern_idx = 0x55555555 } });
-            _ = try nodes.append(allocator, var_node);
+            const var_idx = try nodes.append(allocator, var_node);
             var annotation = init(.annotation);
             annotation.setPayload(.{ .annotation = .{
                 .anno = 0x66666666,
@@ -1452,8 +1461,13 @@ test "Node.List: serialization round-trips full-width payloads and ignores alloc
                 .name_region_span2_idx = 0x0,
                 .flags = .{ .has_where = true, .mentions_type_var = true },
             } });
-            _ = try nodes.append(allocator, annotation);
-            return nodes;
+            const annotation_idx = try nodes.append(allocator, annotation);
+            return .{
+                .nodes = nodes,
+                .call = call_idx,
+                .var_node = var_idx,
+                .annotation = annotation_idx,
+            };
         }
 
         fn serialize(allocator: std.mem.Allocator, nodes: *const List) (std.mem.Allocator.Error || error{BufferTooSmall})![]align(CompactWriter.SERIALIZATION_ALIGNMENT.toByteUnits()) u8 {
@@ -1469,14 +1483,14 @@ test "Node.List: serialization round-trips full-width payloads and ignores alloc
     };
 
     var grown = try Build.list(gpa, 0);
-    defer grown.deinit(gpa);
+    defer grown.nodes.deinit(gpa);
     var oversized = try Build.list(gpa, 4096);
-    defer oversized.deinit(gpa);
-    try std.testing.expect(grown.items.capacity != oversized.items.capacity);
+    defer oversized.nodes.deinit(gpa);
+    try std.testing.expect(grown.nodes.items.capacity != oversized.nodes.items.capacity);
 
-    const grown_bytes = try Build.serialize(gpa, &grown);
+    const grown_bytes = try Build.serialize(gpa, &grown.nodes);
     defer gpa.free(grown_bytes);
-    const oversized_bytes = try Build.serialize(gpa, &oversized);
+    const oversized_bytes = try Build.serialize(gpa, &oversized.nodes);
     defer gpa.free(oversized_bytes);
 
     // Identical contents, different allocation history, identical bytes and length.
@@ -1486,16 +1500,16 @@ test "Node.List: serialization round-trips full-width payloads and ignores alloc
     const loaded = serialized.deserializeInto(@intFromPtr(grown_bytes.ptr));
     try std.testing.expectEqual(@as(u32, 3), loaded.len());
 
-    const call = loaded.get(@enumFromInt(0));
+    const call = loaded.get(grown.call);
     try std.testing.expectEqual(Tag.expr_call, call.tag);
     try std.testing.expectEqual(@as(u32, 0x44444444), call.getPayload().expr_call.constraint_fn_var_plus_one);
 
-    const var_node = loaded.get(@enumFromInt(1));
+    const var_node = loaded.get(grown.var_node);
     try std.testing.expectEqual(Tag.expr_var, var_node.tag);
     try std.testing.expectEqual(@as(u32, 0x55555555), var_node.getPayload().expr_var.pattern_idx);
     try std.testing.expectEqualSlices(u8, &[_]u8{0} ** 12, &var_node.getPayload().expr_var._padding);
 
-    const annotation = loaded.get(@enumFromInt(2));
+    const annotation = loaded.get(grown.annotation);
     try std.testing.expectEqual(Tag.annotation, annotation.tag);
     try std.testing.expectEqual(true, annotation.getPayload().annotation.flags.has_where);
     try std.testing.expectEqualSlices(u8, &[_]u8{ 0, 0, 0 }, &annotation.getPayload().annotation._reserved);
