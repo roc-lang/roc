@@ -11,7 +11,6 @@ const can = @import("can");
 const check = @import("check");
 const parse = @import("parse");
 const reporting = @import("reporting");
-const eval = @import("eval");
 const post_check_executor = @import("base").post_check_task_executor;
 const watch_inputs = @import("watch_inputs.zig");
 
@@ -28,10 +27,26 @@ pub const ModuleId = u32;
 pub const DiscoveredLocalImport = struct {
     /// Exact source target used by canonicalization (e.g. "../Shared/Foo").
     import_name: []const u8,
-    /// Package-root-relative logical module path (e.g. "Shared/Foo").
-    module_name: []const u8,
-    /// The resolved filesystem path
-    path: []const u8,
+    /// The single outcome lexical resolution selected for this import.
+    target: Target,
+
+    /// Lexical import resolution produces exactly one of these per import, so
+    /// the coordinator never re-derives a rejected target from an absent entry.
+    pub const Target = union(enum) {
+        /// The import named a target inside this package's source root.
+        resolved: Resolved,
+        /// The import escaped the package source root. The parse worker already
+        /// owns the user-facing report; the coordinator records the import as a
+        /// rejected edge so canonicalization binds it as missing.
+        rejected,
+    };
+
+    pub const Resolved = struct {
+        /// Package-root-relative logical module path (e.g. "Shared/Foo").
+        module_name: []const u8,
+        /// The resolved filesystem path
+        path: []const u8,
+    };
 };
 
 /// Information about a discovered external import during canonicalization
@@ -40,14 +55,32 @@ pub const DiscoveredExternalImport = struct {
     import_name: []const u8,
 };
 
-/// Ready imported module data passed into canonicalization.
+/// The outcome import resolution selected for one import identity, passed into
+/// canonicalization. Canonicalization consumes this outcome directly instead of
+/// inferring a missing import from an absent entry: a package-qualified import
+/// is resolved by the coordinator, so only the coordinator can say whether it
+/// was accepted or rejected.
 pub const CanonicalizeImport = struct {
     /// The direct import name for canonicalization lookup
     import_name: []const u8,
-    /// The fully-ready semantic env for this import
-    module_env: *const ModuleEnv,
-    /// Exact type declaration selected by a package/platform public entry.
-    selected_type_decl: ?can.CIR.Statement.Idx = null,
+    /// Exactly one resolution outcome for this import identity.
+    resolution: Resolution,
+
+    pub const Resolution = union(enum) {
+        /// The import resolved to a fully-ready semantic env.
+        available: Available,
+        /// Import resolution rejected this target and reported the problem.
+        /// The import names no module, so canonicalization binds it as missing
+        /// and every use of it becomes explicit checked-error data.
+        rejected,
+    };
+
+    pub const Available = struct {
+        /// The fully-ready semantic env for this import
+        module_env: *const ModuleEnv,
+        /// Exact type declaration selected by a package/platform public entry.
+        selected_type_decl: ?can.CIR.Statement.Idx = null,
+    };
 };
 
 /// Information about detected import cycles
@@ -223,8 +256,6 @@ pub const ParsedResult = struct {
     discovered_local_imports: std.ArrayList(DiscoveredLocalImport),
     /// Discovered external imports (cross-package qualified imports)
     discovered_external_imports: std.ArrayList(DiscoveredExternalImport),
-    /// True when lexical import resolution rejected a target before any file access.
-    import_resolution_failed: bool,
     /// Any reports generated during parsing
     reports: std.ArrayList(Report),
     /// Timing: nanoseconds spent parsing
@@ -436,8 +467,13 @@ pub const WorkerResult = union(enum) {
             .parsed => |*r| {
                 for (r.discovered_local_imports.items) |imp| {
                     gpa.free(imp.import_name);
-                    gpa.free(imp.module_name);
-                    gpa.free(imp.path);
+                    switch (imp.target) {
+                        .resolved => |resolved| {
+                            gpa.free(resolved.module_name);
+                            gpa.free(resolved.path);
+                        },
+                        .rejected => {},
+                    }
                 }
                 r.discovered_local_imports.deinit(gpa);
                 for (r.discovered_external_imports.items) |imp| {
@@ -450,8 +486,13 @@ pub const WorkerResult = union(enum) {
             .canonicalized => |*r| {
                 for (r.discovered_local_imports.items) |imp| {
                     gpa.free(imp.import_name);
-                    gpa.free(imp.module_name);
-                    gpa.free(imp.path);
+                    switch (imp.target) {
+                        .resolved => |resolved| {
+                            gpa.free(resolved.module_name);
+                            gpa.free(resolved.path);
+                        },
+                        .rejected => {},
+                    }
                 }
                 r.discovered_local_imports.deinit(gpa);
                 for (r.discovered_external_imports.items) |imp| {
@@ -532,7 +573,6 @@ test "WorkerResult accessors" {
             .cached_ast = undefined,
             .discovered_local_imports = std.ArrayList(DiscoveredLocalImport).empty,
             .discovered_external_imports = std.ArrayList(DiscoveredExternalImport).empty,
-            .import_resolution_failed = false,
             .reports = reports,
             .parse_ns = 1000,
         },

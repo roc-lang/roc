@@ -132,6 +132,32 @@ pub fn Snapshot(comptime T: type, comptime empty: T) type {
             return result;
         }
 
+        /// Enumerates occupied entries in a half-open range. Subtrees outside
+        /// the range are skipped even when densely populated.
+        pub fn iteratorRange(self: *const Self, start: u32, end: u64) RangeIterator {
+            std.debug.assert(start <= end and end <= @as(u64, 1) << 32);
+            var result = RangeIterator{
+                .inner = .{ .depth = self.depth, .reverse = false },
+                .start = start,
+                .end = end,
+            };
+            if (start < end) if (self.root) |root| result.inner.push(root, 0);
+            return result;
+        }
+
+        /// A bounded sparse traversal without adding range fields or checks
+        /// to ordinary whole-snapshot iterators.
+        pub const RangeIterator = struct {
+            inner: Iterator,
+            start: u32,
+            end: u64,
+
+            /// Returns the next occupied entry inside the requested range.
+            pub fn next(self: *RangeIterator) ?Iterator.Entry {
+                return self.inner.nextInRange(true, self.start, self.end);
+            }
+        };
+
         /// Bounded-stack traversal of the borrowed immutable root.
         pub const Iterator = struct {
             /// A non-default entry and its exact snapshot index.
@@ -151,6 +177,10 @@ pub fn Snapshot(comptime T: type, comptime empty: T) type {
 
             /// Returns the next occupied entry, skipping absent subtrees.
             pub fn next(self: *Iterator) ?Entry {
+                return self.nextInRange(false, 0, 0);
+            }
+
+            inline fn nextInRange(self: *Iterator, comptime bounded: bool, start: u32, end: u64) ?Entry {
                 while (self.len != 0) {
                     const frame = &self.frames[self.len - 1];
                     if (frame.slot == radix) {
@@ -161,6 +191,7 @@ pub fn Snapshot(comptime T: type, comptime empty: T) type {
                     frame.slot += 1;
                     const remaining_depth = self.depth + 1 - self.len;
                     if (remaining_depth == 0) {
+                        if (bounded and (frame.base + slot < start or @as(u64, frame.base) + slot >= end)) continue;
                         const leaf: *const Leaf = @ptrCast(@alignCast(frame.node));
                         const value = leaf.values[slot];
                         if (!std.meta.eql(value, empty)) return .{ .index = frame.base + slot, .value = value };
@@ -168,7 +199,9 @@ pub fn Snapshot(comptime T: type, comptime empty: T) type {
                         const branch: *const Branch = @ptrCast(@alignCast(frame.node));
                         if (branch.children[slot]) |child| {
                             const shift: u5 = @intCast(leaf_bits + (remaining_depth - 1) * radix_bits);
-                            self.push(child, frame.base | (@as(u32, slot) << shift));
+                            const base = frame.base | (@as(u32, slot) << shift);
+                            if (bounded and (@as(u64, base) >= end or @as(u64, base) + (@as(u64, 1) << shift) <= start)) continue;
+                            self.push(child, base);
                         }
                     }
                 }
@@ -686,4 +719,36 @@ test "sparse reverse iteration carries values across radix boundaries" {
     state.clear();
     var empty_iter = state.iteratorDirection(.reverse);
     try std.testing.expectEqual(null, empty_iter.next());
+}
+
+test "sparse range iteration excludes populated subtrees and preserves exact boundaries" {
+    var arena = std.heap.ArenaAllocator.init(std.testing.allocator);
+    defer arena.deinit();
+    const Sparse = Snapshot(u32, 0);
+    var snapshot = Sparse.init(arena.allocator(), 0);
+    const keys = [_]u32{ 0, 7, 8, 63, 64, 511, 512, 99999, std.math.maxInt(u32) };
+    for (keys, 0..) |key, i| try snapshot.putUnique(key, @intCast(i + 1));
+    const boundaries = [_]u64{ 0, 1, 7, 8, 63, 64, 65, 511, 512, 513, 99999, 100000, std.math.maxInt(u32), @as(u64, 1) << 32 };
+    for (boundaries[0 .. boundaries.len - 1]) |start| {
+        for (boundaries) |end| {
+            if (end < start) continue;
+            var iter = snapshot.iteratorRange(@intCast(start), end);
+            for (keys, 0..) |key, i| {
+                if (start <= key and key < end) {
+                    try std.testing.expectEqual(Sparse.Iterator.Entry{ .index = key, .value = @intCast(i + 1) }, iter.next().?);
+                }
+            }
+            try std.testing.expectEqual(null, iter.next());
+        }
+    }
+    var retained = snapshot.iteratorRange(99999, 100000);
+    try snapshot.put(99999, 0);
+    try std.testing.expectEqual(@as(u32, 99999), retained.next().?.index);
+    try std.testing.expectEqual(null, retained.next());
+
+    for (0..4096) |key| try snapshot.put(@intCast(key), 1);
+    const before = iterator_node_visits.read();
+    var empty = snapshot.iteratorRange(8192, 65536);
+    try std.testing.expectEqual(null, empty.next());
+    if (@import("builtin").mode == .Debug) try std.testing.expect(iterator_node_visits.read() - before <= 2 * 11);
 }

@@ -832,6 +832,63 @@ pub fn init(allocator: Allocator) Self {
     };
 }
 
+/// Release every procedure body, leaving the procedure inventory as metadata.
+///
+/// A completed compile-time program's code has no reader once its evaluated
+/// values are frozen and whoever needed them has read them: what stays
+/// consulted is those values, their representation metadata, and the
+/// procedures' own identities and names. Statement-level storage is nearly
+/// all of a program's memory, so it is freed here rather than at teardown.
+///
+/// Every procedure is left in an explicit non-executable state: no body, no
+/// arguments, no frame locals or join points, and no header reference into
+/// released storage. What remains of a procedure is its name, identity, ABI,
+/// declared return layout and the flags describing it. A released store is
+/// metadata only; asking it for code is a missing-body bug, not a read of
+/// stale storage.
+pub fn releaseCode(self: *Self) void {
+    if (self.body_coordinator != null) @panic("LIR store invariant violated: a body shard cannot release program code");
+    for (0..self.proc_specs.len()) |index| {
+        const spec = self.proc_specs.getPtrImmediate(@intCast(index));
+        spec.body = null;
+        spec.args = LocalSpan.empty();
+        spec.frame_locals = LocalSpan.empty();
+        spec.join_points = JoinPointSpan.empty();
+        spec.erased_reuse_arg = null;
+        spec.erased_capture_arg = null;
+        spec.runtime_ret_desc = null;
+        spec.erased_call_args = null;
+        spec.tail_calls = null;
+        spec.tail_transform = .none;
+        // A descriptor that names a frame local names released storage; a
+        // static or runtime descriptor source is ordinary metadata.
+        if (spec.ret_desc) |ret_desc| {
+            if (ret_desc.localOrNull() != null) spec.ret_desc = null;
+        }
+    }
+    inline for (.{
+        "cf_stmts",
+        "cf_switch_branches",
+        "str_match_steps",
+        "str_match_arms",
+        "join_points",
+        "locals",
+        "local_ids",
+        "u64s",
+        "u32s",
+        "erased_call_arg_plans",
+        "patterns",
+        "pattern_ids",
+        "cf_stmt_locs",
+        "cf_stmt_regions",
+        "cf_stmt_inline_scopes",
+        "local_names",
+    }) |field| {
+        @field(self, field).deinit(self.allocator);
+        @field(self, field) = .empty;
+    }
+}
+
 /// Releases all storage owned by this LIR store.
 pub fn deinit(self: *Self) void {
     if (self.proc_rewrite) |*rewrite| rewrite.deinit(self.allocator);
