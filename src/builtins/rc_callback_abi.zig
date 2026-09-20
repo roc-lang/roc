@@ -58,6 +58,16 @@ pub const RcFreeFn = *const fn (?[*]u8) callconv(.c) void;
 /// `Payload.on_drop` ABI. `erased_callable.OnDropFn` is this type.
 pub const HostDropFn = *const fn (?[*]u8, *RocOps) callconv(.c) void;
 
+/// Widest parameter list any RC helper ABI uses, so a backend can size a
+/// stack buffer for `abiParams` without hand-maintaining the bound.
+pub const max_params = blk: {
+    var widest: usize = 0;
+    for ([_][]const Param{ incref_params, drop_params, host_drop_params }) |params| {
+        if (params.len > widest) widest = params.len;
+    }
+    break :blk widest;
+};
+
 /// The Zig type a parameter role must have in a callback function type.
 fn paramType(comptime param: Param) type {
     return switch (param) {

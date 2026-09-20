@@ -1808,7 +1808,7 @@ fn localFunctionIndexFromGlobal(self: *const Self, global_func_idx: u32) LocalFu
 pub fn registerIndirectCallTypes(self: *Self) Allocator.Error!void {
     if (self.indirect_call_types_registered) return;
 
-    var on_drop_param_buf: [max_rc_helper_params]ValType = undefined;
+    var on_drop_param_buf: [builtins.rc_callback_abi.max_params]ValType = undefined;
     self.on_drop_type_idx = try self.module.addFuncType(
         rcHelperParamTypes(.host_drop, &on_drop_param_buf),
         &.{},
@@ -3738,12 +3738,9 @@ fn appendRcHelperChildKeys(self: *Self, helper_plan: RcHelperPlan, out: *std.Arr
     }
 }
 
-/// Largest parameter count any RC helper ABI uses, for stack-allocated lists.
-const max_rc_helper_params = 3;
-
 /// Build the wasm parameter types for `op` from the canonical RC callback ABI,
 /// so a generated helper always matches the type its `call_indirect` sites use.
-fn rcHelperParamTypes(op: layout.RcOp, buf: *[max_rc_helper_params]ValType) []const ValType {
+fn rcHelperParamTypes(op: layout.RcOp, buf: *[builtins.rc_callback_abi.max_params]ValType) []const ValType {
     const roles = layout.rc_helper.abiParams(op);
     for (roles, 0..) |role, i| {
         buf[i] = switch (role) {
@@ -3764,7 +3761,7 @@ fn reserveRcHelperFunc(self: *Self, helper_key: RcHelperKey, atomicity: RcAtomic
         }
         unreachable;
     }
-    var param_buf: [max_rc_helper_params]ValType = undefined;
+    var param_buf: [builtins.rc_callback_abi.max_params]ValType = undefined;
     const param_types = rcHelperParamTypes(helper_key.op, &param_buf);
     const type_idx = try self.internFuncType(param_types, &.{});
     const defined = self.module.addDefinedFunction(type_idx) catch return error.OutOfMemory;
@@ -3868,7 +3865,7 @@ fn emitRcHelperBody(self: *Self, helper_key: RcHelperKey, atomicity: RcAtomicity
     const func_idx = self.rc_helper_funcs.get(rcHelperCacheKey(helper_key, atomicity)).?;
     const defined_local = self.localFunctionIndexFromGlobal(func_idx);
 
-    var param_buf: [max_rc_helper_params]ValType = undefined;
+    var param_buf: [builtins.rc_callback_abi.max_params]ValType = undefined;
     const param_types = rcHelperParamTypes(helper_key.op, &param_buf);
 
     const saved = try self.saveState();
@@ -11238,8 +11235,9 @@ fn boxyCaptureDropTableIndex(self: *Self, capture_layout: layout.Idx, desc_field
     const key = boxyCaptureDropKey(capture_layout, desc_field_offset);
     if (self.boxy_capture_drop_table_indices.get(key)) |table_idx| return table_idx;
 
-    var param_buf: [max_rc_helper_params]ValType = undefined;
-    const type_idx = try self.internFuncType(rcHelperParamTypes(.host_drop, &param_buf), &.{});
+    var param_buf: [builtins.rc_callback_abi.max_params]ValType = undefined;
+    const param_types = rcHelperParamTypes(.host_drop, &param_buf);
+    const type_idx = try self.internFuncType(param_types, &.{});
     const defined = self.module.addDefinedFunction(type_idx) catch return error.OutOfMemory;
     _ = try self.addOwnedLocalFunctionSymbol(defined, "roc_boxy_capture_drop", key);
     const table_idx = self.module.addTableElement(defined.function.raw()) catch return error.OutOfMemory;
@@ -11279,7 +11277,7 @@ fn boxyCaptureDropTableIndex(self: *Self, capture_layout: layout.Idx, desc_field
 
     self.currentCode().append(self.allocator, Op.end) catch return error.OutOfMemory;
     self.currentCode().append(self.allocator, Op.end) catch return error.OutOfMemory;
-    try self.encodeLocalsDecl(&self.currentBody().preamble, 2);
+    try self.encodeLocalsDecl(&self.currentBody().preamble, @intCast(param_types.len));
     self.endFunction();
     self.restoreState(saved);
     return table_idx;

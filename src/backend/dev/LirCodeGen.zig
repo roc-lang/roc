@@ -139,9 +139,6 @@ const BitCountOp = enum(u16) {
     num_count_trailing_zero_bits = @intFromEnum(lir.LowLevel.num_count_trailing_zero_bits),
 };
 
-/// Identity of one compiled RC helper: the canonical layout plan plus the
-/// count-update atomicity the helper's own updates use. Atomic and
-/// single-thread helpers are compiled separately, so a helper's body never
 /// `host_drop` names a generated adapter's signature, not an operation the
 /// backend performs, so an RC statement can never carry it.
 fn hostDropInRcStatement() noreturn {
@@ -151,6 +148,9 @@ fn hostDropInRcStatement() noreturn {
     unreachable;
 }
 
+/// Identity of one compiled RC helper: the canonical layout plan plus the
+/// count-update atomicity the helper's own updates use. Atomic and
+/// single-thread helpers are compiled separately, so a helper's body never
 /// has to branch on atomicity at runtime. The element/payload callback ABIs
 /// carry no atomicity parameter, so the statement's atomicity is baked into
 /// which helper variant a teardown callback pointer names; callbacks for

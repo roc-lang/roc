@@ -1635,7 +1635,10 @@ pub fn roc_builtins_hot_reload_retain_current() callconv(.c) ?*anyopaque {
 
 /// Final-drop callback for shim-execution erased callables that carry a
 /// hot-reload capture prefix.
-pub fn roc_builtins_hot_reload_erased_callable_drop(capture_ptr: ?[*]u8) callconv(.c) void {
+///
+/// This fills `Payload.on_drop`, so it carries that slot's published host
+/// signature and ignores the ops argument like any generated adapter.
+pub fn roc_builtins_hot_reload_erased_callable_drop(capture_ptr: ?[*]u8, _: *RocOps) callconv(.c) void {
     const roc_ops = in_process_host.ops();
     const header = erased_callable.hotReloadCaptureHeader(capture_ptr) orelse return;
     const root = @import("root");

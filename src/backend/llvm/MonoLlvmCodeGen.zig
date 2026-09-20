@@ -4160,7 +4160,7 @@ pub const MonoLlvmCodeGen = struct {
         const builder = self.builder orelse return error.CompilationFailed;
         // A Boxy capture drop helper fills the published `Payload.on_drop` slot,
         // so it carries the host-shaped adapter signature.
-        var param_buf: [max_rc_helper_params]LlvmBuilder.Type = undefined;
+        var param_buf: [builtins.rc_callback_abi.max_params]LlvmBuilder.Type = undefined;
         const params = try self.rcHelperParamTypes(.host_drop, &param_buf);
         const fn_ty = builder.fnType(.void, params, .normal) catch return error.OutOfMemory;
         const name = builder.strtabStringFmt("roc_boxy_capture_drop_{x}", .{key}) catch return error.OutOfMemory;
@@ -11140,17 +11140,13 @@ pub const MonoLlvmCodeGen = struct {
         return false;
     }
 
-    /// Largest parameter count any RC helper ABI uses, for stack-allocated
-    /// parameter lists.
-    const max_rc_helper_params = 3;
-
     /// Build the LLVM parameter types for `op` from the canonical RC callback
     /// ABI, so a generated helper always matches the pointer type the builtins
     /// call it through.
     fn rcHelperParamTypes(
         self: *MonoLlvmCodeGen,
         op: layout.RcOp,
-        buf: *[max_rc_helper_params]LlvmBuilder.Type,
+        buf: *[builtins.rc_callback_abi.max_params]LlvmBuilder.Type,
     ) Error![]const LlvmBuilder.Type {
         const ptr_ty = try self.ptrType();
         const roles = layout.rc_helper.abiParams(op);
@@ -11170,7 +11166,7 @@ pub const MonoLlvmCodeGen = struct {
         const cache_key = rcHelperCacheKey(helper_key, atomicity);
         if (self.rc_helpers.get(cache_key)) |entry| return entry.function;
 
-        var param_buf: [max_rc_helper_params]LlvmBuilder.Type = undefined;
+        var param_buf: [builtins.rc_callback_abi.max_params]LlvmBuilder.Type = undefined;
         const params = try self.rcHelperParamTypes(helper_key.op, &param_buf);
         const fn_ty = builder.fnType(.void, params, .normal) catch return error.OutOfMemory;
         const is_static_data_helper = self.proc_symbol_mode == .lir_symbol and

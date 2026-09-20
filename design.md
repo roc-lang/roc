@@ -11637,7 +11637,10 @@ operation names the generated adapter that presents that signature and performs
 the layout's `decref`. It is a calling convention rather than an operation over
 a layout: it plans exactly as its layout's `decref`, it is selected only where
 lowering fills a final-drop slot, and an RC statement that carries it is a
-producer invariant failure.
+producer invariant failure. Planning as the `decref` means a capture layout
+whose `decref` helper is also materialized carries that helper's top-level walk
+twice, once per signature; nested helpers stay shared, so the duplicate is one
+function body rather than a teardown tree.
 
 Every linked Wasm image has exactly one provider for compiler runtime libcalls.
 Standalone Wasm obtains them from the builtins object and the standalone Boxy
