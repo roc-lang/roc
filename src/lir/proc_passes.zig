@@ -59,6 +59,27 @@ pub const ParallelMetrics = struct {
     }
 };
 
+/// Address identity for this stage's retained, exclusively owned lane storage.
+const AnalysisLane = struct {
+    var key: u8 = undefined;
+
+    fn destroy(opaque_state: *anyopaque) void {
+        const analysis: *BodyClone.AnalysisScratch = @ptrCast(@alignCast(opaque_state));
+        const allocator = analysis.counts.allocator;
+        analysis.deinit();
+        allocator.destroy(analysis);
+    }
+};
+
+fn analysisForLane(lane: *TaskExecutor.LaneState) Allocator.Error!*BodyClone.AnalysisScratch {
+    if (lane.get(&AnalysisLane.key)) |state| return @ptrCast(@alignCast(state));
+    const analysis = try lane.allocator.create(BodyClone.AnalysisScratch);
+    analysis.* = BodyClone.AnalysisScratch.init(lane.allocator);
+    errdefer AnalysisLane.destroy(analysis);
+    try lane.put(&AnalysisLane.key, analysis, AnalysisLane.destroy);
+    return analysis;
+}
+
 const TaskContext = struct {
     source: *const LirStore,
     layouts: *const layout.Store,
@@ -75,13 +96,21 @@ const TaskContext = struct {
 
     fn run(context_opaque: *anyopaque, worker: TaskExecutor.Worker) ?*anyopaque {
         const self: *TaskContext = @ptrCast(@alignCast(context_opaque));
-        self.execute(worker.allocator, worker.scratch) catch {
+        self.executeOnLane(worker) catch {
             self.failed = true;
         };
         return self;
     }
 
-    fn execute(self: *TaskContext, output_allocator: Allocator, scratch_allocator: Allocator) Allocator.Error!void {
+    fn executeOnLane(self: *TaskContext, worker: TaskExecutor.Worker) Allocator.Error!void {
+        const analysis = switch (self.phase) {
+            .tag_fusion, .loop_append, .range, .box_reuse => try analysisForLane(worker.lane_state),
+            .trmc, .forwarding_join, .scalarize => null,
+        };
+        try self.execute(worker.allocator, worker.scratch, analysis);
+    }
+
+    fn execute(self: *TaskContext, output_allocator: Allocator, scratch_allocator: Allocator, analysis: ?*BodyClone.AnalysisScratch) Allocator.Error!void {
         var shard = try self.source.cloneForProcRewrite(output_allocator, self.proc);
         errdefer shard.deinit();
         switch (self.phase) {
@@ -93,14 +122,14 @@ const TaskContext = struct {
                 if (self.phase == .forwarding_join) {
                     try ForwardingJoinInline.runProc(&shard, self.layouts, self.proc, scratch_allocator, &joins);
                 } else {
-                    try TagCaseFusion.runProc(&shard, self.layouts, self.proc, scratch_allocator, &joins);
+                    try TagCaseFusion.runProcWithScratch(&shard, self.layouts, self.proc, scratch_allocator, &joins, analysis.?);
                 }
                 self.fresh_join_count = joins.next_join_point - self.first_fresh_join;
             },
             .scalarize => try ScalarizeJoins.runProc(&shard, self.layouts, self.proc, scratch_allocator),
-            .loop_append => try LoopAppendPromote.runProc(&shard, self.layouts, self.proc, scratch_allocator, self.callees.?),
-            .range => try RangeProve.runProc(&shard, self.layouts, self.proc, scratch_allocator),
-            .box_reuse => try BoxReuse.runProc(&shard, self.layouts, self.proc, scratch_allocator),
+            .loop_append => try LoopAppendPromote.runProcWithScratch(&shard, self.layouts, self.proc, scratch_allocator, self.callees.?, analysis.?),
+            .range => try RangeProve.runProcWithScratch(&shard, self.layouts, self.proc, scratch_allocator, analysis.?),
+            .box_reuse => try BoxReuse.runProcWithScratch(&shard, self.layouts, self.proc, scratch_allocator, analysis.?),
         }
         self.changed = shard.procRewriteChanged();
         self.shard = shard;
@@ -194,8 +223,10 @@ pub fn run(
     } else {
         var scratch = std.heap.ArenaAllocator.init(allocator);
         defer scratch.deinit();
+        var analysis = BodyClone.AnalysisScratch.init(allocator);
+        defer analysis.deinit();
         for (contexts.items) |*context| {
-            try context.execute(allocator, scratch.allocator());
+            try context.execute(allocator, scratch.allocator(), &analysis);
             context.completed = true;
             _ = scratch.reset(.retain_capacity);
         }
@@ -321,4 +352,92 @@ test "procedure rewrite ownership includes statements reached through shared met
 fn invariant(comptime message: []const u8) noreturn {
     if (builtin.mode == .Debug) @panic(message);
     unreachable;
+}
+
+test "issue 11325 procedure counting reuses lane storage across distant local IDs" {
+    const testing = std.testing;
+    var store = LirStore.init(testing.allocator);
+    defer store.deinit();
+    var layouts = try layout.Store.init(testing.allocator, .u64);
+    defer layouts.deinit();
+    const low = try store.addLocal(.{ .layout_idx = .u64 });
+    for (0..100000) |_| _ = try store.addLocal(.{ .layout_idx = .u64 });
+    const high = try store.addLocal(.{ .layout_idx = .u64 });
+    for (0..16) |index| {
+        const ret = try store.addCFStmt(.{ .ret = .{ .value = high } });
+        const body = try store.addCFStmt(.{ .assign_ref = .{ .target = high, .op = .{ .local = low }, .next = ret } });
+        _ = try store.addProcSpec(.{
+            .name = store.freshSyntheticSymbol(),
+            .identity = LIR.ProcIdentity.forTest(@intCast(index)),
+            .args = try store.addLocalSpan(&.{low}),
+            .frame_locals = try store.addLocalSpan(&.{ low, high }),
+            .body = body,
+            .ret_layout = .u64,
+        });
+    }
+    var meter = testing.FailingAllocator.init(testing.allocator, .{});
+    var lane = TaskExecutor.LaneState.init(meter.allocator());
+    defer lane.deinit();
+    var warmed_bytes: usize = 0;
+    for (0..store.procSpecCount()) |index| {
+        var context: TaskContext = .{
+            .source = &store,
+            .layouts = &layouts,
+            .phase = .box_reuse,
+            .proc = @enumFromInt(index),
+            .callees = null,
+        };
+        _ = TaskContext.run(&context, .{
+            .id = 0,
+            .allocator = testing.allocator,
+            .scratch = meter.allocator(),
+            .lane_state = &lane,
+        });
+        defer if (context.shard) |*shard| shard.deinit();
+        try testing.expect(!context.failed);
+        try testing.expect(!context.changed);
+        if (index == 0) {
+            warmed_bytes = meter.allocated_bytes;
+        } else {
+            try testing.expectEqual(warmed_bytes, meter.allocated_bytes);
+        }
+    }
+}
+
+fn testLaneCountingAllocation(allocator: Allocator, store: *LirStore, layouts: *const layout.Store, proc: LIR.LirProcSpecId) Allocator.Error!void {
+    var lane = TaskExecutor.LaneState.init(allocator);
+    defer lane.deinit();
+    var context: TaskContext = .{
+        .source = store,
+        .layouts = layouts,
+        .phase = .box_reuse,
+        .proc = proc,
+        .callees = null,
+    };
+    _ = TaskContext.run(&context, .{
+        .id = 0,
+        .allocator = std.testing.allocator,
+        .scratch = std.testing.allocator,
+        .lane_state = &lane,
+    });
+    defer if (context.shard) |*shard| shard.deinit();
+    if (context.failed) return error.OutOfMemory;
+}
+
+test "issue 11325 lane registration and counting allocation failures release storage" {
+    const testing = std.testing;
+    var store = LirStore.init(testing.allocator);
+    defer store.deinit();
+    var layouts = try layout.Store.init(testing.allocator, .u64);
+    defer layouts.deinit();
+    const local = try store.addLocal(.{ .layout_idx = .u64 });
+    const proc = try store.addProcSpec(.{
+        .name = store.freshSyntheticSymbol(),
+        .identity = LIR.ProcIdentity.forTest(0),
+        .args = try store.addLocalSpan(&.{local}),
+        .frame_locals = try store.addLocalSpan(&.{local}),
+        .body = try store.addCFStmt(.{ .ret = .{ .value = local } }),
+        .ret_layout = .u64,
+    });
+    try testing.checkAllAllocationFailures(testing.allocator, testLaneCountingAllocation, .{ &store, &layouts, proc });
 }

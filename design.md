@@ -12251,6 +12251,17 @@ identities from its explicit destination-procedure context, not from a scan of
 unrelated procedures. Active callbacks are executor-bounded; retained patches
 are proportional to the phase's procedure bodies and generated output.
 
+Operand and definition counts and reachable-statement walks retain their paged
+ID indexes and work buffers in exclusive executor-lane storage. Serial phases
+retain the same storage across procedures. Every simultaneous inventory leases
+independent storage; releasing it clears only live rows and pending work, even
+on allocation failure. The pool retains capacity up to peak simultaneous use,
+without a fixed inventory-count cutoff. Only empty storage survives a task or
+compilation: counts and visited marks are never reused after rewrites or across
+stores. Task-arena resets cannot invalidate this lane-owned storage, and emitted
+LIR retains no references to it. Sparse directory initialization and destruction
+are amortized over the owner's lifetime, never repeated for each procedure.
+
 Loop promotion identifies back edges during its body-first lexical scan and
 uses source-indexed carrier edges. Shared body/remainder continuations remain
 back edges when the body can reach them; remainder-only entries are not loops.
