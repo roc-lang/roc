@@ -62815,9 +62815,14 @@ test "issue 11453: stored aliases preserve sharing recursion and nominal backing
     var constants = check.ConstStore.ConstStore.init(gpa);
     defer constants.deinit();
     const stored_types = &constants.type_store;
+    // Two distinct synthetic checked types: the opaque nominal, and the alias
+    // chain that wraps it. This test resolves neither against a checked module;
+    // they only have to stay distinct from each other.
+    const nominal_checked_ty: checked.CheckedTypeId = @enumFromInt(1);
+    const alias_checked_ty: checked.CheckedTypeId = @enumFromInt(2);
     const str = try stored_types.append(.{ .primitive = .str });
     const nominal = try stored_types.append(.{ .named = .{
-        .named_type = .{ .module = .{}, .ty = @enumFromInt(0) },
+        .named_type = .{ .module = .{}, .ty = nominal_checked_ty },
         .def = .{ .module = origin, .type_name = type_name },
         .kind = .@"opaque",
         .args = .{},
@@ -62826,7 +62831,7 @@ test "issue 11453: stored aliases preserve sharing recursion and nominal backing
     var alias = nominal;
     for (0..32) |_| {
         alias = try stored_types.append(.{ .named = .{
-            .named_type = .{ .module = .{}, .ty = @enumFromInt(1) },
+            .named_type = .{ .module = .{}, .ty = alias_checked_ty },
             .def = .{ .module = origin, .type_name = type_name },
             .kind = .alias,
             .args = .{},
