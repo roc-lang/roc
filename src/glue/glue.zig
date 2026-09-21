@@ -2074,10 +2074,6 @@ const TypeTable = struct {
                 for (record.fields) |field| try fields.append(self.gpa, .{ .artifact = src.artifact, .field = field });
                 return try self.collectRecordFieldsForRootBound(src.artifact, record.ext, fields);
             },
-            .record_unbound => |unbound| {
-                for (unbound) |field| try fields.append(self.gpa, .{ .artifact = src.artifact, .field = field });
-                return true;
-            },
             .empty_record => return true,
             .pending, .err, .flex, .rigid, .tuple, .function, .tag_union, .empty_tag_union => return false,
         }
@@ -2119,7 +2115,6 @@ const TypeTable = struct {
             .rigid => try buf.appendSlice(self.gpa, "rigid"),
             .alias => |alias| try self.writeTypeStringBound(src.artifact, alias.backing, buf, active),
             .record => |record| try self.writeRecordTypeStringBound(src.artifact, record.fields, record.ext, buf, active),
-            .record_unbound => |fields| try self.writeRecordTypeStringBound(src.artifact, fields, null, buf, active),
             .tuple => |items| try self.writeTupleTypeStringBound(src.artifact, items, buf, active),
             .nominal => |nominal| try self.writeNominalTypeStringBound(src.artifact, nominal, buf, active),
             .function => |func| try self.writeFunctionTypeStringBound(src.artifact, func, buf, active),
@@ -2170,14 +2165,14 @@ const TypeTable = struct {
         self: *TypeTable,
         artifact: *const CheckedArtifact.CheckedModuleArtifact,
         fields: []const CheckedArtifact.CheckedRecordField,
-        ext: ?CheckedArtifact.CheckedTypeId,
+        ext: CheckedArtifact.CheckedTypeId,
         buf: *std.ArrayList(u8),
         active: *std.AutoHashMap(TypeTableKey, void),
     ) Allocator.Error!void {
         var all_fields = std.ArrayList(BoundRecordField).empty;
         defer all_fields.deinit(self.gpa);
         for (fields) |field| try all_fields.append(self.gpa, .{ .artifact = artifact, .field = field });
-        if (ext) |ext_id| _ = try self.collectRecordFieldsForRootBound(artifact, ext_id, &all_fields);
+        _ = try self.collectRecordFieldsForRootBound(artifact, ext, &all_fields);
 
         if (all_fields.items.len == 0) {
             try buf.appendSlice(self.gpa, "{}");
@@ -2466,12 +2461,6 @@ const TypeTable = struct {
                 }
                 return self.mentionsBoundFormalInner(artifact, record.ext, visited);
             },
-            .record_unbound => |fields| {
-                for (fields) |field| {
-                    if (try self.mentionsBoundFormalInner(artifact, field.ty, visited)) return true;
-                }
-                return false;
-            },
             .tuple => |items| {
                 for (items) |item| {
                     if (try self.mentionsBoundFormalInner(artifact, item, visited)) return true;
@@ -2682,7 +2671,7 @@ const TypeTable = struct {
             switch (checkedTypePayload(artifact, current)) {
                 .alias => |alias| current = alias.backing,
                 .flex, .rigid => |variable| return defaultedVariableRepr(variable) == null,
-                .pending, .err, .record, .record_unbound, .tuple, .nominal, .function, .empty_record, .tag_union, .empty_tag_union => return false,
+                .pending, .err, .record, .tuple, .nominal, .function, .empty_record, .tag_union, .empty_tag_union => return false,
             }
         }
     }
@@ -3375,7 +3364,6 @@ const TypeTable = struct {
             .rigid => |variable| try self.convertTypeVariable(variable, position, "rigid"),
             .alias => |alias| try self.convertCheckedType(artifact, alias.backing, position),
             .record => |record| try self.convertRecord(artifact, record.fields, record.ext),
-            .record_unbound => |fields| try self.convertRecord(artifact, fields, null),
             .tuple => |items| try self.convertTuple(artifact, items),
             .nominal => |nominal| try self.convertNominal(artifact, nominal, position),
             .function => |func| try self.convertFunc(artifact, func),
@@ -3602,7 +3590,7 @@ const TypeTable = struct {
         self: *TypeTable,
         artifact: *const CheckedArtifact.CheckedModuleArtifact,
         fields: []const CheckedArtifact.CheckedRecordField,
-        ext: ?CheckedArtifact.CheckedTypeId,
+        ext: CheckedArtifact.CheckedTypeId,
     ) TypeTableError!CollectedTypeRepr {
         var all_fields = std.ArrayList(CheckedArtifact.CheckedRecordField).empty;
         defer all_fields.deinit(self.gpa);
@@ -4650,12 +4638,12 @@ fn appendRecordRowFields(
     gpa: std.mem.Allocator,
     artifact: *const CheckedArtifact.CheckedModuleArtifact,
     head: []const CheckedArtifact.CheckedRecordField,
-    ext: ?CheckedArtifact.CheckedTypeId,
+    ext: CheckedArtifact.CheckedTypeId,
     fields: *std.ArrayList(CheckedArtifact.CheckedRecordField),
 ) Allocator.Error!void {
     try fields.appendSlice(gpa, head);
 
-    var current = ext;
+    var current: ?CheckedArtifact.CheckedTypeId = ext;
     var seen = collections.DenseMap(CheckedArtifact.CheckedTypeId, void).init(gpa);
     defer seen.deinit();
 
@@ -4673,10 +4661,6 @@ fn appendRecordRowFields(
             .record => |record| {
                 try fields.appendSlice(gpa, record.fields);
                 current = record.ext;
-            },
-            .record_unbound => |tail_fields| {
-                try fields.appendSlice(gpa, tail_fields);
-                break;
             },
             .pending, .err, .tuple, .nominal, .function, .tag_union, .empty_tag_union => glueInvariant("non-record checked row reached glue record conversion", .{}),
         }
@@ -4726,7 +4710,7 @@ fn appendTagRowTags(
                 try tags.appendSlice(gpa, tag_union.tags);
                 current = tag_union.ext;
             },
-            .pending, .err, .record, .record_unbound, .tuple, .nominal, .function, .empty_record => glueInvariant("non-tag checked row reached glue tag-union conversion", .{}),
+            .pending, .err, .record, .tuple, .nominal, .function, .empty_record => glueInvariant("non-tag checked row reached glue tag-union conversion", .{}),
         }
     }
 }
@@ -4765,7 +4749,6 @@ fn writeTypeString(
         .rigid => try buf.appendSlice(gpa, "rigid"),
         .alias => |alias| try writeTypeString(gpa, artifact, alias.backing, buf, active),
         .record => |record| try writeRecordTypeString(gpa, artifact, record.fields, record.ext, buf, active),
-        .record_unbound => |fields| try writeRecordTypeString(gpa, artifact, fields, null, buf, active),
         .tuple => |items| try writeTupleTypeString(gpa, artifact, items, buf, active),
         .nominal => |nominal| try writeNominalTypeString(gpa, artifact, nominal, buf, active),
         .function => |func| try writeFunctionTypeString(gpa, artifact, func, buf, active),
@@ -4816,7 +4799,7 @@ fn writeRecordTypeString(
     gpa: std.mem.Allocator,
     artifact: *const CheckedArtifact.CheckedModuleArtifact,
     fields: []const CheckedArtifact.CheckedRecordField,
-    ext: ?CheckedArtifact.CheckedTypeId,
+    ext: CheckedArtifact.CheckedTypeId,
     buf: *std.ArrayList(u8),
     active: *collections.DenseMap(CheckedArtifact.CheckedTypeId, void),
 ) Allocator.Error!void {
