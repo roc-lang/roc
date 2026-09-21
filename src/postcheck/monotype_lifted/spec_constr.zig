@@ -1264,7 +1264,17 @@ const Pass = struct {
                 const body = if (phase == .unused_loop_results) self.program.getFn(fn_id).body else self.sourceBody(fn_id);
                 if (body == .hosted) continue;
                 const admitted = self.phaseAdmits(phase, fn_id);
-                if (!admitted and builtin.mode != .Debug) continue;
+                if (!admitted) {
+                    if (builtin.mode != .Debug) continue;
+                    // Iterator fusion clones every body it is given, so the
+                    // verification for it is the producer scan itself.
+                    if (phase == .iterator_fusion) {
+                        if (exprContainsIteratorProducer(self.program, body.roc)) {
+                            std.debug.panic("SpecConstr iterator_fusion excluded function {d} whose facts {any} hide an iterator producer", .{ @intFromEnum(fn_id), self.program.getFn(fn_id).facts });
+                        }
+                        continue;
+                    }
+                }
                 work[count] = .{ .source = self, .fn_id = fn_id, .phase = phase, .discovery_admission = admission, .verify_only = !admitted };
                 count += 1;
             }
@@ -12928,6 +12938,126 @@ fn tailSelfCallSummary(program: *const Ast.Program, expr_id: Ast.ExprId, target:
         .expect_err,
         .expect,
         => if (exprCallsFn(program, expr_id, target)) .{ .valid = false } else .{},
+    };
+}
+
+/// Whether this body contains an exact checker-stamped iterator producer.
+/// Debug builds use this scan to verify that a function excluded from the
+/// iterator fusion phase by its recorded facts indeed has no producer; the
+/// phase itself selects bodies by the `iterator_producer` fact alone.
+fn exprContainsIteratorProducer(program: *const Ast.Program, expr_id: Ast.ExprId) bool {
+    return switch (program.getExpr(expr_id).data) {
+        .local, .unit, .@"unreachable", .int_lit, .frac_f32_lit, .frac_f64_lit, .dec_lit, .str_lit, .bytes_lit, .crash, .comptime_exhaustiveness_failed, .uninitialized, .uninitialized_payload => false,
+        .fn_ref => |fn_ref| captureOperandSpanContainsIteratorProducer(program, fn_ref.captures),
+        .list, .tuple => |items| exprSpanContainsIteratorProducer(program, items),
+        .record => |fields| blk: {
+            const field_exprs = program.fieldExprSpan(fields);
+            for (0..field_exprs.len) |index| {
+                if (exprContainsIteratorProducer(program, GuardedList.at(field_exprs, index).value)) break :blk true;
+            }
+            break :blk false;
+        },
+        .record_update => |update| blk: {
+            if (exprContainsIteratorProducer(program, update.base)) break :blk true;
+            const field_exprs = program.fieldExprSpan(update.fields);
+            for (0..field_exprs.len) |index| {
+                if (exprContainsIteratorProducer(program, GuardedList.at(field_exprs, index).value)) break :blk true;
+            }
+            break :blk false;
+        },
+        .tag => |tag| exprSpanContainsIteratorProducer(program, tag.payloads),
+        .static_data_candidate => |candidate| exprContainsIteratorProducer(program, candidate.runtime_expr),
+        .inline_expects_enabled => false,
+        .comptime_value => false,
+        .typed_boundary => |boundary| exprContainsIteratorProducer(program, boundary.value),
+        .nominal, .dbg, .expect => |child| exprContainsIteratorProducer(program, child),
+        .return_ => |ret| exprContainsIteratorProducer(program, ret.value),
+        .expect_err => |expect_err| exprContainsIteratorProducer(program, expect_err.msg),
+        .comptime_branch_taken => |taken| exprContainsIteratorProducer(program, taken.body),
+        .let_ => |let_| exprContainsIteratorProducer(program, let_.value) or
+            exprContainsIteratorProducer(program, let_.rest),
+        .lambda, .def_ref, .fn_def => Common.invariant("pre-lift function expression reached iterator-producer scan"),
+        .call_value => |call| exprContainsIteratorProducer(program, call.callee) or
+            exprSpanContainsIteratorProducer(program, call.args),
+        .call_proc => |call| isIteratorProducer(call.iterator_procedure) or
+            exprSpanContainsIteratorProducer(program, call.args) or
+            captureOperandSpanContainsIteratorProducer(program, call.captures),
+        .low_level => |call| exprSpanContainsIteratorProducer(program, call.args),
+        .field_access => |field| exprContainsIteratorProducer(program, field.receiver),
+        .tuple_access => |access| exprContainsIteratorProducer(program, access.tuple),
+        .structural_eq => |eq| exprContainsIteratorProducer(program, eq.lhs) or
+            exprContainsIteratorProducer(program, eq.rhs),
+        .structural_hash => |h| exprContainsIteratorProducer(program, h.value) or
+            exprContainsIteratorProducer(program, h.hasher),
+        .match_ => |match| blk: {
+            if (exprContainsIteratorProducer(program, match.scrutinee)) break :blk true;
+            const branches = program.branchSpan(match.branches);
+            for (0..branches.len) |index| {
+                const branch = GuardedList.at(branches, index);
+                const bindings = program.stmtSpan(branch.bindings);
+                for (0..bindings.len) |binding_index| {
+                    if (stmtContainsIteratorProducer(program, GuardedList.at(bindings, binding_index))) break :blk true;
+                }
+                if (branch.guard) |guard| if (exprContainsIteratorProducer(program, guard)) break :blk true;
+                if (exprContainsIteratorProducer(program, branch.body)) break :blk true;
+            }
+            break :blk false;
+        },
+        .if_ => |if_| blk: {
+            const branches = program.ifBranchSpan(if_.branches);
+            for (0..branches.len) |index| {
+                const branch = GuardedList.at(branches, index);
+                if (exprContainsIteratorProducer(program, branch.cond) or
+                    exprContainsIteratorProducer(program, branch.body)) break :blk true;
+            }
+            break :blk exprContainsIteratorProducer(program, if_.final_else);
+        },
+        .block => |block| blk: {
+            const statements = program.stmtSpan(block.statements);
+            for (0..statements.len) |index| {
+                if (stmtContainsIteratorProducer(program, GuardedList.at(statements, index))) break :blk true;
+            }
+            break :blk exprContainsIteratorProducer(program, block.final_expr);
+        },
+        .loop_ => |loop| exprSpanContainsIteratorProducer(program, loop.initial_values) or
+            exprContainsIteratorProducer(program, loop.body),
+        .break_ => |maybe| if (maybe) |value| exprContainsIteratorProducer(program, value) else false,
+        .continue_ => |continue_| exprSpanContainsIteratorProducer(program, continue_.values),
+        .join_point => |join_point| exprContainsIteratorProducer(program, join_point.body) or
+            exprContainsIteratorProducer(program, join_point.remainder),
+        .jump => |jump| exprSpanContainsIteratorProducer(program, jump.args),
+        .if_initialized_payload => |payload_switch| exprContainsIteratorProducer(program, payload_switch.cond) or
+            exprContainsIteratorProducer(program, payload_switch.initialized) or
+            exprContainsIteratorProducer(program, payload_switch.uninitialized),
+        .try_sequence => |sequence| exprContainsIteratorProducer(program, sequence.try_expr) or
+            exprContainsIteratorProducer(program, sequence.ok_body),
+        .try_record_sequence => |sequence| exprContainsIteratorProducer(program, sequence.try_expr) or
+            exprContainsIteratorProducer(program, sequence.ok_body),
+    };
+}
+
+fn exprSpanContainsIteratorProducer(program: *const Ast.Program, span: Ast.Span(Ast.ExprId)) bool {
+    const exprs = program.exprSpan(span);
+    for (0..exprs.len) |index| {
+        if (exprContainsIteratorProducer(program, GuardedList.at(exprs, index))) return true;
+    }
+    return false;
+}
+
+fn captureOperandSpanContainsIteratorProducer(program: *const Ast.Program, span: Ast.Span(Ast.CaptureOperand)) bool {
+    const operands = program.captureOperandSpan(span);
+    for (0..operands.len) |index| {
+        if (exprContainsIteratorProducer(program, GuardedList.at(operands, index).value)) return true;
+    }
+    return false;
+}
+
+fn stmtContainsIteratorProducer(program: *const Ast.Program, stmt_id: Ast.StmtId) bool {
+    return switch (program.getStmt(stmt_id)) {
+        .let_ => |let_| exprContainsIteratorProducer(program, let_.value),
+        .expr, .expect, .dbg => |expr| exprContainsIteratorProducer(program, expr),
+        .return_ => |ret| exprContainsIteratorProducer(program, ret.value),
+        .uninitialized, .crash => false,
     };
 }
 
