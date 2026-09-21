@@ -14496,7 +14496,7 @@ test "nominal result descriptors retain a dynamic callable argument source" {
     try expectNominalResultArgumentSource(true);
 }
 
-fn expectNominalResultArgumentSource(alias_argument: bool) !void {
+fn expectNominalResultArgumentSource(alias_argument: bool) (Allocator.Error || error{TestExpectedEqual})!void {
     const gpa = std.testing.allocator;
     var builder = Builder.init(gpa, .{});
     defer builder.deinit();
