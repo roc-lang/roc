@@ -2127,6 +2127,17 @@ alias arguments, but references to the annotated value consume the annotation
 root. This is how alias spelling from annotations is preserved without making
 alias roots union-find representatives for concrete structures.
 
+Runtime Monotype production maps a transparent alias directly to its backing's
+type identity. Direct checked-type lowering, scoped instantiation, and stored
+constant type restoration memoize that mapping in their existing source-type
+maps; they do not allocate an alias wrapper or run a separate normalization
+pass. The mapping has the same module and instantiation lifetime as the backing
+and preserves recursive sharing. Source alias names and arguments remain in
+checked data. Nominal identities, including their type arguments and backing
+authority, remain distinct. Root requests and ordinary calls therefore agree
+on runtime type identity without alias-aware codec lookup or extra graph
+construction for already closed roots.
+
 ### Where Method Annotations
 
 A where method's type is the complete annotation written after its colon.
