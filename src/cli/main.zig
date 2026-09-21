@@ -6676,12 +6676,15 @@ fn evaluateLirImageEntrypoint(
 ) Allocator.Error!void {
     var static_data = try eval.InterpreterStaticData.init(allocator, view.static_data, view.static_data_value_count);
     defer static_data.deinit();
+    var static_strings = try eval.LirInterpreter.buildStaticStrings(allocator, &view.store);
+    defer static_strings.deinit();
 
     var interpreter = try eval.LirInterpreter.initWithBoxyTables(
         allocator,
         &view.store,
         &view.layouts,
         eval.LirInterpreter.BoxyTables.fromImageView(view),
+        static_strings.view(),
         ops,
     );
     defer interpreter.deinit();
@@ -12762,11 +12765,14 @@ fn runInterpreterTestRoots(
         lowered.lir_result.static_data_values.items.len,
     );
     defer static_values.deinit();
+    var static_strings = try eval.LirInterpreter.buildStaticStrings(ctx.gpa, &lowered.lir_result.store);
+    defer static_strings.deinit();
     var interpreter = try eval.LirInterpreter.initWithBoxyTables(
         ctx.gpa,
         &lowered.lir_result.store,
         &lowered.lir_result.layouts,
         eval.LirInterpreter.BoxyTables.fromResult(&lowered.lir_result),
+        static_strings.view(),
         &roc_ops,
     );
     defer interpreter.deinit();

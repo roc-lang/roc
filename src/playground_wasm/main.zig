@@ -1921,11 +1921,14 @@ fn buildEvaluateTestsHtml(data: CompilerStageData) PlaygroundEvaluateTestsError!
     var runtime_env = eval.RuntimeHostEnv.init(allocator);
     defer runtime_env.deinit();
 
+    var static_strings = try eval.LirInterpreter.buildStaticStrings(allocator, &lowered.lir_result.store);
+    defer static_strings.deinit();
     var interpreter = try eval.LirInterpreter.initWithBoxyTables(
         allocator,
         &lowered.lir_result.store,
         &lowered.lir_result.layouts,
         eval.LirInterpreter.BoxyTables.fromResult(&lowered.lir_result),
+        static_strings.view(),
         runtime_env.get_ops(),
     );
     defer interpreter.deinit();
