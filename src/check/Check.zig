@@ -9538,6 +9538,11 @@ fn checkFileInternal(self: *Self, skip_numeric_defaults: bool) std.mem.Allocator
     // implicitly opened by polarity).
     try self.collectHostBoundaryAnnotations();
 
+    // Publish this module's declarations' variance and `Try` error-cell
+    // answers, before any annotation is generated, so both the speculative and
+    // the real generation read the identical table.
+    try self.recordTypeDeclVariances();
+
     // Create a solver env
     var env = try self.env_pool.acquire();
     defer self.env_pool.release(env);
@@ -17411,6 +17416,35 @@ fn externalTypeRefTargetsBuiltin(self: *const Self, import_idx: CIR.Import.Idx) 
     return self.imported_modules[module_idx].module_role == .builtin;
 }
 
+/// An annotation base naming a declaration another module owns: through one of
+/// this module's imports (`.external`), or by content identity after following
+/// an exposed alias out of one (`.external_identity`). Both reach the same
+/// kind of published record; only the way to the declaring module differs.
+const ImportedDeclRef = union(enum) {
+    external: @FieldType(CIR.TypeAnno.LocalOrExternal, "external"),
+    external_identity: @FieldType(CIR.TypeAnno.LocalOrExternal, "external_identity"),
+};
+
+/// The declaring module's recorded answers for the declaration an external type
+/// reference names, or null when there are none.
+///
+/// The record is written by the declaring module's own `Check`
+/// (`recordTypeDeclVariances`), which is the only place a declaration's own
+/// annotation can be read. Absence is the conservative answer everywhere it is
+/// consulted, so an unresolved import, a stale import index, and a declaration
+/// the producer's walk could not answer all fall through the same `orelse`.
+fn importedTypeDeclVariance(self: *const Self, ref: ImportedDeclRef) ?ModuleEnv.TypeDeclVariance {
+    return switch (ref) {
+        .external => |ext| blk: {
+            const module_idx = self.cir.imports.getResolvedModule(ext.module_idx) orelse break :blk null;
+            if (module_idx >= self.imported_modules.len) break :blk null;
+            break :blk self.imported_modules[module_idx].typeDeclVarianceForNode(ext.target_node_idx);
+        },
+        .external_identity => |ext| self.moduleEnvForIdentity(self.cir, ext.module_identity).env
+            .typeDeclVarianceForNode(ext.target_node_idx),
+    };
+}
+
 /// Whether this type application is the builtin `Try(ok, err)`. A `Try`
 /// result's ERROR row is the only position below a where-method signature's
 /// direct result that the result-row widening adapter re-tags (design.md
@@ -17443,7 +17477,18 @@ fn annoApplyIsBuiltinTry(self: *const Self, apply: CIR.TypeAnno.Apply) bool {
 /// The largest declaration arity the alias walk below tracks. A reference with
 /// more type arguments than this returns null, which keeps the pre-walk
 /// `.nested` behaviour; the bound exists so the walk needs no allocation.
-const max_tracked_alias_formals: usize = 8;
+///
+/// Aliased from `ModuleEnv` rather than declared here, because
+/// `ModuleEnv.TypeDeclVariance` sizes its recorded array with the same
+/// constant: a declaration this walk tracks and a declaration the record can
+/// carry must be the same set.
+const max_tracked_alias_formals: usize = ModuleEnv.max_tracked_alias_formals;
+
+/// Type-argument index of `Builtin.Try`'s error row. Deliberately the same
+/// constant as the Monotype relation's
+/// (`src/postcheck/monotype/lower.zig:1727`) and the instantiator's
+/// (`src/types/instantiate.zig:36`).
+const try_error_type_arg_index: usize = 1;
 
 /// Which of `apply`'s OWN argument indices lands in the builtin `Try`'s ERROR
 /// argument, crossing transparent alias declarations.
@@ -17453,30 +17498,62 @@ const max_tracked_alias_formals: usize = 8;
 /// every argument of `Res([IoErr])` generated out of reach - while lowering
 /// crosses the same alias and WOULD re-tag that row: `closedResultRowOrNull`
 /// reads the return through `resolvedPayload`, which walks alias backings, and
-/// `hostedTryNamedOrNull` (src/postcheck/monotype/lower.zig:13046) crosses them
+/// `hostedTryNamedOrNull` (src/postcheck/monotype/lower.zig:13093) crosses them
 /// by design. The opened set was therefore strictly smaller than the adaptable
 /// set, which is under-opening: safe (an ordinary mismatch) but wrong, since
 /// keeping the opened set equal to the adaptable set is the rule this whole
 /// axis exists to hold.
 ///
+/// An IMPORTED alias is answered from the declaring module's recorded
+/// `try_error_formal` rather than declined, for the same reason: lowering does
+/// not know module boundaries either, so `Res(e) : Try(Str, e)` written in
+/// another module is adapted exactly as the byte-identical local spelling is.
+///
 /// Fail-closed everywhere: any shape not recognized exactly returns null, which
 /// is the `.nested` answer this walk replaced.
 fn applyTryErrorArgIndex(self: *const Self, apply: CIR.TypeAnno.Apply) ?usize {
-    // Type-argument index of `Builtin.Try`'s error row. Deliberately the same
-    // constant as the Monotype relation's
-    // (`src/postcheck/monotype/lower.zig:1727`) and the instantiator's
-    // (`src/types/instantiate.zig:36`).
-    const try_error_type_arg_index: usize = 1;
     if (self.annoApplyIsBuiltinTry(apply)) return try_error_type_arg_index;
 
-    // `origin[i]` is the index, among the ORIGINAL reference's arguments, that
+    const args_len = self.cir.store.sliceTypeAnnos(apply.args).len;
+    if (args_len > max_tracked_alias_formals) return null;
+    return switch (apply.base) {
+        .local => |local_ref| self.declTryErrorFormalIndex(local_ref.decl_idx, args_len),
+        .external => |ext| self.importedTryErrorFormalIndex(.{ .external = ext }, args_len),
+        .external_identity => |ext| self.importedTryErrorFormalIndex(.{ .external_identity = ext }, args_len),
+        .builtin, .pending => null,
+    };
+}
+
+/// Which of the IMPORTED declaration's own formals reaches the builtin `Try`'s
+/// error cell, for a reference that passes it `formal_count` arguments.
+///
+/// Absence of a record, a record that declined that axis, and a record
+/// describing a declaration of some other arity are one answer: null, the
+/// conservative one. The arity check is the stale-index safety - a wrong
+/// `target_node_idx` can only land on another declaration's entry, and an entry
+/// for a different arity declines rather than naming a formal this reference
+/// does not have.
+fn importedTryErrorFormalIndex(self: *const Self, ref: ImportedDeclRef, formal_count: usize) ?usize {
+    const record = self.importedTypeDeclVariance(ref) orelse return null;
+    if (record.try_error_formal == ModuleEnv.TypeDeclVariance.no_try_error_formal) return null;
+    if (record.formal_count != formal_count) return null;
+    if (record.try_error_formal >= formal_count) return null;
+    return @as(usize, record.try_error_formal);
+}
+
+/// Which of `decl_idx`'s own `formal_count` formals reaches the builtin `Try`'s
+/// ERROR argument, crossing transparent alias declarations. This is the walk
+/// `applyTryErrorArgIndex` dispatches into, and the walk the pre-pass runs to
+/// author a declaration's own record.
+fn declTryErrorFormalIndex(self: *const Self, decl_idx: CIR.Statement.Idx, formal_count: usize) ?usize {
+    // `origin[i]` is the index, among the ORIGINAL declaration's formals, that
     // the current layer's argument `i` came from.
     var origin: [max_tracked_alias_formals]usize = undefined;
-    var origin_len = self.cir.store.sliceTypeAnnos(apply.args).len;
+    var origin_len = formal_count;
     if (origin_len > max_tracked_alias_formals) return null;
     for (0..origin_len) |index| origin[index] = index;
 
-    var current = apply;
+    var current_decl = decl_idx;
     // Bounded like the Monotype-side alias walks, and for the same reason: a
     // declaration chain that closes on itself must terminate here, and a hang
     // is the worst outcome for a guard whose only job is to answer. Exhaustion
@@ -17485,14 +17562,7 @@ fn applyTryErrorArgIndex(self: *const Self, apply: CIR.TypeAnno.Apply) ?usize {
     // the fail-closed answer.
     var remaining: usize = @intCast(self.cir.store.nodes.len());
     while (remaining > 0) : (remaining -= 1) {
-        // Cross-module aliases are deliberately out of scope: the declaration's
-        // CIR lives in another module. Fail-closed, so it is a limitation
-        // rather than a wrong answer.
-        const base_ref = switch (current.base) {
-            .local => |local_ref| local_ref,
-            .builtin, .external, .external_identity, .pending => return null,
-        };
-        const alias_decl = switch (self.cir.store.getStatement(base_ref.decl_idx)) {
+        const alias_decl = switch (self.cir.store.getStatement(current_decl)) {
             .s_alias_decl => |decl| decl,
             .s_decl,
             .s_var,
@@ -17557,7 +17627,23 @@ fn applyTryErrorArgIndex(self: *const Self, apply: CIR.TypeAnno.Apply) ?usize {
         }
         origin = next_origin;
         origin_len = body_args.len;
-        current = body;
+
+        // Where the next layer's declaration lives. A mid-chain IMPORTED alias
+        // (`Outer(e) : Lib.Res(e)`) is answered from its own record, which the
+        // declaring module composed the same way this loop does, so the chain
+        // needs no cross-module code of its own.
+        switch (body.base) {
+            .local => |local_ref| current_decl = local_ref.decl_idx,
+            .external => |ext| {
+                const formal_index = self.importedTryErrorFormalIndex(.{ .external = ext }, origin_len) orelse return null;
+                return origin[formal_index];
+            },
+            .external_identity => |ext| {
+                const formal_index = self.importedTryErrorFormalIndex(.{ .external_identity = ext }, origin_len) orelse return null;
+                return origin[formal_index];
+            },
+            .builtin, .pending => return null,
+        }
     }
     return null;
 }
@@ -17744,28 +17830,49 @@ const ApplyDeclKnowledge = union(enum) {
     /// formal in an arrow's ARGUMENT would be contravariant, and this class
     /// would then answer it covariantly—reopening the hole `unknown` closes.
     covariant,
-    /// Another module's declaration. Its CIR and its formal names live in
-    /// stores this walk cannot read, so its variance is UNKNOWN, and unknown
-    /// is treated as the most RESTRICTIVE variance: invariant, which generates
-    /// the argument closed whatever the reference's own polarity is. Guessing
-    /// covariance instead would open a row the declaration may hold
-    /// contravariantly, which is the annotation silently ceasing to bound the
-    /// caller. Recording each declaration's variance in the checked module
-    /// data an importer already reads (design.md "Polarity") would replace
-    /// this with the real answer; that is a pure relaxation, since it can only
-    /// ever accept more programs.
+    /// Another module's declaration whose producer recorded its formals'
+    /// variances (`ModuleEnv.TypeDeclVariance`). Read verbatim: the declaring
+    /// module walked its own annotation, in its own CIR and its own ident
+    /// store, which is the only place that walk can run.
+    ///
+    /// Produced only for a record that answers the variance axis at this
+    /// reference's exact arity, so this case never means "a record exists but
+    /// says nothing": that is `.unknown`, because dropping the conservative
+    /// answer without a real one in hand is the permissive guess this whole
+    /// union exists to refuse.
+    imported: ModuleEnv.TypeDeclVariance,
+    /// Another module's declaration this walk has no answer for. Its variance
+    /// is UNKNOWN, and unknown is treated as the most RESTRICTIVE variance:
+    /// invariant, which generates the argument closed whatever the reference's
+    /// own polarity is. Guessing covariance instead would open a row the
+    /// declaration may hold contravariantly, which is the annotation silently
+    /// ceasing to bound the caller.
+    ///
+    /// What still lands here now that declarations publish their variances: an
+    /// unresolved or stale import, a `.pending` base (which carries a type
+    /// name, not a node index, so it can never key a record), and a
+    /// declaration whose producer's own walk could not answer: an arity past
+    /// `max_tracked_alias_formals`, a declaration cycle, or an exhausted walk.
     unknown,
 };
 
-/// Which of the three `ApplyDeclKnowledge` cases this application is.
+/// Which of the four `ApplyDeclKnowledge` cases this application is.
 fn applyDeclKnowledge(self: *const Self, apply: CIR.TypeAnno.Apply) ApplyDeclKnowledge {
     return switch (apply.base) {
         .builtin => .covariant,
         .local => |local_ref| .{ .local = local_ref.decl_idx },
+        // The `Builtin` exemption stays AHEAD of the record deliberately.
+        // `Try`'s error row is an external reference from every ordinary
+        // module, so making `Builtin` depend on a walk having succeeded would
+        // close every annotated error row in the language the day that walk
+        // stops answering. The record is consulted only where the answer today
+        // is `.unknown`.
         .external => |ext| if (self.externalTypeRefTargetsBuiltin(ext.module_idx))
             .covariant
         else
-            .unknown,
+            self.importedApplyDeclKnowledge(.{ .external = ext }, apply),
+        // A `.pending` base names its type by ident rather than by node index,
+        // so there is nothing to key a record on.
         .pending => |pend| if (self.externalTypeRefTargetsBuiltin(pend.module_idx))
             .covariant
         else
@@ -17773,8 +17880,29 @@ fn applyDeclKnowledge(self: *const Self, apply: CIR.TypeAnno.Apply) ApplyDeclKno
         .external_identity => |ext| if (self.identityTypeRefTargetsBuiltin(ext.module_identity))
             .covariant
         else
-            .unknown,
+            self.importedApplyDeclKnowledge(.{ .external_identity = ext }, apply),
     };
+}
+
+/// `applyDeclKnowledge` for a non-`Builtin` declaration another module owns:
+/// its published record when that record answers this reference's arity.
+fn importedApplyDeclKnowledge(self: *const Self, ref: ImportedDeclRef, apply: CIR.TypeAnno.Apply) ApplyDeclKnowledge {
+    const record = self.importedTypeDeclVariance(ref) orelse return .unknown;
+    if (!recordAnswersFormalVariances(record, self.cir.store.sliceTypeAnnos(apply.args).len)) return .unknown;
+    return .{ .imported = record };
+}
+
+/// Whether `record` answers the variance axis for a reference with `args_len`
+/// arguments.
+///
+/// The arity check is the stale-index safety: a wrong `target_node_idx` can
+/// only land on some other declaration's entry, and a mismatched arity makes
+/// that entry decline rather than answer for formals it does not have. It is
+/// the same check the local walk applies to itself in `applyFormalVariances`.
+fn recordAnswersFormalVariances(record: ModuleEnv.TypeDeclVariance, args_len: usize) bool {
+    return record.variancesKnown() and
+        record.formal_count <= max_tracked_alias_formals and
+        record.formal_count == args_len;
 }
 
 /// Write one variance into `out[0..len]` and return `len`, for a reference
@@ -17787,6 +17915,40 @@ fn uniformFormalVariances(
 ) ?usize {
     if (len > max_tracked_alias_formals) return null;
     for (out[0..len]) |*slot| slot.* = variance;
+    return len;
+}
+
+/// One recorded variance byte as a `FormalVariance`.
+///
+/// Matched against the enum's own fields rather than converted, because the
+/// byte arrives from another module's serialized data where a value outside
+/// the enum is corruption rather than a bug in this file. `.invariant` is the
+/// answer that stays conservative if one ever appears.
+fn formalVarianceFromRecordByte(raw: u8) FormalVariance {
+    inline for (@typeInfo(FormalVariance).@"enum".fields) |field| {
+        if (raw == field.value) return @field(FormalVariance, field.name);
+    }
+    return .invariant;
+}
+
+/// Copy a declaring module's recorded formal variances into `out` and return
+/// how many were written.
+///
+/// There is no decline path: `applyDeclKnowledge` produces `.imported` only for
+/// a record that answers at this exact arity
+/// (`recordAnswersFormalVariances`), so a record that says nothing is already
+/// `.unknown` by the time this runs. Returning null here instead would make an
+/// unanswered record MORE permissive than an unreadable one, since a null
+/// answer lets every argument keep the reference's own polarity.
+fn importedFormalVariances(
+    out: *[max_tracked_alias_formals]FormalVariance,
+    len: usize,
+    record: ModuleEnv.TypeDeclVariance,
+) usize {
+    std.debug.assert(recordAnswersFormalVariances(record, len));
+    for (out[0..len], record.formal_variances[0..len]) |*slot, raw| {
+        slot.* = formalVarianceFromRecordByte(raw);
+    }
     return len;
 }
 
@@ -17817,7 +17979,9 @@ const FormalVarianceWalk = struct {
 /// statement that is not a type declaration, a cycle, or an exhausted walk—in
 /// which case every argument keeps the application's own polarity, as it always
 /// did. A reference whose declaration is not local answers from
-/// `ApplyDeclKnowledge` instead, and answers for every formal at once.
+/// `ApplyDeclKnowledge` instead: for every formal at once when the declaration
+/// is compiler-owned or unreadable, and per formal when it is imported and its
+/// producer recorded the answer.
 fn applyFormalVariances(
     self: *const Self,
     apply: CIR.TypeAnno.Apply,
@@ -17827,6 +17991,7 @@ fn applyFormalVariances(
     const local_decl_idx = switch (self.applyDeclKnowledge(apply)) {
         .local => |decl_idx| decl_idx,
         .covariant => return uniformFormalVariances(out, args_len, .covariant),
+        .imported => |record| return importedFormalVariances(out, args_len, record),
         .unknown => return uniformFormalVariances(out, args_len, .invariant),
     };
     var walk = FormalVarianceWalk{
@@ -18011,24 +18176,42 @@ fn accumulateFormalVariances(
             },
             .apply => |inner| {
                 // A nested reference composes the same way the top-level one
-                // does, and it splits the same three ways
+                // does, and it splits the same four ways
                 // (`ApplyDeclKnowledge`): a local declaration is walked, a
                 // compiler-owned one is covariant and its arguments keep this
-                // position's own polarity, and one this walk cannot read marks
-                // its arguments unknown, so any formal beneath it is joined
-                // invariant rather than by a polarity the declaration may not
-                // have.
+                // position's own polarity, and one this walk has no answer for
+                // marks its arguments unknown, so any formal beneath it is
+                // joined invariant rather than by a polarity the declaration
+                // may not have.
+                //
+                // An IMPORTED declaration's record is deliberately NOT read
+                // here, and is treated exactly as unknown in both places
+                // below. Reading it at a nested reference is not monotone: it
+                // opens rows at even depths and CLOSES them at odd ones, so it
+                // rejects programs that check today and cannot ride inside the
+                // top-level relaxation. That is a separate, sweep-gated change.
                 const inner_args = self.cir.store.sliceTypeAnnos(inner.args);
                 var inner_variances: [max_tracked_alias_formals]FormalVariance = undefined;
                 const inner_knowledge = self.applyDeclKnowledge(inner);
                 const inner_modeled = inner_blk: {
                     const inner_decl_idx = switch (inner_knowledge) {
                         .local => |decl_idx| decl_idx,
-                        .covariant, .unknown => break :inner_blk false,
+                        .covariant, .imported, .unknown => break :inner_blk false,
                     };
                     const written = self.declFormalVariances(inner_decl_idx, &inner_variances, walk) orelse
                         break :inner_blk false;
                     break :inner_blk written == inner_args.len;
+                };
+                // Exhaustive rather than `inner_knowledge == .unknown`: a
+                // tagged-union `==` compares tags, so a new variant would leave
+                // this compiling and silently false, dropping the unknown bit
+                // under a nested reference and joining the formals below it by
+                // polarity instead of invariantly. That is half of the
+                // non-monotone behaviour above, with no compile error to catch
+                // it.
+                const inner_unmodeled = switch (inner_knowledge) {
+                    .imported, .unknown => true,
+                    .local, .covariant => false,
                 };
                 if (walk.exhausted) return;
                 for (inner_args, 0..) |inner_arg_idx, inner_index| {
@@ -18038,7 +18221,7 @@ fn accumulateFormalVariances(
                             inner_variances[inner_index].compose(here.polarity)
                         else
                             here.polarity,
-                        .unknown = here.unknown or inner_knowledge == .unknown,
+                        .unknown = here.unknown or inner_unmodeled,
                     };
                     pending_len += 1;
                 }
@@ -18047,6 +18230,118 @@ fn accumulateFormalVariances(
             .lookup, .underscore, .malformed => {},
         }
     }
+}
+
+/// Publish every parameterized type declaration in this module's answers for
+/// the two syntactic annotation walks, so an importer reads them instead of
+/// declining (`ModuleEnv.TypeDeclVariance`).
+///
+/// A declaration's variance is a property of its own annotation, and that
+/// annotation's formal names are interned in THIS module's ident store, so this
+/// is the only place the answer can be computed. An importer holds a `*const
+/// ModuleEnv` for every direct import but cannot resolve the import indexes
+/// inside another module's declaration body, which is why the answer travels
+/// rather than the walk.
+///
+/// A PRE-PASS rather than a memo filled on first cross-module lookup.
+/// `predeclareAnnotationScheme` generates an annotation speculatively and then
+/// unwinds exactly three side effects - problems, snapshots, annotation nodes -
+/// under the claim that the def afterwards checks byte-for-byte as before that
+/// pre-pass existed. A memo written inside that window would survive the
+/// rollback and be read by the body pass, which is a side effect the rollback
+/// does not model. Written here the table is complete before the window opens,
+/// and both generations read the identical one.
+///
+/// Both walks read CIR only, so nothing needs to have been generated yet;
+/// `externalTypeRefTargetsBuiltin` needs resolved imports, which
+/// `preflightForTypeChecking` guarantees. Checking goes on to mutate CIR
+/// EXPRESSIONS (dispatch rewrites) and declaration TYPE VARS, never declaration
+/// type ANNOTATIONS, which is all these walks read - so the answer recorded
+/// here stays true for the rest of the run.
+fn recordTypeDeclVariances(self: *Self) std.mem.Allocator.Error!void {
+    // The same union of spans `checkFileInternal` itself generates declarations
+    // from. The upsert deduplicates the overlap.
+    for (0..self.cir.type_decls.span.len) |stmt_offset| {
+        try self.recordOneTypeDeclVariance(self.cir.store.statementAt(self.cir.type_decls, stmt_offset));
+    }
+    for (0..self.cir.all_statements.span.len) |stmt_offset| {
+        try self.recordOneTypeDeclVariance(self.cir.store.statementAt(self.cir.all_statements, stmt_offset));
+    }
+}
+
+/// Record one declaration's answers, if either walk answered. A declaration
+/// with no entry reads as unknown, which is every consumer's existing
+/// conservative answer, so declining to record is always safe.
+fn recordOneTypeDeclVariance(self: *Self, decl_idx: CIR.Statement.Idx) std.mem.Allocator.Error!void {
+    const header = switch (self.cir.store.getStatement(decl_idx)) {
+        .s_alias_decl => |decl| decl.header,
+        .s_nominal_decl => |decl| decl.header,
+        .s_decl,
+        .s_var,
+        .s_var_uninitialized,
+        .s_reassign,
+        .s_crash,
+        .s_dbg,
+        .s_expr,
+        .s_expect,
+        .s_for,
+        .s_while,
+        .s_infinite_loop,
+        .s_breakable_loop,
+        .s_break,
+        .s_return,
+        .s_import,
+        .s_where_alias_decl,
+        .s_type_anno,
+        .s_type_var_alias,
+        .s_runtime_error,
+        => return,
+    };
+
+    const formal_count = self.cir.store.sliceTypeAnnos(self.cir.store.getTypeHeader(header).args).len;
+    // A reference to a zero-arity declaration has no arguments at all, so both
+    // consumers' loops have no iterations and an absent entry is provably the
+    // same answer as a present one. Past the tracked arity neither walk answers.
+    if (formal_count == 0 or formal_count > max_tracked_alias_formals) return;
+
+    var entry = ModuleEnv.TypeDeclVariance{
+        .node_idx = @intFromEnum(decl_idx),
+        .formal_count = @intCast(formal_count),
+        .flags = 0,
+        .try_error_formal = ModuleEnv.TypeDeclVariance.no_try_error_formal,
+        .formal_variances = [_]u8{@intFromEnum(FormalVariance.unused)} ** max_tracked_alias_formals,
+    };
+
+    // A FRESH walk, deliberately: the per-reference walk carries the enclosing
+    // reference's `open_decls` and its remaining fuel, so it can legitimately
+    // answer null where this one answers. The record is the declaration's own
+    // answer, taken with the whole budget.
+    var variances: [max_tracked_alias_formals]FormalVariance = undefined;
+    var walk = FormalVarianceWalk{
+        .open_decls = undefined,
+        .open_decls_len = 0,
+        .fuel = max_formal_variance_nodes,
+        .exhausted = false,
+    };
+    if (self.declFormalVariances(decl_idx, &variances, &walk)) |written| {
+        if (!walk.exhausted and written == formal_count) {
+            for (variances[0..formal_count], 0..) |variance, index| {
+                entry.formal_variances[index] = @intFromEnum(variance);
+            }
+            entry.flags |= ModuleEnv.TypeDeclVariance.variances_known_flag;
+        }
+    }
+
+    // The two axes stop independently - the `Try` walk declines on a computed
+    // argument where the variance walk succeeds, and the variance walk exhausts
+    // on fuel where the `Try` walk succeeds - so an entry may be half-known.
+    if (self.declTryErrorFormalIndex(decl_idx, formal_count)) |formal_index| {
+        entry.try_error_formal = @intCast(formal_index);
+    }
+
+    const answered_try_axis = entry.try_error_formal != ModuleEnv.TypeDeclVariance.no_try_error_formal;
+    if (!entry.variancesKnown() and !answered_try_axis) return;
+    try self.cir.recordTypeDeclVariance(entry);
 }
 
 /// Push every constraint one where clause places on `owner_var`. A method
@@ -18604,15 +18899,18 @@ fn annoOpensRow(
         .lookup => |l| self.declOpensRow(l.base, polarity, decl_depth),
         .apply => |a| blk: {
             if (self.declOpensRow(a.base, polarity, decl_depth)) break :blk true;
-            // A reference whose variance this walk cannot read generates
+            // A reference this walk has no variance answer for generates
             // everything beneath it `.as_written` at every depth, so no
-            // argument of one can mint. Exhaustive by construction, for the
-            // same reason the generator's own `variance_unknown` is: adding an
-            // `ApplyDeclKnowledge` variant must be a compile error here rather
-            // than a silent answer.
+            // argument of one can mint. An IMPORTED reference whose producer
+            // recorded its variances is not one of those: the generator drops
+            // the `.as_written` floor for it, so its arguments mint exactly as
+            // a local reference's do and this walk must follow. Exhaustive by
+            // construction, for the same reason the generator's own
+            // `variance_unknown` is: adding an `ApplyDeclKnowledge` variant
+            // must be a compile error here rather than a silent answer.
             switch (self.applyDeclKnowledge(a)) {
                 .unknown => break :blk false,
-                .local, .covariant => {},
+                .local, .covariant, .imported => {},
             }
             var formal_variances: [max_tracked_alias_formals]FormalVariance = undefined;
             const formal_variances_len = self.applyFormalVariances(a, &formal_variances);
@@ -19014,9 +19312,15 @@ fn generateAnnoTypeInPlace(self: *Self, anno_idx: CIR.TypeAnno.Idx, env: *Env, c
             // level in, and `Lib.Producer([A] -> Str)` would open the `[A]` it
             // must keep as written. Refusing to open at every depth is the
             // answer that stays conservative under descent.
+            //
+            // An imported declaration whose producer recorded its formals'
+            // variances is NOT unknown: the answer is the one the declaring
+            // module's own walk computed, so the floor drops and each argument
+            // is generated at the real composed polarity, exactly as the
+            // byte-identical local spelling generates it.
             const variance_unknown = switch (self.applyDeclKnowledge(a)) {
                 .unknown => true,
-                .local, .covariant => false,
+                .local, .covariant, .imported => false,
             };
             for (anno_args, 0..) |anno_arg, arg_index| {
                 const reached_arg_ctx = if (try_error_row_reachable and arg_index == try_error_arg_index.?)

@@ -921,6 +921,60 @@ pub const BindingScheme = extern struct {
     pub const SafeList = collections.SafeList(@This());
 };
 
+/// The largest declaration arity the checker's annotation walks track. Shared
+/// with `Check.max_tracked_alias_formals`, which aliases this constant so the
+/// recorded array width and the walk's own bound cannot drift apart.
+pub const max_tracked_alias_formals: usize = 8;
+
+/// One type declaration's answers for the checker's two syntactic annotation
+/// walks (design.md "Two Syntactic Walks"), authored by the declaring module's
+/// own `Check` and read verbatim by importers.
+///
+/// A declaration's variance is a property of its own annotation, so the module
+/// that owns the annotation is the only place it can be decided; an importer
+/// holds that module's `ModuleEnv` but not its ident store's meaning, which is
+/// why the answer travels rather than the walk. Present only for declarations
+/// whose producer's walk ANSWERED: an absent entry means "unknown", which every
+/// consumer must read as its existing conservative answer rather than as a
+/// permissive one. The table is kept sorted by `node_idx` for allocation-free
+/// imported lookup, like `binding_schemes`.
+pub const TypeDeclVariance = extern struct {
+    /// The declaration's CIR node index: a `CIR.Statement.Idx` widened, which
+    /// is exactly the `target_node_idx` an external type reference carries.
+    node_idx: u32,
+    /// The declaration header's arity. A reference whose argument count differs
+    /// is an arity error reported elsewhere; until then the positional
+    /// correspondence this record assumes does not hold, so consumers decline.
+    formal_count: u8,
+    /// Bit 0 (`variances_known_flag`): the variance walk answered, so
+    /// `formal_variances` is meaningful. The two axes have independent stop
+    /// conditions, so one entry can be half-known.
+    flags: u8,
+    /// Which of THIS declaration's own formals reaches the builtin `Try`'s
+    /// ERROR cell across transparent alias layers, or `no_try_error_formal`.
+    /// "No such cell" and "could not answer" are the same answer for that axis,
+    /// so one sentinel covers both.
+    try_error_formal: u8,
+    /// The checker's `FormalVariance` as a `u8`, one per formal. Entries past
+    /// `formal_count` are meaningless.
+    formal_variances: [max_tracked_alias_formals]u8,
+    _padding: u8 = 0,
+
+    /// `try_error_formal` when no formal of this declaration reaches the
+    /// builtin `Try`'s error cell, or the walk could not answer.
+    pub const no_try_error_formal: u8 = 0xFF;
+
+    /// `flags` bit 0.
+    pub const variances_known_flag: u8 = 1;
+
+    /// Whether `formal_variances` is meaningful for this entry.
+    pub fn variancesKnown(self: @This()) bool {
+        return self.flags & variances_known_flag != 0;
+    }
+
+    pub const SafeList = collections.SafeList(@This());
+};
+
 /// One generated-codec dispatch relation that remains part of a binding's
 /// scheme across checked-module boundaries. `scheme_root` preserves alias
 /// identity when a cached checked environment is rechecked, and
@@ -1109,6 +1163,11 @@ generated_codec_calls: GeneratedCodecCall.SafeList,
 rejected_static_dispatches: RejectedStaticDispatch.SafeList,
 /// Exact default identities selected at record-literal omission sites.
 record_omitted_defaults: RecordOmittedDefault.SafeList,
+/// Per-declaration answers for the checker's two syntactic annotation walks,
+/// authored by this module's own `Check` and read verbatim by importers.
+/// Sorted by source node for allocation-free cross-module lookup, like
+/// `binding_schemes`.
+type_decl_variances: TypeDeclVariance.SafeList,
 
 /// A type alias mapping from a for-clause: [Model : model]
 /// Maps an alias name (Model) to a rigid variable name (model)
@@ -1447,6 +1506,7 @@ pub fn relocate(self: *Self, offset: isize) void {
     self.binding_scheme_codec_requirements.relocate(offset);
     self.rejected_static_dispatches.relocate(offset);
     self.record_omitted_defaults.relocate(offset);
+    self.type_decl_variances.relocate(offset);
 
     // Relocate the module_name pointer if it's not empty
     if (self.module_name.len > 0) {
@@ -1553,6 +1613,7 @@ pub fn init(gpa: std.mem.Allocator, source: []const u8) std.mem.Allocator.Error!
         .generated_codec_calls = try GeneratedCodecCall.SafeList.initCapacity(gpa, 16),
         .rejected_static_dispatches = try RejectedStaticDispatch.SafeList.initCapacity(gpa, 4),
         .record_omitted_defaults = try RecordOmittedDefault.SafeList.initCapacity(gpa, 4),
+        .type_decl_variances = try TypeDeclVariance.SafeList.initCapacity(gpa, 8),
     };
 }
 
@@ -1587,6 +1648,7 @@ pub fn deinit(self: *Self) void {
     self.generated_codec_calls.deinit(self.gpa);
     self.rejected_static_dispatches.deinit(self.gpa);
     self.record_omitted_defaults.deinit(self.gpa);
+    self.type_decl_variances.deinit(self.gpa);
     self.top_level_demand_dependencies.deinit(self.gpa);
     // diagnostics are stored in the NodeStore, no need to free separately
     self.store.deinit();
@@ -1691,6 +1753,7 @@ pub fn deinitCachedModule(self: *Self) void {
     self.generated_codec_calls.deinit(self.gpa);
     self.rejected_static_dispatches.deinit(self.gpa);
     self.record_omitted_defaults.deinit(self.gpa);
+    self.type_decl_variances.deinit(self.gpa);
 
     // If enableRuntimeInserts was called on the interner, it allocated new memory
     // that needs to be freed. The interner.deinit checks supports_inserts internally
@@ -4334,6 +4397,7 @@ pub const Serialized = extern struct {
     generated_codec_calls: GeneratedCodecCall.SafeList.Serialized,
     rejected_static_dispatches: RejectedStaticDispatch.SafeList.Serialized,
     record_omitted_defaults: RecordOmittedDefault.SafeList.Serialized,
+    type_decl_variances: TypeDeclVariance.SafeList.Serialized,
     // Reserved space (was is_lambda_lifted and is_defunctionalized, now unused)
     _reserved_flags: [2]u8 = .{ 0, 0 },
     _padding: [6]u8 = .{ 0, 0, 0, 0, 0, 0 },
@@ -4452,6 +4516,7 @@ pub const Serialized = extern struct {
         try self.generated_codec_calls.serialize(&env.generated_codec_calls, allocator, writer);
         try self.rejected_static_dispatches.serialize(&env.rejected_static_dispatches, allocator, writer);
         try self.record_omitted_defaults.serialize(&env.record_omitted_defaults, allocator, writer);
+        try self.type_decl_variances.serialize(&env.type_decl_variances, allocator, writer);
 
         self._reserved_flags = .{ 0, 0 };
     }
@@ -4525,6 +4590,7 @@ pub const Serialized = extern struct {
             .generated_codec_calls = self.generated_codec_calls.deserializeInto(base_addr),
             .rejected_static_dispatches = self.rejected_static_dispatches.deserializeInto(base_addr),
             .record_omitted_defaults = self.record_omitted_defaults.deserializeInto(base_addr),
+            .type_decl_variances = self.type_decl_variances.deserializeInto(base_addr),
         };
 
         env.debugAssertModuleBasename();
@@ -4600,6 +4666,7 @@ pub const Serialized = extern struct {
             .generated_codec_calls = self.generated_codec_calls.deserializeInto(base_addr),
             .rejected_static_dispatches = self.rejected_static_dispatches.deserializeInto(base_addr),
             .record_omitted_defaults = self.record_omitted_defaults.deserializeInto(base_addr),
+            .type_decl_variances = self.type_decl_variances.deserializeInto(base_addr),
         };
 
         env.debugAssertModuleBasename();
@@ -4678,6 +4745,7 @@ pub const Serialized = extern struct {
             .generated_codec_calls = try self.generated_codec_calls.deserializeWithCopy(base_addr, gpa),
             .rejected_static_dispatches = try self.rejected_static_dispatches.deserializeWithCopy(base_addr, gpa),
             .record_omitted_defaults = try self.record_omitted_defaults.deserializeWithCopy(base_addr, gpa),
+            .type_decl_variances = try self.type_decl_variances.deserializeWithCopy(base_addr, gpa),
         };
 
         env.debugAssertModuleBasename();
@@ -4768,6 +4836,7 @@ pub const Serialized = extern struct {
             .generated_codec_calls = try self.generated_codec_calls.deserializeWithCopy(base_addr, gpa),
             .rejected_static_dispatches = try self.rejected_static_dispatches.deserializeWithCopy(base_addr, gpa),
             .record_omitted_defaults = try self.record_omitted_defaults.deserializeWithCopy(base_addr, gpa),
+            .type_decl_variances = try self.type_decl_variances.deserializeWithCopy(base_addr, gpa),
         };
 
         env.debugAssertModuleBasename();
@@ -4971,6 +5040,24 @@ pub fn nodeIsBindingScheme(self: *const Self, node_idx: Node.Idx) bool {
         self.binding_schemes.items.items,
         @intFromEnum(node_idx),
     ) != null;
+}
+
+/// Record one type declaration's answers for the checker's syntactic
+/// annotation walks. Producer-authored: only the declaring module's own
+/// `Check` may call this.
+pub fn recordTypeDeclVariance(self: *Self, entry: TypeDeclVariance) std.mem.Allocator.Error!void {
+    try upsertSortedByNode(TypeDeclVariance, &self.type_decl_variances, self.gpa, entry);
+}
+
+/// The recorded answers for the declaration at `raw_node`, or null when this
+/// module's walk did not answer for it. Null is the conservative answer, never
+/// the permissive one; see `TypeDeclVariance`.
+pub fn typeDeclVarianceForNode(self: *const Self, raw_node: u32) ?TypeDeclVariance {
+    return findSortedByNode(
+        TypeDeclVariance,
+        self.type_decl_variances.items.items,
+        raw_node,
+    );
 }
 
 /// Record one exact generated-codec relation owned by a source binding scheme.

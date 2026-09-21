@@ -235,7 +235,10 @@ pub const Constants = struct {
     /// 107: An expression that did not parse canonicalizes to a runtime error
     ///      carrying `expr_syntax_error`, and the canonicalize diagnostic tags
     ///      no stage produces are gone.
-    pub const CACHE_VERSION = 107;
+    /// 108: Each parameterized type declaration publishes its formals'
+    ///      variances and its `Try` error-cell formal, which importers consult
+    ///      at an external annotation base instead of answering unknown.
+    pub const CACHE_VERSION = 108;
 };
 
 /// Configuration for the Roc cache system.

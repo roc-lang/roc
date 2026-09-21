@@ -9143,13 +9143,24 @@ test "check type - polarity - a formal in both positions is closed" {
 //
 // The walk reads variance out of the referenced declaration's own annotation,
 // and an imported declaration's annotation lives in another module's CIR with
-// its formal names interned in another ident store. Its variance is therefore
-// UNKNOWN, and unknown is treated as INVARIANT: the argument is generated
-// closed whatever the reference's own polarity is. Guessing covariance (which
-// is what inheriting the reference's polarity amounts to) un-enforced the
-// annotation across the boundary: an imported contravariant or invariant
-// alias opened a row the local spelling closes. The four tests below pin both
-// sides of that boundary, which previously had assertions on neither.
+// its formal names interned in another ident store. So the declaring module
+// publishes the answer instead of the importer guessing at it: its own `Check`
+// records each parameterized declaration's formal variances and its `Try`
+// error-cell formal (`ModuleEnv.TypeDeclVariance`), and the importer reads that
+// record at an external annotation base. An imported reference therefore
+// composes exactly as the byte-identical local spelling composes, which is the
+// whole point: which module a declaration was written in is not supposed to
+// change what its uses mean.
+//
+// A declaration with NO record still reads as UNKNOWN, and unknown is still
+// treated as INVARIANT: the argument is generated closed whatever the
+// reference's own polarity is, and closed at every depth. Guessing covariance
+// there (which is what inheriting the reference's polarity amounts to) would
+// un-enforce the annotation across the boundary.
+//
+// The tests below pin both sides of that boundary. The ones that still reject
+// now reject for the reason the local spelling rejects, rather than for not
+// knowing.
 
 test "check type - polarity - imported contravariant alias closes the applied row" {
     // The cross-module half of "alias reference closes a row the declaration
@@ -9206,21 +9217,19 @@ test "check type - polarity - imported invariant alias closes the applied row" {
     try main_env.assertOneTypeError("Type Mismatch");
 }
 
-test "check type - polarity - imported covariant alias closes the applied row too" {
-    // The COST of the rule, pinned deliberately. `Producer(e) : Str -> e` is
-    // covariant, so the local spelling keeps `[A, B]` open for callers ("alias
-    // reference still opens a row the declaration puts in an output
-    // position"). Imported, the walk cannot see that it is covariant, and
-    // unknown variance is invariant, so `consume(produce("s"))` at the wider
-    // union is a Type Mismatch.
+test "check type - polarity - imported covariant alias opens the applied row" {
+    // The cross-module twin of "alias reference still opens a row the
+    // declaration puts in an output position", and the whole reason the record
+    // exists. `Producer(e) : Str -> e` is covariant, so the local spelling
+    // keeps `[A, B]` open for callers. `Lib`'s own `Check` records that
+    // covariance, `Main` reads it at the external base, and the import reaches
+    // the identical answer.
     //
-    // This is the conservative choice, taken because the alternative,
-    // guessing covariance, is the one that accepts programs the annotation
-    // was written to reject. Recording each declaration's formal variances in
-    // the checked module data an importer already reads (design.md
-    // "Polarity") replaces the guess with the real answer and would make this
-    // pass again; that is a pure relaxation, since it can only ever accept
-    // more programs than this rule does.
+    // This was pinned AS REJECTED while the answer was unknown, with the cost
+    // stated in its own comment. Reading the record can only drop an
+    // `.as_written` floor and replace `.invariant` with a real variance,
+    // neither of which closes a position that was open, so this is the one
+    // verdict the change flips.
     const source_lib =
         \\module [Producer]
         \\
@@ -9242,21 +9251,65 @@ test "check type - polarity - imported covariant alias closes the applied row to
     ;
     var main_env = try TestEnv.initWithImport("Main", source_main, "Lib", &lib_env);
     defer main_env.deinit();
-    try main_env.assertOneTypeError("Type Mismatch");
+    try main_env.assertDefType("out", "Str");
 }
 
-test "check type - polarity - an unknown formal's row stays closed under a function argument" {
-    // Unknown variance is refused opening at EVERY depth, not just at the
-    // argument's own root, and this pins why that distinction is load-bearing.
+test "check type - polarity - a covariant alias reached through a re-exported alias opens the applied row" {
+    // The same verdict as "imported covariant alias opens the applied row",
+    // reached through an `external_identity` base: `Gui.Files.Producer` is
+    // resolved by following `Gui`'s `Files : Resource.Files` out to the module
+    // that declares `Producer`, which `App` does not import. That module's own
+    // record answers, exactly as it does for a direct import.
+    const resource_src =
+        \\Resource := [].{
+        \\    Files := [].{
+        \\        Producer(e) : Str -> e
+        \\    }
+        \\}
+    ;
+    var resource_env = try TestEnv.init("Resource", resource_src);
+    defer resource_env.deinit();
+
+    const gui_src =
+        \\import Resource
+        \\
+        \\Gui := [].{
+        \\    Files : Resource.Files
+        \\}
+    ;
+    var gui_env = try TestEnv.initWithImport("Gui", gui_src, "Resource", &resource_env);
+    defer gui_env.deinit();
+
+    const app_src =
+        \\import Gui
+        \\
+        \\produce : Gui.Files.Producer([A, B])
+        \\produce = |_| A
+        \\
+        \\consume : [A, B, C] -> Str
+        \\consume = |_| "x"
+        \\
+        \\out = consume(produce("s"))
+    ;
+    var app_env = try TestEnv.initWithImport("App", app_src, "Gui", &gui_env);
+    defer app_env.deinit();
+    try app_env.assertDefType("out", "Str");
+}
+
+test "check type - polarity - an imported formal's row stays closed under a function argument" {
+    // The guard that the relaxation did not become "open at every depth".
     //
-    // Polarity flips on the way down: a function's parameters negate. So an
-    // unknown formal answered as a closing POLARITY closes only the top row:
-    // one level into a function argument the polarity flips back to positive
-    // and the row opens again. Here `[A]` is the parameter of the function
-    // substituted for `Producer`'s formal, so a polarity-only answer would
-    // open it and accept `mk("s")(C)`, which both the direct spelling and the
-    // pre-rule behaviour reject. Answering with "generate rows as written"
-    // instead is stable under descent.
+    // `Producer` is recorded covariant, so the argument is generated at the
+    // reference's own positive polarity - and polarity flips on the way down.
+    // `[A]` is the PARAMETER of the function substituted for the formal, so
+    // ordinary descent negates it and it is generated as written; `mk("s")(C)`
+    // stays a mismatch, exactly as the direct spelling `mk : Str -> ([A] -> Str)`
+    // and the fully local spelling both reject it. If this starts passing, an
+    // argument is being opened at a depth the declaration does not hold open.
+    //
+    // A declaration with no record reaches the same verdict by a different
+    // route: unknown variance refuses opening at every depth rather than by
+    // polarity, because a closing polarity alone would reopen one level in.
     const source_lib =
         \\module [Producer]
         \\
@@ -9276,6 +9329,189 @@ test "check type - polarity - an unknown formal's row stays closed under a funct
     var main_env = try TestEnv.initWithImport("Main", source_main, "Lib", &lib_env);
     defer main_env.deinit();
     try main_env.assertOneTypeError("Type Mismatch");
+}
+
+test "check type - polarity - imported contravariant alias in an input position opens the applied row" {
+    // The cross-module twin of "alias reference in an input position composes
+    // back to open". `Handler(e) : e -> Str` is recorded contravariant, and
+    // the reference itself stands in an input position, so the two negations
+    // cancel and `[A, B]` is an output row again: a wider handler is accepted,
+    // exactly as the local spelling and the direct `(([A, B] -> Str) -> Str)`
+    // spelling accept one.
+    //
+    // This is the one place the relaxation opens something that used to be
+    // closed at DEPTH rather than at the argument's root, so it is asserted
+    // deliberately here instead of being discovered in a snapshot diff.
+    const source_lib =
+        \\module [Handler]
+        \\
+        \\Handler(e) : e -> Str
+    ;
+    var lib_env = try TestEnv.init("Lib", source_lib);
+    defer lib_env.deinit();
+
+    const source_main =
+        \\import Lib
+        \\
+        \\run : Lib.Handler([A, B]) -> Str
+        \\run = |_h| "ran"
+        \\
+        \\wide : [A, B, C] -> Str
+        \\wide = |_tag| "w"
+        \\
+        \\out = run(wide)
+    ;
+    var main_env = try TestEnv.initWithImport("Main", source_main, "Lib", &lib_env);
+    defer main_env.deinit();
+    try main_env.assertDefType("out", "Str");
+}
+
+test "check type - polarity - an imported alias over Try opens its error row per use" {
+    // The defect this closes, stated as a test: an imported `Res(e) : Try(Str, e)`
+    // rejected a `?` that the byte-identical LOCAL spelling accepts
+    // (`test/cli/WidenAliasErrorFormalImpl.roc`).
+    //
+    // Lowering does not know module boundaries. `closedResultRowOrNull` reads
+    // the return through `resolvedPayload`, which crosses alias backings
+    // unconditionally, so the result-row widening adapter re-tags an imported
+    // transparent alias over `Try` exactly as it re-tags a local one. While
+    // the walk declined at the module boundary the OPENED set was strictly
+    // smaller than the ADAPTABLE set, which is the one rule this whole axis
+    // exists to hold. `Lib` now records which of `Res`'s formals lands in the
+    // `Try` error cell, and `Main` reads it.
+    const source_lib =
+        \\module [Res]
+        \\
+        \\Res(e) : Try(Str, e)
+    ;
+    var lib_env = try TestEnv.init("Lib", source_lib);
+    defer lib_env.deinit();
+
+    const source_main =
+        \\import Lib
+        \\
+        \\load : a -> Lib.Res([IoErr, Other]) where [a.fetch : a -> Lib.Res([IoErr])]
+        \\load = |x| {
+        \\    s = x.fetch()?
+        \\    Ok(s)
+        \\}
+        \\
+        \\closed : Lib.Res([IoErr]) -> Lib.Res([IoErr])
+        \\closed = |v| v
+        \\
+        \\closed_try = closed(Ok("hit"))
+        \\
+        \\Src := [S].{
+        \\    fetch : Src -> Lib.Res([IoErr])
+        \\    fetch = |_| closed_try
+        \\}
+        \\
+        \\out = load(Src.S)
+    ;
+    var main_env = try TestEnv.initWithImport("Main", source_main, "Lib", &lib_env);
+    defer main_env.deinit();
+    try main_env.assertNoErrors();
+}
+
+test "check type - polarity - an imported alias's Try ok row still rejects a widening use" {
+    // The negative control for the test above, and the reason it cannot decay
+    // into "open every argument of every alias over `Try`". `OkRes(a)` puts its
+    // formal in the `Try`'s OK cell, which the result-row widening adapter
+    // never re-tags, so the row must be contributed as written and the widened
+    // body use stays an ordinary mismatch at the use.
+    //
+    // The refusal is producer-side and needs no cross-module rule of its own:
+    // `Lib`'s own walk looks for a formal in the ERROR argument, finds the
+    // written `[IoErr]` there rather than a formal, and records "no such
+    // cell". This is `test/cli/WidenAliasOkFormalRow.roc` across the boundary.
+    const source_lib =
+        \\module [OkRes]
+        \\
+        \\OkRes(a) : Try(a, [IoErr])
+    ;
+    var lib_env = try TestEnv.init("Lib", source_lib);
+    defer lib_env.deinit();
+
+    const source_main =
+        \\import Lib
+        \\
+        \\describe : a -> Lib.OkRes([Red, Green, Blue]) where [a.status : a -> Lib.OkRes([Red, Green])]
+        \\describe = |x| x.status()
+        \\
+        \\closed : Lib.OkRes([Red, Green]) -> Lib.OkRes([Red, Green])
+        \\closed = |v| v
+        \\
+        \\closed_value = closed(Ok(Red))
+        \\
+        \\Job := [Pending].{
+        \\    status : Job -> Lib.OkRes([Red, Green])
+        \\    status = |_| closed_value
+        \\}
+        \\
+        \\out = describe(Job.Pending)
+    ;
+    var main_env = try TestEnv.initWithImport("Main", source_main, "Lib", &lib_env);
+    defer main_env.deinit();
+    try main_env.assertHasTypeError("Type Mismatch");
+}
+
+test "check type - polarity - an imported nominal wrapper over Try still closes its row" {
+    // The other half of the ok-cell control: the adapter refuses a NOMINAL
+    // wrapper outright (`resultRowWideningOrNull` rejects a non-alias pair), so
+    // the checker must not open one either. The refusal is again producer-side
+    // and unchanged: `Lib`'s own walk requires a transparent alias at every
+    // layer, so `NRes` records "no such cell" and the importer reads that.
+    const source_lib =
+        \\module [NRes]
+        \\
+        \\NRes(e) := Try(Str, e)
+    ;
+    var lib_env = try TestEnv.init("Lib", source_lib);
+    defer lib_env.deinit();
+
+    const source_main =
+        \\import Lib
+        \\
+        \\describe : a -> Lib.NRes([IoErr, Other]) where [a.fetch : a -> Lib.NRes([IoErr])]
+        \\describe = |x| x.fetch()
+    ;
+    var main_env = try TestEnv.initWithImport("Main", source_main, "Lib", &lib_env);
+    defer main_env.deinit();
+    try main_env.assertHasTypeError("Type Mismatch");
+}
+
+test "check type - polarity - an imported declaration past the tracked arity stays unknown" {
+    // The one test that pins the absent-record path. The walks track a bounded
+    // declaration arity so they need no allocation, and a declaration past it
+    // publishes nothing; the importer must then keep answering conservatively
+    // rather than inheriting the reference's polarity.
+    //
+    // `Wide` holds its first formal covariantly, so the local spelling would
+    // keep `[A, B]` open for callers. With no record the reference is unknown,
+    // unknown generates as written at every depth, and the widening use is a
+    // mismatch - today's answer, unchanged.
+    const source_lib =
+        \\module [Wide]
+        \\
+        \\Wide(r, a, b, c, d, e, f, g, h) : { first : r, second : a, third : b, fourth : c, fifth : d, sixth : e, seventh : f, eighth : g, ninth : h }
+    ;
+    var lib_env = try TestEnv.init("Lib", source_lib);
+    defer lib_env.deinit();
+
+    const source_main =
+        \\import Lib
+        \\
+        \\produce : Lib.Wide([A, B], Str, Str, Str, Str, Str, Str, Str, Str)
+        \\produce = { first: A, second: "2", third: "3", fourth: "4", fifth: "5", sixth: "6", seventh: "7", eighth: "8", ninth: "9" }
+        \\
+        \\consume : [A, B, C] -> Str
+        \\consume = |_| "x"
+        \\
+        \\out = consume(produce.first)
+    ;
+    var main_env = try TestEnv.initWithImport("Main", source_main, "Lib", &lib_env);
+    defer main_env.deinit();
+    try main_env.assertHasTypeError("Type Mismatch");
 }
 
 test "check type - polarity - a builtin application's row still opens for callers" {
