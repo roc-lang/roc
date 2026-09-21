@@ -291,12 +291,15 @@ pub fn canonicalizeAndTypeCheckModule(
     }
     czer.deinit();
 
+    // File imports depend on no other module, so they are read as soon as
+    // canonicalization has recorded them.
+    try can.resolveDeferredFileImports(env, .{ .read = .{ .ctx = roc_ctx, .source_dir = source_dir } });
+
     env.imports.clearResolvedModules();
     try env.imports.resolveImportsByExactModuleName(env, imported_envs);
     env.imports.markUnresolvedImportsFailedBeforeChecking();
     try can.resolveDeferredImports(env, .{
         .imports = .{ .resolved_store = imported_envs },
-        .file_imports = .{ .read = .{ .ctx = roc_ctx, .source_dir = source_dir } },
     });
 
     // Type check using the SAME module_envs_map
@@ -420,7 +423,6 @@ pub fn typeCheckModule(
     ctfe_options: eval.CompileTimeFinalization.Options,
     defer_publication: bool,
     deferred_imports: can.ImportResolution.Imports,
-    file_imports: can.ImportResolution.FileImports,
 ) TypeCheckModuleError!TypeCheckOutput {
     const builtin_indices = compiled_builtins.builtinIndices(can.CIR);
 
@@ -451,7 +453,6 @@ pub fn typeCheckModule(
     try can.resolveDeferredImports(env, .{
         .imports = deferred_imports,
         .reachable_envs = owner_envs,
-        .file_imports = file_imports,
     });
 
     var checker = try Check.initWithOwnerModules(

@@ -1473,6 +1473,9 @@ fn compileSourceWithValidation(source: []const u8, module_name: []const u8, vali
         try Can.populateModuleEnvs(auto_imported_types, type_can_ir, builtin_module.env, builtin_indices);
         result.auto_imported_types = auto_imported_types;
 
+        // File imports are not read: this compiles the editor's buffer alone.
+        try can.resolveDeferredFileImports(type_can_ir, .skip);
+
         // Resolve imports - map each import to its index in imported_envs
         type_can_ir.imports.clearResolvedModules();
         try type_can_ir.imports.resolveImportsByExactModuleName(type_can_ir, imported_envs);

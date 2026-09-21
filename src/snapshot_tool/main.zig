@@ -1154,12 +1154,12 @@ fn processSnapshotContent(
         if (config.builtin_module) |builtin_env| {
             try Can.populateModuleEnvs(&module_envs, can_ir, builtin_env, config.builtin_indices);
         }
+        try can.resolveDeferredFileImports(can_ir, .{ .read = .{ .ctx = CoreCtx.default(allocator, allocator, app_io) } });
         can_ir.imports.clearResolvedModules();
         try can_ir.imports.resolveImportsByExactModuleName(can_ir, builtin_modules.items);
         can_ir.imports.markUnresolvedImportsFailedBeforeChecking();
         try can.resolveDeferredImports(can_ir, .{
             .imports = .{ .resolved_store = builtin_modules.items },
-            .file_imports = .{ .read = .{ .ctx = CoreCtx.default(allocator, allocator, app_io) } },
         });
 
         var checker = try Check.init(
@@ -1214,12 +1214,12 @@ fn processSnapshotContent(
             if (config.builtin_module) |builtin_env| {
                 try Can.populateModuleEnvs(&module_envs, can_ir, builtin_env, config.builtin_indices);
             }
+            try can.resolveDeferredFileImports(can_ir, .{ .read = .{ .ctx = CoreCtx.default(allocator, allocator, app_io) } });
             can_ir.imports.clearResolvedModules();
             try can_ir.imports.resolveImportsByExactModuleName(can_ir, builtin_modules.items);
             can_ir.imports.markUnresolvedImportsFailedBeforeChecking();
             try can.resolveDeferredImports(can_ir, .{
                 .imports = .{ .resolved_store = builtin_modules.items },
-                .file_imports = .{ .read = .{ .ctx = CoreCtx.default(allocator, allocator, app_io) } },
             });
 
             var checker = try Check.init(
@@ -2965,6 +2965,10 @@ fn validateMonoOutput(allocator: Allocator, mono_source: []const u8, source_path
     };
 
     const imported_modules: []const *const ModuleEnv = &.{builtin_env};
+    can.resolveDeferredFileImports(&validation_env, .{ .read = .{ .ctx = mono_roc_ctx } }) catch |err| {
+        std.log.err("MONO VALIDATION ERROR in {s}: Failed to read file imports: {}", .{ source_path, err });
+        return false;
+    };
     validation_env.imports.clearResolvedModules();
     validation_env.imports.resolveImportsByExactModuleName(&validation_env, imported_modules) catch |err| {
         std.log.err("MONO VALIDATION ERROR in {s}: Failed to resolve imports: {}", .{ source_path, err });
@@ -2973,7 +2977,6 @@ fn validateMonoOutput(allocator: Allocator, mono_source: []const u8, source_path
     validation_env.imports.markUnresolvedImportsFailedBeforeChecking();
     can.resolveDeferredImports(&validation_env, .{
         .imports = .{ .resolved_store = imported_modules },
-        .file_imports = .{ .read = .{ .ctx = mono_roc_ctx } },
     }) catch |err| {
         std.log.err("MONO VALIDATION ERROR in {s}: Failed to resolve deferred imports: {}", .{ source_path, err });
         return false;
@@ -4764,12 +4767,12 @@ fn renderSnapshotReplTypeProblems(
     defer module_envs.deinit();
     try Can.populateModuleEnvs(&module_envs, can_ir, builtin_env, config.builtin_indices);
 
+    try can.resolveDeferredFileImports(can_ir, .{ .read = .{ .ctx = roc_ctx_repl } });
     can_ir.imports.clearResolvedModules();
     try can_ir.imports.resolveImportsByExactModuleName(can_ir, imported_envs.items);
     can_ir.imports.markUnresolvedImportsFailedBeforeChecking();
     try can.resolveDeferredImports(can_ir, .{
         .imports = .{ .resolved_store = imported_envs.items },
-        .file_imports = .{ .read = .{ .ctx = roc_ctx_repl } },
     });
 
     var checker = try Check.init(

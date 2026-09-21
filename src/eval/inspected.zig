@@ -1820,10 +1820,10 @@ pub fn parseCheckModule(
             imported_envs[i + 2] = available.env;
         }
     }
+    try can.resolveDeferredFileImports(module_env, .{ .read = .{ .ctx = canon_ctx } });
     resolveImportsConst(module_env, imported_envs);
     try can.resolveDeferredImports(module_env, .{
         .imports = .{ .resolved_store = imported_envs },
-        .file_imports = .{ .read = .{ .ctx = canon_ctx } },
     });
 
     const checker = try allocator.create(Check);

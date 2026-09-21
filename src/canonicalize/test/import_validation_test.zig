@@ -95,6 +95,7 @@ fn drainImports(
             } },
         });
     }
+    try ImportResolution.resolveDeferredFileImports(env, .skip);
     try ImportResolution.resolveDeferredImports(env, .{ .imports = .{ .explicit = imports.items } });
 }
 

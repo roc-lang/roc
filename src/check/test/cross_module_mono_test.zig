@@ -115,6 +115,7 @@ const MonoTestEnv = struct {
 
         module_env.imports.clearResolvedModules();
         try module_env.imports.resolveImportsByExactModuleName(module_env, imported_envs_list.items);
+        try can.resolveDeferredFileImports(module_env, .skip);
         try can.resolveDeferredImports(module_env, .{ .imports = .{ .resolved_store = imported_envs_list.items } });
 
         var checker = try Check.init(
@@ -230,6 +231,7 @@ const MonoTestEnv = struct {
 
         module_env.imports.clearResolvedModules();
         try module_env.imports.resolveImportsByExactModuleName(module_env, imported_envs_list.items);
+        try can.resolveDeferredFileImports(module_env, .skip);
         try can.resolveDeferredImports(module_env, .{ .imports = .{ .resolved_store = imported_envs_list.items } });
 
         var checker = try Check.init(
@@ -351,6 +353,7 @@ const MonoTestEnv = struct {
 
         module_env.imports.clearResolvedModules();
         try module_env.imports.resolveImportsByExactModuleName(module_env, imported_envs_list.items);
+        try can.resolveDeferredFileImports(module_env, .skip);
         try can.resolveDeferredImports(module_env, .{ .imports = .{ .resolved_store = imported_envs_list.items } });
 
         var checker = try Check.init(
@@ -694,6 +697,7 @@ test "type checker catches polymorphic recursion (infinite type)" {
 
     module_env.imports.clearResolvedModules();
     try module_env.imports.resolveImportsByExactModuleName(module_env, imported_envs_list.items);
+    try can.resolveDeferredFileImports(module_env, .skip);
     try can.resolveDeferredImports(module_env, .{ .imports = .{ .resolved_store = imported_envs_list.items } });
 
     var checker = try Check.init(

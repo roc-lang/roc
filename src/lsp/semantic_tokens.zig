@@ -196,6 +196,7 @@ pub fn extractSemanticTokensWithImports(
     // Settle this module's deferred references into its imports. Semantic
     // tokens are read from the resolved CIR, and file imports are not read
     // because this is an inspection of the open file alone.
+    can.resolveDeferredFileImports(&module_env, .skip) catch return error.OutOfMemory;
     if (imported_envs) |envs| {
         module_env.imports.clearResolvedModules();
         module_env.imports.resolveImportsByExactModuleName(&module_env, envs) catch return error.OutOfMemory;

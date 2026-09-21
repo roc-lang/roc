@@ -1004,7 +1004,9 @@ module_name: []const u8,
 display_module_name_idx: Ident.Idx,
 /// Package-qualified module display name (e.g., "pf.Color"). Display-only; identity
 /// comparisons use content-based module identities (see `module_identities`).
-/// Set by the coordinator after parse or cache hit.
+/// Which package a module belongs to is workspace information, so the
+/// coordinator records this once the module is canonicalized; a cache hit
+/// restores what was recorded then. Canonicalization never reads it.
 qualified_module_ident: Ident.Idx,
 /// Env-local module identity table: dense `base.ModuleIdentity.Idx` -> 32-byte
 /// deep content hash (see `base.module_identity`). Entry ids are the
@@ -1683,13 +1685,18 @@ pub fn deinitCachedModule(self: *Self) void {
 }
 
 /// Whether every recorded file import has been read, which is what makes this
-/// module's source inputs complete. Import resolution reads them, so a module
-/// that has not been drained yet has no complete source-input identity.
+/// module's source inputs complete. The canonicalize task reads them, before
+/// the module's source-input identity keys the checked-module cache.
 pub fn fileDependenciesSettled(self: *const Self) bool {
     for (self.file_dependencies.items.items) |dep| {
         if (dep.state == .pending) return false;
     }
     return true;
+}
+
+/// Whether one recorded file import has been read.
+pub fn fileDependencySettled(self: *const Self, idx: FileDependency.SafeList.Idx) bool {
+    return self.file_dependencies.items.items[@intFromEnum(idx)].state != .pending;
 }
 
 /// Record a relative file dependency before its final read state is known.

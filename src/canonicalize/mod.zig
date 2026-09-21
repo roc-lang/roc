@@ -15,6 +15,8 @@ pub const ModuleEnv = @import("ModuleEnv.zig");
 pub const Scope = @import("Scope.zig");
 /// Resolution of a module's deferred references into its imported modules
 pub const ImportResolution = @import("ImportResolution.zig");
+/// Read the module's `import "path" as name` file imports. See `ImportResolution`.
+pub const resolveDeferredFileImports = ImportResolution.resolveDeferredFileImports;
 /// Drain a module's deferred import worklist. See `ImportResolution`.
 pub const resolveDeferredImports = ImportResolution.resolveDeferredImports;
 /// Dependency graph and SCC (Strongly Connected Components) analysis

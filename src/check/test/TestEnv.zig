@@ -186,6 +186,7 @@ pub fn initWithImport(module_name: []const u8, source: []const u8, other_module_
 
     // Settle this module's deferred references into its imports before any
     // checking reads them.
+    try can_mod.resolveDeferredFileImports(module_env, .skip);
     try can_mod.resolveDeferredImports(module_env, .{
         .imports = .{ .resolved_store = imported_envs.items },
         .reachable_envs = transitive_envs,
@@ -311,6 +312,7 @@ pub fn initWithExecutableRootNames(module_name: []const u8, source: []const u8, 
 
     // Settle this module's deferred references into its imports before any
     // checking reads them.
+    try can_mod.resolveDeferredFileImports(module_env, .skip);
     try can_mod.resolveDeferredImports(module_env, .{
         .imports = .{ .resolved_store = imported_envs.items },
     });
@@ -396,6 +398,7 @@ pub fn countModuleNotFoundDiagnosticsAfterCanonicalization(module_name: []const 
 
     // Whether a name denotes a module is settled by import resolution, so this
     // count comes from the drain with no imports available.
+    try can_mod.resolveDeferredFileImports(&module_env, .skip);
     try can_mod.resolveDeferredImports(&module_env, .{ .imports = .{ .explicit = &.{} } });
 
     const diagnostics = try module_env.getDiagnostics();

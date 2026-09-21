@@ -108,7 +108,8 @@ pub const CanonicalizeTask = struct {
     module_name: []const u8,
     /// Filesystem path (for diagnostics)
     path: []const u8,
-    /// Source-relative import base directory.
+    /// Source-relative base directory this module's `import "path" as name`
+    /// file imports resolve against.
     source_dir: []const u8,
     /// Dependency depth
     depth: u32,
@@ -137,9 +138,6 @@ pub const TypeCheckTask = struct {
     path: []const u8,
     /// Module environment borrowed from the coordinator
     module_env: *ModuleEnv,
-    /// Source-relative base directory this module's file imports resolve
-    /// against. Reading them is import resolution's filesystem input.
-    source_dir: []const u8,
     /// Imported module environments (read-only pointers to completed modules)
     imported_envs: []const *ModuleEnv,
     /// Each import's resolution outcome, which `can`'s import-resolution drain

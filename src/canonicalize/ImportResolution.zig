@@ -85,15 +85,48 @@ pub const Inputs = struct {
     /// which the draining module need not import itself; the checker receives
     /// those same modules as owner modules.
     reachable_envs: []const *const ModuleEnv = &.{},
-    /// How this module's file imports are read.
-    file_imports: FileImports = .skip,
 };
+
+/// Read the `import "path" as name` file imports on the module's deferred
+/// import worklist.
+///
+/// A file import depends on no other module: it is filesystem input named by
+/// the module's own source. It is therefore settled in the canonicalize task,
+/// before the module's source-input identity is used to key the checked-module
+/// cache. This drains exactly the worklist's `.file_import` entries and leaves
+/// every other entry to `resolveDeferredImports`; the worklist stays the one
+/// record of deferred work, and nothing here walks the CIR.
+pub fn resolveDeferredFileImports(
+    env: *ModuleEnv,
+    file_imports: FileImports,
+) std.mem.Allocator.Error!void {
+    if (env.deferred_import_refs.len() == 0) return;
+
+    // Diagnostics canonicalization deliberately left unpublished stay that
+    // way; only the ones this drain records are published below.
+    const unpublished_before = env.unpublishedDiagnosticCount();
+
+    var resolver = try Resolver.init(env, .{ .imports = .{ .explicit = &.{} } });
+    defer resolver.deinit();
+
+    var index: u32 = 0;
+    while (index < env.deferred_import_refs.len()) : (index += 1) {
+        const entry = env.deferred_import_refs.items.items[index];
+        if (entry.kind != .file_import) continue;
+        try resolver.resolveFileImport(entry, file_imports);
+    }
+
+    // Diagnostics the drain recorded belong to the module's reported set, so
+    // they reach reporting exactly like the ones canonicalization recorded.
+    try env.publishScratchDiagnosticsFrom(unpublished_before);
+}
 
 /// Drain a module's deferred import worklist.
 ///
 /// This is the single entry point every checking entry point calls, with the
 /// same inputs, after the module's direct imports have completed and before
-/// `Check.init`.
+/// `Check.init`. File imports have already been read by
+/// `resolveDeferredFileImports`, so their entries are settled here.
 pub fn resolveDeferredImports(
     env: *ModuleEnv,
     inputs: Inputs,
@@ -112,6 +145,10 @@ pub fn resolveDeferredImports(
     var index: u32 = 0;
     while (index < env.deferred_import_refs.len()) : (index += 1) {
         const entry = env.deferred_import_refs.items.items[index];
+        if (entry.kind == .file_import) {
+            std.debug.assert(env.fileDependencySettled(@enumFromInt(entry.file_dependency_idx)));
+            continue;
+        }
         try resolver.resolveEntry(entry);
     }
 
@@ -586,10 +623,6 @@ const Resolver = struct {
             return self.resolveReceiverMethodOwner(entry);
         }
 
-        if (entry.kind == .file_import) {
-            return self.resolveFileImport(entry);
-        }
-
         const outcome = self.outcomeFor(entryImport(entry));
 
         if (entry.kind == .import_statement) {
@@ -856,7 +889,11 @@ const Resolver = struct {
 
     /// Read an `import "path" as name` file and bind its contents, recording
     /// the read state the build's watch mode and checked-cache identity use.
-    fn resolveFileImport(self: *Resolver, entry: DeferredImportRef) std.mem.Allocator.Error!void {
+    fn resolveFileImport(
+        self: *Resolver,
+        entry: DeferredImportRef,
+        file_imports: FileImports,
+    ) std.mem.Allocator.Error!void {
         const expr_idx: CIR.Expr.Idx = @enumFromInt(entry.node_idx);
         const region = self.regionOf(entry);
         const dependency_idx: ModuleEnv.FileDependency.SafeList.Idx = @enumFromInt(entry.file_dependency_idx);
@@ -865,7 +902,7 @@ const Resolver = struct {
         try self.path_buf.appendSlice(self.env.gpa, self.env.getIdent(entry.path()));
         const relative_path = self.path_buf.items;
 
-        const read = switch (self.inputs.file_imports) {
+        const read = switch (file_imports) {
             .read => |read| read,
             .skip => {
                 self.env.setFileDependencyUnreadable(dependency_idx);

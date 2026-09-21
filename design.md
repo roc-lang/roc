@@ -2381,8 +2381,12 @@ stay in canonicalization.
 
 A module's deferred import worklist is drained once, after every direct import
 has completed and the checked-module cache has been probed and missed, at the
-start of the type-check task and before `Check.init`. Diagnostics the drain
-records go at the tail of the module's diagnostics, after the ones
+start of the type-check task and before `Check.init`. The worklist's file
+imports are the exception, because they name filesystem input and no module:
+they are read in the canonicalize task, by a second entry point over the same
+worklist that drains exactly its `.file_import` entries, so the main drain
+finds them already settled. Diagnostics the drain records go at the tail of
+the module's diagnostics, after the ones
 canonicalization reported, and the type-check task renders exactly that tail; a
 diagnostic canonicalization deliberately held back stays held back. `can`
 exposes the drain as one function that every checking entry point—the coordinator, the snapshot
@@ -2481,19 +2485,22 @@ checked-module cache keys, and is probed once the direct imports are complete. A
 checked hit makes the drain unnecessary; a canonicalized hit makes parsing
 unnecessary.
 
-A module's file imports are part of its source-input identity, and import
-resolution is what reads them, so the checked-cache key is complete only after
-the drain. A module whose file imports have not been read has no key to probe
-with and takes the miss.
+A module's file imports are part of its source-input identity. They are read
+in the canonicalize task, after the canonicalized-cache entry is stored and
+before the module leaves that task, so every module's source-input identity is
+complete by the time the checked cache is probed.
 
 ### Coordinator phases
 
 `Parse` (probe the canonicalized cache; on miss parse) → canonicalization
-(immediately, on miss; store the entry) → `WaitingOnImports` (canonicalized,
-waiting for every direct import to complete) → `WaitingOnPlatformRequirements`
-(app roots only) → `TypeCheck` (compute content identity, probe checked cache,
-on miss drain the worklist then check) → `Done`. No phase before
-`WaitingOnImports` depends on any other module.
+(enqueued as soon as the parse result is handled, never waiting on an import;
+on a canonicalized-cache miss canonicalize and store the entry, and either way
+read the file imports before the module leaves the task) → `WaitingOnImports` (canonicalized, waiting for every direct import
+to complete) → `WaitingOnPlatformRequirements` (app roots only) → `TypeCheck`
+(compute content identity, probe checked cache, on miss drain the worklist then
+check) → `Done`. No phase before `WaitingOnImports` depends on any other
+module. The package-qualified display identity is recorded on the env when the
+canonicalized result is handled, before the hosted transform.
 
 ## Cache Boundary
 

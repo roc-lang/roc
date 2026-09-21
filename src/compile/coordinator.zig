@@ -448,11 +448,15 @@ pub const Phase = enum {
     Parse,
     /// Queued for parsing (prevents double-enqueue)
     Parsing,
-    /// Parsed, needs canonicalization
+    /// Parsed, queued for canonicalization. Canonicalization reads no other
+    /// module, so this phase is entered as soon as the parse result is
+    /// handled, without waiting for any import.
     Canonicalize,
-    /// Parsed, waiting for every import to complete before canonicalization
+    /// Canonicalized, waiting for every direct import to complete before
+    /// type checking.
     WaitingOnImports,
-    /// Canonicalized app root, waiting on the platform's checked requires surface.
+    /// Canonicalized app root whose imports are complete, waiting on the
+    /// platform's checked requires surface.
     WaitingOnPlatformRequirements,
     /// Imports ready, needs type checking
     TypeCheck,
@@ -472,9 +476,10 @@ pub const Completion = enum {
 };
 
 /// Readiness of one semantic dependency. An unresolved import is intentionally
-/// distinct from a failed module: unresolved names proceed to canonicalization
-/// so that stage can report the source error, while a known failed module makes
-/// every dependent fail without consuming its partial semantic state.
+/// distinct from a failed module: a name that denotes no module is a
+/// diagnostic the import-resolution drain reports, so its dependents still
+/// reach type checking, while a known failed module makes every dependent fail
+/// without consuming its partial semantic state.
 const DependencyReadiness = enum {
     unresolved,
     waiting,
@@ -3437,10 +3442,9 @@ pub const Coordinator = struct {
         if (!manager.config.enabled) return false;
 
         const current_env = mod.moduleEnv() orelse return false;
-        // A module's file imports are read by import resolution, which runs in
-        // the type-check task. Until they are read this module has no complete
-        // source-input identity, so there is no key to probe with.
-        if (!current_env.fileDependenciesSettled()) return false;
+        // The canonicalize task read this module's file imports, so its
+        // source-input identity is complete and the key below is exact.
+        std.debug.assert(current_env.fileDependenciesSettled());
         if (!resolvedDirectImportsHaveCheckedOutput(current_env, imported_artifacts)) return false;
         const cache_key = self.checkedModuleCacheKey(current_env, imported_envs, imported_artifacts, platform_requirement_context, explicit_roots, mod.validation) catch {
             manager.stats.recordMiss();
@@ -4071,8 +4075,11 @@ pub const Coordinator = struct {
             unreachable;
         };
 
-        mod_after_imports.phase = .WaitingOnImports;
-        try self.tryUnblock(pkg, result.module_id);
+        // Canonicalization is a pure function of this module's own source, so
+        // it is queued now rather than after the imports complete. The module
+        // waits on its imports only once it is canonicalized.
+        if (mod_after_imports.completion != .pending) return;
+        try self.enqueueCanonicalizeTask(pkg, result.module_id, mod_after_imports);
     }
 
     /// Record that import resolution rejected `import_name` for this module.
@@ -4243,6 +4250,19 @@ pub const Coordinator = struct {
         mod.replaceModuleEnv(result.module_env);
 
         if (mod.moduleEnv()) |env| {
+            // The package-qualified display identity is workspace information,
+            // so the coordinator records it on the canonicalized environment.
+            // Two modules with the same basename in different packages share a
+            // bare display name; this identifier distinguishes them in
+            // diagnostics and in checked-artifact names. The bare
+            // `display_module_name_idx` is unchanged, and it keeps any
+            // directory segments the logical module name carries.
+            {
+                const qname = try std.fmt.allocPrint(self.gpa, "{s}.{s}", .{ result.package_name, result.module_name });
+                defer self.gpa.free(qname);
+                env.qualified_module_ident = try env.insertIdent(base.Ident.for_text(qname));
+            }
+
             if (can.BuiltinLowLevel.isBuiltinModule(env)) {
                 try can.BuiltinLowLevel.apply(env);
             } else if (self.enable_hosted_transform) {
@@ -4291,13 +4311,8 @@ pub const Coordinator = struct {
 
         if (mod.completedWithFailure()) return;
 
-        if (self.appShouldWaitForPlatformRequirements(mod)) {
-            mod.phase = .WaitingOnPlatformRequirements;
-            mod.visit_color = .black;
-            return;
-        }
-
-        try self.scheduleTypeCheckForCanonicalizedModule(pkg, result.module_id, mod);
+        mod.phase = .WaitingOnImports;
+        try self.tryUnblock(pkg, result.module_id);
     }
 
     fn platformRootCandidate(self: *Coordinator) ?RootModuleRef {
@@ -4454,7 +4469,6 @@ pub const Coordinator = struct {
                 .module_name = mod.name,
                 .path = mod.path,
                 .module_env = mod.moduleEnv().?,
-                .source_dir = mod.canonicalSourceDir(),
                 .imported_envs = imported_envs,
                 .deferred_imports = deferred_imports,
                 .imported_artifacts = imported_artifacts,
@@ -5006,7 +5020,31 @@ pub const Coordinator = struct {
         }
 
         if (comptime trace_build) {
-            std.debug.print("[COORD] UNBLOCK: pkg={s} module={s} -> Canonicalize\n", .{ pkg.name, mod.name });
+            std.debug.print("[COORD] UNBLOCK: pkg={s} module={s} imports complete\n", .{ pkg.name, mod.name });
+        }
+
+        if (self.appShouldWaitForPlatformRequirements(mod)) {
+            mod.phase = .WaitingOnPlatformRequirements;
+            mod.visit_color = .black;
+            return;
+        }
+
+        try self.scheduleTypeCheckForCanonicalizedModule(pkg, module_id, mod);
+    }
+
+    /// Queue this module's canonicalization.
+    ///
+    /// Canonicalization is a pure function of the module's own source, so this
+    /// is reached straight from the parse result and depends on no other
+    /// module's progress.
+    fn enqueueCanonicalizeTask(
+        self: *Coordinator,
+        pkg: *PackageState,
+        module_id: ModuleId,
+        mod: *ModuleState,
+    ) Allocator.Error!void {
+        if (comptime trace_build) {
+            std.debug.print("[COORD] CANONICALIZE: pkg={s} module={s}\n", .{ pkg.name, mod.name });
         }
 
         mod.phase = .Canonicalize;
@@ -5020,7 +5058,7 @@ pub const Coordinator = struct {
                 .source_dir = mod.canonicalSourceDir(),
                 .module_env = mod.moduleEnv().?,
                 .cached_ast = mod.cached_ast orelse
-                    std.debug.panic("compile.coordinator.tryUnblock missing cached AST for {s}", .{mod.name}),
+                    std.debug.panic("compile.coordinator.enqueueCanonicalizeTask missing cached AST for {s}", .{mod.name}),
                 .depth = mod.depth,
                 .validation = mod.validation,
                 .is_entry_module = self.isEntryModule(pkg, module_id),
@@ -5319,17 +5357,6 @@ pub const Coordinator = struct {
         try env.initCIRFields(display_module_name);
         env.module_role = task.module_role;
 
-        // Set qualified_module_ident to a package-qualified identifier (e.g., "app.main", "pf.Stdout")
-        // to ensure module identity is unique across packages. Without this, two modules with
-        // the same filename in different packages (e.g., app's main.roc and platform's main.roc)
-        // get the same identity, causing nominal type origin_module collisions.
-        // display_module_name_idx stays as the bare final segment (for type
-        // module validation, error messages, etc.), while the qualified identity
-        // preserves any directory segments in task.module_name.
-        {
-            const qname = try std.fmt.allocPrint(task_allocs.scratch, "{s}.{s}", .{ task.package_name, task.module_name });
-            env.qualified_module_ident = try env.insertIdent(base.Ident.for_text(qname));
-        }
         try env.common.calcLineStarts(module_alloc);
 
         // The AST and result payloads outlive this task, so they use the result
@@ -5458,6 +5485,14 @@ pub const Coordinator = struct {
             task.is_entry_module,
         );
 
+        // The module's canonicalization output is complete above, as a
+        // function of this module's source alone. What remains in this task is
+        // its `import "path" as name` file imports: filesystem input that
+        // names no module, read here so that the module's source-input
+        // identity -- which the coordinator's checked-module cache probe keys
+        // on -- is complete before the module leaves the task.
+        try can.resolveDeferredFileImports(env, .{ .read = .{ .ctx = self.roc_ctx, .source_dir = task.source_dir } });
+
         const canonicalize_ns = readStageTimer(self.roc_ctx.std_io, &canonicalize_timer);
 
         var diagnostics_timer = startStageTimer(self.roc_ctx.std_io);
@@ -5558,7 +5593,6 @@ pub const Coordinator = struct {
             ctfe_options,
             task.defer_publication,
             .{ .explicit = task.deferred_imports },
-            .{ .read = .{ .ctx = self.roc_ctx, .source_dir = task.source_dir } },
         );
         defer typecheck_output.deinit();
         // On error the coordinator still owns the input environment. Transfer
@@ -6048,6 +6082,63 @@ fn writeCacheKeyPurityFixture(tmp_dir: *std.testing.TmpDir, sub_dir: []const u8)
     }
 }
 
+/// The echo platform the fixtures below build their apps on.
+const echo_platform_root_source =
+    \\platform ""
+    \\    requires {} { main! : List(Str) => Try({}, [Exit(I8), ..]) }
+    \\    exposes [Echo]
+    \\    packages {}
+    \\    provides { "roc_main": main_for_host! }
+    \\    hosted { "roc_echo_line": Echo.line! }
+    \\
+    \\import Echo
+    \\
+    \\main_for_host! : List(Str) => I8
+    \\main_for_host! = |args|
+    \\    match main!(args) {
+    \\        Ok({}) => 0
+    \\        Err(Exit(code)) => code
+    \\        Err(other) => {
+    \\            Echo.line!("Program exited with error: ${Str.inspect(other)}")
+    \\            1
+    \\        }
+    \\    }
+;
+
+const echo_platform_echo_source =
+    \\Echo := [].{
+    \\    line! : Str => {}
+    \\}
+;
+
+/// An app on the echo platform whose root module obtains one string either
+/// from an `import "path" as name` file import or from an ordinary literal.
+/// The two spellings compile the same modules, so a build of one is the
+/// control for a build of the other.
+fn writeFileImportFixture(
+    tmp_dir: *std.testing.TmpDir,
+    sub_dir: []const u8,
+    root_source: []const u8,
+) (std.Io.Dir.CreateDirPathError || std.Io.Dir.WriteFileError || std.Io.Writer.Error)!void {
+    var path_buf: [256]u8 = undefined;
+    var writer = std.Io.Writer.fixed(&path_buf);
+    try writer.print("{s}/app/.roc_echo_platform", .{sub_dir});
+    try tmp_dir.dir.createDirPath(std.testing.io, writer.buffered());
+
+    const files = [_]struct { rel: []const u8, data: []const u8 }{
+        .{ .rel = "app/message.txt", .data = "hello from an imported file" },
+        .{ .rel = "app/main.roc", .data = root_source },
+        .{ .rel = "app/.roc_echo_platform/main.roc", .data = echo_platform_root_source },
+        .{ .rel = "app/.roc_echo_platform/Echo.roc", .data = echo_platform_echo_source },
+    };
+    for (files) |file| {
+        var rel_buf: [256]u8 = undefined;
+        var rel_writer = std.Io.Writer.fixed(&rel_buf);
+        try rel_writer.print("{s}/{s}", .{ sub_dir, file.rel });
+        try tmp_dir.dir.writeFile(std.testing.io, .{ .sub_path = rel_writer.buffered(), .data = file.data });
+    }
+}
+
 fn writeIssue9883Fixture(tmp_dir: *std.testing.TmpDir, sub_dir: []const u8) (std.Io.Dir.CreateDirPathError || std.Io.Dir.WriteFileError || std.Io.Writer.Error)!void {
     var path_buf: [256]u8 = undefined;
     var writer = std.Io.Writer.fixed(&path_buf);
@@ -6075,32 +6166,8 @@ fn writeIssue9883Fixture(tmp_dir: *std.testing.TmpDir, sub_dir: []const u8) (std
         \\    SomeErrors : [ErrorA, ErrorB, ErrorC, ErrorD, ErrorE, ErrorF]
         \\}
         },
-        .{ .rel = "app/.roc_echo_platform/main.roc", .data =
-        \\platform ""
-        \\    requires {} { main! : List(Str) => Try({}, [Exit(I8), ..]) }
-        \\    exposes [Echo]
-        \\    packages {}
-        \\    provides { "roc_main": main_for_host! }
-        \\    hosted { "roc_echo_line": Echo.line! }
-        \\
-        \\import Echo
-        \\
-        \\main_for_host! : List(Str) => I8
-        \\main_for_host! = |args|
-        \\    match main!(args) {
-        \\        Ok({}) => 0
-        \\        Err(Exit(code)) => code
-        \\        Err(other) => {
-        \\            Echo.line!("Program exited with error: ${Str.inspect(other)}")
-        \\            1
-        \\        }
-        \\    }
-        },
-        .{ .rel = "app/.roc_echo_platform/Echo.roc", .data =
-        \\Echo := [].{
-        \\    line! : Str => {}
-        \\}
-        },
+        .{ .rel = "app/.roc_echo_platform/main.roc", .data = echo_platform_root_source },
+        .{ .rel = "app/.roc_echo_platform/Echo.roc", .data = echo_platform_echo_source },
     };
     for (files) |file| {
         var rel_buf: [256]u8 = undefined;
@@ -7271,6 +7338,70 @@ test "Coordinator checked module cache hits on second compile" {
     try std.testing.expect(second.cache.hits > 0);
 }
 
+const file_import_app_root_source =
+    \\app [main!] { pf: platform "./.roc_echo_platform/main.roc" }
+    \\
+    \\import "message.txt" as message : Str
+    \\
+    \\main! = |_args| {
+    \\    _ = message
+    \\    Ok({})
+    \\}
+;
+
+const string_literal_app_root_source =
+    \\app [main!] { pf: platform "./.roc_echo_platform/main.roc" }
+    \\
+    \\message : Str
+    \\message = "hello from an imported file"
+    \\
+    \\main! = |_args| {
+    \\    _ = message
+    \\    Ok({})
+    \\}
+;
+
+test "Coordinator checked module cache hits a module that imports a file" {
+    const allocator = std.testing.allocator;
+
+    var tmp_dir = std.testing.tmpDir(.{});
+    defer tmp_dir.cleanup();
+    try tmp_dir.dir.createDirPath(std.testing.io, "file_import_cache");
+    const file_import_cache_dir = try tmp_dir.dir.realPathFileAlloc(std.testing.io, "file_import_cache", allocator);
+    defer allocator.free(file_import_cache_dir);
+    try tmp_dir.dir.createDirPath(std.testing.io, "literal_cache");
+    const literal_cache_dir = try tmp_dir.dir.realPathFileAlloc(std.testing.io, "literal_cache", allocator);
+    defer allocator.free(literal_cache_dir);
+
+    try writeFileImportFixture(&tmp_dir, "file_import", file_import_app_root_source);
+    const file_import_app = try tmp_dir.dir.realPathFileAlloc(std.testing.io, "file_import/app/main.roc", allocator);
+    defer allocator.free(file_import_app);
+
+    try writeFileImportFixture(&tmp_dir, "literal", string_literal_app_root_source);
+    const literal_app = try tmp_dir.dir.realPathFileAlloc(std.testing.io, "literal/app/main.roc", allocator);
+    defer allocator.free(literal_app);
+
+    const file_import_first = try compileAppWithCheckedModuleCache(allocator, file_import_cache_dir, file_import_app);
+    try std.testing.expectEqual(@as(u32, 0), file_import_first.build.cache_hits);
+    try std.testing.expect(file_import_first.build.modules_compiled > 0);
+    try std.testing.expect(file_import_first.cache.stores > 0);
+    try std.testing.expectEqual(@as(u64, 0), file_import_first.cache.store_failures);
+
+    const literal_first = try compileAppWithCheckedModuleCache(allocator, literal_cache_dir, literal_app);
+    try std.testing.expectEqual(file_import_first.build.modules_compiled, literal_first.build.modules_compiled);
+
+    // The canonicalize task reads a module's file imports, so its
+    // source-input identity is complete when the checked cache is probed. A
+    // file import therefore costs exactly the cache hits an ordinary string
+    // literal in the same position does.
+    const file_import_second = try compileAppWithCheckedModuleCache(allocator, file_import_cache_dir, file_import_app);
+    const literal_second = try compileAppWithCheckedModuleCache(allocator, literal_cache_dir, literal_app);
+    try std.testing.expect(file_import_second.build.cache_hits > 0);
+    try std.testing.expectEqual(literal_second.build.cache_hits, file_import_second.build.cache_hits);
+    try std.testing.expectEqual(literal_second.build.modules_compiled, file_import_second.build.modules_compiled);
+    try std.testing.expect(file_import_second.build.modules_compiled < file_import_first.build.modules_compiled);
+}
+
 test "Coordinator checked module cache restores imported alias Try error on hit" {
     const allocator = std.testing.allocator;
 
@@ -8143,6 +8274,146 @@ test "platform root candidate comes from registration, not name probing" {
     const candidate = coord.platformRootCandidate() orelse return error.TestExpectedCandidate;
     try std.testing.expect(candidate.mod == pf_pkg.getModule(pf_root_id).?);
     try std.testing.expect(candidate.mod.phase != .Done);
+}
+
+/// What one module's phases were observed to be while the module it imports
+/// was still incomplete.
+const ImportPhaseObservations = struct {
+    /// The importer was canonicalized -- it reached `.WaitingOnImports` and
+    /// its environment carries canonicalization's strict-demand relation --
+    /// while the module it imports had not been canonicalized itself.
+    canonicalized_before_import_canonicalized: bool,
+    /// The importer left `.WaitingOnImports` for type checking while the
+    /// module it imports had not completed.
+    type_checked_while_import_incomplete: bool,
+    /// The importer reached type checking at all.
+    reached_type_check: bool,
+    /// Every module of the build completed successfully.
+    completed_without_errors: bool,
+};
+
+fn findModuleInPackage(pkg: *PackageState, module_name: []const u8) ?*ModuleState {
+    for (pkg.modules.items) |*mod| {
+        if (std.mem.eql(u8, mod.name, module_name)) return mod;
+    }
+    return null;
+}
+
+/// Run the whole frontend one task at a time, recording `importer_name`'s
+/// phase after every step against whether `imported_name` has completed.
+fn observeImportPhases(
+    allocator: Allocator,
+    app_path: []const u8,
+    importer_name: []const u8,
+    imported_name: []const u8,
+) CheckedModuleCacheRunError!ImportPhaseObservations {
+    const roc_ctx = CoreCtx.os(allocator, allocator, std.testing.io);
+    const builtin_modules = try sharedBuiltinModules();
+
+    var coord = try Coordinator.init(
+        allocator,
+        .single_threaded,
+        1,
+        roc_target.RocTarget.detectNative(),
+        builtin_modules,
+        build_options.compiler_version,
+        null, // cache_manager
+        roc_ctx,
+    );
+    defer coord.deinit();
+    coord.enable_hosted_transform = true;
+
+    var arena_impl = base.SingleThreadArena.init(allocator);
+    defer arena_impl.deinit();
+
+    try coord.start();
+    try coord.discoverAppFromPath(arena_impl.allocator(), .{ .entry_path = app_path });
+
+    var observations = ImportPhaseObservations{
+        .canonicalized_before_import_canonicalized = false,
+        .type_checked_while_import_incomplete = false,
+        .reached_type_check = false,
+        .completed_without_errors = false,
+    };
+
+    while (!coord.isComplete()) {
+        if (coord.task_channel.tryRecv()) |task| {
+            const result = try coord.executeTaskInline(task, coord.inline_worker_allocs.taskAllocators());
+            coord.inline_worker_allocs.resetArena();
+            try coord.handleResult(result);
+        } else if (!try coord.tryUnblockAllWaiting()) {
+            return error.TestUnexpectedResult;
+        }
+
+        const app_package_name = coord.app_package_name orelse return error.TestUnexpectedResult;
+        const app_pkg = coord.packages.get(app_package_name) orelse return error.TestUnexpectedResult;
+        const importer = findModuleInPackage(app_pkg, importer_name) orelse continue;
+        const imported = findModuleInPackage(app_pkg, imported_name) orelse continue;
+
+        const import_incomplete = imported.completion == .pending;
+        const import_not_canonicalized = switch (imported.phase) {
+            .Parse, .Parsing, .Canonicalize => true,
+            .WaitingOnImports, .WaitingOnPlatformRequirements, .TypeCheck, .Done => false,
+        };
+        switch (importer.phase) {
+            .WaitingOnImports => {
+                const importer_canonicalized = if (importer.moduleEnv()) |env|
+                    env.topLevelDemandDependenciesReady()
+                else
+                    false;
+                if (importer_canonicalized and import_not_canonicalized) {
+                    observations.canonicalized_before_import_canonicalized = true;
+                }
+            },
+            .WaitingOnPlatformRequirements, .TypeCheck => {
+                observations.reached_type_check = true;
+                if (import_incomplete) observations.type_checked_while_import_incomplete = true;
+            },
+            .Parse, .Parsing, .Canonicalize, .Done => {},
+        }
+    }
+    coord.frontend_complete = true;
+    try coord.finishCheckedProgram(.executable_artifacts);
+
+    observations.completed_without_errors = !coord.hasUserErrors();
+    return observations;
+}
+
+test "Coordinator canonicalizes a module before its import completes" {
+    const allocator = std.testing.allocator;
+
+    var tmp_dir = std.testing.tmpDir(.{});
+    defer tmp_dir.cleanup();
+    try writeIssue9883Fixture(&tmp_dir, "canonicalize_before_imports");
+    const app_path = try tmp_dir.dir.realPathFileAlloc(std.testing.io, "canonicalize_before_imports/app/main.roc", allocator);
+    defer allocator.free(app_path);
+
+    const observations = try observeImportPhases(allocator, app_path, "main", "Bar");
+
+    // Canonicalization reads no other module, so the app root is canonicalized
+    // -- reaching `.WaitingOnImports` -- while `Bar` has not been
+    // canonicalized itself.
+    try std.testing.expect(observations.canonicalized_before_import_canonicalized);
+    try std.testing.expect(observations.completed_without_errors);
+}
+
+test "Coordinator type checks a module only after its imports complete" {
+    const allocator = std.testing.allocator;
+
+    var tmp_dir = std.testing.tmpDir(.{});
+    defer tmp_dir.cleanup();
+    try writeIssue9883Fixture(&tmp_dir, "type_check_after_imports");
+    const app_path = try tmp_dir.dir.realPathFileAlloc(std.testing.io, "type_check_after_imports/app/main.roc", allocator);
+    defer allocator.free(app_path);
+
+    const observations = try observeImportPhases(allocator, app_path, "main", "Bar");
+
+    // Type checking consumes the imported module's checked output, so it is
+    // what waits: the app root leaves `.WaitingOnImports` only once `Bar` has
+    // completed.
+    try std.testing.expect(observations.reached_type_check);
+    try std.testing.expect(!observations.type_checked_while_import_incomplete);
+    try std.testing.expect(observations.completed_without_errors);
 }
 
 test "Coordinator CI failure scenario - app with platform cross-package imports" {
