@@ -13455,7 +13455,7 @@ test "frozen callable procedures and explicit drop helpers are DLL exports on Wi
 /// forced-inline attribute group. Textual IR names each distinct attribute
 /// group once and refers to it by index, so the forced groups are collected
 /// first and the call sites referring to them counted second.
-fn forcedInlineCallSites(gpa: Allocator, ir: []const u8, function_name: []const u8) !usize {
+fn forcedInlineCallSites(gpa: Allocator, ir: []const u8, function_name: []const u8) (Allocator.Error || error{FunctionNotPrinted})!usize {
     var forced_groups = std.AutoHashMap(u32, void).init(gpa);
     defer forced_groups.deinit();
     var groups = std.mem.splitScalar(u8, ir, '\n');
@@ -13463,8 +13463,8 @@ fn forcedInlineCallSites(gpa: Allocator, ir: []const u8, function_name: []const 
         const prefix = "attributes #";
         if (!std.mem.startsWith(u8, line, prefix)) continue;
         const rest = line[prefix.len..];
-        const digits_end = std.mem.indexOfScalar(u8, rest, ' ') orelse continue;
-        if (std.mem.indexOf(u8, rest, "alwaysinline") == null) continue;
+        const digits_end = std.mem.findScalar(u8, rest, ' ') orelse continue;
+        if (std.mem.find(u8, rest, "alwaysinline") == null) continue;
         try forced_groups.put(std.fmt.parseInt(u32, rest[0..digits_end], 10) catch continue, {});
     }
 
@@ -13476,7 +13476,7 @@ fn forcedInlineCallSites(gpa: Allocator, ir: []const u8, function_name: []const 
     var lines = std.mem.splitScalar(u8, ir, '\n');
     while (lines.next()) |line| {
         if (std.mem.startsWith(u8, line, "define ")) {
-            in_function = std.mem.indexOf(u8, line, declaration) != null;
+            in_function = std.mem.find(u8, line, declaration) != null;
             found_function = found_function or in_function;
             continue;
         }
@@ -13485,7 +13485,7 @@ fn forcedInlineCallSites(gpa: Allocator, ir: []const u8, function_name: []const 
             continue;
         }
         if (!in_function) continue;
-        const hash = std.mem.lastIndexOfScalar(u8, line, '#') orelse continue;
+        const hash = std.mem.findScalarLast(u8, line, '#') orelse continue;
         if (hash == 0 or line[hash - 1] != ' ') continue;
         const group = std.fmt.parseInt(u32, line[hash + 1 ..], 10) catch continue;
         if (forced_groups.contains(group)) sites += 1;
