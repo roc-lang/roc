@@ -836,6 +836,24 @@ pub fn assertTypeErrorMsgs(self: *TestEnv, expected: []const []const u8) TestEnv
     }
 }
 
+/// Assert that checking produced exactly the expected problems (errors AND
+/// warnings), in order, each building a report with the expected title.
+pub fn assertTypeErrorTitles(self: *TestEnv, expected: []const []const u8) TestEnvError!void {
+    try self.assertNoParseProblems();
+
+    try testing.expectEqual(expected.len, self.checker.problems.problems.items.len);
+
+    var report_builder = try self.initReportBuilder();
+    defer report_builder.deinit();
+
+    for (expected, self.checker.problems.problems.items) |expected_title, problem| {
+        var report = try report_builder.build(problem);
+        defer report.deinit();
+
+        try testing.expectEqualStrings(expected_title, report.title);
+    }
+}
+
 /// Assert that canonicalization produced exactly one diagnostic with the expected title.
 pub fn assertOneCanError(self: *TestEnv, expected: []const u8) TestEnvError!void {
     try self.assertNoParseProblems();
