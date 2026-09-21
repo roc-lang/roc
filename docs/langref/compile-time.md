@@ -46,12 +46,18 @@ echo!("z is ${z.to_str()}")
 
 The entire string gets evaluated at compile time, but the `echo!` itself only gets evaluated at runtime.
 
-- `z` gets eval at compile time
-- but so does `z.to_str()`
-- and also the interpolation
-- but not `echo!`
+To summarize, here's what happens to each part of that expression:
 
-Lingo: this is sometimes called "comptime" as in "runs at comptime" or [CTFE](https://en.wikipedia.org/wiki/Compile-time_function_execution) in the literature (?)
+- `z` gets evaluated at compile time.
+- `z.to_str()` also gets evaluated at compile time.
+- The string interpolation also gets evaluated at compile time.
+- The call to `echo!` does not get evaluated at compile time; it runs at runtime, using the string that was already computed at compile time.
+
+### Terminology
+
+Compile-time evaluation is sometimes called _comptime_, as in "this runs at comptime." In the literature,
+it's often called [compile-time function execution](https://en.wikipedia.org/wiki/Compile-time_function_execution),
+or CTFE for short.
 
 ### Empty builtin collections never get stored
 
@@ -79,4 +85,26 @@ In contrast, if you do it at compile time, and the big list ends up in the progr
 
 ## Uses
 
-[`parser_for`](static-dispatch#parsing-and-encoding) is a good example: do all the work of assembling the custom parser at comptime, then etc
+Compile-time evaluation makes it practical to do expensive setup work once, while the program is being compiled,
+instead of every time the program runs.
+
+[Parsers](parsers) are a good example. A parser built with [`parser_for`](static-dispatch#parsing-and-encoding)
+(for example, by calling `Json.parser_camel()`) is assembled specifically for the type being parsed. When that
+parser is a top-level constant, all the work of assembling it happens at compile time, and the compiled program
+only contains the finished parser. See [Parsers at Compile Time](parsers#parsers-at-compile-time).
+
+Compile-time evaluation also combines well with [importing non-Roc files](statements#importing-non-roc-files).
+For example, this parses a JSON configuration file at compile time:
+
+```roc
+import "config.json" as config_text : Str
+
+config : Try({ port : U16, host : Str }, [InvalidJson(Str), MissingRequiredField(Str)])
+config = Json.parse(config_text)
+```
+
+Since `config` is a top-level constant, the program contains the already-parsed configuration, and neither
+reads nor parses `config.json` at runtime.
+
+Other common uses include precomputing lookup tables, and building data structures (such as
+[dictionaries](dictionaries-and-sets)) whose contents are known in advance.

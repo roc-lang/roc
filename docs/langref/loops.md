@@ -138,4 +138,28 @@ Loops are typically used for [variable reassignment](statements#reassignment) or
 
 ## Infinite Loops
 
-TODO
+A `while` loop whose condition is `True` will keep running until something inside it
+exits the loop, such as a [`break`](#break-statement) or a [`return`](statements#return):
+
+```roc
+var $n = 1
+
+while True {
+    $n = $n * 2
+
+    if $n > 100 {
+        break
+    }
+}
+
+# $n is now 128
+```
+
+This is useful when the condition for exiting the loop is easiest to check in the middle of
+the loop body, rather than at the beginning.
+
+If nothing ever exits the loop, it will run forever. For example, a server might have a loop
+that waits for a request, handles it, and then goes back to waiting for the next request.
+
+A loop that runs forever during [compile-time evaluation](compile-time) will currently hang the compiler, as
+noted in [Pure Functions](functions#pure-functions).

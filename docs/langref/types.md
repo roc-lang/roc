@@ -247,6 +247,36 @@ Reach for an alias when you only want a shorter or clearer name; reach for a
 [nominal type](#nominal-types) when you want a genuinely distinct type the
 compiler keeps separate.
 
+## Recursive Types {#recursive}
+
+A [nominal type](#nominal-types) can refer to itself in its own definition. This is how you
+define data structures like trees:
+
+```roc
+Tree := [Leaf, Node(Tree, U64, Tree)]
+```
+
+Type aliases can't be recursive, because an alias is only a different name for the type it's
+defined as, and substituting a recursive alias's definition into itself would never end. If you
+need a recursive type, use a nominal type (`:=`) instead of an alias (`:`).
+
+[Structural tag unions](tag-unions#limitations) can't be recursive either, so recursion always
+goes through a nominal type.
+
 ## Mutually Recursive Types {#mutually-recursive}
 
-TODO
+Two or more nominal types can refer to each other in their definitions. For example, a syntax
+tree for a small programming language might have expressions which contain statements, and
+statements which contain expressions:
+
+```roc
+Expr := [Num(I64), Add(Expr, Expr), Block(List(Stmt))]
+
+Stmt := [Let(Str, Expr), Print(Expr)]
+```
+
+As with other recursive types, every type in the cycle must be a nominal type.
+
+Since each [type module](modules#type-modules) exposes only one type, mutually recursive types
+that need to be used from other modules are typically defined as associated types of a single
+type. See [Importing mutually recursive types](modules#importing-mutually-recursive-types) for how to do this.
