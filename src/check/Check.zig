@@ -37587,16 +37587,10 @@ test "issue 11444: complete imported schemes share a cache and roll back with th
 
     var nodes: [2]CIR.Node.Idx = undefined;
     inline for (.{ "encode", "encode_tuple" }, 0..) |name, i| {
-        nodes[i] = for (source.module_env.method_defs.entries.items) |entry| {
-            if (std.mem.eql(u8, name, source.module_env.getIdentStoreConst().getText(entry.key.methodIdent()))) {
-                break entry.value.type_node_idx;
-            }
-        } else return error.TestUnexpectedResult;
+        nodes[i] = source.methodTypeNode(name) orelse return error.TestUnexpectedResult;
         try std.testing.expect(source.module_env.bindingSchemeCodecRequirementsForNode(nodes[i]).len > 0);
     }
-    const import_idx: CIR.Import.Idx = for (client.module_env.imports.imports.items.items, 0..) |str_idx, i| {
-        if (std.mem.eql(u8, client.module_env.getString(str_idx), "Codec")) break @enumFromInt(i);
-    } else return error.TestUnexpectedResult;
+    const import_idx = client.importIndex("Codec") orelse return error.TestUnexpectedResult;
 
     const checker = &client.checker;
     // TestEnv's import array lives only through checkFile. This test invokes
