@@ -6768,6 +6768,18 @@ requirements cover that implementation cycle, so it is not replayed as a new
 external use. Together these rules cover forward and polymorphically recursive
 lookup paths without making an annotation erase requirements inferred from its
 body.
+
+Every predeclared binding, including a block-local annotated function, records
+this correspondence before its body is checked. Attached constraint callable
+identities are paired at the same point. Once checking has settled, checked
+scheme-use records are projected into the finished binding's coordinates using
+these recorded pairs. This also applies to recursive edges that need no
+requirement replay: a body can close an annotation's output row, so the
+predeclared and finished schemes need not have the same quantified slots.
+This remapping changes metadata only, never the solved type graph. Indexed joins
+compose the recorded substitutions without searching the type structure or
+matching variable names, and the correspondence is checker-local scratch.
+
 A receiver already at `Rank.generalized` is never captured as an outer-rank
 pending requirement. Generalization boundaries cannot run inside a commit
 probe; probes may append candidates, but rollback rewinds those candidates and
@@ -9281,6 +9293,12 @@ concrete named arguments for the current specialization and lowers the
 declaration backing through those cells. The result is a backing type in which
 every formal occurrence has the same monomorphic meaning as the named type
 argument that instantiated it.
+
+When declaration output expands an alias containing a local nominal
+application, it must build that application from the arguments translated in
+the current declaration's formal scope. Reusing the original annotation's
+nominal instance would retain the alias declaration's independent parameters
+inside an otherwise correctly substituted outer backing template.
 
 Monotype must use the declaration backing template for ordinary local nominal
 declarations. For local declarations, the `backing` root on a nominal-use

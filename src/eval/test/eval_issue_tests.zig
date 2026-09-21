@@ -200,8 +200,130 @@ const issue10703DualAliasSource =
     \\}
 ;
 
+// https://github.com/roc-lang/roc/issues/11377
+const issue11377GenericNominalCollectionSource =
+    \\RowsIndex(key, value) := [IndexEmpty, IndexNode({ key : key, value : value })].{
+    \\    empty : () -> RowsIndex(key, value)
+    \\    empty = || IndexEmpty
+    \\
+    \\    get : RowsIndex(key, value), key -> Try(value, [Missing])
+    \\    get = |tree, _key| match tree {
+    \\        IndexEmpty => Err(Missing)
+    \\        IndexNode(node) => Ok(node.value)
+    \\    }
+    \\
+    \\    insert : RowsIndex(key, value), key, value -> RowsIndex(key, value)
+    \\    insert = |tree, key, value| match tree {
+    \\        IndexEmpty => IndexNode({ key, value })
+    \\        IndexNode(_node) => IndexNode({ key, value })
+    \\    }
+    \\}
+    \\
+    \\RowsSlotCell(item) : [RowsSlotLive(item)]
+    \\
+    \\RowsBuild(item) : {
+    \\    chunks : RowsIndex(U64, RowsSlotCell(item)),
+    \\    key_index : RowsIndex(Str, U64),
+    \\}
+    \\
+    \\RowsError : [DuplicateKey(Str)]
+    \\
+    \\rows_build_fresh_loop : List(item), (item -> Str), U64, RowsBuild(item) -> Try(RowsBuild(item), RowsError)
+    \\rows_build_fresh_loop = |items, key_of, index, build|
+    \\    if index == items.len() {
+    \\        Ok(build)
+    \\    } else {
+    \\        item = items.get(index) ?? crash "Rows input length changed during construction"
+    \\        key = key_of(item)
+    \\        match build.key_index.get(key) {
+    \\            Ok(_) => Err(DuplicateKey(key))
+    \\            Err(_) => rows_build_fresh_loop(
+    \\                items,
+    \\                key_of,
+    \\                index + 1,
+    \\                {
+    \\                    chunks: build.chunks.insert(index, RowsSlotLive(item)),
+    \\                    key_index: build.key_index.insert(key, index),
+    \\                },
+    \\            )
+    \\        }
+    \\    }
+    \\
+    \\Rows(item) :: [Rows(RowsBuild(item))].{
+    \\    from_list : List(item), (item -> Str) -> Try(Rows(item), RowsError)
+    \\    from_list = |items, key_of| match rows_build_fresh_loop(items, key_of, 0, { chunks: RowsIndex.empty(), key_index: RowsIndex.empty() }) {
+    \\        Ok(built) => Ok(Rows(built))
+    \\        Err(DuplicateKey(key)) => Err(DuplicateKey(key))
+    \\    }
+    \\}
+    \\
+    \\main = match Rows.from_list([{ key: "same" }, { key: "same" }], |item| item.key) {
+    \\    Err(DuplicateKey(key)) => key
+    \\    Ok(_) => "no duplicate"
+    \\}
+;
+
 /// Public value `tests`.
 pub const tests = [_]TestCase{
+    .{
+        .name = "issue 11377: nested nominal alias applications retain outer parameters",
+        .source_kind = .module,
+        .source =
+        \\Cell(a) : [Live(a)]
+        \\Index(k, v) := [Node(k, v)]
+        \\Store(a) : { fixed : Index(Str, U64), cells : Index(U64, Cell(a)) }
+        \\Rows(a) := [Rows(Store(a))].{
+        \\    make : a -> Rows(a)
+        \\    make = |item| Rows({ fixed: Node("fixed", 7), cells: Node(1, Live(item)) })
+        \\    first : Rows(a) -> a
+        \\    first = |Rows(store)| match store.cells { Node(_, Live(item)) => item }
+        \\}
+        \\main = (Rows.first(Rows.make("kept")), Rows.first(Rows.make(42.U64)))
+        ,
+        .expected = .{ .inspect_str = "(\"kept\", 42)" },
+    },
+    .{
+        .name = "issue 11377: recursive annotated output row closes in body scheme",
+        .source_kind = .module,
+        .source =
+        \\Cell(a) : [Live(a)]
+        \\loop : a, U64 -> { cell : Cell(a) }
+        \\loop = |x, n| if n == 0 { { cell: Live(x) } } else { loop(x, n - 1) }
+        \\main = match loop("kept", 2).cell { Live(x) => x }
+        ,
+        .expected = .{ .inspect_str = "\"kept\"" },
+    },
+    .{
+        .name = "issue 11377: local recursive annotated output row closes in body scheme",
+        .source_kind = .module,
+        .source =
+        \\Cell(a) : [Live(a)]
+        \\main = {
+        \\    loop : Str, U64 -> { cell : Cell(Str) }
+        \\    loop = |x, n| if n == 0 { { cell: Live(x) } } else { loop(x, n - 1) }
+        \\    match loop("kept", 2).cell { Live(x) => x }
+        \\}
+        ,
+        .expected = .{ .inspect_str = "\"kept\"" },
+    },
+    .{
+        .name = "issue 11377: recursive annotated dispatch preserves evidence correspondence",
+        .source_kind = .module,
+        .source =
+        \\Cell(a) : [Live(a)]
+        \\loop : a, U64 -> { cell : Cell(a) }
+        \\    where [a.is_eq : a, a -> Bool]
+        \\loop = |x, n| if n == 0 and x.is_eq(x) { { cell: Live(x) } } else { loop(x, n - 1) }
+        \\main = match loop("kept", 2).cell { Live(x) => x }
+        ,
+        .expected = .{ .inspect_str = "\"kept\"" },
+    },
+    .{
+        .name = "issue 11377: checked generic nominal collection construction rejects a duplicate key",
+        .source_kind = .module,
+        .source = issue11377GenericNominalCollectionSource,
+        .expected = .{ .inspect_str = "\"same\"" },
+    },
     .{
         .name = "issue 11376: packed record constants preserve field order and mixed widths",
         .source_kind = .module,

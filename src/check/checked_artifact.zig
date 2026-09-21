@@ -6359,8 +6359,17 @@ fn appendCheckedTypeRootFromDeclarationAnno(
                             }
                             break :blk result;
                         },
-                        .s_nominal_decl => if (finalized != local.decl_idx) {
-                            checkedArtifactInvariant("checked declaration template generic nominal application referenced an associated-type placeholder", .{});
+                        .s_nominal_decl => {
+                            if (finalized != local.decl_idx) {
+                                checkedArtifactInvariant("checked declaration template generic nominal application referenced an associated-type placeholder", .{});
+                            }
+                            const generic_root = try appendCheckedTypeRoot(allocator, module, names, imports, store, active, ModuleEnv.varFrom(finalized));
+                            const result = try appendInstantiatedNamedApplicationFromTemplate(allocator, names, store, generic_root, actual_args);
+                            if (actual_args_owned) {
+                                allocator.free(actual_args);
+                                actual_args_owned = false;
+                            }
+                            break :blk result;
                         },
                         .s_decl,
                         .s_var,
