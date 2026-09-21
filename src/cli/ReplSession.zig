@@ -1254,6 +1254,7 @@ fn bindingPatternOfName(env: *ModuleEnv, pattern_idx: can.CIR.Pattern.Idx, name:
         .underscore,
         .runtime_error,
         => {},
+        .deferred_import_ref => std.debug.panic("compiler invariant violated: deferred import reference pattern reached a stage that runs after import resolution", .{}),
     }
     return null;
 }

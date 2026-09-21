@@ -2645,6 +2645,15 @@ pub const SyntaxChecker = struct {
                 }
                 return self.findModuleByName(build_env, doc_path, type_name, oom);
             },
+            .external_identity => |ext| {
+                // The declaration lives in the module an exposed alias named,
+                // which this module records by content identity.
+                const module_name = module_env.moduleIdentityDisplayText(ext.module_identity);
+                if (module_name.len > 0) {
+                    return self.findDefinitionInModule(build_env, doc_path, module_name, type_name, oom);
+                }
+                return self.findModuleByName(build_env, doc_path, type_name, oom);
+            },
         }
     }
 
@@ -2915,6 +2924,7 @@ pub const SyntaxChecker = struct {
             .e_for,
             .e_run_low_level,
             => return null,
+            .e_deferred_import_ref => std.debug.panic("compiler invariant violated: deferred import reference reached a stage that runs after import resolution", .{}),
         }
     }
 
@@ -4385,6 +4395,7 @@ fn renameTargetAt(module_env: *ModuleEnv, offset: u32) ?RenameTarget {
         .underscore,
         .runtime_error,
         => null,
+        .deferred_import_ref => std.debug.panic("compiler invariant violated: deferred import reference pattern reached a stage that runs after import resolution", .{}),
     };
 }
 

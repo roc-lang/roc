@@ -2062,6 +2062,7 @@ const SpecCensus = if (builtin.os.tag == .freestanding) struct {
             .underscore,
             .runtime_error,
             => "?pat",
+            .deferred_import_ref => checkedPipelineInvariant("deferred import reference pattern reached LIR lowering"),
         };
     }
 

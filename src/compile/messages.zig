@@ -61,28 +61,10 @@ pub const DiscoveredExternalImport = struct {
 /// inferring a missing import from an absent entry: a package-qualified import
 /// is resolved by the coordinator, so only the coordinator can say whether it
 /// was accepted or rejected.
-pub const CanonicalizeImport = struct {
-    /// The direct import name for canonicalization lookup
-    import_name: []const u8,
-    /// Exactly one resolution outcome for this import identity.
-    resolution: Resolution,
-
-    pub const Resolution = union(enum) {
-        /// The import resolved to a fully-ready semantic env.
-        available: Available,
-        /// Import resolution rejected this target and reported the problem.
-        /// The import names no module, so canonicalization binds it as missing
-        /// and every use of it becomes explicit checked-error data.
-        rejected,
-    };
-
-    pub const Available = struct {
-        /// The fully-ready semantic env for this import
-        module_env: *const ModuleEnv,
-        /// Exact type declaration selected by a package/platform public entry.
-        selected_type_decl: ?can.CIR.Statement.Idx = null,
-    };
-};
+/// One import of a module being canonicalized or drained, with the outcome
+/// import resolution selected for it. This is `can`'s own import-resolution
+/// input type: the coordinator builds these once and the drain consumes them.
+pub const CanonicalizeImport = can.ImportResolution.ResolvedImport;
 
 /// Information about detected import cycles
 pub const CycleInfo = struct {
@@ -134,8 +116,6 @@ pub const CanonicalizeTask = struct {
     module_env: *ModuleEnv,
     /// Cached AST from parsing (ownership transferred)
     cached_ast: *AST,
-    /// Real imported semantic envs available to canonicalization
-    imported_modules: []const CanonicalizeImport,
     /// Post-canonicalization validation this module receives.
     validation: can.Can.Validation,
     /// True only for the module the compiler was pointed at. Gates the
@@ -157,8 +137,14 @@ pub const TypeCheckTask = struct {
     path: []const u8,
     /// Module environment borrowed from the coordinator
     module_env: *ModuleEnv,
+    /// Source-relative base directory this module's file imports resolve
+    /// against. Reading them is import resolution's filesystem input.
+    source_dir: []const u8,
     /// Imported module environments (read-only pointers to completed modules)
     imported_envs: []const *ModuleEnv,
+    /// Each import's resolution outcome, which `can`'s import-resolution drain
+    /// consumes to settle this module's deferred references before checking.
+    deferred_imports: []const CanonicalizeImport,
     /// Published checked artifact keys for direct imports, keyed by typed-CIR module index
     imported_artifacts: []const CheckedArtifact.PublishImportArtifact,
     /// Published checked artifacts currently available for exact-key lookup during checking finalization

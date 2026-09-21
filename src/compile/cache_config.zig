@@ -210,7 +210,7 @@ pub const Constants = struct {
     ///     len) instead of a capacity-sized region, and every persisted byte is
     ///     declared: `Node.Payload` variants fill the union exactly and
     ///     `NumeralLiteral` declares its trailing bytes.
-    pub const CACHE_VERSION = 96;
+    pub const CACHE_VERSION = 97;
 };
 
 /// Configuration for the Roc cache system.

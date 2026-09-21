@@ -87,6 +87,7 @@ UNUSED VARIABLE - trailing_comma_layout.md:39:27:39:30
 UNUSED VARIABLE - trailing_comma_layout.md:39:32:39:35
 UNUSED VARIABLE - trailing_comma_layout.md:59:4:59:7
 UNUSED VARIABLE - trailing_comma_layout.md:61:16:61:19
+MOD NOT FOUND - trailing_comma_layout.md:1:1:4:2
 # PROBLEMS
 ~~~clojure
 (reports
@@ -241,7 +242,17 @@ UNUSED VARIABLE - trailing_comma_layout.md:61:16:61:19
 			(annotated symbol-unqualified "_one")
 			(reflow " to suppress this warning.")
 			(line-break)
-			(source-region (file "trailing_comma_layout.md") (start 61 16) (end 61 19) (annotation error) (line-text "\t\tExpandedPair(one, two,) => two")))))
+			(source-region (file "trailing_comma_layout.md") (start 61 16) (end 61 19) (annotation error) (line-text "\t\tExpandedPair(one, two,) => two"))))
+	(report
+		(severity runtime_error)
+		(title "Mod Not Found")
+		(region (start 1 1) (end 4 2))
+		(headline
+			(text "The mod ")
+			(annotated code "Foo")
+			(reflow " was not found in this Roc project."))
+		(document
+			(source-region (file "trailing_comma_layout.md") (start 1 1) (end 4 2) (annotation error) (line-text "import Foo exposing [\n\tone,\n\ttwo\n]")))))
 ~~~
 # TOKENS
 ~~~zig

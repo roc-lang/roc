@@ -1157,6 +1157,10 @@ fn processSnapshotContent(
         can_ir.imports.clearResolvedModules();
         try can_ir.imports.resolveImportsByExactModuleName(can_ir, builtin_modules.items);
         can_ir.imports.markUnresolvedImportsFailedBeforeChecking();
+        try can.resolveDeferredImports(can_ir, .{
+            .imports = .{ .resolved_store = builtin_modules.items },
+            .file_imports = .{ .read = .{ .ctx = CoreCtx.default(allocator, allocator, app_io) } },
+        });
 
         var checker = try Check.init(
             allocator,
@@ -1213,6 +1217,10 @@ fn processSnapshotContent(
             can_ir.imports.clearResolvedModules();
             try can_ir.imports.resolveImportsByExactModuleName(can_ir, builtin_modules.items);
             can_ir.imports.markUnresolvedImportsFailedBeforeChecking();
+            try can.resolveDeferredImports(can_ir, .{
+                .imports = .{ .resolved_store = builtin_modules.items },
+                .file_imports = .{ .read = .{ .ctx = CoreCtx.default(allocator, allocator, app_io) } },
+            });
 
             var checker = try Check.init(
                 allocator,
@@ -2963,6 +2971,13 @@ fn validateMonoOutput(allocator: Allocator, mono_source: []const u8, source_path
         return false;
     };
     validation_env.imports.markUnresolvedImportsFailedBeforeChecking();
+    can.resolveDeferredImports(&validation_env, .{
+        .imports = .{ .resolved_store = imported_modules },
+        .file_imports = .{ .read = .{ .ctx = mono_roc_ctx } },
+    }) catch |err| {
+        std.log.err("MONO VALIDATION ERROR in {s}: Failed to resolve deferred imports: {}", .{ source_path, err });
+        return false;
+    };
 
     var checker = Check.init(
         allocator,
@@ -4752,6 +4767,10 @@ fn renderSnapshotReplTypeProblems(
     can_ir.imports.clearResolvedModules();
     try can_ir.imports.resolveImportsByExactModuleName(can_ir, imported_envs.items);
     can_ir.imports.markUnresolvedImportsFailedBeforeChecking();
+    try can.resolveDeferredImports(can_ir, .{
+        .imports = .{ .resolved_store = imported_envs.items },
+        .file_imports = .{ .read = .{ .ctx = roc_ctx_repl } },
+    });
 
     var checker = try Check.init(
         allocator,

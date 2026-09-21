@@ -733,6 +733,10 @@ fn projectedTypeReference(
             const import_key = artifact.checking_context_identity.imports[import_index].artifact_key orelse unreachable;
             break :external_blk .{ import_key.module_identity_hash, @as(CIR.Statement.Idx, @enumFromInt(external.target_node_idx)) };
         },
+        .external_identity => |external| .{
+            module_env.moduleIdentityHash(external.module_identity).*,
+            @as(CIR.Statement.Idx, @enumFromInt(external.target_node_idx)),
+        },
         .builtin => return null,
         .pending => unreachable,
     };
@@ -780,6 +784,7 @@ fn typeReferenceStatement(base_ref: TypeAnno.LocalOrExternal) ?CIR.Statement.Idx
     return switch (base_ref) {
         .local => |local| local.decl_idx,
         .external => |external| @enumFromInt(external.target_node_idx),
+        .external_identity => |external| @enumFromInt(external.target_node_idx),
         .builtin, .pending => null,
     };
 }
@@ -1117,6 +1122,7 @@ fn defEntryName(module_env: *const ModuleEnv, def_idx: CIR.Def.Idx) ?[]const u8 
         .underscore,
         .runtime_error,
         => null,
+        .deferred_import_ref => std.debug.panic("compiler invariant violated: deferred import reference pattern reached a stage that runs after import resolution", .{}),
     };
 }
 
@@ -1260,6 +1266,7 @@ fn extractDefEntry(
         .underscore,
         .runtime_error,
         => return null,
+        .deferred_import_ref => std.debug.panic("compiler invariant violated: deferred import reference pattern reached a stage that runs after import resolution", .{}),
     }
 }
 
@@ -1529,6 +1536,7 @@ fn resolveModulePathFromBase(
             const str_idx = module_env.imports.imports.items.items[idx];
             break :blk getModulePath(module_env.common.getString(str_idx));
         },
+        .external_identity => |ext| module_env.moduleIdentityDisplayText(ext.module_identity),
     };
 }
 

@@ -17,22 +17,18 @@ printName = |person| {
 main! = |_| {}
 ~~~
 # EXPECTED
-NAME NOT IN SCOPE - type_record_effectful.md:7:5:7:17
+DOES NOT EXIST - type_record_effectful.md:7:5:7:17
 # PROBLEMS
 ~~~clojure
 (reports
 	(report
 		(severity runtime_error)
-		(title "Name Not In Scope")
+		(title "Does Not Exist")
 		(region (start 7 5) (end 7 17))
 		(headline
-			(reflow "Nothing is named ")
-			(annotated symbol-unqualified "line!")
-			(reflow " in this scope."))
+			(annotated symbol-unqualified "Stdout.line!")
+			(reflow " does not exist."))
 		(document
-			(reflow "Is it misspelled, or is there an import missing?")
-			(line-break)
-			(line-break)
 			(source-region (file "type_record_effectful.md") (start 7 5) (end 7 17) (annotation error) (line-text "    Stdout.line!(person.name)")))))
 ~~~
 # TOKENS

@@ -188,9 +188,6 @@ UNEXPECTED EXPRESSION SYNTAX - fuzz_crash_027.md:153:7:153:8
 UNEXPECTED EXPRESSION SYNTAX - fuzz_crash_027.md:155:1:155:7
 EXPECTED LIST SEPARATOR - fuzz_crash_027.md:160:1:160:1
 EXPECTED CLOSING BRACE - fuzz_crash_027.md:160:1:160:1
-MOD NOT FOUND - fuzz_crash_027.md:6:1:8:4
-MOD NOT FOUND - fuzz_crash_027.md:12:1:12:19
-MOD NOT FOUND - fuzz_crash_027.md:13:1:14:4
 UNDECLARED TYPE - fuzz_crash_027.md:26:8:26:11
 UNDECLARED TYPE - fuzz_crash_027.md:26:13:26:16
 UNDECLARED TYPE - fuzz_crash_027.md:29:2:29:5
@@ -225,6 +222,9 @@ UNUSED VARIABLE - fuzz_crash_027.md:104:2:104:5
 UNUSED VARIABLE - fuzz_crash_027.md:119:2:119:10
 UNUSED VARIABLE - fuzz_crash_027.md:120:2:120:6
 UNUSED VARIABLE - fuzz_crash_027.md:121:2:121:6
+MOD NOT FOUND - fuzz_crash_027.md:6:1:8:4
+MOD NOT FOUND - fuzz_crash_027.md:12:1:12:19
+MOD NOT FOUND - fuzz_crash_027.md:13:1:14:4
 TOO FEW ARGS - fuzz_crash_027.md:21:3:22:4
 DECLARATION HAS NO VALUE - fuzz_crash_027.md:28:1:31:2
 TYPE MISMATCH - fuzz_crash_027.md:50:5:50:8
@@ -771,36 +771,6 @@ TOO FEW ARGS - fuzz_crash_027.md:111:2:113:3
 			(source-region (file "fuzz_crash_027.md") (start 160 1) (end 160 1) (annotation error) (line-text ""))))
 	(report
 		(severity runtime_error)
-		(title "Mod Not Found")
-		(region (start 6 1) (end 8 4))
-		(headline
-			(text "The mod ")
-			(annotated code "Stdot")
-			(reflow " was not found in this Roc project."))
-		(document
-			(source-region (file "fuzz_crash_027.md") (start 6 1) (end 8 4) (annotation error) (line-text "import Stdot\n\t\texposing [ #tem\n\t\t] # Cose"))))
-	(report
-		(severity runtime_error)
-		(title "Mod Not Found")
-		(region (start 12 1) (end 12 19))
-		(headline
-			(text "The mod ")
-			(annotated code "Bae")
-			(reflow " was not found in this Roc project."))
-		(document
-			(source-region (file "fuzz_crash_027.md") (start 12 1) (end 12 19) (annotation error) (line-text "import Bae as Gooe"))))
-	(report
-		(severity runtime_error)
-		(title "Mod Not Found")
-		(region (start 13 1) (end 14 4))
-		(headline
-			(text "The mod ")
-			(annotated code "Ba")
-			(reflow " was not found in this Roc project."))
-		(document
-			(source-region (file "fuzz_crash_027.md") (start 13 1) (end 14 4) (annotation error) (line-text "import\n\tBa"))))
-	(report
-		(severity runtime_error)
 		(title "Undeclared Type")
 		(region (start 26 8) (end 26 11))
 		(headline
@@ -1227,6 +1197,36 @@ TOO FEW ARGS - fuzz_crash_027.md:111:2:113:3
 			(reflow " to suppress this warning.")
 			(line-break)
 			(source-region (file "fuzz_crash_027.md") (start 121 2) (end 121 6) (annotation error) (line-text "\tlist = ["))))
+	(report
+		(severity runtime_error)
+		(title "Mod Not Found")
+		(region (start 6 1) (end 8 4))
+		(headline
+			(text "The mod ")
+			(annotated code "Stdot")
+			(reflow " was not found in this Roc project."))
+		(document
+			(source-region (file "fuzz_crash_027.md") (start 6 1) (end 8 4) (annotation error) (line-text "import Stdot\n\t\texposing [ #tem\n\t\t] # Cose"))))
+	(report
+		(severity runtime_error)
+		(title "Mod Not Found")
+		(region (start 12 1) (end 12 19))
+		(headline
+			(text "The mod ")
+			(annotated code "Bae")
+			(reflow " was not found in this Roc project."))
+		(document
+			(source-region (file "fuzz_crash_027.md") (start 12 1) (end 12 19) (annotation error) (line-text "import Bae as Gooe"))))
+	(report
+		(severity runtime_error)
+		(title "Mod Not Found")
+		(region (start 13 1) (end 14 4))
+		(headline
+			(text "The mod ")
+			(annotated code "Ba")
+			(reflow " was not found in this Roc project."))
+		(document
+			(source-region (file "fuzz_crash_027.md") (start 13 1) (end 14 4) (annotation error) (line-text "import\n\tBa"))))
 	(report
 		(severity runtime_error)
 		(title "Too Few Args")

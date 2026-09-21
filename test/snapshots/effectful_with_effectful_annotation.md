@@ -16,23 +16,19 @@ print_msg! = |msg| Stdout.line!(msg)
 main! = print_msg!("Hello, world!")
 ~~~
 # EXPECTED
-NAME NOT IN SCOPE - effectful_with_effectful_annotation.md:7:20:7:32
+DOES NOT EXIST - effectful_with_effectful_annotation.md:7:20:7:32
 EFFECTFUL TOP LEVEL VALUE - effectful_with_effectful_annotation.md:9:9:9:36
 # PROBLEMS
 ~~~clojure
 (reports
 	(report
 		(severity runtime_error)
-		(title "Name Not In Scope")
+		(title "Does Not Exist")
 		(region (start 7 20) (end 7 32))
 		(headline
-			(reflow "Nothing is named ")
-			(annotated symbol-unqualified "line!")
-			(reflow " in this scope."))
+			(annotated symbol-unqualified "Stdout.line!")
+			(reflow " does not exist."))
 		(document
-			(reflow "Is it misspelled, or is there an import missing?")
-			(line-break)
-			(line-break)
 			(source-region (file "effectful_with_effectful_annotation.md") (start 7 20) (end 7 32) (annotation error) (line-text "print_msg! = |msg| Stdout.line!(msg)"))))
 	(report
 		(severity runtime_error)

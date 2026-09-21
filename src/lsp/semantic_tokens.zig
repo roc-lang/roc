@@ -188,11 +188,21 @@ pub fn extractSemanticTokensWithImports(
             .builtin_indices = builtin_indices,
         },
         .is_entry_module = true,
-        .skip_file_import_contents = true,
     }) catch return error.OutOfMemory;
     defer canonicalizer.deinit();
 
     canonicalizer.canonicalizeFile() catch return error.OutOfMemory;
+
+    // Settle this module's deferred references into its imports. Semantic
+    // tokens are read from the resolved CIR, and file imports are not read
+    // because this is an inspection of the open file alone.
+    if (imported_envs) |envs| {
+        module_env.imports.clearResolvedModules();
+        module_env.imports.resolveImportsByExactModuleName(&module_env, envs) catch return error.OutOfMemory;
+        can.resolveDeferredImports(&module_env, .{ .imports = .{ .resolved_store = envs } }) catch return error.OutOfMemory;
+    } else {
+        can.resolveDeferredImports(&module_env, .{ .imports = .{ .explicit = &.{} } }) catch return error.OutOfMemory;
+    }
 
     // Build import context for cross-module lookups
     var import_context = ImportContext.init(allocator);
@@ -446,6 +456,7 @@ const SemanticCollector = struct {
             .e_for,
             .e_run_low_level,
             => {},
+            .e_deferred_import_ref => std.debug.panic("compiler invariant violated: deferred import reference reached a stage that runs after import resolution", .{}),
         }
     }
 
@@ -506,6 +517,7 @@ const SemanticCollector = struct {
             .str_interpolation,
             .runtime_error,
             => {},
+            .deferred_import_ref => std.debug.panic("compiler invariant violated: deferred import reference pattern reached a stage that runs after import resolution", .{}),
         }
     }
 
@@ -582,6 +594,7 @@ const SemanticCollector = struct {
             .e_for,
             .e_run_low_level,
             => {},
+            .e_deferred_import_ref => std.debug.panic("compiler invariant violated: deferred import reference reached a stage that runs after import resolution", .{}),
         }
     }
 

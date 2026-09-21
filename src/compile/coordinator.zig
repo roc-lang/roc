@@ -450,7 +450,7 @@ pub const Phase = enum {
     Parsing,
     /// Parsed, needs canonicalization
     Canonicalize,
-    /// Canonicalized, waiting for imports to complete
+    /// Parsed, waiting for every import to complete before canonicalization
     WaitingOnImports,
     /// Canonicalized app root, waiting on the platform's checked requires surface.
     WaitingOnPlatformRequirements,
@@ -1298,10 +1298,10 @@ pub const Coordinator = struct {
                     .parse, .post_check => {},
                     .canonicalize => |t| {
                         t.cached_ast.deinit();
-                        payload_alloc.free(t.imported_modules);
                     },
                     .type_check => |t| {
                         payload_alloc.free(t.imported_envs);
+                        payload_alloc.free(t.deferred_imports);
                         payload_alloc.free(t.imported_artifacts);
                         payload_alloc.free(t.available_artifacts);
                         payload_alloc.free(t.explicit_roots);
@@ -1845,6 +1845,9 @@ pub const Coordinator = struct {
         env: *const ModuleEnv,
     ) Allocator.Error!void {
         for (env.file_dependencies.items.items) |dep| {
+            // A module that never reached import resolution has not read its
+            // file imports, so this run read no such file.
+            if (dep.state == .pending) continue;
             const relative_path = env.fileDependencyRelativePath(dep);
             const full_path = try std.fs.path.resolve(self.gpa, &.{ source_dir, relative_path });
             defer self.gpa.free(full_path);
@@ -1869,6 +1872,9 @@ pub const Coordinator = struct {
         env: *const ModuleEnv,
     ) Allocator.Error!void {
         for (env.file_dependencies.items.items) |dep| {
+            // A module that never reached import resolution has not read its
+            // file imports, so this run observed no state for one.
+            if (dep.state == .pending) continue;
             const relative_path = env.fileDependencyRelativePath(dep);
             const full_path = try std.fs.path.resolve(self.gpa, &.{ source_dir, relative_path });
             defer self.gpa.free(full_path);
@@ -3431,6 +3437,10 @@ pub const Coordinator = struct {
         if (!manager.config.enabled) return false;
 
         const current_env = mod.moduleEnv() orelse return false;
+        // A module's file imports are read by import resolution, which runs in
+        // the type-check task. Until they are read this module has no complete
+        // source-input identity, so there is no key to probe with.
+        if (!current_env.fileDependenciesSettled()) return false;
         if (!resolvedDirectImportsHaveCheckedOutput(current_env, imported_artifacts)) return false;
         const cache_key = self.checkedModuleCacheKey(current_env, imported_envs, imported_artifacts, platform_requirement_context, explicit_roots, mod.validation) catch {
             manager.stats.recordMiss();
@@ -4432,6 +4442,9 @@ pub const Coordinator = struct {
         errdefer if (platform_requirement_owner_envs.len > 0) task_payload_alloc.free(platform_requirement_owner_envs);
         if (platform_surface) |*surface| surface.owner_modules = platform_requirement_owner_envs;
 
+        const deferred_imports = try self.buildCanonicalizeImports(pkg, mod, task_payload_alloc);
+        errdefer task_payload_alloc.free(deferred_imports);
+
         mod.phase = .TypeCheck;
         mod.visit_color = .black;
         try self.enqueueTask(.{
@@ -4441,7 +4454,9 @@ pub const Coordinator = struct {
                 .module_name = mod.name,
                 .path = mod.path,
                 .module_env = mod.moduleEnv().?,
+                .source_dir = mod.canonicalSourceDir(),
                 .imported_envs = imported_envs,
+                .deferred_imports = deferred_imports,
                 .imported_artifacts = imported_artifacts,
                 .available_artifacts = available_artifacts,
                 .platform_requirements = platform_surface,
@@ -4996,9 +5011,6 @@ pub const Coordinator = struct {
 
         mod.phase = .Canonicalize;
         mod.visit_color = .black;
-        const task_payload_alloc = self.getWorkerAllocator();
-        const imported_modules = try self.buildCanonicalizeImports(pkg, mod, task_payload_alloc);
-        errdefer task_payload_alloc.free(imported_modules);
         try self.enqueueTask(.{
             .canonicalize = .{
                 .package_name = pkg.name,
@@ -5010,7 +5022,6 @@ pub const Coordinator = struct {
                 .cached_ast = mod.cached_ast orelse
                     std.debug.panic("compile.coordinator.tryUnblock missing cached AST for {s}", .{mod.name}),
                 .depth = mod.depth,
-                .imported_modules = imported_modules,
                 .validation = mod.validation,
                 .is_entry_module = self.isEntryModule(pkg, module_id),
             },
@@ -5435,24 +5446,7 @@ pub const Coordinator = struct {
 
         const env = task.module_env;
         const ast = task.cached_ast;
-        defer task_allocs.result.free(task.imported_modules);
         defer ast.deinit();
-
-        // Build KnownModule entries for qualified imports (e.g. platform-exposed
-        // `pf.Stdout`) so canonicalization has explicit module names.
-        const qualified_imports = try module_discovery.extractQualifiedImportsFromDeclIndex(ast, task_allocs.scratch);
-        defer {
-            for (qualified_imports) |qi| task_allocs.scratch.free(qi);
-            task_allocs.scratch.free(qualified_imports);
-        }
-        var known_modules = std.ArrayList(compile_package.KnownModule).empty;
-        defer known_modules.deinit(task_allocs.scratch);
-        for (qualified_imports) |qi| {
-            try known_modules.append(task_allocs.scratch, .{
-                .qualified_name = qi,
-                .import_name = qi,
-            });
-        }
 
         try compile_package.canonicalizeModuleWithSiblings(
             self.roc_ctx,
@@ -5460,9 +5454,6 @@ pub const Coordinator = struct {
             ast,
             self.builtin_modules.builtin_module.env,
             self.builtin_modules.builtin_indices,
-            task.source_dir,
-            known_modules.items,
-            task.imported_modules,
             task.validation,
             task.is_entry_module,
         );
@@ -5532,6 +5523,7 @@ pub const Coordinator = struct {
 
         const env = task.module_env;
         defer task_allocs.result.free(task.imported_envs);
+        defer task_allocs.result.free(task.deferred_imports);
         defer task_allocs.result.free(task.imported_artifacts);
         defer task_allocs.result.free(task.available_artifacts);
         defer if (task.platform_requirements) |surface| {
@@ -5547,6 +5539,10 @@ pub const Coordinator = struct {
         var local_ctfe_timing = eval.CompileTimeFinalization.Timing.init(self.roc_ctx.std_io);
         const ctfe_timing = if (task.defer_publication) &self.ctfe_timing else &local_ctfe_timing;
         const ctfe_options = compile_package.compileTimeFinalizationOptions(self.max_threads, &self.roc_ctx, ctfe_timing);
+        // Import resolution runs inside the type-check task and records its
+        // own diagnostics on the env, after the canonicalize task already
+        // reported the ones canonicalization recorded.
+        const canonicalize_diagnostics = env.diagnosticCount();
         var typecheck_output = try compile_package.typeCheckModule(
             check_alloc,
             result_alloc,
@@ -5561,6 +5557,8 @@ pub const Coordinator = struct {
             task.validation,
             ctfe_options,
             task.defer_publication,
+            .{ .explicit = task.deferred_imports },
+            .{ .read = .{ .ctx = self.roc_ctx, .source_dir = task.source_dir } },
         );
         defer typecheck_output.deinit();
         // On error the coordinator still owns the input environment. Transfer
@@ -5598,6 +5596,13 @@ pub const Coordinator = struct {
             if (task.platform_requirements) |requirements| .{ .env = requirements.env, .filename = requirements.path } else null,
         );
         defer rb.deinit();
+
+        const import_diagnostics = try env.getDiagnosticsFrom(canonicalize_diagnostics);
+        defer env.gpa.free(import_diagnostics);
+        for (import_diagnostics) |d| {
+            const rep = try env.diagnosticToReport(d, worker_alloc, task.path);
+            try appendReportOwned(worker_alloc, &reports, rep);
+        }
 
         for (typecheck_output.checker.problems.problems.items) |prob| {
             const rep = try rb.build(prob);
