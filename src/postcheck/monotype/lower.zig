@@ -940,6 +940,29 @@ const TargetEvidenceSource = union(enum) {
     materialized_contract: []const SpecEvidence,
 };
 
+/// A materialized contract already names the checked targets and their nested
+/// contracts. Once its callable relations have been consumed, those edge-local
+/// callable identities must not distinguish otherwise identical specializations.
+/// Keep the immutable vector and targets unless removing an identity changes them.
+fn normalizeMaterializedEvidence(
+    arena: Allocator,
+    contract: []const SpecEvidence,
+) Allocator.Error![]const SpecEvidence {
+    var normalized: ?[]SpecEvidence = null;
+    for (contract, 0..) |entry, index| switch (entry) {
+        .target => |target| {
+            if (target.instantiation == null) continue;
+            if (normalized == null) normalized = try arena.dupe(SpecEvidence, contract);
+            const replacement = try arena.create(SpecEvidenceTarget);
+            replacement.* = target.*;
+            replacement.instantiation = null;
+            normalized.?[index] = .{ .target = replacement };
+        },
+        .structural, .from_callable, .from_scheme, .unreachable_value, .checked_error => {},
+    };
+    return normalized orelse contract;
+}
+
 fn substitutionsShareClasses(graph: *InstGraph, left: SpecSubstitution, right: SpecSubstitution) bool {
     if (left.len != right.len) return false;
     for (left, right) |left_slot, right_slot| {
@@ -3342,7 +3365,6 @@ const DraftGeneratedHelperDefEntry = union(enum) {
 fn templateSpecIdentity(
     template_ref: names.ProcTemplate,
     method_scope: checked.ModuleId,
-    source_fn_key: names.TypeDigest,
     evidence_digest: Ast.EvidenceDigest,
     codec_contract: ?Ast.CodecContractIdentity,
     request_fn_ty: Type.TypeId,
@@ -3355,7 +3377,6 @@ fn templateSpecIdentity(
             .template = @intFromEnum(template_ref.template),
         } },
         .method_scope = moduleDigestFromId(method_scope),
-        .source_fn_ty_digest = source_fn_key,
         .evidence_digest = evidence_digest,
         .codec_contract_digest = codecContractIdentityDigest(codec_contract),
         .codec_contract = codec_contract,
@@ -3367,7 +3388,6 @@ fn templateSpecIdentity(
 fn nestedSpecIdentity(
     nested: Ast.NestedFn,
     method_scope: checked.ModuleId,
-    source_fn_key: names.TypeDigest,
     evidence_digest: Ast.EvidenceDigest,
     capture_abi_digest: names.TypeDigest,
     codec_contract: ?Ast.CodecContractIdentity,
@@ -3388,7 +3408,6 @@ fn nestedSpecIdentity(
             .default_root_module = nested.default_root,
         } },
         .method_scope = moduleDigestFromId(method_scope),
-        .source_fn_ty_digest = source_fn_key,
         .evidence_digest = evidence_digest,
         .codec_contract_digest = codecContractIdentityDigest(codec_contract),
         .codec_contract = codec_contract,
@@ -5441,7 +5460,6 @@ const Builder = struct {
         const spec_identity = templateSpecIdentity(
             template_ref,
             method_scope.key,
-            source_fn_key,
             evidence_digest,
             self.codecContractIdentity(codec_contract),
             fn_ty,
@@ -5527,7 +5545,7 @@ const Builder = struct {
             if (@import("builtin").link_libc and std.c.getenv("ROC_SPEC_CENSUS") != null) {
                 const proc_base = view.names.procBase(template_ref.proc_base);
                 const name: []const u8 = if (proc_base.export_name) |e| view.names.exportNameText(e) else "?";
-                std.debug.print("CENSUS_KEY\t{s}\t{x}\tsrc={x}\tev={x}\tcodec={x}\treq={x}\tcallable={s}\n", .{ name, key.bytes[0..8], spec_identity.source_fn_ty_digest.bytes[0..6], spec_identity.evidence_digest.bytes[0..6], spec_identity.codec_contract_digest.bytes[0..6], spec_identity.request_fn_ty_digest.bytes[0..6], @tagName(spec_identity.callable) });
+                std.debug.print("CENSUS_KEY\t{s}\t{x}\tev={x}\tcodec={x}\treq={x}\tcallable={s}\n", .{ name, key.bytes[0..8], spec_identity.evidence_digest.bytes[0..6], spec_identity.codec_contract_digest.bytes[0..6], spec_identity.request_fn_ty_digest.bytes[0..6], @tagName(spec_identity.callable) });
             }
             if (self.spec_cache) |cache| {
                 if (cache.lookup(key.bytes)) |hit| {
@@ -5565,7 +5583,6 @@ const Builder = struct {
             const spec = try self.addTemplateSpecRecord(
                 template_ref,
                 method_scope.key,
-                source_fn_key,
                 identity_evidence,
                 lower_fn_ty,
                 request_digest,
@@ -7636,7 +7653,6 @@ const Builder = struct {
         self: *Builder,
         template_ref: names.ProcTemplate,
         method_scope: checked.ModuleId,
-        source_fn_key: names.TypeDigest,
         evidence: StoredConstFnEvidence,
         request_fn_ty: Type.TypeId,
         request_fn_ty_digest: names.TypeDigest,
@@ -7649,7 +7665,6 @@ const Builder = struct {
             templateSpecIdentity(
                 template_ref,
                 method_scope,
-                source_fn_key,
                 evidence_digest,
                 codec_contract,
                 request_fn_ty,
@@ -7665,7 +7680,6 @@ const Builder = struct {
         self: *Builder,
         nested: Ast.NestedFn,
         method_scope: checked.ModuleId,
-        source_fn_key: names.TypeDigest,
         evidence: StoredConstFnEvidence,
         capture_abi_digest: names.TypeDigest,
         codec_contract: ?Ast.CodecContractIdentity,
@@ -7675,7 +7689,7 @@ const Builder = struct {
     ) Allocator.Error!Ast.SpecId {
         const evidence_digest = Ast.fnEvidenceDigest(evidence.nodes, evidence.frames, evidence.head);
         return try self.addSpecRecord(
-            nestedSpecIdentity(nested, method_scope, source_fn_key, evidence_digest, capture_abi_digest, codec_contract, request_fn_ty, request_fn_ty_digest),
+            nestedSpecIdentity(nested, method_scope, evidence_digest, capture_abi_digest, codec_contract, request_fn_ty, request_fn_ty_digest),
             evidence,
             fn_id,
             .lowering,
@@ -9719,7 +9733,6 @@ const Builder = struct {
     fn draftSpecIdentityEql(self: *Builder, left: Ast.SpecIdentity, right: Ast.SpecIdentity) Allocator.Error!bool {
         if (!std.meta.eql(left.callable, right.callable)) return false;
         if (!std.mem.eql(u8, left.method_scope.bytes[0..], right.method_scope.bytes[0..])) return false;
-        if (!std.mem.eql(u8, left.source_fn_ty_digest.bytes[0..], right.source_fn_ty_digest.bytes[0..])) return false;
         if (!std.meta.eql(left.evidence_digest, right.evidence_digest)) return false;
         if (!std.mem.eql(u8, left.codec_contract_digest.bytes[0..], right.codec_contract_digest.bytes[0..])) return false;
         if ((left.codec_contract == null) != (right.codec_contract == null)) return false;
@@ -10629,7 +10642,6 @@ const Builder = struct {
         const identity = templateSpecIdentity(
             spec.template_ref,
             spec.method_scope,
-            spec.source_fn_key,
             draft_fn.source.evidence_digest,
             self.codecContractIdentity(codec_contract),
             coordinator_fn_ty,
@@ -10869,7 +10881,6 @@ const Builder = struct {
                     identity = templateSpecIdentity(
                         spec.template_ref,
                         spec.method_scope,
-                        spec.source_fn_key,
                         sealed_template.evidence_digest,
                         spec.committed_codec_contract,
                         request_fn_ty,
@@ -10886,7 +10897,6 @@ const Builder = struct {
                         identity = nestedSpecIdentity(
                             spec.nested,
                             spec.method_scope,
-                            spec.source_fn_key,
                             sealed_template.evidence_digest,
                             spec.capture_abi_digest,
                             spec.sealed_codec_contract,
@@ -11451,7 +11461,6 @@ const Builder = struct {
             const identity = templateSpecIdentity(
                 spec.template_ref,
                 spec.method_scope,
-                spec.source_fn_key,
                 fn_template.evidence_digest,
                 spec.committed_codec_contract,
                 request_fn_ty,
@@ -11474,7 +11483,6 @@ const Builder = struct {
             const spec_id = try self.addTemplateSpecRecord(
                 spec.template_ref,
                 spec.method_scope,
-                spec.source_fn_key,
                 evidence,
                 request_fn_ty,
                 request_digest,
@@ -11510,13 +11518,12 @@ const Builder = struct {
             const evidence = programViewFnEvidence(self.program.view(), fn_template);
             const capture_abi_digest = spec.capture_abi_digest;
             if (try self.spec_store.findLocal(
-                nestedSpecIdentity(spec.nested, spec.method_scope, spec.source_fn_key, fn_template.evidence_digest, capture_abi_digest, spec.sealed_codec_contract, fn_ty, digest),
+                nestedSpecIdentity(spec.nested, spec.method_scope, fn_template.evidence_digest, capture_abi_digest, spec.sealed_codec_contract, fn_ty, digest),
                 specializationEvidenceView(evidence),
             )) |_| continue;
             const spec_id = try self.addNestedSpecRecord(
                 spec.nested,
                 spec.method_scope,
-                spec.source_fn_key,
                 evidence,
                 capture_abi_digest,
                 spec.sealed_codec_contract,
@@ -43166,19 +43173,17 @@ const BodyContext = struct {
     }
 
     /// Overlay a checked contract on evidence already selected from the
-    /// substitution. Target identity and callable instantiation remain the
-    /// derived entry's; only nested producer data survives after its hidden
-    /// relations have been consumed.
+    /// substitution. Keep the checked callable relation when the parameter
+    /// requires it; otherwise retain only the nested producer contract.
     fn mergeCheckedEvidenceContract(
         self: *BodyContext,
         derived: SpecEvidence,
         contract: SpecEvidence,
-        retain_constraint_relation: bool,
     ) Allocator.Error!SpecEvidence {
         return switch (contract) {
             .target => |contract_target| switch (derived) {
                 .target => |derived_target| blk: {
-                    if (retain_constraint_relation and contract_target.instantiation != null) {
+                    if (contract_target.instantiation != null) {
                         break :blk contract;
                     }
                     if (!std.meta.eql(derived_target.view.key, contract_target.view.key) or
@@ -43366,7 +43371,6 @@ const BodyContext = struct {
                     entry.* = try self.mergeCheckedEvidenceContract(
                         entry.*,
                         try self.materializeCheckedEvidenceRef(site_view, ref, param, purpose),
-                        true,
                     );
                 },
                 .structural, .from_callable, .from_scheme, .checked_error, .unreachable_value => {},
@@ -43411,11 +43415,11 @@ const BodyContext = struct {
         try self.relateEvidenceTargetRootToRequest(root_view, root_fn_ty, target_node, constraint_node, dispatchTargetAdapterReachability(target.target));
     }
 
-    /// Only requirements whose producer says their dispatcher originates in
-    /// a constraint callable can bind scheme variables that the scheme root
-    /// relation did not already reach. `use_site_only` is the same topology
-    /// without a specialization-time default; checked site evidence still
-    /// carries the exact relation that closes it.
+    /// Parameters that retain the checked target's exact callable instantiation
+    /// to bind variables absent from the scheme root. This classifies retained
+    /// producer data, not which target signatures need relating: a target whose
+    /// receiver is callable-root reachable can still bind other variables through
+    /// its method signature when a materialized contract is consumed.
     fn evidenceParamRequiresConstraintRelation(param: static_dispatch.EvidenceParamRecord) bool {
         return switch (param.source) {
             .scheme_requirement, .constraint_callable, .use_site_only => true,
@@ -44476,24 +44480,20 @@ const BodyContext = struct {
                     Common.invariant("materialized target contract length differed from its scheme requirements");
                 }
                 for (schema.params, contract) |param, entry| {
-                    if (!evidenceParamRequiresConstraintRelation(param)) continue;
+                    // Even a callable-root receiver's method can bind variables
+                    // reached only through its constraint signature. Every
+                    // selected target supplies that relation exactly once;
+                    // selection itself needs no graph-driven fixpoint here.
                     switch (entry) {
                         .target => |target| try self.relateTargetToConstraint(target, target_ctx, param),
                         .structural, .from_callable, .from_scheme, .unreachable_value, .checked_error => {},
                     }
                 }
-                const derived = try self.deriveEvidenceVector(
-                    schema,
-                    subst,
-                    schema.view,
-                    null,
-                    .body_lowering,
-                );
-                const merged = try self.builder.evidence_arena.allocator().alloc(SpecEvidence, derived.len);
-                for (derived, contract, merged) |derived_entry, contract_entry, *entry| {
-                    entry.* = try self.mergeCheckedEvidenceContract(derived_entry, contract_entry, false);
-                }
-                break :blk merged;
+                // Reuse is authorized by the checked dispatch plan. Independent
+                // callables without that proof use .derive instead. This contract
+                // already supplies every target and terminal verdict, including
+                // composite requirements with no substitution slot.
+                break :blk try normalizeMaterializedEvidence(self.builder.evidence_arena.allocator(), contract);
             },
         };
         return .{
@@ -57712,6 +57712,73 @@ fn numeralTargetFromPrimitive(primitive: Type.Primitive) exact_numeral.Target {
     };
 }
 
+test "materialized evidence normalization borrows unchanged contracts without allocating" {
+    var failing = std.testing.FailingAllocator.init(std.testing.allocator, .{ .fail_index = 0 });
+    const target: SpecEvidenceTarget = .{
+        .view = undefined,
+        .target = undefined,
+        .instantiation = null,
+        .local_proc_context = null,
+        .nested = .synthesize,
+    };
+    const contract = [_]SpecEvidence{
+        .{ .target = &target },
+        .{ .structural = .{ .derivation = .encoder } },
+        .{ .from_callable = .{ .independent_callable = true } },
+        .{ .from_scheme = 7 },
+        .unreachable_value,
+        .checked_error,
+    };
+    const normalized = try normalizeMaterializedEvidence(failing.allocator(), &contract);
+    try std.testing.expect(normalized.ptr == &contract);
+    try std.testing.expectEqual(@as(usize, contract.len), normalized.len);
+    try std.testing.expectEqual(@as(usize, 0), (try normalizeMaterializedEvidence(failing.allocator(), &.{})).len);
+}
+
+test "materialized evidence normalization copies once and preserves unconsumed nested relations" {
+    // One vector allocation and two changed targets, regardless of the other
+    // entries or the size of their shared nested contracts.
+    var failing = std.testing.FailingAllocator.init(std.testing.allocator, .{ .fail_index = 3 });
+    const allocator = failing.allocator();
+    const nested_target: SpecEvidenceTarget = .{
+        .view = undefined,
+        .target = undefined,
+        .instantiation = .{ .view = undefined, .callable_ty = @enumFromInt(1) },
+        .local_proc_context = @enumFromInt(7),
+        .nested = .synthesize,
+    };
+    const nested = [_]SpecEvidence{.{ .target = &nested_target }};
+    var target = nested_target;
+    target.nested = .{ .resolved = &nested };
+    var unchanged = target;
+    unchanged.instantiation = null;
+    const contract = [_]SpecEvidence{
+        .{ .target = &unchanged },
+        .{ .target = &target },
+        .{ .structural = .{ .derivation = .encoder } },
+        .{ .target = &target },
+    };
+    const normalized = try normalizeMaterializedEvidence(allocator, &contract);
+    defer allocator.free(normalized);
+    defer allocator.destroy(normalized[1].target);
+    defer allocator.destroy(normalized[3].target);
+    try std.testing.expect(normalized.ptr != &contract);
+    try std.testing.expect(normalized[0].target == &unchanged);
+    try std.testing.expect(normalized[2] == .structural);
+    for ([_]usize{ 1, 3 }) |index| {
+        const changed = normalized[index].target;
+        try std.testing.expect(changed != &target);
+        try std.testing.expect(changed.instantiation == null);
+        try std.testing.expectEqual(target.local_proc_context, changed.local_proc_context);
+        try std.testing.expect(changed.nested.resolved.ptr == &nested);
+        try std.testing.expect(changed.nested.resolved[0].target == &nested_target);
+        try std.testing.expect(changed.nested.resolved[0].target.instantiation != null);
+    }
+    try std.testing.expect(target.instantiation != null);
+    // Already-normalized evidence takes the allocation-free path on reuse.
+    try std.testing.expect((try normalizeMaterializedEvidence(allocator, normalized)).ptr == normalized.ptr);
+}
+
 test "independent callable reuse preserves requires-record nested evidence and synthesis rejects it" {
     const resolved_entries = [_]SpecEvidence{.unreachable_value};
     const nested = NestedSpecEvidence{ .resolved = &resolved_entries };
@@ -57809,7 +57876,6 @@ test "queued specialization skips a body claimed immediately before dispatch" {
             const identity = Ast.SpecIdentity{
                 .callable = .{ .generated = @enumFromInt(@as(u32, @intCast(dispatch_index))) },
                 .method_scope = .{},
-                .source_fn_ty_digest = .{},
                 .evidence_digest = .{},
                 .codec_contract_digest = .{},
                 .codec_contract = null,

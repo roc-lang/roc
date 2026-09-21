@@ -3031,6 +3031,17 @@ The CheckedModule data must therefore be able to contain both diagnostics and
 successful compile-time root requests. The presence of diagnostics is not an
 module-level root-selection failure.
 
+`roc test` counts each diagnostic-blocked top-level expect from the existing
+compile-time root table and the body diagnostic recorded with it.
+`runtime_entrypoint` root requests intentionally exclude these expects; their
+absence is not a test inventory. Blocked expects produce one compiler-error test result each, even
+when several diagnostics belong to one expect or one diagnostic blocks several
+expects. Independent roots still execute and may reuse cached results. Checking
+diagnostics are rendered once and are counted separately from test outcomes;
+errors outside tests also prevent an unqualified success summary. This consumes
+existing checked data only during test planning, without another checker pass
+or serialized inventory. Inline expects remain execution observations.
+
 The compiler must not create separate hoisted roots inside an ordinary top-level
 constant body. The whole top-level constant body is already a compile-time root,
 so nested hoisted roots would add metadata and scheduling work without removing
@@ -9853,8 +9864,8 @@ lowering a body. A specialization request is identified by:
 const SpecIdentity = struct {
     callable: CallableIdentity,
     method_scope: CheckedModuleDigest,
-    source_fn_ty_digest: TypeDigest,
     evidence_digest: EvidenceDigest,
+    codec_contract_digest: TypeDigest,
     request_fn_ty_digest: TypeDigest,
     request_fn_ty: TypeId,
 };
@@ -9893,15 +9904,57 @@ const SpecRecord = struct {
 
 `method_scope` records the exact checked registry scope that selected static
 dispatch inside the body; it participates in both draft and durable lookup
-keys. `source_fn_ty_digest` records the checked source function type after
-instantiation into the requesting graph. `evidence_digest` accelerates lookup
-of the exact retained dispatch-evidence topology. `request_fn_ty_digest`
+keys. `evidence_digest` accelerates lookup of the exact retained
+dispatch-evidence topology, and `codec_contract_digest` the exact
+lowering-only context a generated codec body requires. `request_fn_ty_digest`
 records the closed function type REQUESTED by the call site that reserved the
 record. The digests make lookup fast, but they are not the only correctness
 check. When a digest match is found, the store must also verify the checked
-callable identity, method scope, exact evidence topology, and exact structural
-equality of the closed Monotype function type. Digest collisions are therefore
-harmless.
+callable identity, method scope, exact evidence topology, exact codec
+contract, and exact structural equality of the closed Monotype function type.
+Digest collisions are therefore harmless.
+
+The checked source function type a call site instantiated the callable from is
+NOT part of this identity. The callable says which checked body a request
+lowers; the checked source type is the requesting graph's instantiation and
+replay context—the root a fresh instantiation constrains to the requested
+Monotype type—so the requesting graph may key its own instantiation and draft
+memos by it. It does not name the resulting specialization, because two call
+sites can instantiate one callable from checked types that differ at the
+checked level and seal to the same closed Monotype request. The confirmed case
+is a transparent alias: with `Count : U64`, a call site under `Count -> Count`
+and one under `U64 -> U64` carry different checked type keys—that key
+retains alias provenance deliberately—and both requests seal to one Monotype
+function type. (Monotype does retain some alias-named types; what is required
+here is the sealed request type, whatever shape it has.)
+
+Two requests that agree on the checked callable, method scope, exact evidence
+topology, codec contract, and closed Monotype function type lower the same body
+and must reuse ONE record. Caller provenance must not split them, in the
+durable store, in the draft-commit index, or in the object-cache content key.
+Every content identity derived from a specialization obeys the same rule
+because they are compared against each other: an object-cache entry is filed
+under `specIdentityKey` and carries the procedure identity the writing program
+lowered, which the reading program re-derives from the lifted function's
+checked source identity. A record keeps whichever requester reserved it, so a
+requester-derived component in either identity would make two programs that
+reach one specialization through differently annotated call sites disagree—one
+key naming two procedure identities.
+
+A compiler-generated body retains its own source key. An interpolation or
+field-names iterator step, a structural parser or encoder runtime, and a
+generated encoder callback have no checked declaration to name, so the producer
+synthesizes the body's identity—owner context, source expression, site ordinal
+and mode—into the same template slot the caller's checked type would otherwise
+occupy. Several such bodies share one `FnDef`, their evidence, and their
+Monotype type, so every identity derived from the template must carry that key.
+Which reading the slot holds is decided by the callable kind, never inferred
+from names, types, or layouts: the generated kinds keep it, the rest drop it.
+`checked_generated` is also worn by an unavailable-hosted crash stub and a
+result-row widening adapter, whose slot is ordinary caller provenance, so that
+kind is keyed conservatively—those two stay distinct per requester, which costs
+reuse and cannot lose a distinction. Neither is an object-cache entry, so no
+key can disagree with their identity.
 
 Checked callable type ids inside dispatch evidence are relation-replay payload,
 not specialization identity: separate generalized scheme uses deliberately
@@ -10339,6 +10392,20 @@ parents for nested local functions by `depth`). A direct plan's evidence node
 records the target's substitution the same way, so a direct target specializes
 under the exact substitution checking applied rather than under a re-derived
 one.
+
+An evidence-dependent dispatch whose checked plan authorizes nested-contract
+reuse consumes the already-materialized contract directly. Its targets and
+terminal verdicts were selected at the checked edge; composite requirements
+have no substitution slot from which to derive them again. Monotype applies
+every selected target's callable relation once, including variables reached
+only through its constraint signature, then removes the consumed edge-local
+callable identities from its targets. Nested contracts retain their
+own relations until their respective targets specialize. Normalization borrows
+the immutable vector when unchanged and copies it once on the first changed
+entry, allocating only targets whose callable identity is removed. It does not
+repeat method lookup or run the compiler-generated requirement fixpoint.
+Independent callables without the checked reuse proof still derive evidence
+against their own callable relation.
 
 Requirement forwarding carries the method ID's owning checked name store.
 Raw method IDs are comparable only within the same store; cross-module
@@ -11790,6 +11857,28 @@ callback from erased storage, or inspect a descriptor to choose RC behavior.
 An erased-box list that reaches such an operation without its explicit list
 descriptor is a producer invariant failure.
 
+Generated RC helpers have one ABI, declared once in
+`builtins/rc_callback_abi.zig`: `incref` takes the value pointer and the amount,
+and `decref` and `free` take the value pointer alone. Compiled Roc code reaches
+its host through fixed runtime symbols, so a generated helper carries no host
+pointer. Every backend builds its helper signature from that declaration rather
+than spelling the parameter list itself, and the builtins call item and
+payload callbacks through the same types. A backend that spells a different
+parameter list produces a helper the builtins cannot call: native calling
+conventions discard the surplus argument silently, while a Wasm `call_indirect`
+compares the signature and traps.
+
+The erased-callable `Payload.on_drop` slot is the one exception, because glue
+presents it to Zig, Rust, and C hosts as `(capture, ops)`. The `host_drop`
+operation names the generated adapter that presents that signature and performs
+the layout's `decref`. It is a calling convention rather than an operation over
+a layout: it plans exactly as its layout's `decref`, it is selected only where
+lowering fills a final-drop slot, and an RC statement that carries it is a
+producer invariant failure. Planning as the `decref` means a capture layout
+whose `decref` helper is also materialized carries that helper's top-level walk
+twice, once per signature; nested helpers stay shared, so the duplicate is one
+function body rather than a teardown tree.
+
 Every linked Wasm image has exactly one provider for compiler runtime libcalls.
 Standalone Wasm obtains them from the builtins object and the standalone Boxy
 runtime suppresses its copies. Evaluator Wasm has no companion builtins object,
@@ -12024,6 +12113,15 @@ lifetime and is not the shared-memory IPC transport.
 
 ### Layout Selection
 
+Recursive layout commitment interns unrolled copies of recursive nodes
+before selecting boxed slots. Once a recursive component has exact structural
+keys, its nodes also record their one-step encodings with settled child digests.
+An acyclic node with that same encoding inherits the recursive node's key and
+representation. Thus an unrolled record and its recursive counterpart commit
+the same field storage; graph sharing cannot make one inline and the other
+boxed. Procedure reuse by solved type identity consumes this consistent layout
+commitment.
+
 Layout selection is the first stage that chooses runtime encodings:
 
 - struct field order
@@ -12188,6 +12286,17 @@ state occupy only their live procedure domains. Subtree cloning reserves join
 identities from its explicit destination-procedure context, not from a scan of
 unrelated procedures. Active callbacks are executor-bounded; retained patches
 are proportional to the phase's procedure bodies and generated output.
+
+Operand and definition counts and reachable-statement walks retain their paged
+ID indexes and work buffers in exclusive executor-lane storage. Serial phases
+retain the same storage across procedures. Every simultaneous inventory leases
+independent storage; releasing it clears only live rows and pending work, even
+on allocation failure. The pool retains capacity up to peak simultaneous use,
+without a fixed inventory-count cutoff. Only empty storage survives a task or
+compilation: counts and visited marks are never reused after rewrites or across
+stores. Task-arena resets cannot invalidate this lane-owned storage, and emitted
+LIR retains no references to it. Sparse directory initialization and destruction
+are amortized over the owner's lifetime, never repeated for each procedure.
 
 Loop promotion identifies back edges during its body-first lexical scan and
 uses source-indexed carrier edges. Shared body/remainder continuations remain
@@ -13157,7 +13266,8 @@ the body still holding the value the previous iteration released, so the back
 edges maintain their own shrinking meet over the parameters and the body keep
 places only what survives it. A site contribution that shrinks without
 changing the global meet cannot schedule downstream work. Each loop identity
-records whether its solved rows consumed any keep bits. A keep change that
+records whether its solved rows consumed any keep bits, answered from the
+row's structure rather than by counting its set bits. A keep change that
 supplied no boundary bits schedules no liveness work.
 
 Join, jump-site, and continuation-switch identities are compact indices
