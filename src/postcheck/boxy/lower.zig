@@ -5546,6 +5546,7 @@ const ProcedureBuilder = struct {
             for (self.plan.tagVariantSlice(rep.tag_variants), 0..) |variant, index| {
                 if (index > std.math.maxInt(u16)) boxyLowerInvariant("generated tag-union variant index exceeded LIR range");
                 try variants.append(self.allocator, .{
+                    .boundary_rep = shape_rep,
                     .tag_rep = root,
                     .owner_rep = current,
                     .index = @intCast(index),
@@ -7233,6 +7234,7 @@ const ProcedureBuilder = struct {
             if (payload_only and self.plan.childSlice(variant.payloads).len == 0) continue;
             if (index > std.math.maxInt(u16)) boxyLowerInvariant("generated tag encoder variant index exceeded LIR range");
             variants[out_index] = .{
+                .boundary_rep = proc.repForTypeRef(shape_type),
                 .tag_rep = tag_rep,
                 .owner_rep = tag_rep,
                 .index = @intCast(index),
@@ -8759,18 +8761,21 @@ const ProcedureBuilder = struct {
         const ok = proc.generatedParserTagVariant(context.result_rep, "Ok");
         const payloads = self.plan.childSlice(ok.variant.payloads);
         if (payloads.len != 1) boxyLowerInvariant("generated parser final Ok did not have one payload");
-        const result_record = try proc.addFrameLocalForRep(payloads[0].rep);
+        // `Try`'s declared `Ok` payload is its formal `ok`; the record is
+        // built at this result's actual `{ value, rest }` representation.
+        const record_rep = proc.nominalBackingActualRep(context.result_rep, payloads[0].rep);
+        const result_record = try proc.addFrameLocalForRep(record_rep);
         const continuation = try proc.assignGeneratedParserTag(
             context.result,
             context.result_rep,
             ok,
             result_record,
-            payloads[0].rep,
+            record_rep,
             context.next,
         );
         return try proc.assignGeneratedParserTwoFieldRecord(
             result_record,
-            payloads[0].rep,
+            record_rep,
             "value",
             value,
             value_rep,
@@ -10293,6 +10298,10 @@ const ProcedureBuilder = struct {
     }
 
     const GeneratedParserTagVariant = struct {
+        /// The representation the variant was looked up through. For a
+        /// nominal such as `Try` its payload children are the declaration's
+        /// formals, which this boundary maps to the actual payloads.
+        boundary_rep: Plan.TypeRepId,
         /// The root tag domain whose descriptor describes the runtime value.
         tag_rep: Plan.TypeRepId,
         /// The row node that explicitly declares this variant.
@@ -10327,6 +10336,15 @@ const ProcedureBuilder = struct {
         state_type: Plan.CheckedTypeIdentity,
         state_rep: Plan.TypeRepId,
         cursor: LIR.LocalId,
+        /// Whether `parse_record_start` reported an entry count. A `Done`
+        /// event also sets it (with `remaining` zero), so the loop head's
+        /// single "counted and nothing remaining" test is the only finish site.
+        counted: LIR.LocalId,
+        remaining: LIR.LocalId,
+        /// Set after a field value or skipped entry is consumed: the loop head
+        /// then ends that entry (counting it down, or asking the format via
+        /// `parse_record_after_field`) before reading the next event.
+        entry_pending: LIR.LocalId,
         evidence: LIR.LocalId,
         fields: []GeneratedParserRecordField,
         presence: []LIR.LocalId,
@@ -10417,6 +10435,9 @@ const ProcedureBuilder = struct {
         }
 
         const cursor = try proc.addGeneratedParserOutputLocalForRep(shape_context.state_rep);
+        const counted = try proc.addFrameLocal(.bool);
+        const remaining = try proc.addFrameLocal(.u64);
+        const entry_pending = try proc.addFrameLocal(.bool);
         const evidence = try proc.addFrameLocalForRep(proc.repForTypeRef(parse_arg_types[1]));
         const fields = try self.generatedParserRecordFields(
             proc,
@@ -10443,6 +10464,9 @@ const ProcedureBuilder = struct {
             .state_type = shape_context.state_type,
             .state_rep = shape_context.state_rep,
             .cursor = cursor,
+            .counted = counted,
+            .remaining = remaining,
+            .entry_pending = entry_pending,
             .evidence = evidence,
             .fields = fields,
             .presence = presence,
@@ -10454,13 +10478,7 @@ const ProcedureBuilder = struct {
         };
 
         const loop_body = try self.lowerGeneratedRecordParserLoopBody(proc, context, parse_call);
-        var initial = try self.result.store.addCFStmt(.{ .jump = .{ .target = context.join_id } });
-        initial = try proc.setLocalInitializeJoinParamFromRep(
-            cursor,
-            state,
-            shape_context.state_rep,
-            initial,
-        );
+        var initial = try self.lowerGeneratedRecordStart(proc, context, state);
         var field_index = fields.len;
         while (field_index > 0) {
             field_index -= 1;
@@ -10472,11 +10490,14 @@ const ProcedureBuilder = struct {
             initial = try proc.assignIntLiteral(presence[presence_index], 0, initial);
         }
 
-        const join_params = try self.allocator.alloc(LIR.LocalId, 1 + fields.len + presence.len);
+        // Payloads precede presence words: ARC releases an overwritten payload
+        // immediately before its write, testing the old presence bit.
+        const control_params = [_]LIR.LocalId{ cursor, counted, remaining, entry_pending };
+        const join_params = try self.allocator.alloc(LIR.LocalId, control_params.len + fields.len + presence.len);
         defer self.allocator.free(join_params);
-        join_params[0] = cursor;
-        for (fields, 0..) |field, index| join_params[1 + index] = field.payload;
-        for (presence, 0..) |local, index| join_params[1 + fields.len + index] = local;
+        @memcpy(join_params[0..control_params.len], &control_params);
+        for (fields, 0..) |field, index| join_params[control_params.len + index] = field.payload;
+        for (presence, 0..) |local, index| join_params[control_params.len + fields.len + index] = local;
 
         const maybe_payloads = try self.allocator.alloc(LIR.LocalId, fields.len);
         defer self.allocator.free(maybe_payloads);
@@ -10662,51 +10683,242 @@ const ProcedureBuilder = struct {
         } });
     }
 
+    const GeneratedParserTryCall = struct {
+        call: Plan.GeneratedCodecCallPlan,
+        step: LIR.LocalId,
+        step_rep: Plan.TypeRepId,
+        ok: GeneratedParserTagVariant,
+        err: GeneratedParserTagVariant,
+        ok_payload: ProcBodyBuilder.GeneratedParserTagPayload,
+    };
+
+    /// Prepare a call to a generated-parser format method returning
+    /// `Try(payload, err)`; `ok_payload.local` names the `Ok` payload that
+    /// `finishGeneratedParserTryCall`'s success body may read.
+    fn beginGeneratedParserTryCall(
+        proc: *ProcBodyBuilder,
+        call: Plan.GeneratedCodecCallPlan,
+    ) Allocator.Error!GeneratedParserTryCall {
+        const step_rep = proc.repForTypeRef(call.ret_type);
+        const ok = proc.generatedParserTagVariant(step_rep, "Ok");
+        return .{
+            .call = call,
+            .step = try proc.addFrameLocalForRep(step_rep),
+            .step_rep = step_rep,
+            .ok = ok,
+            .err = proc.generatedParserTagVariant(step_rep, "Err"),
+            .ok_payload = try proc.generatedParserSingleTagPayloadLocal(ok),
+        };
+    }
+
+    /// Emit the prepared call: `Err` is forwarded into the parser result
+    /// `target` before `next`, and `Ok` reads its payload and runs `ok_body`.
+    fn finishGeneratedParserTryCall(
+        self: *ProcedureBuilder,
+        proc: *ProcBodyBuilder,
+        try_call: GeneratedParserTryCall,
+        args: []const LIR.LocalId,
+        target: LIR.LocalId,
+        target_rep: Plan.TypeRepId,
+        next: LIR.CFStmtId,
+        ok_body: LIR.CFStmtId,
+    ) Allocator.Error!LIR.CFStmtId {
+        const err_body = try proc.forwardGeneratedParserError(target, target_rep, try_call.step, try_call.err, next);
+        const read_ok = try proc.generatedParserReadTagPayload(try_call.step, try_call.ok, try_call.ok_payload, ok_body);
+        const variants = [_]GeneratedParserTagVariant{ try_call.ok, try_call.err };
+        const bodies = [_]LIR.CFStmtId{ read_ok, err_body };
+        const impossible = try self.result.store.addCFStmt(.runtime_error);
+        const dispatch = try proc.generatedParserTagDispatch(try_call.step, try_call.step_rep, &variants, &bodies, impossible);
+        return try self.lowerGeneratedCodecCallLocalsInto(proc, try_call.call, try_call.step, args, dispatch);
+    }
+
+    /// `parse_record_start` selects counted or uncounted iteration and the
+    /// first cursor; every other loop slot starts empty.
+    fn lowerGeneratedRecordStart(
+        self: *ProcedureBuilder,
+        proc: *ProcBodyBuilder,
+        context: GeneratedParserRecordContext,
+        state: LIR.LocalId,
+    ) Allocator.Error!LIR.CFStmtId {
+        const call = proc.generatedCodecCallPlan(context.worker, context.encoding_type, "parse_record_start", context.shape_type);
+        const start = try beginGeneratedParserTryCall(proc, call);
+        const event = start.ok_payload;
+        const counted_variant = proc.generatedParserTagVariant(event.child.rep, "Counted");
+        const uncounted_variant = proc.generatedParserTagVariant(event.child.rep, "Uncounted");
+
+        const counted_payload = try proc.generatedParserSingleTagPayloadLocal(counted_variant);
+        const counted_len = try proc.addFrameLocal(.u64);
+        const counted_rest = try proc.addFrameLocalForRep(context.state_rep);
+        var counted_body = try self.lowerGeneratedRecordLoopJump(proc, context, counted_rest, true, counted_len, false);
+        counted_body = try proc.generatedParserReadRecordField(counted_rest, context.state_rep, counted_payload.local, counted_payload.child, "rest", counted_body);
+        counted_body = try proc.generatedParserReadRecordField(counted_len, proc.repForTypeRef(try proc.generatedParserRecordFieldType(counted_payload.child.source_type, "len")), counted_payload.local, counted_payload.child, "len", counted_body);
+        counted_body = try proc.generatedParserReadTagPayload(event.local, counted_variant, counted_payload, counted_body);
+
+        const uncounted_payload = try proc.generatedParserSingleTagPayloadLocal(uncounted_variant);
+        const zero = try proc.addFrameLocal(.u64);
+        var uncounted_body = try self.lowerGeneratedRecordLoopJump(proc, context, uncounted_payload.local, false, zero, false);
+        uncounted_body = try proc.assignIntLiteral(zero, 0, uncounted_body);
+        uncounted_body = try proc.generatedParserReadTagPayload(event.local, uncounted_variant, uncounted_payload, uncounted_body);
+
+        const variants = [_]GeneratedParserTagVariant{ counted_variant, uncounted_variant };
+        const bodies = [_]LIR.CFStmtId{ counted_body, uncounted_body };
+        const impossible = try self.result.store.addCFStmt(.runtime_error);
+        const ok_body = try proc.generatedParserTagDispatch(event.local, event.child.rep, &variants, &bodies, impossible);
+        return try self.finishGeneratedParserTryCall(
+            proc,
+            start,
+            &.{ context.encoding, state },
+            context.target,
+            context.target_rep,
+            context.next,
+            ok_body,
+        );
+    }
+
+    /// Re-enter the record loop with the given cursor and control slots.
+    /// Field payloads and presence words keep their current values.
+    fn lowerGeneratedRecordLoopJump(
+        self: *ProcedureBuilder,
+        proc: *ProcBodyBuilder,
+        context: GeneratedParserRecordContext,
+        cursor: LIR.LocalId,
+        counted: bool,
+        remaining: LIR.LocalId,
+        entry_pending: bool,
+    ) Allocator.Error!LIR.CFStmtId {
+        const counted_value = try proc.addFrameLocal(.bool);
+        const pending_value = try proc.addFrameLocal(.bool);
+        var continuation = try self.result.store.addCFStmt(.{ .jump = .{ .target = context.join_id } });
+        continuation = try proc.setLocalInitializeJoinParam(context.entry_pending, pending_value, continuation);
+        continuation = try proc.setLocalInitializeJoinParam(context.remaining, remaining, continuation);
+        continuation = try proc.setLocalInitializeJoinParam(context.counted, counted_value, continuation);
+        continuation = try proc.setLocalInitializeJoinParamFromRep(context.cursor, cursor, context.state_rep, continuation);
+        continuation = try proc.assignBoolLiteral(pending_value, entry_pending, continuation);
+        return try proc.assignBoolLiteral(counted_value, counted, continuation);
+    }
+
+    /// Re-enter the loop after one entry of a counted record: its remaining
+    /// count drops by one. `cursor` already follows the entry.
+    fn lowerGeneratedRecordCountedEntryJump(
+        self: *ProcedureBuilder,
+        proc: *ProcBodyBuilder,
+        context: GeneratedParserRecordContext,
+        cursor: LIR.LocalId,
+    ) Allocator.Error!LIR.CFStmtId {
+        const one = try proc.addFrameLocal(.u64);
+        const next_remaining = try proc.addFrameLocal(.u64);
+        var continuation = try self.lowerGeneratedRecordLoopJump(proc, context, cursor, true, next_remaining, false);
+        continuation = try proc.assignBinaryLowLevel(next_remaining, .num_int_sub_wrap, context.remaining, one, continuation);
+        return try proc.assignIntLiteral(one, 1, continuation);
+    }
+
+    /// Re-enter the loop once the format reported that the record ended:
+    /// counted with nothing remaining is the loop head's finish condition.
+    fn lowerGeneratedRecordDoneJump(
+        self: *ProcedureBuilder,
+        proc: *ProcBodyBuilder,
+        context: GeneratedParserRecordContext,
+        cursor: LIR.LocalId,
+    ) Allocator.Error!LIR.CFStmtId {
+        const zero = try proc.addFrameLocal(.u64);
+        const continuation = try self.lowerGeneratedRecordLoopJump(proc, context, cursor, true, zero, false);
+        return try proc.assignIntLiteral(zero, 0, continuation);
+    }
+
+    /// The loop head. A pending entry end runs first; otherwise a counted
+    /// record with nothing remaining finishes, and anything else reads the
+    /// next `parse_record_field` event.
     fn lowerGeneratedRecordParserLoopBody(
         self: *ProcedureBuilder,
         proc: *ProcBodyBuilder,
         context: GeneratedParserRecordContext,
         parse_call: Plan.GeneratedCodecCallPlan,
     ) Allocator.Error!LIR.CFStmtId {
-        const step_rep = proc.repForTypeRef(parse_call.ret_type);
-        const step = try proc.addFrameLocalForRep(step_rep);
-        const ok = proc.generatedParserTagVariant(step_rep, "Ok");
-        const err = proc.generatedParserTagVariant(step_rep, "Err");
-        const err_body = try proc.forwardGeneratedParserError(
+        const step_join = proc.freshJoinPointId();
+        const read_event = try self.lowerGeneratedRecordReadEvent(proc, context, parse_call);
+        const jump_step = try self.result.store.addCFStmt(.{ .jump = .{ .target = step_join } });
+
+        const finish = try self.lowerGeneratedRecordFinish(proc, context);
+        const remaining_is_zero = try proc.addFrameLocal(.bool);
+        const zero = try proc.addFrameLocal(.u64);
+        var counted_head = try proc.boolSwitchNoContinuation(remaining_is_zero, finish, jump_step);
+        counted_head = try proc.assignBinaryLowLevel(remaining_is_zero, .num_is_eq, context.remaining, zero, counted_head);
+        counted_head = try proc.assignIntLiteral(zero, 0, counted_head);
+        const jump_step_uncounted = try self.result.store.addCFStmt(.{ .jump = .{ .target = step_join } });
+        const head = try proc.boolSwitchNoContinuation(context.counted, counted_head, jump_step_uncounted);
+
+        const entry_end = try self.lowerGeneratedRecordEntryEnd(proc, context);
+        const dispatch = try proc.boolSwitchNoContinuation(context.entry_pending, entry_end, head);
+        return try self.result.store.addCFStmt(.{ .join = .{
+            .id = step_join,
+            .params = LIR.LocalSpan.empty(),
+            .body = read_event,
+            .remainder = dispatch,
+        } });
+    }
+
+    /// End the entry whose value (or skip) just completed: a counted record
+    /// counts it down, and an uncounted one asks `parse_record_after_field`
+    /// whether another entry follows.
+    fn lowerGeneratedRecordEntryEnd(
+        self: *ProcedureBuilder,
+        proc: *ProcBodyBuilder,
+        context: GeneratedParserRecordContext,
+    ) Allocator.Error!LIR.CFStmtId {
+        const counted_body = try self.lowerGeneratedRecordCountedEntryJump(proc, context, context.cursor);
+
+        const call = proc.generatedCodecCallPlan(context.worker, context.encoding_type, "parse_record_after_field", context.shape_type);
+        const after = try beginGeneratedParserTryCall(proc, call);
+        const event = after.ok_payload;
+        const continue_variant = proc.generatedParserTagVariant(event.child.rep, "Continue");
+        const done_variant = proc.generatedParserTagVariant(event.child.rep, "Done");
+        const continue_payload = try proc.generatedParserSingleTagPayloadLocal(continue_variant);
+        const done_payload = try proc.generatedParserSingleTagPayloadLocal(done_variant);
+        const variants = [_]GeneratedParserTagVariant{ continue_variant, done_variant };
+        const bodies = [_]LIR.CFStmtId{
+            try proc.generatedParserReadTagPayload(
+                event.local,
+                continue_variant,
+                continue_payload,
+                try self.lowerGeneratedRecordLoopJump(proc, context, continue_payload.local, false, context.remaining, false),
+            ),
+            try proc.generatedParserReadTagPayload(
+                event.local,
+                done_variant,
+                done_payload,
+                try self.lowerGeneratedRecordDoneJump(proc, context, done_payload.local),
+            ),
+        };
+        const impossible = try self.result.store.addCFStmt(.runtime_error);
+        const ok_body = try proc.generatedParserTagDispatch(event.local, event.child.rep, &variants, &bodies, impossible);
+        const uncounted_body = try self.finishGeneratedParserTryCall(
+            proc,
+            after,
+            &.{ context.encoding, context.cursor },
             context.target,
             context.target_rep,
-            step,
-            err,
             context.next,
+            ok_body,
         );
+        return try proc.boolSwitchNoContinuation(context.counted, counted_body, uncounted_body);
+    }
 
-        const ok_payloads = self.plan.childSlice(ok.variant.payloads);
-        if (ok_payloads.len != 1) boxyLowerInvariant("generated record parser step Ok did not have one event payload");
-        const event_child = ok_payloads[0];
-        const event = try proc.addFrameLocalForRep(event_child.rep);
-        const event_body = try self.lowerGeneratedRecordParserEvent(proc, context, event, event_child);
-        const read_event = try proc.assignConcreteTagPayloadRead(
-            event,
-            event_child.rep,
-            null,
-            step,
-            ok.tag_rep,
-            ok.variant.name,
-            ok.index,
-            0,
-            1,
-            event_body,
-        );
-        const variants = [_]GeneratedParserTagVariant{ ok, err };
-        const bodies = [_]LIR.CFStmtId{ read_event, err_body };
-        const impossible = try self.result.store.addCFStmt(.runtime_error);
-        const dispatch = try proc.generatedParserTagDispatch(step, step_rep, &variants, &bodies, impossible);
-        return try self.lowerGeneratedCodecCallLocalsInto(
+    fn lowerGeneratedRecordReadEvent(
+        self: *ProcedureBuilder,
+        proc: *ProcBodyBuilder,
+        context: GeneratedParserRecordContext,
+        parse_call: Plan.GeneratedCodecCallPlan,
+    ) Allocator.Error!LIR.CFStmtId {
+        const step = try beginGeneratedParserTryCall(proc, parse_call);
+        const event_body = try self.lowerGeneratedRecordParserEvent(proc, context, step.ok_payload.local, step.ok_payload.child);
+        return try self.finishGeneratedParserTryCall(
             proc,
-            parse_call,
             step,
             &.{ context.encoding, context.evidence, context.cursor },
-            dispatch,
+            context.target,
+            context.target_rep,
+            context.next,
+            event_body,
         );
     }
 
@@ -10741,6 +10953,8 @@ const ProcedureBuilder = struct {
         return try proc.generatedParserTagDispatch(event, event_child.rep, &variants, &bodies, impossible);
     }
 
+    /// `Continue` means the format consumed a whole entry itself and the
+    /// cursor already sits at the next entry boundary, so no entry end runs.
     fn lowerGeneratedRecordContinueEvent(
         self: *ProcedureBuilder,
         proc: *ProcBodyBuilder,
@@ -10749,18 +10963,10 @@ const ProcedureBuilder = struct {
         variant: GeneratedParserTagVariant,
     ) Allocator.Error!LIR.CFStmtId {
         const payload = try proc.generatedParserSingleTagPayloadLocal(variant);
-        const rest = try proc.addFrameLocalForRep(context.state_rep);
-        var continuation = try self.result.store.addCFStmt(.{ .jump = .{ .target = context.join_id } });
-        continuation = try proc.setLocalInitializeJoinParam(context.cursor, rest, continuation);
-        continuation = try proc.generatedParserReadRecordField(
-            rest,
-            context.state_rep,
-            payload.local,
-            payload.child,
-            "rest",
-            continuation,
-        );
-        return try proc.generatedParserReadTagPayload(event, variant, payload, continuation);
+        const counted_body = try self.lowerGeneratedRecordCountedEntryJump(proc, context, payload.local);
+        const uncounted_body = try self.lowerGeneratedRecordLoopJump(proc, context, payload.local, false, context.remaining, false);
+        const choose = try proc.boolSwitchNoContinuation(context.counted, counted_body, uncounted_body);
+        return try proc.generatedParserReadTagPayload(event, variant, payload, choose);
     }
 
     fn lowerGeneratedRecordDirectFieldEvent(
@@ -10911,10 +11117,9 @@ const ProcedureBuilder = struct {
         const mask_value = @as(u64, 1) << @intCast(field_index % 64);
         const mask = try proc.addFrameLocal(.u64);
         const next_presence = try proc.addFrameLocal(.u64);
-        var continuation = try self.result.store.addCFStmt(.{ .jump = .{ .target = context.join_id } });
+        var continuation = try self.lowerGeneratedRecordEntryPendingJump(proc, context, rest);
         continuation = try proc.setLocalInitializeJoinParam(context.presence[word_index], next_presence, continuation);
         continuation = try proc.setLocalInitializeJoinParam(context.fields[field_index].payload, value, continuation);
-        continuation = try proc.setLocalInitializeJoinParam(context.cursor, rest, continuation);
         continuation = try proc.assignBinaryLowLevel(
             next_presence,
             .num_bitwise_or,
@@ -10923,6 +11128,21 @@ const ProcedureBuilder = struct {
             continuation,
         );
         return try proc.assignIntLiteral(mask, @intCast(mask_value), continuation);
+    }
+
+    /// Re-enter the loop after an entry's value was consumed, leaving the
+    /// counted state as it is and marking the entry end as pending.
+    fn lowerGeneratedRecordEntryPendingJump(
+        self: *ProcedureBuilder,
+        proc: *ProcBodyBuilder,
+        context: GeneratedParserRecordContext,
+        cursor: LIR.LocalId,
+    ) Allocator.Error!LIR.CFStmtId {
+        const pending_value = try proc.addFrameLocal(.bool);
+        var continuation = try self.result.store.addCFStmt(.{ .jump = .{ .target = context.join_id } });
+        continuation = try proc.setLocalInitializeJoinParam(context.entry_pending, pending_value, continuation);
+        continuation = try proc.setLocalInitializeJoinParamFromRep(context.cursor, cursor, context.state_rep, continuation);
+        return try proc.assignBoolLiteral(pending_value, true, continuation);
     }
 
     fn lowerGeneratedSkipRecordField(
@@ -10944,8 +11164,7 @@ const ProcedureBuilder = struct {
             context.next,
         );
         const ok_payload = try proc.generatedParserSingleTagPayloadLocal(ok);
-        var success = try self.result.store.addCFStmt(.{ .jump = .{ .target = context.join_id } });
-        success = try proc.setLocalInitializeJoinParam(context.cursor, ok_payload.local, success);
+        var success = try self.lowerGeneratedRecordEntryPendingJump(proc, context, ok_payload.local);
         success = try proc.generatedParserReadTagPayload(skipped, ok, ok_payload, success);
         const variants = [_]GeneratedParserTagVariant{ ok, err };
         const bodies = [_]LIR.CFStmtId{ success, err_body };
@@ -10968,30 +11187,33 @@ const ProcedureBuilder = struct {
         variant: GeneratedParserTagVariant,
     ) Allocator.Error!LIR.CFStmtId {
         const payload = try proc.generatedParserSingleTagPayloadLocal(variant);
-        const rest = try proc.addFrameLocalForRep(context.state_rep);
-        var continuation = try self.lowerGeneratedFinishedRecord(proc, context, rest);
+        const done = try self.lowerGeneratedRecordDoneJump(proc, context, payload.local);
+        return try proc.generatedParserReadTagPayload(event, variant, payload, done);
+    }
+
+    /// The single record-construction site, reached from the loop head once
+    /// the record has ended. Every absent field is resolved before any
+    /// payload is consumed.
+    fn lowerGeneratedRecordFinish(
+        self: *ProcedureBuilder,
+        proc: *ProcBodyBuilder,
+        context: GeneratedParserRecordContext,
+    ) Allocator.Error!LIR.CFStmtId {
+        var continuation = try self.lowerGeneratedFinishedRecord(proc, context, context.cursor);
         var index = context.fields.len;
         while (index > 0) {
             index -= 1;
-            const missing = try self.lowerGeneratedMissingRecordField(proc, context, index, rest, continuation);
+            const missing = try self.lowerGeneratedMissingRecordField(proc, context, index, context.cursor, continuation);
             continuation = try self.result.store.addCFStmt(.{ .switch_initialized_payload = .{
                 .cond = context.presence[index / 64],
                 .cond_mask = @as(u64, 1) << @intCast(index % 64),
                 .payload = context.fields[index].payload,
-                .uninitialized_is_cold = true,
+                .uninitialized_is_cold = !context.fields[index].optional_missing,
                 .initialized_branch = continuation,
                 .uninitialized_branch = missing,
             } });
         }
-        continuation = try proc.generatedParserReadRecordField(
-            rest,
-            context.state_rep,
-            payload.local,
-            payload.child,
-            "rest",
-            continuation,
-        );
-        return try proc.generatedParserReadTagPayload(event, variant, payload, continuation);
+        return continuation;
     }
 
     fn lowerGeneratedMissingRecordField(
@@ -14188,6 +14410,7 @@ const ProcBodyBuilder = struct {
                 if (!std.mem.eql(u8, self.tagVariantNameText(variant), tag_text)) continue;
                 if (index > std.math.maxInt(u16)) boxyLowerInvariant("generated parser tag index exceeded LIR range");
                 return .{
+                    .boundary_rep = rep_id,
                     .tag_rep = root_rep,
                     .owner_rep = current,
                     .index = @intCast(index),
@@ -14265,7 +14488,13 @@ const ProcBodyBuilder = struct {
     }
 
     const GeneratedParserTagPayload = struct {
+        /// The payload at its actual representation (`child.rep`).
         local: LIR.LocalId,
+        /// The payload as stored by the tag, at the declared payload
+        /// representation `stored_rep`; the same local as `local` unless the
+        /// variant belongs to a nominal whose declared payload is a formal.
+        stored: LIR.LocalId,
+        stored_rep: Plan.TypeRepId,
         desc_local: ?LIR.LocalId,
         child: Plan.RepChild,
     };
@@ -14278,10 +14507,16 @@ const ProcBodyBuilder = struct {
         if (payloads.len != 1) boxyLowerInvariant("generated parser tag did not have one payload");
         const tag_rep = self.parent.plan.representations.items[@intFromEnum(variant.tag_rep)];
         const extracted = try self.addExtractedTagPayloadLocal(payloads[0].rep, tag_rep.descriptor != null);
+        const actual_rep = self.nominalBackingActualRep(variant.boundary_rep, payloads[0].rep);
+        var child = payloads[0];
+        child.rep = actual_rep;
+        child.source_type = self.parent.plan.representations.items[@intFromEnum(actual_rep)].source_type;
         return .{
-            .local = extracted.local,
+            .local = if (actual_rep == payloads[0].rep) extracted.local else try self.addFrameLocalForRep(actual_rep),
+            .stored = extracted.local,
+            .stored_rep = payloads[0].rep,
             .desc_local = extracted.desc_local,
-            .child = payloads[0],
+            .child = child,
         };
     }
 
@@ -14292,9 +14527,13 @@ const ProcBodyBuilder = struct {
         payload: GeneratedParserTagPayload,
         next: LIR.CFStmtId,
     ) Allocator.Error!LIR.CFStmtId {
+        const converted = if (payload.local == payload.stored)
+            next
+        else
+            try self.assignRepresentationBoundary(payload.local, payload.stored, payload.child.rep, payload.stored_rep, next);
         return try self.assignConcreteTagPayloadRead(
-            payload.local,
-            payload.child.rep,
+            payload.stored,
+            payload.stored_rep,
             payload.desc_local,
             source,
             variant.tag_rep,
@@ -14302,7 +14541,7 @@ const ProcBodyBuilder = struct {
             variant.index,
             0,
             1,
-            next,
+            converted,
         );
     }
 

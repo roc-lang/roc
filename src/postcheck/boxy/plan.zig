@@ -3254,10 +3254,7 @@ const Builder = struct {
                 try self.propagateGeneratedParserTryPlan(worker, shape, backing);
             },
             .record => try self.planGeneratedParserRecord(worker, shape, encoding_type),
-            .empty_record => {
-                _ = try self.ensureGeneratedCodecCall(worker, encoding_type, "parse_record_field", shape);
-                _ = try self.ensureGeneratedCodecCall(worker, encoding_type, "skip_record_field", null);
-            },
+            .empty_record => try self.planGeneratedParserRecordProtocol(worker, shape, encoding_type),
             .tuple => |elems| {
                 _ = try self.ensureGeneratedCodecCall(worker, encoding_type, "parse_array_start", null);
                 _ = try self.ensureGeneratedCodecCall(worker, encoding_type, "parse_array_next", null);
@@ -3605,8 +3602,7 @@ const Builder = struct {
     ) Allocator.Error!void {
         const fields = try self.generatedRecordCheckedFields(record_type);
         defer self.allocator.free(fields);
-        _ = try self.ensureGeneratedCodecCall(worker, encoding_type, "parse_record_field", record_type);
-        _ = try self.ensureGeneratedCodecCall(worker, encoding_type, "skip_record_field", null);
+        try self.planGeneratedParserRecordProtocol(worker, record_type, encoding_type);
         const rename_call = if (fields.len != 0)
             try self.ensureGeneratedCodecCall(worker, encoding_type, "rename_field", null)
         else
@@ -3644,6 +3640,20 @@ const Builder = struct {
             try self.planGeneratedParserShape(worker, parse_type, encoding_type);
         }
         if (needs_required) try self.planGeneratedParserMissingRequiredField(worker, encoding_type);
+    }
+
+    /// The format calls every generated record parser makes, whatever its
+    /// fields: entry iteration, entry recognition, and skipping unknown keys.
+    fn planGeneratedParserRecordProtocol(
+        self: *Builder,
+        worker: WorkerPlanId,
+        record_type: CheckedTypeIdentity,
+        encoding_type: CheckedTypeIdentity,
+    ) Allocator.Error!void {
+        _ = try self.ensureGeneratedCodecCall(worker, encoding_type, "parse_record_start", record_type);
+        _ = try self.ensureGeneratedCodecCall(worker, encoding_type, "parse_record_field", record_type);
+        _ = try self.ensureGeneratedCodecCall(worker, encoding_type, "parse_record_after_field", record_type);
+        _ = try self.ensureGeneratedCodecCall(worker, encoding_type, "skip_record_field", null);
     }
 
     /// Select how `worker`'s generated record parser reports an absent required
@@ -5953,8 +5963,37 @@ const Builder = struct {
         source_type: CheckedTypeIdentity,
         tag_union: checked.CheckedTagUnionType,
     ) Allocator.Error!TypeRepresentation {
-        const closed = try self.tagUnionExtensionIsExplicitlyClosed(view, tag_union.ext);
-        const ordered_tags = try self.layoutOrderedTagUnionTags(view, tag_union.tags);
+        // A checked row may be split across chained tag-union nodes (for
+        // example an inferred `[B, ..r]` whose `r` was later solved to
+        // `[A, C]`). The representation describes the whole row, so every
+        // segment's tags are gathered before variants are ordered.
+        var row_tags = std.ArrayList(checked.CheckedTag).empty;
+        defer row_tags.deinit(self.allocator);
+        try row_tags.appendSlice(self.allocator, tag_union.tags);
+        var seen = std.AutoHashMap(CheckedTypeIdentity, void).init(self.allocator);
+        defer seen.deinit();
+        var tail = tag_union.ext;
+        while (true) {
+            if ((try seen.getOrPut(typeRef(view, tail))).found_existing) {
+                boxyPlanInvariant("boxy tag-union representation encountered a cyclic row");
+            }
+            switch (view.checked_types.payload(tail)) {
+                .tag_union => |segment| {
+                    try row_tags.appendSlice(self.allocator, segment.tags);
+                    tail = segment.ext;
+                },
+                .alias => |alias| tail = alias.backing,
+                .pending, .err, .flex, .rigid, .record, .tuple, .nominal, .function, .empty_record, .empty_tag_union => break,
+            }
+        }
+        const tail_payload = view.checked_types.payload(tail);
+        const default_closed_variable = switch (tail_payload) {
+            .flex, .rigid => |variable| variable.row_default == .empty_tag_union,
+            .pending, .err, .alias, .record, .tuple, .nominal, .function, .empty_record, .tag_union, .empty_tag_union => false,
+        };
+        const closed = default_closed_variable or tail_payload == .empty_tag_union;
+
+        const ordered_tags = try self.layoutOrderedTagUnionTags(view, row_tags.items);
         defer if (ordered_tags.owned) self.allocator.free(ordered_tags.tags);
 
         var children = std.ArrayList(RepChild).empty;
@@ -5964,8 +6003,8 @@ const Builder = struct {
                 try self.appendPendingChild(&children, view, .{ .tag_payload = .{ .tag = tag.name, .index = @intCast(index) } }, arg);
             }
         }
-        if (!try self.rowExtensionIsDefaultClosed(view, tag_union.ext, .empty_tag_union)) {
-            try self.appendPendingChild(&children, view, .tag_ext, tag_union.ext);
+        if (!default_closed_variable) {
+            try self.appendPendingChild(&children, view, .tag_ext, tail);
         }
         const child_span = try self.commitPendingChildren(children.items);
 
@@ -6035,63 +6074,6 @@ const Builder = struct {
         return .{
             .tags = sorted,
             .owned = true,
-        };
-    }
-
-    fn tagUnionExtensionIsExplicitlyClosed(
-        self: *Builder,
-        view: ModuleView,
-        ext_ty: checked.CheckedTypeId,
-    ) Allocator.Error!bool {
-        var seen = std.AutoHashMap(CheckedTypeIdentity, void).init(self.allocator);
-        defer seen.deinit();
-        return try self.tagUnionExtensionIsExplicitlyClosedInner(view, ext_ty, &seen);
-    }
-
-    fn tagUnionExtensionIsExplicitlyClosedInner(
-        self: *Builder,
-        view: ModuleView,
-        ext_ty: checked.CheckedTypeId,
-        seen: *std.AutoHashMap(CheckedTypeIdentity, void),
-    ) Allocator.Error!bool {
-        const source = typeRef(view, ext_ty);
-        const entry = try seen.getOrPut(source);
-        if (entry.found_existing) return false;
-
-        return switch (view.checked_types.payload(ext_ty)) {
-            .empty_tag_union => true,
-            .alias => |alias| try self.tagUnionExtensionIsExplicitlyClosedInner(view, alias.backing, seen),
-            .flex, .rigid => |variable| variable.row_default == .empty_tag_union,
-            .pending, .err, .record, .tuple, .nominal, .function, .empty_record, .tag_union => false,
-        };
-    }
-
-    fn rowExtensionIsDefaultClosed(
-        self: *Builder,
-        view: ModuleView,
-        ext_ty: checked.CheckedTypeId,
-        expected: checked.RowDefault,
-    ) Allocator.Error!bool {
-        var seen = std.AutoHashMap(CheckedTypeIdentity, void).init(self.allocator);
-        defer seen.deinit();
-        return try self.rowExtensionIsDefaultClosedInner(view, ext_ty, expected, &seen);
-    }
-
-    fn rowExtensionIsDefaultClosedInner(
-        self: *Builder,
-        view: ModuleView,
-        ext_ty: checked.CheckedTypeId,
-        expected: checked.RowDefault,
-        seen: *std.AutoHashMap(CheckedTypeIdentity, void),
-    ) Allocator.Error!bool {
-        const source = typeRef(view, ext_ty);
-        const entry = try seen.getOrPut(source);
-        if (entry.found_existing) return false;
-
-        return switch (view.checked_types.payload(ext_ty)) {
-            .alias => |alias| try self.rowExtensionIsDefaultClosedInner(view, alias.backing, expected, seen),
-            .flex, .rigid => |variable| variable.row_default == expected,
-            .pending, .err, .record, .tuple, .nominal, .function, .empty_record, .tag_union, .empty_tag_union => false,
         };
     }
 
