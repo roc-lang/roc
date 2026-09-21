@@ -1242,6 +1242,16 @@ fixed activation lifetime without repeatedly moving the accumulated entry
 instruction list. Slot values are available to body construction immediately;
 final instruction numbering follows the completed block order.
 
+LLVM call sites do not acquire `alwaysinline` from loop nesting. Nesting depth
+does not establish execution frequency or bound the combined body of a caller
+with many sites. Larger helpers remain ordinary calls so LLVM can simplify each
+body before considering its duplication. A callee-local LIR statement limit is
+not a bound on caller growth or on the LLVM instructions generated after builtin
+expansion. Any future Roc-directed expansion of these helpers must consume an
+explicit plan with cumulative and transitive growth accounting, separately from
+the proof that the transformation preserves meaning. LLVM-specific planning
+and representation optimization must not run in dev-backend compilations.
+
 LLVM string-literal lowering emits a complete target-layout constant when the
 literal fits the runtime's inline `RocStr` representation. It uses the runtime's
 word count and flag-byte encoding, the target pointer width and byte order, and
