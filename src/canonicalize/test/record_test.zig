@@ -10,7 +10,7 @@ const BuiltinTestContext = @import("./BuiltinTestContext.zig").BuiltinTestContex
 const CoreCtx = @import("ctx").CoreCtx;
 const Ident = base.Ident;
 
-test "record literal uses record_unbound" {
+test "record literals canonicalize to record expressions" {
     const gpa = std.testing.allocator;
     var builtin_ctx = try BuiltinTestContext.init(gpa);
     defer builtin_ctx.deinit();

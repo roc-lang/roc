@@ -141,7 +141,6 @@ const Frame = union(enum) {
     nominal_decl: NominalDeclFrame,
     func: FuncFrame,
     record: RecordFrame,
-    record_unbound: RecordUnboundFrame,
     tag_union: TagUnionFrame,
 };
 
@@ -242,15 +241,6 @@ const RecordFrame = struct {
     stage: enum { fields, await_ext } = .fields,
 };
 
-const RecordUnboundFrame = struct {
-    fill: Fill,
-    source_fields: RecordField.SafeMultiList.Range,
-    idx: u32 = 0,
-    axis: FieldAxis = .type_var,
-    fields_base: u32,
-    values_base: u32,
-};
-
 const TagUnionFrame = struct {
     fill: Fill,
     source_tags: Tag.SafeMultiList.Range,
@@ -329,7 +319,6 @@ fn drive(ctx: *CopyContext, frames_base: usize) std.mem.Allocator.Error!void {
             .nominal_decl => |*frame| try stepNominalDecl(ctx, frame),
             .func => |*frame| try stepFunc(ctx, frame),
             .record => |*frame| try stepRecord(ctx, frame),
-            .record_unbound => |*frame| try stepRecordUnbound(ctx, frame),
             .tag_union => |*frame| try stepTagUnion(ctx, frame),
         };
         if (finished) {
@@ -474,15 +463,6 @@ fn pushContent(ctx: *CopyContext, fill: Fill, content: Content) std.mem.Allocato
                     .fill = fill,
                     .source_fields = record.fields,
                     .ext = record.ext,
-                    .fields_base = @intCast(machine.pending_fields.items.len),
-                    .values_base = @intCast(machine.values.items.len),
-                } });
-                return false;
-            },
-            .record_unbound => |fields| {
-                try machine.frames.append(ctx.allocator, .{ .record_unbound = .{
-                    .fill = fill,
-                    .source_fields = fields,
                     .fields_base = @intCast(machine.pending_fields.items.len),
                     .values_base = @intCast(machine.values.items.len),
                 } });
@@ -910,18 +890,6 @@ fn stepRecord(ctx: *CopyContext, frame: *RecordFrame) std.mem.Allocator.Error!bo
                 return true;
             },
         }
-    }
-}
-
-fn stepRecordUnbound(ctx: *CopyContext, frame: *RecordUnboundFrame) std.mem.Allocator.Error!bool {
-    while (true) {
-        if (frame.idx < frame.source_fields.count) {
-            if (!try requestRecordField(ctx, frame.source_fields, &frame.idx, &frame.axis)) return false;
-            continue;
-        }
-        const fields_range = try finishRecordFields(ctx, frame.source_fields, frame.fields_base, frame.values_base);
-        try finishFrame(ctx, frame.fill, Content{ .structure = FlatType{ .record_unbound = fields_range } });
-        return true;
     }
 }
 
