@@ -2720,7 +2720,6 @@ fn getDefaultedTypeStringWithSeen(
 
                     return result.toOwnedSlice();
                 },
-                .record_unbound,
                 .tuple,
                 .nominal_type,
                 .empty_record,

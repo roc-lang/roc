@@ -83,7 +83,6 @@ pub fn checkedTypeIsClosed(
         .empty_tag_union,
         .flex,
         .rigid,
-        .record_unbound,
         .alias,
         .record,
         .tuple,
@@ -96,7 +95,7 @@ pub fn checkedTypeIsClosed(
         if (gop.found_existing) continue;
         switch (types.payload(ty)) {
             .pending, .err, .empty_record, .empty_tag_union => {},
-            .flex, .record_unbound, .function => return false,
+            .flex, .function => return false,
             .rigid => if (!bound_formals.contains(ty)) return false,
             .alias => |alias| {
                 try stack.append(allocator, alias.backing);

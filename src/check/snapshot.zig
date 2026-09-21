@@ -63,7 +63,6 @@ pub const SnapshotFlatType = union(enum) {
     fn_effectful: SnapshotFunc,
     fn_unbound: SnapshotFunc,
     record: SnapshotRecord,
-    record_unbound: SnapshotRecordFieldSafeList.Range,
     empty_record,
     tag_union: SnapshotTagUnion,
     empty_tag_union,
@@ -197,7 +196,6 @@ const SnapshotFrame = union(enum) {
     nominal: NominalFrame,
     func: FuncFrame,
     record: RecordFrame,
-    record_unbound: RecordUnboundFrame,
     tag_union: TagUnionFrame,
 };
 
@@ -262,14 +260,6 @@ const RecordFrame = struct {
     scratch_top: u32,
     fields_range: SnapshotRecordFieldSafeList.Range = undefined,
     stage: enum { fields, await_field, await_ext } = .fields,
-};
-
-const RecordUnboundFrame = struct {
-    fill: SnapshotFill,
-    source_fields: types.RecordField.SafeMultiList.Range,
-    idx: u32 = 0,
-    scratch_top: u32,
-    stage: enum { fields, await_field } = .fields,
 };
 
 const TagUnionFrame = struct {
@@ -483,7 +473,6 @@ pub const Store = struct {
                     .nominal => |*frame| try self.stepNominal(store, type_writer, frame),
                     .func => |*frame| try self.stepFunc(store, type_writer, frame),
                     .record => |*frame| try self.stepRecord(store, type_writer, frame),
-                    .record_unbound => |*frame| try self.stepRecordUnbound(store, type_writer, frame),
                     .tag_union => |*frame| try self.stepTagUnion(store, type_writer, frame),
                 };
                 if (finished) {
@@ -519,7 +508,7 @@ pub const Store = struct {
                     // Other structures can appear as backing vars for nominal types.
                     // E.g., List(a) := [Nil, Cons(a, List(a))] has a tag union as backing.
                     // These don't have a direct name, so contextual naming names them.
-                    .record, .record_unbound, .tuple, .fn_pure, .fn_effectful, .fn_unbound, .empty_record, .tag_union, .empty_tag_union => null,
+                    .record, .tuple, .fn_pure, .fn_effectful, .fn_unbound, .empty_record, .tag_union, .empty_tag_union => null,
                 },
                 // Error types shouldn't create cycles
                 .err => unreachable,
@@ -639,14 +628,6 @@ pub const Store = struct {
                         .fill = fill,
                         .source_fields = record.fields,
                         .ext = record.ext,
-                        .scratch_top = self.scratch_record_fields.top(),
-                    } });
-                    return false;
-                },
-                .record_unbound => |fields| {
-                    try self.frames.append(self.gpa, .{ .record_unbound = .{
-                        .fill = fill,
-                        .source_fields = fields,
                         .scratch_top = self.scratch_record_fields.top(),
                     } });
                     return false;
@@ -967,40 +948,6 @@ pub const Store = struct {
         }
     }
 
-    fn stepRecordUnbound(self: *Self, store: *const TypesStore, type_writer: *TypeWriter, frame: *RecordUnboundFrame) std.mem.Allocator.Error!bool {
-        while (true) {
-            switch (frame.stage) {
-                .fields => {
-                    if (frame.idx < frame.source_fields.count) {
-                        frame.stage = .await_field;
-                        const field = sourceRecordField(store, frame.source_fields, frame.idx);
-                        if (!try self.requestVar(store, type_writer, field.presence.typeVar(), frame.fill.polarity)) return false;
-                        continue;
-                    }
-                    const fields_range = try self.record_fields.appendSlice(
-                        self.gpa,
-                        self.scratch_record_fields.sliceFromStart(frame.scratch_top),
-                    );
-                    self.scratch_record_fields.clearFrom(frame.scratch_top);
-                    try self.finishFrame(type_writer, frame.fill, SnapshotContent{ .structure = SnapshotFlatType{
-                        .record_unbound = fields_range,
-                    } });
-                    return true;
-                },
-                .await_field => {
-                    const field = sourceRecordField(store, frame.source_fields, frame.idx);
-                    try self.scratch_record_fields.append(.{
-                        .name = field.name,
-                        .content = self.pending_values.pop().?,
-                        .presence = snapshotFieldPresence(store, field.presence),
-                    });
-                    frame.idx += 1;
-                    frame.stage = .fields;
-                },
-            }
-        }
-    }
-
     fn stepTagUnion(self: *Self, store: *const TypesStore, type_writer: *TypeWriter, frame: *TagUnionFrame) std.mem.Allocator.Error!bool {
         while (true) {
             switch (frame.stage) {
@@ -1095,7 +1042,7 @@ pub const Store = struct {
 
     /// Whether `idx` is a closed record: one whose extension chain terminates in
     /// `empty_record`. A too-narrow record-destructure pattern is always closed,
-    /// so this distinguishes it from an open (`..`) pattern or an unbound record.
+    /// so this distinguishes it from an open (`..`) pattern.
     pub fn isClosedRecord(self: *const Self, idx: SnapshotContentIdx) bool {
         var cur = idx;
         while (true) {
@@ -1138,19 +1085,6 @@ pub const Store = struct {
                         return .empty_record;
                     }
 
-                    return RecordFieldSnapshot{ .record = fields_out_range };
-                },
-                .record_unbound => |fields| {
-                    if (fields.count == 0) {
-                        return .empty_record;
-                    }
-
-                    const fields_out_top: u32 = @intCast(fields_out.items.len);
-                    const slice = self.sliceRecordFields(fields);
-                    for (slice.items(.name), slice.items(.content), slice.items(.presence)) |name, content, presence| {
-                        _ = try fields_out.append(gpa, .{ .name = name, .content = content, .presence = presence });
-                    }
-                    const fields_out_range = fields_out.rangeToEnd(fields_out_top);
                     return RecordFieldSnapshot{ .record = fields_out_range };
                 },
                 .empty_record => return .empty_record,
@@ -1198,13 +1132,6 @@ pub const Store = struct {
                         }
                         ext_idx = rec.ext;
                     },
-                    .record_unbound => |fields_range| {
-                        const ext_fields = self.sliceRecordFields(fields_range);
-                        for (ext_fields.items(.name), ext_fields.items(.content), ext_fields.items(.presence)) |name, field_content, presence| {
-                            _ = try fields_out.append(gpa, .{ .name = name, .content = field_content, .presence = presence });
-                        }
-                        break;
-                    },
                     .empty_record => break,
                     .box,
                     .tuple,
@@ -1249,7 +1176,10 @@ test "snapshot record field presence survives deep copy and gather" {
         .name = tail_name,
         .presence = .unknown(presence_var, field_var),
     }});
-    const tail_var = try type_store.freshFromContent(.{ .structure = .{ .record_unbound = tail_fields } });
+    const tail_var = try type_store.freshFromContent(.{ .structure = .{ .record = .{
+        .fields = tail_fields,
+        .ext = try type_store.fresh(),
+    } } });
 
     const middle_fields = try type_store.appendRecordFields(&.{.{
         .name = middle_name,
@@ -1292,8 +1222,8 @@ test "snapshot record field presence survives deep copy and gather" {
     );
 
     const tail_content = snapshots.getContent(middle_snapshot.ext);
-    if (tail_content != .structure or tail_content.structure != .record_unbound) unreachable;
-    const tail_snapshot_fields = tail_content.structure.record_unbound;
+    if (tail_content != .structure or tail_content.structure != .record) unreachable;
+    const tail_snapshot_fields = tail_content.structure.record.fields;
     try std.testing.expectEqual(
         SnapshotFieldPresence.unknown,
         snapshots.sliceRecordFields(tail_snapshot_fields).items(.presence)[0],

@@ -4337,7 +4337,6 @@ const ProcedureBuilder = struct {
             .tag_union,
             .bool_tag_union,
             .record,
-            .record_unbound,
             .tuple,
             .list,
             .box,
@@ -15083,7 +15082,7 @@ const ProcBodyBuilder = struct {
                 },
                 .opaque_nominal => boxyLowerInvariant("opaque stored constant had no restorable backing representation"),
             },
-            .in_progress, .dynamic, .primitive, .bool_tag_union, .erased_callable, .record, .record_unbound, .tuple, .list, .box, .generated_field, .generated_field_names, .generated_tag_union_spec, .empty_record, .tag_union, .empty_tag_union => {},
+            .in_progress, .dynamic, .primitive, .bool_tag_union, .erased_callable, .record, .tuple, .list, .box, .generated_field, .generated_field_names, .generated_tag_union_spec, .empty_record, .tag_union, .empty_tag_union => {},
         }
 
         return switch (store_module.const_store.get(node)) {
@@ -15680,7 +15679,6 @@ const ProcBodyBuilder = struct {
         const rep = self.parent.plan.representations.items[@intFromEnum(rep_id)];
         const record_target, const record_next = switch (rep.kind) {
             .record,
-            .record_unbound,
             => .{ target, next },
             .dynamic => blk: {
                 const payload_layout = self.parent.layout_plan.rep_layouts[@intFromEnum(rep_id)].descriptor_payload_layout orelse
@@ -15836,7 +15834,7 @@ const ProcBodyBuilder = struct {
                     => rep_id = self.repQuery().requiredSingleChild(rep_id, .nominal_backing).rep,
                     .opaque_nominal => break,
                 },
-                .in_progress, .dynamic, .primitive, .bool_tag_union, .erased_callable, .record, .record_unbound, .tuple, .list, .box, .generated_field, .generated_field_names, .generated_tag_union_spec, .empty_record, .tag_union, .empty_tag_union => break,
+                .in_progress, .dynamic, .primitive, .bool_tag_union, .erased_callable, .record, .tuple, .list, .box, .generated_field, .generated_field_names, .generated_tag_union_spec, .empty_record, .tag_union, .empty_tag_union => break,
             }
         }
         const rep = self.parent.plan.representations.items[@intFromEnum(rep_id)];
@@ -15845,7 +15843,7 @@ const ProcBodyBuilder = struct {
             .tag_union => try self.restoreConstPlannedTagInto(target, store_module, type_module, rep, tag, checked_ty, next),
             .dynamic => try self.restoreConstDynamicTagInto(target, store_module, type_module, rep_id, tag, checked_ty, next),
             .empty_tag_union => boxyLowerInvariant("ConstStore tag value reached empty tag-union representation"),
-            .in_progress, .primitive, .erased_callable, .alias, .record, .record_unbound, .tuple, .nominal, .list, .box, .generated_field, .generated_field_names, .generated_tag_union_spec, .empty_record => boxyLowerInvariant("ConstStore tag restored with a non-tag-union representation"),
+            .in_progress, .primitive, .erased_callable, .alias, .record, .tuple, .nominal, .list, .box, .generated_field, .generated_field_names, .generated_tag_union_spec, .empty_record => boxyLowerInvariant("ConstStore tag restored with a non-tag-union representation"),
         };
     }
 
@@ -16097,7 +16095,7 @@ const ProcBodyBuilder = struct {
             .generated_field_names,
             .generated_tag_union_spec,
             => boxyLowerInvariant("compiler-owned encoding evidence reached ordinary ConstStore nominal restoration"),
-            .in_progress, .dynamic, .primitive, .bool_tag_union, .erased_callable, .record, .record_unbound, .tuple, .list, .box, .empty_record, .tag_union, .empty_tag_union => return try self.restoreConstNodeInto(
+            .in_progress, .dynamic, .primitive, .bool_tag_union, .erased_callable, .record, .tuple, .list, .box, .empty_record, .tag_union, .empty_tag_union => return try self.restoreConstNodeInto(
                 target,
                 store_module,
                 type_module,
@@ -20747,7 +20745,7 @@ const ProcBodyBuilder = struct {
                 => try self.lowerTupleRepInto(target, self.repQuery().requiredSingleChild(rep_id, .nominal_backing).rep, items, next),
                 .opaque_nominal => boxyLowerInvariant("opaque nominal tuple expression reached boxy lowering"),
             },
-            .in_progress, .dynamic, .primitive, .bool_tag_union, .erased_callable, .record, .record_unbound, .list, .box, .generated_field, .generated_field_names, .generated_tag_union_spec, .empty_record, .tag_union, .empty_tag_union => boxyLowerInvariant("tuple expression checked type did not have a boxy tuple representation"),
+            .in_progress, .dynamic, .primitive, .bool_tag_union, .erased_callable, .record, .list, .box, .generated_field, .generated_field_names, .generated_tag_union_spec, .empty_record, .tag_union, .empty_tag_union => boxyLowerInvariant("tuple expression checked type did not have a boxy tuple representation"),
         };
     }
 
@@ -20768,7 +20766,7 @@ const ProcBodyBuilder = struct {
                 => try self.lowerTupleRepInto(target, self.repQuery().requiredSingleChild(rep_id, .nominal_backing).rep, items, next),
                 .opaque_nominal => boxyLowerInvariant("opaque nominal tuple expression reached boxy lowering"),
             },
-            .in_progress, .dynamic, .primitive, .bool_tag_union, .erased_callable, .record, .record_unbound, .list, .box, .generated_field, .generated_field_names, .generated_tag_union_spec, .empty_record, .tag_union, .empty_tag_union => boxyLowerInvariant("tuple expression checked type did not have a boxy tuple representation"),
+            .in_progress, .dynamic, .primitive, .bool_tag_union, .erased_callable, .record, .list, .box, .generated_field, .generated_field_names, .generated_tag_union_spec, .empty_record, .tag_union, .empty_tag_union => boxyLowerInvariant("tuple expression checked type did not have a boxy tuple representation"),
         };
     }
 
@@ -20957,7 +20955,7 @@ const ProcBodyBuilder = struct {
                 .opaque_nominal => boxyLowerInvariant("opaque nominal tag expression reached boxy lowering"),
             },
             .empty_tag_union => boxyLowerInvariant("empty tag union expression reached boxy body lowering"),
-            .in_progress, .primitive, .erased_callable, .record, .record_unbound, .tuple, .list, .box, .generated_field, .generated_field_names, .generated_tag_union_spec, .empty_record => boxyLowerInvariant("tag expression checked type did not have a boxy tag-union representation"),
+            .in_progress, .primitive, .erased_callable, .record, .tuple, .list, .box, .generated_field, .generated_field_names, .generated_tag_union_spec, .empty_record => boxyLowerInvariant("tag expression checked type did not have a boxy tag-union representation"),
         };
     }
 
@@ -21694,7 +21692,6 @@ const ProcBodyBuilder = struct {
                 .bool_tag_union,
                 .erased_callable,
                 .record,
-                .record_unbound,
                 .tuple,
                 .list,
                 .box,
@@ -22013,7 +22010,6 @@ const ProcBodyBuilder = struct {
         const rep = self.parent.plan.representations.items[@intFromEnum(rep_id)];
         switch (rep.kind) {
             .record,
-            .record_unbound,
             => return try self.lowerRecordPayloadInto(target, record_expr, rep_id, rep, expr_fields, unset_fields, extension, next),
             .dynamic => return try self.lowerDynamicRecordInto(target, record_expr, rep_id, rep, expr_fields, unset_fields, extension, next),
             .alias => return try self.lowerRecordRepInto(target, record_expr, self.repQuery().requiredSingleChild(rep_id, .alias_backing).rep, expr_fields, unset_fields, extension, next),
@@ -22868,7 +22864,7 @@ const ProcBodyBuilder = struct {
                 try self.validateTagPatternPayloads(variant.name, variant.payloads, args);
             },
             .dynamic => try self.validateDynamicTagPatternPayloads(pattern_tag_rep, name, args),
-            .in_progress, .primitive, .erased_callable, .alias, .record, .record_unbound, .tuple, .nominal, .list, .box, .generated_field, .generated_field_names, .generated_tag_union_spec, .empty_record, .empty_tag_union => boxyLowerInvariant("boxy dynamic-source tag pattern contextual representation was not a tag union"),
+            .in_progress, .primitive, .erased_callable, .alias, .record, .tuple, .nominal, .list, .box, .generated_field, .generated_field_names, .generated_tag_union_spec, .empty_record, .empty_tag_union => boxyLowerInvariant("boxy dynamic-source tag pattern contextual representation was not a tag union"),
         }
 
         const payloads_bound = try self.lowerTagPayloadPatterns(
@@ -23127,7 +23123,7 @@ const ProcBodyBuilder = struct {
                 .transparent, .builtin_other => return try self.lowerPatternThen(backing_pattern, source, on_match, miss, remaps),
                 .opaque_nominal => {},
             },
-            .in_progress, .dynamic, .primitive, .bool_tag_union, .erased_callable, .alias, .record, .record_unbound, .tuple, .list, .box, .generated_field, .generated_field_names, .generated_tag_union_spec, .empty_record, .tag_union, .empty_tag_union => {},
+            .in_progress, .dynamic, .primitive, .bool_tag_union, .erased_callable, .alias, .record, .tuple, .list, .box, .generated_field, .generated_field_names, .generated_tag_union_spec, .empty_record, .tag_union, .empty_tag_union => {},
         }
         const backing_local = try self.addFrameLocalForType(backing.ty);
         const matched = try self.lowerPatternThen(backing_pattern, backing_local, on_match, miss, remaps);
@@ -23392,7 +23388,7 @@ const ProcBodyBuilder = struct {
                 .opaque_nominal => boxyLowerInvariant("opaque nominal tag match pattern reached boxy lowering"),
             },
             .empty_tag_union => boxyLowerInvariant("empty tag-union match pattern reached boxy lowering"),
-            .in_progress, .primitive, .erased_callable, .record, .record_unbound, .tuple, .list, .box, .generated_field, .generated_field_names, .generated_tag_union_spec, .empty_record => boxyLowerInvariant("tag match pattern checked type did not have a boxy tag-union representation"),
+            .in_progress, .primitive, .erased_callable, .record, .tuple, .list, .box, .generated_field, .generated_field_names, .generated_tag_union_spec, .empty_record => boxyLowerInvariant("tag match pattern checked type did not have a boxy tag-union representation"),
         };
     }
 
@@ -24190,7 +24186,6 @@ const ProcBodyBuilder = struct {
         switch (rep.kind) {
             .empty_record => return try self.assignZst(target, next),
             .record,
-            .record_unbound,
             => {},
             .in_progress, .dynamic, .primitive, .bool_tag_union, .erased_callable, .alias, .tuple, .nominal, .list, .box, .generated_field, .generated_field_names, .generated_tag_union_spec, .tag_union, .empty_tag_union => boxyLowerInvariant("record rest pattern child did not have a boxy record representation"),
         }
@@ -25092,7 +25087,7 @@ const ProcBodyBuilder = struct {
         const step_payload = resolvedTypePayload(module, step_ref.ty);
         const step_tag_union = switch (step_payload) {
             .tag_union => |tag_union| tag_union,
-            .pending, .err, .flex, .rigid, .alias, .record, .record_unbound, .tuple, .nominal, .function, .empty_record, .empty_tag_union => boxyLowerInvariant("iterator next plan did not return a tag union"),
+            .pending, .err, .flex, .rigid, .alias, .record, .tuple, .nominal, .function, .empty_record, .empty_tag_union => boxyLowerInvariant("iterator next plan did not return a tag union"),
         };
 
         var done_tag: ?names.TagNameId = null;
@@ -25145,7 +25140,7 @@ const ProcBodyBuilder = struct {
                     tags = tag_union.tags;
                     current = tag_union.ext;
                 },
-                .pending, .err, .record, .record_unbound, .tuple, .nominal, .function, .empty_record => boxyLowerInvariant("open or non-tag iterator step row reached boxy lowering"),
+                .pending, .err, .record, .tuple, .nominal, .function, .empty_record => boxyLowerInvariant("open or non-tag iterator step row reached boxy lowering"),
             }
         }
 
@@ -26214,7 +26209,7 @@ const ProcBodyBuilder = struct {
         // descriptor.
         const worker_canonical_rep = self.parent.plan.representations.items[@intFromEnum(self.descriptorStorageRep(hidden_arg.worker_rep))];
         const worker_uses_aggregate_storage = worker_canonical_rep.tag_variants.len == 0 and switch (worker_canonical_rep.kind) {
-            .record, .record_unbound, .tuple, .nominal, .list, .box => true,
+            .record, .tuple, .nominal, .list, .box => true,
             .in_progress, .dynamic, .primitive, .bool_tag_union, .erased_callable, .alias, .generated_field, .generated_field_names, .generated_tag_union_spec, .empty_record, .tag_union, .empty_tag_union => false,
         };
         if (worker_uses_aggregate_storage) {
@@ -28605,7 +28600,6 @@ const ProcBodyBuilder = struct {
                 .builtin_other => try self.lowerInspectRepLocalInto(target, source, self.repQuery().requiredSingleChild(rep_id, .nominal_backing).rep, next),
             },
             .record,
-            .record_unbound,
             => try self.lowerRecordInspectLocalsInto(target, source, rep, next),
             .tuple => try self.lowerTupleInspectLocalsInto(target, source, rep, next),
             .tag_union => if (rep.presence_slot_present_discriminant != null)
@@ -29366,7 +29360,6 @@ const ProcBodyBuilder = struct {
                 .builtin_other => try self.lowerEqRepLocalsInto(target, lhs, rhs, self.repQuery().requiredSingleChild(rep_id, .nominal_backing).rep, negated, next),
             },
             .record,
-            .record_unbound,
             => try self.lowerRecordEqLocalsInto(target, lhs, rhs, rep, negated, next),
             .tuple => try self.lowerTupleEqLocalsInto(target, lhs, rhs, rep, negated, next),
             .tag_union => try self.lowerTagUnionEqLocalsInto(target, lhs, rhs, rep_id, negated, next),
@@ -29864,7 +29857,6 @@ const ProcBodyBuilder = struct {
                 .builtin_other => try self.lowerHashRepLocalsInto(target, value, hasher, self.repQuery().requiredSingleChild(rep_id, .nominal_backing).rep, next),
             },
             .record,
-            .record_unbound,
             => try self.lowerRecordHashLocalsInto(target, value, hasher, rep, next),
             .tuple => try self.lowerTupleHashLocalsInto(target, value, hasher, rep, next),
             .tag_union => try self.lowerTagUnionHashLocalsInto(target, value, hasher, rep, next),
@@ -33295,7 +33287,7 @@ const ProcBodyBuilder = struct {
         const target_record = self.parent.plan.representations.items[@intFromEnum(target_record_rep)];
         if (source_record.kind != .dynamic) return null;
         switch (target_record.kind) {
-            .record, .record_unbound => {},
+            .record => {},
             .dynamic => if (!self.repHasRecordFieldChildrenForBoundary(target_record)) return null,
             .in_progress, .primitive, .bool_tag_union, .erased_callable, .alias, .tuple, .nominal, .list, .box, .generated_field, .generated_field_names, .generated_tag_union_spec, .empty_record, .tag_union, .empty_tag_union => return null,
         }
@@ -33446,12 +33438,12 @@ const ProcBodyBuilder = struct {
         const source_record = self.parent.plan.representations.items[@intFromEnum(source_record_rep)];
         const target_record = self.parent.plan.representations.items[@intFromEnum(target_record_rep)];
         switch (source_record.kind) {
-            .record, .record_unbound => {},
+            .record => {},
             .dynamic => if (!self.repHasRecordFieldChildrenForBoundary(source_record)) return null,
             .in_progress, .primitive, .bool_tag_union, .erased_callable, .alias, .tuple, .nominal, .list, .box, .generated_field, .generated_field_names, .generated_tag_union_spec, .empty_record, .tag_union, .empty_tag_union => return null,
         }
         switch (target_record.kind) {
-            .record, .record_unbound => {},
+            .record => {},
             .dynamic => if (!self.repHasRecordFieldChildrenForBoundary(target_record)) return null,
             .in_progress, .primitive, .bool_tag_union, .erased_callable, .alias, .tuple, .nominal, .list, .box, .generated_field, .generated_field_names, .generated_tag_union_spec, .empty_record, .tag_union, .empty_tag_union => return null,
         }
@@ -34082,11 +34074,11 @@ const ProcBodyBuilder = struct {
                         switch (view.checked_types.payload(ty)) {
                             .alias => |alias| ty = alias.backing,
                             .tag_union => |tag_union| return tag_union.tags.len,
-                            .pending, .err, .flex, .rigid, .record, .record_unbound, .tuple, .nominal, .function, .empty_record, .empty_tag_union => return null,
+                            .pending, .err, .flex, .rigid, .record, .tuple, .nominal, .function, .empty_record, .empty_tag_union => return null,
                         }
                     }
                 },
-                .in_progress, .dynamic, .primitive, .bool_tag_union, .erased_callable, .record, .record_unbound, .tuple, .list, .box, .generated_field, .generated_field_names, .generated_tag_union_spec, .empty_record, .empty_tag_union => return null,
+                .in_progress, .dynamic, .primitive, .bool_tag_union, .erased_callable, .record, .tuple, .list, .box, .generated_field, .generated_field_names, .generated_tag_union_spec, .empty_record, .empty_tag_union => return null,
             }
         }
     }
@@ -34446,14 +34438,14 @@ const ProcBodyBuilder = struct {
             .dynamic => return true,
             .primitive => |source_primitive| switch (target.kind) {
                 .primitive => |target_primitive| return source_primitive == target_primitive,
-                .in_progress, .dynamic, .bool_tag_union, .erased_callable, .alias, .record, .record_unbound, .tuple, .nominal, .list, .box, .generated_field, .generated_field_names, .generated_tag_union_spec, .empty_record, .tag_union, .empty_tag_union => return false,
+                .in_progress, .dynamic, .bool_tag_union, .erased_callable, .alias, .record, .tuple, .nominal, .list, .box, .generated_field, .generated_field_names, .generated_tag_union_spec, .empty_record, .tag_union, .empty_tag_union => return false,
             },
             .bool_tag_union => return target.kind == .bool_tag_union,
             .empty_record => return target.kind == .empty_record,
             .empty_tag_union => return target.kind == .empty_tag_union,
             .tag_union => switch (target.kind) {
                 .tag_union => return try self.tagUnionRepsCanReuseSourceDescriptor(identity_source, identity_target, seen),
-                .in_progress, .dynamic, .primitive, .bool_tag_union, .erased_callable, .alias, .record, .record_unbound, .tuple, .nominal, .list, .box, .generated_field, .generated_field_names, .generated_tag_union_spec, .empty_record, .empty_tag_union => return false,
+                .in_progress, .dynamic, .primitive, .bool_tag_union, .erased_callable, .alias, .record, .tuple, .nominal, .list, .box, .generated_field, .generated_field_names, .generated_tag_union_spec, .empty_record, .empty_tag_union => return false,
             },
             .list => switch (target.kind) {
                 .list => {
@@ -34461,9 +34453,9 @@ const ProcBodyBuilder = struct {
                     const target_elem = self.repQuery().requiredSingleChild(identity_target, .list_elem).rep;
                     return try self.repsCanReuseSourceDescriptorInner(source_elem, target_elem, seen);
                 },
-                .in_progress, .dynamic, .primitive, .bool_tag_union, .erased_callable, .alias, .record, .record_unbound, .tuple, .nominal, .box, .generated_field, .generated_field_names, .generated_tag_union_spec, .empty_record, .tag_union, .empty_tag_union => return false,
+                .in_progress, .dynamic, .primitive, .bool_tag_union, .erased_callable, .alias, .record, .tuple, .nominal, .box, .generated_field, .generated_field_names, .generated_tag_union_spec, .empty_record, .tag_union, .empty_tag_union => return false,
             },
-            .in_progress, .erased_callable, .alias, .record, .record_unbound, .tuple, .nominal, .box, .generated_field, .generated_field_names, .generated_tag_union_spec => return false,
+            .in_progress, .erased_callable, .alias, .record, .tuple, .nominal, .box, .generated_field, .generated_field_names, .generated_tag_union_spec => return false,
         }
     }
 
@@ -34675,7 +34667,7 @@ const ProcBodyBuilder = struct {
                     .opaque_nominal => return null,
                 },
                 .tag_union, .dynamic => return current,
-                .in_progress, .primitive, .bool_tag_union, .erased_callable, .record, .record_unbound, .tuple, .list, .box, .generated_field, .generated_field_names, .generated_tag_union_spec, .empty_record, .empty_tag_union => return null,
+                .in_progress, .primitive, .bool_tag_union, .erased_callable, .record, .tuple, .list, .box, .generated_field, .generated_field_names, .generated_tag_union_spec, .empty_record, .empty_tag_union => return null,
             }
         }
     }
@@ -35909,7 +35901,7 @@ const ProcBodyBuilder = struct {
                     }
                     return try self.validateTagPatternPayloads(variant.name, variant.payloads, args);
                 },
-                .in_progress, .dynamic, .primitive, .bool_tag_union, .erased_callable, .record, .record_unbound, .tuple, .list, .box, .generated_field, .generated_field_names, .generated_tag_union_spec, .empty_record, .empty_tag_union => boxyLowerInvariant("irrefutable tag pattern did not have a tag-union representation"),
+                .in_progress, .dynamic, .primitive, .bool_tag_union, .erased_callable, .record, .tuple, .list, .box, .generated_field, .generated_field_names, .generated_tag_union_spec, .empty_record, .empty_tag_union => boxyLowerInvariant("irrefutable tag pattern did not have a tag-union representation"),
             }
         }
     }
@@ -35986,7 +35978,7 @@ const ProcBodyBuilder = struct {
                 const payloads = switch (rep.kind) {
                     .dynamic => try self.dynamicTagPayloadsForName(tag_rep, tag.name),
                     .tag_union => self.parent.plan.childSlice(self.tagVariant(rep, tag.name).payloads),
-                    .in_progress, .primitive, .bool_tag_union, .erased_callable, .alias, .record, .record_unbound, .tuple, .nominal, .list, .box, .generated_field, .generated_field_names, .generated_tag_union_spec, .empty_record, .empty_tag_union => boxyLowerInvariant("boxy tag pattern binder source was not a tag representation"),
+                    .in_progress, .primitive, .bool_tag_union, .erased_callable, .alias, .record, .tuple, .nominal, .list, .box, .generated_field, .generated_field_names, .generated_tag_union_spec, .empty_record, .empty_tag_union => boxyLowerInvariant("boxy tag pattern binder source was not a tag representation"),
                 };
                 if (payloads.len != tag.args.len) {
                     boxyLowerInvariant("boxy tag pattern binder payload count disagreed with its source representation");
@@ -36171,7 +36163,7 @@ const ProcBodyBuilder = struct {
                 .opaque_nominal => boxyLowerInvariant("opaque nominal tag match pattern reached boxy miss analysis"),
             },
             .empty_tag_union => boxyLowerInvariant("empty tag-union match pattern reached boxy miss analysis"),
-            .in_progress, .primitive, .erased_callable, .record, .record_unbound, .tuple, .list, .box, .generated_field, .generated_field_names, .generated_tag_union_spec, .empty_record => boxyLowerInvariant("tag match pattern checked type did not have a boxy tag-union representation during miss analysis"),
+            .in_progress, .primitive, .erased_callable, .record, .tuple, .list, .box, .generated_field, .generated_field_names, .generated_tag_union_spec, .empty_record => boxyLowerInvariant("tag match pattern checked type did not have a boxy tag-union representation during miss analysis"),
         };
     }
 
@@ -36439,7 +36431,7 @@ const ProcBodyBuilder = struct {
                     if (self.workerRuntimeLayoutForRep(current).layoutIdx() != self.workerRuntimeLayoutForRep(child).layoutIdx()) return current;
                     current = child;
                 },
-                .in_progress, .dynamic, .primitive, .bool_tag_union, .erased_callable, .record, .record_unbound, .tuple, .list, .generated_field, .generated_field_names, .generated_tag_union_spec, .empty_record, .tag_union, .empty_tag_union => return current,
+                .in_progress, .dynamic, .primitive, .bool_tag_union, .erased_callable, .record, .tuple, .list, .generated_field, .generated_field_names, .generated_tag_union_spec, .empty_record, .tag_union, .empty_tag_union => return current,
             }
         }
     }
@@ -36485,7 +36477,7 @@ const ProcBodyBuilder = struct {
                     if (rep.tag_variants.len == 0) return null;
                     return current;
                 },
-                .in_progress, .primitive, .bool_tag_union, .erased_callable, .record, .record_unbound, .tuple, .list, .box, .generated_field, .generated_field_names, .generated_tag_union_spec, .empty_record, .empty_tag_union => return null,
+                .in_progress, .primitive, .bool_tag_union, .erased_callable, .record, .tuple, .list, .box, .generated_field, .generated_field_names, .generated_tag_union_spec, .empty_record, .empty_tag_union => return null,
             }
         }
     }
@@ -36505,7 +36497,7 @@ const ProcBodyBuilder = struct {
                     .opaque_nominal => return null,
                 },
                 .list => return current,
-                .in_progress, .dynamic, .primitive, .bool_tag_union, .erased_callable, .record, .record_unbound, .tuple, .box, .generated_field, .generated_field_names, .generated_tag_union_spec, .empty_record, .tag_union, .empty_tag_union => return null,
+                .in_progress, .dynamic, .primitive, .bool_tag_union, .erased_callable, .record, .tuple, .box, .generated_field, .generated_field_names, .generated_tag_union_spec, .empty_record, .tag_union, .empty_tag_union => return null,
             }
         }
     }
@@ -36535,7 +36527,7 @@ const ProcBodyBuilder = struct {
                     }
                     return if (has_element) current else null;
                 },
-                .in_progress, .primitive, .bool_tag_union, .erased_callable, .record, .record_unbound, .list, .box, .generated_field, .generated_field_names, .generated_tag_union_spec, .empty_record, .tag_union, .empty_tag_union => return null,
+                .in_progress, .primitive, .bool_tag_union, .erased_callable, .record, .list, .box, .generated_field, .generated_field_names, .generated_tag_union_spec, .empty_record, .tag_union, .empty_tag_union => return null,
             }
         }
     }
@@ -36555,7 +36547,7 @@ const ProcBodyBuilder = struct {
                     .transparent, .builtin_other => current = self.repQuery().requiredSingleChild(current, .nominal_backing).rep,
                     .opaque_nominal => return null,
                 },
-                .in_progress, .dynamic, .primitive, .bool_tag_union, .erased_callable, .record, .record_unbound, .tuple, .list, .box, .generated_field, .generated_field_names, .generated_tag_union_spec, .empty_record, .tag_union, .empty_tag_union => return null,
+                .in_progress, .dynamic, .primitive, .bool_tag_union, .erased_callable, .record, .tuple, .list, .box, .generated_field, .generated_field_names, .generated_tag_union_spec, .empty_record, .tag_union, .empty_tag_union => return null,
             }
         }
     }
@@ -36607,7 +36599,7 @@ const ProcBodyBuilder = struct {
                         .ret = ret orelse boxyLowerInvariant("function representation had no return child"),
                     };
                 },
-                .in_progress, .dynamic, .primitive, .bool_tag_union, .record, .record_unbound, .tuple, .list, .box, .generated_field, .generated_field_names, .generated_tag_union_spec, .empty_record, .tag_union, .empty_tag_union => return null,
+                .in_progress, .dynamic, .primitive, .bool_tag_union, .record, .tuple, .list, .box, .generated_field, .generated_field_names, .generated_tag_union_spec, .empty_record, .tag_union, .empty_tag_union => return null,
             }
         }
     }
@@ -36971,7 +36963,7 @@ const ProcBodyBuilder = struct {
                     }
                     boxyLowerInvariant("function representation had no return child");
                 },
-                .in_progress, .dynamic, .primitive, .bool_tag_union, .record, .record_unbound, .tuple, .list, .box, .generated_field, .generated_field_names, .generated_tag_union_spec, .empty_record, .tag_union, .empty_tag_union => boxyLowerInvariant("list_map_can_reuse transform argument is not a function"),
+                .in_progress, .dynamic, .primitive, .bool_tag_union, .record, .tuple, .list, .box, .generated_field, .generated_field_names, .generated_tag_union_spec, .empty_record, .tag_union, .empty_tag_union => boxyLowerInvariant("list_map_can_reuse transform argument is not a function"),
             }
         }
     }
@@ -37054,7 +37046,6 @@ const ProcBodyBuilder = struct {
             const rep = self.parent.plan.representations.items[@intFromEnum(current)];
             switch (rep.kind) {
                 .record,
-                .record_unbound,
                 => return current,
                 .dynamic => return if (self.repHasRecordFieldChildrenForBoundary(rep)) current else null,
                 .alias => current = self.repQuery().requiredSingleChild(current, .alias_backing).rep,
@@ -37134,7 +37125,6 @@ const ProcBodyBuilder = struct {
         const rep = self.parent.plan.representations.items[@intFromEnum(record_rep_id)];
         switch (rep.kind) {
             .record,
-            .record_unbound,
             => {},
             .dynamic => {
                 if (!self.repHasRecordFieldChildren(rep)) {
@@ -37281,7 +37271,7 @@ const ProcBodyBuilder = struct {
                 .tag_union,
                 .dynamic,
                 => return self.tagVariantForModule(rep, requested_module, name),
-                .in_progress, .primitive, .bool_tag_union, .erased_callable, .record, .record_unbound, .tuple, .list, .box, .generated_field, .generated_field_names, .generated_tag_union_spec, .empty_record, .empty_tag_union => boxyLowerInvariant("iterator step type did not have a boxy tag-union representation"),
+                .in_progress, .primitive, .bool_tag_union, .erased_callable, .record, .tuple, .list, .box, .generated_field, .generated_field_names, .generated_tag_union_spec, .empty_record, .empty_tag_union => boxyLowerInvariant("iterator step type did not have a boxy tag-union representation"),
             }
         }
     }
@@ -37429,7 +37419,7 @@ fn constBoxPayloadType(module: ProcedureModuleView, checked_ty: checked.CheckedT
 fn checkedFunctionPayload(module: ProcedureModuleView, checked_ty: checked.CheckedTypeId) checked.CheckedFunctionType {
     return switch (resolvedTypePayload(module, checked_ty)) {
         .function => |function| function,
-        .pending, .err, .flex, .rigid, .alias, .record, .record_unbound, .tuple, .nominal, .empty_record, .tag_union, .empty_tag_union => boxyLowerInvariant("checked intrinsic wrapper did not have a function type"),
+        .pending, .err, .flex, .rigid, .alias, .record, .tuple, .nominal, .empty_record, .tag_union, .empty_tag_union => boxyLowerInvariant("checked intrinsic wrapper did not have a function type"),
     };
 }
 
@@ -37500,7 +37490,6 @@ fn checkedTypeUsesBuiltinStructuralEquality(module: ProcedureModuleView, checked
     return switch (resolvedTypePayload(module, checked_ty)) {
         .nominal => |nominal| nominal.builtin != null,
         .record,
-        .record_unbound,
         .tuple,
         .empty_record,
         .tag_union,
@@ -37519,7 +37508,7 @@ fn checkedTypeUsesBuiltinStructuralEquality(module: ProcedureModuleView, checked
 fn constTupleItemTypes(module: ProcedureModuleView, checked_ty: checked.CheckedTypeId) []const checked.CheckedTypeId {
     return switch (resolvedTypePayload(module, checked_ty)) {
         .tuple => |items| items,
-        .pending, .err, .flex, .rigid, .alias, .record, .record_unbound, .nominal, .function, .empty_record, .tag_union, .empty_tag_union => boxyLowerInvariant("ConstStore tuple restored with a non-tuple checked type"),
+        .pending, .err, .flex, .rigid, .alias, .record, .nominal, .function, .empty_record, .tag_union, .empty_tag_union => boxyLowerInvariant("ConstStore tuple restored with a non-tuple checked type"),
     };
 }
 
@@ -37542,10 +37531,6 @@ fn constRecordFields(allocator: Allocator, module: ProcedureModuleView, checked_
             .record => |record| {
                 try fields.appendSlice(allocator, record.fields);
                 current = record.ext;
-            },
-            .record_unbound => |tail_fields| {
-                try fields.appendSlice(allocator, tail_fields);
-                current = null;
             },
             .empty_record => current = null,
             .alias => |alias| current = alias.backing,
@@ -37587,7 +37572,7 @@ fn constRowExtensionIsClosedInner(module: ProcedureModuleView, checked_ty: check
         .flex, .rigid => |variable| variable.row_default == expected,
         .record => |record| if (expected == .empty_record) constRowExtensionIsClosedInner(module, record.ext, expected, depth + 1) else false,
         .tag_union => |tag_union| if (expected == .empty_tag_union) constRowExtensionIsClosedInner(module, tag_union.ext, expected, depth + 1) else false,
-        .pending, .err, .record_unbound, .tuple, .nominal, .function => boxyLowerInvariant("ConstStore record restored with a non-record checked type"),
+        .pending, .err, .tuple, .nominal, .function => boxyLowerInvariant("ConstStore record restored with a non-record checked type"),
     };
 }
 
@@ -37612,12 +37597,6 @@ fn checkedRecordFieldByName(module: ProcedureModuleView, checked_ty: checked.Che
                 }
                 current = record.ext;
             },
-            .record_unbound => |fields| {
-                for (fields) |field| {
-                    if (std.mem.eql(u8, module.canonical_names.recordFieldLabelText(field.name), field_name)) return field;
-                }
-                break;
-            },
             .empty_record => break,
             .pending, .err, .flex, .rigid, .alias, .tuple, .nominal, .function, .tag_union, .empty_tag_union => boxyLowerInvariant("generated record field lookup received a non-record type"),
         }
@@ -37637,7 +37616,7 @@ fn constTagPayloadTypes(
 ) ConstTagPayloadTypes {
     const tag_union = switch (resolvedTypePayload(module, checked_ty)) {
         .tag_union => |tag_union| tag_union,
-        .pending, .err, .flex, .rigid, .alias, .record, .record_unbound, .tuple, .nominal, .function, .empty_record, .empty_tag_union => boxyLowerInvariant("ConstStore tag restored with a non-tag-union checked type"),
+        .pending, .err, .flex, .rigid, .alias, .record, .tuple, .nominal, .function, .empty_record, .empty_tag_union => boxyLowerInvariant("ConstStore tag restored with a non-tag-union checked type"),
     };
     constRowExtensionIsClosed(module, tag_union.ext, .empty_tag_union);
     for (tag_union.tags) |tag| {
@@ -37668,7 +37647,7 @@ fn constTagPayloadTypesAllowOpen(
         depth += 1;
         const tag_union = switch (resolvedTypePayload(module, current)) {
             .tag_union => |tag_union| tag_union,
-            .pending, .err, .flex, .rigid, .alias, .record, .record_unbound, .tuple, .nominal, .function, .empty_record, .empty_tag_union => boxyLowerInvariant("ConstStore tag name was missing from checked tag-union row"),
+            .pending, .err, .flex, .rigid, .alias, .record, .tuple, .nominal, .function, .empty_record, .empty_tag_union => boxyLowerInvariant("ConstStore tag name was missing from checked tag-union row"),
         };
         for (tag_union.tags) |tag| {
             if (std.mem.eql(u8, module.canonical_names.tagLabelText(tag.name), tag_name)) {
@@ -37685,7 +37664,7 @@ fn constTagPayloadTypesAllowOpen(
 fn resolvedNominalPayload(module: ProcedureModuleView, checked_ty: checked.CheckedTypeId) checked.CheckedNominalType {
     return switch (resolvedTypePayload(module, checked_ty)) {
         .nominal => |nominal| nominal,
-        .pending, .err, .flex, .rigid, .alias, .record, .record_unbound, .tuple, .function, .empty_record, .tag_union, .empty_tag_union => boxyLowerInvariant("ConstStore nominal child lookup reached a non-nominal checked type"),
+        .pending, .err, .flex, .rigid, .alias, .record, .tuple, .function, .empty_record, .tag_union, .empty_tag_union => boxyLowerInvariant("ConstStore nominal child lookup reached a non-nominal checked type"),
     };
 }
 
@@ -37701,7 +37680,7 @@ fn checkedBuiltinNominalForType(
 ) ?checked.CheckedBuiltinNominal {
     return switch (resolvedTypePayload(module, checked_ty)) {
         .nominal => |nominal| nominal.builtin,
-        .pending, .err, .flex, .rigid, .alias, .record, .record_unbound, .tuple, .function, .empty_record, .tag_union, .empty_tag_union => null,
+        .pending, .err, .flex, .rigid, .alias, .record, .tuple, .function, .empty_record, .tag_union, .empty_tag_union => null,
     };
 }
 
@@ -37744,7 +37723,7 @@ fn resolvedTypePayload(module: ProcedureModuleView, checked_ty: checked.CheckedT
                 current = alias.backing;
                 continue;
             },
-            .flex, .rigid, .record, .record_unbound, .tuple, .nominal, .function, .empty_record, .tag_union, .empty_tag_union => return payload,
+            .flex, .rigid, .record, .tuple, .nominal, .function, .empty_record, .tag_union, .empty_tag_union => return payload,
         }
     }
 }
@@ -37841,7 +37820,7 @@ const ConstPlanBuilder = struct {
                 self.by_rep[index] = child;
                 return child;
             },
-            .in_progress, .dynamic, .primitive, .bool_tag_union, .erased_callable, .record, .record_unbound, .tuple, .nominal, .list, .box, .generated_field, .generated_field_names, .generated_tag_union_spec, .empty_record, .tag_union, .empty_tag_union => {},
+            .in_progress, .dynamic, .primitive, .bool_tag_union, .erased_callable, .record, .tuple, .nominal, .list, .box, .generated_field, .generated_field_names, .generated_tag_union_spec, .empty_record, .tag_union, .empty_tag_union => {},
         }
 
         const id: LirProgram.ConstPlanId = @enumFromInt(@as(u32, @intCast(self.result.const_plans.items.len)));
@@ -37881,7 +37860,6 @@ const ConstPlanBuilder = struct {
             .list => .{ .list = try self.constPlanForChild(rep_id, .list_elem) },
             .box => .{ .box = try self.constPlanForChild(rep_id, .box_payload) },
             .record,
-            .record_unbound,
             => try self.structConstPlan(rep, .record_field, .record),
             .tuple => try self.structConstPlan(rep, .tuple_elem, .tuple),
             .tag_union => try self.tagUnionConstPlan(rep),
@@ -37911,7 +37889,7 @@ const ConstPlanBuilder = struct {
             boxyLowerInvariant("boxy const planning requested the backing of an opaque nominal type");
         const tag_union = switch (resolvedTypePayload(module, backing)) {
             .tag_union => |tag_union| tag_union,
-            .pending, .err, .flex, .rigid, .alias, .record, .record_unbound, .tuple, .nominal, .function, .empty_record, .empty_tag_union => boxyLowerInvariant("Bool nominal backing was not a checked tag union"),
+            .pending, .err, .flex, .rigid, .alias, .record, .tuple, .nominal, .function, .empty_record, .empty_tag_union => boxyLowerInvariant("Bool nominal backing was not a checked tag union"),
         };
         const variants = try self.allocator.alloc(LirProgram.ConstTagVariant, tag_union.tags.len);
         var initialized: usize = 0;
@@ -38166,7 +38144,7 @@ fn generatedParserScalarMethodForRep(plan: *const Plan.ProgramPlan, rep_id: Plan
             => null,
         },
         .bool_tag_union => "parse_bool",
-        .in_progress, .dynamic, .erased_callable, .record, .record_unbound, .tuple, .nominal, .list, .box, .generated_field, .generated_field_names, .generated_tag_union_spec, .empty_record, .tag_union, .empty_tag_union => null,
+        .in_progress, .dynamic, .erased_callable, .record, .tuple, .nominal, .list, .box, .generated_field, .generated_field_names, .generated_tag_union_spec, .empty_record, .tag_union, .empty_tag_union => null,
     };
 }
 
@@ -38204,7 +38182,7 @@ fn generatedEncoderScalarMethodForRep(plan: *const Plan.ProgramPlan, rep_id: Pla
             => null,
         },
         .bool_tag_union => "encode_bool",
-        .in_progress, .dynamic, .erased_callable, .record, .record_unbound, .tuple, .nominal, .list, .box, .generated_field, .generated_field_names, .generated_tag_union_spec, .empty_record, .tag_union, .empty_tag_union => null,
+        .in_progress, .dynamic, .erased_callable, .record, .tuple, .nominal, .list, .box, .generated_field, .generated_field_names, .generated_tag_union_spec, .empty_record, .tag_union, .empty_tag_union => null,
     };
 }
 
