@@ -211,7 +211,7 @@ pub fn run(
     for (contexts.items) |*context| {
         const shard = &context.shard.?;
         if (context.verify_only) {
-            if (context.changed) invariant("LIR pass rewrote a procedure whose facts excluded it from the phase");
+            if (context.changed) std.debug.panic("LIR pass {s} rewrote procedure {d} whose facts {any} excluded it from the phase", .{ @tagName(phase), @intFromEnum(context.proc), store.getProcSpec(context.proc).facts });
             if (parallel) if (metrics) |counts| {
                 counts.tasks_committed +|= 1;
                 counts.committed_by_phase[@intFromEnum(phase)] +|= 1;
@@ -251,8 +251,8 @@ fn phaseAdmits(store: *const LirStore, phase: Phase, proc: LIR.LirProcSpecId) bo
         .trmc => facts.self_call,
         .loop_append => facts.loop,
         .forwarding_join => facts.join_param,
-        .tag_fusion => facts.join_param and facts.tag_build,
-        .scalarize => facts.join_interned_param or facts.struct_build,
+        .tag_fusion => facts.join_param and facts.switch_stmt,
+        .scalarize => facts.join_aggregate_param or facts.struct_build or facts.tag_build,
         .range => facts.checked_arithmetic or facts.switch_stmt,
         .box_reuse => facts.box_box,
     };

@@ -1227,9 +1227,9 @@ pub const ProcFacts = packed struct(u16) {
     switch_stmt: bool = false,
     /// A join point with at least one parameter.
     join_param: bool = false,
-    /// A join point with a parameter of interned layout, which is the only
-    /// kind of layout a struct or tag union parameter can have.
-    join_interned_param: bool = false,
+    /// A join point with a parameter of interned or zero-sized layout, the
+    /// only layouts a struct, tag union or unit parameter can have.
+    join_aggregate_param: bool = false,
     /// A struct construction.
     struct_build: bool = false,
     /// A tag construction.

@@ -3532,6 +3532,7 @@ const ProcedureBuilder = struct {
         const frame_span = try self.result.store.addLocalSpan(proc.frame_locals.items);
         const proc_spec = self.result.store.getProcSpecPtr(proc_id);
         proc_spec.body = body;
+        proc_spec.facts = proc_spec.facts.merged(self.result.store.facts);
         proc_spec.frame_locals = frame_span;
         proc_spec.stack_probe = self.stackProbeForProc(args_span, frame_span, ret_layout);
 
@@ -4928,6 +4929,7 @@ const ProcedureBuilder = struct {
         body_stmt = try proc.prependWorkerArgumentDescriptorInitializers(body_stmt);
         const proc_spec = self.result.store.getProcSpecPtr(proc_id);
         proc_spec.body = body_stmt;
+        proc_spec.facts = proc_spec.facts.merged(self.result.store.facts);
         const return_desc = try self.returnDescriptorInfoForBody(
             body_stmt,
             args_span,
@@ -5012,6 +5014,7 @@ const ProcedureBuilder = struct {
         body_stmt = try proc.prependErasedCaptureBindings(body_stmt);
         const proc_spec = self.result.store.getProcSpecPtr(proc_id);
         proc_spec.body = body_stmt;
+        proc_spec.facts = proc_spec.facts.merged(self.result.store.facts);
         proc_spec.erased_arg_desc_offsets = try proc.erasedArgumentDescriptorCaptureOffsets();
         proc_spec.erased_arg_layouts = try proc.appendErasedArgumentLayouts(
             proc.arg_locals.items[0..worker_function.arg_count],
@@ -24516,6 +24519,7 @@ const ProcBodyBuilder = struct {
         can_exit: bool,
         next: LIR.CFStmtId,
     ) Allocator.Error!LIR.CFStmtId {
+        self.parent.result.store.facts.loop = true;
         const cond_expr = self.module.checked_bodies.expr(cond_id);
         const cond_local = try self.addFrameLocalForType(cond_expr.ty);
         if (self.parent.result.store.getLocal(cond_local).layout_idx != .bool) {

@@ -1699,7 +1699,8 @@ fn noteStmtFacts(self: *Self, stmt: CFStmt) void {
             const params = self.getLocalSpan(join.params);
             for (0..GuardedList.borrowLen(params)) |index| {
                 self.facts.join_param = true;
-                if (self.getLocal(GuardedList.at(params, index)).layout_idx.isInterned()) self.facts.join_interned_param = true;
+                const param_layout = self.getLocal(GuardedList.at(params, index)).layout_idx;
+                if (param_layout == .zst or param_layout.isInterned()) self.facts.join_aggregate_param = true;
             }
         },
         .assign_literal => |assign| switch (assign.value) {
