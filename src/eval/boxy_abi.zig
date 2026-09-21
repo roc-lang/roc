@@ -47,8 +47,8 @@ const BoxyTypeDesc = LirProgram.BoxyTypeDesc;
 const BoxyDict = LirProgram.BoxyDict;
 const RocList = builtins.list.RocList;
 
-const NativeRcIncFn = *const fn (?[*]u8, isize, *RocOps) callconv(.c) void;
-const NativeRcDropFn = *const fn (?[*]u8, *RocOps) callconv(.c) void;
+const NativeRcIncFn = builtins.rc_callback_abi.RcIncrefFn;
+const NativeRcDropFn = builtins.rc_callback_abi.RcDecrefFn;
 
 /// Native addresses of all Boxy C-ABI wrappers, indexed by `BoxyBuiltinFn`.
 pub const BoxyNativeFnTable = backend.LirCodeGenMod.BoxyNativeFnTable;
@@ -730,17 +730,16 @@ const BoxyListElementContext = struct {
 const NativeListElementContext = struct {
     incref: NativeRcIncFn,
     decref: NativeRcDropFn,
-    roc_ops: *RocOps,
 };
 
 fn nativeListElementIncref(context: ?*anyopaque, element: ?[*]u8) callconv(.c) void {
     const ctx: *const NativeListElementContext = @ptrCast(@alignCast(context orelse unreachable));
-    ctx.incref(element, 1, ctx.roc_ops);
+    ctx.incref(element, 1);
 }
 
 fn nativeListElementDecref(context: ?*anyopaque, element: ?[*]u8) callconv(.c) void {
     const ctx: *const NativeListElementContext = @ptrCast(@alignCast(context orelse unreachable));
-    ctx.decref(element, ctx.roc_ops);
+    ctx.decref(element);
 }
 
 fn boxyListElementIncref(context: ?*anyopaque, element: ?[*]u8) callconv(.c) void {
@@ -1436,6 +1435,9 @@ pub fn roc_boxy_drop(
             count,
             rc_atomicity,
         ) catch abiCrash(g, "drop"),
+        // `host_drop` names a generated adapter's signature, not an operation
+        // the runtime performs, so it is never a valid boxy RC op.
+        .host_drop => abiCrash(g, "rc with host-shaped drop adapter"),
     }
 }
 
@@ -1794,7 +1796,6 @@ pub fn roc_boxy_list_sort_with(
         native_ctx = .{
             .incref = element_incref orelse abiCrash(g, "missing list element incref"),
             .decref = element_decref orelse abiCrash(g, "missing list element decref"),
-            .roc_ops = g.runtime.roc_ops,
         };
         break :blk @ptrCast(&native_ctx);
     } else null;

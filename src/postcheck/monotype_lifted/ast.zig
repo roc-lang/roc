@@ -241,6 +241,9 @@ pub const ProgramView = struct {
     proc_debug_names: *const ProcDebugNameMap,
     roots: []const Root,
     layout_requests: []const LayoutRequest,
+    /// Evaluated roots this program reads a completed value of, recorded once
+    /// each by Monotype lowering and carried unchanged.
+    comptime_value_reads: []const Common.ComptimeValueRoot,
     runtime_schema_requests: []const RuntimeSchemaRequest,
     static_data_values: []const StaticDataValue,
     comptime_value_roots: []const Common.ComptimeValueRoot,
@@ -501,6 +504,8 @@ pub const Program = struct {
     facts_owner: ?FnId = null,
     roots: ProgramList(Root, "roots"),
     layout_requests: ProgramList(LayoutRequest, "layout_requests"),
+    /// See `ProgramView.comptime_value_reads`.
+    comptime_value_reads: ProgramList(Common.ComptimeValueRoot, "comptime_value_reads"),
     runtime_schema_requests: ProgramList(RuntimeSchemaRequest, "runtime_schema_requests"),
     static_data_values: ProgramList(StaticDataValue, "static_data_values"),
     /// Frozen shared metadata for SpecConstr; workers never append descriptors.
@@ -703,6 +708,7 @@ pub const Program = struct {
             .next_lift_capture_id = first_synthesized_capture_index,
             .roots = .empty,
             .layout_requests = .empty,
+            .comptime_value_reads = .empty,
             .runtime_schema_requests = .empty,
             .static_data_values = ProgramList(StaticDataValue, "static_data_values").fromArrayList(static_data_values),
             .comptime_sites = ProgramList(ComptimeSite, "comptime_sites").fromArrayList(comptime_sites),
@@ -745,6 +751,7 @@ pub const Program = struct {
         self.comptime_value_roots.deinit(self.allocator);
         self.static_data_values.deinit(self.allocator);
         self.runtime_schema_requests.deinit(self.allocator);
+        self.comptime_value_reads.deinit(self.allocator);
         self.layout_requests.deinit(self.allocator);
         self.roots.deinit(self.allocator);
         self.proc_debug_names.deinit();
@@ -802,6 +809,7 @@ pub const Program = struct {
             .proc_debug_names = &self.proc_debug_names,
             .roots = self.roots.unsafeRawItemsForView(),
             .layout_requests = self.layout_requests.unsafeRawItemsForView(),
+            .comptime_value_reads = self.comptime_value_reads.unsafeRawItemsForView(),
             .runtime_schema_requests = self.runtime_schema_requests.unsafeRawItemsForView(),
             .static_data_values = self.static_data_values.unsafeRawItemsForView(),
             .comptime_value_roots = self.comptime_value_roots.unsafeRawItemsForView(),
@@ -1218,19 +1226,33 @@ pub const Program = struct {
     }
 
     /// Content digest of a lifted function's checked source identity: which
-    /// checked callable it came from, its checked source type, its dispatch
-    /// evidence, the Monotype type it was requested at, and for a SpecConstr
-    /// clone the call pattern it was cloned for. Nothing here depends on
-    /// per-program numbering, so the same specialization digests identically
-    /// in every program. Null for a function with no checked source.
+    /// checked callable it came from, the generated-body key when that
+    /// callable is a compiler-generated body, its dispatch evidence, the
+    /// Monotype type it was requested at, and for a SpecConstr clone the call
+    /// pattern it was cloned for. Nothing here depends on per-program
+    /// numbering, so the same specialization digests identically in every
+    /// program. Null for a function with no checked source.
+    ///
+    /// Caller provenance is deliberately absent (`Mono.generatedBodyKey`):
+    /// one specialization records whichever requester reserved it, which
+    /// differs between programs that reach it through differently annotated
+    /// call sites. Hashing it would give the same procedure two identities
+    /// while `Mono.specIdentityKey` gave it one object-cache key, and an
+    /// entry written under that key would then disagree with the identity the
+    /// reading program lowered for it.
     pub fn fnSourceDigest(self: *Program, fn_id: FnId) ?[TypeDigestHasher.digest_length]u8 {
         const fn_ = self.getFn(fn_id);
         var hasher = TypeDigestHasher.init();
-        writeIdentityBytes(&hasher, "roc.lifted.fn-source.v1");
+        writeIdentityBytes(&hasher, "roc.lifted.fn-source.v2");
         if (fn_.source) |template| {
             writeIdentityBytes(&hasher, "template");
             writeFnDefDigest(&hasher, &self.names, template.fn_def);
-            hasher.update(&template.source_fn_key.bytes);
+            if (Mono.generatedBodyKey(template)) |body_key| {
+                writeIdentityBytes(&hasher, "generated_body");
+                hasher.update(&body_key.bytes);
+            } else {
+                writeIdentityBytes(&hasher, "no_generated_body");
+            }
             hasher.update(&template.evidence_digest.bytes);
             // The equality digest, not the stored-identity digest: the latter
             // names a nominal type by the checked type id of whichever
@@ -1346,6 +1368,14 @@ pub const Program = struct {
     pub fn addLayoutRequest(self: *Program, request: LayoutRequest) std.mem.Allocator.Error!void {
         std.debug.assert(self.body_prefix == null);
         try self.layout_requests.append(self.allocator, request);
+    }
+
+    pub fn comptimeValueReadsView(self: *const Program) []const Common.ComptimeValueRoot {
+        return self.comptime_value_reads.unsafeRawItemsForView();
+    }
+
+    pub fn addComptimeValueRead(self: *Program, root: Common.ComptimeValueRoot) std.mem.Allocator.Error!void {
+        try self.comptime_value_reads.append(self.allocator, root);
     }
 
     pub fn addRuntimeSchemaRequest(self: *Program, request: RuntimeSchemaRequest) std.mem.Allocator.Error!void {
@@ -1725,6 +1755,175 @@ pub fn forEachBoundLocal(program: *const Program, pat_id: PatId, binder: anytype
         },
         .nominal => |backing| try forEachBoundLocal(program, backing, binder),
     }
+}
+
+fn testLiftedProgram(allocator: std.mem.Allocator) Program {
+    return Program.init(
+        allocator,
+        names.NameStore.init(allocator),
+        Type.Store.init(allocator),
+        .empty, // const_fn_evidence
+        .empty, // const_fn_evidence_frames
+        .empty, // exprs
+        .empty, // pats
+        .empty, // stmts
+        .empty, // locals
+        .empty, // expr_ids
+        .empty, // pat_ids
+        .empty, // typed_locals
+        .empty, // stmt_ids
+        .empty, // field_exprs
+        .empty, // field_access_segments
+        .empty, // fn_def_captures
+        .empty, // capture_operands
+        .empty, // record_destructs
+        .empty, // str_pattern_steps
+        .empty, // branches
+        .empty, // if_branches
+        .empty, // string_literals
+        ProcDebugNameMap.init(allocator),
+        .empty, // source_files
+        .empty, // expr_locs
+        .empty, // expr_regions
+        .empty, // stmt_locs
+        .empty, // stmt_regions
+        .empty, // inline_scopes
+        .empty, // expr_inline_scopes
+        .empty, // stmt_inline_scopes
+        .empty, // local_names
+        .empty, // static_data_values
+        .empty, // comptime_sites
+        0,
+    );
+}
+
+fn testSourceDigestTemplate(name_store: *names.NameStore, template_id: u32) std.mem.Allocator.Error!names.ProcTemplate {
+    return .{
+        .artifact = .{},
+        .proc_base = try name_store.internProcBase(.{
+            .module_name = try name_store.internModuleName("SourceDigest"),
+            .export_name = null,
+            .kind = .checked_source,
+            .ordinal = 0,
+        }),
+        .template = @enumFromInt(template_id),
+    };
+}
+
+fn testSourceDigestKey(comptime byte: u8) names.TypeDigest {
+    var digest: names.TypeDigest = .{};
+    digest.bytes[0] = byte;
+    return digest;
+}
+
+/// One lifted function carrying `source`, with no body of its own: the source
+/// digest reads the template, the clone pattern, and the fusion scope only.
+fn addSourceDigestFn(
+    program: *Program,
+    symbols: *Common.SymbolGen,
+    source: Mono.FnTemplate,
+    ret_ty: Type.TypeId,
+) std.mem.Allocator.Error!FnId {
+    return program.addFn(.{
+        .symbol = symbols.fresh(),
+        .source = source,
+        .args = Span(TypedLocal).empty(),
+        .captures = Span(TypedLocal).empty(),
+        .body = .hosted,
+        .ret = ret_ty,
+    });
+}
+
+test "lifted source digest drops caller provenance and keeps generated bodies apart" {
+    // Distinct allocated symbols prove the digest ignores per-program identity.
+    var symbols: Common.SymbolGen = .{};
+    var program = testLiftedProgram(std.testing.allocator);
+    defer program.deinit();
+
+    const ret_ty = try program.types.add(.zst);
+    const template = try testSourceDigestTemplate(&program.names, 1);
+
+    // Two requesters reserved one specialization of one checked template at
+    // one closed type. They instantiated it from different checked types, and
+    // the record keeps whichever reserved it first, so the digest that names
+    // the procedure must not read that slot: `specIdentityKey` gives both
+    // programs one object-cache key, and an entry written under it carries
+    // this digest for the reading program to check.
+    const ordinary: Mono.FnTemplate = .{
+        .fn_def = .{ .local_template = template },
+        .source_fn_ty = @enumFromInt(7),
+        .source_fn_key = testSourceDigestKey(1),
+        .mono_fn_ty = ret_ty,
+    };
+    var other_requester = ordinary;
+    other_requester.source_fn_ty = @enumFromInt(9);
+    other_requester.source_fn_key = testSourceDigestKey(2);
+
+    const ordinary_fn = try addSourceDigestFn(&program, &symbols, ordinary, ret_ty);
+    const other_requester_fn = try addSourceDigestFn(&program, &symbols, other_requester, ret_ty);
+    const ordinary_digest = program.fnSourceDigest(ordinary_fn) orelse return error.TestUnexpectedResult;
+    const other_requester_digest = program.fnSourceDigest(other_requester_fn) orelse return error.TestUnexpectedResult;
+    try std.testing.expectEqualSlices(u8, ordinary_digest[0..], other_requester_digest[0..]);
+
+    // A generated body has no checked declaration to name, so its producer
+    // writes the body's own key into that slot instead. Every interpolation
+    // step of one expression shares this `fn_def`, its evidence, and its type.
+    const first_step: Mono.FnTemplate = .{
+        .fn_def = .{ .checked_generated = template },
+        .source_fn_ty = @enumFromInt(7),
+        .source_fn_key = testSourceDigestKey(1),
+        .mono_fn_ty = ret_ty,
+    };
+    var second_step = first_step;
+    second_step.source_fn_key = testSourceDigestKey(2);
+    const first_step_fn = try addSourceDigestFn(&program, &symbols, first_step, ret_ty);
+    const second_step_fn = try addSourceDigestFn(&program, &symbols, second_step, ret_ty);
+    const first_step_digest = program.fnSourceDigest(first_step_fn) orelse return error.TestUnexpectedResult;
+    const second_step_digest = program.fnSourceDigest(second_step_fn) orelse return error.TestUnexpectedResult;
+    try std.testing.expect(!std.mem.eql(u8, first_step_digest[0..], second_step_digest[0..]));
+
+    // Generated runtime callbacks of one encoder carry the key the same way.
+    const first_callback: Mono.FnTemplate = .{
+        .fn_def = .{ .encoder_for_runtime = .{ .owner = template, .expr = @enumFromInt(3) } },
+        .source_fn_ty = @enumFromInt(7),
+        .source_fn_key = testSourceDigestKey(1),
+        .mono_fn_ty = ret_ty,
+    };
+    var second_callback = first_callback;
+    second_callback.source_fn_key = testSourceDigestKey(2);
+    const first_callback_fn = try addSourceDigestFn(&program, &symbols, first_callback, ret_ty);
+    const second_callback_fn = try addSourceDigestFn(&program, &symbols, second_callback, ret_ty);
+    const first_callback_digest = program.fnSourceDigest(first_callback_fn) orelse return error.TestUnexpectedResult;
+    const second_callback_digest = program.fnSourceDigest(second_callback_fn) orelse return error.TestUnexpectedResult;
+    try std.testing.expect(!std.mem.eql(u8, first_callback_digest[0..], second_callback_digest[0..]));
+
+    // What the digest does name still separates procedures.
+    var other_callable = ordinary;
+    other_callable.fn_def = .{ .local_template = try testSourceDigestTemplate(&program.names, 2) };
+    var other_evidence = ordinary;
+    other_evidence.evidence_digest = .{ .bytes = testSourceDigestKey(5).bytes };
+    var other_type = ordinary;
+    other_type.mono_fn_ty = try program.types.add(.{ .primitive = .str });
+    for ([_]Mono.FnTemplate{ other_callable, other_evidence, other_type }) |distinct| {
+        const distinct_fn = try addSourceDigestFn(&program, &symbols, distinct, ret_ty);
+        const distinct_digest = program.fnSourceDigest(distinct_fn) orelse return error.TestUnexpectedResult;
+        try std.testing.expect(!std.mem.eql(u8, ordinary_digest[0..], distinct_digest[0..]));
+    }
+
+    // A SpecConstr clone shares its source's template and is a distinct
+    // procedure at a distinct call pattern.
+    const clone_fn = try program.addFn(.{
+        .symbol = symbols.fresh(),
+        .source = ordinary,
+        .spec_constr_pattern = testSourceDigestKey(9),
+        .args = Span(TypedLocal).empty(),
+        .captures = Span(TypedLocal).empty(),
+        .body = .hosted,
+        .ret = ret_ty,
+    });
+    program.next_symbol = symbols.next;
+    const clone_digest = program.fnSourceDigest(clone_fn) orelse return error.TestUnexpectedResult;
+    try std.testing.expect(!std.mem.eql(u8, ordinary_digest[0..], clone_digest[0..]));
 }
 
 test "monotype lifted declarations are referenced" {

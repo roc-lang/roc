@@ -278,6 +278,8 @@ pub fn run(store: *LirStore, layouts: *const layout_mod.Store) ResourceError!voi
 /// Run the same fixed point while reporting deterministic work for scaling tests.
 pub fn runWithStats(store: *LirStore, layouts: *const layout_mod.Store) ResourceError!WorkStats {
     var stats: WorkStats = .{};
+    var analysis = body_clone.AnalysisScratch.init(store.allocator);
+    defer analysis.deinit();
     var join_params = body_clone.JoinParamIndex.init(store.allocator);
     defer join_params.deinit();
     // The identity domain includes other procedures and unreachable old clones.
@@ -286,7 +288,7 @@ pub fn runWithStats(store: *LirStore, layouts: *const layout_mod.Store) Resource
     stats.global_statement_visits = store.cfStmtCount();
     for (0..store.procSpecCount()) |proc_index| {
         const proc: LIR.LirProcSpecId = @enumFromInt(@as(u32, @intCast(proc_index)));
-        try runProcWithStats(store, layouts, proc, store.allocator, &join_params, &stats);
+        try runProcWithStats(store, layouts, proc, store.allocator, &join_params, &stats, &analysis);
     }
     return stats;
 }
@@ -306,8 +308,22 @@ pub fn runProc(
     scratch_allocator: Allocator,
     join_params: *body_clone.JoinParamIndex,
 ) ResourceError!void {
+    var analysis = body_clone.AnalysisScratch.init(scratch_allocator);
+    defer analysis.deinit();
+    try runProcWithScratch(store, layouts, proc, scratch_allocator, join_params, &analysis);
+}
+
+/// Keep region inventories independent while reusing empty lane-owned storage.
+pub fn runProcWithScratch(
+    store: *LirStore,
+    layouts: *const layout_mod.Store,
+    proc: LIR.LirProcSpecId,
+    scratch_allocator: Allocator,
+    join_params: *body_clone.JoinParamIndex,
+    analysis: *body_clone.AnalysisScratch,
+) ResourceError!void {
     var stats: WorkStats = .{};
-    try runProcWithStats(store, layouts, proc, scratch_allocator, join_params, &stats);
+    try runProcWithStats(store, layouts, proc, scratch_allocator, join_params, &stats, analysis);
 }
 
 fn runProcWithStats(
@@ -317,10 +333,11 @@ fn runProcWithStats(
     allocator: Allocator,
     join_params: *body_clone.JoinParamIndex,
     stats: *WorkStats,
+    analysis: *body_clone.AnalysisScratch,
 ) ResourceError!void {
     const body = rewritableProcBody(store, proc) orelse return;
     var indexed = false;
-    while (try findCandidate(store, layouts, proc, stats, allocator)) |found| {
+    while (try findCandidate(store, layouts, proc, stats, allocator, analysis)) |found| {
         var candidate = found;
         defer candidate.deinit(allocator);
         if (!indexed) {
@@ -431,10 +448,11 @@ fn findCandidate(
     proc: LIR.LirProcSpecId,
     stats: *WorkStats,
     allocator: Allocator,
+    analysis: *body_clone.AnalysisScratch,
 ) ResourceError!?Candidate {
     const body = rewritableProcBody(store, proc) orelse return null;
     stats.discovery_walks += 1;
-    var walk = try body_clone.ReachableStmts.initWithAllocator(store, body, allocator);
+    var walk = try body_clone.ReachableStmts.initWithScratch(store, body, analysis);
     defer walk.deinit();
     while (try walk.next()) |join_stmt| {
         stats.discovery_statement_visits += 1;
@@ -497,7 +515,7 @@ fn findCandidate(
         // producer the union join must still receive, and it lies inside the
         // region the hoisted continuations would enclose, so fusion cannot
         // keep every jump in scope; the join stays as lowered.
-        var body_facts = try RegionFacts.init(store, join.body, false, stats, allocator);
+        var body_facts = try RegionFacts.init(store, join.body, false, stats, allocator, analysis);
         defer body_facts.deinit();
         if (body_facts.jump_targets.contains(join.id)) {
             union_locals.deinit(allocator);
@@ -533,7 +551,7 @@ fn findCandidate(
         defer predecessors.deinit();
         var successors = std.ArrayList(LIR.CFStmtId).empty;
         defer successors.deinit(allocator);
-        var remainder_walk = try body_clone.ReachableStmts.initWithAllocator(store, join.remainder, allocator);
+        var remainder_walk = try body_clone.ReachableStmts.initWithScratch(store, join.remainder, analysis);
         defer remainder_walk.deinit();
         stats.inventory_walks += 1;
         while (try remainder_walk.next()) |stmt_id| {
@@ -638,7 +656,7 @@ fn findCandidate(
             union_locals.deinit(allocator);
             continue;
         }
-        var branch_facts = RegionCache.init(allocator);
+        var branch_facts = RegionCache.init(allocator, analysis);
         var keep_branch_facts = false;
         defer if (!keep_branch_facts) branch_facts.deinit();
         try variants.resolveTargets(store, switch_node.switch_stmt, stats);
@@ -761,15 +779,20 @@ const RegionFacts = struct {
     projections: std.ArrayList(LIR.CFStmtId) = .empty,
     jump_targets: collections.DenseMap(LIR.JoinPointId, void),
 
-    fn init(store: *LirStore, body: LIR.CFStmtId, comptime include_defs: bool, stats: *WorkStats, allocator: Allocator) ResourceError!RegionFacts {
-        var self: RegionFacts = .{
-            .reads = .{ .counts = collections.DenseMap(LIR.LocalId, u32).init(allocator) },
-            .defs = .{ .counts = collections.DenseMap(LIR.LocalId, u32).init(allocator) },
-            .releases = .{ .counts = collections.DenseMap(LIR.LocalId, u32).init(allocator) },
-            .jump_targets = collections.DenseMap(LIR.JoinPointId, void).init(allocator),
+    fn init(store: *LirStore, body: LIR.CFStmtId, comptime include_defs: bool, stats: *WorkStats, allocator: Allocator, analysis: *body_clone.AnalysisScratch) ResourceError!RegionFacts {
+        var self: RegionFacts = blk: {
+            var reads = try analysis.acquireCounts();
+            errdefer reads.deinit();
+            const releases = try analysis.acquireCounts();
+            break :blk .{
+                .reads = reads,
+                .defs = .{ .counts = collections.DenseMap(LIR.LocalId, u32).init(allocator) },
+                .releases = releases,
+                .jump_targets = collections.DenseMap(LIR.JoinPointId, void).init(allocator),
+            };
         };
         errdefer self.deinit();
-        var walk = try body_clone.ReachableStmts.initWithAllocator(store, body, allocator);
+        var walk = try body_clone.ReachableStmts.initWithScratch(store, body, analysis);
         defer walk.deinit();
         stats.inventory_walks += 1;
         var statement_count: usize = 0;
@@ -792,7 +815,7 @@ const RegionFacts = struct {
         if (include_defs) {
             // Cloning needs lexical binders, not operand writes (`set_local`
             // writes an outer binder). Keep using the cloner's exact inventory.
-            self.defs = try body_clone.collectReachableDefinitionsWithAllocator(store, body, allocator);
+            self.defs = try body_clone.collectReachableDefinitionsWithScratch(store, body, analysis);
             stats.definition_walks += 1;
             stats.definition_statement_visits += statement_count;
         }
@@ -822,9 +845,10 @@ const RegionFacts = struct {
 /// reads and definitions are invariant, even when the projection proof differs.
 const RegionCache = struct {
     regions: collections.DenseMap(LIR.CFStmtId, RegionFacts),
+    analysis: *body_clone.AnalysisScratch,
 
-    fn init(allocator: Allocator) RegionCache {
-        return .{ .regions = collections.DenseMap(LIR.CFStmtId, RegionFacts).init(allocator) };
+    fn init(allocator: Allocator, analysis: *body_clone.AnalysisScratch) RegionCache {
+        return .{ .regions = collections.DenseMap(LIR.CFStmtId, RegionFacts).init(allocator), .analysis = analysis };
     }
 
     fn deinit(self: *RegionCache) void {
@@ -835,7 +859,7 @@ const RegionCache = struct {
 
     fn get(self: *RegionCache, store: *LirStore, body: LIR.CFStmtId, stats: *WorkStats) ResourceError!*const RegionFacts {
         if (self.regions.getPtr(body)) |facts| return facts;
-        var facts = try RegionFacts.init(store, body, true, stats, self.regions.allocator);
+        var facts = try RegionFacts.init(store, body, true, stats, self.regions.allocator, self.analysis);
         errdefer facts.deinit();
         try self.regions.put(body, facts);
         return self.regions.getPtr(body).?;
@@ -1387,8 +1411,10 @@ test "tag case fusion does not recover opaque producers after descendant cloning
         .remainder = inner,
     } });
     const proc = try graph.proc(outer);
+    var analysis = body_clone.AnalysisScratch.init(testing.allocator);
+    defer analysis.deinit();
     var before: WorkStats = .{};
-    var first = (try findCandidate(&store, &layouts, proc, &before, testing.allocator)).?;
+    var first = (try findCandidate(&store, &layouts, proc, &before, testing.allocator, &analysis)).?;
     defer first.deinit(testing.allocator);
     try testing.expectEqual(inner, first.join_stmt);
     const stats = try runWithStats(&store, &layouts);
@@ -1438,9 +1464,11 @@ test "tag case fusion retries an ancestor after a descendant removes an unproduc
         .remainder = choose,
     } });
     const proc = try graph.proc(outer);
+    var analysis = body_clone.AnalysisScratch.init(testing.allocator);
+    defer analysis.deinit();
     var before: WorkStats = .{};
     {
-        var first = (try findCandidate(&store, &layouts, proc, &before, testing.allocator)).?;
+        var first = (try findCandidate(&store, &layouts, proc, &before, testing.allocator, &analysis)).?;
         defer first.deinit(testing.allocator);
         try testing.expectEqual(inner, first.join_stmt);
     }

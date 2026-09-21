@@ -82,7 +82,9 @@ pub const ResourceError = Allocator.Error;
 
 /// Rewrite qualifying loops in every proc.
 pub fn run(store: *LirStore, layouts: *const layout_mod.Store) ResourceError!void {
-    var pass = Pass.init(store, layouts, store.allocator);
+    var analysis = body_clone.AnalysisScratch.init(store.allocator);
+    defer analysis.deinit();
+    var pass = Pass.init(store, layouts, store.allocator, &analysis);
     defer pass.deinit();
     const proc_count = store.procSpecCount();
     var proc_index: usize = 0;
@@ -117,7 +119,14 @@ pub fn prepareCallees(store: *LirStore, allocator: Allocator) ResourceError!Prep
 
 /// Rewrite one procedure using immutable, phase-wide helper summaries.
 pub fn runProc(store: *LirStore, layouts: *const layout_mod.Store, proc_id: LIR.LirProcSpecId, scratch_allocator: Allocator) ResourceError!void {
-    var pass = Pass.init(store, layouts, scratch_allocator);
+    var analysis = body_clone.AnalysisScratch.init(scratch_allocator);
+    defer analysis.deinit();
+    try runProcWithScratch(store, layouts, proc_id, scratch_allocator, &analysis);
+}
+
+/// Rewrite with independent pooled counts for the procedure and its loop body.
+pub fn runProcWithScratch(store: *LirStore, layouts: *const layout_mod.Store, proc_id: LIR.LirProcSpecId, scratch_allocator: Allocator, analysis: *body_clone.AnalysisScratch) ResourceError!void {
+    var pass = Pass.init(store, layouts, scratch_allocator, analysis);
     defer pass.deinit();
     try pass.transformProc(proc_id);
 }
@@ -252,9 +261,12 @@ const Pass = struct {
     /// Promoted loops of the current proc, keyed by their join statement.
     loop_versions: collections.DenseMap(CFStmtId, LoopVersion),
 
-    fn init(store: *LirStore, layouts: *const layout_mod.Store, allocator: Allocator) Pass {
+    analysis: *body_clone.AnalysisScratch,
+
+    fn init(store: *LirStore, layouts: *const layout_mod.Store, allocator: Allocator, analysis: *body_clone.AnalysisScratch) Pass {
         return .{
             .store = store,
+            .analysis = analysis,
             .layouts = layouts,
             .allocator = allocator,
             .classifier = .{
@@ -1955,7 +1967,7 @@ const Pass = struct {
             // need that environment duplicated, which is not modeled here.
             if (self.store.getLocalSpan(join.retained).len != 0) continue;
             if (self.store.getLocalSpan(join.maybe_uninitialized_params).len != 0) continue;
-            var stmts = try body_clone.ReachableStmts.init(self.store, join.body);
+            var stmts = try body_clone.ReachableStmts.initWithScratch(self.store, join.body, self.analysis);
             defer stmts.deinit();
             var size: u32 = 0;
             while (try stmts.next()) |_| size += 1;
@@ -1973,7 +1985,7 @@ const Pass = struct {
         defer leaves.deinit(allocator);
         for (candidates.items) |candidate| {
             var leaf = true;
-            var stmts = try body_clone.ReachableStmts.init(self.store, self.store.getCFStmt(candidate.stmt).join.body);
+            var stmts = try body_clone.ReachableStmts.initWithScratch(self.store, self.store.getCFStmt(candidate.stmt).join.body, self.analysis);
             defer stmts.deinit();
             while (try stmts.next()) |stmt_id| {
                 for (candidates.items) |other| {
@@ -2104,13 +2116,13 @@ const Pass = struct {
         // The copy gets fresh locals for values that live entirely inside the
         // body, so its stores and loads never share a slot with the cold
         // arm's calls; everything else, the parameters included, is shared.
-        var body_reads = try body_clone.countReachableReadsWithAllocator(self.store, join.body, allocator);
+        var body_reads = try body_clone.countReachableReadsWithScratch(self.store, join.body, self.analysis);
         defer body_reads.deinit();
-        var body_defs = try body_clone.countReachableDefsWithAllocator(self.store, join.body, allocator);
+        var body_defs = try body_clone.countReachableDefsWithScratch(self.store, join.body, self.analysis);
         defer body_defs.deinit();
-        var proc_reads = try body_clone.countReachableReadsWithAllocator(self.store, proc_body, allocator);
+        var proc_reads = try body_clone.countReachableReadsWithScratch(self.store, proc_body, self.analysis);
         defer proc_reads.deinit();
-        var proc_defs = try body_clone.countReachableDefsWithAllocator(self.store, proc_body, allocator);
+        var proc_defs = try body_clone.countReachableDefsWithScratch(self.store, proc_body, self.analysis);
         defer proc_defs.deinit();
         var renamable = collections.DenseMap(LocalId, void).init(allocator);
         defer renamable.deinit();
@@ -2345,7 +2357,9 @@ test "promote carrier index visits reverse ordered edges once and excludes unrel
 /// Compare the once-only scan against the original subtree definition, not
 /// another lexical-scope algorithm, and account for every visited statement.
 fn expectLoopScan(f: *PromoteTest, body: CFStmtId, statements: usize, jumps: usize, loops: usize) (Allocator.Error || error{TestExpectedEqual})!void {
-    var pass = Pass.init(&f.store, &f.layouts, testing.allocator);
+    var analysis = body_clone.AnalysisScratch.init(testing.allocator);
+    defer analysis.deinit();
+    var pass = Pass.init(&f.store, &f.layouts, testing.allocator, &analysis);
     defer pass.deinit();
     var scan = Pass.Scan{
         .total_uses = collections.DenseMap(LocalId, u32).init(testing.allocator),

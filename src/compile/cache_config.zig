@@ -206,7 +206,13 @@ pub const Constants = struct {
     ///     Scheme-use records distinguish per-use where-method signature
     ///     copies from evidence-bearing instantiations, and checked dispatch
     ///     plans retain independent-callable/nested-evidence-reuse flags.
-    pub const CACHE_VERSION = 95;
+    /// 96: Serialized `SafeMultiList` columns hold live rows only (capacity ==
+    ///     len) instead of a capacity-sized region, and every persisted byte is
+    ///     declared: `Node.Payload` variants fill the union exactly and
+    ///     `NumeralLiteral` declares its trailing bytes.
+    /// 97: Record types always carry an explicit extension variable; a record
+    ///     update's base row is an ordinary record whose tail is a flex var.
+    pub const CACHE_VERSION = 97;
 };
 
 /// Configuration for the Roc cache system.

@@ -191,6 +191,7 @@ fn movedMonoView(source: *const Mono.Program, moved: *const Ast.Program) Mono.Pr
         .proc_debug_names = moved.proc_debug_names.view(),
         .roots = source_view.roots,
         .layout_requests = source_view.layout_requests,
+        .comptime_value_reads = source_view.comptime_value_reads,
         .runtime_schema_requests = moved_view.runtime_schema_requests,
         .static_data_values = moved_view.static_data_values,
         .comptime_value_roots = moved_view.comptime_value_roots,
@@ -493,6 +494,12 @@ const Lifter = struct {
                 .fn_id = fn_id,
                 .const_locator = request.const_locator,
             });
+        }
+
+        // Lifting moves bodies between functions but reads no new evaluated
+        // root, so Monotype's record of that demand carries unchanged.
+        for (self.source.comptime_value_reads) |root| {
+            try self.output.addComptimeValueRead(root);
         }
     }
 

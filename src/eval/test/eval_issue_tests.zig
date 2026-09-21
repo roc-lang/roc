@@ -257,6 +257,22 @@ pub const tests = [_]TestCase{
         .expected = .{ .inspect_str = "(1, 2)" },
     },
     .{
+        // Each interpolated part lowers to its own generated step body. The
+        // parts share one owner, one evidence vector, and one Monotype type,
+        // so only the producer's generated-body key tells them apart; merging
+        // two of them would repeat or drop a part here.
+        .name = "issue 11438: every part of a multi-part interpolation keeps its own generated step",
+        .source_kind = .module,
+        .source =
+        \\label : Str, Str, Str -> Str
+        \\label = |a, b, c| "${a}-${b}-${c}/${c}${b}${a}"
+        \\fields : { first : Str, second : Str } -> Str
+        \\fields = |r| "${r.first}|${r.second}"
+        \\main = (label("x", "y", "z"), fields({ first: "p", second: "q" }))
+        ,
+        .expected = .{ .inspect_str = "(\"x-y-z/zyx\", \"p|q\")" },
+    },
+    .{
         .name = "issue 11317: or-pattern capture in a mapped string interpolation",
         .source_kind = .module,
         .source =
@@ -1962,5 +1978,45 @@ pub const tests = [_]TestCase{
         \\}
         ,
         .expected = .{ .inspect_str = "1" },
+    },
+    .{
+        // repro for https://github.com/roc-lang/roc/issues/11463
+        // An unannotated (so generalized) helper passes a closure whose body is
+        // a record update with no field access to a method call. Specializing
+        // the helper at a record with more fields than the updated one must
+        // keep the untouched fields and produce "b 1".
+        .name = "issue 11463: record update in closure passed through method call in generalized function",
+        .source_kind = .module,
+        .imports = &.{.{
+            .name = "Widget",
+            .source =
+            \\Widget(a) := { text : Str, on_change : (a, Str -> a) }.{
+            \\    new : Str -> Widget(a)
+            \\    new = |text| { text, on_change: |state, _| state }
+            \\
+            \\    on_change : Widget(a), (a, Str -> a) -> Widget(a)
+            \\    on_change = |widget, handler| { ..widget, on_change: handler }
+            \\
+            \\    fire : Widget(a), a, Str -> a
+            \\    fire = |widget, state, value| (widget.on_change)(state, value)
+            \\}
+            \\
+            ,
+        }},
+        .source =
+        \\import Widget
+        \\
+        \\State : { filter : Str, count : U64 }
+        \\
+        \\field = |text| Widget.new(text).on_change(|current, value| { ..current, filter: value })
+        \\
+        \\main = {
+        \\    state : State
+        \\    state = { filter: "a", count: 1 }
+        \\    next = field(state.filter).fire(state, "b")
+        \\    "${next.filter} ${next.count.to_str()}"
+        \\}
+        ,
+        .expected = .{ .inspect_str = "\"b 1\"" },
     },
 };

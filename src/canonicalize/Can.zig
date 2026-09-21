@@ -63,6 +63,15 @@ pub const BuiltinTypeContext = struct {
 pub const ModuleInitContext = struct {
     builtin_types: BuiltinTypeContext,
     imported_modules: ?*const std.AutoHashMap(Ident.Idx, AutoImportedType) = null,
+    /// Import identities that import resolution rejected for this module,
+    /// keyed by their exact source spelling (e.g. `pf.Stdout`).
+    ///
+    /// Only the workspace resolver can say whether a package-qualified import
+    /// names a real public module, so canonicalization cannot judge one by
+    /// itself. This is that judgement, carried explicitly: a rejected import
+    /// names no module, and every use of it becomes checked-error data instead
+    /// of reaching whatever module the import spelled.
+    rejected_imports: ?*const std.AutoHashMap(Ident.Idx, void) = null,
     /// Skip reading file-import contents when canonicalizing for inspection only.
     /// Ordinary compilation keeps the default and validates the imported file.
     skip_file_import_contents: bool = false,
@@ -322,6 +331,9 @@ used_patterns: std.AutoHashMapUnmanaged(Pattern.Idx, void),
 globally_resolvable_patterns: std.AutoHashMapUnmanaged(Pattern.Idx, void),
 /// Map of explicit imported module identifiers to their type information for import validation.
 explicit_module_envs: ?*const std.AutoHashMap(Ident.Idx, AutoImportedType),
+/// Import identities that import resolution rejected. See
+/// `ModuleInitContext.rejected_imports`.
+rejected_imports: ?*const std.AutoHashMap(Ident.Idx, void),
 /// Builtin types that are automatically available in every non-Builtin module.
 builtin_auto_imported_types: std.AutoHashMapUnmanaged(Ident.Idx, AutoImportedType) = .{},
 /// Map from module identifier to Import.Idx for tracking unique imports.
@@ -773,6 +785,7 @@ fn initInternal(
         .used_patterns = std.AutoHashMapUnmanaged(Pattern.Idx, void){},
         .globally_resolvable_patterns = std.AutoHashMapUnmanaged(Pattern.Idx, void){},
         .explicit_module_envs = if (maybe_context) |context| context.imported_modules else null,
+        .rejected_imports = if (maybe_context) |context| context.rejected_imports else null,
         .skip_file_import_contents = if (maybe_context) |context| context.skip_file_import_contents else false,
         .compiler_version = if (maybe_context) |context| context.compiler_version else null,
         .validation = if (maybe_context) |context| context.validation else .checking,
@@ -846,6 +859,14 @@ fn lookupExplicitModuleEnv(self: *const Self, ident: Ident.Idx) ?AutoImportedTyp
 
 fn lookupAvailableModuleEnv(self: *const Self, ident: Ident.Idx) ?AutoImportedType {
     return self.lookupExplicitModuleEnv(ident) orelse self.builtin_auto_imported_types.get(ident);
+}
+
+/// Whether import resolution rejected this import identity. A rejected import
+/// has no environment, so its exposed items bind as missing-module items and
+/// every use of them is checked-error data.
+fn importWasRejected(self: *const Self, ident: Ident.Idx) bool {
+    const rejected = self.rejected_imports orelse return false;
+    return rejected.contains(ident);
 }
 
 fn autoImportedTypeUsesCompilerBuiltinImport(info: AutoImportedType) bool {
@@ -6291,30 +6312,85 @@ fn builtinNumKindFromTypeIdent(self: *const Self, type_ident: Ident.Idx) ?CIR.Nu
 
 fn externalTypeBindingIsCompilerBuiltin(self: *const Self, external: Scope.ExternalTypeBinding) bool {
     const import_idx = external.import_idx orelse return false;
+    return self.importIsCompilerBuiltin(import_idx);
+}
+
+fn importIsCompilerBuiltin(self: *const Self, import_idx: CIR.Import.Idx) bool {
     const import_name_idx = self.env.imports.imports.items.items[@intFromEnum(import_idx)];
     return CIR.Import.isCompilerBuiltinImportName(self.env.common.getString(import_name_idx));
 }
 
-/// Resolve a literal suffix once, while the canonicalizer still owns scope
-/// information. A null result means the suffix does not name a type in scope;
-/// `.invalid` means it names an incomplete external binding already diagnosed
-/// by import canonicalization.
-fn resolveNumericSuffixTarget(self: *Self, type_ident: Ident.Idx) std.mem.Allocator.Error!?ModuleEnv.NumericSuffixTarget.Target {
-    const binding_location = (try self.scopeLookupOrPrepareTypeBinding(type_ident)) orelse {
-        if (self.builtinNumKindFromTypeIdent(type_ident)) |num_kind| {
-            return .{ .builtin = num_kind };
-        }
-        return null;
+const LiteralTypeSuffixResolution = union(enum) {
+    resolved: struct {
+        /// The suffix's type name as written, qualified when the suffix is.
+        name: Ident.Idx,
+        target: ModuleEnv.NumericSuffixTarget.Target,
+    },
+    malformed: Diagnostic,
+};
+
+/// Resolve a literal's type suffix once, while the canonicalizer still owns
+/// scope information. `region` is the region of the whole literal. A resolved
+/// `.invalid` target names an incomplete external binding already diagnosed by
+/// import canonicalization.
+fn resolveLiteralTypeSuffix(
+    self: *Self,
+    suffix: AST.LiteralTypeSuffix,
+    region: Region,
+) std.mem.Allocator.Error!LiteralTypeSuffixResolution {
+    const path = switch (suffix) {
+        .deprecated_builtin => |type_name| return try self.resolveUnqualifiedLiteralTypeSuffix(type_name, region),
+        .path => |path| path,
     };
-    return switch (binding_location.binding.*) {
+    if (path.qualifiers.span.len == 0) {
+        const type_name = self.parse_ir.tokens.resolveIdentifier(path.final_token) orelse unreachable;
+        return try self.resolveUnqualifiedLiteralTypeSuffix(type_name, region);
+    }
+
+    const qualified_name_ident = try self.qualifiedNameIdent(path.qualifiers, path.final_token);
+    return switch (try self.resolveQualifiedTypeName(path.qualifiers, path.final_token, qualified_name_ident, region)) {
+        .found => |found| .{ .resolved = .{
+            .name = qualified_name_ident,
+            .target = switch (found.target) {
+                .local => |stmt_idx| .{ .local = stmt_idx },
+                .external => |external| blk: {
+                    if (self.importIsCompilerBuiltin(external.import_idx)) {
+                        const type_name = self.parse_ir.tokens.resolveIdentifier(path.final_token) orelse unreachable;
+                        if (self.builtinNumKindFromTypeIdent(type_name)) |num_kind| break :blk .{ .builtin = num_kind };
+                    }
+                    break :blk .{ .external = .{
+                        .import_idx = external.import_idx,
+                        .target_node_idx = external.target_node_idx,
+                    } };
+                },
+            },
+        } },
+        .malformed => |diagnostic| .{ .malformed = diagnostic },
+    };
+}
+
+fn resolveUnqualifiedLiteralTypeSuffix(
+    self: *Self,
+    type_ident: Ident.Idx,
+    region: Region,
+) std.mem.Allocator.Error!LiteralTypeSuffixResolution {
+    const undeclared = LiteralTypeSuffixResolution{ .malformed = .{ .undeclared_type = .{
+        .name = type_ident,
+        .region = region,
+    } } };
+    const binding_location = (try self.scopeLookupOrPrepareTypeBinding(type_ident)) orelse {
+        const num_kind = self.builtinNumKindFromTypeIdent(type_ident) orelse return undeclared;
+        return .{ .resolved = .{ .name = type_ident, .target = .{ .builtin = num_kind } } };
+    };
+    const target: ModuleEnv.NumericSuffixTarget.Target = switch (binding_location.binding.*) {
         .local_nominal, .local_alias, .local_where_alias, .associated_nominal => |stmt_idx| .{ .local = stmt_idx },
         .external_nominal => |external| blk: {
-            if (self.externalTypeBindingIsCompilerBuiltin(external)) {
+            const import_idx = external.import_idx orelse break :blk .invalid;
+            if (self.importIsCompilerBuiltin(import_idx)) {
                 if (self.builtinNumKindFromTypeIdent(external.original_ident) orelse self.builtinNumKindFromTypeIdent(type_ident)) |num_kind| {
                     break :blk .{ .builtin = num_kind };
                 }
             }
-            const import_idx = external.import_idx orelse break :blk .invalid;
             const target_node_idx = external.target_node_idx orelse break :blk .invalid;
             break :blk .{ .external = .{
                 .import_idx = import_idx,
@@ -6322,14 +6398,7 @@ fn resolveNumericSuffixTarget(self: *Self, type_ident: Ident.Idx) std.mem.Alloca
             } };
         },
     };
-}
-
-/// Record a literal suffix target for syntax paths that preserve an unresolved
-/// target as `.invalid`. Exact numeral canonicalization calls the resolver
-/// directly so validation and recording share one lookup.
-fn recordTypedNumericSuffix(self: *Self, node_idx: Node.Idx, type_ident: Ident.Idx) std.mem.Allocator.Error!void {
-    const target = (try self.resolveNumericSuffixTarget(type_ident)) orelse .invalid;
-    try self.env.recordNumericSuffixTarget(node_idx, target);
+    return .{ .resolved = .{ .name = type_ident, .target = target } };
 }
 
 fn populateExports(self: *Self) std.mem.Allocator.Error!void {
@@ -6915,7 +6984,10 @@ fn importAliased(
     // imports that are resolved by the workspace resolver
     if (self.explicit_module_envs) |envs_map| {
         if (!envs_map.contains(module_name)) {
-            if (!is_package_qualified) {
+            // Import resolution already reported why a rejected import names no
+            // module, and named the exact reason. Canonicalization consumes
+            // that outcome to bind the import; it does not restate it.
+            if (!is_package_qualified and !self.importWasRejected(module_name)) {
                 try self.env.pushDiagnostic(Diagnostic{ .module_not_found = .{
                     .module_name = module_name,
                     .region = import_region,
@@ -6984,7 +7056,10 @@ fn importUnaliased(
     // imports that are resolved by the workspace resolver
     if (self.explicit_module_envs) |envs_map| {
         if (!envs_map.contains(module_name)) {
-            if (!is_package_qualified) {
+            // Import resolution already reported why a rejected import names no
+            // module, and named the exact reason. Canonicalization consumes
+            // that outcome to bind the import; it does not restate it.
+            if (!is_package_qualified and !self.importWasRejected(module_name)) {
                 try self.env.pushDiagnostic(Diagnostic{ .module_not_found = .{
                     .module_name = module_name,
                     .region = import_region,
@@ -7430,6 +7505,52 @@ fn convertASTExposesToCIR(
     }
 }
 
+/// Bind the exposed items of a rejected import as missing-module items.
+///
+/// Import resolution rejected this import, so it names no module and none of
+/// these items has a target. They are still bound, under this import, so that
+/// every use of one is checked-error data naming the missing module rather
+/// than a bare unresolved identifier, and so that no use can reach past the
+/// rejected import to a same-named binding it was meant to introduce.
+fn introduceRejectedImportItems(
+    self: *Self,
+    exposed_items_span: CIR.ExposedItem.Span,
+    module_name: Ident.Idx,
+    import_region: Region,
+    module_import_idx: CIR.Import.Idx,
+) std.mem.Allocator.Error!void {
+    const exposed_items_slice = self.env.store.sliceExposedItems(exposed_items_span);
+    const current_scope_idx = self.scopes.items.len - 1;
+
+    for (exposed_items_slice) |exposed_item_idx| {
+        const exposed_item = self.env.store.getExposedItem(exposed_item_idx);
+        const local_ident = exposed_item.alias orelse exposed_item.name;
+
+        try self.scopeIntroduceExposedItem(local_ident, Scope.ExposedItemInfo{
+            .module_name = module_name,
+            .original_name = exposed_item.name,
+            .target = null,
+        }, import_region);
+
+        if (!self.isSourceTagIdent(local_ident)) continue;
+
+        // The ident text must be fetched fresh here: the binding below interns
+        // new idents, which can move the interner's byte buffer.
+        const original_type_name = self.env.getIdent(exposed_item.name);
+        try self.setExternalTypeBinding(
+            current_scope_idx,
+            local_ident,
+            module_name,
+            exposed_item.name,
+            original_type_name,
+            null,
+            module_import_idx,
+            import_region,
+            .module_not_found,
+        );
+    }
+}
+
 /// Introduce converted exposed items into scope for aliased imports
 /// For imports like `import json.Parser exposing [Config]`, this will:
 /// 1. Auto-expose the module's main type if it's a type module
@@ -7448,6 +7569,17 @@ fn introduceItemsAliased(
 
     if (self.explicit_module_envs) |envs_map| {
         const module_entry = envs_map.get(module_name) orelse {
+            // Import resolution rejected this import, so the module is known to
+            // be unavailable rather than merely absent from this map.
+            if (self.importWasRejected(module_name)) {
+                return try self.introduceRejectedImportItems(
+                    exposed_items_span,
+                    module_name,
+                    import_region,
+                    module_import_idx,
+                );
+            }
+
             // Module not found, but still check for duplicate type names with auto-imports
             // This ensures we report DUPLICATE DEFINITION even for non-existent modules
             for (exposed_items_slice) |exposed_item_idx| {
@@ -7626,6 +7758,17 @@ fn introduceItemsUnaliased(
 
     if (self.explicit_module_envs) |envs_map| {
         const module_entry = envs_map.get(module_name) orelse {
+            // Import resolution rejected this import, so the module is known to
+            // be unavailable rather than merely absent from this map.
+            if (self.importWasRejected(module_name)) {
+                return try self.introduceRejectedImportItems(
+                    exposed_items_span,
+                    module_name,
+                    import_region,
+                    module_import_idx,
+                );
+            }
+
             // Module not found, but still check for duplicate type names with auto-imports
             // This ensures we report DUPLICATE DEFINITION even for non-existent modules
             for (exposed_items_slice) |exposed_item_idx| {
@@ -7842,20 +7985,15 @@ fn canonicalizeSingleQuote(
     self: *Self,
     token_region: AST.TokenizedRegion,
     token: Token.Idx,
-    type_ident: ?Ident.Idx,
+    type_suffix: ?AST.LiteralTypeSuffix,
     comptime Idx: type,
 ) std.mem.Allocator.Error!?Idx {
     const region = self.parse_ir.tokenizedRegionToRegion(token_region);
 
-    const suffix_target = if (type_ident) |ident|
-        (try self.resolveNumericSuffixTarget(ident)) orelse {
-            return try self.env.pushMalformed(Idx, Diagnostic{ .undeclared_type = .{
-                .name = ident,
-                .region = region,
-            } });
-        }
-    else
-        null;
+    const suffix = if (type_suffix) |suffix| switch (try self.resolveLiteralTypeSuffix(suffix, region)) {
+        .resolved => |resolved| resolved,
+        .malformed => |diagnostic| return try self.env.pushMalformed(Idx, diagnostic),
+    } else null;
 
     // Resolve to a string slice from the source
     const token_text = self.parse_ir.resolve(token);
@@ -7884,10 +8022,10 @@ fn canonicalizeSingleQuote(
     }
 
     if (comptime Idx == Expr.Idx) {
-        const expr = if (type_ident) |ident|
+        const expr = if (suffix) |resolved|
             CIR.Expr{ .e_typed_int = .{
                 .value = value_content,
-                .type_name = ident,
+                .type_name = resolved.name,
             } }
         else
             CIR.Expr{ .e_num = .{
@@ -7896,8 +8034,8 @@ fn canonicalizeSingleQuote(
             } };
         const expr_idx = try self.env.addExpr(expr, region);
         try self.env.recordNumeralLiteral(ModuleEnv.nodeIdxFrom(expr_idx), digits[0..digit_len], &.{}, 0, false, false, false, true);
-        if (suffix_target) |target| {
-            try self.env.recordNumericSuffixTarget(ModuleEnv.nodeIdxFrom(expr_idx), target);
+        if (suffix) |resolved| {
+            try self.env.recordNumericSuffixTarget(ModuleEnv.nodeIdxFrom(expr_idx), resolved.target);
         }
         return expr_idx;
     } else if (comptime Idx == Pattern.Idx) {
@@ -7906,8 +8044,8 @@ fn canonicalizeSingleQuote(
             .kind = .int_unbound,
         } }, region);
         try self.env.recordNumeralLiteral(ModuleEnv.nodeIdxFrom(pat_idx), digits[0..digit_len], &.{}, 0, false, false, false, true);
-        if (suffix_target) |target| {
-            try self.env.recordNumericSuffixTarget(ModuleEnv.nodeIdxFrom(pat_idx), target);
+        if (suffix) |resolved| {
+            try self.env.recordNumericSuffixTarget(ModuleEnv.nodeIdxFrom(pat_idx), resolved.target);
         }
         return pat_idx;
     } else {
@@ -7958,17 +8096,12 @@ fn canonicalizeNumeralPattern(
     self: *Self,
     literal: NumericLiteral.Stored,
     region: Region,
-    type_ident: ?Ident.Idx,
+    type_suffix: ?AST.LiteralTypeSuffix,
 ) std.mem.Allocator.Error!Pattern.Idx {
-    const suffix_target = if (type_ident) |ident|
-        (try self.resolveNumericSuffixTarget(ident)) orelse {
-            return try self.env.pushMalformed(Pattern.Idx, Diagnostic{ .undeclared_type = .{
-                .name = ident,
-                .region = region,
-            } });
-        }
-    else
-        null;
+    const suffix_target = if (type_suffix) |suffix| switch (try self.resolveLiteralTypeSuffix(suffix, region)) {
+        .resolved => |resolved| resolved.target,
+        .malformed => |diagnostic| return try self.env.pushMalformed(Pattern.Idx, diagnostic),
+    } else null;
 
     const pattern: Pattern = switch (literal.compact) {
         .int => |value| .{ .num_literal = .{
@@ -8491,7 +8624,20 @@ fn canonicalizeModuleQualifiedIdent(
     } else null;
 
     const target_node_idx = target_node_idx_opt orelse {
-        const auto_imported_type = auto_imported_type_info orelse return null;
+        const auto_imported_type = auto_imported_type_info orelse {
+            // Import resolution rejected this import, so the qualifier names no
+            // module and this reference has a settled answer: it does not
+            // exist. Without that evidence the reference is only unresolved
+            // here, and the caller keeps looking for another meaning.
+            if (self.importWasRejected(module_name)) {
+                const qualified_ident = try self.joinedQualifiedIdent(qualifier_tokens, ident);
+                return try self.canonicalizedMalformedExpr(Diagnostic{ .qualified_ident_does_not_exist = .{
+                    .ident = qualified_ident,
+                    .region = region,
+                } });
+            }
+            return null;
+        };
 
         if (try self.addAutoImportedNominalTagExpr(auto_imported_type, import_idx, ident, region)) |expr_idx| {
             return CanonicalizedExpr{
@@ -10983,16 +11129,16 @@ fn runExprKernel(
                 .typed_int => |e| {
                     const region = self.parse_ir.tokenizedRegionToRegion(e.region);
                     const literal = self.parse_ir.store.getNumericLiteral(e.literal);
-                    const type_ident = e.type_ident;
 
-                    const suffix_target = (try self.resolveNumericSuffixTarget(type_ident)) orelse {
-                        const expr_idx = try self.env.pushMalformed(Expr.Idx, Diagnostic{ .undeclared_type = .{
-                            .name = type_ident,
-                            .region = region,
-                        } });
-                        try storeExprKernelOutput(&last_expr, &child_slots, frame_allocator, current_result_target, CanonicalizedExpr{ .idx = expr_idx, .free_vars = DataSpan.empty() });
-                        continue :expr_kernel_loop .dispatch;
+                    const suffix = switch (try self.resolveLiteralTypeSuffix(e.type_suffix, region)) {
+                        .resolved => |resolved| resolved,
+                        .malformed => |diagnostic| {
+                            const expr_idx = try self.env.pushMalformed(Expr.Idx, diagnostic);
+                            try storeExprKernelOutput(&last_expr, &child_slots, frame_allocator, current_result_target, CanonicalizedExpr{ .idx = expr_idx, .free_vars = DataSpan.empty() });
+                            continue :expr_kernel_loop .dispatch;
+                        },
                     };
+                    const type_ident = suffix.name;
 
                     const numeric_expr: CIR.Expr = switch (literal.compact) {
                         .int => |value| CIR.Expr{ .e_typed_int = .{
@@ -11008,22 +11154,22 @@ fn runExprKernel(
                     };
                     const expr_idx = try self.env.addExpr(numeric_expr, region);
                     try self.recordNumeralLiteralForNode(ModuleEnv.nodeIdxFrom(expr_idx), literal);
-                    try self.env.recordNumericSuffixTarget(ModuleEnv.nodeIdxFrom(expr_idx), suffix_target);
+                    try self.env.recordNumericSuffixTarget(ModuleEnv.nodeIdxFrom(expr_idx), suffix.target);
                     try storeExprKernelOutput(&last_expr, &child_slots, frame_allocator, current_result_target, CanonicalizedExpr{ .idx = expr_idx, .free_vars = DataSpan.empty() });
                 },
                 .typed_frac => |e| {
                     const region = self.parse_ir.tokenizedRegionToRegion(e.region);
                     const literal = self.parse_ir.store.getNumericLiteral(e.literal);
-                    const type_ident = e.type_ident;
 
-                    const suffix_target = (try self.resolveNumericSuffixTarget(type_ident)) orelse {
-                        const expr_idx = try self.env.pushMalformed(Expr.Idx, Diagnostic{ .undeclared_type = .{
-                            .name = type_ident,
-                            .region = region,
-                        } });
-                        try storeExprKernelOutput(&last_expr, &child_slots, frame_allocator, current_result_target, CanonicalizedExpr{ .idx = expr_idx, .free_vars = DataSpan.empty() });
-                        continue :expr_kernel_loop .dispatch;
+                    const suffix = switch (try self.resolveLiteralTypeSuffix(e.type_suffix, region)) {
+                        .resolved => |resolved| resolved,
+                        .malformed => |diagnostic| {
+                            const expr_idx = try self.env.pushMalformed(Expr.Idx, diagnostic);
+                            try storeExprKernelOutput(&last_expr, &child_slots, frame_allocator, current_result_target, CanonicalizedExpr{ .idx = expr_idx, .free_vars = DataSpan.empty() });
+                            continue :expr_kernel_loop .dispatch;
+                        },
                     };
+                    const type_ident = suffix.name;
 
                     const numeric_expr: CIR.Expr = switch (literal.compact) {
                         .small_dec => |value| blk: {
@@ -11048,11 +11194,11 @@ fn runExprKernel(
                     };
                     const expr_idx = try self.env.addExpr(numeric_expr, region);
                     try self.recordNumeralLiteralForNode(ModuleEnv.nodeIdxFrom(expr_idx), literal);
-                    try self.env.recordNumericSuffixTarget(ModuleEnv.nodeIdxFrom(expr_idx), suffix_target);
+                    try self.env.recordNumericSuffixTarget(ModuleEnv.nodeIdxFrom(expr_idx), suffix.target);
                     try storeExprKernelOutput(&last_expr, &child_slots, frame_allocator, current_result_target, CanonicalizedExpr{ .idx = expr_idx, .free_vars = DataSpan.empty() });
                 },
                 .single_quote => |e| {
-                    const expr_idx = try self.canonicalizeSingleQuote(e.region, e.token, e.type_ident, Expr.Idx) orelse {
+                    const expr_idx = try self.canonicalizeSingleQuote(e.region, e.token, e.type_suffix, Expr.Idx) orelse {
                         try storeExprKernelOutput(&last_expr, &child_slots, frame_allocator, current_result_target, null);
                         continue :expr_kernel_loop .dispatch;
                     };
@@ -11098,7 +11244,7 @@ fn runExprKernel(
                         .free_vars_start = self.scratch_free_vars.top(),
                         .interpolation_count = interpolation_count,
                         .is_multiline = false,
-                        .type_ident = e.type_ident,
+                        .type_suffix = e.type_suffix,
                     });
 
                     var i = parts.len;
@@ -11149,7 +11295,7 @@ fn runExprKernel(
                         .free_vars_start = self.scratch_free_vars.top(),
                         .interpolation_count = interpolation_count,
                         .is_multiline = true,
-                        .type_ident = e.type_ident,
+                        .type_suffix = e.type_suffix,
                     });
 
                     var i = parts.len;
@@ -12770,15 +12916,22 @@ fn runExprKernel(
             std.debug.assert(interpolation_i == state.interpolation_count);
 
             const can_str_span = try self.env.store.exprSpanFrom(scratch_top);
-            const expr_idx = if (state.interpolation_count == 0) blk: {
+            const expr_idx = blk: {
+                const suffix_target = if (state.type_suffix) |suffix| switch (try self.resolveLiteralTypeSuffix(suffix, state.region)) {
+                    .resolved => |resolved| resolved.target,
+                    .malformed => |diagnostic| break :blk try self.env.pushMalformed(Expr.Idx, diagnostic),
+                } else null;
+                if (state.interpolation_count != 0) {
+                    break :blk try self.desugarInterpolatedString(can_str_span, state.region, suffix_target);
+                }
                 const str_idx = try self.env.addExpr(Expr{ .e_str = .{
                     .span = can_str_span,
                 } }, state.region);
-                if (state.type_ident) |type_ident| {
-                    try self.recordTypedNumericSuffix(ModuleEnv.nodeIdxFrom(str_idx), type_ident);
+                if (suffix_target) |target| {
+                    try self.env.recordNumericSuffixTarget(ModuleEnv.nodeIdxFrom(str_idx), target);
                 }
                 break :blk str_idx;
-            } else try self.desugarInterpolatedString(can_str_span, state.region, state.type_ident);
+            };
 
             const free_vars_span = self.scratch_free_vars.spanFrom(state.free_vars_start);
             child_slots.shrinkRetainingCapacity(result_start);
@@ -15793,7 +15946,7 @@ fn desugarInterpolatedString(
     self: *Self,
     span: CIR.Expr.Span,
     region: Region,
-    type_ident: ?Ident.Idx,
+    suffix_target: ?ModuleEnv.NumericSuffixTarget.Target,
 ) std.mem.Allocator.Error!Expr.Idx {
     const gpa = self.env.gpa;
 
@@ -15883,14 +16036,8 @@ fn desugarInterpolatedString(
         .method_name_region = region,
     } }, region);
 
-    if (type_ident) |suffix_ident| {
-        if ((try self.scopeLookupOrPrepareTypeBinding(suffix_ident)) == null) {
-            return try self.env.pushMalformed(Expr.Idx, Diagnostic{ .undeclared_type = .{
-                .name = suffix_ident,
-                .region = region,
-            } });
-        }
-        try self.recordTypedNumericSuffix(ModuleEnv.nodeIdxFrom(final_idx), suffix_ident);
+    if (suffix_target) |target| {
+        try self.env.recordNumericSuffixTarget(ModuleEnv.nodeIdxFrom(final_idx), target);
     }
 
     return try self.env.addExpr(CIR.Expr{ .e_block = .{
@@ -16689,7 +16836,7 @@ const ExprFinishStringWork = struct {
     is_multiline: bool,
     /// Explicit type suffix (e.g. `"foo".MyType`), recorded against the
     /// finished string expression for the type checker.
-    type_ident: ?Ident.Idx = null,
+    type_suffix: ?AST.LiteralTypeSuffix = null,
 };
 
 const ExprFinishListWork = struct {
@@ -17922,12 +18069,12 @@ pub fn canonicalizePattern(
                 .typed_int => |e| {
                     const region = self.parse_ir.tokenizedRegionToRegion(e.region);
                     const literal = self.parse_ir.store.getNumericLiteral(e.literal);
-                    last_pattern = try self.canonicalizeNumeralPattern(literal, region, e.type_ident);
+                    last_pattern = try self.canonicalizeNumeralPattern(literal, region, e.type_suffix);
                 },
                 .typed_frac => |e| {
                     const region = self.parse_ir.tokenizedRegionToRegion(e.region);
                     const literal = self.parse_ir.store.getNumericLiteral(e.literal);
-                    last_pattern = try self.canonicalizeNumeralPattern(literal, region, e.type_ident);
+                    last_pattern = try self.canonicalizeNumeralPattern(literal, region, e.type_suffix);
                 },
                 .var_ident => |e| {
                     // Mutable variable binding in a pattern (e.g., `|var $x, y|`)
@@ -17991,7 +18138,7 @@ pub fn canonicalizePattern(
                     last_pattern = try self.canonicalizeStringPattern(e);
                 },
                 .single_quote => |e| {
-                    last_pattern = try self.canonicalizeSingleQuote(e.region, e.token, e.type_ident, Pattern.Idx);
+                    last_pattern = try self.canonicalizeSingleQuote(e.region, e.token, e.type_suffix, Pattern.Idx);
                 },
                 .tag => |e| {
                     const tag_name = self.parse_ir.tokens.resolveIdentifier(e.tag_tok) orelse {
@@ -20076,172 +20223,212 @@ fn canonicalizeTypeAnnoBasicType(
             } });
         }
     } else {
-        // First, check if this is a qualified name for an associated type (e.g., Foo.Bar)
-        // Build the full qualified name
         const qualified_name_ident = try self.qualifiedNameIdent(ty.qualifiers, ty.token);
-
-        // Try looking up the full qualified name in local scope (for associated types)
-        if (try self.scopeLookupOrPrepareTypeDecl(qualified_name_ident)) |type_decl_idx| {
-            return try self.env.addTypeAnno(CIR.TypeAnno{ .lookup = .{
-                .name = qualified_name_ident,
-                .base = .{ .local = .{ .decl_idx = type_decl_idx } },
-            } }, region);
-        }
-
-        const first_qualifier_ident = self.parse_ir.tokens.resolveIdentifier(qualifier_toks[0]) orelse unreachable;
-        if (self.lookupAvailableModuleEnv(first_qualifier_ident)) |auto_imported_type| {
-            if (try self.lookupNestedAutoImportedTypeNode(auto_imported_type, first_qualifier_ident, self.env.getIdent(qualified_name_ident))) |target_node_idx| {
-                const import_idx = try self.getOrCreateAutoImportedTypeImport(auto_imported_type);
-                return try self.env.addTypeAnno(CIR.TypeAnno{ .lookup = .{ .name = qualified_name_ident, .base = .{ .external = .{
-                    .module_idx = import_idx,
-                    .target_node_idx = target_node_idx,
-                } } } }, region);
-            }
-        }
-
-        if (try self.scopeLookupOrPrepareModule(first_qualifier_ident)) |module_info| {
-            const module_name = module_info.module_name;
-            const import_idx = self.scopeLookupImportedModule(module_name) orelse {
-                return try self.env.pushMalformed(TypeAnno.Idx, Diagnostic{ .module_not_imported = .{
-                    .module_name = module_name,
-                    .region = region,
-                } });
-            };
-
-            const type_path_ident = if (qualifier_toks.len > 1) blk: {
-                const type_qualifiers = AST.Token.Span{ .span = .{
-                    .start = ty.qualifiers.span.start + 1,
-                    .len = @intCast(qualifier_toks.len - 1),
-                } };
-                break :blk try self.qualifiedNameIdent(type_qualifiers, ty.token);
-            } else type_name_ident;
-
-            const imported_type = self.lookupAvailableModuleEnv(module_name) orelse {
-                return try self.env.pushMalformed(TypeAnno.Idx, CIR.Diagnostic{ .type_from_missing_module = .{
-                    .module_name = module_name,
-                    .type_name = type_path_ident,
-                    .region = type_name_region,
-                } });
-            };
-
-            const target_node_idx = (try self.lookupImportedExposedTypeNode(imported_type.env, self.env.getIdent(type_path_ident))) orelse {
-                return try self.env.pushMalformed(TypeAnno.Idx, CIR.Diagnostic{ .type_not_exposed = .{
-                    .module_name = module_name,
-                    .type_name = type_path_ident,
-                    .region = type_name_region,
-                } });
-            };
-
-            return try self.env.addTypeAnno(CIR.TypeAnno{ .lookup = .{ .name = type_path_ident, .base = .{ .external = .{
-                .module_idx = import_idx,
-                .target_node_idx = target_node_idx,
-            } } } }, region);
-        }
-
-        if (try self.scopeLookupTypeBinding(first_qualifier_ident)) |binding_location| {
-            const binding = binding_location.binding.*;
-            if (binding == .external_nominal) {
-                if (try self.resolveNestedExternalTypeAnno(binding.external_nominal, qualified_name_ident, region)) |anno_idx| {
-                    return anno_idx;
-                }
-
-                if (self.internalBuiltinTypeKind(first_qualifier_ident, self.env.getIdent(qualified_name_ident))) |kind| {
-                    return try self.env.pushMalformed(TypeAnno.Idx, CIR.Diagnostic{ .internal_builtin_type = .{
-                        .parent_name = first_qualifier_ident,
-                        .nested_name = type_name_ident,
-                        .kind = kind,
-                        .region = region,
-                    } });
-                }
-
-                return try self.env.pushMalformed(TypeAnno.Idx, CIR.Diagnostic{ .nested_type_not_found = .{
-                    .parent_name = first_qualifier_ident,
-                    .nested_name = type_name_ident,
-                    .region = region,
-                } });
-            }
-        }
-
-        // Not a local qualified type, so treat as an external type from a module
-        // Get qualifiers excluding the last one for module alias
-        const module_qualifiers: AST.Token.Span = if (qualifier_toks.len > 1)
-            .{ .span = .{ .start = ty.qualifiers.span.start, .len = @intCast(qualifier_toks.len - 1) } }
-        else
-            .{ .span = .{ .start = 0, .len = 0 } };
-
-        const module_alias = try self.qualifiedNameIdent(
-            module_qualifiers,
-            qualifier_toks[qualifier_toks.len - 1],
-        );
-
-        // Check if this is a module alias
-        const module_info = (try self.scopeLookupOrPrepareModule(module_alias)) orelse {
-            // Module is not in current scope - but check if it's a type name first
-            if (try self.scopeLookupOrPrepareTypeBinding(module_alias)) |_| {
-                // This is in scope as a type/value, but doesn't expose the nested type being requested
-                if (self.internalBuiltinTypeKind(module_alias, self.env.getIdent(qualified_name_ident))) |kind| {
-                    return try self.env.pushMalformed(TypeAnno.Idx, CIR.Diagnostic{ .internal_builtin_type = .{
-                        .parent_name = module_alias,
-                        .nested_name = type_name_ident,
-                        .kind = kind,
-                        .region = region,
-                    } });
-                }
-
-                return try self.env.pushMalformed(TypeAnno.Idx, CIR.Diagnostic{ .nested_type_not_found = .{
-                    .parent_name = module_alias,
-                    .nested_name = type_name_ident,
-                    .region = region,
-                } });
-            }
-
-            // Not a module and not a type - module not imported
-            return try self.env.pushMalformed(TypeAnno.Idx, CIR.Diagnostic{ .module_not_imported = .{
-                .module_name = module_alias,
-                .region = region,
-            } });
+        return switch (try self.resolveQualifiedTypeName(ty.qualifiers, ty.token, qualified_name_ident, region)) {
+            .found => |found| try self.env.addTypeAnno(CIR.TypeAnno{ .lookup = .{
+                .name = found.name,
+                .base = switch (found.target) {
+                    .local => |decl_idx| .{ .local = .{ .decl_idx = decl_idx } },
+                    .external => |external| .{ .external = .{
+                        .module_idx = external.import_idx,
+                        .target_node_idx = external.target_node_idx,
+                    } },
+                },
+            } }, region),
+            .malformed => |diagnostic| try self.env.pushMalformed(TypeAnno.Idx, diagnostic),
         };
+    }
+}
+
+/// A qualified type name (such as `Foo.Bar` or `Module.Type`) resolved by
+/// `resolveQualifiedTypeName`.
+const QualifiedTypeResolution = union(enum) {
+    found: struct {
+        name: Ident.Idx,
+        target: QualifiedTypeTarget,
+    },
+    malformed: Diagnostic,
+};
+
+const QualifiedTypeTarget = union(enum) {
+    local: Statement.Idx,
+    external: struct {
+        import_idx: CIR.Import.Idx,
+        target_node_idx: u32,
+    },
+};
+
+/// Resolve a qualified type name, where `qualified_name_ident` is the full
+/// spelling of `qualifiers` followed by `final_token`. Type annotations and
+/// literal type suffixes (`0x05080a.Gui.Color`) share this resolution, so a
+/// qualified name means the same type in both positions.
+fn resolveQualifiedTypeName(
+    self: *Self,
+    qualifiers: AST.Token.Span,
+    final_token: Token.Idx,
+    qualified_name_ident: Ident.Idx,
+    region: Region,
+) std.mem.Allocator.Error!QualifiedTypeResolution {
+    const qualifier_toks = self.parse_ir.store.tokenSlice(qualifiers);
+    std.debug.assert(qualifier_toks.len > 0);
+    const type_name_ident = self.parse_ir.tokens.resolveIdentifier(final_token) orelse unreachable;
+    const type_name_region = self.parse_ir.tokens.resolve(final_token);
+
+    // A local associated type (e.g., Foo.Bar) is in scope under its full qualified name.
+    if (try self.scopeLookupOrPrepareTypeDecl(qualified_name_ident)) |type_decl_idx| {
+        return .{ .found = .{ .name = qualified_name_ident, .target = .{ .local = type_decl_idx } } };
+    }
+
+    const first_qualifier_ident = self.parse_ir.tokens.resolveIdentifier(qualifier_toks[0]) orelse unreachable;
+    if (self.lookupAvailableModuleEnv(first_qualifier_ident)) |auto_imported_type| {
+        if (try self.lookupNestedAutoImportedTypeNode(auto_imported_type, first_qualifier_ident, self.env.getIdent(qualified_name_ident))) |target_node_idx| {
+            const import_idx = try self.getOrCreateAutoImportedTypeImport(auto_imported_type);
+            return .{ .found = .{ .name = qualified_name_ident, .target = .{ .external = .{
+                .import_idx = import_idx,
+                .target_node_idx = target_node_idx,
+            } } } };
+        }
+    }
+
+    if (try self.scopeLookupOrPrepareModule(first_qualifier_ident)) |module_info| {
         const module_name = module_info.module_name;
-        // Check if this module is imported in the current scope
         const import_idx = self.scopeLookupImportedModule(module_name) orelse {
-            return try self.env.pushMalformed(TypeAnno.Idx, Diagnostic{ .module_not_imported = .{
+            return .{ .malformed = Diagnostic{ .module_not_imported = .{
                 .module_name = module_name,
                 .region = region,
-            } });
+            } } };
         };
 
-        // Look up the target node index in the module's exposed_nodes
-        const type_name_text = self.env.getIdent(type_name_ident);
-        const target_node_idx = blk: {
-            const auto_imported_type = self.lookupAvailableModuleEnv(module_name) orelse {
-                return try self.env.pushMalformed(TypeAnno.Idx, CIR.Diagnostic{ .type_from_missing_module = .{
-                    .module_name = module_name,
-                    .type_name = type_name_ident,
-                    .region = type_name_region,
-                } });
-            };
+        const type_path_ident = if (qualifier_toks.len > 1) blk: {
+            const type_qualifiers = AST.Token.Span{ .span = .{
+                .start = qualifiers.span.start + 1,
+                .len = @intCast(qualifier_toks.len - 1),
+            } };
+            break :blk try self.qualifiedNameIdent(type_qualifiers, final_token);
+        } else type_name_ident;
 
-            const other_module_node_id = (try self.lookupImportedExposedTypeNode(auto_imported_type.env, type_name_text)) orelse {
-                // Type is not exposed by the module
-                return try self.env.pushMalformed(TypeAnno.Idx, CIR.Diagnostic{ .type_not_exposed = .{
-                    .module_name = module_name,
-                    .type_name = type_name_ident,
-                    .region = type_name_region,
-                } });
-            };
-
-            // Successfully found the target node
-            break :blk other_module_node_id;
+        const imported_type = self.lookupAvailableModuleEnv(module_name) orelse {
+            return .{ .malformed = CIR.Diagnostic{ .type_from_missing_module = .{
+                .module_name = module_name,
+                .type_name = type_path_ident,
+                .region = type_name_region,
+            } } };
         };
 
-        // Create the ty_lookup_external expression with Import.Idx
-        // Type solving will copy this types from the origin type store into the
-        // this module's type store
-        return try self.env.addTypeAnno(CIR.TypeAnno{ .lookup = .{ .name = type_name_ident, .base = .{ .external = .{
-            .module_idx = import_idx,
+        const target_node_idx = (try self.lookupImportedExposedTypeNode(imported_type.env, self.env.getIdent(type_path_ident))) orelse {
+            return .{ .malformed = CIR.Diagnostic{ .type_not_exposed = .{
+                .module_name = module_name,
+                .type_name = type_path_ident,
+                .region = type_name_region,
+            } } };
+        };
+
+        return .{ .found = .{ .name = type_path_ident, .target = .{ .external = .{
+            .import_idx = import_idx,
             .target_node_idx = target_node_idx,
-        } } } }, region);
+        } } } };
     }
+
+    if (try self.scopeLookupTypeBinding(first_qualifier_ident)) |binding_location| {
+        const binding = binding_location.binding.*;
+        if (binding == .external_nominal) {
+            if (try self.resolveNestedExternalType(binding.external_nominal, qualified_name_ident)) |target| {
+                return .{ .found = .{ .name = qualified_name_ident, .target = target } };
+            }
+
+            if (self.internalBuiltinTypeKind(first_qualifier_ident, self.env.getIdent(qualified_name_ident))) |kind| {
+                return .{ .malformed = CIR.Diagnostic{ .internal_builtin_type = .{
+                    .parent_name = first_qualifier_ident,
+                    .nested_name = type_name_ident,
+                    .kind = kind,
+                    .region = region,
+                } } };
+            }
+
+            return .{ .malformed = CIR.Diagnostic{ .nested_type_not_found = .{
+                .parent_name = first_qualifier_ident,
+                .nested_name = type_name_ident,
+                .region = region,
+            } } };
+        }
+    }
+
+    // Not a local qualified type, so treat as an external type from a module
+    // Get qualifiers excluding the last one for module alias
+    const module_qualifiers: AST.Token.Span = if (qualifier_toks.len > 1)
+        .{ .span = .{ .start = qualifiers.span.start, .len = @intCast(qualifier_toks.len - 1) } }
+    else
+        .{ .span = .{ .start = 0, .len = 0 } };
+
+    const module_alias = try self.qualifiedNameIdent(
+        module_qualifiers,
+        qualifier_toks[qualifier_toks.len - 1],
+    );
+
+    // Check if this is a module alias
+    const module_info = (try self.scopeLookupOrPrepareModule(module_alias)) orelse {
+        // Module is not in current scope - but check if it's a type name first
+        if (try self.scopeLookupOrPrepareTypeBinding(module_alias)) |_| {
+            // This is in scope as a type/value, but doesn't expose the nested type being requested
+            if (self.internalBuiltinTypeKind(module_alias, self.env.getIdent(qualified_name_ident))) |kind| {
+                return .{ .malformed = CIR.Diagnostic{ .internal_builtin_type = .{
+                    .parent_name = module_alias,
+                    .nested_name = type_name_ident,
+                    .kind = kind,
+                    .region = region,
+                } } };
+            }
+
+            return .{ .malformed = CIR.Diagnostic{ .nested_type_not_found = .{
+                .parent_name = module_alias,
+                .nested_name = type_name_ident,
+                .region = region,
+            } } };
+        }
+
+        // Not a module and not a type - module not imported
+        return .{ .malformed = CIR.Diagnostic{ .module_not_imported = .{
+            .module_name = module_alias,
+            .region = region,
+        } } };
+    };
+    const module_name = module_info.module_name;
+    // Check if this module is imported in the current scope
+    const import_idx = self.scopeLookupImportedModule(module_name) orelse {
+        return .{ .malformed = Diagnostic{ .module_not_imported = .{
+            .module_name = module_name,
+            .region = region,
+        } } };
+    };
+
+    // Look up the target node index in the module's exposed_nodes
+    const type_name_text = self.env.getIdent(type_name_ident);
+    const target_node_idx = blk: {
+        const auto_imported_type = self.lookupAvailableModuleEnv(module_name) orelse {
+            return .{ .malformed = CIR.Diagnostic{ .type_from_missing_module = .{
+                .module_name = module_name,
+                .type_name = type_name_ident,
+                .region = type_name_region,
+            } } };
+        };
+
+        const other_module_node_id = (try self.lookupImportedExposedTypeNode(auto_imported_type.env, type_name_text)) orelse {
+            // Type is not exposed by the module
+            return .{ .malformed = CIR.Diagnostic{ .type_not_exposed = .{
+                .module_name = module_name,
+                .type_name = type_name_ident,
+                .region = type_name_region,
+            } } };
+        };
+
+        // Successfully found the target node
+        break :blk other_module_node_id;
+    };
+
+    return .{ .found = .{ .name = type_name_ident, .target = .{ .external = .{
+        .import_idx = import_idx,
+        .target_node_idx = target_node_idx,
+    } } } };
 }
 
 fn lookupNestedAutoImportedTypeNode(
@@ -20306,12 +20493,11 @@ fn isInternalAutoImportedNestedType(
     );
 }
 
-fn resolveNestedExternalTypeAnno(
+fn resolveNestedExternalType(
     self: *Self,
     external: Scope.ExternalTypeBinding,
     type_path_ident: Ident.Idx,
-    region: Region,
-) std.mem.Allocator.Error!?TypeAnno.Idx {
+) std.mem.Allocator.Error!?QualifiedTypeTarget {
     const import_idx = external.import_idx orelse return null;
     const imported_type = self.lookupAvailableModuleEnv(external.module_ident) orelse
         self.lookupAvailableModuleEnv(external.original_ident) orelse
@@ -20324,10 +20510,10 @@ fn resolveNestedExternalTypeAnno(
         (try self.lookupNestedAutoImportedTypeNode(imported_type, external.original_ident, self.env.getIdent(type_path_ident))) orelse
         return null;
 
-    return try self.env.addTypeAnno(CIR.TypeAnno{ .lookup = .{ .name = type_path_ident, .base = .{ .external = .{
-        .module_idx = import_idx,
+    return .{ .external = .{
+        .import_idx = import_idx,
         .target_node_idx = target_node_idx,
-    } } } }, region);
+    } };
 }
 
 ////////////////////////////////////////////////////////////////////////////////

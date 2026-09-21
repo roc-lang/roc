@@ -11220,9 +11220,16 @@ const CliTestSourceModuleMap = std.StringHashMapUnmanaged(BuildEnv.CompiledModul
 const CliTestRunSummary = struct {
     passed: u32 = 0,
     failed: u32 = 0,
+    /// Tests that could not compile, rather than the number of diagnostics.
     compiler_errors: u32 = 0,
+    /// Checking diagnostics can occur outside tests or affect several tests.
+    diagnostic_errors: usize = 0,
     modules_with_tests: u32 = 0,
     cached_modules: u32 = 0,
+
+    fn allPassed(self: CliTestRunSummary) bool {
+        return self.failed == 0 and self.compiler_errors == 0 and self.diagnostic_errors == 0;
+    }
 };
 
 fn writeCliTestRunSummary(
@@ -11232,7 +11239,7 @@ fn writeCliTestRunSummary(
     fully_cached: bool,
     use_color: bool,
 ) std.Io.Writer.Error!void {
-    const all_passed = summary.failed == 0 and summary.compiler_errors == 0;
+    const all_passed = summary.allPassed();
     if (all_passed) {
         try writer.print("All ({}) tests passed", .{summary.passed});
     } else {
@@ -11265,6 +11272,12 @@ fn writeCliTestRunSummary(
         summary.compiler_errors,
         reset,
     });
+    if (summary.diagnostic_errors != 0) {
+        try writer.print("Compilation failed with {} error{s}.\n", .{
+            summary.diagnostic_errors,
+            if (summary.diagnostic_errors == 1) "" else "s",
+        });
+    }
 }
 
 test "issue 10624: roc test summaries share duration and cache formatting" {
@@ -11295,6 +11308,16 @@ test "issue 10624: roc test summaries share duration and cache formatting" {
             .summary = .{ .passed = 1, .failed = 1, .compiler_errors = 1 },
             .fully_cached = true,
             .expected = "Ran 3 tests in 1.2 ms. (cached):\n    1 passed\n    1 failed\n    1 compiler errors\n",
+        },
+        .{
+            .summary = .{ .passed = 2, .compiler_errors = 1, .diagnostic_errors = 2 },
+            .fully_cached = false,
+            .expected = "Ran 3 tests in 1.2 ms.:\n    2 passed\n    0 failed\n    1 compiler errors\nCompilation failed with 2 errors.\n",
+        },
+        .{
+            .summary = .{ .passed = 1, .diagnostic_errors = 1 },
+            .fully_cached = false,
+            .expected = "Ran 1 tests in 1.2 ms.:\n    1 passed\n    0 failed\n    0 compiler errors\nCompilation failed with 1 error.\n",
         },
     };
 
@@ -11336,6 +11359,9 @@ const CliTestPlanModule = struct {
 };
 
 const CliTestPlan = struct {
+    /// Includes modules whose tests were all rejected during checking.
+    modules_with_tests: u32,
+    /// Only modules with executable test requests need runtime planning.
     modules: []CliTestPlanModule,
     entries: []CliTestPlanEntry,
 
@@ -11714,7 +11740,7 @@ fn loadCachedCliTestResults(
         const has_message = readU8(data, &offset) orelse return null;
 
         const region = base.Region.from_raw_offsets(region_start, region_end);
-        if (!inline_expect and !region.eq(testRootRegion(module.semantic.env, test_roots[root_index - 1]))) return null;
+        if (!inline_expect and !region.eq(testRootRegion(module.semantic.env, test_roots[root_index - 1].source))) return null;
 
         var visibility: CliTestFailureDetailVisibility = .always;
         const message = if (has_message == 0) null else blk: {
@@ -11782,9 +11808,11 @@ fn collectTestRootRequests(
 fn buildCliTestPlan(
     ctx: *CliCtx,
     modules: []const BuildEnv.CompiledModuleInfo,
+    module_results: *std.ArrayList(CliModuleTestResult),
 ) Allocator.Error!CliTestPlan {
     var planned_modules = std.ArrayList(CliTestPlanModule).empty;
     var entries = std.ArrayList(CliTestPlanEntry).empty;
+    var modules_with_tests: u32 = 0;
     errdefer {
         for (planned_modules.items) |*module| {
             ctx.gpa.free(module.test_roots);
@@ -11812,6 +11840,37 @@ fn buildCliTestPlan(
         const artifact = module.semantic.checked_artifact orelse continue;
         const test_roots = try collectTestRootRequests(ctx.gpa, artifact);
         errdefer ctx.gpa.free(test_roots);
+
+        // Root requests deliberately exclude erroneous bodies. The checked
+        // roots still retain their identities and the checker's diagnostic
+        // facts, so rejected tests can participate in result aggregation
+        // without being lowered, executed, or stored in the execution cache.
+        var checking_results = std.ArrayList(CliTestResultItem).empty;
+        defer checking_results.deinit(ctx.gpa);
+        for (artifact.compile_time_roots.roots) |root| {
+            if (root.kind != .expect) continue;
+            if (!artifact.checked_bodies.exprContainsDiagnosticError(root.expr)) continue;
+            std.debug.assert(root.request_eligibility == .ineligible);
+            try checking_results.append(ctx.gpa, .{
+                .result = .compiler_error,
+                .order = @intFromEnum(root.id),
+                .region = testRootRegion(module.semantic.env, root.source),
+                // Checking renders the original diagnostic once. A second
+                // generic test failure would only duplicate that report.
+                .failure_detail = null,
+            });
+        }
+        if (test_roots.len != 0 or checking_results.items.len != 0) modules_with_tests += 1;
+        if (checking_results.items.len != 0) {
+            const results = try checking_results.toOwnedSlice(ctx.gpa);
+            errdefer ctx.gpa.free(results);
+            try module_results.append(ctx.gpa, .{
+                .env = module.semantic.env,
+                .path = module.path,
+                .results = results,
+                .cached = false,
+            });
+        }
         if (test_roots.len == 0) {
             ctx.gpa.free(test_roots);
             continue;
@@ -11826,7 +11885,7 @@ fn buildCliTestPlan(
                 .root_index = @intCast(root_index),
                 .root_order = root.order,
                 .result_index = result_index,
-                .region = testRootRegion(module.semantic.env, root),
+                .region = testRootRegion(module.semantic.env, root.source),
                 .symbol_name = symbol_name,
             }) catch |err| {
                 ctx.gpa.free(symbol_name);
@@ -11857,6 +11916,7 @@ fn buildCliTestPlan(
     errdefer deinitCliTestPlanEntries(ctx.gpa, owned_entries);
 
     return .{
+        .modules_with_tests = modules_with_tests,
         .modules = owned_modules,
         .entries = owned_entries,
     };
@@ -11864,9 +11924,9 @@ fn buildCliTestPlan(
 
 fn testRootRegion(
     env: *const ModuleEnv,
-    root: check.CheckedArtifact.RootRequest,
+    source: check.CheckedArtifact.RootSource,
 ) base.Region {
-    return switch (root.source) {
+    return switch (source) {
         .statement => |statement| env.store.getStatementRegion(statement),
         .def, .expr, .required_binding, .hoisted => {
             if (builtin.mode == .Debug) {
@@ -12459,7 +12519,7 @@ fn collectCliTestRootRuns(
             .path = planned.module.path,
             .result_index = plan_entry.result_index,
             .root_proc = root_proc,
-            .region = testRootRegion(planned.module.semantic.env, root),
+            .region = testRootRegion(planned.module.semantic.env, root.source),
             .arg_layouts = arg_layouts,
             .ret_layout = proc.ret_layout,
             .symbol_name = plan_entry.symbol_name,
@@ -14871,7 +14931,7 @@ fn rocTest(ctx: *CliCtx, args_in: cli_args.TestArgs, arg0: []const u8) RocTestEr
         module_results.deinit(ctx.gpa);
     }
 
-    var test_plan = try buildCliTestPlan(ctx, modules);
+    var test_plan = try buildCliTestPlan(ctx, modules, &module_results);
     defer test_plan.deinit(ctx.gpa);
 
     const specialization_strategy = currentRuntimeSpecializationStrategy(args.specialization_strategy);
@@ -15070,6 +15130,8 @@ fn rocTest(ctx: *CliCtx, args_in: cli_args.TestArgs, arg0: []const u8) RocTestEr
         },
     };
     try coalesceInlineExpectResults(ctx.gpa, module_results.items, &total);
+    total.modules_with_tests = test_plan.modules_with_tests;
+    total.diagnostic_errors = diag.errors;
     reporter.end();
     recordPostCheckLowering(&reporter, &spec_timing, specialization_strategy);
     if (test_mode == .dev) recordDevTestExecution(&reporter, &dev_timing);
@@ -15078,7 +15140,8 @@ fn rocTest(ctx: *CliCtx, args_in: cli_args.TestArgs, arg0: []const u8) RocTestEr
     // Calculate elapsed time
     const end_time = std.Io.Timestamp.now(ctx.io.std_io, .real).nanoseconds;
     const elapsed_ns = @as(u64, @intCast(end_time - start_time));
-    const fully_cached = total.modules_with_tests > 0 and total.cached_modules == total.modules_with_tests;
+    const fully_cached = total.compiler_errors == 0 and total.diagnostic_errors == 0 and
+        total.modules_with_tests > 0 and total.cached_modules == total.modules_with_tests;
 
     // Render the per-module bodies once into in-memory buffers so we can
     // print them after the summary line.
@@ -15111,11 +15174,8 @@ fn rocTest(ctx: *CliCtx, args_in: cli_args.TestArgs, arg0: []const u8) RocTestEr
     try stderr.writeAll(stderr_body.written());
 
     // Report results
-    if (total.failed == 0 and total.compiler_errors == 0) {
+    if (total.allPassed()) {
         try writeCliTestRunSummary(stdout, total, elapsed_ns, fully_cached, report_config.shouldUseColors());
-        // Diagnostics determine the command status only after every independent
-        // test root has run; they never gate checked-artifact execution.
-        if (diag.errors > 0) return error.CompilationFailed;
         // Same warning exit policy as check/build/run: passing tests with
         // compile warnings exit 2.
         exitOnWarnings(ctx, diag.warnings);
@@ -15124,6 +15184,9 @@ fn rocTest(ctx: *CliCtx, args_in: cli_args.TestArgs, arg0: []const u8) RocTestEr
 
     try writeCliTestRunSummary(stderr, total, elapsed_ns, fully_cached, report_config.shouldUseColors());
 
+    // Diagnostics determine the command status only after every independent
+    // test root has run; they never gate checked-artifact execution.
+    if (diag.errors > 0) return error.CompilationFailed;
     return error.TestsFailed;
 }
 
@@ -15860,6 +15923,9 @@ fn renderCliTestResultEntry(
             );
         },
         .compiler_error => {
+            // A checking error already has its original diagnostic. Backend
+            // errors carry their own detail and still need a test report.
+            if (entry.result.failure_detail == null) return;
             const region_info = source_env.calcRegionInfo(entry.result.region);
             try printTestProblem(
                 allocator,
