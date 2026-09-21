@@ -11,21 +11,62 @@ const Idx = layout_mod.Idx;
 const StructIdx = layout_mod.StructIdx;
 const TagUnionIdx = layout_mod.TagUnionIdx;
 
-/// Runtime ops table passed through shared RC helpers.
+/// Runtime ops table a host-shaped final-drop callback receives.
 pub const RocOps = builtins.utils.RocOps;
+
+const callback_abi = builtins.rc_callback_abi;
+
 /// ABI for compiled incref helpers.
-pub const RcIncrefFn = *const fn (?[*]u8, isize, *RocOps) callconv(.c) void;
+pub const RcIncrefFn = callback_abi.RcIncrefFn;
 /// ABI for compiled decref helpers.
-pub const RcDecrefFn = *const fn (?[*]u8, *RocOps) callconv(.c) void;
+pub const RcDecrefFn = callback_abi.RcDecrefFn;
 /// ABI for compiled free helpers.
-pub const RcFreeFn = *const fn (?[*]u8, *RocOps) callconv(.c) void;
+pub const RcFreeFn = callback_abi.RcFreeFn;
+/// ABI for compiled host-shaped final-drop adapters.
+pub const HostDropFn = callback_abi.HostDropFn;
 
 /// Shared RC helper operation kind.
+///
+/// `host_drop` is not a refcount operation over a layout. It names the
+/// generated adapter that performs the layout's `decref` while presenting the
+/// published `Payload.on_drop` signature, so it is only ever valid in an
+/// erased callable's final-drop slot. RC statements carry the other three.
 pub const RcOp = enum(u2) {
     incref,
     decref,
     free,
+    host_drop,
+
+    /// The refcount operation a helper performs, with the host-shaped adapter
+    /// resolved to the operation it forwards.
+    pub fn performed(self: RcOp) PerformedOp {
+        return switch (self) {
+            .incref => .incref,
+            .decref => .decref,
+            .free => .free,
+            .host_drop => .decref,
+        };
+    }
 };
+
+/// A refcount operation over a layout.
+///
+/// This is `RcOp` without `host_drop`, which is a calling convention rather
+/// than an operation and so never reaches plan resolution.
+pub const PerformedOp = enum { incref, decref, free };
+
+/// Parameters of the generated helper for `op`, in order.
+///
+/// Backends build their own signature representations from this rather than
+/// spelling the parameter list again, so a helper always matches the pointer
+/// type the builtins call it through.
+pub fn abiParams(op: RcOp) []const callback_abi.Param {
+    return switch (op) {
+        .incref => callback_abi.incref_params,
+        .decref, .free => callback_abi.drop_params,
+        .host_drop => callback_abi.host_drop_params,
+    };
+}
 
 /// Canonical identity for an RC helper.
 pub const HelperKey = struct {
@@ -144,8 +185,13 @@ pub const Resolver = struct {
     }
 
     /// Plan the RC behavior for a canonical helper key.
-    pub fn plan(self: *const Resolver, helper_key: HelperKey) Plan {
-        const l = self.store.getLayout(helper_key.layout_idx);
+    ///
+    /// A `host_drop` adapter performs its layout's `decref`, so it plans as
+    /// one; the two differ only in the signature the backend gives the
+    /// generated function.
+    pub fn plan(self: *const Resolver, key: HelperKey) Plan {
+        const op = key.op.performed();
+        const l = self.store.getLayout(key.layout_idx);
         if (!self.nestedContainsRefcounted(l)) {
             return .noop;
         }
@@ -154,42 +200,42 @@ pub const Resolver = struct {
             // ptr is never refcounted, so the early return above already handled it.
             .zst, .ptr => .noop,
             .scalar => if (l.getScalar().tag == .str)
-                switch (helper_key.op) {
+                switch (op) {
                     .incref => .str_incref,
                     .decref => .str_decref,
                     .free => .str_free,
                 }
             else
                 .noop,
-            .list, .list_of_zst => switch (helper_key.op) {
-                .incref => .{ .list_incref = self.listPlan(helper_key.layout_idx) },
-                .decref => .{ .list_decref = self.listPlan(helper_key.layout_idx) },
-                .free => .{ .list_free = self.listPlan(helper_key.layout_idx) },
+            .list, .list_of_zst => switch (op) {
+                .incref => .{ .list_incref = self.listPlan(key.layout_idx) },
+                .decref => .{ .list_decref = self.listPlan(key.layout_idx) },
+                .free => .{ .list_free = self.listPlan(key.layout_idx) },
             },
-            .box, .box_of_zst => switch (helper_key.op) {
+            .box, .box_of_zst => switch (op) {
                 .incref => .box_incref,
-                .decref => .{ .box_decref = self.boxPlan(helper_key.layout_idx) },
-                .free => .{ .box_free = self.boxPlan(helper_key.layout_idx) },
+                .decref => .{ .box_decref = self.boxPlan(key.layout_idx) },
+                .free => .{ .box_free = self.boxPlan(key.layout_idx) },
             },
             .erased_box => std.debug.panic(
                 "layout/ARC invariant violated: erased_box RC requires its explicit Boxy descriptor",
                 .{},
             ),
-            .erased_callable => switch (helper_key.op) {
+            .erased_callable => switch (op) {
                 .incref => .erased_callable_incref,
                 .decref => .erased_callable_decref,
                 .free => .erased_callable_free,
             },
             .struct_ => .{ .struct_ = .{
                 .struct_idx = l.getStruct().idx,
-                .child_op = nestedDropOp(helper_key.op),
+                .child_op = nestedDropOp(op),
             } },
             .tag_union => .{ .tag_union = .{
                 .tag_union_idx = l.getTagUnion().idx,
-                .child_op = nestedDropOp(helper_key.op),
+                .child_op = nestedDropOp(op),
             } },
             .closure => .{ .closure = .{
-                .op = nestedDropOp(helper_key.op),
+                .op = nestedDropOp(op),
                 .layout_idx = l.getClosure().captures_layout_idx,
             } },
         };
@@ -283,7 +329,7 @@ pub const Resolver = struct {
         };
     }
 
-    fn nestedDropOp(op: RcOp) RcOp {
+    fn nestedDropOp(op: PerformedOp) RcOp {
         return switch (op) {
             .incref => .incref,
             .decref, .free => .decref,

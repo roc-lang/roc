@@ -525,6 +525,12 @@ pub const ModuleState = struct {
     imports: std.ArrayList(LocalImportEdge),
     /// External imports (qualified names like "pf.Stdout")
     external_imports: std.ArrayList([]const u8),
+    /// Import identities that import resolution rejected for this module.
+    /// Recorded once, where the rejection is reported, and replayed to
+    /// canonicalization as explicit rejected outcomes. A rejected import never
+    /// appears in `imports` or `external_imports`: it names no module, so it
+    /// has no dependency edge and no environment.
+    rejected_imports: std.ArrayList([]const u8),
     /// Modules that depend on this one (for waking dependents)
     dependents: std.ArrayList(ModuleId),
     /// Transitive local imports known for this module.
@@ -557,6 +563,7 @@ pub const ModuleState = struct {
             .completion = .pending,
             .imports = std.ArrayList(LocalImportEdge).empty,
             .external_imports = std.ArrayList([]const u8).empty,
+            .rejected_imports = std.ArrayList([]const u8).empty,
             .dependents = std.ArrayList(ModuleId).empty,
             .reachable_local_imports = .{},
             .reports = std.ArrayList(Report).empty,
@@ -702,6 +709,10 @@ pub const ModuleState = struct {
             gpa.free(imp);
         }
         self.external_imports.deinit(gpa);
+        for (self.rejected_imports.items) |imp| {
+            gpa.free(imp);
+        }
+        self.rejected_imports.deinit(gpa);
         self.dependents.deinit(gpa);
         self.reachable_local_imports.deinit(gpa);
         for (self.reports.items) |*rep| {
@@ -3950,24 +3961,31 @@ pub const Coordinator = struct {
             }
         }
 
-        if (result.import_resolution_failed) {
-            try self.completeModulesWithFailure(&.{.{
-                .pkg_name = pkg.name,
-                .module_id = result.module_id,
-            }});
-            return;
-        }
-
         for (result.discovered_local_imports.items) |imp| {
-            if (try self.validateImportSourcePath(pkg, imp.module_name, imp.path)) |problem| {
-                try self.appendInvalidImportReport(mod, imp.import_name, imp.module_name, problem);
-                try self.completeModulesWithFailure(&.{.{
-                    .pkg_name = pkg.name,
-                    .module_id = result.module_id,
-                }});
-                return;
+            // Registering a sibling module can move this package's module
+            // storage, so every iteration refetches the importing module.
+            const importer = pkg.getModule(result.module_id) orelse {
+                self.bugReport("BUG: module id={} not found in package '{s}' in parsed handler (module={s})\n", .{
+                    result.module_id, result.package_name, result.module_name,
+                });
+                unreachable;
+            };
+            const resolved = switch (imp.target) {
+                // The parse worker already reported why this import names no
+                // module. Record it as a rejected edge so canonicalization
+                // binds it as missing.
+                .rejected => {
+                    try self.recordRejectedImport(importer, imp.import_name);
+                    continue;
+                },
+                .resolved => |resolved| resolved,
+            };
+            if (try self.validateImportSourcePath(pkg, resolved.module_name, resolved.path)) |problem| {
+                try self.appendInvalidImportReport(importer, imp.import_name, resolved.module_name, problem);
+                try self.recordRejectedImport(importer, imp.import_name);
+                continue;
             }
-            const child_id = try pkg.ensureModule(self.gpa, imp.module_name, imp.path);
+            const child_id = try pkg.ensureModule(self.gpa, resolved.module_name, resolved.path);
             const current_mod = pkg.getModule(result.module_id) orelse {
                 self.bugReport("BUG: module id={} not found in package '{s}' after ensureModule in parsed handler (module={s})\n", .{
                     result.module_id, result.package_name, result.module_name,
@@ -4006,24 +4024,23 @@ pub const Coordinator = struct {
             }
         }
 
-        const mod_after_imports = pkg.getModule(result.module_id) orelse {
-            self.bugReport("BUG: module id={} not found in package '{s}' after local parse imports (module={s})\n", .{
-                result.module_id, result.package_name, result.module_name,
-            });
-            unreachable;
-        };
-
         for (result.discovered_external_imports.items) |ext_imp| {
-            try mod_after_imports.external_imports.append(self.gpa, try self.gpa.dupe(u8, ext_imp.import_name));
-            if (try self.scheduleExternalImport(result.package_name, ext_imp.import_name)) |invalid| {
+            // Scheduling can register modules in the target package, which may
+            // be this package, so the module pointer is refetched afterwards.
+            const rejection = try self.scheduleExternalImport(result.package_name, ext_imp.import_name);
+            const current_mod = pkg.getModule(result.module_id) orelse {
+                self.bugReport("BUG: module id={} not found in package '{s}' after scheduling external import (module={s})\n", .{
+                    result.module_id, result.package_name, result.module_name,
+                });
+                unreachable;
+            };
+            if (rejection) |invalid| {
                 const logical_name = base.module_path.parseQualifiedImport(ext_imp.import_name).?.module;
-                try self.appendInvalidImportReport(mod_after_imports, ext_imp.import_name, logical_name, invalid);
-                try self.completeModulesWithFailure(&.{.{
-                    .pkg_name = pkg.name,
-                    .module_id = result.module_id,
-                }});
-                return;
+                try self.appendInvalidImportReport(current_mod, ext_imp.import_name, logical_name, invalid);
+                try self.recordRejectedImport(current_mod, ext_imp.import_name);
+                continue;
             }
+            try current_mod.external_imports.append(self.gpa, try self.gpa.dupe(u8, ext_imp.import_name));
 
             const qualified = base.module_path.parseQualifiedImport(ext_imp.import_name) orelse continue;
             const target_pkg_name = pkg.shorthands.get(qualified.qualifier) orelse continue;
@@ -4037,8 +4054,37 @@ pub const Coordinator = struct {
             );
         }
 
+        const mod_after_imports = pkg.getModule(result.module_id) orelse {
+            self.bugReport("BUG: module id={} not found in package '{s}' after parse imports (module={s})\n", .{
+                result.module_id, result.package_name, result.module_name,
+            });
+            unreachable;
+        };
+
         mod_after_imports.phase = .WaitingOnImports;
         try self.tryUnblock(pkg, result.module_id);
+    }
+
+    /// Record that import resolution rejected `import_name` for this module.
+    ///
+    /// The rejection is a user diagnostic, not a module outcome: the module
+    /// keeps its complete path through canonicalization and checking, and this
+    /// entry is the explicit data canonicalization consumes to bind the import
+    /// as missing.
+    ///
+    /// Each name arrives once. `module_discovery` hands the parse worker two
+    /// import inventories, local and package-qualified; each is already unique
+    /// by import name, and the two inventories name distinct source import
+    /// identities. A rejection is therefore appended without rescanning what
+    /// this module has already recorded.
+    fn recordRejectedImport(
+        self: *Coordinator,
+        mod: *ModuleState,
+        import_name: []const u8,
+    ) Allocator.Error!void {
+        const owned = try self.gpa.dupe(u8, import_name);
+        errdefer self.gpa.free(owned);
+        try mod.rejected_imports.append(self.gpa, owned);
     }
 
     const ImportSourcePathProblem = union(enum) {
@@ -4680,7 +4726,7 @@ pub const Coordinator = struct {
                 coordinatorInvariant("successful local import '{s}' had no module environment", .{imp.name});
             try imports.append(allocator, .{
                 .import_name = edge.import_name,
-                .module_env = env,
+                .resolution = .{ .available = .{ .module_env = env } },
             });
         }
         for (mod.external_imports.items) |ext_name| {
@@ -4693,15 +4739,17 @@ pub const Coordinator = struct {
                         coordinatorInvariant("successful external import '{s}' had no public target", .{ext_name});
                     try imports.append(allocator, .{
                         .import_name = ext_name,
-                        .module_env = ext_env,
-                        .selected_type_decl = switch (public_target.selection) {
-                            .type_decl => |statement| statement,
-                            .whole_module => null,
-                            .unresolved_nested_type => coordinatorInvariant(
-                                "successful external import '{s}' had an unresolved public nested type",
-                                .{ext_name},
-                            ),
-                        },
+                        .resolution = .{ .available = .{
+                            .module_env = ext_env,
+                            .selected_type_decl = switch (public_target.selection) {
+                                .type_decl => |statement| statement,
+                                .whole_module => null,
+                                .unresolved_nested_type => coordinatorInvariant(
+                                    "successful external import '{s}' had an unresolved public nested type",
+                                    .{ext_name},
+                                ),
+                            },
+                        } },
                     });
                 },
                 .waiting, .failed => |readiness| coordinatorInvariant(
@@ -4709,6 +4757,15 @@ pub const Coordinator = struct {
                     .{ mod.name, ext_name, @tagName(readiness) },
                 ),
             }
+        }
+        // Imports that resolution rejected are replayed with their recorded
+        // outcome, so canonicalization binds them as missing instead of
+        // treating an absent entry as an import it cannot judge.
+        for (mod.rejected_imports.items) |rejected_name| {
+            try imports.append(allocator, .{
+                .import_name = rejected_name,
+                .resolution = .rejected,
+            });
         }
 
         return try imports.toOwnedSlice(allocator);
@@ -5287,16 +5344,24 @@ pub const Coordinator = struct {
         errdefer {
             for (discovered_local_imports.items) |imp| {
                 worker_alloc.free(imp.import_name);
-                worker_alloc.free(imp.module_name);
-                worker_alloc.free(imp.path);
+                switch (imp.target) {
+                    .resolved => |resolved| {
+                        worker_alloc.free(resolved.module_name);
+                        worker_alloc.free(resolved.path);
+                    },
+                    .rejected => {},
+                }
             }
             discovered_local_imports.deinit(worker_alloc);
         }
-        var import_resolution_failed = false;
         const local_imports = try module_discovery.extractImportsFromDeclIndex(parse_ast, task_allocs.scratch);
         for (local_imports) |local_import| {
+            const owned_import_name = try worker_alloc.dupe(u8, local_import.import_name);
+            errdefer worker_alloc.free(owned_import_name);
             const module_name = (try module_discovery.resolveLocalImportLogicalPath(task_allocs.scratch, task.module_name, local_import)) orelse {
-                import_resolution_failed = true;
+                // The import names no module inside this package. Report it here
+                // and carry the rejection as this import's resolution outcome;
+                // the rest of the module still has a complete compilation.
                 const report = try Report.init(
                     worker_alloc,
                     "Import Escapes Package Root",
@@ -5304,18 +5369,22 @@ pub const Coordinator = struct {
                     .runtime_error,
                 );
                 try appendReportOwned(worker_alloc, &reports, report);
+                try discovered_local_imports.append(worker_alloc, .{
+                    .import_name = owned_import_name,
+                    .target = .rejected,
+                });
                 continue;
             };
             const path = try self.resolveModulePathWithAllocator(task.package_root, module_name, worker_alloc);
             errdefer worker_alloc.free(path);
             const owned_name = try worker_alloc.dupe(u8, module_name);
             errdefer worker_alloc.free(owned_name);
-            const owned_import_name = try worker_alloc.dupe(u8, local_import.import_name);
-            errdefer worker_alloc.free(owned_import_name);
             try discovered_local_imports.append(worker_alloc, .{
                 .import_name = owned_import_name,
-                .module_name = owned_name,
-                .path = path,
+                .target = .{ .resolved = .{
+                    .module_name = owned_name,
+                    .path = path,
+                } },
             });
         }
 
@@ -5344,7 +5413,6 @@ pub const Coordinator = struct {
                 .cached_ast = parse_ast,
                 .discovered_local_imports = discovered_local_imports,
                 .discovered_external_imports = discovered_external_imports,
-                .import_resolution_failed = import_resolution_failed,
                 .reports = reports,
                 .parse_ns = readStageTimer(self.roc_ctx.std_io, &parse_timer),
             },
@@ -8530,7 +8598,7 @@ test "shared CTFE and runtime requests specialize once across workers and target
             try std.testing.expectEqual(@as(usize, 1), runtime.lir_result.root_procs.items.len);
             // The original host domain reuses the completed program, whose
             // accessor now returns the completed scalar as a literal; a
-            // forked consumer lowers its own continuation, where the read is
+            // separate consumer lowers its own continuation, where the read is
             // the literal. Either way no value slot survives.
             const frozen = runtime.frozen_static_data orelse return error.TestUnexpectedResult;
             var value_exports: usize = 0;

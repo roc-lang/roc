@@ -141,7 +141,8 @@ produces its output, including when procedure templates are extended with
 compile-time entry wrappers. Known batch sizes reserve capacity once;
 incremental appends grow amortized. Producing checked module data must not
 repeatedly copy a completed prefix, and serialization writes only live rows,
-never spare capacity.
+never spare capacity. This holds for column-per-field stores too; see
+"Fully Defined Persisted Bytes".
 
 Checked source schemes are interned by their complete structural keys. The
 owning table retains the first representative root and assigns dense scheme
@@ -210,6 +211,20 @@ explicit argument/frame inventory and clears tracked captures; it never scans
 the whole store. Specialized procedures may share `LocalId`s, but their LLVM
 slot values must never survive into another procedure. These columns preserve
 direct indexing without introducing a remapping lookup on every local access.
+
+Wasm's local bindings use a store-indexed column of their own, scoped by a
+stamp. A row records the function scope that wrote it and is live only for
+that scope, so a nested helper compiled in the middle of a procedure body
+neither reads the procedure's bindings nor leaves its own behind. Every write
+records the row it replaced, so leaving a scope restores exactly the rows that
+scope bound, including after an allocation failure. Entering a scope allocates
+nothing and clears nothing, and scope entry and exit cost is proportional to
+the locals that scope bound. Growing the column initializes each row exactly
+once for the whole module: the procedure that first reaches a high `LocalId`
+initializes the rows below it as well, and no later procedure repeats that
+work. A module's total initialization is therefore the highest `LocalId` any
+procedure binds, and each procedure's own cost on top of it is the locals it
+emits.
 
 The suffix `...Key` is reserved for structural or composite identity for which
 a dense owner-relative ID cannot preserve the required identity. Examples
@@ -845,8 +860,9 @@ no ownership transfers. The pass extends each affected procedure's sorted frame
 local inventory and recomputes its stack-probe requirement. Backends consume
 only these explicit ordinary LIR operations.
 
-A runtime program forked from the completed host program receives the
-completed values in two forms. Its lowering carries the host's completed
+A runtime program continued from the shared producer program after the
+compile-time consumer completed, rather than reusing that consumer's own
+program, receives the completed values in two forms. Its lowering carries the host's completed
 successful scalar roots, decoded from the host's frozen image and keyed by
 checked root identity as transcoding matches slots, and emits each such read
 as the scalar literal rather than a slot read, so range proving, loop
@@ -904,15 +920,67 @@ solving, including callable identities stored in compile-time results. The
 consumer input is opaque to value folding until target LIR lowering supplies the
 configured run/omit Boolean. No specialization is repeated.
 
-A cross-target continuation forks one frozen Solved program after Monotype
-lowering, lifting, SpecConstr, lambda solving, and inline analysis. It copies
-the owned arrays, checked name identities, immutable type graphs, literal and
-diagnostic bytes, and inline plan exactly. Every producer id and specialization
-identity stays unchanged. The fork does not rerun any of those stages. Each
-fork is consumed independently by target LIR lowering; target width and the
-explicitly shared expect consumer mode may change, while specialization options
-remain captured. Callable correspondence therefore compares ids from one
-producer domain, never ids allocated by separate solver runs.
+Monotype lowering, lifting, SpecConstr, lambda solving, and inline analysis
+run once over the union of the compilation's compile-time and runtime root
+requests, and the frozen Solved program they produce is one immutable producer
+identity domain. Every consumer continuation borrows that one program: none
+copies it, and none reruns any of those stages. A consumer chooses its target
+width, the explicitly shared expect consumer mode, and the completed
+compile-time values it reads as literals; every other specialization option is
+captured by preparation and cannot differ between consumers, because the
+specializations were already lowered under it. Callable correspondence
+therefore compares ids from one producer domain, never ids allocated by
+separate solver runs. The producer program is released after its last consumer.
+
+Each consumer names its share of the producer program in an explicit root
+manifest, applied before LIR demand discovery. A manifest names producer root
+positions in the consumer's emitted order, states whether the consumer
+materializes the producer's layout, static-data and runtime-schema requests,
+and names the evaluated roots whose completed values the consumer records.
+Selected roots keep the producer's request metadata and the producer position
+that command-level root metadata is keyed by. Demand discovery then starts
+from the named roots alone: a consumer generates no procedure, layout, static
+data, or ARC for another consumer's roots, and no consumer prunes another's
+code after lowering it.
+
+Two consumers share one program exactly when the code they would lower is the
+same code. The compile-time consumer lowers at the host's width with expects
+run, so a runtime consumer that asks for the same two answers names the union
+of both root sets in one manifest: that program evaluates the compile-time
+roots and is then the runtime program, with its own roots selected out of it
+and its completed values read through the accessors it already had. A runtime
+consumer that asks for a different target width or expect mode cannot read
+that code, so each consumer names only its own roots: a runtime root request
+is then never lowered while checking finalizes, and a compile-time root's own
+body never reaches the runtime program, which reads each compile-time value
+through a slot the evaluation filled, whose frozen bytes are the value's
+definition there. Whether one program or two, no consumer lowers code only
+another consumer runs.
+
+Monotype lowering records the evaluated roots whose completed values the
+program reads, once per root. A root-slot read is that stage's own explicit
+statement of the demand, so later stages consume the record instead of
+rediscovering it. When consumers split, the compile-time consumer's manifest
+names exactly the roots in that record that this compilation evaluates, each
+under the checked identity the evaluation records it with, and the root
+declares the one slot its value is recorded into; that declaration keeps the
+slot through procedure and slot compaction even though no code in that program
+reads it. One root has one completed value, and two demands for it are the same
+demand when they name the same concrete type: the structural type digest
+selects the candidate and exact representation equivalence, private backings
+and callable members included, confirms it. Neither a stage-local type id nor
+an agreeing layout is that proof. A root the program never
+reads materializes nothing: it is still evaluated, and reports its `crash`,
+`dbg` and `expect` behavior, but its value is retained only by the checked
+module data that asked for it.
+
+A producer program is released as soon as its last consumer stops reading it,
+which is when that consumer's LIR generation finishes rather than when its
+whole continuation does: the procedure passes, ARC and emitted program that
+follow consult no producer, and they are where a continuation's footprint
+peaks. A completed compile-time program's procedures are likewise released
+once the values they produced have been read: what stays consulted is those
+values, their representation metadata, and the procedures' own identities.
 
 Boxy runtime lowering is a distinct declared specialization strategy. Compile-
 time evaluation remains LSS, so that consumer's runtime roots are excluded from
@@ -921,8 +989,9 @@ This split follows the selected strategy, never a failed specialization attempt.
 
 Native compile-time instruction generation consumes an explicit, read-only LIR
 demand closure seeded by compile-time root procedures and materialized callable
-relocations. Runtime-only procedures remain in the shared program without being
-JIT-compiled. Runtime machine emission is a distinct consumer: compile-time
+relocations. Runtime-only procedures are in that program only when the runtime
+consumer shares it, and are then left un-JIT-compiled. Runtime
+machine emission is a distinct consumer: compile-time
 hooks, deterministic dictionary seed, host CPU, and root-entry wrapper ABI are
 explicit execution policies. That machine emission does not repeat checked,
 Monotype, or host-compatible LIR lowering.
@@ -2187,6 +2256,22 @@ requirement. Importers and every post-check stage consume that data normally.
 Independent definitions, imports, compile-time roots, and runtime paths remain
 available; execution crashes only if it reaches a recorded checked error.
 
+Import resolution is one of those producer boundaries. It selects exactly one
+outcome per import identity—an accepted target with its module environment, or
+a rejection—and records that outcome where it is decided: a package module the
+target package does not make public, a relative import that escapes the package
+source root, a source path whose spelling or file identity is not the one
+the logical name selects. A rejected import is a user diagnostic, so it neither
+completes the importing module with failure nor propagates to that module's
+dependents. The importing module keeps its complete path through
+canonicalization and checking; canonicalization consumes the recorded rejection
+and binds the import as missing, so uses of it are checked-error data. A
+rejected import carries no dependency edge and no environment, so it never
+reaches the module its name spelled, and the importing module's other imports,
+definitions, and compile-time roots stay available. Failing to read the source
+the import selected—a missing file, an I/O error—is not one of these outcomes;
+it is an operational failure and aborts the operation, as below.
+
 Parsing and error reporting may recover malformed source in order to construct
 the explicit malformed/runtime-error nodes that later stages consume. I/O,
 allocation failure, unsupported compiler hosts, corrupt serialized CheckedModule
@@ -2258,6 +2343,54 @@ Runtime static string layout is generated later by the target-specific static
 data emitter. The checked cache must not store native pointer-width padding,
 static refcount words, allocation headers, or any other runtime `RocStr` layout
 bytes.
+
+### Fully Defined Persisted Bytes
+
+This section governs the raw-byte boundaries: the paths that persist a value by
+copying its in-memory representation rather than encoding it field by field, which
+is how the checked module cache, the baked builtin `CheckedModule` blob, and the
+`SafeList` and `SafeMultiList` tables they hold are written. Other serialized forms
+in the compiler encode explicitly and are not bound by the rules here.
+
+Every byte such a boundary writes is a function of the logical contents alone. A
+byte no declaration accounts for holds whatever that memory held before—allocator-
+and address-layout-dependent garbage that makes otherwise identical compilations
+produce different bytes.
+
+An item type reaching a raw-byte boundary must therefore be one of two kinds,
+decided at compile time; anything else is a compile error at the boundary rather
+than a silent writer of undefined bytes:
+
+- *Fully defined*: every byte of the type's size belongs to a declared field, for
+  every value. Serialization gathers the live bytes directly, with no scratch copy
+  and no scan.
+- *Scrubbable*: undefined bytes or bits exist, but the value itself identifies
+  every one of them—a tagged union's discriminant names the live variant, an
+  optional's null bit names an empty payload, a narrow scalar's declared width
+  names its value bits. Those are canonicalized into a writer-owned copy; the
+  source is never modified, so a frozen or shared store may be serialized.
+
+A fixed layout is the author's byte map, so an `extern struct` must declare the
+bytes its alignment adds, as an explicitly zero-defaulted reserved field, and every
+variant of an `extern union` must fill the union exactly. A union whose
+discriminant lives outside it—`Node.Payload`, tagged by the sibling `Node.tag`
+column—carries nothing that could identify its own dead bytes, so a short variant
+is rejected outright rather than scrubbed. Within a fixed layout, a field that is
+itself scrubbable is still permitted; what is rejected is a gap between fields, or
+a variant that stops short.
+
+Compiler-chosen (`auto`) layouts are checked the same way rather than assumed
+safe: their inter-field gaps are scrubbable, but a member whose undefined bytes
+nothing identifies makes the whole type a compile error, exactly as a fixed layout
+would be. A checked store may keep an ergonomic in-memory shape, but not an
+unrepresentable one.
+
+Serialization never writes spare capacity. A `SafeMultiList` persists its live
+rows as `std.MultiArrayList`'s own column layout with capacity equal to length, so
+both the blob's contents and its size depend on what the list holds and not on how
+it was grown. There is one column-writing implementation behind every
+`SafeMultiList` serialization entry point, so no two entry points can drift into
+different formats for the same store.
 
 The string-literal builder must reject impossible `u32` length or content-offset
 overflow as a compiler invariant: debug builds assert or panic with the
@@ -2897,6 +3030,17 @@ evaluated during checking and, when reachable, emitted as static data.
 The CheckedModule data must therefore be able to contain both diagnostics and
 successful compile-time root requests. The presence of diagnostics is not an
 module-level root-selection failure.
+
+`roc test` counts each diagnostic-blocked top-level expect from the existing
+compile-time root table and the body diagnostic recorded with it.
+`runtime_entrypoint` root requests intentionally exclude these expects; their
+absence is not a test inventory. Blocked expects produce one compiler-error test result each, even
+when several diagnostics belong to one expect or one diagnostic blocks several
+expects. Independent roots still execute and may reuse cached results. Checking
+diagnostics are rendered once and are counted separately from test outcomes;
+errors outside tests also prevent an unqualified success summary. This consumes
+existing checked data only during test planning, without another checker pass
+or serialized inventory. Inline expects remain execution observations.
 
 The compiler must not create separate hoisted roots inside an ordinary top-level
 constant body. The whole top-level constant body is already a compile-time root,
@@ -8779,6 +8923,28 @@ Specialization body scheduling may deduplicate global deferred work, but never
 authorizes importing a checked node or root-owned graph state from another
 root.
 
+Lexical environments have independent versions over lane-confined indexed
+storage. Forking an environment copies no inherited bindings. Reads use the
+active direct index; switching retained versions undoes and replays only the
+changes between them, preserving each version's iteration order. Sibling match
+contexts remain independent across relation production, binder reads,
+result selection, body emission, and pattern emission. Parent mutation after a
+fork never changes a child's inherited bindings. These versions cover runtime
+binders, typed binders, local-procedure contexts, and completed checked-type
+instantiations. In-progress checked-type placeholders remain private to their
+exact instantiation scope and are never inherited. Fresh instantiation scopes,
+field-kind scope routing, shared graph relations, and relation order are
+unchanged by environment storage.
+
+Writes reserve their allocation-free cleanup change before recording a binding.
+Restoring a temporary binding records its exact prior value without allocating,
+including when another retained version still observes the temporary value.
+Only live bindings are enumerated; neither first insertion nor a fork initializes
+a module-sized binder column. A version family owns its index and change storage
+until its final context is released, including on allocation failure. When only
+one version remains, mutation updates the active view directly and discards
+unobservable history; standalone type memo tables need no change records.
+
 Instantiation can expose an overlapping tag through a generic extension even
 when the checked call's row was already normalized. Graph row composition
 preserves the checked unifier's head-before-extension precedence: the first
@@ -8809,6 +8975,10 @@ shards strictly in request order and immediately makes discovered requests
 available to free lanes. Running and completed-but-unaccepted tasks share the
 same bounded window. Each immutable lane suffix is absorbed even when its body
 is discarded after an earlier shard committed its reservation, preserving cumulative lane ids.
+The pending FIFO is a reusable geometrically growing ring. Dispatch consumes
+its head without moving the undispatched suffix; ordered acceptance never
+compacts that suffix. Queue capacity follows the peak outstanding work, not
+the total number of jobs submitted during a lowering run.
 All accepted tasks are joined before releasing their contexts, including on OOM.
 
 Workers never borrow the mutable coordinator Program. Their captured input
@@ -9733,8 +9903,8 @@ lowering a body. A specialization request is identified by:
 const SpecIdentity = struct {
     callable: CallableIdentity,
     method_scope: CheckedModuleDigest,
-    source_fn_ty_digest: TypeDigest,
     evidence_digest: EvidenceDigest,
+    codec_contract_digest: TypeDigest,
     request_fn_ty_digest: TypeDigest,
     request_fn_ty: TypeId,
 };
@@ -9773,15 +9943,57 @@ const SpecRecord = struct {
 
 `method_scope` records the exact checked registry scope that selected static
 dispatch inside the body; it participates in both draft and durable lookup
-keys. `source_fn_ty_digest` records the checked source function type after
-instantiation into the requesting graph. `evidence_digest` accelerates lookup
-of the exact retained dispatch-evidence topology. `request_fn_ty_digest`
+keys. `evidence_digest` accelerates lookup of the exact retained
+dispatch-evidence topology, and `codec_contract_digest` the exact
+lowering-only context a generated codec body requires. `request_fn_ty_digest`
 records the closed function type REQUESTED by the call site that reserved the
 record. The digests make lookup fast, but they are not the only correctness
 check. When a digest match is found, the store must also verify the checked
-callable identity, method scope, exact evidence topology, and exact structural
-equality of the closed Monotype function type. Digest collisions are therefore
-harmless.
+callable identity, method scope, exact evidence topology, exact codec
+contract, and exact structural equality of the closed Monotype function type.
+Digest collisions are therefore harmless.
+
+The checked source function type a call site instantiated the callable from is
+NOT part of this identity. The callable says which checked body a request
+lowers; the checked source type is the requesting graph's instantiation and
+replay context—the root a fresh instantiation constrains to the requested
+Monotype type—so the requesting graph may key its own instantiation and draft
+memos by it. It does not name the resulting specialization, because two call
+sites can instantiate one callable from checked types that differ at the
+checked level and seal to the same closed Monotype request. The confirmed case
+is a transparent alias: with `Count : U64`, a call site under `Count -> Count`
+and one under `U64 -> U64` carry different checked type keys—that key
+retains alias provenance deliberately—and both requests seal to one Monotype
+function type. (Monotype does retain some alias-named types; what is required
+here is the sealed request type, whatever shape it has.)
+
+Two requests that agree on the checked callable, method scope, exact evidence
+topology, codec contract, and closed Monotype function type lower the same body
+and must reuse ONE record. Caller provenance must not split them, in the
+durable store, in the draft-commit index, or in the object-cache content key.
+Every content identity derived from a specialization obeys the same rule
+because they are compared against each other: an object-cache entry is filed
+under `specIdentityKey` and carries the procedure identity the writing program
+lowered, which the reading program re-derives from the lifted function's
+checked source identity. A record keeps whichever requester reserved it, so a
+requester-derived component in either identity would make two programs that
+reach one specialization through differently annotated call sites disagree—one
+key naming two procedure identities.
+
+A compiler-generated body retains its own source key. An interpolation or
+field-names iterator step, a structural parser or encoder runtime, and a
+generated encoder callback have no checked declaration to name, so the producer
+synthesizes the body's identity—owner context, source expression, site ordinal
+and mode—into the same template slot the caller's checked type would otherwise
+occupy. Several such bodies share one `FnDef`, their evidence, and their
+Monotype type, so every identity derived from the template must carry that key.
+Which reading the slot holds is decided by the callable kind, never inferred
+from names, types, or layouts: the generated kinds keep it, the rest drop it.
+`checked_generated` is also worn by an unavailable-hosted crash stub and a
+result-row widening adapter, whose slot is ordinary caller provenance, so that
+kind is keyed conservatively—those two stay distinct per requester, which costs
+reuse and cannot lose a distinction. Neither is an object-cache entry, so no
+key can disagree with their identity.
 
 Checked callable type ids inside dispatch evidence are relation-replay payload,
 not specialization identity: separate generalized scheme uses deliberately
@@ -10219,6 +10431,20 @@ parents for nested local functions by `depth`). A direct plan's evidence node
 records the target's substitution the same way, so a direct target specializes
 under the exact substitution checking applied rather than under a re-derived
 one.
+
+An evidence-dependent dispatch whose checked plan authorizes nested-contract
+reuse consumes the already-materialized contract directly. Its targets and
+terminal verdicts were selected at the checked edge; composite requirements
+have no substitution slot from which to derive them again. Monotype applies
+every selected target's callable relation once, including variables reached
+only through its constraint signature, then removes the consumed edge-local
+callable identities from its targets. Nested contracts retain their
+own relations until their respective targets specialize. Normalization borrows
+the immutable vector when unchanged and copies it once on the first changed
+entry, allocating only targets whose callable identity is removed. It does not
+repeat method lookup or run the compiler-generated requirement fixpoint.
+Independent callables without the checked reuse proof still derive evidence
+against their own callable relation.
 
 Requirement forwarding carries the method ID's owning checked name store.
 Raw method IDs are comparable only within the same store; cross-module
@@ -11670,6 +11896,28 @@ callback from erased storage, or inspect a descriptor to choose RC behavior.
 An erased-box list that reaches such an operation without its explicit list
 descriptor is a producer invariant failure.
 
+Generated RC helpers have one ABI, declared once in
+`builtins/rc_callback_abi.zig`: `incref` takes the value pointer and the amount,
+and `decref` and `free` take the value pointer alone. Compiled Roc code reaches
+its host through fixed runtime symbols, so a generated helper carries no host
+pointer. Every backend builds its helper signature from that declaration rather
+than spelling the parameter list itself, and the builtins call item and
+payload callbacks through the same types. A backend that spells a different
+parameter list produces a helper the builtins cannot call: native calling
+conventions discard the surplus argument silently, while a Wasm `call_indirect`
+compares the signature and traps.
+
+The erased-callable `Payload.on_drop` slot is the one exception, because glue
+presents it to Zig, Rust, and C hosts as `(capture, ops)`. The `host_drop`
+operation names the generated adapter that presents that signature and performs
+the layout's `decref`. It is a calling convention rather than an operation over
+a layout: it plans exactly as its layout's `decref`, it is selected only where
+lowering fills a final-drop slot, and an RC statement that carries it is a
+producer invariant failure. Planning as the `decref` means a capture layout
+whose `decref` helper is also materialized carries that helper's top-level walk
+twice, once per signature; nested helpers stay shared, so the duplicate is one
+function body rather than a teardown tree.
+
 Every linked Wasm image has exactly one provider for compiler runtime libcalls.
 Standalone Wasm obtains them from the builtins object and the standalone Boxy
 runtime suppresses its copies. Evaluator Wasm has no companion builtins object,
@@ -11904,6 +12152,15 @@ lifetime and is not the shared-memory IPC transport.
 
 ### Layout Selection
 
+Recursive layout commitment interns unrolled copies of recursive nodes
+before selecting boxed slots. Once a recursive component has exact structural
+keys, its nodes also record their one-step encodings with settled child digests.
+An acyclic node with that same encoding inherits the recursive node's key and
+representation. Thus an unrolled record and its recursive counterpart commit
+the same field storage; graph sharing cannot make one inline and the other
+boxed. Procedure reuse by solved type identity consumes this consistent layout
+commitment.
+
 Layout selection is the first stage that chooses runtime encodings:
 
 - struct field order
@@ -12068,6 +12325,17 @@ state occupy only their live procedure domains. Subtree cloning reserves join
 identities from its explicit destination-procedure context, not from a scan of
 unrelated procedures. Active callbacks are executor-bounded; retained patches
 are proportional to the phase's procedure bodies and generated output.
+
+Operand and definition counts and reachable-statement walks retain their paged
+ID indexes and work buffers in exclusive executor-lane storage. Serial phases
+retain the same storage across procedures. Every simultaneous inventory leases
+independent storage; releasing it clears only live rows and pending work, even
+on allocation failure. The pool retains capacity up to peak simultaneous use,
+without a fixed inventory-count cutoff. Only empty storage survives a task or
+compilation: counts and visited marks are never reused after rewrites or across
+stores. Task-arena resets cannot invalidate this lane-owned storage, and emitted
+LIR retains no references to it. Sparse directory initialization and destruction
+are amortized over the owner's lifetime, never repeated for each procedure.
 
 Loop promotion identifies back edges during its body-first lexical scan and
 uses source-indexed carrier edges. Shared body/remainder continuations remain
@@ -12974,6 +13242,17 @@ per-statement group counters or additional membership sets are maintained.
 Solver-only resource anchors participate exactly like concrete RC resources in
 these queries. Group-extension bits are not substitutes for raw member bits:
 their read-before-rebind kill equations differ.
+Join keep-set seeding inverts the exact group-use predicate instead of scanning
+the procedure's resource inventory per join. Source preparation builds the
+inverse alongside raw liveness numbering only for procedures with joins and
+multi-member groups. Singleton-only frames retain their allocation-free identity
+mapping. The inverse names concrete refcounted resources, excluding solver-only
+anchors, and is shared by all ownership variants. Sparse range enumeration reads
+only singleton raw bits and group-extension bits; grouped raw-member bits and
+borrowed-result bits do not select seed units. Absent and out-of-range subtrees
+are skipped. Each emission supplies its own committed residual masks and places
+the existing retained resources and join parameters, preserving the exact
+descending ownership fixed point.
 Consequently neither ownership nor liveness rows are widened by locals from
 other procedures. Unrelated scalar locals are not ARC resources and never
 receive raw liveness bits. This distinction is load-bearing for wide static
@@ -13026,7 +13305,8 @@ the body still holding the value the previous iteration released, so the back
 edges maintain their own shrinking meet over the parameters and the body keep
 places only what survives it. A site contribution that shrinks without
 changing the global meet cannot schedule downstream work. Each loop identity
-records whether its solved rows consumed any keep bits. A keep change that
+records whether its solved rows consumed any keep bits, answered from the
+row's structure rather than by counting its set bits. A keep change that
 supplied no boundary bits schedules no liveness work.
 
 Join, jump-site, and continuation-switch identities are compact indices
@@ -14457,6 +14737,49 @@ one newly allocated architecture register per recursive layout, control-flow nod
 list item layer, or tag payload layer. Register-pool exhaustion is therefore
 an internal lifetime-invariant failure, not a source-program condition and not
 an invitation for an architecture-specific best-effort spill.
+
+## Wasm Local Binding
+
+`WasmCodeGen` binds each explicit LIR local to one wasm local index, and it
+binds it on the first emission site that names it. The wasm value type that
+slot must have comes from the `layout_idx` LIR already states for the local, so
+every site that names it agrees on the type whether it reads the local or
+writes it, and no site has to know whether some earlier site got there first.
+The index itself is not derived from the layout: it is the next index in the
+scope, assigned in the order emission reaches locals, after the parameters
+take the positional indices the wasm function signature fixes for them. Every
+entry point binds parameters before emitting a body statement, which is what
+keeps first-encounter binding from disturbing the ABI's assignment.
+
+First encounter is an event in emission order, not in runtime order. Emission
+walks the control-flow graph, and that walk reaches some uses ahead of the
+definitions that dominate them at runtime: a join's body is emitted before the
+remainder that jumps into it, so a local the remainder assigns is read in
+already-emitted code. Binding the local there reserves the storage the
+later-emitted definition writes; it asserts nothing about initialization, and a
+binding is stable for the rest of the scope, so both sites name the same index.
+LIR whose runtime path actually reads an undefined local is invalid LIR, and
+the ARC certifier and the debug checks over emitted LIR own that property—the
+backend neither detects nor compensates for it, and wasm's zero-initialized
+locals are not a stand-in for a definition the producer failed to emit. Because
+the locals declaration is encoded after the body, first-encounter binding needs
+no separate declaration pass.
+
+The wasm backend therefore has no pre-pass that inventories a procedure's
+locals, and no pass that closes a local set over descriptor metadata. A
+descriptor local is bound by the site that emits it—`bindBoxyOutDesc`, a
+dictionary method's descriptor argument read, an erased-ABI descriptor
+parameter, a runtime return descriptor—because each of those sites already
+reads the explicit LIR descriptor data that names it. Nothing searches the
+store for locals that some site might want, so each procedure's own binding
+cost is a function of the code it emits rather than of how many locals the
+whole store holds, and locals that a procedure's emitted code never
+names—including entries its `frame_locals` inventory retains—occupy no index,
+no declared type, and no output bytes. The binding column's one-time growth to
+the highest `LocalId` any procedure reaches is the only store-proportional
+cost, and it is paid once for the module. The same rule forbids reintroducing
+that search at the producer: a whole-module finalization pass whose only
+consumer is wasm local binding trades one redundant traversal for another.
 
 ## Compile-Time Constants
 

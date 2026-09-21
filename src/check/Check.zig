@@ -29688,6 +29688,19 @@ fn deduplicateGeneralizedDispatchRequirements(
     const identity_vars = try self.canonical_key_writer.identityVarsFromVarIgnoringConstraints(scheme_var);
     defer self.gpa.free(identity_vars);
 
+    // Neither loop can merge a singleton. Inspect both sources before
+    // allocating the anchors and scratch needed to compare callable shapes.
+    const has_receiver_candidates = for (identity_vars) |identity_var| {
+        const resolved = self.types.resolveVar(identity_var);
+        const constraints = contentConstraintRange(resolved.desc.content) orelse continue;
+        if (constraints.len() > 1) break true;
+    } else false;
+    const has_scheme_candidates = if (self.typeSchemeIndexForRoot(scheme_var)) |scheme_idx|
+        self.type_schemes.items[scheme_idx].dispatch_requirements.items.len > 1
+    else
+        false;
+    if (!has_receiver_candidates and !has_scheme_candidates) return;
+
     var anchors = std.AutoHashMap(Var, void).init(self.gpa);
     defer anchors.deinit();
     try anchors.ensureTotalCapacity(@intCast(identity_vars.len));
@@ -29829,6 +29842,57 @@ fn deduplicateGeneralizedDispatchRequirements(
         write += 1;
     }
     self.type_schemes.items[scheme_idx].dispatch_requirements.shrinkRetainingCapacity(write);
+}
+
+test "issue 11350 singleton dispatch requirements need no deduplication scratch" {
+    const TestEnv = @import("test/TestEnv.zig");
+    var test_env = try TestEnv.initExpr("Deduplication", "1.U64");
+    defer test_env.deinit();
+    try test_env.assertNoErrors();
+    const checker = &test_env.checker;
+    const gpa = checker.gpa;
+    var env = try checker.env_pool.acquire();
+    defer checker.env_pool.release(env);
+    const method_name = try test_env.module_env.insertIdent(Ident.for_text("method"));
+    const callable = try checker.types.fresh();
+    const constraint = StaticDispatchConstraint{
+        .fn_name = method_name,
+        .fn_var = callable,
+        .origin = .method_call,
+    };
+    const singleton = try checker.types.appendStaticDispatchConstraints(&.{constraint});
+
+    for ([_]u32{ 0, 1 }) |attached_count| {
+        const root = try checker.types.freshFromContent(.{ .flex = types_mod.Flex.init().withConstraints(
+            if (attached_count == 0) StaticDispatchConstraint.SafeList.Range.empty() else singleton,
+        ) });
+        // Cover absent, empty, and singleton side tables independently of
+        // the attached receiver list. Enumeration uses its own writer scratch;
+        // the failing checker allocator catches any deduplication allocation.
+        for (0..3) |side_table_case| {
+            if (side_table_case == 1) _ = try checker.ensureTypeScheme(root, .generalized);
+            if (side_table_case == 2) {
+                const scheme_idx = checker.typeSchemeIndexForRoot(root).?;
+                try checker.type_schemes.items[scheme_idx].dispatch_requirements.append(gpa, .{
+                    .receiver_var = root,
+                    .constraint = constraint,
+                    .deferred_generated_codec = false,
+                    .pristine_codec_is_scheme_only = false,
+                    .failure_expr = null,
+                    .structural_origin = .{ .receiver_var = root, .constraint_fn_var = callable },
+                });
+            }
+            var failing = std.testing.FailingAllocator.init(gpa, .{ .fail_index = 0 });
+            checker.gpa = failing.allocator();
+            defer checker.gpa = gpa;
+            try checker.deduplicateGeneralizedDispatchRequirements(root, &env);
+            try std.testing.expect(!failing.has_induced_failure);
+            try std.testing.expectEqual(attached_count, contentConstraintRange(checker.types.resolveVar(root).desc.content).?.len());
+            if (checker.typeSchemeIndexForRoot(root)) |scheme_idx| {
+                try std.testing.expectEqual(side_table_case - 1, checker.type_schemes.items[scheme_idx].dispatch_requirements.items.len);
+            }
+        }
+    }
 }
 
 /// Establish two same-shape generalized callables as one relation. Returns
