@@ -728,7 +728,7 @@ pub const MethodRegistry = struct {
                     .module_idx = module_idx,
                     .def_idx = def_idx,
                     .kind = target_kind,
-                    .callable_ty = try checkedTypeIdForVar(allocator, module, checked_types, callable_var),
+                    .callable_ty = try checked_types.publishMethodCallableType(allocator, module, names, callable_var),
                 },
             });
         }
