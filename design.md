@@ -15715,6 +15715,13 @@ interpreter-internal structure (the dev-build translation shim and
 compiler-internal evaluation construct one); it is not part of any host ABI,
 and glue never emits it.
 
+Builtins compiled for a platform call the runtime symbols directly from the
+`RocOps` helper methods: the only table such a build carries is the
+symbol-backed adapter, whose entries forward to those symbols, so the
+dispatch would only add a load from a mutable global and an indirect call
+to every allocation. The dispatch stays in an in-process host, which enters
+a per-thread `RocOps` the symbols cannot name.
+
 Generated Zig and Rust bindings provide a `RocHost` helper for host-owned
 allocation state. Its fields are exactly the `env` and callback prefix of
 `RocOps`, with callback self pointers referring to `RocHost`. It has no
