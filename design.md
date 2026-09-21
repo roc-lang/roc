@@ -2885,7 +2885,18 @@ and pairs the platform requirement payload's identity nodes with the recorded
 solutions slot by slot. No stage after check completion resolves an app export
 by name, re-checks requirement/provided type compatibility, or re-derives
 identity bindings by structurally matching platform types against app types. A
-requirement/app mismatch is only ever a check-time diagnostic. Finalization
+requirement/app mismatch is only ever a check-time diagnostic.
+
+The requirement's identity variables stand for exactly the app's solved types,
+so a relation-bearing platform CheckedModule resolves every checked source
+root through those `formal -> actual` pairs once, before any checked body,
+pattern, template, provided export, or root request reads a type. A platform
+body that calls a requirement therefore sees the app's actual types: the
+requirement's `_` is the app's payload type, and its `..` row tail is the
+app's actual row, never a bare tail that a consumer would read as closed. The
+resolution shares one clone memo across the whole module so every other
+identity variable keeps a single root, and it clones only roots that reach a
+formal; nothing downstream re-applies the relation. Finalization
 constructs one total outcome per platform requirement: an exact relation/binding
 for a successful solution or an explicit checked-error requirement index for a
 failed solution. The relation-bearing platform CheckedModule preserves successful
@@ -2906,7 +2917,10 @@ platform requirement type supplies the solved interface, not the scheme's
 evidence identity. Checked output validates a direct procedure's root vector
 against the app template's parameter count. Monotype selects this root evidence
 before materializing an edge for a direct call, procedure value, or interface
-relation; downstream specialization receives only that selected edge.
+relation; downstream specialization receives only that selected edge. Boxy
+planning selects the same root evidence, read through the app CheckedModule's
+evidence table, for every direct call and procedure-value use of a platform
+requirement.
 
 A platform `provides` declaration must name a top-level value defined in the
 platform module. It cannot name a value from `requires` directly; a platform
@@ -11379,15 +11393,17 @@ interchangeability bits from committed item layouts and emits either a
 constant false value or an `assign_low_level` with explicit
 `interchangeable` metadata.
 
-Typed numeric `*_from_str` operations have a closed concrete result ABI. The
-lowerer consumes the operation's `NumericParseSpec`, emits `assign_low_level`
-into a two-variant tag union whose `Err` payload is zero-sized and whose `Ok`
-payload is the specified integer, float, or decimal layout, and attaches a
-descriptor derived from the exact checked result type. When the worker result
-uses erased payload storage, a subsequent `assign_boxy_adapt` carries that
-concrete value and descriptor into the planned result representation. The
-interpreter and code-generation backends therefore receive the concrete builtin
-ABI directly; they do not select numeric payload layouts or descriptor data.
+A low-level operation whose checked result type is the builtin `Try` (the
+typed numeric `*_from_str` parsers, the checked numeric `*_try` conversions,
+and `str_from_utf8`) has a closed concrete result ABI: a two-variant tag union
+whose `Err` and `Ok` payloads use the representations of `Try`'s own `err` and
+`ok` arguments. The lowerer emits `assign_low_level` into that concrete union
+and attaches a descriptor derived from the exact checked result type. Boxy
+stores `Try` payloads in erased storage, so a subsequent `assign_boxy_adapt`
+carries that concrete value and descriptor into the planned result
+representation. The interpreter and code-generation backends therefore receive
+the concrete builtin ABI directly; they do not select payload layouts or
+descriptor data.
 
 Checked unary operator nodes use that same primitive path when they remain in a
 checked body. Unary `-` lowers as `num_negate`, so signed-integer

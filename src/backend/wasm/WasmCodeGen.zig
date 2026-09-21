@@ -8121,17 +8121,19 @@ pub fn compileAllProcSpecs(self: *Self, proc_specs: []const LirProcSpec) Allocat
         try self.registerProcSpec(@enumFromInt(@as(u32, @intCast(i))), proc);
     }
     try self.buildProcArgCountsTable(proc_specs);
-    // Pass 2: Compile proc bodies.
-    for (proc_specs, 0..) |proc, i| {
-        if (proc.is_static_initializer) continue;
-        try self.compileProcSpecBody(@enumFromInt(@as(u32, @intCast(i))), proc);
-    }
+    // A Boxy runtime entry body registers every worker's dispatch thunk, so
+    // the thunks exist before any body is compiled.
     for (self.boxy_worker_procs) |proc_id| {
         const proc = self.store.getProcSpec(proc_id);
         if (proc.is_static_initializer or proc.abi == .erased_callable or proc.hosted != null or proc.body == null) {
             wasmInvariantFmt("Boxy worker proc {d} had a non-worker procedure shape", .{@intFromEnum(proc_id)});
         }
         try self.generateBoxyDictProcThunk(proc_id, proc);
+    }
+    // Pass 2: Compile proc bodies.
+    for (proc_specs, 0..) |proc, i| {
+        if (proc.is_static_initializer) continue;
+        try self.compileProcSpecBody(@enumFromInt(@as(u32, @intCast(i))), proc);
     }
 }
 
