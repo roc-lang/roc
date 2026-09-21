@@ -14681,7 +14681,7 @@ unread operands. This analysis follows explicit ARC statements as ordinary reads
 and makes no ownership decisions.
 
 The planner forms basic blocks once. Within each block it records disjoint
-read-before-write intervals, propagating only live-in obligations backward across
+read-before-write intervals, propagating only live-in requirements backward across
 block edges to a fixed point. Scratch columns are procedure-local and indexed by
 compact identities. There are no locals-wide rows per statement and no eagerly
 materialized pairwise interference graph. Slots are grouped by their required
@@ -14695,7 +14695,7 @@ separately from reusable local slots and instruction-selection scratch. Ordinary
 native scratch cannot escape its emission region; results are copied into their
 planned authoritative locations before the region ends. Frame construction uses
 the maximum storage required by any region and retains all ABI alignment,
-callee-save, unwind, and stack-probing obligations.
+callee-save, unwind, and stack-probing requirements.
 
 Floating-point and vector locations draw from the same register-allocation mask:
 XMM registers alias on x86-64 and V registers alias on AArch64. Vector locals
