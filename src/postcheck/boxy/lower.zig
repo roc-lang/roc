@@ -26395,7 +26395,17 @@ const ProcBodyBuilder = struct {
         const lowered = try self.parent.allocator.alloc(DescriptorArgLocal, hidden_args.len);
         errdefer self.parent.allocator.free(lowered);
 
-        for (hidden_args, lowered) |arg, *local| {
+        for (hidden_args, lowered, 0..) |arg, *local, index| {
+            if (arg.source_descriptor_index) |source_index| {
+                if (source_index >= index) {
+                    boxyLowerInvariant("boxy descriptor source did not precede its result use");
+                }
+                // The source entry owns the initializer; the result parameter
+                // passes the same immutable descriptor without another read or
+                // materialization.
+                local.* = .{ .local = lowered[source_index].local, .from_source_value = true };
+                continue;
+            }
             if (try self.sourceValueDescriptorLocalForHiddenArg(
                 arg,
                 call_arg_types,
