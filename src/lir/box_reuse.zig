@@ -67,19 +67,28 @@ pub fn prepareLayouts(store: *const LirStore, layouts: *layout_mod.Store) Resour
 /// Rewrite eligible box unwrap/update pairs to direct box reuse helper calls.
 pub fn run(store: *LirStore, layouts: *layout_mod.Store) ResourceError!void {
     try prepareLayouts(store, layouts);
+    var analysis = body_clone.AnalysisScratch.init(store.allocator);
+    defer analysis.deinit();
     const proc_count = store.procSpecCount();
     var proc_index: usize = 0;
     while (proc_index < proc_count) : (proc_index += 1) {
         const proc_id: LIR.LirProcSpecId = @enumFromInt(proc_index);
-        try runProc(store, layouts, proc_id, store.allocator);
+        try runProcWithScratch(store, layouts, proc_id, store.allocator, &analysis);
     }
 }
 
 /// Rewrite one proc against serially prepared, immutable layouts.
 pub fn runProc(store: *LirStore, layouts: *const layout_mod.Store, proc_id: LIR.LirProcSpecId, scratch_allocator: Allocator) ResourceError!void {
+    var analysis = body_clone.AnalysisScratch.init(scratch_allocator);
+    defer analysis.deinit();
+    try runProcWithScratch(store, layouts, proc_id, scratch_allocator, &analysis);
+}
+
+/// Rewrite with counting storage retained by the exclusive execution lane.
+pub fn runProcWithScratch(store: *LirStore, layouts: *const layout_mod.Store, proc_id: LIR.LirProcSpecId, scratch_allocator: Allocator, analysis: *body_clone.AnalysisScratch) ResourceError!void {
     const body = body_clone.rewritableProcBody(store, proc_id) orelse return;
 
-    var reads = try body_clone.countReachableReadsWithAllocator(store, body, scratch_allocator);
+    var reads = try body_clone.countReachableReadsWithScratch(store, body, analysis);
     defer reads.deinit();
 
     var transform = Transform{
