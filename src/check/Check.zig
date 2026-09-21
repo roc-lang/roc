@@ -6934,6 +6934,10 @@ fn instantiateVarHelp(
     };
     const shape_validation = if (target) |site| site.shape_validation else false;
 
+    if (!shape_validation) {
+        try self.enqueueLocalSchemeRequirements(var_to_instantiate, env);
+    }
+
     // First, reset state
     instantiator.var_map.clearRetainingCapacity();
 
@@ -7143,13 +7147,42 @@ fn instantiateVarHelp(
     return instantiated_var;
 }
 
+/// Schedule the original relations of a local scheme before its use copies.
+/// An outer receiver can ground after the defining frame released its queue.
+/// The scheme retains the exact relation that must be checked in that case.
+fn enqueueLocalSchemeRequirements(self: *Self, root: Var, env: *Env) Allocator.Error!void {
+    const scheme_idx = self.typeSchemeIndexForRoot(root) orelse return;
+    for (self.type_schemes.items[scheme_idx].dispatch_requirements.items) |requirement| {
+        if (requirement.deferred_generated_codec) continue;
+        if (self.settled_static_dispatch_constraint_fns.contains(requirement.constraint.fn_var) or
+            self.staticDispatchConstraintIsInactive(requirement.constraint)) continue;
+        if (self.deferredDispatchRelationIsQueued(
+            env.deferred_static_dispatch_constraints.items.items,
+            requirement.receiver_var,
+            requirement.constraint.fn_var,
+        )) continue;
+        const range = try self.types.appendStaticDispatchConstraints(&.{requirement.constraint});
+        try self.enqueueDeferredDispatchConstraint(env, .{
+            .var_ = requirement.receiver_var,
+            .constraints = range,
+            .failure_expr = if (requirement.failure_expr) |expr| .from(@intFromEnum(expr)) else .none,
+        }, .{ .recorded = self.type_schemes.items[scheme_idx].capture_group_index });
+    }
+}
+
 fn schemeHasEvidenceParams(self: *Self, root: Var) std.mem.Allocator.Error!bool {
+    if (self.schemeHasExplicitRequirements(root)) return true;
     var scratch: dispatch_evidence.Scratch = .{};
     defer scratch.deinit(self.gpa);
     var params = std.ArrayListUnmanaged(dispatch_evidence.EvidenceParam).empty;
     defer params.deinit(self.gpa);
     try dispatch_evidence.enumerateEvidenceParams(self.gpa, self.types, root, &scratch, &params);
     return params.items.len != 0;
+}
+
+fn schemeHasExplicitRequirements(self: *Self, root: Var) bool {
+    const scheme_idx = self.typeSchemeIndexForRoot(root) orelse return false;
+    return self.type_schemes.items[scheme_idx].dispatch_requirements.items.len != 0;
 }
 
 fn recordSharedSchemeUse(
@@ -33157,6 +33190,10 @@ fn closeConcreteRecursiveDispatch(
         predeclared_scheme_for_method orelse ModuleEnv.varFrom(method_lookup.binding.type_node_idx)
     else
         try self.importedMethodScheme(method_lookup);
+    // Explicit requirements have no callable path. A recursive recipe reads
+    // only what the callable states, so it cannot serve an explicit
+    // requirement, even when the callable's surface is concrete.
+    if (self.schemeHasExplicitRequirements(scheme_root)) return null;
     var scratch: dispatch_evidence.Scratch = .{};
     defer scratch.deinit(self.gpa);
     var params = std.ArrayListUnmanaged(dispatch_evidence.EvidenceParam).empty;
@@ -33240,6 +33277,9 @@ fn recordSettledDeferredDispatchRelation(
         }
         try self.settled_static_dispatch_constraint_fns.put(self.gpa, constraint.fn_var, {});
     }
+    // A later child can inspect this scheme before the queue finishes.
+    // Retire only the exact relations this validation step just consumed.
+    self.retireResolvedTypeSchemeRequirements();
 }
 
 /// Move one currently-concrete generated codec obligation out of the hot
@@ -42628,4 +42668,61 @@ pub fn displayNameIsBetter(new_name: []const u8, existing_name: []const u8) bool
     }
     // Identical strings - no replacement needed
     return false;
+}
+
+test "issue 11393: imported codec methods instantiate independently and reject unsupported arguments" {
+    const TestEnv = @import("test/TestEnv.zig");
+    var source = try TestEnv.init("Browser",
+        \\Browser :: [].{
+        \\    Page := {}
+        \\    stringify : Page, a -> Str where [a.Json.Encodable([])]
+        \\    stringify = |_page, value| Json.to_str({ value })
+        \\}
+    );
+    defer source.deinit();
+    try source.assertNoErrors();
+
+    // Exercise both a freshly checked source and the same source loaded from
+    // its serialized module. The consumer must receive the complete scheme
+    // from durable metadata in either case.
+    const gpa = std.testing.allocator;
+    var writer = collections.CompactWriter.init();
+    defer writer.deinit(gpa);
+    const serialized = try writer.appendAlloc(gpa, ModuleEnv.Serialized);
+    try serialized.serialize(source.module_env, gpa, &writer);
+    const bytes = try gpa.alignedAlloc(u8, collections.CompactWriter.SERIALIZATION_ALIGNMENT, @intCast(writer.total_bytes));
+    defer gpa.free(bytes);
+    _ = try writer.writeToBuffer(bytes);
+    const frozen: *ModuleEnv.Serialized = @ptrCast(@alignCast(bytes.ptr));
+    try frozen.validate(bytes.len);
+    const cached = try frozen.deserializeWithMutableTypes(@intFromPtr(bytes.ptr), gpa, source.module_env.common.source, "Browser");
+    defer {
+        cached.deinitCachedModule();
+        gpa.destroy(cached);
+    }
+
+    for ([_]*ModuleEnv{ source.module_env, cached }) |source_env| {
+        // initWithImport only borrows the source environment and its builtins.
+        var imported_source = source;
+        imported_source.module_env = source_env;
+        var accepted = try TestEnv.initWithImport("Accepted",
+            \\import Browser
+            \\page = Browser.Page.{}
+            \\text = page.stringify("hello")
+            \\flag = Browser.stringify(page, True)
+            \\record = page.stringify({ nested: "world" })
+        , "Browser", &imported_source);
+        defer accepted.deinit();
+        try accepted.assertDefType("text", "Str");
+        try accepted.assertDefType("flag", "Str");
+        try accepted.assertDefType("record", "Str");
+
+        var rejected = try TestEnv.initWithImport("Rejected",
+            \\import Browser
+            \\page = Browser.Page.{}
+            \\bad = page.stringify(|x| x)
+        , "Browser", &imported_source);
+        defer rejected.deinit();
+        try std.testing.expect((try rejected.typeProblemCount()) > 0);
+    }
 }

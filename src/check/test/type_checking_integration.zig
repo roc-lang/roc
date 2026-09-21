@@ -11943,6 +11943,64 @@ test "check type - dispatch - inferred recursive nominal equality closes a concr
     try test_env.assertNoErrors();
 }
 
+test "check type - recursive equality captures local values" {
+    var test_env = try TestEnv.init("Test",
+        \\compare_with = |expected, value| {
+        \\    Expr := [Leaf(Str), Next(Expr)].{
+        \\        is_eq = |self, other|
+        \\            match (self, other) {
+        \\                (Leaf(left), Leaf(right)) => left == expected and right == expected
+        \\                (Next(left), Next(right)) => left == right
+        \\                _ => False
+        \\            }
+        \\    }
+        \\    Expr.Next(Expr.Leaf(value)) == Expr.Next(Expr.Leaf(value))
+        \\}
+        \\same = compare_with("a", "a")
+        \\different = compare_with("b", "a")
+    );
+    defer test_env.deinit();
+    try test_env.assertNoErrors();
+}
+
+test "check type - recursive method captures a local comparison" {
+    var test_env = try TestEnv.init("Test",
+        \\compare_with = |expected, value| {
+        \\    Expr := [Leaf(Str), Next(Expr)].{
+        \\        matches = |self|
+        \\            match self {
+        \\                Next(next) => next.matches()
+        \\                Leaf(left) => left == expected
+        \\            }
+        \\    }
+        \\    Expr.Next(Expr.Leaf(value)).matches()
+        \\}
+        \\same = compare_with("a", "a")
+        \\different = compare_with("b", "a")
+    );
+    defer test_env.deinit();
+    try test_env.assertNoErrors();
+}
+
+test "check type - recursive equality rejects an unsupported captured comparison" {
+    var test_env = try TestEnv.init("Test",
+        \\compare_with = |expected, value| {
+        \\    Expr := [Leaf(Str -> Str), Next(Expr)].{
+        \\        is_eq = |self, other|
+        \\            match (self, other) {
+        \\                (Leaf(left), Leaf(right)) => left == expected and right == expected
+        \\                (Next(left), Next(right)) => left == right
+        \\                _ => False
+        \\            }
+        \\    }
+        \\    Expr.Next(Expr.Leaf(value)) == Expr.Next(Expr.Leaf(value))
+        \\}
+        \\result = compare_with(|x| x, |x| x)
+    );
+    defer test_env.deinit();
+    try test_env.assertFirstTypeError("Type Does Not Support Equality");
+}
+
 test "check type - recursive equality does not discharge a sibling missing method" {
     var test_env = try TestEnv.init("Test",
         \\Expr := [Leaf(Str -> Str), Next(Expr)].{
