@@ -6708,7 +6708,7 @@ scheme-use records are projected into the finished binding's coordinates using
 these recorded pairs. This also applies to recursive edges that need no
 requirement replay: a body can close an annotation's output row, so the
 predeclared and finished schemes need not have the same quantified slots.
-Projection changes metadata only, never the solved type graph. Indexed joins
+This remapping changes metadata only, never the solved type graph. Indexed joins
 compose the recorded substitutions without searching the type structure or
 matching variable names, and the correspondence is checker-local scratch.
 
@@ -9210,7 +9210,7 @@ declaration backing through those cells. The result is a backing type in which
 every formal occurrence has the same monomorphic meaning as the named type
 argument that instantiated it.
 
-When declaration publication expands an alias containing a local nominal
+When declaration output expands an alias containing a local nominal
 application, it must build that application from the arguments translated in
 the current declaration's formal scope. Reusing the original annotation's
 nominal instance would retain the alias declaration's independent parameters
