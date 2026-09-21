@@ -2504,6 +2504,10 @@ const ProcedureBuilder = struct {
         for (worker_children) |worker_child| {
             if (!Plan.childCarriesRuntimeDescriptor(worker_child.role)) continue;
             const has_call_supplied_desc = try self.repSubtreeHasCallSuppliedDescriptor(worker_child.rep, params, descriptor_sources);
+            if (self.namedQuery().rowInstantiationTarget(worker_rep_id, requirement_rep_id, worker_child)) |row_target| {
+                try self.collectStaticMethodCallDescSourcesForRep(worker_child.rep, row_target, params, descriptor_sources, call_desc_indexes, call_desc_reps, call_sources, seen);
+                continue;
+            }
             if (self.namedQuery().findMatchingChildByRole(requirement_children, worker_child)) |requirement_child| {
                 try self.collectStaticMethodCallDescSourcesForRep(worker_child.rep, requirement_child.rep, params, descriptor_sources, call_desc_indexes, call_desc_reps, call_sources, seen);
                 continue;
@@ -2743,6 +2747,10 @@ const ProcedureBuilder = struct {
         const requirement_children = self.plan.childSlice(requirement_rep.children);
         for (worker_children) |worker_child| {
             if (!try self.repQuery().repSubtreeHasDescriptor(worker_child.rep)) continue;
+            if (self.namedQuery().rowInstantiationTarget(worker_rep_id, requirement_rep_id, worker_child)) |row_target| {
+                try self.collectStaticDictionaryDescriptorSourcesForAlignedRep(worker_child.rep, row_target, owner_requirement_rep_id, source_rep_id, params, binding_scope, sources, seen);
+                continue;
+            }
             if (self.namedQuery().findMatchingChildByRole(requirement_children, worker_child)) |requirement_child| {
                 try self.collectStaticDictionaryDescriptorSourcesForAlignedRep(worker_child.rep, requirement_child.rep, owner_requirement_rep_id, source_rep_id, params, binding_scope, sources, seen);
                 continue;
@@ -2811,6 +2819,10 @@ const ProcedureBuilder = struct {
         const source_children = self.plan.childSlice(source_rep.children);
         for (worker_children) |worker_child| {
             if (!try self.repQuery().repSubtreeHasDescriptor(worker_child.rep)) continue;
+            if (self.namedQuery().rowInstantiationTarget(identity_worker, identity_source, worker_child)) |row_target| {
+                try self.collectStaticDescriptorSourcesForWorkerSource(worker_child.rep, row_target, params, binding_scope, sources, seen);
+                continue;
+            }
             if (self.namedQuery().findMatchingChildByRole(source_children, worker_child)) |source_child| {
                 try self.collectStaticDescriptorSourcesForWorkerSource(worker_child.rep, source_child.rep, params, binding_scope, sources, seen);
                 continue;
@@ -5370,6 +5382,18 @@ const ProcedureBuilder = struct {
         const state = try proc.addFrameLocalForRep(state_child.rep);
         const missing = try proc.addFrameLocalForRep(missing_child.rep);
         const runtime_id = try proc.addFrameLocal(.u64);
+        const callback_texts = [_][]const u8{ "start_payloads", "next_payload", "finish_payloads" };
+        var callback_children: [callback_texts.len]Plan.RepChild = undefined;
+        var callback_locals: [callback_texts.len]GeneratedParserCallback = undefined;
+        for (callback_texts, &callback_children, &callback_locals) |text, *child, *callback| {
+            child.* = proc.generatedRecordFieldChild(args[1].rep, text);
+            callback.* = .{ .local = try proc.addFrameLocalForRep(child.rep), .rep = child.rep };
+        }
+        const callbacks = GeneratedParserPayloadCallbacks{
+            .start = callback_locals[0],
+            .next = callback_locals[1],
+            .finish = callback_locals[2],
+        };
 
         var branch_count: usize = 0;
         for (self.plan.generated_parser_tag_union_plans.items) |plan| {
@@ -5389,6 +5413,7 @@ const ProcedureBuilder = struct {
                     proc,
                     plan,
                     args[0].rep,
+                    callbacks,
                     tag,
                     encoding,
                     encoding_child,
@@ -5423,6 +5448,18 @@ const ProcedureBuilder = struct {
             "missing",
             continuation,
         );
+        var callback_index = callback_texts.len;
+        while (callback_index > 0) {
+            callback_index -= 1;
+            continuation = try proc.generatedParserReadRecordField(
+                callback_locals[callback_index].local,
+                callback_children[callback_index].rep,
+                options,
+                args[1],
+                callback_texts[callback_index],
+                continuation,
+            );
+        }
         continuation = try proc.generatedParserReadRecordField(
             state,
             state_child.rep,
@@ -5454,6 +5491,7 @@ const ProcedureBuilder = struct {
         proc: *ProcBodyBuilder,
         plan: Plan.GeneratedParserTagUnionPlan,
         spec_rep: Plan.TypeRepId,
+        callbacks: GeneratedParserPayloadCallbacks,
         tag: LIR.LocalId,
         encoding: LIR.LocalId,
         encoding_child: Plan.RepChild,
@@ -5494,6 +5532,7 @@ const ProcedureBuilder = struct {
                 plan,
                 variants[index],
                 spec_rep,
+                callbacks,
                 exact_encoding,
                 exact_encoding_child,
                 exact_state,
@@ -5546,6 +5585,7 @@ const ProcedureBuilder = struct {
             for (self.plan.tagVariantSlice(rep.tag_variants), 0..) |variant, index| {
                 if (index > std.math.maxInt(u16)) boxyLowerInvariant("generated tag-union variant index exceeded LIR range");
                 try variants.append(self.allocator, .{
+                    .application_rep = shape_rep,
                     .tag_rep = root,
                     .owner_rep = current,
                     .index = @intCast(index),
@@ -5571,6 +5611,7 @@ const ProcedureBuilder = struct {
         plan: Plan.GeneratedParserTagUnionPlan,
         variant: GeneratedParserTagVariant,
         spec_rep: Plan.TypeRepId,
+        callbacks: GeneratedParserPayloadCallbacks,
         encoding: LIR.LocalId,
         encoding_child: Plan.RepChild,
         state: LIR.LocalId,
@@ -5596,49 +5637,7 @@ const ProcedureBuilder = struct {
             .tag_union_plan = plan,
         };
         const success = try self.lowerGeneratedParserSuccess(proc, context, value, shape_rep, rest);
-        const payloads = self.plan.childSlice(variant.variant.payloads);
-        if (payloads.len == 0) {
-            const continuation = try proc.assignGeneratedParserZeroTag(value, shape_rep, variant, success);
-            return try proc.assignRepresentationBoundary(
-                rest,
-                state,
-                state_child.rep,
-                state_child.rep,
-                continuation,
-            );
-        }
-        if (payloads.len == 1) {
-            const payload = try proc.addGeneratedParserOutputLocalForRep(payloads[0].rep);
-            const construct = try proc.assignGeneratedParserTag(
-                value,
-                shape_rep,
-                variant,
-                payload,
-                payloads[0].rep,
-                success,
-            );
-            return try self.lowerGeneratedParseShapeFromState(
-                proc,
-                context,
-                payloads[0].source_type,
-                payloads[0].rep,
-                state,
-                payload,
-                rest,
-                construct,
-            );
-        }
-        return try self.lowerGeneratedTagPayloadArrayFromState(
-            proc,
-            context,
-            shape_rep,
-            variant,
-            payloads,
-            state,
-            value,
-            rest,
-            success,
-        );
+        return try self.lowerGeneratedTagPayloadsFromState(proc, context, callbacks, shape_rep, variant, state, value, rest, success);
     }
 
     fn lowerGeneratedFieldNamesRenameFieldsInto(
@@ -7195,7 +7194,8 @@ const ProcedureBuilder = struct {
         shape_type: Plan.CheckedTypeIdentity,
         payload_only: bool,
     ) Allocator.Error![]GeneratedParserTagVariant {
-        const tag_rep = proc.tagVariantRepForBoundary(proc.repForTypeRef(shape_type)) orelse
+        const application_rep = proc.repForTypeRef(shape_type);
+        const tag_rep = proc.tagVariantRepForBoundary(application_rep) orelse
             boxyLowerInvariant("generated tag encoder shape had no closed tag representation");
         const rep = self.plan.representations.items[@intFromEnum(tag_rep)];
         if (rep.kind != .tag_union) {
@@ -7233,6 +7233,7 @@ const ProcedureBuilder = struct {
             if (payload_only and self.plan.childSlice(variant.payloads).len == 0) continue;
             if (index > std.math.maxInt(u16)) boxyLowerInvariant("generated tag encoder variant index exceeded LIR range");
             variants[out_index] = .{
+                .application_rep = application_rep,
                 .tag_rep = tag_rep,
                 .owner_rep = tag_rep,
                 .index = @intCast(index),
@@ -7538,7 +7539,7 @@ const ProcedureBuilder = struct {
             const ok = proc.generatedParserTagVariant(target_rep, "Ok");
             const payloads = self.plan.childSlice(ok.variant.payloads);
             if (payloads.len != 1) boxyLowerInvariant("generated encoder Ok did not have one state payload");
-            return try proc.assignGeneratedParserTag(target, target_rep, ok, state, payloads[0].rep, next);
+            return try proc.assignGeneratedParserTag(target, target_rep, ok, state, state_rep, next);
         }
 
         const field = fields[field_index];
@@ -7724,7 +7725,7 @@ const ProcedureBuilder = struct {
             const ok = proc.generatedParserTagVariant(target_rep, "Ok");
             const payloads = self.plan.childSlice(ok.variant.payloads);
             if (payloads.len != 1) boxyLowerInvariant("generated sequence encoder Ok did not have one state payload");
-            return try proc.assignGeneratedParserTag(target, target_rep, ok, state, payloads[0].rep, next);
+            return try proc.assignGeneratedParserTag(target, target_rep, ok, state, state_rep, next);
         }
 
         const writer_fn = proc.functionChildrenForRep(element_writer_rep) orelse
@@ -7870,7 +7871,7 @@ const ProcedureBuilder = struct {
         const ok = proc.generatedParserTagVariant(target_rep, "Ok");
         const ok_payloads = self.plan.childSlice(ok.variant.payloads);
         if (ok_payloads.len != 1) boxyLowerInvariant("generated list encoder Ok did not have one state payload");
-        const finish = try proc.assignGeneratedParserTag(target, target_rep, ok, state, ok_payloads[0].rep, next);
+        const finish = try proc.assignGeneratedParserTag(target, target_rep, ok, state, state_rep, next);
         const step = try self.lowerGeneratedEncoderListStep(
             proc,
             source,
@@ -8044,7 +8045,7 @@ const ProcedureBuilder = struct {
         const ok = proc.generatedParserTagVariant(target_rep, "Ok");
         const ok_payloads = self.plan.childSlice(ok.variant.payloads);
         if (ok_payloads.len != 1) boxyLowerInvariant("generated Dict encoder Ok did not have one state payload");
-        const finish = try proc.assignGeneratedParserTag(target, target_rep, ok, state, ok_payloads[0].rep, next);
+        const finish = try proc.assignGeneratedParserTag(target, target_rep, ok, state, state_rep, next);
         const step = try self.lowerGeneratedEncoderDictStep(
             proc,
             source,
@@ -8515,7 +8516,7 @@ const ProcedureBuilder = struct {
             const ok = proc.generatedParserTagVariant(target_rep, "Ok");
             const ok_payloads = self.plan.childSlice(ok.variant.payloads);
             if (ok_payloads.len != 1) boxyLowerInvariant("generated tag element encoder Ok did not have one state payload");
-            return try proc.assignGeneratedParserTag(target, target_rep, ok, state, ok_payloads[0].rep, next);
+            return try proc.assignGeneratedParserTag(target, target_rep, ok, state, state_rep, next);
         }
 
         const writer_fn = proc.functionChildrenForRep(element_writer_rep) orelse
@@ -8687,9 +8688,23 @@ const ProcedureBuilder = struct {
         result: LIR.LocalId,
         result_rep: Plan.TypeRepId,
         next: LIR.CFStmtId,
+        error_route: GeneratedParserErrorRoute = .result,
         tag_union_spec: ?LIR.LocalId = null,
         tag_union_spec_rep: ?Plan.TypeRepId = null,
         tag_union_plan: ?Plan.GeneratedParserTagUnionPlan = null,
+    };
+
+    /// Where a generated parser sends the errors it propagates.
+    const GeneratedParserErrorRoute = union(enum) {
+        /// Construct `Err` in the context's result and continue at its `next`.
+        result,
+        /// Convert the error into `param` and jump to the shared error
+        /// continuation of the innermost enclosing record parser.
+        join: struct {
+            id: LIR.JoinPointId,
+            param: LIR.LocalId,
+            param_rep: Plan.TypeRepId,
+        },
     };
 
     const GeneratedParserTupleItem = struct {
@@ -8759,18 +8774,19 @@ const ProcedureBuilder = struct {
         const ok = proc.generatedParserTagVariant(context.result_rep, "Ok");
         const payloads = self.plan.childSlice(ok.variant.payloads);
         if (payloads.len != 1) boxyLowerInvariant("generated parser final Ok did not have one payload");
-        const result_record = try proc.addFrameLocalForRep(payloads[0].rep);
+        const result_record_rep = proc.nominalBackingActualRep(context.result_rep, payloads[0].rep);
+        const result_record = try proc.addFrameLocalForRep(result_record_rep);
         const continuation = try proc.assignGeneratedParserTag(
             context.result,
             context.result_rep,
             ok,
             result_record,
-            payloads[0].rep,
+            result_record_rep,
             context.next,
         );
         return try proc.assignGeneratedParserTwoFieldRecord(
             result_record,
-            payloads[0].rep,
+            result_record_rep,
             "value",
             value,
             value_rep,
@@ -8853,13 +8869,7 @@ const ProcedureBuilder = struct {
             const parsed = try proc.addFrameLocalForRepWithRequiredFreshDescriptor(parsed_rep);
             const ok = proc.generatedParserTagVariant(parsed_rep, "Ok");
             const err = proc.generatedParserTagVariant(parsed_rep, "Err");
-            const err_body = try proc.forwardGeneratedParserError(
-                context.result,
-                context.result_rep,
-                parsed,
-                err,
-                context.next,
-            );
+            const err_body = try self.lowerGeneratedParserTryError(proc, context, parsed, err);
             const ok_payload = try proc.generatedParserSingleTagPayloadLocal(ok);
             var parsed_success = try proc.generatedParserReadRecordField(
                 rest,
@@ -8962,10 +8972,20 @@ const ProcedureBuilder = struct {
         }
 
         if (proc.tupleRepForBoundary(shape_rep) != null) {
-            return try self.lowerGeneratedTupleFromState(proc, context, shape_rep, state, value, rest, success);
+            return try self.lowerGeneratedTupleFromState(proc, context, shape_type, shape_rep, state, value, rest, success);
         }
         if (proc.listRepForBoundary(shape_rep) != null) {
-            return try self.lowerGeneratedListFromState(proc, context, shape_rep, null, state, value, rest, success);
+            return try self.lowerGeneratedListFromState(
+                proc,
+                context,
+                self.generatedParserSubjectType(shape_type),
+                shape_rep,
+                null,
+                state,
+                value,
+                rest,
+                success,
+            );
         }
         if (proc.tagVariantRepForBoundary(shape_rep) != null) {
             return try self.lowerGeneratedTagUnionFromState(
@@ -9090,13 +9110,7 @@ const ProcedureBuilder = struct {
         const parsed = try proc.addFrameLocalForRepWithRequiredFreshDescriptor(parsed_rep);
         const ok = proc.generatedParserTagVariant(parsed_rep, "Ok");
         const err = proc.generatedParserTagVariant(parsed_rep, "Err");
-        const err_body = try proc.forwardGeneratedParserError(
-            context.result,
-            context.result_rep,
-            parsed,
-            err,
-            context.next,
-        );
+        const err_body = try self.lowerGeneratedParserTryError(proc, context, parsed, err);
         const ok_payload = try proc.generatedParserSingleTagPayloadLocal(ok);
         var ok_body = try proc.generatedParserReadRecordField(
             rest,
@@ -9186,138 +9200,305 @@ const ProcedureBuilder = struct {
         return continuation;
     }
 
-    fn lowerGeneratedTagPayloadArrayFromState(
+    /// One call whose result is a `Try`, with the locals its `Ok` branch reads.
+    const GeneratedParserTryStep = struct {
+        value: LIR.LocalId,
+        rep: Plan.TypeRepId,
+        ok: GeneratedParserTagVariant,
+        err: GeneratedParserTagVariant,
+        ok_payload: ProcBodyBuilder.GeneratedParserTagPayload,
+    };
+
+    fn beginGeneratedParserTryStep(
+        _: *ProcedureBuilder,
+        proc: *ProcBodyBuilder,
+        rep: Plan.TypeRepId,
+    ) Allocator.Error!GeneratedParserTryStep {
+        const ok = proc.generatedParserTagVariant(rep, "Ok");
+        return .{
+            .value = try proc.addFrameLocalForRep(rep),
+            .rep = rep,
+            .ok = ok,
+            .err = proc.generatedParserTagVariant(rep, "Err"),
+            .ok_payload = try proc.generatedParserSingleTagPayloadLocal(ok),
+        };
+    }
+
+    fn beginGeneratedParserCallStep(
+        self: *ProcedureBuilder,
+        proc: *ProcBodyBuilder,
+        call: Plan.GeneratedCodecCallPlan,
+    ) Allocator.Error!GeneratedParserTryStep {
+        return try self.beginGeneratedParserTryStep(proc, proc.repForTypeRef(call.ret_type));
+    }
+
+    /// Branch on `step`'s result: `Ok` reads its payload and continues at
+    /// `ok_body`; `Err` follows the context's error route.
+    fn dispatchGeneratedParserTryStep(
         self: *ProcedureBuilder,
         proc: *ProcBodyBuilder,
         context: GeneratedParserShapeContext,
-        shape_rep: Plan.TypeRepId,
-        variant: GeneratedParserTagVariant,
-        payloads: []const Plan.RepChild,
-        state: LIR.LocalId,
-        value: LIR.LocalId,
-        rest: LIR.LocalId,
-        success: LIR.CFStmtId,
+        step: GeneratedParserTryStep,
+        ok_body: LIR.CFStmtId,
     ) Allocator.Error!LIR.CFStmtId {
-        const items = try self.allocator.alloc(GeneratedParserTupleItem, payloads.len);
-        defer self.allocator.free(items);
-        for (payloads, items) |payload, *item| {
-            item.* = .{
-                .source_type = payload.source_type,
-                .rep = payload.rep,
-                .value = try proc.addGeneratedParserOutputLocalForRep(payload.rep),
-            };
-        }
-
-        const payload = switch (proc.workerRuntimeLayoutForRep(variant.tag_rep)) {
-            .concrete => blk: {
-                const payload_layout = if (proc.isZstLocal(value))
-                    layout.Idx.zst
-                else
-                    proc.tagUnionPayloadLayout(self.result.store.getLocal(value).layout_idx, variant.index);
-                break :blk ProcBodyBuilder.DynamicTagPayloadLocal{
-                    .local = try proc.addFrameLocal(payload_layout),
-                    .layout_idx = payload_layout,
-                };
-            },
-            .dynamic_box => try proc.dynamicTagPayloadLocalForChildren(payloads),
-        };
-        const construct = try proc.assignGeneratedParserMultiTag(
-            value,
-            shape_rep,
-            variant,
-            payload,
-            items,
-            success,
-        );
-
-        const start_call = proc.generatedCodecCallPlan(context.worker, context.encoding_type, "parse_array_start", null);
-        const start_rep = proc.repForTypeRef(start_call.ret_type);
-        const start = try proc.addFrameLocalForRep(start_rep);
-        const ok = proc.generatedParserTagVariant(start_rep, "Ok");
-        const err = proc.generatedParserTagVariant(start_rep, "Err");
-        const err_body = try proc.forwardGeneratedParserError(
-            context.result,
-            context.result_rep,
-            start,
-            err,
-            context.next,
-        );
-        const ok_payload = try proc.generatedParserSingleTagPayloadLocal(ok);
-        var ok_body = try self.lowerGeneratedTupleNext(
-            proc,
-            context,
-            shape_rep,
-            payload.local,
-            rest,
-            items,
-            0,
-            ok_payload.local,
-            construct,
-        );
-        ok_body = try proc.generatedParserReadTagPayload(start, ok, ok_payload, ok_body);
-        const variants = [_]GeneratedParserTagVariant{ ok, err };
-        const bodies = [_]LIR.CFStmtId{ ok_body, err_body };
+        const err_body = try self.lowerGeneratedParserTryError(proc, context, step.value, step.err);
+        const read_ok = try proc.generatedParserReadTagPayload(step.value, step.ok, step.ok_payload, ok_body);
+        const variants = [_]GeneratedParserTagVariant{ step.ok, step.err };
+        const bodies = [_]LIR.CFStmtId{ read_ok, err_body };
         const impossible = try self.result.store.addCFStmt(.runtime_error);
-        const dispatch = try proc.generatedParserTagDispatch(start, start_rep, &variants, &bodies, impossible);
-        return try self.lowerGeneratedCodecCallLocalsInto(
-            proc,
-            start_call,
-            start,
-            &.{ context.encoding, state },
-            dispatch,
-        );
+        return try proc.generatedParserTagDispatch(step.value, step.rep, &variants, &bodies, impossible);
+    }
+
+    fn finishGeneratedParserCallStep(
+        self: *ProcedureBuilder,
+        proc: *ProcBodyBuilder,
+        context: GeneratedParserShapeContext,
+        call: Plan.GeneratedCodecCallPlan,
+        step: GeneratedParserTryStep,
+        args: []const LIR.LocalId,
+        ok_body: LIR.CFStmtId,
+    ) Allocator.Error!LIR.CFStmtId {
+        const dispatch = try self.dispatchGeneratedParserTryStep(proc, context, step, ok_body);
+        return try self.lowerGeneratedCodecCallLocalsInto(proc, call, step.value, args, dispatch);
+    }
+
+    /// A local of the representation a generated codec call declares for its
+    /// argument at `index`.
+    fn addGeneratedCodecCallArgLocal(
+        self: *ProcedureBuilder,
+        proc: *ProcBodyBuilder,
+        call: Plan.GeneratedCodecCallPlan,
+        index: usize,
+    ) Allocator.Error!LIR.LocalId {
+        const arg_types = self.plan.generatedCodecCallTypeSlice(call.arg_types);
+        if (index >= arg_types.len) boxyLowerInvariant("generated codec call argument index exceeded its planned arity");
+        return try proc.addFrameLocalForRep(proc.repForTypeRef(arg_types[index]));
+    }
+
+    /// One variant of a protocol event union, with the local its payload is
+    /// read into.
+    const GeneratedParserEvent = struct {
+        variant: GeneratedParserTagVariant,
+        payload: ProcBodyBuilder.GeneratedParserTagPayload,
+    };
+
+    fn generatedParserEvent(
+        _: *ProcedureBuilder,
+        proc: *ProcBodyBuilder,
+        event_rep: Plan.TypeRepId,
+        tag_text: []const u8,
+    ) Allocator.Error!GeneratedParserEvent {
+        const variant = proc.generatedParserTagVariant(event_rep, tag_text);
+        return .{
+            .variant = variant,
+            .payload = try proc.generatedParserSingleTagPayloadLocal(variant),
+        };
+    }
+
+    /// Branch on an event value; each branch first reads its variant's payload.
+    fn dispatchGeneratedParserEvents(
+        self: *ProcedureBuilder,
+        proc: *ProcBodyBuilder,
+        event: LIR.LocalId,
+        event_rep: Plan.TypeRepId,
+        events: []const GeneratedParserEvent,
+        bodies: []const LIR.CFStmtId,
+    ) Allocator.Error!LIR.CFStmtId {
+        if (events.len != bodies.len) boxyLowerInvariant("generated parser event dispatch had mismatched branch metadata");
+        const variants = try self.allocator.alloc(GeneratedParserTagVariant, events.len);
+        defer self.allocator.free(variants);
+        const read_bodies = try self.allocator.alloc(LIR.CFStmtId, events.len);
+        defer self.allocator.free(read_bodies);
+        for (events, bodies, variants, read_bodies) |event_variant, body, *variant, *read_body| {
+            variant.* = event_variant.variant;
+            read_body.* = try proc.generatedParserReadTagPayload(event, event_variant.variant, event_variant.payload, body);
+        }
+        const impossible = try self.result.store.addCFStmt(.runtime_error);
+        return try proc.generatedParserTagDispatch(event, event_rep, variants, read_bodies, impossible);
+    }
+
+    /// The error representation errors in `context` are converted to.
+    fn generatedParserContextErrorRep(
+        _: *ProcedureBuilder,
+        proc: *ProcBodyBuilder,
+        context: GeneratedParserShapeContext,
+    ) Plan.TypeRepId {
+        return switch (context.error_route) {
+            .join => |join| join.param_rep,
+            .result => blk: {
+                const err = proc.generatedParserTagVariant(context.result_rep, "Err");
+                const payloads = proc.parent.plan.childSlice(err.variant.payloads);
+                if (payloads.len != 1) boxyLowerInvariant("generated parser result Err did not have one payload");
+                break :blk proc.nominalBackingActualRep(context.result_rep, payloads[0].rep);
+            },
+        };
+    }
+
+    /// Send `error_value` along `context`'s error route.
+    fn lowerGeneratedParserErrorValue(
+        self: *ProcedureBuilder,
+        proc: *ProcBodyBuilder,
+        context: GeneratedParserShapeContext,
+        error_value: LIR.LocalId,
+        error_rep: Plan.TypeRepId,
+    ) Allocator.Error!LIR.CFStmtId {
+        switch (context.error_route) {
+            .result => {
+                // Widen the error to this result's exact error type before it
+                // is stored, so the stored payload and the result's descriptor
+                // describe the same value.
+                const target_err = proc.generatedParserTagVariant(context.result_rep, "Err");
+                const exact_rep = self.generatedParserContextErrorRep(proc, context);
+                if (exact_rep == error_rep) {
+                    return try proc.assignGeneratedParserTag(context.result, context.result_rep, target_err, error_value, error_rep, context.next);
+                }
+                const widened = try proc.addFrameLocalForRep(exact_rep);
+                const store = try proc.assignGeneratedParserTag(context.result, context.result_rep, target_err, widened, exact_rep, context.next);
+                return try proc.assignRepresentationBoundary(widened, error_value, exact_rep, error_rep, store);
+            },
+            .join => |join| {
+                const jump = try self.result.store.addCFStmt(.{ .jump = .{ .target = join.id } });
+                if (join.param_rep == error_rep) {
+                    return try proc.setLocalInitializeJoinParamFromRep(join.param, error_value, error_rep, jump);
+                }
+                const converted = try proc.addFrameLocalForRep(join.param_rep);
+                const set_param = try proc.setLocalInitializeJoinParamFromRep(join.param, converted, join.param_rep, jump);
+                return try proc.assignRepresentationBoundary(converted, error_value, join.param_rep, error_rep, set_param);
+            },
+        }
+    }
+
+    /// Send the payload of `source`'s `Err` along `context`'s error route.
+    fn lowerGeneratedParserTryError(
+        self: *ProcedureBuilder,
+        proc: *ProcBodyBuilder,
+        context: GeneratedParserShapeContext,
+        source: LIR.LocalId,
+        source_err: GeneratedParserTagVariant,
+    ) Allocator.Error!LIR.CFStmtId {
+        const payload = try proc.generatedParserSingleTagPayloadLocal(source_err);
+        const routed = try self.lowerGeneratedParserErrorValue(proc, context, payload.local, payload.child.rep);
+        return try proc.generatedParserReadTagPayload(source, source_err, payload, routed);
+    }
+
+    /// Build the format's `invalid_value` error at `state` and route it.
+    fn lowerGeneratedParserInvalidValue(
+        self: *ProcedureBuilder,
+        proc: *ProcBodyBuilder,
+        context: GeneratedParserShapeContext,
+        state: LIR.LocalId,
+    ) Allocator.Error!LIR.CFStmtId {
+        const call = proc.generatedCodecCallPlan(context.worker, context.encoding_type, "invalid_value", null);
+        const err_rep = proc.repForTypeRef(call.ret_type);
+        const err = try proc.addFrameLocalForRep(err_rep);
+        const routed = try self.lowerGeneratedParserErrorValue(proc, context, err, err_rep);
+        return try self.lowerGeneratedCodecCallLocalsInto(proc, call, err, &.{ context.encoding, state }, routed);
+    }
+
+    /// Read `value` and `rest` out of a parse result `{ value, rest }`.
+    fn readGeneratedParseResult(
+        _: *ProcedureBuilder,
+        proc: *ProcBodyBuilder,
+        payload: ProcBodyBuilder.GeneratedParserTagPayload,
+        value: LIR.LocalId,
+        value_rep: Plan.TypeRepId,
+        rest: LIR.LocalId,
+        rest_rep: Plan.TypeRepId,
+        next: LIR.CFStmtId,
+    ) Allocator.Error!LIR.CFStmtId {
+        const with_rest = try proc.generatedParserReadRecordField(rest, rest_rep, payload.local, payload.child, "rest", next);
+        return try proc.generatedParserReadRecordField(value, value_rep, payload.local, payload.child, "value", with_rest);
+    }
+
+    /// The checked identity a generated codec call names for a structural
+    /// shape: aliases are transparent, exactly as when the call was planned.
+    fn generatedParserSubjectType(self: *const ProcedureBuilder, shape_type: Plan.CheckedTypeIdentity) Plan.CheckedTypeIdentity {
+        var current = shape_type;
+        var depth: u16 = 0;
+        while (true) {
+            if (depth == 1024) boxyLowerInvariant("generated parser subject alias chain exceeded lowerer limit");
+            depth += 1;
+            const view = procedureModuleById(self.modules, current.module);
+            switch (view.checked_types.payload(current.ty)) {
+                .alias => |alias| current = .{ .module = current.module, .ty = alias.backing },
+                .pending, .err, .flex, .rigid, .record, .tuple, .nominal, .function, .empty_record, .tag_union, .empty_tag_union => return current,
+            }
+        }
     }
 
     fn lowerGeneratedTupleFromState(
         self: *ProcedureBuilder,
         proc: *ProcBodyBuilder,
         context: GeneratedParserShapeContext,
+        shape_type: Plan.CheckedTypeIdentity,
         shape_rep: Plan.TypeRepId,
         state: LIR.LocalId,
         value: LIR.LocalId,
         rest: LIR.LocalId,
         success: LIR.CFStmtId,
     ) Allocator.Error!LIR.CFStmtId {
+        const subject = self.generatedParserSubjectType(shape_type);
         const items = try self.generatedParserTupleItems(proc, shape_rep);
         defer self.allocator.free(items);
         for (items) |*item| item.value = try proc.addGeneratedParserOutputLocalForRep(item.rep);
 
-        const start_call = proc.generatedCodecCallPlan(context.worker, context.encoding_type, "parse_array_start", null);
-        const start_rep = proc.repForTypeRef(start_call.ret_type);
-        const start = try proc.addFrameLocalForRep(start_rep);
-        const ok = proc.generatedParserTagVariant(start_rep, "Ok");
-        const err = proc.generatedParserTagVariant(start_rep, "Err");
-        const err_body = try proc.forwardGeneratedParserError(
-            context.result,
-            context.result_rep,
-            start,
-            err,
-            context.next,
-        );
-        const ok_payload = try proc.generatedParserSingleTagPayloadLocal(ok);
-        var ok_body = try self.lowerGeneratedTupleNext(
-            proc,
-            context,
-            shape_rep,
-            value,
+        const start_call = proc.generatedCodecCallPlan(context.worker, context.encoding_type, "parse_tuple_start", subject);
+        const next_call = proc.generatedCodecCallPlan(context.worker, context.encoding_type, "parse_tuple_next", subject);
+        const end_call = proc.generatedCodecCallPlan(context.worker, context.encoding_type, "parse_tuple_end", subject);
+        const len = try self.addGeneratedCodecCallArgLocal(proc, start_call, 2);
+        const start = try self.beginGeneratedParserCallStep(proc, start_call);
+        const end = try self.beginGeneratedParserCallStep(proc, end_call);
+        // `next_steps[i]` reads the separator before item `i`; the first item
+        // has none.
+        const next_steps = try self.allocator.alloc(GeneratedParserTryStep, items.len);
+        defer self.allocator.free(next_steps);
+        const item_rests = try self.allocator.alloc(LIR.LocalId, items.len);
+        defer self.allocator.free(item_rests);
+        for (next_steps, item_rests, 0..) |*step, *item_rest, index| {
+            item_rest.* = try proc.addGeneratedParserOutputLocalForRep(context.state_rep);
+            if (index > 0) step.* = try self.beginGeneratedParserCallStep(proc, next_call);
+        }
+
+        var continuation = try proc.assignRepresentationBoundary(
             rest,
-            items,
-            0,
-            ok_payload.local,
+            end.ok_payload.local,
+            context.state_rep,
+            end.ok_payload.child.rep,
             success,
         );
-        ok_body = try proc.generatedParserReadTagPayload(start, ok, ok_payload, ok_body);
-        const variants = [_]GeneratedParserTagVariant{ ok, err };
-        const bodies = [_]LIR.CFStmtId{ ok_body, err_body };
-        const impossible = try self.result.store.addCFStmt(.runtime_error);
-        const dispatch = try proc.generatedParserTagDispatch(start, start_rep, &variants, &bodies, impossible);
-        return try self.lowerGeneratedCodecCallLocalsInto(
-            proc,
-            start_call,
-            start,
-            &.{ context.encoding, state },
-            dispatch,
-        );
+        continuation = try self.assignGeneratedTupleValue(proc, shape_rep, value, items, continuation);
+        const last_state = if (items.len == 0) start.ok_payload.local else item_rests[items.len - 1];
+        continuation = try self.finishGeneratedParserCallStep(proc, context, end_call, end, &.{ context.encoding, last_state, len }, continuation);
+
+        var index = items.len;
+        while (index > 0) {
+            index -= 1;
+            const item_state = if (index == 0) start.ok_payload.local else next_steps[index].ok_payload.local;
+            continuation = try self.lowerGeneratedParseShapeFromState(
+                proc,
+                context,
+                items[index].source_type,
+                items[index].rep,
+                item_state,
+                items[index].value,
+                item_rests[index],
+                continuation,
+            );
+            if (index > 0) {
+                const position = try self.addGeneratedCodecCallArgLocal(proc, next_call, 2);
+                continuation = try self.finishGeneratedParserCallStep(
+                    proc,
+                    context,
+                    next_call,
+                    next_steps[index],
+                    &.{ context.encoding, item_rests[index - 1], position, len },
+                    continuation,
+                );
+                continuation = try proc.assignIntLiteral(position, @intCast(index), continuation);
+            }
+        }
+        continuation = try self.finishGeneratedParserCallStep(proc, context, start_call, start, &.{ context.encoding, state, len }, continuation);
+        return try proc.assignIntLiteral(len, @intCast(items.len), continuation);
     }
 
     fn generatedParserTupleItems(
@@ -9354,182 +9535,14 @@ const ProcedureBuilder = struct {
         return items;
     }
 
-    fn lowerGeneratedTupleNext(
+    fn assignGeneratedTupleValue(
         self: *ProcedureBuilder,
         proc: *ProcBodyBuilder,
-        context: GeneratedParserShapeContext,
         shape_rep: Plan.TypeRepId,
         value: LIR.LocalId,
-        rest: LIR.LocalId,
         items: []const GeneratedParserTupleItem,
-        item_index: usize,
-        state: LIR.LocalId,
-        success: LIR.CFStmtId,
+        next: LIR.CFStmtId,
     ) Allocator.Error!LIR.CFStmtId {
-        const call = proc.generatedCodecCallPlan(context.worker, context.encoding_type, "parse_array_next", null);
-        const step_rep = proc.repForTypeRef(call.ret_type);
-        const step = try proc.addFrameLocalForRep(step_rep);
-        const ok = proc.generatedParserTagVariant(step_rep, "Ok");
-        const err = proc.generatedParserTagVariant(step_rep, "Err");
-        const err_body = try proc.forwardGeneratedParserError(
-            context.result,
-            context.result_rep,
-            step,
-            err,
-            context.next,
-        );
-        const ok_payload = try proc.generatedParserSingleTagPayloadLocal(ok);
-        const event = ok_payload.local;
-        const element = proc.generatedParserTagVariant(ok_payload.child.rep, "Element");
-        const done = proc.generatedParserTagVariant(ok_payload.child.rep, "Done");
-        const element_body = if (item_index < items.len)
-            try self.lowerGeneratedTupleElement(proc, context, shape_rep, value, rest, items, item_index, event, element, success)
-        else
-            try self.lowerGeneratedParserInvalidValueFromEvent(proc, context, event, element);
-        const done_body = if (item_index == items.len)
-            try self.lowerGeneratedTupleFinish(proc, context, shape_rep, value, rest, items, event, done, success)
-        else
-            try self.lowerGeneratedParserInvalidValueFromEvent(proc, context, event, done);
-        const event_variants = [_]GeneratedParserTagVariant{ element, done };
-        const event_bodies = [_]LIR.CFStmtId{ element_body, done_body };
-        const event_impossible = try self.result.store.addCFStmt(.runtime_error);
-        var ok_body = try proc.generatedParserTagDispatch(event, ok_payload.child.rep, &event_variants, &event_bodies, event_impossible);
-        ok_body = try proc.generatedParserReadTagPayload(step, ok, ok_payload, ok_body);
-        const variants = [_]GeneratedParserTagVariant{ ok, err };
-        const bodies = [_]LIR.CFStmtId{ ok_body, err_body };
-        const impossible = try self.result.store.addCFStmt(.runtime_error);
-        const dispatch = try proc.generatedParserTagDispatch(step, step_rep, &variants, &bodies, impossible);
-        return try self.lowerGeneratedCodecCallLocalsInto(proc, call, step, &.{ context.encoding, state }, dispatch);
-    }
-
-    fn lowerGeneratedTupleElement(
-        self: *ProcedureBuilder,
-        proc: *ProcBodyBuilder,
-        context: GeneratedParserShapeContext,
-        shape_rep: Plan.TypeRepId,
-        value: LIR.LocalId,
-        rest: LIR.LocalId,
-        items: []const GeneratedParserTupleItem,
-        item_index: usize,
-        event: LIR.LocalId,
-        variant: GeneratedParserTagVariant,
-        success: LIR.CFStmtId,
-    ) Allocator.Error!LIR.CFStmtId {
-        const payload = try proc.generatedParserSingleTagPayloadLocal(variant);
-        const parsed_rest = try proc.addGeneratedParserOutputLocalForRep(context.state_rep);
-        var continuation = try self.lowerGeneratedTupleAfterElement(
-            proc,
-            context,
-            shape_rep,
-            value,
-            rest,
-            items,
-            item_index,
-            parsed_rest,
-            success,
-        );
-        continuation = try self.lowerGeneratedParseShapeFromState(
-            proc,
-            context,
-            items[item_index].source_type,
-            items[item_index].rep,
-            payload.local,
-            items[item_index].value,
-            parsed_rest,
-            continuation,
-        );
-        return try proc.generatedParserReadTagPayload(event, variant, payload, continuation);
-    }
-
-    fn lowerGeneratedTupleAfterElement(
-        self: *ProcedureBuilder,
-        proc: *ProcBodyBuilder,
-        context: GeneratedParserShapeContext,
-        shape_rep: Plan.TypeRepId,
-        value: LIR.LocalId,
-        rest: LIR.LocalId,
-        items: []const GeneratedParserTupleItem,
-        item_index: usize,
-        state: LIR.LocalId,
-        success: LIR.CFStmtId,
-    ) Allocator.Error!LIR.CFStmtId {
-        const call = proc.generatedCodecCallPlan(context.worker, context.encoding_type, "parse_array_after_element", null);
-        const step_rep = proc.repForTypeRef(call.ret_type);
-        const step = try proc.addFrameLocalForRep(step_rep);
-        const ok = proc.generatedParserTagVariant(step_rep, "Ok");
-        const err = proc.generatedParserTagVariant(step_rep, "Err");
-        const err_body = try proc.forwardGeneratedParserError(
-            context.result,
-            context.result_rep,
-            step,
-            err,
-            context.next,
-        );
-        const ok_payload = try proc.generatedParserSingleTagPayloadLocal(ok);
-        const event = ok_payload.local;
-        const continue_variant = proc.generatedParserTagVariant(ok_payload.child.rep, "Continue");
-        const done = proc.generatedParserTagVariant(ok_payload.child.rep, "Done");
-        const continue_body = if (item_index + 1 < items.len)
-            try self.lowerGeneratedTupleContinue(proc, context, shape_rep, value, rest, items, item_index + 1, event, continue_variant, success)
-        else
-            try self.lowerGeneratedParserInvalidValueFromEvent(proc, context, event, continue_variant);
-        const done_body = if (item_index + 1 == items.len)
-            try self.lowerGeneratedTupleFinish(proc, context, shape_rep, value, rest, items, event, done, success)
-        else
-            try self.lowerGeneratedParserInvalidValueFromEvent(proc, context, event, done);
-        const event_variants = [_]GeneratedParserTagVariant{ continue_variant, done };
-        const event_bodies = [_]LIR.CFStmtId{ continue_body, done_body };
-        const event_impossible = try self.result.store.addCFStmt(.runtime_error);
-        var ok_body = try proc.generatedParserTagDispatch(event, ok_payload.child.rep, &event_variants, &event_bodies, event_impossible);
-        ok_body = try proc.generatedParserReadTagPayload(step, ok, ok_payload, ok_body);
-        const variants = [_]GeneratedParserTagVariant{ ok, err };
-        const bodies = [_]LIR.CFStmtId{ ok_body, err_body };
-        const impossible = try self.result.store.addCFStmt(.runtime_error);
-        const dispatch = try proc.generatedParserTagDispatch(step, step_rep, &variants, &bodies, impossible);
-        return try self.lowerGeneratedCodecCallLocalsInto(proc, call, step, &.{ context.encoding, state }, dispatch);
-    }
-
-    fn lowerGeneratedTupleContinue(
-        self: *ProcedureBuilder,
-        proc: *ProcBodyBuilder,
-        context: GeneratedParserShapeContext,
-        shape_rep: Plan.TypeRepId,
-        value: LIR.LocalId,
-        rest: LIR.LocalId,
-        items: []const GeneratedParserTupleItem,
-        next_index: usize,
-        event: LIR.LocalId,
-        variant: GeneratedParserTagVariant,
-        success: LIR.CFStmtId,
-    ) Allocator.Error!LIR.CFStmtId {
-        const payload = try proc.generatedParserSingleTagPayloadLocal(variant);
-        const continuation = try self.lowerGeneratedTupleNext(
-            proc,
-            context,
-            shape_rep,
-            value,
-            rest,
-            items,
-            next_index,
-            payload.local,
-            success,
-        );
-        return try proc.generatedParserReadTagPayload(event, variant, payload, continuation);
-    }
-
-    fn lowerGeneratedTupleFinish(
-        self: *ProcedureBuilder,
-        proc: *ProcBodyBuilder,
-        context: GeneratedParserShapeContext,
-        shape_rep: Plan.TypeRepId,
-        value: LIR.LocalId,
-        rest: LIR.LocalId,
-        items: []const GeneratedParserTupleItem,
-        event: LIR.LocalId,
-        variant: GeneratedParserTagVariant,
-        success: LIR.CFStmtId,
-    ) Allocator.Error!LIR.CFStmtId {
-        const payload = try proc.generatedParserSingleTagPayloadLocal(variant);
         const fields = try self.allocator.alloc(LIR.LocalId, items.len);
         defer self.allocator.free(fields);
         const descriptor_fields = try self.allocator.alloc(ProcBodyBuilder.AggregateDescriptorField, items.len);
@@ -9542,65 +9555,337 @@ const ProcedureBuilder = struct {
                 .source_rep = item.rep,
             };
         }
-        var continuation = try proc.assignRepresentationBoundary(
-            rest,
-            payload.local,
-            context.state_rep,
-            payload.child.rep,
-            success,
-        );
-        const aggregate_desc = try proc.constructedAggregateDescriptorForFields(
-            value,
-            shape_rep,
-            descriptor_fields,
-        );
+        const aggregate_desc = try proc.constructedAggregateDescriptorForFields(value, shape_rep, descriptor_fields);
         defer aggregate_desc.deinit(self.allocator);
-        continuation = try self.result.store.addCFStmt(.{ .assign_struct = .{
+        var continuation = try self.result.store.addCFStmt(.{ .assign_struct = .{
             .target = value,
             .fields = try self.result.store.addLocalSpan(fields),
             .contents_desc = aggregate_desc.contents_desc,
-            .next = continuation,
+            .next = next,
         } });
         continuation = try proc.prependOptionalDescriptorMaterialization(aggregate_desc.materialize, continuation);
-        continuation = try proc.prependDescriptorArgMaterializations(aggregate_desc.field_initializers, continuation);
-        continuation = try proc.generatedParserReadTagPayload(event, variant, payload, continuation);
-        return continuation;
+        return try proc.prependDescriptorArgMaterializations(aggregate_desc.field_initializers, continuation);
     }
 
-    fn lowerGeneratedParserInvalidValueFromEvent(
+    /// The format callbacks `ParseTagUnionSpec.parse` receives for moving
+    /// between a tag's payloads.
+    const GeneratedParserPayloadCallbacks = struct {
+        start: GeneratedParserCallback,
+        next: GeneratedParserCallback,
+        finish: GeneratedParserCallback,
+    };
+
+    const GeneratedParserCallback = struct {
+        local: LIR.LocalId,
+        rep: Plan.TypeRepId,
+    };
+
+    /// Call a payload-boundary callback with the state and its position
+    /// arguments, and continue at `ok_body` with the state it returns in
+    /// `out_state`.
+    fn lowerGeneratedParserCallbackStep(
         self: *ProcedureBuilder,
         proc: *ProcBodyBuilder,
         context: GeneratedParserShapeContext,
-        event: LIR.LocalId,
-        variant: GeneratedParserTagVariant,
+        callback: GeneratedParserCallback,
+        step: GeneratedParserTryStep,
+        state: LIR.LocalId,
+        positions: []const LIR.LocalId,
+        out_state: LIR.LocalId,
+        ok_body: LIR.CFStmtId,
     ) Allocator.Error!LIR.CFStmtId {
-        const payload = try proc.generatedParserSingleTagPayloadLocal(variant);
-        const call = proc.generatedCodecCallPlan(context.worker, context.encoding_type, "invalid_value", null);
-        const err_rep = proc.repForTypeRef(call.ret_type);
-        const err = try proc.addFrameLocalForRep(err_rep);
-        const target_err = proc.generatedParserTagVariant(context.result_rep, "Err");
-        var continuation = try proc.assignGeneratedParserTag(
-            context.result,
-            context.result_rep,
-            target_err,
-            err,
-            err_rep,
-            context.next,
+        const function = proc.functionChildrenForRep(callback.rep) orelse
+            boxyLowerInvariant("generated tag payload callback was not callable");
+        if (function.arg_count != positions.len + 1) boxyLowerInvariant("generated tag payload callback had an unexpected arity");
+        const children = self.plan.childSlice(self.plan.representations.items[@intFromEnum(function.rep)].children);
+        const args = try self.allocator.alloc(LIR.LocalId, function.arg_count);
+        defer self.allocator.free(args);
+        const arg_reps = try self.allocator.alloc(Plan.TypeRepId, function.arg_count);
+        defer self.allocator.free(arg_reps);
+        args[0] = state;
+        arg_reps[0] = context.state_rep;
+        for (positions, args[1..], arg_reps[1..], children[function.args_start + 1 ..][0..positions.len]) |position, *arg, *arg_rep, child| {
+            arg.* = position;
+            arg_rep.* = child.rep;
+        }
+        const with_state = try proc.assignRepresentationBoundary(
+            out_state,
+            step.ok_payload.local,
+            context.state_rep,
+            step.ok_payload.child.rep,
+            ok_body,
         );
-        continuation = try self.lowerGeneratedCodecCallLocalsInto(
+        const dispatch = try self.dispatchGeneratedParserTryStep(proc, context, step, with_state);
+        return try proc.lowerErasedCallLocalsInto(step.value, step.rep, callback.rep, callback.local, args, arg_reps, dispatch);
+    }
+
+    fn generatedParserCallbackArgRep(
+        self: *ProcedureBuilder,
+        proc: *ProcBodyBuilder,
+        callback: GeneratedParserCallback,
+        index: usize,
+    ) Plan.TypeRepId {
+        const function = proc.functionChildrenForRep(callback.rep) orelse
+            boxyLowerInvariant("generated tag payload callback was not callable");
+        if (index >= function.arg_count) boxyLowerInvariant("generated tag payload callback argument index exceeded its arity");
+        const children = self.plan.childSlice(self.plan.representations.items[@intFromEnum(function.rep)].children);
+        return children[function.args_start + index].rep;
+    }
+
+    fn generatedParserCallbackRetRep(
+        _: *ProcedureBuilder,
+        proc: *ProcBodyBuilder,
+        callback: GeneratedParserCallback,
+    ) Plan.TypeRepId {
+        const function = proc.functionChildrenForRep(callback.rep) orelse
+            boxyLowerInvariant("generated tag payload callback was not callable");
+        return function.ret;
+    }
+
+    /// Parse a matched tag's payloads between the format's `start_payloads`
+    /// and `finish_payloads` callbacks, with `next_payload` before every
+    /// payload after the first.
+    fn lowerGeneratedTagPayloadsFromState(
+        self: *ProcedureBuilder,
+        proc: *ProcBodyBuilder,
+        context: GeneratedParserShapeContext,
+        callbacks: GeneratedParserPayloadCallbacks,
+        shape_rep: Plan.TypeRepId,
+        variant: GeneratedParserTagVariant,
+        state: LIR.LocalId,
+        value: LIR.LocalId,
+        rest: LIR.LocalId,
+        success: LIR.CFStmtId,
+    ) Allocator.Error!LIR.CFStmtId {
+        const payloads = self.plan.childSlice(variant.variant.payloads);
+        const items = try self.allocator.alloc(GeneratedParserTupleItem, payloads.len);
+        defer self.allocator.free(items);
+        for (payloads, items) |payload, *item| {
+            item.* = .{
+                .source_type = payload.source_type,
+                .rep = payload.rep,
+                .value = try proc.addGeneratedParserOutputLocalForRep(payload.rep),
+            };
+        }
+
+        const count = try proc.addFrameLocalForRep(self.generatedParserCallbackArgRep(proc, callbacks.start, 1));
+        const start = try self.beginGeneratedParserTryStep(proc, self.generatedParserCallbackRetRep(proc, callbacks.start));
+        const finish = try self.beginGeneratedParserTryStep(proc, self.generatedParserCallbackRetRep(proc, callbacks.finish));
+        const started = try proc.addGeneratedParserOutputLocalForRep(context.state_rep);
+        // `next_steps[i]` and `item_states[i]` move to payload `i` from the one
+        // before it; the first payload starts at `started`.
+        const next_steps = try self.allocator.alloc(GeneratedParserTryStep, items.len);
+        defer self.allocator.free(next_steps);
+        const item_states = try self.allocator.alloc(LIR.LocalId, items.len);
+        defer self.allocator.free(item_states);
+        const item_rests = try self.allocator.alloc(LIR.LocalId, items.len);
+        defer self.allocator.free(item_rests);
+        for (next_steps, item_states, item_rests, 0..) |*step, *item_state, *item_rest, index| {
+            item_rest.* = try proc.addGeneratedParserOutputLocalForRep(context.state_rep);
+            if (index == 0) {
+                item_state.* = started;
+            } else {
+                step.* = try self.beginGeneratedParserTryStep(proc, self.generatedParserCallbackRetRep(proc, callbacks.next));
+                item_state.* = try proc.addGeneratedParserOutputLocalForRep(context.state_rep);
+            }
+        }
+
+        var continuation = success;
+        continuation = switch (items.len) {
+            0 => try proc.assignGeneratedParserZeroTag(value, shape_rep, variant, continuation),
+            1 => try proc.assignGeneratedParserTag(value, shape_rep, variant, items[0].value, items[0].rep, continuation),
+            else => blk: {
+                const payload = switch (proc.workerRuntimeLayoutForRep(variant.tag_rep)) {
+                    .concrete => concrete: {
+                        const payload_layout = if (proc.isZstLocal(value))
+                            layout.Idx.zst
+                        else
+                            proc.tagUnionPayloadLayout(self.result.store.getLocal(value).layout_idx, variant.index);
+                        break :concrete ProcBodyBuilder.DynamicTagPayloadLocal{
+                            .local = try proc.addFrameLocal(payload_layout),
+                            .layout_idx = payload_layout,
+                        };
+                    },
+                    .dynamic_box => try proc.dynamicTagPayloadLocalForChildren(payloads),
+                };
+                const construct = try proc.assignGeneratedParserMultiTag(value, shape_rep, variant, payload, items, continuation);
+                break :blk try self.assignGeneratedTupleValue(proc, shape_rep, payload.local, items, construct);
+            },
+        };
+        const last_state = if (items.len == 0) started else item_rests[items.len - 1];
+        continuation = try self.lowerGeneratedParserCallbackStep(proc, context, callbacks.finish, finish, last_state, &.{count}, rest, continuation);
+
+        var index = items.len;
+        while (index > 0) {
+            index -= 1;
+            continuation = try self.lowerGeneratedParseShapeFromState(
+                proc,
+                context,
+                items[index].source_type,
+                items[index].rep,
+                item_states[index],
+                items[index].value,
+                item_rests[index],
+                continuation,
+            );
+            if (index > 0) {
+                const position = try proc.addFrameLocalForRep(self.generatedParserCallbackArgRep(proc, callbacks.next, 1));
+                continuation = try self.lowerGeneratedParserCallbackStep(
+                    proc,
+                    context,
+                    callbacks.next,
+                    next_steps[index],
+                    item_rests[index - 1],
+                    &.{ position, count },
+                    item_states[index],
+                    continuation,
+                );
+                continuation = try proc.assignIntLiteral(position, @intCast(index), continuation);
+            }
+        }
+        continuation = try self.lowerGeneratedParserCallbackStep(proc, context, callbacks.start, start, state, &.{count}, started, continuation);
+        return try proc.assignIntLiteral(count, @intCast(items.len), continuation);
+    }
+
+    /// The loop state shared by generated list and dict parsers: the format
+    /// either announced an entry count up front (`counted`, with `remaining`
+    /// entries left to read) or is asked after every entry whether more follow.
+    const GeneratedParserCountedLoop = struct {
+        join_id: LIR.JoinPointId,
+        cursor: LIR.LocalId,
+        acc: LIR.LocalId,
+        counted: LIR.LocalId,
+        remaining: LIR.LocalId,
+    };
+
+    fn generatedParserCountedLoopParams(loop: GeneratedParserCountedLoop) [4]LIR.LocalId {
+        return .{ loop.cursor, loop.acc, loop.counted, loop.remaining };
+    }
+
+    /// Re-enter `loop` with the given cursor and accumulator; `counted` is
+    /// unchanged.
+    fn continueGeneratedParserCountedLoop(
+        self: *ProcedureBuilder,
+        proc: *ProcBodyBuilder,
+        loop: GeneratedParserCountedLoop,
+        cursor: LIR.LocalId,
+        cursor_rep: Plan.TypeRepId,
+        acc: LIR.LocalId,
+        remaining: LIR.LocalId,
+    ) Allocator.Error!LIR.CFStmtId {
+        var continuation = try self.result.store.addCFStmt(.{ .jump = .{ .target = loop.join_id } });
+        if (remaining != loop.remaining) continuation = try proc.setLocalInitializeJoinParam(loop.remaining, remaining, continuation);
+        if (acc != loop.acc) continuation = try proc.setLocalInitializeJoinParam(loop.acc, acc, continuation);
+        return try proc.setLocalInitializeJoinParamFromRep(loop.cursor, cursor, cursor_rep, continuation);
+    }
+
+    /// `remaining - 1` into a fresh local, then `next`.
+    fn decrementGeneratedParserRemaining(
+        _: *ProcedureBuilder,
+        proc: *ProcBodyBuilder,
+        remaining: LIR.LocalId,
+        decremented: LIR.LocalId,
+        next: LIR.CFStmtId,
+    ) Allocator.Error!LIR.CFStmtId {
+        const one = try proc.addFrameLocal(.u64);
+        const continuation = try proc.assignBinaryLowLevel(decremented, .num_int_sub_wrap, remaining, one, next);
+        return try proc.assignIntLiteral(one, 1, continuation);
+    }
+
+    /// `remaining == 0` into a fresh Bool local, then branch.
+    fn branchGeneratedParserRemainingIsZero(
+        _: *ProcedureBuilder,
+        proc: *ProcBodyBuilder,
+        remaining: LIR.LocalId,
+        zero_body: LIR.CFStmtId,
+        nonzero_body: LIR.CFStmtId,
+    ) Allocator.Error!LIR.CFStmtId {
+        const zero = try proc.addFrameLocal(.u64);
+        const is_zero = try proc.addFrameLocal(.bool);
+        var continuation = try proc.boolSwitchNoContinuation(is_zero, zero_body, nonzero_body);
+        continuation = try proc.assignBinaryLowLevel(is_zero, .num_is_eq, remaining, zero, continuation);
+        return try proc.assignIntLiteral(zero, 0, continuation);
+    }
+
+    /// Call a container's start method, which returns
+    /// `[Counted({ len, rest }), Uncounted(state)]`, and enter `loop`: the
+    /// accumulator is built by `initial` from the announced count (zero when
+    /// uncounted).
+    fn enterGeneratedParserCountedLoop(
+        self: *ProcedureBuilder,
+        proc: *ProcBodyBuilder,
+        context: GeneratedParserShapeContext,
+        loop: GeneratedParserCountedLoop,
+        start_call: Plan.GeneratedCodecCallPlan,
+        state: LIR.LocalId,
+        initial: GeneratedParserCountedInitial,
+    ) Allocator.Error!LIR.CFStmtId {
+        const start = try self.beginGeneratedParserCallStep(proc, start_call);
+        const event_rep = start.ok_payload.child.rep;
+        const counted_event = try self.generatedParserEvent(proc, event_rep, "Counted");
+        const uncounted_event = try self.generatedParserEvent(proc, event_rep, "Uncounted");
+
+        const len_rep = proc.repForTypeRef(try proc.generatedParserRecordFieldType(counted_event.payload.child.source_type, "len"));
+        const len = try proc.addFrameLocalForRep(len_rep);
+        const counted_rest = try proc.addGeneratedParserOutputLocalForRep(context.state_rep);
+        var counted_body = try self.enterGeneratedParserCountedLoopWith(proc, loop, counted_rest, context.state_rep, len, true, initial);
+        counted_body = try proc.generatedParserReadRecordField(counted_rest, context.state_rep, counted_event.payload.local, counted_event.payload.child, "rest", counted_body);
+        counted_body = try proc.generatedParserReadRecordField(len, len_rep, counted_event.payload.local, counted_event.payload.child, "len", counted_body);
+
+        const zero = try proc.addFrameLocal(.u64);
+        var uncounted_body = try self.enterGeneratedParserCountedLoopWith(
             proc,
-            call,
-            err,
-            &.{ context.encoding, payload.local },
-            continuation,
+            loop,
+            uncounted_event.payload.local,
+            uncounted_event.payload.child.rep,
+            zero,
+            false,
+            initial,
         );
-        return try proc.generatedParserReadTagPayload(event, variant, payload, continuation);
+        uncounted_body = try proc.assignIntLiteral(zero, 0, uncounted_body);
+
+        const events = [_]GeneratedParserEvent{ counted_event, uncounted_event };
+        const bodies = [_]LIR.CFStmtId{ counted_body, uncounted_body };
+        const ok_body = try self.dispatchGeneratedParserEvents(proc, start.ok_payload.local, event_rep, &events, &bodies);
+        return try self.finishGeneratedParserCallStep(proc, context, start_call, start, &.{ context.encoding, state }, ok_body);
+    }
+
+    /// How a counted loop builds its initial accumulator from a capacity.
+    const GeneratedParserCountedInitial = union(enum) {
+        list,
+        dict: Plan.GeneratedCodecCallPlan,
+    };
+
+    fn enterGeneratedParserCountedLoopWith(
+        self: *ProcedureBuilder,
+        proc: *ProcBodyBuilder,
+        loop: GeneratedParserCountedLoop,
+        cursor: LIR.LocalId,
+        cursor_rep: Plan.TypeRepId,
+        len: LIR.LocalId,
+        counted: bool,
+        initial: GeneratedParserCountedInitial,
+    ) Allocator.Error!LIR.CFStmtId {
+        const counted_value = try proc.addFrameLocal(.bool);
+        const acc = try proc.addFrameLocal(self.result.store.getLocal(loop.acc).layout_idx);
+        if (self.result.store.getLocal(loop.acc).boxy_desc) |desc| self.result.store.setLocalBoxyDesc(acc, desc);
+        var continuation = try self.result.store.addCFStmt(.{ .jump = .{ .target = loop.join_id } });
+        continuation = try proc.setLocalInitializeJoinParam(loop.remaining, len, continuation);
+        continuation = try proc.setLocalInitializeJoinParam(loop.counted, counted_value, continuation);
+        continuation = try proc.setLocalInitializeJoinParam(loop.acc, acc, continuation);
+        continuation = try proc.setLocalInitializeJoinParamFromRep(loop.cursor, cursor, cursor_rep, continuation);
+        continuation = try proc.assignBoolLiteral(counted_value, counted, continuation);
+        return switch (initial) {
+            .list => try proc.assignUnaryLowLevel(acc, .list_with_capacity, len, continuation),
+            .dict => |with_capacity| try self.lowerGeneratedCodecCallLocalsInto(proc, with_capacity, acc, &.{len}, continuation),
+        };
     }
 
     fn lowerGeneratedListFromState(
         self: *ProcedureBuilder,
         proc: *ProcBodyBuilder,
         context: GeneratedParserShapeContext,
+        subject_type: Plan.CheckedTypeIdentity,
         shape_rep: Plan.TypeRepId,
         explicit_elem: ?Plan.RepChild,
         state: LIR.LocalId,
@@ -9616,68 +9901,164 @@ const ProcedureBuilder = struct {
             boxyLowerInvariant("generated list parser element worker and storage layouts disagreed");
         }
 
-        const initial_list = try proc.addFrameLocal(self.result.store.getLocal(value).layout_idx);
-        const acc = try proc.addFrameLocal(self.result.store.getLocal(value).layout_idx);
-        const cursor = try proc.addGeneratedParserOutputLocalForRep(context.state_rep);
-        const capacity = try proc.addFrameLocal(.u64);
+        const list_layout = self.result.store.getLocal(value).layout_idx;
+        const loop = GeneratedParserCountedLoop{
+            .join_id = proc.freshJoinPointId(),
+            .cursor = try proc.addGeneratedParserOutputLocalForRep(context.state_rep),
+            .acc = try proc.addFrameLocal(list_layout),
+            .counted = try proc.addFrameLocal(.bool),
+            .remaining = try proc.addFrameLocal(.u64),
+        };
         const target_desc = try proc.stableDescriptorForConstructedValue(value, shape_rep);
         if (target_desc.desc) |desc| {
             self.result.store.setLocalBoxyDesc(value, desc);
-            self.result.store.setLocalBoxyDesc(initial_list, desc);
-            self.result.store.setLocalBoxyDesc(acc, desc);
+            self.result.store.setLocalBoxyDesc(loop.acc, desc);
         }
+        const list = GeneratedParserListLoop{
+            .loop = loop,
+            .subject_type = subject_type,
+            .shape_rep = shape_rep,
+            .elem = elem,
+            .list_layout = list_layout,
+            .value = value,
+            .rest = rest,
+            .success = success,
+        };
 
-        const join_id = proc.freshJoinPointId();
-        const loop_body = try self.lowerGeneratedListLoop(
-            proc,
-            context,
-            shape_rep,
-            elem,
-            cursor,
-            acc,
-            value,
-            rest,
-            join_id,
-            success,
-        );
-
-        const start_call = proc.generatedCodecCallPlan(context.worker, context.encoding_type, "parse_array_start", null);
-        const start_rep = proc.repForTypeRef(start_call.ret_type);
-        const start = try proc.addFrameLocalForRep(start_rep);
-        const ok = proc.generatedParserTagVariant(start_rep, "Ok");
-        const err = proc.generatedParserTagVariant(start_rep, "Err");
-        const err_body = try proc.forwardGeneratedParserError(
-            context.result,
-            context.result_rep,
-            start,
-            err,
-            context.next,
-        );
-        const ok_payload = try proc.generatedParserSingleTagPayloadLocal(ok);
-        var ok_body = try self.result.store.addCFStmt(.{ .jump = .{ .target = join_id } });
-        ok_body = try proc.setLocalInitializeJoinParam(acc, initial_list, ok_body);
-        ok_body = try proc.setLocalInitializeJoinParamFromRep(cursor, ok_payload.local, ok_payload.child.rep, ok_body);
-        ok_body = try proc.generatedParserReadTagPayload(start, ok, ok_payload, ok_body);
-        const variants = [_]GeneratedParserTagVariant{ ok, err };
-        const bodies = [_]LIR.CFStmtId{ ok_body, err_body };
-        const impossible = try self.result.store.addCFStmt(.runtime_error);
-        const dispatch = try proc.generatedParserTagDispatch(start, start_rep, &variants, &bodies, impossible);
-        var initial = try self.lowerGeneratedCodecCallLocalsInto(
-            proc,
-            start_call,
-            start,
-            &.{ context.encoding, state },
-            dispatch,
-        );
-        initial = try proc.assignUnaryLowLevel(initial_list, .list_with_capacity, capacity, initial);
-        initial = try proc.assignIntLiteral(capacity, 0, initial);
+        const loop_body = try self.lowerGeneratedListLoopBody(proc, context, list);
+        const start_call = proc.generatedCodecCallPlan(context.worker, context.encoding_type, "parse_list_start", subject_type);
+        var initial = try self.enterGeneratedParserCountedLoop(proc, context, loop, start_call, state, .list);
         initial = try proc.prependOptionalDescriptorMaterialization(target_desc.materialize, initial);
+        const params = generatedParserCountedLoopParams(loop);
         return try self.result.store.addCFStmt(.{ .join = .{
-            .id = join_id,
-            .params = try proc.joinParamSpan(&.{ cursor, acc }),
+            .id = loop.join_id,
+            .params = try proc.joinParamSpan(&params),
             .body = loop_body,
             .remainder = initial,
         } });
+    }
+
+    const GeneratedParserListLoop = struct {
+        loop: GeneratedParserCountedLoop,
+        subject_type: Plan.CheckedTypeIdentity,
+        shape_rep: Plan.TypeRepId,
+        elem: Plan.RepChild,
+        list_layout: layout.Idx,
+        value: LIR.LocalId,
+        rest: LIR.LocalId,
+        success: LIR.CFStmtId,
+    };
+
+    fn lowerGeneratedListLoopBody(
+        self: *ProcedureBuilder,
+        proc: *ProcBodyBuilder,
+        context: GeneratedParserShapeContext,
+        list: GeneratedParserListLoop,
+    ) Allocator.Error!LIR.CFStmtId {
+        const loop = list.loop;
+
+        // Counted: read exactly `remaining` more elements, with no format call
+        // between them.
+        const counted_done = try self.finishGeneratedList(proc, context, list, loop.acc, loop.cursor, context.state_rep);
+        const counted_elem = try proc.addGeneratedParserOutputLocalForRep(list.elem.rep);
+        const counted_rest = try proc.addGeneratedParserOutputLocalForRep(context.state_rep);
+        const counted_acc = try self.addGeneratedListAccumulator(proc, list);
+        const decremented = try proc.addFrameLocal(.u64);
+        var counted_step = try self.continueGeneratedParserCountedLoop(proc, loop, counted_rest, context.state_rep, counted_acc, decremented);
+        counted_step = try self.decrementGeneratedParserRemaining(proc, loop.remaining, decremented, counted_step);
+        counted_step = try proc.assignListAppendGrowingMovingElement(counted_acc, loop.acc, counted_elem, counted_step);
+        counted_step = try self.lowerGeneratedParseShapeFromState(
+            proc,
+            context,
+            list.elem.source_type,
+            list.elem.rep,
+            loop.cursor,
+            counted_elem,
+            counted_rest,
+            counted_step,
+        );
+        const counted_body = try self.branchGeneratedParserRemainingIsZero(proc, loop.remaining, counted_done, counted_step);
+
+        // Uncounted: ask the format before and after every element.
+        const next_call = proc.generatedCodecCallPlan(context.worker, context.encoding_type, "parse_list_next", list.subject_type);
+        const next = try self.beginGeneratedParserCallStep(proc, next_call);
+        const next_event_rep = next.ok_payload.child.rep;
+        const item_event = try self.generatedParserEvent(proc, next_event_rep, "Item");
+        const done_event = try self.generatedParserEvent(proc, next_event_rep, "Done");
+
+        const elem = try proc.addGeneratedParserOutputLocalForRep(list.elem.rep);
+        const elem_rest = try proc.addGeneratedParserOutputLocalForRep(context.state_rep);
+        const after_call = proc.generatedCodecCallPlan(context.worker, context.encoding_type, "parse_list_after_item", list.subject_type);
+        const after = try self.beginGeneratedParserCallStep(proc, after_call);
+        const after_event_rep = after.ok_payload.child.rep;
+        const continue_event = try self.generatedParserEvent(proc, after_event_rep, "Continue");
+        const after_done_event = try self.generatedParserEvent(proc, after_event_rep, "Done");
+
+        const continue_acc = try self.addGeneratedListAccumulator(proc, list);
+        var continue_body = try self.continueGeneratedParserCountedLoop(
+            proc,
+            loop,
+            continue_event.payload.local,
+            continue_event.payload.child.rep,
+            continue_acc,
+            loop.remaining,
+        );
+        continue_body = try proc.assignListAppendGrowingMovingElement(continue_acc, loop.acc, elem, continue_body);
+        const done_acc = try self.addGeneratedListAccumulator(proc, list);
+        var after_done_body = try self.finishGeneratedList(
+            proc,
+            context,
+            list,
+            done_acc,
+            after_done_event.payload.local,
+            after_done_event.payload.child.rep,
+        );
+        after_done_body = try proc.assignListAppendGrowingMovingElement(done_acc, loop.acc, elem, after_done_body);
+        const after_events = [_]GeneratedParserEvent{ continue_event, after_done_event };
+        const after_bodies = [_]LIR.CFStmtId{ continue_body, after_done_body };
+        var item_body = try self.dispatchGeneratedParserEvents(proc, after.ok_payload.local, after_event_rep, &after_events, &after_bodies);
+        item_body = try self.finishGeneratedParserCallStep(proc, context, after_call, after, &.{ context.encoding, elem_rest }, item_body);
+        item_body = try self.lowerGeneratedParseShapeFromState(
+            proc,
+            context,
+            list.elem.source_type,
+            list.elem.rep,
+            item_event.payload.local,
+            elem,
+            elem_rest,
+            item_body,
+        );
+
+        const done_body = try self.finishGeneratedList(proc, context, list, loop.acc, done_event.payload.local, done_event.payload.child.rep);
+        const next_events = [_]GeneratedParserEvent{ item_event, done_event };
+        const next_bodies = [_]LIR.CFStmtId{ item_body, done_body };
+        var uncounted_body = try self.dispatchGeneratedParserEvents(proc, next.ok_payload.local, next_event_rep, &next_events, &next_bodies);
+        uncounted_body = try self.finishGeneratedParserCallStep(proc, context, next_call, next, &.{ context.encoding, loop.cursor }, uncounted_body);
+
+        return try proc.boolSwitchNoContinuation(loop.counted, counted_body, uncounted_body);
+    }
+
+    fn addGeneratedListAccumulator(
+        self: *ProcedureBuilder,
+        proc: *ProcBodyBuilder,
+        list: GeneratedParserListLoop,
+    ) Allocator.Error!LIR.LocalId {
+        const acc = try proc.addFrameLocal(list.list_layout);
+        if (self.result.store.getLocal(list.loop.acc).boxy_desc) |desc| self.result.store.setLocalBoxyDesc(acc, desc);
+        return acc;
+    }
+
+    fn finishGeneratedList(
+        _: *ProcedureBuilder,
+        proc: *ProcBodyBuilder,
+        context: GeneratedParserShapeContext,
+        list: GeneratedParserListLoop,
+        acc: LIR.LocalId,
+        state: LIR.LocalId,
+        state_rep: Plan.TypeRepId,
+    ) Allocator.Error!LIR.CFStmtId {
+        const continuation = try proc.assignRepresentationBoundary(list.rest, state, context.state_rep, state_rep, list.success);
+        return try proc.assignRepresentationBoundary(list.value, acc, list.shape_rep, list.shape_rep, continuation);
     }
 
     fn lowerGeneratedSetFromState(
@@ -9690,7 +10071,8 @@ const ProcedureBuilder = struct {
         rest: LIR.LocalId,
         success: LIR.CFStmtId,
     ) Allocator.Error!LIR.CFStmtId {
-        const call = proc.generatedCodecCallPlan(context.worker, shape_type, "from_list", shape_type);
+        const subject = self.generatedParserSubjectType(shape_type);
+        const call = proc.generatedCodecCallPlan(context.worker, subject, "from_list", subject);
         const arg_types = self.plan.generatedCodecCallTypeSlice(call.arg_types);
         if (arg_types.len != 1) boxyLowerInvariant("generated Set.from_list call had unexpected arity");
         const list_rep = proc.repForTypeRef(arg_types[0]);
@@ -9699,17 +10081,18 @@ const ProcedureBuilder = struct {
         }
         const list = try proc.addFrameLocalForRep(list_rep);
         const convert = try self.lowerGeneratedCodecCallLocalsInto(proc, call, value, &.{list}, success);
-        const shape_module = procedureModuleById(self.modules, shape_type.module);
-        const nominal = resolvedNominalPayload(shape_module, shape_type.ty);
+        const shape_module = procedureModuleById(self.modules, subject.module);
+        const nominal = resolvedNominalPayload(shape_module, subject.ty);
         if (nominal.builtin != .set or nominal.args.len != 1) {
             boxyLowerInvariant("generated Set parser shape did not have one public element type");
         }
         var public_elem = proc.repQuery().requiredSingleChild(proc.listRepForBoundary(list_rep).?, .list_elem);
-        public_elem.source_type = .{ .module = shape_type.module, .ty = nominal.args[0] };
+        public_elem.source_type = .{ .module = subject.module, .ty = nominal.args[0] };
         public_elem.rep = proc.repForTypeRef(public_elem.source_type);
         return try self.lowerGeneratedListFromState(
             proc,
             context,
+            subject,
             list_rep,
             public_elem,
             state,
@@ -9718,6 +10101,20 @@ const ProcedureBuilder = struct {
             convert,
         );
     }
+
+    const GeneratedParserDictLoop = struct {
+        loop: GeneratedParserCountedLoop,
+        subject_type: Plan.CheckedTypeIdentity,
+        shape_rep: Plan.TypeRepId,
+        key_type: Plan.CheckedTypeIdentity,
+        key_rep: Plan.TypeRepId,
+        value_type: Plan.CheckedTypeIdentity,
+        value_rep: Plan.TypeRepId,
+        insert_call: Plan.GeneratedCodecCallPlan,
+        value: LIR.LocalId,
+        rest: LIR.LocalId,
+        success: LIR.CFStmtId,
+    };
 
     fn lowerGeneratedDictFromState(
         self: *ProcedureBuilder,
@@ -9730,569 +10127,238 @@ const ProcedureBuilder = struct {
         rest: LIR.LocalId,
         success: LIR.CFStmtId,
     ) Allocator.Error!LIR.CFStmtId {
-        const insert_call = proc.generatedCodecCallPlan(context.worker, shape_type, "insert", shape_type);
+        const subject = self.generatedParserSubjectType(shape_type);
+        const insert_call = proc.generatedCodecCallPlan(context.worker, subject, "insert", subject);
         const insert_arg_types = self.plan.generatedCodecCallTypeSlice(insert_call.arg_types);
-        if (insert_arg_types.len != 3 or !planTypeRefEql(insert_arg_types[0], shape_type)) {
+        if (insert_arg_types.len != 3 or !planTypeRefEql(insert_arg_types[0], subject)) {
             boxyLowerInvariant("generated Dict.insert call had unexpected arguments");
         }
-        const shape_module = procedureModuleById(self.modules, shape_type.module);
-        const nominal = resolvedNominalPayload(shape_module, shape_type.ty);
+        const with_capacity = proc.generatedCodecCallPlan(context.worker, subject, "with_capacity", subject);
+        if (self.plan.generatedCodecCallTypeSlice(with_capacity.arg_types).len != 1) {
+            boxyLowerInvariant("generated Dict.with_capacity call had unexpected arity");
+        }
+        const shape_module = procedureModuleById(self.modules, subject.module);
+        const nominal = resolvedNominalPayload(shape_module, subject.ty);
         if (nominal.builtin != .dict or nominal.args.len != 2) {
             boxyLowerInvariant("generated Dict parser shape did not have public key and value types");
         }
-        const key_type = Plan.CheckedTypeIdentity{ .module = shape_type.module, .ty = nominal.args[0] };
-        const value_type = Plan.CheckedTypeIdentity{ .module = shape_type.module, .ty = nominal.args[1] };
-        const key_rep = proc.repForTypeRef(key_type);
-        const value_rep = proc.repForTypeRef(value_type);
+        const key_type = Plan.CheckedTypeIdentity{ .module = subject.module, .ty = nominal.args[0] };
+        const value_type = Plan.CheckedTypeIdentity{ .module = subject.module, .ty = nominal.args[1] };
 
-        const initial_dict = try proc.addFrameLocalForRep(shape_rep);
-        const acc = try proc.addFrameLocalForRep(shape_rep);
-        const cursor = try proc.addGeneratedParserOutputLocalForRep(context.state_rep);
-        const join_id = proc.freshJoinPointId();
-        const loop_body = try self.lowerGeneratedDictLoop(
-            proc,
-            context,
-            shape_rep,
-            key_type,
-            key_rep,
-            value_type,
-            value_rep,
-            cursor,
-            acc,
-            value,
-            rest,
-            insert_call,
-            join_id,
-            success,
-        );
+        const loop = GeneratedParserCountedLoop{
+            .join_id = proc.freshJoinPointId(),
+            .cursor = try proc.addGeneratedParserOutputLocalForRep(context.state_rep),
+            .acc = try proc.addFrameLocalForRep(shape_rep),
+            .counted = try proc.addFrameLocal(.bool),
+            .remaining = try proc.addFrameLocal(.u64),
+        };
+        const dict = GeneratedParserDictLoop{
+            .loop = loop,
+            .subject_type = subject,
+            .shape_rep = shape_rep,
+            .key_type = key_type,
+            .key_rep = proc.repForTypeRef(key_type),
+            .value_type = value_type,
+            .value_rep = proc.repForTypeRef(value_type),
+            .insert_call = insert_call,
+            .value = value,
+            .rest = rest,
+            .success = success,
+        };
 
-        var initial = try self.result.store.addCFStmt(.{ .jump = .{ .target = join_id } });
-        initial = try proc.setLocalInitializeJoinParam(acc, initial_dict, initial);
-        initial = try proc.setLocalInitializeJoinParamFromRep(cursor, state, context.state_rep, initial);
-        const with_capacity = proc.generatedCodecCallPlan(context.worker, shape_type, "with_capacity", shape_type);
-        const capacity_types = self.plan.generatedCodecCallTypeSlice(with_capacity.arg_types);
-        if (capacity_types.len != 1) boxyLowerInvariant("generated Dict.with_capacity call had unexpected arity");
-        const capacity = try proc.addFrameLocalForRep(proc.repForTypeRef(capacity_types[0]));
-        initial = try self.lowerGeneratedCodecCallLocalsInto(proc, with_capacity, initial_dict, &.{capacity}, initial);
-        initial = try proc.assignIntLiteral(capacity, 0, initial);
+        const loop_body = try self.lowerGeneratedDictLoopBody(proc, context, dict);
+        const start_call = proc.generatedCodecCallPlan(context.worker, context.encoding_type, "parse_dict_start", subject);
+        const initial = try self.enterGeneratedParserCountedLoop(proc, context, loop, start_call, state, .{ .dict = with_capacity });
+        const params = generatedParserCountedLoopParams(loop);
         return try self.result.store.addCFStmt(.{ .join = .{
-            .id = join_id,
-            .params = try proc.joinParamSpan(&.{ cursor, acc }),
+            .id = loop.join_id,
+            .params = try proc.joinParamSpan(&params),
             .body = loop_body,
             .remainder = initial,
         } });
     }
 
-    fn lowerGeneratedDictLoop(
+    fn lowerGeneratedDictLoopBody(
         self: *ProcedureBuilder,
         proc: *ProcBodyBuilder,
         context: GeneratedParserShapeContext,
-        shape_rep: Plan.TypeRepId,
-        key_type: Plan.CheckedTypeIdentity,
-        key_rep: Plan.TypeRepId,
-        value_type: Plan.CheckedTypeIdentity,
-        value_rep: Plan.TypeRepId,
-        cursor: LIR.LocalId,
-        acc: LIR.LocalId,
-        value: LIR.LocalId,
-        rest: LIR.LocalId,
-        insert_call: Plan.GeneratedCodecCallPlan,
-        join_id: LIR.JoinPointId,
-        success: LIR.CFStmtId,
+        dict: GeneratedParserDictLoop,
     ) Allocator.Error!LIR.CFStmtId {
-        const call = proc.generatedCodecCallPlan(context.worker, context.encoding_type, "parse_object_next", null);
-        const step_rep = proc.repForTypeRef(call.ret_type);
-        const step = try proc.addFrameLocalForRep(step_rep);
-        const ok = proc.generatedParserTagVariant(step_rep, "Ok");
-        const err = proc.generatedParserTagVariant(step_rep, "Err");
-        const err_body = try proc.forwardGeneratedParserError(
-            context.result,
-            context.result_rep,
-            step,
-            err,
-            context.next,
-        );
-        const ok_payload = try proc.generatedParserSingleTagPayloadLocal(ok);
-        const event = ok_payload.local;
-        const entry = proc.generatedParserTagVariant(ok_payload.child.rep, "Entry");
-        const done = proc.generatedParserTagVariant(ok_payload.child.rep, "Done");
-        const entry_body = try self.lowerGeneratedDictEntry(
-            proc,
-            context,
-            shape_rep,
-            key_type,
-            key_rep,
-            value_type,
-            value_rep,
-            cursor,
-            acc,
-            insert_call,
-            join_id,
-            event,
-            entry,
-        );
-        const done_body = try self.lowerGeneratedDictDone(
-            proc,
-            context,
-            shape_rep,
-            acc,
-            value,
-            rest,
-            event,
-            done,
-            success,
-        );
-        const event_variants = [_]GeneratedParserTagVariant{ entry, done };
-        const event_bodies = [_]LIR.CFStmtId{ entry_body, done_body };
-        const event_impossible = try self.result.store.addCFStmt(.runtime_error);
-        var ok_body = try proc.generatedParserTagDispatch(event, ok_payload.child.rep, &event_variants, &event_bodies, event_impossible);
-        ok_body = try proc.generatedParserReadTagPayload(step, ok, ok_payload, ok_body);
-        const variants = [_]GeneratedParserTagVariant{ ok, err };
-        const bodies = [_]LIR.CFStmtId{ ok_body, err_body };
-        const impossible = try self.result.store.addCFStmt(.runtime_error);
-        const dispatch = try proc.generatedParserTagDispatch(step, step_rep, &variants, &bodies, impossible);
-        return try self.lowerGeneratedCodecCallLocalsInto(proc, call, step, &.{ context.encoding, cursor }, dispatch);
+        const loop = dict.loop;
+
+        const counted_done = try self.finishGeneratedDict(proc, context, dict, loop.acc, loop.cursor, context.state_rep);
+        const counted_entry = try self.lowerGeneratedDictEntry(proc, context, dict, loop.cursor, .counted);
+        const counted_body = try self.branchGeneratedParserRemainingIsZero(proc, loop.remaining, counted_done, counted_entry);
+
+        const next_call = proc.generatedCodecCallPlan(context.worker, context.encoding_type, "parse_dict_next", dict.subject_type);
+        const next = try self.beginGeneratedParserCallStep(proc, next_call);
+        const event_rep = next.ok_payload.child.rep;
+        const entry_event = try self.generatedParserEvent(proc, event_rep, "Entry");
+        const done_event = try self.generatedParserEvent(proc, event_rep, "Done");
+        const events = [_]GeneratedParserEvent{ entry_event, done_event };
+        const bodies = [_]LIR.CFStmtId{
+            try self.lowerGeneratedDictEntry(proc, context, dict, entry_event.payload.local, .uncounted),
+            try self.finishGeneratedDict(proc, context, dict, loop.acc, done_event.payload.local, done_event.payload.child.rep),
+        };
+        var uncounted_body = try self.dispatchGeneratedParserEvents(proc, next.ok_payload.local, event_rep, &events, &bodies);
+        uncounted_body = try self.finishGeneratedParserCallStep(proc, context, next_call, next, &.{ context.encoding, loop.cursor }, uncounted_body);
+
+        return try proc.boolSwitchNoContinuation(loop.counted, counted_body, uncounted_body);
     }
 
+    const GeneratedParserEntryEnd = enum { counted, uncounted };
+
+    /// One key-value entry read from `state`. Counted mode re-enters the loop
+    /// with one fewer entry left; uncounted mode asks the format whether more
+    /// follow.
     fn lowerGeneratedDictEntry(
         self: *ProcedureBuilder,
         proc: *ProcBodyBuilder,
         context: GeneratedParserShapeContext,
-        shape_rep: Plan.TypeRepId,
-        key_type: Plan.CheckedTypeIdentity,
-        key_rep: Plan.TypeRepId,
-        value_type: Plan.CheckedTypeIdentity,
-        value_rep: Plan.TypeRepId,
-        cursor: LIR.LocalId,
-        acc: LIR.LocalId,
-        insert_call: Plan.GeneratedCodecCallPlan,
-        join_id: LIR.JoinPointId,
-        event: LIR.LocalId,
-        variant: GeneratedParserTagVariant,
+        dict: GeneratedParserDictLoop,
+        state: LIR.LocalId,
+        entry_end: GeneratedParserEntryEnd,
     ) Allocator.Error!LIR.CFStmtId {
-        const payload = try proc.generatedParserSingleTagPayloadLocal(variant);
-        const key_string_type = try proc.generatedParserRecordFieldType(payload.child.source_type, "key");
-        const key_string = try proc.addFrameLocalForRep(proc.repForTypeRef(key_string_type));
-        const value_state = try proc.addFrameLocalForRep(context.state_rep);
-        const key = try proc.addGeneratedParserOutputLocalForRep(key_rep);
-        const parsed_value = try proc.addGeneratedParserOutputLocalForRep(value_rep);
-        const parsed_rest = try proc.addGeneratedParserOutputLocalForRep(context.state_rep);
-        const next_acc = try proc.addFrameLocalForRep(shape_rep);
+        const loop = dict.loop;
+        const key = try proc.addGeneratedParserOutputLocalForRep(dict.key_rep);
+        const after_key = try proc.addGeneratedParserOutputLocalForRep(context.state_rep);
+        const entry_value = try proc.addGeneratedParserOutputLocalForRep(dict.value_rep);
+        const entry_rest = try proc.addGeneratedParserOutputLocalForRep(context.state_rep);
+        const inserted = try proc.addFrameLocalForRep(dict.shape_rep);
 
-        var continuation = try self.result.store.addCFStmt(.{ .jump = .{ .target = join_id } });
-        continuation = try proc.setLocalInitializeJoinParam(acc, next_acc, continuation);
-        continuation = try proc.setLocalInitializeJoinParamFromRep(cursor, parsed_rest, context.state_rep, continuation);
-        continuation = try self.lowerGeneratedCodecCallLocalsInto(
-            proc,
-            insert_call,
-            next_acc,
-            &.{ acc, key, parsed_value },
-            continuation,
-        );
+        var continuation = switch (entry_end) {
+            .counted => blk: {
+                const decremented = try proc.addFrameLocal(.u64);
+                const jump = try self.continueGeneratedParserCountedLoop(proc, loop, entry_rest, context.state_rep, inserted, decremented);
+                break :blk try self.decrementGeneratedParserRemaining(proc, loop.remaining, decremented, jump);
+            },
+            .uncounted => blk: {
+                const after_call = proc.generatedCodecCallPlan(context.worker, context.encoding_type, "parse_dict_after_entry", dict.subject_type);
+                const after = try self.beginGeneratedParserCallStep(proc, after_call);
+                const event_rep = after.ok_payload.child.rep;
+                const continue_event = try self.generatedParserEvent(proc, event_rep, "Continue");
+                const done_event = try self.generatedParserEvent(proc, event_rep, "Done");
+                const events = [_]GeneratedParserEvent{ continue_event, done_event };
+                const bodies = [_]LIR.CFStmtId{
+                    try self.continueGeneratedParserCountedLoop(
+                        proc,
+                        loop,
+                        continue_event.payload.local,
+                        continue_event.payload.child.rep,
+                        inserted,
+                        loop.remaining,
+                    ),
+                    try self.finishGeneratedDict(proc, context, dict, inserted, done_event.payload.local, done_event.payload.child.rep),
+                };
+                const dispatch = try self.dispatchGeneratedParserEvents(proc, after.ok_payload.local, event_rep, &events, &bodies);
+                break :blk try self.finishGeneratedParserCallStep(proc, context, after_call, after, &.{ context.encoding, entry_rest }, dispatch);
+            },
+        };
+        continuation = try self.lowerGeneratedCodecCallLocalsInto(proc, dict.insert_call, inserted, &.{ loop.acc, key, entry_value }, continuation);
+
+        const separator_call = proc.generatedCodecCallPlan(context.worker, context.encoding_type, "parse_dict_after_key", dict.subject_type);
+        const separator = try self.beginGeneratedParserCallStep(proc, separator_call);
         continuation = try self.lowerGeneratedParseShapeFromState(
             proc,
             context,
-            value_type,
-            value_rep,
-            value_state,
-            parsed_value,
-            parsed_rest,
+            dict.value_type,
+            dict.value_rep,
+            separator.ok_payload.local,
+            entry_value,
+            entry_rest,
             continuation,
         );
-        continuation = try self.lowerGeneratedDictKey(
-            proc,
-            context,
-            key_type,
-            key_rep,
-            key_string,
-            key,
-            value_state,
-            continuation,
-        );
-        continuation = try proc.generatedParserReadRecordField(
-            value_state,
-            context.state_rep,
-            payload.local,
-            payload.child,
-            "rest",
-            continuation,
-        );
-        continuation = try proc.generatedParserReadRecordField(
-            key_string,
-            proc.repForTypeRef(key_string_type),
-            payload.local,
-            payload.child,
-            "key",
-            continuation,
-        );
-        continuation = try proc.generatedParserReadTagPayload(event, variant, payload, continuation);
-        return continuation;
+        continuation = try self.finishGeneratedParserCallStep(proc, context, separator_call, separator, &.{ context.encoding, after_key }, continuation);
+        return try self.lowerGeneratedDictKey(proc, context, dict, state, key, after_key, continuation);
     }
 
+    fn finishGeneratedDict(
+        _: *ProcedureBuilder,
+        proc: *ProcBodyBuilder,
+        context: GeneratedParserShapeContext,
+        dict: GeneratedParserDictLoop,
+        acc: LIR.LocalId,
+        state: LIR.LocalId,
+        state_rep: Plan.TypeRepId,
+    ) Allocator.Error!LIR.CFStmtId {
+        const continuation = try proc.assignRepresentationBoundary(dict.rest, state, context.state_rep, state_rep, dict.success);
+        return try proc.assignRepresentationBoundary(dict.value, acc, dict.shape_rep, dict.shape_rep, continuation);
+    }
+
+    /// Read a dict key from `state` into `key`, leaving the cursor after it in
+    /// `after_key`.
     fn lowerGeneratedDictKey(
         self: *ProcedureBuilder,
         proc: *ProcBodyBuilder,
         context: GeneratedParserShapeContext,
-        key_type: Plan.CheckedTypeIdentity,
-        key_rep: Plan.TypeRepId,
-        key_string: LIR.LocalId,
-        key: LIR.LocalId,
-        value_state: LIR.LocalId,
-        success: LIR.CFStmtId,
-    ) Allocator.Error!LIR.CFStmtId {
-        const field_selection = self.plan.generatedParserDictionaryFieldSelection(context.worker, key_type) orelse
-            boxyLowerInvariant("generated dictionary key parser had no checked strategy");
-        const method = switch (field_selection.strategy) {
-            .method => |method| method,
-            .unit_tags => return try self.lowerGeneratedDictUnitTagKey(
-                proc,
-                context,
-                key_rep,
-                key_string,
-                key,
-                value_state,
-                success,
-            ),
-        };
-        const call = proc.generatedCodecCallPlanByIdentity(
-            context.worker,
-            context.encoding_type,
-            key_type,
-            method.module,
-            method.name,
-        );
-        const parsed_rep = proc.repForTypeRef(call.ret_type);
-        const parsed = try proc.addFrameLocalForRepWithRequiredFreshDescriptor(parsed_rep);
-        const ok = proc.generatedParserTagVariant(parsed_rep, "Ok");
-        const err = proc.generatedParserTagVariant(parsed_rep, "Err");
-        const err_body = try proc.forwardGeneratedParserError(
-            context.result,
-            context.result_rep,
-            parsed,
-            err,
-            context.next,
-        );
-        const ok_payload = try proc.generatedParserSingleTagPayloadLocal(ok);
-        var ok_body = try proc.assignRepresentationBoundary(key, ok_payload.local, key_rep, ok_payload.child.rep, success);
-        ok_body = try proc.generatedParserReadTagPayload(parsed, ok, ok_payload, ok_body);
-        const variants = [_]GeneratedParserTagVariant{ ok, err };
-        const bodies = [_]LIR.CFStmtId{ ok_body, err_body };
-        const impossible = try self.result.store.addCFStmt(.runtime_error);
-        const dispatch = try proc.generatedParserTagDispatch(parsed, parsed_rep, &variants, &bodies, impossible);
-        return try self.lowerGeneratedCodecCallLocalsInto(proc, call, parsed, &.{ context.encoding, key_string }, dispatch);
-    }
-
-    fn lowerGeneratedDictUnitTagKey(
-        self: *ProcedureBuilder,
-        proc: *ProcBodyBuilder,
-        context: GeneratedParserShapeContext,
-        key_rep: Plan.TypeRepId,
-        key_string: LIR.LocalId,
-        key: LIR.LocalId,
-        value_state: LIR.LocalId,
-        success: LIR.CFStmtId,
-    ) Allocator.Error!LIR.CFStmtId {
-        const invalid_call = proc.generatedCodecCallPlan(context.worker, context.encoding_type, "invalid_value", null);
-        const error_rep = proc.repForTypeRef(invalid_call.ret_type);
-        const error_value = try proc.addFrameLocalForRep(error_rep);
-        const result_err = proc.generatedParserTagVariant(context.result_rep, "Err");
-        var dispatch = try proc.assignGeneratedParserTag(
-            context.result,
-            context.result_rep,
-            result_err,
-            error_value,
-            error_rep,
-            context.next,
-        );
-        dispatch = try self.lowerGeneratedCodecCallLocalsInto(
-            proc,
-            invalid_call,
-            error_value,
-            &.{ context.encoding, value_state },
-            dispatch,
-        );
-
-        const variants = try self.generatedParserTagVariants(proc, key_rep);
-        defer self.allocator.free(variants);
-        var index = variants.len;
-        while (index > 0) {
-            index -= 1;
-            const variant = variants[index];
-            if (self.plan.childSlice(variant.variant.payloads).len != 0) {
-                boxyLowerInvariant("generated Dict unit-tag key carried a payload");
-            }
-            const name = try proc.addFrameLocal(.str);
-            const matches = try proc.addFrameLocal(.bool);
-            const matched = try proc.assignGeneratedParserZeroTag(key, key_rep, variant, success);
-            const branch = try proc.boolSwitchNoContinuation(matches, matched, dispatch);
-            dispatch = try proc.assignBinaryLowLevel(matches, .str_is_eq, key_string, name, branch);
-            dispatch = try proc.assignStringBytesLiteral(name, proc.tagVariantNameText(variant.variant), dispatch);
-        }
-        return dispatch;
-    }
-
-    fn lowerGeneratedDictDone(
-        _: *ProcedureBuilder,
-        proc: *ProcBodyBuilder,
-        context: GeneratedParserShapeContext,
-        shape_rep: Plan.TypeRepId,
-        acc: LIR.LocalId,
-        value: LIR.LocalId,
-        rest: LIR.LocalId,
-        event: LIR.LocalId,
-        variant: GeneratedParserTagVariant,
-        success: LIR.CFStmtId,
-    ) Allocator.Error!LIR.CFStmtId {
-        const payload = try proc.generatedParserSingleTagPayloadLocal(variant);
-        var continuation = try proc.assignRepresentationBoundary(value, acc, shape_rep, shape_rep, success);
-        continuation = try proc.generatedParserReadRecordField(
-            rest,
-            context.state_rep,
-            payload.local,
-            payload.child,
-            "rest",
-            continuation,
-        );
-        return try proc.generatedParserReadTagPayload(event, variant, payload, continuation);
-    }
-
-    fn lowerGeneratedListLoop(
-        self: *ProcedureBuilder,
-        proc: *ProcBodyBuilder,
-        context: GeneratedParserShapeContext,
-        shape_rep: Plan.TypeRepId,
-        elem: Plan.RepChild,
-        cursor: LIR.LocalId,
-        acc: LIR.LocalId,
-        value: LIR.LocalId,
-        rest: LIR.LocalId,
-        join_id: LIR.JoinPointId,
-        success: LIR.CFStmtId,
-    ) Allocator.Error!LIR.CFStmtId {
-        const call = proc.generatedCodecCallPlan(context.worker, context.encoding_type, "parse_array_next", null);
-        const step_rep = proc.repForTypeRef(call.ret_type);
-        const step = try proc.addFrameLocalForRep(step_rep);
-        const ok = proc.generatedParserTagVariant(step_rep, "Ok");
-        const err = proc.generatedParserTagVariant(step_rep, "Err");
-        const err_body = try proc.forwardGeneratedParserError(
-            context.result,
-            context.result_rep,
-            step,
-            err,
-            context.next,
-        );
-        const ok_payload = try proc.generatedParserSingleTagPayloadLocal(ok);
-        const event = ok_payload.local;
-        const element = proc.generatedParserTagVariant(ok_payload.child.rep, "Element");
-        const done = proc.generatedParserTagVariant(ok_payload.child.rep, "Done");
-        const element_body = try self.lowerGeneratedListElement(
-            proc,
-            context,
-            elem,
-            cursor,
-            acc,
-            value,
-            rest,
-            join_id,
-            event,
-            element,
-            success,
-        );
-        const done_body = try self.lowerGeneratedListDone(
-            proc,
-            context,
-            shape_rep,
-            acc,
-            value,
-            rest,
-            event,
-            done,
-            success,
-        );
-        const event_variants = [_]GeneratedParserTagVariant{ element, done };
-        const event_bodies = [_]LIR.CFStmtId{ element_body, done_body };
-        const event_impossible = try self.result.store.addCFStmt(.runtime_error);
-        var ok_body = try proc.generatedParserTagDispatch(event, ok_payload.child.rep, &event_variants, &event_bodies, event_impossible);
-        ok_body = try proc.generatedParserReadTagPayload(step, ok, ok_payload, ok_body);
-        const variants = [_]GeneratedParserTagVariant{ ok, err };
-        const bodies = [_]LIR.CFStmtId{ ok_body, err_body };
-        const impossible = try self.result.store.addCFStmt(.runtime_error);
-        const dispatch = try proc.generatedParserTagDispatch(step, step_rep, &variants, &bodies, impossible);
-        return try self.lowerGeneratedCodecCallLocalsInto(proc, call, step, &.{ context.encoding, cursor }, dispatch);
-    }
-
-    fn lowerGeneratedListElement(
-        self: *ProcedureBuilder,
-        proc: *ProcBodyBuilder,
-        context: GeneratedParserShapeContext,
-        elem: Plan.RepChild,
-        cursor: LIR.LocalId,
-        acc: LIR.LocalId,
-        value: LIR.LocalId,
-        rest: LIR.LocalId,
-        join_id: LIR.JoinPointId,
-        event: LIR.LocalId,
-        variant: GeneratedParserTagVariant,
-        success: LIR.CFStmtId,
-    ) Allocator.Error!LIR.CFStmtId {
-        const payload = try proc.generatedParserSingleTagPayloadLocal(variant);
-        const elem_value = try proc.addGeneratedParserOutputLocalForRep(elem.rep);
-        const parsed_rest = try proc.addGeneratedParserOutputLocalForRep(context.state_rep);
-        var continuation = try self.lowerGeneratedListAfterElement(
-            proc,
-            context,
-            elem_value,
-            cursor,
-            acc,
-            value,
-            rest,
-            join_id,
-            parsed_rest,
-            success,
-        );
-        continuation = try self.lowerGeneratedParseShapeFromState(
-            proc,
-            context,
-            elem.source_type,
-            elem.rep,
-            payload.local,
-            elem_value,
-            parsed_rest,
-            continuation,
-        );
-        return try proc.generatedParserReadTagPayload(event, variant, payload, continuation);
-    }
-
-    fn lowerGeneratedListAfterElement(
-        self: *ProcedureBuilder,
-        proc: *ProcBodyBuilder,
-        context: GeneratedParserShapeContext,
-        elem: LIR.LocalId,
-        cursor: LIR.LocalId,
-        acc: LIR.LocalId,
-        value: LIR.LocalId,
-        rest: LIR.LocalId,
-        join_id: LIR.JoinPointId,
+        dict: GeneratedParserDictLoop,
         state: LIR.LocalId,
+        key: LIR.LocalId,
+        after_key: LIR.LocalId,
         success: LIR.CFStmtId,
     ) Allocator.Error!LIR.CFStmtId {
-        const call = proc.generatedCodecCallPlan(context.worker, context.encoding_type, "parse_array_after_element", null);
-        const step_rep = proc.repForTypeRef(call.ret_type);
-        const step = try proc.addFrameLocalForRep(step_rep);
-        const ok = proc.generatedParserTagVariant(step_rep, "Ok");
-        const err = proc.generatedParserTagVariant(step_rep, "Err");
-        const err_body = try proc.forwardGeneratedParserError(
-            context.result,
-            context.result_rep,
-            step,
-            err,
-            context.next,
-        );
-        const ok_payload = try proc.generatedParserSingleTagPayloadLocal(ok);
-        const event = ok_payload.local;
-        const continue_variant = proc.generatedParserTagVariant(ok_payload.child.rep, "Continue");
-        const done = proc.generatedParserTagVariant(ok_payload.child.rep, "Done");
-        const continue_body = try self.lowerGeneratedListContinue(
-            proc,
-            cursor,
-            acc,
-            elem,
-            join_id,
-            event,
-            continue_variant,
-        );
-        const done_body = try self.lowerGeneratedListDoneAfterElement(
-            proc,
-            context,
-            acc,
-            elem,
-            value,
-            rest,
-            event,
-            done,
-            success,
-        );
-        const event_variants = [_]GeneratedParserTagVariant{ continue_variant, done };
-        const event_bodies = [_]LIR.CFStmtId{ continue_body, done_body };
-        const event_impossible = try self.result.store.addCFStmt(.runtime_error);
-        var ok_body = try proc.generatedParserTagDispatch(event, ok_payload.child.rep, &event_variants, &event_bodies, event_impossible);
-        ok_body = try proc.generatedParserReadTagPayload(step, ok, ok_payload, ok_body);
-        const variants = [_]GeneratedParserTagVariant{ ok, err };
-        const bodies = [_]LIR.CFStmtId{ ok_body, err_body };
-        const impossible = try self.result.store.addCFStmt(.runtime_error);
-        const dispatch = try proc.generatedParserTagDispatch(step, step_rep, &variants, &bodies, impossible);
-        return try self.lowerGeneratedCodecCallLocalsInto(proc, call, step, &.{ context.encoding, state }, dispatch);
-    }
-
-    fn lowerGeneratedListContinue(
-        self: *ProcedureBuilder,
-        proc: *ProcBodyBuilder,
-        cursor: LIR.LocalId,
-        acc: LIR.LocalId,
-        elem: LIR.LocalId,
-        join_id: LIR.JoinPointId,
-        event: LIR.LocalId,
-        variant: GeneratedParserTagVariant,
-    ) Allocator.Error!LIR.CFStmtId {
-        const payload = try proc.generatedParserSingleTagPayloadLocal(variant);
-        const next_acc = try proc.addFrameLocal(self.result.store.getLocal(acc).layout_idx);
-        if (self.result.store.getLocal(acc).boxy_desc) |desc| self.result.store.setLocalBoxyDesc(next_acc, desc);
-        var continuation = try self.result.store.addCFStmt(.{ .jump = .{ .target = join_id } });
-        continuation = try proc.setLocalInitializeJoinParam(acc, next_acc, continuation);
-        continuation = try proc.setLocalInitializeJoinParamFromRep(cursor, payload.local, payload.child.rep, continuation);
-        continuation = try proc.assignListAppendGrowingMovingElement(next_acc, acc, elem, continuation);
-        return try proc.generatedParserReadTagPayload(event, variant, payload, continuation);
-    }
-
-    fn lowerGeneratedListDone(
-        _: *ProcedureBuilder,
-        proc: *ProcBodyBuilder,
-        context: GeneratedParserShapeContext,
-        shape_rep: Plan.TypeRepId,
-        acc: LIR.LocalId,
-        value: LIR.LocalId,
-        rest: LIR.LocalId,
-        event: LIR.LocalId,
-        variant: GeneratedParserTagVariant,
-        success: LIR.CFStmtId,
-    ) Allocator.Error!LIR.CFStmtId {
-        const payload = try proc.generatedParserSingleTagPayloadLocal(variant);
-        var continuation = try proc.assignRepresentationBoundary(
-            rest,
-            payload.local,
-            context.state_rep,
-            payload.child.rep,
-            success,
-        );
-        continuation = try proc.assignRepresentationBoundary(value, acc, shape_rep, shape_rep, continuation);
-        return try proc.generatedParserReadTagPayload(event, variant, payload, continuation);
-    }
-
-    fn lowerGeneratedListDoneAfterElement(
-        _: *ProcedureBuilder,
-        proc: *ProcBodyBuilder,
-        context: GeneratedParserShapeContext,
-        acc: LIR.LocalId,
-        elem: LIR.LocalId,
-        value: LIR.LocalId,
-        rest: LIR.LocalId,
-        event: LIR.LocalId,
-        variant: GeneratedParserTagVariant,
-        success: LIR.CFStmtId,
-    ) Allocator.Error!LIR.CFStmtId {
-        const payload = try proc.generatedParserSingleTagPayloadLocal(variant);
-        var continuation = try proc.assignRepresentationBoundary(
-            rest,
-            payload.local,
-            context.state_rep,
-            payload.child.rep,
-            success,
-        );
-        continuation = try proc.assignListAppendGrowingMovingElement(value, acc, elem, continuation);
-        return try proc.generatedParserReadTagPayload(event, variant, payload, continuation);
+        const field_selection = self.plan.generatedParserDictionaryFieldSelection(context.worker, dict.key_type) orelse
+            boxyLowerInvariant("generated dictionary key parser had no checked strategy");
+        switch (field_selection.strategy) {
+            .method => |method| {
+                const call = proc.generatedCodecCallPlanByIdentity(
+                    context.worker,
+                    context.encoding_type,
+                    dict.key_type,
+                    method.module,
+                    method.name,
+                );
+                const parsed = try self.beginGeneratedParserTryStep(proc, proc.repForTypeRef(call.ret_type));
+                const ok_body = try self.readGeneratedParseResult(proc, parsed.ok_payload, key, dict.key_rep, after_key, context.state_rep, success);
+                return try self.finishGeneratedParserCallStep(proc, context, call, parsed, &.{ context.encoding, state }, ok_body);
+            },
+            .unit_tags => |unit_tags| {
+                const call = proc.generatedCodecCallPlan(context.worker, context.encoding_type, "parse_key_str", unit_tags.string_type);
+                const parsed = try self.beginGeneratedParserTryStep(proc, proc.repForTypeRef(call.ret_type));
+                const name_child = proc.generatedRecordFieldChild(parsed.ok_payload.child.rep, "value");
+                const name = try proc.addFrameLocalForRep(name_child.rep);
+                var dispatch = try self.lowerGeneratedParserInvalidValue(proc, context, after_key);
+                const variants = try self.generatedParserTagVariants(proc, dict.key_rep);
+                defer self.allocator.free(variants);
+                var index = variants.len;
+                while (index > 0) {
+                    index -= 1;
+                    const variant = variants[index];
+                    if (self.plan.childSlice(variant.variant.payloads).len != 0) {
+                        boxyLowerInvariant("generated Dict unit-tag key carried a payload");
+                    }
+                    const expected = try proc.addFrameLocal(.str);
+                    const matches = try proc.addFrameLocal(.bool);
+                    const matched = try proc.assignGeneratedParserZeroTag(key, dict.key_rep, variant, success);
+                    const branch = try proc.boolSwitchNoContinuation(matches, matched, dispatch);
+                    dispatch = try proc.assignBinaryLowLevel(matches, .str_is_eq, name, expected, branch);
+                    dispatch = try proc.assignStringBytesLiteral(expected, proc.tagVariantNameText(variant.variant), dispatch);
+                }
+                const ok_body = try self.readGeneratedParseResult(proc, parsed.ok_payload, name, name_child.rep, after_key, context.state_rep, dispatch);
+                return try self.finishGeneratedParserCallStep(proc, context, call, parsed, &.{ context.encoding, state }, ok_body);
+            },
+            .key_parser => {
+                const call = proc.generatedCodecCallPlan(context.worker, context.encoding_type, "parse_key_start", dict.key_type);
+                const opened = try self.beginGeneratedParserCallStep(proc, call);
+                const key_body = try self.lowerGeneratedParseShapeFromState(
+                    proc,
+                    context,
+                    dict.key_type,
+                    dict.key_rep,
+                    opened.ok_payload.local,
+                    key,
+                    after_key,
+                    success,
+                );
+                return try self.finishGeneratedParserCallStep(proc, context, call, opened, &.{ context.encoding, state }, key_body);
+            },
+        }
     }
 
     const GeneratedParserTagVariant = struct {
+        /// The value's own representation, whose nominal application supplies
+        /// the exact instantiation of each declaration-formal payload.
+        application_rep: Plan.TypeRepId,
         /// The root tag domain whose descriptor describes the runtime value.
         tag_rep: Plan.TypeRepId,
         /// The row node that explicitly declares this variant.
@@ -10308,31 +10374,42 @@ const ProcedureBuilder = struct {
         rep: Plan.TypeRepId,
         parse_type: Plan.CheckedTypeIdentity,
         parse_rep: Plan.TypeRepId,
-        parser_wrap_ok: bool,
-        optional_error_type: ?Plan.CheckedTypeIdentity,
-        optional_missing: bool,
-        optional_null: bool,
+        absence: Plan.GeneratedParserFieldAbsence,
         renamed: LIR.LocalId,
+        /// The renamed field name is borrowed from the worker's captures
+        /// rather than owned by this procedure.
+        renamed_is_capture: bool,
         payload: LIR.LocalId,
         index: usize,
     };
 
-    const GeneratedParserRecordContext = struct {
-        worker: Plan.WorkerPlanId,
-        encoding_type: Plan.CheckedTypeIdentity,
-        encoding: LIR.LocalId,
-        shape_type: Plan.CheckedTypeIdentity,
+    /// One generated record parser: a single loop plus shared continuations
+    /// (design.md "linear typed control-flow plan"). Every field's parser
+    /// exists once, in its own continuation; every parsed or skipped entry
+    /// reaches the one after-entry continuation; and every failure inside the
+    /// loop reaches the one error continuation.
+    const GeneratedParserRecordLoop = struct {
+        /// The context of everything inside the loop, whose errors go to the
+        /// shared error continuation.
+        inner: GeneratedParserShapeContext,
+        subject_type: Plan.CheckedTypeIdentity,
         shape_rep: Plan.TypeRepId,
-        target: LIR.LocalId,
-        target_rep: Plan.TypeRepId,
-        state_type: Plan.CheckedTypeIdentity,
-        state_rep: Plan.TypeRepId,
-        cursor: LIR.LocalId,
-        evidence: LIR.LocalId,
         fields: []GeneratedParserRecordField,
         presence: []LIR.LocalId,
-        join_id: LIR.JoinPointId,
-        next: LIR.CFStmtId,
+        evidence: LIR.LocalId,
+        loop_id: LIR.JoinPointId,
+        cursor: LIR.LocalId,
+        /// No more entries follow: the format said so, or a counted record has
+        /// read all of its entries.
+        done: LIR.LocalId,
+        counted: LIR.LocalId,
+        remaining: LIR.LocalId,
+        entry_end_id: LIR.JoinPointId,
+        entry_state: LIR.LocalId,
+        skip_id: LIR.JoinPointId,
+        skip_state: LIR.LocalId,
+        field_ids: []LIR.JoinPointId,
+        field_states: []LIR.LocalId,
         value: LIR.LocalId,
         rest: LIR.LocalId,
         success: LIR.CFStmtId,
@@ -10362,7 +10439,12 @@ const ProcedureBuilder = struct {
         if (proc.erased_capture_locals.items.len == 0) boxyLowerInvariant("generated record parser runtime had no bound captures");
 
         const shape_rep = proc.repForTypeRef(source.shape);
-        const parse_call = proc.generatedCodecCallPlan(worker, encoding_type, "parse_record_field", source.shape);
+        const parse_call = proc.generatedCodecCallPlan(
+            worker,
+            encoding_type,
+            "parse_record_field",
+            self.generatedParserSubjectType(source.shape),
+        );
         const parse_arg_types = self.plan.generatedCodecCallTypeSlice(parse_call.arg_types);
         if (parse_arg_types.len != 3) boxyLowerInvariant("generated parse_record_field call did not have three arguments");
         const state_rep = proc.repForTypeRef(parse_arg_types[2]);
@@ -10406,66 +10488,158 @@ const ProcedureBuilder = struct {
     ) Allocator.Error!LIR.CFStmtId {
         try proc.ensureGeneratedParserOutputDescriptorForRep(value, shape_rep);
         try proc.ensureGeneratedParserOutputDescriptorForRep(rest, shape_context.state_rep);
-        const parse_call = proc.generatedCodecCallPlan(
-            shape_context.worker,
-            shape_context.encoding_type,
-            "parse_record_field",
-            shape_type,
-        );
-        const parse_arg_types = self.plan.generatedCodecCallTypeSlice(parse_call.arg_types);
-        if (parse_arg_types.len != 3 or !planTypeRefEql(parse_arg_types[2], shape_context.state_type)) {
+        const subject = self.generatedParserSubjectType(shape_type);
+        const field_call = proc.generatedCodecCallPlan(shape_context.worker, shape_context.encoding_type, "parse_record_field", subject);
+        const field_arg_types = self.plan.generatedCodecCallTypeSlice(field_call.arg_types);
+        if (field_arg_types.len != 3 or !planTypeRefEql(field_arg_types[2], shape_context.state_type)) {
             boxyLowerInvariant("generated parse_record_field call disagreed with parser state metadata");
         }
 
-        const cursor = try proc.addGeneratedParserOutputLocalForRep(shape_context.state_rep);
-        const evidence = try proc.addFrameLocalForRep(proc.repForTypeRef(parse_arg_types[1]));
-        const fields = try self.generatedParserRecordFields(
-            proc,
-            shape_context.worker,
-            shape_type,
-            shape_rep,
-            field_names_source,
-        );
+        const fields = try self.generatedParserRecordFields(proc, shape_context.worker, shape_type, shape_rep, field_names_source);
         defer self.allocator.free(fields);
-        const presence_count = (fields.len + 63) / 64;
-        const presence = try self.allocator.alloc(LIR.LocalId, presence_count);
+        const presence = try self.allocator.alloc(LIR.LocalId, (fields.len + 63) / 64);
         defer self.allocator.free(presence);
         for (presence) |*local| local.* = try proc.addFrameLocal(.u64);
         for (fields) |*field| field.payload = try proc.addGeneratedParserOutputLocalForRep(field.rep);
+        const field_ids = try self.allocator.alloc(LIR.JoinPointId, fields.len);
+        defer self.allocator.free(field_ids);
+        const field_states = try self.allocator.alloc(LIR.LocalId, fields.len);
+        defer self.allocator.free(field_states);
+        for (field_ids, field_states) |*id, *field_state| {
+            id.* = proc.freshJoinPointId();
+            field_state.* = try proc.addGeneratedParserOutputLocalForRep(shape_context.state_rep);
+        }
 
-        const context = GeneratedParserRecordContext{
-            .worker = shape_context.worker,
-            .encoding_type = shape_context.encoding_type,
-            .encoding = shape_context.encoding,
-            .shape_type = shape_type,
+        const error_id = proc.freshJoinPointId();
+        const error_rep = self.generatedParserContextErrorRep(proc, shape_context);
+        const error_param = try proc.addFrameLocalForRep(error_rep);
+        var inner = shape_context;
+        inner.error_route = .{ .join = .{ .id = error_id, .param = error_param, .param_rep = error_rep } };
+
+        const record = GeneratedParserRecordLoop{
+            .inner = inner,
+            .subject_type = subject,
             .shape_rep = shape_rep,
-            .target = shape_context.result,
-            .target_rep = shape_context.result_rep,
-            .state_type = shape_context.state_type,
-            .state_rep = shape_context.state_rep,
-            .cursor = cursor,
-            .evidence = evidence,
             .fields = fields,
             .presence = presence,
-            .join_id = proc.freshJoinPointId(),
-            .next = shape_context.next,
+            .evidence = try proc.addFrameLocalForRep(proc.repForTypeRef(field_arg_types[1])),
+            .loop_id = proc.freshJoinPointId(),
+            .cursor = try proc.addGeneratedParserOutputLocalForRep(shape_context.state_rep),
+            .done = try proc.addFrameLocal(.bool),
+            .counted = try proc.addFrameLocal(.bool),
+            .remaining = try proc.addFrameLocal(.u64),
+            .entry_end_id = proc.freshJoinPointId(),
+            .entry_state = try proc.addGeneratedParserOutputLocalForRep(shape_context.state_rep),
+            .skip_id = proc.freshJoinPointId(),
+            .skip_state = try proc.addGeneratedParserOutputLocalForRep(shape_context.state_rep),
+            .field_ids = field_ids,
+            .field_states = field_states,
             .value = value,
             .rest = rest,
             .success = success,
         };
 
-        const loop_body = try self.lowerGeneratedRecordParserLoopBody(proc, context, parse_call);
-        var initial = try self.result.store.addCFStmt(.{ .jump = .{ .target = context.join_id } });
-        initial = try proc.setLocalInitializeJoinParamFromRep(
-            cursor,
-            state,
-            shape_context.state_rep,
-            initial,
-        );
+        // The shared ownership environment of the after-entry and error
+        // continuations: the field names and every payload slot.
+        var retained = std.ArrayList(LIR.LocalId).empty;
+        defer retained.deinit(self.allocator);
+        try retained.append(self.allocator, record.evidence);
+        for (fields) |field| {
+            if (!field.renamed_is_capture) try retained.append(self.allocator, field.renamed);
+        }
+        const payloads = try self.allocator.alloc(LIR.LocalId, fields.len);
+        defer self.allocator.free(payloads);
+        const payload_conditions = try self.allocator.alloc(LIR.LocalId, fields.len);
+        defer self.allocator.free(payload_conditions);
+        const payload_masks = try self.allocator.alloc(u64, fields.len);
+        defer self.allocator.free(payload_masks);
+        for (fields, payloads, payload_conditions, payload_masks, 0..) |field, *payload, *condition, *mask, index| {
+            payload.* = field.payload;
+            condition.* = presence[index / 64];
+            mask.* = @as(u64, 1) << @intCast(index % 64);
+            try retained.append(self.allocator, field.payload);
+        }
+
+        var loop_body = try self.lowerGeneratedRecordLoopHead(proc, record, field_call);
         var field_index = fields.len;
         while (field_index > 0) {
             field_index -= 1;
-            initial = try proc.initUninitializedLocal(fields[field_index].payload, initial);
+            loop_body = try self.result.store.addCFStmt(.{ .join = .{
+                .id = field_ids[field_index],
+                .params = try proc.joinParamSpan(&.{field_states[field_index]}),
+                .body = try self.lowerGeneratedRecordFieldContinuation(proc, record, field_index),
+                .remainder = loop_body,
+            } });
+        }
+        loop_body = try self.result.store.addCFStmt(.{ .join = .{
+            .id = record.skip_id,
+            .params = try proc.joinParamSpan(&.{record.skip_state}),
+            .body = try self.lowerGeneratedRecordSkipContinuation(proc, record),
+            .remainder = loop_body,
+        } });
+        loop_body = try self.result.store.addCFStmt(.{ .join = .{
+            .id = record.entry_end_id,
+            .params = try proc.joinParamSpan(&.{record.entry_state}),
+            .retained = try self.result.store.addLocalSpan(retained.items),
+            .maybe_uninitialized_params = try self.result.store.addLocalSpan(payloads),
+            .maybe_uninitialized_conditions = try self.result.store.addLocalSpan(payload_conditions),
+            .maybe_uninitialized_condition_masks = try self.result.store.addU64Span(payload_masks),
+            .body = try self.lowerGeneratedRecordEntryEnd(proc, record),
+            .remainder = loop_body,
+        } });
+        loop_body = try self.result.store.addCFStmt(.{ .join = .{
+            .id = error_id,
+            .params = try proc.joinParamSpan(&.{error_param}),
+            .retained = try self.result.store.addLocalSpan(retained.items),
+            .maybe_uninitialized_params = try self.result.store.addLocalSpan(payloads),
+            .maybe_uninitialized_conditions = try self.result.store.addLocalSpan(payload_conditions),
+            .maybe_uninitialized_condition_masks = try self.result.store.addU64Span(payload_masks),
+            .body = try self.lowerGeneratedParserErrorValue(proc, shape_context, error_param, error_rep),
+            .remainder = loop_body,
+        } });
+
+        // Enter the loop from the format's start event. The start call runs
+        // before any payload slot exists, so its error follows the enclosing
+        // route.
+        const start_call = proc.generatedCodecCallPlan(shape_context.worker, shape_context.encoding_type, "parse_record_start", subject);
+        const start = try self.beginGeneratedParserCallStep(proc, start_call);
+        const event_rep = start.ok_payload.child.rep;
+        const counted_event = try self.generatedParserEvent(proc, event_rep, "Counted");
+        const uncounted_event = try self.generatedParserEvent(proc, event_rep, "Uncounted");
+
+        const len_rep = proc.repForTypeRef(try proc.generatedParserRecordFieldType(counted_event.payload.child.source_type, "len"));
+        const len = try proc.addFrameLocalForRep(len_rep);
+        const counted_rest = try proc.addGeneratedParserOutputLocalForRep(shape_context.state_rep);
+        const counted_done = try proc.addFrameLocal(.bool);
+        const zero = try proc.addFrameLocal(.u64);
+        var counted_body = try self.enterGeneratedRecordLoop(proc, record, counted_rest, shape_context.state_rep, counted_done, true, len);
+        counted_body = try proc.assignBinaryLowLevel(counted_done, .num_is_eq, len, zero, counted_body);
+        counted_body = try proc.assignIntLiteral(zero, 0, counted_body);
+        counted_body = try proc.generatedParserReadRecordField(counted_rest, shape_context.state_rep, counted_event.payload.local, counted_event.payload.child, "rest", counted_body);
+        counted_body = try proc.generatedParserReadRecordField(len, len_rep, counted_event.payload.local, counted_event.payload.child, "len", counted_body);
+
+        const uncounted_done = try proc.addFrameLocal(.bool);
+        const no_remaining = try proc.addFrameLocal(.u64);
+        var uncounted_body = try self.enterGeneratedRecordLoop(
+            proc,
+            record,
+            uncounted_event.payload.local,
+            uncounted_event.payload.child.rep,
+            uncounted_done,
+            false,
+            no_remaining,
+        );
+        uncounted_body = try proc.assignIntLiteral(no_remaining, 0, uncounted_body);
+        uncounted_body = try proc.assignBoolLiteral(uncounted_done, false, uncounted_body);
+
+        const events = [_]GeneratedParserEvent{ counted_event, uncounted_event };
+        const bodies = [_]LIR.CFStmtId{ counted_body, uncounted_body };
+        var initial = try self.dispatchGeneratedParserEvents(proc, start.ok_payload.local, event_rep, &events, &bodies);
+        initial = try self.finishGeneratedParserCallStep(proc, shape_context, start_call, start, &.{ shape_context.encoding, state }, initial);
+        var payload_index = fields.len;
+        while (payload_index > 0) {
+            payload_index -= 1;
+            initial = try proc.initUninitializedLocal(fields[payload_index].payload, initial);
         }
         var presence_index = presence.len;
         while (presence_index > 0) {
@@ -10473,41 +10647,449 @@ const ProcedureBuilder = struct {
             initial = try proc.assignIntLiteral(presence[presence_index], 0, initial);
         }
 
-        const join_params = try self.allocator.alloc(LIR.LocalId, 1 + fields.len + presence.len);
-        defer self.allocator.free(join_params);
-        join_params[0] = cursor;
-        for (fields, 0..) |field, index| join_params[1 + index] = field.payload;
-        for (presence, 0..) |local, index| join_params[1 + fields.len + index] = local;
-
-        const maybe_payloads = try self.allocator.alloc(LIR.LocalId, fields.len);
-        defer self.allocator.free(maybe_payloads);
-        const maybe_conditions = try self.allocator.alloc(LIR.LocalId, fields.len);
-        defer self.allocator.free(maybe_conditions);
-        const maybe_masks = try self.allocator.alloc(u64, fields.len);
-        defer self.allocator.free(maybe_masks);
-        for (fields, 0..) |field, index| {
-            maybe_payloads[index] = field.payload;
-            maybe_conditions[index] = presence[index / 64];
-            maybe_masks[index] = @as(u64, 1) << @intCast(index % 64);
-        }
-
-        const join = try self.result.store.addCFStmt(.{ .join = .{
-            .id = context.join_id,
-            .params = try proc.joinParamSpan(join_params),
-            .maybe_uninitialized_params = try self.result.store.addLocalSpan(maybe_payloads),
-            .maybe_uninitialized_conditions = try self.result.store.addLocalSpan(maybe_conditions),
-            .maybe_uninitialized_condition_masks = try self.result.store.addU64Span(maybe_masks),
+        const loop_params = try self.allocator.alloc(LIR.LocalId, 4 + fields.len + presence.len);
+        defer self.allocator.free(loop_params);
+        loop_params[0] = record.cursor;
+        loop_params[1] = record.done;
+        loop_params[2] = record.counted;
+        loop_params[3] = record.remaining;
+        // Payloads precede presence words, so a jump that replaces a payload
+        // writes it while the presence word still describes the old one.
+        @memcpy(loop_params[4..][0..fields.len], payloads);
+        @memcpy(loop_params[4 + fields.len ..], presence);
+        const loop = try self.result.store.addCFStmt(.{ .join = .{
+            .id = record.loop_id,
+            .params = try proc.joinParamSpan(loop_params),
+            .maybe_uninitialized_params = try self.result.store.addLocalSpan(payloads),
+            .maybe_uninitialized_conditions = try self.result.store.addLocalSpan(payload_conditions),
+            .maybe_uninitialized_condition_masks = try self.result.store.addU64Span(payload_masks),
             .body = loop_body,
             .remainder = initial,
         } });
-        const with_evidence = try self.lowerGeneratedFieldNamesValue(proc, evidence, fields, join);
-        return try self.lowerGeneratedRecordFieldNamesSource(
+        const with_evidence = try self.lowerGeneratedFieldNamesValue(proc, record.evidence, fields, loop);
+        return try self.lowerGeneratedRecordFieldNamesSource(proc, field_names_source, shape_rep, fields, with_evidence);
+    }
+
+    fn enterGeneratedRecordLoop(
+        self: *ProcedureBuilder,
+        proc: *ProcBodyBuilder,
+        record: GeneratedParserRecordLoop,
+        cursor: LIR.LocalId,
+        cursor_rep: Plan.TypeRepId,
+        done: LIR.LocalId,
+        counted: bool,
+        remaining: LIR.LocalId,
+    ) Allocator.Error!LIR.CFStmtId {
+        const counted_value = try proc.addFrameLocal(.bool);
+        var continuation = try self.result.store.addCFStmt(.{ .jump = .{ .target = record.loop_id } });
+        continuation = try proc.setLocalInitializeJoinParam(record.remaining, remaining, continuation);
+        continuation = try proc.setLocalInitializeJoinParam(record.counted, counted_value, continuation);
+        continuation = try proc.setLocalInitializeJoinParam(record.done, done, continuation);
+        continuation = try proc.setLocalInitializeJoinParamFromRep(record.cursor, cursor, cursor_rep, continuation);
+        return try proc.assignBoolLiteral(counted_value, counted, continuation);
+    }
+
+    /// Re-enter the record loop at `cursor`, after one entry was consumed.
+    /// Counted mode takes one entry off `remaining` and is done once none are
+    /// left.
+    fn continueGeneratedRecordLoopAfterEntry(
+        self: *ProcedureBuilder,
+        proc: *ProcBodyBuilder,
+        record: GeneratedParserRecordLoop,
+        cursor: LIR.LocalId,
+        cursor_rep: Plan.TypeRepId,
+    ) Allocator.Error!LIR.CFStmtId {
+        const decremented = try proc.addFrameLocal(.u64);
+        const zero = try proc.addFrameLocal(.u64);
+        const exhausted = try proc.addFrameLocal(.bool);
+        var counted_body = try self.result.store.addCFStmt(.{ .jump = .{ .target = record.loop_id } });
+        counted_body = try proc.setLocalInitializeJoinParam(record.done, exhausted, counted_body);
+        counted_body = try proc.setLocalInitializeJoinParam(record.remaining, decremented, counted_body);
+        counted_body = try proc.setLocalInitializeJoinParamFromRep(record.cursor, cursor, cursor_rep, counted_body);
+        counted_body = try proc.assignBinaryLowLevel(exhausted, .num_is_eq, decremented, zero, counted_body);
+        counted_body = try proc.assignIntLiteral(zero, 0, counted_body);
+        counted_body = try self.decrementGeneratedParserRemaining(proc, record.remaining, decremented, counted_body);
+
+        var uncounted_body = try self.result.store.addCFStmt(.{ .jump = .{ .target = record.loop_id } });
+        uncounted_body = try proc.setLocalInitializeJoinParamFromRep(record.cursor, cursor, cursor_rep, uncounted_body);
+        return try proc.boolSwitchNoContinuation(record.counted, counted_body, uncounted_body);
+    }
+
+    /// Re-enter the record loop at `cursor` with no more entries to read.
+    fn finishGeneratedRecordLoopAt(
+        self: *ProcedureBuilder,
+        proc: *ProcBodyBuilder,
+        record: GeneratedParserRecordLoop,
+        cursor: LIR.LocalId,
+        cursor_rep: Plan.TypeRepId,
+    ) Allocator.Error!LIR.CFStmtId {
+        const done = try proc.addFrameLocal(.bool);
+        var continuation = try self.result.store.addCFStmt(.{ .jump = .{ .target = record.loop_id } });
+        continuation = try proc.setLocalInitializeJoinParam(record.done, done, continuation);
+        continuation = try proc.setLocalInitializeJoinParamFromRep(record.cursor, cursor, cursor_rep, continuation);
+        return try proc.assignBoolLiteral(done, true, continuation);
+    }
+
+    /// The loop head: build the record once no entries remain, otherwise read
+    /// the next entry event.
+    fn lowerGeneratedRecordLoopHead(
+        self: *ProcedureBuilder,
+        proc: *ProcBodyBuilder,
+        record: GeneratedParserRecordLoop,
+        field_call: Plan.GeneratedCodecCallPlan,
+    ) Allocator.Error!LIR.CFStmtId {
+        const finish = try self.lowerGeneratedRecordFinish(proc, record);
+
+        const step = try self.beginGeneratedParserCallStep(proc, field_call);
+        const event_rep = step.ok_payload.child.rep;
+        const continue_event = try self.generatedParserEvent(proc, event_rep, "Continue");
+        const done_event = try self.generatedParserEvent(proc, event_rep, "Done");
+        const field_event = try self.generatedParserEvent(proc, event_rep, "Field");
+        const try_field_event = try self.generatedParserEvent(proc, event_rep, "TryField");
+        const caseless_event = try self.generatedParserEvent(proc, event_rep, "TryFieldCaseless");
+        const events = [_]GeneratedParserEvent{ continue_event, done_event, field_event, try_field_event, caseless_event };
+        const bodies = [_]LIR.CFStmtId{
+            // The format consumed a whole entry itself and the cursor is
+            // already at the next entry boundary.
+            try self.continueGeneratedRecordLoopAfterEntry(proc, record, continue_event.payload.local, continue_event.payload.child.rep),
+            try self.finishGeneratedRecordLoopAt(proc, record, done_event.payload.local, done_event.payload.child.rep),
+            try self.lowerGeneratedRecordDirectFieldEvent(proc, record, field_event.payload),
+            try self.lowerGeneratedRecordNamedFieldEvent(proc, record, try_field_event.payload, .str_is_eq),
+            try self.lowerGeneratedRecordNamedFieldEvent(proc, record, caseless_event.payload, .str_caseless_ascii_equals),
+        };
+        var step_body = try self.dispatchGeneratedParserEvents(proc, step.ok_payload.local, event_rep, &events, &bodies);
+        step_body = try self.finishGeneratedParserCallStep(
             proc,
-            field_names_source,
-            shape_rep,
-            fields,
-            with_evidence,
+            record.inner,
+            field_call,
+            step,
+            &.{ record.inner.encoding, record.evidence, record.cursor },
+            step_body,
         );
+        return try proc.boolSwitchNoContinuation(record.done, finish, step_body);
+    }
+
+    fn jumpToGeneratedRecordContinuation(
+        self: *ProcedureBuilder,
+        proc: *ProcBodyBuilder,
+        id: LIR.JoinPointId,
+        param: LIR.LocalId,
+        state: LIR.LocalId,
+        state_rep: Plan.TypeRepId,
+    ) Allocator.Error!LIR.CFStmtId {
+        const jump = try self.result.store.addCFStmt(.{ .jump = .{ .target = id } });
+        return try proc.setLocalInitializeJoinParamFromRep(param, state, state_rep, jump);
+    }
+
+    fn lowerGeneratedRecordDirectFieldEvent(
+        self: *ProcedureBuilder,
+        proc: *ProcBodyBuilder,
+        record: GeneratedParserRecordLoop,
+        payload: ProcBodyBuilder.GeneratedParserTagPayload,
+    ) Allocator.Error!LIR.CFStmtId {
+        const state_rep = record.inner.state_rep;
+        const field_handle = try proc.addFrameLocal(self.layout_plan.generated_evidence.field);
+        const rest = try proc.addGeneratedParserOutputLocalForRep(state_rep);
+        const index = try proc.addFrameLocal(.u64);
+        const branches = try self.allocator.alloc(LIR.CFSwitchBranch, record.fields.len);
+        defer self.allocator.free(branches);
+        for (record.fields, branches, 0..) |field, *branch, field_index| {
+            branch.* = .{
+                .value = field.index,
+                .body = try self.jumpToGeneratedRecordContinuation(proc, record.field_ids[field_index], record.field_states[field_index], rest, state_rep),
+            };
+        }
+        const impossible = try self.result.store.addCFStmt(.runtime_error);
+        const field_switch = try self.result.store.addCFStmt(.{ .switch_stmt = .{
+            .cond = index,
+            .branches = try self.result.store.addCFSwitchBranches(branches),
+            .default_branch = impossible,
+            .continuation = null,
+        } });
+        var continuation = try self.result.store.addCFStmt(.{ .assign_ref = .{
+            .target = index,
+            .op = .{ .field = .{ .source = field_handle, .field_idx = 1 } },
+            .next = field_switch,
+        } });
+        continuation = try proc.generatedParserReadRecordField(rest, state_rep, payload.local, payload.child, "rest", continuation);
+        return try proc.generatedParserReadRecordField(
+            field_handle,
+            proc.repForTypeRef(try proc.generatedParserRecordFieldType(payload.child.source_type, "field")),
+            payload.local,
+            payload.child,
+            "field",
+            continuation,
+        );
+    }
+
+    fn lowerGeneratedRecordNamedFieldEvent(
+        self: *ProcedureBuilder,
+        proc: *ProcBodyBuilder,
+        record: GeneratedParserRecordLoop,
+        payload: ProcBodyBuilder.GeneratedParserTagPayload,
+        compare_op: LIR.LowLevel,
+    ) Allocator.Error!LIR.CFStmtId {
+        const state_rep = record.inner.state_rep;
+        const name = try proc.addFrameLocal(.str);
+        const rest = try proc.addGeneratedParserOutputLocalForRep(state_rep);
+        var dispatch = try self.jumpToGeneratedRecordContinuation(proc, record.skip_id, record.skip_state, rest, state_rep);
+        var index = record.fields.len;
+        while (index > 0) {
+            index -= 1;
+            const matches = try proc.addFrameLocal(.bool);
+            const matched = try self.jumpToGeneratedRecordContinuation(proc, record.field_ids[index], record.field_states[index], rest, state_rep);
+            const switch_stmt = try proc.boolSwitchNoContinuation(matches, matched, dispatch);
+            dispatch = try proc.assignBinaryLowLevel(matches, compare_op, name, record.fields[index].renamed, switch_stmt);
+        }
+        dispatch = try proc.generatedParserReadRecordField(rest, state_rep, payload.local, payload.child, "rest", dispatch);
+        return try proc.generatedParserReadRecordField(
+            name,
+            proc.repForTypeRef(try proc.generatedParserRecordFieldType(payload.child.source_type, "name")),
+            payload.local,
+            payload.child,
+            "name",
+            dispatch,
+        );
+    }
+
+    /// The one parser of field `field_index`: parse its value, store it in the
+    /// field's payload slot, and continue after the entry.
+    fn lowerGeneratedRecordFieldContinuation(
+        self: *ProcedureBuilder,
+        proc: *ProcBodyBuilder,
+        record: GeneratedParserRecordLoop,
+        field_index: usize,
+    ) Allocator.Error!LIR.CFStmtId {
+        const field = record.fields[field_index];
+        const state_rep = record.inner.state_rep;
+        const parsed = try proc.addGeneratedParserOutputLocalForRep(field.parse_rep);
+        const parsed_rest = try proc.addGeneratedParserOutputLocalForRep(state_rep);
+        const word_index = field_index / 64;
+        const mask = try proc.addFrameLocal(.u64);
+        const next_presence = try proc.addFrameLocal(.u64);
+
+        var continuation = try self.result.store.addCFStmt(.{ .jump = .{ .target = record.entry_end_id } });
+        continuation = try proc.setLocalInitializeJoinParamFromRep(record.entry_state, parsed_rest, state_rep, continuation);
+        continuation = try proc.setLocalInitializeJoinParam(record.presence[word_index], next_presence, continuation);
+        const stored = switch (field.absence) {
+            .required, .defaulted => blk: {
+                break :blk try proc.setLocalInitializeJoinParam(field.payload, parsed, continuation);
+            },
+            .missing_try => blk: {
+                const wrapped = try proc.addGeneratedParserOutputLocalForRep(field.rep);
+                const set_payload = try proc.setLocalInitializeJoinParam(field.payload, wrapped, continuation);
+                const ok = proc.generatedParserTagVariant(field.rep, "Ok");
+                break :blk try proc.assignGeneratedParserTag(wrapped, field.rep, ok, parsed, field.parse_rep, set_payload);
+            },
+            .optional_slot => blk: {
+                const wrapped = try proc.addGeneratedParserOutputLocalForRep(field.rep);
+                const set_payload = try proc.setLocalInitializeJoinParam(field.payload, wrapped, continuation);
+                const present = proc.generatedParserTagVariant(field.rep, "#Present");
+                break :blk try proc.assignGeneratedParserTag(wrapped, field.rep, present, parsed, field.parse_rep, set_payload);
+            },
+        };
+        // The payload slot is replaced before its presence bit is set, so a
+        // repeated key retires the old payload under the old bit.
+        continuation = try proc.assignBinaryLowLevel(next_presence, .num_bitwise_or, record.presence[word_index], mask, stored);
+        continuation = try proc.assignIntLiteral(mask, @intCast(@as(u64, 1) << @intCast(field_index % 64)), continuation);
+        return try self.lowerGeneratedParseShapeFromState(
+            proc,
+            record.inner,
+            field.parse_type,
+            field.parse_rep,
+            record.field_states[field_index],
+            parsed,
+            parsed_rest,
+            continuation,
+        );
+    }
+
+    fn lowerGeneratedRecordSkipContinuation(
+        self: *ProcedureBuilder,
+        proc: *ProcBodyBuilder,
+        record: GeneratedParserRecordLoop,
+    ) Allocator.Error!LIR.CFStmtId {
+        const call = proc.generatedCodecCallPlan(record.inner.worker, record.inner.encoding_type, "skip_record_field", null);
+        const skipped = try self.beginGeneratedParserCallStep(proc, call);
+        const ok_body = try self.jumpToGeneratedRecordContinuation(
+            proc,
+            record.entry_end_id,
+            record.entry_state,
+            skipped.ok_payload.local,
+            skipped.ok_payload.child.rep,
+        );
+        return try self.finishGeneratedParserCallStep(proc, record.inner, call, skipped, &.{ record.inner.encoding, record.skip_state }, ok_body);
+    }
+
+    /// The one continuation after every parsed or skipped entry. Counted mode
+    /// re-enters the loop directly; uncounted mode asks the format whether
+    /// another entry follows.
+    fn lowerGeneratedRecordEntryEnd(
+        self: *ProcedureBuilder,
+        proc: *ProcBodyBuilder,
+        record: GeneratedParserRecordLoop,
+    ) Allocator.Error!LIR.CFStmtId {
+        const state_rep = record.inner.state_rep;
+        const decremented = try proc.addFrameLocal(.u64);
+        const zero = try proc.addFrameLocal(.u64);
+        const exhausted = try proc.addFrameLocal(.bool);
+        var counted_body = try self.result.store.addCFStmt(.{ .jump = .{ .target = record.loop_id } });
+        counted_body = try proc.setLocalInitializeJoinParam(record.done, exhausted, counted_body);
+        counted_body = try proc.setLocalInitializeJoinParam(record.remaining, decremented, counted_body);
+        counted_body = try proc.setLocalInitializeJoinParamFromRep(record.cursor, record.entry_state, state_rep, counted_body);
+        counted_body = try proc.assignBinaryLowLevel(exhausted, .num_is_eq, decremented, zero, counted_body);
+        counted_body = try proc.assignIntLiteral(zero, 0, counted_body);
+        counted_body = try self.decrementGeneratedParserRemaining(proc, record.remaining, decremented, counted_body);
+
+        const after_call = proc.generatedCodecCallPlan(record.inner.worker, record.inner.encoding_type, "parse_record_after_field", record.subject_type);
+        const after = try self.beginGeneratedParserCallStep(proc, after_call);
+        const event_rep = after.ok_payload.child.rep;
+        const continue_event = try self.generatedParserEvent(proc, event_rep, "Continue");
+        const done_event = try self.generatedParserEvent(proc, event_rep, "Done");
+        var continue_body = try self.result.store.addCFStmt(.{ .jump = .{ .target = record.loop_id } });
+        continue_body = try proc.setLocalInitializeJoinParamFromRep(record.cursor, continue_event.payload.local, continue_event.payload.child.rep, continue_body);
+        const events = [_]GeneratedParserEvent{ continue_event, done_event };
+        const bodies = [_]LIR.CFStmtId{
+            continue_body,
+            try self.finishGeneratedRecordLoopAt(proc, record, done_event.payload.local, done_event.payload.child.rep),
+        };
+        var uncounted_body = try self.dispatchGeneratedParserEvents(proc, after.ok_payload.local, event_rep, &events, &bodies);
+        uncounted_body = try self.finishGeneratedParserCallStep(
+            proc,
+            record.inner,
+            after_call,
+            after,
+            &.{ record.inner.encoding, record.entry_state },
+            uncounted_body,
+        );
+        return try proc.boolSwitchNoContinuation(record.counted, counted_body, uncounted_body);
+    }
+
+    /// Build the record from its payload slots. Every required field's
+    /// presence is checked before any payload is consumed, so each failure
+    /// reaches the error continuation in the same ownership state.
+    fn lowerGeneratedRecordFinish(
+        self: *ProcedureBuilder,
+        proc: *ProcBodyBuilder,
+        record: GeneratedParserRecordLoop,
+    ) Allocator.Error!LIR.CFStmtId {
+        const fields = record.fields;
+        const values = try self.allocator.alloc(LIR.LocalId, fields.len);
+        defer self.allocator.free(values);
+        const descriptor_fields = try self.allocator.alloc(ProcBodyBuilder.AggregateDescriptorField, fields.len);
+        defer self.allocator.free(descriptor_fields);
+        for (fields, values, descriptor_fields) |field, *value, *descriptor_field| {
+            value.* = switch (field.absence) {
+                .required => field.payload,
+                .missing_try, .optional_slot, .defaulted => try proc.addGeneratedParserOutputLocalForRep(field.rep),
+            };
+            descriptor_field.* = .{
+                .local = value.*,
+                .target_rep = field.rep,
+                .source_rep = field.rep,
+            };
+        }
+
+        var continuation = try proc.assignRepresentationBoundary(
+            record.rest,
+            record.cursor,
+            record.inner.state_rep,
+            record.inner.state_rep,
+            record.success,
+        );
+        const aggregate_desc = try proc.constructedAggregateDescriptorForFields(record.value, record.shape_rep, descriptor_fields);
+        defer aggregate_desc.deinit(self.allocator);
+        continuation = try self.result.store.addCFStmt(.{ .assign_struct = .{
+            .target = record.value,
+            .fields = try self.result.store.addLocalSpan(values),
+            .contents_desc = aggregate_desc.contents_desc,
+            .next = continuation,
+        } });
+        continuation = try proc.prependOptionalDescriptorMaterialization(aggregate_desc.materialize, continuation);
+        continuation = try proc.prependDescriptorArgMaterializations(aggregate_desc.field_initializers, continuation);
+
+        var index = fields.len;
+        while (index > 0) {
+            index -= 1;
+            const field = fields[index];
+            if (field.absence == .required) continue;
+            continuation = try self.lowerGeneratedRecordAbsentField(proc, record, index, values[index], continuation);
+        }
+
+        index = fields.len;
+        while (index > 0) {
+            index -= 1;
+            const field = fields[index];
+            if (field.absence != .required) continue;
+            continuation = try self.result.store.addCFStmt(.{ .switch_initialized_payload = .{
+                .cond = record.presence[index / 64],
+                .cond_mask = @as(u64, 1) << @intCast(index % 64),
+                .payload = field.payload,
+                .uninitialized_is_cold = true,
+                .initialized_branch = continuation,
+                .uninitialized_branch = try self.lowerGeneratedMissingRequiredField(proc, record.inner, field.renamed),
+            } });
+        }
+        return continuation;
+    }
+
+    /// Select a missing-able field's final value: its parsed payload when the
+    /// key appeared, otherwise what its absence produces.
+    fn lowerGeneratedRecordAbsentField(
+        self: *ProcedureBuilder,
+        proc: *ProcBodyBuilder,
+        record: GeneratedParserRecordLoop,
+        field_index: usize,
+        final: LIR.LocalId,
+        next: LIR.CFStmtId,
+    ) Allocator.Error!LIR.CFStmtId {
+        const field = record.fields[field_index];
+        const join_id = proc.freshJoinPointId();
+        const jump = try self.result.store.addCFStmt(.{ .jump = .{ .target = join_id } });
+        const present = try proc.setLocalInitializeJoinParam(final, field.payload, jump);
+        const absent_value = try proc.addGeneratedParserOutputLocalForRep(field.rep);
+        const set_absent = try proc.setLocalInitializeJoinParam(final, absent_value, jump);
+        const absent = switch (field.absence) {
+            .required => boxyLowerInvariant("required record field reached absent-field selection"),
+            .missing_try => |missing_try| blk: {
+                const error_rep = proc.repForTypeRef(missing_try.error_type);
+                const error_value = try proc.addFrameLocalForRep(error_rep);
+                const err = proc.generatedParserTagVariant(field.rep, "Err");
+                const wrap = try proc.assignGeneratedParserTag(absent_value, field.rep, err, error_value, error_rep, set_absent);
+                const missing = proc.generatedParserTagVariant(error_rep, "Missing");
+                break :blk try proc.assignGeneratedParserZeroTag(error_value, error_rep, missing, wrap);
+            },
+            .optional_slot => try proc.lowerOptionalSlotMissingInto(absent_value, field.rep, set_absent),
+            .defaulted => |default| try proc.lowerDefaultedRecordFieldInto(absent_value, default, field.source_type, set_absent),
+        };
+        return try self.result.store.addCFStmt(.{ .join = .{
+            .id = join_id,
+            .params = try proc.joinParamSpan(&.{final}),
+            .body = next,
+            .remainder = try self.result.store.addCFStmt(.{ .switch_initialized_payload = .{
+                .cond = record.presence[field_index / 64],
+                .cond_mask = @as(u64, 1) << @intCast(field_index % 64),
+                .payload = field.payload,
+                .initialized_branch = present,
+                .uninitialized_branch = absent,
+            } }),
+        } });
+    }
+
+    /// Route `MissingRequiredField(name)` along `context`'s error route.
+    fn lowerGeneratedMissingRequiredField(
+        self: *ProcedureBuilder,
+        proc: *ProcBodyBuilder,
+        context: GeneratedParserShapeContext,
+        name: LIR.LocalId,
+    ) Allocator.Error!LIR.CFStmtId {
+        const error_rep = self.generatedParserContextErrorRep(proc, context);
+        const error_value = try proc.addFrameLocalForRep(error_rep);
+        const missing = proc.generatedParserTagVariant(error_rep, "MissingRequiredField");
+        const payloads = self.plan.childSlice(missing.variant.payloads);
+        if (payloads.len != 1) boxyLowerInvariant("MissingRequiredField did not carry one field-name payload");
+        const routed = try self.lowerGeneratedParserErrorValue(proc, context, error_value, error_rep);
+        return try proc.assignGeneratedParserTag(error_value, error_rep, missing, name, payloads[0].rep, routed);
     }
 
     fn generatedParserRecordFields(
@@ -10548,10 +11130,7 @@ const ProcedureBuilder = struct {
             var capture_local_index: usize = 1;
             var renamed: ?LIR.LocalId = null;
             var parse_type: ?Plan.CheckedTypeIdentity = null;
-            var parser_wrap_ok = false;
-            var optional_error_type: ?Plan.CheckedTypeIdentity = null;
-            var optional_missing = false;
-            var optional_null = false;
+            var absence: Plan.GeneratedParserFieldAbsence = .required;
             for (self.plan.generated_parser_field_captures.items) |capture| {
                 if (capture.worker != worker) continue;
                 const capture_view = procedureModuleById(self.modules, capture.field_module);
@@ -10569,10 +11148,7 @@ const ProcedureBuilder = struct {
                         .tag_union_spec => try proc.addFrameLocal(.str),
                     };
                     parse_type = capture.parse_type;
-                    parser_wrap_ok = capture.parser_wrap_ok;
-                    optional_error_type = capture.optional_error_type;
-                    optional_missing = capture.optional_missing;
-                    optional_null = capture.optional_null;
+                    absence = capture.absence;
                 }
                 capture_local_index += 1;
             }
@@ -10585,11 +11161,9 @@ const ProcedureBuilder = struct {
                     boxyLowerInvariant("generated parser record field had no planned parse type"),
                 .parse_rep = proc.repForTypeRef(parse_type orelse
                     boxyLowerInvariant("generated parser record field had no planned parse representation")),
-                .parser_wrap_ok = parser_wrap_ok,
-                .optional_error_type = optional_error_type,
-                .optional_missing = optional_missing,
-                .optional_null = optional_null,
+                .absence = absence,
                 .renamed = renamed orelse boxyLowerInvariant("generated parser record field had no renamed capture"),
+                .renamed_is_capture = field_names_source == .captures,
                 .payload = undefined,
                 .index = out_index,
             };
@@ -10664,422 +11238,6 @@ const ProcedureBuilder = struct {
             .op = .{ .field = .{ .source = tag_source.spec, .field_idx = 0 } },
             .next = continuation,
         } });
-    }
-
-    fn lowerGeneratedRecordParserLoopBody(
-        self: *ProcedureBuilder,
-        proc: *ProcBodyBuilder,
-        context: GeneratedParserRecordContext,
-        parse_call: Plan.GeneratedCodecCallPlan,
-    ) Allocator.Error!LIR.CFStmtId {
-        const step_rep = proc.repForTypeRef(parse_call.ret_type);
-        const step = try proc.addFrameLocalForRep(step_rep);
-        const ok = proc.generatedParserTagVariant(step_rep, "Ok");
-        const err = proc.generatedParserTagVariant(step_rep, "Err");
-        const err_body = try proc.forwardGeneratedParserError(
-            context.target,
-            context.target_rep,
-            step,
-            err,
-            context.next,
-        );
-
-        const ok_payloads = self.plan.childSlice(ok.variant.payloads);
-        if (ok_payloads.len != 1) boxyLowerInvariant("generated record parser step Ok did not have one event payload");
-        const event_child = ok_payloads[0];
-        const event = try proc.addFrameLocalForRep(event_child.rep);
-        const event_body = try self.lowerGeneratedRecordParserEvent(proc, context, event, event_child);
-        const read_event = try proc.assignConcreteTagPayloadRead(
-            event,
-            event_child.rep,
-            null,
-            step,
-            ok.tag_rep,
-            ok.variant.name,
-            ok.index,
-            0,
-            1,
-            event_body,
-        );
-        const variants = [_]GeneratedParserTagVariant{ ok, err };
-        const bodies = [_]LIR.CFStmtId{ read_event, err_body };
-        const impossible = try self.result.store.addCFStmt(.runtime_error);
-        const dispatch = try proc.generatedParserTagDispatch(step, step_rep, &variants, &bodies, impossible);
-        return try self.lowerGeneratedCodecCallLocalsInto(
-            proc,
-            parse_call,
-            step,
-            &.{ context.encoding, context.evidence, context.cursor },
-            dispatch,
-        );
-    }
-
-    fn lowerGeneratedRecordParserEvent(
-        self: *ProcedureBuilder,
-        proc: *ProcBodyBuilder,
-        context: GeneratedParserRecordContext,
-        event: LIR.LocalId,
-        event_child: Plan.RepChild,
-    ) Allocator.Error!LIR.CFStmtId {
-        const continue_variant = proc.generatedParserTagVariant(event_child.rep, "Continue");
-        const done_variant = proc.generatedParserTagVariant(event_child.rep, "Done");
-        const field_variant = proc.generatedParserTagVariant(event_child.rep, "Field");
-        const try_field_variant = proc.generatedParserTagVariant(event_child.rep, "TryField");
-        const caseless_variant = proc.generatedParserTagVariant(event_child.rep, "TryFieldCaseless");
-
-        const variants = [_]GeneratedParserTagVariant{
-            continue_variant,
-            done_variant,
-            field_variant,
-            try_field_variant,
-            caseless_variant,
-        };
-        const bodies = [_]LIR.CFStmtId{
-            try self.lowerGeneratedRecordContinueEvent(proc, context, event, continue_variant),
-            try self.lowerGeneratedRecordDoneEvent(proc, context, event, done_variant),
-            try self.lowerGeneratedRecordDirectFieldEvent(proc, context, event, field_variant),
-            try self.lowerGeneratedRecordNamedFieldEvent(proc, context, event, try_field_variant, .str_is_eq),
-            try self.lowerGeneratedRecordNamedFieldEvent(proc, context, event, caseless_variant, .str_caseless_ascii_equals),
-        };
-        const impossible = try self.result.store.addCFStmt(.runtime_error);
-        return try proc.generatedParserTagDispatch(event, event_child.rep, &variants, &bodies, impossible);
-    }
-
-    fn lowerGeneratedRecordContinueEvent(
-        self: *ProcedureBuilder,
-        proc: *ProcBodyBuilder,
-        context: GeneratedParserRecordContext,
-        event: LIR.LocalId,
-        variant: GeneratedParserTagVariant,
-    ) Allocator.Error!LIR.CFStmtId {
-        const payload = try proc.generatedParserSingleTagPayloadLocal(variant);
-        const rest = try proc.addFrameLocalForRep(context.state_rep);
-        var continuation = try self.result.store.addCFStmt(.{ .jump = .{ .target = context.join_id } });
-        continuation = try proc.setLocalInitializeJoinParam(context.cursor, rest, continuation);
-        continuation = try proc.generatedParserReadRecordField(
-            rest,
-            context.state_rep,
-            payload.local,
-            payload.child,
-            "rest",
-            continuation,
-        );
-        return try proc.generatedParserReadTagPayload(event, variant, payload, continuation);
-    }
-
-    fn lowerGeneratedRecordDirectFieldEvent(
-        self: *ProcedureBuilder,
-        proc: *ProcBodyBuilder,
-        context: GeneratedParserRecordContext,
-        event: LIR.LocalId,
-        variant: GeneratedParserTagVariant,
-    ) Allocator.Error!LIR.CFStmtId {
-        const payload = try proc.generatedParserSingleTagPayloadLocal(variant);
-        const field_handle = try proc.addFrameLocal(self.layout_plan.generated_evidence.field);
-        const rest = try proc.addFrameLocalForRep(context.state_rep);
-        const index = try proc.addFrameLocal(.u64);
-        const branches = try self.allocator.alloc(LIR.CFSwitchBranch, context.fields.len);
-        defer self.allocator.free(branches);
-        for (context.fields, 0..) |field, field_index| {
-            branches[field_index] = .{
-                .value = field.index,
-                .body = try self.lowerGeneratedMatchedRecordField(proc, context, field_index, rest),
-            };
-        }
-        const impossible = try self.result.store.addCFStmt(.runtime_error);
-        const field_switch = try self.result.store.addCFStmt(.{ .switch_stmt = .{
-            .cond = index,
-            .branches = try self.result.store.addCFSwitchBranches(branches),
-            .default_branch = impossible,
-            .continuation = null,
-        } });
-        var continuation = try self.result.store.addCFStmt(.{ .assign_ref = .{
-            .target = index,
-            .op = .{ .field = .{ .source = field_handle, .field_idx = 1 } },
-            .next = field_switch,
-        } });
-        continuation = try proc.generatedParserReadRecordField(
-            rest,
-            context.state_rep,
-            payload.local,
-            payload.child,
-            "rest",
-            continuation,
-        );
-        continuation = try proc.generatedParserReadRecordField(
-            field_handle,
-            proc.repForTypeRef(try proc.generatedParserRecordFieldType(payload.child.source_type, "field")),
-            payload.local,
-            payload.child,
-            "field",
-            continuation,
-        );
-        return try proc.generatedParserReadTagPayload(event, variant, payload, continuation);
-    }
-
-    fn lowerGeneratedRecordNamedFieldEvent(
-        self: *ProcedureBuilder,
-        proc: *ProcBodyBuilder,
-        context: GeneratedParserRecordContext,
-        event: LIR.LocalId,
-        variant: GeneratedParserTagVariant,
-        compare_op: LIR.LowLevel,
-    ) Allocator.Error!LIR.CFStmtId {
-        const payload = try proc.generatedParserSingleTagPayloadLocal(variant);
-        const name = try proc.addFrameLocal(.str);
-        const rest = try proc.addFrameLocalForRep(context.state_rep);
-        var dispatch = try self.lowerGeneratedSkipRecordField(proc, context, rest);
-        var index = context.fields.len;
-        while (index > 0) {
-            index -= 1;
-            const matches = try proc.addFrameLocal(.bool);
-            const matched = try self.lowerGeneratedMatchedRecordField(proc, context, index, rest);
-            const switch_stmt = try proc.boolSwitchNoContinuation(matches, matched, dispatch);
-            dispatch = try proc.assignBinaryLowLevel(matches, compare_op, name, context.fields[index].renamed, switch_stmt);
-        }
-        dispatch = try proc.generatedParserReadRecordField(
-            rest,
-            context.state_rep,
-            payload.local,
-            payload.child,
-            "rest",
-            dispatch,
-        );
-        dispatch = try proc.generatedParserReadRecordField(
-            name,
-            proc.repForTypeRef(try proc.generatedParserRecordFieldType(payload.child.source_type, "name")),
-            payload.local,
-            payload.child,
-            "name",
-            dispatch,
-        );
-        return try proc.generatedParserReadTagPayload(event, variant, payload, dispatch);
-    }
-
-    fn lowerGeneratedMatchedRecordField(
-        self: *ProcedureBuilder,
-        proc: *ProcBodyBuilder,
-        context: GeneratedParserRecordContext,
-        field_index: usize,
-        rest: LIR.LocalId,
-    ) Allocator.Error!LIR.CFStmtId {
-        const field = context.fields[field_index];
-        const value = try proc.addGeneratedParserOutputLocalForRep(field.rep);
-        const parsed_value = if (field.parser_wrap_ok)
-            try proc.addGeneratedParserOutputLocalForRep(field.parse_rep)
-        else
-            value;
-        const next_rest = try proc.addGeneratedParserOutputLocalForRep(context.state_rep);
-        var success = try self.lowerGeneratedRecordLoopUpdate(proc, context, field_index, value, next_rest);
-        if (field.parser_wrap_ok) {
-            const field_ok = proc.generatedParserTagVariant(field.rep, "Ok");
-            success = try proc.assignGeneratedParserTag(
-                value,
-                field.rep,
-                field_ok,
-                parsed_value,
-                field.parse_rep,
-                success,
-            );
-        }
-        return try self.lowerGeneratedParseShapeFromState(
-            proc,
-            .{
-                .worker = context.worker,
-                .encoding_type = context.encoding_type,
-                .encoding = context.encoding,
-                .state_type = context.state_type,
-                .state_rep = context.state_rep,
-                .result = context.target,
-                .result_rep = context.target_rep,
-                .next = context.next,
-            },
-            field.parse_type,
-            field.parse_rep,
-            rest,
-            parsed_value,
-            next_rest,
-            success,
-        );
-    }
-
-    fn lowerGeneratedRecordLoopUpdate(
-        self: *ProcedureBuilder,
-        proc: *ProcBodyBuilder,
-        context: GeneratedParserRecordContext,
-        field_index: usize,
-        value: LIR.LocalId,
-        rest: LIR.LocalId,
-    ) Allocator.Error!LIR.CFStmtId {
-        const word_index = field_index / 64;
-        const mask_value = @as(u64, 1) << @intCast(field_index % 64);
-        const mask = try proc.addFrameLocal(.u64);
-        const next_presence = try proc.addFrameLocal(.u64);
-        var continuation = try self.result.store.addCFStmt(.{ .jump = .{ .target = context.join_id } });
-        continuation = try proc.setLocalInitializeJoinParam(context.presence[word_index], next_presence, continuation);
-        continuation = try proc.setLocalInitializeJoinParam(context.fields[field_index].payload, value, continuation);
-        continuation = try proc.setLocalInitializeJoinParam(context.cursor, rest, continuation);
-        continuation = try proc.assignBinaryLowLevel(
-            next_presence,
-            .num_bitwise_or,
-            context.presence[word_index],
-            mask,
-            continuation,
-        );
-        return try proc.assignIntLiteral(mask, @intCast(mask_value), continuation);
-    }
-
-    fn lowerGeneratedSkipRecordField(
-        self: *ProcedureBuilder,
-        proc: *ProcBodyBuilder,
-        context: GeneratedParserRecordContext,
-        rest: LIR.LocalId,
-    ) Allocator.Error!LIR.CFStmtId {
-        const call = proc.generatedCodecCallPlan(context.worker, context.encoding_type, "skip_record_field", null);
-        const skipped_rep = proc.repForTypeRef(call.ret_type);
-        const skipped = try proc.addFrameLocalForRep(skipped_rep);
-        const ok = proc.generatedParserTagVariant(skipped_rep, "Ok");
-        const err = proc.generatedParserTagVariant(skipped_rep, "Err");
-        const err_body = try proc.forwardGeneratedParserError(
-            context.target,
-            context.target_rep,
-            skipped,
-            err,
-            context.next,
-        );
-        const ok_payload = try proc.generatedParserSingleTagPayloadLocal(ok);
-        var success = try self.result.store.addCFStmt(.{ .jump = .{ .target = context.join_id } });
-        success = try proc.setLocalInitializeJoinParam(context.cursor, ok_payload.local, success);
-        success = try proc.generatedParserReadTagPayload(skipped, ok, ok_payload, success);
-        const variants = [_]GeneratedParserTagVariant{ ok, err };
-        const bodies = [_]LIR.CFStmtId{ success, err_body };
-        const impossible = try self.result.store.addCFStmt(.runtime_error);
-        const dispatch = try proc.generatedParserTagDispatch(skipped, skipped_rep, &variants, &bodies, impossible);
-        return try self.lowerGeneratedCodecCallLocalsInto(
-            proc,
-            call,
-            skipped,
-            &.{ context.encoding, rest },
-            dispatch,
-        );
-    }
-
-    fn lowerGeneratedRecordDoneEvent(
-        self: *ProcedureBuilder,
-        proc: *ProcBodyBuilder,
-        context: GeneratedParserRecordContext,
-        event: LIR.LocalId,
-        variant: GeneratedParserTagVariant,
-    ) Allocator.Error!LIR.CFStmtId {
-        const payload = try proc.generatedParserSingleTagPayloadLocal(variant);
-        const rest = try proc.addFrameLocalForRep(context.state_rep);
-        var continuation = try self.lowerGeneratedFinishedRecord(proc, context, rest);
-        var index = context.fields.len;
-        while (index > 0) {
-            index -= 1;
-            const missing = try self.lowerGeneratedMissingRecordField(proc, context, index, rest, continuation);
-            continuation = try self.result.store.addCFStmt(.{ .switch_initialized_payload = .{
-                .cond = context.presence[index / 64],
-                .cond_mask = @as(u64, 1) << @intCast(index % 64),
-                .payload = context.fields[index].payload,
-                .uninitialized_is_cold = true,
-                .initialized_branch = continuation,
-                .uninitialized_branch = missing,
-            } });
-        }
-        continuation = try proc.generatedParserReadRecordField(
-            rest,
-            context.state_rep,
-            payload.local,
-            payload.child,
-            "rest",
-            continuation,
-        );
-        return try proc.generatedParserReadTagPayload(event, variant, payload, continuation);
-    }
-
-    fn lowerGeneratedMissingRecordField(
-        self: *ProcedureBuilder,
-        proc: *ProcBodyBuilder,
-        context: GeneratedParserRecordContext,
-        field_index: usize,
-        rest: LIR.LocalId,
-        present_continuation: LIR.CFStmtId,
-    ) Allocator.Error!LIR.CFStmtId {
-        const field = context.fields[field_index];
-        const method = if (field.optional_missing) "missing_optional_field" else "missing_record_field";
-        const call = proc.generatedCodecCallPlan(context.worker, context.encoding_type, method, null);
-        const err_rep = proc.repForTypeRef(call.ret_type);
-        const err = try proc.addFrameLocalForRep(err_rep);
-        const continuation = if (field.optional_missing) blk: {
-            const field_err = proc.generatedParserTagVariant(field.rep, "Err");
-            break :blk try proc.assignGeneratedParserTag(
-                field.payload,
-                field.rep,
-                field_err,
-                err,
-                err_rep,
-                present_continuation,
-            );
-        } else blk: {
-            const target_err = proc.generatedParserTagVariant(context.target_rep, "Err");
-            break :blk try proc.assignGeneratedParserTag(
-                context.target,
-                context.target_rep,
-                target_err,
-                err,
-                err_rep,
-                context.next,
-            );
-        };
-        return try self.lowerGeneratedCodecCallLocalsInto(
-            proc,
-            call,
-            err,
-            &.{ context.encoding, field.renamed, rest },
-            continuation,
-        );
-    }
-
-    fn lowerGeneratedFinishedRecord(
-        self: *ProcedureBuilder,
-        proc: *ProcBodyBuilder,
-        context: GeneratedParserRecordContext,
-        rest: LIR.LocalId,
-    ) Allocator.Error!LIR.CFStmtId {
-        var continuation = try proc.assignRepresentationBoundary(
-            context.rest,
-            rest,
-            context.state_rep,
-            context.state_rep,
-            context.success,
-        );
-        const shape_fields = try self.allocator.alloc(LIR.LocalId, context.fields.len);
-        defer self.allocator.free(shape_fields);
-        const descriptor_fields = try self.allocator.alloc(ProcBodyBuilder.AggregateDescriptorField, context.fields.len);
-        defer self.allocator.free(descriptor_fields);
-        for (context.fields, 0..) |field, index| {
-            shape_fields[index] = field.payload;
-            descriptor_fields[index] = .{
-                .local = field.payload,
-                .target_rep = field.rep,
-                .source_rep = field.rep,
-            };
-        }
-        const aggregate_desc = try proc.constructedAggregateDescriptorForFields(
-            context.value,
-            context.shape_rep,
-            descriptor_fields,
-        );
-        defer aggregate_desc.deinit(self.allocator);
-        continuation = try self.result.store.addCFStmt(.{ .assign_struct = .{
-            .target = context.value,
-            .fields = try self.result.store.addLocalSpan(shape_fields),
-            .contents_desc = aggregate_desc.contents_desc,
-            .next = continuation,
-        } });
-        continuation = try proc.prependOptionalDescriptorMaterialization(aggregate_desc.materialize, continuation);
-        return try proc.prependDescriptorArgMaterializations(aggregate_desc.field_initializers, continuation);
     }
 
     fn lowerGeneratedFieldNamesValue(
@@ -14154,6 +14312,7 @@ const ProcBodyBuilder = struct {
                 if (!std.mem.eql(u8, self.tagVariantNameText(variant), tag_text)) continue;
                 if (index > std.math.maxInt(u16)) boxyLowerInvariant("generated parser tag index exceeded LIR range");
                 return .{
+                    .application_rep = rep_id,
                     .tag_rep = root_rep,
                     .owner_rep = current,
                     .index = @intCast(index),
@@ -14231,9 +14390,16 @@ const ProcBodyBuilder = struct {
     }
 
     const GeneratedParserTagPayload = struct {
+        /// The payload at its exact representation for this nominal application.
         local: LIR.LocalId,
-        desc_local: ?LIR.LocalId,
+        /// `child` describes the exact payload: its representation and checked
+        /// type for this nominal application.
         child: Plan.RepChild,
+        /// The payload as the tag's storage declares it, read before adapting
+        /// it to `local`.
+        stored_local: LIR.LocalId,
+        stored_rep: Plan.TypeRepId,
+        desc_local: ?LIR.LocalId,
     };
 
     fn generatedParserSingleTagPayloadLocal(
@@ -14244,10 +14410,15 @@ const ProcBodyBuilder = struct {
         if (payloads.len != 1) boxyLowerInvariant("generated parser tag did not have one payload");
         const tag_rep = self.parent.plan.representations.items[@intFromEnum(variant.tag_rep)];
         const extracted = try self.addExtractedTagPayloadLocal(payloads[0].rep, tag_rep.descriptor != null);
+        var child = payloads[0];
+        child.rep = self.nominalBackingActualRep(variant.application_rep, payloads[0].rep);
+        child.source_type = self.parent.plan.representations.items[@intFromEnum(child.rep)].source_type;
         return .{
-            .local = extracted.local,
+            .local = if (child.rep == payloads[0].rep) extracted.local else try self.addFrameLocalForRep(child.rep),
+            .child = child,
+            .stored_local = extracted.local,
+            .stored_rep = payloads[0].rep,
             .desc_local = extracted.desc_local,
-            .child = payloads[0],
         };
     }
 
@@ -14258,9 +14429,13 @@ const ProcBodyBuilder = struct {
         payload: GeneratedParserTagPayload,
         next: LIR.CFStmtId,
     ) Allocator.Error!LIR.CFStmtId {
+        const adapted = if (payload.local == payload.stored_local)
+            next
+        else
+            try self.assignRepresentationBoundary(payload.local, payload.stored_local, payload.child.rep, payload.stored_rep, next);
         return try self.assignConcreteTagPayloadRead(
-            payload.local,
-            payload.child.rep,
+            payload.stored_local,
+            payload.stored_rep,
             payload.desc_local,
             source,
             variant.tag_rep,
@@ -14268,7 +14443,7 @@ const ProcBodyBuilder = struct {
             variant.index,
             0,
             1,
-            next,
+            adapted,
         );
     }
 
@@ -17274,8 +17449,13 @@ const ProcBodyBuilder = struct {
 
         var callable_bindings = std.ArrayList(LocalDescriptorEnvironmentBinding).empty;
         defer callable_bindings.deinit(self.parent.allocator);
-        var exact_reps = collections.DenseMap(Plan.TypeRepId, Plan.TypeRepId).init(self.parent.allocator);
+        // Only the formals the descriptor captures name need an exact rep; a
+        // formal shared by nested uses of one nominal may have several.
+        var exact_reps = collections.DenseMap(Plan.TypeRepId, ?Plan.TypeRepId).init(self.parent.allocator);
         defer exact_reps.deinit();
+        for (captures) |capture| {
+            if (capture.kind == .hidden_desc) try exact_reps.put(capture.rep, null);
+        }
         var seen_exact_reps = collections.DenseMap(Plan.TypeRepId, void).init(self.parent.allocator);
         defer seen_exact_reps.deinit();
         try self.collectNominalBackingRepActualSubstitutions(
@@ -17288,8 +17468,10 @@ const ProcBodyBuilder = struct {
             const desc = capture.desc orelse
                 boxyLowerInvariant("generated erased callable hidden descriptor capture had no requirement");
             try self.appendLocalDescriptorEnvironmentBinding(&callable_bindings, desc, capture.rep, value);
-            if (exact_reps.get(capture.rep)) |exact_rep| {
-                try self.appendLocalDescriptorEnvironmentBinding(&callable_bindings, desc, exact_rep, value);
+            if (exact_reps.get(capture.rep)) |maybe_exact_rep| {
+                if (maybe_exact_rep) |exact_rep| {
+                    try self.appendLocalDescriptorEnvironmentBinding(&callable_bindings, desc, exact_rep, value);
+                }
             }
         }
         if (result_desc.desc) |desc| {
@@ -17376,10 +17558,12 @@ const ProcBodyBuilder = struct {
         return try self.prependDescriptorArgMaterializations(descriptor_initializers.items, continuation);
     }
 
+    /// Record the exact rep each formal in `substitutions` is instantiated at
+    /// anywhere in `rep_id`.
     fn collectNominalBackingRepActualSubstitutions(
         self: *ProcBodyBuilder,
         rep_id: Plan.TypeRepId,
-        substitutions: *collections.DenseMap(Plan.TypeRepId, Plan.TypeRepId),
+        substitutions: *collections.DenseMap(Plan.TypeRepId, ?Plan.TypeRepId),
         seen: *collections.DenseMap(Plan.TypeRepId, void),
     ) Allocator.Error!void {
         const entry = try seen.getOrPut(rep_id);
@@ -17389,11 +17573,14 @@ const ProcBodyBuilder = struct {
         var substitution_iter = self.parent.plan.nominalBackingSubstitutions(rep.nominal_backing_arg_substitutions);
         while (substitution_iter.next()) |substitution| {
             if (substitution.formal_rep) |formal_rep| {
-                const put = try substitutions.getOrPut(formal_rep);
-                if (put.found_existing and put.value_ptr.* != substitution.actual_rep) {
-                    boxyLowerInvariant("boxy callable representation assigned one nominal backing formal to two exact reps");
+                if (substitutions.getPtr(formal_rep)) |exact| {
+                    if (exact.*) |existing| {
+                        if (existing != substitution.actual_rep) {
+                            boxyLowerInvariant("boxy callable representation assigned one nominal backing formal to two exact reps");
+                        }
+                    }
+                    exact.* = substitution.actual_rep;
                 }
-                put.value_ptr.* = substitution.actual_rep;
             }
             try self.collectNominalBackingRepActualSubstitutions(substitution.actual_rep, substitutions, seen);
         }
@@ -19477,9 +19664,10 @@ const ProcBodyBuilder = struct {
             // Removing local variants would renumber the extension
             // discriminant without changing the source storage layout. Keep
             // the exact source descriptor whenever local residual variants
-            // remain; otherwise project its already-layout-correct extension.
+            // remain or the source row is closed; otherwise project its
+            // already-layout-correct extension.
             if (has_residual_variant) break :static_residual source_desc;
-            break :static_residual source_template_value.tag_ext_desc;
+            break :static_residual source_template_value.tag_ext_desc orelse source_desc;
         } else runtime_residual: {
             const target_tag_rep = self.parent.tagVariantRepForDesc(target_rep);
             const target_tag = self.parent.plan.representations.items[@intFromEnum(target_tag_rep)];
@@ -19493,10 +19681,9 @@ const ProcBodyBuilder = struct {
                     has_residual_variant = true;
                 }
             }
-            if (has_residual_variant) {
+            if (has_residual_variant or !self.tagUnionRepHasExtension(source_tag)) {
                 break :runtime_residual source_desc;
             }
-            if (!self.tagUnionRepHasExtension(source_tag)) break :runtime_residual null;
 
             const ext_local = try self.addFrameLocal(.opaque_ptr);
             prerequisite = .{
@@ -23120,7 +23307,17 @@ const ProcBodyBuilder = struct {
         const nominal = self.parent.plan.representations.items[@intFromEnum(nominal_rep)];
         switch (nominal.kind) {
             .nominal => |kind| switch (kind) {
-                .transparent, .builtin_other => return try self.lowerPatternThen(backing_pattern, source, on_match, miss, remaps),
+                // A nominal is stored as its declaration's shared backing, so
+                // the backing pattern, typed at this use's instantiated
+                // backing, matches through that stored representation.
+                .transparent, .builtin_other => return try self.lowerPatternFromRepThen(
+                    backing_pattern,
+                    source,
+                    self.repQuery().requiredSingleChild(nominal_rep, .nominal_backing).rep,
+                    on_match,
+                    miss,
+                    remaps,
+                ),
                 .opaque_nominal => {},
             },
             .in_progress, .dynamic, .primitive, .bool_tag_union, .erased_callable, .alias, .record, .tuple, .list, .box, .generated_field, .generated_field_names, .generated_tag_union_spec, .empty_record, .tag_union, .empty_tag_union => {},

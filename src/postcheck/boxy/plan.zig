@@ -586,10 +586,28 @@ pub const GeneratedParserFieldCapture = struct {
     field_name: RecordFieldLabelId,
     source_type: CheckedTypeIdentity,
     parse_type: CheckedTypeIdentity,
-    parser_wrap_ok: bool = false,
+    absence: GeneratedParserFieldAbsence = .required,
     optional_error_type: ?CheckedTypeIdentity,
     optional_missing: bool = false,
     optional_null: bool = false,
+};
+
+/// What a generated record parser produces for a field whose key never
+/// appeared in the input.
+pub const GeneratedParserFieldAbsence = union(enum) {
+    /// The whole parse fails with `MissingRequiredField(name)`.
+    required,
+    /// A `Try(ok, [Missing])` field: the input is parsed at `ok` and wrapped in
+    /// `Ok`; an absent key is `Err(Missing)`.
+    missing_try: struct {
+        ok_type: CheckedTypeIdentity,
+        error_type: CheckedTypeIdentity,
+    },
+    /// A `?:` field: the input is parsed at the slot's payload type and wrapped
+    /// in `#Present`; an absent key is `#Missing`.
+    optional_slot,
+    /// A `??` field: an absent key materializes the field's checked default.
+    defaulted: checked.CheckedFieldDefault,
 };
 
 /// Exact checked JSON-style Try handling consumed by a generated parser.
@@ -604,11 +622,19 @@ pub const GeneratedParserTryPlan = struct {
 
 /// Checked strategy selected for a generated dictionary field parser.
 pub const GeneratedParserDictionaryFieldStrategy = union(enum) {
+    /// The format's `parse_key_*` method for a key it renders as a key string.
     method: struct {
         module: checked.ModuleId,
         name: MethodNameId,
     },
-    unit_tags,
+    /// A payload-free tag union key, read with `parse_key_str` and matched by
+    /// tag name. `string_type` is the checked `Str` subject of that call.
+    unit_tags: struct {
+        string_type: CheckedTypeIdentity,
+    },
+    /// Any other key: `parse_key_start` opens the key position and the key
+    /// type's own parser reads it.
+    key_parser,
 };
 
 /// Checked dictionary-field parser selection for one generated Dict parser.
@@ -3223,16 +3249,11 @@ const Builder = struct {
                 try self.propagateGeneratedParserTagCallLink(worker, shape, backing);
                 try self.propagateGeneratedParserTryPlan(worker, shape, backing);
             },
-            .record => try self.planGeneratedParserRecord(worker, shape, encoding_type),
-            .empty_record => {
-                _ = try self.ensureGeneratedCodecCall(worker, encoding_type, "parse_record_field", shape);
-                _ = try self.ensureGeneratedCodecCall(worker, encoding_type, "skip_record_field", null);
-            },
+            .record, .empty_record => try self.planGeneratedParserRecord(worker, shape, encoding_type),
             .tuple => |elems| {
-                _ = try self.ensureGeneratedCodecCall(worker, encoding_type, "parse_array_start", null);
-                _ = try self.ensureGeneratedCodecCall(worker, encoding_type, "parse_array_next", null);
-                _ = try self.ensureGeneratedCodecCall(worker, encoding_type, "parse_array_after_element", null);
-                _ = try self.ensureGeneratedCodecCall(worker, encoding_type, "invalid_value", null);
+                _ = try self.ensureGeneratedCodecCall(worker, encoding_type, "parse_tuple_start", shape);
+                _ = try self.ensureGeneratedCodecCall(worker, encoding_type, "parse_tuple_next", shape);
+                _ = try self.ensureGeneratedCodecCall(worker, encoding_type, "parse_tuple_end", shape);
                 for (elems) |elem| {
                     try self.planGeneratedParserShape(worker, typeRef(view, elem), encoding_type);
                 }
@@ -3253,29 +3274,50 @@ const Builder = struct {
                             if (nominal.args.len != 1) boxyPlanInvariant("Box generated parser type had unexpected arity");
                             try self.planGeneratedParserShape(worker, typeRef(view, nominal.args[0]), encoding_type);
                         },
+                        .try_ => {
+                            // A `Try(ok, [Null])` shape reads `null` as `Err(Null)`
+                            // and anything else as `Ok` of the parsed `ok`.
+                            const payloads = checkedTryPayloads(view, shape.ty) orelse
+                                boxyPlanInvariant("generated Try parser shape had no ok and err arguments");
+                            const kinds = checkedTryErrorKinds(view, payloads.err) orelse
+                                boxyPlanInvariant("generated Try parser had unsupported error tags");
+                            if (!kinds.null or kinds.missing or kinds.other) {
+                                boxyPlanInvariant("generated Try parser shape was not a Null optional");
+                            }
+                            const ok_type = typeRef(view, payloads.ok);
+                            _ = try self.ensureGeneratedCodecCall(worker, encoding_type, "parse_null", null);
+                            try self.appendGeneratedParserTryPlan(worker, shape, ok_type, typeRef(view, payloads.err), kinds);
+                            try self.planGeneratedParserShape(worker, ok_type, encoding_type);
+                        },
                         .list => {
                             if (nominal.args.len != 1) boxyPlanInvariant("List generated parser type had unexpected arity");
-                            _ = try self.ensureGeneratedCodecCall(worker, encoding_type, "parse_array_start", null);
-                            _ = try self.ensureGeneratedCodecCall(worker, encoding_type, "parse_array_next", null);
-                            _ = try self.ensureGeneratedCodecCall(worker, encoding_type, "parse_array_after_element", null);
+                            try self.planGeneratedParserListMethods(worker, shape, encoding_type);
                             try self.planGeneratedParserShape(worker, typeRef(view, nominal.args[0]), encoding_type);
                         },
                         .dict => {
                             if (nominal.args.len != 2) boxyPlanInvariant("Dict generated parser type had unexpected arity");
                             const key_type = typeRef(view, nominal.args[0]);
-                            _ = try self.ensureGeneratedCodecCall(worker, encoding_type, "parse_object_next", null);
+                            _ = try self.ensureGeneratedCodecCall(worker, encoding_type, "parse_dict_start", shape);
+                            _ = try self.ensureGeneratedCodecCall(worker, encoding_type, "parse_dict_next", shape);
+                            _ = try self.ensureGeneratedCodecCall(worker, encoding_type, "parse_dict_after_key", shape);
+                            _ = try self.ensureGeneratedCodecCall(worker, encoding_type, "parse_dict_after_entry", shape);
                             if (generatedParserKeyMethod(view, nominal.args[0])) |method_text| {
                                 const key_call = try self.ensureGeneratedCodecCall(worker, encoding_type, method_text, key_type);
                                 try self.appendGeneratedParserDictionaryFieldSelection(worker, key_type, .{ .method = .{
                                     .module = key_call.method_module,
                                     .name = key_call.method,
                                 } });
-                            } else {
-                                if (!checkedParserUnitTagKey(view, nominal.args[0])) {
-                                    boxyPlanInvariant("generated Dict parser key had no checked parsing strategy");
-                                }
+                            } else if (checkedParserUnitTagKey(view, nominal.args[0])) {
+                                const key_call = try self.ensureGeneratedCodecCallWithCheckedSubject(worker, encoding_type, "parse_key_str");
                                 _ = try self.ensureGeneratedCodecCall(worker, encoding_type, "invalid_value", null);
-                                try self.appendGeneratedParserDictionaryFieldSelection(worker, key_type, .unit_tags);
+                                try self.appendGeneratedParserDictionaryFieldSelection(worker, key_type, .{ .unit_tags = .{
+                                    .string_type = key_call.subject_type orelse
+                                        boxyPlanInvariant("generated Dict unit-tag key call had no checked subject"),
+                                } });
+                            } else {
+                                _ = try self.ensureGeneratedCodecCall(worker, encoding_type, "parse_key_start", key_type);
+                                try self.appendGeneratedParserDictionaryFieldSelection(worker, key_type, .key_parser);
+                                try self.planGeneratedParserShape(worker, key_type, encoding_type);
                             }
                             _ = try self.ensureGeneratedCodecCall(worker, shape, "with_capacity", shape);
                             _ = try self.ensureGeneratedCodecCall(worker, shape, "insert", shape);
@@ -3283,14 +3325,11 @@ const Builder = struct {
                         },
                         .set => {
                             if (nominal.args.len != 1) boxyPlanInvariant("Set generated parser type had unexpected arity");
-                            _ = try self.ensureGeneratedCodecCall(worker, encoding_type, "parse_array_start", null);
-                            _ = try self.ensureGeneratedCodecCall(worker, encoding_type, "parse_array_next", null);
-                            _ = try self.ensureGeneratedCodecCall(worker, encoding_type, "parse_array_after_element", null);
+                            try self.planGeneratedParserListMethods(worker, shape, encoding_type);
                             _ = try self.ensureGeneratedCodecCall(worker, shape, "from_list", shape);
                             try self.planGeneratedParserShape(worker, typeRef(view, nominal.args[0]), encoding_type);
                         },
                         .bool,
-                        .try_,
                         .str,
                         .u8,
                         .i8,
@@ -3371,6 +3410,17 @@ const Builder = struct {
                 try self.propagateGeneratedParserTryPlan(worker, shape, backing);
             },
         }
+    }
+
+    fn planGeneratedParserListMethods(
+        self: *Builder,
+        worker: WorkerPlanId,
+        shape: CheckedTypeIdentity,
+        encoding_type: CheckedTypeIdentity,
+    ) Allocator.Error!void {
+        _ = try self.ensureGeneratedCodecCall(worker, encoding_type, "parse_list_start", shape);
+        _ = try self.ensureGeneratedCodecCall(worker, encoding_type, "parse_list_next", shape);
+        _ = try self.ensureGeneratedCodecCall(worker, encoding_type, "parse_list_after_item", shape);
     }
 
     fn propagateGeneratedParserTryPlan(
@@ -3480,14 +3530,7 @@ const Builder = struct {
         switch (view.checked_types.payload(row_type.ty)) {
             .tag_union => |row| {
                 for (row.tags) |tag| {
-                    const args = tag.argsSlice(view.checked_types);
-                    if (args.len > 1) {
-                        _ = try self.ensureGeneratedCodecCall(worker, encoding_type, "parse_array_start", null);
-                        _ = try self.ensureGeneratedCodecCall(worker, encoding_type, "parse_array_next", null);
-                        _ = try self.ensureGeneratedCodecCall(worker, encoding_type, "parse_array_after_element", null);
-                        _ = try self.ensureGeneratedCodecCall(worker, encoding_type, "invalid_value", null);
-                    }
-                    for (args) |arg| {
+                    for (tag.argsSlice(view.checked_types)) |arg| {
                         try self.planGeneratedParserShape(worker, typeRef(view, arg), encoding_type);
                     }
                 }
@@ -3575,32 +3618,37 @@ const Builder = struct {
     ) Allocator.Error!void {
         const fields = try self.generatedRecordCheckedFields(record_type);
         defer self.allocator.free(fields);
+        _ = try self.ensureGeneratedCodecCall(worker, encoding_type, "parse_record_start", record_type);
         _ = try self.ensureGeneratedCodecCall(worker, encoding_type, "parse_record_field", record_type);
+        _ = try self.ensureGeneratedCodecCall(worker, encoding_type, "parse_record_after_field", record_type);
         _ = try self.ensureGeneratedCodecCall(worker, encoding_type, "skip_record_field", null);
         const rename_call = if (fields.len != 0)
             try self.ensureGeneratedCodecCall(worker, encoding_type, "rename_field", null)
         else
             null;
 
-        var needs_required = false;
-        var needs_optional = false;
         for (fields) |planned_field| {
             const field_view = self.moduleForId(planned_field.module);
             const field = planned_field.field;
             const field_type = typeRef(field_view, field.ty);
-            const try_payloads = checkedTryPayloads(field_view, field.ty);
-            const optional_kinds = if (try_payloads) |payloads|
-                checkedTryErrorKinds(field_view, payloads.err) orelse
-                    boxyPlanInvariant("generated record parser Try field had unsupported error tags")
-            else
-                null;
-            const optional_missing = if (optional_kinds) |kinds| kinds.missing or kinds.other else false;
-            const optional_null = if (optional_kinds) |kinds| kinds.null and !kinds.other else false;
-            const parser_wrap_ok = optional_missing and !optional_null;
-            const parse_type = if (try_payloads) |payloads|
-                if (optional_null) field_type else typeRef(field_view, payloads.ok)
-            else
-                field_type;
+            const absence: GeneratedParserFieldAbsence = switch (field.kind.tag) {
+                .optional, .undetermined => .optional_slot,
+                .defaulted => .{ .defaulted = field.kind.default },
+                .required => required: {
+                    const payloads = checkedTryPayloads(field_view, field.ty) orelse break :required .required;
+                    const kinds = checkedTryErrorKinds(field_view, payloads.err) orelse break :required .required;
+                    if (!kinds.missing or kinds.null or kinds.other) break :required .required;
+                    break :required .{ .missing_try = .{
+                        .ok_type = typeRef(field_view, payloads.ok),
+                        .error_type = typeRef(field_view, payloads.err),
+                    } };
+                },
+                .err => boxyPlanInvariant("checked-error record field reached generated parser planning"),
+            };
+            const parse_type = switch (absence) {
+                .missing_try => |missing| missing.ok_type,
+                .required, .optional_slot, .defaulted => field_type,
+            };
             try self.plan.generated_parser_field_captures.append(self.allocator, .{
                 .worker = worker,
                 .record_type = record_type,
@@ -3608,25 +3656,11 @@ const Builder = struct {
                 .field_name = field.name,
                 .source_type = rename_call.?.ret_type,
                 .parse_type = parse_type,
-                .parser_wrap_ok = parser_wrap_ok,
-                .optional_error_type = if (try_payloads) |payloads| typeRef(field_view, payloads.err) else null,
-                .optional_missing = optional_missing,
-                .optional_null = optional_null,
+                .absence = absence,
+                .optional_error_type = null,
             });
-            if (optional_kinds != null) {
-                if (optional_missing) {
-                    needs_optional = true;
-                } else {
-                    needs_required = true;
-                }
-                try self.planGeneratedParserShape(worker, parse_type, encoding_type);
-            } else {
-                needs_required = true;
-                try self.planGeneratedParserShape(worker, field_type, encoding_type);
-            }
+            try self.planGeneratedParserShape(worker, parse_type, encoding_type);
         }
-        if (needs_required) _ = try self.ensureGeneratedCodecCall(worker, encoding_type, "missing_record_field", null);
-        if (needs_optional) _ = try self.ensureGeneratedCodecCall(worker, encoding_type, "missing_optional_field", null);
     }
 
     const GeneratedRecordCheckedField = struct {
@@ -5909,8 +5943,12 @@ const Builder = struct {
         source_type: CheckedTypeIdentity,
         tag_union: checked.CheckedTagUnionType,
     ) Allocator.Error!TypeRepresentation {
-        const closed = try self.tagUnionExtensionIsExplicitlyClosed(view, tag_union.ext);
-        const ordered_tags = try self.layoutOrderedTagUnionTags(view, tag_union.tags);
+        var row_tags = std.ArrayList(checked.CheckedTag).empty;
+        defer row_tags.deinit(self.allocator);
+        try row_tags.appendSlice(self.allocator, tag_union.tags);
+        const tail = try self.appendTagRowSegments(view, &row_tags, tag_union.ext);
+        const closed = try self.tagUnionExtensionIsExplicitlyClosed(view, tail);
+        const ordered_tags = try self.layoutOrderedTagUnionTags(view, row_tags.items);
         defer if (ordered_tags.owned) self.allocator.free(ordered_tags.tags);
 
         var children = std.ArrayList(RepChild).empty;
@@ -5920,8 +5958,8 @@ const Builder = struct {
                 try self.appendPendingChild(&children, view, .{ .tag_payload = .{ .tag = tag.name, .index = @intCast(index) } }, arg);
             }
         }
-        if (!try self.rowExtensionIsDefaultClosed(view, tag_union.ext, .empty_tag_union)) {
-            try self.appendPendingChild(&children, view, .tag_ext, tag_union.ext);
+        if (!try self.rowExtensionIsDefaultClosed(view, tail, .empty_tag_union)) {
+            try self.appendPendingChild(&children, view, .tag_ext, tail);
         }
         const child_span = try self.commitPendingChildren(children.items);
 
@@ -5953,6 +5991,38 @@ const Builder = struct {
             .children = child_span,
             .tag_variants = tag_variants,
         };
+    }
+
+    /// Append the tags of every `.tag_union` segment in a row extension chain,
+    /// so a representation always describes the complete tag row. Returns the
+    /// chain's tail: the first extension that is not itself a tag segment.
+    fn appendTagRowSegments(
+        self: *Builder,
+        view: ModuleView,
+        tags: *std.ArrayList(checked.CheckedTag),
+        ext: checked.CheckedTypeId,
+    ) Allocator.Error!checked.CheckedTypeId {
+        var seen = std.AutoHashMap(CheckedTypeIdentity, void).init(self.allocator);
+        defer seen.deinit();
+
+        var current = ext;
+        while (true) {
+            const entry = try seen.getOrPut(typeRef(view, current));
+            if (entry.found_existing) boxyPlanInvariant("boxy tag-union row extension chain was cyclic");
+            switch (view.checked_types.payload(current)) {
+                .tag_union => |segment| {
+                    try tags.appendSlice(self.allocator, segment.tags);
+                    current = segment.ext;
+                },
+                .alias => |alias| {
+                    switch (view.checked_types.payload(alias.backing)) {
+                        .tag_union, .alias => current = alias.backing,
+                        .pending, .err, .flex, .rigid, .record, .tuple, .nominal, .function, .empty_record, .empty_tag_union => return current,
+                    }
+                },
+                .pending, .err, .flex, .rigid, .record, .tuple, .nominal, .function, .empty_record, .empty_tag_union => return current,
+            }
+        }
     }
 
     const OrderedTags = struct {
@@ -6017,8 +6087,11 @@ const Builder = struct {
         return switch (view.checked_types.payload(ext_ty)) {
             .empty_tag_union => true,
             .alias => |alias| try self.tagUnionExtensionIsExplicitlyClosedInner(view, alias.backing, seen),
-            .flex, .rigid => |variable| variable.row_default == .empty_tag_union,
-            .pending, .err, .record, .tuple, .nominal, .function, .empty_record, .tag_union => false,
+            // An unconstrained flex tail defaults to the empty row. A rigid tail
+            // is a type parameter of the enclosing declaration, which a
+            // representation shared by every use must keep open.
+            .flex => |variable| variable.row_default == .empty_tag_union,
+            .pending, .err, .rigid, .record, .tuple, .nominal, .function, .empty_record, .tag_union => false,
         };
     }
 
@@ -6046,8 +6119,8 @@ const Builder = struct {
 
         return switch (view.checked_types.payload(ext_ty)) {
             .alias => |alias| try self.rowExtensionIsDefaultClosedInner(view, alias.backing, expected, seen),
-            .flex, .rigid => |variable| variable.row_default == expected,
-            .pending, .err, .record, .tuple, .nominal, .function, .empty_record, .tag_union, .empty_tag_union => false,
+            .flex => |variable| variable.row_default == expected,
+            .pending, .err, .rigid, .record, .tuple, .nominal, .function, .empty_record, .tag_union, .empty_tag_union => false,
         };
     }
 
@@ -7335,7 +7408,7 @@ const Builder = struct {
         for (0..worker_rep.children.len) |index| {
             const child = self.plan.children.items[@as(usize, worker_rep.children.start) + index];
             const call_children = self.plan.childSlice(call_rep.children);
-            if (self.rowInstantiationTarget(worker_rep_id, call_rep_id, child)) |row| {
+            if (self.namedQuery().rowInstantiationTarget(worker_rep_id, call_rep_id, child)) |row| {
                 try self.propagateInspectDemand(child.rep, row, seen);
             } else if (self.namedQuery().findMatchingChildByRole(call_children, child)) |call_child| {
                 try self.propagateInspectDemand(child.rep, call_child.rep, seen);
@@ -8079,11 +8152,12 @@ const Builder = struct {
             const current_rep = self.plan.representations.items[@intFromEnum(current)];
             const children = self.plan.childSlice(current_rep.children);
             if (current_rep.kind == .nominal) {
+                const scope_start = substitutions.entries.items.len;
                 var substitution_iter = self.plan.nominalBackingSubstitutions(current_rep.nominal_backing_arg_substitutions);
                 while (substitution_iter.next()) |substitution| {
                     const formal_rep = substitution.formal_rep orelse continue;
                     if (formal_rep == substitution.actual_rep) continue;
-                    try substitutions.put(self.allocator, formal_rep, substitution.actual_rep);
+                    try substitutions.put(self.allocator, scope_start, formal_rep, substitution.actual_rep);
                 }
             }
             const selected = switch (path_step.stepKind()) {
@@ -8696,7 +8770,7 @@ const Builder = struct {
             // descriptor once, via that sibling; skip the duplicate here to
             // mirror the worker param collection's per-rep dedup.
             if (seen_reps.contains(worker_child.rep)) continue;
-            if (self.rowInstantiationTarget(worker_rep_id, aligned_call_rep_id, worker_child)) |row_target| {
+            if (self.namedQuery().rowInstantiationTarget(worker_rep_id, aligned_call_rep_id, worker_child)) |row_target| {
                 try self.collectCallHiddenDescriptorArgs(worker_child.rep, row_target, call_value_rep, source_value_rep, source_arg_index, params, next_param, pending, seen_reps, seen_descriptor_reps, substitutions, runtime_value_only);
                 continue;
             }
@@ -8751,8 +8825,14 @@ const Builder = struct {
             self.entries.deinit(allocator);
         }
 
+        /// The innermost binding of `worker_rep`: a nested use of a nominal
+        /// binds its declaration's formals again, shadowing the bindings of
+        /// every enclosing use.
         fn get(self: *const CallDescriptorRepSubstitutionMap, worker_rep: TypeRepId) ?TypeRepId {
-            for (self.entries.items) |entry| {
+            var index = self.entries.items.len;
+            while (index > 0) {
+                index -= 1;
+                const entry = self.entries.items[index];
                 if (entry.worker_rep == worker_rep) return entry.call_rep;
             }
             return null;
@@ -8768,13 +8848,15 @@ const Builder = struct {
             boxyPlanInvariant("cyclic nominal descriptor substitution");
         }
 
+        /// Bind `worker_rep` in the scope that begins at `scope_start`.
         fn put(
             self: *CallDescriptorRepSubstitutionMap,
             allocator: Allocator,
+            scope_start: usize,
             worker_rep: TypeRepId,
             call_rep: TypeRepId,
         ) Allocator.Error!void {
-            for (self.entries.items) |entry| {
+            for (self.entries.items[scope_start..]) |entry| {
                 if (entry.worker_rep != worker_rep) continue;
                 if (entry.call_rep != call_rep) {
                     boxyPlanInvariant("one worker descriptor representation mapped to two call representations");
@@ -8927,6 +9009,11 @@ const Builder = struct {
             (worker_rep.kind == .nominal and call_rep.kind == .nominal);
         if (!roles_match) return;
 
+        // Every actual is resolved in the enclosing scope before any of this
+        // wrapper's bindings are made, including a nested use of the same
+        // nominal at different arguments.
+        var bindings = std.ArrayList(CallDescriptorRepSubstitution).empty;
+        defer bindings.deinit(self.allocator);
         if (worker_rep.kind == .nominal) {
             // Both sides have shared declaration templates. Descending the
             // call-side backing must apply its formals too, e.g. Set(Str)'s
@@ -8936,7 +9023,7 @@ const Builder = struct {
                 const formal_rep = call_substitution.formal_rep orelse continue;
                 const actual = substitutions.resolve(call_substitution.actual_rep);
                 if (formal_rep != actual) {
-                    try substitutions.put(self.allocator, formal_rep, actual);
+                    try bindings.append(self.allocator, .{ .worker_rep = formal_rep, .call_rep = actual });
                 }
             }
             var backing_substitutions = self.plan.nominalBackingSubstitutions(worker_rep.nominal_backing_arg_substitutions);
@@ -8946,7 +9033,7 @@ const Builder = struct {
                 const exact_call_arg_rep = substitutions.resolve(call_arg_rep);
                 if (backing_substitution.formal_rep) |formal_rep| {
                     if (formal_rep != exact_call_arg_rep) {
-                        try substitutions.put(self.allocator, formal_rep, exact_call_arg_rep);
+                        try bindings.append(self.allocator, .{ .worker_rep = formal_rep, .call_rep = exact_call_arg_rep });
                     }
                 }
             }
@@ -8964,7 +9051,12 @@ const Builder = struct {
             };
             const exact_call_arg_rep = substitutions.resolve(call_arg_rep);
             if (worker_child.rep == exact_call_arg_rep) continue;
-            try substitutions.put(self.allocator, worker_child.rep, exact_call_arg_rep);
+            try bindings.append(self.allocator, .{ .worker_rep = worker_child.rep, .call_rep = exact_call_arg_rep });
+        }
+
+        const scope_start = substitutions.entries.items.len;
+        for (bindings.items) |binding| {
+            try substitutions.put(self.allocator, scope_start, binding.worker_rep, binding.call_rep);
         }
     }
 
@@ -9082,7 +9174,7 @@ const Builder = struct {
             // dictionary once, via that sibling; skip the duplicate here to
             // mirror the worker param collection's per-rep dedup.
             if (context.seen_reps.contains(worker_child.rep)) continue;
-            if (self.rowInstantiationTarget(worker_rep_id, call_rep_id, worker_child)) |row_target| {
+            if (self.namedQuery().rowInstantiationTarget(worker_rep_id, call_rep_id, worker_child)) |row_target| {
                 try self.collectCallHiddenDictionaryArgs(worker_child.rep, row_target, context);
                 continue;
             }
@@ -9170,7 +9262,7 @@ const Builder = struct {
         for (worker_children) |worker_child| {
             if (!try self.repQuery().repSubtreeHasDictionary(worker_child.rep)) continue;
             if (substitutions.get(worker_child.rep) != null) continue;
-            if (self.rowInstantiationTarget(worker_rep_id, call_rep_id, worker_child)) |row_target| {
+            if (self.namedQuery().rowInstantiationTarget(worker_rep_id, call_rep_id, worker_child)) |row_target| {
                 try self.collectCallDictionaryRepSubstitutions(worker_child.rep, row_target, substitutions, seen);
                 continue;
             }
@@ -9955,61 +10047,6 @@ const Builder = struct {
                 .equality, .hash, .map, .map_effectful => boxyPlanInvariant("non-codec structural target reached Boxy method worker selection"),
             },
         };
-    }
-
-    /// Returns the exact call-side row that instantiates a worker child when
-    /// open tag rows expose different tags on each side of a checked function
-    /// boundary. Unmatched worker payloads live in the call extension; when
-    /// the call contributes unmatched payloads, the worker extension denotes
-    /// the complete call row rather than only its residual extension.
-    fn rowInstantiationTarget(
-        self: *Builder,
-        worker_rep_id: TypeRepId,
-        call_rep_id: TypeRepId,
-        worker_child: RepChild,
-    ) ?TypeRepId {
-        const worker_rep = self.plan.representations.items[@intFromEnum(worker_rep_id)];
-        const call_rep = self.plan.representations.items[@intFromEnum(call_rep_id)];
-        if (worker_rep.kind != .tag_union or call_rep.kind != .tag_union) return null;
-
-        const worker_children = self.plan.childSlice(worker_rep.children);
-        const call_children = self.plan.childSlice(call_rep.children);
-        switch (worker_child.role) {
-            .tag_payload => {
-                if (self.namedQuery().findMatchingChildByRole(call_children, worker_child) != null) return null;
-                var extension: ?TypeRepId = null;
-                for (call_children) |call_child| {
-                    if (call_child.role != .tag_ext) continue;
-                    if (extension != null) {
-                        boxyPlanInvariant("boxy tag union representation had multiple row extensions");
-                    }
-                    extension = call_child.rep;
-                }
-                return extension;
-            },
-            .tag_ext => {
-                for (call_children) |call_child| {
-                    if (call_child.role != .tag_payload) continue;
-                    if (self.namedQuery().findMatchingChildByRole(worker_children, call_child) == null) {
-                        return call_rep_id;
-                    }
-                }
-                return null;
-            },
-            .alias_backing,
-            .alias_arg,
-            .nominal_backing,
-            .nominal_arg,
-            .nominal_padding_field,
-            .record_field,
-            .record_ext,
-            .tuple_elem,
-            .function_arg,
-            .function_ret,
-            .list_elem,
-            .box_payload,
-            => return null,
-        }
     }
 
     fn workerPresenceSlotPayloadMatchesUnwrappedCallRep(
@@ -12634,6 +12671,10 @@ pub const RepQuery = struct {
     }
 };
 
+fn repIsTagRow(rep: TypeRepresentation) bool {
+    return rep.kind == .tag_union or (rep.kind == .dynamic and rep.tag_variants.len != 0);
+}
+
 /// True when two child roles are the same payload-free role.
 ///
 /// Every role that carries a payload (an index, a label) answers false: this
@@ -12673,6 +12714,71 @@ pub fn NamedRepQuery(comptime Modules: type) type {
 
         query: RepQuery,
         modules: Modules,
+
+        /// Returns the exact call-side row that instantiates a worker child when
+        /// open tag rows expose different tags on each side of a checked function
+        /// boundary. Unmatched worker payloads live in the call extension; when
+        /// the call has tags the worker row does not name, or no extension of its
+        /// own, the worker extension denotes the complete call row rather than
+        /// only its residual extension.
+        pub fn rowInstantiationTarget(
+            self: Self,
+            worker_rep_id: TypeRepId,
+            call_rep_id: TypeRepId,
+            worker_child: RepChild,
+        ) ?TypeRepId {
+            const worker_rep = self.query.rep(worker_rep_id);
+            const call_rep = self.query.rep(call_rep_id);
+            if (!repIsTagRow(worker_rep) or !repIsTagRow(call_rep)) return null;
+
+            const call_children = self.query.plan.childSlice(call_rep.children);
+            switch (worker_child.role) {
+                .tag_payload => {
+                    if (self.findMatchingChildByRole(call_children, worker_child) != null) return null;
+                    var extension: ?TypeRepId = null;
+                    for (call_children) |call_child| {
+                        if (call_child.role != .tag_ext) continue;
+                        if (extension != null) {
+                            boxyPlanInvariant("boxy tag union representation had multiple row extensions");
+                        }
+                        extension = call_child.rep;
+                    }
+                    return extension;
+                },
+                .tag_ext => {
+                    var call_has_extension = false;
+                    for (call_children) |call_child| {
+                        if (call_child.role == .tag_ext) call_has_extension = true;
+                    }
+                    if (!call_has_extension) return call_rep_id;
+                    for (self.query.plan.tagVariantSlice(call_rep.tag_variants)) |call_variant| {
+                        if (!self.tagRowNamesVariant(worker_rep, call_variant)) return call_rep_id;
+                    }
+                    return null;
+                },
+                .alias_backing,
+                .alias_arg,
+                .nominal_backing,
+                .nominal_arg,
+                .nominal_padding_field,
+                .record_field,
+                .record_ext,
+                .tuple_elem,
+                .function_arg,
+                .function_ret,
+                .list_elem,
+                .box_payload,
+                => return null,
+            }
+        }
+
+        fn tagRowNamesVariant(self: Self, row: TypeRepresentation, variant: TagVariant) bool {
+            const variant_names = self.modules.moduleNames(variant.name_module);
+            for (self.query.plan.tagVariantSlice(row.tag_variants)) |candidate| {
+                if (tagLabelNameMatches(variant_names, variant.name, self.modules.moduleNames(candidate.name_module), candidate.name)) return true;
+            }
+            return false;
+        }
 
         /// True when two children fill the same role, comparing record field
         /// and tag payload labels by text across modules.
@@ -13177,37 +13283,19 @@ fn checkedTryErrorKinds(view: ModuleView, checked_ty: checked.CheckedTypeId) ?Ch
     boxyPlanInvariant("checked Try error row was cyclic");
 }
 
+/// The `ok` and `err` arguments of a builtin `Try`, seen through aliases.
 fn checkedTryPayloads(view: ModuleView, checked_ty: checked.CheckedTypeId) ?CheckedTryPayloads {
-    const names = view.canonical_names orelse return null;
     var current = checked_ty;
-    var ok: ?checked.CheckedTypeId = null;
-    var err: ?checked.CheckedTypeId = null;
     var remaining = view.checked_types.payloadCount();
     while (remaining > 0) : (remaining -= 1) {
         switch (view.checked_types.payload(current)) {
             .alias => |alias| current = alias.backing,
-            .nominal => |nominal| current = view.checked_types.nominalBackingTemplateForPayload(nominal) orelse return null,
-            .tag_union => |tag_union| {
-                for (tag_union.tags) |tag| {
-                    const args = tag.argsSlice(view.checked_types);
-                    if (args.len != 1) return null;
-                    const text = names.tagLabelText(tag.name);
-                    if (std.mem.eql(u8, text, "Ok")) {
-                        if (ok != null) return null;
-                        ok = args[0];
-                    } else if (std.mem.eql(u8, text, "Err")) {
-                        if (err != null) return null;
-                        err = args[0];
-                    } else {
-                        return null;
-                    }
-                }
-                current = tag_union.ext;
+            .nominal => |nominal| {
+                if (nominal.builtin != .try_) return null;
+                if (nominal.args.len != 2) boxyPlanInvariant("checked Try did not have ok and err arguments");
+                return .{ .ok = nominal.args[0], .err = nominal.args[1] };
             },
-            .empty_tag_union => return if (ok != null and err != null) .{ .ok = ok.?, .err = err.? } else null,
-            .flex, .rigid => |variable| return if (variable.row_default == .empty_tag_union and
-                ok != null and err != null) .{ .ok = ok.?, .err = err.? } else null,
-            .pending, .err, .record, .tuple, .function, .empty_record => return null,
+            .pending, .err, .flex, .rigid, .record, .tuple, .function, .empty_record, .tag_union, .empty_tag_union => return null,
         }
     }
     boxyPlanInvariant("checked Try alias chain was cyclic");

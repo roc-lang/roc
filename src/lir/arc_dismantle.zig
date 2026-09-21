@@ -2243,6 +2243,11 @@ pub fn compute(
             if (read.field_idx >= 64) continue :candidates;
         }
 
+        // A container released through its Boxy descriptor has fields whose
+        // release needs that descriptor too, so they cannot be released one
+        // at a time from their layouts.
+        if (store.getLocal(local).boxy_desc != null) continue :candidates;
+
         // Only refcounted fields carry stored units worth taking; a
         // container with no refcounted take keeps its ordinary whole
         // release.
