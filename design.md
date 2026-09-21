@@ -14654,8 +14654,10 @@ Branch environments use an undo journal of local-location writes. Capture
 spills resident vectors before recording a journal mark and the float-register
 mask; restoration replays writes in reverse to that mark and clears vector
 residency. Nested regions retain their enclosing journal prefix. Neither
-operation copies the local-location table, and restoration never rolls back the
-stack-slot allocator: different arms retain distinct stack slots.
+operation copies the local-location table. A procedure-local native storage plan
+assigns offsets before emission, so restoring bindings never changes storage
+assignments. Different locals may share bytes only when their planned storage
+lifetimes do not overlap.
 
 Stable does not mean distinct. Before emitting a procedure, `LirCodeGen` walks
 its exact control-flow graph and inventories every definition and indirect
@@ -14663,11 +14665,37 @@ write. A one-definition `assign_ref.local` may adopt its source's authoritative
 location only when both locals have the same runtime representation and the
 source is immutable. Multiply-defined locals, join parameters, uninitialized
 poisoning, output-pointer writes, control-flow capture writes, and aggregate
-stores therefore retain independent locations. This lets immutable alias
+stores therefore retain independent storage identities. This lets immutable alias
 chains emit no load/store copies without allowing a later source mutation to
 change an earlier snapshot. Floating-point values that require per-binding NaN
 normalization and vector values retain independent locations. The proof never
 uses emission order, last-use guesses, or an adjacent-instruction peephole.
+
+Native stack planning consumes the shared LIR read/definition inventories plus
+explicit native descriptor accesses and fused-result writes. Runtime successor
+edges distinguish join declarations from jumps, and pattern captures write only
+on their successful edges. Immutable aliases share a storage identity; their
+combined reads keep that identity live. Each instruction-selection region holds
+all its inputs and outputs simultaneously, so multiword copies cannot overwrite
+unread operands. This analysis follows explicit ARC statements as ordinary reads
+and makes no ownership decisions.
+
+The planner forms basic blocks once. Within each block it records disjoint
+read-before-write intervals, propagating only live-in obligations backward across
+block edges to a fixed point. Scratch columns are procedure-local and indexed by
+compact identities. There are no locals-wide rows per statement and no eagerly
+materialized pairwise interference graph. Slots are grouped by their required
+size and alignment and reused only after checking all remaining lifetime
+intervals, including holes and back edges. Single intervals are stored inline,
+without a heap allocation per local or slot. A queue retires occupied intervals
+so straight-line dead-temporary chains do not scan every earlier local.
+
+`ptr_alloca` backing cells have explicit procedure lifetime and are reserved
+separately from reusable local slots and instruction-selection scratch. Ordinary
+native scratch cannot escape its emission region; results are copied into their
+planned authoritative locations before the region ends. Frame construction uses
+the maximum storage required by any region and retains all ABI alignment,
+callee-save, unwind, and stack-probing obligations.
 
 Floating-point and vector locations draw from the same register-allocation mask:
 XMM registers alias on x86-64 and V registers alias on AArch64. Vector locals
