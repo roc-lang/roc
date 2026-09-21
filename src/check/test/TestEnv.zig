@@ -171,12 +171,25 @@ pub fn initWithImport(module_name: []const u8, source: []const u8, other_module_
     module_env.imports.clearResolvedModules();
     try module_env.imports.resolveImportsByExactModuleName(module_env, imported_envs.items);
 
+    // Types reached through the imported module (e.g. an alias it exposes for a
+    // type declared in one of its own imports) are owned by modules this module
+    // never imports directly. Every module the imported module could resolve as
+    // a type owner is therefore also an owner here, as in a real build.
+    var owner_envs = try std.ArrayList(*const ModuleEnv).initCapacity(gpa, imported_envs.items.len);
+    defer owner_envs.deinit(gpa);
+    try owner_envs.appendSlice(gpa, imported_envs.items);
+    var other_owner_iter = other_test_env.checker.owner_envs_by_identity.valueIterator();
+    while (other_owner_iter.next()) |owner| {
+        try owner_envs.append(gpa, owner.env);
+    }
+
     // Type Check - Pass all imported modules
-    var checker = try Check.init(
+    var checker = try Check.initWithOwnerModules(
         gpa,
         &module_env.types,
         module_env,
         imported_envs.items,
+        owner_envs.items,
         &module_envs,
         &module_env.store.regions,
         module_builtin_ctx,

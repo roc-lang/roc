@@ -524,22 +524,64 @@ const SeenRecordField = struct { ident: base.Ident.Idx, region: base.Region };
 const SeenTag = struct { ident: base.Ident.Idx, region: base.Region };
 const SeenTypeParameter = struct { ident: base.Ident.Idx, region: base.Region };
 
-const RecordBuilderMap2 = union(enum) {
+/// What a qualified value path such as `Module.Type.item` refers to.
+/// Resolving a path creates any imports and associated-value patterns it
+/// needs; emitting a target only adds a lookup expression, so one resolved
+/// path can back several independent lookup expressions.
+const QualifiedValueTarget = union(enum) {
     local: Pattern.Idx,
+    associated: Associated,
+    local_associated: LocalAssociated,
+    external_associated: ExternalAssociated,
     external: External,
+    type_dispatch: TypeDispatch,
+    auto_imported_nominal_tag: AutoImportedNominalTag,
+    /// The path's qualifier resolved, but nothing it names holds the value.
+    missing: Diagnostic,
+    /// The path cannot be referenced for a reason other than being missing.
+    malformed: Diagnostic,
+
+    const Associated = struct {
+        owner_path: AST.DeclIndex.TypePathIdx,
+        pattern_idx: Pattern.Idx,
+    };
+
+    const LocalAssociated = struct {
+        type_node_idx: u32,
+        type_ident: Ident.Idx,
+        item_ident: Ident.Idx,
+    };
+
+    const ExternalAssociated = struct {
+        import_idx: Import.Idx,
+        type_node_idx: u32,
+        type_ident: Ident.Idx,
+        item_ident: Ident.Idx,
+    };
 
     const External = struct {
-        module_idx: Import.Idx,
+        import_idx: Import.Idx,
         target_node_idx: u32,
         ident_idx: Ident.Idx,
     };
 
-    fn localPattern(self: RecordBuilderMap2) ?Pattern.Idx {
-        return switch (self) {
-            .local => |pattern_idx| pattern_idx,
-            .external => null,
-        };
-    }
+    const TypeDispatch = struct {
+        type_dispatch_stmt: Statement.Idx,
+        method_name: Ident.Idx,
+    };
+
+    const AutoImportedNominalTag = struct {
+        import_idx: Import.Idx,
+        target_node_idx: u32,
+        tag_ident: Ident.Idx,
+    };
+};
+
+/// The `map2` a record builder calls, and the capture set of the builder
+/// expression that each emitted `map2` lookup's free variables join.
+const RecordBuilderMap2 = struct {
+    target: QualifiedValueTarget,
+    captures_top: u32,
 };
 
 /// Both the canonicalized expression and any free variables
@@ -900,33 +942,22 @@ fn getOrCreateAutoImportedTypeImport(
     };
 }
 
-fn addAutoImportedNominalTagExpr(
+fn autoImportedNominalTagTarget(
     self: *Self,
     info: AutoImportedType,
     import_idx: Import.Idx,
     tag_ident: Ident.Idx,
-    region: Region,
-) std.mem.Allocator.Error!?Expr.Idx {
+) ?QualifiedValueTarget {
     if (!self.isSourceTagIdent(tag_ident)) return null;
 
     const stmt_idx = info.statement_idx orelse return null;
     const target_node_idx = info.env.getExposedNodeIndexByStatementIdx(stmt_idx) orelse return null;
 
-    const tag_expr_idx = try self.env.addExpr(CIR.Expr{
-        .e_tag = .{
-            .name = tag_ident,
-            .args = .{ .span = DataSpan.empty() },
-        },
-    }, region);
-
-    return try self.env.addExpr(CIR.Expr{
-        .e_nominal_external = .{
-            .module_idx = import_idx,
-            .target_node_idx = target_node_idx,
-            .backing_expr = tag_expr_idx,
-            .backing_type = .tag,
-        },
-    }, region);
+    return .{ .auto_imported_nominal_tag = .{
+        .import_idx = import_idx,
+        .target_node_idx = target_node_idx,
+        .tag_ident = tag_ident,
+    } };
 }
 
 /// Return a caller-requested root from canonicalization's finalized
@@ -8247,34 +8278,45 @@ fn canonicalizeQualifiedIdentExpr(
     region: Region,
     qualifier_tokens: []const u32,
 ) std.mem.Allocator.Error!?CanonicalizedExpr {
+    const target = (try self.resolveQualifiedValue(ident, region, qualifier_tokens)) orelse return null;
+    return try self.emitQualifiedValue(target, region);
+}
+
+/// Resolve the value path `qualifier_tokens.ident`. Returns null when the
+/// qualifier names nothing that could hold the value, so the path has no
+/// qualified meaning.
+fn resolveQualifiedValue(
+    self: *Self,
+    ident: Ident.Idx,
+    region: Region,
+    qualifier_tokens: []const u32,
+) std.mem.Allocator.Error!?QualifiedValueTarget {
     const qualified_ident = try self.joinedQualifiedIdent(qualifier_tokens, ident);
 
     switch (self.scopeLookup(.ident, qualified_ident)) {
         .found => |found_pattern_idx| {
             if (self.isDefiningBoundVar(found_pattern_idx)) {
-                return try self.canonicalizedMalformedExpr(Diagnostic{ .self_referential_definition = .{
+                return .{ .malformed = .{ .self_referential_definition = .{
                     .ident = qualified_ident,
                     .region = region,
-                } });
+                } } };
             }
-            return try self.canonicalizedLocalLookup(found_pattern_idx, region);
+            return .{ .local = found_pattern_idx };
         },
         .not_found => {},
     }
 
     if (try self.qualifierTypePath(qualifier_tokens)) |owner_path| {
         if (try self.lookupOrCreateAssocValuePattern(owner_path, ident, qualified_ident, region)) |pattern_idx| {
-            return try self.canonicalizedAssociatedLookup(owner_path, qualified_ident, pattern_idx, region);
+            return self.associatedValueTarget(owner_path, qualified_ident, pattern_idx, region);
         }
         if (self.typeStatementForPath(owner_path)) |type_stmt_idx| {
             if (self.env.store.getStatement(type_stmt_idx) == .s_alias_decl) {
-                const type_ident = try self.joinedQualifierIdent(qualifier_tokens);
-                return try self.canonicalizedLocalAssociatedLookup(
-                    @intFromEnum(type_stmt_idx),
-                    type_ident,
-                    ident,
-                    region,
-                );
+                return .{ .local_associated = .{
+                    .type_node_idx = @intFromEnum(type_stmt_idx),
+                    .type_ident = try self.joinedQualifierIdent(qualifier_tokens),
+                    .item_ident = ident,
+                } };
             }
         }
     }
@@ -8283,8 +8325,11 @@ fn canonicalizeQualifiedIdentExpr(
     const module_alias = self.parse_ir.tokens.resolveIdentifier(qualifier_tok) orelse return null;
 
     if (qualifier_tokens.len == 1) {
-        if (try self.canonicalizeTypeDispatchOwner(module_alias, ident, region)) |expr| {
-            return expr;
+        if (try self.typeDispatchOwnerStatement(module_alias, ident)) |type_dispatch_stmt| {
+            return .{ .type_dispatch = .{
+                .type_dispatch_stmt = type_dispatch_stmt,
+                .method_name = ident,
+            } };
         }
     }
 
@@ -8300,47 +8345,106 @@ fn canonicalizeQualifiedIdentExpr(
 
     const module_name = if (module_info) |info| info.module_name else {
         if (qualifier_tokens.len == 1) {
-            if (try self.canonicalizeTypeAssociatedLookup(module_alias, ident, region)) |expr| {
-                return expr;
+            if (try self.resolveTypeAssociatedValue(module_alias, ident, region)) |target| {
+                return target;
             }
         } else if ((try self.scopeLookupOrPrepareTypeBinding(module_alias)) != null) {
             // A multi-segment chain rooted at a type resolved no associated
             // item; the report names the full path rather than collapsing it
             // to its first segment.
-            const parent_ident = try self.joinedQualifierIdent(qualifier_tokens);
-            return try self.canonicalizedMalformedExpr(Diagnostic{ .nested_value_not_found = .{
-                .parent_name = parent_ident,
+            return .{ .missing = .{ .nested_value_not_found = .{
+                .parent_name = try self.joinedQualifierIdent(qualifier_tokens),
                 .nested_name = ident,
                 .region = region,
-            } });
+            } } };
         }
 
-        return try self.canonicalizedMalformedExpr(Diagnostic{ .qualified_ident_does_not_exist = .{
+        return .{ .missing = .{ .qualified_ident_does_not_exist = .{
             .ident = qualified_ident,
             .region = region,
-        } });
+        } } };
     };
 
-    return try self.canonicalizeModuleQualifiedIdent(module_name, ident, region, qualifier_tokens);
+    return try self.resolveModuleQualifiedValue(module_name, ident, region, qualifier_tokens);
 }
 
-fn canonicalizeTypeDispatchOwner(
+fn associatedValueTarget(
     self: *Self,
-    owner_name: Ident.Idx,
-    method_name: Ident.Idx,
+    owner_path: AST.DeclIndex.TypePathIdx,
+    qualified_ident: Ident.Idx,
+    pattern_idx: Pattern.Idx,
     region: Region,
-) std.mem.Allocator.Error!?CanonicalizedExpr {
-    const type_dispatch_stmt = (try self.typeDispatchOwnerStatement(owner_name, method_name)) orelse return null;
-    const dispatch_expr_idx = try self.env.addExpr(CIR.Expr{
-        .e_type_method_call = .{
-            .type_dispatch_stmt = type_dispatch_stmt,
-            .method_name = method_name,
-            .method_name_region = region,
-            .args = .{ .span = DataSpan.empty() },
-        },
-    }, region);
+) QualifiedValueTarget {
+    if (self.isDefiningBoundVar(pattern_idx)) {
+        return .{ .malformed = .{ .self_referential_definition = .{
+            .ident = qualified_ident,
+            .region = region,
+        } } };
+    }
+    return .{ .associated = .{ .owner_path = owner_path, .pattern_idx = pattern_idx } };
+}
 
-    return CanonicalizedExpr{ .idx = dispatch_expr_idx, .free_vars = DataSpan.empty() };
+/// Add a lookup expression for a resolved qualified value path.
+fn emitQualifiedValue(
+    self: *Self,
+    target: QualifiedValueTarget,
+    region: Region,
+) std.mem.Allocator.Error!CanonicalizedExpr {
+    switch (target) {
+        .local => |pattern_idx| return try self.canonicalizedLocalLookup(pattern_idx, region),
+        .associated => |associated| {
+            try self.used_patterns.put(self.env.gpa, associated.pattern_idx, {});
+            return try self.canonicalizedAssociatedForwardLookup(associated.owner_path, associated.pattern_idx, region);
+        },
+        .local_associated => |associated| return try self.canonicalizedLocalAssociatedLookup(
+            associated.type_node_idx,
+            associated.type_ident,
+            associated.item_ident,
+            region,
+        ),
+        .external_associated => |associated| return try self.canonicalizedExternalAssociatedLookup(
+            associated.import_idx,
+            associated.type_node_idx,
+            associated.type_ident,
+            associated.item_ident,
+            region,
+        ),
+        .external => |external| return try self.canonicalizedExternalLookup(
+            external.import_idx,
+            external.target_node_idx,
+            external.ident_idx,
+            region,
+        ),
+        .type_dispatch => |dispatch| {
+            const dispatch_expr_idx = try self.env.addExpr(CIR.Expr{
+                .e_type_method_call = .{
+                    .type_dispatch_stmt = dispatch.type_dispatch_stmt,
+                    .method_name = dispatch.method_name,
+                    .method_name_region = region,
+                    .args = .{ .span = DataSpan.empty() },
+                },
+            }, region);
+            return CanonicalizedExpr{ .idx = dispatch_expr_idx, .free_vars = DataSpan.empty() };
+        },
+        .auto_imported_nominal_tag => |nominal_tag| {
+            const tag_expr_idx = try self.env.addExpr(CIR.Expr{
+                .e_tag = .{
+                    .name = nominal_tag.tag_ident,
+                    .args = .{ .span = DataSpan.empty() },
+                },
+            }, region);
+            const nominal_expr_idx = try self.env.addExpr(CIR.Expr{
+                .e_nominal_external = .{
+                    .module_idx = nominal_tag.import_idx,
+                    .target_node_idx = nominal_tag.target_node_idx,
+                    .backing_expr = tag_expr_idx,
+                    .backing_type = .tag,
+                },
+            }, region);
+            return CanonicalizedExpr{ .idx = nominal_expr_idx, .free_vars = DataSpan.empty() };
+        },
+        .missing, .malformed => |diagnostic| return try self.canonicalizedMalformedExpr(diagnostic),
+    }
 }
 
 fn typeDispatchOwnerStatement(
@@ -8390,37 +8494,35 @@ fn canonicalizeTypeDispatchApply(
     return true;
 }
 
-fn canonicalizeTypeAssociatedLookup(
+fn resolveTypeAssociatedValue(
     self: *Self,
-    unresolved_module_alias: Ident.Idx,
+    type_name: Ident.Idx,
     ident: Ident.Idx,
     region: Region,
-) std.mem.Allocator.Error!?CanonicalizedExpr {
-    const module_alias = unresolved_module_alias;
-    const local_type_binding = try self.scopeLookupOrPrepareTypeBinding(module_alias);
+) std.mem.Allocator.Error!?QualifiedValueTarget {
+    const local_type_binding = try self.scopeLookupOrPrepareTypeBinding(type_name);
     const is_type_in_scope = local_type_binding != null;
-    const is_auto_imported_type = self.hasAvailableModuleEnv(module_alias);
+    const is_auto_imported_type = self.hasAvailableModuleEnv(type_name);
     if (!is_type_in_scope and !is_auto_imported_type) return null;
 
-    const type_text = self.env.getIdent(module_alias);
+    const type_text = self.env.getIdent(type_name);
     const field_text = self.env.getIdent(ident);
     const type_qualified_idx = try self.insertQualifiedIdent(type_text, field_text);
 
     if (local_type_binding) |binding_location| {
         if (self.typePathForBinding(binding_location.binding.*)) |owner_path| {
             if (try self.lookupOrCreateAssocValuePattern(owner_path, ident, type_qualified_idx, region)) |pattern_idx| {
-                return try self.canonicalizedAssociatedLookup(owner_path, type_qualified_idx, pattern_idx, region);
+                return self.associatedValueTarget(owner_path, type_qualified_idx, pattern_idx, region);
             }
         }
 
         const binding = binding_location.binding.*;
         if (binding == .local_alias) {
-            return try self.canonicalizedLocalAssociatedLookup(
-                @intFromEnum(binding.local_alias),
-                module_alias,
-                ident,
-                region,
-            );
+            return .{ .local_associated = .{
+                .type_node_idx = @intFromEnum(binding.local_alias),
+                .type_ident = type_name,
+                .item_ident = ident,
+            } };
         }
 
         // A type imported via `import M exposing [T]` is an `external_nominal`
@@ -8433,14 +8535,12 @@ fn canonicalizeTypeAssociatedLookup(
                 if (ext.target_node_idx) |type_node_idx| {
                     const type_stmt: Statement.Idx = @enumFromInt(type_node_idx);
                     if (module_env.store.getStatement(type_stmt) == .s_alias_decl) {
-                        const import_idx = ext.import_idx orelse try self.getOrCreateAutoImportIdent(ext.module_ident);
-                        return try self.canonicalizedExternalAssociatedLookup(
-                            import_idx,
-                            type_node_idx,
-                            module_alias,
-                            ident,
-                            region,
-                        );
+                        return .{ .external_associated = .{
+                            .import_idx = ext.import_idx orelse try self.getOrCreateAutoImportIdent(ext.module_ident),
+                            .type_node_idx = type_node_idx,
+                            .type_ident = type_name,
+                            .item_ident = ident,
+                        } };
                     }
                 }
                 const original_type_text = self.env.getIdent(ext.original_ident);
@@ -8450,8 +8550,11 @@ fn canonicalizeTypeAssociatedLookup(
 
                 if (module_env.common.findIdent(qualified_text)) |qname_ident| {
                     if (module_env.getExposedValueNodeIndexById(qname_ident)) |target_node_idx| {
-                        const import_idx = ext.import_idx orelse try self.getOrCreateAutoImportIdent(ext.module_ident);
-                        return try self.canonicalizedExternalLookup(import_idx, target_node_idx, type_qualified_idx, region);
+                        return .{ .external = .{
+                            .import_idx = ext.import_idx orelse try self.getOrCreateAutoImportIdent(ext.module_ident),
+                            .target_node_idx = target_node_idx,
+                            .ident_idx = type_qualified_idx,
+                        } };
                     }
                 }
             }
@@ -8459,7 +8562,7 @@ fn canonicalizeTypeAssociatedLookup(
     }
 
     if (is_auto_imported_type) {
-        if (self.lookupAvailableModuleEnv(module_alias)) |auto_imported_type_env| {
+        if (self.lookupAvailableModuleEnv(type_name)) |auto_imported_type_env| {
             const module_env = auto_imported_type_env.env;
             const qualified_type_text = self.env.getIdent(auto_imported_type_env.qualified_type_ident);
             const fully_qualified_idx = try self.insertQualifiedIdent(qualified_type_text, field_text);
@@ -8467,35 +8570,33 @@ fn canonicalizeTypeAssociatedLookup(
 
             if (module_env.common.findIdent(qualified_text)) |qname_ident| {
                 if (module_env.getExposedValueNodeIndexById(qname_ident)) |target_node_idx| {
-                    const import_idx = try self.getOrCreateAutoImportedTypeImport(auto_imported_type_env);
-
-                    return try self.canonicalizedExternalLookup(import_idx, target_node_idx, type_qualified_idx, region);
+                    return .{ .external = .{
+                        .import_idx = try self.getOrCreateAutoImportedTypeImport(auto_imported_type_env),
+                        .target_node_idx = target_node_idx,
+                        .ident_idx = type_qualified_idx,
+                    } };
                 }
             }
         }
     }
 
-    switch (self.scopeLookup(.ident, type_qualified_idx)) {
-        .found => |found_pattern_idx| {
-            return try self.canonicalizedLocalLookup(found_pattern_idx, region);
-        },
-        .not_found => {
-            return try self.canonicalizedMalformedExpr(Diagnostic{ .nested_value_not_found = .{
-                .parent_name = module_alias,
-                .nested_name = ident,
-                .region = region,
-            } });
-        },
-    }
+    return switch (self.scopeLookup(.ident, type_qualified_idx)) {
+        .found => |found_pattern_idx| .{ .local = found_pattern_idx },
+        .not_found => .{ .missing = .{ .nested_value_not_found = .{
+            .parent_name = type_name,
+            .nested_name = ident,
+            .region = region,
+        } } },
+    };
 }
 
-fn canonicalizeModuleQualifiedIdent(
+fn resolveModuleQualifiedValue(
     self: *Self,
     module_name: Ident.Idx,
     ident: Ident.Idx,
     region: Region,
     qualifier_tokens: []const u32,
-) std.mem.Allocator.Error!?CanonicalizedExpr {
+) std.mem.Allocator.Error!?QualifiedValueTarget {
     const auto_imported_type_info = self.lookupAvailableModuleEnv(module_name);
     const compiler_builtin_auto_import = if (auto_imported_type_info) |info|
         autoImportedTypeUsesCompilerBuiltinImport(info)
@@ -8509,10 +8610,10 @@ fn canonicalizeModuleQualifiedIdent(
     else if (auto_imported_type_info) |info|
         try self.getOrCreateAutoImportedTypeImport(info)
     else
-        return try self.canonicalizedMalformedExpr(Diagnostic{ .module_not_imported = .{
+        return .{ .malformed = .{ .module_not_imported = .{
             .module_name = module_name,
             .region = region,
-        } });
+        } } };
 
     const field_text = self.env.getIdent(ident);
     const lookup_scratch_top = self.scratchBytesTop();
@@ -8535,14 +8636,12 @@ fn canonicalizeModuleQualifiedIdent(
                     if (module_env.getExposedTypeNodeIndexById(type_qname_ident)) |type_node_idx| {
                         const type_stmt: Statement.Idx = @enumFromInt(type_node_idx);
                         if (module_env.store.getStatement(type_stmt) == .s_alias_decl) {
-                            const type_ident = try self.joinedQualifierIdent(qualifier_tokens);
-                            return try self.canonicalizedExternalAssociatedLookup(
-                                import_idx,
-                                type_node_idx,
-                                type_ident,
-                                ident,
-                                region,
-                            );
+                            return .{ .external_associated = .{
+                                .import_idx = import_idx,
+                                .type_node_idx = type_node_idx,
+                                .type_ident = try self.joinedQualifierIdent(qualifier_tokens),
+                                .item_ident = ident,
+                            } };
                         }
                     }
                 }
@@ -8592,30 +8691,30 @@ fn canonicalizeModuleQualifiedIdent(
             // exist. Without that evidence the reference is only unresolved
             // here, and the caller keeps looking for another meaning.
             if (self.importWasRejected(module_name)) {
-                const qualified_ident = try self.joinedQualifiedIdent(qualifier_tokens, ident);
-                return try self.canonicalizedMalformedExpr(Diagnostic{ .qualified_ident_does_not_exist = .{
-                    .ident = qualified_ident,
+                return .{ .missing = .{ .qualified_ident_does_not_exist = .{
+                    .ident = try self.joinedQualifiedIdent(qualifier_tokens, ident),
                     .region = region,
-                } });
+                } } };
             }
             return null;
         };
 
-        if (try self.addAutoImportedNominalTagExpr(auto_imported_type, import_idx, ident, region)) |expr_idx| {
-            return CanonicalizedExpr{
-                .idx = expr_idx,
-                .free_vars = DataSpan.empty(),
-            };
+        if (self.autoImportedNominalTagTarget(auto_imported_type, import_idx, ident)) |target| {
+            return target;
         }
 
-        return try self.canonicalizedMalformedExpr(Diagnostic{ .nested_value_not_found = .{
+        return .{ .missing = .{ .nested_value_not_found = .{
             .parent_name = module_name,
             .nested_name = ident,
             .region = region,
-        } });
+        } } };
     };
 
-    return try self.canonicalizedExternalLookup(import_idx, target_node_idx, ident, region);
+    return .{ .external = .{
+        .import_idx = import_idx,
+        .target_node_idx = target_node_idx,
+        .ident_idx = ident,
+    } };
 }
 
 fn canonicalizeUnqualifiedIdentExpr(
@@ -11512,14 +11611,6 @@ fn runExprKernel(
                         try storeExprKernelOutput(&last_expr, &child_slots, frame_allocator, current_result_target, CanonicalizedExpr{ .idx = expr_idx, .free_vars = DataSpan.empty() });
                         continue :expr_kernel_loop .dispatch;
                     }
-                    const type_name: Ident.Idx = self.parse_ir.tokens.resolveIdentifier(mapper_expr.tag.token) orelse {
-                        const malformed_idx = try self.env.pushMalformed(Expr.Idx, Diagnostic{ .expr_not_canonicalized = .{
-                            .region = region,
-                        } });
-                        try storeExprKernelOutput(&last_expr, &child_slots, frame_allocator, current_result_target, CanonicalizedExpr{ .idx = malformed_idx, .free_vars = DataSpan.empty() });
-                        continue :expr_kernel_loop .dispatch;
-                    };
-
                     var field_work: std.ArrayList(ExprRecordBuilderFieldWork) = .empty;
                     defer field_work.deinit(frame_allocator);
                     var explicit_value_count: usize = 0;
@@ -11554,7 +11645,7 @@ fn runExprKernel(
                     const fields = try field_work.toOwnedSlice(frame_allocator);
                     try stacks.pushFinishRecordBuilder(frame_allocator, .{
                         .region = region,
-                        .type_name = type_name,
+                        .mapper = mapper_expr.tag,
                         .captures_top = self.scratch_captures.top(),
                         .fields = fields,
                         .explicit_value_count = explicit_value_count,
@@ -13695,25 +13786,19 @@ fn runExprKernel(
                 }
             }
 
-            const map2_callee = (try self.resolveRecordBuilderMap2(state.type_name, state.region)) orelse {
+            const map2_target = try self.resolveRecordBuilderMap2(state.mapper, state.region);
+            if (map2_target == .malformed) {
                 child_slots.shrinkRetainingCapacity(result_start);
-                const expr_idx = try self.env.pushMalformed(Expr.Idx, Diagnostic{ .record_builder_map2_not_found = .{
-                    .type_name = state.type_name,
-                    .region = state.region,
-                } });
+                const expr_idx = try self.env.pushMalformed(Expr.Idx, map2_target.malformed);
                 try storeExprKernelOutput(&last_expr, &child_slots, frame_allocator, current_result_target, CanonicalizedExpr{ .idx = expr_idx, .free_vars = DataSpan.empty() });
                 continue :expr_kernel_loop .dispatch;
-            };
-
-            if (map2_callee.localPattern()) |pattern_idx| {
-                try self.used_patterns.put(self.env.gpa, pattern_idx, {});
             }
 
             const field_names = self.scratch_idents.slice(field_names_top, self.scratch_idents.top());
             const field_values = self.scratch_expr_ids.slice(field_values_top, self.scratch_expr_ids.top());
             const result_expr = try self.buildChainedMap2(
                 state.region,
-                map2_callee,
+                .{ .target = map2_target, .captures_top = state.captures_top },
                 field_names,
                 field_values,
             );
@@ -13722,11 +13807,6 @@ fn runExprKernel(
             const captures_slice = self.scratch_captures.sliceFromStart(state.captures_top);
             for (captures_slice) |fv| {
                 try self.scratch_free_vars.append(fv);
-            }
-            if (map2_callee.localPattern()) |pattern_idx| {
-                if (!self.isGloballyResolvablePattern(pattern_idx)) {
-                    try self.scratch_free_vars.append(pattern_idx);
-                }
             }
             const free_vars_span = self.scratch_free_vars.spanFrom(free_vars_start);
 
@@ -14505,64 +14585,42 @@ fn canonicalizeDoubleQuestionOp(
     return CanonicalizedExpr{ .idx = expr_idx, .free_vars = free_vars_span };
 }
 
+/// Resolve the `map2` a record builder with the type suffix `mapper` calls.
+/// The suffix `.P` stands for the value path `P.map2`, so this resolves
+/// exactly what that path means as an expression.
 fn resolveRecordBuilderMap2(
     self: *Self,
-    type_name: Ident.Idx,
+    mapper: AST.TagExpr,
     region: Region,
-) std.mem.Allocator.Error!?RecordBuilderMap2 {
+) std.mem.Allocator.Error!QualifiedValueTarget {
+    const qualifier_tokens = self.parse_ir.store.tokenSlice(mapper.qualifiers);
+    var path_fallback = std.heap.stackFallback(8 * @sizeOf(u32), self.env.gpa);
+    const path_allocator = path_fallback.get();
+    const type_path = try path_allocator.alloc(u32, qualifier_tokens.len + 1);
+    defer path_allocator.free(type_path);
+    @memcpy(type_path[0..qualifier_tokens.len], qualifier_tokens);
+    type_path[qualifier_tokens.len] = mapper.token;
+
     const map2_name = try self.env.insertIdent(base.Ident.for_text("map2"));
-    const type_name_text = self.env.getIdent(type_name);
-    const qualified_map2_name = try self.insertQualifiedIdent(type_name_text, "map2");
-
-    if (try self.scopeLookupOrPrepareTypeBinding(type_name)) |binding_location| {
-        const binding = binding_location.binding.*;
-        if (self.typePathForBinding(binding)) |owner_path| {
-            if (try self.lookupOrCreateAssocValuePattern(owner_path, map2_name, qualified_map2_name, region)) |pattern_idx| {
-                return RecordBuilderMap2{ .local = pattern_idx };
-            }
+    if (try self.resolveQualifiedValue(map2_name, region, type_path)) |target| {
+        switch (target) {
+            .missing => {},
+            .local,
+            .associated,
+            .local_associated,
+            .external_associated,
+            .external,
+            .type_dispatch,
+            .auto_imported_nominal_tag,
+            .malformed,
+            => return target,
         }
-
-        if (binding == .external_nominal) return try self.resolveRecordBuilderExternalMap2(map2_name, binding.external_nominal);
-        return null;
     }
 
-    return switch (self.scopeLookup(.ident, qualified_map2_name)) {
-        .found => |pattern_idx| RecordBuilderMap2{ .local = pattern_idx },
-        .not_found => null,
-    };
-}
-
-fn resolveRecordBuilderExternalMap2(
-    self: *Self,
-    map2_name: Ident.Idx,
-    external: Scope.ExternalTypeBinding,
-) std.mem.Allocator.Error!?RecordBuilderMap2 {
-    const import_idx = external.import_idx orelse return null;
-    const imported_type = self.lookupAvailableModuleEnv(external.module_ident) orelse
-        self.lookupAvailableModuleEnv(external.original_ident) orelse
-        return null;
-    const map2_text = self.env.getIdent(map2_name);
-
-    if (imported_type.statement_idx != null) {
-        const qualified_type_text = self.env.getIdent(imported_type.qualified_type_ident);
-        const qualified_map2_name = try self.insertQualifiedIdent(qualified_type_text, map2_text);
-        const qualified_map2_text = self.env.getIdent(qualified_map2_name);
-        const imported_ident = imported_type.env.common.findIdent(qualified_map2_text) orelse return null;
-        const target_node_idx = imported_type.env.getExposedValueNodeIndexById(imported_ident) orelse return null;
-
-        return RecordBuilderMap2{ .external = .{
-            .module_idx = import_idx,
-            .target_node_idx = target_node_idx,
-            .ident_idx = qualified_map2_name,
-        } };
-    }
-
-    const target_node_idx = (try self.lookupImportedExposedValueNode(imported_type.env, map2_text)) orelse return null;
-    return RecordBuilderMap2{ .external = .{
-        .module_idx = import_idx,
-        .target_node_idx = target_node_idx,
-        .ident_idx = map2_name,
-    } };
+    return .{ .malformed = .{ .record_builder_map2_not_found = .{
+        .type_name = try self.joinedQualifierIdent(type_path),
+        .region = region,
+    } } };
 }
 
 /// Build chained map2 calls for record builder desugaring.
@@ -14570,7 +14628,7 @@ fn resolveRecordBuilderExternalMap2(
 fn buildChainedMap2(
     self: *Self,
     region: base.Region,
-    map2_callee: RecordBuilderMap2,
+    map2: RecordBuilderMap2,
     field_names: []const Ident.Idx,
     field_values: []const Expr.Idx,
 ) std.mem.Allocator.Error!Expr.Idx {
@@ -14580,14 +14638,14 @@ fn buildChainedMap2(
     if (n == 2) {
         // Base case: T.map2(f0, f1, |p0, p1| { p0, p1 })
         const lambda_idx = try self.buildFinalRecordLambda(region, field_names);
-        return try self.buildMap2Call(region, map2_callee, field_values[0], field_values[1], lambda_idx);
+        return try self.buildMap2Call(region, map2, field_values[0], field_values[1], lambda_idx);
     }
 
     // Recursive case: Build from right to left
     // Start with innermost: T.map2(f_{n-2}, f_{n-1}, |p_{n-2}, p_{n-1}| (p_{n-2}, p_{n-1}))
     var inner_expr = try self.buildInnerMap2WithTuple(
         region,
-        map2_callee,
+        map2,
         field_values[n - 2],
         field_values[n - 1],
         field_names[n - 2],
@@ -14600,7 +14658,7 @@ fn buildChainedMap2(
     while (i >= 1) : (i -= 1) {
         inner_expr = try self.buildIntermediateMap2(
             region,
-            map2_callee,
+            map2,
             field_values[i],
             inner_expr,
             field_names[i],
@@ -14610,30 +14668,23 @@ fn buildChainedMap2(
 
     // Final layer: T.map2(f_0, inner, |p_0, (rest...)| { all fields })
     const final_lambda_idx = try self.buildFinalLambdaWithTupleDestructure(region, field_names);
-    return try self.buildMap2Call(region, map2_callee, field_values[0], inner_expr, final_lambda_idx);
+    return try self.buildMap2Call(region, map2, field_values[0], inner_expr, final_lambda_idx);
 }
 
 /// Build a map2 call: map2(arg1, arg2, lambda)
 fn buildMap2Call(
     self: *Self,
     region: base.Region,
-    map2_callee: RecordBuilderMap2,
+    map2: RecordBuilderMap2,
     arg1: Expr.Idx,
     arg2: Expr.Idx,
     lambda: Expr.Idx,
 ) std.mem.Allocator.Error!Expr.Idx {
-    // Create function lookup
-    const func_expr_idx = switch (map2_callee) {
-        .local => |pattern_idx| try self.env.addExpr(CIR.Expr{ .e_lookup_local = .{
-            .pattern_idx = pattern_idx,
-        } }, region),
-        .external => |external| try self.env.addExpr(CIR.Expr{ .e_lookup_external = .{
-            .module_idx = external.module_idx,
-            .target_node_idx = external.target_node_idx,
-            .ident_idx = external.ident_idx,
-            .region = region,
-        } }, region),
-    };
+    const func_expr = try self.emitQualifiedValue(map2.target, region);
+    for (self.scratch_free_vars.sliceFromSpan(func_expr.free_vars)) |fv| {
+        try self.appendPropagatedFreeVar(map2.captures_top, fv);
+    }
+    const func_expr_idx = func_expr.idx;
 
     // Build args
     const args_start = self.env.store.scratchExprTop();
@@ -14656,7 +14707,7 @@ fn buildMap2Call(
 fn buildInnerMap2WithTuple(
     self: *Self,
     region: base.Region,
-    map2_callee: RecordBuilderMap2,
+    map2: RecordBuilderMap2,
     arg1: Expr.Idx,
     arg2: Expr.Idx,
     name1: Ident.Idx,
@@ -14698,7 +14749,7 @@ fn buildInnerMap2WithTuple(
         .e_lambda = .{ .args = args_span, .body = tuple_body },
     }, region);
 
-    return try self.buildMap2Call(region, map2_callee, arg1, arg2, lambda_idx);
+    return try self.buildMap2Call(region, map2, arg1, arg2, lambda_idx);
 }
 
 /// Build an intermediate map2 call that extends a tuple:
@@ -14706,7 +14757,7 @@ fn buildInnerMap2WithTuple(
 fn buildIntermediateMap2(
     self: *Self,
     region: base.Region,
-    map2_callee: RecordBuilderMap2,
+    map2: RecordBuilderMap2,
     arg1: Expr.Idx,
     inner: Expr.Idx,
     new_name: Ident.Idx,
@@ -14753,7 +14804,7 @@ fn buildIntermediateMap2(
         .e_lambda = .{ .args = args_span, .body = tuple_body },
     }, region);
 
-    return try self.buildMap2Call(region, map2_callee, arg1, inner, lambda_idx);
+    return try self.buildMap2Call(region, map2, arg1, inner, lambda_idx);
 }
 
 /// Build a tuple pattern for destructuring: (a, b, ...) or nested ((a, b), c)
@@ -16951,7 +17002,7 @@ const ExprFinishIfWithoutElseWork = struct {
 
 const ExprFinishRecordBuilderWork = struct {
     region: Region,
-    type_name: Ident.Idx,
+    mapper: AST.TagExpr,
     captures_top: u32,
     fields: []const ExprRecordBuilderFieldWork,
     explicit_value_count: usize,
