@@ -7295,6 +7295,7 @@ pub const Interpreter = struct {
             .num_abs_checked => self.numUnaryOp(args[0], ll.ret_layout, arg_layout, .abs, .num_abs_checked),
             .num_abs_diff => self.numBinOp(args[0], args[1], ll.ret_layout, arg_layout, .abs_diff, null),
             .num_pow => self.evalNumPow(args[0], args[1], ll.ret_layout, arg_layout),
+            .num_atan2 => self.evalNumAtan2(args[0], args[1], ll.ret_layout, arg_layout),
             .num_sqrt => self.evalNumSqrt(args[0], ll.ret_layout, arg_layout),
             .num_sin => self.evalNumFloatUnaryMath(args[0], ll.ret_layout, arg_layout, .sin),
             .num_cos => self.evalNumFloatUnaryMath(args[0], ll.ret_layout, arg_layout, .cos),
@@ -8422,6 +8423,25 @@ pub const Interpreter = struct {
             },
             .signed_int, .unsigned_int => return self.invariantFailedError(
                 "LIR/interpreter invariant violated: integer num_pow survived lowering for layout {d}",
+                .{@intFromEnum(arg_layout)},
+            ),
+        }
+        return val;
+    }
+
+    fn evalNumAtan2(self: *LirInterpreter, a: Value, b: Value, ret_layout: layout_mod.Idx, arg_layout: layout_mod.Idx) Error!Value {
+        const val = try self.alloc(ret_layout);
+        switch (try self.numericOperandKind(arg_layout)) {
+            .dec => {
+                val.write(i128, builtins.dec.atan2C(RocDec{ .num = a.read(i128) }, RocDec{ .num = b.read(i128) }, &self.roc_ops));
+            },
+            .float => |bits| switch (bits) {
+                32 => val.write(f32, builtins.float_math_f32.atan2(a.read(f32), b.read(f32))),
+                64 => val.write(f64, builtins.float_math_f64.atan2(a.read(f64), b.read(f64))),
+                else => return self.invariantFailedError("LIR/interpreter invariant violated: unsupported float atan2 width {d}", .{bits}),
+            },
+            .signed_int, .unsigned_int => return self.invariantFailedError(
+                "LIR/interpreter invariant violated: integer num_atan2 survived lowering for layout {d}",
                 .{@intFromEnum(arg_layout)},
             ),
         }

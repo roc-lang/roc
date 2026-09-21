@@ -359,7 +359,9 @@ pub fn runWasmOutcomeWithStats(
             .{ BuiltinSignatures.BuiltinKind.u128_to_f32, hostU128ToF32 },
             .{ BuiltinSignatures.BuiltinKind.u128_to_f64, hostU128ToF64 },
             .{ BuiltinSignatures.BuiltinKind.float_pow_f32, hostFloatPowF32 },
+            .{ BuiltinSignatures.BuiltinKind.float_atan2_f32, hostFloatAtan2F32 },
             .{ BuiltinSignatures.BuiltinKind.float_pow, hostFloatPow },
+            .{ BuiltinSignatures.BuiltinKind.float_atan2, hostFloatAtan2 },
             .{ BuiltinSignatures.BuiltinKind.float_rem_f32, hostFloatRemF32 },
             .{ BuiltinSignatures.BuiltinKind.float_rem, hostFloatRem },
             .{ BuiltinSignatures.BuiltinKind.float_sin_f32, hostFloatSinF32 },
@@ -387,6 +389,7 @@ pub fn runWasmOutcomeWithStats(
         env_imports.addHostFunction("roc_dec_div", &[_]bytebox.ValType{ .I32, .I32, .I32 }, &[_]bytebox.ValType{}, hostDecDiv, &run_state) catch return error.WasmExecFailed;
         env_imports.addHostFunction("roc_dec_div_trunc", &[_]bytebox.ValType{ .I32, .I32, .I32 }, &[_]bytebox.ValType{}, hostDecDivTrunc, &run_state) catch return error.WasmExecFailed;
         env_imports.addHostFunction("roc_dec_pow", &[_]bytebox.ValType{ .I32, .I32, .I32 }, &[_]bytebox.ValType{}, hostDecPow, &run_state) catch return error.WasmExecFailed;
+        env_imports.addHostFunction("roc_dec_atan2", &[_]bytebox.ValType{ .I32, .I32, .I32 }, &[_]bytebox.ValType{}, hostDecAtan2, &run_state) catch return error.WasmExecFailed;
         env_imports.addHostFunction("roc_dec_sqrt", &[_]bytebox.ValType{ .I32, .I32 }, &[_]bytebox.ValType{}, hostDecSqrt, &run_state) catch return error.WasmExecFailed;
         env_imports.addHostFunction("roc_dec_sin", &[_]bytebox.ValType{ .I32, .I32 }, &[_]bytebox.ValType{}, hostDecSin, &run_state) catch return error.WasmExecFailed;
         env_imports.addHostFunction("roc_dec_cos", &[_]bytebox.ValType{ .I32, .I32 }, &[_]bytebox.ValType{}, hostDecCos, &run_state) catch return error.WasmExecFailed;
@@ -1079,6 +1082,22 @@ fn hostDecPow(ctx: ?*anyopaque, module: *bytebox.ModuleInstance, params: [*]cons
     writeI128ToMem(buffer, result_ptr, result);
 }
 
+fn hostDecAtan2(ctx: ?*anyopaque, module: *bytebox.ModuleInstance, params: [*]const bytebox.Val, _: [*]bytebox.Val) error{}!void {
+    const state: *WasmRunState = @ptrCast(@alignCast(ctx));
+    const RocDec = builtins.dec.RocDec;
+    const buffer = module.store.getMemory(0).buffer();
+    const lhs_ptr: usize = @intCast(params[0].I32);
+    const rhs_ptr: usize = @intCast(params[1].I32);
+    const result_ptr: usize = @intCast(params[2].I32);
+    std.debug.assert(lhs_ptr + 16 <= buffer.len and rhs_ptr + 16 <= buffer.len and result_ptr + 16 <= buffer.len);
+
+    const y = RocDec{ .num = readI128FromMem(buffer, lhs_ptr) };
+    const x = RocDec{ .num = readI128FromMem(buffer, rhs_ptr) };
+    var dec_ops = wasmDecRocOps(state);
+    const result = builtins.dec.atan2C(y, x, &dec_ops);
+    writeI128ToMem(buffer, result_ptr, result);
+}
+
 fn hostDecUnaryMath(state: *WasmRunState, module: *bytebox.ModuleInstance, params: [*]const bytebox.Val, comptime op: DecUnaryMathOp) void {
     const RocDec = builtins.dec.RocDec;
     const buffer = module.store.getMemory(0).buffer();
@@ -1237,8 +1256,16 @@ fn hostFloatPowF32(_: ?*anyopaque, _: *bytebox.ModuleInstance, params: [*]const 
     results[0] = .{ .F32 = builtins.dev_wrappers.roc_builtins_float_pow_f32(params[0].F32, params[1].F32) };
 }
 
+fn hostFloatAtan2F32(_: ?*anyopaque, _: *bytebox.ModuleInstance, params: [*]const bytebox.Val, results: [*]bytebox.Val) error{}!void {
+    results[0] = .{ .F32 = builtins.dev_wrappers.roc_builtins_float_atan2_f32(params[0].F32, params[1].F32) };
+}
+
 fn hostFloatPow(_: ?*anyopaque, _: *bytebox.ModuleInstance, params: [*]const bytebox.Val, results: [*]bytebox.Val) error{}!void {
     results[0] = .{ .F64 = builtins.dev_wrappers.roc_builtins_float_pow(params[0].F64, params[1].F64) };
+}
+
+fn hostFloatAtan2(_: ?*anyopaque, _: *bytebox.ModuleInstance, params: [*]const bytebox.Val, results: [*]bytebox.Val) error{}!void {
+    results[0] = .{ .F64 = builtins.dev_wrappers.roc_builtins_float_atan2(params[0].F64, params[1].F64) };
 }
 
 fn hostFloatRemF32(_: ?*anyopaque, _: *bytebox.ModuleInstance, params: [*]const bytebox.Val, results: [*]bytebox.Val) error{}!void {
