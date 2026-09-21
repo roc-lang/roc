@@ -8422,6 +8422,21 @@ information needed to copy, drop, allocate, inspect, or dispatch on that
 payload is not stored in the value; it travels separately as explicit hidden
 data.
 
+A checked flex variable that no enclosing worker scheme quantifies has no hidden
+descriptor to supply its payload description; for example, the item variable of
+`[]` in a monomorphic `main! = |_| Ok([])` appears in no worker signature. Such a
+variable keeps the `erased_box` value layout, and its static descriptor
+describes the representation the variable seals to under the same rule Monotype
+applies in `lowerCheckedTypeVariable`: its numeric default when it carries a
+numeric default phase, otherwise its row default (`{}` or `[]`), otherwise the
+empty tag union. Planning records that sealed representation as explicit
+`sealed_default` data on the flex representation, so lowering reads it rather
+than re-deriving a default from the checked type. A flex variable carrying
+non-numeric static-dispatch constraints has no sealed default, because its
+dispatch needs a dictionary that only a quantifying scheme can supply; reaching
+it without a bound descriptor, like reaching an unbound rigid variable, is a
+lowering invariant violation.
+
 `erased_box` is distinct from the `box_of_zst` layout used for `Box({})`. `Box({})` is
 represented by a null pointer, owns no allocation, and is not refcounted. An
 `erased_box` is a refcounted layout even when its current descriptor names a
