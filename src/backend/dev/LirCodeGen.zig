@@ -25951,10 +25951,11 @@ test "stack reuse does not allocate declaration-only join parameters" {
         for (params) |*param| param.* = try addLocal(&store, .u64);
         const body = try store.addCFStmt(.{ .ret = .{ .value = result } });
         const remainder = try store.addCFStmt(.{ .ret = .{ .value = result } });
+        var next_join_point: u32 = 0;
         // There is no incoming jump, so these parameters are never initialized
         // or read. The declaration must not create a storage lifetime.
         const join = try store.addCFStmt(.{ .join = .{
-            .id = @enumFromInt(0),
+            .id = freshTestJoinPointId(&next_join_point),
             .params = try store.addLocalSpan(params),
             .body = body,
             .remainder = remainder,
