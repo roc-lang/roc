@@ -508,7 +508,7 @@ const Lifter = struct {
         var facts: Ast.FnFacts = .{};
         const body: Ast.FnBody = switch (def.body) {
             .roc => |body| blk: {
-                const outer_facts = self.output.beginFnFacts();
+                const outer_facts = self.output.beginFnFacts(fn_id);
                 try self.rewriteExpr(body);
                 facts = self.output.finishFnFacts(outer_facts);
                 break :blk .{ .roc = body };
@@ -535,7 +535,7 @@ const Lifter = struct {
     }
 
     fn lowerNestedDef(self: *Lifter, fn_id: Ast.FnId, def: Mono.NestedDef) Allocator.Error!void {
-        const outer_facts = self.output.beginFnFacts();
+        const outer_facts = self.output.beginFnFacts(fn_id);
         try self.rewriteExpr(def.body);
         const facts = self.output.finishFnFacts(outer_facts);
         const capture_span = try self.output.addTypedLocalSpan(self.fn_captures[@intFromEnum(fn_id)].items);
@@ -817,7 +817,7 @@ const Lifter = struct {
             .captures = capture_exprs,
         } });
 
-        const outer_facts = self.output.beginFnFacts();
+        const outer_facts = self.output.beginFnFacts(fn_id);
         try self.rewriteExpr(lambda.body);
         const facts = self.output.finishFnFacts(outer_facts);
         const capture_span = try self.output.addTypedLocalSpan(captures.items.items);

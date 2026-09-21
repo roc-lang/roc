@@ -158,7 +158,10 @@ pub const FnFacts = packed struct(u8) {
     loop: bool = false,
     /// A loop whose result is a tuple of at least two values.
     loop_tuple_result: bool = false,
-    _padding: u2 = 0,
+    /// A direct call to the function itself.
+    self_call: bool = false,
+    /// A `return` expression.
+    contains_return: bool = false,
 
     pub fn merged(self: FnFacts, other: FnFacts) FnFacts {
         return @bitCast(@as(u8, @bitCast(self)) | @as(u8, @bitCast(other)));
@@ -493,6 +496,9 @@ pub const Program = struct {
     /// Facts of the expressions created or rewritten since the accumulator was
     /// last started; `beginFnFacts`/`finishFnFacts` bracket one body.
     facts: FnFacts = .{},
+    /// The function whose body the accumulator is collecting for, so a call
+    /// to it is recorded as a self call.
+    facts_owner: ?FnId = null,
     roots: ProgramList(Root, "roots"),
     layout_requests: ProgramList(LayoutRequest, "layout_requests"),
     runtime_schema_requests: ProgramList(RuntimeSchemaRequest, "runtime_schema_requests"),
@@ -540,6 +546,7 @@ pub const Program = struct {
         result.next_symbol = self.next_symbol;
         result.next_lift_capture_id = self.next_lift_capture_id;
         result.facts = .{};
+        result.facts_owner = null;
         result.proc_debug_names = ProcDebugNameMap.init(allocator);
         result.current_loc = self.current_loc;
         result.current_region = self.current_region;
@@ -996,19 +1003,28 @@ pub const Program = struct {
         return self.proc_debug_names.get(symbol);
     }
 
+    /// The accumulator state an enclosing body emission owns while a nested
+    /// body is collected.
+    pub const FnFactsScope = struct {
+        facts: FnFacts = .{},
+        owner: ?FnId = null,
+    };
+
     /// Start collecting the facts of one function body's expressions. The
-    /// returned outer accumulator goes back to `finishFnFacts`, so a body
-    /// emitted while another is in progress keeps both sets exact.
-    pub fn beginFnFacts(self: *Program) FnFacts {
-        const outer = self.facts;
+    /// returned outer scope goes back to `finishFnFacts`, so a body emitted
+    /// while another is in progress keeps both sets exact.
+    pub fn beginFnFacts(self: *Program, owner: FnId) FnFactsScope {
+        const outer: FnFactsScope = .{ .facts = self.facts, .owner = self.facts_owner };
         self.facts = .{};
+        self.facts_owner = owner;
         return outer;
     }
 
     /// Finish the body started by `beginFnFacts` and return its facts.
-    pub fn finishFnFacts(self: *Program, outer: FnFacts) FnFacts {
+    pub fn finishFnFacts(self: *Program, outer: FnFactsScope) FnFacts {
         const facts = self.facts;
-        self.facts = outer;
+        self.facts = outer.facts;
+        self.facts_owner = outer.owner;
         return facts;
     }
 
@@ -1021,7 +1037,17 @@ pub const Program = struct {
                     self.facts.iterator_call = true;
                     if (procedure.producesIteratorValue()) self.facts.iterator_producer = true;
                 }
+                // The lifter records a call before and after it rewrites the
+                // callee to a lifted function; only the lifted form can name
+                // the owner.
+                switch (call.callee) {
+                    .lifted => |callee| if (callee == self.facts_owner) {
+                        self.facts.self_call = true;
+                    },
+                    .func => {},
+                }
             },
+            .return_ => self.facts.contains_return = true,
             .def_ref => {
                 self.facts.direct_call = true;
                 self.facts.constructs_value = true;
@@ -1036,7 +1062,7 @@ pub const Program = struct {
                     else => {},
                 }
             },
-            .local, .int_lit, .dec_lit, .str_lit, .bytes_lit, .inline_expects_enabled, .typed_boundary, .let_, .call_value, .low_level, .field_access, .tuple_access, .structural_eq, .structural_hash, .match_, .if_, .uninitialized_payload, .if_initialized_payload, .try_sequence, .try_record_sequence, .block, .break_, .continue_, .join_point, .jump, .return_, .crash, .comptime_branch_taken, .comptime_exhaustiveness_failed, .dbg, .expect_err, .expect, .@"unreachable", .unit, .frac_f32_lit, .frac_f64_lit, .uninitialized => {},
+            .local, .int_lit, .dec_lit, .str_lit, .bytes_lit, .inline_expects_enabled, .typed_boundary, .let_, .call_value, .low_level, .field_access, .tuple_access, .structural_eq, .structural_hash, .match_, .if_, .uninitialized_payload, .if_initialized_payload, .try_sequence, .try_record_sequence, .block, .break_, .continue_, .join_point, .jump, .crash, .comptime_branch_taken, .comptime_exhaustiveness_failed, .dbg, .expect_err, .expect, .@"unreachable", .unit, .frac_f32_lit, .frac_f64_lit, .uninitialized => {},
         }
     }
 

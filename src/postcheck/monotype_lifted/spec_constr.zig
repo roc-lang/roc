@@ -2664,7 +2664,7 @@ const Pass = struct {
             if (popped.fn_id != source_fn_id) Common.invariant("call-pattern inline stack was corrupted while writing specialization");
         }
 
-        const outer_facts = self.program.beginFnFacts();
+        const outer_facts = self.program.beginFnFacts(spec_fn_id);
         const args = try cloner.buildArgs();
         const body: Ast.FnBody = switch (self.sourceBody(source_fn_id)) {
             .roc => |body_expr| .{ .roc = try cloner.cloneExpr(body_expr) },
@@ -4171,7 +4171,7 @@ const Pass = struct {
             const local = GuardedList.at(captures, index).local;
             try cloner.putLocalAlias(local, local);
         }
-        const outer_facts = self.program.beginFnFacts();
+        const outer_facts = self.program.beginFnFacts(fn_id);
         const cloned = try cloner.cloneExpr(body);
         const facts = self.program.finishFnFacts(outer_facts);
         self.program.setFn(fn_id, .{
@@ -4216,7 +4216,7 @@ const Pass = struct {
             try cloner.putLocalAlias(local, local);
         }
 
-        const outer_facts = self.program.beginFnFacts();
+        const outer_facts = self.program.beginFnFacts(fn_id);
         const cloned = try cloner.cloneExpr(body);
         const facts = self.program.finishFnFacts(outer_facts);
         self.program.setFn(fn_id, .{
@@ -4257,7 +4257,7 @@ const Pass = struct {
         var cloner = Cloner.initForLoopExitSelection(self);
         defer cloner.deinit();
         cloner.exit_demands = &demands;
-        const outer_facts = self.program.beginFnFacts();
+        const outer_facts = self.program.beginFnFacts(fn_id);
         const cloned = try cloner.cloneExpr(body);
         const facts = self.program.finishFnFacts(outer_facts);
         self.program.setFn(fn_id, .{
@@ -11883,7 +11883,7 @@ const Cloner = struct {
         // start their strip depth from zero.
         const saved_strip_depth = self.materialize_strip_depth;
         self.materialize_strip_depth = 0;
-        const outer_facts = self.pass.program.beginFnFacts();
+        const outer_facts = self.pass.program.beginFnFacts(worker_fn_id);
         const worker_body = try self.cloneExprWithoutSourceReuse(source_body);
         const worker_facts = self.pass.program.finishFnFacts(outer_facts);
         self.materialize_strip_depth = saved_strip_depth;
@@ -12615,8 +12615,23 @@ const ProgramProcedureUsage = struct {
                 .roc => |body| body,
                 .hosted => continue,
             };
-            fn_uses[owner_index].contains_return = exprContainsReturn(program, body);
-            tail_self_calls[owner_index] = tailSelfCallSummary(program, body, owner);
+            // Both walks answer questions the body's recorded facts already
+            // settle for a body without the shape: no return expression, and
+            // no self call means an empty summary.
+            const facts = program.getFnAt(owner_index).facts;
+            if (builtin.mode == .Debug) {
+                if (exprContainsReturn(program, body) and !facts.contains_return) {
+                    std.debug.panic("function {d} contains a return its facts {any} do not record", .{ owner_index, facts });
+                }
+                if (!facts.self_call) {
+                    const summary = tailSelfCallSummary(program, body, owner);
+                    if (!summary.valid or summary.count != 0) {
+                        std.debug.panic("function {d} calls itself although its facts {any} do not record it", .{ owner_index, facts });
+                    }
+                }
+            }
+            fn_uses[owner_index].contains_return = facts.contains_return;
+            tail_self_calls[owner_index] = if (facts.self_call) tailSelfCallSummary(program, body, owner) else .{};
             collectAllFnUsesInExpr(program, body, owner, fn_uses);
         }
         for (program.rootsView()) |root| {
