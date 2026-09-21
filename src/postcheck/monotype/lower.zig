@@ -9198,6 +9198,31 @@ const Builder = struct {
         local_proc_context_digest: ?names.TypeDigest,
         in_default_expr: bool,
     ) Allocator.Error!Ast.NestedFn {
+        const site = try self.nestedSiteForExpr(view, owner, expr_id, in_default_expr);
+        return .{
+            .owner = owner,
+            .site = site,
+            // A default-root site belongs to no template; the produced
+            // reference carries the declaring module's content identity so a
+            // stored function value built from it stays resolvable outside
+            // materialization context (const-store restore).
+            .default_root = switch (view.nested_proc_sites.sites[@intFromEnum(site)].owner) {
+                .template => null,
+                .default_root => .{ .bytes = view.module_identity.stable_hash },
+            },
+            .context_fn_key = context_fn_key,
+            .local_proc_context_digest = local_proc_context_digest,
+        };
+    }
+
+    /// The checked nested-procedure site `owner` lowers `expr_id` at.
+    fn nestedSiteForExpr(
+        self: *Builder,
+        view: ModuleView,
+        owner: names.ProcTemplate,
+        expr_id: checked.CheckedExprId,
+        in_default_expr: bool,
+    ) Allocator.Error!names.NestedProcSiteId {
         const address = NestedSiteAddress.from(view.key, owner, expr_id);
         const site = if (self.nested_site_cache.get(address)) |cached|
             cached
@@ -9221,24 +9246,10 @@ const Builder = struct {
             }
             Common.invariant("nested function expression reached Monotype without a checked nested function site");
         };
-        const raw_site = @intFromEnum(site);
-        if (raw_site >= view.nested_proc_sites.sites.len) {
+        if (@intFromEnum(site) >= view.nested_proc_sites.sites.len) {
             Common.invariant("nested function site id was outside the CheckedModule procedure-site table");
         }
-        return .{
-            .owner = owner,
-            .site = site,
-            // A default-root site belongs to no template; the produced
-            // reference carries the declaring module's content identity so a
-            // stored function value built from it stays resolvable outside
-            // materialization context (const-store restore).
-            .default_root = switch (view.nested_proc_sites.sites[raw_site].owner) {
-                .template => null,
-                .default_root => .{ .bytes = view.module_identity.stable_hash },
-            },
-            .context_fn_key = context_fn_key,
-            .local_proc_context_digest = local_proc_context_digest,
-        };
+        return site;
     }
 
     fn lowerDraftNestedFromContext(
@@ -22548,11 +22559,6 @@ const BodyContext = struct {
                     defer local_ctx.deinit();
                     local_ctx.owner_context_fn_key = self.owner_context_fn_key;
                     local_ctx.current_fn_key = self.current_fn_key;
-                    const local_root_node = try local_ctx.checkedTemplateInterfaceScopeRootNode(local_scope);
-                    try relateFunctionRequestInterface(self.graph, local_root_node, request_node);
-                    try active_local_scopes.put(local_scope, local_root_node);
-                    defer _ = active_local_scopes.remove(local_scope);
-
                     const use_evidence = try self.evidenceForUseSiteForPurposeAtNode(
                         record.expr,
                         .specialization_interface,
@@ -22565,6 +22571,27 @@ const BodyContext = struct {
                         local.expr,
                         use_evidence,
                     );
+                    // The scope's relations mention checked variables quantified
+                    // by enclosing frames as well as by the scope itself, and
+                    // some are reachable only through constraints rather than
+                    // through the scope's callable shape. Bind them the way
+                    // lowering the local's use does before any relation
+                    // instantiates them.
+                    if (local.is_alias) {
+                        try local_ctx.seedSubstitution(local_ctx.evidence.schema.?, use_evidence.subst);
+                    } else {
+                        try local_ctx.bindNestedTypes(try self.builder.nestedSiteForExpr(
+                            self.view,
+                            self.owner_template,
+                            local.expr,
+                            self.in_default_expr,
+                        ), false);
+                    }
+                    const local_root_node = try local_ctx.checkedTemplateInterfaceScopeRootNode(local_scope);
+                    try relateFunctionRequestInterface(self.graph, local_root_node, request_node);
+                    try active_local_scopes.put(local_scope, local_root_node);
+                    defer _ = active_local_scopes.remove(local_scope);
+
                     try local_ctx.instantiateTemplateDispatchRelations(template, local_scope);
                     try local_ctx.applyCheckedTemplateInterfaceScopeRelations(
                         template,
