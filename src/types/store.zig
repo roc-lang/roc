@@ -1446,7 +1446,6 @@ pub const Store = struct {
                 .structure => |flat| return switch (flat) {
                     .fn_pure, .fn_effectful, .fn_unbound => true,
                     .record,
-                    .record_unbound,
                     .tuple,
                     .nominal_type,
                     .empty_record,

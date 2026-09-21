@@ -521,7 +521,6 @@ const Unifier = struct {
                     .fn_unbound => |func| {
                         return Content{ .structure = FlatType{ .fn_unbound = try self.funcForMerge(vars, func) } };
                     },
-                    .record_unbound,
                     .tuple,
                     .nominal_type,
                     .empty_record,
@@ -1080,7 +1079,6 @@ const Unifier = struct {
                         try self.unifyTuple(vars, a_tuple, b_tuple);
                     },
                     .record,
-                    .record_unbound,
                     .nominal_type,
                     .fn_pure,
                     .fn_effectful,
@@ -1120,11 +1118,7 @@ const Unifier = struct {
                     },
                     .record => |b_record| {
                         // Try to unify nominal record (a) with anonymous record (b)
-                        try self.unifyRecordWithNominal(vars, a_type, b_record.fields, .{ .ext = b_record.ext }, .a_is_nominal);
-                    },
-                    .record_unbound => |b_fields| {
-                        // Try to unify nominal record (a) with anonymous unbound record (b)
-                        try self.unifyRecordWithNominal(vars, a_type, b_fields, .unbound, .a_is_nominal);
+                        try self.unifyRecordWithNominal(vars, a_type, b_record.fields, b_record.ext, .a_is_nominal);
                     },
                     .empty_record => {
                         try self.unifyEmptyWithNominal(vars, a_type, .empty_record, .a_is_nominal, .enforce_opacity);
@@ -1150,7 +1144,6 @@ const Unifier = struct {
                         return error.TypeMismatch;
                     },
                     .record,
-                    .record_unbound,
                     .tuple,
                     .nominal_type,
                     .empty_record,
@@ -1175,7 +1168,6 @@ const Unifier = struct {
                         return error.TypeMismatch;
                     },
                     .record,
-                    .record_unbound,
                     .tuple,
                     .nominal_type,
                     .empty_record,
@@ -1204,7 +1196,6 @@ const Unifier = struct {
                         try self.unifyFunc(vars, a_func, b_func);
                     },
                     .record,
-                    .record_unbound,
                     .tuple,
                     .nominal_type,
                     .empty_record,
@@ -1222,18 +1213,9 @@ const Unifier = struct {
                         try self.unifyTwoRecords(
                             vars,
                             a_record.fields,
-                            .{ .ext = a_record.ext },
+                            a_record.ext,
                             b_record.fields,
-                            .{ .ext = b_record.ext },
-                        );
-                    },
-                    .record_unbound => |b_fields| {
-                        try self.unifyTwoRecords(
-                            vars,
-                            a_record.fields,
-                            .{ .ext = a_record.ext },
-                            b_fields,
-                            .unbound,
+                            b_record.ext,
                         );
                     },
                     .nominal_type => |b_type| {
@@ -1242,51 +1224,7 @@ const Unifier = struct {
                             try self.merge(vars, .err);
                             return;
                         }
-                        try self.unifyRecordWithNominal(vars, b_type, a_record.fields, .{ .ext = a_record.ext }, .b_is_nominal);
-                    },
-                    .tuple,
-                    .fn_pure,
-                    .fn_effectful,
-                    .fn_unbound,
-                    .tag_union,
-                    .empty_tag_union,
-                    => return error.TypeMismatch,
-                }
-            },
-            .record_unbound => |a_fields| {
-                switch (b_flat_type) {
-                    .empty_record => {
-                        try self.unifyRowWithEmptyRecord(vars, self.unresolved_b.?, a_fields, null, null);
-                    },
-                    .record => |b_record| {
-                        try self.unifyTwoRecords(
-                            vars,
-                            a_fields,
-                            .unbound,
-                            b_record.fields,
-                            .{ .ext = b_record.ext },
-                        );
-                    },
-                    .record_unbound => |b_fields| {
-                        if (a_fields.len() == 0 and b_fields.len() == 0) {
-                            try self.merge(vars, .{ .structure = .empty_record });
-                        } else {
-                            try self.unifyTwoRecords(
-                                vars,
-                                a_fields,
-                                .unbound,
-                                b_fields,
-                                .unbound,
-                            );
-                        }
-                    },
-                    .nominal_type => |b_type| {
-                        // Try to unify anonymous unbound record (a) with nominal record (b)
-                        if (self.types_store.nominalDeclIsInvalid(b_type)) {
-                            try self.merge(vars, .err);
-                            return;
-                        }
-                        try self.unifyRecordWithNominal(vars, b_type, a_fields, .unbound, .b_is_nominal);
+                        try self.unifyRecordWithNominal(vars, b_type, a_record.fields, a_record.ext, .b_is_nominal);
                     },
                     .tuple,
                     .fn_pure,
@@ -1305,9 +1243,6 @@ const Unifier = struct {
 
                     .record => |b_record| {
                         try self.unifyRowWithEmptyRecord(vars, self.unresolved_a.?, b_record.fields, b_record.ext, null);
-                    },
-                    .record_unbound => |b_fields| {
-                        try self.unifyRowWithEmptyRecord(vars, self.unresolved_a.?, b_fields, null, null);
                     },
                     .nominal_type => |b_type| {
                         // Try to unify empty record (a) with nominal record (b)
@@ -1351,7 +1286,6 @@ const Unifier = struct {
                     .fn_effectful,
                     .fn_unbound,
                     .record,
-                    .record_unbound,
                     .empty_record,
                     => return error.TypeMismatch,
                 }
@@ -1381,7 +1315,6 @@ const Unifier = struct {
                     .fn_effectful,
                     .fn_unbound,
                     .record,
-                    .record_unbound,
                     .empty_record,
                     => return error.TypeMismatch,
                 }
@@ -1609,7 +1542,6 @@ const Unifier = struct {
         if (empty_shape == .empty_record) {
             switch (backing_content.structure) {
                 .record, .empty_record => {},
-                .record_unbound,
                 .nominal_type,
                 .tuple,
                 .fn_pure,
@@ -1689,7 +1621,6 @@ const Unifier = struct {
                         .record => |record| {
                             ext_var = record.ext;
                         },
-                        .record_unbound,
                         .tuple,
                         .nominal_type,
                         .fn_pure,
@@ -1726,7 +1657,6 @@ const Unifier = struct {
                             ext_var = tag_union.ext;
                         },
                         .record,
-                        .record_unbound,
                         .tuple,
                         .nominal_type,
                         .fn_pure,
@@ -1801,10 +1731,6 @@ const Unifier = struct {
                                 try self.mergeRecordFieldsIntoScratch(&range, target_record.fields);
                                 ext_var = target_record.ext;
                             },
-                            .record_unbound => |fields| {
-                                try self.mergeRecordFieldsIntoScratch(&range, fields);
-                                return try self.finishRecordForMerge(range, try self.fresh(vars, resolved.desc.content));
-                            },
                             .tuple,
                             .nominal_type,
                             .fn_pure,
@@ -1831,7 +1757,6 @@ const Unifier = struct {
                             try self.mergeRecordFieldsIntoScratch(&range, ext_record.fields);
                             ext_var = ext_record.ext;
                         },
-                        .record_unbound,
                         .tuple,
                         .nominal_type,
                         .fn_pure,
@@ -1878,7 +1803,6 @@ const Unifier = struct {
                                 ext_var = target_tag_union.ext;
                             },
                             .record,
-                            .record_unbound,
                             .tuple,
                             .nominal_type,
                             .fn_pure,
@@ -1905,7 +1829,6 @@ const Unifier = struct {
                             ext_var = ext_tag_union.ext;
                         },
                         .record,
-                        .record_unbound,
                         .tuple,
                         .nominal_type,
                         .fn_pure,
@@ -2087,7 +2010,7 @@ const Unifier = struct {
         vars: *const ResolvedVarDescs,
         nominal_type: NominalType,
         anon_record_fields: RecordField.SafeMultiList.Range,
-        anon_record_ext: RecordExt,
+        anon_record_ext: Var,
         direction: NominalDirection,
     ) Error!void {
         const trace = tracy.trace(@src());
@@ -2155,7 +2078,7 @@ const Unifier = struct {
             anon_record_fields,
             anon_record_ext,
             nominal_backing_record.fields,
-            .{ .ext = nominal_backing_record.ext },
+            nominal_backing_record.ext,
         );
     }
 
@@ -2275,10 +2198,10 @@ const Unifier = struct {
         self: *Self,
         record_var: Var,
         fields: RecordFieldSafeMultiList.Range,
-        mb_ext: ?Var,
+        row_ext: Var,
     ) std.mem.Allocator.Error!void {
         try self.recordAbsorbedRecordFields(record_var, fields);
-        var ext = mb_ext orelse return;
+        var ext = row_ext;
         var guard = types_mod.debug.IterationGuard.init("recordAbsorbedRecordDefaults");
 
         while (true) {
@@ -2291,7 +2214,6 @@ const Unifier = struct {
                         try self.recordAbsorbedRecordFields(record_var, record.fields);
                         ext = record.ext;
                     },
-                    .record_unbound => |tail_fields| return self.recordAbsorbedRecordFields(record_var, tail_fields),
                     .empty_record => return,
                     .tuple,
                     .nominal_type,
@@ -2313,11 +2235,11 @@ const Unifier = struct {
     fn validateAbsorbableRecordRow(
         self: *Self,
         fields: RecordFieldSafeMultiList.Range,
-        mb_ext: ?Var,
+        row_ext: Var,
         owner_exists: bool,
     ) Error!void {
         try self.validateAbsorbableRecordFields(fields, owner_exists);
-        var ext = mb_ext orelse return;
+        var ext = row_ext;
         var guard = types_mod.debug.IterationGuard.init("validateAbsorbableRecordRow");
 
         while (true) {
@@ -2332,7 +2254,6 @@ const Unifier = struct {
                         try self.validateAbsorbableRecordFields(record.fields, owner_exists);
                         ext = record.ext;
                     },
-                    .record_unbound => |tail_fields| return self.validateAbsorbableRecordFields(tail_fields, owner_exists),
                     .empty_record => return,
                     .tuple,
                     .nominal_type,
@@ -2355,7 +2276,7 @@ const Unifier = struct {
         vars: *const ResolvedVarDescs,
         record_var: Var,
         fields: RecordFieldSafeMultiList.Range,
-        mb_ext: ?Var,
+        ext: Var,
         nominal_direction: ?NominalDirection,
     ) Error!void {
         if (fields.len() == 0) {
@@ -2364,21 +2285,17 @@ const Unifier = struct {
                     .vars = vars.*,
                     .direction = direction,
                 } });
-                if (mb_ext) |ext| {
-                    const empty_var = try self.fresh(vars, .{ .structure = .empty_record });
-                    try self.unifyGuarded(ext, empty_var);
-                }
-            } else if (mb_ext) |ext| {
-                try self.unifyGuarded(ext, record_var);
+                const empty_var = try self.fresh(vars, .{ .structure = .empty_record });
+                try self.unifyGuarded(ext, empty_var);
             } else {
-                try self.merge(vars, .{ .structure = .empty_record });
+                try self.unifyGuarded(ext, record_var);
             }
             return;
         }
         if (self.row_width_relation == .exact) return error.TypeMismatch;
 
-        try self.validateAbsorbableRecordRow(fields, mb_ext, self.absorptionOwnerExists(record_var));
-        try self.recordAbsorbedRecordDefaults(record_var, fields, mb_ext);
+        try self.validateAbsorbableRecordRow(fields, ext, self.absorptionOwnerExists(record_var));
+        try self.recordAbsorbedRecordDefaults(record_var, fields, ext);
 
         const empty_var = try self.fresh(vars, .{ .structure = .empty_record });
         if (nominal_direction) |direction| {
@@ -2389,12 +2306,10 @@ const Unifier = struct {
         } else {
             try self.merge(vars, Content{ .structure = .{ .record = .{
                 .fields = fields,
-                .ext = mb_ext orelse empty_var,
+                .ext = ext,
             } } });
         }
-        if (mb_ext) |ext| {
-            try self.unifyGuarded(ext, empty_var);
-        }
+        try self.unifyGuarded(ext, empty_var);
     }
 
     /// Retain the checked representatives of a record relation while its
@@ -2491,9 +2406,9 @@ const Unifier = struct {
         self: *Self,
         vars: *const ResolvedVarDescs,
         a_fields: RecordField.SafeMultiList.Range,
-        a_ext: RecordExt,
+        a_ext: Var,
         b_fields: RecordField.SafeMultiList.Range,
-        b_ext: RecordExt,
+        b_ext: Var,
     ) Error!void {
         const trace = tracy.trace(@src());
         defer trace.end();
@@ -2525,18 +2440,8 @@ const Unifier = struct {
             fields_ext = .b_extends_a;
         }
 
-        const a_gathered_ext = blk: {
-            switch (a_gathered_fields.ext) {
-                .unbound => break :blk try self.fresh(vars, .{ .flex = Flex.init() }),
-                .ext => |ext_var| break :blk ext_var,
-            }
-        };
-        const b_gathered_ext = blk: {
-            switch (b_gathered_fields.ext) {
-                .unbound => break :blk try self.fresh(vars, .{ .flex = Flex.init() }),
-                .ext => |ext_var| break :blk ext_var,
-            }
-        };
+        const a_gathered_ext = a_gathered_fields.ext;
+        const b_gathered_ext = b_gathered_fields.ext;
 
         // Unify fields
         switch (fields_ext) {
@@ -2647,9 +2552,7 @@ const Unifier = struct {
 
     const FieldsExtension = enum { exactly_the_same, a_extends_b, b_extends_a, both_extend };
 
-    const RecordExt = union(enum) { ext: Var, unbound };
-
-    const GatheredFields = struct { ext: RecordExt, range: RecordFieldSafeList.Range };
+    const GatheredFields = struct { ext: Var, range: RecordFieldSafeList.Range };
 
     /// Recursively unwraps the fields of an extensible record, flattening all visible fields
     /// into `scratch.gathered_fields` and following through:
@@ -2661,7 +2564,7 @@ const Unifier = struct {
     /// * the final tail extension variable, which is either a flex var or an empty record
     ///
     /// Errors if it encounters a malformed or invalid extension (e.g. a non-record type).
-    fn gatherRecordFields(self: *Self, record_fields: RecordField.SafeMultiList.Range, record_ext: RecordExt) Error!GatheredFields {
+    fn gatherRecordFields(self: *Self, record_fields: RecordField.SafeMultiList.Range, record_ext: Var) Error!GatheredFields {
         // first, copy from the store's MultiList record fields array into scratch's
         // regular list, capturing the insertion range
         var range = try self.scratch.copyGatherFieldsFromMultiList(
@@ -2680,65 +2583,40 @@ const Unifier = struct {
         var guard = types_mod.debug.IterationGuard.init("gatherRecordFields");
         while (true) {
             guard.tick();
-            switch (ext) {
-                .unbound => {
-                    return .{ .ext = ext, .range = range };
+            switch (self.types_store.resolveVar(ext).desc.content) {
+                .flex, .rigid => return .{ .ext = ext, .range = range },
+                .alias => |alias| {
+                    ext = self.types_store.getAliasBackingVar(alias);
                 },
-                .ext => |ext_var| {
-                    switch (self.types_store.resolveVar(ext_var).desc.content) {
-                        .flex => {
-                            return .{ .ext = .{ .ext = ext_var }, .range = range };
-                        },
-                        .rigid => {
-                            return .{ .ext = .{ .ext = ext_var }, .range = range };
-                        },
-                        .alias => |alias| {
-                            ext = .{ .ext = self.types_store.getAliasBackingVar(alias) };
-                        },
-                        .structure => |flat_type| {
-                            switch (flat_type) {
-                                .record => |ext_record| {
-                                    const next_fields = self.types_store.record_fields.sliceRange(ext_record.fields);
+                .structure => |flat_type| {
+                    switch (flat_type) {
+                        .record => |ext_record| {
+                            const next_fields = self.types_store.record_fields.sliceRange(ext_record.fields);
 
-                                    // Merge extension fields while maintaining sorted order
-                                    try self.scratch.mergeSortedExtensionFields(
-                                        &range,
-                                        next_fields.items(.name),
-                                        next_fields.items(.presence),
-                                        self.ident_store,
-                                    );
+                            // Merge extension fields while maintaining sorted order
+                            try self.scratch.mergeSortedExtensionFields(
+                                &range,
+                                next_fields.items(.name),
+                                next_fields.items(.presence),
+                                self.ident_store,
+                            );
 
-                                    ext = .{ .ext = ext_record.ext };
-                                },
-                                .record_unbound => |fields| {
-                                    const next_fields = self.types_store.record_fields.sliceRange(fields);
-
-                                    // Merge extension fields while maintaining sorted order
-                                    try self.scratch.mergeSortedExtensionFields(
-                                        &range,
-                                        next_fields.items(.name),
-                                        next_fields.items(.presence),
-                                        self.ident_store,
-                                    );
-
-                                    return .{ .ext = ext, .range = range };
-                                },
-                                .tuple,
-                                .nominal_type,
-                                .fn_pure,
-                                .fn_effectful,
-                                .fn_unbound,
-                                .empty_record,
-                                .tag_union,
-                                .empty_tag_union,
-                                => return .{ .ext = ext, .range = range },
-                            }
+                            ext = ext_record.ext;
                         },
-                        // A presence variable can never be a record extension tail.
-                        .field_presence => return .{ .ext = ext, .range = range },
-                        .err => return .{ .ext = ext, .range = range },
+                        .tuple,
+                        .nominal_type,
+                        .fn_pure,
+                        .fn_effectful,
+                        .fn_unbound,
+                        .empty_record,
+                        .tag_union,
+                        .empty_tag_union,
+                        => return .{ .ext = ext, .range = range },
                     }
                 },
+                // A presence variable can never be a record extension tail.
+                .field_presence => return .{ .ext = ext, .range = range },
+                .err => return .{ .ext = ext, .range = range },
             }
         }
     }
@@ -2876,7 +2754,6 @@ const Unifier = struct {
                         return;
                     },
                     .record,
-                    .record_unbound,
                     .tuple,
                     .nominal_type,
                     .empty_record,
@@ -3321,7 +3198,6 @@ const Unifier = struct {
                             ext_var = ext_tag_union.ext;
                         },
                         .record,
-                        .record_unbound,
                         .tuple,
                         .nominal_type,
                         .fn_pure,
@@ -3871,7 +3747,6 @@ const Unifier = struct {
                     .fn_effectful => |func| .{ .arity = func.args.len(), .effectful = true },
                     .fn_unbound => |func| .{ .arity = func.args.len(), .effectful = null },
                     .record,
-                    .record_unbound,
                     .tuple,
                     .nominal_type,
                     .tag_union,
@@ -4745,7 +4620,6 @@ pub fn structurallyIncompatiblePair(
                 return .safe;
             },
             .record,
-            .record_unbound,
             .tuple,
             .fn_pure,
             .fn_effectful,

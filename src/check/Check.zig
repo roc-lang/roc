@@ -1375,7 +1375,6 @@ fn callableArity(self: *const Self, var_: Var) ?u32 {
             .structure => |flat| return switch (flat) {
                 .fn_pure, .fn_effectful, .fn_unbound => |func| func.args.len(),
                 .record,
-                .record_unbound,
                 .tuple,
                 .nominal_type,
                 .tag_union,
@@ -5361,15 +5360,6 @@ fn validateSettledValueTagRows(self: *Self, env: *Env) std.mem.Allocator.Error!v
                         }
                     }
                 },
-                .record_unbound => |fields_range| {
-                    const fields = self.types.getRecordFieldsSlice(fields_range);
-                    for (fields.items(.presence)) |presence| {
-                        try walk_stack.append(self.gpa, .{ .var_ = presence.typeVar(), .starts_tag_row = true });
-                        if (presence.presenceVar()) |presence_var| {
-                            try walk_stack.append(self.gpa, .{ .var_ = presence_var, .starts_tag_row = true });
-                        }
-                    }
-                },
                 .tag_union => |tag_union| {
                     try walk_stack.append(self.gpa, .{ .var_ = tag_union.ext, .starts_tag_row = false });
                     const tags = self.types.getTagsSlice(tag_union.tags);
@@ -5430,7 +5420,6 @@ fn validateSettledValueTagRows(self: *Self, env: *Env) std.mem.Allocator.Error!v
                     },
                     .empty_tag_union => break,
                     .record,
-                    .record_unbound,
                     .tuple,
                     .nominal_type,
                     .fn_pure,
@@ -5926,15 +5915,6 @@ fn validateNominalDeclArgumentGrowth(self: *Self) std.mem.Allocator.Error!void {
                             }
                         }
                     },
-                    .record_unbound => |fields| {
-                        const fields_slice = self.types.getRecordFieldsSlice(fields);
-                        for (fields_slice.items(.presence)) |presence| {
-                            try walk_stack.append(self.gpa, presence.typeVar());
-                            if (presence.presenceVar()) |presence_var| {
-                                try walk_stack.append(self.gpa, presence_var);
-                            }
-                        }
-                    },
                     .tag_union => |tag_union| {
                         try walk_stack.append(self.gpa, tag_union.ext);
                         const tags = self.types.getTagsSlice(tag_union.tags);
@@ -6176,15 +6156,6 @@ fn collectFormalOccurrences(
                         }
                     }
                 },
-                .record_unbound => |fields| {
-                    const fields_slice = self.types.getRecordFieldsSlice(fields);
-                    for (fields_slice.items(.presence)) |presence| {
-                        try walk_stack.append(self.gpa, presence.typeVar());
-                        if (presence.presenceVar()) |presence_var| {
-                            try walk_stack.append(self.gpa, presence_var);
-                        }
-                    }
-                },
                 .tag_union => |tag_union| {
                     try walk_stack.append(self.gpa, tag_union.ext);
                     const tags = self.types.getTagsSlice(tag_union.tags);
@@ -6302,7 +6273,6 @@ fn resolvePendingTupleAccess(
                 }
             },
             .record,
-            .record_unbound,
             .nominal_type,
             .fn_pure,
             .fn_effectful,
@@ -6488,15 +6458,6 @@ fn typeHasGeneralizedVar(self: *Self, root_var: Var) Allocator.Error!bool {
                         }
                     }
                     try self.binding_scheme_classification_stack.append(self.gpa, record.ext);
-                },
-                .record_unbound => |fields_range| {
-                    const presences = self.types.getRecordFieldsSlice(fields_range).items(.presence);
-                    for (presences) |presence| {
-                        try self.binding_scheme_classification_stack.append(self.gpa, presence.typeVar());
-                        if (presence.presenceVar()) |presence_var| {
-                            try self.binding_scheme_classification_stack.append(self.gpa, presence_var);
-                        }
-                    }
                 },
                 .tag_union => |tag_union| {
                     const tag_args = self.types.getTagsSlice(tag_union.tags).items(.args);
@@ -9394,14 +9355,6 @@ fn flatTypeIsConcreteHoistedConst(
             }
             break :blk try self.varIsConcreteHoistedConstTypeInternal(walk, purpose, record.ext, visited);
         },
-        .record_unbound => |fields| blk: {
-            const fields_slice = self.types.getRecordFieldsSlice(fields);
-            for (fields_slice.items(.presence)) |presence| {
-                const field_var = presence.typeVar();
-                if (!try self.varIsConcreteHoistedConstTypeInternal(walk, purpose, field_var, visited)) break :blk false;
-            }
-            break :blk true;
-        },
         .tuple => |tuple| try self.varsAreConcreteHoistedConstTypes(walk, purpose, self.types.sliceVars(tuple.elems), visited),
         .tag_union => |tag_union| blk: {
             const tags = self.types.getTagsSlice(tag_union.tags);
@@ -10134,7 +10087,6 @@ fn varIsBuiltinLiteralTarget(self: *Self, var_: Var) bool {
                 .nominal_type => |nominal| self.nominalIsBuiltinNumberType(nominal) or
                     self.nominalIsBuiltinStrType(nominal),
                 .record,
-                .record_unbound,
                 .tuple,
                 .fn_pure,
                 .fn_effectful,
@@ -11899,15 +11851,6 @@ fn collectReachableVarsExcluding(
                 }
                 try self.collectReachableVarsExcluding(record.ext, excluded_root, out);
             },
-            .record_unbound => |fields_range| {
-                const fields = self.types.getRecordFieldsSlice(fields_range);
-                for (fields.items(.presence)) |presence| {
-                    try self.collectReachableVarsExcluding(presence.typeVar(), excluded_root, out);
-                    if (presence.presenceVar()) |presence_var| {
-                        try self.collectReachableVarsExcluding(presence_var, excluded_root, out);
-                    }
-                }
-            },
             .tag_union => |tag_union| {
                 const tags = self.types.getTagsSlice(tag_union.tags);
                 for (tags.items(.args)) |tag_args| {
@@ -11962,15 +11905,6 @@ fn collectDataReachableVars(self: *Self, var_: Var, out: *std.AutoHashMap(Var, v
                     }
                 }
                 try self.collectDataReachableVars(record.ext, out);
-            },
-            .record_unbound => |fields_range| {
-                const fields = self.types.getRecordFieldsSlice(fields_range);
-                for (fields.items(.presence)) |presence| {
-                    {
-                        const field_var = presence.typeVar();
-                        try self.collectDataReachableVars(field_var, out);
-                    }
-                }
             },
             .tag_union => |tag_union| {
                 const tags = self.types.getTagsSlice(tag_union.tags);
@@ -12137,7 +12071,7 @@ fn varIsFunctionType(self: *Self, var_: Var) bool {
             },
             .structure => |flat| return switch (flat) {
                 .fn_pure, .fn_effectful, .fn_unbound => true,
-                .record, .record_unbound, .tuple, .nominal_type, .empty_record, .tag_union, .empty_tag_union => false,
+                .record, .tuple, .nominal_type, .empty_record, .tag_union, .empty_tag_union => false,
             },
             .err, .flex, .rigid, .field_presence => return false,
         }
@@ -12155,7 +12089,7 @@ fn zeroArgFunctionReturnVar(self: *Self, var_: Var) ?Var {
             },
             .structure => |flat| return switch (flat) {
                 .fn_pure, .fn_effectful, .fn_unbound => |func| if (func.args.len() == 0) func.ret else null,
-                .record, .record_unbound, .tuple, .nominal_type, .empty_record, .tag_union, .empty_tag_union => null,
+                .record, .tuple, .nominal_type, .empty_record, .tag_union, .empty_tag_union => null,
             },
             .err, .flex, .rigid, .field_presence => return null,
         }
@@ -12211,7 +12145,7 @@ fn functionEffectStateHelp(self: *Self, var_: Var) Allocator.Error!FunctionEffec
                 }
                 break :blk result;
             },
-            .record, .record_unbound, .tuple, .nominal_type, .empty_record, .tag_union, .empty_tag_union => .pure,
+            .record, .tuple, .nominal_type, .empty_record, .tag_union, .empty_tag_union => .pure,
         },
     };
 
@@ -12359,16 +12293,6 @@ fn flatTypeHasUnresolvedInspectContent(
             }
             break :blk try self.varHasUnresolvedInspectContent(record.ext, .record_row, visited);
         },
-        .record_unbound => |fields_range| blk: {
-            const fields = self.types.getRecordFieldsSlice(fields_range);
-            for (fields.items(.presence)) |presence| {
-                {
-                    const field_var = presence.typeVar();
-                    if (try self.varHasUnresolvedInspectContent(field_var, .value, visited)) break :blk true;
-                }
-            }
-            break :blk false;
-        },
         .tag_union => |tag_union| blk: {
             const tags = self.types.getTagsSlice(tag_union.tags);
             for (tags.items(.args)) |args| {
@@ -12428,16 +12352,6 @@ fn flatTypeHasUnresolvedStaticDispatchConstraints(
             }
             break :blk try self.varHasUnresolvedStaticDispatchConstraints(record.ext, visited);
         },
-        .record_unbound => |fields_range| blk: {
-            const fields = self.types.getRecordFieldsSlice(fields_range);
-            for (fields.items(.presence)) |presence| {
-                {
-                    const field_var = presence.typeVar();
-                    if (try self.varHasUnresolvedStaticDispatchConstraints(field_var, visited)) break :blk true;
-                }
-            }
-            break :blk false;
-        },
         .tag_union => |tag_union| blk: {
             const tags = self.types.getTagsSlice(tag_union.tags);
             for (tags.items(.args)) |args| {
@@ -12496,16 +12410,6 @@ fn flatTypeHasUnresolvedNonLiteralStaticDispatchConstraints(
                 }
             }
             break :blk try self.varHasUnresolvedNonLiteralStaticDispatchConstraints(record.ext, visited);
-        },
-        .record_unbound => |fields_range| blk: {
-            const fields = self.types.getRecordFieldsSlice(fields_range);
-            for (fields.items(.presence)) |presence| {
-                {
-                    const field_var = presence.typeVar();
-                    if (try self.varHasUnresolvedNonLiteralStaticDispatchConstraints(field_var, visited)) break :blk true;
-                }
-            }
-            break :blk false;
         },
         .tag_union => |tag_union| blk: {
             const tags = self.types.getTagsSlice(tag_union.tags);
@@ -14272,7 +14176,7 @@ fn finalizeFunctionEffectsAtBoundary(self: *Self, roots: []const BoundaryRoot) A
             // state is always pure.
             .fn_pure => unreachable,
             .fn_effectful => {},
-            .record, .record_unbound, .tuple, .nominal_type, .empty_record, .tag_union, .empty_tag_union => continue,
+            .record, .tuple, .nominal_type, .empty_record, .tag_union, .empty_tag_union => continue,
         }
     }
 }
@@ -15787,7 +15691,6 @@ fn typeGraphReaches(
                     try stack.append(self.gpa, record.ext);
                     try self.appendRecordFieldVars(stack, record.fields);
                 },
-                .record_unbound => |fields_range| try self.appendRecordFieldVars(stack, fields_range),
                 .tag_union => |tag_union| {
                     try stack.append(self.gpa, tag_union.ext);
                     const tags = self.types.getTagsSlice(tag_union.tags);
@@ -18027,20 +17930,6 @@ fn stepAliasRowNode(
                     .guard = types_mod.debug.IterationGuard.init("validateRecordExt"),
                 } });
             },
-            .record_unbound => |fields| {
-                // An unbound record has no extension and no duplicate-name
-                // check of its own, so its fields are ordinary spine children.
-                const field_slice = self.types.getRecordFieldsSlice(fields);
-                var i = field_slice.len;
-                while (i > 0) {
-                    i -= 1;
-                    const presence = field_slice.items(.presence)[i];
-                    if (presence.presenceVar()) |presence_var| {
-                        try self.alias_row_frames.append(self.gpa, .{ .node = presence_var });
-                    }
-                    try self.alias_row_frames.append(self.gpa, .{ .node = presence.typeVar() });
-                }
-            },
             .tag_union => |tag_union| {
                 try self.alias_row_frames.append(self.gpa, .{ .tag_row = .{
                     .names_base = @intCast(self.alias_row_names.items.len),
@@ -18135,14 +18024,6 @@ fn stepRecordRow(self: *Self, frame: *RecordRowFrame, env: *Env, region: Region)
                                 frame.stage = .ext_fields;
                                 break;
                             },
-                            .record_unbound => |fields| {
-                                frame.fields = fields;
-                                frame.idx = 0;
-                                frame.ext_source_var = current;
-                                frame.ext_terminates = true;
-                                frame.stage = .ext_fields;
-                                break;
-                            },
                             .empty_record => return .finished,
                             .tuple,
                             .nominal_type,
@@ -18234,7 +18115,6 @@ fn stepTagRow(self: *Self, frame: *TagRowFrame, env: *Env, region: Region) Alloc
                             },
                             .empty_tag_union => return .finished,
                             .record,
-                            .record_unbound,
                             .tuple,
                             .nominal_type,
                             .fn_pure,
@@ -19543,7 +19423,6 @@ fn borrowExpectedRecordField(self: *Self, base_var: Var, name: Ident.Idx, env: *
                     fields = record.fields;
                     ext = record.ext;
                 },
-                .record_unbound => |record_fields| fields = record_fields,
                 .nominal_type => |nominal| {
                     // Record unification opens a nominal only at the outer
                     // row, requires a record backing, and respects opacity.
@@ -20317,12 +20196,13 @@ fn checkExprWithFunctionOwner(self: *Self, expr_idx: CIR.Expr.Idx, env: *Env, ex
                     // record-aware diagnostic. Use the instantiated stored
                     // value here; the borrowed field was context only.
                     const actual_field_record = try self.freshFromContent(.{
-                        .structure = .{
-                            .record_unbound = try self.types.appendRecordFields(&.{types_mod.RecordField{
+                        .structure = .{ .record = .{
+                            .fields = try self.types.appendRecordFields(&.{types_mod.RecordField{
                                 .name = field.name,
                                 .presence = .unknown(field_kind_var, field_value.var_),
                             }}),
-                        },
+                            .ext = try self.fresh(env, expr_region),
+                        } },
                     }, env, expr_region);
                     _ = try self.unifyRecordInContext(
                         record_being_updated_var,
@@ -20355,12 +20235,13 @@ fn checkExprWithFunctionOwner(self: *Self, expr_idx: CIR.Expr.Idx, env: *Env, ex
                         .use = .unset,
                     });
                     const single_field_record = try self.freshFromContent(.{
-                        .structure = .{
-                            .record_unbound = try self.types.appendRecordFields(&.{types_mod.RecordField{
+                        .structure = .{ .record = .{
+                            .fields = try self.types.appendRecordFields(&.{types_mod.RecordField{
                                 .name = field.name,
                                 .presence = .unknown(presence_var, field_var),
                             }}),
-                        },
+                            .ext = try self.fresh(env, expr_region),
+                        } },
                     }, env, expr_region);
 
                     // Unify this record update with the record we're updating
@@ -20507,7 +20388,7 @@ fn checkExprWithFunctionOwner(self: *Self, expr_idx: CIR.Expr.Idx, env: *Env, ex
                 std.mem.sort(types_mod.RecordField, record_fields_scratch, self.cir.getIdentStore(), types_mod.RecordField.sortByNameAsc);
                 const record_fields_range = try self.types.appendRecordFields(record_fields_scratch);
 
-                // Create an unbound record with the provided fields
+                // Create a closed record with the provided fields
                 const ext_var = try self.freshFromContent(.{ .structure = .empty_record }, env, expr_region);
                 try self.unifyWith(expr_var, .{ .structure = .{ .record = .{
                     .fields = record_fields_range,
@@ -21046,7 +20927,7 @@ fn checkExprWithFunctionOwner(self: *Self, expr_idx: CIR.Expr.Idx, env: *Env, ex
                                     .fn_pure => |func| break :blk func,
                                     .fn_unbound => |func| break :blk func,
                                     .fn_effectful => |func| break :blk func,
-                                    .record, .record_unbound, .tuple, .nominal_type, .empty_record, .tag_union, .empty_tag_union => break :blk null,
+                                    .record, .tuple, .nominal_type, .empty_record, .tag_union, .empty_tag_union => break :blk null,
                                 }
                             },
                             .alias => |alias| {
@@ -21358,7 +21239,6 @@ fn checkExprWithFunctionOwner(self: *Self, expr_idx: CIR.Expr.Idx, env: *Env, ex
                                 .structure => |flat_type| switch (flat_type) {
                                     .fn_pure, .fn_unbound, .fn_effectful => |func| break :known func,
                                     .record,
-                                    .record_unbound,
                                     .tuple,
                                     .nominal_type,
                                     .empty_record,
@@ -21519,7 +21399,6 @@ fn checkExprWithFunctionOwner(self: *Self, expr_idx: CIR.Expr.Idx, env: *Env, ex
                                     .fn_unbound => .unresolved,
                                     .fn_pure, .fn_effectful => .pure,
                                     .record,
-                                    .record_unbound,
                                     .tuple,
                                     .nominal_type,
                                     .empty_record,
@@ -22290,7 +22169,7 @@ fn validateToInspectMethodTypeForArg(
     switch (resolved.desc.content) {
         .structure => |structure| switch (structure) {
             .nominal_type => |nominal| try self.validateNominalToInspectMethodType(arg_var, nominal, env, region),
-            .record, .record_unbound, .tuple, .fn_pure, .fn_effectful, .fn_unbound, .empty_record, .tag_union, .empty_tag_union => {},
+            .record, .tuple, .fn_pure, .fn_effectful, .fn_unbound, .empty_record, .tag_union, .empty_tag_union => {},
         },
         .alias => |alias| try self.validateAliasToInspectMethodType(arg_var, alias, env, region),
         .flex,
@@ -23790,7 +23669,7 @@ fn singleParameterWrapperPayload(self: *Self, wrapper_var: Var) ?Var {
                 if (args.len != 1) break :blk null;
                 break :blk args[0];
             },
-            .record, .record_unbound, .tuple, .fn_pure, .fn_effectful, .fn_unbound, .empty_record, .tag_union, .empty_tag_union => null,
+            .record, .tuple, .fn_pure, .fn_effectful, .fn_unbound, .empty_record, .tag_union, .empty_tag_union => null,
         },
         .flex, .rigid, .field_presence, .err => null,
     };
@@ -23805,7 +23684,7 @@ fn functionTypeFromVar(self: *Self, fn_var: Var) ?Func {
         switch (resolved.desc.content) {
             .structure => |flat| switch (flat) {
                 .fn_pure, .fn_effectful, .fn_unbound => |func| return func,
-                .record, .record_unbound, .tuple, .nominal_type, .empty_record, .tag_union, .empty_tag_union => return null,
+                .record, .tuple, .nominal_type, .empty_record, .tag_union, .empty_tag_union => return null,
             },
             .alias => |alias| current = self.types.getAliasBackingVar(alias),
             .flex, .rigid, .field_presence, .err => return null,
@@ -23827,7 +23706,7 @@ fn tryArgsFromVar(self: *Self, try_var: Var) ?TryArgs {
                     if (args.len != 2) return null;
                     return .{ .ok = args[0], .err = args[1] };
                 },
-                .record, .record_unbound, .tuple, .fn_pure, .fn_effectful, .fn_unbound, .empty_record, .tag_union, .empty_tag_union => return null,
+                .record, .tuple, .fn_pure, .fn_effectful, .fn_unbound, .empty_record, .tag_union, .empty_tag_union => return null,
             },
             .alias => |alias| current = self.types.getAliasBackingVar(alias),
             .flex, .rigid, .field_presence, .err => return null,
@@ -23941,7 +23820,6 @@ fn tryErrorRowEndsOpen(self: *Self, err_var: Var) bool {
                 .tag_union => |tag_union| current = tag_union.ext,
                 .empty_tag_union => return false,
                 .record,
-                .record_unbound,
                 .tuple,
                 .nominal_type,
                 .fn_pure,
@@ -23992,7 +23870,7 @@ fn actualTagRowIsIncludedInExpected(
                 }
                 return try self.actualTagRowIsIncludedInExpected(tag_union.ext, expected_var, visited_actual);
             },
-            .record, .record_unbound, .tuple, .nominal_type, .fn_pure, .fn_effectful, .fn_unbound, .empty_record => return false,
+            .record, .tuple, .nominal_type, .fn_pure, .fn_effectful, .fn_unbound, .empty_record => return false,
         },
         .err => return true,
         .flex, .rigid, .field_presence => return false,
@@ -24040,7 +23918,7 @@ fn findVisibleTagInRow(
                 return try self.findVisibleTagInRow(tag_union.ext, tag_name, visited);
             },
             .empty_tag_union => return null,
-            .record, .record_unbound, .tuple, .nominal_type, .fn_pure, .fn_effectful, .fn_unbound, .empty_record => return null,
+            .record, .tuple, .nominal_type, .fn_pure, .fn_effectful, .fn_unbound, .empty_record => return null,
         },
         .err, .flex, .rigid, .field_presence => return null,
     }
@@ -25416,7 +25294,6 @@ fn varIsDefinitelyNonNumericOperand(self: *Self, var_: Var) bool {
             },
             .structure => |flat| switch (flat) {
                 .record,
-                .record_unbound,
                 .tuple,
                 .fn_pure,
                 .fn_effectful,
@@ -25862,13 +25739,6 @@ fn varIsGround(self: *Self, root_var: Var) std.mem.Allocator.Error!bool {
                         if (presence.presenceVar()) |presence_var| try stack.append(self.gpa, presence_var);
                     }
                     try stack.append(self.gpa, record.ext);
-                },
-                .record_unbound => |fields| {
-                    const fields_slice = self.types.getRecordFieldsSlice(fields);
-                    for (fields_slice.items(.presence)) |presence| {
-                        try stack.append(self.gpa, presence.typeVar());
-                        if (presence.presenceVar()) |presence_var| try stack.append(self.gpa, presence_var);
-                    }
                 },
                 .tag_union => |tag_union| {
                     const tags = self.types.getTagsSlice(tag_union.tags);
@@ -30183,7 +30053,6 @@ fn schemeCandidateUsesGeneratedCodec(
                 break :blk staticDispatchBindingIsDerivedMarker(method);
             },
             .record,
-            .record_unbound,
             .tuple,
             .tag_union,
             .empty_record,
@@ -30219,7 +30088,6 @@ fn schemeCodecReceiverHasOpenOuterRow(self: *Self, root: Var) bool {
             .structure => |structure| switch (structure) {
                 .record => |record| return self.types.resolveVar(record.ext).desc.content == .flex,
                 .tag_union => |tag_union| return self.types.resolveVar(tag_union.ext).desc.content == .flex,
-                .record_unbound,
                 .tuple,
                 .nominal_type,
                 .empty_record,
@@ -30827,7 +30695,6 @@ fn structureHasPendingOpenLiteralForDerivedParse(
         .nominal_type => |nominal| try self.nominalHasPendingOpenLiteralForDerivedParse(nominal, env, visited),
         .record => |record| try self.recordHasPendingOpenLiteralForDerivedParse(record.fields, env, visited) or
             try self.varHasPendingOpenLiteralForDerivedParse(record.ext, env, visited),
-        .record_unbound => |fields| try self.recordHasPendingOpenLiteralForDerivedParse(fields, env, visited),
         .tag_union => |tag_union| try self.tagUnionHasPendingOpenLiteralForDerivedParse(tag_union, env, visited),
         .tuple => |tuple| blk: {
             const elems = self.types.sliceVars(tuple.elems);
@@ -30877,7 +30744,7 @@ fn tagExtHasPendingOpenLiteralForDerivedParse(
     return switch (self.types.resolveVar(ext_var).desc.content) {
         .structure => |structure| switch (structure) {
             .tag_union => |tag_union| try self.tagUnionHasPendingOpenLiteralForDerivedParse(tag_union, env, visited),
-            .record, .record_unbound, .tuple, .nominal_type, .fn_pure, .fn_effectful, .fn_unbound, .empty_record, .empty_tag_union => false,
+            .record, .tuple, .nominal_type, .fn_pure, .fn_effectful, .fn_unbound, .empty_record, .empty_tag_union => false,
         },
         .alias => |alias| try self.tagExtHasPendingOpenLiteralForDerivedParse(self.types.getAliasBackingVar(alias), env, visited),
         .flex, .rigid, .field_presence, .err => false,
@@ -30945,7 +30812,6 @@ fn structureHasPendingOpenLiteralForDerivedEncode(
         .nominal_type => |nominal| try self.nominalHasPendingOpenLiteralForDerivedEncode(nominal, env, visited),
         .record => |record| try self.recordHasPendingOpenLiteralForDerivedEncode(record.fields, env, visited) or
             try self.varHasPendingOpenLiteralForDerivedEncode(record.ext, env, visited),
-        .record_unbound => |fields| try self.recordHasPendingOpenLiteralForDerivedEncode(fields, env, visited),
         .tag_union => |tag_union| try self.tagUnionHasPendingOpenLiteralForDerivedEncode(tag_union, env, visited),
         .tuple => |tuple| blk: {
             const elems = self.types.sliceVars(tuple.elems);
@@ -30999,7 +30865,7 @@ fn tagExtHasPendingOpenLiteralForDerivedEncode(
     return switch (self.types.resolveVar(ext_var).desc.content) {
         .structure => |structure| switch (structure) {
             .tag_union => |tag_union| try self.tagUnionHasPendingOpenLiteralForDerivedEncode(tag_union, env, visited),
-            .record, .record_unbound, .tuple, .nominal_type, .fn_pure, .fn_effectful, .fn_unbound, .empty_record, .empty_tag_union => false,
+            .record, .tuple, .nominal_type, .fn_pure, .fn_effectful, .fn_unbound, .empty_record, .empty_tag_union => false,
         },
         .alias => |alias| try self.tagExtHasPendingOpenLiteralForDerivedEncode(self.types.getAliasBackingVar(alias), env, visited),
         .flex, .rigid, .field_presence, .err => false,
@@ -31689,7 +31555,6 @@ fn tryReturnErrorContribution(self: *Self, error_var: Var) TryReturnErrorContrib
                 },
                 .empty_tag_union => return .none,
                 .record,
-                .record_unbound,
                 .tuple,
                 .nominal_type,
                 .fn_pure,
@@ -31718,7 +31583,6 @@ fn tryReturnErrorTail(self: *Self, error_var: Var) Var {
             .structure => |flat| switch (flat) {
                 .tag_union => |tag_union| current = tag_union.ext,
                 .record,
-                .record_unbound,
                 .tuple,
                 .nominal_type,
                 .fn_pure,
@@ -31774,13 +31638,6 @@ fn typeStructurallyContainsVar(self: *Self, root: Var, needle: Var) std.mem.Allo
                         if (presence.presenceVar()) |presence_var| try stack.append(self.gpa, presence_var);
                     }
                     try stack.append(self.gpa, record.ext);
-                },
-                .record_unbound => |fields_range| {
-                    const fields = self.types.getRecordFieldsSlice(fields_range);
-                    for (fields.items(.presence)) |presence| {
-                        try stack.append(self.gpa, presence.typeVar());
-                        if (presence.presenceVar()) |presence_var| try stack.append(self.gpa, presence_var);
-                    }
                 },
                 .tag_union => |tag_union| {
                     const tags = self.types.getTagsSlice(tag_union.tags);
@@ -32338,7 +32195,7 @@ const DispatchEmbedGrade = enum(u8) { none, equal, strict };
 
 const DispatchSizeResult = struct { count: u32, saw_cycle: bool };
 
-const DispatchRowTailKind = enum { closed, open, unbound };
+const DispatchRowTailKind = enum { closed, open };
 
 const DispatchRowTail = struct { kind: DispatchRowTailKind, var_: Var };
 
@@ -32502,7 +32359,7 @@ fn dispatchEmbedCoupleGrade(
                 .fn_pure, .fn_unbound, .fn_effectful => |small_func| {
                     const big_func = switch (big_flat) {
                         .fn_pure, .fn_unbound, .fn_effectful => |func| func,
-                        .empty_record, .record, .record_unbound, .empty_tag_union, .tag_union, .tuple, .nominal_type => return .none,
+                        .empty_record, .record, .empty_tag_union, .tag_union, .tuple, .nominal_type => return .none,
                     };
                     // An unbound function can still commit either way, so it
                     // couples with everything; pure and effectful couple only
@@ -32528,9 +32385,9 @@ fn dispatchEmbedCoupleGrade(
                     }
                     return if (strict) .strict else .equal;
                 },
-                .empty_record, .record, .record_unbound => {
+                .empty_record, .record => {
                     switch (big_flat) {
-                        .empty_record, .record, .record_unbound => {},
+                        .empty_record, .record => {},
                         .empty_tag_union, .tag_union, .tuple, .nominal_type, .fn_pure, .fn_unbound, .fn_effectful => return .none,
                     }
                     return try self.dispatchEmbedRecordRowGrade(small.var_, big.var_);
@@ -32538,7 +32395,7 @@ fn dispatchEmbedCoupleGrade(
                 .empty_tag_union, .tag_union => {
                     switch (big_flat) {
                         .empty_tag_union, .tag_union => {},
-                        .empty_record, .record, .record_unbound, .tuple, .nominal_type, .fn_pure, .fn_unbound, .fn_effectful => return .none,
+                        .empty_record, .record, .tuple, .nominal_type, .fn_pure, .fn_unbound, .fn_effectful => return .none,
                     }
                     return try self.dispatchEmbedTagRowGrade(small.var_, big.var_);
                 },
@@ -32739,7 +32596,7 @@ fn dispatchEmbedDivesIntoChild(
                 }
                 return try self.dispatchEmbedsInto(small_var, func.ret);
             },
-            .record, .record_unbound => {
+            .record => {
                 var fields: std.ArrayListUnmanaged(DispatchRecordField) = .empty;
                 defer fields.deinit(self.gpa);
                 const tail = try self.dispatchCollectRecordRow(big.var_, &fields);
@@ -32799,15 +32656,6 @@ fn dispatchCollectRecordRow(
                     }
                     tail_var = record.ext;
                 },
-                .record_unbound => |fields_range| {
-                    const slice = self.types.getRecordFieldsSlice(fields_range);
-                    const names = slice.items(.name);
-                    const presences = slice.items(.presence);
-                    for (names, presences) |name, presence| {
-                        try fields.append(self.gpa, .{ .name = name, .presence = presence });
-                    }
-                    return .{ .kind = .unbound, .var_ = resolved.var_ };
-                },
                 .empty_tag_union, .tag_union, .tuple, .nominal_type, .fn_pure, .fn_unbound, .fn_effectful => {
                     return .{ .kind = .open, .var_ = resolved.var_ };
                 },
@@ -32843,7 +32691,7 @@ fn dispatchCollectTagRow(
                     }
                     tail_var = tag_union.ext;
                 },
-                .empty_record, .record, .record_unbound, .tuple, .nominal_type, .fn_pure, .fn_unbound, .fn_effectful => {
+                .empty_record, .record, .tuple, .nominal_type, .fn_pure, .fn_unbound, .fn_effectful => {
                     return .{ .kind = .open, .var_ = resolved.var_ };
                 },
             },
@@ -32909,7 +32757,7 @@ fn dispatchReceiverSizeInner(
                 }
                 try self.dispatchReceiverSizeInner(active, func.ret, result);
             },
-            .record, .record_unbound => {
+            .record => {
                 var fields: std.ArrayListUnmanaged(DispatchRecordField) = .empty;
                 defer fields.deinit(self.gpa);
                 const tail = try self.dispatchCollectRecordRow(resolved.var_, &fields);
@@ -34257,7 +34105,6 @@ fn checkStaticDispatchConstraints(self: *Self, env: *Env, is_numeric_default_pas
                 break :dispatch_resolution;
             } else if (dispatcher_content == .structure and
                 (dispatcher_content.structure == .record or
-                    dispatcher_content.structure == .record_unbound or
                     dispatcher_content.structure == .tuple or
                     dispatcher_content.structure == .tag_union or
                     dispatcher_content.structure == .empty_record or
@@ -34758,16 +34605,6 @@ fn typeSupportsStructuralDeriveInternal(
         },
 
         // Unbound records: check each field.
-        .record_unbound => |fields| {
-            const fields_slice = self.types.getRecordFieldsSlice(fields);
-            for (fields_slice.items(.presence)) |presence| {
-                {
-                    const field_var = presence.typeVar();
-                    if (!try self.varSupportsStructuralDeriveInternal(field_var, derivation, visited)) return false;
-                }
-            }
-            return true;
-        },
     };
 }
 
@@ -34898,12 +34735,6 @@ fn hostedWalkReachesUnboxedVariable(self: *Self, var_: Var, walk: *HostedVariabl
             .empty_record, .empty_tag_union => return false,
             .record => |record| {
                 for (self.types.getRecordFieldsSlice(record.fields).items(.presence)) |presence| {
-                    if (try self.hostedWalkReachesUnboxedVariable(presence.typeVar(), walk)) return true;
-                }
-                return false;
-            },
-            .record_unbound => |fields| {
-                for (self.types.getRecordFieldsSlice(fields).items(.presence)) |presence| {
                     if (try self.hostedWalkReachesUnboxedVariable(presence.typeVar(), walk)) return true;
                 }
                 return false;
@@ -35070,10 +34901,6 @@ fn flatTypeViolatesHostBoundaryRule(
                 .no_optional_fields => try self.varViolatesHostBoundaryRuleInternal(record.ext, visited, rule),
             };
         },
-        .record_unbound => |fields| blk: {
-            if (try self.recordFieldsViolateHostBoundaryRule(fields, visited, rule)) break :blk true;
-            break :blk rule == .closed_rows;
-        },
         .tuple => |tuple| try self.varsViolateHostBoundaryRule(self.types.sliceVars(tuple.elems), visited, rule),
         .tag_union => |tag_union| blk: {
             if (try self.tagsViolateHostBoundaryRule(tag_union.tags, visited, rule)) break :blk true;
@@ -35120,10 +34947,6 @@ fn recordExtIsClosedForHostBoundary(
                     if (try self.recordFieldsViolateHostBoundaryRule(record.fields, visited, .closed_rows)) return false;
                     current = record.ext;
                 },
-                .record_unbound => |fields| {
-                    _ = try self.recordFieldsViolateHostBoundaryRule(fields, visited, .closed_rows);
-                    return false;
-                },
                 .empty_record => return true,
                 .tuple,
                 .nominal_type,
@@ -35165,7 +34988,6 @@ fn tagUnionExtIsClosedForHostBoundary(
                 },
                 .empty_tag_union => return true,
                 .record,
-                .record_unbound,
                 .tuple,
                 .nominal_type,
                 .fn_pure,
@@ -35204,7 +35026,6 @@ fn varContainsUnboxedFunctionInHostedSignatureInternal(
                 break :blk false;
             },
             .record,
-            .record_unbound,
             .tuple,
             .nominal_type,
             .empty_record,
@@ -35244,16 +35065,6 @@ fn flatTypeContainsUnboxedFunction(
         .empty_record, .empty_tag_union => false,
         .record => |record| blk: {
             const fields_slice = self.types.getRecordFieldsSlice(record.fields);
-            for (fields_slice.items(.presence)) |presence| {
-                {
-                    const field_var = presence.typeVar();
-                    if (try self.varContainsUnboxedFunctionInternal(field_var, boxed_allowed, visited)) break :blk true;
-                }
-            }
-            break :blk false;
-        },
-        .record_unbound => |fields| blk: {
-            const fields_slice = self.types.getRecordFieldsSlice(fields);
             for (fields_slice.items(.presence)) |presence| {
                 {
                     const field_var = presence.typeVar();
@@ -35398,7 +35209,6 @@ fn typeSupportsStringRenderedDictKey(self: *Self, flat_type: types_mod.FlatType)
         .tag_union => |tag_union| try self.tagUnionIsClosedAndUnit(tag_union),
         .empty_tag_union => false,
         .record,
-        .record_unbound,
         .tuple,
         .fn_pure,
         .fn_effectful,
@@ -35423,7 +35233,6 @@ fn varIsClosedUnitTagUnion(self: *Self, var_: Var) std.mem.Allocator.Error!bool 
         .structure => |structure| switch (structure) {
             .tag_union => |tag_union| try self.tagUnionIsClosedAndUnit(tag_union),
             .record,
-            .record_unbound,
             .tuple,
             .nominal_type,
             .fn_pure,
@@ -35460,7 +35269,6 @@ fn closeDerivedCodecUnitTagDictKeyRow(
                 break :blk try self.closeDerivedCodecUnitTagDictKeyExt(tag_union.ext, env, region);
             },
             .record,
-            .record_unbound,
             .tuple,
             .nominal_type,
             .fn_pure,
@@ -35496,7 +35304,6 @@ fn closeDerivedCodecUnitTagDictKeyExt(
                 break :blk try self.closeDerivedCodecUnitTagDictKeyExt(tag_union.ext, env, region);
             },
             .record,
-            .record_unbound,
             .tuple,
             .nominal_type,
             .fn_pure,
@@ -35533,7 +35340,6 @@ fn tagExtIsClosedAndUnit(self: *Self, ext_var: Var) std.mem.Allocator.Error!bool
             .empty_tag_union => true,
             .tag_union => |tag_union| try self.tagUnionIsClosedAndUnit(tag_union),
             .record,
-            .record_unbound,
             .tuple,
             .nominal_type,
             .fn_pure,
@@ -35561,7 +35367,6 @@ fn varResolvesToBuiltinScalarNominal(self: *const Self, var_: Var) bool {
                 self.nominalIsBuiltinStrType(nominal) or
                 (self.builtinNumKindFromNominalType(nominal) != null),
             .record,
-            .record_unbound,
             .tuple,
             .fn_pure,
             .fn_effectful,
@@ -35661,13 +35466,6 @@ fn closeTagRowsForDerivationHelp(
                 }
                 try self.closeTagRowsForDerivationHelp(record.ext, env, visited);
             },
-            .record_unbound => |fields_range| {
-                var i: usize = 0;
-                while (i < fields_range.count) : (i += 1) {
-                    const field = self.types.record_fields.get(@enumFromInt(@intFromEnum(fields_range.start) + i));
-                    try self.closeTagRowsForDerivationHelp(field.presence.typeVar(), env, visited);
-                }
-            },
             .tuple => |tuple| {
                 var i: usize = 0;
                 while (i < tuple.elems.count) : (i += 1) {
@@ -35747,16 +35545,6 @@ fn typeSupportsDerivedParse(
             if (support == .unsupported) break :blk support;
             break :blk combineDerivedSupport(support, try self.varSupportsDerivedParseRecordExt(record.ext, env, region));
         },
-        .record_unbound => |fields| blk: {
-            const fields_slice = self.types.getRecordFieldsSlice(fields);
-            var support: DerivedSupport = .supported;
-            for (fields_slice.items(.presence)) |presence| {
-                const field_var = presence.typeVar();
-                support = combineDerivedSupport(support, try self.varSupportsDerivedParseField(field_var, env, region));
-                if (support == .unsupported) break;
-            }
-            break :blk support;
-        },
         .tag_union => |tag_union| blk: {
             switch (try self.derivedParseTagUnionHasAnyTag(tag_union)) {
                 .supported => {},
@@ -35816,7 +35604,6 @@ fn derivedParseExtHasAnyTag(self: *Self, ext_var: Var) Allocator.Error!DerivedSu
             .empty_tag_union => .unsupported,
             .tag_union => |tag_union| try self.derivedParseTagUnionHasAnyTag(tag_union),
             .record,
-            .record_unbound,
             .tuple,
             .nominal_type,
             .fn_pure,
@@ -35846,7 +35633,6 @@ fn varSupportsDerivedParseRecordExt(
         .structure => |structure| switch (structure) {
             .empty_record => .supported,
             .record => |record| try self.typeSupportsDerivedParse(.{ .record = record }, env, region),
-            .record_unbound => |fields| try self.typeSupportsDerivedParse(.{ .record_unbound = fields }, env, region),
             .tag_union,
             .empty_tag_union,
             .tuple,
@@ -35898,7 +35684,6 @@ fn varSupportsDerivedParseTagExt(
             .empty_tag_union => .supported,
             .tag_union => |tag_union| try self.typeSupportsDerivedParse(.{ .tag_union = tag_union }, env, region),
             .record,
-            .record_unbound,
             .tuple,
             .nominal_type,
             .fn_pure,
@@ -35927,7 +35712,6 @@ fn varSupportsDerivedParseField(
         .structure => |structure| switch (structure) {
             .nominal_type => |nominal| try self.nominalSupportsDerivedParseField(nominal, env, region),
             .record => |record| try self.typeSupportsDerivedParse(.{ .record = record }, env, region),
-            .record_unbound => |fields| try self.typeSupportsDerivedParse(.{ .record_unbound = fields }, env, region),
             .tag_union => |tag_union| try self.typeSupportsDerivedParse(.{ .tag_union = tag_union }, env, region),
             .tuple => |tuple| try self.typeSupportsDerivedParse(.{ .tuple = tuple }, env, region),
             .empty_record => .supported,
@@ -36058,18 +35842,6 @@ fn typeSupportsDerivedEncode(
             if (support == .unsupported) break :blk support;
             break :blk combineDerivedSupport(support, try self.varSupportsDerivedEncodeRecordExt(record.ext, encoding_var, env, region));
         },
-        .record_unbound => |fields| blk: {
-            const fields_slice = self.types.getRecordFieldsSlice(fields);
-            var support: DerivedSupport = .supported;
-            for (fields_slice.items(.presence)) |presence| {
-                {
-                    const field_var = presence.typeVar();
-                    support = combineDerivedSupport(support, try self.varSupportsDerivedEncodeRecordField(field_var, encoding_var, env, region));
-                    if (support == .unsupported) break;
-                }
-            }
-            break :blk support;
-        },
         .tag_union => |tag_union| blk: {
             switch (try self.derivedParseTagUnionHasAnyTag(tag_union)) {
                 .supported => {},
@@ -36130,7 +35902,6 @@ fn varSupportsDerivedEncodeShape(
         .structure => |structure| switch (structure) {
             .nominal_type => |nominal| try self.nominalSupportsDerivedEncodeShape(nominal, encoding_var, env, region),
             .record => |record| try self.typeSupportsDerivedEncode(.{ .record = record }, encoding_var, env, region),
-            .record_unbound => |fields| try self.typeSupportsDerivedEncode(.{ .record_unbound = fields }, encoding_var, env, region),
             .tag_union => |tag_union| try self.typeSupportsDerivedEncode(.{ .tag_union = tag_union }, encoding_var, env, region),
             .tuple => |tuple| try self.typeSupportsDerivedEncode(.{ .tuple = tuple }, encoding_var, env, region),
             .empty_record => .supported,
@@ -36159,7 +35930,6 @@ fn varSupportsDerivedEncodeRecordExt(
         .structure => |structure| switch (structure) {
             .empty_record => .supported,
             .record => |record| try self.typeSupportsDerivedEncode(.{ .record = record }, encoding_var, env, region),
-            .record_unbound => |fields| try self.typeSupportsDerivedEncode(.{ .record_unbound = fields }, encoding_var, env, region),
             .tag_union,
             .empty_tag_union,
             .tuple,
@@ -36213,7 +35983,6 @@ fn varSupportsDerivedEncodeTagExt(
             .empty_tag_union => .supported,
             .tag_union => |tag_union| try self.typeSupportsDerivedEncode(.{ .tag_union = tag_union }, encoding_var, env, region),
             .record,
-            .record_unbound,
             .tuple,
             .nominal_type,
             .fn_pure,
@@ -36269,7 +36038,6 @@ fn missingTryInfoForVar(
         .structure => |structure| switch (structure) {
             .nominal_type => |nominal| try self.missingTryInfoFromNominal(nominal),
             .record,
-            .record_unbound,
             .tuple,
             .fn_pure,
             .fn_effectful,
@@ -36351,7 +36119,6 @@ fn varIsOpenOptionalParseError(self: *Self, var_: Var) Allocator.Error!bool {
                 break :blk Ident.textEql(text, "Missing");
             },
             .record,
-            .record_unbound,
             .tuple,
             .nominal_type,
             .fn_pure,
@@ -36370,7 +36137,6 @@ fn unboundTryInfoForVar(self: *Self, var_: Var) Allocator.Error!?BuiltinTryInfo 
         .structure => |structure| switch (structure) {
             .nominal_type => |nominal| try self.unboundTryInfoFromNominal(nominal),
             .record,
-            .record_unbound,
             .tuple,
             .fn_pure,
             .fn_effectful,
@@ -36408,7 +36174,6 @@ fn varIsExactUnitTagUnion(
                 break :blk Ident.textEql(text, tag_text);
             },
             .record,
-            .record_unbound,
             .tuple,
             .nominal_type,
             .fn_pure,
@@ -36435,7 +36200,6 @@ fn varIsBuiltinStr(self: *Self, var_: Var) std.mem.Allocator.Error!bool {
         .structure => |structure| switch (structure) {
             .nominal_type => |nominal| self.nominalIsBuiltinStrType(nominal),
             .record,
-            .record_unbound,
             .tuple,
             .fn_pure,
             .fn_effectful,
@@ -36683,7 +36447,6 @@ fn validateResolvedOpenNumeralLiterals(
             .structure => |flat_type| switch (flat_type) {
                 .nominal_type => |nominal| nominal,
                 .record,
-                .record_unbound,
                 .tuple,
                 .fn_pure,
                 .fn_effectful,
@@ -36747,13 +36510,6 @@ fn literalTargetContainsIdentity(
                 }
                 break :blk try self.literalTargetContainsIdentity(record.ext, visited);
             },
-            .record_unbound => |record_fields| blk: {
-                const fields = self.types.getRecordFieldsSlice(record_fields);
-                for (fields.items(.presence)) |presence| {
-                    if (try self.literalTargetContainsIdentity(presence.typeVar(), visited)) break :blk true;
-                }
-                break :blk false;
-            },
             .tag_union => |tag_union| blk: {
                 const tags = self.types.getTagsSlice(tag_union.tags);
                 for (tags.items(.args)) |args| {
@@ -36789,7 +36545,6 @@ fn literalTargetIsBuiltinDirect(
                 .quote => self.nominalIsBuiltinStrType(nominal),
             },
             .record,
-            .record_unbound,
             .tuple,
             .fn_pure,
             .fn_effectful,
@@ -36906,7 +36661,6 @@ fn finalizeLiteralDispatchResolutions(self: *Self) Allocator.Error!void {
                 .structure => |structure| switch (structure) {
                     .nominal_type => |nominal| self.cir.getIdent(nominal.ident.ident_idx),
                     .record,
-                    .record_unbound,
                     .tuple,
                     .fn_pure,
                     .fn_effectful,
@@ -38063,7 +37817,6 @@ fn collectDerivedMapTags(
                 break :blk try self.collectDerivedMapTags(tag_union.ext, tags, open_ext, visited);
             },
             .record,
-            .record_unbound,
             .tuple,
             .nominal_type,
             .fn_pure,
@@ -38112,9 +37865,6 @@ fn varIsDerivedMapZst(
                 }
                 break :blk try self.varIsDerivedMapZst(record.ext, env, region, visited_vars, visited_nominals);
             },
-            // An unbound record can gain fields, so its size is not known to be
-            // zero at checking time even when every currently-known field is.
-            .record_unbound => false,
             .tuple => |tuple| blk: {
                 const elems = try self.gpa.dupe(Var, self.types.sliceVars(tuple.elems));
                 defer self.gpa.free(elems);
@@ -38197,16 +37947,6 @@ fn collectDerivedMapTypeVars(
                     try self.collectDerivedMapTypeVars(self.scratch_record_field_vars.items.items[i], found, visited);
                 }
                 try self.collectDerivedMapTypeVars(record.ext, found, visited);
-            },
-            .record_unbound => |range| {
-                const fields_slice = self.types.getRecordFieldsSlice(range);
-                const vars_top = try self.dupeRecordFieldTypeVars(fields_slice.items(.presence));
-                defer self.scratch_record_field_vars.clearFrom(vars_top);
-                const vars_end = self.scratch_record_field_vars.top();
-                var i: u32 = vars_top;
-                while (i < vars_end) : (i += 1) {
-                    try self.collectDerivedMapTypeVars(self.scratch_record_field_vars.items.items[i], found, visited);
-                }
             },
             .tuple => |tuple| {
                 const elems = try self.gpa.dupe(Var, self.types.sliceVars(tuple.elems));
@@ -38881,7 +38621,6 @@ fn parserErrorRowHasTag(
                 },
                 .empty_tag_union => return false,
                 .record,
-                .record_unbound,
                 .tuple,
                 .nominal_type,
                 .fn_pure,
@@ -39572,7 +39311,6 @@ fn parseDictKeyMethodText(self: *Self, key_var: Var) Allocator.Error!?[]const u8
                 return null;
             },
             .record,
-            .record_unbound,
             .tuple,
             .fn_pure,
             .fn_effectful,
@@ -39615,7 +39353,6 @@ fn encodeDictKeyMethodText(self: *Self, key_var: Var) Allocator.Error!?[]const u
                 return null;
             },
             .record,
-            .record_unbound,
             .tuple,
             .fn_pure,
             .fn_effectful,
@@ -39713,7 +39450,6 @@ fn parseFormatMethodVarForEncoding(
                 };
             },
             .record,
-            .record_unbound,
             .tuple,
             .fn_pure,
             .fn_effectful,
@@ -39778,7 +39514,6 @@ fn reportDerivedParseMissingMethodAt(
         .structure => |structure| switch (structure) {
             .nominal_type => .nominal,
             .record,
-            .record_unbound,
             .tuple,
             .fn_pure,
             .fn_effectful,
@@ -40125,7 +39860,7 @@ fn constrainDerivedParserFormatError(
             },
             .structure => |structure| switch (structure) {
                 .tag_union, .empty_tag_union => return try self.constrainDerivedParserErrorRowIncludes(parent, child, env, region),
-                .record, .record_unbound, .tuple, .nominal_type, .fn_pure, .fn_effectful, .fn_unbound, .empty_record => {},
+                .record, .tuple, .nominal_type, .fn_pure, .fn_effectful, .fn_unbound, .empty_record => {},
             },
             .flex => |flex| if (flex.constraints.len() == 0) {
                 return try self.constrainDerivedParserErrorRowIncludes(parent, child, env, region);
@@ -40173,7 +39908,7 @@ fn constrainDerivedParserErrorRowIncludes(
                     }
                     current = row.ext;
                 },
-                .record, .record_unbound, .tuple, .nominal_type, .fn_pure, .fn_effectful, .fn_unbound, .empty_record => return .unsupported,
+                .record, .tuple, .nominal_type, .fn_pure, .fn_effectful, .fn_unbound, .empty_record => return .unsupported,
             },
             .alias => |alias| current = self.types.getAliasBackingVar(alias),
             .flex => |flex| {
@@ -40454,7 +40189,6 @@ fn derivedCodecTypesEql(
             if (!try self.derivedCodecTypesEql(a_record.ext, b_structure.record.ext, assumed)) break :blk false;
             break :blk try self.derivedCodecRecordFieldsEql(a_record.fields, b_structure.record.fields, assumed);
         },
-        .record_unbound => |a_fields| try self.derivedCodecRecordFieldsEql(a_fields, b_structure.record_unbound, assumed),
         .tag_union => |a_tag_union| blk: {
             if (!try self.derivedCodecTypesEql(a_tag_union.ext, b_structure.tag_union.ext, assumed)) break :blk false;
             break :blk try self.derivedCodecTagsEql(a_tag_union.tags, b_structure.tag_union.tags, assumed);
@@ -40467,7 +40201,6 @@ fn derivedCodecTypesEql(
                 .nominal_type,
                 .tuple,
                 .record,
-                .record_unbound,
                 .tag_union,
                 => break :blk false,
             };
@@ -40608,10 +40341,6 @@ fn pushDerivedCodecComponents(self: *Self, pending: *std.ArrayList(Var), var_: V
                 for (fields.items(.presence)) |presence| try pending.append(self.gpa, presence.typeVar());
                 try pending.append(self.gpa, record.ext);
             },
-            .record_unbound => |field_range| {
-                const fields = self.types.getRecordFieldsSlice(field_range);
-                for (fields.items(.presence)) |presence| try pending.append(self.gpa, presence.typeVar());
-            },
             .tag_union => |tag_union| {
                 const tags = self.types.getTagsSlice(tag_union.tags);
                 for (tags.items(.args)) |tag_args| try pending.appendSlice(self.gpa, self.types.sliceVars(tag_args));
@@ -40704,7 +40433,7 @@ fn validateDerivedParseVar(
     return switch (resolved.desc.content) {
         .structure => |structure| switch (structure) {
             .nominal_type => |nominal| try self.validateDerivedParseNominal(var_, nominal, encoding_var, state_var, err_var, constraint, env, region, walk, context, failure_expr),
-            .record, .record_unbound, .empty_record => blk: {
+            .record, .empty_record => blk: {
                 if (walk.visited.contains(resolved.var_)) break :blk .ok;
                 try walk.visited.put(resolved.var_, {});
                 break :blk try self.validateDerivedParseRecord(var_, encoding_var, state_var, err_var, constraint, env, region, walk, failure_expr);
@@ -40816,9 +40545,6 @@ fn collectDerivedRecordFields(
                     const record = structure.record;
                     try field_presences.appendSlice(self.gpa, self.types.getRecordFieldsSlice(record.fields).items(.presence));
                     current = record.ext;
-                } else if (structure == .record_unbound) {
-                    try field_presences.appendSlice(self.gpa, self.types.getRecordFieldsSlice(structure.record_unbound).items(.presence));
-                    return .ok;
                 } else if (structure == .empty_record) {
                     return .ok;
                 } else return .unsupported;
@@ -40917,7 +40643,6 @@ fn varIsOptionalParseField(
         .structure => |structure| switch (structure) {
             .nominal_type => |nominal| try self.nominalIsOptionalParseField(nominal),
             .record,
-            .record_unbound,
             .tuple,
             .fn_pure,
             .fn_effectful,
@@ -41008,7 +40733,6 @@ fn validateDerivedParseTagExt(
                 break :blk try self.validateDerivedParseTagExt(tag_union.ext, encoding_var, state_var, err_var, constraint, env, region, walk, failure_expr);
             },
             .record,
-            .record_unbound,
             .tuple,
             .nominal_type,
             .fn_pure,
@@ -41420,11 +41144,6 @@ fn validateDerivedEncodeVar(
                 try walk.visited.put(resolved.var_, {});
                 break :blk try self.validateDerivedEncodeRecord(resolved.var_, encoding_var, state_var, err_var, constraint, env, region, walk);
             },
-            .record_unbound => blk: {
-                if (walk.visited.contains(resolved.var_)) break :blk .ok;
-                try walk.visited.put(resolved.var_, {});
-                break :blk try self.validateDerivedEncodeRecord(resolved.var_, encoding_var, state_var, err_var, constraint, env, region, walk);
-            },
             .tag_union => |tag_union| blk: {
                 if (walk.visited.contains(resolved.var_)) break :blk .ok;
                 try walk.visited.put(resolved.var_, {});
@@ -41590,7 +41309,6 @@ fn validateDerivedEncodeTagExt(
                 break :blk try self.validateDerivedEncodeTagExt(tag_union.ext, encoding_var, state_var, err_var, constraint, env, region, walk);
             },
             .record,
-            .record_unbound,
             .tuple,
             .nominal_type,
             .fn_pure,
@@ -42325,13 +42043,6 @@ fn varContainsError(self: *Self, root_var: Var, visited: *std.AutoHashMap(Var, v
                         if (presence.presenceVar()) |presence_var| try stack.append(self.gpa, presence_var);
                     }
                     try stack.append(self.gpa, record.ext);
-                },
-                .record_unbound => |fields| {
-                    const fields_slice = self.types.getRecordFieldsSlice(fields);
-                    for (fields_slice.items(.presence)) |presence| {
-                        try stack.append(self.gpa, presence.typeVar());
-                        if (presence.presenceVar()) |presence_var| try stack.append(self.gpa, presence_var);
-                    }
                 },
                 .tag_union => |tag_union| {
                     const tags = self.types.getTagsSlice(tag_union.tags);
