@@ -2002,4 +2002,44 @@ pub const tests = [_]TestCase{
         ,
         .expected = .{ .inspect_str = "1" },
     },
+    .{
+        // repro for https://github.com/roc-lang/roc/issues/11463
+        // An unannotated (so generalized) helper passes a closure whose body is
+        // a record update with no field access to a method call. Specializing
+        // the helper at a record with more fields than the updated one must
+        // keep the untouched fields and produce "b 1".
+        .name = "issue 11463: record update in closure passed through method call in generalized function",
+        .source_kind = .module,
+        .imports = &.{.{
+            .name = "Widget",
+            .source =
+            \\Widget(a) := { text : Str, on_change : (a, Str -> a) }.{
+            \\    new : Str -> Widget(a)
+            \\    new = |text| { text, on_change: |state, _| state }
+            \\
+            \\    on_change : Widget(a), (a, Str -> a) -> Widget(a)
+            \\    on_change = |widget, handler| { ..widget, on_change: handler }
+            \\
+            \\    fire : Widget(a), a, Str -> a
+            \\    fire = |widget, state, value| (widget.on_change)(state, value)
+            \\}
+            \\
+            ,
+        }},
+        .source =
+        \\import Widget
+        \\
+        \\State : { filter : Str, count : U64 }
+        \\
+        \\field = |text| Widget.new(text).on_change(|current, value| { ..current, filter: value })
+        \\
+        \\main = {
+        \\    state : State
+        \\    state = { filter: "a", count: 1 }
+        \\    next = field(state.filter).fire(state, "b")
+        \\    "${next.filter} ${next.count.to_str()}"
+        \\}
+        ,
+        .expected = .{ .inspect_str = "\"b 1\"" },
+    },
 };

@@ -280,10 +280,6 @@ fn walk(
             },
             .structure => |flat_type| switch (flat_type) {
                 .record => |record| try pushRecordChildren(gpa, scratch, entry, store, record.fields, record.ext),
-                .record_unbound => |fields_range| {
-                    try collectRecordFieldChildren(gpa, scratch, store, fields_range);
-                    try pushChildren(gpa, scratch, entry);
-                },
                 .tuple => |tuple| {
                     scratch.children.clearRetainingCapacity();
                     for (store.sliceVars(tuple.elems), 0..) |elem, i| {
@@ -348,10 +344,6 @@ fn walkRowContinuation(
         .structure => |flat_type| switch (entry.row_context) {
             .record => switch (flat_type) {
                 .record => |record| try pushRecordChildren(gpa, scratch, entry, store, record.fields, record.ext),
-                .record_unbound => |fields_range| {
-                    try collectRecordFieldChildren(gpa, scratch, store, fields_range);
-                    try pushChildren(gpa, scratch, entry);
-                },
                 .empty_record => {},
                 .tuple,
                 .nominal_type,
@@ -366,7 +358,6 @@ fn walkRowContinuation(
                 .tag_union => |tag_union| try pushTagChildren(gpa, scratch, entry, store, tag_union),
                 .empty_tag_union => {},
                 .record,
-                .record_unbound,
                 .tuple,
                 .nominal_type,
                 .fn_pure,
@@ -439,9 +430,7 @@ fn pushChildren(gpa: Allocator, scratch: *Scratch, entry: StackEntry) Allocator.
     }
 }
 
-/// Collect one child per record field, addressed by label. Shared by the
-/// `record` and `record_unbound` branches of both walkers so the two row kinds
-/// cannot diverge.
+/// Collect one child per record field, addressed by label.
 ///
 /// Only the field's VALUE-axis var is walked. A field with a dynamic kind also
 /// carries a presence-axis var, but a
@@ -453,14 +442,10 @@ fn pushChildren(gpa: Allocator, scratch: *Scratch, entry: StackEntry) Allocator.
 /// carries zero constraints (and still `recordDeferredConstraint` it), so no
 /// constraint can hide behind a presence var.
 ///
-/// `.unknown` fields occur in both row kinds: `record` rows mint them for
-/// literals, `.?` accesses, and `?:` annotations, and `record_unbound` rows—
-/// whose sole producer is the record-update probe in `Check.zig` (`e_record`
-/// with an ext, later appearances being verbatim copies via `instantiate.zig`
-/// and `copy_import.zig`)—carry one kind-flexible `.unknown` field per
-/// mentioned update field (creation semantics: the base's kind decides).
-/// Both row kinds share this walk because the evidence-bearing axis is
-/// identical either way.
+/// `.unknown` fields are minted for literals, `.?` accesses, `?:`
+/// annotations, and the record-update probe in `Check.zig`, which carries one
+/// kind-flexible `.unknown` field per mentioned update field (creation
+/// semantics: the base's kind decides).
 fn collectRecordFieldChildren(
     gpa: Allocator,
     scratch: *Scratch,
