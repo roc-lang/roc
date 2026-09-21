@@ -509,9 +509,20 @@ Poison is local to the expression or dependency region that owns the checking
 problem. It propagates only through explicit checked dependencies, such as a
 lookup of an erroneous local or top-level value, or a call whose callee's body
 contains code checking replaced with a runtime error: the post-solve walk that
-confirms a root's dependencies already follows each callee's body, and a root
-whose evaluation can reach such code is not kept, so the crash that code lowers
-to is never reported a second time as a compile-time crash. It must never become a module,
+confirms a hoisted root's dependencies already follows each callee's body, and a
+root whose evaluation can reach such code is not kept, so the crash that code
+lowers to is never reported a second time as a compile-time crash. Top-level
+roots get the same guarantee from CheckedModule construction, which records in
+`checked_error_templates` every procedure template whose evaluation can reach a
+checked runtime error. It follows each template's explicit procedure
+references, constant references, and closed dispatch targets to a fixpoint,
+reads an imported template's answer from the importing CheckedModule's view of
+that module's `checked_error_templates` list, and never requests a compile-time
+root whose entry wrapper is in the list. An expect is the exception: when only a
+callee or a referenced constant reaches the checked error, the expect still runs
+and its crash is a failed test, which is not a second report of the checked
+error. A CheckedModule whose bodies and imports contain no checked runtime error
+records an empty list and does no traversal. It must never become a module,
 package, or program flag. A checked module or checked program may contain
 user-facing diagnostics and still produce hoisted roots for every independent
 expression whose own dependency region is resolved and otherwise eligible. This
@@ -3738,7 +3749,10 @@ constraint callable or from a later union-find representative.
 An ordinary call judges its callee from the callable variable produced by
 scheme instantiation; imported static methods may use an erroneous source
 placeholder whose instantiated callable is valid. Its arguments consume
-`call_operand_type_error_exprs` like the other call-like forms.
+`call_operand_type_error_exprs` like the other call-like forms. A `crash` owns
+its message's `Str` demand the same way: an erroneous message retires the
+crash, and a message whose own type is not `Str` is rejected by an owned
+relation that retires the crash while the message keeps its solved type.
 Statement-owned iterator loops have no parent expression to mark; they consume
 the same operand record and leave the erroneous iterable expression in
 `erroneous_value_exprs`. Checked for-nodes require a topology plan even on
