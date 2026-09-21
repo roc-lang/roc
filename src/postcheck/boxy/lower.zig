@@ -31901,6 +31901,20 @@ const ProcBodyBuilder = struct {
             }
         }
 
+        // A nominal's runtime descriptor is built from its backing shape, so
+        // the backing's own requirement is read from the same descriptor.
+        if (self.parent.descriptorBackingShapeRep(identity_current)) |backing_rep| {
+            try self.collectCallableAdapterProjectedDescriptorCaptureSources(
+                backing_rep,
+                root_materialize_rep,
+                params,
+                mapped,
+                seen_reps,
+                read_path,
+            );
+            return;
+        }
+
         if (self.tagVariantRepForBoundary(identity_current)) |tag_rep_id| {
             const tag_rep = self.parent.plan.representations.items[@intFromEnum(tag_rep_id)];
             const variants = self.parent.plan.tagVariantSlice(tag_rep.tag_variants);
