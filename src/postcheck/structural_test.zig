@@ -62,7 +62,6 @@ test "Monotype types are closed checked types without row tails" {
     try std.testing.expect(@hasField(MonoType.Content, "erased"));
     try std.testing.expect(@hasField(MonoType.Content, "zst"));
 
-    try std.testing.expect(!@hasField(MonoType.Content, "record_unbound"));
     try std.testing.expect(!@hasField(MonoType.Content, "empty_record"));
     try std.testing.expect(!@hasField(MonoType.Content, "empty_tag_union"));
     try std.testing.expect(!@hasField(MonoType.Content, "row_var"));

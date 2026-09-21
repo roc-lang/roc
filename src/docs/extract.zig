@@ -2615,9 +2615,6 @@ fn extractFlatType(
         .record => |record| {
             return try extractRecord(ctx, record);
         },
-        .record_unbound => |fields| {
-            return try extractRecordUnbound(ctx, fields);
-        },
         .tuple => |tuple| {
             return try extractTuple(ctx, tuple);
         },
@@ -2837,13 +2834,6 @@ fn extractRecord(
                         }
                         ext = ext_record.ext;
                     },
-                    .record_unbound => |ext_fields| {
-                        const ext_slice = types.getRecordFieldsSlice(ext_fields);
-                        for (ext_slice.items(.name), ext_slice.items(.presence)) |name, presence| {
-                            try all_fields.append(gpa, .{ .name = name, .presence = presence });
-                        }
-                        break;
-                    },
                     .empty_record => break,
                     .tuple,
                     .nominal_type,
@@ -2882,52 +2872,6 @@ fn extractRecord(
         .fields = doc_fields,
         .ext = ext_doc_type,
         .is_open = is_open,
-        .layout = .multiline,
-    } });
-}
-
-fn extractRecordUnbound(
-    ctx: *ExtractContext,
-    fields_range: types_mod.RecordField.SafeMultiList.Range,
-) ExtractError!*const DocType {
-    const gpa = ctx.gpa;
-
-    if (fields_range.isEmpty()) {
-        return try allocDocType(gpa, .{ .record = .{
-            .fields = try gpa.alloc(DocType.Field, 0),
-            .ext = null,
-            .is_open = false,
-            .layout = .multiline,
-        } });
-    }
-
-    const slice = ctx.types.getRecordFieldsSlice(fields_range);
-    const names = slice.items(.name);
-    const presences = slice.items(.presence);
-    var fields = try gpa.alloc(DocType.Field, names.len);
-    for (names, presences, 0..) |name, presence, i| {
-        fields[i] = .{
-            .name = try gpa.dupe(u8, ctx.idents.getText(name)),
-            // Every field carries a value type on the type axis; the solved
-            // kind only selects the `:` / `?:` separator (design.md
-            // "Field Kinds").
-            .type = try extractDocTypeInner(ctx, presence.typeVar()) orelse
-                try allocDocType(gpa, .@"error"),
-            .kind = docFieldKind(ctx.types, presence),
-        };
-    }
-
-    // Sort fields alphabetically
-    std.mem.sort(DocType.Field, fields, {}, struct {
-        fn lessThan(_: void, a: DocType.Field, b: DocType.Field) bool {
-            return std.mem.order(u8, a.name, b.name) == .lt;
-        }
-    }.lessThan);
-
-    return try allocDocType(gpa, .{ .record = .{
-        .fields = fields,
-        .ext = null,
-        .is_open = false,
         .layout = .multiline,
     } });
 }
@@ -3030,7 +2974,6 @@ fn extractTagUnion(
         .structure => |ft| switch (ft) {
             .empty_tag_union => {}, // closed union
             .record,
-            .record_unbound,
             .tuple,
             .nominal_type,
             .fn_pure,

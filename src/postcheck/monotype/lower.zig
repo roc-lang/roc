@@ -1538,7 +1538,7 @@ fn checkedResultRowIsClosed(view: ModuleView, root: checked.CheckedTypeId) bool 
             .empty_tag_union => return true,
             .flex, .rigid => |variable| return payload.variableSealsToRowDefault() and
                 variable.row_default == .empty_tag_union,
-            .pending, .err, .record, .record_unbound, .tuple, .nominal, .function, .empty_record => return false,
+            .pending, .err, .record, .tuple, .nominal, .function, .empty_record => return false,
         }
     }
     Common.invariant("checked result row extension chain was cyclic");
@@ -1552,7 +1552,7 @@ fn checkedResultRowIsClosed(view: ModuleView, root: checked.CheckedTypeId) bool 
 fn closedResultRowOrNull(view: ModuleView, checked_fn_root: checked.CheckedTypeId) ?ClosedResultRow {
     const function = switch (resolvedPayload(view, checked_fn_root).payload) {
         .function => |function| function,
-        .pending, .err, .flex, .rigid, .alias, .record, .record_unbound, .tuple, .nominal, .empty_record, .tag_union, .empty_tag_union => return null,
+        .pending, .err, .flex, .rigid, .alias, .record, .tuple, .nominal, .empty_record, .tag_union, .empty_tag_union => return null,
     };
     const ret = resolvedPayload(view, function.ret);
     switch (ret.payload) {
@@ -1568,7 +1568,7 @@ fn closedResultRowOrNull(view: ModuleView, checked_fn_root: checked.CheckedTypeI
             if (!checkedResultRowIsClosed(view, ret.root)) return null;
             return .{ .row = ret.root, .behind_try = false };
         },
-        .pending, .err, .flex, .rigid, .alias, .record, .record_unbound, .tuple, .function, .empty_record => return null,
+        .pending, .err, .flex, .rigid, .alias, .record, .tuple, .function, .empty_record => return null,
     }
 }
 
@@ -1587,7 +1587,7 @@ fn checkedClosedRowLabelCount(view: ModuleView, root: checked.CheckedTypeId) usi
                 current = tag_union.ext;
             },
             .empty_tag_union, .flex, .rigid => return count,
-            .pending, .err, .record, .record_unbound, .tuple, .nominal, .function, .empty_record => Common.invariant("closed result row chain left its row"),
+            .pending, .err, .record, .tuple, .nominal, .function, .empty_record => Common.invariant("closed result row chain left its row"),
         }
     }
     Common.invariant("checked result row extension chain was cyclic");
@@ -4322,12 +4322,6 @@ const Builder = struct {
                 }
                 return try self.checkedTypeHasVariable(view, record.ext, seen);
             },
-            .record_unbound => |fields| {
-                for (fields) |field| {
-                    if (try self.checkedTypeHasVariable(view, field.ty, seen)) return true;
-                }
-                return false;
-            },
             .tuple => |items| return try self.checkedTypeSliceHasVariable(view, items, seen),
             .tag_union => |tag_union| {
                 for (tag_union.tags) |tag| {
@@ -4438,10 +4432,6 @@ const Builder = struct {
             .type_name = try self.typeName(view, type_name),
             .source_decl = source_decl,
         };
-    }
-
-    fn declaredModuleForAlias(_: *Builder, _: ModuleView, alias: checked.CheckedAliasType) names.CheckedModuleDigest {
-        return moduleDigestFromId(alias.owner_module);
     }
 
     fn declaredModuleForNominal(_: *Builder, _: ModuleView, nominal: checked.CheckedNominalType) names.CheckedModuleDigest {
@@ -7808,15 +7798,27 @@ const Builder = struct {
         const raw = @intFromEnum(checked_ty);
         if (raw >= view.types.payloadCount()) Common.invariant("checked type id outside checked type store");
 
+        // Alias spelling belongs to checked data. Share the backing's runtime
+        // identity, just as scoped instantiation does, before reserving any
+        // type storage. Checking rules out alias-only cycles and phantom alias
+        // arguments; recursive structure closes through the backing's memo.
+        const payload = view.types.payload(checked_ty);
+        if (payload == .alias) {
+            const backing = try self.lowerType(view, payload.alias.backing);
+            try cache.put(address, backing);
+            return backing;
+        }
+
         const Context = struct {
             builder: *Builder,
             address: CheckedTypeAddress,
             view: ModuleView,
             checked_ty: checked.CheckedTypeId,
+            payload: checked.CheckedTypePayload,
 
             fn fill(context: @This(), reserved: Type.TypeId) Allocator.Error!Type.Content {
                 try context.builder.activeCheckedTypeCache().put(context.address, reserved);
-                return try context.builder.lowerTypePayload(context.view, context.checked_ty, context.view.types.payload(context.checked_ty));
+                return try context.builder.lowerTypePayload(context.view, context.checked_ty, context.payload);
             }
         };
         return try self.activeTypeStore().addRecursive(Context{
@@ -7824,6 +7826,7 @@ const Builder = struct {
             .address = address,
             .view = view,
             .checked_ty = checked_ty,
+            .payload = payload,
         }, Context.fill);
     }
 
@@ -7835,7 +7838,6 @@ const Builder = struct {
             .rigid => |variable| lowerCheckedTypeVariable(variable),
             .empty_record => .{ .record = .empty() },
             .empty_tag_union => .{ .tag_union = .empty() },
-            .record_unbound => |fields| try self.lowerRecordFields(view, fields),
             .record => |record| try self.lowerRecordRow(view, record.fields, record.ext),
             .tuple => |items| blk: {
                 const lowered = try self.lowerTypeSlice(view, items);
@@ -7851,20 +7853,7 @@ const Builder = struct {
                     .ret = try self.lowerType(view, fn_ty.ret),
                 } };
             },
-            .alias => |alias| blk: {
-                const args = try self.lowerTypeSlice(view, alias.args);
-                defer self.allocator.free(args);
-                break :blk .{ .named = .{
-                    .named_type = .{ .module = self.declaredModuleForAlias(view, alias), .ty = checked_ty },
-                    .def = try self.typeDef(view, alias.origin_module, alias.name, alias.source_decl),
-                    .kind = .alias,
-                    .args = try self.activeTypeStore().addSpan(args),
-                    .backing = .{
-                        .ty = try self.lowerType(view, alias.backing),
-                        .use = .inspectable,
-                    },
-                } };
-            },
+            .alias => Common.invariant("transparent alias reserved a Monotype wrapper"),
             .nominal => |nominal| blk: {
                 switch (nominal.representation) {
                     .builtin => |builtin| switch (checked.builtinRuntimeEncoding(builtin)) {
@@ -8270,27 +8259,6 @@ const Builder = struct {
         return optionalFieldSlotForType(self.activeTypeStore(), self.activeNameStore(), slot_ty);
     }
 
-    fn lowerRecordFields(self: *Builder, view: ModuleView, fields: []const checked.CheckedRecordField) Allocator.Error!Type.Content {
-        const lowered = try self.allocator.alloc(Type.Field, fields.len);
-        defer self.allocator.free(lowered);
-        for (fields, 0..) |field, i| {
-            const value_ty = try self.lowerType(view, field.ty);
-            lowered[i] = .{
-                .name = try self.recordFieldName(view, field.name),
-                .ty = switch (field.kind.tag) {
-                    .required, .defaulted => value_ty,
-                    .optional => try self.optionalSlotType(value_ty),
-                    .undetermined => Common.invariant("undetermined checked field kind reached direct record lowering"),
-                    .err => Common.invariant("poisoned checked field kind reached direct record lowering"),
-                },
-                .value_ty = if (field.kind.tag == .optional) value_ty else null,
-                .default = try self.monoFieldDefault(view, field),
-            };
-        }
-        const type_store = self.activeTypeStore();
-        return .{ .record = try type_store.addRecordFields(self.activeNameStore(), lowered) };
-    }
-
     /// Translate a checked `??` identity into the Monotype name store.
     fn monoFieldDefault(self: *Builder, view: ModuleView, field: checked.CheckedRecordField) Allocator.Error!?Type.FieldDefault {
         const default = field.kind.defaultIdentity() orelse return null;
@@ -8326,10 +8294,6 @@ const Builder = struct {
                 .flex, .rigid => |variable| {
                     if (variable.row_default == .empty_record) break;
                     Common.invariant("open non-record checked row reached Monotype record lowering");
-                },
-                .record_unbound => |tail_fields| {
-                    try self.appendRecordFields(view, &fields, tail_fields);
-                    break;
                 },
                 .record => |record| {
                     try self.appendRecordFields(view, &fields, record.fields);
@@ -8395,7 +8359,7 @@ const Builder = struct {
                     try self.appendTags(view, &tags, tag_union.tags);
                     current = tag_union.ext;
                 },
-                .pending, .err, .record, .record_unbound, .tuple, .nominal, .function, .empty_record => Common.invariant("open or non-tag checked row reached Monotype tag-union lowering"),
+                .pending, .err, .record, .tuple, .nominal, .function, .empty_record => Common.invariant("open or non-tag checked row reached Monotype tag-union lowering"),
             }
         }
 
@@ -21752,7 +21716,6 @@ const BodyContext = struct {
                 if (try self.checkedTypeContainsErrorInner(alias.backing, visited)) break :blk true;
                 break :blk try self.checkedTypeSpanContainsError(alias.args, visited);
             },
-            .record_unbound => |fields| try self.checkedRecordFieldsContainError(fields, visited),
             .record => |record| blk: {
                 if (try self.checkedRecordFieldsContainError(record.fields, visited)) break :blk true;
                 break :blk try self.checkedTypeContainsErrorInner(record.ext, visited);
@@ -21995,10 +21958,6 @@ const BodyContext = struct {
                 for (alias.args) |arg| _ = try self.instNode(arg);
                 break :blk try self.instNode(alias.backing);
             },
-            .record_unbound => |fields| try self.graph.newNode(.{ .record = .{
-                .fields = try self.instFields(fields),
-                .ext = try self.graph.newNode(.{ .unresolved = InstVariable.row(.empty_record) }),
-            } }),
             .record => |record| try self.graph.newNode(.{ .record = .{
                 .fields = try self.instFields(record.fields),
                 .ext = try self.instNode(record.ext),
@@ -25034,7 +24993,7 @@ const BodyContext = struct {
     fn checkedFunctionType(self: *BodyContext, checked_fn_ty: checked.CheckedTypeId) checked.CheckedFunctionType {
         return switch (resolvedPayload(self.view, checked_fn_ty).payload) {
             .function => |function| function,
-            .pending, .err, .flex, .rigid, .alias, .record, .record_unbound, .tuple, .nominal, .empty_record, .tag_union, .empty_tag_union => Common.invariant("checked call function type was not a function"),
+            .pending, .err, .flex, .rigid, .alias, .record, .tuple, .nominal, .empty_record, .tag_union, .empty_tag_union => Common.invariant("checked call function type was not a function"),
         };
     }
 
@@ -25832,7 +25791,7 @@ const BodyContext = struct {
         const value_expr = self.view.bodies.expr(call.args[0]);
         switch (resolvedPayload(self.view, value_expr.ty).payload) {
             .function => {},
-            .pending, .err, .flex, .rigid, .alias, .record, .record_unbound, .tuple, .nominal, .empty_record, .tag_union, .empty_tag_union => return null,
+            .pending, .err, .flex, .rigid, .alias, .record, .tuple, .nominal, .empty_record, .tag_union, .empty_tag_union => return null,
         }
 
         try self.constrainTypeToMono(checked_ret_ty, str_ty);
@@ -26845,7 +26804,7 @@ const BodyContext = struct {
         const checked_try = while (true) switch (checkedPayload(self.view, checked_try_ty)) {
             .alias => |alias| checked_try_ty = alias.backing,
             .nominal => |nominal| break nominal,
-            .pending, .err, .flex, .rigid, .record_unbound, .record, .tuple, .function, .tag_union, .empty_record, .empty_tag_union => Common.invariant("Iter.custom advance callable did not return Try"),
+            .pending, .err, .flex, .rigid, .record, .tuple, .function, .tag_union, .empty_record, .empty_tag_union => Common.invariant("Iter.custom advance callable did not return Try"),
         };
         const checked_try_builtin = switch (checked_try.representation) {
             .builtin => |builtin| builtin,
@@ -26858,7 +26817,7 @@ const BodyContext = struct {
         const checked_ok_items = while (true) switch (checkedPayload(self.view, checked_ok)) {
             .alias => |alias| checked_ok = alias.backing,
             .tuple => |items| break items,
-            .pending, .err, .flex, .rigid, .record_unbound, .record, .nominal, .function, .tag_union, .empty_record, .empty_tag_union => Common.invariant("Iter.custom advance success value was not an item-state tuple"),
+            .pending, .err, .flex, .rigid, .record, .nominal, .function, .tag_union, .empty_record, .empty_tag_union => Common.invariant("Iter.custom advance success value was not an item-state tuple"),
         };
         if (checked_ok_items.len != 2) {
             Common.invariant("Iter.custom advance success tuple did not have item and state elements");
@@ -33892,7 +33851,7 @@ const BodyContext = struct {
                     }
                     return nominal.args[0];
                 },
-                .pending, .err, .flex, .rigid, .record, .record_unbound, .tuple, .function, .empty_record, .tag_union, .empty_tag_union => Common.invariant("optional access chain's checked type was not a nominal Try"),
+                .pending, .err, .flex, .rigid, .record, .tuple, .function, .empty_record, .tag_union, .empty_tag_union => Common.invariant("optional access chain's checked type was not a nominal Try"),
             }
         }
     }
@@ -35034,7 +34993,6 @@ const BodyContext = struct {
             .flex, .rigid => payload.variableSealsToRowDefault(),
             .alias => |alias| (try self.checkedTypeSpanSealsWithoutSpecialization(alias.args, visited)) and
                 try self.checkedTypeSealsWithoutSpecializationInner(alias.backing, visited),
-            .record_unbound => |fields| try self.checkedRecordFieldsSealWithoutSpecialization(fields, visited),
             .record => |record| (try self.checkedRecordFieldsSealWithoutSpecialization(record.fields, visited)) and
                 try self.checkedTypeSealsWithoutSpecializationInner(record.ext, visited),
             .tuple => |items| try self.checkedTypeSpanSealsWithoutSpecialization(items, visited),
@@ -36289,6 +36247,16 @@ const BodyContext = struct {
         map: *collections.DenseMap(check.ConstStore.ConstTypeId, Type.TypeId),
     ) Allocator.Error!Type.TypeId {
         if (map.get(ty)) |existing| return existing;
+        const stored = store_view.const_store.type_store.get(ty);
+        if (stored == .named and stored.named.kind == .alias) {
+            // Stored aliases retain the checked acyclic backing chain. Memoize
+            // its runtime identity without recreating source-only wrappers.
+            const backing = stored.named.backing orelse
+                Common.invariant("stored transparent alias had no backing type");
+            const lowered = try self.lowerConstCaptureTypeInner(store_view, backing.ty, map);
+            try map.put(ty, lowered);
+            return lowered;
+        }
         const context = ConstTypeLowerContext{
             .body = self,
             .store_view = store_view,
@@ -39644,15 +39612,6 @@ const BodyContext = struct {
                     }
                     current = record.ext;
                 },
-                .record_unbound => |tail_fields| {
-                    for (tail_fields) |checked_field| {
-                        const lowered_name = try self.recordFieldName(view, checked_field.name);
-                        if (lowered_name == field_name) return .{ .found = checked_field };
-                    }
-                    // An unbound row has no committed extension: the tail is
-                    // still open exactly like a scheme-interior variable.
-                    return .scheme_interior;
-                },
                 .nominal => |nominal| {
                     const lookup = self.builder.nominalDeclarationFor(view, nominal) orelse return .absent;
                     view = lookup.view;
@@ -42951,7 +42910,7 @@ const BodyContext = struct {
             slot.* = switch (checkedPayload(self.view, ty)) {
                 .err => .checked_error,
                 .pending => Common.invariant("pending checked type reached a root substitution"),
-                .flex, .rigid, .alias, .record, .record_unbound, .tuple, .nominal, .function, .empty_record, .tag_union, .empty_tag_union => .{ .node = try self.instNode(ty) },
+                .flex, .rigid, .alias, .record, .tuple, .nominal, .function, .empty_record, .tag_union, .empty_tag_union => .{ .node = try self.instNode(ty) },
             };
         }
         return rootEvidenceWithSubstitution(self.owner_template, schema, .{ .subst = slots, .vector = vector });
@@ -42984,7 +42943,7 @@ const BodyContext = struct {
             slot.* = switch (checkedPayload(site_view, ty)) {
                 .err => .checked_error,
                 .pending => Common.invariant("pending checked type reached a specialization substitution"),
-                .flex, .rigid, .alias, .record, .record_unbound, .tuple, .nominal, .function, .empty_record, .tag_union, .empty_tag_union => .{ .node = try ctx.instNode(ty) },
+                .flex, .rigid, .alias, .record, .tuple, .nominal, .function, .empty_record, .tag_union, .empty_tag_union => .{ .node = try ctx.instNode(ty) },
             };
         }
         return slots;
@@ -51575,10 +51534,10 @@ const BodyContext = struct {
         const merge_binders = try self.stateMergeBinders(expr_id);
         defer self.allocator.free(merge_binders);
         if (merge_binders.len == 0) {
-            var selection = try self.initControlFlowResultSelection(
-                self.view.bodies.expr(expr_id).ty,
-                result_cell,
-            );
+            var selection: ControlFlowResultSelection = .{
+                .declared = result_cell,
+                .selected = result_cell,
+            };
             const data = try self.lowerMatch(
                 match,
                 .{ .value = selection.selected },
@@ -53443,10 +53402,10 @@ const BodyContext = struct {
         const merge_binders = try self.stateMergeBinders(expr_id);
         defer self.allocator.free(merge_binders);
         if (merge_binders.len == 0) {
-            var selection = try self.initControlFlowResultSelection(
-                self.view.bodies.expr(expr_id).ty,
-                result_cell,
-            );
+            var selection: ControlFlowResultSelection = .{
+                .declared = result_cell,
+                .selected = result_cell,
+            };
             const data = try self.lowerIfAtTypeCells(
                 if_,
                 result_cell,
@@ -53469,30 +53428,15 @@ const BodyContext = struct {
         return try self.unwrapStateResultAtTypeCells(state_expr, state_cell, result_cell, merge_binders);
     }
 
+    /// Start from the exact specialized request so branch constructors retain
+    /// its type constraints before selecting nested-callable evidence. Producer
+    /// selection may replace `selected` with a distinct private representation;
+    /// `declared` remains the outer interface, including when it is immutable.
     const ControlFlowResultSelection = struct {
         declared: DraftTypeCell,
         selected: DraftTypeCell,
         has_value: bool = false,
     };
-
-    /// A value-producing control-flow expression owns one result selection
-    /// while its inhabited branches are lowered. A finished expected Monotype
-    /// remains an immutable outer interface, so selection begins on a fresh
-    /// checked-public graph cell unless the caller already supplied exact
-    /// generated-private evidence.
-    fn initControlFlowResultSelection(
-        self: *BodyContext,
-        checked_ty: checked.CheckedTypeId,
-        declared: DraftTypeCell,
-    ) Allocator.Error!ControlFlowResultSelection {
-        const declared_node = try declared.toGraphNode(self.graph);
-        const selected = if (try self.graph.containsGeneratedPrivate(declared_node) or
-            !try self.graph.containsFinishedMono(declared_node))
-            DraftTypeCell.fromGraphNode(declared_node)
-        else
-            DraftTypeCell.fromGraphNode(try self.freshInstNode(checked_ty));
-        return .{ .declared = declared, .selected = selected };
-    }
 
     /// Discover producer-authored representation evidence before emitting any
     /// branch. Public-only evidence does not constrain the selection: every
@@ -59759,7 +59703,7 @@ fn monotypeNamedKind(kind: check.ConstStore.TypeNamedKind) Type.NamedKind {
     return switch (kind) {
         .nominal => .nominal,
         .@"opaque" => .@"opaque",
-        .alias => .alias,
+        .alias => Common.invariant("stored transparent alias reserved a Monotype wrapper"),
     };
 }
 
@@ -59942,7 +59886,7 @@ fn resolvedPayload(view: ModuleView, ty: checked.CheckedTypeId) ResolvedPayload 
         const payload = checkedPayload(view, current);
         switch (payload) {
             .alias => |alias| current = alias.backing,
-            .pending, .err, .flex, .rigid, .record, .record_unbound, .tuple, .nominal, .function, .empty_record, .tag_union, .empty_tag_union => return .{ .root = current, .payload = payload },
+            .pending, .err, .flex, .rigid, .record, .tuple, .nominal, .function, .empty_record, .tag_union, .empty_tag_union => return .{ .root = current, .payload = payload },
         }
     }
     Common.invariant("checked type alias chain was cyclic");
@@ -62762,4 +62706,198 @@ test "lazy checked placeholders obey closed and innermost declaration scopes" {
     try std.testing.expectEqual(closed_node, (try ctx.scopedNode(closed)).?);
     _ = ctx.instantiation.decl_scopes.pop();
     try std.testing.expectEqual(outer_node, (try ctx.scopedNode(open)).?);
+}
+
+test "issue 11453: direct alias lowering shares runtime types without wrapper allocations" {
+    const gpa = std.testing.allocator;
+    var source_names = names.NameStore.init(gpa);
+    defer source_names.deinit();
+    var checked_types = checked.CheckedTypeStore{};
+    defer checked_types.deinit(gpa);
+    const origin = try source_names.internModuleIdentity(&([_]u8{7} ** 32));
+    const alias_name = try source_names.internTypeName("Alias");
+    const unit = try checked_types.reserveSyntheticTypeRoot(gpa, .{ .bytes = @splat(1) }, false);
+    try checked_types.fillSyntheticTypeRoot(gpa, unit, .empty_record);
+    const empty = try checked_types.reserveSyntheticTypeRoot(gpa, .{ .bytes = @splat(2) }, false);
+    try checked_types.fillSyntheticTypeRoot(gpa, empty, .empty_tag_union);
+    const pair = try checked_types.reserveSyntheticTypeRoot(gpa, .{ .bytes = @splat(3) }, false);
+    try checked_types.fillSyntheticTypeRoot(gpa, pair, .{ .tuple = try gpa.dupe(checked.CheckedTypeId, &.{ unit, empty }) });
+    var aliases: [64]checked.CheckedTypeId = undefined;
+    var previous = pair;
+    for (&aliases, 0..) |*alias, index| {
+        alias.* = try checked_types.reserveSyntheticTypeRoot(gpa, .{ .bytes = @splat(@as(u8, @intCast(index + 4))) }, false);
+        try checked_types.fillSyntheticTypeRoot(gpa, alias.*, .{ .alias = .{
+            .name = alias_name,
+            .origin_module = origin,
+            .owner_module = .{},
+            .source_decl = @intCast(index),
+            .args = try gpa.dupe(checked.CheckedTypeId, &.{unit}),
+            .backing = previous,
+        } });
+        previous = alias.*;
+    }
+
+    // Same declaration with different arguments and a different declaration
+    // with the same arguments must all remain distinct nominal identities.
+    var nominals: [3]checked.CheckedTypeId = undefined;
+    for (&nominals, 0..) |*nominal, index| {
+        nominal.* = try checked_types.reserveSyntheticTypeRoot(gpa, .{ .bytes = @splat(@as(u8, @intCast(index + 68))) }, false);
+        try checked_types.fillSyntheticTypeRoot(gpa, nominal.*, .{ .nominal = .{
+            .name = try source_names.internTypeName("Opaque"),
+            .origin_module = origin,
+            .owner_module = .{},
+            .source_decl = if (index == 2) 101 else 100,
+            .is_opaque = true,
+            .representation = .opaque_without_backing,
+            .args = try gpa.dupe(checked.CheckedTypeId, &.{if (index == 1) empty else unit}),
+        } });
+    }
+    const nominal_alias = try checked_types.reserveSyntheticTypeRoot(gpa, .{ .bytes = @splat(71) }, false);
+    try checked_types.fillSyntheticTypeRoot(gpa, nominal_alias, .{ .alias = .{
+        .name = alias_name,
+        .origin_module = origin,
+        .owner_module = .{},
+        .backing = nominals[0],
+    } });
+    const recursive = try checked_types.reserveSyntheticTypeRoot(gpa, .{ .bytes = @splat(72) }, false);
+    const recursive_alias = try checked_types.reserveSyntheticTypeRoot(gpa, .{ .bytes = @splat(73) }, false);
+    try checked_types.fillSyntheticTypeRoot(gpa, recursive_alias, .{ .alias = .{
+        .name = alias_name,
+        .origin_module = origin,
+        .owner_module = .{},
+        .backing = recursive,
+    } });
+    try checked_types.fillSyntheticTypeRoot(gpa, recursive, .{ .tuple = try gpa.dupe(checked.CheckedTypeId, &.{recursive_alias}) });
+    const aliased_function = try checked_types.reserveSyntheticTypeRoot(gpa, .{ .bytes = @splat(74) }, false);
+    try checked_types.fillSyntheticTypeRoot(gpa, aliased_function, .{ .function = .{
+        .kind = .pure,
+        .args = try gpa.dupe(checked.CheckedTypeId, &.{previous}),
+        .ret = previous,
+    } });
+    const structural_function = try checked_types.reserveSyntheticTypeRoot(gpa, .{ .bytes = @splat(75) }, false);
+    try checked_types.fillSyntheticTypeRoot(gpa, structural_function, .{ .function = .{
+        .kind = .pure,
+        .args = try gpa.dupe(checked.CheckedTypeId, &.{pair}),
+        .ret = pair,
+    } });
+
+    var program = Ast.Program.init(gpa);
+    defer program.deinit();
+    // Exercise the direct producer without constructing an instantiation graph.
+    var builder: Builder = undefined;
+    builder.allocator = gpa;
+    builder.program = &program;
+    builder.force_program_type_destination = false;
+    builder.active_body_draft = null;
+    builder.type_cache = std.AutoHashMap(CheckedTypeAddress, Type.TypeId).init(gpa);
+    defer builder.type_cache.deinit();
+    var view: ModuleView = undefined;
+    view.key = .{};
+    view.names = &source_names;
+    view.types = checked_types.view();
+
+    const pair_ty = try builder.lowerType(view, previous);
+    try std.testing.expectEqual(@as(usize, 3), program.types.typeCount());
+    try std.testing.expectEqual(pair_ty, try builder.lowerType(view, pair));
+    for (aliases) |alias| {
+        try std.testing.expectEqual(pair_ty, try builder.lowerType(view, alias));
+        try std.testing.expect(view.types.payload(alias) == .alias);
+    }
+    try std.testing.expectEqual(@as(usize, 3), program.types.typeCount());
+    const opaque_ty = try builder.lowerType(view, nominal_alias);
+    try std.testing.expectEqual(opaque_ty, try builder.lowerType(view, nominals[0]));
+    try std.testing.expectEqual(Type.NamedKind.@"opaque", program.types.get(opaque_ty).named.kind);
+    try std.testing.expectEqual(null, program.types.get(opaque_ty).named.backing);
+    for (nominals[1..]) |nominal| {
+        const other = try builder.lowerType(view, nominal);
+        try std.testing.expect(!try program.types.typeEql(&program.names, opaque_ty, other));
+    }
+    try std.testing.expectEqual(@as(usize, 6), program.types.typeCount());
+    const recursive_ty = try builder.lowerType(view, recursive_alias);
+    try std.testing.expectEqual(recursive_ty, try builder.lowerType(view, recursive));
+    const items = program.types.span(program.types.get(recursive_ty).tuple);
+    try std.testing.expectEqual(recursive_ty, GuardedList.at(items, 0));
+    try std.testing.expectEqual(@as(usize, 7), program.types.typeCount());
+    const aliased_fn_ty = try builder.lowerType(view, aliased_function);
+    const structural_fn_ty = try builder.lowerType(view, structural_function);
+    try std.testing.expectEqual(
+        program.types.specializationDigest(&program.names, structural_fn_ty),
+        program.types.specializationDigest(&program.names, aliased_fn_ty),
+    );
+}
+
+test "issue 11453: stored aliases preserve sharing recursion and nominal backing authority" {
+    const gpa = std.testing.allocator;
+    var source_names = names.NameStore.init(gpa);
+    defer source_names.deinit();
+    const origin = try source_names.internModuleIdentity(&([_]u8{9} ** 32));
+    const type_name = try source_names.internTypeName("Wrapper");
+    var constants = check.ConstStore.ConstStore.init(gpa);
+    defer constants.deinit();
+    const stored_types = &constants.type_store;
+    // Two distinct synthetic checked types: the opaque nominal, and the alias
+    // chain that wraps it. This test resolves neither against a checked module;
+    // they only have to stay distinct from each other.
+    const nominal_checked_ty: checked.CheckedTypeId = @enumFromInt(1);
+    const alias_checked_ty: checked.CheckedTypeId = @enumFromInt(2);
+    const str = try stored_types.append(.{ .primitive = .str });
+    const nominal = try stored_types.append(.{ .named = .{
+        .named_type = .{ .module = .{}, .ty = nominal_checked_ty },
+        .def = .{ .module = origin, .type_name = type_name },
+        .kind = .@"opaque",
+        .args = .{},
+        .backing = .{ .ty = str, .use = .runtime_layout_only },
+    } });
+    var alias = nominal;
+    for (0..32) |_| {
+        alias = try stored_types.append(.{ .named = .{
+            .named_type = .{ .module = .{}, .ty = alias_checked_ty },
+            .def = .{ .module = origin, .type_name = type_name },
+            .kind = .alias,
+            .args = .{},
+            .backing = .{ .ty = alias, .use = .inspectable },
+        } });
+    }
+    const recursive = try stored_types.reserve();
+    const recursive_alias = try stored_types.append(.{ .named = .{
+        .named_type = .{ .module = .{}, .ty = @enumFromInt(2) },
+        .def = .{ .module = origin, .type_name = type_name },
+        .kind = .alias,
+        .args = .{},
+        .backing = .{ .ty = recursive, .use = .inspectable },
+    } });
+    stored_types.fill(recursive, .{ .tuple = try stored_types.appendTypeSpan(&.{recursive_alias}) });
+    const root = try stored_types.append(.{ .tuple = try stored_types.appendTypeSpan(&.{ alias, nominal, str, recursive_alias }) });
+
+    var program = Ast.Program.init(gpa);
+    defer program.deinit();
+    const graph = try InstGraph.create(gpa, &program.types, &program.names);
+    defer graph.destroy();
+    var draft = BodyDraftStore.init(gpa);
+    defer draft.deinit();
+    draft.mutable_graph_names = &program.names;
+    var builder: Builder = undefined;
+    builder.program = &program;
+    var ctx: BodyContext = undefined;
+    ctx.allocator = gpa;
+    ctx.builder = &builder;
+    ctx.graph = graph;
+    ctx.draft = &draft;
+    var view: ModuleView = undefined;
+    view.names = &source_names;
+    view.const_store = &constants;
+
+    const result = try ctx.lowerConstCaptureType(view, root);
+    const items = program.types.span(program.types.get(result).tuple);
+    const restored_nominal = GuardedList.at(items, 0);
+    try std.testing.expectEqual(restored_nominal, GuardedList.at(items, 1));
+    const named = program.types.get(restored_nominal).named;
+    try std.testing.expectEqual(Type.NamedKind.@"opaque", named.kind);
+    try std.testing.expectEqual(Type.BackingUse.runtime_layout_only, named.backing.?.use);
+    try std.testing.expectEqual(GuardedList.at(items, 2), named.backing.?.ty);
+    try std.testing.expect(restored_nominal != named.backing.?.ty);
+    const restored_recursive = GuardedList.at(items, 3);
+    const recursive_items = program.types.span(program.types.get(restored_recursive).tuple);
+    try std.testing.expectEqual(restored_recursive, GuardedList.at(recursive_items, 0));
+    try std.testing.expectEqual(@as(usize, 4), program.types.typeCount());
 }

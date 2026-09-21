@@ -1979,4 +1979,82 @@ pub const tests = [_]TestCase{
         ,
         .expected = .{ .inspect_str = "1" },
     },
+    .{
+        // https://github.com/roc-lang/roc/issues/11424
+        // Branch-result selection must retain the enclosing specialization's
+        // I64 constraint when constructing the inner stored closures.
+        .name = "issue 11424: tag payload lambda returns a tag whose closure differs per branch",
+        .source_kind = .module,
+        .source =
+        \\widget : I64 -> [Dyn(I64 -> [Button(I64 -> I64)])]
+        \\widget = |_x| Dyn(|m| if m > 0 { Button(|mm| mm + 1) } else { Button(|mm| mm * 2) })
+        \\
+        \\main = match widget(0) {
+        \\    Dyn(f) =>
+        \\        match (f(0), f(1)) {
+        \\            (Button(g0), Button(g1)) => g0(3) * 10 + g1(3)
+        \\        }
+        \\}
+        ,
+        .expected = .{ .inspect_str = "64" },
+    },
+    .{
+        .name = "issue 11424: match result retains I32 specialization for stored closures",
+        .source_kind = .module,
+        .source =
+        \\widget : I64 -> [Dyn(I32 -> [Button(I32 -> I32)])]
+        \\widget = |_x| Dyn(|m| match m {
+        \\    0 => Button(|mm| mm * 2)
+        \\    _ => Button(|mm| mm + 1)
+        \\})
+        \\
+        \\main = match widget(0) {
+        \\    Dyn(f) =>
+        \\        match (f(0), f(1)) {
+        \\            (Button(g0), Button(g1)) => g0(3) * 10 + g1(3)
+        \\        }
+        \\}
+        ,
+        .expected = .{ .inspect_str = "64" },
+    },
+    .{
+        // repro for https://github.com/roc-lang/roc/issues/11463
+        // An unannotated (so generalized) helper passes a closure whose body is
+        // a record update with no field access to a method call. Specializing
+        // the helper at a record with more fields than the updated one must
+        // keep the untouched fields and produce "b 1".
+        .name = "issue 11463: record update in closure passed through method call in generalized function",
+        .source_kind = .module,
+        .imports = &.{.{
+            .name = "Widget",
+            .source =
+            \\Widget(a) := { text : Str, on_change : (a, Str -> a) }.{
+            \\    new : Str -> Widget(a)
+            \\    new = |text| { text, on_change: |state, _| state }
+            \\
+            \\    on_change : Widget(a), (a, Str -> a) -> Widget(a)
+            \\    on_change = |widget, handler| { ..widget, on_change: handler }
+            \\
+            \\    fire : Widget(a), a, Str -> a
+            \\    fire = |widget, state, value| (widget.on_change)(state, value)
+            \\}
+            \\
+            ,
+        }},
+        .source =
+        \\import Widget
+        \\
+        \\State : { filter : Str, count : U64 }
+        \\
+        \\field = |text| Widget.new(text).on_change(|current, value| { ..current, filter: value })
+        \\
+        \\main = {
+        \\    state : State
+        \\    state = { filter: "a", count: 1 }
+        \\    next = field(state.filter).fire(state, "b")
+        \\    "${next.filter} ${next.count.to_str()}"
+        \\}
+        ,
+        .expected = .{ .inspect_str = "\"b 1\"" },
+    },
 };

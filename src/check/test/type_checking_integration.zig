@@ -755,7 +755,7 @@ test "check type - record - opt - unset through generalized function rejects req
         \\
         \\But `unset_world` needs the first argument to be:
         \\
-        \\    { world ?: U8, .. }
+        \\    { hello: Str, world ?: U8 }
         \\
         \\
     );
@@ -4837,7 +4837,7 @@ test "check type - record - pattern destructure rest 1" {
     try checkTypesModule(
         source,
         .{ .pass = .{ .def = "strip_name" } },
-        "{ name: _field, .. } -> a",
+        "{ name: _field, ..a } -> a",
     );
 }
 

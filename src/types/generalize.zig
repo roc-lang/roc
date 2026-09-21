@@ -73,7 +73,6 @@ const RankFrame = union(enum) {
     over_args: OverArgsFrame,
     func: FuncFrame,
     record: RecordFrame,
-    record_unbound: RecordUnboundFrame,
     tag_union: TagUnionFrame,
 };
 
@@ -107,15 +106,6 @@ const RecordFrame = struct {
     awaiting: bool = false,
     field_axis: enum { type_var, presence_var } = .type_var,
     stage: enum { ext, await_ext, fields } = .ext,
-};
-
-const RecordUnboundFrame = struct {
-    fill: RankFill,
-    fields: []const RecordField.Presence,
-    idx: u32 = 0,
-    acc: Rank,
-    awaiting: bool = false,
-    field_axis: enum { type_var, presence_var } = .type_var,
 };
 
 const TagUnionFrame = struct {
@@ -370,7 +360,6 @@ pub const Generalizer = struct {
                     .over_args => |*frame| try self.stepOverArgs(frame, group_rank),
                     .func => |*frame| try self.stepFunc(frame, group_rank),
                     .record => |*frame| try self.stepRecord(frame, group_rank),
-                    .record_unbound => |*frame| try self.stepRecordUnbound(frame, group_rank),
                     .tag_union => |*frame| try self.stepTagUnion(frame, group_rank),
                 };
                 if (finished) {
@@ -475,17 +464,6 @@ pub const Generalizer = struct {
                         .fill = fill,
                         .fields = self.store.getRecordFieldsSlice(record.fields).items(.presence),
                         .ext = record.ext,
-                    } });
-                    return false;
-                },
-                .record_unbound => |record_fields| {
-                    // Unbounds are special-cased: An unbound represents a flex
-                    // var _at the same rank_ as the unbound record, which would
-                    // reduce to group_rank, so that seeds the max directly.
-                    try self.rank_frames.append(self.gpa, .{ .record_unbound = .{
-                        .fill = fill,
-                        .fields = self.store.getRecordFieldsSlice(record_fields).items(.presence),
-                        .acc = group_rank,
                     } });
                     return false;
                 },
@@ -625,34 +603,6 @@ pub const Generalizer = struct {
                     return true;
                 },
             }
-        }
-    }
-
-    fn stepRecordUnbound(self: *Self, frame: *RecordUnboundFrame, group_rank: Rank) std.mem.Allocator.Error!bool {
-        while (true) {
-            if (frame.awaiting) {
-                frame.acc = frame.acc.max(self.pending_ranks.pop().?);
-                frame.awaiting = false;
-                if (frame.field_axis == .type_var and frame.fields[frame.idx].presenceVar() != null) {
-                    frame.field_axis = .presence_var;
-                } else {
-                    frame.idx += 1;
-                    frame.field_axis = .type_var;
-                }
-                continue;
-            }
-            if (frame.idx < frame.fields.len) {
-                const presence = frame.fields[frame.idx];
-                const child = switch (frame.field_axis) {
-                    .type_var => presence.typeVar(),
-                    .presence_var => presence.presenceVar().?,
-                };
-                frame.awaiting = true;
-                if (!try self.requestRank(child, group_rank)) return false;
-                continue;
-            }
-            try self.settleRank(frame.fill.desc_idx, frame.acc);
-            return true;
         }
     }
 

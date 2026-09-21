@@ -422,7 +422,6 @@ pub const Module = struct {
                             .structure => |ret_flat| switch (ret_flat) {
                                 .fn_pure, .fn_effectful, .fn_unbound => current = ret,
                                 .record,
-                                .record_unbound,
                                 .tuple,
                                 .nominal_type,
                                 .empty_record,
@@ -440,7 +439,6 @@ pub const Module = struct {
                         }
                     },
                     .record,
-                    .record_unbound,
                     .tuple,
                     .nominal_type,
                     .empty_record,
@@ -576,7 +574,6 @@ pub const Module = struct {
                             .structure => |ret_flat| switch (ret_flat) {
                                 .fn_pure, .fn_effectful, .fn_unbound => current = ret,
                                 .record,
-                                .record_unbound,
                                 .tuple,
                                 .nominal_type,
                                 .empty_record,
@@ -588,7 +585,6 @@ pub const Module = struct {
                         }
                     },
                     .record,
-                    .record_unbound,
                     .tuple,
                     .nominal_type,
                     .empty_record,

@@ -1063,7 +1063,6 @@ fn getUnionFromType(
                     return getUnionFromType(allocator, type_store, builtin_idents, backing_var);
                 },
                 .record,
-                .record_unbound,
                 .tuple,
                 .fn_pure,
                 .fn_effectful,
@@ -1160,7 +1159,6 @@ fn buildUnionFromTagUnion(
                         break;
                     },
                     .record,
-                    .record_unbound,
                     .tuple,
                     .nominal_type,
                     .fn_pure,
@@ -1402,11 +1400,6 @@ fn isTypeInhabitedWithKnownEmpty(
                             try pushRecordAndWork(gpa, type_store, &work_list, &record_field_vars, presences);
                         },
 
-                        .record_unbound => |fields| {
-                            const presences = type_store.getRecordFieldsSlice(fields).items(.presence);
-                            try pushRecordAndWork(gpa, type_store, &work_list, &record_field_vars, presences);
-                        },
-
                         // Tuples - all elements must be inhabited (AND semantics)
                         .tuple => |tuple| {
                             const elem_vars = type_store.sliceVars(tuple.elems);
@@ -1565,17 +1558,6 @@ fn isCtorPayloadTypeInhabitedHelp(
                 }
                 break :blk true;
             },
-            .record_unbound => |fields| blk: {
-                for (0..fields.count) |offset| {
-                    const field_presence = type_store.getRecordFieldAt(fields, @intCast(offset)).presence;
-                    if (!fieldIsAlwaysPresent(type_store, field_presence)) continue;
-                    const field_var = field_presence.typeVar();
-                    if (!try isCtorPayloadTypeInhabitedHelp(type_store, builtin_idents, field_var, seen)) {
-                        break :blk false;
-                    }
-                }
-                break :blk true;
-            },
             .tuple => |tuple| blk: {
                 for (0..tuple.elems.count) |offset| {
                     const elem_var = type_store.getVarAt(tuple.elems, @intCast(offset));
@@ -1630,7 +1612,6 @@ fn isCtorPayloadTagUnionInhabited(
                 },
                 .empty_tag_union => return false,
                 .record,
-                .record_unbound,
                 .tuple,
                 .nominal_type,
                 .fn_pure,
@@ -1731,16 +1712,6 @@ fn collectCtorPayloadBlockersHelp(
                     }
                 }
             },
-            .record_unbound => |fields| {
-                for (0..fields.count) |offset| {
-                    const field_presence = type_store.getRecordFieldAt(fields, @intCast(offset)).presence;
-                    if (!fieldIsAlwaysPresent(type_store, field_presence)) continue;
-                    const field_var = field_presence.typeVar();
-                    if (!try isCtorPayloadTypeInhabited(type_store, builtin_idents, field_var)) {
-                        try collectCtorPayloadBlockersHelp(type_store, builtin_idents, field_var, out, seen);
-                    }
-                }
-            },
             .tuple => |tuple| {
                 for (0..tuple.elems.count) |offset| {
                     const elem_var = type_store.getVarAt(tuple.elems, @intCast(offset));
@@ -1812,7 +1783,6 @@ fn collectCtorPayloadTagUnionBlockers(
                 },
                 .empty_tag_union => return,
                 .record,
-                .record_unbound,
                 .tuple,
                 .nominal_type,
                 .fn_pure,
@@ -1911,23 +1881,6 @@ fn isKnownAbsentCtorPayloadTypeInhabitedHelp(
             .record => |record| blk: {
                 for (0..record.fields.count) |offset| {
                     const field_presence = type_store.getRecordFieldAt(record.fields, @intCast(offset)).presence;
-                    if (!fieldIsAlwaysPresent(type_store, field_presence)) continue;
-                    const field_var = field_presence.typeVar();
-                    if (!try isKnownAbsentCtorPayloadTypeInhabitedHelp(
-                        allocator,
-                        type_store,
-                        builtin_idents,
-                        field_var,
-                        seen,
-                    )) {
-                        break :blk false;
-                    }
-                }
-                break :blk true;
-            },
-            .record_unbound => |fields| blk: {
-                for (0..fields.count) |offset| {
-                    const field_presence = type_store.getRecordFieldAt(fields, @intCast(offset)).presence;
                     if (!fieldIsAlwaysPresent(type_store, field_presence)) continue;
                     const field_var = field_presence.typeVar();
                     if (!try isKnownAbsentCtorPayloadTypeInhabitedHelp(
@@ -2079,16 +2032,6 @@ fn collectKnownAbsentCtorPayloadBlockersHelp(
                     }
                 }
             },
-            .record_unbound => |fields| {
-                for (0..fields.count) |offset| {
-                    const field_presence = type_store.getRecordFieldAt(fields, @intCast(offset)).presence;
-                    if (!fieldIsAlwaysPresent(type_store, field_presence)) continue;
-                    const field_var = field_presence.typeVar();
-                    if (!try isKnownAbsentCtorPayloadTypeInhabited(allocator, type_store, builtin_idents, field_var)) {
-                        try collectKnownAbsentCtorPayloadBlockersHelp(allocator, type_store, builtin_idents, field_var, out, seen);
-                    }
-                }
-            },
             .tuple => |tuple| {
                 for (0..tuple.elems.count) |offset| {
                     const elem_var = type_store.getVarAt(tuple.elems, @intCast(offset));
@@ -2209,7 +2152,6 @@ fn pushTagUnionWork(gpa: std.mem.Allocator, type_store: *TypeStore, work_list: *
                     break;
                 },
                 .record,
-                .record_unbound,
                 .tuple,
                 .nominal_type,
                 .fn_pure,
@@ -2288,7 +2230,6 @@ fn isExtensionOpen(type_store: *TypeStore, ext_var: Var) error{OutOfMemory}!bool
                 },
                 .empty_tag_union => return false,
                 .record,
-                .record_unbound,
                 .tuple,
                 .nominal_type,
                 .fn_pure,
@@ -2424,7 +2365,6 @@ fn isOpenExtension(type_store: *TypeStore, ext: Var) bool {
             // A tag union extension (nested tags) means more tags exist
             .tag_union => true,
             .record,
-            .record_unbound,
             .tuple,
             .nominal_type,
             .fn_pure,
@@ -2583,7 +2523,6 @@ fn getCtorArgTypes(type_store: *TypeStore, builtin_idents: BuiltinIdents, type_v
                         current_ext = ext_tu.ext;
                     },
                     .record,
-                    .record_unbound,
                     .tuple,
                     .nominal_type,
                     .fn_pure,
@@ -2624,10 +2563,6 @@ fn getCtorArgTypes(type_store: *TypeStore, builtin_idents: BuiltinIdents, type_v
             .record => |record| {
                 // Records are single-constructor types, return the field types
                 return .{ .record_fields = record.fields };
-            },
-            .record_unbound => |fields| {
-                // Unbound records also have field types
-                return .{ .record_fields = fields };
             },
             .fn_pure,
             .fn_effectful,
@@ -3264,7 +3199,6 @@ fn collectFlexExtVars(
                 .tag_union => |ext_tu| current_ext = ext_tu.ext,
                 .empty_tag_union => break,
                 .record,
-                .record_unbound,
                 .tuple,
                 .nominal_type,
                 .fn_pure,

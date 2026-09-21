@@ -778,10 +778,6 @@ fn Walk(comptime digest: bool) type {
                     self.writeTag("[]");
                     return false;
                 },
-                .record_unbound => |fields| {
-                    self.writeTag("record_unbound");
-                    return try self.writeNormalizedRecordFields(fields);
-                },
                 .record => |record| return try self.writeNormalizedRecordPayload(record.fields, record.ext),
                 .tuple => |tuple| {
                     self.writeTag("tuple");
@@ -915,11 +911,11 @@ fn Walk(comptime digest: bool) type {
         fn collectRecordRow(
             self: *Self,
             head: types.RecordField.SafeMultiList.Range,
-            ext: ?Var,
+            ext: Var,
         ) Allocator.Error!?Var {
             try self.appendRecordFieldsForKey(head);
 
-            var tail = ext;
+            var tail: ?Var = ext;
             self.ext_seen.clearRetainingCapacity();
             while (tail) |tail_var| {
                 const resolved = self.store.resolveVar(tail_var);
@@ -939,34 +935,9 @@ fn Walk(comptime digest: bool) type {
                     tail = flat.record.ext;
                     continue;
                 }
-                if (flat_tag == .record_unbound) {
-                    try self.appendRecordFieldsForKey(flat.record_unbound);
-                    tail = null;
-                }
                 break;
             }
             return tail;
-        }
-
-        fn writeNormalizedRecordFields(
-            self: *Self,
-            head: types.RecordField.SafeMultiList.Range,
-        ) Allocator.Error!bool {
-            const fields_base: u32 = @intCast(self.pending_fields.items.len);
-            const tail = try self.collectRecordRow(head, null);
-
-            const fields = self.pending_fields.items[fields_base..];
-            if (fields.len > 1) {
-                self.text_ranks = try self.idents.textRanks(&self.rank_scratch);
-                try base.TextRankCache.sortByRank(RecordFieldForKey, fields, &self.field_sort_scratch, self.allocator, self, recordFieldForKeyRank);
-            }
-            self.writeU32(@intCast(fields.len));
-            try self.frames.append(self.allocator, .{ .record = .{
-                .fields_base = fields_base,
-                .fields_count = @intCast(fields.len),
-                .tail = tail,
-            } });
-            return true;
         }
 
         fn writeNormalizedRecordPayload(
@@ -1443,15 +1414,21 @@ test "record field presence participates in canonical type keys" {
         .fields = optional_fields,
         .ext = empty_ext,
     } } });
-    const required_unbound = try store.freshFromContent(.{ .structure = .{ .record_unbound = required_fields } });
-    const optional_unbound = try store.freshFromContent(.{ .structure = .{ .record_unbound = optional_fields } });
+    const required_open = try store.freshFromContent(.{ .structure = .{ .record = .{
+        .fields = required_fields,
+        .ext = try store.fresh(),
+    } } });
+    const optional_open = try store.freshFromContent(.{ .structure = .{ .record = .{
+        .fields = optional_fields,
+        .ext = try store.fresh(),
+    } } });
 
     const required_key = try fromVar(allocator, &store, &env, required_record);
     const optional_key = try fromVar(allocator, &store, &env, optional_record);
-    const required_unbound_key = try fromVar(allocator, &store, &env, required_unbound);
-    const optional_unbound_key = try fromVar(allocator, &store, &env, optional_unbound);
+    const required_open_key = try fromVar(allocator, &store, &env, required_open);
+    const optional_open_key = try fromVar(allocator, &store, &env, optional_open);
     try std.testing.expect(!std.meta.eql(required_key, optional_key));
-    try std.testing.expect(!std.meta.eql(required_unbound_key, optional_unbound_key));
+    try std.testing.expect(!std.meta.eql(required_open_key, optional_open_key));
 }
 
 test "record field presence is stable across normalized row extensions" {
@@ -1695,20 +1672,16 @@ test "row ranks preserve keys across sorting thresholds and extension runs" {
         const ordered_fields = try store.appendRecordFields(fields[0..len]);
         const ordered_tags = try store.appendTags(tags[0..len]);
         const record = try store.freshFromContent(.{ .structure = .{ .record = .{ .fields = ordered_fields, .ext = empty_record } } });
-        const unbound = try store.freshFromContent(.{ .structure = .{ .record_unbound = ordered_fields } });
         const tag_union = try store.freshFromContent(.{ .structure = .{ .tag_union = .{ .tags = ordered_tags, .ext = empty_union } } });
         const expected_record = try writer.fromVar(record);
-        const expected_unbound = try writer.fromVar(unbound);
         const expected_tags = try writer.fromVar(tag_union);
         std.mem.reverse(types.RecordField, fields[0..len]);
         std.mem.reverse(types.Tag, tags[0..len]);
         const reversed_fields = try store.appendRecordFields(fields[0..len]);
         const reversed_tags = try store.appendTags(tags[0..len]);
         const reversed_record = try store.freshFromContent(.{ .structure = .{ .record = .{ .fields = reversed_fields, .ext = empty_record } } });
-        const reversed_unbound = try store.freshFromContent(.{ .structure = .{ .record_unbound = reversed_fields } });
         const reversed_union = try store.freshFromContent(.{ .structure = .{ .tag_union = .{ .tags = reversed_tags, .ext = empty_union } } });
         try std.testing.expectEqualDeep(expected_record, try writer.fromVar(reversed_record));
-        try std.testing.expectEqualDeep(expected_unbound, try writer.fromVar(reversed_unbound));
         try std.testing.expectEqualDeep(expected_tags, try writer.fromVar(reversed_union));
         std.mem.reverse(types.RecordField, fields[0..len]);
         std.mem.reverse(types.Tag, tags[0..len]);
@@ -1891,7 +1864,10 @@ test "inspection preserves digest identity order across composed shared cyclic g
                     for (&fields, children, [_][]const u8{ "z", "a", "m" }) |*field, child, name| {
                         field.* = .{ .name = try env.insertIdent(Ident.for_text(name)), .presence = .required(child) };
                     }
-                    try store.setVarContent(v, .{ .structure = .{ .record_unbound = try store.appendRecordFields(&fields) } });
+                    try store.setVarContent(v, .{ .structure = .{ .record = .{
+                        .fields = try store.appendRecordFields(&fields),
+                        .ext = try store.fresh(),
+                    } } });
                 },
                 else => unreachable,
             }

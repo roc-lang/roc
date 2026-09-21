@@ -2127,6 +2127,17 @@ alias arguments, but references to the annotated value consume the annotation
 root. This is how alias spelling from annotations is preserved without making
 alias roots union-find representatives for concrete structures.
 
+Runtime Monotype production maps a transparent alias directly to its backing's
+type identity. Direct checked-type lowering, scoped instantiation, and stored
+constant type restoration memoize that mapping in their existing source-type
+maps; they do not allocate an alias wrapper or run a separate normalization
+pass. The mapping has the same module and instantiation lifetime as the backing
+and preserves recursive sharing. Source alias names and arguments remain in
+checked data. Nominal identities, including their type arguments and backing
+authority, remain distinct. Root requests and ordinary calls therefore agree
+on runtime type identity without alias-aware codec lookup or extra graph
+construction for already closed roots.
+
 ### Where Method Annotations
 
 A where method's type is the complete annotation written after its colon.
@@ -3833,6 +3844,16 @@ edges collect their substitutions in the existing variable-registration walk;
 only an empty substitution needs an evidence-parameter query to decide whether
 shared requirements need a record.
 
+Ordinary imports and selected method targets share one complete-scheme cache
+per importing checker, keyed by source module and declaration node. A cache
+miss copies the type root and its explicit codec requirements under the same
+variable mapping and records binding-scheme ownership before exposing the
+entry. Each use independently instantiates that complete scheme. A speculative
+rollback removes only the imports created in its scope, including their
+requirement tables and synthetic binding ownership. A committed import survives
+later rolled-back cache hits. No cache hit recopies a type graph or re-enumerates
+the source requirements.
+
 Every procedure evidence parameter also carries an explicit dispatcher source.
 The source is exactly one of: a checked component path over the procedure's
 scheme callable; a checked component path over the scheme-side constraint
@@ -5086,8 +5107,15 @@ witness. ConstStore preserves that witness beside the stored value, and restore
 relates the checked public interface to it without ordinary unification.
 
 A value-producing `if` or `match` likewise owns one explicit result selection
-for all of its inhabited branches. An exact generated-private request already
-supplied by the caller remains authoritative. Otherwise, before emitting any
+for all of its inhabited branches. Selection starts with the exact specialized
+request, including its type bindings and method evidence. A finished request is
+an immutable interface, not a reason to instantiate the generic checked result
+again: branch constructors and nested callables must consume its constraints
+before selecting methods. The declared interface and selected representation
+are separate cells only when producer evidence requires a distinct representation;
+ordinary branch results reuse the request without another type instantiation or
+ownership scan. An exact generated-private request already supplied by the caller
+remains authoritative. Otherwise, before emitting any
 branch body, Monotype asks every branch's checked producer for its exact result
 evidence and joins all generated-private evidence into the shared live result
 selection. Public-only evidence does not settle the selection. Match patterns
@@ -5098,10 +5126,12 @@ minted iterator producers therefore use the ordinary graph representation join,
 which keeps a compatible static representation and reaches the defined
 forced-dynamic fixed point only when the producer topology requires it. Source
 order cannot make one already-emitted branch authoritative, and lowering never
-needs to revise emitted branch code. Only after all branches have been lowered
-does the selected result relate to the outer interface and seal. Representation
-selection never reconstructs branch evidence from finished output IR or
-reopens a durable Monotype.
+needs to revise emitted branch code. A producer that selects a distinct private
+representation relates its public interface to the request without merging or
+mutating a finished request. After all branches have been lowered, the selected
+result is validated against the declared interface and carried to sealing.
+Representation selection never reconstructs branch evidence from finished
+output IR or reopens a durable Monotype.
 
 Branches that provably terminate do not participate in result selection. If
 every branch terminates, the control-flow expression produces no runtime value:
@@ -6987,7 +7017,11 @@ The kind rules:
   owning generalization boundary commits to `required` before the scheme
   forms; a generic update therefore has one stable field layout instead of
   adopting a different kind per caller. This realizes the SET side of the
-  typing frame in "In Progress: Unsetting an Optional Field" below.
+  typing frame in "In Progress: Unsetting an Optional Field" below. Each
+  probe (set or unset) is an ordinary record whose extension is a fresh flex
+  variable, exactly like a field access: the base's remaining row is an
+  explicit variable, so it generalizes, keys as an identity variable, and
+  makes any dispatch that mentions it `direct_parametric`.
 - Record DESTRUCTURE (IMPLEMENTED) is kind-flexible the same way: each
   destructured field probes the record with a fresh presence var and a
   FRESH payload var, and the binder stays unbound until the deferred
