@@ -15706,7 +15706,7 @@ Glue reflects only the platform-host boundary: hosted argument and result
 values, provided exports, and the storage types reachable from those values.
 Application `requires` declarations are internal Roc bindings, not glue layout
 roots, and are absent from the glue input protocol. A function stored as a
-value is an erased callable; its semantic arguments and result do not introduce
+value is an erased callable; its checked arguments and result do not introduce
 layout roots. Direct provided functions retain their argument and result types
 because those describe the exported symbol's C ABI.
 
