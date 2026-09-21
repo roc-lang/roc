@@ -215,7 +215,9 @@ pub const Constants = struct {
     /// 98: Calls of non-function values report a dedicated diagnostic, and
     ///     a call to an in-flight recursive def whose annotation is an alias
     ///     of a function type classifies its effect through the alias.
-    pub const CACHE_VERSION = 98;
+    /// 99: A static-dispatch obligation whose where-method signature is
+    ///     erroneous is recorded as rejected on every receiver.
+    pub const CACHE_VERSION = 99;
 };
 
 /// Configuration for the Roc cache system.
