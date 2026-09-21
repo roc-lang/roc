@@ -717,6 +717,77 @@ pub fn assertOneTypeWarning(self: *TestEnv, expected: []const u8) TestEnvError!v
     try self.assertOnlyTypeWarnings(&.{expected});
 }
 
+/// A 1-based source span: line plus inclusive start column and exclusive end
+/// column, all on that one line.
+pub const SourceSpan = struct {
+    line: u32,
+    start_column: u32,
+    end_column: u32,
+};
+
+/// Assert that there was a single type error with the expected title, and that
+/// the first source region its report highlights lies within `within` (so the
+/// diagnostic points at the expected expression, whatever its exact wording).
+pub fn assertOneTypeErrorHighlightsWithin(self: *TestEnv, expected_title: []const u8, within: SourceSpan) TestEnvError!void {
+    try self.assertNoParseProblems();
+
+    var report_builder = try self.initReportBuilder();
+    defer report_builder.deinit();
+
+    if (self.checker.problems.problems.items.len != 1) {
+        std.debug.print("expected exactly one type problem, but found {d}:\n", .{self.checker.problems.problems.items.len});
+        for (self.checker.problems.problems.items) |problem| {
+            var report = try report_builder.build(problem);
+            defer report.deinit();
+
+            var report_buf = try std.array_list.Managed(u8).initCapacity(self.gpa, 256);
+            defer report_buf.deinit();
+
+            try renderReportToMarkdownBuffer(&report_buf, &report);
+            std.debug.print("{s}\n", .{report_buf.items});
+        }
+        return error.TestUnexpectedResult;
+    }
+
+    var report = try report_builder.build(self.checker.problems.problems.items[0]);
+    defer report.deinit();
+
+    try testing.expectEqualStrings(expected_title, report.title);
+
+    const highlighted: SourceSpan = for (report.document.elements.items) |element| {
+        if (element == .source_code_region) {
+            const region = element.source_code_region;
+            break .{
+                .line = region.start_line,
+                .start_column = region.start_column,
+                .end_column = if (region.end_line == region.start_line) region.end_column else std.math.maxInt(u32),
+            };
+        }
+        if (element == .source_code_with_underlines and element.source_code_with_underlines.underline_regions.len > 0) {
+            const region = element.source_code_with_underlines.underline_regions[0];
+            break .{
+                .line = region.start_line,
+                .start_column = region.start_column,
+                .end_column = if (region.end_line == region.start_line) region.end_column else std.math.maxInt(u32),
+            };
+        }
+    } else {
+        std.debug.print("expected the report to highlight a source region, but it highlights none\n", .{});
+        return error.TestUnexpectedResult;
+    };
+
+    if (highlighted.line != within.line or
+        highlighted.start_column < within.start_column or
+        highlighted.end_column > within.end_column)
+    {
+        std.debug.print(
+            "expected the report to highlight within line {d}, columns {d}-{d}, but it highlights line {d}, columns {d}-{d}\n",
+            .{ within.line, within.start_column, within.end_column, highlighted.line, highlighted.start_column, highlighted.end_column },
+        );
+        return error.TestUnexpectedResult;
+    }
+}
+
 /// Assert that there was a single type error when checking the input. Assert
 /// that the title of the type error matches the expected title.
 pub fn assertOneTypeErrorMsg(self: *TestEnv, expected: []const u8) TestEnvError!void {

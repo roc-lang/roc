@@ -102,6 +102,10 @@ pub const RootRequestSet = struct {
 /// Deterministic task counts for parallel solved-LIR body lowering.
 pub const SolvedLirParallelMetrics = postcheck.SolvedLirLower.ParallelMetrics;
 
+/// Exact staged SpecConstr work, independent of worker completion order.
+pub const SpecConstrParallelMetrics = postcheck.MonotypeLifted.SpecConstr.ParallelMetrics;
+pub const SpecConstrPhase = postcheck.MonotypeLifted.SpecConstr.Phase;
+
 /// Deterministic worker counters for procedure-local LIR optimization phases.
 pub const LirPassParallelMetrics = ProcPasses.ParallelMetrics;
 /// ARC worker task counts and deterministic serial-or-parallel work totals.
@@ -179,6 +183,8 @@ pub const TargetConfig = struct {
     debug_materialized_out: ?*?postcheck.LambdaMono.Ast.Program = null,
     /// Optional deterministic task counts for solved-LIR body-shard lowering.
     solved_lir_parallel_metrics_out: ?*SolvedLirParallelMetrics = null,
+    /// Per-run staged specialization counters; SpecConstr owns resetting them.
+    spec_constr_parallel_metrics_out: ?*SpecConstrParallelMetrics = null,
     /// Reset once before the LIR pass pipeline, then accumulated across phases.
     lir_pass_parallel_metrics_out: ?*LirPassParallelMetrics = null,
     /// Per-run ARC counters; ARC insertion owns resetting this output.
@@ -203,6 +209,8 @@ pub const Timing = struct {
     monotype_diagnostics: postcheck.Monotype.Lower.Diagnostics = .{},
     solved_lir_parallel_mutex: std.Io.Mutex = .init,
     solved_lir_parallel: SolvedLirParallelMetrics = .{},
+    spec_constr_parallel_mutex: std.Io.Mutex = .init,
+    spec_constr_parallel: SpecConstrParallelMetrics = .{},
     lir_pass_parallel_mutex: std.Io.Mutex = .init,
     lir_pass_parallel: LirPassParallelMetrics = .{},
     arc_parallel_mutex: std.Io.Mutex = .init,
@@ -309,6 +317,7 @@ pub const Timing = struct {
             .arc_ns = self.arc_ns.load(),
             .monotype_diagnostics = diagnostics,
             .solved_lir_parallel = self.solvedLirParallelSnapshot(),
+            .spec_constr_parallel = self.specConstrParallelSnapshot(),
             .lir_pass_parallel = self.lirPassParallelSnapshot(),
             .arc_parallel = self.arcParallelSnapshot(),
         };
@@ -337,6 +346,7 @@ pub const Timing = struct {
         self.monotype_finalization_ns.add(snapshot_value.monotype_finalization_ns);
         self.addMonotypeParallel(snapshot_value.monotype_parallel);
         self.addSolvedLirParallel(snapshot_value.solved_lir_parallel);
+        self.addSpecConstrParallel(snapshot_value.spec_constr_parallel);
         self.addLirPassParallel(snapshot_value.lir_pass_parallel);
         self.addArcParallel(snapshot_value.arc_parallel);
         self.boxy_plan_ns.add(snapshot_value.boxy_plan_ns);
@@ -427,6 +437,19 @@ pub const Timing = struct {
         return self.solved_lir_parallel;
     }
 
+    fn addSpecConstrParallel(self: *Timing, parallel: SpecConstrParallelMetrics) void {
+        self.spec_constr_parallel_mutex.lockUncancelable(self.std_io);
+        defer self.spec_constr_parallel_mutex.unlock(self.std_io);
+        self.spec_constr_parallel.add(parallel);
+    }
+
+    fn specConstrParallelSnapshot(self: *const Timing) SpecConstrParallelMetrics {
+        const mutable = @constCast(self);
+        mutable.spec_constr_parallel_mutex.lockUncancelable(self.std_io);
+        defer mutable.spec_constr_parallel_mutex.unlock(self.std_io);
+        return self.spec_constr_parallel;
+    }
+
     fn addLirPassParallel(self: *Timing, parallel: LirPassParallelMetrics) void {
         self.lir_pass_parallel_mutex.lockUncancelable(self.std_io);
         defer self.lir_pass_parallel_mutex.unlock(self.std_io);
@@ -493,6 +516,7 @@ pub const TimingSnapshot = struct {
     monotype_finalization_ns: u64 = 0,
     monotype_parallel: postcheck.Monotype.Lower.ParallelMetricsSnapshot = .{},
     solved_lir_parallel: SolvedLirParallelMetrics = .{},
+    spec_constr_parallel: SpecConstrParallelMetrics = .{},
     lir_pass_parallel: LirPassParallelMetrics = .{},
     arc_parallel: ArcParallelMetrics = .{},
     boxy_plan_ns: u64 = 0,
@@ -589,6 +613,68 @@ test "pipeline timing preserves explicit Solved-LIR metrics output" {
     try std.testing.expectEqualDeep(explicit, timing.snapshot().solved_lir_parallel);
     try std.testing.expectEqual(@as(u64, 3), explicit.tasks_submitted);
     try std.testing.expectEqualDeep(SolvedLirParallelMetrics{}, local);
+}
+
+test "pipeline timing aggregates SpecConstr totals and preserves peaks" {
+    var timing = Timing.init(std.testing.io);
+    var first: SpecConstrParallelMetrics = .{
+        .tasks_submitted = 3,
+        .tasks_committed = 3,
+        .patterns_recorded = 5,
+        .patterns_admitted = 2,
+        .bodies_committed = 4,
+        .expressions_committed = 30,
+        .peak_retained_shards = 2,
+        .committed_by_phase = .{ 1, 2, 3 },
+        .changed_by_phase = .{ 1, 1, 2 },
+    };
+    timing.addSpecConstrParallel(first);
+    var aggregate = Timing.init(std.testing.io);
+    aggregate.addSnapshot(timing.snapshot());
+    aggregate.addSnapshot(timing.snapshot());
+    const doubled = aggregate.snapshot().spec_constr_parallel;
+    inline for (std.meta.fields(SpecConstrParallelMetrics)) |field| {
+        if (comptime std.mem.eql(u8, field.name, "peak_retained_shards")) {
+            try std.testing.expectEqual(@field(first, field.name), @field(doubled, field.name));
+        } else if (field.type == u64) {
+            try std.testing.expectEqual(2 * @field(first, field.name), @field(doubled, field.name));
+        } else {
+            for (@field(first, field.name), @field(doubled, field.name)) |value, total| {
+                try std.testing.expectEqual(2 * value, total);
+            }
+        }
+        if (field.type == u64) {
+            @field(first, field.name) = std.math.maxInt(u64);
+        } else {
+            @memset(&@field(first, field.name), std.math.maxInt(u64));
+        }
+    }
+    aggregate.addSpecConstrParallel(first);
+    aggregate.addSpecConstrParallel(first);
+    try std.testing.expectEqualDeep(first, aggregate.snapshot().spec_constr_parallel);
+    try std.testing.expectEqual(@as(u64, 0), aggregate.snapshot().spec_constr_ns);
+    aggregate = Timing.init(std.testing.io);
+    try std.testing.expectEqualDeep(SpecConstrParallelMetrics{}, aggregate.snapshot().spec_constr_parallel);
+}
+
+test "pipeline timing preserves explicit SpecConstr metrics output" {
+    var timing = Timing.init(std.testing.io);
+    var local: SpecConstrParallelMetrics = .{};
+    var explicit: SpecConstrParallelMetrics = .{ .tasks_submitted = 99 };
+    try std.testing.expect(specConstrMetricsOutput(.{}, &local) == null);
+    try std.testing.expect(specConstrMetricsOutput(.{ .timing = &timing }, &local).? == &local);
+    try std.testing.expect(specConstrMetricsOutput(.{ .spec_constr_parallel_metrics_out = &explicit }, &local).? == &explicit);
+    const output = specConstrMetricsOutput(.{
+        .timing = &timing,
+        .spec_constr_parallel_metrics_out = &explicit,
+    }, &local).?;
+    try std.testing.expect(output == &explicit);
+    try std.testing.expectEqual(@as(u64, 99), explicit.tasks_submitted);
+    // The pass owns resetting its output; aggregation only observes it.
+    output.* = .{ .tasks_submitted = 3, .tasks_committed = 3 };
+    timing.addSpecConstrParallel(output.*);
+    try std.testing.expectEqualDeep(explicit, timing.snapshot().spec_constr_parallel);
+    try std.testing.expectEqualDeep(SpecConstrParallelMetrics{}, local);
 }
 
 test "pipeline timing aggregates ARC counters with saturation and fresh reset" {
@@ -760,6 +846,59 @@ pub const InlineMode = postcheck.SolvedInline.Mode;
 pub const SpecConstrCloneInlining = postcheck.MonotypeLifted.SpecConstr.CloneInlining;
 pub const InlineExpectMode = postcheck.SolvedLirLower.InlineExpectMode;
 
+/// One consumer's explicit share of a shared producer program: the producer
+/// root positions it is responsible for, and whether it materializes the
+/// producer's layout, static-data and runtime-schema requests.
+pub const ConsumerRoots = postcheck.SolvedLirLower.RootManifest;
+
+/// One evaluated root a consumer asks to have materialized into its program.
+pub const CompletedValueRequest = postcheck.SolvedLirLower.CompletedValueRequest;
+
+/// Command-level test-plan metadata keyed by producer root position.
+pub const RootTestPlanMetadata = postcheck.Common.RootTestPlanMetadata;
+
+/// Live destinations that belong to a lowering invocation rather than to the
+/// producer it continues. Preparation captures semantics; these carry results
+/// and workers back to whoever asked for this continuation.
+pub const Observers = struct {
+    work_metrics: ?*WorkMetrics = null,
+    timing: ?*Timing = null,
+    post_check_executor: ?base.post_check_task_executor.Executor = null,
+    debug_materialized_out: ?*?postcheck.LambdaMono.Ast.Program = null,
+    solved_lir_parallel_metrics_out: ?*SolvedLirParallelMetrics = null,
+    lir_pass_parallel_metrics_out: ?*LirPassParallelMetrics = null,
+    arc_parallel_metrics_out: ?*ArcParallelMetrics = null,
+    lifted_expr_count_out: ?*usize = null,
+
+    pub fn fromTarget(target: TargetConfig) Observers {
+        var observers = Observers{};
+        inline for (@typeInfo(Observers).@"struct".fields) |field| {
+            @field(observers, field.name) = @field(target, field.name);
+        }
+        return observers;
+    }
+
+    fn applyTo(self: Observers, target: *TargetConfig) void {
+        inline for (@typeInfo(Observers).@"struct".fields) |field| {
+            @field(target, field.name) = @field(self, field.name);
+        }
+    }
+};
+
+/// One consumer continuation of a prepared solved program. Everything not
+/// named here is the producer's captured decision and cannot be changed by a
+/// consumer: preparation already lowered specializations under it.
+pub const Consumer = struct {
+    roots: ConsumerRoots,
+    /// Target pointer width this continuation commits layouts for.
+    target_usize: base.target.TargetUsize,
+    /// This consumer's answer to the shared `inline_expects_enabled` input.
+    inline_expects: InlineExpectMode,
+    /// Completed compile-time scalar roots this consumer reads as literals.
+    completed_scalar_values: ?*const CompletedScalarValues = null,
+    observers: Observers = .{},
+};
+
 /// Materialized Lambda Mono program type, re-exported for harnesses that
 /// receive one through `TargetConfig.debug_materialized_out`.
 pub const LambdaMonoProgram = postcheck.LambdaMono.Ast.Program;
@@ -816,8 +955,9 @@ pub const RuntimeValueSchemaStore = struct {
 };
 
 /// Select the runtime roots by the producer-recorded positions in the shared
-/// request list. Completion has already rewritten successful failure guards;
-/// remaining guard CFG belongs to failed roots and remains ordinary runtime LIR.
+/// request list. One program serves both consumers when their target width and
+/// expect mode agree, so this is how the runtime consumer takes its roots out
+/// of the program the compile-time roots were evaluated in.
 pub fn retainRuntimeRoots(lowered: *LoweredProgram, root_indices: []const u32) Allocator.Error!void {
     const allocator = lowered.lir_result.store.allocator;
     const result = &lowered.lir_result;
@@ -837,6 +977,28 @@ pub fn retainRuntimeRoots(lowered: *LoweredProgram, root_indices: []const u32) A
     procs = .empty;
     metadata = .empty;
     result.const_roots.clearRetainingCapacity();
+    try completeComptimeValueSlots(lowered);
+}
+
+/// Turn a runtime consumer's completed compile-time value slots into ordinary
+/// frozen program data.
+///
+/// This consumer lowered only its own roots, so nothing here selects roots. It
+/// reaches each compile-time value through a slot the evaluation has since
+/// filled, and its own roots are the program's roots already.
+pub fn adoptCompletedComptimeValues(lowered: *LoweredProgram) Allocator.Error!void {
+    if (lowered.lir_result.const_roots.items.len != 0) checkedPipelineInvariant("runtime consumer lowered a compile-time root");
+    if (lowered.frozen_static_data == null) checkedPipelineInvariant("runtime consumer has no completed compile-time values to adopt");
+    try completeComptimeValueSlots(lowered);
+}
+
+/// The completed frozen bytes are now each compile-time value's definition, so
+/// the slot keeps no initializer and no compile-time root identity, and the
+/// program's procedures are compacted against the frozen graph's own
+/// references. Completion has already rewritten successful failure guards;
+/// remaining guard CFG belongs to failed roots and remains ordinary runtime LIR.
+fn completeComptimeValueSlots(lowered: *LoweredProgram) Allocator.Error!void {
+    const result = &lowered.lir_result;
     result.comptime_value_guards.clearRetainingCapacity();
     if (lowered.frozen_static_data) |*frozen| {
         for (frozen.exports) |item| {
@@ -862,6 +1024,14 @@ pub const LoweredProgram = struct {
         if (self.frozen_static_data) |*data| data.deinit();
         self.runtime_value_schemas.deinit();
         self.lir_result.deinit();
+    }
+
+    /// Release this program's procedure bodies, keeping its completed values,
+    /// their representation metadata, and its procedure inventory. A
+    /// compile-time program whose values have been read is only that metadata
+    /// from then on; see `LirStore.releaseCode`.
+    pub fn releaseCode(self: *LoweredProgram) void {
+        self.lir_result.store.releaseCode();
     }
 
     /// Host compilation selects only provided roots before lowering. Their
@@ -1111,19 +1281,26 @@ pub fn prepareMonotypeToSolved(prepared: PreparedMonotype) Allocator.Error!Prepa
     errdefer if (lifted_owned) lifted.deinit();
     lift_timing_scope.end();
 
+    var local_spec_constr_metrics: SpecConstrParallelMetrics = .{};
+    const spec_constr_metrics = specConstrMetricsOutput(target, &local_spec_constr_metrics);
+    const spec_constr_options: postcheck.MonotypeLifted.SpecConstr.Options = .{
+        .executor = target.post_check_executor,
+        .metrics_out = spec_constr_metrics,
+    };
     var procedure_usage = if (target.inline_mode != .none) blk: {
         var spec_constr_timing_scope = PipelineTimingScope.begin(target.timing, .spec_constr);
         defer spec_constr_timing_scope.end();
-        const usage = try postcheck.MonotypeLifted.SpecConstr.runAndCollectProcedureUsage(allocator, &lifted, target.spec_constr_clone_inlining);
+        const usage = try postcheck.MonotypeLifted.SpecConstr.runAndCollectProcedureUsageWithOptions(allocator, &lifted, target.spec_constr_clone_inlining, spec_constr_options);
         spec_constr_timing_scope.end();
         break :blk usage;
     } else blk: {
         const spec_constr_started_ns = if (target.timing) |timing| timing.start() else 0;
-        try postcheck.MonotypeLifted.SpecConstr.runIteratorFusion(allocator, &lifted);
+        try postcheck.MonotypeLifted.SpecConstr.runIteratorFusionWithOptions(allocator, &lifted, spec_constr_options);
         if (target.timing) |timing| timing.finish(spec_constr_started_ns, .spec_constr);
         break :blk postcheck.MonotypeLifted.SpecConstr.OwnedProcedureUsage.empty(allocator);
     };
     defer procedure_usage.deinit();
+    if (target.timing) |timing| timing.addSpecConstrParallel(spec_constr_metrics.?.*);
 
     const lifted_expr_count = lifted.exprCount();
     if (target.lifted_expr_count_out) |slot| slot.* = lifted_expr_count;
@@ -1167,28 +1344,10 @@ pub const PreparedSolved = struct {
     test_plan_metadata: []postcheck.Common.RootTestPlanMetadata,
     lifted_expr_count: usize,
 
-    /// Copy the solved owner exactly so consumer-local IDs retain producer identity.
-    pub fn forkForConsumer(self: *const PreparedSolved, target_usize: base.target.TargetUsize, inline_expects: InlineExpectMode) Allocator.Error!PreparedSolved {
-        if (!self.target.comptime_value_reads and inline_expects != self.target.inline_expects) {
-            checkedPipelineInvariant("changing expect mode requires shared Monotype lowering");
-        }
-        var program = try postcheck.SolvedLirLower.cloneSolvedProgram(self.allocator, &self.program);
-        errdefer program.deinit();
-        const metadata = try self.allocator.dupe(postcheck.Common.RootTestPlanMetadata, self.test_plan_metadata);
-        errdefer self.allocator.free(metadata);
-        const bodies = try self.allocator.dupe(?postcheck.MonotypeLifted.Ast.ExprId, self.inline_plan.inline_bodies);
-        var target = self.target;
-        target.target_usize = target_usize;
-        target.inline_expects = inline_expects;
-        return .{
-            .allocator = self.allocator,
-            .program = program,
-            .inline_plan = .{ .allocator = self.allocator, .inline_bodies = bodies },
-            .target = target,
-            .root_count = self.root_count,
-            .test_plan_metadata = metadata,
-            .lifted_expr_count = self.lifted_expr_count,
-        };
+    /// The evaluated roots this producer program records reads of. Whoever
+    /// materializes completed values materializes these and no others.
+    pub fn comptimeValueReads(self: *const PreparedSolved) []const postcheck.Common.ComptimeValueRoot {
+        return self.program.lifted.comptimeValueReadsView();
     }
 
     /// Release the retained solved program and its owned continuation metadata.
@@ -1205,24 +1364,93 @@ pub fn lowerPreparedMonotypeToLir(prepared: PreparedMonotype) LowerResourceError
     return lowerPreparedSolvedToLir(try prepareMonotypeToSolved(prepared));
 }
 
-/// Consume a solved owner into one target-specific LIR continuation.
+/// Consume a solved owner into one LIR continuation over its whole program.
 pub fn lowerPreparedSolvedToLir(prepared: PreparedSolved) LowerResourceError!LoweredProgram {
+    // Naming the whole root plan allocates nothing, so ownership of the
+    // prepared program transfers with no step in between that could fail.
+    return lowerFinalConsumerToLir(prepared, .{
+        .roots = .{},
+        .target_usize = prepared.target.target_usize,
+        .inline_expects = prepared.target.inline_expects,
+        .completed_scalar_values = prepared.target.completed_scalar_values,
+        .observers = Observers.fromTarget(prepared.target),
+    });
+}
+
+/// Lower one consumer's share of a shared solved producer program.
+///
+/// The producer program is borrowed, not copied: its specialization,
+/// lambda-solving and inline decisions are one immutable identity domain that
+/// every consumer reads. A consumer names the producer roots it is
+/// responsible for, and demand discovery starts from those alone, so no
+/// consumer generates code for another's roots. Use this only while a later
+/// consumer still needs the producer; the last one should release it.
+pub fn lowerConsumerToLir(prepared: *PreparedSolved, consumer: Consumer) LowerResourceError!LoweredProgram {
+    var generated = try generateConsumerLir(prepared, consumer);
+    errdefer generated.output.deinit();
+    return finishLoweredOutput(prepared.allocator, consumerRootCount(prepared.*, consumer), generated.target, &generated.output);
+}
+
+/// Lower the producer program's last consumer, and release the producer as
+/// soon as LIR generation stops reading it.
+///
+/// Nothing after LIR generation consults the producer, and the procedure
+/// passes, ARC and the emitted program are where a continuation's footprint
+/// peaks, so holding the specialized program across them would hold two large
+/// programs at once for no reader.
+pub fn lowerFinalConsumerToLir(prepared: PreparedSolved, consumer: Consumer) LowerResourceError!LoweredProgram {
+    var owned = prepared;
+    var owned_live = true;
+    errdefer if (owned_live) owned.deinit();
+    var generated = try generateConsumerLir(&owned, consumer);
+    errdefer generated.output.deinit();
+    const allocator = owned.allocator;
+    const root_count = consumerRootCount(owned, consumer);
+    const target = generated.target;
+    owned_live = false;
+    owned.deinit();
+    return finishLoweredOutput(allocator, root_count, target, &generated.output);
+}
+
+/// How many roots this consumer lowers: its own share, or the producer's
+/// whole root plan when it named no share.
+fn consumerRootCount(prepared: PreparedSolved, consumer: Consumer) usize {
+    return if (consumer.roots.roots) |positions| positions.len else prepared.root_count;
+}
+
+/// One consumer's generated LIR, before the procedure passes and ARC, plus
+/// the resolved target the rest of that continuation runs under.
+const GeneratedConsumerLir = struct {
+    output: postcheck.SolvedLirLower.Output,
+    target: TargetConfig,
+};
+
+fn generateConsumerLir(prepared: *PreparedSolved, consumer: Consumer) LowerResourceError!GeneratedConsumerLir {
     const allocator = prepared.allocator;
-    const target = prepared.target;
+    var target = prepared.target;
+    target.target_usize = consumer.target_usize;
+    target.inline_expects = consumer.inline_expects;
+    target.completed_scalar_values = consumer.completed_scalar_values;
+    consumer.observers.applyTo(&target);
+    if (!prepared.target.comptime_value_reads and consumer.inline_expects != prepared.target.inline_expects) {
+        checkedPipelineInvariant("changing expect mode requires shared Monotype lowering");
+    }
+    if (consumer.roots.roots) |positions| {
+        for (positions) |position| {
+            if (position >= prepared.root_count) checkedPipelineInvariant("consumer root manifest named a position outside the producer's root plan");
+        }
+    }
     if (target.work_metrics) |metrics| metrics.lir_continuations += 1;
     if (target.lifted_expr_count_out) |slot| slot.* = prepared.lifted_expr_count;
-    defer allocator.free(prepared.test_plan_metadata);
-    var inline_plan = prepared.inline_plan;
-    defer inline_plan.deinit();
     var lir_gen_timing_scope = PipelineTimingScope.begin(target.timing, .lir_gen);
     defer lir_gen_timing_scope.end();
-    const solved_input = prepared.program;
     var local_parallel_metrics: SolvedLirParallelMetrics = .{};
     const parallel_metrics = solvedLirMetricsOutput(target, &local_parallel_metrics);
-    var lowered = try postcheck.SolvedLirLower.run(allocator, target.target_usize, solved_input, .{
+    const lowered = try postcheck.SolvedLirLower.runBorrowed(allocator, target.target_usize, &prepared.program, .{
+        .root_manifest = consumer.roots,
         .spec_cache = target.spec_cache,
         .comptime_closure_hits = target.comptime_closure_hits,
-        .inline_plan = inline_plan.view(),
+        .inline_plan = prepared.inline_plan.view(),
         .post_check_executor = target.post_check_executor,
         .inline_expects = target.inline_expects,
         .list_in_place_map = target.list_in_place_map,
@@ -1239,15 +1467,20 @@ pub fn lowerPreparedSolvedToLir(prepared: PreparedSolved) LowerResourceError!Low
     });
     if (target.timing) |timing| timing.addSolvedLirParallel(parallel_metrics.?.*);
     lir_gen_timing_scope.end();
-    errdefer lowered.deinit();
 
-    return finishLoweredOutput(allocator, prepared.root_count, target, &lowered);
+    return .{ .output = lowered, .target = target };
 }
 
 /// The lowerer owns resetting its per-run output. Prefer the caller's slot so
 /// collecting aggregate timings neither resets nor overwrites it a second time.
 fn solvedLirMetricsOutput(target: TargetConfig, local: *SolvedLirParallelMetrics) ?*SolvedLirParallelMetrics {
     return target.solved_lir_parallel_metrics_out orelse
+        if (target.timing != null) local else null;
+}
+
+/// SpecConstr alone resets per-run counters, including caller-owned output.
+fn specConstrMetricsOutput(target: TargetConfig, local: *SpecConstrParallelMetrics) ?*SpecConstrParallelMetrics {
+    return target.spec_constr_parallel_metrics_out orelse
         if (target.timing != null) local else null;
 }
 
@@ -1687,6 +1920,68 @@ test "runtime extraction consumes producer root positions and preserves their or
     try std.testing.expectEqual(@as(u32, 1), lowered.lir_result.root_metadata.items[1].order);
     try std.testing.expectEqual(@as(u32, 1), @intFromEnum(lowered.lir_result.root_procs.items[0]));
     try std.testing.expectEqual(@as(u32, 0), @intFromEnum(lowered.lir_result.root_procs.items[1]));
+    try std.testing.expectEqual(lowered.lir_result.root_procs.items[0], lowered.main_proc.?);
+}
+
+test "adopting completed compile-time values drops their initializers and identity" {
+    const allocator = std.testing.allocator;
+    var lowered = LoweredProgram{
+        .lir_result = try LirProgram.Result.init(allocator, base.target.TargetUsize.native),
+        .main_proc = null,
+        .target_usize = base.target.TargetUsize.native,
+        .runtime_value_schemas = RuntimeValueSchemaStore.init(allocator),
+    };
+    defer lowered.deinit();
+    const local = try lowered.lir_result.store.addLocal(.{ .layout_idx = .zst });
+    const ret = try lowered.lir_result.store.addCFStmt(.{ .ret = .{ .value = local } });
+    var procs: [2]LIR.LirProcSpecId = undefined;
+    for (&procs, 0..) |*proc, index| {
+        proc.* = try lowered.lir_result.store.addProcSpec(.{
+            .name = lowered.lir_result.store.freshSyntheticSymbol(),
+            .identity = LIR.ProcIdentity.forTest(@intCast(index + 1)),
+            .args = .empty(),
+            .body = ret,
+            .ret_layout = .zst,
+        });
+    }
+    // One runtime root, and one slot whose value the evaluation completed:
+    // its initializer is the only reference to the second procedure.
+    try lowered.lir_result.root_procs.append(allocator, procs[0]);
+    try lowered.lir_result.root_metadata.append(allocator, .{
+        .order = 0,
+        .kind = .runtime_entrypoint,
+        .abi = .roc,
+        .exposure = .private,
+    });
+    const completed_slot: LIR.StaticDataId = @enumFromInt(lowered.lir_result.static_data_values.items.len);
+    try lowered.lir_result.static_data_values.append(allocator, .{
+        .initializer = procs[1],
+        .layout_idx = .zst,
+        .compile_time_root = .{
+            .module = .{ .bytes = @splat(0) },
+            .root = undefined, // Adoption reads the slot's initializer and role, never its checked-root identity.
+            .const_locator = null,
+            .role = .{ .failure_message = .{ .failed_field = 0, .message_field = 1, .failed_offset = 0, .message_offset = 0 } },
+        },
+    });
+    const exports = try allocator.alloc(LirProgram.StaticDataExport, 1);
+    exports[0] = .{
+        .symbol_name = try allocator.dupe(u8, "roc__completed"),
+        .value_id = completed_slot,
+        .bytes = try allocator.alloc(u8, 0),
+        .alignment = 1,
+        .relocations = try allocator.alloc(LirProgram.StaticDataRelocation, 0),
+        .empty_list_capacities = try allocator.alloc(LirProgram.EmptyListCapacity, 0),
+    };
+    lowered.frozen_static_data = .{ .allocator = allocator, .exports = exports };
+
+    try adoptCompletedComptimeValues(&lowered);
+
+    const slot = lowered.lir_result.static_data_values.items[0];
+    try std.testing.expectEqual(@as(?LIR.LirProcSpecId, null), slot.initializer);
+    try std.testing.expect(slot.compile_time_root == null);
+    try std.testing.expectEqual(@as(usize, 1), lowered.lir_result.store.procSpecCount());
+    try std.testing.expectEqual(@as(usize, 1), lowered.lir_result.root_procs.items.len);
     try std.testing.expectEqual(lowered.lir_result.root_procs.items[0], lowered.main_proc.?);
 }
 

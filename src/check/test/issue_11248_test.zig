@@ -73,7 +73,7 @@ test "issue 11248 a wrapped `?` before an all-Ok if keeps the inferred error row
     ;
     var test_env = try TestEnv.init("Test", src);
     defer test_env.deinit();
-    try test_env.assertDefType("with_suffix", "Str, Bool -> Try(Str, [Wrapped([Empty]), ..])");
+    try test_env.assertDefType("with_suffix", "Str, Bool -> Try(Str, [Wrapped([Empty])])");
 }
 
 test "issue 11248 an explicit early return keeps the inferred error row open" {
@@ -89,7 +89,7 @@ test "issue 11248 an explicit early return keeps the inferred error row open" {
     ;
     var test_env = try TestEnv.init("Test", src);
     defer test_env.deinit();
-    try test_env.assertDefType("with_suffix", "Str, Bool -> Try(Str, [Empty, ..])");
+    try test_env.assertDefType("with_suffix", "Str, Bool -> Try(Str, [Empty])");
 }
 
 test "issue 11248 an all-Ok body with no early return still closes the error payload" {

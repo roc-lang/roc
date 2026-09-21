@@ -110,7 +110,7 @@ total = {
 				(e-block
 					(s-reassign
 						(p-var-assign (ident "sum_"))
-						(e-dispatch-call (method "plus") (constraint-fn-var 311)
+						(e-dispatch-call (method "plus") (constraint-fn-var 313)
 							(receiver
 								(e-lookup-local
 									(p-var-assign (ident "sum_"))))

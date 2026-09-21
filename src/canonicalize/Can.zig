@@ -63,6 +63,15 @@ pub const BuiltinTypeContext = struct {
 pub const ModuleInitContext = struct {
     builtin_types: BuiltinTypeContext,
     imported_modules: ?*const std.AutoHashMap(Ident.Idx, AutoImportedType) = null,
+    /// Import identities that import resolution rejected for this module,
+    /// keyed by their exact source spelling (e.g. `pf.Stdout`).
+    ///
+    /// Only the workspace resolver can say whether a package-qualified import
+    /// names a real public module, so canonicalization cannot judge one by
+    /// itself. This is that judgement, carried explicitly: a rejected import
+    /// names no module, and every use of it becomes checked-error data instead
+    /// of reaching whatever module the import spelled.
+    rejected_imports: ?*const std.AutoHashMap(Ident.Idx, void) = null,
     /// Skip reading file-import contents when canonicalizing for inspection only.
     /// Ordinary compilation keeps the default and validates the imported file.
     skip_file_import_contents: bool = false,
@@ -98,12 +107,6 @@ pub const ModuleInitContext = struct {
     /// The coordinator is the component that knows a module is *not* the entry
     /// module, and it is the one that says so.
     is_entry_module: bool = false,
-};
-
-/// Information about a placeholder identifier, tracking its component parts
-const PlaceholderInfo = struct {
-    parent_qualified_idx: Ident.Idx, // The qualified parent type name (e.g., "Module.Foo.Bar")
-    item_name_idx: Ident.Idx, // The unqualified item name (e.g., "baz")
 };
 
 const ActiveDeclBinding = struct {
@@ -305,11 +308,6 @@ exposed_types: std.AutoHashMapUnmanaged(Ident.Idx, void) = .{},
 exposed_ident_texts: std.StringHashMapUnmanaged(Region) = .{},
 /// Track exposed types by text to handle changing indices
 exposed_type_idents: std.AutoHashMapUnmanaged(Ident.Idx, Region) = .{},
-/// Track which identifiers in the current scope are placeholders (not yet replaced with real definitions)
-/// Maps the fully qualified placeholder ident to its component parts for hierarchical registration.
-/// In the common case this stays empty—it is only populated by builtin canon paths that still
-/// want to pre-register hierarchical qualified item names for cross-module lookup.
-placeholder_idents: std.AutoHashMapUnmanaged(Ident.Idx, PlaceholderInfo) = .{},
 /// Version of the compiler that is running, or null to skip checking the
 /// header's `roc` version pin. See `ModuleInitContext.compiler_version`.
 compiler_version: ?[]const u8 = null,
@@ -333,6 +331,9 @@ used_patterns: std.AutoHashMapUnmanaged(Pattern.Idx, void),
 globally_resolvable_patterns: std.AutoHashMapUnmanaged(Pattern.Idx, void),
 /// Map of explicit imported module identifiers to their type information for import validation.
 explicit_module_envs: ?*const std.AutoHashMap(Ident.Idx, AutoImportedType),
+/// Import identities that import resolution rejected. See
+/// `ModuleInitContext.rejected_imports`.
+rejected_imports: ?*const std.AutoHashMap(Ident.Idx, void),
 /// Builtin types that are automatically available in every non-Builtin module.
 builtin_auto_imported_types: std.AutoHashMapUnmanaged(Ident.Idx, AutoImportedType) = .{},
 /// Map from module identifier to Import.Idx for tracking unique imports.
@@ -680,7 +681,6 @@ pub fn deinit(
     self.exposed_types.deinit(gpa);
     self.exposed_ident_texts.deinit(gpa);
     self.exposed_type_idents.deinit(gpa);
-    self.placeholder_idents.deinit(gpa);
     self.pending_provides_entries.deinit(gpa);
     self.method_registrations.deinit(gpa);
 
@@ -785,6 +785,7 @@ fn initInternal(
         .used_patterns = std.AutoHashMapUnmanaged(Pattern.Idx, void){},
         .globally_resolvable_patterns = std.AutoHashMapUnmanaged(Pattern.Idx, void){},
         .explicit_module_envs = if (maybe_context) |context| context.imported_modules else null,
+        .rejected_imports = if (maybe_context) |context| context.rejected_imports else null,
         .skip_file_import_contents = if (maybe_context) |context| context.skip_file_import_contents else false,
         .compiler_version = if (maybe_context) |context| context.compiler_version else null,
         .validation = if (maybe_context) |context| context.validation else .checking,
@@ -858,6 +859,14 @@ fn lookupExplicitModuleEnv(self: *const Self, ident: Ident.Idx) ?AutoImportedTyp
 
 fn lookupAvailableModuleEnv(self: *const Self, ident: Ident.Idx) ?AutoImportedType {
     return self.lookupExplicitModuleEnv(ident) orelse self.builtin_auto_imported_types.get(ident);
+}
+
+/// Whether import resolution rejected this import identity. A rejected import
+/// has no environment, so its exposed items bind as missing-module items and
+/// every use of them is checked-error data.
+fn importWasRejected(self: *const Self, ident: Ident.Idx) bool {
+    const rejected = self.rejected_imports orelse return false;
+    return rejected.contains(ident);
 }
 
 fn autoImportedTypeUsesCompilerBuiltinImport(info: AutoImportedType) bool {
@@ -3218,8 +3227,6 @@ fn processAssociatedBlock(
 fn findOrCreateAssocPattern(
     self: *Self,
     qualified_ident: Ident.Idx,
-    decl_ident: Ident.Idx,
-    type_qualified_ident: ?Ident.Idx,
     assoc_key: ?AST.DeclIndex.AssocValue,
     pattern_region: Region,
     globally_resolvable: bool,
@@ -3231,165 +3238,53 @@ fn findOrCreateAssocPattern(
             }
             return existing;
         }
+    }
+
+    const pattern_idx = if (try self.adoptAssocPlaceholderPattern(qualified_ident, assoc_key)) |placeholder| blk: {
+        // The placeholder was created where the item was first referenced;
+        // from here on it is this declaration's binder.
+        self.env.store.setRegionAt(ModuleEnv.nodeIdxFrom(placeholder), pattern_region);
+        break :blk placeholder;
+    } else blk: {
+        const ident_pattern = Pattern{ .assign = .{ .ident = qualified_ident } };
+        const new_pattern_idx = try self.env.addPattern(ident_pattern, pattern_region);
+        _ = try self.scopeIntroduceInternal(self.env.gpa, .ident, qualified_ident, new_pattern_idx, true);
+        try self.registerAssocPatternQualifiers(qualified_ident, new_pattern_idx);
+        break :blk new_pattern_idx;
+    };
+    if (globally_resolvable) {
+        try self.markGloballyResolvablePattern(pattern_idx);
+    }
+    if (assoc_key) |key| {
+        try self.assoc_value_patterns.put(self.env.gpa, key, pattern_idx);
+    }
+    return pattern_idx;
+}
+
+/// Take the placeholder pattern that references ahead of an associated item
+/// created and bind it under the item's qualified name.
+fn adoptAssocPlaceholderPattern(
+    self: *Self,
+    qualified_ident: Ident.Idx,
+    assoc_key: ?AST.DeclIndex.AssocValue,
+) std.mem.Allocator.Error!?CIR.Pattern.Idx {
+    if (assoc_key) |key| {
         if (self.assoc_forward_references.fetchRemove(key)) |kv| {
             const placeholder = kv.value.pattern_idx;
             var mut_regions = kv.value.reference_regions;
             mut_regions.deinit(self.env.gpa);
             self.rebindPlaceholderPatternIdent(placeholder, qualified_ident);
             try self.registerAssocPatternQualifiers(qualified_ident, placeholder);
-            if (globally_resolvable) {
-                try self.markGloballyResolvablePattern(placeholder);
-            }
-            try self.assoc_value_patterns.put(self.env.gpa, key, placeholder);
             return placeholder;
         }
     }
 
-    if (self.scopeLookup(.ident, qualified_ident) == .found) {
-        const found = self.scopeLookup(.ident, qualified_ident).found;
-        if (try self.adoptAssocForwardReference(qualified_ident, type_qualified_ident, decl_ident)) |adopted| {
-            if (globally_resolvable) {
-                try self.markGloballyResolvablePattern(adopted);
-            }
-            if (assoc_key) |key| {
-                try self.assoc_value_patterns.put(self.env.gpa, key, adopted);
-            }
-            return adopted;
-        }
-        self.drainForwardReferences(qualified_ident, type_qualified_ident, decl_ident);
-        self.rebindPlaceholderPatternIdent(found, qualified_ident);
-        if (globally_resolvable) {
-            try self.markGloballyResolvablePattern(found);
-        }
-        if (assoc_key) |key| {
-            try self.assoc_value_patterns.put(self.env.gpa, key, found);
-        }
-        return found;
-    }
-
-    var scope_idx = self.scopes.items.len;
-    while (scope_idx > 0) {
-        scope_idx -= 1;
-        const scope = &self.scopes.items[scope_idx];
-        if (scope.forward_references.fetchRemove(qualified_ident)) |kv| {
-            const placeholder = kv.value.pattern_idx;
-            var mut_regions = kv.value.reference_regions;
-            mut_regions.deinit(self.env.gpa);
-            self.rebindPlaceholderPatternIdent(placeholder, qualified_ident);
-            try self.registerAssocPatternQualifiers(qualified_ident, placeholder);
-            if (globally_resolvable) {
-                try self.markGloballyResolvablePattern(placeholder);
-            }
-            if (assoc_key) |key| {
-                try self.assoc_value_patterns.put(self.env.gpa, key, placeholder);
-            }
-            return placeholder;
-        }
-        if (type_qualified_ident) |tq| {
-            if (scope.forward_references.fetchRemove(tq)) |kv| {
-                const placeholder = kv.value.pattern_idx;
-                var mut_regions = kv.value.reference_regions;
-                mut_regions.deinit(self.env.gpa);
-                _ = scope.idents.remove(tq);
-                self.rebindPlaceholderPatternIdent(placeholder, qualified_ident);
-                try self.registerAssocPatternQualifiers(qualified_ident, placeholder);
-                if (globally_resolvable) {
-                    try self.markGloballyResolvablePattern(placeholder);
-                }
-                if (assoc_key) |key| {
-                    try self.assoc_value_patterns.put(self.env.gpa, key, placeholder);
-                }
-                return placeholder;
-            }
-        }
-        if (scope.forward_references.fetchRemove(decl_ident)) |kv| {
-            const placeholder = kv.value.pattern_idx;
-            var mut_regions = kv.value.reference_regions;
-            mut_regions.deinit(self.env.gpa);
-            self.rebindPlaceholderPatternIdent(placeholder, qualified_ident);
-            try self.registerAssocPatternQualifiers(qualified_ident, placeholder);
-            if (globally_resolvable) {
-                try self.markGloballyResolvablePattern(placeholder);
-            }
-            if (assoc_key) |key| {
-                try self.assoc_value_patterns.put(self.env.gpa, key, placeholder);
-            }
-            return placeholder;
-        }
-    }
-
-    const ident_pattern = Pattern{ .assign = .{ .ident = qualified_ident } };
-    const new_pattern_idx = try self.env.addPattern(ident_pattern, pattern_region);
-    _ = try self.scopeIntroduceInternal(self.env.gpa, .ident, qualified_ident, new_pattern_idx, true);
-    try self.registerAssocPatternQualifiers(qualified_ident, new_pattern_idx);
-    if (globally_resolvable) {
-        try self.markGloballyResolvablePattern(new_pattern_idx);
-    }
-    if (assoc_key) |key| {
-        try self.assoc_value_patterns.put(self.env.gpa, key, new_pattern_idx);
-    }
-    return new_pattern_idx;
-}
-
-/// Remove any forward_reference entries keyed by the names a definition
-/// adopts, freeing their reference_regions lists. Called by
-/// findOrCreateAssocPattern when the placeholder pattern was already published
-/// to a scope's idents map and scopeLookup returned it directly, so the
-/// forward_references entries that point at that placeholder no longer need
-/// to flag an undefined reference at scope-pop time.
-fn adoptAssocForwardReference(
-    self: *Self,
-    qualified_ident: Ident.Idx,
-    type_qualified_ident: ?Ident.Idx,
-    decl_ident: Ident.Idx,
-) std.mem.Allocator.Error!?CIR.Pattern.Idx {
-    var scope_idx = self.scopes.items.len;
-    while (scope_idx > 0) {
-        scope_idx -= 1;
-        const scope = &self.scopes.items[scope_idx];
-        const keys = [_]?Ident.Idx{ qualified_ident, type_qualified_ident, decl_ident };
-        for (keys) |maybe_key| {
-            const key = maybe_key orelse continue;
-            if (scope.forward_references.fetchRemove(key)) |kv| {
-                var mut_regions = kv.value.reference_regions;
-                mut_regions.deinit(self.env.gpa);
-                self.rebindPlaceholderPatternIdent(kv.value.pattern_idx, qualified_ident);
-                try self.registerAssocPatternQualifiers(qualified_ident, kv.value.pattern_idx);
-                return kv.value.pattern_idx;
-            }
-        }
-    }
-    return null;
-}
-
-fn drainForwardReferences(
-    self: *Self,
-    qualified_ident: Ident.Idx,
-    type_qualified_ident: ?Ident.Idx,
-    decl_ident: Ident.Idx,
-) void {
-    var scope_idx = self.scopes.items.len;
-    while (scope_idx > 0) {
-        scope_idx -= 1;
-        const scope = &self.scopes.items[scope_idx];
-        if (scope.forward_references.fetchRemove(qualified_ident)) |kv| {
-            var mut_regions = kv.value.reference_regions;
-            mut_regions.deinit(self.env.gpa);
-        }
-        if (type_qualified_ident) |tq| {
-            if (!tq.eql(qualified_ident)) {
-                if (scope.forward_references.fetchRemove(tq)) |kv| {
-                    var mut_regions = kv.value.reference_regions;
-                    mut_regions.deinit(self.env.gpa);
-                }
-            }
-        }
-        if (!decl_ident.eql(qualified_ident)) {
-            if (scope.forward_references.fetchRemove(decl_ident)) |kv| {
-                var mut_regions = kv.value.reference_regions;
-                mut_regions.deinit(self.env.gpa);
-            }
-        }
+    switch (self.scopeLookup(.ident, qualified_ident)) {
+        .found => |found| {
+            self.rebindPlaceholderPatternIdent(found, qualified_ident);
+            return found;
+        },
+        .not_found => return null,
     }
 }
 
@@ -3553,8 +3448,6 @@ fn prepareAssociatedDeclBody(
     try self.warnAboutBindingName(decl_ident, pattern_region, .immutable);
     const pattern_idx = try self.findOrCreateAssocPattern(
         qualified_ident,
-        decl_ident,
-        type_qualified_ident,
         assoc_key,
         pattern_region,
         state.owner_is_module_visible,
@@ -3831,6 +3724,7 @@ fn recordAssociatedValue(
         if (self.assoc_forward_pattern_keys.get(def.pattern)) |key| {
             if (self.assoc_local_statement_placeholders.fetchRemove(key)) |placeholder| {
                 try self.env.store.setStatementNode(placeholder.value, stmt);
+                self.env.store.setRegionAt(ModuleEnv.nodeIdxFrom(placeholder.value), region);
                 try self.propagateBlockStatementFreeVars(self.localAssociatedContext(block_context), associated_def.free_vars);
                 break :blk placeholder.value;
             }
@@ -4114,11 +4008,9 @@ fn canonicalizeAssociatedItems(
                     else
                         null;
 
-                    // Adopt any pre-existing forward-reference placeholder keyed by
-                    // the type-qualified name (e.g. `Str.count_utf8_bytes` inside
-                    // `Builtin.Str`) so reference sites and the annotation def share one
-                    // Pattern.Idx. `createAnnotationDef` already handles the
-                    // qualified-form key; do the type-qualified form here.
+                    // Adopt the placeholder that references ahead of this item
+                    // created, so reference sites and the annotation def share one
+                    // Pattern.Idx.
                     const adopted_pattern_idx: ?CIR.Pattern.Idx = blk_adopt: {
                         if (assoc_key) |key| {
                             if (self.assoc_forward_references.fetchRemove(key)) |kv| {
@@ -4130,29 +4022,8 @@ fn canonicalizeAssociatedItems(
                         }
                         switch (self.scopeLookup(.ident, qualified_idx)) {
                             .found => |existing| break :blk_adopt existing,
-                            .not_found => {},
+                            .not_found => break :blk_adopt null,
                         }
-                        const tq_for_adopt = if (parent_name.eql(type_name))
-                            qualified_idx
-                        else blk_tq: {
-                            const tn = self.env.getIdent(type_name);
-                            const nn = self.env.getIdent(name_ident);
-                            break :blk_tq try self.insertQualifiedIdent(tn, nn);
-                        };
-                        if (tq_for_adopt.eql(qualified_idx)) break :blk_adopt null;
-                        var s_idx = self.scopes.items.len;
-                        while (s_idx > 0) {
-                            s_idx -= 1;
-                            const scope_ptr = &self.scopes.items[s_idx];
-                            if (scope_ptr.forward_references.fetchRemove(tq_for_adopt)) |kv| {
-                                var mut_regions = kv.value.reference_regions;
-                                mut_regions.deinit(self.env.gpa);
-                                _ = scope_ptr.idents.remove(tq_for_adopt);
-                                self.rebindPlaceholderPatternIdent(kv.value.pattern_idx, qualified_idx);
-                                break :blk_adopt kv.value.pattern_idx;
-                            }
-                        }
-                        break :blk_adopt null;
                     };
 
                     const source_name_region = self.parse_ir.tokens.resolve(ta.name);
@@ -5112,44 +4983,16 @@ fn createAnnotationDef(
 ) std.mem.Allocator.Error!CIR.Def.Idx {
     try self.warnAboutBindingName(source_binding_ident, source_binding_region, .immutable);
 
-    // If a placeholder pattern was previously registered for this ident in a
-    // parent scope (e.g. by builtin hierarchical name registration), reuse it
-    // instead of introducing a fresh one.
+    // A declaration referenced ahead of itself adopts the placeholder those
+    // references created instead of introducing a fresh pattern.
     const value_forward_pattern = if (parser_decl_idx) |decl_idx|
         self.takeValueForwardReference(decl_idx, ident)
     else
         null;
-    if (value_forward_pattern) |forward_pattern| {
+    const pattern_idx = if (value_forward_pattern) |forward_pattern| blk: {
         self.env.store.setRegionAt(ModuleEnv.nodeIdxFrom(forward_pattern), region);
-    }
-    const pattern_idx = if (value_forward_pattern) |forward_pattern|
-        forward_pattern
-    else if (self.isPlaceholder(ident)) placeholder_check: {
-        // Use scopeLookup to search up the scope chain for the placeholder
-        switch (self.scopeLookup(.ident, ident)) {
-            .found => |existing_pattern| {
-                // Note: We don't remove from placeholder_idents here. The calling code
-                // (canonicalizeAssociatedItems) will call updatePlaceholder to do that.
-                break :placeholder_check existing_pattern;
-            },
-            .not_found => {
-                // Placeholder is tracked but not found in current scope chain.
-                // This can happen if the placeholder was created in a scope that's
-                // not an ancestor of the current scope. Create a new pattern;
-                // any actual errors will be caught later during definition checking.
-                const pattern = Pattern{
-                    .assign = .{
-                        .ident = ident,
-                    },
-                };
-                break :placeholder_check try self.env.addPattern(pattern, region);
-            },
-        }
+        break :blk forward_pattern;
     } else try self.createAnnotationPattern(ident, region);
-
-    // Note: We don't update placeholders here. For associated items, the calling code
-    // (canonicalizeAssociatedItems) will update all three identifiers (qualified,
-    // type-qualified, unqualified). For top-level items, there are no placeholders to update.
 
     const annotation_expr = try self.addAnnotationExpr(ident, annotation_expr_kind, region);
 
@@ -5174,52 +5017,27 @@ fn createAnnotationPattern(
     ident: Ident.Idx,
     region: Region,
 ) std.mem.Allocator.Error!Pattern.Idx {
-    return create_new: {
-        // If an earlier reference parked a forward-reference placeholder for
-        // this ident, adopt that pattern instead of creating a new one—all
-        // existing e_lookup_local nodes already point at it, so the def must
-        // use the same Pattern.Idx to stay consistent.
-        {
-            var s_idx = self.scopes.items.len;
-            while (s_idx > 0) {
-                s_idx -= 1;
-                const scope_ptr = &self.scopes.items[s_idx];
-                if (scope_ptr.forward_references.fetchRemove(ident)) |kv| {
-                    var mut_regions = kv.value.reference_regions;
-                    mut_regions.deinit(self.env.gpa);
-                    const current_scope_idx = self.scopes.items.len - 1;
-                    if (s_idx != current_scope_idx) {
-                        _ = scope_ptr.idents.remove(ident);
-                    }
-                    try self.scopes.items[current_scope_idx].idents.put(self.env.gpa, ident, kv.value.pattern_idx);
-                    break :create_new kv.value.pattern_idx;
-                }
-            }
-        }
-
-        // No placeholder - create new pattern and introduce to scope
-        const pattern = Pattern{
-            .assign = .{
-                .ident = ident,
-            },
-        };
-        const new_pattern_idx = try self.env.addPattern(pattern, region);
-
-        // Introduce the identifier to scope so it can be referenced
-        switch (try self.scopeIntroduceInternal(self.env.gpa, .ident, ident, new_pattern_idx, true)) {
-            .success => {},
-            .shadowing_warning => |shadowed_pattern_idx| {
-                const original_region = self.env.store.getPatternRegion(shadowed_pattern_idx);
-                try self.env.pushDiagnostic(Diagnostic{ .shadowing_warning = .{
-                    .ident = ident,
-                    .region = region,
-                    .original_region = original_region,
-                } });
-            },
-            .top_level_var_error, .var_across_function_boundary, .var_reassignment_ok => {},
-        }
-        break :create_new new_pattern_idx;
+    const pattern = Pattern{
+        .assign = .{
+            .ident = ident,
+        },
     };
+    const new_pattern_idx = try self.env.addPattern(pattern, region);
+
+    // Introduce the identifier to scope so it can be referenced
+    switch (try self.scopeIntroduceInternal(self.env.gpa, .ident, ident, new_pattern_idx, true)) {
+        .success => {},
+        .shadowing_warning => |shadowed_pattern_idx| {
+            const original_region = self.env.store.getPatternRegion(shadowed_pattern_idx);
+            try self.env.pushDiagnostic(Diagnostic{ .shadowing_warning = .{
+                .ident = ident,
+                .region = region,
+                .original_region = original_region,
+            } });
+        },
+        .top_level_var_error, .var_across_function_boundary, .var_reassignment_ok => {},
+    }
+    return new_pattern_idx;
 }
 
 /// Build an annotation-only or derived-method def reusing a pre-existing pattern (typically a
@@ -5238,6 +5056,7 @@ fn createAnnotationDefWithPattern(
 ) std.mem.Allocator.Error!CIR.Def.Idx {
     try self.warnAboutBindingName(source_binding_ident, source_binding_region, .immutable);
     try self.scopes.items[self.scopes.items.len - 1].idents.put(self.env.gpa, ident, pattern_idx);
+    self.env.store.setRegionAt(ModuleEnv.nodeIdxFrom(pattern_idx), region);
 
     const annotation_expr = try self.addAnnotationExpr(ident, annotation_expr_kind, region);
 
@@ -7117,7 +6936,10 @@ fn importAliased(
     // imports that are resolved by the workspace resolver
     if (self.explicit_module_envs) |envs_map| {
         if (!envs_map.contains(module_name)) {
-            if (!is_package_qualified) {
+            // Import resolution already reported why a rejected import names no
+            // module, and named the exact reason. Canonicalization consumes
+            // that outcome to bind the import; it does not restate it.
+            if (!is_package_qualified and !self.importWasRejected(module_name)) {
                 try self.env.pushDiagnostic(Diagnostic{ .module_not_found = .{
                     .module_name = module_name,
                     .region = import_region,
@@ -7186,7 +7008,10 @@ fn importUnaliased(
     // imports that are resolved by the workspace resolver
     if (self.explicit_module_envs) |envs_map| {
         if (!envs_map.contains(module_name)) {
-            if (!is_package_qualified) {
+            // Import resolution already reported why a rejected import names no
+            // module, and named the exact reason. Canonicalization consumes
+            // that outcome to bind the import; it does not restate it.
+            if (!is_package_qualified and !self.importWasRejected(module_name)) {
                 try self.env.pushDiagnostic(Diagnostic{ .module_not_found = .{
                     .module_name = module_name,
                     .region = import_region,
@@ -7636,6 +7461,52 @@ fn convertASTExposesToCIR(
     }
 }
 
+/// Bind the exposed items of a rejected import as missing-module items.
+///
+/// Import resolution rejected this import, so it names no module and none of
+/// these items has a target. They are still bound, under this import, so that
+/// every use of one is checked-error data naming the missing module rather
+/// than a bare unresolved identifier, and so that no use can reach past the
+/// rejected import to a same-named binding it was meant to introduce.
+fn introduceRejectedImportItems(
+    self: *Self,
+    exposed_items_span: CIR.ExposedItem.Span,
+    module_name: Ident.Idx,
+    import_region: Region,
+    module_import_idx: CIR.Import.Idx,
+) std.mem.Allocator.Error!void {
+    const exposed_items_slice = self.env.store.sliceExposedItems(exposed_items_span);
+    const current_scope_idx = self.scopes.items.len - 1;
+
+    for (exposed_items_slice) |exposed_item_idx| {
+        const exposed_item = self.env.store.getExposedItem(exposed_item_idx);
+        const local_ident = exposed_item.alias orelse exposed_item.name;
+
+        try self.scopeIntroduceExposedItem(local_ident, Scope.ExposedItemInfo{
+            .module_name = module_name,
+            .original_name = exposed_item.name,
+            .target = null,
+        }, import_region);
+
+        if (!self.isSourceTagIdent(local_ident)) continue;
+
+        // The ident text must be fetched fresh here: the binding below interns
+        // new idents, which can move the interner's byte buffer.
+        const original_type_name = self.env.getIdent(exposed_item.name);
+        try self.setExternalTypeBinding(
+            current_scope_idx,
+            local_ident,
+            module_name,
+            exposed_item.name,
+            original_type_name,
+            null,
+            module_import_idx,
+            import_region,
+            .module_not_found,
+        );
+    }
+}
+
 /// Introduce converted exposed items into scope for aliased imports
 /// For imports like `import json.Parser exposing [Config]`, this will:
 /// 1. Auto-expose the module's main type if it's a type module
@@ -7654,6 +7525,17 @@ fn introduceItemsAliased(
 
     if (self.explicit_module_envs) |envs_map| {
         const module_entry = envs_map.get(module_name) orelse {
+            // Import resolution rejected this import, so the module is known to
+            // be unavailable rather than merely absent from this map.
+            if (self.importWasRejected(module_name)) {
+                return try self.introduceRejectedImportItems(
+                    exposed_items_span,
+                    module_name,
+                    import_region,
+                    module_import_idx,
+                );
+            }
+
             // Module not found, but still check for duplicate type names with auto-imports
             // This ensures we report DUPLICATE DEFINITION even for non-existent modules
             for (exposed_items_slice) |exposed_item_idx| {
@@ -7832,6 +7714,17 @@ fn introduceItemsUnaliased(
 
     if (self.explicit_module_envs) |envs_map| {
         const module_entry = envs_map.get(module_name) orelse {
+            // Import resolution rejected this import, so the module is known to
+            // be unavailable rather than merely absent from this map.
+            if (self.importWasRejected(module_name)) {
+                return try self.introduceRejectedImportItems(
+                    exposed_items_span,
+                    module_name,
+                    import_region,
+                    module_import_idx,
+                );
+            }
+
             // Module not found, but still check for duplicate type names with auto-imports
             // This ensures we report DUPLICATE DEFINITION even for non-existent modules
             for (exposed_items_slice) |exposed_item_idx| {
@@ -8697,7 +8590,20 @@ fn canonicalizeModuleQualifiedIdent(
     } else null;
 
     const target_node_idx = target_node_idx_opt orelse {
-        const auto_imported_type = auto_imported_type_info orelse return null;
+        const auto_imported_type = auto_imported_type_info orelse {
+            // Import resolution rejected this import, so the qualifier names no
+            // module and this reference has a settled answer: it does not
+            // exist. Without that evidence the reference is only unresolved
+            // here, and the caller keeps looking for another meaning.
+            if (self.importWasRejected(module_name)) {
+                const qualified_ident = try self.joinedQualifiedIdent(qualifier_tokens, ident);
+                return try self.canonicalizedMalformedExpr(Diagnostic{ .qualified_ident_does_not_exist = .{
+                    .ident = qualified_ident,
+                    .region = region,
+                } });
+            }
+            return null;
+        };
 
         if (try self.addAutoImportedNominalTagExpr(auto_imported_type, import_idx, ident, region)) |expr_idx| {
             return CanonicalizedExpr{
@@ -18064,67 +17970,56 @@ pub fn canonicalizePattern(
                             last_pattern = placeholder;
                             continue :patternkernel_loop .dispatch;
                         }
-                        // Check if a placeholder exists for this identifier in the current scope
-                        // Placeholders are tracked in the placeholder_idents hash map
-                        const current_scope = &self.scopes.items[self.scopes.items.len - 1];
-                        const placeholder_exists = self.isPlaceholder(ident_idx);
-
                         // Create a Pattern node for our identifier
                         const pattern_idx = try self.env.addPattern(Pattern{ .assign = .{
                             .ident = ident_idx,
                         } }, region);
 
-                        if (placeholder_exists) {
-                            // Replace the placeholder in the current scope
-                            try self.updatePlaceholder(current_scope, ident_idx, pattern_idx);
-                            try self.warnAboutBindingName(ident_idx, region, .immutable);
-                        } else {
-                            // Introduce the identifier into scope mapping to this pattern node
-                            // Use is_declaration=false so scopeIntroduceInternal can detect var reassignments
-                            switch (try self.scopeIntroduceInternal(self.env.gpa, .ident, ident_idx, pattern_idx, false)) {
-                                .success => try self.warnAboutBindingName(ident_idx, region, .immutable),
-                                .shadowing_warning => |shadowed_pattern_idx| {
-                                    try self.warnAboutBindingName(ident_idx, region, .immutable);
-                                    const original_region = self.env.store.getPatternRegion(shadowed_pattern_idx);
-                                    try self.env.pushDiagnostic(Diagnostic{ .shadowing_warning = .{
-                                        .ident = ident_idx,
+                        // Introduce the identifier into scope mapping to this pattern node
+                        // Use is_declaration=false so scopeIntroduceInternal can detect var reassignments
+                        switch (try self.scopeIntroduceInternal(self.env.gpa, .ident, ident_idx, pattern_idx, false)) {
+                            .success => try self.warnAboutBindingName(ident_idx, region, .immutable),
+                            .shadowing_warning => |shadowed_pattern_idx| {
+                                try self.warnAboutBindingName(ident_idx, region, .immutable);
+                                const original_region = self.env.store.getPatternRegion(shadowed_pattern_idx);
+                                try self.env.pushDiagnostic(Diagnostic{ .shadowing_warning = .{
+                                    .ident = ident_idx,
+                                    .region = region,
+                                    .original_region = original_region,
+                                } });
+                            },
+                            .top_level_var_error => {
+                                last_pattern = try self.env.pushMalformed(Pattern.Idx, Diagnostic{
+                                    .invalid_top_level_statement = .{
+                                        .stmt = try self.env.insertString("var"),
                                         .region = region,
-                                        .original_region = original_region,
-                                    } });
-                                },
-                                .top_level_var_error => {
-                                    last_pattern = try self.env.pushMalformed(Pattern.Idx, Diagnostic{
-                                        .invalid_top_level_statement = .{
-                                            .stmt = try self.env.insertString("var"),
-                                            .region = region,
-                                        },
-                                    });
-                                    continue :patternkernel_loop .dispatch;
-                                },
-                                .var_across_function_boundary => {
-                                    last_pattern = try self.env.pushMalformed(Pattern.Idx, Diagnostic{ .var_across_function_boundary = .{
-                                        .region = region,
-                                    } });
-                                    continue :patternkernel_loop .dispatch;
-                                },
-                                .var_reassignment_ok => |existing_pattern_idx| {
-                                    try self.env.store.recordWriteOccurrence(existing_pattern_idx, region);
-                                    self.pattern_reused_existing_var = true;
-                                    // Only record the reassignment target while inside a block
-                                    // declaration's pattern (where `allow_pattern_var_reuse` is set):
-                                    // that is the only window where `beginDefiningBoundVars` reads and
-                                    // clears these targets to exclude them from the self-reference set.
-                                    // Recording elsewhere (a `var` shadowed by a match/for/lambda
-                                    // binder) would never be consumed or cleared, leaking onto the buffer.
-                                    if (self.allow_pattern_var_reuse) {
-                                        try self.scratch_reassign_targets.append(existing_pattern_idx);
-                                    }
-                                    // This is a var reassignment - return the existing pattern
-                                    // so the interpreter's upsertBinding will update the existing binding
-                                    last_pattern = existing_pattern_idx;
-                                    continue :patternkernel_loop .dispatch;
-                                },
-                            }
+                                    },
+                                });
+                                continue :patternkernel_loop .dispatch;
+                            },
+                            .var_across_function_boundary => {
+                                last_pattern = try self.env.pushMalformed(Pattern.Idx, Diagnostic{ .var_across_function_boundary = .{
+                                    .region = region,
+                                } });
+                                continue :patternkernel_loop .dispatch;
+                            },
+                            .var_reassignment_ok => |existing_pattern_idx| {
+                                try self.env.store.recordWriteOccurrence(existing_pattern_idx, region);
+                                self.pattern_reused_existing_var = true;
+                                // Only record the reassignment target while inside a block
+                                // declaration's pattern (where `allow_pattern_var_reuse` is set):
+                                // that is the only window where `beginDefiningBoundVars` reads and
+                                // clears these targets to exclude them from the self-reference set.
+                                // Recording elsewhere (a `var` shadowed by a match/for/lambda
+                                // binder) would never be consumed or cleared, leaking onto the buffer.
+                                if (self.allow_pattern_var_reuse) {
+                                    try self.scratch_reassign_targets.append(existing_pattern_idx);
+                                }
+                                // This is a var reassignment - return the existing pattern
+                                // so the interpreter's upsertBinding will update the existing binding
+                                last_pattern = existing_pattern_idx;
+                                continue :patternkernel_loop .dispatch;
+                            },
                         }
 
                         last_pattern = pattern_idx;
@@ -19505,17 +19400,21 @@ fn runTypeAnnoKernel(self: *Self, anno_idx: AST.TypeAnno.Idx, type_anno_ctx: *Ty
                     const region = self.parse_ir.tokenizedRegionToRegion(tag_union.region);
                     const mb_ext_anno: ?TypeAnno.Idx = switch (tag_union.ext) {
                         .closed => null,
-                        .open => blk: {
+                        .open => |open_tok| blk: {
+                            // Give the ext anno the `..` token's own region so
+                            // diagnostics about it (eg the redundant-open-ext
+                            // warning in output positions) point at the `..`.
+                            const open_region = self.parse_ir.tokenizedRegionToRegion(.{ .start = open_tok, .end = open_tok + 1 });
                             switch (type_anno_ctx.type) {
                                 .local_anno, .for_clause_anno => {
                                     break :blk try self.env.addTypeAnno(.{ .rigid_var = .{
                                         .name = self.env.idents.open_ext,
-                                    } }, region);
+                                    } }, open_region);
                                 },
                                 .type_decl_anno => {
                                     last = try self.env.pushMalformed(TypeAnno.Idx, Diagnostic{
                                         .open_ext_not_allowed_in_type_decl = .{
-                                            .region = self.parse_ir.tokenizedRegionToRegion(.{ .start = tag_union.ext.open, .end = tag_union.ext.open + 1 }),
+                                            .region = open_region,
                                         },
                                     });
                                     break :blk null;
@@ -21039,21 +20938,7 @@ pub fn scopePop(self: *Self) Scope.Error!Scope {
         return Scope.Error.ExitedTopScopeLevel;
     }
 
-    // Check for undefined forward references in the scope we're about to exit
     const scope = &self.scopes.items[self.scopes.items.len - 1];
-    var forward_ref_iter = scope.forward_references.iterator();
-    while (forward_ref_iter.next()) |entry| {
-        const ident_idx = entry.key_ptr.*;
-        const forward_ref = entry.value_ptr.*;
-
-        // This forward reference was never defined - report error for all reference sites
-        for (forward_ref.reference_regions.items) |ref_region| {
-            try self.env.pushDiagnostic(Diagnostic{ .ident_not_in_scope = .{
-                .ident = ident_idx,
-                .region = ref_region,
-            } });
-        }
-    }
 
     // Check for unused variables in the scope we're about to exit
     try self.checkScopeForUnusedVariables(scope);
@@ -21336,32 +21221,6 @@ pub fn introduceType(
         input,
     );
     try self.handleTypeBindingDecision(name_ident, region, decision, true);
-}
-
-/// Check if an identifier is a placeholder, with fast path for empty map (99% of files).
-/// Returns true if the identifier is tracked as a placeholder.
-fn isPlaceholder(self: *const Self, ident_idx: Ident.Idx) bool {
-    // Fast path: if map is empty, no placeholders exist
-    if (self.placeholder_idents.count() == 0) return false;
-    return self.placeholder_idents.contains(ident_idx);
-}
-
-/// Update a placeholder pattern in scope with the actual pattern.
-/// In debug builds, asserts that the identifier was tracked as a placeholder.
-fn updatePlaceholder(
-    self: *Self,
-    scope: *Scope,
-    ident_idx: Ident.Idx,
-    pattern_idx: Pattern.Idx,
-) std.mem.Allocator.Error!void {
-    if (builtin.mode == .Debug) {
-        std.debug.assert(self.isPlaceholder(ident_idx));
-    }
-    // Remove from placeholder tracking since it's now a real definition
-    if (self.placeholder_idents.count() > 0) {
-        _ = self.placeholder_idents.remove(ident_idx);
-    }
-    try scope.idents.put(self.env.gpa, ident_idx, pattern_idx);
 }
 
 /// Look up a type declaration already present in canonical scopes.

@@ -31,6 +31,7 @@ const FinalizeError = checked.CompileTimeFinalizer.Error;
 const LirProgram = lir.Program;
 const BoxyBuiltinFn = backend.LirCodeGenMod.BoxyBuiltinFn;
 const BoxyNativeFnTable = backend.LirCodeGenMod.BoxyNativeFnTable;
+const NativeProcCompiler = backend.dev.NativeProcCompiler;
 
 /// Borrowed compile-time `dbg` observation delivered while finalized roots are
 /// replayed in deterministic request order.
@@ -148,16 +149,29 @@ pub const ProgramSession = struct {
     runtime_roots: lir.CheckedPipeline.RootRequestSet,
     runtime_target: ?lir.CheckedPipeline.TargetConfig,
     host: ?lir.CheckedPipeline.LoweredProgram,
+    /// The prepared producer program the runtime consumer continues. It is
+    /// the same program the compile-time consumer was lowered from: both
+    /// borrow it, neither copies it.
     runtime_prepared: ?lir.CheckedPipeline.PreparedSolved,
     compile_time_root_count: usize,
+    native_artifacts: ?NativeProcCompiler.Retained = null,
+    /// Only a successful transfer of the original host LIR establishes the
+    /// producer-domain proof required by native artifact reuse.
+    runtime_owns_native_domain: bool = false,
 
     pub fn deinit(self: *ProgramSession) void {
+        if (self.native_artifacts) |*artifacts| artifacts.deinit();
         if (self.host) |*host| host.deinit();
         if (self.runtime_prepared) |*prepared| prepared.deinit();
         self.allocator.free(self.modules.root.relation_modules);
         self.allocator.free(self.modules.imports);
         deinitRootRequests(self.allocator, self.runtime_roots);
         self.* = undefined;
+    }
+
+    pub fn runtimeNativeArtifacts(self: *const ProgramSession) ?*const NativeProcCompiler.Retained {
+        if (!self.runtime_owns_native_domain) return null;
+        return if (self.native_artifacts) |*artifacts| artifacts else null;
     }
 
     pub fn takeRuntime(
@@ -167,29 +181,27 @@ pub const ProgramSession = struct {
         target: lir.CheckedPipeline.TargetConfig,
     ) lir.CheckedPipeline.LowerResourceError!lir.CheckedPipeline.LoweredProgram {
         const configured = self.runtime_target orelse finalizationInvariant("check-only session has no runtime consumer");
-        inline for (@typeInfo(lir.CheckedPipeline.TargetConfig).@"struct".fields) |field| {
-            if (comptime std.mem.eql(u8, field.name, "timing") or
-                std.mem.eql(u8, field.name, "work_metrics") or
-                std.mem.eql(u8, field.name, "post_check_executor") or
-                std.mem.eql(u8, field.name, "debug_materialized_out") or
-                std.mem.eql(u8, field.name, "solved_lir_parallel_metrics_out") or
-                std.mem.eql(u8, field.name, "lifted_expr_count_out") or
-                std.mem.eql(u8, field.name, "completed_scalar_values"))
+        inline for (comptime std.meta.tags(std.meta.FieldEnum(lir.CheckedPipeline.TargetConfig))) |field| {
+            if (comptime field == .timing or
+                field == .work_metrics or
+                field == .post_check_executor or
+                field == .debug_materialized_out or
+                field == .solved_lir_parallel_metrics_out or
+                field == .lifted_expr_count_out or
+                field == .completed_scalar_values)
             {
                 // A completed host program has already published its outputs.
                 // Reusing it cannot silently redirect those results or count
                 // its producer work again in another metrics destination.
-                if (comptime !std.mem.eql(u8, field.name, "timing") and
-                    !std.mem.eql(u8, field.name, "post_check_executor"))
-                {
+                if (comptime field != .timing and field != .post_check_executor) {
                     const reuses_completed_host = target.specialization_strategy == .lss and
                         self.compile_time_root_count != 0 and self.runtime_prepared == null;
-                    if (reuses_completed_host and !std.meta.eql(@field(configured, field.name), @field(target, field.name)))
+                    if (reuses_completed_host and !std.meta.eql(@field(configured, @tagName(field)), @field(target, @tagName(field))))
                         finalizationInvariant("completed runtime program cannot redirect previously published lowering outputs");
                 }
                 continue;
             }
-            if (!std.meta.eql(@field(configured, field.name), @field(target, field.name)))
+            if (!std.meta.eql(@field(configured, @tagName(field)), @field(target, @tagName(field))))
                 finalizationInvariant("runtime policy differs from the compilation's declared consumer");
         }
         inline for (@typeInfo(lir.CheckedPipeline.RootRequestSet).@"struct".fields) |field| {
@@ -206,49 +218,77 @@ pub const ProgramSession = struct {
             self.runtime_target = null;
             return lir.CheckedPipeline.lowerCheckedModulesToLir(allocator, self.modules, roots, target);
         }
-        const needs_conversion = self.runtime_prepared != null;
-        var lowered = if (self.runtime_prepared) |owned_prepared| block: {
+        if (self.runtime_prepared) |owned_prepared| {
             self.runtime_prepared = null;
-            var prepared = owned_prepared;
-            // Consumer-local observers and workers may change between the
-            // prepared phase and the continuation. Semantic options above are
-            // fixed, while these live destinations belong to this invocation.
-            inline for (.{ "timing", "work_metrics", "post_check_executor", "debug_materialized_out", "solved_lir_parallel_metrics_out", "lifted_expr_count_out" }) |field| {
-                @field(prepared.target, field) = @field(target, field);
-            }
-            const source = if (self.host) |*host| host else finalizationInvariant("target consumer omitted its completed host program");
-            const host_frozen = if (source.frozen_static_data) |*frozen| frozen else finalizationInvariant("host program omitted its completed frozen values");
-            // The host program has completed, so its scalar roots lower as
-            // literals here; the completed image itself is attached after
-            // the LIR passes, which compact the slot table.
-            var scalar_values = try lir.CheckedPipeline.CompletedScalarValues.init(allocator, &source.lir_result, host_frozen);
-            defer scalar_values.deinit(allocator);
-            prepared.target.completed_scalar_values = &scalar_values;
-            break :block try lir.CheckedPipeline.lowerPreparedSolvedToLir(prepared);
-        } else block: {
-            var host = self.host orelse finalizationInvariant("runtime program was already consumed");
-            self.host = null;
-            errdefer host.deinit();
-            // The reused program read its roots before they were evaluated;
-            // the completed constructions now replace those reads.
-            const host_frozen = if (host.frozen_static_data) |*frozen| frozen else finalizationInvariant("host program omitted its completed frozen values");
-            try lir.ComptimeRootAccessors.rebuild(allocator, &host.lir_result, host_frozen);
-            break :block host;
-        };
-        errdefer lowered.deinit();
-        if (needs_conversion) {
-            const source = if (self.host) |*host| host else finalizationInvariant("target consumer omitted its completed host program");
-            lowered.frozen_static_data = try transcodeCompletedSlots(allocator, source, &lowered);
+            const lowered = try self.continueRuntimeConsumer(allocator, owned_prepared, target);
+            self.runtime_target = null;
+            return lowered;
         }
+        // One program serves both consumers. Its runtime roots were lowered
+        // with the compile-time roots, so the runtime program is that program
+        // with its own roots selected.
+        var host = self.host orelse finalizationInvariant("runtime program was already consumed");
+        self.host = null;
+        errdefer host.deinit();
+        // The reused program read its roots before they were evaluated;
+        // the completed constructions now replace those reads.
+        const host_frozen = if (host.frozen_static_data) |*frozen| frozen else finalizationInvariant("host program omitted its completed frozen values");
+        try lir.ComptimeRootAccessors.rebuild(allocator, &host.lir_result, host_frozen);
         const start = self.compile_time_root_count;
         const runtime_count = self.runtime_requests.len;
-        if (lowered.lir_result.root_procs.items.len != start + runtime_count)
-            finalizationInvariant("union root lowering changed the requested root count");
+        if (host.lir_result.root_procs.items.len != start + runtime_count)
+            finalizationInvariant("shared root lowering changed the requested root count");
         const runtime_indices = try allocator.alloc(u32, runtime_count);
         defer allocator.free(runtime_indices);
         for (runtime_indices, 0..) |*index, ordinal| index.* = @intCast(start + ordinal);
-        try lir.CheckedPipeline.retainRuntimeRoots(&lowered, runtime_indices);
+        try lir.CheckedPipeline.retainRuntimeRoots(&host, runtime_indices);
         self.runtime_target = null;
+        self.runtime_owns_native_domain = true;
+        return host;
+    }
+
+    /// Lower the runtime consumer's own share of the producer program, which
+    /// this compilation's compile-time consumer could not serve: a different
+    /// target width or expect mode means different code. The producer program
+    /// has no consumer after this one, so lowering releases it.
+    fn continueRuntimeConsumer(
+        self: *ProgramSession,
+        allocator: Allocator,
+        prepared: lir.CheckedPipeline.PreparedSolved,
+        target: lir.CheckedPipeline.TargetConfig,
+    ) lir.CheckedPipeline.LowerResourceError!lir.CheckedPipeline.LoweredProgram {
+        var owned = prepared;
+        var owned_live = true;
+        errdefer if (owned_live) owned.deinit();
+        const source = if (self.host) |*host| host else finalizationInvariant("target consumer omitted its completed host program");
+        const host_frozen = if (source.frozen_static_data) |*frozen| frozen else finalizationInvariant("host program omitted its completed frozen values");
+        // The host program has completed, so its scalar roots lower as
+        // literals here; the completed image itself is attached after
+        // the LIR passes, which compact the slot table.
+        var scalar_values = try lir.CheckedPipeline.CompletedScalarValues.init(allocator, &source.lir_result, host_frozen);
+        defer scalar_values.deinit(allocator);
+        const manifest = try allocator.alloc(u32, self.runtime_requests.len);
+        defer allocator.free(manifest);
+        // Compile-time requests are published first, so the runtime requests
+        // are the positions after them, in their declared order.
+        for (manifest, 0..) |*position, ordinal| position.* = @intCast(self.compile_time_root_count + ordinal);
+        owned_live = false;
+        var lowered = try lir.CheckedPipeline.lowerFinalConsumerToLir(owned, .{
+            .roots = .{ .roots = manifest },
+            .target_usize = target.target_usize,
+            .inline_expects = target.inline_expects,
+            .completed_scalar_values = &scalar_values,
+            .observers = lir.CheckedPipeline.Observers.fromTarget(target),
+        });
+        errdefer lowered.deinit();
+        if (lowered.lir_result.root_procs.items.len != manifest.len)
+            finalizationInvariant("runtime consumer lowering changed the requested root count");
+        lowered.frozen_static_data = try transcodeCompletedSlots(allocator, source, &lowered);
+        try lir.CheckedPipeline.adoptCompletedComptimeValues(&lowered);
+        // The host's procedures have no reader left: the runtime program has
+        // its own, and only the host's completed values and their
+        // representation metadata are still consulted.
+        source.releaseCode();
         return lowered;
     }
 };
@@ -271,18 +311,25 @@ fn transcodeCompletedSlots(
         }
         exports.deinit(allocator);
     }
+    const ComptimeRootOwner = @typeInfo(@FieldType(LirProgram.StaticDataValue, "compile_time_root")).optional.child;
+    const SourceKey = struct {
+        module: checked.ModuleId,
+        root: checked.ComptimeRootId,
+        role: std.meta.Tag(@FieldType(ComptimeRootOwner, "role")),
+    };
+    var source_slots = std.AutoHashMap(SourceKey, usize).init(allocator);
+    defer source_slots.deinit();
+    for (source.lir_result.static_data_values.items, 0..) |source_entry, ordinal| {
+        const source_root = source_entry.compile_time_root orelse continue;
+        const entry = try source_slots.getOrPut(.{ .module = source_root.module, .root = source_root.root, .role = std.meta.activeTag(source_root.role) });
+        if (entry.found_existing) finalizationInvariant("checked root has ambiguous source value slots");
+        entry.value_ptr.* = ordinal;
+    }
     for (target.lir_result.static_data_values.items, 0..) |target_entry, index| {
         const target_root = target_entry.compile_time_root orelse continue;
         const target_slot: lir.LIR.StaticDataId = @enumFromInt(index);
-        var source_index: ?usize = null;
-        for (source.lir_result.static_data_values.items, 0..) |source_entry, ordinal| {
-            const source_root = source_entry.compile_time_root orelse continue;
-            if (!std.meta.eql(target_root.module, source_root.module) or target_root.root != source_root.root or
-                std.meta.activeTag(target_root.role) != std.meta.activeTag(source_root.role)) continue;
-            if (source_index != null) finalizationInvariant("checked root has ambiguous source value slots");
-            source_index = ordinal;
-        }
-        const ordinal = source_index orelse finalizationInvariant("target slot has no corresponding host root");
+        const ordinal = source_slots.get(.{ .module = target_root.module, .root = target_root.root, .role = std.meta.activeTag(target_root.role) }) orelse
+            finalizationInvariant("target slot has no corresponding host root");
         const source_entry = source.lir_result.static_data_values.items[ordinal];
         const source_symbol = frozenSlotSymbol(frozen.exports, @enumFromInt(ordinal));
         const failed = if (target_root.role == .value) block: {
@@ -441,19 +488,63 @@ pub fn finalizeProgram(
     var prepared = try lir.CheckedPipeline.prepareMonotypeToSolved(monotype);
     var prepared_owned = true;
     errdefer if (prepared_owned) prepared.deinit();
-    var runtime_prepared: ?lir.CheckedPipeline.PreparedSolved = null;
-    errdefer if (runtime_prepared) |*owned| owned.deinit();
-    if (runtime_target) |target| {
-        if (target.specialization_strategy == .lss and
-            (target.target_usize != host_target.target_usize or target.inline_expects != .run))
-            runtime_prepared = try prepared.forkForConsumer(target.target_usize, target.inline_expects);
+    // One program serves both consumers when the runtime consumer asks for
+    // the compile-time consumer's own target width and expect mode: the code
+    // it would lower is the code already lowered here. Any other runtime
+    // consumer needs its own continuation, and then neither consumer lowers
+    // the other's roots.
+    const reuse_host = share_runtime and
+        runtime_target.?.target_usize == host_target.target_usize and
+        runtime_target.?.inline_expects == host_target.inline_expects;
+    // The compile-time roots are published first, so the compile-time
+    // consumer's own share of the shared root plan is the positions before
+    // the runtime requests. Serving only that share also materializes none of
+    // the runtime consumer's layout, static-data or runtime-schema requests:
+    // those describe the target artifact, which such a program is not.
+    const host_root_count = if (reuse_host) requests.items.len else compile_time_root_count;
+    // A program that serves both consumers names the producer's whole root
+    // plan, which needs no list to say so.
+    const host_manifest: ?[]u32 = if (reuse_host) null else try allocator.alloc(u32, compile_time_root_count);
+    defer if (host_manifest) |positions| allocator.free(positions);
+    if (host_manifest) |positions| {
+        for (positions, 0..) |*position, ordinal| position.* = @intCast(ordinal);
     }
-    prepared_owned = false;
-    var host = lir.CheckedPipeline.lowerPreparedSolvedToLir(prepared) catch |err| switch (err) {
+    // A separate runtime consumer reads its compile-time values out of this
+    // program's frozen data, so the roots the producer records reads of
+    // materialize their completed values here. A reused program reads its own
+    // slots and needs no materialization it did not already demand.
+    const completed_values = if (reuse_host)
+        &[_]lir.CheckedPipeline.CompletedValueRequest{}
+    else
+        try collectCompletedValueRequests(allocator, modules, &prepared);
+    defer allocator.free(completed_values);
+    const host_consumer = lir.CheckedPipeline.Consumer{
+        .roots = .{
+            .roots = host_manifest,
+            .completed_values = completed_values,
+            .layout_requests = reuse_host,
+            .runtime_schema_requests = reuse_host,
+        },
+        .target_usize = host_target.target_usize,
+        .inline_expects = host_target.inline_expects,
+        .observers = lir.CheckedPipeline.Observers.fromTarget(host_target),
+    };
+    // The producer program is released as soon as its last consumer no longer
+    // reads it, which is before that consumer's procedure passes and ARC.
+    const retains_producer = share_runtime and !reuse_host;
+    if (!retains_producer) prepared_owned = false;
+    var host = (if (retains_producer)
+        lir.CheckedPipeline.lowerConsumerToLir(&prepared, host_consumer)
+    else
+        lir.CheckedPipeline.lowerFinalConsumerToLir(prepared, host_consumer)) catch |err| switch (err) {
         error.OutOfMemory => return error.OutOfMemory,
         error.HostedFunctionNotBound => unreachable,
     };
     errdefer host.deinit();
+    if (host.lir_result.root_procs.items.len != host_root_count)
+        finalizationInvariant("compile-time consumer lowering changed the requested root count");
+    var native_artifacts: ?NativeProcCompiler.Retained = null;
+    errdefer if (native_artifacts) |*artifacts| artifacts.deinit();
     var evaluation_options = options;
     evaluation_options.debug_events = &debug_events;
     if (compile_time_root_count != 0) {
@@ -469,6 +560,8 @@ pub fn finalizeProgram(
             native.codegen.static_strings = native.static_strings.view();
             try finalizeLoweredProgram(allocator, modules, &host, compile_time_root_count, &native, evaluation_options);
             host.frozen_static_data = try native.freezeCompleted();
+            native_artifacts = native.artifacts;
+            native.artifacts = null;
         }
     } else {
         for (modules) |entry| {
@@ -488,9 +581,45 @@ pub fn finalizeProgram(
         .runtime_roots = retained_roots,
         .runtime_target = runtime_target,
         .host = host,
-        .runtime_prepared = runtime_prepared,
+        .runtime_prepared = if (retains_producer) prepared else null,
         .compile_time_root_count = compile_time_root_count,
+        .native_artifacts = native_artifacts,
     };
+}
+
+/// The compile-time consumer's materialization requests.
+///
+/// The producer program records which evaluated roots it reads a completed
+/// value of, so the requests are exactly the compile-time roots this
+/// compilation evaluates that appear in that record, named by the producer's
+/// own root identity and by their position in the shared root plan. A root
+/// nothing reads is still evaluated for its diagnostics, and its value is
+/// retained only by whatever checked module data asked for it.
+fn collectCompletedValueRequests(
+    allocator: Allocator,
+    modules: []const ProgramModule,
+    prepared: *const lir.CheckedPipeline.PreparedSolved,
+) Allocator.Error![]lir.CheckedPipeline.CompletedValueRequest {
+    const reads = prepared.comptimeValueReads();
+    if (reads.len == 0) return &.{};
+    const ValueRoot = @FieldType(lir.CheckedPipeline.CompletedValueRequest, "value");
+    const ReadKey = struct { module: checked.ModuleId, root: checked.ComptimeRootId };
+    var read_roots = std.AutoHashMap(ReadKey, ValueRoot).init(allocator);
+    defer read_roots.deinit();
+    try read_roots.ensureTotalCapacity(@intCast(reads.len));
+    for (reads) |read| read_roots.putAssumeCapacity(.{ .module = read.module, .root = read.root }, read);
+    var owned = std.ArrayList(lir.CheckedPipeline.CompletedValueRequest).empty;
+    errdefer owned.deinit(allocator);
+    var position: u32 = 0;
+    for (modules) |entry| {
+        for (entry.module.root_requests.compile_time_requests) |request| {
+            defer position += 1;
+            const root = compileTimeRootForRequest(entry.module, request);
+            const read = read_roots.get(.{ .module = entry.module.key, .root = root }) orelse continue;
+            try owned.append(allocator, .{ .root = position, .value = read });
+        }
+    }
+    return try owned.toOwnedSlice(allocator);
 }
 
 /// A slot read demands its declared producer before observing its storage.
@@ -609,6 +738,8 @@ pub const Timing = struct {
     /// burst fold a footprint reading at the same points.
     mem_min: MemMinCounter = MemMinCounter.init(std.math.maxInt(u64)),
     mem_max: MemMaxCounter = .{},
+    native_emission_mutex: std.atomic.Mutex = .unlocked,
+    native_emission: NativeProcCompiler.Metrics = .{},
 
     pub fn init(std_io: std.Io) Timing {
         return .{
@@ -618,6 +749,9 @@ pub const Timing = struct {
     }
 
     pub fn snapshot(self: *const Timing) TimingSnapshot {
+        const mutable = @constCast(self);
+        while (!mutable.native_emission_mutex.tryLock()) std.atomic.spinLoopHint();
+        defer mutable.native_emission_mutex.unlock();
         return .{
             .total_ns = self.total_ns.load(),
             .lowering = self.lowering.snapshot(),
@@ -627,10 +761,18 @@ pub const Timing = struct {
             .store_results_ns = self.store_results_ns.load(),
             .mem_min = self.mem_min.load(),
             .mem_max = self.mem_max.load(),
+            .native_emission = self.native_emission,
         };
     }
 
+    fn addNativeEmission(self: *Timing, metrics: NativeProcCompiler.Metrics) void {
+        while (!self.native_emission_mutex.tryLock()) std.atomic.spinLoopHint();
+        defer self.native_emission_mutex.unlock();
+        self.native_emission.add(metrics);
+    }
+
     pub fn addSnapshot(self: *Timing, snapshot_value: TimingSnapshot) void {
+        self.addNativeEmission(snapshot_value.native_emission);
         self.lowering.addSnapshot(snapshot_value.lowering);
         self.total_ns.add(snapshot_value.total_ns);
         self.static_data_ns.add(snapshot_value.static_data_ns);
@@ -686,6 +828,7 @@ pub const TimingSnapshot = struct {
     store_results_ns: u64 = 0,
     mem_min: u64 = std.math.maxInt(u64),
     mem_max: u64 = 0,
+    native_emission: NativeProcCompiler.Metrics = .{},
 };
 
 test "shared lowering timing preserves full snapshots through aggregation" {
@@ -709,6 +852,7 @@ test "shared lowering timing preserves full snapshots through aggregation" {
         .store_results_ns = 113,
         .mem_min = 127,
         .mem_max = 131,
+        .native_emission = .{ .tasks_submitted = 3, .procedures_emitted = 5, .procedures_reused = 7, .peak_inflight_fragments = 2 },
     };
     var first = Timing.init(std.testing.io);
     first.addSnapshot(input);
@@ -725,6 +869,10 @@ test "shared lowering timing preserves full snapshots through aggregation" {
     try std.testing.expectEqual(@as(u64, 202), result.total_ns);
     try std.testing.expectEqual(@as(u64, 127), result.mem_min);
     try std.testing.expectEqual(@as(u64, 131), result.mem_max);
+    try std.testing.expectEqual(@as(u64, 6), result.native_emission.tasks_submitted);
+    try std.testing.expectEqual(@as(u64, 10), result.native_emission.procedures_emitted);
+    try std.testing.expectEqual(@as(u64, 14), result.native_emission.procedures_reused);
+    try std.testing.expectEqual(@as(u64, 2), result.native_emission.peak_inflight_fragments);
     try std.testing.expectEqualDeep(TimingSnapshot{}, Timing.init(std.testing.io).snapshot());
 }
 
@@ -1940,10 +2088,20 @@ const StaticSlotEnvironment = struct {
         for (lowered.lir_result.static_data_values.items, 0..) |entry, index| {
             const root = entry.compile_time_root orelse continue;
             if (!std.meta.eql(root.module, module) or root.root != root_id or root.role != .value) continue;
+            // The slot may hold a pointer to the value rather than the value:
+            // a constant folded into a recursive tag's payload lands in a
+            // pointer slot, while the root's own procedure returns the union
+            // unboxed. Both describe the same value, and the freezer emits the
+            // payload as its own node with a relocation into the slot.
             const destination_layout = entry.layout_idx;
-            if (destination_layout != plan.ret_layout) finalizationInvariant("evaluated root requires its explicit instance conversion");
+            if (destination_layout != plan.ret_layout) {
+                const destination = lowered.lir_result.layouts.getLayout(destination_layout);
+                if (destination.tag != .box or destination.getIdx() != plan.ret_layout) {
+                    finalizationInvariant("evaluated root requires its explicit instance conversion");
+                }
+            }
             const slot: lir.LIR.StaticDataId = @enumFromInt(index);
-            const exports = try NativeRootExport.freezeRoot(self.allocator, &lowered.lir_result, slot, plan, value, callables);
+            const exports = try NativeRootExport.freezeRootIntoSlot(self.allocator, &lowered.lir_result, slot, plan, value, callables, destination_layout);
             try self.installExports(lowered, slot, exports, functions);
             lir.ComptimeValueGuards.completeSuccessfulSlot(&lowered.lir_result, slot);
         }
@@ -2114,6 +2272,7 @@ const DevProgram = struct {
     splice: backend.dev.HostSplice,
     executable: backend.ExecutableMemory,
     entry_offsets: collections.DenseMap(lir.LIR.LirProcSpecId, usize),
+    artifacts: ?NativeProcCompiler.Retained,
 
     fn init(allocator: Allocator, modules: lir.CheckedPipeline.CheckedModuleSet, lowered: *lir.CheckedPipeline.LoweredProgram, options: Options) FinalizeError!DevProgram {
         const static_data_started_ns = if (options.timing) |timing| timing.start() else 0;
@@ -2140,14 +2299,16 @@ const DevProgram = struct {
         errdefer codegen.deinit();
         codegen.dict_seed_mode = .comptime_zero;
         codegen.setNativeStaticData(slots.addresses);
-        codegen.setComptimeHooks(.{
+        try codegen.setStaticDataSymbols(slots.materialized);
+        const hooks = backend.dev.LirCodeGenMod.ComptimeHooks{
             .branch_taken = CompileTimeHost.rocComptimeBranchTaken,
             .exhaustiveness_failed = CompileTimeHost.rocComptimeExhaustivenessFailed,
             .failure_region = CompileTimeHost.rocComptimeFailureRegion,
             .ensure_static_value = CompileTimeHost.rocComptimeEnsureStaticValue,
             .call_enter = CompileTimeHost.rocComptimeCallEnter,
             .call_exit = CompileTimeHost.rocComptimeCallExit,
-        });
+        };
+        codegen.setComptimeHooks(hooks);
         var native_fns = boxyNativeFnTable();
         codegen.boxy_native_fns = &native_fns;
         const evaluation_roots = try allocator.alloc(lir.LIR.LirProcSpecId, lowered.lir_result.const_roots.items.len);
@@ -2157,11 +2318,22 @@ const DevProgram = struct {
         defer allocator.free(evaluation_demand);
         var splice = backend.dev.HostSplice.init(allocator);
         errdefer splice.deinit();
+        splice.setComptimeHooks(hooks);
+        splice.bindStaticDataSymbols(slots.materialized, &slots.image) catch |err| switch (err) {
+            error.OutOfMemory => return error.OutOfMemory,
+            error.MissingStaticDataSymbol => finalizationInvariant("CTFE slot image omitted a declared static data symbol"),
+            error.DuplicateStaticDataSymbol => finalizationInvariant("CTFE slot image contains conflicting static data symbols"),
+        };
         if (options.splice_source) |source| try splice.spliceExternal(&codegen, evaluation_demand, source);
-        try codegen.compileSelectedProcSpecs(evaluation_demand);
         const static_rc_helpers = try static_data_exports.collectRequiredRcHelpers(allocator, slots.materialized);
         defer allocator.free(static_rc_helpers);
-        try codegen.compileStaticDataRcHelpers(static_rc_helpers);
+        var artifacts = try compileProcedures(allocator, &codegen, evaluation_demand, static_rc_helpers, options);
+        errdefer artifacts.deinit();
+        // Prepared fragments own their carried strings and pointer cells.
+        // The splice borrows those bytes until image placement completes.
+        const carried_data = try artifacts.dataItems(allocator);
+        defer allocator.free(carried_data);
+        try splice.addDataItems(carried_data);
 
         var entry_offsets = collections.DenseMap(lir.LIR.LirProcSpecId, usize).init(allocator);
         errdefer entry_offsets.deinit();
@@ -2225,7 +2397,20 @@ const DevProgram = struct {
             .splice = splice,
             .executable = executable,
             .entry_offsets = entry_offsets,
+            .artifacts = artifacts,
         };
+    }
+
+    fn compileProcedures(allocator: Allocator, codegen: *backend.HostLirCodeGen, demand: []const lir.LIR.LirProcSpecId, static_helpers: []const @import("layout").RcHelperKey, options: Options) Allocator.Error!NativeProcCompiler.Retained {
+        var metrics: NativeProcCompiler.Metrics = .{};
+        const artifacts = try NativeProcCompiler.run(backend.HostLirCodeGen, allocator, codegen, demand, .{
+            .target = backend.dev.LirCodeGenMod.host_lir_codegen_target,
+            .executor = options.post_check_executor,
+            .static_helpers = static_helpers,
+            .metrics_out = &metrics,
+        });
+        if (options.timing) |timing| timing.addNativeEmission(metrics);
+        return artifacts;
     }
 
     fn resolveCallable(raw: ?*anyopaque, data_ptr: [*]u8) error{RuntimeError}!NativeRootExport.CallableResolution {
@@ -2267,6 +2452,7 @@ const DevProgram = struct {
         self.executable.deinit();
         self.splice.deinit();
         self.codegen.deinit();
+        if (self.artifacts) |*artifacts| artifacts.deinit();
         self.slots.deinit();
         self.static_strings.deinit();
         self.* = undefined;
@@ -3504,6 +3690,116 @@ test "compile-time finalization declarations are referenced" {
     std.testing.refAllDecls(@This());
 }
 
+test "CTFE native emission uses worker callbacks and retains reusable code without its image" {
+    if (comptime !backend.host_lir_codegen_available) return error.SkipZigTest;
+    const allocator = std.testing.allocator;
+    const tasks = base.post_check_task_executor;
+    const ExecutorFixture = struct {
+        lane: tasks.LaneState,
+        completions: std.ArrayList(tasks.Completion) = .empty,
+        callbacks: usize = 0,
+
+        fn begin(_: *anyopaque) void {}
+        fn end(_: *anyopaque) void {}
+        fn submit(raw: *anyopaque, task: tasks.Task) Allocator.Error!void {
+            const self: *@This() = @ptrCast(@alignCast(raw));
+            var scratch = std.heap.ArenaAllocator.init(std.testing.allocator);
+            defer scratch.deinit();
+            self.callbacks += 1;
+            const value = task.run(task.context, .{
+                .id = 0,
+                .allocator = std.testing.allocator,
+                .scratch = scratch.allocator(),
+                .lane_state = &self.lane,
+            });
+            try self.completions.append(std.testing.allocator, .{ .id = task.id, .worker_id = 0, .value = value });
+        }
+        fn receive(raw: *anyopaque) tasks.Completion {
+            const self: *@This() = @ptrCast(@alignCast(raw));
+            return self.completions.orderedRemove(0);
+        }
+        fn executor(self: *@This()) tasks.Executor {
+            return .{ .context = self, .worker_count = 1, .beginFn = begin, .submitFn = submit, .receiveFn = receive, .endFn = end };
+        }
+    };
+    var program = try LirProgram.Result.init(allocator, .native);
+    defer program.deinit();
+    const answer = try program.store.addLocal(.{ .layout_idx = .u64 });
+    const ret = try program.store.addCFStmt(.{ .ret = .{ .value = answer } });
+    const body = try program.store.addCFStmt(.{ .assign_literal = .{ .target = answer, .value = .{ .i64_literal = .{ .value = 42, .layout_idx = .u64 } }, .next = ret } });
+    const proc = try program.store.addProcSpec(.{
+        .name = .fromRaw(0),
+        .identity = lir.LIR.ProcIdentity.forTest(901),
+        .args = .empty(),
+        .frame_locals = try program.store.addLocalSpan(&.{answer}),
+        .body = body,
+        .ret_layout = .u64,
+    });
+    var timing = Timing.init(std.testing.io);
+    var retained = block: {
+        var executor = ExecutorFixture{ .lane = tasks.LaneState.init(allocator) };
+        defer executor.lane.deinit();
+        defer executor.completions.deinit(allocator);
+        var strings = try backend.StaticStringData.build(allocator, &program.store, backend.dev.LirCodeGenMod.host_lir_codegen_target);
+        defer strings.deinit();
+        var codegen = try backend.HostLirCodeGen.initWithBoxyMetadata(allocator, &program.store, &program.layouts, strings.view(), &.{}, &.{}, &.{}, roc_target.host_cpu.level());
+        defer codegen.deinit();
+        codegen.dict_seed_mode = .comptime_zero;
+        codegen.setComptimeHooks(.{
+            .branch_taken = CompileTimeHost.rocComptimeBranchTaken,
+            .exhaustiveness_failed = CompileTimeHost.rocComptimeExhaustivenessFailed,
+            .failure_region = CompileTimeHost.rocComptimeFailureRegion,
+            .ensure_static_value = CompileTimeHost.rocComptimeEnsureStaticValue,
+            .call_enter = CompileTimeHost.rocComptimeCallEnter,
+            .call_exit = CompileTimeHost.rocComptimeCallExit,
+        });
+        var artifacts = try DevProgram.compileProcedures(allocator, &codegen, &.{proc}, &.{}, .{ .post_check_executor = executor.executor(), .timing = &timing });
+        errdefer artifacts.deinit();
+        try std.testing.expect(executor.callbacks > 0);
+        try std.testing.expect(timing.snapshot().native_emission.procedures_emitted > 0);
+        const entry = try codegen.generateEntrypointWrapper("ctfe_retained_leaf", proc, &.{}, .u64);
+        try codegen.finishImage();
+        var image = try backend.ExecutableMemory.initWithEntryOffset(codegen.getGeneratedCode(), 0);
+        defer image.deinit();
+        var result: u64 = 0;
+        image.callRocABIAt(entry.offset, @ptrCast(&result), null);
+        try std.testing.expectEqual(@as(u64, 42), result);
+        break :block artifacts;
+    };
+    defer retained.deinit();
+    // Every producer workspace, string table, and executable mapping is dead.
+    // Only the same LIR domain and independently owned artifacts remain.
+    for (0..2) |iteration| {
+        if (iteration == 1) program.store.getProcSpecPtr(proc).native_code_revision += 1;
+        var strings = try backend.StaticStringData.build(allocator, &program.store, backend.dev.LirCodeGenMod.host_lir_codegen_target);
+        defer strings.deinit();
+        var codegen = try backend.HostLirCodeGen.initWithBoxyMetadata(allocator, &program.store, &program.layouts, strings.view(), &.{}, &.{}, &.{}, roc_target.host_cpu.level());
+        defer codegen.deinit();
+        var metrics: NativeProcCompiler.Metrics = .{};
+        var runtime_artifacts = try NativeProcCompiler.run(backend.HostLirCodeGen, allocator, &codegen, &.{proc}, .{
+            .target = backend.dev.LirCodeGenMod.host_lir_codegen_target,
+            .reuse_same_program = &retained,
+            .metrics_out = &metrics,
+        });
+        defer runtime_artifacts.deinit();
+        if (iteration == 0) {
+            try std.testing.expectEqual(@as(u64, 1), metrics.procedures_reused);
+            try std.testing.expectEqual(@as(u64, 0), metrics.procedures_emitted);
+        } else {
+            try std.testing.expectEqual(@as(u64, 0), metrics.procedures_reused);
+            try std.testing.expectEqual(@as(u64, 1), metrics.procedures_emitted);
+            try std.testing.expectEqual(@as(u64, 1), metrics.rejected_revision);
+        }
+        const entry = try codegen.generateEntrypointWrapper("runtime_retained_leaf", proc, &.{}, .u64);
+        try codegen.finishImage();
+        var image = try backend.ExecutableMemory.initWithEntryOffset(codegen.getGeneratedCode(), 0);
+        defer image.deinit();
+        var result: u64 = 0;
+        image.callRocABIAt(entry.offset, @ptrCast(&result), null);
+        try std.testing.expectEqual(@as(u64, 42), result);
+    }
+}
+
 test "shared compile-time debug replay sorts module root and event identities" {
     const allocator = std.testing.allocator;
     var events = DebugEvents{ .allocator = allocator };
@@ -3888,7 +4184,7 @@ test "shared frozen erased callables execute on interpreter dev and LLVM" {
         .capture_layout = .str,
         .template = .{ .fn_def = undefined, .source_fn_ty = undefined, .source_fn_key = undefined },
         .captures = captures,
-        .on_drop = .{ .rc_helper = .{ .op = .decref, .layout_idx = .str } },
+        .on_drop = .{ .rc_helper = .{ .op = .host_drop, .layout_idx = .str } },
     }});
     try program.erased_fns.append(allocator, .{ .layout = erased_layout, .entries = entries });
     const slot_name = try LirProgram.staticDataSymbolName(allocator, closure_slot);
@@ -3899,11 +4195,11 @@ test "shared frozen erased callables execute on interpreter dev and LLVM" {
     var payload_bytes: [4 * word + @sizeOf(builtins.str.RocStr)]u8 = @splat(0);
     const capture_str = builtins.str.RocStr.fromSliceSmall("capture");
     @memcpy(payload_bytes[4 * word ..], std.mem.asBytes(&capture_str));
-    const drop_name = try static_data_exports.atomicRcHelperSymbolName(allocator, &program.layouts, .{ .op = .decref, .layout_idx = .str });
+    const drop_name = try static_data_exports.atomicRcHelperSymbolName(allocator, &program.layouts, .{ .op = .host_drop, .layout_idx = .str });
     defer allocator.free(drop_name);
     const exports = try static_data_exports.cloneStaticData(allocator, &.{
         .{ .symbol_name = slot_name, .value_id = closure_slot, .bytes = &(@as([word]u8, @splat(0))), .alignment = @alignOf(usize), .relocations = &.{.{ .offset = 0, .target_symbol_name = "closure_payload", .target = .{ .data_symbol = @enumFromInt(1) }, .addend = 2 * word }} },
-        .{ .symbol_name = "closure_payload", .bytes = &payload_bytes, .alignment = builtins.erased_callable.payload_alignment, .relocations = &.{ .{ .offset = 2 * word, .target_symbol_name = proc_name, .kind = .function_pointer, .procedure = worker, .callable_capture_offset = builtins.erased_callable.capture_offset }, .{ .offset = 3 * word, .target_symbol_name = drop_name, .kind = .function_pointer, .rc_helper = .{ .op = .decref, .layout_idx = .str } } } },
+        .{ .symbol_name = "closure_payload", .bytes = &payload_bytes, .alignment = builtins.erased_callable.payload_alignment, .relocations = &.{ .{ .offset = 2 * word, .target_symbol_name = proc_name, .kind = .function_pointer, .procedure = worker, .callable_capture_offset = builtins.erased_callable.capture_offset }, .{ .offset = 3 * word, .target_symbol_name = drop_name, .kind = .function_pointer, .rc_helper = .{ .op = .host_drop, .layout_idx = .str } } } },
     });
     defer static_data_exports.deinitStaticData(allocator, exports);
     const StaticInterpreterData = @import("interpreter_static_data.zig").InterpreterStaticData;

@@ -26,6 +26,7 @@ pub const ExecutableMemory = dev.ExecutableMemory;
 pub const HostLirCodeGen = dev.HostLirCodeGen;
 pub const host_lir_codegen_available = dev.host_lir_codegen_available;
 pub const LirCodeGenMod = dev.LirCodeGenMod;
+pub const NativeProcCompiler = dev.NativeProcCompiler;
 pub const DevBackend = dev.DevBackend;
 pub const Storage = dev.Storage;
 pub const X86_64LinuxBackend = dev.X86_64LinuxBackend;
@@ -53,7 +54,12 @@ test "backend tests" {
     const std = @import("std");
     std.testing.refAllDecls(StructuralTest);
     std.testing.refAllDecls(dev);
+    std.testing.refAllDecls(NativeProcCompiler);
     std.testing.refAllDecls(wasm);
+}
+
+test "native driver tests" {
+    @import("std").testing.refAllDecls(NativeProcCompiler);
 }
 
 test "issue 10295: dev backend preserves deep structural equality under register pressure" {

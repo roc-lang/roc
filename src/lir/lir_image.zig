@@ -53,7 +53,8 @@ pub const MAGIC: u32 = 0x52494c52; // "RLIR" in little-endian bytes.
 ///      self-tail proofs.
 /// v31: frozen static values and explicit callable/data relocations.
 /// v32: procedure specs carry content identities.
-pub const FORMAT_VERSION: u32 = 33;
+/// v34: procedure specs carry producer-local native code revisions.
+pub const FORMAT_VERSION: u32 = 34;
 const StaticDataImage = @import("lir_image_static_data.zig").Schema(@This());
 
 /// Public `ImageError` declaration.
@@ -1331,6 +1332,7 @@ test "LIR image views empty and populated boxy tables" {
     const proc_id = try lowered.store.addProcSpec(.{
         .name = lowered.store.freshSyntheticSymbol(),
         .identity = LIR.ProcIdentity.forTest(3),
+        .native_code_revision = 7,
         .args = try lowered.store.addLocalSpan(&.{ret_desc_local}),
         .body = ret_stmt,
         .ret_layout = .str,
@@ -1373,6 +1375,7 @@ test "LIR image views empty and populated boxy tables" {
     try std.testing.expect(populated_view.layouts.struct_fields.fieldItem(.is_padding, struct_field_idx));
     try std.testing.expectEqual(layout_mod.Idx.u64, populated_view.layouts.tag_union_variants.fieldItem(.payload_layout, tag_variant_idx));
     try std.testing.expectEqual(LIR.BoxyDescRef{ .local = ret_desc_local }, populated_view.store.getProcSpec(proc_id).ret_desc.?);
+    try std.testing.expectEqual(@as(u64, 7), populated_view.store.getProcSpec(proc_id).native_code_revision);
 }
 
 // Regression for issue #11153: folded scalar lists share the literal store,

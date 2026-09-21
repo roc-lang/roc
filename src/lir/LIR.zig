@@ -63,9 +63,28 @@ pub const ProcIdentity = struct {
         return std.fmt.bytesToHex(self.bytes[0..16].*, .lower);
     }
 
+    /// Bytes that every procedure symbol name begins with.
+    pub const symbol_name_prefix = "roc__proc_";
+
+    /// Length of a procedure symbol name. The identity encoding fixes it: the
+    /// prefix plus the hex of the leading 128 bits.
+    pub const symbol_name_len = symbol_name_prefix.len + 32;
+
+    /// Write this procedure's object symbol into caller-owned storage.
+    ///
+    /// Naming a procedure is on the path that registers every procedure with a
+    /// backend, so it does no formatting work: the length is known, and the
+    /// two pieces are copied into place.
+    pub fn writeSymbolName(self: ProcIdentity, buffer: *[symbol_name_len]u8) []u8 {
+        @memcpy(buffer[0..symbol_name_prefix.len], symbol_name_prefix);
+        buffer[symbol_name_prefix.len..].* = self.symbolHex();
+        return buffer;
+    }
+
     /// The object symbol that names this procedure in every program.
     pub fn symbolName(self: ProcIdentity, allocator: std.mem.Allocator) std.mem.Allocator.Error![]u8 {
-        return std.fmt.allocPrint(allocator, "roc__proc_{s}", .{&self.symbolHex()});
+        const name = try allocator.alloc(u8, symbol_name_len);
+        return self.writeSymbolName(name[0..symbol_name_len]);
     }
 
     /// Identity of a procedure a pass derives from this one: the same role
@@ -1182,6 +1201,10 @@ pub const LirProcSpec = struct {
     name: Symbol,
     /// Content identity; every symbol emitted for this procedure derives from it.
     identity: ProcIdentity,
+    /// Session-local code-generation provenance, not semantic identity.
+    /// Compare only inside the same LIR producer domain, with matching target
+    /// and emission policy; equal revisions across separate lowers prove nothing.
+    native_code_revision: u64 = 0,
     args: LocalSpan,
     /// Producer-authored provenance for a function normalized from an
     /// iterator pipeline. Dev-only structural fusion consumes this bit; it

@@ -27,12 +27,12 @@ Capability(a) := [Capability(HostValue.CapabilityHandle)].{
     handle : Capability(a) -> HostValue.CapabilityHandle
     handle = |Capability(handle_value)| handle_value
 
-    store : Box(a), Capability(a) -> HostValue
-    store = |boxed, cap| HostValue.store_with_capability!(boxed, Capability.handle(cap))
+    store! : Box(a), Capability(a) => HostValue
+    store! = |boxed, cap| HostValue.store_with_capability!(boxed, Capability.handle(cap))
 
-    get : HostValue, Capability(a) -> Box(a)
-    get = |host_value, cap| HostValue.get_with_capability!(host_value, Capability.handle(cap))
+    get! : HostValue, Capability(a) => Box(a)
+    get! = |host_value, cap| HostValue.get_with_capability!(host_value, Capability.handle(cap))
 
-    take : HostValue, Capability(a) -> Box(a)
-    take = |host_value, cap| HostValue.take_with_capability!(host_value, Capability.handle(cap))
+    take! : HostValue, Capability(a) => Box(a)
+    take! = |host_value, cap| HostValue.take_with_capability!(host_value, Capability.handle(cap))
 }

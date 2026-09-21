@@ -1037,7 +1037,8 @@ fn hostTreeClonePayload(tree: *const HostTree, ops: *builtins.host_abi.RocOps) H
     };
 }
 
-fn hostTreeDropPayload(tree_ptr: ?[*]u8, ops: *builtins.host_abi.RocOps) callconv(.c) void {
+fn hostTreeDropPayload(tree_ptr: ?[*]u8) callconv(.c) void {
+    const ops = builtins.in_process_host.ops();
     const tree = capturePtrAs(HostTree, tree_ptr);
     switch (tree.discriminant) {
         0 => {},
@@ -1050,7 +1051,8 @@ fn hostTreeDropPayload(tree_ptr: ?[*]u8, ops: *builtins.host_abi.RocOps) callcon
     }
 }
 
-fn hostTreeDropPayloadWithoutReport(tree_ptr: ?[*]u8, ops: *builtins.host_abi.RocOps) callconv(.c) void {
+fn hostTreeDropPayloadWithoutReport(tree_ptr: ?[*]u8) callconv(.c) void {
+    const ops = builtins.in_process_host.ops();
     const tree = capturePtrAs(HostTree, tree_ptr);
     switch (tree.discriminant) {
         0 => {},
@@ -1080,16 +1082,16 @@ fn hostTreeCallable(_: *builtins.host_abi.RocOps, ret: ?[*]u8, args: ?[*]const u
     ret_desc.* = null;
 }
 
-fn hostTreeCaptureOnDrop(capture_ptr: ?[*]u8, ops: *builtins.host_abi.RocOps) callconv(.c) void {
+fn hostTreeCaptureOnDrop(capture_ptr: ?[*]u8, _: *builtins.host_abi.RocOps) callconv(.c) void {
     const capture = capturePtrAs(TreeCapture, capture_ptr);
-    hostTreeDropPayload(@ptrCast(&capture.tree), ops);
+    hostTreeDropPayload(@ptrCast(&capture.tree));
     boxed_host_drop_counts.recursive_tree += 1;
 }
 
 fn hostedHostBoxedRecursiveTree(tree: HostTree) callconv(.c) ?[*]u8 {
     const ops = g_roc_ops.?;
     var tree_local = tree;
-    defer hostTreeDropPayloadWithoutReport(@ptrCast(&tree_local), ops);
+    defer hostTreeDropPayloadWithoutReport(@ptrCast(&tree_local));
     var ret: ?[*]u8 = null;
     writeErasedCallable(
         TreeCapture,

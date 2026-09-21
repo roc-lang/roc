@@ -58,8 +58,6 @@ pub const TypeVarAliasBinding = struct {
 /// Maps an Ident to a Pattern in the Can IR
 idents: std.AutoHashMapUnmanaged(Ident.Idx, CIR.Pattern.Idx),
 aliases: std.AutoHashMapUnmanaged(Ident.Idx, CIR.Pattern.Idx),
-/// Forward references: identifiers that have been referenced but not yet defined
-forward_references: std.AutoHashMapUnmanaged(Ident.Idx, ForwardReference),
 /// Canonical bindings for type names (local, auto-imported, and imported types)
 type_bindings: std.AutoHashMapUnmanaged(Ident.Idx, TypeBinding),
 /// Maps type variables to their type annotation indices
@@ -83,7 +81,6 @@ pub fn init(is_function_boundary: bool) Scope {
     return Scope{
         .idents = std.AutoHashMapUnmanaged(Ident.Idx, CIR.Pattern.Idx){},
         .aliases = std.AutoHashMapUnmanaged(Ident.Idx, CIR.Pattern.Idx){},
-        .forward_references = std.AutoHashMapUnmanaged(Ident.Idx, ForwardReference){},
         .type_bindings = std.AutoHashMapUnmanaged(Ident.Idx, TypeBinding){},
         .type_vars = std.AutoHashMapUnmanaged(Ident.Idx, CIR.TypeAnno.Idx){},
         .type_var_aliases = std.AutoHashMapUnmanaged(Ident.Idx, TypeVarAliasBinding){},
@@ -99,13 +96,6 @@ pub fn init(is_function_boundary: bool) Scope {
 pub fn deinit(self: *Scope, gpa: std.mem.Allocator) void {
     self.idents.deinit(gpa);
     self.aliases.deinit(gpa);
-
-    // Deinit forward reference arraylists
-    var forward_iter = self.forward_references.valueIterator();
-    while (forward_iter.next()) |forward_ref| {
-        forward_ref.reference_regions.deinit(gpa);
-    }
-    self.forward_references.deinit(gpa);
 
     self.type_bindings.deinit(gpa);
     self.type_vars.deinit(gpa);

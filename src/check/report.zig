@@ -78,6 +78,8 @@ const PlatformAliasNotFound = problem_mod.PlatformAliasNotFound;
 const PlatformDefNotFound = problem_mod.PlatformDefNotFound;
 const PlatformHostedSection = problem_mod.PlatformHostedSection;
 const HostedUnboxedFunction = problem_mod.HostedUnboxedFunction;
+const HostedFunctionNotEffectful = problem_mod.HostedFunctionNotEffectful;
+const HostedTypeVariableNotBoxed = problem_mod.HostedTypeVariableNotBoxed;
 const HostBoundaryOpenRow = problem_mod.HostBoundaryOpenRow;
 const HostBoundaryOptionalField = problem_mod.HostBoundaryOptionalField;
 const AnnotationOnlyValue = problem_mod.AnnotationOnlyValue;
@@ -89,6 +91,7 @@ const EffectfulTopLevel = problem_mod.EffectfulTopLevel;
 const EffectfulComptimeExpression = problem_mod.EffectfulComptimeExpression;
 const EffectfulExpect = problem_mod.EffectfulExpect;
 const EffectfulFunctionName = problem_mod.EffectfulFunctionName;
+const RedundantOpenTagUnion = problem_mod.RedundantOpenTagUnion;
 
 // Comptime errors
 const ComptimeOrigin = problem_mod.ComptimeOrigin;
@@ -959,6 +962,19 @@ pub const ReportBuilder = struct {
                         mismatch.types.expected_snapshot,
                         &.{},
                     ),
+                    .tag_not_in_annotation => |ctx| return try self.makeMismatchReport(
+                        ProblemRegion{ .direct = ctx.region },
+                        &.{
+                            D.bytes("This definition can produce the tag"),
+                            D.ident(ctx.tag_name).withAnnotation(.inline_code),
+                            D.bytes("but the annotated tag union does not list it."),
+                        },
+                        &.{D.bytes("It has the type:")},
+                        mismatch.types.actual_snapshot,
+                        &.{D.bytes("But the annotation says it should be:")},
+                        mismatch.types.expected_snapshot,
+                        &.{&.{D.bytes("A tag union in an output position is open for the callers of this definition, which may use the result at a wider union, but the annotation still bounds the definition itself: it may only produce the tags the annotation lists.")}},
+                    ),
                     .record_destructure => return try self.buildRecordDestructureMismatch(mismatch.types),
                     .none => return try self.buildGenericMismatch(mismatch.types),
                 };
@@ -1039,6 +1055,12 @@ pub const ReportBuilder = struct {
             .hosted_unboxed_function => |data| {
                 return self.buildHostedUnboxedFunctionReport(data);
             },
+            .hosted_function_not_effectful => |data| {
+                return self.buildHostedFunctionNotEffectfulReport(data);
+            },
+            .hosted_type_variable_not_boxed => |data| {
+                return self.buildHostedTypeVariableNotBoxedReport(data);
+            },
             .host_boundary_open_row => |data| {
                 return self.buildHostBoundaryOpenRowReport(data);
             },
@@ -1073,6 +1095,7 @@ pub const ReportBuilder = struct {
             .non_exhaustive_match => |data| return self.buildNonExhaustiveMatchReport(data),
             .non_exhaustive_destructure => |data| return self.buildNonExhaustiveDestructureReport(data),
             .redundant_pattern => |data| return self.buildRedundantPatternReport(data),
+            .redundant_open_tag_union => |data| return self.buildRedundantOpenTagUnionReport(data),
             .unmatchable_pattern => |data| return self.buildUnmatchablePatternReport(data),
             .unreachable_code => |data| return self.buildUnreachableCodeReport(data),
             .comptime_unused_branch => |data| return self.buildComptimeUnusedBranchReport(data),
@@ -2363,6 +2386,24 @@ pub const ReportBuilder = struct {
     }
 
     /// Build a report for a where constraint whose receiver is not owned by this annotation.
+    fn buildRedundantOpenTagUnionReport(self: *Self, data: RedundantOpenTagUnion) Allocator.Error!Report {
+        var report = try Report.init(self.gpa, "Redundant Open Tag Union", "This tag union has an explicit `..`, but it is already implicitly open.", .warning);
+        errdefer report.deinit();
+
+        try self.addSourceWarningRegion(&report, data.region);
+
+        try report.document.addLineBreak();
+        try report.document.addLineBreak();
+        try D.renderSlice(&.{
+            D.bytes("Tag unions in output positions, like the return type of a function, are automatically open. Remove the"),
+            D.bytes("..").withAnnotation(.inline_code),
+            D.bytes("or bind it to a named type variable like"),
+            D.bytes("..others").withAnnotation(.inline_code),
+            D.bytes("if you want to refer to the extension elsewhere."),
+        }, self, &report);
+        return report;
+    }
+
     fn buildWhereClauseReceiverNotIntroducedReport(
         self: *Self,
         data: WhereClauseReceiverNotIntroduced,
@@ -2398,6 +2439,44 @@ pub const ReportBuilder = struct {
 
     // static dispatch //
 
+    /// Headline for a failed obligation that a use of an annotated value
+    /// created from its `where` clause: the violation is at that use.
+    fn renderOwnedObligationMissingMethodHeadline(
+        self: *Self,
+        report: *Report,
+        method_name: Ident.Idx,
+    ) Allocator.Error!void {
+        try D.renderSliceInto(&.{
+            D.bytes("A"),
+            D.bytes("where").withAnnotation(.inline_code),
+            D.bytes("clause requires the"),
+            D.ident(method_name).withAnnotation(.inline_code),
+            D.bytes("method here, but the type being used doesn't have that method."),
+        }, self, report, &report.headline);
+    }
+
+    /// Highlight where a static dispatch constraint failed: at the expression
+    /// that owns the failed obligation when there is one, and otherwise at the
+    /// constraint's own provenance.
+    fn addConstraintFailureHighlight(
+        self: *Self,
+        report: *Report,
+        owner_region: ?Region,
+        fn_var: Var,
+    ) Allocator.Error!void {
+        const region: Region = owner_region orelse
+            (self.getRegionSafe(@enumFromInt(@intFromEnum(fn_var))) orelse return).*;
+        const region_info = self.module_env.calcRegionInfo(region);
+        try report.document.addSourceRegion(
+            region_info,
+            .error_highlight,
+            self.filename,
+            self.source,
+            self.module_env.getLineStarts(),
+        );
+        try report.document.addLineBreak();
+    }
+
     /// Build a report for when a type is not nominal, but you're trying to
     /// static dispatch on it
     fn buildStaticDispatchDispatcherNotNominal(
@@ -2406,26 +2485,19 @@ pub const ReportBuilder = struct {
     ) Allocator.Error!Report {
         var report = try Report.init(self.gpa, "Missing Method", "", .runtime_error);
         errdefer report.deinit();
-        try D.renderSliceInto(&.{
-            D.bytes("This"),
-            D.ident(data.method_name).withAnnotation(.inline_code),
-            D.bytes("method is being called on a value whose type doesn't have that method."),
-        }, self, &report, &report.headline);
+        if (data.owner_region != null and data.origin == .where_clause) {
+            try self.renderOwnedObligationMissingMethodHeadline(&report, data.method_name);
+        } else {
+            try D.renderSliceInto(&.{
+                D.bytes("This"),
+                D.ident(data.method_name).withAnnotation(.inline_code),
+                D.bytes("method is being called on a value whose type doesn't have that method."),
+            }, self, &report, &report.headline);
+        }
 
         const snapshot_str = try report.addOwnedString(self.getFormattedString(data.dispatcher_snapshot));
 
-        // Add source region highlighting
-        if (self.getRegionSafe(@enumFromInt(@intFromEnum(data.fn_var)))) |region| {
-            const region_info = self.module_env.calcRegionInfo(region.*);
-            try report.document.addSourceRegion(
-                region_info,
-                .error_highlight,
-                self.filename,
-                self.source,
-                self.module_env.getLineStarts(),
-            );
-            try report.document.addLineBreak();
-        }
+        try self.addConstraintFailureHighlight(&report, data.owner_region, data.fn_var);
 
         try D.renderSlice(&.{
             D.bytes("The value's type, which does not have a method named "),
@@ -2481,6 +2553,8 @@ pub const ReportBuilder = struct {
                 D.ident(data.method_name).withAnnotation(.inline_code),
                 D.bytes("method."),
             }, self, &report, &report.headline);
+        } else if (data.owner_region != null and data.origin == .where_clause) {
+            try self.renderOwnedObligationMissingMethodHeadline(&report, data.method_name);
         } else {
             try D.renderSliceInto(&.{
                 D.bytes("This"),
@@ -2491,18 +2565,7 @@ pub const ReportBuilder = struct {
 
         const snapshot_str = try report.addOwnedString(self.getFormattedString(data.dispatcher_snapshot));
 
-        // Add source region highlighting
-        if (self.getRegionSafe(@enumFromInt(@intFromEnum(data.fn_var)))) |region| {
-            const region_info = self.module_env.calcRegionInfo(region.*);
-            try report.document.addSourceRegion(
-                region_info,
-                .error_highlight,
-                self.filename,
-                self.source,
-                self.module_env.getLineStarts(),
-            );
-            try report.document.addLineBreak();
-        }
+        try self.addConstraintFailureHighlight(&report, data.owner_region, data.fn_var);
 
         try D.renderSlice(&.{
             D.bytes("The value's type, which does not have a method named "),
@@ -2992,22 +3055,23 @@ pub const ReportBuilder = struct {
         self: *Self,
         data: TypeDoesNotSupportEquality,
     ) Allocator.Error!Report {
-        var report = try Report.init(self.gpa, "Type Does Not Support Equality", "This expression is doing an equality check on a type that doesn't support equality.", .runtime_error);
+        var report = try Report.init(self.gpa, "Type Does Not Support Equality", "", .runtime_error);
         errdefer report.deinit();
+        if (data.owner_region != null and data.origin == .where_clause) {
+            try D.renderSliceInto(&.{
+                D.bytes("A"),
+                D.bytes("where").withAnnotation(.inline_code),
+                D.bytes("clause requires equality here, but the type being used doesn't support equality."),
+            }, self, &report, &report.headline);
+        } else {
+            try D.renderSliceInto(&.{
+                D.bytes("This expression is doing an equality check on a type that doesn't support equality."),
+            }, self, &report, &report.headline);
+        }
 
         const snapshot_str = try report.addOwnedString(self.getFormattedString(data.dispatcher_snapshot));
 
-        if (self.getRegionSafe(@enumFromInt(@intFromEnum(data.fn_var)))) |region| {
-            const region_info = self.module_env.calcRegionInfo(region.*);
-            try report.document.addSourceRegion(
-                region_info,
-                .error_highlight,
-                self.filename,
-                self.source,
-                self.module_env.getLineStarts(),
-            );
-            try report.document.addLineBreak();
-        }
+        try self.addConstraintFailureHighlight(&report, data.owner_region, data.fn_var);
 
         try D.renderSlice(&.{
             D.bytes("The type is:"),
@@ -3056,17 +3120,7 @@ pub const ReportBuilder = struct {
         var report = try Report.init(self.gpa, "Type Does Not Support Map", "This type does not have an unambiguous direct tag payload for compiler-derived mapping.", .runtime_error);
         errdefer report.deinit();
 
-        if (self.getRegionSafe(@enumFromInt(@intFromEnum(data.fn_var)))) |region| {
-            const region_info = self.module_env.calcRegionInfo(region.*);
-            try report.document.addSourceRegion(
-                region_info,
-                .error_highlight,
-                self.filename,
-                self.source,
-                self.module_env.getLineStarts(),
-            );
-            try report.document.addLineBreak();
-        }
+        try self.addConstraintFailureHighlight(&report, data.owner_region, data.fn_var);
 
         const snapshot_str = try report.addOwnedString(self.getFormattedString(data.dispatcher_snapshot));
         try D.renderSlice(&.{D.bytes("The type is:")}, self, &report);
@@ -4614,6 +4668,40 @@ pub const ReportBuilder = struct {
             D.bytes("Wrap function types in"),
             D.bytes("Box").withAnnotation(.inline_code),
             D.bytes("when crossing the host boundary."),
+        }, self, &report);
+        return report;
+    }
+
+    fn buildHostedFunctionNotEffectfulReport(self: *Self, data: HostedFunctionNotEffectful) Allocator.Error!Report {
+        var report = try Report.init(self.gpa, "Hosted Function Must Be Effectful", "Every function the host provides is effectful.", .runtime_error);
+        errdefer report.deinit();
+
+        try self.addSourceHighlightRegion(&report, data.region);
+
+        try report.document.addLineBreak();
+        try report.document.addLineBreak();
+        try D.renderSlice(&.{
+            D.bytes("Every use of it crashes at runtime until it is declared with"),
+            D.bytes("=>").withAnnotation(.inline_code),
+            D.bytes("instead of"),
+            D.bytes("->").withAnnotation(.inline_code),
+            D.bytes("like every other hosted function."),
+        }, self, &report);
+        return report;
+    }
+
+    fn buildHostedTypeVariableNotBoxedReport(self: *Self, data: HostedTypeVariableNotBoxed) Allocator.Error!Report {
+        var report = try Report.init(self.gpa, "Hosted Type Variable Must Be Boxed", "A hosted function's type variables can only appear inside a Box.", .runtime_error);
+        errdefer report.deinit();
+
+        try self.addSourceHighlightRegion(&report, data.region);
+
+        try report.document.addLineBreak();
+        try report.document.addLineBreak();
+        try D.renderSlice(&.{
+            D.bytes("The host has one C signature for every use of this function, so it can only receive or return a value of an unknown type through a pointer. Wrap each type variable in"),
+            D.bytes("Box").withAnnotation(.inline_code),
+            D.bytes("so the host only ever sees that pointer."),
         }, self, &report);
         return report;
     }

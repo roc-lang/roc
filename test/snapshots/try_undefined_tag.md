@@ -54,7 +54,7 @@ TYPE MISMATCH - try_undefined_tag.md:1:1:1:2
 			(line-break)
 			(annotation-start code-block)
 			(indent 1)
-			(text "[A, ..]")
+			(text "[A]")
 			(annotation-end)
 			(line-break)
 			(line-break)

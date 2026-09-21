@@ -428,6 +428,71 @@ test "where clause - discarded unpinned return type reports missing method" {
     try std.testing.expect(hasRuntimeErrorExpr(&test_env));
 }
 
+// repro for https://github.com/roc-lang/roc/issues/11427
+// `f0` passes an unconstrained rigid `a` to `f1`, whose annotation requires
+// `a.to_hash`. The violation belongs to the call `f1(a)` inside `f0`; `f1` and
+// `f2` are each correct in isolation and must not be blamed.
+test "where clause - unsatisfied annotated constraint is reported at the violating call" {
+    const source =
+        \\f0 : a -> a
+        \\f0 = |a| f1(a)
+        \\
+        \\f1 : a -> a where [a.to_hash : a, Hasher -> Hasher]
+        \\f1 = |a| f2(a)
+        \\
+        \\f2 : a -> a where [a.to_hash : a, Hasher -> Hasher]
+        \\f2 = |a| a
+    ;
+    var test_env = try TestEnv.init("Test", source);
+    defer test_env.deinit();
+
+    // Line 2 is `f0 = |a| f1(a)`; columns 10-15 span the call `f1(a)`.
+    try test_env.assertOneTypeErrorHighlightsWithin("Missing Method", .{
+        .line = 2,
+        .start_column = 10,
+        .end_column = 15,
+    });
+}
+
+test "where clause - unsatisfied equality constraint is reported at the violating call" {
+    const source =
+        \\eq : a -> Bool where [a.is_eq : a, a -> Bool]
+        \\eq = |x| x == x
+        \\
+        \\main = eq({ f: |y| y })
+    ;
+    var test_env = try TestEnv.init("Test", source);
+    defer test_env.deinit();
+
+    // Line 4 is `main = eq({ f: |y| y })`; columns 8-24 span the call.
+    try test_env.assertOneTypeErrorHighlightsWithin("Type Does Not Support Equality", .{
+        .line = 4,
+        .start_column = 8,
+        .end_column = 24,
+    });
+}
+
+test "where clause - unsatisfied derived map constraint is reported at the violating call" {
+    const source =
+        \\mapper : a -> a where [a.map : a, (U8 -> U8) -> a]
+        \\mapper = |x| x.map(|n| n)
+        \\
+        \\value : [A(U8), B(U8)]
+        \\value = A(1)
+        \\
+        \\main = mapper(value)
+    ;
+    var test_env = try TestEnv.init("Test", source);
+    defer test_env.deinit();
+
+    // Line 7 is `main = mapper(value)`; columns 8-21 span the call.
+    try test_env.assertOneTypeErrorHighlightsWithin("Type Does Not Support Map", .{
+        .line = 7,
+        .start_column = 8,
+        .end_column = 21,
+    });
+}
+
 // Let polymorphism with where clauses
 
 test "where clause - same type used multiple times with where constraint" {
@@ -759,6 +824,26 @@ test "where clause - a bare result type is not an implicit nullary function" {
         \\}
     ;
     var test_env = try TestEnv.init("BareResultMethod", source);
+    defer test_env.deinit();
+    try test_env.assertFirstTypeError("Type Mismatch");
+}
+
+test "where clause - a bare type variable method signature is not a callable" {
+    // `a.render : b` is a LEAF signature, same as the whole-method hole
+    // `a.render : _`, except that it resolves to a `.rigid` rather than a
+    // `.flex`. `Instantiator` shares every leaf it is handed
+    // (`types/instantiate.zig:733-740`), so per-use instantiation of such a
+    // signature copies nothing; `Check.recordWhereMethodUse` used to panic
+    // with "where-method use instantiation produced no callable copy" on the
+    // empty map. The body dispatch must get an ordinary type error instead,
+    // like the bare `Str` signature in the test above.
+    const source =
+        \\Probe := {}
+        \\
+        \\helper : a -> b where [a.render : b]
+        \\helper = |x| x.render()
+    ;
+    var test_env = try TestEnv.init("BareTypeVarMethod", source);
     defer test_env.deinit();
     try test_env.assertFirstTypeError("Type Mismatch");
 }

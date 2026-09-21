@@ -68,6 +68,7 @@ pub const NotAWhereAlias = types.NotAWhereAlias;
 pub const WhereAliasInTypePosition = types.WhereAliasInTypePosition;
 pub const RecursiveWhereAlias = types.RecursiveWhereAlias;
 pub const WhereClauseReceiverNotIntroduced = types.WhereClauseReceiverNotIntroduced;
+pub const RedundantOpenTagUnion = types.RedundantOpenTagUnion;
 
 // Nominal type errors
 pub const CannotAccessOpaqueNominal = types.CannotAccessOpaqueNominal;
@@ -79,6 +80,8 @@ pub const PlatformAliasNotFound = types.PlatformAliasNotFound;
 pub const PlatformDefNotFound = types.PlatformDefNotFound;
 pub const PlatformHostedSection = types.PlatformHostedSection;
 pub const HostedUnboxedFunction = types.HostedUnboxedFunction;
+pub const HostedFunctionNotEffectful = types.HostedFunctionNotEffectful;
+pub const HostedTypeVariableNotBoxed = types.HostedTypeVariableNotBoxed;
 pub const HostBoundaryOpenRow = types.HostBoundaryOpenRow;
 pub const HostBoundaryOptionalField = types.HostBoundaryOptionalField;
 pub const AnnotationOnlyValue = types.AnnotationOnlyValue;

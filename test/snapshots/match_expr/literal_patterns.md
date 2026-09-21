@@ -55,7 +55,7 @@ TYPE MISMATCH - literal_patterns.md:3:13:3:20
 			(line-break)
 			(annotation-start code-block)
 			(indent 1)
-			(text "[Answer, Greeting, Zero, ..]")
+			(text "[Answer, Greeting, Zero]")
 			(annotation-end)))
 	(report
 		(severity runtime_error)

@@ -1223,6 +1223,25 @@ test "run executes until it reaches a checked error in an explicit backend" {
     try testing.expect(std.mem.find(u8, run_result.stderr, "Roc crashed:") != null);
 }
 
+test "run crashes only when a branch with a checked type mismatch is taken" {
+    // A mismatched `if` branch becomes a runtime error on its own: the
+    // enclosing function keeps its annotated type, so the well-typed branch
+    // runs normally and only the mismatched branch crashes.
+    const allocator = testing.allocator;
+
+    const run_result = try util.runRocCommand(std.testing.io, allocator, &.{
+        "--opt=dev",
+        "test/fx/erroneous_branch_not_taken.roc",
+    });
+    defer allocator.free(run_result.stdout);
+    defer allocator.free(run_result.stderr);
+
+    try util.checkFailure(run_result);
+    try testing.expect(std.mem.find(u8, run_result.stderr, "type mismatch") != null);
+    try testing.expectEqualStrings("checked: 2\n", run_result.stdout);
+    try testing.expect(std.mem.find(u8, run_result.stderr, "Roc crashed:") != null);
+}
+
 test "run handles a checked type mismatch in function args" {
     // Regression test for https://github.com/roc-lang/roc/issues/9263
     // The dev backend crashed (SIGABRT) on code

@@ -1,19 +1,11 @@
 //! Lists that make it easier to avoid incorrect indexing.
 
 const std = @import("std");
-const builtin = @import("builtin");
 
 const testing = std.testing;
 const Allocator = std.mem.Allocator;
 
 const CompactWriter = @import("CompactWriter.zig");
-
-/// Recursively zero all padding bytes in a value for deterministic serialization.
-/// The single implementation lives in `CompactWriter` (the serialization layer) so
-/// both `SafeList.Serialized` and `CompactWriter.appendSlicePodZeroed` share it.
-fn zeroValuePadding(comptime V: type, ptr: [*]u8) void {
-    CompactWriter.zeroValuePadding(V, ptr);
-}
 
 /// L-10 bounds check: reject an `(offset)`+`span_bytes` extent that would reach
 /// outside the `backing_len`-byte relocated buffer (truncated/corrupt blob), with
@@ -149,20 +141,6 @@ pub fn SafeList(comptime T: type) type {
             nonempty: Range,
         };
 
-        /// Zero all padding bytes in a slice of T items for deterministic serialization.
-        /// Delegates to zeroValuePadding which recursively handles unions (tail padding,
-        /// variant overshoot) and structs (inter-field gaps, nested types).
-        fn zeroPadding(buf: []T) void {
-            const info = @typeInfo(T);
-            if (@sizeOf(T) == 0) return;
-            const needs_zeroing = (info == .@"union" and info.@"union".tag_type != null) or
-                (info == .@"struct" and info.@"struct".layout == .auto);
-            if (!needs_zeroing) return;
-            for (buf) |*item| {
-                zeroValuePadding(T, @as([*]u8, @ptrCast(item)));
-            }
-        }
-
         /// Serialized representation of a SafeList
         /// Uses extern struct to guarantee consistent field layout across optimization levels.
         pub const Serialized = extern struct {
@@ -195,48 +173,9 @@ pub fn SafeList(comptime T: type) type {
                 writer: *CompactWriter,
             ) Allocator.Error!void {
                 const items = safe_list.items.items;
-
-                // Pad to the alignment of the slice elements.
-                try writer.padToAlignment(allocator, @alignOf(T));
-
-                // Now that we are aligned, this is the correct offset for our data.
-                const data_offset = writer.total_bytes;
-
-                // Append the raw data without further padding.
-                if (items.len > 0) {
-                    if (comptime CompactWriter.needsPaddingZeroing(T)) {
-                        // Auto-layout structs/unions/optionals have undefined padding that
-                        // varies between runs (ASLR, stack contents). Assignment copies ALL
-                        // bytes including padding, so copy into writer-owned memory and zero
-                        // the padding for deterministic bytes.
-                        const buf = try allocator.alloc(T, items.len);
-                        for (items, 0..) |item, i| {
-                            buf[i] = item;
-                        }
-                        zeroPadding(buf);
-
-                        // Track the allocated memory for cleanup by the writer
-                        try writer.allocated_memory.append(allocator, .{
-                            .ptr = @ptrCast(buf.ptr),
-                            .size = items.len * @sizeOf(T),
-                            .alignment = @alignOf(T),
-                        });
-
-                        try writer.iovecs.append(allocator, .{
-                            .iov_base = @ptrCast(buf.ptr),
-                            .iov_len = items.len * @sizeOf(T),
-                        });
-                    } else {
-                        // `T` has no padding to zero, so the live items are already
-                        // byte-deterministic: iovec them verbatim (no scratch alloc/copy).
-                        // The list outlives the writer's flush on the serialize path.
-                        try writer.iovecs.append(allocator, .{
-                            .iov_base = @ptrCast(items.ptr),
-                            .iov_len = items.len * @sizeOf(T),
-                        });
-                    }
-                    writer.total_bytes += items.len * @sizeOf(T);
-                }
+                // An integer offset, so a store whose items legitimately begin at byte
+                // zero records zero rather than an unrepresentable null pointer.
+                const data_offset = try writer.appendSlicePodZeroedOffset(allocator, @as([]const T, items));
 
                 self.offset = @intCast(data_offset);
                 self.len = items.len;
@@ -395,31 +334,11 @@ pub fn SafeList(comptime T: type) type {
             const items = self.items.items;
 
             const offset_self = try writer.appendAlloc(allocator, SafeList(T));
-
-            // Create a copy with zeroed padding for deterministic serialization.
-            // See Serialized.serialize for rationale.
-            const clean_items = if (items.len > 0 and @sizeOf(T) > 0) blk: {
-                const buf = try allocator.alloc(T, items.len);
-                for (items, 0..) |item, i| {
-                    buf[i] = item;
-                }
-                zeroPadding(buf);
-
-                // Track the allocated memory for cleanup by the writer
-                try writer.allocated_memory.append(allocator, .{
-                    .ptr = @ptrCast(buf.ptr),
-                    .size = items.len * @sizeOf(T),
-                    .alignment = @alignOf(T),
-                });
-
-                break :blk buf;
-            } else items;
-
-            const slice = try writer.appendSlice(allocator, clean_items);
+            const written = try writer.appendSlicePodZeroed(allocator, @as([]const T, items));
 
             offset_self.* = .{
                 .items = .{
-                    .items = slice,
+                    .items = @constCast(written),
                     .capacity = items.len,
                 },
             };
@@ -525,6 +444,126 @@ pub fn SafeMultiList(comptime T: type) type {
         const Self = @This();
 
         items: std.MultiArrayList(T) = .empty,
+
+        comptime {
+            if (@typeInfo(T) != .@"struct") {
+                @compileError("SafeMultiList element '" ++ @typeName(T) ++
+                    "' must be a struct: the serialized column layout is derived from its fields");
+            }
+        }
+
+        /// The order in which `std.MultiArrayList(T)` places its field columns in one
+        /// allocation: descending field alignment, ties in declaration order. Each
+        /// column is `@sizeOf(field) * capacity` bytes and they are packed with no gaps
+        /// between them, because a field's size is a multiple of its alignment and the
+        /// alignments only decrease.
+        ///
+        /// This mirrors the private `sizes` table inside `std.MultiArrayList`. It is not
+        /// trusted on faith: `writeCompactedColumns` asserts every derived column offset
+        /// against the pointers the real `slice()` hands back, so a change in std's
+        /// layout fails loudly instead of writing a silently transposed blob.
+        const column_order: [std.meta.fields(T).len]usize = blk: {
+            const fields = std.meta.fields(T);
+            var order: [fields.len]usize = undefined;
+            for (&order, 0..) |*slot, i| slot.* = i;
+            // Insertion sort: stable, so equal alignments keep declaration order.
+            var i: usize = 1;
+            while (i < order.len) : (i += 1) {
+                var j = i;
+                while (j > 0 and fieldAlignment(order[j - 1]) < fieldAlignment(order[j])) : (j -= 1) {
+                    const tmp = order[j - 1];
+                    order[j - 1] = order[j];
+                    order[j] = tmp;
+                }
+            }
+            break :blk order;
+        };
+
+        fn fieldAlignment(comptime field_index: usize) comptime_int {
+            const info = std.meta.fields(T)[field_index];
+            return info.alignment orelse @alignOf(info.type);
+        }
+
+        /// Append this list's live rows to `writer` as `std.MultiArrayList`'s own column
+        /// layout at `capacity == len`, and return the byte offset the columns start at.
+        ///
+        /// Only live rows are written: spare capacity never reaches the output, so the
+        /// serialized bytes and their length are a function of the list's contents alone
+        /// rather than of the allocation history that produced its capacity.
+        ///
+        /// The input is not mutated. A column whose element bytes are already fully
+        /// defined is gathered straight from the list with no copy; only a column that
+        /// needs padding scrubbed is copied into writer-owned memory first. Which case
+        /// applies is decided at compile time, and an element shape whose undefined bytes
+        /// nothing could scrub is rejected there too.
+        fn writeCompactedColumns(
+            list: *const Self,
+            allocator: Allocator,
+            writer: *CompactWriter,
+        ) Allocator.Error!usize {
+            comptime {
+                // No padding is ever needed between columns, at any length: a column's
+                // start is `len * columnBytesBefore`, and `columnBytesBefore` is a sum of
+                // element sizes that are each a multiple of an alignment at least as
+                // large as this column's, so it is a multiple of this column's alignment.
+                // The block itself is padded to the largest field alignment below.
+                var block_align: usize = 1;
+                for (column_order) |field_index| {
+                    if (@sizeOf(std.meta.fields(T)[field_index].type) == 0) continue;
+                    const field_align = fieldAlignment(field_index);
+                    if (columnBytesBefore(field_index) % field_align != 0) {
+                        @compileError("SafeMultiList(" ++ @typeName(T) ++ ") column '" ++
+                            std.meta.fields(T)[field_index].name ++
+                            "' would need alignment padding in the compacted layout");
+                    }
+                    if (field_align > block_align) block_align = field_align;
+                }
+                if (block_align > @alignOf(T)) {
+                    @compileError("SafeMultiList(" ++ @typeName(T) ++
+                        ") has a field alignment larger than the element alignment the reader aligns to");
+                }
+            }
+            try writer.padToAlignment(allocator, @alignOf(T));
+            const data_offset = writer.total_bytes;
+            const live_rows = list.items.len;
+            if (live_rows == 0) return data_offset;
+
+            const slice = list.items.slice();
+            inline for (column_order) |field_index| {
+                const FieldType = std.meta.fields(T)[field_index].type;
+                if (@sizeOf(FieldType) > 0) {
+                    // `column_order` must agree with the layout std actually produced:
+                    // this column starts `capacity * columnBytesBefore` into the source
+                    // allocation...
+                    std.debug.assert(@intFromPtr(slice.ptrs[field_index]) - @intFromPtr(list.items.bytes) ==
+                        list.items.capacity * columnBytesBefore(field_index));
+                    const column: [*]const FieldType = @ptrCast(@alignCast(slice.ptrs[field_index]));
+                    // An integer offset keeps a first column that starts at byte zero
+                    // representable, and lets the assertions below name where the column
+                    // actually landed.
+                    const column_offset = try writer.appendSlicePodZeroedOffset(allocator, column[0..live_rows]);
+                    // ...and `len * columnBytesBefore` into the compacted output, with no
+                    // alignment padding inserted between columns.
+                    std.debug.assert(column_offset == data_offset + live_rows * columnBytesBefore(field_index));
+                    std.debug.assert(writer.total_bytes - column_offset == live_rows * @sizeOf(FieldType));
+                }
+            }
+            return data_offset;
+        }
+
+        /// Sum of the element sizes of the columns laid out before `field_index`. The
+        /// assertion above uses it to convert a capacity-strided source offset into the
+        /// len-strided offset the compacted output uses.
+        fn columnBytesBefore(comptime field_index: usize) usize {
+            return comptime blk: {
+                var total: usize = 0;
+                for (column_order) |candidate| {
+                    if (candidate == field_index) break :blk total;
+                    total += @sizeOf(std.meta.fields(T)[candidate].type);
+                }
+                unreachable;
+            };
+        }
 
         /// Index of an item in the list.
         pub const Idx = enum(u32) { first = 0, _ };
@@ -746,34 +785,7 @@ pub fn SafeMultiList(comptime T: type) type {
             allocator: Allocator,
             writer: *CompactWriter,
         ) Allocator.Error!*const SafeMultiList(T) {
-            // Zero padding bytes in used elements for deterministic serialization.
-            Serialized.zeroFieldPadding(@constCast(self));
-
-            // Write only len elements, not capacity, to avoid storing garbage memory.
-            const data_offset = if (self.items.len > 0) blk: {
-                const slice = self.items.slice();
-                const fields = std.meta.fields(T);
-
-                // MultiArrayList lays out fields in order, with alignment padding as
-                // necessary between the end of one field's elements and the beginning of
-                // the next. So we need to append entries to the writer for all fields.
-                const first_field_offset = writer.total_bytes;
-
-                inline for (fields, 0..) |_, i| {
-                    const field_ptr = slice.items(@as(Field, @enumFromInt(i))).ptr;
-
-                    // Write the field data (only len elements' worth).
-                    // appendSlice will take care of alignment padding.
-                    const written = try writer.appendSlice(allocator, field_ptr[0..self.items.len]);
-                    if (comptime builtin.mode == .Debug) {
-                        std.debug.assert(written.len == self.items.len);
-                    } else if (written.len != self.items.len) {
-                        unreachable;
-                    }
-                }
-
-                break :blk first_field_offset;
-            } else writer.total_bytes;
+            const data_offset = try writeCompactedColumns(self, allocator, writer);
 
             // Write the SafeMultiList struct
             const offset_self = try writer.appendAlloc(allocator, SafeMultiList(T));
@@ -820,96 +832,22 @@ pub fn SafeMultiList(comptime T: type) type {
                 try validateRelocatedSpan(@alignOf(T), self.offset, span_bytes, backing_len);
             }
 
-            // We copy capacity-sized regions below; clear per-field slack so the writer never
-            // observes uninitialized bytes. Leaving that memory undefined is UB and makes the
-            // output non-deterministic. The one-time zeroing cost is negligible next to writing
-            // the same memory to disk.
-            fn zeroUnusedCapacity(list: *SafeMultiList(T)) void {
-                const list_len = list.items.len;
-                const total_capacity = list.items.capacity;
-                if (total_capacity == 0 or total_capacity <= list_len) return;
-
-                const slice = list.items.slice();
-                inline for (std.meta.fields(T), 0..) |field_info, field_index| {
-                    const field_size = @sizeOf(field_info.type);
-                    if (field_size == 0) continue;
-
-                    const capacity_bytes = field_size * total_capacity;
-                    const initialized_bytes = field_size * list_len;
-
-                    if (initialized_bytes < capacity_bytes) {
-                        const field_ptr = slice.ptrs[field_index];
-                        const tail_ptr = field_ptr + initialized_bytes;
-                        const tail_len = capacity_bytes - initialized_bytes;
-                        @memset(tail_ptr[0..tail_len], 0);
-                    }
-                }
-            }
-
-            /// Zero padding bytes within used field elements for deterministic serialization.
-            /// MultiArrayList stores each struct field as a separate contiguous array.
-            /// Delegates to zeroValuePadding which recursively handles all padding.
-            fn zeroFieldPadding(list: *SafeMultiList(T)) void {
-                const list_len = list.items.len;
-                if (list_len == 0) return;
-
-                const slice = list.items.slice();
-                inline for (std.meta.fields(T), 0..) |field_info, field_index| {
-                    const FieldType = field_info.type;
-                    const field_size = @sizeOf(FieldType);
-                    if (field_size == 0) continue;
-
-                    const finfo = @typeInfo(FieldType);
-                    const needs_zeroing = (finfo == .@"union" and finfo.@"union".tag_type != null) or
-                        (finfo == .@"struct" and finfo.@"struct".layout == .auto);
-                    if (needs_zeroing) {
-                        const field_ptr = slice.ptrs[field_index];
-                        for (0..list_len) |i| {
-                            zeroValuePadding(FieldType, field_ptr + i * field_size);
-                        }
-                    }
-                }
-            }
-
-            /// Serialize a SafeMultiList into this Serialized struct, appending data to the writer
+            /// Serialize a SafeMultiList into this Serialized struct, appending data to
+            /// the writer. Shares `writeCompactedColumns` with the pointer-returning
+            /// `SafeMultiList.serialize`, so both produce the same bytes for the same
+            /// contents: live rows only, in MultiArrayList's own column order, at
+            /// `capacity == len`.
             pub fn serialize(
                 self: *Serialized,
                 safe_multi_list: *const SafeMultiList(T),
                 allocator: Allocator,
                 writer: *CompactWriter,
             ) Allocator.Error!void {
-                // MultiArrayList reorders fields by alignment internally.
-                // We need to copy the raw bytes exactly as they are laid out.
-                const mutable = @constCast(safe_multi_list);
-                zeroUnusedCapacity(mutable);
-                zeroFieldPadding(mutable);
+                const data_offset = try writeCompactedColumns(safe_multi_list, allocator, writer);
 
-                const data_offset = if (safe_multi_list.items.len > 0) blk: {
-                    const MultiArrayListType = std.MultiArrayList(T);
-                    // We need to write all the bytes up to where the actual data is stored
-                    // This includes gaps due to the capacity being larger than the length
-                    const used_bytes = MultiArrayListType.capacityInBytes(safe_multi_list.items.capacity);
-
-                    // Ensure proper alignment
-                    try writer.padToAlignment(allocator, @alignOf(T));
-
-                    // Record the offset after padding
-                    const first_offset = writer.total_bytes;
-
-                    // Add the MultiArrayList bytes directly to iovecs
-                    try writer.iovecs.append(allocator, .{
-                        .iov_base = @ptrCast(safe_multi_list.items.bytes),
-                        .iov_len = used_bytes,
-                    });
-                    writer.total_bytes += used_bytes;
-
-                    break :blk first_offset;
-                } else writer.total_bytes;
-
-                // Store the offset, len, and capacity
                 self.offset = @intCast(data_offset);
                 self.len = safe_multi_list.items.len;
-                self.capacity = safe_multi_list.items.capacity;
+                self.capacity = safe_multi_list.items.len;
             }
 
             /// Deserialize into a SafeMultiList value (Option F: no in-place modification).
@@ -1848,7 +1786,9 @@ test "SafeMultiList CompactWriter verify exact memory layout" {
     const gpa = testing.allocator;
     const io = std.testing.io;
 
-    // Test that our serialization produces the exact memory layout that MultiArrayList expects
+    // Test that our serialization produces the exact memory layout that MultiArrayList
+    // expects when it reads the blob back: field columns in descending-alignment order,
+    // packed with no gaps, each holding exactly `len` elements.
     const TestStruct = struct {
         a: u8,
         b: u32,
@@ -1860,7 +1800,8 @@ test "SafeMultiList CompactWriter verify exact memory layout" {
     const test_lengths = [_]usize{ 1, 2, 3, 5, 8 };
 
     for (test_lengths) |len| {
-        // Create a list with test data
+        // Reserve more than needed, so a layout that wrote capacity-sized columns
+        // would disagree with the expectation below.
         var original = try SafeMultiList(TestStruct).initCapacity(gpa, len + 10);
         defer original.deinit(gpa);
 
@@ -1875,93 +1816,17 @@ test "SafeMultiList CompactWriter verify exact memory layout" {
             try testing.expectEqual(i, @intFromEnum(idx));
         }
 
-        // Manually create the expected memory layout
-        const expected_bytes = try gpa.alloc(u8, std.MultiArrayList(TestStruct).capacityInBytes(original.items.capacity));
-        defer gpa.free(expected_bytes);
-
-        // Sort fields by alignment (descending) then by name (ascending)
-        // This is how MultiArrayList orders fields internally
-        const FieldInfo = struct {
-            field_idx: usize,
-            name: []const u8,
-            alignment: usize,
-            size: usize,
-        };
-
-        var field_infos = [_]FieldInfo{
-            .{ .field_idx = 0, .name = "a", .alignment = @alignOf(u8), .size = @sizeOf(u8) },
-            .{ .field_idx = 1, .name = "b", .alignment = @alignOf(u32), .size = @sizeOf(u32) },
-            .{ .field_idx = 2, .name = "c", .alignment = @alignOf(u16), .size = @sizeOf(u16) },
-            .{ .field_idx = 3, .name = "d", .alignment = @alignOf(u64), .size = @sizeOf(u64) },
-        };
-
-        // Sort by alignment descending, then name ascending
-        std.mem.sort(FieldInfo, &field_infos, {}, struct {
-            fn lessThan(_: void, lhs: FieldInfo, rhs: FieldInfo) bool {
-                if (lhs.alignment != rhs.alignment) {
-                    return lhs.alignment > rhs.alignment;
-                }
-                return std.mem.order(u8, lhs.name, rhs.name) == .lt;
-            }
-        }.lessThan);
-
-        // Write fields in sorted order
-        var offset: usize = 0;
-        for (field_infos) |field_info| {
-            // Align offset for this field
-            offset = std.mem.alignForward(usize, offset, field_info.alignment);
-
-            // Copy field data based on field index
-            const field_capacity_bytes = field_info.size * original.items.capacity;
-            const field_dest = expected_bytes[offset..][0..field_capacity_bytes];
-
-            switch (field_info.field_idx) {
-                0 => { // field a
-                    const field_items = original.field(.a);
-                    const field_bytes = std.mem.sliceAsBytes(field_items);
-                    @memcpy(field_dest[0..field_bytes.len], field_bytes);
-                    // Fill remaining capacity with zeros to match serialization sanitization
-                    if (field_bytes.len < field_capacity_bytes) {
-                        @memset(field_dest[field_bytes.len..], 0);
-                    }
-                },
-                1 => { // field b
-                    const field_items = original.field(.b);
-                    const field_bytes = std.mem.sliceAsBytes(field_items);
-                    @memcpy(field_dest[0..field_bytes.len], field_bytes);
-                    // Fill remaining capacity with zeros to match serialization sanitization
-                    if (field_bytes.len < field_capacity_bytes) {
-                        @memset(field_dest[field_bytes.len..], 0);
-                    }
-                },
-                2 => { // field c
-                    const field_items = original.field(.c);
-                    const field_bytes = std.mem.sliceAsBytes(field_items);
-                    @memcpy(field_dest[0..field_bytes.len], field_bytes);
-                    // Fill remaining capacity with zeros to match serialization sanitization
-                    if (field_bytes.len < field_capacity_bytes) {
-                        @memset(field_dest[field_bytes.len..], 0);
-                    }
-                },
-                3 => { // field d
-                    const field_items = original.field(.d);
-                    const field_bytes = std.mem.sliceAsBytes(field_items);
-                    @memcpy(field_dest[0..field_bytes.len], field_bytes);
-                    // Fill remaining capacity with zeros to match serialization sanitization
-                    if (field_bytes.len < field_capacity_bytes) {
-                        @memset(field_dest[field_bytes.len..], 0);
-                    }
-                },
-                else => unreachable,
-            }
-
-            offset += field_info.size * original.items.capacity;
-        }
-
-        // Fill remaining space with zeros to match serialization sanitization
-        if (offset < expected_bytes.len) {
-            @memset(expected_bytes[offset..], 0);
-        }
+        // The oracle is std's own layout: a MultiArrayList holding the same rows with
+        // capacity equal to length has exactly the byte image the blob must contain.
+        // Deriving it this way rather than restating the column-ordering rule keeps the
+        // expectation independent of the writer's computation of that rule—and correct
+        // on hosts where the field alignments, and so the column order, differ.
+        var oracle = try std.MultiArrayList(TestStruct).initCapacity(gpa, len);
+        defer oracle.deinit(gpa);
+        try testing.expectEqual(len, oracle.capacity);
+        i = 0;
+        while (i < len) : (i += 1) oracle.appendAssumeCapacity(original.get(@enumFromInt(@as(u32, @intCast(i)))));
+        const expected_bytes = oracle.bytes[0..std.MultiArrayList(TestStruct).capacityInBytes(len)];
 
         // Now serialize using our implementation
         var tmp_dir = testing.tmpDir(.{});
@@ -1984,25 +1849,24 @@ test "SafeMultiList CompactWriter verify exact memory layout" {
 
         _ = try file.readPositionalAll(io, buffer, 0);
 
-        // Extract the data portion (after the Serialized struct)
-        const data_size = std.MultiArrayList(TestStruct).capacityInBytes(original.items.capacity);
-        const serialized_offset = @sizeOf(SafeMultiList(TestStruct).Serialized);
-
-        // Account for alignment padding
-        const aligned_offset = std.mem.alignForward(usize, serialized_offset, @alignOf(TestStruct));
-        const serialized_data = buffer[aligned_offset..][0..data_size];
+        const serialized_ptr = @as(*SafeMultiList(TestStruct).Serialized, @ptrCast(@alignCast(buffer.ptr)));
+        // Only the live rows are written, so the stored capacity is the length and the
+        // blob ends right after the last column.
+        try testing.expectEqual(@as(u64, len), serialized_ptr.len);
+        try testing.expectEqual(@as(u64, len), serialized_ptr.capacity);
+        const data_start: usize = @intCast(serialized_ptr.offset);
+        try testing.expectEqual(file_size, data_start + expected_bytes.len);
 
         // Verify byte-for-byte equality
-        try testing.expectEqualSlices(u8, expected_bytes, serialized_data);
+        try testing.expectEqualSlices(u8, expected_bytes, buffer[data_start..][0..expected_bytes.len]);
 
         // Also verify it deserializes correctly
-        const serialized_ptr = @as(*SafeMultiList(TestStruct).Serialized, @ptrCast(@alignCast(buffer.ptr)));
         const deserialized = serialized_ptr.deserializeInto(@intFromPtr(buffer.ptr));
 
         // Verify all data is accessible
         i = 0;
         while (i < len) : (i += 1) {
-            const item = deserialized.get(@enumFromInt(i));
+            const item = deserialized.get(@enumFromInt(@as(u32, @intCast(i))));
             try testing.expectEqual(@as(u8, @intCast(i + 10)), item.a);
             try testing.expectEqual(@as(u32, @intCast(i + 100)), item.b);
             try testing.expectEqual(@as(u16, @intCast(i + 1000)), item.c);
@@ -2294,4 +2158,408 @@ test "SafeMultiList(T) iterRange from index zero vs mid-list (len = start + coun
     try testing.expectEqual(@as(u32, 400), iter_mid.next().?.num);
     try testing.expectEqual(@as(u32, 500), iter_mid.next().?.num);
     try testing.expectEqual(@as(?Struct, null), iter_mid.next());
+}
+
+/// Element whose declaration order (`small`, `big`, `mid`) deliberately differs from
+/// MultiArrayList's column order (`big`, `mid`, `small`, by descending alignment), so
+/// the serialization tests below fail if the columns are written in declaration order.
+const MixedAlignElem = struct {
+    small: u8,
+    big: u64,
+    mid: u16,
+};
+
+fn buildMixedAlign(gpa: Allocator, reserve: usize, count: u8) Allocator.Error!SafeMultiList(MixedAlignElem) {
+    var list = SafeMultiList(MixedAlignElem){};
+    errdefer list.deinit(gpa);
+    if (reserve > 0) try list.ensureTotalCapacity(gpa, reserve);
+    for (0..count) |i| {
+        _ = try list.append(gpa, .{
+            .small = @intCast(i + 1),
+            .big = 0x1122334455660000 + @as(u64, i),
+            .mid = @intCast(0x7700 + i),
+        });
+    }
+    return list;
+}
+
+fn serializeMultiListToBuffer(
+    gpa: Allocator,
+    comptime T: type,
+    list: *const SafeMultiList(T),
+) (Allocator.Error || error{BufferTooSmall})![]align(CompactWriter.SERIALIZATION_ALIGNMENT.toByteUnits()) u8 {
+    var writer = CompactWriter.init();
+    defer writer.deinit(gpa);
+    const serialized = try writer.appendAlloc(gpa, SafeMultiList(T).Serialized);
+    try serialized.serialize(list, gpa, &writer);
+    const buffer = try gpa.alignedAlloc(u8, CompactWriter.SERIALIZATION_ALIGNMENT, writer.total_bytes);
+    errdefer gpa.free(buffer);
+    _ = try writer.writeToBuffer(buffer);
+    return buffer;
+}
+
+test "SafeMultiList serialization depends on contents, not on allocation history" {
+    // Spare capacity is a property of how a list was grown, not of what it holds. When
+    // serialization wrote capacity-sized regions, two lists with identical contents but
+    // different capacities produced different bytes AND different file sizes, so the
+    // compiler's own baked output depended on its allocator's growth history.
+    const gpa = testing.allocator;
+
+    var grown = try buildMixedAlign(gpa, 0, 9); // amortized growth: capacity > len
+    defer grown.deinit(gpa);
+    var exact = try buildMixedAlign(gpa, 9, 9); // capacity == len
+    defer exact.deinit(gpa);
+    var oversized = try buildMixedAlign(gpa, 4096, 9); // capacity >> len
+    defer oversized.deinit(gpa);
+
+    try testing.expect(grown.items.capacity != oversized.items.capacity);
+
+    const a = try serializeMultiListToBuffer(gpa, MixedAlignElem, &grown);
+    defer gpa.free(a);
+    const b = try serializeMultiListToBuffer(gpa, MixedAlignElem, &exact);
+    defer gpa.free(b);
+    const c = try serializeMultiListToBuffer(gpa, MixedAlignElem, &oversized);
+    defer gpa.free(c);
+
+    try testing.expectEqualSlices(u8, a, b);
+    try testing.expectEqualSlices(u8, a, c);
+
+    // And the written region is exactly the live rows: no spare capacity reaches the
+    // output, so its size is a function of `len` alone.
+    const header_bytes = @sizeOf(SafeMultiList(MixedAlignElem).Serialized);
+    try testing.expectEqual(header_bytes + 9 * (8 + 2 + 1), a.len);
+}
+
+test "SafeMultiList serialization leaves a frozen source untouched" {
+    // The serialize path may be handed a store it does not own (a cache-loaded module
+    // re-serialized, or a shared read-only view). Scrubbing in place would corrupt a
+    // shared store and fault on read-only memory, so the source must not be written.
+    //
+    // The element's padded field has to be a padded *column*: MultiArrayList splits a
+    // struct into one array per field, so a struct of plain scalars has no padding
+    // anywhere in the backing store and would only prove that spare capacity is left
+    // alone. `Detail` is a nested padded struct, so the live rows of that column really
+    // do contain padding bytes for an in-place scrub to touch.
+    const gpa = testing.allocator;
+
+    const Detail = struct { tag: u8, value: u64 }; // auto layout: inter-field gap
+    const Choice = union(enum) { none: void, some: u64 }; // inactive/tail bytes
+    const Row = struct { detail: Detail, choice: Choice, plain: u32 };
+    comptime std.debug.assert(CompactWriter.needsPaddingZeroing(Detail));
+    comptime std.debug.assert(CompactWriter.needsPaddingZeroing(Choice));
+
+    var list = SafeMultiList(Row){};
+    defer list.deinit(gpa);
+
+    // Exactly as many rows as capacity, so there is no spare capacity at all: only a
+    // scrub of live rows could change the backing bytes.
+    const row_count = 6;
+    try list.ensureTotalCapacity(gpa, row_count);
+    const backing_bytes = std.MultiArrayList(Row).capacityInBytes(list.items.capacity);
+    @memset(list.items.bytes[0..backing_bytes], 0xA7);
+    for (0..row_count) |i| {
+        _ = try list.append(gpa, .{
+            .detail = .{ .tag = @intCast(i), .value = i * 1000 },
+            .choice = if (i % 2 == 0) .{ .some = i } else .none,
+            .plain = @intCast(i),
+        });
+    }
+
+    // Appending whole rows can overwrite a row's padding with the temporary's own, so
+    // put the stale bytes into the live `detail` column deliberately: poison each
+    // element, then rewrite its fields one at a time, which leaves the inter-field gap
+    // holding poison. That is the state a store built field by field really has.
+    const detail_column = list.field(.detail);
+    for (detail_column, 0..) |*detail, i| {
+        @memset(std.mem.asBytes(detail), 0xA7);
+        detail.tag = @intCast(i);
+        detail.value = i * 1000;
+    }
+
+    // Prove the poison is actually there, so the test cannot pass by having nothing to
+    // scrub in the first place.
+    var poisoned_padding_bytes: usize = 0;
+    for (detail_column) |*detail| {
+        for (std.mem.asBytes(detail)) |byte| {
+            if (byte == 0xA7) poisoned_padding_bytes += 1;
+        }
+    }
+    try testing.expect(poisoned_padding_bytes > 0);
+
+    const before = try gpa.alloc(u8, backing_bytes);
+    defer gpa.free(before);
+    @memcpy(before, list.items.bytes[0..backing_bytes]);
+
+    const buffer = try serializeMultiListToBuffer(gpa, Row, &list);
+    defer gpa.free(buffer);
+
+    // Every byte of the source backing store is unchanged, live rows included.
+    try testing.expectEqualSlices(u8, before, list.items.bytes[0..backing_bytes]);
+
+    // ...while the serialized copy is scrubbed: no poison byte reaches the output.
+    try testing.expect(std.mem.findScalar(u8, buffer, 0xA7) == null);
+
+    // And the values survive the scrub.
+    const serialized: *const SafeMultiList(Row).Serialized = @ptrCast(@alignCast(buffer.ptr));
+    const loaded = serialized.deserializeInto(@intFromPtr(buffer.ptr));
+    try testing.expectEqual(@as(u32, row_count), loaded.len());
+    for (0..row_count) |i| {
+        try testing.expectEqualDeep(
+            list.get(@enumFromInt(@as(u32, @intCast(i)))),
+            loaded.get(@enumFromInt(@as(u32, @intCast(i)))),
+        );
+    }
+}
+
+test "SafeMultiList round-trips when column order differs from declaration order" {
+    const gpa = testing.allocator;
+
+    var list = try buildMixedAlign(gpa, 0, 6);
+    defer list.deinit(gpa);
+
+    const buffer = try serializeMultiListToBuffer(gpa, MixedAlignElem, &list);
+    defer gpa.free(buffer);
+
+    const serialized: *const SafeMultiList(MixedAlignElem).Serialized = @ptrCast(@alignCast(buffer.ptr));
+    try serialized.validateRelocations(buffer.len);
+    const loaded = serialized.deserializeInto(@intFromPtr(buffer.ptr));
+
+    try testing.expectEqual(@as(u32, 6), loaded.len());
+    try testing.expectEqual(@as(usize, 6), loaded.items.capacity);
+    for (0..6) |i| {
+        const expected = list.get(@enumFromInt(@as(u32, @intCast(i))));
+        try testing.expectEqualDeep(expected, loaded.get(@enumFromInt(@as(u32, @intCast(i)))));
+    }
+}
+
+test "SafeMultiList serialization: empty list writes no columns" {
+    const gpa = testing.allocator;
+
+    var list = SafeMultiList(MixedAlignElem){};
+    defer list.deinit(gpa);
+    // Reserved-but-unused capacity must still write nothing.
+    try list.ensureTotalCapacity(gpa, 32);
+
+    const buffer = try serializeMultiListToBuffer(gpa, MixedAlignElem, &list);
+    defer gpa.free(buffer);
+
+    try testing.expectEqual(@sizeOf(SafeMultiList(MixedAlignElem).Serialized), buffer.len);
+    const serialized: *const SafeMultiList(MixedAlignElem).Serialized = @ptrCast(@alignCast(buffer.ptr));
+    try serialized.validateRelocations(buffer.len);
+    try testing.expectEqual(@as(u32, 0), serialized.deserializeInto(@intFromPtr(buffer.ptr)).len());
+}
+
+test "SafeMultiList: both serialize entry points produce the same column bytes" {
+    // There are two serialization entry points (the `Serialized` header form used by
+    // composing stores, and the pointer-returning form). They must agree byte for byte,
+    // or a store that mixes them writes a blob its own reader cannot interpret.
+    const gpa = testing.allocator;
+
+    var list = try buildMixedAlign(gpa, 0, 7);
+    defer list.deinit(gpa);
+
+    var header_writer = CompactWriter.init();
+    defer header_writer.deinit(gpa);
+    const serialized = try header_writer.appendAlloc(gpa, SafeMultiList(MixedAlignElem).Serialized);
+    try serialized.serialize(&list, gpa, &header_writer);
+    const header_buf = try gpa.alignedAlloc(u8, CompactWriter.SERIALIZATION_ALIGNMENT, header_writer.total_bytes);
+    defer gpa.free(header_buf);
+    _ = try header_writer.writeToBuffer(header_buf);
+    const header_columns_at: usize = @intCast(serialized.offset);
+
+    var direct_writer = CompactWriter.init();
+    defer direct_writer.deinit(gpa);
+    const anchor = try direct_writer.appendAlloc(gpa, SafeMultiList(MixedAlignElem).Serialized);
+    anchor.* = .{ .offset = 0, .len = 0, .capacity = 0 };
+    const direct = try list.serialize(gpa, &direct_writer);
+    const direct_buf = try gpa.alignedAlloc(u8, CompactWriter.SERIALIZATION_ALIGNMENT, direct_writer.total_bytes);
+    defer gpa.free(direct_buf);
+    _ = try direct_writer.writeToBuffer(direct_buf);
+    const direct_columns_at = @intFromPtr(direct.items.bytes);
+
+    const column_bytes = 7 * (8 + 2 + 1);
+    try testing.expectEqualSlices(
+        u8,
+        header_buf[header_columns_at..][0..column_bytes],
+        direct_buf[direct_columns_at..][0..column_bytes],
+    );
+    try testing.expectEqual(@as(u64, 7), serialized.len);
+    try testing.expectEqual(@as(u64, 7), serialized.capacity);
+    try testing.expectEqual(@as(usize, 7), direct.items.capacity);
+}
+
+/// Serialize `list` into a stack-allocated `Serialized` header and a fresh writer, so
+/// the data is the very first thing the writer gathers and therefore begins at byte
+/// zero. Returns the header alongside the bytes; the caller frees the bytes.
+fn serializeAtByteZero(
+    gpa: Allocator,
+    comptime Container: type,
+    list: *const Container,
+) (Allocator.Error || error{BufferTooSmall})!struct {
+    header: Container.Serialized,
+    bytes: []align(CompactWriter.SERIALIZATION_ALIGNMENT.toByteUnits()) u8,
+} {
+    var writer = CompactWriter.init();
+    defer writer.deinit(gpa);
+    var header: Container.Serialized = undefined;
+    try header.serialize(list, gpa, &writer);
+    const bytes = try gpa.alignedAlloc(u8, CompactWriter.SERIALIZATION_ALIGNMENT, writer.total_bytes);
+    errdefer gpa.free(bytes);
+    _ = try writer.writeToBuffer(bytes);
+    return .{ .header = header, .bytes = bytes };
+}
+
+test "SafeList serialization records a byte-zero offset as zero" {
+    // A store normally writes its header struct into the writer first, which puts its
+    // data past byte zero. Nothing requires that, though, and a serializer that carries
+    // the offset in a pointer cannot express zero: it either panics on the null cast or
+    // silently records the wrong place. Keep the offset an integer.
+    const gpa = testing.allocator;
+
+    {
+        var list = SafeList(u32){};
+        defer list.deinit(gpa);
+        for (0..4) |i| _ = try list.append(gpa, @intCast(0x1000 + i));
+
+        const written = try serializeAtByteZero(gpa, SafeList(u32), &list);
+        defer gpa.free(written.bytes);
+
+        try testing.expectEqual(@as(i64, 0), written.header.offset);
+        try testing.expectEqual(@as(u64, 4), written.header.len);
+        try testing.expectEqual(written.bytes.len, 4 * @sizeOf(u32));
+
+        try written.header.validateRelocations(written.bytes.len);
+        const loaded = written.header.deserializeInto(@intFromPtr(written.bytes.ptr));
+        try testing.expectEqual(@as(u64, 4), loaded.len());
+        for (0..4) |i| {
+            try testing.expectEqual(@as(u32, @intCast(0x1000 + i)), loaded.get(@enumFromInt(@as(u32, @intCast(i)))).*);
+        }
+    }
+
+    {
+        // Empty at byte zero: no bytes written, and the header still reads back empty.
+        var empty = SafeList(u32){};
+        defer empty.deinit(gpa);
+
+        const written = try serializeAtByteZero(gpa, SafeList(u32), &empty);
+        defer gpa.free(written.bytes);
+
+        try testing.expectEqual(@as(i64, 0), written.header.offset);
+        try testing.expectEqual(@as(u64, 0), written.header.len);
+        try testing.expectEqual(@as(usize, 0), written.bytes.len);
+        try written.header.validateRelocations(written.bytes.len);
+        try testing.expectEqual(@as(u64, 0), written.header.deserializeInto(@intFromPtr(written.bytes.ptr)).len());
+    }
+}
+
+test "SafeMultiList serialization records a byte-zero offset as zero" {
+    // Same property for the column writer, with a scrubbable column so the first column
+    // at byte zero is one that takes the copy-and-canonicalize path rather than the
+    // gather-verbatim one.
+    const gpa = testing.allocator;
+
+    const Detail = struct { tag: u8, value: u64 }; // auto layout: inter-field gap
+    const Row = struct { detail: Detail, plain: u32 };
+    comptime std.debug.assert(CompactWriter.needsPaddingZeroing(Detail));
+
+    {
+        var list = SafeMultiList(Row){};
+        defer list.deinit(gpa);
+        for (0..5) |i| {
+            _ = try list.append(gpa, .{
+                .detail = .{ .tag = @intCast(i), .value = 0x2000 + i },
+                .plain = @intCast(0x30 + i),
+            });
+        }
+        // The widest column is the scrubbable one, so it sorts first and lands at zero.
+        const detail_column = list.field(.detail);
+        for (detail_column, 0..) |*detail, i| {
+            @memset(std.mem.asBytes(detail), 0xC3);
+            detail.tag = @intCast(i);
+            detail.value = 0x2000 + i;
+        }
+
+        const written = try serializeAtByteZero(gpa, SafeMultiList(Row), &list);
+        defer gpa.free(written.bytes);
+
+        try testing.expectEqual(@as(i64, 0), written.header.offset);
+        try testing.expectEqual(@as(u64, 5), written.header.len);
+        try testing.expectEqual(@as(u64, 5), written.header.capacity);
+        try testing.expectEqual(written.bytes.len, 5 * (@sizeOf(Detail) + @sizeOf(u32)));
+
+        // The scrubbed copy carries no poison even though the source column does.
+        try testing.expect(std.mem.findScalar(u8, written.bytes, 0xC3) == null);
+
+        try written.header.validateRelocations(written.bytes.len);
+        const loaded = written.header.deserializeInto(@intFromPtr(written.bytes.ptr));
+        try testing.expectEqual(@as(u32, 5), loaded.len());
+        for (0..5) |i| {
+            const row = loaded.get(@enumFromInt(@as(u32, @intCast(i))));
+            try testing.expectEqual(@as(u8, @intCast(i)), row.detail.tag);
+            try testing.expectEqual(@as(u64, 0x2000 + i), row.detail.value);
+            try testing.expectEqual(@as(u32, @intCast(0x30 + i)), row.plain);
+        }
+    }
+
+    {
+        var empty = SafeMultiList(Row){};
+        defer empty.deinit(gpa);
+
+        const written = try serializeAtByteZero(gpa, SafeMultiList(Row), &empty);
+        defer gpa.free(written.bytes);
+
+        try testing.expectEqual(@as(i64, 0), written.header.offset);
+        try testing.expectEqual(@as(u64, 0), written.header.len);
+        try testing.expectEqual(@as(usize, 0), written.bytes.len);
+        try written.header.validateRelocations(written.bytes.len);
+        try testing.expectEqual(@as(u32, 0), written.header.deserializeInto(@intFromPtr(written.bytes.ptr)).len());
+    }
+}
+
+test "SafeList: both serialize entry points produce the same item bytes" {
+    // The `Serialized` header form and the pointer-returning form must stay on one
+    // implementation, or a store that mixes them writes a blob its own reader cannot
+    // interpret. The padded item type also proves both scrub.
+    const gpa = testing.allocator;
+
+    const Padded = struct { tag: u8, value: u64 };
+    comptime std.debug.assert(CompactWriter.needsPaddingZeroing(Padded));
+
+    var list = SafeList(Padded){};
+    defer list.deinit(gpa);
+    for (0..6) |i| _ = try list.append(gpa, .{ .tag = @intCast(i), .value = 0x4000 + i });
+    for (list.items.items, 0..) |*item, i| {
+        @memset(std.mem.asBytes(item), 0xD4);
+        item.tag = @intCast(i);
+        item.value = 0x4000 + i;
+    }
+
+    var header_writer = CompactWriter.init();
+    defer header_writer.deinit(gpa);
+    const header = try header_writer.appendAlloc(gpa, SafeList(Padded).Serialized);
+    try header.serialize(&list, gpa, &header_writer);
+    const header_buf = try gpa.alignedAlloc(u8, CompactWriter.SERIALIZATION_ALIGNMENT, header_writer.total_bytes);
+    defer gpa.free(header_buf);
+    _ = try header_writer.writeToBuffer(header_buf);
+    const header_items_at: usize = @intCast(header.offset);
+
+    var direct_writer = CompactWriter.init();
+    defer direct_writer.deinit(gpa);
+    const anchor = try direct_writer.appendAlloc(gpa, SafeList(Padded).Serialized);
+    anchor.* = .{ .offset = 0, .len = 0, .capacity = 0 };
+    const direct = try list.serialize(gpa, &direct_writer);
+    const direct_buf = try gpa.alignedAlloc(u8, CompactWriter.SERIALIZATION_ALIGNMENT, direct_writer.total_bytes);
+    defer gpa.free(direct_buf);
+    _ = try direct_writer.writeToBuffer(direct_buf);
+    const direct_items_at = @intFromPtr(direct.items.items.ptr);
+
+    const item_bytes = 6 * @sizeOf(Padded);
+    try testing.expectEqualSlices(
+        u8,
+        header_buf[header_items_at..][0..item_bytes],
+        direct_buf[direct_items_at..][0..item_bytes],
+    );
+    try testing.expect(std.mem.findScalar(u8, header_buf[header_items_at..][0..item_bytes], 0xD4) == null);
+    try testing.expectEqual(@as(u64, 6), header.len);
+    try testing.expectEqual(@as(usize, 6), direct.items.capacity);
 }

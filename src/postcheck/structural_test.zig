@@ -965,8 +965,8 @@ test "Monotype closed direct low-level lowering stays sealed and allocation disc
         "const BinderMap = struct",
         "const TypedBinder = struct",
     );
-    try expectContains(binder_map, "locals: ?[]?DraftLocalId = null");
-    try expectContains(binder_map, "if (self.locals == null)");
+    try expectContains(binder_map, "collections.VersionedDenseMap");
+    try expectNotContains(binder_map, "alloc(?DraftLocalId, self.binder_count)");
     try expectNotContains(binder_map, "AutoHashMap");
 
     const inst_node = sourceSliceBetween(
@@ -1384,17 +1384,25 @@ test "hosted Try adaptation consumes checker-recorded nominal provenance" {
         "fn graphHostedTryInfoOrNull(",
         "const Builder = struct",
     );
+    // The hosted `Try` adapter is now one instance of the general result-row
+    // widening adapter (design.md "Result-Row Widening Adapter"), so the two
+    // functions this slices between carry the general names. The adapter no
+    // longer returns early on a missing capability—a template whose result
+    // is a bare closed row is adapted without one—so the assertion that
+    // pinned the capability as the only route to `Try` moved to the two
+    // `hostedTryInfoOrNull` calls that read the `Try` rows through it.
     const adapter_source = sourceSliceBetween(
         lower_source,
-        "fn hostedTryAdapterSourceType(",
-        "fn hostedTryAdapterBody(",
+        "fn resultRowWideningAdapterSourceType(",
+        "fn resultRowWideningAdapterBody(",
     );
     try std.testing.expect(@hasField(check.CheckedModule.CheckedProcedureTemplate, "hosted_try_adapter"));
     try expectContains(lower_source, "template.hosted_try_adapter");
     try expectContains(graph_relation, "capability.def");
     try expectContains(graph_relation, "capability.ok_type_arg_index");
     try expectContains(graph_relation, "capability.err_type_arg_index");
-    try expectContains(adapter_source, "capability orelse return null");
+    try expectContains(adapter_source, "self.hostedTryInfoOrNull(try_capability, requested.ret)");
+    try expectContains(adapter_source, "self.hostedTryInfoOrNull(try_capability, declared.ret)");
     try expectContains(lower_source, "sameTypeDef(named.def, capability.def)");
     try expectContains(lower_source, "tagByNameOrNull(backing_ty.ty, capability.ok_tag)");
     try expectContains(lower_source, "tagByNameOrNull(backing_ty.ty, capability.err_tag)");

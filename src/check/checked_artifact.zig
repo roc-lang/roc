@@ -3218,6 +3218,37 @@ pub const CheckedTypePayload = union(enum) {
     empty_record,
     tag_union: CheckedTagUnionType,
     empty_tag_union,
+
+    /// Whether this variable payload stands for no specialization input of
+    /// its own: an unconstrained flex row tail carrying a row default and no
+    /// numeric default, which lowering seals to that default
+    /// (`lowerCheckedTypeVariable`). A rigid, an undefaulted flex, a
+    /// numeric-defaulting flex, and a constrained flex each stand for one.
+    /// This is the variable half of the `direct_closed` rule (design.md
+    /// "Static Dispatch In Monotype"), shared by the checked artifact's
+    /// classification and Monotype's sealed-cell guard so the two cannot
+    /// drift; whether an enclosing scheme quantifies the variable is the
+    /// classification's own question. Ask only at `.flex` or `.rigid`.
+    pub fn variableSealsToRowDefault(self: CheckedTypePayload) bool {
+        return switch (self) {
+            .flex => |variable| variable.constraints.len == 0 and
+                variable.numeric_default_phase == null and
+                variable.row_default != null,
+            .rigid => false,
+            .pending,
+            .err,
+            .alias,
+            .record,
+            .record_unbound,
+            .tuple,
+            .nominal,
+            .function,
+            .empty_record,
+            .tag_union,
+            .empty_tag_union,
+            => checkedArtifactInvariant("row-default sealing was asked of a non-variable checked type", .{}),
+        };
+    }
 };
 
 /// Build form of `CheckedTypePayload`: slice fields carry individually-allocated
@@ -4384,6 +4415,17 @@ pub const CheckedTypeStore = struct {
     /// already interned, making this the DAG's structural-consing index.
     structural_root_heads: std.AutoHashMapUnmanaged(u64, u32) = .empty,
     structural_root_entries: std.ArrayListUnmanaged(CheckedStructuralRootEntry) = .empty,
+    /// Build-only record of the identity instance each substitution-cloned
+    /// flex or rigid root was minted from (clone → source). Substituting an
+    /// identity-bearing root reserves distinct roots for the variables it
+    /// leaves unsubstituted (`reserveDistinctSyntheticTypeRoot`), so a
+    /// consumer relating an instantiated callable's variables back to the
+    /// scheme that quantifies them reads through `identityOrigin`.
+    identity_origins: std.AutoHashMapUnmanaged(CheckedTypeId, CheckedTypeId) = .empty,
+    /// Build-only set of every variable root filled through the synthetic
+    /// path (`fillSyntheticTypeRoot`). Each must declare its origin in
+    /// `identity_origins`; `identityOrigin` refuses one that has not.
+    synthetic_variable_roots: std.AutoHashMapUnmanaged(CheckedTypeId, void) = .empty,
     roots: std.ArrayList(CheckedTypeRoot) = .empty,
     schemes: std.ArrayList(CheckedTypeScheme) = .empty,
     /// Serialized probing buckets contain scheme IDs, with zero denoting an
@@ -4419,6 +4461,8 @@ pub const CheckedTypeStore = struct {
         "root_index",
         "structural_root_heads",
         "structural_root_entries",
+        "identity_origins",
+        "synthetic_variable_roots",
     };
 
     /// The shared flat pool of `CheckedTypeId`s backing range fields.
@@ -4839,10 +4883,12 @@ pub const CheckedTypeStore = struct {
 
         // Evidence nodes retain exact checked callable instantiations. Publish
         // every fresh type participating in a recorded scheme use, including
-        // the constraint function that identifies a selected dispatch target.
+        // the constraint function that identifies a selected dispatch target
+        // or a per-use where-method callable.
         for (module_env.scheme_uses.items.items) |record| {
             if (record.slot_kind == @intFromEnum(ModuleEnv.SchemeUseRecord.Slot.dispatch_target) or
-                record.slot_kind == @intFromEnum(ModuleEnv.SchemeUseRecord.Slot.recursive_dispatch_target))
+                record.slot_kind == @intFromEnum(ModuleEnv.SchemeUseRecord.Slot.recursive_dispatch_target) or
+                record.slot_kind == @intFromEnum(ModuleEnv.SchemeUseRecord.Slot.where_method_use))
             {
                 _ = try appendCheckedTypeRoot(allocator, module, names, import_views, &store, &active, @enumFromInt(record.slot_data));
             }
@@ -4939,6 +4985,38 @@ pub const CheckedTypeStore = struct {
             checkedArtifactInvariant("checked identity metadata referenced a missing root", .{});
         }
         return self.roots.items[index].contains_identity_variables;
+    }
+
+    /// The identity instance a variable root stands for: the source a
+    /// substitution cloned it from, followed through nested clones, or the
+    /// root itself when it was published from a source variable or declared
+    /// a fresh instance (`declareIdentityInstance`). A synthetic variable
+    /// root that declared neither is refused rather than read as its own
+    /// origin: a forgotten origin would make a cloned, quantified tail look
+    /// unquantified and let a defaultable one classify `direct_closed`.
+    /// Build-time only: serialized stores carry no origins.
+    pub fn identityOrigin(self: *const CheckedTypeStore, root: CheckedTypeId) CheckedTypeId {
+        var current = root;
+        var remaining = self.identity_origins.count();
+        while (true) {
+            const source = self.identity_origins.get(current) orelse {
+                if (self.synthetic_variable_roots.contains(current)) {
+                    checkedArtifactInvariant("synthetic checked variable root declared no identity origin", .{});
+                }
+                return current;
+            };
+            if (source == current) return current;
+            if (remaining == 0) checkedArtifactInvariant("checked identity origin chain was cyclic", .{});
+            remaining -= 1;
+            current = source;
+        }
+    }
+
+    /// Declare a synthetic variable root a fresh identity instance (its own
+    /// origin): a projection of an imported or viewed variable into this
+    /// store, which no scheme of this module quantifies through another id.
+    pub fn declareIdentityInstance(self: *CheckedTypeStore, allocator: Allocator, root: CheckedTypeId) Allocator.Error!void {
+        try self.identity_origins.put(allocator, root, root);
     }
 
     fn indexRoot(
@@ -5164,6 +5242,14 @@ pub const CheckedTypeStore = struct {
     /// structural key. Checked instantiations can share a key while carrying
     /// different explicit identity-variable solutions, so projection paths that
     /// preserve one source instance must keep its payload address distinct.
+    ///
+    /// A distinct root later filled with a variable payload must declare its
+    /// identity origin: the source variable it clones
+    /// (`cloneCheckedTypeRootSubstituting` records it) or itself when it is a
+    /// fresh instance (`declareIdentityInstance`). `fillSyntheticTypeRoot`
+    /// marks every such root and `identityOrigin` refuses one without a
+    /// declaration, so a producer that forgets fails loudly instead of
+    /// letting a cloned, quantified row tail read as unquantified.
     fn reserveDistinctSyntheticTypeRoot(
         self: *CheckedTypeStore,
         allocator: Allocator,
@@ -5203,6 +5289,9 @@ pub const CheckedTypeStore = struct {
 
         var owned_payload = build_payload;
         errdefer deinitCheckedTypePayloadBuild(allocator, &owned_payload);
+        if (owned_payload == .flex or owned_payload == .rigid) {
+            try self.synthetic_variable_roots.put(allocator, root, {});
+        }
         const stored = try self.commitPayload(allocator, owned_payload);
         self.payloads.items[index] = stored;
         errdefer self.payloads.items[index] = .pending;
@@ -5388,6 +5477,8 @@ pub const CheckedTypeStore = struct {
         self.structural_root_entries.deinit(allocator);
         self.structural_root_heads.deinit(allocator);
         self.root_index.deinit(allocator);
+        self.identity_origins.deinit(allocator);
+        self.synthetic_variable_roots.deinit(allocator);
         if (!self.serialized) {
             self.nominal_declarations.deinit(allocator);
             self.payloads.deinit(allocator);
@@ -5483,6 +5574,9 @@ pub const CheckedTypeStore = struct {
         // the store's pools, which can reallocate slices that alias them.
         var snapshot = try self.snapshotStoredPayload(allocator, self.payloads.items[source_index]);
         defer deinitCheckedTypePayloadBuild(allocator, &snapshot);
+        if (snapshot == .flex or snapshot == .rigid) {
+            try self.identity_origins.put(allocator, target, source);
+        }
         if (snapshot == .function and @intFromEnum(snapshot.function.ret) >= self.payloads.items.len) {
             checkedArtifactInvariant("checked type substitution reached function root {} with missing ret {} and {} payloads", .{
                 source_index,
@@ -12047,13 +12141,6 @@ pub const CheckedBodyStore = struct {
             }
         }
 
-        const statement_diverges = try allocator.alloc(bool, statements.items.len);
-        errdefer allocator.free(statement_diverges);
-        @memset(statement_diverges, false);
-        const statement_diverges_without_inline_expects = try allocator.alloc(bool, statements.items.len);
-        errdefer allocator.free(statement_diverges_without_inline_expects);
-        @memset(statement_diverges_without_inline_expects, false);
-
         const pattern_binder_by_pattern = try allocator.alloc(?PatternBinderId, patterns.items.len);
         errdefer allocator.free(pattern_binder_by_pattern);
         @memset(pattern_binder_by_pattern, null);
@@ -12099,78 +12186,12 @@ pub const CheckedBodyStore = struct {
             }
         }
 
-        // Exact runtime operand dependencies for checked dispatch forms whose
-        // compact expression payload stores only the checker-produced plan id.
-        // Divergence publication consumes this producer-owned column directly.
-        const dispatch_operands = try allocator.alloc([]const CheckedExprId, exprs.items.len);
-        for (dispatch_operands) |*operands| operands.* = &.{};
-        defer {
-            for (dispatch_operands) |operands| if (operands.len > 0) allocator.free(operands);
-            allocator.free(dispatch_operands);
-        }
-        node_idx = 0;
-        while (node_idx < module.nodeCount()) : (node_idx += 1) {
-            const checked_expr = source_node_map.exprAtRawNode(node_idx) orelse continue;
-            const source_expr: CIR.Expr.Idx = @enumFromInt(node_idx);
-            const source_data = module.expr(source_expr).data;
-            dispatch_operands[@intFromEnum(checked_expr)] = if (source_data == .e_dispatch_call) blk: {
-                const call = source_data.e_dispatch_call;
-                const source_args = module.sliceExpr(call.args);
-                const operands = try allocator.alloc(CheckedExprId, source_args.len + 1);
-                operands[0] = source_node_map.expr(call.receiver) orelse checkedArtifactInvariant("checked dispatch receiver was not recorded in the source node map", .{});
-                for (source_args, 0..) |arg, index| {
-                    operands[index + 1] = source_node_map.expr(arg) orelse checkedArtifactInvariant("checked dispatch argument was not recorded in the source node map", .{});
-                }
-                break :blk operands;
-            } else if (source_data == .e_method_eq)
-                try allocator.dupe(CheckedExprId, &.{
-                    source_node_map.expr(source_data.e_method_eq.lhs) orelse checkedArtifactInvariant("checked method equality lhs was not recorded in the source node map", .{}),
-                    source_node_map.expr(source_data.e_method_eq.rhs) orelse checkedArtifactInvariant("checked method equality rhs was not recorded in the source node map", .{}),
-                })
-            else if (source_data == .e_type_dispatch_call) blk: {
-                const call = source_data.e_type_dispatch_call;
-                const source_args = module.sliceExpr(call.args);
-                const operands = try allocator.alloc(CheckedExprId, source_args.len);
-                for (source_args, 0..) |arg, index| {
-                    operands[index] = source_node_map.expr(arg) orelse checkedArtifactInvariant("checked type-dispatch argument was not recorded in the source node map", .{});
-                }
-                break :blk operands;
-            } else &.{};
-        }
-
-        for (literal_pattern_exprs.items) |literal| {
-            dispatch_operands[@intFromEnum(literal.equality)] = try allocator.dupe(CheckedExprId, &.{ literal.scrutinee, literal.expr });
-        }
-
         // Allocated after the copy pass because custom literal patterns append
         // their conversion and equality expressions.
-        const expr_diverges = try allocator.alloc(bool, exprs.items.len);
-        errdefer allocator.free(expr_diverges);
-        @memset(expr_diverges, false);
-        const expr_diverges_without_inline_expects = try allocator.alloc(bool, exprs.items.len);
-        errdefer allocator.free(expr_diverges_without_inline_expects);
-        @memset(expr_diverges_without_inline_expects, false);
         const expr_inspect_evaluation_may_be_elided = try allocator.alloc(bool, exprs.items.len);
         errdefer allocator.free(expr_inspect_evaluation_may_be_elided);
         @memset(expr_inspect_evaluation_may_be_elided, false);
-        const dispatch_crashes = try allocator.alloc(bool, exprs.items.len);
-        defer allocator.free(dispatch_crashes);
-        @memset(dispatch_crashes, false);
-        const dispatch_facts = DivergenceDispatchFacts{
-            .operands = dispatch_operands,
-            .crashes = dispatch_crashes,
-        };
 
-        try publishCheckedBodyDivergence(allocator, exprs.items, statements.items, dispatch_facts, expr_diverges, statement_diverges, .run);
-        try publishCheckedBodyDivergence(
-            allocator,
-            exprs.items,
-            statements.items,
-            dispatch_facts,
-            expr_diverges_without_inline_expects,
-            statement_diverges_without_inline_expects,
-            .omit,
-        );
         try publishCheckedInspectEvaluationElision(
             allocator,
             exprs.items,
@@ -12194,38 +12215,14 @@ pub const CheckedBodyStore = struct {
         try store.commitStatements(allocator, statements.items);
         try store.commitStringLiterals(allocator, string_builder.strings.items);
         try store.pattern_binders.appendSlice(allocator, pattern_binders.items);
-        // Stamp the divergence bit onto each stored expr/statement. `commitExprs`/
-        // `commitStatements` produce one stored element per build element in order, so
-        // the zip aligns by construction—this is the lockstep guarantee, replacing a
-        // parallel array that could fall out of sync.
-        for (store.stored_exprs.items, expr_diverges) |*stored, diverges| stored.diverges = diverges;
-        for (store.stored_statements.items, statement_diverges) |*stored, diverges| stored.diverges = diverges;
-        for (store.stored_exprs.items, expr_diverges_without_inline_expects) |*stored, diverges| stored.diverges_without_inline_expects = diverges;
-        for (store.stored_statements.items, statement_diverges_without_inline_expects) |*stored, diverges| stored.diverges_without_inline_expects = diverges;
+        // `commitExprs` produces one stored element per build element in order,
+        // so the zip aligns by construction.
         for (store.stored_exprs.items, expr_inspect_evaluation_may_be_elided) |*stored, may_be_elided| stored.evaluation_may_be_elided_for_inspect = may_be_elided;
-        const expr_contains_diagnostic_error = try allocator.alloc(bool, store.stored_exprs.items.len);
-        errdefer allocator.free(expr_contains_diagnostic_error);
-        @memset(expr_contains_diagnostic_error, false);
-        try publishCheckedBodyDiagnosticErrors(
-            allocator,
-            &checked_types.store,
-            store.view(),
-            dispatch_operands,
-            expr_contains_diagnostic_error,
-            false,
-            {},
-        );
-        for (store.stored_exprs.items, expr_contains_diagnostic_error) |*stored, contains_diagnostic_error| stored.contains_diagnostic_error = contains_diagnostic_error;
         try store.pattern_binder_by_pattern.appendSlice(allocator, pattern_binder_by_pattern);
         try store.literal_pattern_exprs.appendSlice(allocator, literal_pattern_exprs.items);
 
         // The build arrays' per-element owned slices are now copied into pools.
-        allocator.free(expr_diverges);
-        allocator.free(statement_diverges);
-        allocator.free(expr_diverges_without_inline_expects);
-        allocator.free(statement_diverges_without_inline_expects);
         allocator.free(expr_inspect_evaluation_may_be_elided);
-        allocator.free(expr_contains_diagnostic_error);
         allocator.free(pattern_binder_by_pattern);
         literal_pattern_exprs.deinit(allocator);
         deinitCheckedExprList(allocator, exprs.items);
@@ -12327,7 +12324,7 @@ pub const CheckedBodyStore = struct {
         };
     }
 
-    /// Republish runtime divergence after static dispatch resolutions are
+    /// Publish runtime divergence once static dispatch resolutions are
     /// final. Monotype emits an explicit runtime crash for a checked-error or
     /// unreachable dispatch, so the dispatch never returns a result value. Its
     /// divergence must propagate through the same CheckedBodyStore expression
@@ -12420,33 +12417,44 @@ pub const CheckedBodyStore = struct {
         }
     }
 
-    /// Rejection discovered when resolving a binding use or dispatch must reach
-    /// the same checked facts as a source runtime error before roots are requested.
-    /// Successful modules never allocate this recovery scratch.
-    fn republishDiagnosticErrorFacts(
+    /// Publish `contains_diagnostic_error` for every expression. The ordinary
+    /// publication runs once every source runtime error and rejected binding
+    /// use is explicit in the bodies. When total dispatch resolution records
+    /// rejected-dispatch seeds, a second publication propagates them through
+    /// the same dependencies and through resolved local constant references;
+    /// only that recovery path allocates the constant-reference graph.
+    fn publishDiagnosticErrorFacts(
         self: *CheckedBodyStore,
         allocator: Allocator,
         checked_types: *const CheckedTypeStore,
-        plans: *const static_dispatch.StaticDispatchPlanTable,
+        operands: []const []const CheckedExprId,
         bindings: ?DiagnosticErrorBindings,
     ) Allocator.Error!void {
-        const operands = try checkedDispatchOperands(allocator, self.exprCount(), plans, null);
-        defer freeCheckedDispatchOperands(allocator, operands);
         const errors = try allocator.alloc(bool, self.exprCount());
         defer allocator.free(errors);
+        @memset(errors, false);
         if (bindings) |resolved| {
             try publishCheckedBodyDiagnosticErrors(allocator, checked_types, self.view(), operands, errors, true, resolved);
         } else {
             try publishCheckedBodyDiagnosticErrors(allocator, checked_types, self.view(), operands, errors, false, {});
         }
         for (self.stored_exprs.items, errors) |*stored, contains_error| stored.contains_diagnostic_error = contains_error;
+    }
 
+    /// Rejected binding uses rewrite expressions to `runtime_error` after the
+    /// builder published inspect elision, so their elision facts are
+    /// recomputed from the rewritten bodies.
+    fn publishInspectEvaluationElisionAfterRejectedBindings(
+        self: *CheckedBodyStore,
+        allocator: Allocator,
+    ) Allocator.Error!void {
         const exprs = try allocator.alloc(CheckedExpr, self.exprCount());
         defer allocator.free(exprs);
         for (exprs, 0..) |*stored, i| stored.* = self.expr(@enumFromInt(i));
-        try publishCheckedInspectEvaluationElision(allocator, exprs, errors);
-        for (self.stored_exprs.items, errors) |*stored, may_elide| stored.evaluation_may_be_elided_for_inspect = may_elide;
-        try self.publishResolvedDispatchDivergence(allocator, plans);
+        const may_be_elided = try allocator.alloc(bool, self.exprCount());
+        defer allocator.free(may_be_elided);
+        try publishCheckedInspectEvaluationElision(allocator, exprs, may_be_elided);
+        for (self.stored_exprs.items, may_be_elided) |*stored, may_elide| stored.evaluation_may_be_elided_for_inspect = may_elide;
     }
 
     // --- Shared flat pool accessors (used by materialize functions). ---
@@ -17534,7 +17542,7 @@ fn sealCheckedProcedureTemplateRefs(
                     @enumFromInt(record.scheme_root),
                     {},
                 ),
-                .nested_function_use, .dispatch_target, .recursive_dispatch_target, .recursive_reference => {},
+                .nested_function_use, .dispatch_target, .recursive_dispatch_target, .recursive_reference, .where_method_use => {},
             }
         }
 
@@ -17887,6 +17895,15 @@ const EvidencePass = struct {
     /// union-find roots are deliberately not used because two distinct checked
     /// edges may later acquire equal types.
     generated_codec_by_source: std.AutoHashMap(u64, static_dispatch.GeneratedCodecDerivationId),
+    /// where_method_use record index by the body dispatch's raw fn var.
+    /// The record explicitly maps that callable to its pristine signature.
+    where_method_use_by_fn_var: std.AutoHashMap(u32, u32),
+    /// The same records by the settled root of that raw fn var. Generalized
+    /// requirement deduplication unifies same-shape callables through a
+    /// committed probe, so a plan may name a callable that is in one class
+    /// with a recorded body use without being its raw key; the class is the
+    /// equality authority after that probe. First record per root wins.
+    where_method_use_by_fn_root: std.AutoHashMap(Var, u32),
     /// Source node by checked expr (reverse of `exprIdForSource`).
     source_by_checked_expr: std.AutoHashMap(u32, u32),
     /// Generalized local VALUE decls (non-lambda exprs, e.g. an `if` choosing
@@ -17987,6 +18004,8 @@ const EvidencePass = struct {
             .schemas_by_root = collections.DenseMap(Var, SchemeSchema).init(allocator),
             .identity_writer = canonical_type_keys.TypeWriter.init(allocator, module.typeStoreConst(), module.moduleEnvConst()),
             .generated_codec_by_source = std.AutoHashMap(u64, static_dispatch.GeneratedCodecDerivationId).init(allocator),
+            .where_method_use_by_fn_var = std.AutoHashMap(u32, u32).init(allocator),
+            .where_method_use_by_fn_root = std.AutoHashMap(Var, u32).init(allocator),
             .source_by_checked_expr = std.AutoHashMap(u32, u32).init(allocator),
             .local_value_scheme_by_var = std.AutoHashMap(u32, u32).init(allocator),
             .value_use_record_by_pattern = std.AutoHashMap(u32, u32).init(allocator),
@@ -18019,6 +18038,8 @@ const EvidencePass = struct {
         self.value_use_by_node.deinit();
         self.target_by_fn_var.deinit();
         self.generated_codec_by_source.deinit();
+        self.where_method_use_by_fn_var.deinit();
+        self.where_method_use_by_fn_root.deinit();
         self.source_by_checked_expr.deinit();
         self.local_value_scheme_by_var.deinit();
         self.value_use_record_by_pattern.deinit();
@@ -18442,6 +18463,20 @@ const EvidencePass = struct {
                         checkedArtifactInvariant("duplicate raw dispatch-target evidence identity", .{});
                     }
                     entry.value_ptr.* = @intCast(i);
+                },
+                .where_method_use => {
+                    // `slot_data` is the raw body constraint callable. It is
+                    // deliberately not resolved through union-find: two body
+                    // uses may settle to the same callable shape while still
+                    // owning distinct per-use signature copies.
+                    const entry = try self.where_method_use_by_fn_var.getOrPut(record.slot_data);
+                    if (entry.found_existing) {
+                        checkedArtifactInvariant("duplicate raw where-method-use callable identity", .{});
+                    }
+                    entry.value_ptr.* = @intCast(i);
+                    const root = self.types.resolveVar(@as(Var, @enumFromInt(record.slot_data))).var_;
+                    const root_entry = try self.where_method_use_by_fn_root.getOrPut(root);
+                    if (!root_entry.found_existing) root_entry.value_ptr.* = @intCast(i);
                 },
                 .nested_function_use, .recursive_reference => {},
             }
@@ -18916,6 +18951,16 @@ const EvidencePass = struct {
             method == idents.from_interpolation;
     }
 
+    /// How a checked plan's callable relates to the evidence slot it resolves
+    /// through. Only `exact` shares the slot's callable identity; the other two
+    /// own an independent callable instantiation and differ in where their
+    /// nested evidence comes from.
+    const CallableRelation = enum {
+        exact,
+        independent_synthesize,
+        independent_reuse_slot_nested,
+    };
+
     /// The canonical `(depth, index)` of one method target in the chain,
     /// searching innermost-out. Independent same-name callable relations share
     /// the target slot, while their checked plans retain the per-call shape.
@@ -18927,13 +18972,13 @@ const EvidencePass = struct {
         constraint_fn_var: ?Var,
     ) Allocator.Error!?struct {
         index: static_dispatch.EvidenceChainIndex,
-        exact_callable: bool,
+        callable_relation: CallableRelation,
     } {
         for (chain, 0..) |params, depth| {
             if (try self.paramIndexFor(params, dispatcher_root, method, constraint_fn_var)) |match| {
                 return .{
                     .index = .{ .depth = @intCast(depth), .index = @intCast(match.index) },
-                    .exact_callable = match.exact_callable,
+                    .callable_relation = match.callable_relation,
                 };
             }
         }
@@ -19008,7 +19053,7 @@ const EvidencePass = struct {
         constraint_fn_var: ?Var,
     ) Allocator.Error!?struct {
         index: u32,
-        exact_callable: bool,
+        callable_relation: CallableRelation,
     } {
         const idents = self.module.identStoreConst();
         const constraint_fn_root = if (constraint_fn_var) |fn_var|
@@ -19026,12 +19071,43 @@ const EvidencePass = struct {
             if (constraint_fn_root) |fn_root| {
                 if (self.types.resolveVar(param.constraint.fn_var).var_ != fn_root) continue;
             }
-            return .{ .index = @intCast(k), .exact_callable = true };
+            return .{ .index = @intCast(k), .callable_relation = .exact };
         }
         return if (same_method_fallback) |index|
-            .{ .index = index, .exact_callable = false }
+            .{ .index = index, .callable_relation = self.fallbackCallableRelation(params[index], constraint_fn_var) }
         else
             null;
+    }
+
+    /// A same-name candidate names an independent callable. When that callable
+    /// is (in one settled class with) a per-use where-method signature copy
+    /// (`SchemeUseRecord.where_method_use`) whose pristine signature is the
+    /// slot's own callable, the plan may reuse the slot's checked
+    /// nested-evidence vector: every non-marker leaf of the copy is the
+    /// signature's own variable (`Instantiator.share_leaves`). Otherwise the
+    /// plan synthesizes nested evidence from its own callable.
+    fn fallbackCallableRelation(self: *EvidencePass, candidate: EvidenceParam, constraint_fn_var: ?Var) CallableRelation {
+        const fn_var = constraint_fn_var orelse return .independent_synthesize;
+        const fn_root = self.types.resolveVar(fn_var).var_;
+        const record_idx = self.where_method_use_by_fn_var.get(@intFromEnum(fn_var)) orelse
+            self.where_method_use_by_fn_root.get(fn_root) orelse
+            return .independent_synthesize;
+        const module_env = self.module.moduleEnvConst();
+        const record = module_env.scheme_uses.items.items[record_idx];
+        if (record.slot_kind != @intFromEnum(ModuleEnv.SchemeUseRecord.Slot.where_method_use) or
+            self.types.resolveVar(@as(Var, @enumFromInt(record.slot_data))).var_ != fn_root)
+        {
+            checkedArtifactInvariant("where-method-use index named the wrong scheme-use record", .{});
+        }
+        const signature_root = self.types.resolveVar(@as(Var, @enumFromInt(record.scheme_root))).var_;
+        const pairs = module_env.scheme_use_pairs.items.items[record.pairs_start .. record.pairs_start + record.pairs_len];
+        const copied_callable = self.pairForResolved(pairs, signature_root) orelse
+            checkedArtifactInvariant("where-method-use record omitted its signature callable copy", .{});
+        if (self.types.resolveVar(copied_callable).var_ != fn_root) {
+            checkedArtifactInvariant("where-method-use callable copy did not resolve to its body constraint", .{});
+        }
+        if (self.types.resolveVar(candidate.constraint.fn_var).var_ == signature_root) return .independent_reuse_slot_nested;
+        return .independent_synthesize;
     }
 
     fn resolvePlan(self: *EvidencePass, plan_id: static_dispatch.StaticDispatchPlanId, chain: []const []const EvidenceParam, commit_unpinned: bool) Allocator.Error!void {
@@ -19265,9 +19341,11 @@ const EvidencePass = struct {
         commit_unpinned: bool,
     ) Allocator.Error!?static_dispatch.CheckedCallResolution {
         if (try self.chainParamIndex(chain, dispatcher_root, method, constraint_fn_var)) |match| {
+            const independent_callable = match.callable_relation != .exact;
             return .{ .evidence_dependent = .{
                 .index = match.index,
-                .independent_callable = !match.exact_callable,
+                .independent_callable = independent_callable,
+                .reuse_slot_nested_evidence = match.callable_relation == .independent_reuse_slot_nested,
             } };
         }
 
@@ -19426,11 +19504,7 @@ const EvidencePass = struct {
         };
     }
 
-    const ProcedureEvidenceSchema = enum {
-        none,
-        from_callable,
-        requires_record,
-    };
+    const ProcedureEvidenceSchema = static_dispatch.ProcedureEvidenceSchema;
 
     const ProcedureEvidenceView = struct {
         table: *const CheckedProcedureTemplateTable,
@@ -19478,16 +19552,7 @@ const EvidencePass = struct {
         params: []const static_dispatch.EvidenceParamRecord,
         paths: []const static_dispatch.EvidencePathStep,
     ) ProcedureEvidenceSchema {
-        if (params.len == 0) return .none;
-        for (params) |param| {
-            const path = paths[param.path.start .. param.path.start + param.path.len];
-            switch (param.source) {
-                .scheme_callable => {},
-                .explicit_default => if (path.len != 0) return .requires_record,
-                .scheme_requirement, .constraint_callable, .use_site_only, .erased_row_remainder => return .requires_record,
-            }
-        }
-        return .from_callable;
+        return static_dispatch.procedureEvidenceSchema(params, paths);
     }
 
     fn procedureEvidenceSchema(self: *EvidencePass, target: static_dispatch.MethodTarget) ProcedureEvidenceSchema {
@@ -19705,6 +19770,9 @@ const EvidencePass = struct {
     fn evidenceRefsForRecord(self: *EvidencePass, record_idx: u32, commit_unpinned: bool) Allocator.Error!?RecordSiteSpans {
         const module_env = self.module.moduleEnvConst();
         const record = module_env.scheme_uses.items.items[record_idx];
+        if (record.slot_kind == @intFromEnum(ModuleEnv.SchemeUseRecord.Slot.where_method_use)) {
+            checkedArtifactInvariant("where-method callable relation reached scheme-use evidence emission", .{});
+        }
         const pairs = module_env.scheme_use_pairs.items.items[record.pairs_start .. record.pairs_start + record.pairs_len];
 
         var params = std.ArrayListUnmanaged(EvidenceParam).empty;
@@ -19777,6 +19845,7 @@ const EvidencePass = struct {
                     .scheme_param = dependent.scheme_param,
                     .index = dependent.index,
                     .independent_callable = dependent.independent_callable,
+                    .reuse_slot_nested_evidence = dependent.reuse_slot_nested_evidence,
                 } },
                 .structural => |kind| blk: {
                     const callable_var = fresh_fn_var orelse param.constraint.fn_var;
@@ -19995,6 +20064,9 @@ const EvidencePass = struct {
         if (self.site_seen.contains(site_key)) return;
 
         const record = self.module.moduleEnvConst().scheme_uses.items.items[record_idx];
+        if (record.slot_kind == @intFromEnum(ModuleEnv.SchemeUseRecord.Slot.where_method_use)) {
+            checkedArtifactInvariant("where-method callable relation reached a scheme-use evidence site", .{});
+        }
         // A value use and a nested-function use can share one node (a
         // referenced value stored in expression position); the value use
         // owns the site's evidence regardless of which record checking
@@ -20007,7 +20079,6 @@ const EvidencePass = struct {
 
         self.current_chain = chain;
         defer self.current_chain = &.{};
-
         const shared = record.slot_kind == @intFromEnum(ModuleEnv.SchemeUseRecord.Slot.shared_value_use);
         const spans = (try self.evidenceRefsForRecord(record_idx, !shared)) orelse {
             try self.deferred_use_sites.append(self.allocator, .{ .record_idx = record_idx, .site_key = site_key });
@@ -21050,9 +21121,9 @@ test "hosted Try adapter capability recognizes only closed structural error rows
     const empty_row = try store.appendSyntheticPayloadRoot(allocator, &names, .empty_tag_union);
     const non_row = try store.appendSyntheticPayloadRoot(allocator, &names, .empty_record);
     const open_tail = try store.reserveSyntheticTypeRoot(allocator, testCanonicalTypeKey(105), true);
-    try store.fillSyntheticTypeRoot(allocator, open_tail, .{ .flex = .{} });
+    try testFillSyntheticVariableRoot(allocator, &store, open_tail, .{ .flex = .{} });
     const defaulted_tail = try store.reserveSyntheticTypeRoot(allocator, testCanonicalTypeKey(106), true);
-    try store.fillSyntheticTypeRoot(allocator, defaulted_tail, .{ .flex = .{ .row_default = .empty_tag_union } });
+    try testFillSyntheticVariableRoot(allocator, &store, defaulted_tail, .{ .flex = .{ .row_default = .empty_tag_union } });
 
     const error_tag = try names.internTagLabel("HostErr");
     const closed_tags = try allocator.alloc(CheckedTagBuild, 1);
@@ -21091,6 +21162,112 @@ test "hosted Try adapter capability recognizes only closed structural error rows
     try std.testing.expect(checkedTypeIsClosedTagRow(&store, aliased_row));
     try std.testing.expect(!checkedTypeIsClosedTagRow(&store, open_row));
     try std.testing.expect(!checkedTypeIsClosedTagRow(&store, non_row));
+}
+
+/// Whether a tag row is closed for the purposes of result-row widening: its
+/// extension chain ends in the empty tag union, or in a variable that lowering
+/// seals to one.
+///
+/// Closedness here is `CheckedTypePayload.variableSealsToRowDefault` (see its
+/// doc comment: the rule Monotype's sealed-cell guard shares, so the two
+/// cannot drift), not `checkedTypeIsClosedTagRow` above. The two differ at a
+/// rigid tail, which that rule counts as closed. A rigid result row is
+/// parametric—the caller supplies it—so a template carrying one is
+/// polymorphic in its result and must never mint a widening adapter.
+fn checkedResultRowIsClosed(
+    checked_types: *const CheckedTypeStore,
+    root: CheckedTypeId,
+) bool {
+    var remaining = checked_types.payloads.items.len;
+    var current = root;
+    while (true) {
+        const payload = checked_types.payload(current);
+        switch (payload) {
+            .alias => |alias| current = alias.backing,
+            .tag_union => |tag_union| current = tag_union.ext,
+            .empty_tag_union => return true,
+            .flex, .rigid => |variable| return payload.variableSealsToRowDefault() and
+                variable.row_default == .empty_tag_union,
+            .pending,
+            .err,
+            .record,
+            .record_unbound,
+            .tuple,
+            .nominal,
+            .function,
+            .empty_record,
+            => return false,
+        }
+        if (remaining == 0) {
+            checkedArtifactInvariant("result row extension chain was cyclic", .{});
+        }
+        remaining -= 1;
+    }
+}
+
+/// Whether a procedure template's published result row is closed, so a request
+/// at a row that includes it is served by a generated widening adapter
+/// (design.md "Result-Row Widening Adapter"). The result row is the function
+/// result's own tag row, or—when the result is `Builtin.Try`—its error
+/// argument's row. Monotype mirrors this walk in `lower.zig`'s
+/// `closedResultRowOrNull`.
+fn checkedRootHasClosedResultRow(
+    checked_types: *const CheckedTypeStore,
+    checked_fn_root: CheckedTypeId,
+) bool {
+    var remaining = checked_types.payloads.items.len;
+    var current = checked_fn_root;
+    const function = while (true) {
+        switch (checked_types.payload(current)) {
+            .alias => |alias| current = alias.backing,
+            .function => |function| break function,
+            .pending,
+            .err,
+            .flex,
+            .rigid,
+            .record,
+            .record_unbound,
+            .tuple,
+            .nominal,
+            .empty_record,
+            .tag_union,
+            .empty_tag_union,
+            => return false,
+        }
+        if (remaining == 0) {
+            checkedArtifactInvariant("procedure root alias chain was cyclic", .{});
+        }
+        remaining -= 1;
+    };
+    remaining = checked_types.payloads.items.len;
+    current = function.ret;
+    while (true) {
+        switch (checked_types.payload(current)) {
+            .alias => |alias| current = alias.backing,
+            .nominal => |nominal| {
+                if (nominal.builtin != .try_) return false;
+                if (nominal.args.len != 2) {
+                    checkedArtifactInvariant("Builtin.Try checked type did not have exactly two type arguments", .{});
+                }
+                return checkedResultRowIsClosed(checked_types, nominal.args[1]);
+            },
+            .tag_union, .empty_tag_union => return checkedResultRowIsClosed(checked_types, current),
+            .pending,
+            .err,
+            .flex,
+            .rigid,
+            .record,
+            .record_unbound,
+            .tuple,
+            .function,
+            .empty_record,
+            => return false,
+        }
+        if (remaining == 0) {
+            checkedArtifactInvariant("procedure result alias chain was cyclic", .{});
+        }
+        remaining -= 1;
+    }
 }
 
 fn hostedTryAdapterCapabilityForRoot(
@@ -21310,7 +21487,15 @@ pub const CheckedProcedureTemplateTable = struct {
                     .hosted
                 else
                     .roc,
-                .hosted_try_adapter = if (isHostedProcedureExpr(def.expr.data))
+                // The `Try` capability is published for every template whose
+                // published result row is closed, not only hosted ones: a Roc
+                // implementation reached at a row that includes its own is
+                // adapted by the same mechanism (design.md "Result-Row
+                // Widening Adapter"). Hosted templates keep publishing it
+                // unconditionally so the host ABI boundary is unaffected by
+                // the stricter closed-row rule.
+                .hosted_try_adapter = if (isHostedProcedureExpr(def.expr.data) or
+                    checkedRootHasClosedResultRow(&checked_type_publication.store, checked_fn_root))
                     try hostedTryAdapterCapabilityForRoot(module, names, &checked_type_publication.store, checked_fn_root)
                 else
                     null,
@@ -21396,6 +21581,14 @@ pub const CheckedProcedureTemplateTable = struct {
                     .expect => .entry,
                     .constant, .hoisted_constant, .hoisted_validation, .callable_binding, .numeral_conversion, .quote_conversion, .repl_expr => .comptime_only,
                 },
+                // Compile-time root wrappers publish the capability under the
+                // same closed-result-row rule as ordinary procedure templates,
+                // so Monotype never meets a closed `Try` result row without the
+                // provenance the adapter reads it through.
+                .hosted_try_adapter = if (checkedRootHasClosedResultRow(checked_types, checked_fn_root))
+                    try hostedTryAdapterCapabilityForRoot(module, names, checked_types, checked_fn_root)
+                else
+                    null,
             });
         }
     }
@@ -23436,6 +23629,375 @@ fn platformRequiredPayloadForDeclaration(
     };
 }
 
+/// Per-scheme identity origins for `EnclosingDispatchIdentity`, computed on
+/// first use and pooled. Each set is the key builder's own identity
+/// enumeration of the scheme root (`collectCheckedIdentityRootsInKeyOrder`),
+/// which reaches a where-clause signature through the constrained variable's
+/// callable, normalized through `CheckedTypeStore.identityOrigin` so a
+/// relation-substituted template root names a variable the way a specialized
+/// plan callable does.
+const EnclosingIdentityIndex = struct {
+    allocator: Allocator,
+    names: *const canonical.CanonicalNameStore,
+    store: *const CheckedTypeStore,
+    /// Identity origins per scheme root; each span indexes `pool`.
+    spans_by_root: collections.DenseMap(CheckedTypeId, artifact_serialize.Span),
+    pool: std.ArrayList(CheckedTypeId),
+
+    fn init(
+        allocator: Allocator,
+        names: *const canonical.CanonicalNameStore,
+        store: *const CheckedTypeStore,
+    ) EnclosingIdentityIndex {
+        return .{
+            .allocator = allocator,
+            .names = names,
+            .store = store,
+            .spans_by_root = collections.DenseMap(CheckedTypeId, artifact_serialize.Span).init(allocator),
+            .pool = .empty,
+        };
+    }
+
+    fn deinit(self: *EnclosingIdentityIndex) void {
+        self.pool.deinit(self.allocator);
+        self.spans_by_root.deinit();
+    }
+
+    /// Whether the scheme published at `scheme_root` quantifies the identity
+    /// origin `origin`.
+    fn schemeQuantifies(
+        self: *EnclosingIdentityIndex,
+        scheme_root: CheckedTypeId,
+        origin: CheckedTypeId,
+    ) Allocator.Error!bool {
+        const span = try self.identityOriginsOf(scheme_root);
+        for (self.pool.items[span.start .. span.start + span.len]) |quantified| {
+            if (quantified == origin) return true;
+        }
+        return false;
+    }
+
+    fn identityOriginsOf(
+        self: *EnclosingIdentityIndex,
+        scheme_root: CheckedTypeId,
+    ) Allocator.Error!artifact_serialize.Span {
+        if (self.spans_by_root.get(scheme_root)) |span| return span;
+        const start: u32 = @intCast(self.pool.items.len);
+        if (self.store.rootContainsIdentityVariables(scheme_root)) {
+            const roots = try collectCheckedIdentityRootsInKeyOrder(self.allocator, self.store, self.names, scheme_root);
+            defer self.allocator.free(roots);
+            try self.pool.ensureUnusedCapacity(self.allocator, roots.len);
+            for (roots) |root| self.pool.appendAssumeCapacity(self.store.identityOrigin(root));
+        }
+        const span: artifact_serialize.Span = .{
+            .start = start,
+            .len = @intCast(self.pool.items.len - start),
+        };
+        try self.spans_by_root.put(scheme_root, span);
+        return span;
+    }
+};
+
+/// One scheme context a collected span attributes to a dispatch site: the
+/// enclosing template's checked function root (null for a defaulted-field
+/// expression, which no template quantifies) and the generalized-local scope
+/// that owns the reference.
+const EnclosingDispatchSite = struct {
+    template_root: ?CheckedTypeId,
+    scope: DispatchScope,
+};
+
+/// The schemes enclosing one dispatch site, asked which variables they
+/// quantify: for every span that references the site, the enclosing
+/// template's checked function root (with the where-clause signatures its
+/// variables carry) and every generalized-local scope between the template
+/// and the site. A variable any referencing context quantifies is a
+/// specialization input. A site no span reaches (dead code) has no enclosing
+/// scheme and is classified like a root edge.
+const EnclosingDispatchIdentity = struct {
+    index: *EnclosingIdentityIndex,
+    sites: []const EnclosingDispatchSite,
+    scopes: []const DispatchRefScope,
+
+    /// Whether any referencing context—its template, that template's
+    /// where-clause signatures, or an enclosing generalized-local scope—
+    /// quantifies the variable at `root`.
+    fn quantifies(self: EnclosingDispatchIdentity, root: CheckedTypeId) Allocator.Error!bool {
+        const origin = self.index.store.identityOrigin(root);
+        for (self.sites) |site| {
+            if (site.template_root) |template_root| {
+                if (try self.index.schemeQuantifies(template_root, origin)) return true;
+            }
+            var current: ?DispatchScopeId = switch (site.scope) {
+                .root => null,
+                .generalized => |id| id,
+            };
+            while (current) |id| {
+                const raw_scope = @intFromEnum(id);
+                if (raw_scope >= self.scopes.len) {
+                    checkedArtifactInvariant("dispatch site referenced a missing generalized-local scope", .{});
+                }
+                const scope = self.scopes[raw_scope];
+                if (try self.index.schemeQuantifies(scope.scheme_root, origin)) return true;
+                current = scope.parent;
+            }
+        }
+        return false;
+    }
+};
+
+/// Whether a resolved direct-dispatch callable specializes without any input
+/// from the enclosing specialization (design.md "Static Dispatch In Monotype",
+/// `direct_closed`). A rigid, a flex with no row default, a numeric-defaulting
+/// flex, and a constrained flex each stand for a specialization input, as does
+/// a defaultable row tail the enclosing schemes quantify; a defaultable,
+/// unconstrained row tail nothing enclosing quantifies has exactly one
+/// instantiation—its row default, which the closed path seals it to—and does
+/// not. `rootContainsIdentityVariables` keeps answering the digest-identity
+/// question (is any variable reachable at all); this answers the
+/// specialization question.
+fn callableIdentityIsSpecializationIndependent(
+    allocator: Allocator,
+    store: *const CheckedTypeStore,
+    callable: CheckedTypeId,
+    enclosing: EnclosingDispatchIdentity,
+) Allocator.Error!bool {
+    if (!store.rootContainsIdentityVariables(callable)) return true;
+    var visited = collections.DenseMap(CheckedTypeId, void).init(allocator);
+    defer visited.deinit();
+    return try callableIdentityIsSpecializationIndependentInner(store, callable, enclosing, &visited);
+}
+
+fn callableIdentityIsSpecializationIndependentInner(
+    store: *const CheckedTypeStore,
+    root: CheckedTypeId,
+    enclosing: EnclosingDispatchIdentity,
+    visited: *collections.DenseMap(CheckedTypeId, void),
+) Allocator.Error!bool {
+    if ((try visited.getOrPut(root)).found_existing) return true;
+    const index: usize = @intFromEnum(root);
+    if (index >= store.payloads.items.len) {
+        checkedArtifactInvariant("direct dispatch classification referenced a missing checked type", .{});
+    }
+    const payload = store.payload(root);
+    return switch (payload) {
+        .pending => checkedArtifactInvariant("direct dispatch classification reached a pending checked type", .{}),
+        .err, .empty_record, .empty_tag_union => true,
+        .flex, .rigid => payload.variableSealsToRowDefault() and !try enclosing.quantifies(root),
+        .alias => |alias| (try checkedTypeSpanIsSpecializationIndependent(store, alias.args, enclosing, visited)) and
+            try callableIdentityIsSpecializationIndependentInner(store, alias.backing, enclosing, visited),
+        .record => |record| (try checkedFieldTypesAreSpecializationIndependent(store, record.fields, enclosing, visited)) and
+            try callableIdentityIsSpecializationIndependentInner(store, record.ext, enclosing, visited),
+        .record_unbound => |fields| try checkedFieldTypesAreSpecializationIndependent(store, fields, enclosing, visited),
+        .tuple => |elems| try checkedTypeSpanIsSpecializationIndependent(store, elems, enclosing, visited),
+        .nominal => |nominal| (try checkedTypeSpanIsSpecializationIndependent(store, nominal.args, enclosing, visited)) and
+            try checkedTypeSpanIsSpecializationIndependent(store, nominal.padding_field_types, enclosing, visited),
+        .function => |function| (try checkedTypeSpanIsSpecializationIndependent(store, function.args, enclosing, visited)) and
+            try callableIdentityIsSpecializationIndependentInner(store, function.ret, enclosing, visited),
+        .tag_union => |tag_union| (try checkedTagsAreSpecializationIndependent(store, tag_union.tags, enclosing, visited)) and
+            try callableIdentityIsSpecializationIndependentInner(store, tag_union.ext, enclosing, visited),
+    };
+}
+
+fn checkedTypeSpanIsSpecializationIndependent(
+    store: *const CheckedTypeStore,
+    items: []const CheckedTypeId,
+    enclosing: EnclosingDispatchIdentity,
+    visited: *collections.DenseMap(CheckedTypeId, void),
+) Allocator.Error!bool {
+    for (items) |item| {
+        if (!try callableIdentityIsSpecializationIndependentInner(store, item, enclosing, visited)) return false;
+    }
+    return true;
+}
+
+fn checkedFieldTypesAreSpecializationIndependent(
+    store: *const CheckedTypeStore,
+    fields: []const CheckedRecordField,
+    enclosing: EnclosingDispatchIdentity,
+    visited: *collections.DenseMap(CheckedTypeId, void),
+) Allocator.Error!bool {
+    for (fields) |field| {
+        if (!try callableIdentityIsSpecializationIndependentInner(store, field.ty, enclosing, visited)) return false;
+        if (field.kind.undeterminedVariable()) |variable| {
+            if (!try callableIdentityIsSpecializationIndependentInner(store, variable, enclosing, visited)) return false;
+        }
+    }
+    return true;
+}
+
+fn checkedTagsAreSpecializationIndependent(
+    store: *const CheckedTypeStore,
+    tags: []const CheckedTag,
+    enclosing: EnclosingDispatchIdentity,
+    visited: *collections.DenseMap(CheckedTypeId, void),
+) Allocator.Error!bool {
+    for (tags) |tag| {
+        if (!try checkedTypeSpanIsSpecializationIndependent(store, tag.argsSlice(store), enclosing, visited)) return false;
+    }
+    return true;
+}
+
+/// Every scheme context the collected spans attribute to each plan and each
+/// iterator plan, as per-plan chains over one pool. A plan can be referenced
+/// from more than one span: a hoisted compile-time-root subexpression is
+/// collected under its def template (`CheckedTemplateRefCollector.collectExpr`)
+/// and again under the entry wrapper `appendEntryWrappersForRoots` publishes
+/// for the root, so classification gathers every context first and never
+/// depends on the order the spans are walked in.
+const EnclosingDispatchSiteChains = struct {
+    const Entry = struct {
+        site: EnclosingDispatchSite,
+        next_plus_one: u32,
+    };
+
+    allocator: Allocator,
+    entries: std.ArrayList(Entry) = .empty,
+    /// Index of each plan's newest entry plus one; zero is the empty chain.
+    plan_heads_plus_one: []u32,
+    iterator_plan_heads_plus_one: []u32,
+    scratch: std.ArrayList(EnclosingDispatchSite) = .empty,
+
+    fn init(allocator: Allocator, plan_count: usize, iterator_plan_count: usize) Allocator.Error!EnclosingDispatchSiteChains {
+        const plan_heads = try allocator.alloc(u32, plan_count);
+        errdefer allocator.free(plan_heads);
+        @memset(plan_heads, 0);
+        const iterator_plan_heads = try allocator.alloc(u32, iterator_plan_count);
+        @memset(iterator_plan_heads, 0);
+        return .{
+            .allocator = allocator,
+            .plan_heads_plus_one = plan_heads,
+            .iterator_plan_heads_plus_one = iterator_plan_heads,
+        };
+    }
+
+    fn deinit(self: *EnclosingDispatchSiteChains) void {
+        self.scratch.deinit(self.allocator);
+        self.allocator.free(self.iterator_plan_heads_plus_one);
+        self.allocator.free(self.plan_heads_plus_one);
+        self.entries.deinit(self.allocator);
+    }
+
+    fn append(self: *EnclosingDispatchSiteChains, heads_plus_one: []u32, raw: usize, site: EnclosingDispatchSite) Allocator.Error!void {
+        if (raw >= heads_plus_one.len) {
+            checkedArtifactInvariant("dispatch callable specialization referenced a missing plan", .{});
+        }
+        const index: u32 = @intCast(self.entries.items.len);
+        try self.entries.append(self.allocator, .{ .site = site, .next_plus_one = heads_plus_one[raw] });
+        heads_plus_one[raw] = index + 1;
+    }
+
+    /// The sites chained at `heads_plus_one[raw]`; aliases `scratch` until
+    /// the next call.
+    fn sites(self: *EnclosingDispatchSiteChains, heads_plus_one: []const u32, raw: usize) Allocator.Error![]const EnclosingDispatchSite {
+        self.scratch.clearRetainingCapacity();
+        var entry_plus_one = heads_plus_one[raw];
+        while (entry_plus_one != 0) {
+            const entry = self.entries.items[entry_plus_one - 1];
+            try self.scratch.append(self.allocator, entry.site);
+            entry_plus_one = entry.next_plus_one;
+        }
+        return self.scratch.items;
+    }
+};
+
+/// Shared state of `specializeResolvedStaticDispatchPlanCallables`: the
+/// callable projection/instantiation memo, the evidence-closure memo, and
+/// the enclosing-identity index.
+const ResolvedDispatchCallableSpecializer = struct {
+    allocator: Allocator,
+    names: *canonical.CanonicalNameStore,
+    store: *CheckedTypeStore,
+    artifact_key: CheckedModuleArtifactKey,
+    direct_imports: []const PublishImportArtifact,
+    available_artifacts: []const ImportedModuleView,
+    plans: *static_dispatch.StaticDispatchPlanTable,
+    instantiated_pairs: std.AutoHashMapUnmanaged(ResolvedDispatchCallablePair, CheckedTypeId) = .empty,
+    evidence_closure: []DirectEvidenceClosure,
+    identity_index: EnclosingIdentityIndex,
+
+    fn deinit(self: *ResolvedDispatchCallableSpecializer) void {
+        self.identity_index.deinit();
+        self.instantiated_pairs.deinit(self.allocator);
+    }
+
+    fn finalizePlan(
+        self: *ResolvedDispatchCallableSpecializer,
+        plan: *static_dispatch.StaticDispatchCallPlan,
+        enclosing: EnclosingDispatchIdentity,
+    ) Allocator.Error!void {
+        const node_id = switch (plan.resolution) {
+            .direct_pending => |node_id| node_id,
+            .direct_closed, .direct_parametric => checkedArtifactInvariant("static dispatch plan was finalized more than once", .{}),
+            .evidence_dependent, .structural, .checked_error, .@"unreachable" => return,
+        };
+        plan.callable_ty = try self.specializeCallable(node_id, plan.callable_ty);
+        plan.resolution = try self.classify(node_id, plan.callable_ty, enclosing);
+    }
+
+    fn finalizeIteratorPlan(
+        self: *ResolvedDispatchCallableSpecializer,
+        iterator_plan: *static_dispatch.IteratorForPlan,
+        enclosing: EnclosingDispatchIdentity,
+    ) Allocator.Error!void {
+        inline for (.{ &iterator_plan.iter, &iterator_plan.next }) |call| {
+            switch (call.resolution) {
+                .direct_pending => |node_id| {
+                    call.callable_ty = try self.specializeCallable(node_id, call.callable_ty);
+                    call.resolution = try self.classify(node_id, call.callable_ty, enclosing);
+                },
+                .direct_closed, .direct_parametric => checkedArtifactInvariant("iterator dispatch plan was finalized more than once", .{}),
+                .evidence_dependent, .structural, .checked_error, .@"unreachable" => {},
+            }
+        }
+    }
+
+    /// Project the resolved target's callable into this store and specialize
+    /// the call's recorded callable against it.
+    fn specializeCallable(
+        self: *ResolvedDispatchCallableSpecializer,
+        node_id: static_dispatch.EvidenceNodeId,
+        plan_callable: CheckedTypeId,
+    ) Allocator.Error!CheckedTypeId {
+        const target = self.plans.evidenceNode(node_id).target;
+        const target_callable = try projectResolvedDispatchTargetCallable(
+            self.allocator,
+            self.names,
+            self.store,
+            self.artifact_key,
+            self.direct_imports,
+            self.available_artifacts,
+            target,
+        );
+        return try instantiateResolvedDispatchTargetCallableMemoized(
+            self.allocator,
+            self.names,
+            self.store,
+            target_callable,
+            plan_callable,
+            &self.instantiated_pairs,
+        );
+    }
+
+    fn classify(
+        self: *ResolvedDispatchCallableSpecializer,
+        node_id: static_dispatch.EvidenceNodeId,
+        callable_ty: CheckedTypeId,
+        enclosing: EnclosingDispatchIdentity,
+    ) Allocator.Error!static_dispatch.CheckedCallResolution {
+        const direct: static_dispatch.DirectCall = .{ .evidence = node_id };
+        const closed = (try callableIdentityIsSpecializationIndependent(self.allocator, self.store, callable_ty, enclosing)) and
+            directEvidenceIsClosed(self.plans, node_id, self.evidence_closure);
+        return if (closed) .{ .direct_closed = direct } else .{ .direct_parametric = direct };
+    }
+};
+
+/// Specialize every resolved direct call's recorded callable against its
+/// target and classify it `direct_closed` or `direct_parametric`. The
+/// collected per-template spans (and their scope marks, parallel to the
+/// pooled refs) first attribute every referencing scheme context to each
+/// site; each plan is then specialized exactly once and classified against
+/// all of them.
 fn specializeResolvedStaticDispatchPlanCallables(
     allocator: Allocator,
     names: *canonical.CanonicalNameStore,
@@ -23444,77 +24006,88 @@ fn specializeResolvedStaticDispatchPlanCallables(
     direct_imports: []const PublishImportArtifact,
     available_artifacts: []const ImportedModuleView,
     plans: *static_dispatch.StaticDispatchPlanTable,
+    templates: *const CheckedProcedureTemplateTable,
+    template_refs: *const TemplateIteratorRefs,
 ) Allocator.Error!void {
-    var instantiated_pairs: std.AutoHashMapUnmanaged(ResolvedDispatchCallablePair, CheckedTypeId) = .empty;
-    defer instantiated_pairs.deinit(allocator);
+    var chains = try EnclosingDispatchSiteChains.init(allocator, plans.plans.len, plans.iterator_for_plans.len);
+    defer chains.deinit();
+
+    for (templates.templates.items, 0..) |template, template_index| {
+        try appendEnclosingDispatchSites(
+            &chains,
+            plans,
+            template_refs,
+            template.checked_fn_root,
+            .{ .start = template.static_dispatch_plans.start, .len = template.static_dispatch_plans.len },
+            template_refs.spans[template_index],
+        );
+    }
+    // Defaulted-field expressions (design.md "Defaulted Fields") are lowered
+    // standalone at every omitting construction site: no template quantifies
+    // their variables, only a generalized local function inside one.
+    try appendEnclosingDispatchSites(
+        &chains,
+        plans,
+        template_refs,
+        null,
+        template_refs.default_plan_refs,
+        template_refs.default_iterator_refs,
+    );
+
     const evidence_closure = try allocator.alloc(DirectEvidenceClosure, plans.evidence_nodes.len);
     defer allocator.free(evidence_closure);
     @memset(evidence_closure, .unknown);
+    var specializer = ResolvedDispatchCallableSpecializer{
+        .allocator = allocator,
+        .names = names,
+        .store = store,
+        .artifact_key = artifact_key,
+        .direct_imports = direct_imports,
+        .available_artifacts = available_artifacts,
+        .plans = plans,
+        .evidence_closure = evidence_closure,
+        .identity_index = EnclosingIdentityIndex.init(allocator, names, store),
+    };
+    defer specializer.deinit();
 
-    for (plans.plans) |*plan| {
-        const node_id = switch (plan.resolution) {
-            .direct_pending => |node_id| node_id,
-            .direct_closed, .direct_parametric => checkedArtifactInvariant("static dispatch plan was finalized more than once", .{}),
-            .evidence_dependent, .structural, .checked_error, .@"unreachable" => continue,
-        };
-        const target = plans.evidenceNode(node_id).target;
-        const target_callable = try projectResolvedDispatchTargetCallable(
-            allocator,
-            names,
-            store,
-            artifact_key,
-            direct_imports,
-            available_artifacts,
-            target,
-        );
-        plan.callable_ty = try instantiateResolvedDispatchTargetCallableMemoized(
-            allocator,
-            names,
-            store,
-            target_callable,
-            plan.callable_ty,
-            &instantiated_pairs,
-        );
-        const direct: static_dispatch.DirectCall = .{ .evidence = node_id };
-        plan.resolution = if (store.rootContainsIdentityVariables(plan.callable_ty) or
-            !directEvidenceIsClosed(plans, node_id, evidence_closure))
-            .{ .direct_parametric = direct }
-        else
-            .{ .direct_closed = direct };
+    // Plans no collected span reached (dead code, expressions outside any
+    // template) still leave publication finalized; like `EvidencePass`, they
+    // are classified as root edges (an empty site list).
+    for (plans.plans, 0..) |*plan, raw| {
+        try specializer.finalizePlan(plan, .{
+            .index = &specializer.identity_index,
+            .sites = try chains.sites(chains.plan_heads_plus_one, raw),
+            .scopes = template_refs.scopes,
+        });
     }
-    for (plans.iterator_for_plans) |*iterator_plan| {
-        inline for (.{ &iterator_plan.iter, &iterator_plan.next }) |call| {
-            switch (call.resolution) {
-                .direct_pending => |node_id| {
-                    const target = plans.evidenceNode(node_id).target;
-                    const target_callable = try projectResolvedDispatchTargetCallable(
-                        allocator,
-                        names,
-                        store,
-                        artifact_key,
-                        direct_imports,
-                        available_artifacts,
-                        target,
-                    );
-                    call.callable_ty = try instantiateResolvedDispatchTargetCallableMemoized(
-                        allocator,
-                        names,
-                        store,
-                        target_callable,
-                        call.callable_ty,
-                        &instantiated_pairs,
-                    );
-                    const direct: static_dispatch.DirectCall = .{ .evidence = node_id };
-                    call.resolution = if (store.rootContainsIdentityVariables(call.callable_ty) or
-                        !directEvidenceIsClosed(plans, node_id, evidence_closure))
-                        .{ .direct_parametric = direct }
-                    else
-                        .{ .direct_closed = direct };
-                },
-                .direct_closed, .direct_parametric => checkedArtifactInvariant("iterator dispatch plan was finalized more than once", .{}),
-                .evidence_dependent, .structural, .checked_error, .@"unreachable" => {},
-            }
-        }
+    for (plans.iterator_for_plans, 0..) |*iterator_plan, raw| {
+        try specializer.finalizeIteratorPlan(iterator_plan, .{
+            .index = &specializer.identity_index,
+            .sites = try chains.sites(chains.iterator_plan_heads_plus_one, raw),
+            .scopes = template_refs.scopes,
+        });
+    }
+}
+
+/// Attribute one collected span's plan refs and iterator plan refs to the
+/// scheme context `template_root` and each ref's own scope mark.
+fn appendEnclosingDispatchSites(
+    chains: *EnclosingDispatchSiteChains,
+    plans: *const static_dispatch.StaticDispatchPlanTable,
+    template_refs: *const TemplateIteratorRefs,
+    template_root: ?CheckedTypeId,
+    plan_span: artifact_serialize.Span,
+    iterator_span: artifact_serialize.Span,
+) Allocator.Error!void {
+    const plan_refs = plans.template_refs[plan_span.start .. plan_span.start + plan_span.len];
+    const plan_scopes = template_refs.plan_scopes[plan_span.start .. plan_span.start + plan_span.len];
+    for (plan_refs, plan_scopes) |plan_id, scope| {
+        try chains.append(chains.plan_heads_plus_one, @intFromEnum(plan_id), .{ .template_root = template_root, .scope = scope });
+    }
+    const iterator_refs = template_refs.pool[iterator_span.start .. iterator_span.start + iterator_span.len];
+    const iterator_scopes = template_refs.iterator_scopes[iterator_span.start .. iterator_span.start + iterator_span.len];
+    for (iterator_refs, iterator_scopes) |iterator_plan_id, scope| {
+        try chains.append(chains.iterator_plan_heads_plus_one, @intFromEnum(iterator_plan_id), .{ .template_root = template_root, .scope = scope });
     }
 }
 
@@ -25550,6 +26123,23 @@ fn testCanonicalTypeKey(byte: u8) canonical.CanonicalTypeKey {
     return key;
 }
 
+/// Fill a reserved synthetic root with a variable payload and declare it a
+/// fresh identity instance, as every non-clone producer of a synthetic
+/// variable root must (`reserveDistinctSyntheticTypeRoot`); a test variable
+/// left undeclared would trip `identityOrigin` the first time a
+/// classification reaches it.
+fn testFillSyntheticVariableRoot(
+    allocator: Allocator,
+    store: *CheckedTypeStore,
+    root: CheckedTypeId,
+    payload: CheckedTypePayloadBuild,
+) Allocator.Error!void {
+    if (!builtin.is_test) unreachable;
+
+    try store.fillSyntheticTypeRoot(allocator, root, payload);
+    try store.declareIdentityInstance(allocator, root);
+}
+
 fn testCheckedModuleKey(byte: u8) CheckedModuleArtifactKey {
     if (!builtin.is_test) unreachable;
 
@@ -26026,7 +26616,7 @@ pub const CompileTimeRootTable = struct {
             );
         }
 
-        try publishCompileTimeRootRequestEligibility(allocator, module, checked_types, checked_bodies, roots.items);
+        try publishCompileTimeRootRequestEligibility(allocator, module, checked_types, roots.items);
 
         return .{ .roots = try roots.toOwnedSlice(allocator) };
     }
@@ -26153,11 +26743,12 @@ pub const CompileTimeRootTable = struct {
     }
 };
 
+/// Request eligibility from each root's solved type. Diagnostic exclusion
+/// follows once the body diagnostic facts are published.
 fn publishCompileTimeRootRequestEligibility(
     allocator: Allocator,
     module: TypedCIR.Module,
     checked_types: *const CheckedTypePublication,
-    checked_bodies: *const CheckedBodyStore,
     roots: []CompileTimeRoot,
 ) Allocator.Error!void {
     for (roots) |*root| {
@@ -26181,15 +26772,14 @@ fn publishCompileTimeRootRequestEligibility(
             producer_callable_type_is_fixed,
             root.checked_type,
         );
-        // The checker already owns this diagnostic; evaluating the root would
-        // only add a secondary compile-time crash for its replacement node.
-        const eligible = context_free and !checked_bodies.exprContainsDiagnosticError(root.expr);
-        root.request_eligibility = if (eligible) .eligible else .ineligible;
+        root.request_eligibility = if (context_free) .eligible else .ineligible;
     }
 }
 
-/// Solved root types are unchanged by diagnostic propagation. Only remove
-/// newly erroneous requests; do not repeat context-free type traversal.
+/// The checker already owns the diagnostic for an erroneous root; evaluating it
+/// would only add a secondary compile-time crash for its replacement node.
+/// Solved root types are unchanged by diagnostic publication, so this only
+/// removes erroneous requests and never repeats the context-free traversal.
 fn excludeErroneousCompileTimeRootRequests(bodies: *const CheckedBodyStore, roots: []CompileTimeRoot) void {
     for (roots) |*root| {
         if (compileTimeRootRequestIsEligible(root.*) and bodies.exprContainsDiagnosticError(root.expr)) {
@@ -30974,6 +31564,7 @@ pub const DispatchEvidenceFailure = struct {
         generated_codec_call_unfinalized,
         generated_codec_call_evidence_invalid,
         generated_codec_call_nested_derivation_invalid,
+        dependent_nested_reuse_without_independent_callable,
         evidence_node_nested_refs_out_of_bounds,
         evidence_ref_node_out_of_bounds,
         evidence_scheme_param_invalid,
@@ -31534,7 +32125,14 @@ pub const CheckedModuleArtifact = struct {
     // Version 98 uses 256-bit SHA-256 type and evidence content hashes.
     // Version 99 stores packed fixed-product lists with an optional scalar
     // encoding and their padding-free product width.
-    const serialized_layout_version: u32 = 99;
+    // Version 100 distinguishes independent callable plans that reuse the
+    // evidence slot's producer-resolved nested vector from those that must
+    // synthesize nested evidence from their own callable.
+    // Version 101 publishes the `Builtin.Try` adapter capability for every
+    // procedure template whose result row is closed, not only hosted ones, so
+    // a Roc implementation requested at a row that includes its own can be
+    // adapted (design.md "Result-Row Widening Adapter").
+    const serialized_layout_version: u32 = 101;
 
     /// Comptime fingerprint of `Serialized`'s layout, mirroring
     /// `cache_module.MODULE_ENV_VERSION_HASH`. It is appended to the baked builtin
@@ -32045,10 +32643,20 @@ pub const CheckedModuleArtifact = struct {
                         .method = plan.method,
                     };
                 },
-                .evidence_dependent => |dependent| if (dependent.scheme_param) |param_index| {
-                    const pool = self.checked_procedure_templates.evidence_params_pool;
-                    if (param_index >= pool.len or pool[param_index].source != .scheme_requirement or pool[param_index].method != plan.method)
-                        return .{ .kind = .evidence_scheme_param_invalid, .index = @intCast(i) };
+                .evidence_dependent => |dependent| {
+                    if (dependent.reuse_slot_nested_evidence and !dependent.independent_callable) {
+                        return .{
+                            .kind = .dependent_nested_reuse_without_independent_callable,
+                            .expr = plan.expr,
+                            .index = @intCast(i),
+                            .method = plan.method,
+                        };
+                    }
+                    if (dependent.scheme_param) |param_index| {
+                        const pool = self.checked_procedure_templates.evidence_params_pool;
+                        if (param_index >= pool.len or pool[param_index].source != .scheme_requirement or pool[param_index].method != plan.method)
+                            return .{ .kind = .evidence_scheme_param_invalid, .index = @intCast(i) };
+                    }
                 },
                 .structural, .checked_error, .@"unreachable" => {},
             }
@@ -32208,7 +32816,15 @@ pub const CheckedModuleArtifact = struct {
                         .method = call.method,
                     },
                     .checked_error, .@"unreachable" => continue,
-                    .evidence_dependent => {},
+                    .evidence_dependent => |dependent| if (dependent.reuse_slot_nested_evidence and
+                        !dependent.independent_callable)
+                    {
+                        return .{
+                            .kind = .dependent_nested_reuse_without_independent_callable,
+                            .index = @intCast(i),
+                            .method = call.method,
+                        };
+                    },
                 }
 
                 if (@intFromEnum(call.callable_ty) >= self.checked_types.payloads.items.len) {
@@ -32254,10 +32870,18 @@ pub const CheckedModuleArtifact = struct {
                 .direct => |node| if (@intFromEnum(node) >= table.evidence_nodes.len) {
                     return .{ .kind = .evidence_ref_node_out_of_bounds, .index = @intCast(i) };
                 },
-                .constraint => |constraint| if (constraint.scheme_param) |param_index| {
-                    const pool = self.checked_procedure_templates.evidence_params_pool;
-                    if (param_index >= pool.len or pool[param_index].source != .scheme_requirement)
-                        return .{ .kind = .evidence_scheme_param_invalid, .index = @intCast(i) };
+                .constraint => |constraint| {
+                    if (constraint.reuse_slot_nested_evidence and !constraint.independent_callable) {
+                        return .{
+                            .kind = .dependent_nested_reuse_without_independent_callable,
+                            .index = @intCast(i),
+                        };
+                    }
+                    if (constraint.scheme_param) |param_index| {
+                        const pool = self.checked_procedure_templates.evidence_params_pool;
+                        if (param_index >= pool.len or pool[param_index].source != .scheme_requirement)
+                            return .{ .kind = .evidence_scheme_param_invalid, .index = @intCast(i) };
+                    }
                 },
                 .structural, .from_callable, .from_scheme, .checked_error, .unreachable_value => {},
             }
@@ -33517,6 +34141,7 @@ pub const CheckedTypeProjector = struct {
         errdefer _ = active.remove(ty);
 
         const payload = try self.projectCheckedTypeViewPayload(source, source_names, source.payload(@enumFromInt(index)), active);
+        if (payload == .flex or payload == .rigid) try self.target.checked_types.declareIdentityInstance(self.allocator, reserved);
         try self.target.checked_types.fillSyntheticTypeRoot(self.allocator, reserved, payload);
         return reserved;
     }
@@ -33793,6 +34418,7 @@ pub const CheckedTypeProjector = struct {
 
         const source_payload = imported.checked_types.payload(@enumFromInt(index));
         const payload = try self.projectImportedCheckedTypePayload(imported, source_payload);
+        if (payload == .flex or payload == .rigid) try self.target.checked_types.declareIdentityInstance(self.allocator, reserved);
         try self.target.checked_types.fillSyntheticTypeRoot(self.allocator, reserved, payload);
         switch (source_payload) {
             .nominal => |nominal| try self.ensureProjectedImportedNominalDeclaration(imported, nominal),
@@ -34225,6 +34851,7 @@ const CheckedTypeStoreImportProjector = struct {
 
         const source_payload = self.imported.checked_types.payload(@enumFromInt(index));
         const payload = try self.projectPayload(source_payload);
+        if (payload == .flex or payload == .rigid) try self.target_store.declareIdentityInstance(self.allocator, reserved);
         try self.target_store.fillSyntheticTypeRoot(self.allocator, reserved, payload);
         _ = self.active.remove(ty);
         try self.projected.put(ty, reserved);
@@ -35413,9 +36040,13 @@ pub fn publishFromTypedModule(
 
     if (rejected_bindings) {
         try checked_bodies.propagateRejectedCallableBindings(allocator, artifact_key, &resolved_value_refs, &top_level_procedure_bindings, &callable_eval_templates, &compile_time_roots);
-        try checked_bodies.republishDiagnosticErrorFacts(allocator, checked_types, &static_dispatch_plans, null);
-        excludeErroneousCompileTimeRootRequests(checked_bodies, compile_time_roots.roots);
+        try checked_bodies.publishInspectEvaluationElisionAfterRejectedBindings(allocator);
     }
+
+    const dispatch_operands = try checkedDispatchOperands(allocator, checked_bodies.exprCount(), &static_dispatch_plans, null);
+    defer freeCheckedDispatchOperands(allocator, dispatch_operands);
+    try checked_bodies.publishDiagnosticErrorFacts(allocator, checked_types, dispatch_operands, null);
+    excludeErroneousCompileTimeRootRequests(checked_bodies, compile_time_roots.roots);
 
     var template_iterator_refs = TemplateIteratorRefs{};
     errdefer template_iterator_refs.deinit(allocator);
@@ -35477,6 +36108,8 @@ pub fn publishFromTypedModule(
         inputs.imports,
         inputs.available_artifacts,
         &static_dispatch_plans,
+        &checked_procedure_templates,
+        &template_iterator_refs,
     );
     try classifyTemplateDispatchPlanRefs(
         allocator,
@@ -35484,16 +36117,15 @@ pub fn publishFromTypedModule(
         &checked_procedure_templates,
     );
     if (rejected_dispatches) {
-        try checked_bodies.republishDiagnosticErrorFacts(allocator, checked_types, &static_dispatch_plans, .{
+        try checked_bodies.publishDiagnosticErrorFacts(allocator, checked_types, dispatch_operands, .{
             .module = artifact_key,
             .refs = &resolved_value_refs,
             .roots = &compile_time_roots,
             .const_templates = &const_templates,
         });
         excludeErroneousCompileTimeRootRequests(checked_bodies, compile_time_roots.roots);
-    } else {
-        try checked_bodies.publishResolvedDispatchDivergence(allocator, &static_dispatch_plans);
     }
+    try checked_bodies.publishResolvedDispatchDivergence(allocator, &static_dispatch_plans);
     template_iterator_refs.deinit(allocator);
     plan_build_data.deinit(allocator);
 
@@ -36718,7 +37350,7 @@ test "hosted Try adapter capability requires a closed tag-row error" {
     const closed_error = try appendExplicitCheckedTypePayload(allocator, &names, &store, .empty_tag_union);
     const record_error = try appendExplicitCheckedTypePayload(allocator, &names, &store, .empty_record);
     const unresolved_error = try store.reserveSyntheticTypeRoot(allocator, testCanonicalTypeKey(67), true);
-    try store.fillSyntheticTypeRoot(allocator, unresolved_error, .{ .flex = .{} });
+    try testFillSyntheticVariableRoot(allocator, &store, unresolved_error, .{ .flex = .{} });
 
     try std.testing.expect(checkedTypeIsClosedTagRow(&store, closed_error));
     try std.testing.expect(!checkedTypeIsClosedTagRow(&store, record_error));
@@ -36736,7 +37368,7 @@ test "checked type substitution reuses a closed source root without cloning" {
 
     const closed = try appendExplicitCheckedTypePayload(allocator, &names, &store, .empty_record);
     const formal = try store.reserveSyntheticTypeRoot(allocator, testCanonicalTypeKey(68), true);
-    try store.fillSyntheticTypeRoot(allocator, formal, .{ .flex = .{} });
+    try testFillSyntheticVariableRoot(allocator, &store, formal, .{ .flex = .{} });
     const actual = try appendExplicitCheckedTypePayload(allocator, &names, &store, .empty_tag_union);
 
     var active = collections.DenseMap(CheckedTypeId, CheckedTypeId).init(allocator);
@@ -36765,8 +37397,8 @@ test "checked type store preserves distinct identity roots with equal variable s
     const first = try store.reserveSyntheticTypeRoot(allocator, shared_key, true);
     const second = try store.reserveSyntheticTypeRoot(allocator, shared_key, true);
 
-    try store.fillSyntheticTypeRoot(allocator, first, .{ .flex = .{} });
-    try store.fillSyntheticTypeRoot(allocator, second, .{ .flex = .{} });
+    try testFillSyntheticVariableRoot(allocator, &store, first, .{ .flex = .{} });
+    try testFillSyntheticVariableRoot(allocator, &store, second, .{ .flex = .{} });
 
     try std.testing.expect(first != second);
     try std.testing.expectEqual(@as(usize, 2), store.roots.items.len);
@@ -36786,7 +37418,7 @@ test "relation projection preserves anonymous row identity and provenance" {
     defer source_store.deinit(allocator);
     const anonymous_key = testCanonicalTypeKey(70);
     const source_tail = try source_store.reserveDistinctSyntheticTypeRoot(allocator, anonymous_key, true);
-    try source_store.fillSyntheticTypeRoot(allocator, source_tail, .{ .flex = .{ .row_default = .empty_tag_union } });
+    try testFillSyntheticVariableRoot(allocator, &source_store, source_tail, .{ .flex = .{ .row_default = .empty_tag_union } });
 
     const source_union = try source_store.reserveDistinctSyntheticTypeRoot(allocator, testCanonicalTypeKey(71), true);
     const tags = try allocator.alloc(CheckedTagBuild, 1);
@@ -36837,7 +37469,7 @@ test "relation projection preserves anonymous row identity and provenance" {
     var target_store = CheckedTypeStore{};
     defer target_store.deinit(allocator);
     const platform_tail = try target_store.reserveSyntheticTypeRoot(allocator, anonymous_key, true);
-    try target_store.fillSyntheticTypeRoot(allocator, platform_tail, .{ .flex = .{} });
+    try testFillSyntheticVariableRoot(allocator, &target_store, platform_tail, .{ .flex = .{} });
 
     var projector = CheckedTypeStoreImportProjector.initPreservingSourceInstance(
         allocator,
@@ -36876,7 +37508,7 @@ test "source-instance projection does not coalesce a solved payload with an equa
     try source.fillSyntheticTypeRoot(allocator, source_root, .empty_tag_union);
 
     const target_template = try target.reserveSyntheticTypeRoot(allocator, shared_key, true);
-    try target.fillSyntheticTypeRoot(allocator, target_template, .{ .flex = .{ .row_default = .empty_tag_union } });
+    try testFillSyntheticVariableRoot(allocator, &target, target_template, .{ .flex = .{ .row_default = .empty_tag_union } });
 
     var imported = testVisibilityImportedView(testCheckedArtifactKey(72), undefined, .{});
     imported.canonical_names = &source_names;
@@ -36936,7 +37568,7 @@ test "checked type identity scan finds identity beside recursive tag cycle" {
     const empty_tags = try store.appendSyntheticPayloadRoot(allocator, &names, .empty_tag_union);
     const root = try store.reserveSyntheticTypeRoot(allocator, testCanonicalTypeKey(91), true);
     const identity = try store.reserveSyntheticTypeRoot(allocator, testCanonicalTypeKey(92), true);
-    try store.fillSyntheticTypeRoot(allocator, identity, .{ .flex = .{} });
+    try testFillSyntheticVariableRoot(allocator, &store, identity, .{ .flex = .{} });
 
     const node_args = try allocator.alloc(CheckedTypeId, 1);
     node_args[0] = root;
@@ -38158,8 +38790,8 @@ test "SERIALIZED_VERSION_HASH golden value" {
     // `serialized_layout_version` only for semantic changes the structural hash
     // cannot observe, as documented at that discriminant.
     const golden: [32]u8 = .{
-        0x6A, 0xC2, 0xE8, 0x95, 0xA9, 0x64, 0x68, 0x1A, 0x9B, 0x99, 0x6A, 0x97, 0xA0, 0xFC, 0x2A, 0xA0,
-        0xB7, 0x37, 0x10, 0xBC, 0x39, 0x74, 0x73, 0x8C, 0xC2, 0x20, 0x4F, 0x38, 0xD9, 0x87, 0x44, 0x4A,
+        0xE4, 0x69, 0x6E, 0x30, 0xB3, 0x6E, 0x5B, 0x0A, 0x05, 0x66, 0x09, 0x15, 0x58, 0x72, 0x57, 0x87,
+        0xAC, 0x7B, 0x67, 0xDC, 0xCE, 0x20, 0xDE, 0x2A, 0x92, 0x53, 0x23, 0xA3, 0x77, 0x16, 0xF7, 0x3E,
     };
     try std.testing.expectEqualSlices(u8, &golden, &CheckedModuleArtifact.SERIALIZED_VERSION_HASH);
 }
@@ -38404,4 +39036,342 @@ test "compile-time debug store validates root identities and message ranges" {
         .bytes = "abc",
     };
     try std.testing.expectError(error.CorruptArtifact, outside.validate(1));
+}
+
+/// Test scaffolding for the direct-dispatch classification predicate: a
+/// callable `{} -> [Unavailable]tail` over the given row tail.
+fn testCallableWithRowTail(
+    allocator: Allocator,
+    names: *canonical.CanonicalNameStore,
+    store: *CheckedTypeStore,
+    tail: CheckedTypeId,
+) Allocator.Error!CheckedTypeId {
+    if (!builtin.is_test) unreachable;
+
+    const unit = try store.appendSyntheticPayloadRoot(allocator, names, .empty_record);
+    const tags = try allocator.alloc(CheckedTagBuild, 1);
+    tags[0] = .{ .name = try names.internTagLabel("Unavailable") };
+    const row = try store.appendSyntheticPayloadRoot(allocator, names, .{ .tag_union = .{
+        .tags = tags,
+        .ext = tail,
+    } });
+    return try store.appendSyntheticFunctionRoot(allocator, .pure, &.{unit}, row);
+}
+
+fn testRowTail(
+    allocator: Allocator,
+    store: *CheckedTypeStore,
+    key_byte: u8,
+    payload: CheckedTypePayloadBuild,
+) Allocator.Error!CheckedTypeId {
+    if (!builtin.is_test) unreachable;
+
+    const tail = try store.reserveSyntheticTypeRoot(allocator, testCanonicalTypeKey(key_byte), true);
+    try testFillSyntheticVariableRoot(allocator, store, tail, payload);
+    return tail;
+}
+
+test "direct dispatch classification treats only a body-local defaultable row tail as closed" {
+    const allocator = std.testing.allocator;
+
+    var names = canonical.CanonicalNameStore.init(allocator);
+    defer names.deinit();
+
+    var store = CheckedTypeStore{};
+    defer store.deinit(allocator);
+
+    var identity_index = EnclosingIdentityIndex.init(allocator, &names, &store);
+    defer identity_index.deinit();
+    const nothing_enclosing = EnclosingDispatchIdentity{
+        .index = &identity_index,
+        .sites = &.{},
+        .scopes = &.{},
+    };
+
+    // Each variable arm of the predicate, with nothing enclosing quantifying
+    // the tail: only the defaultable, unconstrained flex is closed.
+    const rigid_tail = try testRowTail(allocator, &store, 110, .{ .rigid = .{ .row_default = .empty_tag_union } });
+    const open_tail = try testRowTail(allocator, &store, 111, .{ .flex = .{} });
+    const numeric_tail = try testRowTail(allocator, &store, 112, .{ .flex = .{
+        .numeric_default_phase = .mono_specialization,
+        .row_default = .empty_tag_union,
+    } });
+    const unit = try store.appendSyntheticPayloadRoot(allocator, &names, .empty_record);
+    const method_callable = try store.appendSyntheticFunctionRoot(allocator, .pure, &.{unit}, unit);
+    const constraints = try allocator.alloc(CheckedStaticDispatchConstraint, 1);
+    constraints[0] = .{
+        .fn_name = try names.internMethodName("wrapped"),
+        .fn_ty = method_callable,
+        .origin = .method_call,
+    };
+    const constrained_tail = try testRowTail(allocator, &store, 113, .{ .flex = .{
+        .constraints = constraints,
+        .row_default = .empty_tag_union,
+    } });
+    const local_tail = try testRowTail(allocator, &store, 114, .{ .flex = .{ .row_default = .empty_tag_union } });
+
+    try std.testing.expect(!try callableIdentityIsSpecializationIndependent(
+        allocator,
+        &store,
+        try testCallableWithRowTail(allocator, &names, &store, rigid_tail),
+        nothing_enclosing,
+    ));
+    try std.testing.expect(!try callableIdentityIsSpecializationIndependent(
+        allocator,
+        &store,
+        try testCallableWithRowTail(allocator, &names, &store, open_tail),
+        nothing_enclosing,
+    ));
+    try std.testing.expect(!try callableIdentityIsSpecializationIndependent(
+        allocator,
+        &store,
+        try testCallableWithRowTail(allocator, &names, &store, numeric_tail),
+        nothing_enclosing,
+    ));
+    try std.testing.expect(!try callableIdentityIsSpecializationIndependent(
+        allocator,
+        &store,
+        try testCallableWithRowTail(allocator, &names, &store, constrained_tail),
+        nothing_enclosing,
+    ));
+    const local_callable = try testCallableWithRowTail(allocator, &names, &store, local_tail);
+    try std.testing.expect(store.rootContainsIdentityVariables(local_callable));
+    try std.testing.expect(try callableIdentityIsSpecializationIndependent(
+        allocator,
+        &store,
+        local_callable,
+        nothing_enclosing,
+    ));
+    try std.testing.expect(try callableIdentityIsSpecializationIndependent(
+        allocator,
+        &store,
+        unit,
+        nothing_enclosing,
+    ));
+
+    // The same defaultable tail is parametric once an enclosing scheme
+    // quantifies it: the template root, a generalized-local scope's root,
+    // or a scope's ancestor.
+    const quantified_tail = try testRowTail(allocator, &store, 115, .{ .flex = .{ .row_default = .empty_tag_union } });
+    const quantifying_root = try testCallableWithRowTail(allocator, &names, &store, quantified_tail);
+    const quantified_callable = try testCallableWithRowTail(allocator, &names, &store, quantified_tail);
+    const quantifying_site = [_]EnclosingDispatchSite{.{ .template_root = quantifying_root, .scope = .root }};
+    const unrelated_site = [_]EnclosingDispatchSite{.{ .template_root = local_callable, .scope = .root }};
+    try std.testing.expect(!try callableIdentityIsSpecializationIndependent(
+        allocator,
+        &store,
+        quantified_callable,
+        .{ .index = &identity_index, .sites = &quantifying_site, .scopes = &.{} },
+    ));
+    try std.testing.expect(try callableIdentityIsSpecializationIndependent(
+        allocator,
+        &store,
+        quantified_callable,
+        .{ .index = &identity_index, .sites = &unrelated_site, .scopes = &.{} },
+    ));
+
+    // A plan referenced from two spans (a hoisted compile-time root under
+    // its def template and its entry wrapper) is parametric when either
+    // referencing context quantifies the tail, whichever is walked first.
+    const second_quantifies = [_]EnclosingDispatchSite{
+        .{ .template_root = local_callable, .scope = .root },
+        .{ .template_root = quantifying_root, .scope = .root },
+    };
+    try std.testing.expect(!try callableIdentityIsSpecializationIndependent(
+        allocator,
+        &store,
+        quantified_callable,
+        .{ .index = &identity_index, .sites = &second_quantifies, .scopes = &.{} },
+    ));
+    const neither_quantifies = [_]EnclosingDispatchSite{
+        .{ .template_root = local_callable, .scope = .root },
+        .{ .template_root = null, .scope = .root },
+    };
+    try std.testing.expect(try callableIdentityIsSpecializationIndependent(
+        allocator,
+        &store,
+        quantified_callable,
+        .{ .index = &identity_index, .sites = &neither_quantifies, .scopes = &.{} },
+    ));
+
+    const scopes = [_]DispatchRefScope{
+        .{
+            .parent = null,
+            .scheme_var = testIndexId(Var, 0),
+            .scheme_root = quantifying_root,
+            .checked_expr = testIndexId(CheckedExprId, 0),
+        },
+        .{
+            .parent = testIndexId(DispatchScopeId, 0),
+            .scheme_var = testIndexId(Var, 1),
+            .scheme_root = local_callable,
+            .checked_expr = testIndexId(CheckedExprId, 1),
+        },
+    };
+    const outer_scope_site = [_]EnclosingDispatchSite{.{ .template_root = local_callable, .scope = .{ .generalized = testIndexId(DispatchScopeId, 0) } }};
+    const inner_scope_site = [_]EnclosingDispatchSite{.{ .template_root = local_callable, .scope = .{ .generalized = testIndexId(DispatchScopeId, 1) } }};
+    try std.testing.expect(!try callableIdentityIsSpecializationIndependent(
+        allocator,
+        &store,
+        quantified_callable,
+        .{ .index = &identity_index, .sites = &outer_scope_site, .scopes = &scopes },
+    ));
+    try std.testing.expect(!try callableIdentityIsSpecializationIndependent(
+        allocator,
+        &store,
+        quantified_callable,
+        .{ .index = &identity_index, .sites = &inner_scope_site, .scopes = &scopes },
+    ));
+    const unrelated_tail = try testRowTail(allocator, &store, 117, .{ .flex = .{ .row_default = .empty_tag_union } });
+    const unrelated_inner_site = [_]EnclosingDispatchSite{.{ .template_root = quantifying_root, .scope = .{ .generalized = @enumFromInt(1) } }};
+    try std.testing.expect(try callableIdentityIsSpecializationIndependent(
+        allocator,
+        &store,
+        try testCallableWithRowTail(allocator, &names, &store, unrelated_tail),
+        .{ .index = &identity_index, .sites = &unrelated_inner_site, .scopes = &scopes },
+    ));
+}
+
+test "direct dispatch classification follows instantiation clones to the scheme that quantifies them" {
+    const allocator = std.testing.allocator;
+
+    var names = canonical.CanonicalNameStore.init(allocator);
+    defer names.deinit();
+
+    var store = CheckedTypeStore{};
+    defer store.deinit(allocator);
+
+    var identity_index = EnclosingIdentityIndex.init(allocator, &names, &store);
+    defer identity_index.deinit();
+
+    // A template `{} -> [Unavailable]tail` whose body dispatches at exactly
+    // that callable: specializing the plan callable against the target
+    // clones the tail, and the clone must still count as the template's.
+    const tail = try testRowTail(allocator, &store, 116, .{ .flex = .{ .row_default = .empty_tag_union } });
+    const template_root = try testCallableWithRowTail(allocator, &names, &store, tail);
+    const instantiated = try instantiateResolvedDispatchTargetCallable(allocator, &names, &store, template_root, template_root);
+    const instantiated_tail = switch (store.payload(checkedFunctionPayload(&store, instantiated, "test callable").ret)) {
+        .tag_union => |tag_union| tag_union.ext,
+        .pending,
+        .err,
+        .flex,
+        .rigid,
+        .alias,
+        .record,
+        .record_unbound,
+        .tuple,
+        .nominal,
+        .function,
+        .empty_record,
+        .empty_tag_union,
+        => return error.TestUnexpectedResult,
+    };
+    try std.testing.expect(store.payload(instantiated_tail) == .flex);
+    try std.testing.expectEqual(tail, store.identityOrigin(instantiated_tail));
+
+    const template_site = [_]EnclosingDispatchSite{.{ .template_root = template_root, .scope = .root }};
+    try std.testing.expect(!try callableIdentityIsSpecializationIndependent(
+        allocator,
+        &store,
+        instantiated,
+        .{ .index = &identity_index, .sites = &template_site, .scopes = &.{} },
+    ));
+    try std.testing.expect(try callableIdentityIsSpecializationIndependent(
+        allocator,
+        &store,
+        instantiated,
+        .{ .index = &identity_index, .sites = &.{}, .scopes = &.{} },
+    ));
+
+    // A relation-substituted template root is itself a clone; both sides
+    // resolve to the same origin.
+    var active = collections.DenseMap(CheckedTypeId, CheckedTypeId).init(allocator);
+    defer active.deinit();
+    const substituted_root = try store.cloneCheckedTypeRootSubstituting(allocator, &names, template_root, &.{}, &.{}, &active);
+    const substituted_site = [_]EnclosingDispatchSite{.{ .template_root = substituted_root, .scope = .root }};
+    try std.testing.expect(!try callableIdentityIsSpecializationIndependent(
+        allocator,
+        &store,
+        instantiated,
+        .{ .index = &identity_index, .sites = &substituted_site, .scopes = &.{} },
+    ));
+
+    // A target and a plan with distinct tails: identity against identity
+    // records no substitution (`collectDispatchPlanIdentitySubstitutions`),
+    // so the plan's tail survives and the surviving clone's origin is the
+    // plan's, never the target's.
+    const target_tail = try testRowTail(allocator, &store, 118, .{ .flex = .{ .row_default = .empty_tag_union } });
+    const target_root = try testCallableWithRowTail(allocator, &names, &store, target_tail);
+    const plan_tail = try testRowTail(allocator, &store, 119, .{ .flex = .{ .row_default = .empty_tag_union } });
+    const plan_root = try testCallableWithRowTail(allocator, &names, &store, plan_tail);
+    const specialized = try instantiateResolvedDispatchTargetCallable(allocator, &names, &store, target_root, plan_root);
+    const specialized_tail = switch (store.payload(checkedFunctionPayload(&store, specialized, "test callable").ret)) {
+        .tag_union => |tag_union| tag_union.ext,
+        .pending,
+        .err,
+        .flex,
+        .rigid,
+        .alias,
+        .record,
+        .record_unbound,
+        .tuple,
+        .nominal,
+        .function,
+        .empty_record,
+        .empty_tag_union,
+        => return error.TestUnexpectedResult,
+    };
+    try std.testing.expectEqual(plan_tail, store.identityOrigin(specialized_tail));
+    try std.testing.expect(store.identityOrigin(specialized_tail) != target_tail);
+
+    // A relation-substituted clone of the plan root as the plan: the
+    // surviving tail's origin is two clones deep, and `identityOrigin`
+    // walks the chain to the published variable.
+    active.clearRetainingCapacity();
+    const plan_clone = try store.cloneCheckedTypeRootSubstituting(allocator, &names, plan_root, &.{}, &.{}, &active);
+    const plan_clone_tail = switch (store.payload(checkedFunctionPayload(&store, plan_clone, "test callable").ret)) {
+        .tag_union => |tag_union| tag_union.ext,
+        .pending,
+        .err,
+        .flex,
+        .rigid,
+        .alias,
+        .record,
+        .record_unbound,
+        .tuple,
+        .nominal,
+        .function,
+        .empty_record,
+        .empty_tag_union,
+        => return error.TestUnexpectedResult,
+    };
+    try std.testing.expectEqual(plan_tail, store.identity_origins.get(plan_clone_tail).?);
+    const respecialized = try instantiateResolvedDispatchTargetCallable(allocator, &names, &store, target_root, plan_clone);
+    const respecialized_tail = switch (store.payload(checkedFunctionPayload(&store, respecialized, "test callable").ret)) {
+        .tag_union => |tag_union| tag_union.ext,
+        .pending,
+        .err,
+        .flex,
+        .rigid,
+        .alias,
+        .record,
+        .record_unbound,
+        .tuple,
+        .nominal,
+        .function,
+        .empty_record,
+        .empty_tag_union,
+        => return error.TestUnexpectedResult,
+    };
+    try std.testing.expectEqual(plan_clone_tail, store.identity_origins.get(respecialized_tail).?);
+    try std.testing.expectEqual(plan_tail, store.identityOrigin(respecialized_tail));
+
+    // Every clone above is a synthetic variable root with a declared origin;
+    // a synthetic variable root that declares none trips `identityOrigin`'s
+    // invariant (not exercised here: invariants abort the process), which is
+    // what stops a forgotten clone origin from reading as an unquantified
+    // tail. A declared fresh instance is its own origin.
+    try std.testing.expect(store.synthetic_variable_roots.contains(respecialized_tail));
+    try std.testing.expect(store.synthetic_variable_roots.contains(plan_tail));
+    try std.testing.expectEqual(plan_tail, store.identityOrigin(plan_tail));
 }

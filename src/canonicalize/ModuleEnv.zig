@@ -233,6 +233,9 @@ pub const CommonIdents = extern struct {
     // Error tag produced by optional field access (`r.?x`) when the field is
     // absent: the Err side of `Try(field_type, [MissingField])`.
     missing_field: Ident.Idx,
+    // Synthetic identifier for polarity-deferred tag union extensions in alias
+    // declaration bodies (see types.polarity_var_text)
+    polarity_var: Ident.Idx,
 
     /// Insert all well-known identifiers into a CommonEnv.
     /// Use this when creating a fresh ModuleEnv from scratch.
@@ -364,6 +367,8 @@ pub const CommonIdents = extern struct {
             .optional_presence = try common.insertIdent(gpa, Ident.for_text("#optional")),
             // Error tag for optional field access on an absent field
             .missing_field = try common.insertIdent(gpa, Ident.for_text("MissingField")),
+            // Synthetic identifier for polarity-deferred tag union extensions
+            .polarity_var = try common.insertIdent(gpa, Ident.for_text(types_mod.polarity_var_text)),
         };
     }
 
@@ -498,6 +503,8 @@ pub const CommonIdents = extern struct {
             .optional_presence = common.findIdent("#optional") orelse unreachable,
             // Error tag for optional field access on an absent field
             .missing_field = common.findIdent("MissingField") orelse unreachable,
+            // Synthetic identifier for polarity-deferred tag union extensions
+            .polarity_var = common.findIdent(types_mod.polarity_var_text) orelse unreachable,
         };
     }
 };
@@ -645,6 +652,11 @@ pub const NumeralLiteral = extern struct {
     after_len: u32,
     after_decimal_digit_count: u64,
     flags: u32,
+    /// The bytes the 8-byte alignment of `after_decimal_digit_count` adds after
+    /// `flags`. Declared rather than implicit so every byte this struct persists
+    /// has a defined value: the checked cache writes its representation verbatim,
+    /// and an implicit gap would write whatever happened to be in that memory.
+    _reserved: u32 = 0,
 
     pub const negative_flag: u32 = 1;
     pub const fractional_flag: u32 = 2;
@@ -667,25 +679,37 @@ pub const NumeralLiteral = extern struct {
     pub fn isMaterialized(self: NumeralLiteral) bool {
         return (self.flags & materialized_flag) != 0;
     }
+
+    comptime {
+        // Every byte this struct persists must belong to a declared field. The checked
+        // cache and the baked builtin artifact copy its representation verbatim, so an
+        // implicit gap here writes whatever that memory happened to hold. This is the
+        // same proof the serialization boundary runs; asserting it beside the
+        // declaration points at this file when a field is added or reordered.
+        collections.serde_validation.assertFullyDefined(@This(), "ModuleEnv.NumeralLiteral");
+    }
 };
 
 /// One constrained-scheme use recorded by checking for static-dispatch
 /// evidence. It names the source node, the scheme root used at that edge, and—
-/// for an instantiation—the fresh var each constrained scheme var was
-/// copied to. Shared monomorphic edges have no copy pairs. Publication resolves
-/// the recorded vars after checking settles to decide how each of the callee's
-/// dispatch constraints was satisfied at this site.
+/// for an instantiation—the source-to-fresh var relation needed by its slot.
+/// Ordinary evidence edges retain constrained vars; a where-method use retains
+/// the instantiator's complete structural map. Shared monomorphic edges have no
+/// copy pairs. Checked-artifact construction resolves the recorded vars after
+/// checking settles to decide how each callee dispatch requirement was
+/// satisfied at this site.
 pub const SchemeUseRecord = extern struct {
     node_idx: u32,
     /// `Slot`—distinguishes several schemes instantiated at one node (a value
-    /// use, an expression-position function stored as a value, or the target
-    /// of a dispatch constraint).
+    /// use, an expression-position function stored as a value, the target of
+    /// a dispatch constraint, or a per-use where-method signature copy).
     slot_kind: u32,
     /// For `dispatch_target` slots, the raw fn `Var` of the constraint whose
     /// discharge instantiated this scheme—unique per constraint
     /// instantiation, so nested evidence chains resolve without ambiguity.
-    /// 0 for value and nested-function use slots (keyed by `node_idx`
-    /// instead).
+    /// For `where_method_use`, the raw fn `Var` of the body dispatch whose
+    /// callable instantiated the where-method signature. 0 for value and
+    /// nested-function use slots (keyed by `node_idx` instead).
     slot_data: u32,
     /// The scheme root `Var` used at this edge. For imported schemes this is
     /// the pristine local copy; for shared uses it is the in-flight local root.
@@ -721,13 +745,20 @@ pub const SchemeUseRecord = extern struct {
         /// or substitution of its own; an accompanying value/shared use owns
         /// those facts when the referenced scheme has quantified variables.
         recursive_reference,
+        /// One body dispatch's per-use instantiation of its where-method
+        /// signature. `slot_data` is the body's constraint callable and
+        /// `scheme_root` is the pristine where-method signature callable.
+        /// The use has no child dispatch requirements; this record deliberately
+        /// relates the two callable identities for checked-plan construction.
+        where_method_use,
     };
 };
 
-/// One (constrained scheme var → fresh instantiated var) pair of a
-/// `SchemeUseRecord`.
+/// One (source scheme var → fresh instantiated var) pair of a
+/// `SchemeUseRecord`. Ordinary evidence records retain constrained vars;
+/// `where_method_use` retains the instantiator's complete structural map.
 pub const SchemeUsePair = extern struct {
-    /// Constrained var in the pristine scheme (`Var`).
+    /// Source var in the pristine scheme (`Var`).
     old_var: u32,
     /// The fresh copy created for this instantiation (`Var`).
     fresh_var: u32,
@@ -1021,7 +1052,8 @@ numeric_suffix_targets: NumericSuffixTarget.SafeList,
 /// Constrained-scheme uses recorded by checking for static-dispatch evidence;
 /// consumed at checked-module publication.
 scheme_uses: SchemeUseRecord.SafeList,
-/// Flat pool of (scheme var → fresh var) pairs backing `scheme_uses`.
+/// Flat pool of (source scheme var → fresh var) pairs backing
+/// `scheme_uses`.
 scheme_use_pairs: SchemeUsePair.SafeList,
 /// Exact source bindings that checking generalized into rank-1 type schemes.
 /// Sorted by source node for allocation-free cross-module lookup.
@@ -1166,6 +1198,8 @@ pub fn relocate(self: *Self, offset: isize) void {
     self.method_defs.relocate(offset);
     self.provided_low_level_defs.relocate(offset);
     self.for_loop_dispatch_plans.relocate(offset);
+    self.scheme_uses.relocate(offset);
+    self.scheme_use_pairs.relocate(offset);
     self.binding_schemes.relocate(offset);
     self.binding_scheme_codec_requirements.relocate(offset);
     self.rejected_static_dispatches.relocate(offset);
@@ -4703,7 +4737,8 @@ pub fn recordQuoteDispatchPlan(
 
 /// Record a constrained-scheme use for static-dispatch evidence.
 /// `slot_data` is the raw fn `Var` of the discharged constraint for
-/// `dispatch_target` slots and 0 for value and nested-function use slots.
+/// `dispatch_target` slots, the body constraint callable for
+/// `where_method_use`, and 0 for value and nested-function use slots.
 pub fn recordSchemeUse(
     self: *Self,
     node_idx: u32,
@@ -5816,4 +5851,76 @@ pub fn lookupMethodBindingFromOwnerAndMethodEnvsConst(
 /// Each element represents the byte offset where a new line begins.
 pub fn getLineStarts(self: *const Self) []const u32 {
     return self.common.getLineStartsAll();
+}
+
+test "NumeralLiteral: serialized bytes are a function of the recorded literals" {
+    // The numeral pool is copied verbatim into `Builtin.bin` and into every checked
+    // module cache entry, so its bytes must depend on the literals alone. Before this
+    // struct declared the bytes its 8-byte alignment adds after `flags`, those four
+    // bytes carried whatever the pool's storage last held, and two runs of the same
+    // compilation disagreed there.
+    const gpa = std.testing.allocator;
+
+    const Build = struct {
+        fn pool(allocator: std.mem.Allocator, poison: u8) std.mem.Allocator.Error!NumeralLiteral.SafeList {
+            var list = try NumeralLiteral.SafeList.initCapacity(allocator, 8);
+            errdefer list.deinit(allocator);
+            for (0..5) |_| _ = try list.append(allocator, std.mem.zeroes(NumeralLiteral));
+            // Poison each row, then write its fields one at a time. A whole-struct store
+            // may overwrite an undeclared gap with the temporary's own bytes, so putting
+            // the stale bytes in deliberately is what makes this test able to fail.
+            for (list.items.items, 0..) |*slot, i| {
+                @memset(std.mem.asBytes(slot), poison);
+                slot.node_idx = @intCast(i);
+                slot.digits_start = @intCast(i * 4);
+                slot.before_len = @intCast(i);
+                slot.after_len = @intCast(i + 1);
+                slot.after_decimal_digit_count = i;
+                slot.flags = NumeralLiteral.materialized_flag;
+                slot._reserved = 0;
+            }
+            return list;
+        }
+
+        fn serialize(
+            allocator: std.mem.Allocator,
+            list: *const NumeralLiteral.SafeList,
+        ) (std.mem.Allocator.Error || error{BufferTooSmall})![]align(CompactWriter.SERIALIZATION_ALIGNMENT.toByteUnits()) u8 {
+            var writer = CompactWriter.init();
+            defer writer.deinit(allocator);
+            const serialized = try writer.appendAlloc(allocator, NumeralLiteral.SafeList.Serialized);
+            try serialized.serialize(list, allocator, &writer);
+            const buffer = try allocator.alignedAlloc(u8, CompactWriter.SERIALIZATION_ALIGNMENT, writer.total_bytes);
+            errdefer allocator.free(buffer);
+            _ = try writer.writeToBuffer(buffer);
+            return buffer;
+        }
+    };
+
+    var over_ones = try Build.pool(gpa, 0xAA);
+    defer over_ones.deinit(gpa);
+    var over_fives = try Build.pool(gpa, 0x55);
+    defer over_fives.deinit(gpa);
+
+    const ones_bytes = try Build.serialize(gpa, &over_ones);
+    defer gpa.free(ones_bytes);
+    const fives_bytes = try Build.serialize(gpa, &over_fives);
+    defer gpa.free(fives_bytes);
+
+    try std.testing.expectEqualSlices(u8, ones_bytes, fives_bytes);
+
+    // No poison survives anywhere in the output, including the bytes after `flags`.
+    try std.testing.expect(std.mem.findScalar(u8, ones_bytes, 0xAA) == null);
+    try std.testing.expect(std.mem.findScalar(u8, ones_bytes, 0x55) == null);
+
+    // And the literals themselves round-trip.
+    const serialized: *const NumeralLiteral.SafeList.Serialized = @ptrCast(@alignCast(ones_bytes.ptr));
+    const loaded = serialized.deserializeInto(@intFromPtr(ones_bytes.ptr));
+    try std.testing.expectEqual(@as(u64, 5), loaded.len());
+    for (0..5) |i| {
+        const literal = loaded.get(@enumFromInt(@as(u32, @intCast(i)))).*;
+        try std.testing.expectEqual(@as(u32, @intCast(i)), literal.node_idx);
+        try std.testing.expectEqual(@as(u64, i), literal.after_decimal_digit_count);
+        try std.testing.expect(literal.isMaterialized());
+    }
 }

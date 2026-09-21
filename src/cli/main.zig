@@ -8573,6 +8573,7 @@ fn compileModulePack(
     errdefer compile.static_data_exports.deinitStaticData(ctx.gpa, static_data_exports);
 
     var object_compiler = backend.ObjectFileCompiler.initForPack(ctx.gpa);
+    object_compiler.post_check_executor = build_env.postCheckExecutor();
     const compiled = object_compiler.compileToObjectFile(
         &lowered.lir_result.store,
         &lowered.lir_result.layouts,
@@ -9708,6 +9709,35 @@ fn devBackendBreakdown(timing: backend.ObjectFileCompiler.TimingSnapshot) [8]pro
     };
 }
 
+fn nativeEmissionCounters(metrics: backend.dev.NativeProcCompiler.Metrics) [12]progress.Counter {
+    return .{
+        .{ .name = "Tasks submitted", .count = metrics.tasks_submitted },
+        .{ .name = "Tasks committed", .count = metrics.tasks_committed },
+        .{ .name = "Procedures emitted", .count = metrics.procedures_emitted },
+        .{ .name = "Procedures reused", .count = metrics.procedures_reused },
+        .{ .name = "Helpers emitted", .count = metrics.helpers_emitted },
+        .{ .name = "Helpers reused", .count = metrics.helpers_reused },
+        .{ .name = "Code bytes emitted", .count = metrics.code_bytes_emitted },
+        .{ .name = "Code bytes reused", .count = metrics.code_bytes_reused },
+        .{ .name = "Rejected revision", .count = metrics.rejected_revision },
+        .{ .name = "Rejected context", .count = metrics.rejected_context },
+        .{ .name = "Rejected target", .count = metrics.rejected_target },
+        .{ .name = "Peak inflight fragments", .count = metrics.peak_inflight_fragments },
+    };
+}
+
+test "native artifact counters preserve every measured field" {
+    var metrics: backend.dev.NativeProcCompiler.Metrics = .{};
+    inline for (std.meta.fields(@TypeOf(metrics)), 1..) |field, value| {
+        @field(metrics, field.name) = value;
+    }
+    const counters = nativeEmissionCounters(metrics);
+    try std.testing.expectEqual(std.meta.fields(@TypeOf(metrics)).len, counters.len);
+    for (counters, 1..) |counter, value| {
+        try std.testing.expectEqual(@as(u64, @intCast(value)), counter.count);
+    }
+}
+
 test "dev backend timing labels name the backend and emitted instruction format" {
     try std.testing.expectEqualStrings("x64 Backend", devBackendPhaseName(.x86_64));
     try std.testing.expectEqualStrings("arm64 Backend", devBackendPhaseName(.aarch64));
@@ -10675,6 +10705,11 @@ fn rocBuildNative(ctx: *CliCtx, args: cli_args.BuildArgs) CliMainError!BuildResu
     var object_compiler = backend.ObjectFileCompiler.init(ctx.gpa);
     var backend_timing = backend.ObjectFileCompiler.Timing.init(ctx.io.std_io);
     object_compiler.timing = &backend_timing;
+    object_compiler.post_check_executor = build_env.postCheckExecutor();
+    object_compiler.reuse_same_program = if (build_env.runtimeProgramSession()) |session|
+        session.runtimeNativeArtifacts()
+    else
+        null;
     if (loaded_packs) |*packs| object_compiler.splice_source = packs.spliceSource();
     object_compiler.capture_artifacts = object_cache_enabled;
     defer if (object_compiler.captured_artifacts) |*set| set.deinit();
@@ -10707,6 +10742,7 @@ fn rocBuildNative(ctx: *CliCtx, args: cli_args.BuildArgs) CliMainError!BuildResu
         return error.NativeCompilationFailed;
     };
     reporter.endWithBreakdown(&devBackendBreakdown(backend_timing.snapshot()));
+    reporter.recordCounters("Native artifact emission", &nativeEmissionCounters(backend_timing.snapshot().native_emission));
     try writePackObjects(ctx, &build_env, root_artifact, imported_artifacts, relation_artifacts, &lowered, args, target, final_output_path);
     if (object_store) |*store| {
         try writePacksToStore(ctx, &build_env, store, root_artifact, imported_artifacts, relation_artifacts, &lowered, if (object_compiler.captured_artifacts) |*set| set else null, args, target);
@@ -11184,9 +11220,16 @@ const CliTestSourceModuleMap = std.StringHashMapUnmanaged(BuildEnv.CompiledModul
 const CliTestRunSummary = struct {
     passed: u32 = 0,
     failed: u32 = 0,
+    /// Tests that could not compile, rather than the number of diagnostics.
     compiler_errors: u32 = 0,
+    /// Checking diagnostics can occur outside tests or affect several tests.
+    diagnostic_errors: usize = 0,
     modules_with_tests: u32 = 0,
     cached_modules: u32 = 0,
+
+    fn allPassed(self: CliTestRunSummary) bool {
+        return self.failed == 0 and self.compiler_errors == 0 and self.diagnostic_errors == 0;
+    }
 };
 
 fn writeCliTestRunSummary(
@@ -11196,7 +11239,7 @@ fn writeCliTestRunSummary(
     fully_cached: bool,
     use_color: bool,
 ) std.Io.Writer.Error!void {
-    const all_passed = summary.failed == 0 and summary.compiler_errors == 0;
+    const all_passed = summary.allPassed();
     if (all_passed) {
         try writer.print("All ({}) tests passed", .{summary.passed});
     } else {
@@ -11229,6 +11272,12 @@ fn writeCliTestRunSummary(
         summary.compiler_errors,
         reset,
     });
+    if (summary.diagnostic_errors != 0) {
+        try writer.print("Compilation failed with {} error{s}.\n", .{
+            summary.diagnostic_errors,
+            if (summary.diagnostic_errors == 1) "" else "s",
+        });
+    }
 }
 
 test "issue 10624: roc test summaries share duration and cache formatting" {
@@ -11259,6 +11308,16 @@ test "issue 10624: roc test summaries share duration and cache formatting" {
             .summary = .{ .passed = 1, .failed = 1, .compiler_errors = 1 },
             .fully_cached = true,
             .expected = "Ran 3 tests in 1.2 ms. (cached):\n    1 passed\n    1 failed\n    1 compiler errors\n",
+        },
+        .{
+            .summary = .{ .passed = 2, .compiler_errors = 1, .diagnostic_errors = 2 },
+            .fully_cached = false,
+            .expected = "Ran 3 tests in 1.2 ms.:\n    2 passed\n    0 failed\n    1 compiler errors\nCompilation failed with 2 errors.\n",
+        },
+        .{
+            .summary = .{ .passed = 1, .diagnostic_errors = 1 },
+            .fully_cached = false,
+            .expected = "Ran 1 tests in 1.2 ms.:\n    1 passed\n    0 failed\n    0 compiler errors\nCompilation failed with 1 error.\n",
         },
     };
 
@@ -11300,6 +11359,9 @@ const CliTestPlanModule = struct {
 };
 
 const CliTestPlan = struct {
+    /// Includes modules whose tests were all rejected during checking.
+    modules_with_tests: u32,
+    /// Only modules with executable test requests need runtime planning.
     modules: []CliTestPlanModule,
     entries: []CliTestPlanEntry,
 
@@ -11678,7 +11740,7 @@ fn loadCachedCliTestResults(
         const has_message = readU8(data, &offset) orelse return null;
 
         const region = base.Region.from_raw_offsets(region_start, region_end);
-        if (!inline_expect and !region.eq(testRootRegion(module.semantic.env, test_roots[root_index - 1]))) return null;
+        if (!inline_expect and !region.eq(testRootRegion(module.semantic.env, test_roots[root_index - 1].source))) return null;
 
         var visibility: CliTestFailureDetailVisibility = .always;
         const message = if (has_message == 0) null else blk: {
@@ -11746,9 +11808,11 @@ fn collectTestRootRequests(
 fn buildCliTestPlan(
     ctx: *CliCtx,
     modules: []const BuildEnv.CompiledModuleInfo,
+    module_results: *std.ArrayList(CliModuleTestResult),
 ) Allocator.Error!CliTestPlan {
     var planned_modules = std.ArrayList(CliTestPlanModule).empty;
     var entries = std.ArrayList(CliTestPlanEntry).empty;
+    var modules_with_tests: u32 = 0;
     errdefer {
         for (planned_modules.items) |*module| {
             ctx.gpa.free(module.test_roots);
@@ -11776,6 +11840,37 @@ fn buildCliTestPlan(
         const artifact = module.semantic.checked_artifact orelse continue;
         const test_roots = try collectTestRootRequests(ctx.gpa, artifact);
         errdefer ctx.gpa.free(test_roots);
+
+        // Root requests deliberately exclude erroneous bodies. The checked
+        // roots still retain their identities and the checker's diagnostic
+        // facts, so rejected tests can participate in result aggregation
+        // without being lowered, executed, or stored in the execution cache.
+        var checking_results = std.ArrayList(CliTestResultItem).empty;
+        defer checking_results.deinit(ctx.gpa);
+        for (artifact.compile_time_roots.roots) |root| {
+            if (root.kind != .expect) continue;
+            if (!artifact.checked_bodies.exprContainsDiagnosticError(root.expr)) continue;
+            std.debug.assert(root.request_eligibility == .ineligible);
+            try checking_results.append(ctx.gpa, .{
+                .result = .compiler_error,
+                .order = @intFromEnum(root.id),
+                .region = testRootRegion(module.semantic.env, root.source),
+                // Checking renders the original diagnostic once. A second
+                // generic test failure would only duplicate that report.
+                .failure_detail = null,
+            });
+        }
+        if (test_roots.len != 0 or checking_results.items.len != 0) modules_with_tests += 1;
+        if (checking_results.items.len != 0) {
+            const results = try checking_results.toOwnedSlice(ctx.gpa);
+            errdefer ctx.gpa.free(results);
+            try module_results.append(ctx.gpa, .{
+                .env = module.semantic.env,
+                .path = module.path,
+                .results = results,
+                .cached = false,
+            });
+        }
         if (test_roots.len == 0) {
             ctx.gpa.free(test_roots);
             continue;
@@ -11790,7 +11885,7 @@ fn buildCliTestPlan(
                 .root_index = @intCast(root_index),
                 .root_order = root.order,
                 .result_index = result_index,
-                .region = testRootRegion(module.semantic.env, root),
+                .region = testRootRegion(module.semantic.env, root.source),
                 .symbol_name = symbol_name,
             }) catch |err| {
                 ctx.gpa.free(symbol_name);
@@ -11821,6 +11916,7 @@ fn buildCliTestPlan(
     errdefer deinitCliTestPlanEntries(ctx.gpa, owned_entries);
 
     return .{
+        .modules_with_tests = modules_with_tests,
         .modules = owned_modules,
         .entries = owned_entries,
     };
@@ -11828,9 +11924,9 @@ fn buildCliTestPlan(
 
 fn testRootRegion(
     env: *const ModuleEnv,
-    root: check.CheckedArtifact.RootRequest,
+    source: check.CheckedArtifact.RootSource,
 ) base.Region {
-    return switch (root.source) {
+    return switch (source) {
         .statement => |statement| env.store.getStatementRegion(statement),
         .def, .expr, .required_binding, .hoisted => {
             if (builtin.mode == .Debug) {
@@ -12410,7 +12506,7 @@ fn collectCliTestRootRuns(
             .path = planned.module.path,
             .result_index = plan_entry.result_index,
             .root_proc = root_proc,
-            .region = testRootRegion(planned.module.semantic.env, root),
+            .region = testRootRegion(planned.module.semantic.env, root.source),
             .arg_layouts = arg_layouts,
             .ret_layout = proc.ret_layout,
             .symbol_name = plan_entry.symbol_name,
@@ -14822,7 +14918,7 @@ fn rocTest(ctx: *CliCtx, args_in: cli_args.TestArgs, arg0: []const u8) RocTestEr
         module_results.deinit(ctx.gpa);
     }
 
-    var test_plan = try buildCliTestPlan(ctx, modules);
+    var test_plan = try buildCliTestPlan(ctx, modules, &module_results);
     defer test_plan.deinit(ctx.gpa);
 
     const specialization_strategy = currentRuntimeSpecializationStrategy(args.specialization_strategy);
@@ -15021,6 +15117,8 @@ fn rocTest(ctx: *CliCtx, args_in: cli_args.TestArgs, arg0: []const u8) RocTestEr
         },
     };
     try coalesceInlineExpectResults(ctx.gpa, module_results.items, &total);
+    total.modules_with_tests = test_plan.modules_with_tests;
+    total.diagnostic_errors = diag.errors;
     reporter.end();
     recordPostCheckLowering(&reporter, &spec_timing, specialization_strategy);
     if (test_mode == .dev) recordDevTestExecution(&reporter, &dev_timing);
@@ -15029,7 +15127,8 @@ fn rocTest(ctx: *CliCtx, args_in: cli_args.TestArgs, arg0: []const u8) RocTestEr
     // Calculate elapsed time
     const end_time = std.Io.Timestamp.now(ctx.io.std_io, .real).nanoseconds;
     const elapsed_ns = @as(u64, @intCast(end_time - start_time));
-    const fully_cached = total.modules_with_tests > 0 and total.cached_modules == total.modules_with_tests;
+    const fully_cached = total.compiler_errors == 0 and total.diagnostic_errors == 0 and
+        total.modules_with_tests > 0 and total.cached_modules == total.modules_with_tests;
 
     // Render the per-module bodies once into in-memory buffers so we can
     // print them after the summary line.
@@ -15062,11 +15161,8 @@ fn rocTest(ctx: *CliCtx, args_in: cli_args.TestArgs, arg0: []const u8) RocTestEr
     try stderr.writeAll(stderr_body.written());
 
     // Report results
-    if (total.failed == 0 and total.compiler_errors == 0) {
+    if (total.allPassed()) {
         try writeCliTestRunSummary(stdout, total, elapsed_ns, fully_cached, report_config.shouldUseColors());
-        // Diagnostics determine the command status only after every independent
-        // test root has run; they never gate checked-artifact execution.
-        if (diag.errors > 0) return error.CompilationFailed;
         // Same warning exit policy as check/build/run: passing tests with
         // compile warnings exit 2.
         exitOnWarnings(ctx, diag.warnings);
@@ -15075,6 +15171,9 @@ fn rocTest(ctx: *CliCtx, args_in: cli_args.TestArgs, arg0: []const u8) RocTestEr
 
     try writeCliTestRunSummary(stderr, total, elapsed_ns, fully_cached, report_config.shouldUseColors());
 
+    // Diagnostics determine the command status only after every independent
+    // test root has run; they never gate checked-artifact execution.
+    if (diag.errors > 0) return error.CompilationFailed;
     return error.TestsFailed;
 }
 
@@ -15811,6 +15910,9 @@ fn renderCliTestResultEntry(
             );
         },
         .compiler_error => {
+            // A checking error already has its original diagnostic. Backend
+            // errors carry their own detail and still need a test report.
+            if (entry.result.failure_detail == null) return;
             const region_info = source_env.calcRegionInfo(entry.result.region);
             try printTestProblem(
                 allocator,
@@ -16412,6 +16514,7 @@ fn recordLoweringCounters(
         reporter.recordCounters(prefix ++ "Monotype type graph", &monotypeGraphCounters(snapshot.monotype_diagnostics));
         reporter.recordCounters(prefix ++ "Monotype body + dispatch", &monotypeBodyCounters(snapshot.monotype_diagnostics));
         reporter.recordCounters(prefix ++ "Monotype parallel execution", &monotypeParallelCounters(snapshot.monotype_parallel));
+        reporter.recordCounters(prefix ++ "SpecConstr parallel execution", &specConstrParallelCounters(snapshot.spec_constr_parallel));
         reporter.recordCounters(prefix ++ "Solved-LIR parallel execution", &solvedLirParallelCounters(snapshot.solved_lir_parallel));
     }
     reporter.recordCounters(prefix ++ "LIR pass parallel execution", &lirPassParallelCounters(snapshot.lir_pass_parallel));
@@ -16594,6 +16697,56 @@ fn solvedLirParallelCounters(parallel: lir.CheckedPipeline.SolvedLirParallelMetr
         .{ .name = "Worker literal tasks committed", .count = parallel.worker_literal_tasks_committed },
         .{ .name = "Worker loop tasks committed", .count = parallel.worker_loop_tasks_committed },
     };
+}
+
+const spec_constr_counter_count = 7 + 2 * std.meta.fields(lir.CheckedPipeline.SpecConstrPhase).len;
+
+fn specConstrParallelCounters(parallel: lir.CheckedPipeline.SpecConstrParallelMetrics) [spec_constr_counter_count]progress.Counter {
+    var rows: [spec_constr_counter_count]progress.Counter = undefined;
+    rows[0..7].* = .{
+        .{ .name = "Tasks submitted", .count = parallel.tasks_submitted },
+        .{ .name = "Tasks committed", .count = parallel.tasks_committed },
+        .{ .name = "Patterns recorded", .count = parallel.patterns_recorded },
+        .{ .name = "Patterns admitted", .count = parallel.patterns_admitted },
+        .{ .name = "Bodies committed", .count = parallel.bodies_committed },
+        .{ .name = "Expressions committed", .count = parallel.expressions_committed },
+        .{ .name = "Peak retained body shards", .count = parallel.peak_retained_shards },
+    };
+    inline for (comptime std.meta.tags(lir.CheckedPipeline.SpecConstrPhase), 0..) |phase, index| {
+        const name = comptime switch (phase) {
+            .discovery => "Pattern discovery",
+            .unused_loop_results => "Loop-result projection",
+            .iterator_fusion => "Iterator fusion",
+        };
+        rows[7 + 2 * index] = .{ .name = name ++ " tasks", .count = parallel.committed_by_phase[index] };
+        rows[8 + 2 * index] = .{ .name = name ++ " changes", .count = parallel.changed_by_phase[index] };
+    }
+    return rows;
+}
+
+test "post-check diagnostics preserve labeled SpecConstr counts" {
+    const rows = specConstrParallelCounters(.{
+        .tasks_submitted = 1,
+        .tasks_committed = 2,
+        .patterns_recorded = 3,
+        .patterns_admitted = 4,
+        .bodies_committed = 5,
+        .expressions_committed = 6,
+        .peak_retained_shards = 7,
+        .committed_by_phase = .{ 8, 10, 12 },
+        .changed_by_phase = .{ 9, 11, 13 },
+    });
+    const names = [_][]const u8{
+        "Tasks submitted",           "Tasks committed",              "Patterns recorded",              "Patterns admitted",
+        "Bodies committed",          "Expressions committed",        "Peak retained body shards",      "Pattern discovery tasks",
+        "Pattern discovery changes", "Loop-result projection tasks", "Loop-result projection changes", "Iterator fusion tasks",
+        "Iterator fusion changes",
+    };
+    for (rows, names, 1..) |row, name, count| {
+        try std.testing.expectEqualStrings(name, row.name);
+        try std.testing.expectEqual(@as(u64, count), row.count);
+    }
+    for (specConstrParallelCounters(.{})) |row| try std.testing.expectEqual(@as(u64, 0), row.count);
 }
 
 fn arcParallelCounters(parallel: lir.CheckedPipeline.ArcParallelMetrics) [17]progress.Counter {
@@ -16953,7 +17106,9 @@ test "timings display every Monotype graph counter" {
 fn finishFrontEndPhase(reporter: *progress.Reporter, timing: anytype) void {
     reporter.endWithBreakdown(&frontEndBreakdown(timing));
     const compile_time = timing.compile_time_evaluation;
-    if (compile_time.total_ns == 0 and std.meta.eql(compile_time.lowering, lir.CheckedPipeline.TimingSnapshot{})) return;
+    if (compile_time.total_ns == 0 and
+        std.meta.eql(compile_time.lowering, lir.CheckedPipeline.TimingSnapshot{}) and
+        std.meta.eql(compile_time.native_emission, backend.dev.NativeProcCompiler.Metrics{})) return;
     reporter.recordCompletedWithBreakdown(
         "Shared Lowering and Compile-Time Evaluation",
         compile_time.total_ns,
@@ -16962,6 +17117,9 @@ fn finishFrontEndPhase(reporter: *progress.Reporter, timing: anytype) void {
     );
     if (!std.meta.eql(compile_time.lowering, lir.CheckedPipeline.TimingSnapshot{})) {
         recordLoweringCounters(reporter, compile_time.lowering, .lss, "Shared ");
+    }
+    if (!std.meta.eql(compile_time.native_emission, backend.dev.NativeProcCompiler.Metrics{})) {
+        reporter.recordCounters("Shared native artifact emission", &nativeEmissionCounters(compile_time.native_emission));
     }
 }
 
@@ -16978,6 +17136,7 @@ test "shared lowering reporting preserves counters for runtime reuse and continu
             .lir_passes_ns = 7,
             .arc_ns = 8,
             .solved_lir_parallel = .{ .tasks_submitted = 61, .tasks_committed = 61 },
+            .spec_constr_parallel = .{ .tasks_submitted = 63, .tasks_committed = 63 },
             .lir_pass_parallel = .{ .tasks_submitted = 67, .tasks_committed = 67 },
             .arc_parallel = .{ .planning_tasks_submitted = 71, .planning_tasks_committed = 71 },
         },
@@ -16985,6 +17144,7 @@ test "shared lowering reporting preserves counters for runtime reuse and continu
         .code_generation_ns = 10,
         .execution_ns = 11,
         .store_results_ns = 12,
+        .native_emission = .{ .procedures_emitted = 83 },
     };
     const rows = compileTimeEvaluationBreakdown(shared);
     for (rows, 1..) |row, index| try std.testing.expectEqual(@as(u64, @intCast(index)), row.ns);
@@ -17037,6 +17197,8 @@ test "shared lowering reporting preserves counters for runtime reuse and continu
         });
         reporter.begin("Specializing");
         finishPostCheckLowering(&reporter, &runtime, .lss);
+        reporter.recordCounters("Native artifact emission", &nativeEmissionCounters(.{ .procedures_reused = 89 }));
+        reporter.recordCounters("Test result cache", &.{.{ .name = "Hits", .count = 79 }});
         reporter.finish();
         const output = buf.written();
         for ([_][]const u8{
@@ -17044,10 +17206,14 @@ test "shared lowering reporting preserves counters for runtime reuse and continu
             "Shared Monotype type graph",
             "Shared Monotype body + dispatch",
             "Shared Monotype parallel execution",
+            "Shared SpecConstr parallel execution",
             "Shared Solved-LIR parallel execution",
             "Shared LIR pass parallel execution",
             "Shared ARC parallel execution",
+            "Shared native artifact emission",
+            "Native artifact emission",
         }) |label| try std.testing.expectEqual(@as(usize, 1), std.mem.count(u8, output, label));
+        try std.testing.expectEqual(@as(usize, 1), std.mem.count(u8, output, "Test result cache"));
         try std.testing.expect(std.mem.find(u8, output, "71") != null);
         try std.testing.expectEqual(
             @as(usize, if (case.runtime_continuation) 1 else 0),

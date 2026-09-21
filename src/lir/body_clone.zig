@@ -22,6 +22,101 @@ const GuardedList = LirStore.GuardedList;
 const CFStmtId = LIR.CFStmtId;
 const LocalId = LIR.LocalId;
 
+/// Retains empty analysis storage up to the peak number of simultaneous leases.
+/// Nodes stay at stable addresses even when nested analyses acquire more storage.
+/// Returning a lease never allocates, including while unwinding an allocation failure.
+fn ScratchPool(comptime T: type) type {
+    return struct {
+        const Self = @This();
+        const Lease = struct {
+            value: T,
+            pool: *Self,
+            next: ?*Lease = null,
+
+            fn release(self: *Lease, value: T) void {
+                self.value = value;
+                self.value.clearRetainingCapacity();
+                self.next = self.pool.free;
+                self.pool.free = self;
+                self.pool.active -= 1;
+            }
+        };
+
+        allocator: Allocator,
+        free: ?*Lease = null,
+        active: usize = 0,
+
+        fn acquire(self: *Self) Allocator.Error!*Lease {
+            const lease = if (self.free) |entry| blk: {
+                self.free = entry.next;
+                break :blk entry;
+            } else blk: {
+                const entry = try self.allocator.create(Lease);
+                entry.* = .{ .value = T.init(self.allocator), .pool = self };
+                break :blk entry;
+            };
+            self.active += 1;
+            return lease;
+        }
+
+        fn deinit(self: *Self) void {
+            std.debug.assert(self.active == 0);
+            while (self.free) |entry| {
+                self.free = entry.next;
+                entry.value.deinit();
+                self.allocator.destroy(entry);
+            }
+            self.* = undefined;
+        }
+    };
+}
+
+const CountPool = ScratchPool(collections.DenseMap(LocalId, u32));
+const WalkPool = ScratchPool(WalkStorage);
+
+const WalkStorage = struct {
+    work: std.ArrayList(CFStmtId) = .empty,
+    visited: collections.DenseMap(CFStmtId, void),
+
+    fn init(allocator: Allocator) WalkStorage {
+        return .{ .visited = collections.DenseMap(CFStmtId, void).init(allocator) };
+    }
+
+    fn clearRetainingCapacity(self: *WalkStorage) void {
+        self.work.clearRetainingCapacity();
+        self.visited.clearRetainingCapacity();
+    }
+
+    fn deinit(self: *WalkStorage) void {
+        self.work.deinit(self.visited.allocator);
+        self.visited.deinit();
+    }
+};
+
+/// Exclusive worker-owned storage. Leases contain current analysis results;
+/// only empty capacity survives a procedure, a rewrite, or a compilation.
+/// This owner must stay at a stable address and outlive every acquired result.
+pub const AnalysisScratch = struct {
+    counts: CountPool,
+    walks: WalkPool,
+
+    pub fn init(allocator: Allocator) AnalysisScratch {
+        return .{ .counts = .{ .allocator = allocator }, .walks = .{ .allocator = allocator } };
+    }
+
+    pub fn deinit(self: *AnalysisScratch) void {
+        self.counts.deinit();
+        self.walks.deinit();
+    }
+
+    pub fn acquireCounts(self: *AnalysisScratch) Allocator.Error!ReadCounts {
+        const lease = try self.counts.acquire();
+        const counts = lease.value;
+        lease.value = undefined;
+        return .{ .counts = counts, .lease = lease };
+    }
+};
+
 /// Reserve the source identity domain once before dispatching procedure work.
 /// Include unreachable statements and borrowed prefixes, not just owned output.
 pub fn firstFreshJoinPoint(store: *const LirStore) u32 {
@@ -238,13 +333,15 @@ pub fn appendSuccessorsWithAllocator(
 /// statement still reads that local before it commits the fusion.
 pub const ReadCounts = struct {
     counts: collections.DenseMap(LocalId, u32),
+    lease: ?*CountPool.Lease = null,
     // Operand enumeration is also used by allocation-free dense callers.
     // Defer a sparse insertion failure until the end of that statement.
     failure: ?Allocator.Error = null,
 
     /// Release the backing count storage.
     pub fn deinit(self: *ReadCounts) void {
-        self.counts.deinit();
+        if (self.lease) |lease| lease.release(self.counts) else self.counts.deinit();
+        self.* = undefined;
     }
 
     /// Number of counted operand occurrences (or definitions) of `local`.
@@ -262,7 +359,12 @@ pub fn countReachableReads(store: *LirStore, body: CFStmtId) Allocator.Error!Rea
 
 /// Count only reachable operands, allocating scratch independently of output.
 pub fn countReachableReadsWithAllocator(store: *LirStore, body: CFStmtId, allocator: Allocator) Allocator.Error!ReadCounts {
-    return countReachable(store, body, allocator, .reads);
+    return countReachable(store, body, allocator, null, .reads);
+}
+
+/// Count operands using retained worker storage, with an independent result lease.
+pub fn countReachableReadsWithScratch(store: *LirStore, body: CFStmtId, scratch: *AnalysisScratch) Allocator.Error!ReadCounts {
+    return countReachable(store, body, scratch.counts.allocator, scratch, .reads);
 }
 
 /// Add this statement's operand reads to an existing per-local count row.
@@ -424,19 +526,25 @@ pub fn countReachableDefs(store: *LirStore, body: CFStmtId) Allocator.Error!Read
 
 /// Like `countReachableDefs`, using the procedure task's scratch allocator.
 pub fn countReachableDefsWithAllocator(store: *LirStore, body: CFStmtId, allocator: Allocator) Allocator.Error!ReadCounts {
-    return countReachable(store, body, allocator, .defs);
+    return countReachable(store, body, allocator, null, .defs);
 }
 
-fn countReachable(store: *LirStore, body: CFStmtId, allocator: Allocator, comptime kind: enum { reads, defs }) Allocator.Error!ReadCounts {
-    var counts: ReadCounts = .{ .counts = collections.DenseMap(LocalId, u32).init(allocator) };
+/// Count writes using retained worker storage, independently of live read counts.
+pub fn countReachableDefsWithScratch(store: *LirStore, body: CFStmtId, scratch: *AnalysisScratch) Allocator.Error!ReadCounts {
+    return countReachable(store, body, scratch.counts.allocator, scratch, .defs);
+}
+
+fn countReachable(store: *LirStore, body: CFStmtId, allocator: Allocator, scratch: ?*AnalysisScratch, comptime kind: enum { reads, defs, binders }) Allocator.Error!ReadCounts {
+    var counts: ReadCounts = if (scratch) |owner| try owner.acquireCounts() else .{ .counts = collections.DenseMap(LocalId, u32).init(allocator) };
     errdefer counts.deinit();
-    var walk = try ReachableStmts.initWithAllocator(store, body, allocator);
+    var walk = if (scratch) |owner| try ReachableStmts.initWithScratch(store, body, owner) else try ReachableStmts.initWithAllocator(store, body, allocator);
     defer walk.deinit();
 
     while (try walk.next()) |stmt_id| {
         switch (kind) {
             .reads => forEachStmtRead(store, store.getCFStmt(stmt_id), &counts, noteReachableRead),
             .defs => forEachStmtDef(store, store.getCFStmt(stmt_id), &counts, noteReachableRead),
+            .binders => visitStmtDefinitions(store, &counts, stmt_id),
         }
         if (counts.failure) |err| return err;
     }
@@ -589,6 +697,7 @@ pub const ReachableStmts = struct {
     allocator: Allocator,
     work: std.ArrayList(CFStmtId),
     visited: collections.DenseMap(CFStmtId, void),
+    lease: ?*WalkPool.Lease = null,
 
     /// Start a walk rooted at `body`.
     pub fn init(store: *LirStore, body: CFStmtId) Allocator.Error!ReachableStmts {
@@ -607,10 +716,31 @@ pub const ReachableStmts = struct {
         };
     }
 
+    /// Lease an empty traversal, including its retained work stack and visited map.
+    pub fn initWithScratch(store: *LirStore, body: CFStmtId, scratch: *AnalysisScratch) Allocator.Error!ReachableStmts {
+        const lease = try scratch.walks.acquire();
+        var walk: ReachableStmts = .{
+            .store = store,
+            .allocator = scratch.walks.allocator,
+            .work = lease.value.work,
+            .visited = lease.value.visited,
+            .lease = lease,
+        };
+        lease.value = undefined;
+        errdefer walk.deinit();
+        try walk.work.append(walk.allocator, body);
+        return walk;
+    }
+
     /// Release the walk's scratch storage.
     pub fn deinit(self: *ReachableStmts) void {
-        self.work.deinit(self.allocator);
-        self.visited.deinit();
+        if (self.lease) |lease| {
+            lease.release(.{ .work = self.work, .visited = self.visited });
+        } else {
+            self.work.deinit(self.allocator);
+            self.visited.deinit();
+        }
+        self.* = undefined;
     }
 
     /// The next unvisited statement, or null when the walk is done.
@@ -634,15 +764,12 @@ pub fn collectReachableDefinitions(store: *LirStore, body: CFStmtId) Allocator.E
 
 /// Like `collectReachableDefinitions`, with independently owned scratch.
 pub fn collectReachableDefinitionsWithAllocator(store: *LirStore, body: CFStmtId, allocator: Allocator) Allocator.Error!ReadCounts {
-    var defined: ReadCounts = .{ .counts = collections.DenseMap(LocalId, u32).init(allocator) };
-    errdefer defined.deinit();
-    var walk = try ReachableStmts.initWithAllocator(store, body, allocator);
-    defer walk.deinit();
-    while (try walk.next()) |stmt_id| {
-        visitStmtDefinitions(store, &defined, stmt_id);
-        if (defined.failure) |err| return err;
-    }
-    return defined;
+    return countReachable(store, body, allocator, null, .binders);
+}
+
+/// Collect lexical binders using an independent lease from the worker's storage.
+pub fn collectReachableDefinitionsWithScratch(store: *LirStore, body: CFStmtId, scratch: *AnalysisScratch) Allocator.Error!ReadCounts {
+    return countReachable(store, body, scratch.counts.allocator, scratch, .binders);
 }
 
 /// Add every local defined by `stmt_id` to an existing definition set.
@@ -1919,4 +2046,124 @@ test "body_clone preserves external locals without preseeded map entries" {
     try std.testing.expectEqual(cloned, try cloner.mapLocal(value));
     try std.testing.expectEqual(@as(usize, 1), cloner.new_locals.items.len);
     try std.testing.expectEqual(@as(usize, 2), cloner.local_map.count());
+}
+
+test "body_clone retained counts isolate nested inventories and clear only live entries" {
+    const testing = std.testing;
+    var store = LirStore.init(testing.allocator);
+    defer store.deinit();
+    const low = try store.addLocal(.{ .layout_idx = .u64 });
+    for (0..100000) |_| _ = try store.addLocal(.{ .layout_idx = .u64 });
+    const high = try store.addLocal(.{ .layout_idx = .u64 });
+    const ret = try store.addCFStmt(.{ .ret = .{ .value = high } });
+    const copy = try store.addCFStmt(.{ .assign_ref = .{ .target = high, .op = .{ .local = low }, .next = ret } });
+    // Both successors share a suffix: count its statements once, but count
+    // both operand occurrences of low (the condition and the copy).
+    const body = try store.addCFStmt(.{ .switch_stmt = .{
+        .cond = low,
+        .branches = try store.addCFSwitchBranches(&.{.{ .value = 0, .body = copy }}),
+        .default_branch = copy,
+    } });
+    var meter = testing.FailingAllocator.init(testing.allocator, .{});
+    var scratch = AnalysisScratch.init(meter.allocator());
+    defer scratch.deinit();
+    var inventories: [20]?ReadCounts = @splat(null);
+    defer for (&inventories) |*inventory| {
+        if (inventory.*) |*counts| counts.deinit();
+    };
+    var warmed_bytes: usize = 0;
+    for (0..3) |round| {
+        for (&inventories, 0..) |*inventory, index| {
+            inventory.* = try countReachableReadsWithScratch(&store, if (index % 2 == round % 2) body else copy, &scratch);
+        }
+        for (&inventories, 0..) |*inventory, index| {
+            const counts = &inventory.*.?;
+            try testing.expectEqual(@as(u32, if (index % 2 == round % 2) 2 else 1), counts.get(low));
+            try testing.expectEqual(@as(u32, 1), counts.get(high));
+            try testing.expectEqual(@as(u32, 0), counts.get(@enumFromInt(1)));
+        }
+        if (round == 0) {
+            warmed_bytes = meter.allocated_bytes;
+        } else {
+            try testing.expectEqual(warmed_bytes, meter.allocated_bytes);
+        }
+        // Release in non-stack order. More than eight inventories must keep
+        // their capacity, and no result may borrow another result's counts.
+        for (0..2) |parity| {
+            for (&inventories, 0..) |*inventory, index| {
+                if (index % 2 != parity) continue;
+                inventory.*.?.deinit();
+                inventory.* = null;
+            }
+        }
+    }
+    // Returning a partially consumed traversal must discard its work stack.
+    {
+        var walk = try ReachableStmts.initWithScratch(&store, body, &scratch);
+        defer walk.deinit();
+        try testing.expectEqual(body, (try walk.next()).?);
+    }
+    var walk = try ReachableStmts.initWithScratch(&store, ret, &scratch);
+    defer walk.deinit();
+    try testing.expectEqual(ret, (try walk.next()).?);
+    try testing.expectEqual(@as(?CFStmtId, null), try walk.next());
+
+    // Same IDs in a different store are different values, not cached facts.
+    var other = LirStore.init(testing.allocator);
+    defer other.deinit();
+    const other_low = try other.addLocal(.{ .layout_idx = .u64 });
+    const other_ret = try other.addCFStmt(.{ .ret = .{ .value = other_low } });
+    var reads = try countReachableReadsWithScratch(&other, other_ret, &scratch);
+    defer reads.deinit();
+    try testing.expectEqual(@as(u32, 1), reads.get(low));
+    try testing.expectEqual(@as(u32, 0), reads.get(high));
+}
+
+fn testRetainedCountAllocations(allocator: Allocator, store: *LirStore, body: CFStmtId) Allocator.Error!void {
+    var scratch = AnalysisScratch.init(allocator);
+    defer scratch.deinit();
+    var reads = try countReachableReadsWithScratch(store, body, &scratch);
+    defer reads.deinit();
+    var defs = try countReachableDefsWithScratch(store, body, &scratch);
+    defer defs.deinit();
+    var binders = try collectReachableDefinitionsWithScratch(store, body, &scratch);
+    defer binders.deinit();
+}
+
+test "body_clone retained counting returns every lease on allocation failure" {
+    var store = LirStore.init(std.testing.allocator);
+    defer store.deinit();
+    const local = try store.addLocal(.{ .layout_idx = .u64 });
+    for (0..256) |_| _ = try store.addLocal(.{ .layout_idx = .u64 });
+    const distant = try store.addLocal(.{ .layout_idx = .u64 });
+    const ret = try store.addCFStmt(.{ .ret = .{ .value = local } });
+    const body = try store.addCFStmt(.{ .assign_low_level = .{
+        .target = local,
+        .op = .num_int_add_wrap,
+        .rc_effect = .none(),
+        .args = try store.addLocalSpan(&.{ local, distant }),
+        .next = ret,
+    } });
+    try std.testing.checkAllAllocationFailures(std.testing.allocator, testRetainedCountAllocations, .{ &store, body });
+
+    // Retry with the same owner after each possible allocation failure. An
+    // aborted count may have inserted rows before its deferred failure surfaced.
+    var fail_index: usize = 0;
+    while (true) : (fail_index += 1) {
+        var meter = std.testing.FailingAllocator.init(std.testing.allocator, .{ .fail_index = fail_index });
+        var scratch = AnalysisScratch.init(meter.allocator());
+        defer scratch.deinit();
+        if (countReachableReadsWithScratch(&store, body, &scratch)) |result| {
+            var counts = result;
+            counts.deinit();
+            break;
+        } else |err| {
+            try std.testing.expectEqual(error.OutOfMemory, err);
+            meter.fail_index = std.math.maxInt(usize);
+            var retry = try countReachableReadsWithScratch(&store, body, &scratch);
+            defer retry.deinit();
+            try std.testing.expectEqual(@as(u32, 2), retry.get(local));
+            try std.testing.expectEqual(@as(u32, 1), retry.get(distant));
+        }
+    }
 }

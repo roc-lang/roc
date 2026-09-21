@@ -77,16 +77,19 @@ pub fn run(
     errdefer program.deinit();
 
     const solved_view = movedSolvedView(&owned, &program);
+    // Expressions keep their Lifted-domain IDs, but debug evaluation must not
+    // borrow descriptors from the consumed Solved program.
+    try program.comptime_value_roots.appendSlice(allocator, solved_view.lifted.comptime_value_roots);
     try program.field_access_segments.ensureUnusedCapacity(allocator, solved_view.lifted.field_access_segments.len);
     for (solved_view.lifted.field_access_segments) |segment| {
         program.field_access_segments.appendAssumeCapacity(.{ .field = segment.field });
     }
     var lowerer = try Lowerer.init(allocator, solved_view, &program, options);
+    defer lowerer.deinit();
     defer lowerer.folded_matches.deinit(allocator);
     for (folded_matches) |folded| {
         try lowerer.folded_matches.put(allocator, folded.scrutinee, folded.body);
     }
-    defer lowerer.deinit();
     try lowerer.lower();
     if (options.debug_specialization_identities) |identities| {
         if (identities.items.len != program.fnCount()) {
@@ -129,9 +132,11 @@ fn movedSolvedView(source: *const Solved.Program, moved: *const Ast.Program) Sol
             .proc_debug_names = lifted.proc_debug_names,
             .roots = lifted.roots,
             .layout_requests = lifted.layout_requests,
+            .comptime_value_reads = lifted.comptime_value_reads,
             .runtime_schema_requests = lifted.runtime_schema_requests,
             .static_data_values = moved.static_data_values.unsafeRawItemsForView(),
             .comptime_sites = lifted.comptime_sites,
+            .comptime_value_roots = lifted.comptime_value_roots,
             .source_files = moved.source_files.unsafeRawItemsForView(),
             .expr_locs = lifted.expr_locs,
             .expr_regions = lifted.expr_regions,
