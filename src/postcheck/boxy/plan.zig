@@ -263,6 +263,11 @@ pub const TypeRepresentation = struct {
     nominal_backing_arg_substitutions: NominalBackingSubstitutions = .{},
     dictionaries: Span = .{},
     descriptor: ?DescriptorRequirementId = null,
+    /// For a bare `.dynamic = .flex` representation, the representation its
+    /// checked variable seals to (numeric default, row default, or the empty
+    /// tag union) when no enclosing worker quantifies it. A static descriptor
+    /// for an unbound flex describes this representation's payload.
+    sealed_default: ?TypeRepId = null,
     /// Set when this planned representation transitively stores at least one
     /// dynamic child whose ownership is descriptor-defined. Lowering consumes
     /// `contains_dynamic` directly; committed layouts are not an input.
@@ -4528,23 +4533,25 @@ const Builder = struct {
         try self.host_types.put(self.allocator, key, rep);
         try self.plan.representations.append(self.allocator, .{ .source_type = key.source, .kind = .in_progress });
         const shape = switch (payload) {
-            .flex, .rigid => |variable| hostVariableRepresentation(key.source, variable),
+            .flex, .rigid => |variable| TypeRepresentation{ .source_type = key.source, .kind = variableDefaultKind(variable) },
             .pending, .err, .alias, .record, .tuple, .nominal, .function, .empty_record, .tag_union, .empty_tag_union => try self.buildRepresentation(view, key.source.ty),
         };
         self.plan.representations.items[@intFromEnum(rep)] = shape;
         return rep;
     }
 
-    fn hostVariableRepresentation(source: CheckedTypeIdentity, variable: checked.CheckedTypeVariable) TypeRepresentation {
+    /// The representation kind a checked variable seals to when nothing
+    /// quantifies it, following Monotype's `lowerCheckedTypeVariable`.
+    fn variableDefaultKind(variable: checked.CheckedTypeVariable) RepresentationKind {
         if (variable.numeric_default_phase) |phase| {
             const target = checked.literal_defaulting.defaultTargetForPhase(phase) orelse
-                boxyPlanInvariant("checking-finalized numeric variable reached checked ABI unresolved");
-            return .{ .source_type = source, .kind = .{ .primitive = switch (target) {
+                boxyPlanInvariant("checking-finalized numeric variable reached boxy planning unresolved");
+            return .{ .primitive = switch (target) {
                 .dec => .dec,
                 .str => .str,
-            } } };
+            } };
         }
-        return .{ .source_type = source, .kind = if (variable.row_default == .empty_record) .empty_record else .empty_tag_union };
+        return if (variable.row_default == .empty_record) .empty_record else .empty_tag_union;
     }
 
     fn finalizeHostNominalStorage(self: *Builder) Allocator.Error!void {
@@ -4663,7 +4670,17 @@ const Builder = struct {
         return switch (payload) {
             .pending => boxyPlanInvariant("checked type payload was pending during boxy planning"),
             .err => boxyPlanInvariant("checked error type reached boxy representation planning"),
-            .flex => |flex| try self.dynamicRepresentation(source_type, flex.constraints, .flex),
+            .flex => |flex| blk: {
+                var rep = try self.dynamicRepresentation(source_type, flex.constraints, .flex);
+                if (!self.host_mode and (flex.constraints.len == 0 or flex.numeric_default_phase != null)) {
+                    rep.sealed_default = @enumFromInt(@as(u32, @intCast(self.plan.representations.items.len)));
+                    try self.plan.representations.append(self.allocator, .{
+                        .source_type = source_type,
+                        .kind = variableDefaultKind(flex),
+                    });
+                }
+                break :blk rep;
+            },
             .rigid => |rigid| try self.dynamicRepresentation(source_type, rigid.constraints, .rigid),
             .alias => |alias| try self.aliasRepresentation(view, source_type, alias),
             .record => |record| try self.recordRepresentation(view, source_type, record.fields, record.ext),

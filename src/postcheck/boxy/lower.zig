@@ -3791,6 +3791,11 @@ const ProcedureBuilder = struct {
         if (self.type_desc_ids[rep_index]) |existing| return existing;
 
         const source_rep = self.plan.representations.items[rep_index];
+        if (source_rep.sealed_default) |sealed_default| {
+            const desc_id = try self.typeDescForRep(sealed_default);
+            self.type_desc_ids[rep_index] = desc_id;
+            return desc_id;
+        }
         if (source_rep.nominal_backing_arg_substitutions.len != 0) {
             var descriptor_sources = StaticDescriptorSourceMap{};
             defer descriptor_sources.deinit(self.allocator);
