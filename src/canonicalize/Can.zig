@@ -8505,9 +8505,7 @@ fn resolveTypeAssociatedValue(
     const is_auto_imported_type = self.hasAvailableModuleEnv(type_name);
     if (!is_type_in_scope and !is_auto_imported_type) return null;
 
-    const type_text = self.env.getIdent(type_name);
-    const field_text = self.env.getIdent(ident);
-    const type_qualified_idx = try self.insertQualifiedIdent(type_text, field_text);
+    const type_qualified_idx = try self.insertQualifiedIdent(self.env.getIdent(type_name), self.env.getIdent(ident));
 
     if (local_type_binding) |binding_location| {
         if (self.typePathForBinding(binding_location.binding.*)) |owner_path| {
@@ -8545,7 +8543,7 @@ fn resolveTypeAssociatedValue(
                 }
                 const original_type_text = self.env.getIdent(ext.original_ident);
                 const qualified_type_idx = try self.insertQualifiedIdent(module_env.module_name, original_type_text);
-                const fully_qualified_idx = try self.insertQualifiedIdent(self.env.getIdent(qualified_type_idx), field_text);
+                const fully_qualified_idx = try self.insertQualifiedIdent(self.env.getIdent(qualified_type_idx), self.env.getIdent(ident));
                 const qualified_text = self.env.getIdent(fully_qualified_idx);
 
                 if (module_env.common.findIdent(qualified_text)) |qname_ident| {
@@ -8565,7 +8563,7 @@ fn resolveTypeAssociatedValue(
         if (self.lookupAvailableModuleEnv(type_name)) |auto_imported_type_env| {
             const module_env = auto_imported_type_env.env;
             const qualified_type_text = self.env.getIdent(auto_imported_type_env.qualified_type_ident);
-            const fully_qualified_idx = try self.insertQualifiedIdent(qualified_type_text, field_text);
+            const fully_qualified_idx = try self.insertQualifiedIdent(qualified_type_text, self.env.getIdent(ident));
             const qualified_text = self.env.getIdent(fully_qualified_idx);
 
             if (module_env.common.findIdent(qualified_text)) |qname_ident| {
@@ -14605,12 +14603,18 @@ fn resolveRecordBuilderMap2(
     if (try self.resolveQualifiedValue(map2_name, region, type_path)) |target| {
         switch (target) {
             .missing => {},
+            // A type-variable alias's `map2` is dispatched through the
+            // `where` clause as a type method call, which the checker's
+            // record-builder `map2` return rule does not cover.
+            .type_dispatch => return .{ .malformed = .{ .not_implemented = .{
+                .feature = try self.env.insertString("record builder on a type variable alias"),
+                .region = region,
+            } } },
             .local,
             .associated,
             .local_associated,
             .external_associated,
             .external,
-            .type_dispatch,
             .auto_imported_nominal_tag,
             .malformed,
             => return target,

@@ -142,3 +142,16 @@ test "issue 11465: qualified record-builder suffix without map2 names the full t
         \\
     );
 }
+
+test "issue 11465: record-builder suffix naming a type variable alias is reported as not implemented" {
+    const source =
+        \\pair : f, f -> f where [f.map2 : f, f, (U64, U64 -> { a : U64, b : U64 }) -> f]
+        \\pair = |x, y| {
+        \\    F : f
+        \\    { a: x, b: y }.F
+        \\}
+    ;
+    var test_env = try TestEnv.init("Test", source);
+    defer test_env.deinit();
+    try test_env.assertOneCanError("Not Implemented");
+}
