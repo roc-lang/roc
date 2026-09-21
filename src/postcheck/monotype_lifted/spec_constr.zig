@@ -1101,6 +1101,9 @@ const Pass = struct {
     /// Direct-call inlining scope for this pass's value-aware clones. See
     /// `CloneInlining`.
     clone_inlining: CloneInlining = .all_calls,
+    /// Direct callers recorded per function while the first argument-use walk
+    /// runs; null outside `collectArgUses`.
+    arg_use_callers: ?[]std.ArrayList(Ast.FnId) = null,
     /// Per source function: whether the whole-body value clone has already
     /// satisfied value-aware call rewriting, shape demand, and known-loop
     /// scalarization. Those analyses can all request the same clone, but the
@@ -2042,17 +2045,63 @@ const Pass = struct {
         }
     }
 
+    /// Argument uses flow from a callee to its callers: a caller's argument
+    /// becomes used when it is passed in a position the callee uses. One walk
+    /// over every body records the direct callers of each function and the
+    /// functions whose uses it changed; afterwards only the callers of a
+    /// changed function are walked again, until no walk changes anything.
     fn collectArgUses(self: *Pass, original_fn_count: usize) Allocator.Error!void {
-        var changed = true;
-        while (changed) {
-            changed = false;
-            for (0..original_fn_count) |index| {
-                const body = switch (self.plans[index].source.body) {
-                    .roc => |body| body,
-                    .hosted => continue,
-                };
-                const fn_id: Ast.FnId = @enumFromInt(@as(u32, @intCast(index)));
-                try self.markArgUsesInExpr(fn_id, body, &changed);
+        const callers = try self.allocator.alloc(std.ArrayList(Ast.FnId), original_fn_count);
+        defer {
+            for (callers) |*list| list.deinit(self.allocator);
+            self.allocator.free(callers);
+        }
+        for (callers) |*list| list.* = .empty;
+        const changed_fns = try self.allocator.alloc(bool, original_fn_count);
+        defer self.allocator.free(changed_fns);
+        @memset(changed_fns, false);
+        self.arg_use_callers = callers;
+        defer self.arg_use_callers = null;
+        for (0..original_fn_count) |index| {
+            const body = switch (self.plans[index].source.body) {
+                .roc => |body| body,
+                .hosted => continue,
+            };
+            const fn_id: Ast.FnId = @enumFromInt(@as(u32, @intCast(index)));
+            var changed = false;
+            try self.markArgUsesInExpr(fn_id, body, &changed);
+            changed_fns[index] = changed;
+        }
+        self.arg_use_callers = null;
+        var pending = std.ArrayList(Ast.FnId).empty;
+        defer pending.deinit(self.allocator);
+        const queued = try self.allocator.alloc(bool, original_fn_count);
+        defer self.allocator.free(queued);
+        @memset(queued, false);
+        for (changed_fns, 0..) |changed, index| {
+            if (!changed) continue;
+            for (callers[index].items) |caller| {
+                const raw = @intFromEnum(caller);
+                if (queued[raw]) continue;
+                queued[raw] = true;
+                try pending.append(self.allocator, caller);
+            }
+        }
+        while (pending.pop()) |fn_id| {
+            const raw = @intFromEnum(fn_id);
+            queued[raw] = false;
+            const body = switch (self.plans[raw].source.body) {
+                .roc => |body| body,
+                .hosted => continue,
+            };
+            var changed = false;
+            try self.markArgUsesInExpr(fn_id, body, &changed);
+            if (!changed) continue;
+            for (callers[raw].items) |caller| {
+                const caller_raw = @intFromEnum(caller);
+                if (queued[caller_raw]) continue;
+                queued[caller_raw] = true;
+                try pending.append(self.allocator, caller);
             }
         }
     }
@@ -2188,6 +2237,12 @@ const Pass = struct {
                 const callee = Ast.localDirectCallee(call) orelse return;
                 const callee_raw = @intFromEnum(callee);
                 if (callee_raw < self.plans.len) {
+                    if (self.arg_use_callers) |callers| {
+                        const list = &callers[callee_raw];
+                        if (list.items.len == 0 or list.items[list.items.len - 1] != fn_id) {
+                            try list.append(self.allocator, fn_id);
+                        }
+                    }
                     const callee_uses = self.plans[callee_raw].used_args;
                     if (args.len != callee_uses.len) Common.invariant("direct call arity differed from lifted function arity while propagating argument uses");
                     for (0..args.len) |index| {
