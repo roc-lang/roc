@@ -5532,7 +5532,8 @@ fn runUniquenessTasks(
 
 /// Exact ownership components run against frozen signatures in deterministic
 /// waves. Only callers of semantically changed signatures enter the next wave.
-/// Every invocation starts all components afresh, including post-take settlement.
+/// Every invocation starts all components afresh, including post-take
+/// settlement; only the store-shaped structure is retained between them.
 pub fn settleUniquenessWithOptions(
     allocator: Allocator,
     store: *const LirStore,
@@ -7224,10 +7225,11 @@ test "uniqueness fixed point propagates fresh returns through a call diamond and
     for (solution.sigs) |sig| try testing.expect(sig.ret_unique);
     try testing.expectEqual(@as(u64, 3), solution.sigOf(chain).ret_unique_fields);
     try testing.expect(solution.isUnique(fresh));
-    // Even settled signatures must receive the mandatory post-take analysis.
+    // Even settled signatures must receive the mandatory post-take analysis,
+    // over the structure the first settlement retained on the solution.
     const settled_rounds = uniqueness_analysis_rounds;
     try settleUniqueness(allocator, &f.store, &f.layouts, rc, &solution, .stamped, true);
-    try testing.expectEqual(@as(usize, 2), uniqueness_topology_builds - builds_before);
+    try testing.expectEqual(@as(usize, 1), uniqueness_topology_builds - builds_before);
     try testing.expectEqual(@as(usize, 1), uniqueness_analysis_rounds - settled_rounds);
     try testing.expectEqual(@as(u64, 3), solution.sigOf(chain).ret_unique_fields);
     UniquenessOracleState.resetCapabilities(&solution);
