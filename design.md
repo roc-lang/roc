@@ -11436,6 +11436,23 @@ mapping model. The producer derives it from checked callable types and checked
 dispatch evidence. It does not inspect the expression variant to decide whether
 the expression type or parameter type is authoritative.
 
+A resolved direct-dispatch call boundary takes its call-side callable from the
+checked evidence selected for that edge. The dispatch plan's own `callable_ty`
+is the constraint callable, whose variables may be distinct from the caller's
+even when both callables describe the same shape; a return position over such a
+variable then has no runtime descriptor source at the call site, because the
+caller's values are bound to its own variables. The selected evidence node
+names the exact callable relation this edge instantiated and is therefore
+authoritative for the boundary; a target scheme with no variables records
+`monomorphic`, and the target's declared callable in the target's own module is
+that relation. Ordinary dispatch calls, iterator protocol calls, and dictionary
+method evidence read that same field. A dictionary dispatch has no selected
+direct node, so its boundary keeps using the plan's constraint callable, which
+is the requirement its dictionary slot is typed against. Worker identity
+remains separate data: a procedure worker is the target's generalized
+declaration whose body is shared by every edge that selects it, while the edge
+instantiation describes only one call's boundary.
+
 Alias and nominal wrappers make substitution ordering explicit. Before the
 planner descends an alias backing, it records each checked `alias_arg` pair from
 the worker and call representations. A nominal instead records each declaration
