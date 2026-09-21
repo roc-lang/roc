@@ -4325,20 +4325,20 @@ encoding.parse_str : encoding, state -> Try({ value : Str, rest : state }, err)
 encoding.parse_u64 : encoding, state -> Try({ value : U64, rest : state }, err)
 encoding.parse_tag_union : encoding, Encoding.ParseTagUnionSpec(a), state -> Try({ value : a, rest : state }, err)
 
+encoding.parse_record_start : encoding, state -> Try([Counted({ len : U64, rest : state }), Uncounted(state)], err)
 encoding.parse_record_field : encoding, Encoding.FieldName.FieldNames(_shape), state -> Try(
 	[
 		Field({ field : Encoding.FieldName(_shape), rest : state }),
 		TryField({ name : Str, rest : state }),
 		TryFieldCaseless({ name : Str, rest : state }),
-		Continue({ rest : state }),
-		Done({ rest : state }),
+		Continue(state),
+		Done(state),
 	],
 	err,
 )
+encoding.parse_record_after_field : encoding, state -> Try([Continue(state), Done(state)], err)
 
 encoding.skip_record_field : encoding, state -> Try(state, err)
-encoding.missing_record_field : encoding, Str, state -> err
-encoding.missing_optional_field : encoding, Str, state -> optional_err
 encoding.rename_field : encoding, Str -> Str
 ```
 
@@ -4372,19 +4372,23 @@ code calls the format's `skip_record_field` method with the encoding and `rest`,
 then continues with the returned state. This avoids scanning matched values
 twice while still letting unknown fields be skipped correctly.
 
-`Continue.rest` advances the record loop after the format has consumed input
-that cannot be a relevant field. `Done.rest` is the state remaining after the
-record ends. If the generated finisher sees that a required field was never
-filled, it calls the format's `missing_record_field` method with the encoding,
-field name, and final state to produce the format's concrete parse error value.
-Optional fields are expressed by their field type, for example
-`Try(Str, [Missing])`. If an optional field is absent, the generated finisher
-calls the format's `missing_optional_field` method with the encoding, field
-name, and final state at the optional field's error type and stores
-`Err(missing)` in that field. This lets the format define the absence tag;
-`Missing`, `Absent`, or any other tag name is ordinary userspace data, not a
-compiler-known concept. A field annotated as `Try(Str, _)` can infer that error
-type from the format method's return type.
+`parse_record_start` says whether the format knows the record's entry count up
+front (`Counted`) or learns where the record ends from its events
+(`Uncounted`). `Continue` advances the record loop after the format has consumed
+a whole entry itself, and `Done` carries the state remaining after the record
+ends. After a matched field's value or a skipped entry, a counted record counts
+that entry down and an uncounted record calls `parse_record_after_field`, whose
+`Continue` or `Done` says whether another entry follows.
+
+If the generated finisher sees that a required field was never filled, the
+generated parser itself reports the failure, as described in "Derived Parser
+Required-Field Error Composition": `MissingRequiredField(field_name)` when the
+parser's error row retains that tag, otherwise the format's checked
+`invalid_value` capability. Formats implement no missing-field callback. A field
+whose key may be absent says so through its kind or type: an absent
+`Try(Str, [Missing])` field is `Err(Missing)`, an absent `?:` field is in its
+missing state, and an absent `??` field holds its default. A field annotated as
+`Try(Str, _)` has its error row pinned to `[Missing]`.
 
 Record-field dispatch is optimized around the assumption that serialized record
 field names are overwhelmingly small. JSON object keys, HTTP headers, CSV
@@ -4603,13 +4607,10 @@ Parsing a Roc `Str` from JSON succeeds only for JSON string values. JSON `null`
 and missing object fields are separate format conditions. They are surfaced only
 through field or value types that request them, such as `Try(Str, [Null])` or
 `Try(Str, [Missing])`; the plain `Str` method does not accept either condition.
-`Try(a, [Null])` is the nullable JSON value shape. A format's
-`missing_optional_field` method chooses the record-field absence tag for
-optional fields; JSON uses `Missing`, but another format may choose `Absent` or
-any other tag. `Try(a, [Missing])` and `Try(a, [Missing, Null])` are JSON's
-record-field-only shapes: missing fields parse as `Err(Missing)`, explicit
-`null` parses as `Err(Null)` only when `Null` is in the row, and encoding
-`Err(Missing)` omits the field. Missing fields and `Null` are never conflated.
+`Try(a, [Null])` is the nullable JSON value shape: explicit `null` parses as
+`Err(Null)`. `Try(a, [Missing])` is the record-field-only optional shape: a
+missing field parses as `Err(Missing)`, and encoding `Err(Missing)` omits the
+field. Missing fields and `Null` are never conflated.
 
 JSON arrays are used for lists, tuples, and sets. Tuples parse with exact arity.
 Sets preserve `Set` insertion order and parse by inserting the array items.
@@ -4626,31 +4627,31 @@ HttpHeaderState :: { raw : Str }
 
 HttpHeaderEncoding :: [Caseless].{
 	rename_field : HttpHeaderEncoding, Str -> Str
-	parse_str : HttpHeaderEncoding, HttpHeaderState -> Try({ value : Str, rest : HttpHeaderState }, HttpHeader)
-	parse_u64 : HttpHeaderEncoding, HttpHeaderState -> Try({ value : U64, rest : HttpHeaderState }, HttpHeader)
+	parse_str : HttpHeaderEncoding, HttpHeaderState -> Try({ value : Str, rest : HttpHeaderState }, [BadHeader])
+	parse_u64 : HttpHeaderEncoding, HttpHeaderState -> Try({ value : U64, rest : HttpHeaderState }, [BadHeader])
 
+	parse_record_start : HttpHeaderEncoding, HttpHeaderState -> Try([Counted({ len : U64, rest : HttpHeaderState }), Uncounted(HttpHeaderState)], [BadHeader])
 	parse_record_field : HttpHeaderEncoding, Encoding.FieldName.FieldNames(_shape), HttpHeaderState -> Try(
 		[
 			Field({ field : Encoding.FieldName(_shape), rest : HttpHeaderState }),
 			TryField({ name : Str, rest : HttpHeaderState }),
 			TryFieldCaseless({ name : Str, rest : HttpHeaderState }),
-			Continue({ rest : HttpHeaderState }),
-			Done({ rest : HttpHeaderState }),
+			Continue(HttpHeaderState),
+			Done(HttpHeaderState),
 		],
-		HttpHeader,
+		[BadHeader],
 	)
+	parse_record_after_field : HttpHeaderEncoding, HttpHeaderState -> Try([Continue(HttpHeaderState), Done(HttpHeaderState)], [BadHeader])
 
-	skip_record_field : HttpHeaderEncoding, HttpHeaderState -> Try(HttpHeaderState, HttpHeader)
-	missing_record_field : HttpHeaderEncoding, Str, HttpHeaderState -> HttpHeader
-	missing_optional_field : HttpHeaderEncoding, Str, HttpHeaderState -> [Missing]
+	skip_record_field : HttpHeaderEncoding, HttpHeaderState -> Try(HttpHeaderState, [BadHeader])
 }
 
-HttpHeader := [MissingRequired, BadHeader].{
+HttpHeader :: {}.{
 	output.Parseable(errs) : where [
 		output.parser_for : HttpHeaderEncoding -> (HttpHeaderState -> Try({ value : output, rest : HttpHeaderState }, errs)),
 	]
 
-	parser_for : () -> (Str -> Try(output, HttpHeader)) where [output.Parseable(HttpHeader)]
+	parser_for : () -> (Str -> Try(output, [BadHeader, ..errs])) where [output.Parseable([BadHeader, ..errs])]
 	parser_for = || {
 		Output : output
 		parse_output = Output.parser_for(HttpHeaderEncoding.Caseless)
@@ -4661,7 +4662,7 @@ HttpHeader := [MissingRequired, BadHeader].{
 		}
 	}
 
-	parse : Str -> Try(output, HttpHeader)
+	parse : Str -> Try(output, [BadHeader, ..errs])
 }
 ```
 
@@ -4681,15 +4682,16 @@ The exact derived parser type for a header record with mixed field shapes is:
 		},
 		rest : HttpHeaderState,
 	},
-	Encoding.HttpHeader,
+	[BadHeader, MissingRequiredField(Str)],
 ))
 ```
 
-Because `Encoding.HttpHeader` does not define `parse_tag_union`, trying to parse a
-header record that contains a tag union is a compile-time static-dispatch error:
+Because `Encoding.HttpHeaderEncoding` does not define `parse_tag_union`, trying
+to parse a header record that contains a tag union is a compile-time
+static-dispatch error:
 
 ```roc
-bad : Try({ mode : [On, Off] }, Encoding.HttpHeader)
+bad : Try({ mode : [On, Off] }, [BadHeader, MissingRequiredField(Str)])
 bad = Encoding.HttpHeader.parse("mode: On\r\n")
 ```
 

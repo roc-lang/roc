@@ -14591,10 +14591,10 @@ const ProcBodyBuilder = struct {
         var child = payloads[0];
         child.rep = actual_rep;
         child.source_type = self.parent.plan.representations.items[@intFromEnum(actual_rep)].source_type;
-        // A concrete tag stores the payload at its actual layout; only a
-        // descriptor-driven tag holds it at the declared payload
-        // representation, from which it is converted.
-        const stored_rep = if (tag_rep.descriptor != null) payloads[0].rep else actual_rep;
+        // A tag union is laid out from its declared payload representations,
+        // which for a nominal such as `Try` are the declaration's formals; the
+        // payload is read at that storage representation and then converted.
+        const stored_rep = payloads[0].rep;
         const extracted = try self.addExtractedTagPayloadLocal(stored_rep, tag_rep.descriptor != null);
         return .{
             .local = if (actual_rep == stored_rep) extracted.local else try self.addFrameLocalForRep(actual_rep),

@@ -6026,25 +6026,30 @@ const Builder = struct {
     ) Allocator.Error!TypeRepresentation {
         // A checked row may be split across chained tag-union nodes (for
         // example an inferred `[B, ..r]` whose `r` was later solved to
-        // `[A, C]`). The representation describes the whole row, so every
-        // segment's tags are gathered before variants are ordered.
+        // `[A, C]`). A row whose chain ends in the empty row is fully known,
+        // so its representation is the whole row, with every segment's tags
+        // gathered before variants are ordered. A chain ending in a variable
+        // keeps its segments: each boundary is where the checker instantiated
+        // an extension variable, which the variable's row default does not fix.
         var row_tags = std.ArrayList(checked.CheckedTag).empty;
         defer row_tags.deinit(self.allocator);
         try row_tags.appendSlice(self.allocator, tag_union.tags);
-        var seen = std.AutoHashMap(CheckedTypeIdentity, void).init(self.allocator);
-        defer seen.deinit();
         var tail = tag_union.ext;
-        while (true) {
-            if ((try seen.getOrPut(typeRef(view, tail))).found_existing) {
-                boxyPlanInvariant("boxy tag-union representation encountered a cyclic row");
-            }
-            switch (view.checked_types.payload(tail)) {
-                .tag_union => |segment| {
-                    try row_tags.appendSlice(self.allocator, segment.tags);
-                    tail = segment.ext;
-                },
-                .alias => |alias| tail = alias.backing,
-                .pending, .err, .flex, .rigid, .record, .tuple, .nominal, .function, .empty_record, .empty_tag_union => break,
+        if (try self.chainedTagRowIsClosed(view, tag_union.ext)) {
+            var seen = std.AutoHashMap(CheckedTypeIdentity, void).init(self.allocator);
+            defer seen.deinit();
+            while (true) {
+                if ((try seen.getOrPut(typeRef(view, tail))).found_existing) {
+                    boxyPlanInvariant("boxy tag-union representation encountered a cyclic row");
+                }
+                switch (view.checked_types.payload(tail)) {
+                    .tag_union => |segment| {
+                        try row_tags.appendSlice(self.allocator, segment.tags);
+                        tail = segment.ext;
+                    },
+                    .alias => |alias| tail = alias.backing,
+                    .pending, .err, .flex, .rigid, .record, .tuple, .nominal, .function, .empty_record, .empty_tag_union => break,
+                }
             }
         }
         const tail_payload = view.checked_types.payload(tail);
@@ -6097,6 +6102,28 @@ const Builder = struct {
             .children = child_span,
             .tag_variants = tag_variants,
         };
+    }
+
+    /// Whether a tag row's extension chain ends at the empty row.
+    fn chainedTagRowIsClosed(
+        self: *Builder,
+        view: ModuleView,
+        ext: checked.CheckedTypeId,
+    ) Allocator.Error!bool {
+        var seen = std.AutoHashMap(CheckedTypeIdentity, void).init(self.allocator);
+        defer seen.deinit();
+        var current = ext;
+        while (true) {
+            if ((try seen.getOrPut(typeRef(view, current))).found_existing) {
+                boxyPlanInvariant("boxy tag-union representation encountered a cyclic row");
+            }
+            switch (view.checked_types.payload(current)) {
+                .tag_union => |segment| current = segment.ext,
+                .alias => |alias| current = alias.backing,
+                .empty_tag_union => return true,
+                .pending, .err, .flex, .rigid, .record, .tuple, .nominal, .function, .empty_record => return false,
+            }
+        }
     }
 
     const OrderedTags = struct {
@@ -6690,6 +6717,9 @@ const Builder = struct {
         while (index < self.plan.direct_calls.items.len) : (index += 1) {
             const substitution = self.directCallSchemeSubstitution(self.plan.direct_calls.items[index]) orelse continue;
             for (substitution.site_types) |site_type| {
+                // Checking rejected this instantiation; the call is lowered as
+                // the reported error, so the slot supplies no descriptor.
+                if (substitution.site_view.checked_types.payload(site_type) == .err) continue;
                 _ = try self.analyzeType(substitution.site_view, site_type);
             }
         }
@@ -8037,9 +8067,10 @@ const Builder = struct {
         // The checker's call-site substitution is the authority for each of
         // the callee scheme's variables: it names exactly the caller type a
         // variable stood for, including a row extension's residual tags,
-        // which no comparison of the two representations can recover.
+        // which a whole-row call representation has no child for.
         if (scheme_substitution) |substitution| {
             for (substitution.scheme_vars, substitution.site_types) |scheme_var, site_type| {
+                if (substitution.site_view.checked_types.payload(site_type) == .err) continue;
                 const worker_var_rep = self.plan.repForSourceType(typeRef(substitution.callee_view, scheme_var)) orelse continue;
                 const call_rep = self.plan.repForSourceType(typeRef(substitution.site_view, site_type)) orelse
                     boxyPlanInvariant("checked call-site substitution type was not analyzed");
@@ -10201,7 +10232,12 @@ const Builder = struct {
     ) ?TypeRepId {
         const worker_rep = self.plan.representations.items[@intFromEnum(worker_rep_id)];
         const call_rep = self.plan.representations.items[@intFromEnum(call_rep_id)];
-        if (worker_rep.kind != .tag_union or call_rep.kind != .tag_union) return null;
+        // A worker row whose extension is a variable is dynamic but still
+        // names its own tags; a call row laid out whole instantiates that
+        // extension with the tags the worker row does not name.
+        const worker_is_row = worker_rep.kind == .tag_union or
+            (worker_rep.kind == .dynamic and worker_rep.tag_variants.len != 0);
+        if (!worker_is_row or call_rep.kind != .tag_union) return null;
 
         const worker_children = self.plan.childSlice(worker_rep.children);
         const call_children = self.plan.childSlice(call_rep.children);
