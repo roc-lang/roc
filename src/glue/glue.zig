@@ -126,10 +126,9 @@ fn rocGlueInner(gpa: Allocator, stderr: *std.Io.Writer, stdout: *std.Io.Writer, 
         return error.GlueSpecNotFound;
     };
 
-    // 1. Parse platform header to get requires entries and verify it's a platform file.
-    // Header parsing is still allowed here because it is parser-stage syntax handling,
-    // not post-check semantic recovery.
-    const platform_info = parsePlatformHeader(gpa, args.platform_path, std_io) catch |err| {
+    // 1. Verify the input is a platform file. Header parsing is still allowed here
+    // because it is parser-stage syntax handling, not post-check semantic recovery.
+    validatePlatformHeader(gpa, args.platform_path, std_io) catch |err| {
         return switch (err) {
             error.NotPlatformFile => error.NotPlatformFile,
             error.FileNotFound => error.FileNotFound,
@@ -138,7 +137,6 @@ fn rocGlueInner(gpa: Allocator, stderr: *std.Io.Writer, stdout: *std.Io.Writer, 
             => error.ParseFailed,
         };
     };
-    defer platform_info.deinit(gpa);
 
     // 2. Compile the platform root relation-less. Glue consumes its declared
     // checked surface directly; it does not need app values satisfying `requires`.
@@ -223,7 +221,7 @@ fn rocGlueInner(gpa: Allocator, stderr: *std.Io.Writer, stdout: *std.Io.Writer, 
     var provides_type_ids = std.StringHashMap(u64).init(gpa);
     defer provides_type_ids.deinit();
 
-    var provides_entries = std.ArrayList(PlatformHeaderInfo.ProvidesEntry).empty;
+    var provides_entries = std.ArrayList(ProvidesEntry).empty;
     defer {
         for (provides_entries.items) |entry| {
             gpa.free(entry.name);
@@ -1142,17 +1140,6 @@ fn hostedBindingForDef(
     return null;
 }
 
-fn stripTrailingBang(name: []const u8) []const u8 {
-    if (std.mem.endsWith(u8, name, "!")) return name[0 .. name.len - 1];
-    return name;
-}
-
-fn hostedKeyAlloc(allocator: Allocator, module_name: []const u8, local_name: []const u8) Allocator.Error![]const u8 {
-    const stripped = stripTrailingBang(local_name);
-    if (module_name.len == 0) return try allocator.dupe(u8, stripped);
-    return try std.fmt.allocPrint(allocator, "{s}.{s}", .{ module_name, stripped });
-}
-
 fn selectGlueSpecRootProc(
     root_artifact: *const CheckedArtifact.CheckedModuleArtifact,
     lowered: *const lir.CheckedPipeline.LoweredProgram,
@@ -1188,75 +1175,14 @@ fn argLayoutsForProc(
     return arg_layouts;
 }
 
-/// Information extracted from a platform header for glue generation.
-pub const PlatformHeaderInfo = struct {
-    hosted_entries: []HostedEntry,
-
-    pub const HostedEntry = struct {
-        key: []const u8,
-        ffi_symbol: []const u8,
-    };
-
-    pub const ProvidesEntry = struct {
-        name: []const u8,
-        ffi_symbol: []const u8,
-    };
-
-    pub fn deinit(self: *const PlatformHeaderInfo, gpa: std.mem.Allocator) void {
-        deinitPlatformHostedEntries(gpa, self.hosted_entries);
-    }
+/// A `provides` entry of the platform main module.
+const ProvidesEntry = struct {
+    name: []const u8,
+    ffi_symbol: []const u8,
 };
 
-fn deinitPlatformHostedEntries(gpa: std.mem.Allocator, entries: []const PlatformHeaderInfo.HostedEntry) void {
-    for (entries) |entry| {
-        gpa.free(entry.key);
-        gpa.free(entry.ffi_symbol);
-    }
-    gpa.free(entries);
-}
-
-fn hostedEntryLocalNameAlloc(
-    gpa: Allocator,
-    env: *ModuleEnv,
-    ast: *const parse.AST,
-    entry: parse.AST.SymbolMapEntry,
-) Allocator.Error!?[]const u8 {
-    const direct = ast.tokens.resolveIdentifier(entry.func) orelse return null;
-    const module_tok = entry.module orelse return try gpa.dupe(u8, env.common.getIdent(direct));
-    if (entry.func == module_tok + 1) return try gpa.dupe(u8, env.common.getIdent(direct));
-
-    var text = std.ArrayList(u8).empty;
-    defer text.deinit(gpa);
-
-    var tok = module_tok + 1;
-    while (tok <= entry.func) : (tok += 1) {
-        const segment = ast.tokens.resolveIdentifier(tok) orelse return null;
-        if (text.items.len != 0) try text.append(gpa, '.');
-        try text.appendSlice(gpa, env.common.getIdent(segment));
-    }
-
-    return try text.toOwnedSlice(gpa);
-}
-
-fn hostedEntryKeyAllocFromAst(
-    gpa: Allocator,
-    env: *ModuleEnv,
-    ast: *const parse.AST,
-    entry: parse.AST.SymbolMapEntry,
-) Allocator.Error!?[]const u8 {
-    const local_name = (try hostedEntryLocalNameAlloc(gpa, env, ast, entry)) orelse return null;
-    defer gpa.free(local_name);
-
-    const module_name = if (entry.module) |module_tok| blk: {
-        const module_ident = ast.tokens.resolveIdentifier(module_tok) orelse return null;
-        break :blk env.common.getIdent(module_ident);
-    } else "";
-
-    return try hostedKeyAlloc(gpa, module_name, local_name);
-}
-
-/// Parse a platform header to extract requires entries and validate it's a platform file.
-fn parsePlatformHeader(gpa: Allocator, platform_path: []const u8, std_io: std.Io) (Allocator.Error || error{ FileNotFound, ParseFailed, NotPlatformFile })!PlatformHeaderInfo {
+/// Parse a module header and verify it's a platform file.
+fn validatePlatformHeader(gpa: Allocator, platform_path: []const u8, std_io: std.Io) (Allocator.Error || error{ FileNotFound, ParseFailed, NotPlatformFile })!void {
     // Read source file
     var source = std.Io.Dir.cwd().readFileAlloc(std_io, platform_path, gpa, .unlimited) catch |err| switch (err) {
         error.FileNotFound => return error.FileNotFound,
@@ -1320,42 +1246,6 @@ fn parsePlatformHeader(gpa: Allocator, platform_path: []const u8, std_io: std.Io
 
     // Check if this is a platform file
     if (header != .platform) return error.NotPlatformFile;
-    const platform_header = header.platform;
-    {
-        var hosted_entries = std.ArrayList(PlatformHeaderInfo.HostedEntry).empty;
-        errdefer {
-            for (hosted_entries.items) |entry| {
-                gpa.free(entry.key);
-                gpa.free(entry.ffi_symbol);
-            }
-            hosted_entries.deinit(gpa);
-        }
-
-        const hosted_entries_ast = parse_ast.store.symbolMapEntrySlice(platform_header.hosted);
-        for (hosted_entries_ast) |entry_idx| {
-            const entry = parse_ast.store.getSymbolMapEntry(entry_idx);
-            const hosted_key = (try hostedEntryKeyAllocFromAst(gpa, &env, parse_ast, entry)) orelse continue;
-            const ffi_symbol = gpa.dupe(u8, parse_ast.resolve(entry.symbol)) catch |err| {
-                gpa.free(hosted_key);
-                return err;
-            };
-            hosted_entries.append(gpa, .{
-                .key = hosted_key,
-                .ffi_symbol = ffi_symbol,
-            }) catch |err| {
-                gpa.free(hosted_key);
-                gpa.free(ffi_symbol);
-                return err;
-            };
-        }
-
-        const hosted_entries_owned = try hosted_entries.toOwnedSlice(gpa);
-        errdefer deinitPlatformHostedEntries(gpa, hosted_entries_owned);
-
-        return PlatformHeaderInfo{
-            .hosted_entries = hosted_entries_owned,
-        };
-    }
 }
 
 /// Collected module type information for glue generation
@@ -4306,7 +4196,7 @@ fn buildModuleTypeInfoList(
 
 fn buildProvidesEntryList(
     writer: *const GlueRocValueWriter,
-    provides_entries: []const PlatformHeaderInfo.ProvidesEntry,
+    provides_entries: []const ProvidesEntry,
     provides_type_ids: *const std.StringHashMap(u64),
     list_layout: layout.Idx,
 ) RocList {
@@ -4328,7 +4218,7 @@ fn buildProvidesEntryList(
 fn constructTypesRocList(
     writer: *const GlueRocValueWriter,
     collected_modules: []const CollectedModuleTypeInfo,
-    provides_entries: []const PlatformHeaderInfo.ProvidesEntry,
+    provides_entries: []const ProvidesEntry,
     type_table: *const TypeTable,
     provides_type_ids: *const std.StringHashMap(u64),
     list_layout: layout.Idx,
