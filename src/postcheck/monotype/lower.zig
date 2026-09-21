@@ -23787,8 +23787,10 @@ const BodyContext = struct {
 
     /// Lower a lambda body at its function's return cell.
     ///
-    /// A body whose checked type is not the function's checked result is a
-    /// composed `?` result (design.md "Inferred Try Return-Row Composition"):
+    /// A divergent body uses the function's return cell without requesting
+    /// its checked value type. Otherwise, a body whose checked type is not the
+    /// function's checked result is a composed `?` result
+    /// (design.md "Try Return-Row Composition"):
     /// the function's error row includes the body's rather than equalling it.
     /// Such a body is lowered at its own type and crosses the explicit return
     /// boundary to the return cell exactly as a `?` return does, so the
@@ -23799,6 +23801,9 @@ const BodyContext = struct {
         checked_body: checked.CheckedExprId,
         ret_cell: DraftTypeCell,
     ) Allocator.Error!DraftExprId {
+        if (self.checkedExprDivergesInLoweredRuntime(checked_body)) {
+            return try self.lowerExprAtTypeCell(checked_body, ret_cell);
+        }
         const body_ty = self.view.bodies.expr(checked_body).ty;
         const fn_ret_ty = self.checkedFunctionType(self.view.bodies.expr(lambda_id).ty).ret;
         if (resolvedPayload(self.view, body_ty).root == resolvedPayload(self.view, fn_ret_ty).root) {
