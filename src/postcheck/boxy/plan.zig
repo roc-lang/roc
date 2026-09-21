@@ -619,11 +619,16 @@ pub const GeneratedParserTryPlan = struct {
 
 /// Checked strategy selected for a generated dictionary field parser.
 pub const GeneratedParserDictionaryFieldStrategy = union(enum) {
+    /// The format's key method for this key type (`parse_key_str`, ...).
     method: struct {
         module: checked.ModuleId,
         name: MethodNameId,
     },
-    unit_tags,
+    /// A closed unit-tag key read through `parse_key_str` at this checked
+    /// `Str` subject and matched against the tag names.
+    unit_tags: CheckedTypeIdentity,
+    /// `parse_key_start` followed by the key type's own generated parser.
+    key_start,
 };
 
 /// Checked dictionary-field parser selection for one generated Dict parser.
@@ -3287,19 +3292,31 @@ const Builder = struct {
                         .dict => {
                             if (nominal.args.len != 2) boxyPlanInvariant("Dict generated parser type had unexpected arity");
                             const key_type = typeRef(view, nominal.args[0]);
-                            _ = try self.ensureGeneratedCodecCall(worker, encoding_type, "parse_object_next", null);
+                            _ = try self.ensureGeneratedCodecCall(worker, encoding_type, "parse_dict_start", shape);
+                            _ = try self.ensureGeneratedCodecCall(worker, encoding_type, "parse_dict_next", shape);
+                            _ = try self.ensureGeneratedCodecCall(worker, encoding_type, "parse_dict_after_key", shape);
+                            _ = try self.ensureGeneratedCodecCall(worker, encoding_type, "parse_dict_after_entry", shape);
                             if (generatedParserKeyMethod(view, nominal.args[0])) |method_text| {
                                 const key_call = try self.ensureGeneratedCodecCall(worker, encoding_type, method_text, key_type);
                                 try self.appendGeneratedParserDictionaryFieldSelection(worker, key_type, .{ .method = .{
                                     .module = key_call.method_module,
                                     .name = key_call.method,
                                 } });
-                            } else {
-                                if (!checkedParserUnitTagKey(view, nominal.args[0])) {
-                                    boxyPlanInvariant("generated Dict parser key had no checked parsing strategy");
-                                }
+                            } else if (checkedParserUnitTagKey(view, nominal.args[0])) {
+                                // The checker reads a unit-tag key as a key string at a
+                                // `Str` subject of its own, then matches the tag names.
+                                const key_str_call = try self.ensureGeneratedCodecCallWithCheckedSubject(worker, encoding_type, "parse_key_str");
                                 _ = try self.ensureGeneratedCodecCall(worker, encoding_type, "invalid_value", null);
-                                try self.appendGeneratedParserDictionaryFieldSelection(worker, key_type, .unit_tags);
+                                try self.appendGeneratedParserDictionaryFieldSelection(worker, key_type, .{
+                                    .unit_tags = key_str_call.subject_type orelse
+                                        boxyPlanInvariant("generated unit-tag Dict key string call had no checked subject"),
+                                });
+                            } else {
+                                // A key with no key-string rendering is read by its own
+                                // parser once the format opens the key position.
+                                _ = try self.ensureGeneratedCodecCall(worker, encoding_type, "parse_key_start", key_type);
+                                try self.planGeneratedParserShape(worker, key_type, encoding_type);
+                                try self.appendGeneratedParserDictionaryFieldSelection(worker, key_type, .key_start);
                             }
                             _ = try self.ensureGeneratedCodecCall(worker, shape, "with_capacity", shape);
                             _ = try self.ensureGeneratedCodecCall(worker, shape, "insert", shape);
