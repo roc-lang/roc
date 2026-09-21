@@ -11380,7 +11380,7 @@ exact actual parameter to that recorded source, including when the actual is
 runtime-bound. The source retains its operand index and exact representation,
 and records the earlier hidden descriptor argument that supplies it. Lowering
 reuses that argument's immutable local and its existing initialization, including
-projection after argument adaptation; it emits no second descriptor projection.
+its read after argument adaptation; it emits no second descriptor read.
 These callable sources are scoped to the call; nominal declaration substitutions
 remain scoped to their backing descent. Result planning does not rediscover a
 parameter descriptor from an ambient binding or require it to become static.

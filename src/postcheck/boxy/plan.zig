@@ -339,7 +339,7 @@ pub const DirectCallHiddenDescriptorArg = struct {
     source_value_rep: ?TypeRepId = null,
     /// Index in this call's hidden descriptor arguments of an earlier operand
     /// descriptor supplying the same callable parameter. Lowering reuses that
-    /// local, including its exact projection from the adapted operand.
+    /// local, including its exact read from the adapted operand.
     source_descriptor_index: ?u32 = null,
     /// The call-side nominal whose backing `rep` belongs to. Such a `rep` names
     /// the declaration's formals, so its descriptor is built under this
