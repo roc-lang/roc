@@ -486,21 +486,21 @@ active_scheme_root: ?Var = null,
 /// dispatch-evidence publication sees one coherent scheme); references after
 /// that use the def's own pattern var as always.
 predeclared_scheme_vars: std.ArrayListUnmanaged(?Var) = .empty,
-/// Sparse body-annotation identity slot → predeclared-copy correspondence for
-/// annotated defs actually referenced before their bodies are checked. The
+/// Body-annotation identity slot → predeclared-copy correspondence for
+/// annotated bindings, including self-recursive and block-local functions. The
 /// predeclared scheme and body generation enumerate the same canonical identity
 /// slots, including internal open-row vars with no CIR node, so an early use can
 /// compose substitutions without structural recovery.
-predeclared_identity_correspondence_by_def: std.AutoHashMapUnmanaged(CIR.Def.Idx, PredeclaredIdentityCorrespondence) = .empty,
+predeclared_identity_correspondence_by_binding: std.AutoHashMapUnmanaged(Var, PredeclaredIdentityCorrespondence) = .empty,
 predeclared_annotation_pairs: std.ArrayListUnmanaged(VarPair) = .empty,
 /// Predeclared-scheme → early-use substitutions. Pending uses own ranges in
 /// this append-only pool until their caller boundary replays off-root
 /// requirements; storage is reclaimed with the checker.
 pending_predeclared_use_pairs: std.ArrayListUnmanaged(VarPair) = .empty,
-/// Annotated top-level body currently being checked. Closure wrappers delegate
-/// annotation generation to their inner lambda, so this explicit def identity
+/// Annotated body currently being checked. Closure wrappers delegate
+/// annotation generation to their inner lambda, so this explicit binding identity
 /// carries the predeclared correspondence across that delegation.
-checking_predeclared_body_def: ?CIR.Def.Idx = null,
+checking_predeclared_body: ?PredeclaredBody = null,
 /// The block-local (`s_decl`) analogue of `predeclared_scheme_vars`, keyed by
 /// pattern and live only while the local def is in flight (entries are
 /// removed when the statement finishes).
@@ -1715,8 +1715,16 @@ const VarPairRange = struct {
     }
 };
 
+const PredeclaredBody = struct {
+    binding: Var,
+    scheme: Var,
+    annotation: CIR.Annotation.Idx,
+};
+
 const PredeclaredIdentityCorrespondence = struct {
+    scheme: Var,
     pairs: VarPairRange,
+    callable_pairs: VarPairRange = .{},
     body_recorded: bool = false,
 };
 
@@ -2801,7 +2809,7 @@ pub fn deinit(self: *Self) void {
     while (scheme_candidate_indices.next()) |indices| indices.deinit(self.gpa);
     self.scheme_requirement_candidate_indices_by_owner.deinit(self.gpa);
     self.predeclared_scheme_vars.deinit(self.gpa);
-    self.predeclared_identity_correspondence_by_def.deinit(self.gpa);
+    self.predeclared_identity_correspondence_by_binding.deinit(self.gpa);
     self.predeclared_annotation_pairs.deinit(self.gpa);
     self.predeclared_local_scheme_vars.deinit(self.gpa);
     self.value_lookup_tracking.deinit(self.gpa);
@@ -6467,6 +6475,7 @@ fn markBindingSchemeVar(self: *Self, var_: Var) Allocator.Error!void {
 /// stored in checked module output. Scanning node order once avoids maintaining
 /// a sorted list while dependency-order checking discovers schemes.
 fn finalizeBindingSchemeNodes(self: *Self) Allocator.Error!void {
+    try self.finalizePredeclaredSchemeSubstitutions();
     self.cir.binding_schemes.items.clearRetainingCapacity();
     var raw_node: usize = 0;
     while (raw_node < self.binding_scheme_nodes.bit_length) : (raw_node += 1) {
@@ -13656,9 +13665,13 @@ fn checkDef(self: *Self, def_idx: CIR.Def.Idx, env: *Env) std.mem.Allocator.Erro
     defer self.checking_immediate_callee = saved_checking_immediate_callee;
     self.checking_binding_rhs = true;
     self.checking_binding_rhs_pattern = def.pattern;
-    const previous_checking_predeclared_body_def = self.checking_predeclared_body_def;
-    if (self.predeclaredSchemeVar(def_idx) != null) self.checking_predeclared_body_def = def_idx;
-    defer self.checking_predeclared_body_def = previous_checking_predeclared_body_def;
+    const previous_checking_predeclared_body = self.checking_predeclared_body;
+    self.checking_predeclared_body = if (self.predeclaredSchemeVar(def_idx)) |scheme| .{
+        .binding = ModuleEnv.varFrom(def_idx),
+        .scheme = scheme,
+        .annotation = def.annotation.?,
+    } else null;
+    defer self.checking_predeclared_body = previous_checking_predeclared_body;
     const saved_active_scheme_root = self.active_scheme_root;
     // A singleton value definition has no scheme boundary and therefore owns
     // no side-table candidates. Recursive groups still provisionally own every
@@ -13880,18 +13893,18 @@ fn predeclareAnnotationScheme(
     return scheme_var;
 }
 
-/// Initialize the sparse predeclared identity side of the correspondence only
-/// when an actual lookup reaches the annotation before its body. The pristine
-/// predeclared scheme is still available here, so canonical slot enumeration
+/// Initialize the predeclared identity side when an early lookup needs it, or
+/// when its body annotation is generated, before recursive uses can occur.
+/// The pristine scheme is still available here, so canonical slot enumeration
 /// is direct producer data rather than a later reconstruction.
 fn ensurePredeclaredIdentityCorrespondence(
     self: *Self,
-    def_idx: CIR.Def.Idx,
+    binding: Var,
     scheme_var: Var,
 ) Allocator.Error!void {
-    const entry = try self.predeclared_identity_correspondence_by_def.getOrPut(self.gpa, def_idx);
+    const entry = try self.predeclared_identity_correspondence_by_binding.getOrPut(self.gpa, binding);
     if (entry.found_existing) return;
-    errdefer _ = self.predeclared_identity_correspondence_by_def.remove(def_idx);
+    errdefer _ = self.predeclared_identity_correspondence_by_binding.remove(binding);
 
     const identity_vars = try self.canonical_key_writer.identityVarsFromVar(scheme_var);
     defer self.gpa.free(identity_vars);
@@ -13903,7 +13916,7 @@ fn ensurePredeclaredIdentityCorrespondence(
             .fresh_var = identity_var,
         });
     }
-    entry.value_ptr.* = .{ .pairs = .{
+    entry.value_ptr.* = .{ .scheme = scheme_var, .pairs = .{
         .start = pairs_start,
         .len = @intCast(identity_vars.len),
     } };
@@ -13915,19 +13928,89 @@ fn ensurePredeclaredIdentityCorrespondence(
 /// is complete where raw annotation-node pairs would not be.
 fn recordPredeclaredBodyAnnotationPairs(
     self: *Self,
-    def_idx: CIR.Def.Idx,
-    annotation_idx: CIR.Annotation.Idx,
+    body: PredeclaredBody,
 ) Allocator.Error!void {
-    const correspondence = self.predeclared_identity_correspondence_by_def.getPtr(def_idx) orelse return;
+    try self.ensurePredeclaredIdentityCorrespondence(body.binding, body.scheme);
+    const correspondence = self.predeclared_identity_correspondence_by_binding.getPtr(body.binding).?;
     if (correspondence.body_recorded) return;
     const range = correspondence.pairs;
-    const body_identity_vars = try self.canonical_key_writer.identityVarsFromVar(ModuleEnv.varFrom(annotation_idx));
+    const body_identity_vars = try self.canonical_key_writer.identityVarsFromVar(ModuleEnv.varFrom(body.annotation));
     defer self.gpa.free(body_identity_vars);
-    if (body_identity_vars.len != range.len) return;
+    if (body_identity_vars.len != range.len) {
+        // An erroneous annotation may generate an error type in one pass.
+        // Successful checking must retain every declared identity.
+        if (self.problems.len() != 0) return;
+        std.debug.panic("check invariant violated: regenerated annotation changed its declared identity slots", .{});
+    }
     for (body_identity_vars, range.mutableSlice(self.predeclared_annotation_pairs.items)) |body_var, *pair| {
         pair.old_var = body_var;
     }
+    // Attached callable identities are also part of an evidence substitution.
+    // Both generations emit the annotation's constraints in the same order;
+    // retain that correspondence before checking can discharge or merge them.
+    const callable_pairs_start: u32 = @intCast(self.predeclared_annotation_pairs.items.len);
+    for (0..range.len) |i| {
+        const pair = range.slice(self.predeclared_annotation_pairs.items)[i];
+        const body_constraints = self.annotationIdentityConstraints(pair.old_var);
+        const predeclared_constraints = self.annotationIdentityConstraints(pair.fresh_var);
+        std.debug.assert(body_constraints.len == predeclared_constraints.len);
+        for (body_constraints, predeclared_constraints) |body_constraint, predeclared_constraint| {
+            std.debug.assert(body_constraint.fn_name.eql(predeclared_constraint.fn_name));
+            try self.predeclared_annotation_pairs.append(self.gpa, .{
+                .old_var = body_constraint.fn_var,
+                .fresh_var = predeclared_constraint.fn_var,
+            });
+        }
+    }
+    correspondence.callable_pairs = .{
+        .start = callable_pairs_start,
+        .len = @intCast(self.predeclared_annotation_pairs.items.len - callable_pairs_start),
+    };
     correspondence.body_recorded = true;
+}
+
+fn annotationIdentityConstraints(self: *Self, var_: Var) []const StaticDispatchConstraint {
+    const range = switch (self.types.resolveVar(var_).desc.content) {
+        .flex => |flex| flex.constraints,
+        .rigid => |rigid| rigid.constraints,
+        .alias, .structure, .field_presence, .err => return &.{},
+    };
+    return self.types.sliceStaticDispatchConstraints(range);
+}
+
+/// Publish substitutions in the finished binding's coordinates. A declared
+/// output row can close while checking the body, so canonical identity slots
+/// of the pristine annotation and of the finished scheme need not agree.
+/// Their correspondence was recorded before the body solved either graph.
+/// This is metadata projection only: it neither copies nor changes types.
+fn finalizePredeclaredSchemeSubstitutions(self: *Self) Allocator.Error!void {
+    var schemes = collections.DenseMap(Var, Var).init(self.gpa);
+    defer schemes.deinit();
+    var variables = collections.DenseMap(Var, Var).init(self.gpa);
+    defer variables.deinit();
+
+    var correspondences = self.predeclared_identity_correspondence_by_binding.iterator();
+    while (correspondences.next()) |entry| {
+        const correspondence = entry.value_ptr.*;
+        if (!correspondence.body_recorded) continue;
+        try schemes.put(correspondence.scheme, entry.key_ptr.*);
+        for (correspondence.pairs.slice(self.predeclared_annotation_pairs.items)) |pair| {
+            try variables.put(self.types.resolveVar(pair.fresh_var).var_, self.types.resolveVar(pair.old_var).var_);
+        }
+        for (correspondence.callable_pairs.slice(self.predeclared_annotation_pairs.items)) |pair| {
+            try variables.put(self.types.resolveVar(pair.fresh_var).var_, self.types.resolveVar(pair.old_var).var_);
+        }
+    }
+
+    for (self.cir.scheme_uses.items.items) |*record| {
+        const body_scheme = schemes.get(@enumFromInt(record.scheme_root)) orelse continue;
+        const pairs = self.cir.scheme_use_pairs.items.items[record.pairs_start..][0..record.pairs_len];
+        for (pairs) |*pair| {
+            const old_root = self.types.resolveVar(@enumFromInt(pair.old_var)).var_;
+            if (variables.get(old_root)) |body_var| pair.old_var = @intFromEnum(body_var);
+        }
+        record.scheme_root = @intFromEnum(body_scheme);
+    }
 }
 
 /// Reset every type-annotation node var this annotation's generation wrote
@@ -14485,7 +14568,7 @@ fn instantiatePendingPredeclaredSchemeUse(
     source_expr: CIR.Expr.Idx,
     env: *Env,
 ) Allocator.Error!void {
-    try self.ensurePredeclaredIdentityCorrespondence(target_def, scheme_var);
+    try self.ensurePredeclaredIdentityCorrespondence(ModuleEnv.varFrom(target_def), scheme_var);
     const scheme_uses_before = self.cir.scheme_uses.items.items.len;
     const instantiated = try self.instantiateBindingVar(scheme_var, env, .use_last_var, .{ .value_use = source_expr });
     const use_pairs_start: u32 = @intCast(self.pending_predeclared_use_pairs.items.len);
@@ -14569,19 +14652,22 @@ fn replayPredeclaredSchemeUse(
     self.var_map.clearRetainingCapacity();
     var seeded_body_vars = std.AutoHashMap(Var, void).init(self.gpa);
     defer seeded_body_vars.deinit();
-    const annotation_pairs = self.predeclared_identity_correspondence_by_def.get(pending.target_def).?.pairs.slice(
+    const annotation_pairs = self.predeclared_identity_correspondence_by_binding.get(ModuleEnv.varFrom(pending.target_def)).?.pairs.slice(
         self.predeclared_annotation_pairs.items,
     );
     const use_pairs = pending.use_pairs.slice(self.pending_predeclared_use_pairs.items);
+    var use_by_root = collections.DenseMap(Var, Var).init(self.gpa);
+    defer use_by_root.deinit();
+    for (use_pairs) |use_pair| {
+        const root = self.types.resolveVar(use_pair.old_var).var_;
+        if (!use_by_root.contains(root)) try use_by_root.put(root, use_pair.fresh_var);
+    }
     for (annotation_pairs) |annotation_pair| {
         const predeclared_root = self.types.resolveVar(annotation_pair.fresh_var).var_;
-        for (use_pairs) |use_pair| {
-            if (self.types.resolveVar(use_pair.old_var).var_ != predeclared_root) continue;
-            const body_root = self.types.resolveVar(annotation_pair.old_var).var_;
-            try self.var_map.put(body_root, use_pair.fresh_var);
-            try seeded_body_vars.put(body_root, {});
-            break;
-        }
+        const use_var = use_by_root.get(predeclared_root) orelse continue;
+        const body_root = self.types.resolveVar(annotation_pair.old_var).var_;
+        try self.var_map.put(body_root, use_var);
+        try seeded_body_vars.put(body_root, {});
     }
 
     var instantiator = Instantiator{
@@ -19925,8 +20011,8 @@ fn beginExprCheckFrame(
 
         if (expected.annotation) |annotation_idx| {
             try self.generateAnnotationType(annotation_idx, env);
-            if (self.checking_predeclared_body_def) |predeclared_def_idx| {
-                try self.recordPredeclaredBodyAnnotationPairs(predeclared_def_idx, annotation_idx);
+            if (self.checking_predeclared_body) |body| {
+                if (body.annotation == annotation_idx) try self.recordPredeclaredBodyAnnotationPairs(body);
             }
             const anno_var = ModuleEnv.varFrom(annotation_idx);
             const anno_var_backup = try self.instantiateVarOrphan(anno_var, env, env.rank(), .use_last_var);
@@ -23387,7 +23473,17 @@ fn checkBlockStatements(self: *Self, statements: CIR.Statement.Span, env: *Env, 
 
                 self.checking_binding_rhs = true;
                 self.checking_binding_rhs_pattern = decl_stmt.pattern;
-                const decl_expr_does_fx = try self.checkExpr(decl_stmt.expr, env, expectation);
+                const saved_predeclared_body = self.checking_predeclared_body;
+                self.checking_predeclared_body = if (self.predeclared_local_scheme_vars.get(decl_stmt.pattern)) |scheme| .{
+                    .binding = decl_pattern_var,
+                    .scheme = scheme,
+                    .annotation = decl_stmt.anno.?,
+                } else null;
+                const decl_expr_does_fx = self.checkExpr(decl_stmt.expr, env, expectation) catch |err| {
+                    self.checking_predeclared_body = saved_predeclared_body;
+                    return err;
+                };
+                self.checking_predeclared_body = saved_predeclared_body;
                 // The annotation bounds the definition (see `checkDef`).
                 if (decl_stmt.anno) |annotation_idx| {
                     try self.auditImplicitOpenExts(
