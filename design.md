@@ -186,7 +186,7 @@ popping, truncating, and clearing require no sparse-page writes or scans.
 Row normalization and constant-time identity/cycle lookups preserve the digest's
 existing traversal order, slot numbering, and encoded bytes.
 
-CheckedTypeStore.fromModule records identity-variable reachability and cycle reachability
+Checked type publication records identity-variable reachability and cycle reachability
 in a one-byte column indexed by immutable source variable. Each slot records
 unseen, active, or complete, plus those two booleans. The column is allocated
 once for the exact source domain and never crosses source-store mutations;
@@ -2710,6 +2710,23 @@ representation data. In particular, the checked module does not contain runtime
 type payloads, value conversion plans, callable-set descriptors, boxy
 `TypeDesc` data, boxy dictionaries, erased callable ABI decisions, layout ids,
 runtime tag discriminants, or backend encodings.
+
+Method registry construction is a source-type publication producer. Each retained
+method publishes its exact callable source variable through the same type builder
+as body publication and stores the returned checked type id. Derived declarations
+own this root even when a containing executable expression has been replaced by a
+checked error. Rejected declarations retain their explicit target-less registry
+entry; skipped associated values request no method callable root.
+
+The source-variable-to-checked-type index is a direct, paged index shared by
+publication and its consumers; it is not copied, sorted, and searched again.
+Source graph-analysis and digest scratch live until the registry has published
+its callable types, then are released. Each method publication embeds imported
+nominal declarations for only the payloads it adds, making its types
+self-contained without rescanning existing payloads or publishing unrelated
+producers' dependencies. The source index and source-scheme index are released
+before compile-time evaluation, including on error exits, and neither is
+serialized.
 
 The checked type store is an interned graph, not a collection of independently
 duplicated checked type trees. During construction it maintains an exact

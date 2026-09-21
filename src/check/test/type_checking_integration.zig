@@ -16,11 +16,13 @@ const ModuleEnv = can.ModuleEnv;
 const testing = std.testing;
 
 const MethodRegistryTestCheckedTypes = struct {
-    pub fn rootForSourceVar(
+    pub fn publishMethodCallableType(
         _: *const @This(),
+        _: std.mem.Allocator,
         _: TypedCIR.Module,
+        _: *canonical.CanonicalNameStore,
         _: types.Var,
-    ) ?checked_ids.CheckedTypeId {
+    ) std.mem.Allocator.Error!checked_ids.CheckedTypeId {
         unreachable;
     }
 };
