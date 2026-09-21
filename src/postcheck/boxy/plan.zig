@@ -6353,15 +6353,15 @@ const Builder = struct {
             }
         }
         for (self.plan.nested_callable_uses.items) |use| {
-            const view = self.moduleForId(use.use.module);
-            if (view.static_dispatch_plans.siteEvidence(use.use.expr)) |entries| {
-                for (entries) |entry| _ = try self.analyzeType(view, entry.dispatcher_ty);
+            const use_evidence = self.checkedEvidenceForProcedureUse(use.use);
+            if (use_evidence.entries) |entries| {
+                for (entries) |entry| _ = try self.analyzeType(use_evidence.view, entry.dispatcher_ty);
             }
         }
         for (self.plan.callable_uses.items) |use| {
-            const view = self.moduleForId(use.use.module);
-            if (view.static_dispatch_plans.siteEvidence(use.use.expr)) |entries| {
-                for (entries) |entry| _ = try self.analyzeType(view, entry.dispatcher_ty);
+            const use_evidence = self.checkedEvidenceForProcedureUse(use.use);
+            if (use_evidence.entries) |entries| {
+                for (entries) |entry| _ = try self.analyzeType(use_evidence.view, entry.dispatcher_ty);
             }
         }
     }
@@ -6371,12 +6371,39 @@ const Builder = struct {
         entries: ?[]const static_dispatch.CheckedEvidence,
     };
 
+    /// The checked evidence one procedure use supplies to its target. A
+    /// platform requirement has no use-site scheme in the platform module:
+    /// checking records its root evidence from the app definition's complete
+    /// scheme, in the app CheckedModule's evidence table (design.md
+    /// "Platform/App Relation"). Every other use carries its own site evidence.
+    fn checkedEvidenceForProcedureUse(self: *Builder, use: CheckedExprIdentity) CheckedCallEvidence {
+        const view = self.moduleForId(use.module);
+        const use_expr = view.checked_bodies.expr(use.expr);
+        if (use_expr.data == .lookup_required) {
+            if (use_expr.data.lookup_required) |ref_id| {
+                const record = self.resolvedValueRecord(view, ref_id);
+                if (record.ref == .platform_required_proc) {
+                    if (record.ref.platform_required_proc.root_evidence) |root_evidence| {
+                        const app_view = self.moduleForCheckedModuleId(root_evidence.checked_module);
+                        const span = root_evidence.span;
+                        return .{
+                            .view = app_view,
+                            .entries = app_view.static_dispatch_plans.evidence_refs[span.start .. span.start + span.len],
+                        };
+                    }
+                }
+            }
+        }
+        return .{ .view = view, .entries = view.static_dispatch_plans.siteEvidence(use.expr) };
+    }
+
     fn checkedEvidenceForDirectCall(self: *Builder, direct: DirectCallPlan) CheckedCallEvidence {
         const view = self.moduleForId(direct.call.module);
         const call_expr = view.checked_bodies.expr(direct.call.expr);
-        const entries = if (call_expr.data == .call)
-            view.static_dispatch_plans.siteEvidence(call_expr.data.call.func)
-        else if (call_expr.data == .dispatch_call)
+        if (call_expr.data == .call) {
+            return self.checkedEvidenceForProcedureUse(.{ .module = direct.call.module, .expr = call_expr.data.call.func });
+        }
+        const entries = if (call_expr.data == .dispatch_call)
             self.nestedEvidenceForDirectDispatch(view, call_expr.data.dispatch_call)
         else if (call_expr.data == .type_dispatch_call)
             self.nestedEvidenceForDirectDispatch(view, call_expr.data.type_dispatch_call)
@@ -7518,27 +7545,25 @@ const Builder = struct {
         for (self.plan.callable_uses.items) |*use| {
             const worker = self.plan.workers.items[@intFromEnum(use.worker)];
             if (worker.hidden_descs.len == 0) continue;
-            const view = self.moduleForId(use.use.module);
-            const evidence = view.static_dispatch_plans.siteEvidence(use.use.expr);
-            if (evidence == null and self.workerHasPathlessEvidence(worker)) continue;
+            const evidence = self.checkedEvidenceForProcedureUse(use.use);
+            if (evidence.entries == null and self.workerHasPathlessEvidence(worker)) continue;
             use.hidden_desc_args = try self.materializeCallableUseHiddenDescriptorArgsAtType(
                 use.worker,
                 use.callable_ty,
-                view,
-                evidence,
+                evidence.view,
+                evidence.entries,
             );
         }
         for (self.plan.nested_callable_uses.items) |*use| {
             const worker = self.plan.workers.items[@intFromEnum(use.worker)];
             if (worker.hidden_descs.len == 0) continue;
-            const view = self.moduleForId(use.use.module);
-            const evidence = view.static_dispatch_plans.siteEvidence(use.use.expr);
-            if (evidence == null and self.workerHasPathlessEvidence(worker)) continue;
+            const evidence = self.checkedEvidenceForProcedureUse(use.use);
+            if (evidence.entries == null and self.workerHasPathlessEvidence(worker)) continue;
             use.hidden_desc_args = try self.materializeCallableUseHiddenDescriptorArgsAtType(
                 use.worker,
                 use.callable_ty,
-                view,
-                evidence,
+                evidence.view,
+                evidence.entries,
             );
         }
 
@@ -11452,20 +11477,19 @@ const Builder = struct {
                 arg_types[arg_index] = self.plan.representations.items[@intFromEnum(child.rep)].source_type;
             }
             const ret_type = self.plan.representations.items[@intFromEnum(fn_children.ret)].source_type;
-            const view = self.moduleForId(use.use.module);
-            const evidence = view.static_dispatch_plans.siteEvidence(use.use.expr);
             if (worker.hidden_dicts.len == 0) {
                 self.plan.callable_uses.items[callable_index].hidden_dict_args = .{};
                 continue;
             }
+            const evidence = self.checkedEvidenceForProcedureUse(use.use);
             self.plan.callable_uses.items[callable_index].hidden_dict_args =
                 try self.materializeWorkerCallHiddenDictionaryArgsWithEvidence(
                     use.worker,
                     use.caller,
                     arg_types,
                     ret_type,
-                    view,
-                    evidence,
+                    evidence.view,
+                    evidence.entries,
                 );
         }
 
@@ -11480,11 +11504,10 @@ const Builder = struct {
                 self.plan.nested_callable_uses.items[index].hidden_dict_args = .{};
                 continue;
             }
-            const view = self.moduleForId(use.use.module);
-            const evidence = view.static_dispatch_plans.siteEvidence(use.use.expr);
-            if (evidence == null and typeRefEql(use.callable_ty, worker.checked_type)) continue;
+            const evidence = self.checkedEvidenceForProcedureUse(use.use);
+            if (evidence.entries == null and typeRefEql(use.callable_ty, worker.checked_type)) continue;
             self.plan.nested_callable_uses.items[index].hidden_dict_args =
-                try self.materializeNestedCallableUseDictionaries(use, view, evidence);
+                try self.materializeNestedCallableUseDictionaries(use, evidence.view, evidence.entries);
         }
 
         const dictionary_use_count = self.worker_dictionary_uses.items.len;

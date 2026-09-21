@@ -811,6 +811,31 @@ fn methodOwnerForProcedureType(module: ProcedureModuleView, ty: checked.CheckedT
     }
 }
 
+const BuiltinTryArgs = struct {
+    ok: checked.CheckedTypeId,
+    err: checked.CheckedTypeId,
+};
+
+/// The `ok` and `err` arguments of `ty` when it is the builtin `Try`.
+fn builtinTryArgs(module: ProcedureModuleView, ty: checked.CheckedTypeId) ?BuiltinTryArgs {
+    var current = ty;
+    var remaining = module.checked_types.payloadCount();
+    while (true) {
+        if (remaining == 0) boxyLowerInvariant("checked type alias chain was cyclic during boxy Try lookup");
+        remaining -= 1;
+        switch (module.checked_types.payload(current)) {
+            .alias => |alias| current = alias.backing,
+            .nominal => |nominal| {
+                const builtin = nominal.builtin orelse return null;
+                if (builtin != .try_) return null;
+                if (nominal.args.len != 2) boxyLowerInvariant("builtin Try did not have exactly two type arguments");
+                return .{ .ok = nominal.args[0], .err = nominal.args[1] };
+            },
+            .pending, .err, .flex, .rigid, .record, .tuple, .function, .empty_record, .tag_union, .empty_tag_union => return null,
+        }
+    }
+}
+
 fn methodOwnerForProcedurePayload(payload: checked.CheckedTypePayload) ?static_dispatch.MethodOwner {
     if (payload != .nominal) return null;
     const nominal = payload.nominal;
@@ -25221,16 +25246,18 @@ const ProcBodyBuilder = struct {
         else
             next;
 
-        // Typed numeric parsers write a closed `Try(number, BadNumStr)` ABI.
-        // A generalized worker can represent that result with erased payload
-        // storage, so compute the builtin into its concrete ABI and cross the
-        // explicit descriptor-guided representation boundary afterwards.
-        if (base.numeric_conversion.getNumericParseSpec(op)) |parse_spec| {
+        // A low-level that produces the builtin `Try` writes `Try`'s concrete
+        // ABI: each variant's payload in its own argument's representation.
+        // Boxy stores `Try` payloads in erased storage, so compute the builtin
+        // into that concrete ABI and cross the explicit descriptor-guided
+        // representation boundary afterwards.
+        if (builtinTryArgs(self.module, result_ty)) |try_args| {
             const result_rep = self.repForType(result_ty);
-            const number_layout = numericParsePayloadLayout(parse_spec);
-            const concrete_layout = try self.parent.result.layouts.putTagUnion(&.{ .zst, number_layout });
+            const err_layout = self.workerRuntimeLayoutForRep(self.repForType(try_args.err)).layoutIdx();
+            const ok_layout = self.workerRuntimeLayoutForRep(self.repForType(try_args.ok)).layoutIdx();
+            const concrete_layout = try self.parent.result.layouts.putTagUnion(&.{ err_layout, ok_layout });
             const concrete = try self.addFrameLocal(concrete_layout);
-            const source_materialization = try self.concreteNumericParseResultDescriptor(result_rep, concrete_layout);
+            const source_materialization = try self.concreteTryResultDescriptor(result_rep, concrete_layout);
 
             var source_desc_local: ?LIR.LocalId = null;
             const source_desc = if (source_materialization.captures.len == 0)
@@ -25356,26 +25383,7 @@ const ProcBodyBuilder = struct {
         return continuation;
     }
 
-    fn numericParsePayloadLayout(spec: base.numeric_conversion.NumericParseSpec) layout.Idx {
-        return switch (spec) {
-            .int => |int| switch (int.width_bytes) {
-                1 => if (int.signed) .i8 else .u8,
-                2 => if (int.signed) .i16 else .u16,
-                4 => if (int.signed) .i32 else .u32,
-                8 => if (int.signed) .i64 else .u64,
-                16 => if (int.signed) .i128 else .u128,
-                else => boxyLowerInvariant("typed integer parser had an unsupported payload width"),
-            },
-            .float => |float| switch (float.width_bytes) {
-                4 => .f32,
-                8 => .f64,
-                else => boxyLowerInvariant("typed float parser had an unsupported payload width"),
-            },
-            .dec => .dec,
-        };
-    }
-
-    fn concreteNumericParseResultDescriptor(
+    fn concreteTryResultDescriptor(
         self: *ProcBodyBuilder,
         result_rep: Plan.TypeRepId,
         concrete_layout: layout.Idx,
@@ -25383,12 +25391,12 @@ const ProcBodyBuilder = struct {
         var materialization = try self.descriptorMaterializationForExactRep(result_rep);
         const template_id = switch (materialization.desc) {
             .static => |desc_id| desc_id,
-            .local, .runtime, .dict_method_arg, .dict_method_hidden => boxyLowerInvariant("exact numeric parser result descriptor was not static"),
+            .local, .runtime, .dict_method_arg, .dict_method_hidden => boxyLowerInvariant("exact low-level Try result descriptor was not static"),
         };
         const template = self.parent.result.boxy_type_descs.items[@intFromEnum(template_id)];
         const concrete_value = self.parent.result.layouts.getLayout(concrete_layout);
         if (concrete_value.tag != .tag_union) {
-            boxyLowerInvariant("typed numeric parser concrete result was not a tag union");
+            boxyLowerInvariant("low-level Try concrete result was not a tag union");
         }
         const concrete_info = self.parent.result.layouts.getTagUnionInfo(concrete_value);
 
@@ -25398,7 +25406,7 @@ const ProcBodyBuilder = struct {
         );
         defer self.parent.allocator.free(template_variants);
         if (template_variants.len != concrete_info.variants.len) {
-            boxyLowerInvariant("typed numeric parser descriptor disagreed with its concrete result ABI");
+            boxyLowerInvariant("low-level Try descriptor disagreed with its concrete result ABI");
         }
 
         const variants_start: u32 = @intCast(self.parent.result.boxy_tag_variants.items.len);
