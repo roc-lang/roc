@@ -3485,8 +3485,8 @@ fn appendRuntimeSchemaRequestToProgram(
 
 const DeclaredComptimeRootFunctions = std.AutoHashMap(EntryRoot, Ast.FnId);
 
-/// Checked artifact keys cross independent checking environments. Their local
-/// module indices do not; distinct artifacts routinely have the same index.
+/// Checked module keys cross independent checking environments. Their local
+/// module indices do not; distinct checked modules routinely share an index.
 const SourceFileIds = std.AutoHashMap([32]u8, u32);
 
 const Builder = struct {
@@ -3495,7 +3495,7 @@ const Builder = struct {
     modules: Common.CheckedModules,
     root_view: checked.ImportedModuleView,
     /// Program source-file id of every checked module in the lowering input,
-    /// keyed by checked artifact identity. The coordinator seeds this table
+    /// keyed by checked module identity. The coordinator seeds this table
     /// before lowering any body; workers borrow it for this lowering run.
     source_file_ids: SourceFileIds,
     borrowed_source_file_ids: ?*const SourceFileIds = null,
@@ -3750,7 +3750,7 @@ const Builder = struct {
     };
 
     /// Every checked module in the lowering input, ordered by qualified module
-    /// name and then checked artifact identity. Module indices are local to
+    /// name and then checked module identity. Module indices are local to
     /// independently checked environments, and cannot identify source files
     /// across those environments. Scheduling cannot decide source-file order.
     fn canonicalSourceFiles(self: *Builder) Allocator.Error![]SourceFileSeed {

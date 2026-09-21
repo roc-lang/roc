@@ -7716,10 +7716,10 @@ before each crash and each expect-failed call, passing
 file/line/column alongside region offsets.
 
 Monotype assigns source-file IDs once per program, deduplicating by checked
-artifact identity and ordering by qualified module name and artifact key.
-An artifact's `module_idx` belongs to its own checking environment; equal local
-indices in different artifacts never identify the same source file. The
-coordinator's completed artifact-to-file mapping is immutable throughout body
+module identity and ordering by qualified module name and checked module key.
+A checked module's `module_idx` belongs to its own checking environment; equal
+local indices in different checked modules never identify the same source file.
+The coordinator's completed module-to-file mapping is immutable throughout body
 lowering. Workers borrow it instead of rebuilding or sorting their own tables.
 Each body context retains its declaring module's file ID, and later IR stages
 preserve that ID together with its owning program's source-file table.
