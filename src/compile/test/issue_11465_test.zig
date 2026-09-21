@@ -8,6 +8,10 @@ const roc_target = @import("roc_target");
 const compile_build = @import("../compile_build.zig");
 const BuildEnv = compile_build.BuildEnv;
 
+const BuildTestError = compile_build.InitError || compile_build.BuildRootError ||
+    std.Io.Dir.WriteFileError || std.Io.Dir.RealPathFileAllocError ||
+    error{ WriteFailed, TestExpectedEqual };
+
 const SourceFile = struct {
     path: []const u8,
     source: []const u8,
@@ -15,7 +19,7 @@ const SourceFile = struct {
 
 /// Build `entry` from `files` and return the markdown rendering of every
 /// non-warning report, concatenated.
-fn renderedErrors(gpa: std.mem.Allocator, files: []const SourceFile, entry: []const u8) ![]u8 {
+fn renderedErrors(gpa: std.mem.Allocator, files: []const SourceFile, entry: []const u8) BuildTestError![]u8 {
     const io = std.testing.io;
     var tmp_dir = std.testing.tmpDir(.{});
     defer tmp_dir.cleanup();
@@ -49,7 +53,7 @@ fn renderedErrors(gpa: std.mem.Allocator, files: []const SourceFile, entry: []co
     return rendered.toOwnedSlice();
 }
 
-fn expectNoErrors(files: []const SourceFile, entry: []const u8) !void {
+fn expectNoErrors(files: []const SourceFile, entry: []const u8) BuildTestError!void {
     const gpa = std.testing.allocator;
     const rendered = try renderedErrors(gpa, files, entry);
     defer gpa.free(rendered);
@@ -208,5 +212,5 @@ test "issue 11465: qualified record-builder suffix without map2 names the full t
     defer gpa.free(rendered);
 
     try std.testing.expect(std.mem.startsWith(u8, rendered, "**Record Builder Not Supported**"));
-    try std.testing.expect(std.mem.indexOf(u8, rendered, "The type `Gui.Plain` is used in a record builder expression") != null);
+    try std.testing.expect(std.mem.find(u8, rendered, "The type `Gui.Plain` is used in a record builder expression") != null);
 }
