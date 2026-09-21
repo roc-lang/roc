@@ -505,9 +505,12 @@ const Lifter = struct {
             Common.invariant("top-level Monotype definition has free locals after checked closure collection");
         }
 
+        var facts: Ast.FnFacts = .{};
         const body: Ast.FnBody = switch (def.body) {
             .roc => |body| blk: {
+                const outer_facts = self.output.beginFnFacts();
                 try self.rewriteExpr(body);
+                facts = self.output.finishFnFacts(outer_facts);
                 break :blk .{ .roc = body };
             },
             .hosted => .hosted,
@@ -526,12 +529,15 @@ const Lifter = struct {
             .captures = .empty(),
             .body = body,
             .ret = def.ret,
+            .facts = facts,
         });
         try self.initialized_fns.put(fn_id, {});
     }
 
     fn lowerNestedDef(self: *Lifter, fn_id: Ast.FnId, def: Mono.NestedDef) Allocator.Error!void {
+        const outer_facts = self.output.beginFnFacts();
         try self.rewriteExpr(def.body);
+        const facts = self.output.finishFnFacts(outer_facts);
         const capture_span = try self.output.addTypedLocalSpan(self.fn_captures[@intFromEnum(fn_id)].items);
         var source = self.nestedSource(def.fn_id, def.fn_def);
         source.frozen_fn = def.fn_id;
@@ -546,6 +552,7 @@ const Lifter = struct {
             .captures = capture_span,
             .body = .{ .roc = def.body },
             .ret = def.ret,
+            .facts = facts,
         });
         try self.initialized_fns.put(fn_id, {});
     }
@@ -617,6 +624,7 @@ const Lifter = struct {
         self.expr_done[index] = true;
 
         const expr = self.output.getExpr(expr_id);
+        self.output.noteExprFacts(expr);
         switch (expr.data) {
             .@"unreachable",
             .local,
@@ -809,7 +817,9 @@ const Lifter = struct {
             .captures = capture_exprs,
         } });
 
+        const outer_facts = self.output.beginFnFacts();
         try self.rewriteExpr(lambda.body);
+        const facts = self.output.finishFnFacts(outer_facts);
         const capture_span = try self.output.addTypedLocalSpan(captures.items.items);
         var source = self.source.fnSource(lambda.fn_id);
         source.frozen_fn = lambda.fn_id;
@@ -824,6 +834,7 @@ const Lifter = struct {
             .captures = capture_span,
             .body = .{ .roc = lambda.body },
             .ret = functionRet(&self.output.types, ty),
+            .facts = facts,
         });
         try self.initialized_fns.put(fn_id, {});
     }
