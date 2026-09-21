@@ -4173,7 +4173,9 @@ const Pass = struct {
         }
         const outer_facts = self.program.beginFnFacts(fn_id);
         const cloned = try cloner.cloneExpr(body);
-        const facts = self.program.finishFnFacts(outer_facts);
+        // Unchanged subtrees of the source body are reused rather than
+        // re-created, so the rewritten body keeps the source body's facts.
+        const facts = self.program.finishFnFacts(outer_facts).merged(fn_.facts);
         self.program.setFn(fn_id, .{
             .symbol = fn_.symbol,
             .source = fn_.source,
@@ -4218,7 +4220,9 @@ const Pass = struct {
 
         const outer_facts = self.program.beginFnFacts(fn_id);
         const cloned = try cloner.cloneExpr(body);
-        const facts = self.program.finishFnFacts(outer_facts);
+        // Unchanged subtrees of the source body are reused rather than
+        // re-created, so the rewritten body keeps the source body's facts.
+        const facts = self.program.finishFnFacts(outer_facts).merged(fn_.facts);
         self.program.setFn(fn_id, .{
             .symbol = fn_.symbol,
             .source = fn_.source,
@@ -4259,7 +4263,9 @@ const Pass = struct {
         cloner.exit_demands = &demands;
         const outer_facts = self.program.beginFnFacts(fn_id);
         const cloned = try cloner.cloneExpr(body);
-        const facts = self.program.finishFnFacts(outer_facts);
+        // Unchanged subtrees of the source body are reused rather than
+        // re-created, so the rewritten body keeps the source body's facts.
+        const facts = self.program.finishFnFacts(outer_facts).merged(fn_.facts);
         self.program.setFn(fn_id, .{
             .symbol = fn_.symbol,
             .source = fn_.source,

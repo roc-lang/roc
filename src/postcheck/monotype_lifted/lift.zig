@@ -562,7 +562,9 @@ const Lifter = struct {
         if (self.stmt_done[index]) return;
         self.stmt_done[index] = true;
 
-        switch (self.output.getStmt(stmt_id)) {
+        const stmt = self.output.getStmt(stmt_id);
+        self.output.noteStmtFacts(stmt);
+        switch (stmt) {
             .uninitialized => {},
             .let_ => |let_| try self.rewriteExpr(let_.value),
             .expr,

@@ -1124,7 +1124,16 @@ pub const Program = struct {
         return id;
     }
 
+    /// Record the facts one statement implies for the body being emitted.
+    pub fn noteStmtFacts(self: *Program, stmt_: Stmt) void {
+        switch (stmt_) {
+            .return_ => self.facts.contains_return = true,
+            .uninitialized, .let_, .expr, .expect, .dbg, .crash => {},
+        }
+    }
+
     pub fn addStmt(self: *Program, stmt_: Stmt) std.mem.Allocator.Error!StmtId {
+        self.noteStmtFacts(stmt_);
         const id: StmtId = @enumFromInt(@as(u32, @intCast(self.stmtCount())));
         try self.stmts.ensureUnusedCapacity(self.allocator, 1);
         try self.stmt_locs.ensureUnusedCapacity(self.allocator, 1);
