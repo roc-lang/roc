@@ -1249,7 +1249,7 @@ body before considering its duplication. A callee-local LIR statement limit is
 not a bound on caller growth or on the LLVM instructions generated after builtin
 expansion. Any future Roc-directed expansion of these helpers must consume an
 explicit plan with cumulative and transitive growth accounting, separately from
-the proof that the transformation preserves semantics. LLVM-specific planning
+the proof that the transformation preserves meaning. LLVM-specific planning
 and representation optimization must not run in dev-backend compilations.
 
 LLVM string-literal lowering emits a complete target-layout constant when the
