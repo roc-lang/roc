@@ -9964,7 +9964,7 @@ retain the checked references needed by constant evaluation and checked-store
 re-entry. Worker-local choice of an equal representative must neither reserve
 another specialization nor consume another procedure symbol.
 
-Semantic digest computation is demand-driven and cached on immutable types,
+Specialization digest computation is demand-driven and cached on immutable types,
 including an alias used as the query root. Repeated queries and aliases over
 an already-cached backing allocate no traversal storage. Draft lookup,
 coordinator reservation, and solved-view aliases consume these producer-owned
