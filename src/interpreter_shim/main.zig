@@ -47,6 +47,9 @@ const RuntimeState = struct {
     shm: ?SharedMemoryAllocator,
     view: lir.LirImage.ProgramView,
     static_data: eval.InterpreterStaticData,
+    /// Literal backings live as long as the image, because values returned to
+    /// the host point into them after the entrypoint's interpreter is gone.
+    static_strings: eval.LirInterpreter.StaticStrings.Table,
 };
 
 const ShimError = error{
@@ -84,13 +87,16 @@ fn openRuntimeState(gpa: Allocator) RuntimeStateError!RuntimeState {
     // the width-independent image for the native pointer width.
     var view = try lir.LirImage.viewMappedImageWithAllocator(header, shm.base_ptr, shm.total_size, TargetUsize.native, gpa);
     errdefer view.deinit();
-    const static_data = try eval.InterpreterStaticData.init(gpa, view.static_data, view.static_data_value_count);
+    var static_data = try eval.InterpreterStaticData.init(gpa, view.static_data, view.static_data_value_count);
+    errdefer static_data.deinit();
+    const static_strings = try eval.LirInterpreter.buildStaticStrings(gpa, &view.store);
 
     return .{
         .source = .coordination,
         .shm = shm,
         .view = view,
         .static_data = static_data,
+        .static_strings = static_strings,
     };
 }
 
@@ -197,6 +203,7 @@ fn evaluateEntrypointInState(
         &view.store,
         &view.layouts,
         eval.LirInterpreter.BoxyTables.fromImageView(view),
+        state.static_strings.view(),
         ops,
         shimIo(),
     ) catch {
@@ -267,8 +274,13 @@ fn ensureEmbeddedRuntimeState(image_base: *anyopaque, image_len: usize, ops: *Ro
 
     var view = viewEmbeddedLirImage(image_base, image_len, ops) catch return error.ImageUnavailable;
     errdefer view.deinit();
-    const static_data = eval.InterpreterStaticData.init(allocator(), view.static_data, view.static_data_value_count) catch {
+    var static_data = eval.InterpreterStaticData.init(allocator(), view.static_data, view.static_data_value_count) catch {
         ops.crash("LIR shim could not allocate the immutable value image");
+        return error.OutOfMemory;
+    };
+    errdefer static_data.deinit();
+    const static_strings = eval.LirInterpreter.buildStaticStrings(allocator(), &view.store) catch {
+        ops.crash("LIR shim could not allocate the string literal image");
         return error.OutOfMemory;
     };
     runtime_state = .{
@@ -276,6 +288,7 @@ fn ensureEmbeddedRuntimeState(image_base: *anyopaque, image_len: usize, ops: *Ro
         .shm = null,
         .view = view,
         .static_data = static_data,
+        .static_strings = static_strings,
     };
     runtime_state_initialized.store(true, .release);
     return &runtime_state;

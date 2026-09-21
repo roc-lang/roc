@@ -3704,12 +3704,15 @@ pub fn lirInterpreterTranscript(allocator: Allocator, lowered: *const LoweredPro
 
     var static_data = try @import("interpreter_static_data.zig").InterpreterStaticData.init(allocator, lowered.view.static_data, lowered.view.static_data_value_count);
     defer static_data.deinit();
+    var static_strings = try Interpreter.buildStaticStrings(allocator, &lowered.view.store);
+    defer static_strings.deinit();
 
     var interp = try Interpreter.initWithBoxyTables(
         allocator,
         &lowered.view.store,
         &lowered.view.layouts,
         boxy_runtime.BoxyTables.fromImageView(&lowered.view),
+        static_strings.view(),
         runtime_env.get_ops(),
     );
     defer interp.deinit();

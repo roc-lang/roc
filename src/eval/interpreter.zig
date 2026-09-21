@@ -350,7 +350,10 @@ pub const Interpreter = struct {
     roc_ops: RocOps,
     hosted_call_handler: ?HostedCallHandler,
     expect_observer: ?ExpectObserver = null,
-    static_strings: backend.StaticStringData.Table,
+    /// Borrowed literal backings. Values the interpreter returns point into
+    /// these bytes, so their owner must outlive every such value, just as a
+    /// native program's readonly data outlives its calls.
+    static_strings: backend.StaticStringData.View,
     /// Resolved immutable values indexed directly by compact `StaticDataId`.
     static_data: []const usize,
     /// Explicit compile-time slot readiness callback; ordinary runtime images
@@ -635,6 +638,8 @@ pub const Interpreter = struct {
     };
 
     pub const BoxyTables = boxy_runtime.BoxyTables;
+    /// Literal backing table a caller owns and lends to interpreters.
+    pub const StaticStrings = backend.StaticStringData;
 
     /// Heap-pinned interpreter lifetime for host-facing execution. The root
     /// call owns the initial reference and every interpreter-created erased
@@ -655,6 +660,7 @@ pub const Interpreter = struct {
             store: *const LirStore,
             layout_store: *const layout_mod.Store,
             boxy_tables: BoxyTables,
+            static_strings: backend.StaticStringData.View,
             caller_roc_ops: *RocOps,
             synchronization_io: std.Io,
         ) Allocator.Error!*Retained {
@@ -670,6 +676,7 @@ pub const Interpreter = struct {
                     store,
                     layout_store,
                     boxy_tables,
+                    static_strings,
                     caller_roc_ops,
                 ),
             };
@@ -748,10 +755,18 @@ pub const Interpreter = struct {
         }
     };
 
+    /// Build the literal backings for `store` in the native layout the
+    /// interpreter evaluates with. The caller owns the table and must keep it
+    /// alive for as long as any value the interpreter produces may be read.
+    pub fn buildStaticStrings(allocator: Allocator, store: *const LirStore) Allocator.Error!backend.StaticStringData.Table {
+        return backend.StaticStringData.build(allocator, store, RocTarget.detectNative());
+    }
+
     pub fn init(
         allocator: Allocator,
         store: *const LirStore,
         layout_store: *const layout_mod.Store,
+        static_strings: backend.StaticStringData.View,
         caller_roc_ops: *RocOps,
     ) Allocator.Error!LirInterpreter {
         return initWithBoxyTablesAndHostedCallHandler(
@@ -759,6 +774,7 @@ pub const Interpreter = struct {
             store,
             layout_store,
             .{},
+            static_strings,
             caller_roc_ops,
             null,
         );
@@ -769,6 +785,7 @@ pub const Interpreter = struct {
         store: *const LirStore,
         layout_store: *const layout_mod.Store,
         boxy_tables: BoxyTables,
+        static_strings: backend.StaticStringData.View,
         caller_roc_ops: *RocOps,
     ) Allocator.Error!LirInterpreter {
         return initWithBoxyTablesAndHostedCallHandler(
@@ -776,6 +793,7 @@ pub const Interpreter = struct {
             store,
             layout_store,
             boxy_tables,
+            static_strings,
             caller_roc_ops,
             null,
         );
@@ -788,6 +806,7 @@ pub const Interpreter = struct {
         allocator: Allocator,
         store: *const LirStore,
         layout_store: *const layout_mod.Store,
+        static_strings: backend.StaticStringData.View,
         caller_roc_ops: *RocOps,
         hosted_call_handler: ?HostedCallHandler,
     ) Allocator.Error!LirInterpreter {
@@ -796,6 +815,7 @@ pub const Interpreter = struct {
             store,
             layout_store,
             .{},
+            static_strings,
             caller_roc_ops,
             hosted_call_handler,
         );
@@ -808,6 +828,7 @@ pub const Interpreter = struct {
         store: *const LirStore,
         layout_store: *const layout_mod.Store,
         boxy_tables: BoxyTables,
+        static_strings: backend.StaticStringData.View,
         caller_roc_ops: *RocOps,
         hosted_call_handler: ?HostedCallHandler,
     ) Allocator.Error!LirInterpreter {
@@ -832,9 +853,6 @@ pub const Interpreter = struct {
             roc_env.deinit();
             allocator.destroy(roc_env);
         }
-
-        var static_strings = try backend.StaticStringData.build(allocator, store, RocTarget.detectNative());
-        errdefer static_strings.deinit();
 
         return .{
             .allocator = allocator,
@@ -908,7 +926,6 @@ pub const Interpreter = struct {
         self.adapter_desc_specializations.deinit(self.allocator);
         self.roc_env.deinit();
         self.allocator.destroy(self.roc_env);
-        self.static_strings.deinit();
         self.descriptor_arena.deinit();
         self.arena.deinit();
         self.tag_variant_plans.deinit(self.allocator);
@@ -10166,7 +10183,9 @@ test "interpreter float NaN mode preserves runtime payloads and normalizes compi
         .frame_locals = try store.addLocalSpan(&.{f64_local}),
     });
 
-    var interpreter = try Interpreter.init(allocator, &store, &layouts, runtime_env.get_ops());
+    var static_strings = try Interpreter.buildStaticStrings(allocator, &store);
+    defer static_strings.deinit();
+    var interpreter = try Interpreter.init(allocator, &store, &layouts, static_strings.view(), runtime_env.get_ops());
     defer interpreter.deinit();
 
     const f32_result = try interpreter.eval(.{ .proc_id = f32_proc, .ret_layout = .f32 });
@@ -10209,7 +10228,9 @@ test "interpreter evaluates explicit static data by compact id" {
         .frame_locals = frame_locals,
     });
 
-    var interpreter = try Interpreter.init(allocator, &store, &layouts, runtime_env.get_ops());
+    var static_strings = try Interpreter.buildStaticStrings(allocator, &store);
+    defer static_strings.deinit();
+    var interpreter = try Interpreter.init(allocator, &store, &layouts, static_strings.view(), runtime_env.get_ops());
     defer interpreter.deinit();
     interpreter.setStaticData(static_addresses.items, &.{});
 

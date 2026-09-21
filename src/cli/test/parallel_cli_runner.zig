@@ -369,6 +369,7 @@ const CustomCase = enum {
     issue_11344_diagnostics,
     issue_11344_shared_helper,
     issue_11344_lir_image,
+    issue_11364_interpreter_static_big_string,
     cli_cache_roots_distinct,
     watch_inputs_reject_absolute_import,
     watch_completed_run_refresh_reruns,
@@ -1834,6 +1835,7 @@ const subcommand_cases = [_]CliCase{
     .{ .id = 0, .suite = .subcommands, .name = "issue 10484: test/alloc-count/app_json_encode.roc: Json.to_str allocations do not scale with element count (speed)", .backend = .speed, .skip = .{ .windows = "test/alloc-count platform does not have Windows host libraries" }, .body = .{ .command = .{ .args = &.{ "--opt=speed", "--no-cache" }, .roc_file = "test/alloc-count/app_json_encode.roc", .contains = &.{.{ .stream = .stderr, .text = "json bytes: 833 13313" }}, .not_contains = &.{.{ .stream = .stderr, .text = "Expect failed" }} } } },
     .{ .id = 0, .suite = .subcommands, .name = "issue 10967: test/alloc-count/app_dbg_list.roc: dbg allocations do not scale with element count (dev)", .backend = .dev, .skip = .{ .windows = "test/alloc-count platform does not have Windows host libraries" }, .body = .{ .command = .{ .args = &.{ "--opt=dev", "--no-cache" }, .roc_file = "test/alloc-count/app_dbg_list.roc", .contains = &.{ .{ .stream = .stderr, .text = "ROC DBG: [16, 16, 16, 16" }, .{ .stream = .stderr, .text = "dbg elements: 64 1024" } }, .not_contains = &.{.{ .stream = .stderr, .text = "Expect failed" }} } } },
     .{ .id = 0, .suite = .subcommands, .name = "issue 10967: test/alloc-count/app_dbg_list.roc: dbg allocations do not scale with element count (interpreter)", .backend = .interpreter, .skip = .{ .windows = "test/alloc-count platform does not have Windows host libraries" }, .body = .{ .command = .{ .args = &.{ "--opt=interpreter", "--no-cache" }, .roc_file = "test/alloc-count/app_dbg_list.roc", .contains = &.{ .{ .stream = .stderr, .text = "ROC DBG: [16, 16, 16, 16" }, .{ .stream = .stderr, .text = "dbg elements: 64 1024" } }, .not_contains = &.{.{ .stream = .stderr, .text = "Expect failed" }} } } },
+    .{ .id = 0, .suite = .subcommands, .name = "issue 11364: interpreter run and embedded images return a 24-byte static string to the host", .backend = .interpreter, .skip = .{ .windows = "test/str platform does not have Windows host libraries" }, .body = .{ .custom = .issue_11364_interpreter_static_big_string } },
     .{ .id = 0, .suite = .subcommands, .name = "roc test/str/app_static_24_byte_string.roc does not panic", .skip = .{ .windows = "test/str platform does not have Windows host libraries" }, .body = .{ .command = .{ .args = &.{"--no-cache"}, .roc_file = "test/str/app_static_24_byte_string.roc", .exit = .not_panic, .not_contains = &.{ .{ .stream = .stderr, .text = "panic" }, .{ .stream = .stderr, .text = "reached unreachable code" } } } } },
     .{ .id = 0, .suite = .subcommands, .name = "roc build creates executable from test/int/app.roc (interpreter)", .backend = .interpreter, .skip = .{ .windows = "test/int platform does not have Windows host libraries" }, .body = .{ .custom = .build_int_interpreter_creates_output } },
     .{ .id = 0, .suite = .subcommands, .name = "roc build creates executable from test/int/app.roc (dev)", .backend = .dev, .skip = .{ .windows = "test/int platform does not have Windows host libraries" }, .body = .{ .custom = .build_int_dev_creates_output } },
@@ -3184,6 +3186,7 @@ fn runCustomCase(
         .issue_11344_diagnostics => customIssue11344Diagnostics(io, allocator, &env, &timer, timeout_ms),
         .issue_11344_shared_helper => customIssue11344SharedHelper(io, allocator, &env, &timer, timeout_ms),
         .issue_11344_lir_image => customIssue11344LirImage(io, allocator, &env, &timer, timeout_ms),
+        .issue_11364_interpreter_static_big_string => customIssue11364InterpreterStaticBigString(io, allocator, &env, &timer, timeout_ms),
         .cli_cache_roots_distinct => customCliCacheRootsDistinct(io, allocator, &timer),
         .watch_inputs_reject_absolute_import => customWatchInputsRejectAbsoluteImport(io, allocator, &env, &timer, timeout_ms),
         .watch_completed_run_refresh_reruns => customWatchCompletedRunRefreshReruns(io, allocator, &env, &timer, timeout_ms),
@@ -7405,6 +7408,35 @@ fn customIssue11344LirImage(io: std.Io, allocator: Allocator, env: *const CaseEn
         })) |failure| return failure;
     }
     return null;
+}
+
+/// The host prints the returned string, then exits 1 because it lacks the
+/// substring the host looks for. Printing all 24 bytes shows the static
+/// backing outlived the entrypoint's interpreter.
+fn customIssue11364InterpreterStaticBigString(io: std.Io, allocator: Allocator, env: *const CaseEnv, timer: *harness.Timer, timeout_ms: u64) ?TestResult {
+    const fixture = "test/str/app_static_24_byte_string.roc";
+    const expected_output: []const OutputNeedle = &.{.{ .stream = .stderr, .text = "aaaaaaaaaaaaaaaaaaaaaaaa\n" }};
+    if (runRocAndCheck(io, allocator, env, timer, timeout_ms, .{
+        .args = &.{ "--opt=interpreter", "--no-cache" },
+        .roc_file = fixture,
+        .exit = .{ .code = 1 },
+        .contains = expected_output,
+    })) |failure| return failure;
+    const output = std.fs.path.join(allocator, &.{ env.dirs.work_dir, "static-24-interpreter" }) catch |err|
+        return customInfraFailure(allocator, timer, "failed to allocate interpreter output: {}", .{err});
+    const output_arg = outputArg(allocator, output) catch |err|
+        return customInfraFailure(allocator, timer, "failed to allocate interpreter output argument: {}", .{err});
+    if (runRocAndCheck(io, allocator, env, timer, timeout_ms, .{
+        .args = &.{ "build", "--opt=interpreter", "--no-cache", output_arg },
+        .roc_file = fixture,
+    })) |failure| return failure;
+    const executable = runnableOutputPath(io, allocator, output) catch |err|
+        return customInfraFailure(allocator, timer, "failed to find embedded interpreter executable: {}", .{err});
+    return runRawAndCheck(io, allocator, env, timer, timeout_ms, &.{executable}, env.dirs.work_dir, .{
+        .args = &.{},
+        .exit = .{ .code = 1 },
+        .contains = expected_output,
+    });
 }
 
 fn customPipelineParitySharedCache(io: std.Io, allocator: Allocator, env: *const CaseEnv, timer: *harness.Timer, timeout_ms: u64) ?TestResult {
