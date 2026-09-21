@@ -8,6 +8,7 @@ const layout = @import("layout");
 
 const lir_defs = @import("LIR.zig");
 const TailCallBuilder = @import("tail_call_builder.zig");
+const CheckedArithmetic = @import("checked_arithmetic.zig");
 
 const Allocator = std.mem.Allocator;
 pub const GuardedList = collections.GuardedList;
@@ -267,8 +268,9 @@ pub fn commitProcRewriteWithJoinRelocation(self: *Self, worker: *const Self, rel
     const appended = try self.appendBodyShardWithJoinRelocation(shard, null, .empty(), relocation);
     inline for (rewrite_columns) |field|
         @field(rewrite, field).commit(self, worker.body_prefix, appended.relocation);
-    self.getProcSpecPtr(rewrite.proc_id).* =
-        relocateBodyValue(LirProcSpec, rewrite.proc, worker.body_prefix, appended.relocation);
+    const spec = self.getProcSpecPtr(rewrite.proc_id);
+    spec.* = relocateBodyValue(LirProcSpec, rewrite.proc, worker.body_prefix, appended.relocation);
+    spec.facts = spec.facts.merged(worker.facts);
 }
 
 /// Lengths of the coordinator-owned prefix visible to a body worker.
@@ -813,6 +815,9 @@ current_inline_scope: InlineScopeId,
 /// Active procedure-construction scope. Never persisted in LIR images or
 /// transferred into another body worker; completed proofs live in LIR itself.
 tail_call_builder: ?*TailCallBuilder = null,
+/// Facts of the statements appended to this store since the accumulator was
+/// last reset: the body being lowered, or a procedure rewrite's additions.
+facts: lir_defs.ProcFacts = .{},
 
 /// Initializes empty storage for statement-only LIR.
 pub fn init(allocator: Allocator) Self {
@@ -1400,6 +1405,7 @@ pub fn getErasedCallArgOffsets(self: *const Self, plan: ErasedCallArgsPlan) Stor
 pub fn addCFStmt(self: *Self, stmt: CFStmt) Allocator.Error!CFStmtId {
     const idx = self.cf_stmts.len() + if (self.body_coordinator != null) self.body_prefix.cf_stmts else 0;
     try self.cf_stmts.append(self.allocator, stmt);
+    self.noteStmtFacts(stmt);
     const has_source = switch (stmt) {
         .incref,
         .decref,
@@ -1668,9 +1674,85 @@ pub fn getJoinPointSpanMut(self: *Self, span: JoinPointSpan) StoreSpanBorrowMut(
 pub fn addProcSpec(self: *Self, proc: LirProcSpec) Allocator.Error!LirProcSpecId {
     self.assertBodyMetadataImmutable();
     const idx = self.proc_specs.len();
-    try self.proc_specs.append(self.allocator, proc);
+    // A procedure created with a body was built from statements this store
+    // has accumulated facts for; a placeholder is overwritten exactly when
+    // its body is lowered.
+    var spec = proc;
+    if (spec.body != null) spec.facts = spec.facts.merged(self.facts);
+    try self.proc_specs.append(self.allocator, spec);
     try self.proc_locs.append(self.allocator, self.current_loc);
     return @enumFromInt(@as(u32, @intCast(idx)));
+}
+
+/// Record the statement-level procedure facts one appended statement implies.
+fn noteStmtFacts(self: *Self, stmt: CFStmt) void {
+    switch (stmt) {
+        .assign_call => |call| {
+            if (self.tail_call_builder) |builder| {
+                if (builder.proc == call.proc) self.facts.self_call = true;
+            }
+            const result_layout = self.getLocal(call.target).layout_idx;
+            if (result_layout == .str) self.facts.str_call = true;
+            if (result_layout.isInterned()) self.facts.interned_call_result = true;
+        },
+        .join => |join| {
+            const params = self.getLocalSpan(join.params);
+            for (0..GuardedList.borrowLen(params)) |index| {
+                self.facts.join_param = true;
+                if (self.getLocal(GuardedList.at(params, index)).layout_idx.isInterned()) self.facts.join_interned_param = true;
+            }
+        },
+        .assign_literal => |assign| switch (assign.value) {
+            .static_data, .bytes_literal => self.facts.static_literal = true,
+            .i64_literal, .i128_literal, .f64_literal, .f32_literal, .dec_literal, .str_literal, .null_ptr, .proc_ref, .boxy_dynamic_num_literal, .boxy_dynamic_frac_literal => {},
+        },
+        .assign_low_level => |assign| {
+            if (assign.op == .box_box) self.facts.box_box = true;
+            if (CheckedArithmetic.isFamily(assign.op)) self.facts.checked_arithmetic = true;
+        },
+        .switch_stmt => self.facts.switch_stmt = true,
+        .assign_struct => self.facts.struct_build = true,
+        .assign_tag => self.facts.tag_build = true,
+        .init_uninitialized,
+        .assign_ref,
+        .assign_call_erased,
+        .assign_packed_erased_fn,
+        .assign_boxy_desc_ref,
+        .assign_boxy_dict_ref,
+        .assign_boxy_box,
+        .assign_boxy_reuse_box,
+        .assign_boxy_unbox,
+        .assign_boxy_adapt,
+        .assign_boxy_inspect,
+        .assign_boxy_eq,
+        .assign_boxy_tag,
+        .assign_boxy_tag_payload,
+        .boxy_tag_match,
+        .assign_call_dict,
+        .assign_list,
+        .store_struct,
+        .store_tag,
+        .set_local,
+        .debug,
+        .expect,
+        .expect_err,
+        .runtime_error,
+        .comptime_exhaustiveness_failed,
+        .comptime_branch_taken,
+        .incref,
+        .decref,
+        .decref_if_initialized,
+        .free,
+        .switch_initialized_payload,
+        .str_match,
+        .str_match_set,
+        .loop_continue,
+        .loop_break,
+        .jump,
+        .ret,
+        .crash,
+        => {},
+    }
 }
 
 /// Number of stored proc specifications.
@@ -1720,7 +1802,9 @@ pub fn getProcSpec(self: *const Self, idx: LirProcSpecId) LirProcSpec {
 
 /// Updates the body for a stored proc specification.
 pub fn setProcSpecBody(self: *Self, idx: LirProcSpecId, body: ?CFStmtId) void {
-    self.getProcSpecPtr(idx).body = body;
+    const proc = self.getProcSpecPtr(idx);
+    proc.body = body;
+    proc.facts = proc.facts.merged(self.facts);
 }
 
 /// Updates the final join-point span for a stored proc specification.
@@ -1733,6 +1817,7 @@ pub fn setProcSpecBodyAndJoinPoints(self: *Self, idx: LirProcSpecId, body: ?CFSt
     const proc = self.getProcSpecPtr(idx);
     proc.body = body;
     proc.join_points = join_points;
+    proc.facts = proc.facts.merged(self.facts);
 }
 
 /// Returns a mutable pointer to the stored proc specification for the given id.

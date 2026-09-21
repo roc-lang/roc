@@ -386,6 +386,7 @@ const LoweredFnBody = struct {
     frame_locals: LIR.LocalSpan,
     stack_probe: LIR.StackProbe,
     tail_calls: ?LIR.TailCalls,
+    facts: LIR.ProcFacts,
 };
 
 const WorkerBodyFeatures = struct {
@@ -406,6 +407,7 @@ const CompletedFnBodyShard = struct {
     frame_locals: LIR.LocalSpan,
     stack_probe: LIR.StackProbe,
     tail_calls: ?LIR.TailCalls,
+    facts: LIR.ProcFacts,
     join_point_count: u32,
     features: WorkerBodyFeatures,
     discovered_fns: []Type.FnId,
@@ -1384,6 +1386,7 @@ const Lowerer = struct {
             .frame_locals = body.frame_locals,
             .stack_probe = body.stack_probe,
             .tail_calls = body.tail_calls,
+            .facts = body.facts,
             .join_point_count = worker.next_join_point,
             .features = worker.worker_features,
             .discovered_fns = discovered_fns,
@@ -2031,6 +2034,7 @@ const Lowerer = struct {
             Common.invariant("Solved-LIR committed a Roc procedure without a body");
         proc.frame_locals = appended.frame_locals;
         proc.stack_probe = shard.stack_probe;
+        proc.facts = shard.facts;
         proc.tail_calls = if (shard.tail_calls) |sites|
             appended.relocation.tailCalls(shard.prefix, sites)
         else
@@ -2106,6 +2110,11 @@ const Lowerer = struct {
         self.aggregate_bindings = &aggregates;
         defer self.aggregate_bindings = saved_aggregates;
         const proc_id = try self.procPlaceholder(fn_id);
+        // The store accumulates this body's facts from the statements it
+        // appends; a body lowered inside another body keeps its own set.
+        const saved_facts = self.result.store.facts;
+        self.result.store.facts = .{};
+        defer self.result.store.facts = saved_facts;
         if (self.result.store.getProcSpec(proc_id).external) {
             // The object cache provides this procedure's code; its body is
             // never lowered, and nothing it would reach is reached through it.
@@ -2176,6 +2185,7 @@ const Lowerer = struct {
                 proc_ptr.frame_locals = lowered_body.?.frame_locals;
                 proc_ptr.stack_probe = lowered_body.?.stack_probe;
                 proc_ptr.tail_calls = lowered_body.?.tail_calls;
+                proc_ptr.facts = lowered_body.?.facts;
                 self.fn_written.items[@intFromEnum(fn_id)] = true;
             }
             return lowered_body;
@@ -2257,6 +2267,7 @@ const Lowerer = struct {
                     .frame_locals = frame_locals,
                     .stack_probe = self.stackProbeForProc(proc.args, frame_locals, proc.ret_layout),
                     .tail_calls = try tail_calls.finish(&self.result.store),
+                    .facts = self.result.store.facts,
                 };
                 if (!self.worker_callback) {
                     const proc_ptr = self.result.store.getProcSpecPtr(proc_id);
@@ -2264,6 +2275,7 @@ const Lowerer = struct {
                     proc_ptr.frame_locals = frame_locals;
                     proc_ptr.stack_probe = lowered_body.?.stack_probe;
                     proc_ptr.tail_calls = lowered_body.?.tail_calls;
+                    proc_ptr.facts = lowered_body.?.facts;
                 }
             },
             .hosted => {
@@ -2327,6 +2339,7 @@ const Lowerer = struct {
             .frame_locals = frame_locals,
             .stack_probe = self.stackProbeForProc(proc.args, frame_locals, proc.ret_layout),
             .tail_calls = null,
+            .facts = self.result.store.facts,
         };
     }
 
@@ -4558,6 +4571,7 @@ const Lowerer = struct {
     }
 
     fn noteWorkerExpr(self: *Lowerer, data: Lifted.ExprData) void {
+        if (data == .loop_) self.result.store.facts.loop = true;
         if (!self.worker_callback or self.parallel_metrics == null) return;
         if (data == .call_value) self.worker_features.indirect_call = true;
         if (data == .match_) self.worker_features.match_ = true;

@@ -1058,6 +1058,7 @@ const Transform = struct {
     }
 
     fn applyTrmc(self: *Transform) ResourceError!void {
+        self.store.facts.loop = true;
         const proc = self.store.getProcSpec(self.proc_id);
         const ret_layout = proc.ret_layout;
         try self.copyArgs(proc.args);
@@ -1088,6 +1089,7 @@ const Transform = struct {
     }
 
     fn applyTce(self: *Transform) ResourceError!void {
+        self.store.facts.loop = true;
         const proc = self.store.getProcSpec(self.proc_id);
         try self.copyArgs(proc.args);
         try self.initLoopMoves(null);

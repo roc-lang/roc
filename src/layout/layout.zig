@@ -199,6 +199,13 @@ pub const Idx = enum(std.meta.Int(.unsigned, layout_bit_size - @bitSizeOf(Layout
     /// Default numeric type for unbound/polymorphic numbers.
     /// Dec is the default in the new Roc compiler.
     pub const default_num: Idx = .dec;
+
+    /// Whether this index names a layout interned in a store rather than one
+    /// of the fixed scalar layouts above. Every aggregate, list, box, closure
+    /// and pointer layout is interned.
+    pub fn isInterned(self: Idx) bool {
+        return self != Idx.none and @intFromEnum(self) > @intFromEnum(Idx.i64x2);
+    }
 };
 
 /// Represents a closure with its captured environment

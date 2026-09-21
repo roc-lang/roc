@@ -221,6 +221,16 @@ const Pass = struct {
 ///
 /// Returns how many statements were dropped.
 pub fn elide(gpa: Allocator, store: *LirStore) Allocator.Error!usize {
+    if (!anyStaticLiteral(store)) {
+        if (@import("builtin").mode == .Debug) {
+            var check = try compute(gpa, store);
+            defer check.deinit(gpa);
+            for (0..store.localCount()) |index| {
+                if (check.contains(@enumFromInt(@as(u32, @intCast(index))))) immortalInvariant("a program without static-literal facts held an immortal local");
+            }
+        }
+        return 0;
+    }
     var immortal = try compute(gpa, store);
     defer immortal.deinit(gpa);
 
@@ -405,6 +415,15 @@ pub fn elide(gpa: Allocator, store: *LirStore) Allocator.Error!usize {
     }
 
     return drop_count;
+}
+
+/// Whether any procedure's facts record a static-backed literal; without one
+/// no local can be immortal.
+fn anyStaticLiteral(store: *const LirStore) bool {
+    for (0..store.procSpecCount()) |index| {
+        if (store.getProcSpec(@enumFromInt(@as(u32, @intCast(index)))).facts.static_literal) return true;
+    }
+    return false;
 }
 
 fn immortalInvariant(comptime message: []const u8) noreturn {
