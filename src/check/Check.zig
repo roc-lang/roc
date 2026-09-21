@@ -313,13 +313,12 @@ final_codec_dispatch_constraint_fns: std.AutoHashMapUnmanaged(Var, void) = .empt
 /// settled: each scheme instantiation copies and validates the exact relation.
 scheme_deferred_codec_constraint_fns: std.AutoHashMapUnmanaged(Var, void) = .empty,
 checking_final_codec_dispatch_constraints: bool = false,
-/// Complete imported schemes shared by value lookup and method dispatch.
-/// Each source node is copied into this solver exactly once.
-/// Each use still instantiates from this immutable scheme, so polymorphic uses
-/// remain fresh without recopied import graphs. Cache hits return the root
-/// directly; only imports created inside a probe need rollback journal rows.
-imported_scheme_by_source: std.AutoHashMapUnmanaged(ImportedSchemeKey, Var) = .empty,
-speculative_imports: std.ArrayListUnmanaged(ImportedScheme) = .empty,
+/// Complete imported schemes, shared by ordinary lookups and method dispatch.
+/// Each source binding is copied once; each use freshly instantiates its type
+/// and explicit requirements. The append-only log owns speculative imports so
+/// rollback discards their cache entries and scheme metadata together.
+imported_schemes: std.ArrayListUnmanaged(ImportedScheme) = .empty,
+imported_scheme_by_source: std.AutoHashMapUnmanaged(ImportedSchemeKey, u32) = .empty,
 /// Exact associated-item targets keyed by the alias declaration type var and
 /// item. Alias traversal and owner-scope lookup happen once per declaration.
 associated_lookup_cache: std.AutoHashMapUnmanaged(AssociatedLookupCacheKey, ?AssociatedLookupResolution) = .empty,
@@ -2875,7 +2874,7 @@ pub fn deinit(self: *Self) void {
     self.scratch_default_param_vars.deinit();
     self.scratch_generated_codec_calls.deinit(self.gpa);
     self.pending_generated_parser_error_mappings.deinit(self.gpa);
-    self.speculative_imports.deinit(self.gpa);
+    self.imported_schemes.deinit(self.gpa);
     self.imported_scheme_by_source.deinit(self.gpa);
     self.associated_lookup_cache.deinit(self.gpa);
     self.ident_to_var_map.deinit();
@@ -27164,7 +27163,7 @@ const Probe = struct {
     accepted_nominal_constructor_backings_len: usize,
     dispatch_target_instantiations_len: usize,
     dispatch_derivations_len: usize,
-    speculative_imports_len: usize,
+    imported_schemes_len: usize,
 
     fn rollback(self: *Probe) void {
         std.debug.assert(self.check.probe_depth > 0);
@@ -27223,11 +27222,11 @@ const Probe = struct {
         }
         self.check.probe_depth -= 1;
         self.check.shrinkDispatchDerivationsTo(self.dispatch_derivations_len);
-        while (self.check.speculative_imports.items.len > self.speculative_imports_len) {
-            const removed = self.check.speculative_imports.pop().?;
+        while (self.check.imported_schemes.items.len > self.imported_schemes_len) {
+            const removed = self.check.imported_schemes.pop().?;
+            self.check.discardImportedSchemeMetadata(removed.scheme_var);
             const did_remove = self.check.imported_scheme_by_source.remove(removed.key);
             std.debug.assert(did_remove);
-            self.check.discardImportedSchemeMetadata(removed.scheme_var);
         }
     }
 
@@ -27244,7 +27243,6 @@ const Probe = struct {
         // observations are real—so the journal entries are dead weight and
         // drop with the scope.
         self.check.ambiguity_escalation_journal.shrinkRetainingCapacity(self.ambiguity_escalation_journal_len);
-        self.check.speculative_imports.shrinkRetainingCapacity(self.speculative_imports_len);
     }
 };
 
@@ -27268,7 +27266,7 @@ fn beginProbe(self: *Self, env: ?*Env) std.mem.Allocator.Error!Probe {
     const accepted_nominal_constructor_backings_len = self.accepted_nominal_constructor_backings.items.len;
     const dispatch_target_instantiations_len = self.dispatch_target_instantiations.items.len;
     const dispatch_derivations_len = self.dispatch_derivations.items.len;
-    const speculative_imports_len = self.speculative_imports.items.len;
+    const imported_schemes_len = self.imported_schemes.items.len;
     const savepoint = try self.types.createSavepoint();
     self.probe_depth += 1;
     return .{
@@ -27299,7 +27297,7 @@ fn beginProbe(self: *Self, env: ?*Env) std.mem.Allocator.Error!Probe {
         .accepted_nominal_constructor_backings_len = accepted_nominal_constructor_backings_len,
         .dispatch_target_instantiations_len = dispatch_target_instantiations_len,
         .dispatch_derivations_len = dispatch_derivations_len,
-        .speculative_imports_len = speculative_imports_len,
+        .imported_schemes_len = imported_schemes_len,
         .savepoint = savepoint,
     };
 }
@@ -32094,42 +32092,42 @@ fn importedSchemeFromSource(
         .env = source_env,
         .type_node_idx = type_node_idx,
     };
-    if (self.imported_scheme_by_source.get(key)) |scheme_var| return scheme_var;
+    if (self.imported_scheme_by_source.get(key)) |index| {
+        return self.imported_schemes.items[index].scheme_var;
+    }
 
-    if (self.probe_depth > 0) try self.speculative_imports.ensureUnusedCapacity(self.gpa, 1);
+    try self.imported_schemes.ensureUnusedCapacity(self.gpa, 1);
     try self.imported_scheme_by_source.ensureUnusedCapacity(self.gpa, 1);
 
     // The cached graph is the generalized import scheme, not a use. Keep it
     // source-owned and regionless; each fresh instantiation below receives its
     // own use-site region and can be unified or rejected independently.
     const source_var = ModuleEnv.varFrom(type_node_idx);
-    std.debug.assert(@intFromEnum(source_var) < source_env.types.len());
     const scheme_var = try self.copyVar(source_var, source_env, null);
     errdefer self.discardImportedSchemeMetadata(scheme_var);
     if (source_env.nodeIsBindingScheme(type_node_idx)) {
         try self.markBindingSchemeVar(scheme_var);
+        // copyVar leaves the source-to-destination map intact. Requirements
+        // must use it too, preserving every variable shared with the type.
         try self.copyImportedBindingSchemeCodecRequirements(source_env, type_node_idx, scheme_var);
     }
-    self.imported_scheme_by_source.putAssumeCapacityNoClobber(key, scheme_var);
-    if (self.probe_depth > 0) {
-        self.speculative_imports.appendAssumeCapacity(.{
-            .key = key,
-            .scheme_var = scheme_var,
-        });
-    }
+    const index: u32 = @intCast(self.imported_schemes.items.len);
+    self.imported_schemes.appendAssumeCapacity(.{
+        .key = key,
+        .scheme_var = scheme_var,
+    });
+    self.imported_scheme_by_source.putAssumeCapacityNoClobber(key, index);
     return scheme_var;
 }
 
-/// Discard precisely the metadata owned by a newly copied import. Its raw
-/// root is fresh, so it cannot own a pre-existing scheme or classification.
-/// Used both for failed construction and for imports allocated in a probe
-/// whose type-store allocations have been rolled back.
+/// A pristine imported root owns all of this metadata. No existing scheme
+/// is extended by importing another source binding, so removing an import is
+/// proportional only to that import's own requirements and index entries.
 fn discardImportedSchemeMetadata(self: *Self, scheme_var: Var) void {
     if (self.typeSchemeIndexForRoot(scheme_var)) |scheme_idx| {
         self.removeTypeSchemeAt(scheme_idx);
     }
-    // Imported roots are allocated after every source CIR node, and their
-    // binding classification therefore lives in the synthetic table.
+    // Imported roots are allocated after CIR's source-node domain.
     std.debug.assert(@intFromEnum(scheme_var) >= self.binding_scheme_nodes.bit_length);
     _ = self.synthetic_binding_schemes.remove(scheme_var);
 }
@@ -37600,7 +37598,7 @@ test "literal dispatch finalization preserves generalized specialization obligat
     try std.testing.expect(quote_found);
 }
 
-test "imported schemes are shared by ordinary calls and method dispatch" {
+test "imported method schemes are copied once and freshly instantiated per use" {
     const TestEnv = @import("test/TestEnv.zig");
     const source =
         \\wide : U64
@@ -37609,137 +37607,84 @@ test "imported schemes are shared by ordinary calls and method dispatch" {
         \\small = 2
         \\wide_result = wide.plus_wrap(3)
         \\small_result = small.plus_wrap(4)
-        \\direct_result = U64.plus_wrap(wide, small)
     ;
     var test_env = try TestEnv.init("ImportedScheme", source);
     defer test_env.deinit();
     try test_env.assertNoErrors();
 
-    try std.testing.expectEqual(@as(usize, 0), test_env.checker.speculative_imports.items.len);
+    try std.testing.expectEqual(@as(usize, 1), test_env.checker.imported_schemes.items.len);
     try std.testing.expectEqual(@as(usize, 1), test_env.checker.imported_scheme_by_source.count());
 }
 
-test "imported codec schemes roll back their metadata and survive committed imports" {
+test "issue 11444: complete imported schemes share a cache and roll back with their metadata" {
     const TestEnv = @import("test/TestEnv.zig");
-    var source = try TestEnv.init("Codecs",
-        \\module [to_json, identity]
-        \\to_json = |a, b| Json.to_str({ a, b })
-        \\identity = |x| x
-    );
-    defer source.deinit();
-    try std.testing.expectEqual(@as(usize, 0), try source.typeProblemCount());
-    const json_node = source.exposedValueNode("to_json").?;
-    const identity_node = source.exposedValueNode("identity").?;
-    try std.testing.expect(source.module_env.bindingSchemeCodecRequirementsForNode(json_node).len > 0);
-
-    var destination = try TestEnv.init("Consumer", "value = {}");
-    defer destination.deinit();
-    const checker = &destination.checker;
-    const identity = try checker.importedSchemeFromSource(source.module_env, identity_node);
-    const types_before = checker.types.len();
-    const schemes_before = checker.type_schemes.items.len;
-    const classifications_before = checker.synthetic_binding_schemes.count();
-    const imports_before = checker.speculative_imports.items.len;
-    const json_key = ImportedSchemeKey{ .env = source.module_env, .type_node_idx = json_node };
-
-    // A failed probe removes its complete imported scheme, including indices,
-    // while keeping the identity scheme imported before the savepoint.
-    {
-        var outer = try checker.beginProbe(null);
-        defer outer.rollback();
-        const copied = try checker.importedSchemeFromSource(source.module_env, json_node);
-        try std.testing.expect(checker.isBindingSchemeVar(copied));
-        const scheme_idx = checker.typeSchemeIndexForRoot(copied).?;
-        try std.testing.expect(checker.type_schemes.items[scheme_idx].dispatch_requirements.items.len > 0);
-        const copied_types = checker.types.len();
-        try std.testing.expectEqual(copied, try checker.importedSchemeFromSource(source.module_env, json_node));
-        try std.testing.expectEqual(copied_types, checker.types.len());
-        try std.testing.expectEqual(scheme_idx, checker.typeSchemeIndexForRoot(copied).?);
-    }
-    try std.testing.expectEqual(types_before, checker.types.len());
-    try std.testing.expectEqual(schemes_before, checker.type_schemes.items.len);
-    try std.testing.expectEqual(classifications_before, checker.synthetic_binding_schemes.count());
-    try std.testing.expectEqual(imports_before, checker.speculative_imports.items.len);
-    try std.testing.expect(!checker.imported_scheme_by_source.contains(json_key));
-    try std.testing.expectEqual(identity, try checker.importedSchemeFromSource(source.module_env, identity_node));
-
-    // Reusing the rolled-back variable numbers must create a fresh complete
-    // scheme; a successful probe keeps it for every later use.
-    const copied = committed: {
-        var commit = try checker.beginProbe(null);
-        errdefer commit.rollback();
-        const copied = try checker.importedSchemeFromSource(source.module_env, json_node);
-        try std.testing.expectEqual(@intFromEnum(copied), types_before);
-        try std.testing.expect(checker.typeSchemeIndexForRoot(copied) != null);
-        commit.commit();
-        break :committed copied;
-    };
-    try std.testing.expectEqual(copied, try checker.importedSchemeFromSource(source.module_env, json_node));
-    {
-        var probe = try checker.beginProbe(null);
-        defer probe.rollback();
-        try std.testing.expectEqual(copied, try checker.importedSchemeFromSource(source.module_env, json_node));
-    }
-    try std.testing.expect(checker.typeSchemeIndexForRoot(copied) != null);
-    try std.testing.expect(checker.isBindingSchemeVar(copied));
-    try std.testing.expectEqual(imports_before, checker.speculative_imports.items.len);
-}
-
-test "issue 11393: imported codec methods instantiate independently and reject unsupported arguments" {
-    const TestEnv = @import("test/TestEnv.zig");
-    var source = try TestEnv.init("Browser",
-        \\Browser :: [].{
-        \\    Page := {}
-        \\    stringify : Page, a -> Str where [a.Json.Encodable([])]
-        \\    stringify = |_page, value| Json.to_str({ value })
-        \\}
-    );
+    var source = try TestEnv.init("Codec", @import("test/issue_11444_test.zig").codec_source);
     defer source.deinit();
     try source.assertNoErrors();
+    var client = try TestEnv.initWithImport("Client", "import Codec\nvalue = True", "Codec", &source);
+    defer client.deinit();
+    try client.assertNoErrors();
 
-    // Exercise both a freshly checked source and the same source loaded from
-    // its serialized module. The consumer must receive the complete scheme
-    // from durable metadata in either case.
-    const gpa = std.testing.allocator;
-    var writer = collections.CompactWriter.init();
-    defer writer.deinit(gpa);
-    const serialized = try writer.appendAlloc(gpa, ModuleEnv.Serialized);
-    try serialized.serialize(source.module_env, gpa, &writer);
-    const bytes = try gpa.alignedAlloc(u8, collections.CompactWriter.SERIALIZATION_ALIGNMENT, @intCast(writer.total_bytes));
-    defer gpa.free(bytes);
-    _ = try writer.writeToBuffer(bytes);
-    const frozen: *ModuleEnv.Serialized = @ptrCast(@alignCast(bytes.ptr));
-    try frozen.validate(bytes.len);
-    const cached = try frozen.deserializeWithMutableTypes(@intFromPtr(bytes.ptr), gpa, source.module_env.common.source, "Browser");
-    defer {
-        cached.deinitCachedModule();
-        gpa.destroy(cached);
+    var nodes: [2]CIR.Node.Idx = undefined;
+    inline for (.{ "encode", "encode_tuple" }, 0..) |name, i| {
+        nodes[i] = source.methodTypeNode(name) orelse return error.TestUnexpectedResult;
+        try std.testing.expect(source.module_env.bindingSchemeCodecRequirementsForNode(nodes[i]).len > 0);
+    }
+    const import_idx = client.importIndex("Codec") orelse return error.TestUnexpectedResult;
+
+    const checker = &client.checker;
+    // TestEnv's import array lives only through checkFile. This test invokes
+    // further imports, so supply the same module ordering for its duration.
+    const imported_modules = [_]*const ModuleEnv{ client.builtin_module.env, source.module_env };
+    checker.imported_modules = &imported_modules;
+    const type_count = checker.types.len();
+    const cache_count = checker.imported_schemes.items.len;
+    const scheme_count = checker.type_schemes.items.len;
+    const binding_count = checker.synthetic_binding_schemes.count();
+
+    // Repeat after rollback to exercise reuse of the discarded type indices.
+    for (0..2) |_| {
+        var transaction = try checker.beginProbe(null);
+        const ordinary = (try checker.resolveVarFromExternal(import_idx, @intFromEnum(nodes[0]))).?;
+        const copied_type_count = checker.types.len();
+        const method = try checker.importedSchemeFromSource(source.module_env, nodes[0]);
+        try std.testing.expectEqual(ordinary.local_var, method);
+        try std.testing.expectEqual(copied_type_count, checker.types.len());
+        try std.testing.expectEqual(cache_count + 1, checker.imported_schemes.items.len);
+        try std.testing.expect(checker.isBindingSchemeVar(method));
+        const scheme_idx = checker.typeSchemeIndexForRoot(method).?;
+        try std.testing.expectEqual(
+            source.module_env.bindingSchemeCodecRequirementsForNode(nodes[0]).len,
+            checker.type_schemes.items[scheme_idx].dispatch_requirements.items.len,
+        );
+
+        // Exercise method-first lookup too, followed by an ordinary hit.
+        const second_method = try checker.importedSchemeFromSource(source.module_env, nodes[1]);
+        const second_type_count = checker.types.len();
+        const second_ordinary = (try checker.resolveVarFromExternal(import_idx, @intFromEnum(nodes[1]))).?;
+        try std.testing.expectEqual(second_method, second_ordinary.local_var);
+        try std.testing.expectEqual(second_type_count, checker.types.len());
+        transaction.rollback();
+
+        try std.testing.expectEqual(type_count, checker.types.len());
+        try std.testing.expectEqual(cache_count, checker.imported_schemes.items.len);
+        try std.testing.expectEqual(cache_count, checker.imported_scheme_by_source.count());
+        try std.testing.expectEqual(scheme_count, checker.type_schemes.items.len);
+        try std.testing.expectEqual(binding_count, checker.synthetic_binding_schemes.count());
+        try std.testing.expect(checker.typeSchemeIndexForRoot(method) == null);
+        try std.testing.expect(checker.typeSchemeIndexForRoot(second_method) == null);
     }
 
-    for ([_]*ModuleEnv{ source.module_env, cached }) |source_env| {
-        // initWithImport only borrows the source environment and its builtins.
-        var imported_source = source;
-        imported_source.module_env = source_env;
-        var accepted = try TestEnv.initWithImport("Accepted",
-            \\import Browser
-            \\page = Browser.Page.{}
-            \\text = page.stringify("hello")
-            \\flag = Browser.stringify(page, True)
-            \\record = page.stringify({ nested: "world" })
-        , "Browser", &imported_source);
-        defer accepted.deinit();
-        try accepted.assertDefType("text", "Str");
-        try accepted.assertDefType("flag", "Str");
-        try accepted.assertDefType("record", "Str");
-
-        var rejected = try TestEnv.initWithImport("Rejected",
-            \\import Browser
-            \\page = Browser.Page.{}
-            \\bad = page.stringify(|x| x)
-        , "Browser", &imported_source);
-        defer rejected.deinit();
-        try std.testing.expect((try rejected.typeProblemCount()) > 0);
-    }
+    // A committed import survives, including across later rolled-back hits.
+    var committed = try checker.beginProbe(null);
+    const retained = try checker.importedSchemeFromSource(source.module_env, nodes[0]);
+    committed.commit();
+    var probe = try checker.beginProbe(null);
+    try std.testing.expectEqual(retained, (try checker.resolveVarFromExternal(import_idx, @intFromEnum(nodes[0]))).?.local_var);
+    probe.rollback();
+    try std.testing.expect(checker.typeSchemeIndexForRoot(retained) != null);
+    try std.testing.expect(checker.isBindingSchemeVar(retained));
+    try std.testing.expectEqual(retained, try checker.importedSchemeFromSource(source.module_env, nodes[0]));
 }
 
 // THE CLASS-HOP CONTRACT (`recordDispatchDerivations`): instantiating a
@@ -42852,4 +42797,61 @@ pub fn displayNameIsBetter(new_name: []const u8, existing_name: []const u8) bool
     }
     // Identical strings - no replacement needed
     return false;
+}
+
+test "issue 11393: imported codec methods instantiate independently and reject unsupported arguments" {
+    const TestEnv = @import("test/TestEnv.zig");
+    var source = try TestEnv.init("Browser",
+        \\Browser :: [].{
+        \\    Page := {}
+        \\    stringify : Page, a -> Str where [a.Json.Encodable([])]
+        \\    stringify = |_page, value| Json.to_str({ value })
+        \\}
+    );
+    defer source.deinit();
+    try source.assertNoErrors();
+
+    // Exercise both a freshly checked source and the same source loaded from
+    // its serialized module. The consumer must receive the complete scheme
+    // from durable metadata in either case.
+    const gpa = std.testing.allocator;
+    var writer = collections.CompactWriter.init();
+    defer writer.deinit(gpa);
+    const serialized = try writer.appendAlloc(gpa, ModuleEnv.Serialized);
+    try serialized.serialize(source.module_env, gpa, &writer);
+    const bytes = try gpa.alignedAlloc(u8, collections.CompactWriter.SERIALIZATION_ALIGNMENT, @intCast(writer.total_bytes));
+    defer gpa.free(bytes);
+    _ = try writer.writeToBuffer(bytes);
+    const frozen: *ModuleEnv.Serialized = @ptrCast(@alignCast(bytes.ptr));
+    try frozen.validate(bytes.len);
+    const cached = try frozen.deserializeWithMutableTypes(@intFromPtr(bytes.ptr), gpa, source.module_env.common.source, "Browser");
+    defer {
+        cached.deinitCachedModule();
+        gpa.destroy(cached);
+    }
+
+    for ([_]*ModuleEnv{ source.module_env, cached }) |source_env| {
+        // initWithImport only borrows the source environment and its builtins.
+        var imported_source = source;
+        imported_source.module_env = source_env;
+        var accepted = try TestEnv.initWithImport("Accepted",
+            \\import Browser
+            \\page = Browser.Page.{}
+            \\text = page.stringify("hello")
+            \\flag = Browser.stringify(page, True)
+            \\record = page.stringify({ nested: "world" })
+        , "Browser", &imported_source);
+        defer accepted.deinit();
+        try accepted.assertDefType("text", "Str");
+        try accepted.assertDefType("flag", "Str");
+        try accepted.assertDefType("record", "Str");
+
+        var rejected = try TestEnv.initWithImport("Rejected",
+            \\import Browser
+            \\page = Browser.Page.{}
+            \\bad = page.stringify(|x| x)
+        , "Browser", &imported_source);
+        defer rejected.deinit();
+        try std.testing.expect((try rejected.typeProblemCount()) > 0);
+    }
 }

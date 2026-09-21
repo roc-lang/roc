@@ -2127,6 +2127,17 @@ alias arguments, but references to the annotated value consume the annotation
 root. This is how alias spelling from annotations is preserved without making
 alias roots union-find representatives for concrete structures.
 
+Runtime Monotype production maps a transparent alias directly to its backing's
+type identity. Direct checked-type lowering, scoped instantiation, and stored
+constant type restoration memoize that mapping in their existing source-type
+maps; they do not allocate an alias wrapper or run a separate normalization
+pass. The mapping has the same module and instantiation lifetime as the backing
+and preserves recursive sharing. Source alias names and arguments remain in
+checked data. Nominal identities, including their type arguments and backing
+authority, remain distinct. Root requests and ordinary calls therefore agree
+on runtime type identity without alias-aware codec lookup or extra graph
+construction for already closed roots.
+
 ### Where Method Annotations
 
 A where method's type is the complete annotation written after its colon.
@@ -3832,6 +3843,16 @@ record evidence pairs or enumerate a scheme's evidence parameters. Real
 edges collect their substitutions in the existing variable-registration walk;
 only an empty substitution needs an evidence-parameter query to decide whether
 shared requirements need a record.
+
+Ordinary imports and selected method targets share one complete-scheme cache
+per importing checker, keyed by source module and declaration node. A cache
+miss copies the type root and its explicit codec requirements under the same
+variable mapping and records binding-scheme ownership before exposing the
+entry. Each use independently instantiates that complete scheme. A speculative
+rollback removes only the imports created in its scope, including their
+requirement tables and synthetic binding ownership. A committed import survives
+later rolled-back cache hits. No cache hit recopies a type graph or re-enumerates
+the source requirements.
 
 Every procedure evidence parameter also carries an explicit dispatcher source.
 The source is exactly one of: a checked component path over the procedure's
@@ -6869,17 +6890,6 @@ explicit TypeScheme requirement. Rechecking a deserialized checked environment
 uses that scheme root to rehydrate the same alias-indexed TypeScheme before
 source checking starts. No import stage infers a codec relation from the solved
 receiver shape or from method-name heuristics.
-
-Ordinary value imports and selected method targets share one lazy cache keyed
-by source environment and source node. A cache entry owns the complete pristine
-scheme: its callable graph, binding classification, and captured codec
-requirements. Each use instantiates that complete scheme independently. Cache
-hits return the scheme root directly. Only imports created in a speculative
-probe enter its rollback journal; rollback removes those cache entries together
-with their TypeScheme indices and synthetic binding classifications. Commit
-keeps the entries and discards their journal rows. Cached schemes from before
-the probe remain valid. Failed import construction likewise discards its scheme
-metadata.
 
 Boundary literal defaulting protects variables in the callable relation but
 does not protect the receiver solely because it is the callable's first
