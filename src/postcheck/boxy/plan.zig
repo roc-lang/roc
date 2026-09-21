@@ -171,6 +171,27 @@ pub fn childCarriesRuntimeDescriptor(role: ChildRole) bool {
     };
 }
 
+/// A nominal's backing and padding are written in terms of its declaration
+/// formals; its type arguments belong to the enclosing scope.
+fn childIsInNominalDeclarationScope(role: ChildRole) bool {
+    return switch (role) {
+        .nominal_backing, .nominal_padding_field => true,
+        .alias_backing,
+        .alias_arg,
+        .nominal_arg,
+        .record_field,
+        .record_ext,
+        .tuple_elem,
+        .tag_payload,
+        .tag_ext,
+        .list_elem,
+        .box_payload,
+        .function_arg,
+        .function_ret,
+        => false,
+    };
+}
+
 /// One explicitly analyzed child of a type representation.
 pub const RepChild = struct {
     role: ChildRole,
@@ -8148,11 +8169,15 @@ const Builder = struct {
             const current_rep = self.plan.representations.items[@intFromEnum(current)];
             const children = self.plan.childSlice(current_rep.children);
             if (current_rep.kind == .nominal) {
+                // The path only descends, so each nominal's scope stays open
+                // for the rest of the walk.
+                _ = substitutions.enterScope();
                 var substitution_iter = self.plan.nominalBackingSubstitutions(current_rep.nominal_backing_arg_substitutions);
                 while (substitution_iter.next()) |substitution| {
                     const formal_rep = substitution.formal_rep orelse continue;
-                    if (formal_rep == substitution.actual_rep) continue;
-                    try substitutions.put(self.allocator, formal_rep, substitution.actual_rep);
+                    const actual = substitutions.resolveEnclosing(substitution.actual_rep);
+                    if (formal_rep == actual) continue;
+                    try substitutions.bindFormal(self.allocator, formal_rep, actual);
                 }
             }
             const selected = switch (path_step.stepKind()) {
@@ -8693,8 +8718,8 @@ const Builder = struct {
         const rep_entry = try seen_reps.getOrPut(worker_rep_id);
         if (rep_entry.found_existing) return;
 
-        const substitution_scope = substitutions.entries.items.len;
-        defer substitutions.entries.shrinkRetainingCapacity(substitution_scope);
+        const enclosing_scope = substitutions.enterScope();
+        defer substitutions.exitScope(enclosing_scope);
         const inherited_call_rep_id = substitutions.get(worker_rep_id) orelse call_rep_id;
         try self.recordCallDescriptorWrapperSubstitutions(worker_rep_id, inherited_call_rep_id, substitutions);
         const aligned_call_rep_id = substitutions.get(worker_rep_id) orelse inherited_call_rep_id;
@@ -8773,6 +8798,11 @@ const Builder = struct {
                 const worker_child = self.plan.children.items[worker_rep.children.start + child_index];
                 if (runtime_value_only and !childCarriesRuntimeDescriptor(worker_child.role)) continue;
                 if (!try self.repQuery().repSubtreeHasDescriptor(worker_child.rep)) continue;
+                const child_scope = substitutions.enterScope();
+                defer substitutions.exitScope(child_scope);
+                if (childIsInNominalDeclarationScope(worker_child.role)) {
+                    try self.bindCallNominalFormals(worker_rep_id, aligned_call_rep_id, substitutions);
+                }
                 try self.collectCallHiddenDescriptorArgs(worker_child.rep, aligned_call_rep_id, call_value_rep, source_value_rep, source_arg_index, params, next_param, pending, seen_reps, seen_descriptor_reps, substitutions, runtime_value_only);
             }
             return;
@@ -8798,6 +8828,11 @@ const Builder = struct {
             defer if (worker_child.role == .tag_ext) {
                 for (pending.items[first_child_arg..]) |*arg| arg.argument_source = .original;
             };
+            const child_scope = substitutions.enterScope();
+            defer substitutions.exitScope(child_scope);
+            if (childIsInNominalDeclarationScope(worker_child.role)) {
+                try self.bindCallNominalFormals(worker_rep_id, aligned_call_rep_id, substitutions);
+            }
             if (self.rowInstantiationTarget(worker_rep_id, aligned_call_rep_id, worker_child)) |row_target| {
                 try self.collectCallHiddenDescriptorArgs(worker_child.rep, row_target, call_value_rep, source_value_rep, source_arg_index, params, next_param, pending, seen_reps, seen_descriptor_reps, substitutions, runtime_value_only);
                 continue;
@@ -8846,10 +8881,18 @@ const Builder = struct {
         call_rep: TypeRepId,
     };
 
+    /// A lexical environment of call substitutions. Worker representations
+    /// map to one call representation wherever they are visible, except
+    /// declaration formals: every nominal use binds its declaration's shared
+    /// formals for its own backing, so `Try(Try(U64, Str), Str)` binds `ok`
+    /// to `Try(U64, Str)` in the outer backing and to `U64` in the inner one.
+    /// The innermost binding of a formal shadows the enclosing ones.
     const CallDescriptorRepSubstitutionMap = struct {
         entries: std.ArrayList(CallDescriptorRepSubstitution) = .empty,
         // Callable parameters outlive the nested declaration scopes in entries.
         argument_sources: ?collections.DenseMap(TypeRepId, u32) = null,
+        /// Entries from this index on belong to the innermost scope.
+        scope_start: usize = 0,
 
         fn deinit(self: *CallDescriptorRepSubstitutionMap, allocator: Allocator) void {
             self.entries.deinit(allocator);
@@ -8857,8 +8900,14 @@ const Builder = struct {
         }
 
         fn get(self: *const CallDescriptorRepSubstitutionMap, worker_rep: TypeRepId) ?TypeRepId {
-            for (self.entries.items) |entry| {
-                if (entry.worker_rep == worker_rep) return entry.call_rep;
+            return getIn(self.entries.items, worker_rep);
+        }
+
+        fn getIn(entries: []const CallDescriptorRepSubstitution, worker_rep: TypeRepId) ?TypeRepId {
+            var index = entries.len;
+            while (index > 0) {
+                index -= 1;
+                if (entries[index].worker_rep == worker_rep) return entries[index].call_rep;
             }
             return null;
         }
@@ -8866,27 +8915,64 @@ const Builder = struct {
         /// Enclosing nominal arguments can themselves be declaration formals.
         /// Compose those explicit substitutions before entering a nested backing.
         fn resolve(self: *const CallDescriptorRepSubstitutionMap, rep: TypeRepId) TypeRepId {
+            return resolveIn(self.entries.items, rep);
+        }
+
+        /// Resolve in the environment enclosing the innermost scope.
+        fn resolveEnclosing(self: *const CallDescriptorRepSubstitutionMap, rep: TypeRepId) TypeRepId {
+            return resolveIn(self.entries.items[0..self.scope_start], rep);
+        }
+
+        fn resolveIn(entries: []const CallDescriptorRepSubstitution, rep: TypeRepId) TypeRepId {
             var current = rep;
-            for (0..self.entries.items.len + 1) |_| {
-                current = self.get(current) orelse return current;
+            for (0..entries.len + 1) |_| {
+                current = getIn(entries, current) orelse return current;
             }
             boxyPlanInvariant("cyclic nominal descriptor substitution");
         }
 
+        fn enterScope(self: *CallDescriptorRepSubstitutionMap) usize {
+            const enclosing = self.scope_start;
+            self.scope_start = self.entries.items.len;
+            return enclosing;
+        }
+
+        fn exitScope(self: *CallDescriptorRepSubstitutionMap, enclosing: usize) void {
+            self.entries.shrinkRetainingCapacity(self.scope_start);
+            self.scope_start = enclosing;
+        }
+
+        /// Map a worker representation that is not a declaration formal.
         fn put(
             self: *CallDescriptorRepSubstitutionMap,
             allocator: Allocator,
             worker_rep: TypeRepId,
             call_rep: TypeRepId,
         ) Allocator.Error!void {
-            for (self.entries.items) |entry| {
-                if (entry.worker_rep != worker_rep) continue;
-                if (entry.call_rep != call_rep) {
+            if (self.get(worker_rep)) |existing| {
+                if (existing != call_rep) {
                     boxyPlanInvariant("one worker descriptor representation mapped to two call representations");
                 }
                 return;
             }
             try self.entries.append(allocator, .{ .worker_rep = worker_rep, .call_rep = call_rep });
+        }
+
+        /// Bind a declaration formal in the innermost scope, shadowing any
+        /// binding of the same formal by an enclosing use of its declaration.
+        fn bindFormal(
+            self: *CallDescriptorRepSubstitutionMap,
+            allocator: Allocator,
+            formal_rep: TypeRepId,
+            call_rep: TypeRepId,
+        ) Allocator.Error!void {
+            if (getIn(self.entries.items[self.scope_start..], formal_rep)) |existing| {
+                if (existing != call_rep) {
+                    boxyPlanInvariant("one nominal use bound a declaration formal to two call representations");
+                }
+                return;
+            }
+            try self.entries.append(allocator, .{ .worker_rep = formal_rep, .call_rep = call_rep });
         }
     };
 
@@ -9032,30 +9118,6 @@ const Builder = struct {
             (worker_rep.kind == .nominal and call_rep.kind == .nominal);
         if (!roles_match) return;
 
-        if (worker_rep.kind == .nominal) {
-            // Both sides have shared declaration templates. Descending the
-            // call-side backing must apply its formals too, e.g. Set(Str)'s
-            // backing Dict(item, {}) must supply Str, not the template's item.
-            var call_substitutions = self.plan.nominalBackingSubstitutions(call_rep.nominal_backing_arg_substitutions);
-            while (call_substitutions.next()) |call_substitution| {
-                const formal_rep = call_substitution.formal_rep orelse continue;
-                const actual = substitutions.resolve(call_substitution.actual_rep);
-                if (formal_rep != actual) {
-                    try substitutions.put(self.allocator, formal_rep, actual);
-                }
-            }
-            var backing_substitutions = self.plan.nominalBackingSubstitutions(worker_rep.nominal_backing_arg_substitutions);
-            while (backing_substitutions.next()) |backing_substitution| {
-                const call_arg_rep = self.nominalBackingArgActualRep(call_rep_id, backing_substitution.arg_index) orelse
-                    boxyPlanInvariant("checked nominal call was missing a backing argument substitution");
-                const exact_call_arg_rep = substitutions.resolve(call_arg_rep);
-                if (backing_substitution.formal_rep) |formal_rep| {
-                    if (formal_rep != exact_call_arg_rep) {
-                        try substitutions.put(self.allocator, formal_rep, exact_call_arg_rep);
-                    }
-                }
-            }
-        }
         const call_children = self.plan.childSlice(call_rep.children);
         for (self.plan.childSlice(worker_rep.children)) |worker_child| {
             if (worker_child.role != .alias_arg and worker_child.role != .nominal_arg) continue;
@@ -9070,6 +9132,43 @@ const Builder = struct {
             const exact_call_arg_rep = substitutions.resolve(call_arg_rep);
             if (worker_child.rep == exact_call_arg_rep) continue;
             try substitutions.put(self.allocator, worker_child.rep, exact_call_arg_rep);
+        }
+    }
+
+    /// Bind the declaration formals of a nominal use for its backing and
+    /// padding. Actuals belong to the enclosing environment, so they are
+    /// resolved there before the new bindings become visible.
+    fn bindCallNominalFormals(
+        self: *Builder,
+        worker_rep_id: TypeRepId,
+        call_rep_id: TypeRepId,
+        substitutions: *CallDescriptorRepSubstitutionMap,
+    ) Allocator.Error!void {
+        const worker_rep = self.plan.representations.items[@intFromEnum(worker_rep_id)];
+        const call_rep = self.plan.representations.items[@intFromEnum(call_rep_id)];
+        if (worker_rep.kind != .nominal or call_rep.kind != .nominal) return;
+
+        // Both sides have shared declaration templates. Descending the
+        // call-side backing must apply its formals too, e.g. Set(Str)'s
+        // backing Dict(item, {}) must supply Str, not the template's item.
+        var call_substitutions = self.plan.nominalBackingSubstitutions(call_rep.nominal_backing_arg_substitutions);
+        while (call_substitutions.next()) |call_substitution| {
+            const formal_rep = call_substitution.formal_rep orelse continue;
+            const actual = substitutions.resolveEnclosing(call_substitution.actual_rep);
+            if (formal_rep != actual) {
+                try substitutions.bindFormal(self.allocator, formal_rep, actual);
+            }
+        }
+        var backing_substitutions = self.plan.nominalBackingSubstitutions(worker_rep.nominal_backing_arg_substitutions);
+        while (backing_substitutions.next()) |backing_substitution| {
+            const call_arg_rep = self.nominalBackingArgActualRep(call_rep_id, backing_substitution.arg_index) orelse
+                boxyPlanInvariant("checked nominal call was missing a backing argument substitution");
+            const exact_call_arg_rep = substitutions.resolveEnclosing(call_arg_rep);
+            if (backing_substitution.formal_rep) |formal_rep| {
+                if (formal_rep != exact_call_arg_rep) {
+                    try substitutions.bindFormal(self.allocator, formal_rep, exact_call_arg_rep);
+                }
+            }
         }
     }
 
@@ -14478,6 +14577,37 @@ test "direct call metadata uses instantiated nominal arguments inside generalize
         &seen_dictionary_pairs,
     );
     try std.testing.expectEqual(exact_arg, dictionary_substitutions.get(worker_arg).?);
+}
+
+test "call descriptor substitutions scope declaration formals to one nominal use" {
+    const gpa = std.testing.allocator;
+    var substitutions = Builder.CallDescriptorRepSubstitutionMap{};
+    defer substitutions.deinit(gpa);
+
+    const ok_formal: TypeRepId = @enumFromInt(1);
+    const outer_actual: TypeRepId = @enumFromInt(2);
+    const inner_actual: TypeRepId = @enumFromInt(3);
+    const worker_arg: TypeRepId = @enumFromInt(4);
+
+    try substitutions.put(gpa, worker_arg, outer_actual);
+
+    const outer_scope = substitutions.enterScope();
+    try substitutions.bindFormal(gpa, ok_formal, outer_actual);
+    try std.testing.expectEqual(outer_actual, substitutions.get(ok_formal).?);
+
+    // A nested use of the same declaration shadows the enclosing binding and
+    // resolves its actuals in the enclosing environment.
+    const inner_scope = substitutions.enterScope();
+    try std.testing.expectEqual(outer_actual, substitutions.resolveEnclosing(ok_formal));
+    try substitutions.bindFormal(gpa, ok_formal, inner_actual);
+    try std.testing.expectEqual(inner_actual, substitutions.get(ok_formal).?);
+    try std.testing.expectEqual(outer_actual, substitutions.get(worker_arg).?);
+    substitutions.exitScope(inner_scope);
+
+    try std.testing.expectEqual(outer_actual, substitutions.get(ok_formal).?);
+    substitutions.exitScope(outer_scope);
+    try std.testing.expectEqual(null, substitutions.get(ok_formal));
+    try std.testing.expectEqual(outer_actual, substitutions.get(worker_arg).?);
 }
 
 test "direct call descriptors use operand nominal substitutions over generic call types" {
