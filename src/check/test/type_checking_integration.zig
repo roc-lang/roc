@@ -3310,6 +3310,58 @@ test "check type - def - call with wrong fn arity - too few" {
     );
 }
 
+test "check type - def - call of a non-function value" {
+    const source =
+        \\greeting : Str
+        \\greeting = "hello"
+        \\
+        \\test = greeting("world", 10.U8)
+    ;
+    try checkTypesModule(
+        source,
+        .fail_with,
+        \\**Not A Function**
+        \\The `greeting` value is not a function, but it was given 2 arguments.
+        \\```roc
+        \\test = greeting("world", 10.U8)
+        \\```
+        \\       ^^^^^^^^^^^^^^^^^^^^^^^^
+        \\
+        \\It has the type:
+        \\
+        \\    Str
+        \\
+        \\
+        ,
+    );
+}
+
+test "check type - def - call of an unnamed non-function value" {
+    const source =
+        \\r : { a : Str }
+        \\r = { a: "x" }
+        \\
+        \\test = (r.a)(1)
+    ;
+    try checkTypesModule(
+        source,
+        .fail_with,
+        \\**Not A Function**
+        \\This value is not a function, but it was given 1 argument.
+        \\```roc
+        \\test = (r.a)(1)
+        \\```
+        \\       ^^^^^^^^
+        \\
+        \\It has the type:
+        \\
+        \\    Str
+        \\
+        \\
+        ,
+    );
+}
+
 test "check type - def - call with mismatch arg" {
     const source =
         \\idStr : Str, U8 -> Str

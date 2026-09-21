@@ -12253,6 +12253,37 @@ fn defInOnStackGroup(self: *const Self, def_idx: CIR.Def.Idx) bool {
     return false;
 }
 
+/// The effect a call contributes when its callee is an in-flight member of the
+/// recursive group being checked. A declared pure/effectful tag on an
+/// in-flight recursive scheme must not seed the body's fixpoint. An inferred
+/// unbound slot, however, is a real directed edge between SCC members and must
+/// survive until the boundary resolves the group. A callee that is not a
+/// function has already failed the call-shape relation, which owns that
+/// diagnostic; it is not a callable, so it contributes no effect.
+fn inFlightRecursiveCallEffectState(self: *const Self, func_var: Var) FunctionEffectState {
+    var current = func_var;
+    var guard = types_mod.debug.IterationGuard.init("inFlightRecursiveCallEffectState");
+    while (true) {
+        guard.tick();
+        switch (self.types.resolveVar(current).desc.content) {
+            .alias => |alias| current = self.types.getAliasBackingVar(alias),
+            .structure => |flat| return switch (flat) {
+                .fn_unbound => .unresolved,
+                .fn_pure,
+                .fn_effectful,
+                .record,
+                .tuple,
+                .nominal_type,
+                .empty_record,
+                .tag_union,
+                .empty_tag_union,
+                => .pure,
+            },
+            .flex, .rigid, .field_presence, .err => return .pure,
+        }
+    }
+}
+
 /// Whether a call's callee is a recursive reference to a def that has not
 /// finished checking—a self-call, or a call between members of an on-stack
 /// binding group (top-level or block-local).
@@ -21404,7 +21435,10 @@ fn checkExprWithFunctionOwner(self: *Self, expr_idx: CIR.Expr.Idx, env: *Env, ex
                                 .actual_args = @intCast(call_arg_expr_idxs.len),
                             } }
                         else
-                            .none;
+                            .{ .fn_call_non_function = .{
+                                .fn_name = func_name,
+                                .actual_args = @intCast(call_arg_expr_idxs.len),
+                            } };
                         break :shape .{
                             .func = call_func,
                             .result = try self.unifyOwnedRelation(
@@ -21499,28 +21533,10 @@ fn checkExprWithFunctionOwner(self: *Self, expr_idx: CIR.Expr.Idx, env: *Env, ex
                         // effect-polymorphic callback can become pure or
                         // effectful. Resolve the directed formula now, never from
                         // the pre-unification function tag.
-                        const call_effect_state: FunctionEffectState = if (self.callTargetIsInFlightRecursiveRef(call.func)) recursive_effect: {
-                            // A declared pure/effectful tag on an in-flight
-                            // recursive scheme must not seed the body's
-                            // fixpoint. An inferred unbound slot, however, is a
-                            // real directed edge between SCC members and must
-                            // survive until the boundary resolves the group.
-                            const recursive_func = self.types.resolveVar(func_var).desc.content;
-                            break :recursive_effect switch (recursive_func) {
-                                .structure => |flat| switch (flat) {
-                                    .fn_unbound => .unresolved,
-                                    .fn_pure, .fn_effectful => .pure,
-                                    .record,
-                                    .tuple,
-                                    .nominal_type,
-                                    .empty_record,
-                                    .tag_union,
-                                    .empty_tag_union,
-                                    => .unresolved,
-                                },
-                                .flex, .rigid, .alias, .field_presence, .err => .unresolved,
-                            };
-                        } else try self.functionEffectState(func_var);
+                        const call_effect_state: FunctionEffectState = if (self.callTargetIsInFlightRecursiveRef(call.func))
+                            self.inFlightRecursiveCallEffectState(func_var)
+                        else
+                            try self.functionEffectState(func_var);
                         switch (call_effect_state) {
                             .effectful => does_fx = true,
                             .unresolved => try self.recordCurrentFunctionEffectDependency(func_var),

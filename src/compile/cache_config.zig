@@ -212,7 +212,10 @@ pub const Constants = struct {
     ///     `NumeralLiteral` declares its trailing bytes.
     /// 97: Record types always carry an explicit extension variable; a record
     ///     update's base row is an ordinary record whose tail is a flex var.
-    pub const CACHE_VERSION = 97;
+    /// 98: Calls of non-function values report a dedicated diagnostic, and
+    ///     a call to an in-flight recursive def whose annotation is an alias
+    ///     of a function type classifies its effect through the alias.
+    pub const CACHE_VERSION = 98;
 };
 
 /// Configuration for the Roc cache system.
