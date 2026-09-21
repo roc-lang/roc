@@ -892,6 +892,15 @@ build after the first does, reaches the same constructions: the const
 store keeps an empty list's evaluated capacity and restores it as the
 `with_capacity` call, and a restored value whose parts are all
 constructions lowers as them rather than as a static-data candidate.
+A construction is the value's shape and leaves alone and names no list,
+field or payload layout: the compile-time consumer that decoded it and the
+runtime consumer that emits it lower separately and intern layouts in their
+own order, so a layout index from one program is not a name in the other.
+A read matches a construction by checked root identity; a scalar literal is
+checked against the read's scalar layout, which is the same fixed index in
+every store, and an aggregate is checked shape by shape as it is emitted,
+with the reading site's own layout supplying the item, field and
+payload layouts the emitted code needs.
 After the passes, which compact the slot table, the remaining
 aggregate slots are transcoded into the target's frozen image. The LLVM
 backend then defines each slot whose image is a link-time constant—bytes with
