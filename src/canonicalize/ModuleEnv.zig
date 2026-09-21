@@ -833,6 +833,8 @@ pub const RejectedStaticDispatch = extern struct {
 /// checking consumes it directly instead of looking up the suffix text again.
 pub const NumericSuffixTarget = extern struct {
     node_idx: u32,
+    /// The suffix's type name as written, such as `Gui.Color`.
+    type_name: u32,
     kind: u32,
     data1: u32,
     data2: u32,
@@ -855,6 +857,10 @@ pub const NumericSuffixTarget = extern struct {
         },
         invalid,
     };
+
+    pub fn typeName(self: NumericSuffixTarget) Ident.Idx {
+        return @bitCast(self.type_name);
+    }
 
     pub fn target(self: NumericSuffixTarget) Target {
         return switch (@as(Kind, @enumFromInt(self.kind))) {
@@ -4848,30 +4854,36 @@ pub fn quoteDispatchPlanForNode(self: *const Self, node_idx: Node.Idx) ?NodeStor
 pub fn recordNumericSuffixTarget(
     self: *Self,
     node_idx: Node.Idx,
+    type_name: Ident.Idx,
     target: NumericSuffixTarget.Target,
 ) std.mem.Allocator.Error!void {
     const raw_node: u32 = @intFromEnum(node_idx);
+    const raw_type_name: u32 = @bitCast(type_name);
     const suffix_target = switch (target) {
         .builtin => |num_kind| NumericSuffixTarget{
             .node_idx = raw_node,
+            .type_name = raw_type_name,
             .kind = @intFromEnum(NumericSuffixTarget.Kind.builtin),
             .data1 = @intFromEnum(num_kind),
             .data2 = 0,
         },
         .local => |stmt_idx| NumericSuffixTarget{
             .node_idx = raw_node,
+            .type_name = raw_type_name,
             .kind = @intFromEnum(NumericSuffixTarget.Kind.local),
             .data1 = @intFromEnum(stmt_idx),
             .data2 = 0,
         },
         .external => |external| NumericSuffixTarget{
             .node_idx = raw_node,
+            .type_name = raw_type_name,
             .kind = @intFromEnum(NumericSuffixTarget.Kind.external),
             .data1 = @intFromEnum(external.import_idx),
             .data2 = external.target_node_idx,
         },
         .invalid => NumericSuffixTarget{
             .node_idx = raw_node,
+            .type_name = raw_type_name,
             .kind = @intFromEnum(NumericSuffixTarget.Kind.invalid),
             .data1 = 0,
             .data2 = 0,

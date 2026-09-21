@@ -635,6 +635,23 @@ fn scratchQualifiedText(self: *Self, parent: []const u8, child: []const u8) std.
     return appendQualifiedText(&self.scratch_bytes, parent, child);
 }
 
+const ScratchQualifiedText = struct {
+    qualified: []const u8,
+    child: []const u8,
+};
+
+/// Like `scratchQualifiedText`, but also returns `child` re-sliced after the
+/// append, so a caller whose `child` lives in `scratch_bytes` can keep reading
+/// it after the buffer grows.
+fn scratchQualifiedTextKeepingChild(self: *Self, parent: []const u8, child: []const u8) std.mem.Allocator.Error!ScratchQualifiedText {
+    const child_offset = scratchSliceOffsetIn(&self.scratch_bytes, child);
+    const qualified = try self.scratchQualifiedText(parent, child);
+    return .{
+        .qualified = qualified,
+        .child = if (child_offset) |offset| self.scratch_bytes.items.items[offset..][0..child.len] else child,
+    };
+}
+
 fn insertQualifiedIdent(self: *Self, parent: []const u8, child: []const u8) std.mem.Allocator.Error!Ident.Idx {
     const top = self.qualified_ident_bytes.top();
     defer self.qualified_ident_bytes.clearFrom(top);
@@ -6320,19 +6337,20 @@ fn importIsCompilerBuiltin(self: *const Self, import_idx: CIR.Import.Idx) bool {
     return CIR.Import.isCompilerBuiltinImportName(self.env.common.getString(import_name_idx));
 }
 
+const ResolvedLiteralTypeSuffix = struct {
+    /// The suffix's type name as written, qualified when the suffix is.
+    name: Ident.Idx,
+    target: ModuleEnv.NumericSuffixTarget.Target,
+};
+
 const LiteralTypeSuffixResolution = union(enum) {
-    resolved: struct {
-        /// The suffix's type name as written, qualified when the suffix is.
-        name: Ident.Idx,
-        target: ModuleEnv.NumericSuffixTarget.Target,
-    },
+    resolved: ResolvedLiteralTypeSuffix,
     malformed: Diagnostic,
 };
 
 /// Resolve a literal's type suffix once, while the canonicalizer still owns
 /// scope information. `region` is the region of the whole literal. A resolved
-/// `.invalid` target names an incomplete external binding already diagnosed by
-/// import canonicalization.
+/// `.invalid` target names an external type binding with no declaration node.
 fn resolveLiteralTypeSuffix(
     self: *Self,
     suffix: AST.LiteralTypeSuffix,
@@ -6353,16 +6371,10 @@ fn resolveLiteralTypeSuffix(
             .name = qualified_name_ident,
             .target = switch (found.target) {
                 .local => |stmt_idx| .{ .local = stmt_idx },
-                .external => |external| blk: {
-                    if (self.importIsCompilerBuiltin(external.import_idx)) {
-                        const type_name = self.parse_ir.tokens.resolveIdentifier(path.final_token) orelse unreachable;
-                        if (self.builtinNumKindFromTypeIdent(type_name)) |num_kind| break :blk .{ .builtin = num_kind };
-                    }
-                    break :blk .{ .external = .{
-                        .import_idx = external.import_idx,
-                        .target_node_idx = external.target_node_idx,
-                    } };
-                },
+                .external => |external| .{ .external = .{
+                    .import_idx = external.import_idx,
+                    .target_node_idx = external.target_node_idx,
+                } },
             },
         } },
         .malformed => |diagnostic| .{ .malformed = diagnostic },
@@ -8035,7 +8047,7 @@ fn canonicalizeSingleQuote(
         const expr_idx = try self.env.addExpr(expr, region);
         try self.env.recordNumeralLiteral(ModuleEnv.nodeIdxFrom(expr_idx), digits[0..digit_len], &.{}, 0, false, false, false, true);
         if (suffix) |resolved| {
-            try self.env.recordNumericSuffixTarget(ModuleEnv.nodeIdxFrom(expr_idx), resolved.target);
+            try self.env.recordNumericSuffixTarget(ModuleEnv.nodeIdxFrom(expr_idx), resolved.name, resolved.target);
         }
         return expr_idx;
     } else if (comptime Idx == Pattern.Idx) {
@@ -8045,7 +8057,7 @@ fn canonicalizeSingleQuote(
         } }, region);
         try self.env.recordNumeralLiteral(ModuleEnv.nodeIdxFrom(pat_idx), digits[0..digit_len], &.{}, 0, false, false, false, true);
         if (suffix) |resolved| {
-            try self.env.recordNumericSuffixTarget(ModuleEnv.nodeIdxFrom(pat_idx), resolved.target);
+            try self.env.recordNumericSuffixTarget(ModuleEnv.nodeIdxFrom(pat_idx), resolved.name, resolved.target);
         }
         return pat_idx;
     } else {
@@ -8098,8 +8110,8 @@ fn canonicalizeNumeralPattern(
     region: Region,
     type_suffix: ?AST.LiteralTypeSuffix,
 ) std.mem.Allocator.Error!Pattern.Idx {
-    const suffix_target = if (type_suffix) |suffix| switch (try self.resolveLiteralTypeSuffix(suffix, region)) {
-        .resolved => |resolved| resolved.target,
+    const suffix = if (type_suffix) |suffix| switch (try self.resolveLiteralTypeSuffix(suffix, region)) {
+        .resolved => |resolved| resolved,
         .malformed => |diagnostic| return try self.env.pushMalformed(Pattern.Idx, diagnostic),
     } else null;
 
@@ -8122,8 +8134,8 @@ fn canonicalizeNumeralPattern(
 
     const pattern_idx = try self.env.addPattern(pattern, region);
     try self.recordNumeralLiteralForNode(ModuleEnv.nodeIdxFrom(pattern_idx), literal);
-    if (suffix_target) |target| {
-        try self.env.recordNumericSuffixTarget(ModuleEnv.nodeIdxFrom(pattern_idx), target);
+    if (suffix) |resolved| {
+        try self.env.recordNumericSuffixTarget(ModuleEnv.nodeIdxFrom(pattern_idx), resolved.name, resolved.target);
     }
     return pattern_idx;
 }
@@ -11154,7 +11166,7 @@ fn runExprKernel(
                     };
                     const expr_idx = try self.env.addExpr(numeric_expr, region);
                     try self.recordNumeralLiteralForNode(ModuleEnv.nodeIdxFrom(expr_idx), literal);
-                    try self.env.recordNumericSuffixTarget(ModuleEnv.nodeIdxFrom(expr_idx), suffix.target);
+                    try self.env.recordNumericSuffixTarget(ModuleEnv.nodeIdxFrom(expr_idx), suffix.name, suffix.target);
                     try storeExprKernelOutput(&last_expr, &child_slots, frame_allocator, current_result_target, CanonicalizedExpr{ .idx = expr_idx, .free_vars = DataSpan.empty() });
                 },
                 .typed_frac => |e| {
@@ -11194,7 +11206,7 @@ fn runExprKernel(
                     };
                     const expr_idx = try self.env.addExpr(numeric_expr, region);
                     try self.recordNumeralLiteralForNode(ModuleEnv.nodeIdxFrom(expr_idx), literal);
-                    try self.env.recordNumericSuffixTarget(ModuleEnv.nodeIdxFrom(expr_idx), suffix.target);
+                    try self.env.recordNumericSuffixTarget(ModuleEnv.nodeIdxFrom(expr_idx), suffix.name, suffix.target);
                     try storeExprKernelOutput(&last_expr, &child_slots, frame_allocator, current_result_target, CanonicalizedExpr{ .idx = expr_idx, .free_vars = DataSpan.empty() });
                 },
                 .single_quote => |e| {
@@ -12917,18 +12929,18 @@ fn runExprKernel(
 
             const can_str_span = try self.env.store.exprSpanFrom(scratch_top);
             const expr_idx = blk: {
-                const suffix_target = if (state.type_suffix) |suffix| switch (try self.resolveLiteralTypeSuffix(suffix, state.region)) {
-                    .resolved => |resolved| resolved.target,
+                const suffix = if (state.type_suffix) |suffix| switch (try self.resolveLiteralTypeSuffix(suffix, state.region)) {
+                    .resolved => |resolved| resolved,
                     .malformed => |diagnostic| break :blk try self.env.pushMalformed(Expr.Idx, diagnostic),
                 } else null;
                 if (state.interpolation_count != 0) {
-                    break :blk try self.desugarInterpolatedString(can_str_span, state.region, suffix_target);
+                    break :blk try self.desugarInterpolatedString(can_str_span, state.region, suffix);
                 }
                 const str_idx = try self.env.addExpr(Expr{ .e_str = .{
                     .span = can_str_span,
                 } }, state.region);
-                if (suffix_target) |target| {
-                    try self.env.recordNumericSuffixTarget(ModuleEnv.nodeIdxFrom(str_idx), target);
+                if (suffix) |resolved| {
+                    try self.env.recordNumericSuffixTarget(ModuleEnv.nodeIdxFrom(str_idx), resolved.name, resolved.target);
                 }
                 break :blk str_idx;
             };
@@ -14965,17 +14977,11 @@ fn lookupImportedExposedTarget(
     imported_env: *const ModuleEnv,
     item_text: []const u8,
 ) std.mem.Allocator.Error!?collections.ExposedItemTarget {
-    const module_name_text = imported_env.module_name;
     const scratch_top = self.scratchBytesTop();
     defer self.clearScratchBytesFrom(scratch_top);
-    const module_qualified_text = try self.scratchQualifiedText(module_name_text, item_text);
-    const module_qualified_target = lookupExposedTargetByText(imported_env, module_qualified_text);
-
-    if (module_qualified_target) |target| {
-        return target;
-    }
-
-    return lookupExposedTargetByText(imported_env, item_text);
+    const names = try self.scratchQualifiedTextKeepingChild(imported_env.module_name, item_text);
+    return lookupExposedTargetByText(imported_env, names.qualified) orelse
+        lookupExposedTargetByText(imported_env, names.child);
 }
 
 fn lookupImportedExposedValueNode(
@@ -15004,9 +15010,9 @@ fn lookupImportedTypeDeclNode(
     const scratch_top = self.scratchBytesTop();
     defer self.clearScratchBytesFrom(scratch_top);
 
-    const module_qualified_text = try self.scratchQualifiedText(imported_env.module_name, item_text);
-    const qualified_ident = imported_env.common.findIdent(module_qualified_text) orelse
-        imported_env.common.findIdent(item_text) orelse
+    const names = try self.scratchQualifiedTextKeepingChild(imported_env.module_name, item_text);
+    const qualified_ident = imported_env.common.findIdent(names.qualified) orelse
+        imported_env.common.findIdent(names.child) orelse
         return null;
 
     for (imported_env.store.sliceStatements(imported_env.all_statements)) |stmt_idx| {
@@ -15946,7 +15952,7 @@ fn desugarInterpolatedString(
     self: *Self,
     span: CIR.Expr.Span,
     region: Region,
-    suffix_target: ?ModuleEnv.NumericSuffixTarget.Target,
+    suffix: ?ResolvedLiteralTypeSuffix,
 ) std.mem.Allocator.Error!Expr.Idx {
     const gpa = self.env.gpa;
 
@@ -16036,8 +16042,8 @@ fn desugarInterpolatedString(
         .method_name_region = region,
     } }, region);
 
-    if (suffix_target) |target| {
-        try self.env.recordNumericSuffixTarget(ModuleEnv.nodeIdxFrom(final_idx), target);
+    if (suffix) |resolved| {
+        try self.env.recordNumericSuffixTarget(ModuleEnv.nodeIdxFrom(final_idx), resolved.name, resolved.target);
     }
 
     return try self.env.addExpr(CIR.Expr{ .e_block = .{

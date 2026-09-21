@@ -151,6 +151,28 @@ test "Custom number type with from_numeral: qualified typed decimal suffix unifi
     try test_env.assertNoErrors();
 }
 
+test "Custom number type with from_numeral: qualified suffix naming an imported where alias is rejected" {
+    const codec_source =
+        \\Codec := [].{
+        \\    a.Num : where [a.from_numeral : Numeral -> Try(a, [InvalidNumeral(Str)])]
+        \\}
+    ;
+    var codec_env = try TestEnv.init("Codec", codec_source);
+    defer codec_env.deinit();
+    try codec_env.assertNoErrors();
+
+    const source =
+        \\import Codec
+        \\
+        \\x = 5.Codec.Num
+    ;
+
+    var test_env = try TestEnv.initWithImport("Theme", source, "Codec", &codec_env);
+    defer test_env.deinit();
+
+    try test_env.assertOneTypeError("Where Alias Used as a Type");
+}
+
 test "Custom number type without from_numeral: integer literal does not unify" {
     const source =
         \\  MyType := [].{

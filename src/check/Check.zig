@@ -7929,6 +7929,7 @@ fn unifyLiteralWithSuffixTarget(
             try self.unifyWith(flex_var, try self.mkBuiltinNumberTypeContentFromKind(num_kind), env);
         },
         .local => |stmt_idx| {
+            if (try self.rejectWhereAliasInTypePosition(suffix_target.typeName(), .{ .local = .{ .decl_idx = stmt_idx } }, flex_var, region, env)) return;
             const local_decl_var = ModuleEnv.varFrom(stmt_idx);
             const resolved_var = if (self.isForClauseAliasStatement(stmt_idx))
                 local_decl_var
@@ -7938,6 +7939,10 @@ fn unifyLiteralWithSuffixTarget(
             _ = try self.unify(flex_var, resolved_var, env);
         },
         .external => |external| {
+            if (try self.rejectWhereAliasInTypePosition(suffix_target.typeName(), .{ .external = .{
+                .module_idx = external.import_idx,
+                .target_node_idx = external.target_node_idx,
+            } }, flex_var, region, env)) return;
             if (try self.resolveVarFromExternal(external.import_idx, external.target_node_idx)) |ext_ref| {
                 const instantiated_var = try self.instantiateVar(
                     ext_ref.local_var,
