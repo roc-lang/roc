@@ -169,7 +169,6 @@ const Frame = union(enum) {
     nominal: NominalFrame,
     func: FuncFrame,
     record: RecordFrame,
-    record_unbound: RecordUnboundFrame,
     tag_union: TagUnionFrame,
 };
 
@@ -265,14 +264,6 @@ const RecordFrame = struct {
     field_axis: enum { type_var, presence_var } = .type_var,
     fields_range: RecordField.SafeMultiList.Range = undefined,
     stage: enum { fields, await_ext } = .fields,
-};
-
-const RecordUnboundFrame = struct {
-    common: FillCommon,
-    source_fields: RecordField.SafeMultiList.Range,
-    vars_base: u32,
-    field_idx: u32 = 0,
-    field_axis: enum { type_var, presence_var } = .type_var,
 };
 
 const TagUnionFrame = struct {
@@ -572,7 +563,6 @@ pub const Instantiator = struct {
                         try self.visitReachFields(parent, record.fields);
                         try self.visitReachChild(parent, record.ext);
                     },
-                    .record_unbound => |fields| try self.visitReachFields(parent, fields),
                     .tag_union => |tag_union| {
                         var i: u32 = 0;
                         while (i < tag_union.tags.count) : (i += 1) {
@@ -697,7 +687,6 @@ pub const Instantiator = struct {
                     .nominal => |*frame| try self.stepNominal(frame),
                     .func => |*frame| try self.stepFunc(frame),
                     .record => |*frame| try self.stepRecord(frame),
-                    .record_unbound => |*frame| try self.stepRecordUnbound(frame),
                     .tag_union => |*frame| try self.stepTagUnion(frame),
                 };
                 if (finished) {
@@ -1030,17 +1019,6 @@ pub const Instantiator = struct {
                             },
                             .source_fields = record.fields,
                             .ext = record.ext,
-                            .vars_base = @intCast(machine.value_stack.items.len),
-                        } });
-                        return false;
-                    },
-                    .record_unbound => |fields| {
-                        try machine.frames.append(self.store.gpa, .{ .record_unbound = .{
-                            .common = .{
-                                .fresh_var = fresh_var,
-                                .empty_tag_union_is_default = empty_tag_union_is_default,
-                            },
-                            .source_fields = fields,
                             .vars_base = @intCast(machine.value_stack.items.len),
                         } });
                         return false;
@@ -1381,39 +1359,6 @@ pub const Instantiator = struct {
                     return true;
                 },
             }
-        }
-    }
-
-    fn stepRecordUnbound(self: *Self, frame: *RecordUnboundFrame) std.mem.Allocator.Error!bool {
-        const machine = self.scratch();
-        while (true) {
-            if (frame.field_idx < frame.source_fields.count) {
-                // Indexing through the run's start only happens when the
-                // record has fields; start may be undefined when count is 0.
-                const field = self.store.record_fields.get(@enumFromInt(@intFromEnum(frame.source_fields.start) + frame.field_idx));
-                const child_var = switch (frame.field_axis) {
-                    .type_var => blk: {
-                        if (field.presence.presenceVar() != null) {
-                            frame.field_axis = .presence_var;
-                        } else {
-                            frame.field_idx += 1;
-                        }
-                        break :blk field.presence.typeVar();
-                    },
-                    .presence_var => blk: {
-                        frame.field_idx += 1;
-                        frame.field_axis = .type_var;
-                        break :blk field.presence.presenceVar().?;
-                    },
-                };
-                self.current_reach = .nested;
-                if (!try self.requestVar(child_var, false)) return false;
-                continue;
-            }
-            const fresh_fields_range = try self.appendFreshRecordFields(frame.source_fields, frame.vars_base);
-            machine.value_stack.items.len = frame.vars_base;
-            try self.finishFrame(frame.common, Content{ .structure = FlatType{ .record_unbound = fresh_fields_range } });
-            return true;
         }
     }
 
