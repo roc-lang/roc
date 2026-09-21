@@ -2862,7 +2862,12 @@ consume that index directly; they do not scan source statements to find builtin
 backings or duplicate the containers' storage definitions. Declaration formals
 and backing templates remain shared checked data. Each strategy substitutes the
 actual arguments only when lowering a reachable use, with Boxy preserving the
-explicit nested descriptors and ordinary LIR ownership contract.
+explicit nested descriptors and ordinary LIR ownership contract. Because every
+use of a declaration shares its formals, a substitution of those formals is
+scoped to one use's backing, with actuals resolved in the enclosing scope: in
+`Try(Try(U64, Str), Str)` the outer backing binds `ok` to `Try(U64, Str)` and
+the inner backing binds it to `U64`. The innermost binding shadows the others;
+type arguments themselves belong to the enclosing scope.
 
 ### Platform/App Relation
 
