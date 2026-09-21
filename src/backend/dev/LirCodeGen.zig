@@ -10006,8 +10006,6 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
                 switch (stmt) {
                     .join => |j| {
                         try joins.put(j.id, j.body);
-                        const params = self.store.getLocalSpan(j.params);
-                        for (0..params.len) |i| plan.values.items[try plan.local(GuardedList.at(params, i))].mutable = true;
                     },
                     .str_match, .str_match_set => {},
                     .init_uninitialized,
@@ -10202,6 +10200,14 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
             for (work.items) |id| {
                 const stmt = self.store.getCFStmt(id);
                 const at = nodes.get(id).?;
+                if (stmt == .join) {
+                    // A declaration alone needs no storage. Mark only locals
+                    // present in the completed read/write inventory as mutable.
+                    const params = self.store.getLocalSpan(stmt.join.params);
+                    for (0..params.len) |i| {
+                        if (plan.locals.get(GuardedList.at(params, i))) |index| plan.values.items[index].mutable = true;
+                    }
+                }
                 if (stmt == .jump) {
                     try plan.edge(at, nodes.get(joins.get(stmt.jump.target).?).?);
                 }
@@ -22765,7 +22771,7 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
 
                         .join => |j| {
                             const jp_key = @intFromEnum(j.id);
-                            try self.setupJoinPointParams(j.id, j.params);
+                            try self.registerJoinPointParams(j.id, j.params);
                             if (!self.join_point_jumps.contains(jp_key)) {
                                 try self.join_point_jumps.put(jp_key, std.ArrayList(JumpRecord).empty);
                             }
@@ -23584,20 +23590,14 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
             try self.emitStore(.w64, frame_ptr, dest_offset + 16, capture_len_reg);
         }
 
-        /// Set up storage locations for join point parameters
-        fn setupJoinPointParams(self: *Self, join_point: JoinPointId, params: LocalSpan) Allocator.Error!void {
+        /// Register join parameters; storage is assigned by the procedure plan.
+        fn registerJoinPointParams(self: *Self, join_point: JoinPointId, params: LocalSpan) Allocator.Error!void {
             const jp_key = @intFromEnum(join_point);
             if (builtin.mode == .Debug and self.join_point_params.contains(jp_key)) {
                 std.debug.panic(
                     "LIR/codegen invariant violated: duplicate join-point registration for id {d}",
                     .{jp_key},
                 );
-            }
-
-            const locals = self.store.getLocalSpan(params);
-            for (0..locals.len) |local_index| {
-                const local = GuardedList.at(locals, local_index);
-                try self.ensureStableLocationForLocal(local);
             }
 
             try self.join_point_params.put(jp_key, params);
@@ -25935,6 +25935,45 @@ fn addSineChainProc(store: *LirStore, allocator: Allocator, count: u32) Allocato
         .next = body,
     } });
     return try addNoArgProc(store, body, .f64);
+}
+
+test "stack reuse does not allocate declaration-only join parameters" {
+    const allocator = std.testing.allocator;
+    var sizes: [2]u32 = undefined;
+    for ([_]usize{ 0, 128 }, &sizes) |count, *size| {
+        var store = LirStore.init(allocator);
+        defer store.deinit();
+        var state = try TestLayoutState.init(allocator);
+        defer state.deinit();
+        const result = try addLocal(&store, .u64);
+        const params = try allocator.alloc(LocalId, count);
+        defer allocator.free(params);
+        for (params) |*param| param.* = try addLocal(&store, .u64);
+        const body = try store.addCFStmt(.{ .ret = .{ .value = result } });
+        const remainder = try store.addCFStmt(.{ .ret = .{ .value = result } });
+        // There is no incoming jump, so these parameters are never initialized
+        // or read. The declaration must not create a storage lifetime.
+        const join = try store.addCFStmt(.{ .join = .{
+            .id = @enumFromInt(0),
+            .params = try store.addLocalSpan(params),
+            .body = body,
+            .remainder = remainder,
+        } });
+        const entry = try store.addCFStmt(.{ .assign_literal = .{
+            .target = result,
+            .value = .{ .i64_literal = .{ .value = 42, .layout_idx = .u64 } },
+            .next = join,
+        } });
+        const proc = try addNoArgProc(&store, entry, .u64);
+        var cg = try HostLirCodeGen.init(allocator, &store, &state.layout_store, .{}, &.{}, .default);
+        defer cg.deinit();
+        try cg.compileAllProcSpecs(store.getProcSpecs());
+        size.* = cg.proc_registry.get(@intFromEnum(proc)).?.frame_size;
+        if (comptime builtin.cpu.arch == .x86_64 or builtin.cpu.arch == .aarch64) {
+            try std.testing.expectEqual(@as(u64, 42), try runRootU64(&store, &state.layout_store, proc, .u64));
+        }
+    }
+    try std.testing.expectEqual(sizes[0], sizes[1]);
 }
 
 test "stack reuse bounds locals and call scratch on both native architectures" {
