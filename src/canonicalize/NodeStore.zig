@@ -6736,6 +6736,45 @@ pub const Serialized = extern struct {
             .scratch = null,
         };
     }
+
+    /// Deserialize into a NodeStore that owns every list it holds and carries
+    /// its own scratch buffers, so later compilation stages may append nodes,
+    /// regions, and extra data to it. `deinit` releases it exactly like a
+    /// freshly constructed `NodeStore`.
+    pub fn deserializeOwned(self: *const Serialized, base_addr: usize, gpa: Allocator) Allocator.Error!NodeStore {
+        var store = NodeStore{
+            .gpa = gpa,
+            .nodes = try self.nodes.deserializeWithCopy(base_addr, gpa),
+            .regions = try self.regions.deserializeWithCopy(base_addr, gpa),
+            .write_occurrences = try self.write_occurrences.deserializeWithCopy(base_addr, gpa),
+            .int128_values = try self.int128_values.deserializeWithCopy(base_addr, gpa),
+            .literal_dispatch_plans = try self.literal_dispatch_plans.deserializeWithCopy(base_addr, gpa),
+            .literal_pattern_contexts = try self.literal_pattern_contexts.deserializeWithCopy(base_addr, gpa),
+            .interpolation_data = try self.interpolation_data.deserializeWithCopy(base_addr, gpa),
+            .span2_data = try self.span2_data.deserializeWithCopy(base_addr, gpa),
+            .span_with_node_data = try self.span_with_node_data.deserializeWithCopy(base_addr, gpa),
+            .method_call_data = try self.method_call_data.deserializeWithCopy(base_addr, gpa),
+            .match_data = try self.match_data.deserializeWithCopy(base_addr, gpa),
+            .if_data = try self.if_data.deserializeWithCopy(base_addr, gpa),
+            .match_branch_data = try self.match_branch_data.deserializeWithCopy(base_addr, gpa),
+            .closure_data = try self.closure_data.deserializeWithCopy(base_addr, gpa),
+            .zero_arg_tag_data = try self.zero_arg_tag_data.deserializeWithCopy(base_addr, gpa),
+            .def_data = try self.def_data.deserializeWithCopy(base_addr, gpa),
+            .import_data = try self.import_data.deserializeWithCopy(base_addr, gpa),
+            .type_apply_data = try self.type_apply_data.deserializeWithCopy(base_addr, gpa),
+            .pattern_list_data = try self.pattern_list_data.deserializeWithCopy(base_addr, gpa),
+            .pattern_str_interpolation_data = try self.pattern_str_interpolation_data.deserializeWithCopy(base_addr, gpa),
+            .pattern_str_interpolation_steps = try self.pattern_str_interpolation_steps.deserializeWithCopy(base_addr, gpa),
+            .where_clause_owners = try self.where_clause_owners.deserializeWithCopy(base_addr, gpa),
+            .index_data = try self.index_data.deserializeWithCopy(base_addr, gpa),
+            .scratch = null,
+        };
+        errdefer store.deinit();
+
+        try store.ensureScratch();
+
+        return store;
+    }
 };
 
 test "NodeStore empty CompactWriter roundtrip" {

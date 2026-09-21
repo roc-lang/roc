@@ -2293,13 +2293,14 @@ retain an owning AST pointer while a worker consumes it.
 Canonicalization of a module is a pure function of these inputs and nothing
 else: the module's source bytes, its module basename (the file name, which a
 type module's main type must match), the entry-module flag, the `Validation`
-mode, and the compiler itself (its version string and its baked `Builtin`
-module). It never reads another user module's environment, the workspace's
-package names or shorthands, whether the module's package is a platform, the
-resolution outcome of any import, or any file on disk other than the module
-source. Two modules with identical bytes, basename, and flags canonicalize to
-byte-identical `ModuleEnv` data no matter which workspace, package, or
-directory they are compiled in and no matter what their imports contain.
+mode, the module role (whether the file is the compiler's own builtin source),
+and the compiler itself (its version string and its baked `Builtin` module). It
+never reads another user module's environment, the workspace's package names or
+shorthands, whether the module's package is a platform, the resolution outcome
+of any import, or any file on disk other than the module source. Two modules
+with identical bytes, basename, and flags canonicalize to byte-identical
+`ModuleEnv` data no matter which workspace, package, or directory they are
+compiled in and no matter what their imports contain.
 
 This is what makes canonicalization independent of every other module: a
 module is canonicalized as soon as it is parsed, in parallel with every other
@@ -2461,23 +2462,53 @@ applied to the env after the canonicalized-cache boundary, before the drain.
 
 ### Canonicalization output cache
 
-The canonicalized module cache stores one module's canonicalization output: the
-serialized `ModuleEnv` (including its diagnostics, import store, and deferred
-import worklist), keyed by the SHA-256 of exactly the inputs above: the source
-bytes, the module basename, the entry-module flag, the `Validation` mode, the
-compiler version, and the cache format's version hash. Nothing about imports,
-packages, shorthands, or paths participates, so an entry stays valid when any
-other module changes and is shared by identical modules in different packages,
-directories, or workspaces.
+The canonicalized module cache stores one module's parse-and-canonicalize
+output, keyed by the SHA-256 of exactly the inputs above: the module's source
+bytes, its module basename, the entry-module flag, the `Validation` mode, the
+module role, the compiler version string, and the cache entry format's version
+hash. Every variable-length input is length-prefixed, so no two different
+inputs can split into the same hash input. Nothing about imports, packages,
+shorthands, paths, or the root module participates, and the key input type has
+no field that could express one, so an entry stays valid when any other module
+changes and is shared by identical modules in different packages, directories,
+or workspaces.
 
-The parse task probes this cache before reading anything but the source. A hit
-loads the env into owned, growable storage (the drain patches nodes in place,
-checking grows types) and skips parsing and canonicalization entirely; the
-module's imports are read from the cached import store. A miss parses,
-canonicalizes, and stores the entry before the env leaves the task. Cache state
-never changes compiler output: a warm, cold, or disabled canonicalized cache
-yields identical diagnostics, identical checked data, and identical checked
-cache keys.
+An entry holds two bodies behind one header (magic, entry-version hash, the
+key, and both body lengths):
+
+- the serialized `ModuleEnv` exactly as canonicalization left it, which carries
+  its diagnostics, import store, deferred import worklist, file-dependency
+  records, and method tables;
+- the parse-stage record: the module's tokenizer and parser diagnostics, each
+  reduced to the stage, tag, byte region, and found-token tag its report
+  renders from, plus the parser's own import inventory (each local import's
+  spelling, base, and parent count, and each package-qualified import name).
+  The parse stage produces these source-local records in the AST rather than in
+  the env, and a hit has no AST, so they are encoded explicitly, field by
+  field, and decoded the same way. Nothing is re-parsed to recover them.
+
+Location-dependent import normalization is deliberately absent from an entry:
+an import's package-root-relative module name depends on the importing module's
+logical path and its filesystem path depends on the package root, and neither
+is a canonicalization input. The parse task normalizes the record's spellings
+against its own task inputs on a hit exactly as it does on a miss.
+
+The parse task probes this cache after reading the source and before parsing. A
+hit loads the env into fully owned, growable storage (every store copied, the
+identifier interner and module-identity table reopened for insertion, the
+string-literal builder rebuilt from the loaded store's own entries, and the node
+store given its scratch) because the drain patches nodes in place and appends
+nodes, diagnostics, identifiers, string literals, method rows, and module
+identities, and checking then grows types and regions. A hit then reads the
+module's file imports and renders both the parse-stage and canonicalization
+reports, and the coordinator handles it as a parse result followed by a
+canonicalized result, through the same two steps a miss takes. A miss parses,
+canonicalizes, and stores the entry before the env leaves the canonicalize task.
+A corrupt, truncated, stale, or misaligned entry is a miss.
+
+Cache state never changes compiler output: a warm, cold, or disabled
+canonicalized cache yields identical diagnostics, identical checked data, and
+identical checked cache keys.
 
 The checked-module cache is unchanged in role: it stores the fully checked
 module after the drain, keyed by content identity and the direct imports'
@@ -2492,19 +2523,23 @@ complete by the time the checked cache is probed.
 
 ### Coordinator phases
 
-`Parse` (probe the canonicalized cache; on miss parse) → canonicalization
-(enqueued as soon as the parse result is handled, never waiting on an import;
-on a canonicalized-cache miss canonicalize and store the entry, and either way
-read the file imports before the module leaves the task) → `WaitingOnImports` (canonicalized, waiting for every direct import
-to complete) → `WaitingOnPlatformRequirements` (app roots only) → `TypeCheck`
-(compute content identity, probe checked cache, on miss drain the worklist then
-check) → `Done`. No phase before `WaitingOnImports` depends on any other
-module. The package-qualified display identity is recorded on the env when the
-canonicalized result is handled, before the hosted transform.
+`Parse` (probe the canonicalized cache; on a hit load the env, read the file
+imports, and skip straight to the canonicalized result; on a miss parse) →
+canonicalization (enqueued as soon as the parse result is handled, never
+waiting on an import; canonicalize, store the entry, then read the file imports
+before the module leaves the task) → `WaitingOnImports` (canonicalized, waiting
+for every direct import to complete) → `WaitingOnPlatformRequirements` (app
+roots only) → `TypeCheck` (compute content identity, probe checked cache, on
+miss drain the worklist then check) → `Done`. No phase before
+`WaitingOnImports` depends on any other module. The package-qualified display
+identity is recorded on the env when the canonicalized result is handled,
+before the hosted transform, on a cache hit exactly as on a miss.
 
 ## Cache Boundary
 
-The checked module cache is the only checked cache boundary in this design.
+The checked module cache is the only *checked* cache boundary in this design;
+the canonicalized module cache is a second, non-checked boundary, and the rules
+below bind the checked one.
 Checked module cache entries are trusted compiler-produced cache entries, not
 adversarial inputs. Cache reads validate only the cache header,
 entry-version hash, key, serialized layout, and ordinary binary decoding. They must
@@ -2537,10 +2572,19 @@ It has no insert API and no dedup index.
 Fresh construction uses `StringLiteral.Builder` state paired with a `Store`.
 That state may live in a wrapper or in the build owner that owns the store, but
 it is always transient. The builder index is never serialized, never stored in
-LirImage, and never rebuilt on a cache hit. If a later phase needs a mutable
-string-literal builder, it must request an explicit fresh builder from source
-data or another builder-owned input; it must not reopen a cached store on the
-normal cache path.
+LirImage, and never rebuilt on a checked-cache hit. If a later phase needs a
+mutable string-literal builder, it must request an explicit fresh builder from
+source data or another builder-owned input; it must not reopen a cached store on
+the checked cache path.
+
+The canonicalized module cache is the one place that does reopen a loaded
+store, because its entry is not checked data: the module it loads still has its
+file imports to read, its deferred import worklist to drain, and its types to
+solve, and each of those appends string literals. Its load builds a fresh
+builder index by registering the entries the loaded store already holds, in
+entry order. Each of those entries was deduped when it was appended, so the
+rebuilt index is the one the appends built, and an insert after a hit returns
+the same `StringLiteral.Idx` it returns after a miss.
 
 The byte interning algorithm has one owner shared by identifier names, checked
 name stores, and string-literal builders. Storage policies own only id encoding,

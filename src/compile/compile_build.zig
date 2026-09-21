@@ -2193,6 +2193,14 @@ pub const BuildEnv = struct {
         /// Modules that needed compilation (cache misses)
         cache_misses: u32 = 0,
 
+        /// Modules whose canonicalization output was loaded from the
+        /// canonicalized-module cache instead of being parsed and canonicalized.
+        canonicalized_cache_hits: u32 = 0,
+        /// Modules this build parsed and canonicalized.
+        canonicalized_cache_misses: u32 = 0,
+        /// Canonicalized-module cache entries this build wrote.
+        canonicalized_cache_stores: u32 = 0,
+
         /// Number of modules that were compiled (not cached)
         modules_compiled: u32 = 0,
 

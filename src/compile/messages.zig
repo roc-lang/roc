@@ -96,6 +96,13 @@ pub const ParseTask = struct {
     module_role: ModuleEnv.ModuleRole,
     /// Dependency depth from root
     depth: u32,
+    /// Post-canonicalization validation this module receives. A
+    /// canonicalization input, so the parse task's cache probe keys on it.
+    validation: can.Can.Validation,
+    /// True only for the module the compiler was pointed at. A
+    /// canonicalization input, so the parse task's cache probe keys on it.
+    /// See `Can.ModuleInitContext.is_entry_module`.
+    is_entry_module: bool,
 };
 
 /// Task to canonicalize a parsed module
@@ -124,6 +131,10 @@ pub const CanonicalizeTask = struct {
     /// lambda, so a module inside a package cannot reach the host by defining
     /// `main!`. See `Can.ModuleInitContext.is_entry_module`.
     is_entry_module: bool,
+    /// The canonicalized-module cache key the parse task computed and missed
+    /// on. The entry this task stores is written under exactly that key, so a
+    /// store can never disagree with the probe that preceded it.
+    canonicalized_cache_key: [32]u8,
 };
 
 /// Task to type-check a canonicalized module
@@ -249,6 +260,43 @@ pub const ParsedResult = struct {
     reports: std.ArrayList(Report),
     /// Timing: nanoseconds spent parsing
     parse_ns: u64,
+    /// The entry-module flag the parse task keyed its cache probe on. The
+    /// canonicalize task receives exactly this value, so the key an entry is
+    /// stored under and the flag canonicalization consumed always agree.
+    is_entry_module: bool,
+    /// The canonicalized-module cache key this module's source missed on.
+    canonicalized_cache_key: [32]u8,
+};
+
+/// Result of a canonicalized-module cache hit: the parse task loaded this
+/// module's canonicalization output instead of parsing and canonicalizing it.
+///
+/// It carries everything the coordinator would otherwise receive from a parse
+/// result followed by a canonicalized result, in that order, because the
+/// coordinator handles it as exactly those two steps back to back.
+pub const CanonicalizedCachedResult = struct {
+    /// Package this module belongs to
+    package_name: []const u8,
+    /// Module identifier
+    module_id: ModuleId,
+    /// Module name
+    module_name: []const u8,
+    /// Path to the module file
+    path: []const u8,
+    /// Raw source file state consumed before line-ending normalization, when requested.
+    source_file_state: ?watch_inputs.State,
+    /// The canonicalized module environment loaded from the cache (ownership returned)
+    module_env: *ModuleEnv,
+    /// Discovered local imports (within the same package)
+    discovered_local_imports: std.ArrayList(DiscoveredLocalImport),
+    /// Discovered external imports (cross-package qualified imports)
+    discovered_external_imports: std.ArrayList(DiscoveredExternalImport),
+    /// The reports the parse stage produced, rendered from the entry's
+    /// recorded tokenizer and parser diagnostics.
+    parse_reports: std.ArrayList(Report),
+    /// The reports canonicalization produced, rendered from the loaded
+    /// environment's own diagnostics.
+    canonicalize_reports: std.ArrayList(Report),
 };
 
 /// Result of successfully canonicalizing a module
@@ -410,6 +458,8 @@ pub const WorkerResult = union(enum) {
     parsed: ParsedResult,
     /// Module was successfully canonicalized
     canonicalized: CanonicalizedResult,
+    /// Module's canonicalization output was loaded from the canonicalized cache
+    canonicalized_cached: CanonicalizedCachedResult,
     /// Module was successfully type-checked
     type_checked: TypeCheckedResult,
     /// A worker could not complete the compilation operation.
@@ -425,6 +475,7 @@ pub const WorkerResult = union(enum) {
         return switch (self) {
             .parsed => |r| r.package_name,
             .canonicalized => |r| r.package_name,
+            .canonicalized_cached => |r| r.package_name,
             .type_checked => |r| r.package_name,
             .operation_failed => |r| r.package_name,
             .cycle_detected => |r| r.package_name,
@@ -437,6 +488,7 @@ pub const WorkerResult = union(enum) {
         return switch (self) {
             .parsed => |r| r.module_id,
             .canonicalized => |r| r.module_id,
+            .canonicalized_cached => |r| r.module_id,
             .type_checked => |r| r.module_id,
             .operation_failed => |r| r.module_id,
             .cycle_detected => |r| r.module_id,
@@ -449,6 +501,7 @@ pub const WorkerResult = union(enum) {
         return switch (self) {
             .parsed => |r| r.module_name,
             .canonicalized => |r| r.module_name,
+            .canonicalized_cached => |r| r.module_name,
             .type_checked => |r| r.module_name,
             .operation_failed => |r| r.module_name,
             .cycle_detected => |r| r.module_name,
@@ -464,6 +517,10 @@ pub const WorkerResult = union(enum) {
         switch (self.*) {
             .parsed => |r| {
                 r.cached_ast.deinit();
+                var storage: CheckedArtifact.ModuleEnvStorage = .{ .checked_source = r.module_env };
+                storage.deinit();
+            },
+            .canonicalized_cached => |r| {
                 var storage: CheckedArtifact.ModuleEnvStorage = .{ .checked_source = r.module_env };
                 storage.deinit();
             },
@@ -514,6 +571,27 @@ pub const WorkerResult = union(enum) {
                 for (r.reports.items) |*rep| rep.deinit();
                 r.reports.deinit(gpa);
             },
+            .canonicalized_cached => |*r| {
+                for (r.discovered_local_imports.items) |imp| {
+                    gpa.free(imp.import_name);
+                    switch (imp.target) {
+                        .resolved => |resolved| {
+                            gpa.free(resolved.module_name);
+                            gpa.free(resolved.path);
+                        },
+                        .rejected => {},
+                    }
+                }
+                r.discovered_local_imports.deinit(gpa);
+                for (r.discovered_external_imports.items) |imp| {
+                    gpa.free(imp.import_name);
+                }
+                r.discovered_external_imports.deinit(gpa);
+                for (r.parse_reports.items) |*rep| rep.deinit();
+                r.parse_reports.deinit(gpa);
+                for (r.canonicalize_reports.items) |*rep| rep.deinit();
+                r.canonicalize_reports.deinit(gpa);
+            },
             .type_checked => |*r| {
                 r.semantic.deinit();
                 gpa.destroy(r.semantic);
@@ -563,6 +641,8 @@ test "WorkerTask accessors" {
             .package_root = "/path/to",
             .depth = 0,
             .module_role = .user,
+            .validation = .checking,
+            .is_entry_module = false,
         },
     };
 
@@ -587,6 +667,8 @@ test "WorkerResult accessors" {
             .discovered_external_imports = std.ArrayList(DiscoveredExternalImport).empty,
             .reports = reports,
             .parse_ns = 1000,
+            .is_entry_module = false,
+            .canonicalized_cache_key = [_]u8{0} ** 32,
         },
     };
 

@@ -6585,10 +6585,17 @@ fn customGeneratedModuleGraph(
         if (checkCommandExpectation(allocator, result, .{ .args = &.{"check"}, .exit = .success })) |message| {
             return failureFromRun(allocator, timer, result, message);
         }
-        const cached_module_count = countModuleCacheFiles(io, allocator, cache_path) catch |err|
-            return customInfraFailure(allocator, timer, "failed to count module cache files: {}", .{err});
+        const cached_module_count = countModuleCacheFiles(io, allocator, cache_path, "mod") catch |err|
+            return customInfraFailure(allocator, timer, "failed to count checked module cache files: {}", .{err});
         if (cached_module_count != config.roc_file_count) {
-            return customFailure(allocator, timer, "expected {d} cached module files, found {d}", .{ config.roc_file_count, cached_module_count });
+            return customFailure(allocator, timer, "expected {d} checked module cache files, found {d}", .{ config.roc_file_count, cached_module_count });
+        }
+        // Each module also stores exactly one canonicalized entry, keyed on its
+        // own source alone.
+        const canonicalized_module_count = countModuleCacheFiles(io, allocator, cache_path, "can") catch |err|
+            return customInfraFailure(allocator, timer, "failed to count canonicalized module cache files: {}", .{err});
+        if (canonicalized_module_count != config.roc_file_count) {
+            return customFailure(allocator, timer, "expected {d} canonicalized module cache files, found {d}", .{ config.roc_file_count, canonicalized_module_count });
         }
     } else |err| {
         return customInfraFailure(allocator, timer, "failed to write generated module graph: {}", .{err});
@@ -6692,7 +6699,11 @@ fn writeGeneratedTypeModule(
     try out.flush();
 }
 
-fn countModuleCacheFiles(io: std.Io, allocator: Allocator, cache_path: []const u8) CliRunnerError!usize {
+/// Count the entry files one cache section holds. The compiler keeps its two
+/// module caches in sibling directories under the version directory (checked
+/// artifacts in `mod`, canonicalization output in `can`), so a count must name
+/// the section it means rather than every file under the cache root.
+fn countModuleCacheFiles(io: std.Io, allocator: Allocator, cache_path: []const u8, section: []const u8) CliRunnerError!usize {
     var cache_dir = std.Io.Dir.cwd().openDir(io, cache_path, .{ .iterate = true }) catch |err| switch (err) {
         error.AccessDenied,
         error.BadPathName,
@@ -6720,9 +6731,18 @@ fn countModuleCacheFiles(io: std.Io, allocator: Allocator, cache_path: []const u
         if (entry.kind != .file) continue;
         if (std.mem.endsWith(u8, entry.basename, ".meta")) continue;
         if (std.mem.endsWith(u8, entry.basename, ".tmp")) continue;
+        if (!cachePathIsInSection(entry.path, section)) continue;
         count += 1;
     }
     return count;
+}
+
+/// Whether a cache-root-relative entry path lies under `<version>/<section>/`.
+fn cachePathIsInSection(entry_path: []const u8, section: []const u8) bool {
+    var components = std.mem.tokenizeAny(u8, entry_path, "/\\");
+    _ = components.next() orelse return false; // compiler version directory
+    const entry_section = components.next() orelse return false;
+    return std.mem.eql(u8, entry_section, section);
 }
 
 /// The `--timings` row that covers LLVM's optimization pipeline and object
@@ -7103,7 +7123,7 @@ fn customDefaultAppAllSyntaxCheckedCache(io: std.Io, allocator: Allocator, env: 
 
     if (runRocAndCheck(io, allocator, env, timer, timeout_ms, command)) |failure| return failure;
 
-    const cached_module_count_after_first_run = countModuleCacheFiles(io, allocator, env.dirs.roc_cache_dir) catch |err|
+    const cached_module_count_after_first_run = countModuleCacheFiles(io, allocator, env.dirs.roc_cache_dir, "mod") catch |err|
         return customInfraFailure(allocator, timer, "failed to count module cache files: {}", .{err});
     if (cached_module_count_after_first_run == 0) {
         return customFailure(allocator, timer, "expected default app run to populate checked module cache entries before the second run, found 0", .{});
@@ -7111,7 +7131,7 @@ fn customDefaultAppAllSyntaxCheckedCache(io: std.Io, allocator: Allocator, env: 
 
     if (runRocAndCheck(io, allocator, env, timer, timeout_ms, command)) |failure| return failure;
 
-    const cached_module_count_after_second_run = countModuleCacheFiles(io, allocator, env.dirs.roc_cache_dir) catch |err|
+    const cached_module_count_after_second_run = countModuleCacheFiles(io, allocator, env.dirs.roc_cache_dir, "mod") catch |err|
         return customInfraFailure(allocator, timer, "failed to count module cache files after second run: {}", .{err});
     if (cached_module_count_after_second_run != cached_module_count_after_first_run) {
         return customFailure(allocator, timer, "expected second default app run to reuse {d} checked module cache entries, found {d}", .{ cached_module_count_after_first_run, cached_module_count_after_second_run });

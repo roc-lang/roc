@@ -4685,6 +4685,96 @@ pub const Serialized = extern struct {
 
         return env;
     }
+
+    /// Deserialize into a ModuleEnv that owns every byte it holds.
+    ///
+    /// This is what a canonicalized-cache hit loads: the module still has its
+    /// file imports to read, its deferred import worklist to drain, and its
+    /// types to solve, and each of those appends to the env. Every store is
+    /// therefore copied into growable memory owned by `gpa`, the identifier
+    /// interner and module-identity table are reopened for insertion, the
+    /// string-literal builder is rebuilt from the store's own entries, and the
+    /// node store gets its scratch buffers. The result is released with
+    /// `deinit`, exactly like a freshly canonicalized env.
+    pub fn deserializeOwned(
+        self: *const Serialized,
+        base_addr: usize,
+        gpa: std.mem.Allocator,
+        source: []const u8,
+        module_basename: []const u8,
+    ) std.mem.Allocator.Error!*Self {
+        const env = try gpa.create(Self);
+        errdefer gpa.destroy(env);
+
+        // The frozen store's lists alias the serialized buffer, so only the
+        // lookup map `deserializeInto` allocated is released here; `clone`
+        // copies those lists into memory this env owns.
+        var frozen_imports = try self.imports.deserializeInto(base_addr, gpa);
+        defer frozen_imports.deinitMapOnly(gpa);
+
+        var module_identities = self.module_identities.deserialize(base_addr);
+        try module_identities.enableRuntimeInserts(gpa);
+
+        env.* = Self{
+            .gpa = gpa,
+            .common = try self.common.deserializeOwned(base_addr, gpa, source),
+            .types = try self.types.deserializeWithCopy(base_addr, gpa),
+            .module_kind = self.module_kind.decode(),
+            .module_role = self.module_role,
+            .all_defs = self.all_defs,
+            .global_value_defs = self.global_value_defs,
+            .top_level_value_defs = self.top_level_value_defs,
+            .value_binding_defs = self.value_binding_defs,
+            .hosted_defs = self.hosted_defs,
+            .all_statements = self.all_statements,
+            .type_decls = self.type_decls,
+            .forward_type_decls = self.forward_type_decls,
+            .exports = self.exports,
+            .requires_types = try self.requires_types.deserializeWithCopy(base_addr, gpa),
+            .for_clause_aliases = try self.for_clause_aliases.deserializeWithCopy(base_addr, gpa),
+            .provides_entries = try self.provides_entries.deserializeWithCopy(base_addr, gpa),
+            .hosted_entries = try self.hosted_entries.deserializeWithCopy(base_addr, gpa),
+            .builtin_statements = self.builtin_statements,
+            .external_decls = try self.external_decls.deserializeWithCopy(base_addr, gpa),
+            .imports = try frozen_imports.clone(gpa),
+            .file_dependencies = try self.file_dependencies.deserializeWithCopy(base_addr, gpa),
+            .deferred_import_refs = try self.deferred_import_refs.deserializeWithCopy(base_addr, gpa),
+            .import_identities = try self.import_identities.deserializeWithCopy(base_addr, gpa),
+            .module_name = module_basename,
+            .display_module_name_idx = @bitCast(self.display_module_name_idx_reserved),
+            .qualified_module_ident = @bitCast(self.qualified_module_ident_reserved),
+            .module_identities = module_identities,
+            .module_identity_displays = try self.module_identity_displays.deserializeWithCopy(base_addr, gpa),
+            .self_module_identity = @enumFromInt(self.self_module_identity_reserved),
+            .diagnostics = self.diagnostics,
+            .store = try self.store.deserializeOwned(base_addr, gpa),
+            .evaluation_order = null,
+            .top_level_demand_dependencies = try self.top_level_demand_dependencies.deserializeWithCopy(base_addr, gpa),
+            .top_level_demand_dependencies_ready = self.top_level_demand_dependencies_ready,
+            .runtime_prepared = self.runtime_prepared,
+            .idents = self.idents,
+            .import_mapping = types_mod.import_mapping.ImportMapping.init(gpa),
+            .method_idents = try self.method_idents.deserializeWithCopy(base_addr, gpa),
+            .method_defs = try self.method_defs.deserializeWithCopy(base_addr, gpa),
+            .provided_low_level_defs = try self.provided_low_level_defs.deserializeWithCopy(base_addr, gpa),
+            .for_loop_dispatch_plans = try self.for_loop_dispatch_plans.deserializeWithCopy(base_addr, gpa),
+            .numeral_digit_bytes = try self.numeral_digit_bytes.deserializeWithCopy(base_addr, gpa),
+            .numeral_literals = try self.numeral_literals.deserializeWithCopy(base_addr, gpa),
+            .numeric_suffix_targets = try self.numeric_suffix_targets.deserializeWithCopy(base_addr, gpa),
+            .scheme_uses = try self.scheme_uses.deserializeWithCopy(base_addr, gpa),
+            .scheme_use_pairs = try self.scheme_use_pairs.deserializeWithCopy(base_addr, gpa),
+            .binding_schemes = try self.binding_schemes.deserializeWithCopy(base_addr, gpa),
+            .binding_scheme_codec_requirements = try self.binding_scheme_codec_requirements.deserializeWithCopy(base_addr, gpa),
+            .generated_codec_derivations = try self.generated_codec_derivations.deserializeWithCopy(base_addr, gpa),
+            .generated_codec_calls = try self.generated_codec_calls.deserializeWithCopy(base_addr, gpa),
+            .rejected_static_dispatches = try self.rejected_static_dispatches.deserializeWithCopy(base_addr, gpa),
+            .record_omitted_defaults = try self.record_omitted_defaults.deserializeWithCopy(base_addr, gpa),
+        };
+
+        env.debugAssertModuleBasename();
+
+        return env;
+    }
 };
 
 /// Assert that the runtime-only module basename agrees with its serialized

@@ -17258,6 +17258,11 @@ fn printBuildSuccess(
             cache_stats.modules_compiled,
         });
         try stdout.print("    Cache Hit: {}%\n", .{cache_percent});
+        try stdout.print("    Canonicalized: {} cached, {} canonicalized, {} stored\n", .{
+            cache_stats.canonicalized_cache_hits,
+            cache_stats.canonicalized_cache_misses,
+            cache_stats.canonicalized_cache_stores,
+        });
     }
 }
 
@@ -17424,6 +17429,12 @@ const CheckResult = struct {
     modules_total: u32 = 0,
     cache_hits: u32 = 0,
     cache_misses: u32 = 0,
+    /// Modules loaded from the canonicalized-module cache.
+    canonicalized_cache_hits: u32 = 0,
+    /// Modules this build parsed and canonicalized.
+    canonicalized_cache_misses: u32 = 0,
+    /// Canonicalized-module cache entries this build wrote.
+    canonicalized_cache_stores: u32 = 0,
     modules_compiled: u32 = 0,
     /// Module compile time tracking (in nanoseconds)
     module_time_min_ns: u64 = 0,
@@ -17786,6 +17797,9 @@ fn checkFileWithBuildEnvPreserved(
                 .modules_total = cache_stats.modules_total,
                 .cache_hits = cache_stats.cache_hits,
                 .cache_misses = cache_stats.cache_misses,
+                .canonicalized_cache_hits = cache_stats.canonicalized_cache_hits,
+                .canonicalized_cache_misses = cache_stats.canonicalized_cache_misses,
+                .canonicalized_cache_stores = cache_stats.canonicalized_cache_stores,
                 .modules_compiled = cache_stats.modules_compiled,
                 .module_time_min_ns = cache_stats.module_time_min_ns,
                 .module_time_max_ns = cache_stats.module_time_max_ns,
@@ -17839,6 +17853,9 @@ fn checkFileWithBuildEnvPreserved(
         .modules_total = cache_stats.modules_total,
         .cache_hits = cache_stats.cache_hits,
         .cache_misses = cache_stats.cache_misses,
+        .canonicalized_cache_hits = cache_stats.canonicalized_cache_hits,
+        .canonicalized_cache_misses = cache_stats.canonicalized_cache_misses,
+        .canonicalized_cache_stores = cache_stats.canonicalized_cache_stores,
         .modules_compiled = cache_stats.modules_compiled,
         .module_time_min_ns = cache_stats.module_time_min_ns,
         .module_time_max_ns = cache_stats.module_time_max_ns,
@@ -17919,6 +17936,9 @@ fn checkFileWithBuildEnv(
             .modules_total = cache_stats.modules_total,
             .cache_hits = cache_stats.cache_hits,
             .cache_misses = cache_stats.cache_misses,
+            .canonicalized_cache_hits = cache_stats.canonicalized_cache_hits,
+            .canonicalized_cache_misses = cache_stats.canonicalized_cache_misses,
+            .canonicalized_cache_stores = cache_stats.canonicalized_cache_stores,
             .modules_compiled = cache_stats.modules_compiled,
             .module_time_min_ns = cache_stats.module_time_min_ns,
             .module_time_max_ns = cache_stats.module_time_max_ns,
@@ -17962,6 +17982,9 @@ fn checkFileWithBuildEnv(
         .modules_total = cache_stats.modules_total,
         .cache_hits = cache_stats.cache_hits,
         .cache_misses = cache_stats.cache_misses,
+        .canonicalized_cache_hits = cache_stats.canonicalized_cache_hits,
+        .canonicalized_cache_misses = cache_stats.canonicalized_cache_misses,
+        .canonicalized_cache_stores = cache_stats.canonicalized_cache_stores,
         .modules_compiled = cache_stats.modules_compiled,
         .module_time_min_ns = cache_stats.module_time_min_ns,
         .module_time_max_ns = cache_stats.module_time_max_ns,
@@ -18318,6 +18341,7 @@ fn printTimingBreakdown(writer: anytype, timing: ?CheckTimingInfo) void {
 /// Format:
 ///     Modules: 6 total, 4 cached, 2 built
 ///     Cache Hit: 67%
+///     Canonicalized: 5 cached, 1 canonicalized, 1 stored
 ///     Build: 8ms / 14ms / 25ms (min / avg / max)
 fn printVerboseStats(writer: anytype, result: *const CheckResult) void {
     const total = result.modules_total;
@@ -18334,6 +18358,14 @@ fn printVerboseStats(writer: anytype, result: *const CheckResult) void {
 
     // Print cache hit percentage
     writer.print("    Cache Hit: {}%\n", .{cache_percent}) catch {};
+
+    // The canonicalized-module cache is reported separately: it is keyed on one
+    // module's own source, so it hits where the checked cache misses.
+    writer.print("    Canonicalized: {} cached, {} canonicalized, {} stored\n", .{
+        result.canonicalized_cache_hits,
+        result.canonicalized_cache_misses,
+        result.canonicalized_cache_stores,
+    }) catch {};
 
     // Print build time breakdown (only if we have compiled modules)
     if (result.modules_compiled > 0) {

@@ -172,7 +172,85 @@ pub const Serialized = extern struct {
             .source = source,
         };
     }
+
+    /// Deserialize into a CommonEnv that owns every byte it holds, so later
+    /// compilation stages may append identifiers, string literals, exposed
+    /// items, and line starts to it. `deinit` releases it exactly like a
+    /// freshly constructed `CommonEnv`.
+    pub fn deserializeOwned(
+        self: *const Serialized,
+        base_addr: usize,
+        gpa: Allocator,
+        source: []const u8,
+    ) Allocator.Error!CommonEnv {
+        const frozen = self.deserializeInto(base_addr, source);
+
+        // `enableRuntimeInserts` copies the interner's bytes and hash table;
+        // the parallel attribute column is copied here so `genUnique` can
+        // extend both halves of an owned store and `deinit` releases both.
+        var idents = frozen.idents;
+        try idents.enableRuntimeInserts(gpa);
+        idents.attributes = frozen.idents.attributes.clone(gpa) catch |err| {
+            // The interner copy above is owned now, but the attribute column
+            // still aliases the serialized buffer, so it is emptied before the
+            // store is released rather than freed through this allocator.
+            idents.attributes = .{};
+            idents.deinit(gpa);
+            return err;
+        };
+        errdefer idents.deinit(gpa);
+
+        var strings = try frozen.strings.clone(gpa);
+        errdefer strings.deinit(gpa);
+
+        var string_builder = try rebuildStringBuilder(&strings, gpa);
+        errdefer string_builder.deinit(gpa);
+
+        var exposed_items = try frozen.exposed_items.clone(gpa);
+        errdefer exposed_items.deinit(gpa);
+
+        const line_starts = try frozen.line_starts.clone(gpa);
+
+        return CommonEnv{
+            .idents = idents,
+            .strings = strings,
+            .string_builder = string_builder,
+            .strings_insertable = true,
+            .exposed_items = exposed_items,
+            .line_starts = line_starts,
+            .source = source,
+        };
+    }
 };
+
+/// Build the transient dedup state for an owned `StringLiteral.Store` from the
+/// entries that store already holds.
+///
+/// Those entries are themselves the builder's input: each was deduped when it
+/// was appended, so registering them in entry order reproduces the index the
+/// appends built. A later `insertString` therefore returns the same
+/// `StringLiteral.Idx` it returns when the store was never serialized.
+fn rebuildStringBuilder(
+    strings: *StringLiteral.Store,
+    gpa: Allocator,
+) Allocator.Error!StringLiteral.BuilderState {
+    var builder = StringLiteral.BuilderState{};
+    errdefer builder.deinit(gpa);
+
+    var count: usize = 0;
+    var counting = strings.iterator();
+    while (counting.next()) |_| count += 1;
+    if (count == 0) return builder;
+
+    try builder.ensureAdditionalCapacity(strings, gpa, count);
+
+    var entries = strings.iterator();
+    while (entries.next()) |entry| {
+        builder.registerExistingAssumeCapacity(strings, entry.idx);
+    }
+
+    return builder;
+}
 
 /// Inserts an identifier into the store and returns its index.
 pub fn insertIdent(self: *CommonEnv, gpa: std.mem.Allocator, ident: Ident) std.mem.Allocator.Error!Ident.Idx {
@@ -449,6 +527,60 @@ test "CommonEnv.Serialized roundtrip" {
     try testing.expectEqual(@as(u32, 20), env.line_starts.items.items[2]);
 
     try testing.expectEqualStrings(source, env.source);
+}
+
+test "CommonEnv.Serialized deserializeOwned keeps inserting where the original left off" {
+    const testing = std.testing;
+    const gpa = testing.allocator;
+
+    const source = "hello world\n";
+
+    var original = try CommonEnv.init(gpa, source);
+    defer original.deinit(gpa);
+
+    const hello_ident = try original.insertIdent(gpa, Ident.for_text("hello"));
+    const first = try original.insertString(gpa, "shared literal");
+    const second = try original.insertString(gpa, "other literal");
+    try original.addExposedById(gpa, hello_ident);
+
+    var writer = CompactWriter.init();
+    defer writer.deinit(gpa);
+
+    const io = std.testing.io;
+    var tmp_dir = testing.tmpDir(.{});
+    defer tmp_dir.cleanup();
+    const tmp_file = try tmp_dir.dir.createFile(io, "owned.compact", .{ .read = true });
+    defer tmp_file.close(io);
+
+    const serialized = try writer.appendAlloc(gpa, CommonEnv.Serialized);
+    try serialized.serialize(&original, gpa, &writer);
+    try writer.writeGather(tmp_file, io);
+
+    const buffer = try gpa.alignedAlloc(u8, CompactWriter.SERIALIZATION_ALIGNMENT, writer.total_bytes);
+    defer gpa.free(buffer);
+    _ = try tmp_file.readPositionalAll(io, buffer, 0);
+
+    const deserialized_ptr = @as(*CommonEnv.Serialized, @ptrCast(@alignCast(buffer.ptr)));
+    var env = try deserialized_ptr.deserializeOwned(@intFromPtr(buffer.ptr), gpa, source);
+    defer env.deinit(gpa);
+
+    try testing.expectEqualStrings("shared literal", env.getString(first));
+    try testing.expectEqualStrings("other literal", env.getString(second));
+
+    // Re-inserting a literal the loaded store already holds returns that same
+    // entry, so a cache hit and a cache miss agree on every `StringLiteral.Idx`.
+    try testing.expectEqual(first, try env.insertString(gpa, "shared literal"));
+    try testing.expectEqual(second, try env.insertString(gpa, "other literal"));
+    try testing.expectEqual(hello_ident, try env.insertIdent(gpa, Ident.for_text("hello")));
+
+    // Appending is what the drain and type checking do to a loaded env.
+    const appended = try env.insertString(gpa, "appended literal");
+    try testing.expectEqualStrings("appended literal", env.getString(appended));
+    try testing.expectEqual(appended, try env.insertString(gpa, "appended literal"));
+
+    const appended_ident = try env.insertIdent(gpa, Ident.for_text("appended"));
+    try testing.expectEqualStrings("appended", env.getIdent(appended_ident));
+    try testing.expectEqual(@as(usize, 1), env.exposed_items.count());
 }
 
 test "CommonEnv.Serialized roundtrip with empty data" {
