@@ -20812,7 +20812,9 @@ const ProcBodyBuilder = struct {
             return try self.lowerExprIntoRep(target, target_rep, expr_id, next);
         }
 
-        const worker_value = try self.addFrameLocalForRep(target_rep);
+        // A constructed payload owns its descriptor. A shared worker input
+        // cannot capture the descriptors produced while evaluating its fields.
+        const worker_value = try self.addFrameLocalForRepWithFreshDescriptor(target_rep);
         if (self.parent.result.store.getLocal(target).layout_idx == self.parent.result.store.getLocal(worker_value).layout_idx) {
             if (self.parent.result.store.getLocal(target).boxy_desc) |target_desc| {
                 self.parent.result.store.setLocalBoxyDesc(worker_value, target_desc);

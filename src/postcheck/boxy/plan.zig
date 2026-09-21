@@ -1449,6 +1449,7 @@ pub fn analyzeProgram(
 ) Allocator.Error!ProgramPlan {
     var builder = Builder.init(allocator, input);
     defer builder.deinit();
+    try builder.collectQuantifiedVariables();
 
     if (input.source_modules.len != 0 and input.source_modules.len != input.roots.len)
         boxyPlanInvariant("root source module count differs from request count");
@@ -1571,6 +1572,7 @@ const Builder = struct {
     relation_modules: []const checked.ImportedModuleView,
     plan: ProgramPlan,
     by_type: std.AutoHashMap(CheckedTypeIdentity, TypeBindingId),
+    quantified_variables: std.AutoHashMap(CheckedTypeIdentity, void),
     nominal_declaration_formals: std.AutoHashMap(NominalDeclarationKey, Span),
     optional_slots: std.AutoHashMap(CheckedTypeIdentity, TypeRepId),
     by_stored_type: std.AutoHashMap(StoredTypeIdentity, TypeRepId),
@@ -1649,6 +1651,7 @@ const Builder = struct {
             .relation_modules = if (input.root_module) |root_module| root_module.relation_modules else &.{},
             .plan = ProgramPlan.init(allocator),
             .by_type = std.AutoHashMap(CheckedTypeIdentity, TypeBindingId).init(allocator),
+            .quantified_variables = std.AutoHashMap(CheckedTypeIdentity, void).init(allocator),
             .nominal_declaration_formals = std.AutoHashMap(NominalDeclarationKey, Span).init(allocator),
             .optional_slots = std.AutoHashMap(CheckedTypeIdentity, TypeRepId).init(allocator),
             .by_stored_type = std.AutoHashMap(StoredTypeIdentity, TypeRepId).init(allocator),
@@ -1685,9 +1688,30 @@ const Builder = struct {
         self.body_exprs_seen.deinit();
         self.optional_slots.deinit();
         self.by_type.deinit();
+        self.quantified_variables.deinit();
         self.nominal_declaration_formals.deinit();
         self.by_stored_type.deinit();
         self.plan.deinit();
+    }
+
+    fn collectQuantifiedVariables(self: *Builder) Allocator.Error!void {
+        try self.collectModuleQuantifiedVariables(self.root_view);
+        for (self.extra_module_views) |view| try self.collectModuleQuantifiedVariables(view);
+        for (self.imports) |imported| try self.collectModuleQuantifiedVariables(moduleViewFromImported(imported));
+        for (self.relation_modules) |imported| try self.collectModuleQuantifiedVariables(moduleViewFromImported(imported));
+    }
+
+    fn collectModuleQuantifiedVariables(self: *Builder, view: ModuleView) Allocator.Error!void {
+        for (view.checked_procedure_templates.scheme_vars_pool) |variable| {
+            try self.quantified_variables.put(typeRef(view, variable), {});
+        }
+    }
+
+    fn variableRowIsDefaultClosed(self: *const Builder, view: ModuleView, ty: checked.CheckedTypeId, expected: checked.RowDefault) bool {
+        const payload = view.checked_types.payload(ty);
+        return payload.variableSealsToRowDefault() and
+            payload.flex.row_default == expected and
+            !self.quantified_variables.contains(typeRef(view, ty));
     }
 
     /// The module data the shared label-comparing queries need.
@@ -4682,7 +4706,10 @@ const Builder = struct {
         return switch (payload) {
             .pending => boxyPlanInvariant("checked type payload was pending during boxy planning"),
             .err => boxyPlanInvariant("checked error type reached boxy representation planning"),
-            .flex => |flex| try self.dynamicRepresentation(source_type, flex.constraints, .flex),
+            .flex => |flex| if (self.variableRowIsDefaultClosed(view, ty, .empty_tag_union))
+                .{ .source_type = source_type, .kind = .empty_tag_union }
+            else
+                try self.dynamicRepresentation(source_type, flex.constraints, .flex),
             .rigid => |rigid| try self.dynamicRepresentation(source_type, rigid.constraints, .rigid),
             .alias => |alias| try self.aliasRepresentation(view, source_type, alias),
             .record => |record| try self.recordRepresentation(view, source_type, .record, record.fields, record.ext),
@@ -5954,9 +5981,7 @@ const Builder = struct {
                 try self.appendPendingChild(&children, view, .{ .tag_payload = .{ .tag = tag.name, .index = @intCast(index) } }, arg);
             }
         }
-        if (!try self.rowExtensionIsDefaultClosed(view, tag_union.ext, .empty_tag_union)) {
-            try self.appendPendingChild(&children, view, .tag_ext, tag_union.ext);
-        }
+        try self.appendPendingChild(&children, view, .tag_ext, tag_union.ext);
         const child_span = try self.commitPendingChildren(children.items);
 
         const variant_start: u32 = @intCast(self.plan.tag_variants.items.len);
@@ -6051,37 +6076,8 @@ const Builder = struct {
         return switch (view.checked_types.payload(ext_ty)) {
             .empty_tag_union => true,
             .alias => |alias| try self.tagUnionExtensionIsExplicitlyClosedInner(view, alias.backing, seen),
-            .flex, .rigid => |variable| variable.row_default == .empty_tag_union,
+            .flex, .rigid => self.variableRowIsDefaultClosed(view, ext_ty, .empty_tag_union),
             .pending, .err, .record, .record_unbound, .tuple, .nominal, .function, .empty_record, .tag_union => false,
-        };
-    }
-
-    fn rowExtensionIsDefaultClosed(
-        self: *Builder,
-        view: ModuleView,
-        ext_ty: checked.CheckedTypeId,
-        expected: checked.RowDefault,
-    ) Allocator.Error!bool {
-        var seen = std.AutoHashMap(CheckedTypeIdentity, void).init(self.allocator);
-        defer seen.deinit();
-        return try self.rowExtensionIsDefaultClosedInner(view, ext_ty, expected, &seen);
-    }
-
-    fn rowExtensionIsDefaultClosedInner(
-        self: *Builder,
-        view: ModuleView,
-        ext_ty: checked.CheckedTypeId,
-        expected: checked.RowDefault,
-        seen: *std.AutoHashMap(CheckedTypeIdentity, void),
-    ) Allocator.Error!bool {
-        const source = typeRef(view, ext_ty);
-        const entry = try seen.getOrPut(source);
-        if (entry.found_existing) return false;
-
-        return switch (view.checked_types.payload(ext_ty)) {
-            .alias => |alias| try self.rowExtensionIsDefaultClosedInner(view, alias.backing, expected, seen),
-            .flex, .rigid => |variable| variable.row_default == expected,
-            .pending, .err, .record, .record_unbound, .tuple, .nominal, .function, .empty_record, .tag_union, .empty_tag_union => false,
         };
     }
 
@@ -9998,9 +9994,8 @@ const Builder = struct {
 
     /// Returns the exact call-side row that instantiates a worker child when
     /// open tag rows expose different tags on each side of a checked function
-    /// boundary. Unmatched worker payloads live in the call extension; when
-    /// the call contributes unmatched payloads, the worker extension denotes
-    /// the complete call row rather than only its residual extension.
+    /// boundary. When the call contributes unmatched tags, the worker
+    /// extension denotes the complete call row with its stored discriminants.
     fn rowInstantiationTarget(
         self: *Builder,
         worker_rep_id: TypeRepId,
@@ -10009,32 +10004,30 @@ const Builder = struct {
     ) ?TypeRepId {
         const worker_rep = self.plan.representations.items[@intFromEnum(worker_rep_id)];
         const call_rep = self.plan.representations.items[@intFromEnum(call_rep_id)];
-        if (worker_rep.kind != .tag_union or call_rep.kind != .tag_union) return null;
+        if ((worker_rep.kind != .tag_union and worker_rep.kind != .dynamic) or
+            (call_rep.kind != .tag_union and call_rep.kind != .dynamic)) return null;
 
-        const worker_children = self.plan.childSlice(worker_rep.children);
-        const call_children = self.plan.childSlice(call_rep.children);
         switch (worker_child.role) {
-            .tag_payload => {
-                if (self.namedQuery().findMatchingChildByRole(call_children, worker_child) != null) return null;
-                var extension: ?TypeRepId = null;
-                for (call_children) |call_child| {
-                    if (call_child.role != .tag_ext) continue;
-                    if (extension != null) {
-                        boxyPlanInvariant("boxy tag union representation had multiple row extensions");
-                    }
-                    extension = call_child.rep;
-                }
-                return extension;
-            },
             .tag_ext => {
-                for (call_children) |call_child| {
-                    if (call_child.role != .tag_payload) continue;
-                    if (self.namedQuery().findMatchingChildByRole(worker_children, call_child) == null) {
-                        return call_rep_id;
+                const worker_variants = self.plan.tagVariantSlice(worker_rep.tag_variants);
+                for (self.plan.tagVariantSlice(call_rep.tag_variants)) |call_variant| {
+                    var matched = false;
+                    for (worker_variants) |worker_variant| {
+                        if (tagLabelNameMatches(
+                            self.moduleNames(worker_variant.name_module),
+                            worker_variant.name,
+                            self.moduleNames(call_variant.name_module),
+                            call_variant.name,
+                        )) {
+                            matched = true;
+                            break;
+                        }
                     }
+                    if (!matched) return call_rep_id;
                 }
                 return null;
             },
+            .tag_payload,
             .alias_backing,
             .alias_arg,
             .nominal_backing,
@@ -14737,6 +14730,79 @@ test "boxy planner represents open tag-union rows dynamically" {
     try std.testing.expectEqual(RepresentationKind{ .dynamic = .flex }, rep.kind);
     try std.testing.expect(rep.contains_dynamic);
     try std.testing.expect(rep.descriptor != null);
+}
+
+test "boxy row instantiation retains unmatched zero-payload variants in dynamic rows" {
+    const gpa = std.testing.allocator;
+    const worker: TypeRepId = @enumFromInt(fixtureTableIndex(0));
+    const call: TypeRepId = @enumFromInt(1);
+    const tail: TypeRepId = @enumFromInt(2);
+    const kinds = [_]RepresentationKind{ .tag_union, .{ .dynamic = .flex } };
+    for (kinds) |worker_kind| {
+        for (kinds) |call_kind| {
+            for ([_]bool{ false, true }) |same_tag| {
+                var builder = Builder.init(gpa, .{});
+                defer builder.deinit();
+                const extension = RepChild{
+                    .role = .tag_ext,
+                    .source_type = rootTypeRef(@enumFromInt(2)),
+                    .rep = tail,
+                };
+                try builder.plan.children.append(gpa, extension);
+                try builder.plan.tag_variants.appendSlice(gpa, &.{
+                    .{ .name = @enumFromInt(1), .name_module = builder.root_view.key, .payloads = .{} },
+                    .{ .name = @enumFromInt(@as(u32, if (same_tag) 1 else 2)), .name_module = builder.root_view.key, .payloads = .{} },
+                });
+                try builder.plan.representations.appendSlice(gpa, &.{
+                    .{ .source_type = rootTypeRef(@enumFromInt(fixtureTableIndex(0))), .kind = worker_kind, .children = .{ .start = 0, .len = 1 }, .tag_variants = .{ .start = 0, .len = 1 } },
+                    .{ .source_type = rootTypeRef(@enumFromInt(1)), .kind = call_kind, .children = .{ .start = 0, .len = 1 }, .tag_variants = .{ .start = 1, .len = 1 } },
+                    .{ .source_type = rootTypeRef(@enumFromInt(2)), .kind = .{ .dynamic = .flex } },
+                });
+                try std.testing.expectEqual(
+                    if (same_tag) @as(?TypeRepId, null) else call,
+                    builder.rowInstantiationTarget(worker, call, extension),
+                );
+            }
+        }
+    }
+}
+
+test "boxy planner keeps quantified defaultable tag tails open" {
+    const gpa = std.testing.allocator;
+    const tail: checked.CheckedTypeId = @enumFromInt(fixtureTableIndex(0));
+    var scheme_vars = [_]checked.CheckedTypeId{tail};
+    const tags = [_]checked.CheckedTag{
+        .{ .name = @enumFromInt(1), .args_start = 0, .args_len = 0 },
+    };
+    for ([_]bool{ false, true }) |quantified| {
+        const payloads = [_]checked.StoredCheckedTypePayload{
+            .{ .flex = .{ .row_default = .empty_tag_union } },
+            .{ .tag_union = .{ .tags = .{ .start = 0, .len = tags.len }, .ext = tail } },
+        };
+        const templates = checked.CheckedProcedureTemplateTable{
+            .scheme_vars_pool = if (quantified) &scheme_vars else &.{},
+        };
+        var plan = try analyzeProgram(gpa, .{
+            .root_view = .{
+                .checked_types = .{ .stored_payloads = &payloads, .tag_pool = &tags },
+                .checked_procedure_templates = &templates,
+            },
+            .layout_requests = &.{@as(checked.CheckedTypeId, @enumFromInt(1))},
+        }, .{});
+        defer plan.deinit();
+
+        const rep = plan.representations.items[@intFromEnum(plan.root_reps.items[0])];
+        try std.testing.expectEqual(if (quantified) RepresentationKind{ .dynamic = .flex } else RepresentationKind.tag_union, rep.kind);
+        try std.testing.expectEqual(quantified, rep.contains_dynamic);
+        try std.testing.expectEqual(quantified, rep.descriptor != null);
+        try std.testing.expectEqual(@as(usize, 1), plan.tagVariantSlice(rep.tag_variants).len);
+        const children = plan.childSlice(rep.children);
+        try std.testing.expectEqual(@as(usize, 1), children.len);
+        try std.testing.expectEqual(ChildRole.tag_ext, children[0].role);
+        try std.testing.expectEqual(tail, children[0].source_type.ty);
+        const tail_rep = plan.representations.items[@intFromEnum(children[0].rep)];
+        try std.testing.expectEqual(if (quantified) RepresentationKind{ .dynamic = .flex } else RepresentationKind.empty_tag_union, tail_rep.kind);
+    }
 }
 
 test "boxy planner preserves known variants on open tag-union rows" {

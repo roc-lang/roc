@@ -11478,7 +11478,8 @@ test "stored encoder_for restore lowers a shape with an optional field" {
 
 test "issue 11470: tagged shared error composition executes in both strategies" {
     const allocator = std.testing.allocator;
-    const source = @import("issue_11470_source.zig").source ++ "\nmain = run\n";
+    // The helper selects a procedure root, so give it a lambda rather than a value alias.
+    const source = @import("issue_11470_source.zig").source ++ "\nmain = |mode| run(mode)\n";
     for ([_]base.SpecializationStrategy{ .lss, .boxy }) |strategy| {
         var lowered = try lowerModuleWithOptions(allocator, source, .none, .{
             .specialization_strategy = strategy,

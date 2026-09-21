@@ -11553,6 +11553,21 @@ boundary metadata; it is not attached to unchanged bytes. A boundary may relabel
 an unchanged value only when the producer has proved that the source and target
 descriptors use the same complete storage convention.
 
+Boxy worker tag rows close a variable tail only when it is an unconstrained
+flex with an empty-row default and no procedure scheme quantifies its checked
+identity. The planner indexes the checked procedure tables' quantified
+variables before analyzing representations. Quantified and rigid tails remain
+descriptor inputs even when they carry a row default. Defaulted tails have an
+explicit empty representation and remain row children so generic calls can
+bind their extension parameters.
+
+The row-instantiation rule applies to both closed and dynamic tag rows. When
+the call supplies tags absent from the worker's local variants, the worker
+extension receives the complete call row's descriptor, preserving that row's
+stored discriminants and payload layouts. A newly constructed tag payload uses
+a fresh descriptor local so its fields' descriptors can be captured without
+replacing a read-only worker input.
+
 Tag-row reads are explicit descriptor operations. Nested payload descriptor
 read, row-extension descriptor read, and residual-row subtraction are separate
 LIR choices with separate operands. Residual-row subtraction names both the
