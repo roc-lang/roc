@@ -51579,10 +51579,10 @@ const BodyContext = struct {
         const merge_binders = try self.stateMergeBinders(expr_id);
         defer self.allocator.free(merge_binders);
         if (merge_binders.len == 0) {
-            var selection = try self.initControlFlowResultSelection(
-                self.view.bodies.expr(expr_id).ty,
-                result_cell,
-            );
+            var selection: ControlFlowResultSelection = .{
+                .declared = result_cell,
+                .selected = result_cell,
+            };
             const data = try self.lowerMatch(
                 match,
                 .{ .value = selection.selected },
@@ -53447,10 +53447,10 @@ const BodyContext = struct {
         const merge_binders = try self.stateMergeBinders(expr_id);
         defer self.allocator.free(merge_binders);
         if (merge_binders.len == 0) {
-            var selection = try self.initControlFlowResultSelection(
-                self.view.bodies.expr(expr_id).ty,
-                result_cell,
-            );
+            var selection: ControlFlowResultSelection = .{
+                .declared = result_cell,
+                .selected = result_cell,
+            };
             const data = try self.lowerIfAtTypeCells(
                 if_,
                 result_cell,
@@ -53473,30 +53473,15 @@ const BodyContext = struct {
         return try self.unwrapStateResultAtTypeCells(state_expr, state_cell, result_cell, merge_binders);
     }
 
+    /// Start from the exact specialized request so branch constructors retain
+    /// its type constraints before selecting nested-callable evidence. Producer
+    /// selection may replace `selected` with a distinct private representation;
+    /// `declared` remains the outer interface, including when it is immutable.
     const ControlFlowResultSelection = struct {
         declared: DraftTypeCell,
         selected: DraftTypeCell,
         has_value: bool = false,
     };
-
-    /// A value-producing control-flow expression owns one result selection
-    /// while its inhabited branches are lowered. A finished expected Monotype
-    /// remains an immutable outer interface, so selection begins on a fresh
-    /// checked-public graph cell unless the caller already supplied exact
-    /// generated-private evidence.
-    fn initControlFlowResultSelection(
-        self: *BodyContext,
-        checked_ty: checked.CheckedTypeId,
-        declared: DraftTypeCell,
-    ) Allocator.Error!ControlFlowResultSelection {
-        const declared_node = try declared.toGraphNode(self.graph);
-        const selected = if (try self.graph.containsGeneratedPrivate(declared_node) or
-            !try self.graph.containsFinishedMono(declared_node))
-            DraftTypeCell.fromGraphNode(declared_node)
-        else
-            DraftTypeCell.fromGraphNode(try self.freshInstNode(checked_ty));
-        return .{ .declared = declared, .selected = selected };
-    }
 
     /// Discover producer-authored representation evidence before emitting any
     /// branch. Public-only evidence does not constrain the selection: every

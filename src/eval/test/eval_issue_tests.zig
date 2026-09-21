@@ -1979,4 +1979,42 @@ pub const tests = [_]TestCase{
         ,
         .expected = .{ .inspect_str = "1" },
     },
+    .{
+        // https://github.com/roc-lang/roc/issues/11424
+        // Branch-result selection must retain the enclosing specialization's
+        // I64 constraint when constructing the inner stored closures.
+        .name = "issue 11424: tag payload lambda returns a tag whose closure differs per branch",
+        .source_kind = .module,
+        .source =
+        \\widget : I64 -> [Dyn(I64 -> [Button(I64 -> I64)])]
+        \\widget = |_x| Dyn(|m| if m > 0 { Button(|mm| mm + 1) } else { Button(|mm| mm * 2) })
+        \\
+        \\main = match widget(0) {
+        \\    Dyn(f) =>
+        \\        match (f(0), f(1)) {
+        \\            (Button(g0), Button(g1)) => g0(3) * 10 + g1(3)
+        \\        }
+        \\}
+        ,
+        .expected = .{ .inspect_str = "64" },
+    },
+    .{
+        .name = "issue 11424: match result retains I32 specialization for stored closures",
+        .source_kind = .module,
+        .source =
+        \\widget : I64 -> [Dyn(I32 -> [Button(I32 -> I32)])]
+        \\widget = |_x| Dyn(|m| match m {
+        \\    0 => Button(|mm| mm * 2)
+        \\    _ => Button(|mm| mm + 1)
+        \\})
+        \\
+        \\main = match widget(0) {
+        \\    Dyn(f) =>
+        \\        match (f(0), f(1)) {
+        \\            (Button(g0), Button(g1)) => g0(3) * 10 + g1(3)
+        \\        }
+        \\}
+        ,
+        .expected = .{ .inspect_str = "64" },
+    },
 };
