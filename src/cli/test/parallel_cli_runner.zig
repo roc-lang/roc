@@ -476,6 +476,7 @@ const CustomCase = enum {
     glue_record_function_field,
     glue_recursive_slot_box,
     glue_generic_callable_arg,
+    glue_provided_value_shared_type,
     glue_c_tests,
     roc_test_skips_url_dependency_expects,
     roc_test_caches_local_dependency_expects,
@@ -973,6 +974,7 @@ const glue_cases = [_]CliCase{
     .{ .id = 0, .suite = .glue, .name = "glue regression: opaque nominal record with a function field is a boxed payload", .body = .{ .custom = .glue_record_function_field } },
     .{ .id = 0, .suite = .glue, .name = "glue regression: recursive-slot boxed edges wrap by-value types and compile", .body = .{ .custom = .glue_recursive_slot_box } },
     .{ .id = 0, .suite = .glue, .name = "glue regression: generic callable values are erased at the host boundary", .body = .{ .custom = .glue_generic_callable_arg } },
+    .{ .id = 0, .suite = .glue, .name = "glue regression: provided data shares its type entry with a provided function signature", .body = .{ .custom = .glue_provided_value_shared_type } },
     .{ .id = 0, .suite = .glue, .name = "CGlue.roc expect tests pass", .body = .{ .custom = .glue_c_tests } },
 };
 
@@ -3289,6 +3291,7 @@ fn runCustomCase(
         .glue_record_function_field => customGlueRecordFunctionField(io, allocator, &env, &timer, timeout_ms),
         .glue_recursive_slot_box => customGlueRecursiveSlotBox(io, allocator, &env, &timer, timeout_ms),
         .glue_generic_callable_arg => customGlueGenericCallableArg(io, allocator, &env, &timer, timeout_ms),
+        .glue_provided_value_shared_type => customGlueProvidedValueSharedType(io, allocator, &env, &timer, timeout_ms),
         .glue_c_tests => customGlueCTests(io, allocator, &env, &timer, timeout_ms),
         .roc_test_skips_url_dependency_expects => customRocTestSkipsUrlDependencyExpects(io, allocator, &env, &timer, timeout_ms),
         .roc_test_caches_local_dependency_expects => customRocTestCachesLocalDependencyExpects(io, allocator, &env, &timer, timeout_ms),
@@ -10617,6 +10620,27 @@ fn customGlueGenericCallableArg(io: std.Io, allocator: Allocator, env: *const Ca
             }
         }
     }
+    return null;
+}
+
+fn customGlueProvidedValueSharedType(io: std.Io, allocator: Allocator, env: *const CaseEnv, timer: *harness.Timer, timeout_ms: u64) ?TestResult {
+    // Provided data is an ordinary boundary value, so the type table describes
+    // its record once even though a provided function's signature also
+    // mentions it.
+    const output_dir = createWorkSubdir(io, allocator, env, "glue-out") catch |err|
+        return customInfraFailure(allocator, timer, "failed to create glue output dir: {}", .{err});
+    if (runRocAndCheck(io, allocator, env, timer, timeout_ms, .{
+        .args = &.{ "glue", "--no-cache", "src/glue/src/DebugGlue.roc", output_dir, "test/glue/provided-value-shared-type/main.roc" },
+        .contains = &.{
+            .{ .stream = .stderr, .text = "ffi_symbol: \"roc_default_shared\"" },
+            .{ .stream = .stderr, .text = "ffi_symbol: \"roc_echo\"" },
+        },
+        .occurrences = &.{.{ .stream = .stderr, .text = "RocRecord", .count = 1 }},
+        .not_contains = &.{
+            .{ .stream = .stderr, .text = "panic" },
+            .{ .stream = .stderr, .text = "unreachable" },
+        },
+    })) |failure| return failure;
     return null;
 }
 

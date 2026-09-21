@@ -242,20 +242,26 @@ fn rocGlueInner(gpa: Allocator, stderr: *std.Io.Writer, stdout: *std.Io.Writer, 
             });
         }
 
-        for (artifact.provides_requires.provides) |provides_entry| {
-            const def_idx = provides_entry.def;
-            const top_level = artifact.top_level_values.lookupByDef(def_idx) orelse
-                glueInvariant("provided entry has no top-level value", .{});
-            const scheme = artifact.checked_types.schemeForKey(top_level.source_scheme) orelse
-                glueInvariant("provided entry has no checked type scheme", .{});
-            type_table.boundary_value_name = artifact.canonical_names.exportNameText(provides_entry.source_name);
-            defer type_table.boundary_value_name = null;
-            const type_id = type_table.getOrInsertRootAt(artifact, scheme.root, .provided) catch |err| switch (err) {
-                error.OutOfMemory => return error.OutOfMemory,
-                error.UnresolvedByValue => return reportUnresolvedTypeVariable(stderr, &type_table),
+        for (artifact.provided_exports.exports) |provided_export| {
+            // A provided procedure's signature is the exported symbol's C ABI;
+            // provided data is an ordinary boundary value.
+            const position: ValuePosition = switch (provided_export) {
+                .procedure => .provided,
+                .data => .boundary,
             };
-            const ffi_symbol = artifact.canonical_names.externalSymbolNameText(provides_entry.ffi_symbol);
-            try provides_type_ids.put(ffi_symbol, type_id);
+            switch (provided_export) {
+                inline .procedure, .data => |exported| {
+                    const scheme = artifact.checked_types.schemeForKey(exported.source_scheme) orelse
+                        glueInvariant("provided export has no checked type scheme", .{});
+                    type_table.boundary_value_name = artifact.canonical_names.exportNameText(exported.source_name);
+                    defer type_table.boundary_value_name = null;
+                    const type_id = type_table.getOrInsertRootAt(artifact, scheme.root, position) catch |err| switch (err) {
+                        error.OutOfMemory => return error.OutOfMemory,
+                        error.UnresolvedByValue => return reportUnresolvedTypeVariable(stderr, &type_table),
+                    };
+                    try provides_type_ids.put(artifact.canonical_names.externalSymbolNameText(exported.ffi_symbol), type_id);
+                },
+            }
         }
         break;
     }
@@ -1471,7 +1477,8 @@ const ValuePosition = enum {
     by_value,
     heap_indirect,
     boundary,
-    /// The exported value itself, whose function signature is a direct C ABI.
+    /// A provided procedure export itself, whose signature is the exported
+    /// symbol's C ABI.
     provided,
 };
 
