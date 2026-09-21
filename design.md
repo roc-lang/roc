@@ -6710,6 +6710,15 @@ deferred-constraint, and evidence tails, so neither records nor partial
 unifications from an implementation that failed compatibility can outlive the
 rejection or enter a later scheme.
 
+Before a local scheme use copies its requirements, it schedules the ordinary
+stored relations that have not yet been checked, ahead of their use copies.
+Their original receiver can ground after the defining frame released its queue,
+including during the new use's unification. The stored relation supplies its
+exact callable and owning group. Generated codec templates keep their independent
+instantiation rule. Each checked relation retires from schemes immediately,
+before a later child selects its target. A recursive target therefore reads the
+remaining requirements after earlier relations were checked, including failures.
+
 Instantiation copies the root type and every pending requirement under one
 substitution. The receiver follows ordinary rank behavior: an enclosing weak
 value stays shared, while a receiver quantified by an enclosing scheme is

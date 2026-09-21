@@ -6974,6 +6974,10 @@ fn instantiateVarHelp(
     };
     const shape_validation = if (target) |site| site.shape_validation else false;
 
+    if (!shape_validation) {
+        try self.enqueueLocalSchemeRequirements(var_to_instantiate, env);
+    }
+
     // First, reset state
     instantiator.var_map.clearRetainingCapacity();
 
@@ -7181,6 +7185,29 @@ fn instantiateVarHelp(
 
     // Return the instantiated var
     return instantiated_var;
+}
+
+/// Schedule the original relations of a local scheme before its use copies.
+/// An outer receiver can ground after the defining frame released its queue.
+/// The scheme retains the exact relation that must be checked in that case.
+fn enqueueLocalSchemeRequirements(self: *Self, root: Var, env: *Env) Allocator.Error!void {
+    const scheme_idx = self.typeSchemeIndexForRoot(root) orelse return;
+    for (self.type_schemes.items[scheme_idx].dispatch_requirements.items) |requirement| {
+        if (requirement.deferred_generated_codec) continue;
+        if (self.settled_static_dispatch_constraint_fns.contains(requirement.constraint.fn_var) or
+            self.staticDispatchConstraintIsInactive(requirement.constraint)) continue;
+        if (self.deferredDispatchRelationIsQueued(
+            env.deferred_static_dispatch_constraints.items.items,
+            requirement.receiver_var,
+            requirement.constraint.fn_var,
+        )) continue;
+        const range = try self.types.appendStaticDispatchConstraints(&.{requirement.constraint});
+        try self.enqueueDeferredDispatchConstraint(env, .{
+            .var_ = requirement.receiver_var,
+            .constraints = range,
+            .failure_expr = if (requirement.failure_expr) |expr| .from(@intFromEnum(expr)) else .none,
+        }, .{ .recorded = self.type_schemes.items[scheme_idx].capture_group_index });
+    }
 }
 
 fn schemeHasEvidenceParams(self: *Self, root: Var) std.mem.Allocator.Error!bool {
@@ -33244,6 +33271,9 @@ fn recordSettledDeferredDispatchRelation(
         }
         try self.settled_static_dispatch_constraint_fns.put(self.gpa, constraint.fn_var, {});
     }
+    // A later child can inspect this scheme before the queue finishes.
+    // Retire only the exact relations this validation step just consumed.
+    self.retireResolvedTypeSchemeRequirements();
 }
 
 /// Move one currently-concrete generated codec obligation out of the hot
