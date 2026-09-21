@@ -3256,10 +3256,9 @@ const Builder = struct {
             .record => try self.planGeneratedParserRecord(worker, shape, encoding_type),
             .empty_record => try self.planGeneratedParserRecordProtocol(worker, shape, encoding_type),
             .tuple => |elems| {
-                _ = try self.ensureGeneratedCodecCall(worker, encoding_type, "parse_array_start", null);
-                _ = try self.ensureGeneratedCodecCall(worker, encoding_type, "parse_array_next", null);
-                _ = try self.ensureGeneratedCodecCall(worker, encoding_type, "parse_array_after_element", null);
-                _ = try self.ensureGeneratedCodecCall(worker, encoding_type, "invalid_value", null);
+                _ = try self.ensureGeneratedCodecCall(worker, encoding_type, "parse_tuple_start", shape);
+                _ = try self.ensureGeneratedCodecCall(worker, encoding_type, "parse_tuple_next", shape);
+                _ = try self.ensureGeneratedCodecCall(worker, encoding_type, "parse_tuple_end", shape);
                 for (elems) |elem| {
                     try self.planGeneratedParserShape(worker, typeRef(view, elem), encoding_type);
                 }
@@ -3282,9 +3281,7 @@ const Builder = struct {
                         },
                         .list => {
                             if (nominal.args.len != 1) boxyPlanInvariant("List generated parser type had unexpected arity");
-                            _ = try self.ensureGeneratedCodecCall(worker, encoding_type, "parse_array_start", null);
-                            _ = try self.ensureGeneratedCodecCall(worker, encoding_type, "parse_array_next", null);
-                            _ = try self.ensureGeneratedCodecCall(worker, encoding_type, "parse_array_after_element", null);
+                            try self.planGeneratedParserListProtocol(worker, shape, encoding_type);
                             try self.planGeneratedParserShape(worker, typeRef(view, nominal.args[0]), encoding_type);
                         },
                         .dict => {
@@ -3310,9 +3307,7 @@ const Builder = struct {
                         },
                         .set => {
                             if (nominal.args.len != 1) boxyPlanInvariant("Set generated parser type had unexpected arity");
-                            _ = try self.ensureGeneratedCodecCall(worker, encoding_type, "parse_array_start", null);
-                            _ = try self.ensureGeneratedCodecCall(worker, encoding_type, "parse_array_next", null);
-                            _ = try self.ensureGeneratedCodecCall(worker, encoding_type, "parse_array_after_element", null);
+                            try self.planGeneratedParserListProtocol(worker, shape, encoding_type);
                             _ = try self.ensureGeneratedCodecCall(worker, shape, "from_list", shape);
                             try self.planGeneratedParserShape(worker, typeRef(view, nominal.args[0]), encoding_type);
                         },
@@ -3507,13 +3502,9 @@ const Builder = struct {
         switch (view.checked_types.payload(row_type.ty)) {
             .tag_union => |row| {
                 for (row.tags) |tag| {
+                    // Payload boundaries are the format's `ParseTagUnionSpec`
+                    // callbacks, so a variant plans only its payload parsers.
                     const args = tag.argsSlice(view.checked_types);
-                    if (args.len > 1) {
-                        _ = try self.ensureGeneratedCodecCall(worker, encoding_type, "parse_array_start", null);
-                        _ = try self.ensureGeneratedCodecCall(worker, encoding_type, "parse_array_next", null);
-                        _ = try self.ensureGeneratedCodecCall(worker, encoding_type, "parse_array_after_element", null);
-                        _ = try self.ensureGeneratedCodecCall(worker, encoding_type, "invalid_value", null);
-                    }
                     for (args) |arg| {
                         try self.planGeneratedParserShape(worker, typeRef(view, arg), encoding_type);
                     }
@@ -3640,6 +3631,19 @@ const Builder = struct {
             try self.planGeneratedParserShape(worker, parse_type, encoding_type);
         }
         if (needs_required) try self.planGeneratedParserMissingRequiredField(worker, encoding_type);
+    }
+
+    /// The format calls a generated list-shaped parser (a `List`, or a `Set`
+    /// read as a sequence) makes, validated against that shape as subject.
+    fn planGeneratedParserListProtocol(
+        self: *Builder,
+        worker: WorkerPlanId,
+        subject_type: CheckedTypeIdentity,
+        encoding_type: CheckedTypeIdentity,
+    ) Allocator.Error!void {
+        _ = try self.ensureGeneratedCodecCall(worker, encoding_type, "parse_list_start", subject_type);
+        _ = try self.ensureGeneratedCodecCall(worker, encoding_type, "parse_list_next", subject_type);
+        _ = try self.ensureGeneratedCodecCall(worker, encoding_type, "parse_list_after_item", subject_type);
     }
 
     /// The format calls every generated record parser makes, whatever its
