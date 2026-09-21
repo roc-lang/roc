@@ -6186,8 +6186,8 @@ function returns, and equating it is exactly the widening this rule removes.
 
 Because the body's checked type and the function's checked result then differ,
 the body's value crosses the explicit return boundary exactly as a `?` return
-does: the checker publishes the composed `Try` as what the body delivers at
-the return (`CheckedTemplateRefCollector.lambdaDeliveredReturnType`), Monotype
+does: the checker records the composed `Try` as what the body delivers at
+the return (`lambdaDeliveredReturnType`), Monotype
 lowers such a body at its own type inside the same explicit return node a `?`
 return uses (`BodyContext.lowerLambdaBodyAtCell`), Lambda Solved relates that
 value to the return as it relates any return, and `.boxy` crosses its
