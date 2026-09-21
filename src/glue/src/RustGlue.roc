@@ -93,6 +93,7 @@ type_repr_to_rust = |type_table, duplicate_names, preferred_names, type_id, type
 		RocBool => "bool"
 		RocBox(inner_id) =>
 			match type_table.get(inner_id) {
+				RocErasedCallable => "RocErasedCallable"
 				RocFunction(_) => "RocErasedCallable"
 				RocUnknown(_) => "RocBox"
 				_ => {
@@ -142,6 +143,7 @@ type_repr_to_rust = |type_table, duplicate_names, preferred_names, type_id, type
 		RocTagUnion(tu) => resolve_tag_union_type_rust(type_table, duplicate_names, preferred_names, type_id, tu)
 		# A function stored inside a value is one erased-callable allocation,
 		# exactly like `Box(fn)`.
+		RocErasedCallable => "RocErasedCallable"
 		RocFunction(_) => "RocErasedCallable"
 		RocUnknown(_) => "*mut c_void"
 	}
@@ -2330,6 +2332,7 @@ release_policy_for_type_id_rust = |type_table, duplicate_names, preferred_names,
 			}
 		RocBox(inner_id) =>
 			match type_table.get(inner_id) {
+				RocErasedCallable => "RocErasedCallableRelease"
 				RocFunction(_) => "RocErasedCallableRelease"
 				RocUnknown(_) => ""
 				_ => {
@@ -2365,6 +2368,7 @@ release_policy_for_type_id_rust = |type_table, duplicate_names, preferred_names,
 						"${tag_union_struct_name(preferred_names, duplicate_names, type_id, tu)}Release"
 					}
 				}
+		RocErasedCallable => "RocErasedCallableRelease"
 		RocFunction(_) => "RocErasedCallableRelease"
 		_ => ""
 	}
@@ -2380,6 +2384,7 @@ type_ident_rust = |type_table, duplicate_names, preferred_names, type_id|
 		RocList(elem_id) => "list_of_${type_ident_rust(type_table, duplicate_names, preferred_names, elem_id)}"
 		RocBox(inner_id) =>
 			match type_table.get(inner_id) {
+				RocErasedCallable => "erased_callable"
 				RocFunction(_) => "erased_callable"
 				_ => "box_of_${type_ident_rust(type_table, duplicate_names, preferred_names, inner_id)}"
 			}
@@ -2404,6 +2409,7 @@ type_ident_rust = |type_table, duplicate_names, preferred_names, type_id|
 						"type${U64.to_str(type_id)}"
 					}
 				}
+		RocErasedCallable => "erased_callable"
 		RocFunction(_) => "erased_callable"
 		_ => "type${U64.to_str(type_id)}"
 	}
@@ -2438,6 +2444,7 @@ decref_stmt_for_repr_rust = |type_table, duplicate_names, preferred_names, _type
 		}
 		RocBox(inner_id) =>
 			match type_table.get(inner_id) {
+				RocErasedCallable => "    unsafe { decref_erased_callable(${expr}, roc_host); }\n"
 				RocFunction(_) => "    unsafe { decref_erased_callable(${expr}, roc_host); }\n"
 				_ => {
 					inner_rust = type_id_to_rust(type_table, duplicate_names, preferred_names, inner_id)
@@ -2467,6 +2474,7 @@ decref_stmt_for_repr_rust = |type_table, duplicate_names, preferred_names, _type
 						""
 					}
 				}
+		RocErasedCallable => "    unsafe { decref_erased_callable(${expr}, roc_host); }\n"
 		RocFunction(_) => "    unsafe { decref_erased_callable(${expr}, roc_host); }\n"
 		_ => ""
 	}
@@ -2485,6 +2493,7 @@ incref_stmt_for_repr_rust = |type_table, duplicate_names, preferred_names, _type
 		RocList(_) => "    unsafe { ${expr}.incref(amount); }\n"
 		RocBox(inner_id) =>
 			match type_table.get(inner_id) {
+				RocErasedCallable => "    unsafe { incref_erased_callable(${expr}, amount); }\n"
 				RocFunction(_) => "    unsafe { incref_erased_callable(${expr}, amount); }\n"
 				_ => "    unsafe { incref_box(${expr} as RocBox, amount); }\n"
 			}
@@ -2505,6 +2514,7 @@ incref_stmt_for_repr_rust = |type_table, duplicate_names, preferred_names, _type
 						""
 					}
 				}
+		RocErasedCallable => "    unsafe { incref_erased_callable(${expr}, amount); }\n"
 		RocFunction(_) => "    unsafe { incref_erased_callable(${expr}, amount); }\n"
 		_ => ""
 	}
@@ -2708,6 +2718,7 @@ generate_box_payload_decref_helpers_rust = |type_table, duplicate_names, preferr
 				if !(List.contains($seen_inner_ids, inner_id)) {
 					$seen_inner_ids = $seen_inner_ids.append(inner_id)
 					match type_table.get(inner_id) {
+						RocErasedCallable => {}
 						RocFunction(_) => {}
 						_ => {
 							inner_rust = type_id_to_rust(type_table, duplicate_names, preferred_names, inner_id)

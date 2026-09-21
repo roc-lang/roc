@@ -44,6 +44,7 @@ type_repr_to_c = |type_table, duplicate_record_names, duplicate_tag_names, prefe
 		RocBool => "bool"
 		RocBox(inner_id) =>
 			match type_table.get(inner_id) {
+				RocErasedCallable => "RocErasedCallable"
 				RocFunction(_) => "RocErasedCallable"
 				RocUnknown(_) => "RocBox"
 				_ => {
@@ -88,6 +89,7 @@ type_repr_to_c = |type_table, duplicate_record_names, duplicate_tag_names, prefe
 		RocTagUnion(tu) => resolve_tag_union_type_c(type_table, duplicate_record_names, duplicate_tag_names, preferred_names, type_id, tu)
 		# A function stored inside a value is one erased-callable allocation,
 		# exactly like `Box(fn)`.
+		RocErasedCallable => "RocErasedCallable"
 		RocFunction(_) => "RocErasedCallable"
 		RocUnknown(_) => "void*"
 	}

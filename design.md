@@ -15681,6 +15681,14 @@ schema logical indices; the layout store supplies their byte offsets and
 layouts. A checked-source schema regression test locks the remaining marshaller
 field names and leaf types.
 
+Glue reflects only the platform-host boundary: hosted argument and result
+values, provided exports, and the storage types reachable from those values.
+Application `requires` declarations are internal Roc bindings, not glue layout
+roots, and are absent from the glue input protocol. A function stored as a
+value is an erased callable; its semantic arguments and result do not introduce
+layout roots. Direct provided functions retain their argument and result types
+because those describe the exported symbol's C ABI.
+
 The platform header maps linker symbols explicitly, symbol-string first, in
 both directions:
 

@@ -6,6 +6,17 @@ metadata. A glue script such as `src/glue/src/ZigGlue.roc`,
 compiler-emitted type table and writes host-language source files for platform
 authors.
 
+The input reflects `hosted` and `provides` signatures and their reachable
+storage types. Application `requires` bindings are internal to Roc and are
+not reflected. Custom glue specifications must use `Types.provides_entries`
+for host exports; the legacy `Types.entrypoints` field and `EntryPoint` type
+have been removed from the protocol.
+
+`TypeRepr.RocFunction(FunctionRepr)` describes a direct provided function's
+C ABI signature. A stored function value, including the payload of
+`Box(function)`, is `TypeRepr.RocErasedCallable`. Its semantic argument and
+result types are not layout roots and are not included in that representation.
+
 ## Why Glue Code Generates the Interface
 
 The Roc platform ABI is not just a collection of structs that can be copied by

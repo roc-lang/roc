@@ -9,8 +9,11 @@ TypeRepr := [
 	RocBool,
 	RocBox(U64),
 	RocDec,
+	## A stored function value with the uniform erased-callable pointer ABI.
+	RocErasedCallable,
 	RocF32,
 	RocF64,
+	## A direct provided function's exported C ABI signature.
 	RocFunction(FunctionRepr),
 	RocI128,
 	RocI16,

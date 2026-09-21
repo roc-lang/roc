@@ -71,6 +71,7 @@ TypeTable := { entries : List(TypeInfo) }.{
 			RocStr => Bool.True
 			RocBox(_) => Bool.True
 			RocList(_) => Bool.True
+			RocErasedCallable => Bool.True
 			RocFunction(_) => Bool.True
 			_ => Bool.False
 		}
@@ -149,6 +150,7 @@ TypeTable := { entries : List(TypeInfo) }.{
 			RocDec => "dec"
 			RocF32 => "f32"
 			RocF64 => "f64"
+			RocErasedCallable => "fn"
 			RocFunction(_) => "fn"
 			RocI128 => "i128"
 			RocI16 => "i16"

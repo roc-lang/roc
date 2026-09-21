@@ -82,7 +82,6 @@ const glue_platform_files = [_][]const u8{
     "AbiTagUnionLayout.roc",
     "AbiWidth.roc",
     "ArgShape.roc",
-    "EntryPoint.roc",
     "File.roc",
     "FunctionInfo.roc",
     "FunctionRepr.roc",

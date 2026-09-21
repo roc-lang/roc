@@ -397,6 +397,7 @@ type_repr_to_zig = |type_table, duplicate_tag_names, preferred_names, type_id, t
 		RocBool => "bool"
 		RocBox(inner_id) =>
 			match type_table.get(inner_id) {
+				RocErasedCallable => "RocErasedCallable"
 				RocFunction(_) => "RocErasedCallable"
 				RocUnknown(_) => "RocBox"
 				_ => {
@@ -446,6 +447,7 @@ type_repr_to_zig = |type_table, duplicate_tag_names, preferred_names, type_id, t
 		RocTagUnion(tu) => resolve_tag_union_type(type_table, duplicate_tag_names, preferred_names, type_id, tu)
 		# A function stored inside a value is one erased-callable allocation,
 		# exactly like `Box(fn)`.
+		RocErasedCallable => "RocErasedCallable"
 		RocFunction(_) => "RocErasedCallable"
 		RocUnknown(_) => "*anyopaque"
 	}
@@ -859,6 +861,7 @@ generate_element_type_structs = |type_table, duplicate_tag_names, preferred_name
 			RocDec => {}
 			RocF32 => {}
 			RocF64 => {}
+			RocErasedCallable => {}
 			RocFunction(_) => {}
 			RocI128 => {}
 			RocI16 => {}
@@ -914,6 +917,7 @@ generate_tag_union_structs = |type_table, duplicate_tag_names, preferred_names| 
 			RocDec => {}
 			RocF32 => {}
 			RocF64 => {}
+			RocErasedCallable => {}
 			RocFunction(_) => {}
 			RocI128 => {}
 			RocI16 => {}
@@ -1137,6 +1141,7 @@ release_policy_for_type_id = |type_table, duplicate_tag_names, preferred_names, 
 			}
 		RocBox(inner_id) =>
 			match type_table.get(inner_id) {
+				RocErasedCallable => "RocErasedCallableRelease"
 				RocFunction(_) => "RocErasedCallableRelease"
 				RocUnknown(_) => ""
 				_ => {
@@ -1172,6 +1177,7 @@ release_policy_for_type_id = |type_table, duplicate_tag_names, preferred_names, 
 						"${tag_union_struct_name(preferred_names, duplicate_tag_names, type_id, tu)}Release"
 					}
 				}
+		RocErasedCallable => "RocErasedCallableRelease"
 		RocFunction(_) => "RocErasedCallableRelease"
 		_ => ""
 	}
@@ -1187,6 +1193,7 @@ type_ident_zig = |type_table, duplicate_tag_names, preferred_names, type_id|
 		RocList(elem_id) => "ListOf${type_ident_zig(type_table, duplicate_tag_names, preferred_names, elem_id)}"
 		RocBox(inner_id) =>
 			match type_table.get(inner_id) {
+				RocErasedCallable => "ErasedCallable"
 				RocFunction(_) => "ErasedCallable"
 				_ => "BoxOf${type_ident_zig(type_table, duplicate_tag_names, preferred_names, inner_id)}"
 			}
@@ -1211,6 +1218,7 @@ type_ident_zig = |type_table, duplicate_tag_names, preferred_names, type_id|
 						"Type${U64.to_str(type_id)}"
 					}
 				}
+		RocErasedCallable => "ErasedCallable"
 		RocFunction(_) => "ErasedCallable"
 		_ => "Type${U64.to_str(type_id)}"
 	}
@@ -1245,6 +1253,7 @@ decref_stmt_for_repr = |type_table, duplicate_tag_names, preferred_names, _type_
 		}
 		RocBox(inner_id) =>
 			match type_table.get(inner_id) {
+				RocErasedCallable => "    decrefErasedCallable(${expr}, roc_host);\n"
 				RocFunction(_) => "    decrefErasedCallable(${expr}, roc_host);\n"
 				_ => {
 					inner_zig = type_id_to_zig(type_table, duplicate_tag_names, preferred_names, inner_id)
@@ -1276,6 +1285,7 @@ decref_stmt_for_repr = |type_table, duplicate_tag_names, preferred_names, _type_
 					}
 				}
 			}
+		RocErasedCallable => "    decrefErasedCallable(${expr}, roc_host);\n"
 		RocFunction(_) => "    decrefErasedCallable(${expr}, roc_host);\n"
 		_ => ""
 	}
@@ -1294,6 +1304,7 @@ incref_stmt_for_repr = |type_table, duplicate_tag_names, preferred_names, _type_
 		RocList(_) => "    ${expr}.incref(amount);\n"
 		RocBox(inner_id) =>
 			match type_table.get(inner_id) {
+				RocErasedCallable => "    increfErasedCallable(${expr}, amount);\n"
 				RocFunction(_) => "    increfErasedCallable(${expr}, amount);\n"
 				_ => "    increfBox(@ptrCast(${expr}), amount);\n"
 			}
@@ -1315,6 +1326,7 @@ incref_stmt_for_repr = |type_table, duplicate_tag_names, preferred_names, _type_
 						""
 					}
 				}
+		RocErasedCallable => "    increfErasedCallable(${expr}, amount);\n"
 		RocFunction(_) => "    increfErasedCallable(${expr}, amount);\n"
 		_ => ""
 	}
@@ -1547,6 +1559,7 @@ generate_box_payload_decref_helpers = |type_table, duplicate_tag_names, preferre
 				if !(List.contains($seen_inner_ids, inner_id)) {
 					$seen_inner_ids = $seen_inner_ids.append(inner_id)
 					match type_table.get(inner_id) {
+						RocErasedCallable => {}
 						RocFunction(_) => {}
 						_ => {
 							inner_zig = type_id_to_zig(type_table, duplicate_tag_names, preferred_names, inner_id)

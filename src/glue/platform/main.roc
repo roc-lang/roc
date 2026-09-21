@@ -3,7 +3,6 @@ platform ""
 		make_glue : List(Types) -> Try(List(File), Str)
 	}
 	exposes [
-		EntryPoint,
 		AbiFieldLayout,
 		AbiLayout,
 		AbiLayoutDetails,
@@ -48,7 +47,6 @@ import AbiTagLayout exposing [AbiTagLayout]
 import AbiTagUnionLayout exposing [AbiTagUnionLayout]
 import AbiWidth exposing [AbiWidth]
 import ArgShape exposing [ArgShape]
-import EntryPoint exposing [EntryPoint]
 import ModuleTypeInfo exposing [ModuleTypeInfo]
 import FunctionInfo exposing [FunctionInfo]
 import HostedFunctionInfo exposing [HostedFunctionInfo]

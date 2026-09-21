@@ -466,7 +466,7 @@ const CustomCase = enum {
     glue_rust_box_payload_alignment,
     glue_rust_returned_list_elements,
     glue_rust_payload_free_tag_union_names,
-    glue_zig_bang_record_fields,
+    glue_required_callbacks_internal,
     glue_zig_keyword_tag_names,
     glue_package_nominal_api_alias,
     glue_nominal_canonical_field,
@@ -963,7 +963,7 @@ const glue_cases = [_]CliCase{
     .{ .id = 0, .suite = .glue, .name = "glue regression: RustGlue decrefs non-refcounted boxed payloads with payload alignment", .body = .{ .custom = .glue_rust_box_payload_alignment } },
     .{ .id = 0, .suite = .glue, .name = "issue 10451: RustGlue releases list elements returned from a provided entrypoint", .body = .{ .custom = .glue_rust_returned_list_elements } },
     .{ .id = 0, .suite = .glue, .name = "issue 11197: generated Rust names only declared types for a payload-free tag union", .body = .{ .custom = .glue_rust_payload_free_tag_union_names } },
-    .{ .id = 0, .suite = .glue, .name = "glue regression: ZigGlue quotes bang record fields", .body = .{ .custom = .glue_zig_bang_record_fields } },
+    .{ .id = 0, .suite = .glue, .name = "glue regression: required application callbacks remain internal", .body = .{ .custom = .glue_required_callbacks_internal } },
     .{ .id = 0, .suite = .glue, .name = "issue 11196: ZigGlue emits parseable Zig for tags named after Zig keywords", .body = .{ .custom = .glue_zig_keyword_tag_names } },
     .{ .id = 0, .suite = .glue, .name = "issue 9865: RustGlue does not panic for package nominal record API alias", .body = .{ .custom = .glue_package_nominal_api_alias } },
     .{ .id = 0, .suite = .glue, .name = "glue regression: nominal scalar field resolves canonical backing", .body = .{ .custom = .glue_nominal_canonical_field } },
@@ -972,7 +972,7 @@ const glue_cases = [_]CliCase{
     .{ .id = 0, .suite = .glue, .name = "issue 9824: glue reports an error for a by-value unresolved type variable", .body = .{ .custom = .glue_unresolved_by_value_errors } },
     .{ .id = 0, .suite = .glue, .name = "glue regression: opaque nominal record with a function field is a boxed payload", .body = .{ .custom = .glue_record_function_field } },
     .{ .id = 0, .suite = .glue, .name = "glue regression: recursive-slot boxed edges wrap by-value types and compile", .body = .{ .custom = .glue_recursive_slot_box } },
-    .{ .id = 0, .suite = .glue, .name = "glue regression: function argument mentioning a generic type parameter is a glue error", .body = .{ .custom = .glue_generic_callable_arg } },
+    .{ .id = 0, .suite = .glue, .name = "glue regression: generic callable values are erased at the host boundary", .body = .{ .custom = .glue_generic_callable_arg } },
     .{ .id = 0, .suite = .glue, .name = "CGlue.roc expect tests pass", .body = .{ .custom = .glue_c_tests } },
 };
 
@@ -3279,7 +3279,7 @@ fn runCustomCase(
         .glue_rust_box_payload_alignment => customGlueRustBoxPayloadAlignment(io, allocator, &env, &timer, timeout_ms),
         .glue_rust_returned_list_elements => customGlueRustReturnedListElements(io, allocator, &env, &timer, timeout_ms),
         .glue_rust_payload_free_tag_union_names => customGlueRustPayloadFreeTagUnionNames(io, allocator, &env, &timer, timeout_ms),
-        .glue_zig_bang_record_fields => customGlueZigBangRecordFieldNames(io, allocator, &env, &timer, timeout_ms),
+        .glue_required_callbacks_internal => customGlueRequiredCallbacksInternal(io, allocator, &env, &timer, timeout_ms),
         .glue_zig_keyword_tag_names => customGlueZigKeywordTagNames(io, allocator, &env, &timer, timeout_ms),
         .glue_package_nominal_api_alias => customGluePackageNominalApiAlias(io, allocator, &env, &timer, timeout_ms),
         .glue_nominal_canonical_field => customGlueNominalCanonicalField(io, allocator, &env, &timer, timeout_ms),
@@ -9801,7 +9801,7 @@ fn customGlueDebug(io: std.Io, allocator: Allocator, env: *const CaseEnv, timer:
         return customInfraFailure(allocator, timer, "failed to create glue output dir: {}", .{err});
     if (runRocAndCheck(io, allocator, env, timer, timeout_ms, .{
         .args = &.{ "glue", "src/glue/src/DebugGlue.roc", output_dir, "test/fx/platform/main.roc" },
-        .contains = &.{.{ .stream = .stderr, .text = "name: \"main!\"" }},
+        .contains = &.{.{ .stream = .stderr, .text = "name: \"main_for_host!\"" }},
         .not_contains = &.{
             .{ .stream = .stderr, .text = "panic" },
             .{ .stream = .stderr, .text = "unreachable" },
@@ -9816,7 +9816,7 @@ fn customGlueDebugDev(io: std.Io, allocator: Allocator, env: *const CaseEnv, tim
         return customInfraFailure(allocator, timer, "failed to create glue output dir: {}", .{err});
     if (runRocAndCheck(io, allocator, env, timer, timeout_ms, .{
         .args = &.{ "glue", "--opt=dev", "src/glue/src/DebugGlue.roc", output_dir, "test/fx/platform/main.roc" },
-        .contains = &.{.{ .stream = .stderr, .text = "name: \"main!\"" }},
+        .contains = &.{.{ .stream = .stderr, .text = "name: \"main_for_host!\"" }},
         .not_contains = &.{
             .{ .stream = .stderr, .text = "panic" },
             .{ .stream = .stderr, .text = "unreachable" },
@@ -9841,7 +9841,7 @@ fn customGlueDevWithoutTempEnv(io: std.Io, allocator: Allocator, env: *const Cas
         return customInfraFailure(allocator, timer, "failed to create glue output dir: {}", .{err});
     if (runRocAndCheck(io, allocator, &no_temp_env, timer, timeout_ms, .{
         .args = &.{ "glue", "--opt=dev", "src/glue/src/DebugGlue.roc", output_dir, "test/fx/platform/main.roc" },
-        .contains = &.{.{ .stream = .stderr, .text = "name: \"main!\"" }},
+        .contains = &.{.{ .stream = .stderr, .text = "name: \"main_for_host!\"" }},
         .not_contains = &.{
             .{ .stream = .stderr, .text = "Compilation failed" },
             .{ .stream = .stderr, .text = "panic" },
@@ -9975,13 +9975,13 @@ fn customGluePluginCacheHit(io: std.Io, allocator: Allocator, env: *const CaseEn
 
     if (runRocAndCheck(io, allocator, &compile_count_env, timer, timeout_ms, .{
         .args = &.{ "glue", "--opt=dev", "src/glue/src/DebugGlue.roc", first_output_dir, "test/fx/platform/main.roc" },
-        .contains = &.{.{ .stream = .stderr, .text = "name: \"main!\"" }},
+        .contains = &.{.{ .stream = .stderr, .text = "name: \"main_for_host!\"" }},
         .not_contains = &common_not_contains,
     })) |failure| return failure;
 
     if (runRocAndCheck(io, allocator, &compile_count_env, timer, timeout_ms, .{
         .args = &.{ "glue", "--opt=dev", "src/glue/src/DebugGlue.roc", second_output_dir, "test/fx/platform/main.roc" },
-        .contains = &.{.{ .stream = .stderr, .text = "name: \"main!\"" }},
+        .contains = &.{.{ .stream = .stderr, .text = "name: \"main_for_host!\"" }},
         .not_contains = &common_not_contains,
     })) |failure| return failure;
 
@@ -10503,27 +10503,120 @@ fn customGlueRecursiveSlotBox(io: std.Io, allocator: Allocator, env: *const Case
 }
 
 fn customGlueGenericCallableArg(io: std.Io, allocator: Allocator, env: *const CaseEnv, timer: *harness.Timer, timeout_ms: u64) ?TestResult {
-    // A function stored inside a generic nominal whose argument mentions the
-    // type parameter inside a record has no checked type for its
-    // instantiation, so glue cannot ask the compiler for that argument's
-    // layout. Glue reports the type and the boundary value instead of
-    // describing the uninstantiated template to the host.
-    const output_dir = createWorkSubdir(io, allocator, env, "glue-out") catch |err|
-        return customInfraFailure(allocator, timer, "failed to create glue output dir: {}", .{err});
-    if (runRocAndCheck(io, allocator, env, timer, timeout_ms, .{
-        .args = &.{ "glue", "--no-cache", "src/glue/src/ZigGlue.roc", output_dir, "test/glue/generic-callable-arg/main.roc" },
-        .exit = .failure,
-        .contains = &.{
-            .{ .stream = .stderr, .text = "stored inside a generic type" },
-            .{ .stream = .stderr, .text = "y : U64" },
-            .{ .stream = .stderr, .text = "in the signature of `handler`" },
-        },
-        .not_contains = &.{
-            .{ .stream = .stderr, .text = "panic" },
-            .{ .stream = .stderr, .text = "unreachable" },
-            .{ .stream = .stderr, .text = "invariant violated" },
-        },
-    })) |failure| return failure;
+    // Stored functions expose only their erased pointer ABI, including when
+    // their semantic arguments mention a nominal's type parameter.
+    const fixtures = [_][]const u8{ "generic-callable-arg", "hosted-generic-callable", "application-only-requires" };
+    const generators = [_]struct { spec: []const u8, extension: []const u8 }{
+        .{ .spec = "src/glue/src/ZigGlue.roc", .extension = "zig" },
+        .{ .spec = "src/glue/src/RustGlue.roc", .extension = "rs" },
+        .{ .spec = "src/glue/src/CGlue.roc", .extension = "h" },
+    };
+    for (fixtures) |fixture| {
+        const platform = std.fmt.allocPrint(allocator, "test/glue/{s}/main.roc", .{fixture}) catch |err|
+            return customInfraFailure(allocator, timer, "failed to allocate fixture path: {}", .{err});
+        for (generators) |generator| {
+            const dir_name = std.fmt.allocPrint(allocator, "{s}-{s}", .{ fixture, generator.extension }) catch |err|
+                return customInfraFailure(allocator, timer, "failed to allocate output name: {}", .{err});
+            const output_dir = createWorkSubdir(io, allocator, env, dir_name) catch |err|
+                return customInfraFailure(allocator, timer, "failed to create glue output dir: {}", .{err});
+            if (runRocAndCheck(io, allocator, env, timer, timeout_ms, .{
+                .args = &.{ "glue", "--no-cache", generator.spec, output_dir, platform },
+            })) |failure| return failure;
+            const generated_path = std.fmt.allocPrint(allocator, "{s}/roc_platform_abi.{s}", .{ output_dir, generator.extension }) catch |err|
+                return customInfraFailure(allocator, timer, "failed to allocate generated path: {}", .{err});
+            const generated = std.Io.Dir.cwd().readFileAlloc(io, generated_path, allocator, .limited(1024 * 1024)) catch |err|
+                return customFailure(allocator, timer, "failed to read generated glue: {}", .{err});
+            const output_object = std.fs.path.join(allocator, &.{ output_dir, "compile_lock.o" }) catch |err|
+                return customInfraFailure(allocator, timer, "failed to allocate compile output path: {}", .{err});
+            if (std.mem.eql(u8, generator.extension, "zig")) {
+                const source =
+                    \\const std = @import("std");
+                    \\const abi = @import("roc_platform_abi.zig");
+                    \\comptime {
+                    \\    std.testing.refAllDecls(abi);
+                    \\    if (@sizeOf(abi.RocErasedCallable) != @sizeOf(usize)) @compileError("callable size");
+                    \\    if (@alignOf(abi.RocErasedCallable) != @alignOf(usize)) @compileError("callable alignment");
+                    \\}
+                ;
+                const source_path = std.fs.path.join(allocator, &.{ output_dir, "compile_lock.zig" }) catch |err|
+                    return customInfraFailure(allocator, timer, "failed to allocate compile lock path: {}", .{err});
+                std.Io.Dir.cwd().writeFile(io, .{ .sub_path = source_path, .data = source }) catch |err|
+                    return customInfraFailure(allocator, timer, "failed to write compile lock: {}", .{err});
+                const emit = std.fmt.allocPrint(allocator, "-femit-bin={s}", .{output_object}) catch |err|
+                    return customInfraFailure(allocator, timer, "failed to allocate emit flag: {}", .{err});
+                if (runRawAndCheck(io, allocator, env, timer, timeout_ms, &.{ "zig", "build-obj", source_path, emit }, project_root_path, .{ .args = &.{} })) |failure| return failure;
+            } else if (std.mem.eql(u8, generator.extension, "rs")) {
+                if (runRawAndCheck(io, allocator, env, timer, timeout_ms, &.{ "rustc", "--edition=2021", "--crate-type=lib", "--emit=metadata", generated_path, "-o", output_object }, project_root_path, .{ .args = &.{} })) |failure| return failure;
+            } else {
+                if (runRawAndCheck(io, allocator, env, timer, timeout_ms, &.{ "zig", "cc", "-x", "c", "-std=c11", "-Werror", "-c", generated_path, "-o", output_object }, project_root_path, .{ .args = &.{} })) |failure| return failure;
+            }
+            if (std.mem.eql(u8, fixture, "hosted-generic-callable")) {
+                if (std.mem.eql(u8, generator.extension, "zig")) {
+                    for ([_][]const u8{ "@\"init!\": RocErasedCallable", "@\"render!\": RocErasedCallable" }) |field| {
+                        if (std.mem.find(u8, generated, field) == null) return customFailure(allocator, timer, "missing quoted hosted callable field: {s}", .{field});
+                    }
+                }
+                for ([_][]const u8{ "roc_install", "roc_callback" }) |symbol| {
+                    const offset = std.mem.find(u8, generated, symbol) orelse
+                        return customFailure(allocator, timer, "missing hosted symbol {s}", .{symbol});
+                    const start = if (std.mem.findScalarLast(u8, generated[0..offset], '\n')) |line| line + 1 else 0;
+                    const end = offset + (std.mem.findScalar(u8, generated[offset..], '\n') orelse generated[offset..].len);
+                    if (std.mem.find(u8, generated[start..end], "RocErasedCallable") == null) {
+                        return customFailure(allocator, timer, "hosted declaration is not erased: {s}", .{generated[start..end]});
+                    }
+                }
+            }
+            if (!std.mem.eql(u8, fixture, "generic-callable-arg")) {
+                // Change only semantic types that do not determine storage at
+                // the host boundary. Application-only changes must leave all
+                // generated bytes unchanged; callable changes may affect
+                // source-signature comments, but not symbol declarations.
+                const variant_dir = std.fs.path.join(allocator, &.{ output_dir, "variant" }) catch |err|
+                    return customInfraFailure(allocator, timer, "failed to allocate variant path: {}", .{err});
+                std.Io.Dir.cwd().createDirPath(io, variant_dir) catch |err|
+                    return customInfraFailure(allocator, timer, "failed to create variant: {}", .{err});
+                const application_only = std.mem.eql(u8, fixture, "application-only-requires");
+                const files: []const []const u8 = if (application_only) &.{ "main.roc", "Boundary.roc" } else &.{"main.roc"};
+                for (files) |file| {
+                    const from = std.fmt.allocPrint(allocator, "test/glue/{s}/{s}", .{ fixture, file }) catch |err|
+                        return customInfraFailure(allocator, timer, "failed to allocate source path: {}", .{err});
+                    const to = std.fs.path.join(allocator, &.{ variant_dir, file }) catch |err|
+                        return customInfraFailure(allocator, timer, "failed to allocate destination path: {}", .{err});
+                    std.Io.Dir.cwd().copyFile(from, std.Io.Dir.cwd(), to, io, .{}) catch |err|
+                        return customInfraFailure(allocator, timer, "failed to copy fixture: {}", .{err});
+                }
+                const changed_path = std.fs.path.join(allocator, &.{ variant_dir, if (application_only) "Program.roc" else "Callbacks.roc" }) catch |err|
+                    return customInfraFailure(allocator, timer, "failed to allocate changed module path: {}", .{err});
+                const changed_source = if (application_only)
+                    "import Boundary\nProgram(a) := [Ready(a, Boundary.Shared), Waiting(List(a))]\n"
+                else
+                    "Callbacks := [].{\n\tinstall! : Box((List(a) => {})) => {}\n\tcallback! : {} => Box(({} => List(a)))\n\tinstall_record! : { init! : Box((List(a) => {})), render! : Box(({} => List(a))) } => {}\n}\n";
+                std.Io.Dir.cwd().writeFile(io, .{ .sub_path = changed_path, .data = changed_source }) catch |err|
+                    return customInfraFailure(allocator, timer, "failed to change semantic type: {}", .{err});
+                const variant_platform = std.fs.path.join(allocator, &.{ variant_dir, "main.roc" }) catch |err|
+                    return customInfraFailure(allocator, timer, "failed to allocate variant platform path: {}", .{err});
+                if (runRocAndCheck(io, allocator, env, timer, timeout_ms, .{
+                    .args = &.{ "glue", "--no-cache", generator.spec, variant_dir, variant_platform },
+                })) |failure| return failure;
+                const variant_path = std.fmt.allocPrint(allocator, "{s}/roc_platform_abi.{s}", .{ variant_dir, generator.extension }) catch |err|
+                    return customInfraFailure(allocator, timer, "failed to allocate variant output path: {}", .{err});
+                const variant = std.Io.Dir.cwd().readFileAlloc(io, variant_path, allocator, .limited(1024 * 1024)) catch |err|
+                    return customFailure(allocator, timer, "failed to read variant: {}", .{err});
+                if (application_only) {
+                    if (!std.mem.eql(u8, generated, variant)) return customFailure(allocator, timer, "application-only requirement changed {s} bindings", .{generator.extension});
+                } else {
+                    for ([_][]const u8{ "roc_install", "roc_callback" }) |symbol| {
+                        var lines = std.mem.splitScalar(u8, generated, '\n');
+                        while (lines.next()) |line| {
+                            if (std.mem.find(u8, line, symbol) != null and std.mem.find(u8, line, "RocErasedCallable") != null) {
+                                if (std.mem.find(u8, variant, line) == null) return customFailure(allocator, timer, "semantic callable change altered hosted declaration: {s}", .{line});
+                            }
+                        }
+                    }
+                }
+            }
+        }
+    }
     return null;
 }
 
@@ -11308,7 +11401,7 @@ fn customGlueZigBoxHelperTest(
     return null;
 }
 
-fn customGlueZigBangRecordFieldNames(io: std.Io, allocator: Allocator, env: *const CaseEnv, timer: *harness.Timer, timeout_ms: u64) ?TestResult {
+fn customGlueRequiredCallbacksInternal(io: std.Io, allocator: Allocator, env: *const CaseEnv, timer: *harness.Timer, timeout_ms: u64) ?TestResult {
     const output_dir = createWorkSubdir(io, allocator, env, "glue-bang-out") catch |err|
         return customInfraFailure(allocator, timer, "failed to create glue output dir: {}", .{err});
     if (runRocAndCheck(io, allocator, env, timer, timeout_ms, .{
@@ -11322,8 +11415,6 @@ fn customGlueZigBangRecordFieldNames(io: std.Io, allocator: Allocator, env: *con
         return customFailure(allocator, timer, "failed to read generated Zig file: {}", .{err});
 
     for ([_][]const u8{
-        "@\"init!\": RocErasedCallable",
-        "@\"render!\": RocErasedCallable",
         "pub const HostSet_mouseArgs = if (@sizeOf(usize) == 4) extern struct",
         "pub extern fn roc_host_set_mouse(arg0: HostSet_mouseArgs) callconv(.c) void;",
     }) |needle| {
@@ -11344,9 +11435,9 @@ fn customGlueZigBangRecordFieldNames(io: std.Io, allocator: Allocator, env: *con
             return customFailure(allocator, timer, "generated Zig file contained obsolete entrypoint ABI text {s}", .{needle});
         }
     }
-    for ([_][]const u8{ "    init!:", "    render!:" }) |needle| {
+    for ([_][]const u8{ "@\"init!\":", "@\"render!\":" }) |needle| {
         if (std.mem.find(u8, generated, needle) != null) {
-            return customFailure(allocator, timer, "generated Zig file contained unquoted bang field {s}", .{needle});
+            return customFailure(allocator, timer, "generated Zig file reflected an application-only callback {s}", .{needle});
         }
     }
 
