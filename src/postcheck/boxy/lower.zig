@@ -14587,15 +14587,19 @@ const ProcBodyBuilder = struct {
         const payloads = self.parent.plan.childSlice(variant.variant.payloads);
         if (payloads.len != 1) boxyLowerInvariant("generated parser tag did not have one payload");
         const tag_rep = self.parent.plan.representations.items[@intFromEnum(variant.tag_rep)];
-        const extracted = try self.addExtractedTagPayloadLocal(payloads[0].rep, tag_rep.descriptor != null);
         const actual_rep = self.nominalBackingActualRep(variant.boundary_rep, payloads[0].rep);
         var child = payloads[0];
         child.rep = actual_rep;
         child.source_type = self.parent.plan.representations.items[@intFromEnum(actual_rep)].source_type;
+        // A concrete tag stores the payload at its actual layout; only a
+        // descriptor-driven tag holds it at the declared payload
+        // representation, from which it is converted.
+        const stored_rep = if (tag_rep.descriptor != null) payloads[0].rep else actual_rep;
+        const extracted = try self.addExtractedTagPayloadLocal(stored_rep, tag_rep.descriptor != null);
         return .{
-            .local = if (actual_rep == payloads[0].rep) extracted.local else try self.addFrameLocalForRep(actual_rep),
+            .local = if (actual_rep == stored_rep) extracted.local else try self.addFrameLocalForRep(actual_rep),
             .stored = extracted.local,
-            .stored_rep = payloads[0].rep,
+            .stored_rep = stored_rep,
             .desc_local = extracted.desc_local,
             .child = child,
         };
@@ -23487,7 +23491,12 @@ const ProcBodyBuilder = struct {
         const nominal = self.parent.plan.representations.items[@intFromEnum(nominal_rep)];
         switch (nominal.kind) {
             .nominal => |kind| switch (kind) {
-                .transparent, .builtin_other => return try self.lowerPatternThen(backing_pattern, source, on_match, miss, remaps),
+                // The value keeps the nominal's representation, whose backing is
+                // the declaration's shared template; the backing pattern's own
+                // type is this use's instantiation, which may be laid out
+                // differently (a concrete row where the template holds boxed
+                // formals), so the pattern reads it from the nominal's rep.
+                .transparent, .builtin_other => return try self.lowerPatternFromRepThen(backing_pattern, source, nominal_rep, on_match, miss, remaps),
                 .opaque_nominal => {},
             },
             .in_progress, .dynamic, .primitive, .bool_tag_union, .erased_callable, .alias, .record, .tuple, .list, .box, .generated_field, .generated_field_names, .generated_tag_union_spec, .empty_record, .tag_union, .empty_tag_union => {},

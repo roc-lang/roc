@@ -1521,6 +1521,7 @@ pub fn analyzeProgram(
     }
 
     try builder.analyzePlannedEvidenceTypes();
+    try builder.analyzeDirectCallSchemeSubstitutions();
     builder.propagateDynamicRequirements();
     try builder.materializeDictionaryCallPlans();
     try builder.materializeGeneratedParserTagUnionPlans();
@@ -6593,6 +6594,107 @@ const Builder = struct {
         params: []const static_dispatch.EvidenceParamRecord,
     };
 
+    /// A callee scheme's quantified variables in `scheme_vars` order, together
+    /// with the checked types one call site substituted for them
+    /// (`StaticDispatchPlanTable.siteSubstitution`).
+    const SchemeCallSubstitution = struct {
+        callee_view: ModuleView,
+        scheme_vars: []const checked.CheckedTypeId,
+        site_view: ModuleView,
+        site_types: []const checked.CheckedTypeId,
+    };
+
+    const WorkerSchemeVars = struct {
+        view: ModuleView,
+        vars: []const checked.CheckedTypeId,
+    };
+
+    fn workerSchemeVars(self: *Builder, source: WorkerSource) ?WorkerSchemeVars {
+        return switch (source) {
+            .procedure_template => |template| self.templateSchemeVars(template),
+            .procedure_binding => |binding| self.bindingSchemeVars(self.moduleForId(binding.artifact), binding.binding),
+            .procedure_use => |use| switch (use.binding) {
+                .top_level => |binding| self.bindingSchemeVars(self.moduleForId(binding.artifact), binding.binding),
+                .platform_required => |required| self.bindingSchemeVars(
+                    self.moduleForId(required.app_value.artifact),
+                    required.procedure_binding,
+                ),
+                .imported => |imported| blk: {
+                    const view = self.moduleForId(imported.artifact);
+                    break :blk self.bindingBodySchemeVars(self.importedProcedureBinding(view, imported).body);
+                },
+                .hosted => null,
+            },
+            .nested_expr => |expr_ref| blk: {
+                const view = self.moduleForId(expr_ref.module);
+                const site_expr = self.nestedCallableSiteExprForExpr(view, expr_ref.expr) orelse expr_ref.expr;
+                for (view.checked_procedure_templates.dispatch_scopes) |*scope| {
+                    if (scope.checked_expr != site_expr) continue;
+                    break :blk .{ .view = view, .vars = view.checked_procedure_templates.scopeSchemeVars(scope) };
+                }
+                break :blk null;
+            },
+            .generated_codec,
+            .generated_field_iterator,
+            .generated_interpolation_step,
+            => null,
+        };
+    }
+
+    fn templateSchemeVars(self: *Builder, template_ref: checked_names.ProcedureTemplateRef) WorkerSchemeVars {
+        const view = self.moduleForCheckedModuleId(template_ref.artifact);
+        const template = &view.checked_procedure_templates.templates.items[@intFromEnum(template_ref.template)];
+        return .{ .view = view, .vars = view.checked_procedure_templates.templateSchemeVars(template) };
+    }
+
+    fn bindingSchemeVars(self: *Builder, view: ModuleView, binding_ref: checked.TopLevelProcedureBindingRef) ?WorkerSchemeVars {
+        return self.bindingBodySchemeVars(view.top_level_procedure_bindings.get(binding_ref).body);
+    }
+
+    fn bindingBodySchemeVars(self: *Builder, body: anytype) ?WorkerSchemeVars {
+        return switch (body) {
+            .direct_template => |direct| switch (direct.template) {
+                .checked => |template| self.templateSchemeVars(template),
+                .lifted, .synthetic => null,
+            },
+            .checked_error => null,
+            .callable_eval_template => null,
+        };
+    }
+
+    /// The checked call-site substitution for a direct call's callee scheme,
+    /// when the call names its callee through an instantiated lookup.
+    fn directCallSchemeSubstitution(self: *Builder, direct: DirectCallPlan) ?SchemeCallSubstitution {
+        const site_view = self.moduleForId(direct.call.module);
+        const call_expr = site_view.checked_bodies.expr(direct.call.expr);
+        if (call_expr.data != .call) return null;
+        const site_types = site_view.static_dispatch_plans.siteSubstitution(call_expr.data.call.func) orelse return null;
+        if (site_types.len == 0) return null;
+        const scheme = self.workerSchemeVars(self.plan.workers.items[@intFromEnum(direct.worker)].source) orelse return null;
+        if (scheme.vars.len != site_types.len) {
+            boxyPlanInvariant("checked call-site substitution disagreed with its callee scheme's variables");
+        }
+        return .{
+            .callee_view = scheme.view,
+            .scheme_vars = scheme.vars,
+            .site_view = site_view,
+            .site_types = site_types,
+        };
+    }
+
+    /// Each direct call's scheme substitution names caller-side types that
+    /// supply its callee's type-variable descriptors; they are analyzed
+    /// before descriptor requirements are fixed.
+    fn analyzeDirectCallSchemeSubstitutions(self: *Builder) Allocator.Error!void {
+        var index: usize = 0;
+        while (index < self.plan.direct_calls.items.len) : (index += 1) {
+            const substitution = self.directCallSchemeSubstitution(self.plan.direct_calls.items[index]) orelse continue;
+            for (substitution.site_types) |site_type| {
+                _ = try self.analyzeType(substitution.site_view, site_type);
+            }
+        }
+    }
+
     fn workerEvidenceParams(self: *Builder, source: WorkerSource) ?WorkerEvidenceParams {
         return switch (source) {
             .procedure_template => |template| self.templateEvidenceParams(template),
@@ -7498,13 +7600,14 @@ const Builder = struct {
             const call_types = try self.callSubstitutionTypes(direct.arg_substitutions, .call);
             defer self.allocator.free(call_types);
             const evidence = self.checkedEvidenceForDirectCall(direct);
-            const hidden_desc_args = try self.materializeWorkerCallHiddenDescriptorArgsWithEvidence(
+            const hidden_desc_args = try self.materializeWorkerCallHiddenDescriptorArgsWithSubstitution(
                 direct.worker,
                 call_types,
                 operand_types,
                 direct.ret_substitution.?.call_type,
                 evidence.view,
                 evidence.entries,
+                self.directCallSchemeSubstitution(direct),
             );
             self.plan.direct_calls.items[direct_index].hidden_desc_args = hidden_desc_args;
         }
@@ -7848,6 +7951,27 @@ const Builder = struct {
         evidence_view: ?ModuleView,
         evidence: ?[]const static_dispatch.CheckedEvidence,
     ) Allocator.Error!Span {
+        return try self.materializeWorkerCallHiddenDescriptorArgsWithSubstitution(
+            worker_id,
+            call_arg_types,
+            operand_arg_types,
+            ret_type,
+            evidence_view,
+            evidence,
+            null,
+        );
+    }
+
+    fn materializeWorkerCallHiddenDescriptorArgsWithSubstitution(
+        self: *Builder,
+        worker_id: WorkerPlanId,
+        call_arg_types: []const CheckedTypeIdentity,
+        operand_arg_types: []const CheckedTypeIdentity,
+        ret_type: CheckedTypeIdentity,
+        evidence_view: ?ModuleView,
+        evidence: ?[]const static_dispatch.CheckedEvidence,
+        scheme_substitution: ?SchemeCallSubstitution,
+    ) Allocator.Error!Span {
         if (call_arg_types.len != operand_arg_types.len) {
             boxyPlanInvariant("boxy worker call hidden descriptor mapping saw mismatched function arity");
         }
@@ -7873,6 +7997,7 @@ const Builder = struct {
             ret_type,
             evidence_view,
             evidence,
+            scheme_substitution,
         );
     }
 
@@ -7886,6 +8011,7 @@ const Builder = struct {
         ret_type: CheckedTypeIdentity,
         evidence_view: ?ModuleView,
         evidence: ?[]const static_dispatch.CheckedEvidence,
+        scheme_substitution: ?SchemeCallSubstitution,
     ) Allocator.Error!Span {
         if (call_arg_reps.len != operand_arg_reps.len) {
             boxyPlanInvariant("boxy worker call hidden descriptor mapping saw mismatched operand arity");
@@ -7908,6 +8034,18 @@ const Builder = struct {
         defer seen_descriptor_reps.deinit();
         var substitutions = CallDescriptorRepSubstitutionMap{};
         defer substitutions.deinit(self.allocator);
+        // The checker's call-site substitution is the authority for each of
+        // the callee scheme's variables: it names exactly the caller type a
+        // variable stood for, including a row extension's residual tags,
+        // which no comparison of the two representations can recover.
+        if (scheme_substitution) |substitution| {
+            for (substitution.scheme_vars, substitution.site_types) |scheme_var, site_type| {
+                const worker_var_rep = self.plan.repForSourceType(typeRef(substitution.callee_view, scheme_var)) orelse continue;
+                const call_rep = self.plan.repForSourceType(typeRef(substitution.site_view, site_type)) orelse
+                    boxyPlanInvariant("checked call-site substitution type was not analyzed");
+                try substitutions.put(self.allocator, worker_var_rep, call_rep);
+            }
+        }
         const evidence_only_start: usize = if (worker.evidence_only_descs.len == 0)
             params.len
         else
@@ -8782,6 +8920,13 @@ const Builder = struct {
             // descriptor once, via that sibling; skip the duplicate here to
             // mirror the worker param collection's per-rep dedup.
             if (seen_reps.contains(worker_child.rep)) continue;
+            // An explicit substitution (the checker's call-site substitution,
+            // or a wrapper argument recorded above) names this child's call
+            // representation exactly.
+            if (substitutions.get(worker_child.rep)) |call_child_rep| {
+                try self.collectCallHiddenDescriptorArgs(worker_child.rep, call_child_rep, call_value_rep, source_value_rep, source_arg_index, params, next_param, pending, seen_reps, seen_descriptor_reps, substitutions, runtime_value_only);
+                continue;
+            }
             if (self.rowInstantiationTarget(worker_rep_id, aligned_call_rep_id, worker_child)) |row_target| {
                 try self.collectCallHiddenDescriptorArgs(worker_child.rep, row_target, call_value_rep, source_value_rep, source_arg_index, params, next_param, pending, seen_reps, seen_descriptor_reps, substitutions, runtime_value_only);
                 continue;
