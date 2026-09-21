@@ -131,8 +131,7 @@ const CommittedGraphTypes = struct {
     /// Commit several types through one import: types already relocated are
     /// answered from the relocation map and the rest share one closure walk
     /// and one interning transaction. The result is owned by the caller.
-    fn commitTypes(self: *CommittedGraphTypes, tys: []const Type.TypeId) Allocator.Error![]Type.TypeId {
-        const allocator = self.source_store.allocator;
+    fn commitTypes(self: *CommittedGraphTypes, allocator: Allocator, tys: []const Type.TypeId) Allocator.Error![]Type.TypeId {
         const committed = try allocator.alloc(Type.TypeId, tys.len);
         errdefer allocator.free(committed);
         const destination = self.destination orelse {
@@ -4085,7 +4084,7 @@ const Builder = struct {
             roots[index * 2] = entry.provisional_ty;
             roots[index * 2 + 1] = entry.summary_ty;
         }
-        const committed = try committed_types.commitTypes(roots);
+        const committed = try committed_types.commitTypes(self.allocator, roots);
         defer self.allocator.free(committed);
         for (entries, 0..) |entry, index| {
             try self.interface_summaries.insert(&self.program.types, &self.program.names, .{
