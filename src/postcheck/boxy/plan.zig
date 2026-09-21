@@ -586,10 +586,35 @@ pub const GeneratedParserFieldCapture = struct {
     field_name: RecordFieldLabelId,
     source_type: CheckedTypeIdentity,
     parse_type: CheckedTypeIdentity,
-    parser_wrap_ok: bool = false,
-    optional_error_type: ?CheckedTypeIdentity,
+    /// How a generated parser stores this field and fills it when absent.
+    parser_kind: GeneratedParserFieldKind = .required,
+    optional_error_type: ?CheckedTypeIdentity = null,
     optional_missing: bool = false,
     optional_null: bool = false,
+};
+
+/// How a generated record parser stores a field it read and fills the field
+/// when its key is absent (design.md "Field Kinds", "Defaulted Fields",
+/// "Derived Parser Required-Field Error Composition").
+pub const GeneratedParserFieldKind = union(enum) {
+    /// Stored as parsed; an absent key is the parser's required-field failure.
+    required,
+    /// `Try(ok, [Missing])`: parsed at `ok` and stored as `Ok`; an absent key
+    /// is `Err(Missing)` of this `[Missing]` error row.
+    missing_try: CheckedTypeIdentity,
+    /// A `?:` field: parsed at its payload and stored as `#Present`; an absent
+    /// key is `#Missing`.
+    optional_slot,
+    /// A presence slot whose kind is still undetermined: stored as
+    /// `#Present`, and an absent key reads as required.
+    undetermined_slot,
+    /// A `??` field: stored as parsed; an absent key materializes this
+    /// archived checked default, whose identity is relative to `module`
+    /// (the module owning the record field).
+    defaulted: struct {
+        module: checked.ModuleId,
+        default: checked.CheckedFieldDefault,
+    },
 };
 
 /// How one generated parser worker reports an absent required record field.
@@ -2866,10 +2891,17 @@ const Builder = struct {
                     const encoding_type = codec.capture_type orelse
                         boxyPlanInvariant("generated parser runtime had no encoding capture type");
                     _ = try self.analyzeType(self.moduleForId(codec.shape.module), codec.shape.ty);
-                    try self.planGeneratedParserShape(worker_id, codec.shape, encoding_type);
+                    // The checker validated the generated body against the
+                    // contract's body shape, which for a declaration-backed
+                    // nominal is its own snapshot of the backing; every call
+                    // subject in the contract names that snapshot.
+                    const contract = self.generatedCodecContractForWorker(worker_id);
+                    const body_shape = typeRef(contract.view, contract.derivation.body_shape_ty);
+                    _ = try self.analyzeType(contract.view, body_shape.ty);
+                    try self.planGeneratedParserShape(worker_id, body_shape, encoding_type);
                     try self.plan.generated_parser_runtime_plans.append(self.allocator, .{
                         .worker = worker_id,
-                        .schema_type = try self.generatedParserRuntimeSchema(codec.shape),
+                        .schema_type = try self.generatedParserRuntimeSchema(body_shape),
                     });
                 },
                 .encoder_runtime => {
@@ -3328,8 +3360,22 @@ const Builder = struct {
                             _ = try self.ensureGeneratedCodecCall(worker, shape, "from_list", shape);
                             try self.planGeneratedParserShape(worker, typeRef(view, nominal.args[0]), encoding_type);
                         },
+                        .try_ => {
+                            // Outside a record field, the only parseable `Try`
+                            // is the nullable `Try(ok, [Null])` value shape.
+                            const payloads = checkedTryPayloads(view, shape.ty) orelse
+                                boxyPlanInvariant("generated Try parser had no Ok and Err payloads");
+                            const kinds = checkedTryErrorKinds(view, payloads.err) orelse
+                                boxyPlanInvariant("generated Try parser had unsupported error tags");
+                            if (!kinds.null or kinds.missing or kinds.other) {
+                                boxyPlanInvariant("generated Try parser was not the nullable [Null] shape");
+                            }
+                            const ok_type = typeRef(view, payloads.ok);
+                            _ = try self.ensureGeneratedCodecCall(worker, encoding_type, "parse_null", null);
+                            try self.appendGeneratedParserTryPlan(worker, shape, ok_type, typeRef(view, payloads.err), kinds);
+                            try self.planGeneratedParserShape(worker, ok_type, encoding_type);
+                        },
                         .bool,
-                        .try_,
                         .str,
                         .u8,
                         .i8,
@@ -3365,49 +3411,11 @@ const Builder = struct {
                     return;
                 }
 
-                if (methodOwnerForModuleType(view, shape.ty)) |owner| {
-                    if (view.canonical_names.?.lookupMethodName("parser_for")) |parser_for| {
-                        if (self.lookupMethodTarget(view, owner, view, parser_for)) |lookup| {
-                            switch (lookup.target.kind) {
-                                .procedure, .local_proc => {
-                                    _ = try self.ensureGeneratedCodecCall(worker, shape, "parser_for", shape);
-                                    return;
-                                },
-                                .structural => |kind| switch (kind) {
-                                    .parser => {},
-                                    .encoder => boxyPlanInvariant("parser planning resolved to generated encoder target"),
-                                    .equality, .hash, .map, .map_effectful => boxyPlanInvariant("parser planning resolved to a non-parser structural target"),
-                                },
-                            }
-                        }
-                    }
-                }
-
-                const backing_source = try self.nominalBackingSource(view, nominal);
-                if (checkedTryPayloads(backing_source.view, backing_source.ty)) |try_payloads| {
-                    const kinds = checkedTryErrorKinds(backing_source.view, try_payloads.err) orelse
-                        boxyPlanInvariant("generated Try parser had unsupported error tags");
-                    if (kinds.other) {
-                        boxyPlanInvariant("generated Try parser had unsupported error tags");
-                    }
-                    const ok_type = typeRef(backing_source.view, try_payloads.ok);
-                    if (kinds.null) {
-                        _ = try self.ensureGeneratedCodecCall(worker, encoding_type, "parse_null", null);
-                        try self.appendGeneratedParserTryPlan(
-                            worker,
-                            shape,
-                            ok_type,
-                            typeRef(backing_source.view, try_payloads.err),
-                            kinds,
-                        );
-                    }
-                    try self.planGeneratedParserShape(worker, ok_type, encoding_type);
-                    return;
-                }
-                const backing = typeRef(backing_source.view, backing_source.ty);
-                try self.planGeneratedParserShape(worker, backing, encoding_type);
-                try self.propagateGeneratedParserTagCallLink(worker, shape, backing);
-                try self.propagateGeneratedParserTryPlan(worker, shape, backing);
+                // Every other nominal parses through its own `parser_for`:
+                // a declared one, or the compiler-generated structural parser,
+                // whose body the checker validated as a nested derivation of
+                // its own (reached through the contract's `parser_for` edge).
+                _ = try self.ensureGeneratedCodecCall(worker, shape, "parser_for", shape);
             },
         }
     }
@@ -3621,18 +3629,29 @@ const Builder = struct {
             const field_view = self.moduleForId(planned_field.module);
             const field = planned_field.field;
             const field_type = typeRef(field_view, field.ty);
-            // Only a builtin `Try(ok, [Missing])` field may be absent from the
-            // input (design.md "Derived Parser Required-Field Error Composition"); an absent
-            // key fills it with `Err(Missing)`. Every other field is required
-            // and parses at its own type, including a nullable `Try(ok, [Null])`.
-            const optional_payloads: ?CheckedTryPayloads = if (checkedTryPayloads(field_view, field.ty)) |payloads|
-                if (checkedTryErrorKinds(field_view, payloads.err)) |kinds|
-                    if (kinds.missing and !kinds.null and !kinds.other) payloads else null
+            const parser_kind: GeneratedParserFieldKind = switch (field.kind.tag) {
+                .optional => .optional_slot,
+                .undetermined => .undetermined_slot,
+                .defaulted => .{ .defaulted = .{ .module = field_view.key, .default = field.kind.default } },
+                .err => boxyPlanInvariant("checked-error record field reached generated parser planning"),
+                // Only a builtin `Try(ok, [Missing])` field of the required
+                // kind may otherwise be absent; every other field parses at
+                // its own type, including a nullable `Try(ok, [Null])`.
+                .required => if (checkedTryPayloads(field_view, field.ty)) |payloads|
+                    if (checkedTryErrorKinds(field_view, payloads.err)) |kinds|
+                        if (kinds.missing and !kinds.null and !kinds.other)
+                            .{ .missing_try = typeRef(field_view, payloads.err) }
+                        else
+                            .required
+                    else
+                        .required
                 else
-                    null
-            else
-                null;
-            const parse_type = if (optional_payloads) |payloads| typeRef(field_view, payloads.ok) else field_type;
+                    .required,
+            };
+            const parse_type = switch (parser_kind) {
+                .missing_try => typeRef(field_view, checkedTryPayloads(field_view, field.ty).?.ok),
+                .required, .optional_slot, .undetermined_slot, .defaulted => field_type,
+            };
             try self.plan.generated_parser_field_captures.append(self.allocator, .{
                 .worker = worker,
                 .record_type = record_type,
@@ -3640,11 +3659,13 @@ const Builder = struct {
                 .field_name = field.name,
                 .source_type = rename_call.?.ret_type,
                 .parse_type = parse_type,
-                .parser_wrap_ok = optional_payloads != null,
-                .optional_error_type = if (optional_payloads) |payloads| typeRef(field_view, payloads.err) else null,
-                .optional_missing = optional_payloads != null,
+                .parser_kind = parser_kind,
             });
-            if (optional_payloads == null) needs_required = true;
+            switch (parser_kind) {
+                .required, .undetermined_slot => needs_required = true,
+                .missing_try, .optional_slot => {},
+                .defaulted => |defaulted| try self.planGeneratedParserFieldDefault(worker, field_view, defaulted.default),
+            }
             try self.planGeneratedParserShape(worker, parse_type, encoding_type);
         }
         if (needs_required) try self.planGeneratedParserMissingRequiredField(worker, encoding_type);
@@ -3661,6 +3682,24 @@ const Builder = struct {
         _ = try self.ensureGeneratedCodecCall(worker, encoding_type, "parse_list_start", subject_type);
         _ = try self.ensureGeneratedCodecCall(worker, encoding_type, "parse_list_next", subject_type);
         _ = try self.ensureGeneratedCodecCall(worker, encoding_type, "parse_list_after_item", subject_type);
+    }
+
+    /// A generated parser materializes an absent `??` field's archived default
+    /// inline in its own body, so the default expression is analyzed in that
+    /// worker exactly as a record literal's omitted default is.
+    fn planGeneratedParserFieldDefault(
+        self: *Builder,
+        worker: WorkerPlanId,
+        field_view: ModuleView,
+        default: checked.CheckedFieldDefault,
+    ) Allocator.Error!void {
+        const declaring_view = self.moduleForFieldDefaultOrigin(field_view, default);
+        const default_expr = declaring_view.checked_bodies.defaultExpr(default.expr_node) orelse
+            boxyPlanInvariant("defaulted record field's expression was not archived");
+        const previous_worker = self.active_worker;
+        self.active_worker = worker;
+        defer self.active_worker = previous_worker;
+        try self.analyzeExprTypes(declaring_view, default_expr);
     }
 
     /// The format calls every generated record parser makes, whatever its

@@ -10363,9 +10363,7 @@ const ProcedureBuilder = struct {
         rep: Plan.TypeRepId,
         parse_type: Plan.CheckedTypeIdentity,
         parse_rep: Plan.TypeRepId,
-        parser_wrap_ok: bool,
-        optional_error_type: ?Plan.CheckedTypeIdentity,
-        optional_missing: bool,
+        kind: Plan.GeneratedParserFieldKind,
         renamed: LIR.LocalId,
         payload: LIR.LocalId,
         index: usize,
@@ -10614,9 +10612,7 @@ const ProcedureBuilder = struct {
             var capture_local_index: usize = 1;
             var renamed: ?LIR.LocalId = null;
             var parse_type: ?Plan.CheckedTypeIdentity = null;
-            var parser_wrap_ok = false;
-            var optional_error_type: ?Plan.CheckedTypeIdentity = null;
-            var optional_missing = false;
+            var kind: Plan.GeneratedParserFieldKind = .required;
             for (self.plan.generated_parser_field_captures.items) |capture| {
                 if (capture.worker != worker) continue;
                 const capture_view = procedureModuleById(self.modules, capture.field_module);
@@ -10634,9 +10630,7 @@ const ProcedureBuilder = struct {
                         .tag_union_spec => try proc.addFrameLocal(.str),
                     };
                     parse_type = capture.parse_type;
-                    parser_wrap_ok = capture.parser_wrap_ok;
-                    optional_error_type = capture.optional_error_type;
-                    optional_missing = capture.optional_missing;
+                    kind = capture.parser_kind;
                 }
                 capture_local_index += 1;
             }
@@ -10649,9 +10643,7 @@ const ProcedureBuilder = struct {
                     boxyLowerInvariant("generated parser record field had no planned parse type"),
                 .parse_rep = proc.repForTypeRef(parse_type orelse
                     boxyLowerInvariant("generated parser record field had no planned parse representation")),
-                .parser_wrap_ok = parser_wrap_ok,
-                .optional_error_type = optional_error_type,
-                .optional_missing = optional_missing,
+                .kind = kind,
                 .renamed = renamed orelse boxyLowerInvariant("generated parser record field had no renamed capture"),
                 .payload = undefined,
                 .index = out_index,
@@ -11139,18 +11131,24 @@ const ProcedureBuilder = struct {
     ) Allocator.Error!LIR.CFStmtId {
         const field = context.fields[field_index];
         const value = try proc.addGeneratedParserOutputLocalForRep(field.rep);
-        const parsed_value = if (field.parser_wrap_ok)
+        // A field stored in a wrapper (`Ok` of an optional `Try`, `#Present`
+        // of a presence slot) is parsed at the wrapped payload type.
+        const present_tag: ?[]const u8 = switch (field.kind) {
+            .missing_try => "Ok",
+            .optional_slot, .undetermined_slot => "#Present",
+            .required, .defaulted => null,
+        };
+        const parsed_value = if (present_tag != null)
             try proc.addGeneratedParserOutputLocalForRep(field.parse_rep)
         else
             value;
         const next_rest = try proc.addGeneratedParserOutputLocalForRep(context.state_rep);
         var success = try self.lowerGeneratedRecordLoopUpdate(proc, context, field_index, value, next_rest);
-        if (field.parser_wrap_ok) {
-            const field_ok = proc.generatedParserTagVariant(field.rep, "Ok");
+        if (present_tag) |tag_text| {
             success = try proc.assignGeneratedParserTag(
                 value,
                 field.rep,
-                field_ok,
+                proc.generatedParserTagVariant(field.rep, tag_text),
                 parsed_value,
                 field.parse_rep,
                 success,
@@ -11280,7 +11278,10 @@ const ProcedureBuilder = struct {
                 .cond = context.presence[index / 64],
                 .cond_mask = @as(u64, 1) << @intCast(index % 64),
                 .payload = context.fields[index].payload,
-                .uninitialized_is_cold = !context.fields[index].optional_missing,
+                .uninitialized_is_cold = switch (context.fields[index].kind) {
+                    .required, .undetermined_slot => true,
+                    .missing_try, .optional_slot, .defaulted => false,
+                },
                 .initialized_branch = continuation,
                 .uninitialized_branch = missing,
             } });
@@ -11297,26 +11298,34 @@ const ProcedureBuilder = struct {
         present_continuation: LIR.CFStmtId,
     ) Allocator.Error!LIR.CFStmtId {
         const field = context.fields[field_index];
-        if (field.optional_missing) {
-            // An absent optional `Try(ok, [Missing])` field is `Err(Missing)`.
-            const error_type = field.optional_error_type orelse
-                boxyLowerInvariant("generated optional parser field had no checked error type");
-            const error_rep = proc.repForTypeRef(error_type);
-            const error_value = try proc.addFrameLocalForRep(error_rep);
-            const continuation = try proc.assignGeneratedParserTag(
+        switch (field.kind) {
+            .required, .undetermined_slot => {},
+            .missing_try => |error_type| {
+                const error_rep = proc.repForTypeRef(error_type);
+                const error_value = try proc.addFrameLocalForRep(error_rep);
+                const continuation = try proc.assignGeneratedParserTag(
+                    field.payload,
+                    field.rep,
+                    proc.generatedParserTagVariant(field.rep, "Err"),
+                    error_value,
+                    error_rep,
+                    present_continuation,
+                );
+                return try proc.assignGeneratedParserZeroTag(
+                    error_value,
+                    error_rep,
+                    proc.generatedParserTagVariant(error_rep, "Missing"),
+                    continuation,
+                );
+            },
+            .optional_slot => return try proc.lowerOptionalSlotMissingInto(field.payload, field.rep, present_continuation),
+            .defaulted => |defaulted| return try proc.lowerDefaultedRecordFieldIntoFromModule(
+                procedureModuleById(self.modules, defaulted.module),
                 field.payload,
-                field.rep,
-                proc.generatedParserTagVariant(field.rep, "Err"),
-                error_value,
-                error_rep,
+                defaulted.default,
+                field.source_type,
                 present_continuation,
-            );
-            return try proc.assignGeneratedParserZeroTag(
-                error_value,
-                error_rep,
-                proc.generatedParserTagVariant(error_rep, "Missing"),
-                continuation,
-            );
+            ),
         }
 
         const target_err = proc.generatedParserTagVariant(context.target_rep, "Err");
@@ -22698,12 +22707,25 @@ const ProcBodyBuilder = struct {
         field_type: Plan.CheckedTypeIdentity,
         next: LIR.CFStmtId,
     ) Allocator.Error!LIR.CFStmtId {
+        return try self.lowerDefaultedRecordFieldIntoFromModule(self.module, target, default, field_type, next);
+    }
+
+    /// `default`'s origin identity is relative to `field_module`, the module
+    /// owning the defaulted record field.
+    fn lowerDefaultedRecordFieldIntoFromModule(
+        self: *ProcBodyBuilder,
+        field_module: ProcedureModuleView,
+        target: LIR.LocalId,
+        default: checked.CheckedFieldDefault,
+        field_type: Plan.CheckedTypeIdentity,
+        next: LIR.CFStmtId,
+    ) Allocator.Error!LIR.CFStmtId {
         // Per-specialization materialization (design.md "Defaulted Fields"):
         // lower the declaring module's archived checked default expression
         // into the omitted field's slot—no archived constant, no root.
         const origin = default.origin() orelse
             boxyLowerInvariant("defaulted record field carried no declaring module identity");
-        const origin_hash = self.module.canonical_names.moduleIdentityBytes(origin);
+        const origin_hash = field_module.canonical_names.moduleIdentityBytes(origin);
         const declaring_module = self.moduleForIdentityHash(origin_hash) orelse
             boxyLowerInvariant("defaulted record field's declaring module was absent from boxy lowering");
         const default_expr = declaring_module.checked_bodies.defaultExpr(default.expr_node) orelse
