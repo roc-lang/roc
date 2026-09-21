@@ -8837,7 +8837,8 @@ const Builder = struct {
             self.scope_start = enclosing;
         }
 
-        /// Map a worker representation that is not a declaration formal.
+        /// Map a worker representation wherever it is visible. A
+        /// representation that already resolves must resolve to `call_rep`.
         fn put(
             self: *CallDescriptorRepSubstitutionMap,
             allocator: Allocator,
