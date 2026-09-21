@@ -2002,6 +2002,65 @@ pub const tests = [_]TestCase{
     },
     .{
         // https://github.com/roc-lang/roc/issues/11468
+        // The local closure's enclosing function is itself reached through a
+        // caller's specialization interface, at two numeric types.
+        .name = "issue 11468: callee's local closure forwards captured value to where-constrained helper",
+        .source_kind = .module,
+        .source =
+        \\lt = |x| x < x
+        \\
+        \\f = |x| {
+        \\    g = || lt(x)
+        \\    g()
+        \\}
+        \\
+        \\outer = |y| f(y)
+        \\
+        \\main = (outer(1.U64), outer(2.5.F32))
+        ,
+        .expected = .{ .inspect_str = "(False, False)" },
+    },
+    .{
+        // https://github.com/roc-lang/roc/issues/11468
+        // The innermost closure compares values quantified by two different
+        // enclosing frames.
+        .name = "issue 11468: doubly nested closure compares captures from two enclosing frames",
+        .source_kind = .module,
+        .source =
+        \\lt = |a, b| a < b
+        \\
+        \\f = |x| {
+        \\    g = |y| {
+        \\        h = || lt(x, y)
+        \\        h()
+        \\    }
+        \\    g(x)
+        \\}
+        \\
+        \\main = (f(1.U64), f(2.I8))
+        ,
+        .expected = .{ .inspect_str = "(False, False)" },
+    },
+    .{
+        // https://github.com/roc-lang/roc/issues/11468
+        // A generalized callable alias of the capturing closure.
+        .name = "issue 11468: callable alias of a local closure forwarding a captured value",
+        .source_kind = .module,
+        .source =
+        \\lt = |x| x < x
+        \\
+        \\f = |x| {
+        \\    g = || lt(x)
+        \\    k = g
+        \\    k()
+        \\}
+        \\
+        \\main = f(1.U64)
+        ,
+        .expected = .{ .inspect_str = "False" },
+    },
+    .{
+        // https://github.com/roc-lang/roc/issues/11468
         // The issue's shape: an unannotated selection sort whose local
         // recursive closures compare elements read through unannotated
         // `get` and `swap` helpers, so the element type is only constrained
