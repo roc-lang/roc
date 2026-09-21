@@ -1538,7 +1538,7 @@ fn checkedResultRowIsClosed(view: ModuleView, root: checked.CheckedTypeId) bool 
             .empty_tag_union => return true,
             .flex, .rigid => |variable| return payload.variableSealsToRowDefault() and
                 variable.row_default == .empty_tag_union,
-            .pending, .err, .record, .record_unbound, .tuple, .nominal, .function, .empty_record => return false,
+            .pending, .err, .record, .tuple, .nominal, .function, .empty_record => return false,
         }
     }
     Common.invariant("checked result row extension chain was cyclic");
@@ -1552,7 +1552,7 @@ fn checkedResultRowIsClosed(view: ModuleView, root: checked.CheckedTypeId) bool 
 fn closedResultRowOrNull(view: ModuleView, checked_fn_root: checked.CheckedTypeId) ?ClosedResultRow {
     const function = switch (resolvedPayload(view, checked_fn_root).payload) {
         .function => |function| function,
-        .pending, .err, .flex, .rigid, .alias, .record, .record_unbound, .tuple, .nominal, .empty_record, .tag_union, .empty_tag_union => return null,
+        .pending, .err, .flex, .rigid, .alias, .record, .tuple, .nominal, .empty_record, .tag_union, .empty_tag_union => return null,
     };
     const ret = resolvedPayload(view, function.ret);
     switch (ret.payload) {
@@ -1568,7 +1568,7 @@ fn closedResultRowOrNull(view: ModuleView, checked_fn_root: checked.CheckedTypeI
             if (!checkedResultRowIsClosed(view, ret.root)) return null;
             return .{ .row = ret.root, .behind_try = false };
         },
-        .pending, .err, .flex, .rigid, .alias, .record, .record_unbound, .tuple, .function, .empty_record => return null,
+        .pending, .err, .flex, .rigid, .alias, .record, .tuple, .function, .empty_record => return null,
     }
 }
 
@@ -1587,7 +1587,7 @@ fn checkedClosedRowLabelCount(view: ModuleView, root: checked.CheckedTypeId) usi
                 current = tag_union.ext;
             },
             .empty_tag_union, .flex, .rigid => return count,
-            .pending, .err, .record, .record_unbound, .tuple, .nominal, .function, .empty_record => Common.invariant("closed result row chain left its row"),
+            .pending, .err, .record, .tuple, .nominal, .function, .empty_record => Common.invariant("closed result row chain left its row"),
         }
     }
     Common.invariant("checked result row extension chain was cyclic");
@@ -4327,12 +4327,6 @@ const Builder = struct {
                     if (try self.checkedTypeHasVariable(view, field.ty, seen)) return true;
                 }
                 return try self.checkedTypeHasVariable(view, record.ext, seen);
-            },
-            .record_unbound => |fields| {
-                for (fields) |field| {
-                    if (try self.checkedTypeHasVariable(view, field.ty, seen)) return true;
-                }
-                return false;
             },
             .tuple => |items| return try self.checkedTypeSliceHasVariable(view, items, seen),
             .tag_union => |tag_union| {
@@ -7848,7 +7842,6 @@ const Builder = struct {
             .rigid => |variable| lowerCheckedTypeVariable(variable),
             .empty_record => .{ .record = .empty() },
             .empty_tag_union => .{ .tag_union = .empty() },
-            .record_unbound => |fields| try self.lowerRecordFields(view, fields),
             .record => |record| try self.lowerRecordRow(view, record.fields, record.ext),
             .tuple => |items| blk: {
                 const lowered = try self.lowerTypeSlice(view, items);
@@ -8270,27 +8263,6 @@ const Builder = struct {
         return optionalFieldSlotForType(self.activeTypeStore(), self.activeNameStore(), slot_ty);
     }
 
-    fn lowerRecordFields(self: *Builder, view: ModuleView, fields: []const checked.CheckedRecordField) Allocator.Error!Type.Content {
-        const lowered = try self.allocator.alloc(Type.Field, fields.len);
-        defer self.allocator.free(lowered);
-        for (fields, 0..) |field, i| {
-            const value_ty = try self.lowerType(view, field.ty);
-            lowered[i] = .{
-                .name = try self.recordFieldName(view, field.name),
-                .ty = switch (field.kind.tag) {
-                    .required, .defaulted => value_ty,
-                    .optional => try self.optionalSlotType(value_ty),
-                    .undetermined => Common.invariant("undetermined checked field kind reached direct record lowering"),
-                    .err => Common.invariant("poisoned checked field kind reached direct record lowering"),
-                },
-                .value_ty = if (field.kind.tag == .optional) value_ty else null,
-                .default = try self.monoFieldDefault(view, field),
-            };
-        }
-        const type_store = self.activeTypeStore();
-        return .{ .record = try type_store.addRecordFields(self.activeNameStore(), lowered) };
-    }
-
     /// Translate a checked `??` identity into the Monotype name store.
     fn monoFieldDefault(self: *Builder, view: ModuleView, field: checked.CheckedRecordField) Allocator.Error!?Type.FieldDefault {
         const default = field.kind.defaultIdentity() orelse return null;
@@ -8326,10 +8298,6 @@ const Builder = struct {
                 .flex, .rigid => |variable| {
                     if (variable.row_default == .empty_record) break;
                     Common.invariant("open non-record checked row reached Monotype record lowering");
-                },
-                .record_unbound => |tail_fields| {
-                    try self.appendRecordFields(view, &fields, tail_fields);
-                    break;
                 },
                 .record => |record| {
                     try self.appendRecordFields(view, &fields, record.fields);
@@ -8395,7 +8363,7 @@ const Builder = struct {
                     try self.appendTags(view, &tags, tag_union.tags);
                     current = tag_union.ext;
                 },
-                .pending, .err, .record, .record_unbound, .tuple, .nominal, .function, .empty_record => Common.invariant("open or non-tag checked row reached Monotype tag-union lowering"),
+                .pending, .err, .record, .tuple, .nominal, .function, .empty_record => Common.invariant("open or non-tag checked row reached Monotype tag-union lowering"),
             }
         }
 
@@ -21752,7 +21720,6 @@ const BodyContext = struct {
                 if (try self.checkedTypeContainsErrorInner(alias.backing, visited)) break :blk true;
                 break :blk try self.checkedTypeSpanContainsError(alias.args, visited);
             },
-            .record_unbound => |fields| try self.checkedRecordFieldsContainError(fields, visited),
             .record => |record| blk: {
                 if (try self.checkedRecordFieldsContainError(record.fields, visited)) break :blk true;
                 break :blk try self.checkedTypeContainsErrorInner(record.ext, visited);
@@ -21995,10 +21962,6 @@ const BodyContext = struct {
                 for (alias.args) |arg| _ = try self.instNode(arg);
                 break :blk try self.instNode(alias.backing);
             },
-            .record_unbound => |fields| try self.graph.newNode(.{ .record = .{
-                .fields = try self.instFields(fields),
-                .ext = try self.graph.newNode(.{ .unresolved = InstVariable.row(.empty_record) }),
-            } }),
             .record => |record| try self.graph.newNode(.{ .record = .{
                 .fields = try self.instFields(record.fields),
                 .ext = try self.instNode(record.ext),
@@ -25034,7 +24997,7 @@ const BodyContext = struct {
     fn checkedFunctionType(self: *BodyContext, checked_fn_ty: checked.CheckedTypeId) checked.CheckedFunctionType {
         return switch (resolvedPayload(self.view, checked_fn_ty).payload) {
             .function => |function| function,
-            .pending, .err, .flex, .rigid, .alias, .record, .record_unbound, .tuple, .nominal, .empty_record, .tag_union, .empty_tag_union => Common.invariant("checked call function type was not a function"),
+            .pending, .err, .flex, .rigid, .alias, .record, .tuple, .nominal, .empty_record, .tag_union, .empty_tag_union => Common.invariant("checked call function type was not a function"),
         };
     }
 
@@ -25832,7 +25795,7 @@ const BodyContext = struct {
         const value_expr = self.view.bodies.expr(call.args[0]);
         switch (resolvedPayload(self.view, value_expr.ty).payload) {
             .function => {},
-            .pending, .err, .flex, .rigid, .alias, .record, .record_unbound, .tuple, .nominal, .empty_record, .tag_union, .empty_tag_union => return null,
+            .pending, .err, .flex, .rigid, .alias, .record, .tuple, .nominal, .empty_record, .tag_union, .empty_tag_union => return null,
         }
 
         try self.constrainTypeToMono(checked_ret_ty, str_ty);
@@ -26845,7 +26808,7 @@ const BodyContext = struct {
         const checked_try = while (true) switch (checkedPayload(self.view, checked_try_ty)) {
             .alias => |alias| checked_try_ty = alias.backing,
             .nominal => |nominal| break nominal,
-            .pending, .err, .flex, .rigid, .record_unbound, .record, .tuple, .function, .tag_union, .empty_record, .empty_tag_union => Common.invariant("Iter.custom advance callable did not return Try"),
+            .pending, .err, .flex, .rigid, .record, .tuple, .function, .tag_union, .empty_record, .empty_tag_union => Common.invariant("Iter.custom advance callable did not return Try"),
         };
         const checked_try_builtin = switch (checked_try.representation) {
             .builtin => |builtin| builtin,
@@ -26858,7 +26821,7 @@ const BodyContext = struct {
         const checked_ok_items = while (true) switch (checkedPayload(self.view, checked_ok)) {
             .alias => |alias| checked_ok = alias.backing,
             .tuple => |items| break items,
-            .pending, .err, .flex, .rigid, .record_unbound, .record, .nominal, .function, .tag_union, .empty_record, .empty_tag_union => Common.invariant("Iter.custom advance success value was not an item-state tuple"),
+            .pending, .err, .flex, .rigid, .record, .nominal, .function, .tag_union, .empty_record, .empty_tag_union => Common.invariant("Iter.custom advance success value was not an item-state tuple"),
         };
         if (checked_ok_items.len != 2) {
             Common.invariant("Iter.custom advance success tuple did not have item and state elements");
@@ -33892,7 +33855,7 @@ const BodyContext = struct {
                     }
                     return nominal.args[0];
                 },
-                .pending, .err, .flex, .rigid, .record, .record_unbound, .tuple, .function, .empty_record, .tag_union, .empty_tag_union => Common.invariant("optional access chain's checked type was not a nominal Try"),
+                .pending, .err, .flex, .rigid, .record, .tuple, .function, .empty_record, .tag_union, .empty_tag_union => Common.invariant("optional access chain's checked type was not a nominal Try"),
             }
         }
     }
@@ -35034,7 +34997,6 @@ const BodyContext = struct {
             .flex, .rigid => payload.variableSealsToRowDefault(),
             .alias => |alias| (try self.checkedTypeSpanSealsWithoutSpecialization(alias.args, visited)) and
                 try self.checkedTypeSealsWithoutSpecializationInner(alias.backing, visited),
-            .record_unbound => |fields| try self.checkedRecordFieldsSealWithoutSpecialization(fields, visited),
             .record => |record| (try self.checkedRecordFieldsSealWithoutSpecialization(record.fields, visited)) and
                 try self.checkedTypeSealsWithoutSpecializationInner(record.ext, visited),
             .tuple => |items| try self.checkedTypeSpanSealsWithoutSpecialization(items, visited),
@@ -39654,15 +39616,6 @@ const BodyContext = struct {
                     }
                     current = record.ext;
                 },
-                .record_unbound => |tail_fields| {
-                    for (tail_fields) |checked_field| {
-                        const lowered_name = try self.recordFieldName(view, checked_field.name);
-                        if (lowered_name == field_name) return .{ .found = checked_field };
-                    }
-                    // An unbound row has no committed extension: the tail is
-                    // still open exactly like a scheme-interior variable.
-                    return .scheme_interior;
-                },
                 .nominal => |nominal| {
                     const lookup = self.builder.nominalDeclarationFor(view, nominal) orelse return .absent;
                     view = lookup.view;
@@ -42961,7 +42914,7 @@ const BodyContext = struct {
             slot.* = switch (checkedPayload(self.view, ty)) {
                 .err => .checked_error,
                 .pending => Common.invariant("pending checked type reached a root substitution"),
-                .flex, .rigid, .alias, .record, .record_unbound, .tuple, .nominal, .function, .empty_record, .tag_union, .empty_tag_union => .{ .node = try self.instNode(ty) },
+                .flex, .rigid, .alias, .record, .tuple, .nominal, .function, .empty_record, .tag_union, .empty_tag_union => .{ .node = try self.instNode(ty) },
             };
         }
         return rootEvidenceWithSubstitution(self.owner_template, schema, .{ .subst = slots, .vector = vector });
@@ -42994,7 +42947,7 @@ const BodyContext = struct {
             slot.* = switch (checkedPayload(site_view, ty)) {
                 .err => .checked_error,
                 .pending => Common.invariant("pending checked type reached a specialization substitution"),
-                .flex, .rigid, .alias, .record, .record_unbound, .tuple, .nominal, .function, .empty_record, .tag_union, .empty_tag_union => .{ .node = try ctx.instNode(ty) },
+                .flex, .rigid, .alias, .record, .tuple, .nominal, .function, .empty_record, .tag_union, .empty_tag_union => .{ .node = try ctx.instNode(ty) },
             };
         }
         return slots;
@@ -59952,7 +59905,7 @@ fn resolvedPayload(view: ModuleView, ty: checked.CheckedTypeId) ResolvedPayload 
         const payload = checkedPayload(view, current);
         switch (payload) {
             .alias => |alias| current = alias.backing,
-            .pending, .err, .flex, .rigid, .record, .record_unbound, .tuple, .nominal, .function, .empty_record, .tag_union, .empty_tag_union => return .{ .root = current, .payload = payload },
+            .pending, .err, .flex, .rigid, .record, .tuple, .nominal, .function, .empty_record, .tag_union, .empty_tag_union => return .{ .root = current, .payload = payload },
         }
     }
     Common.invariant("checked type alias chain was cyclic");

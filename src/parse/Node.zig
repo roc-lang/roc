@@ -286,12 +286,12 @@ pub const Tag = enum {
     frac_patt,
     /// Integer pattern with explicit type annotation.
     /// * main_token - Token index of the integer literal
-    /// * lhs - Ident index of the type
+    /// * lhs - Extra data index of the LiteralTypeSuffix
     /// * rhs - NumericLiteral.Idx
     typed_int_patt,
     /// Fractional pattern with explicit type annotation.
     /// * main_token - Token index of the fractional literal
-    /// * lhs - Ident index of the type
+    /// * lhs - Extra data index of the LiteralTypeSuffix
     /// * rhs - NumericLiteral.Idx
     typed_frac_patt,
     /// DESCRIPTION
@@ -301,8 +301,8 @@ pub const Tag = enum {
     string_patt,
     /// A codepoint literal pattern, with an optional type suffix.
     /// * main_token - Token index containing the codepoint
-    /// * lhs - Ident index of the optional type suffix
-    /// * rhs - Whether lhs contains a type suffix Ident index
+    /// * lhs - Extra data index of the optional LiteralTypeSuffix
+    /// * rhs - Whether lhs contains a LiteralTypeSuffix
     single_quote_patt,
     /// DESCRIPTION
     /// Example: EXAMPLE
@@ -360,20 +360,20 @@ pub const Tag = enum {
     frac,
     /// An integer with explicit type annotation: 123.U64
     /// * main_token - Token index of the integer literal
-    /// * lhs - Ident index of the type
+    /// * lhs - Extra data index of the LiteralTypeSuffix
     /// * rhs - NumericLiteral.Idx
     typed_int,
     /// A fractional with explicit type annotation: 3.14.Dec
     /// * main_token - Token index of the fractional literal
-    /// * lhs - Ident index of the type
+    /// * lhs - Extra data index of the LiteralTypeSuffix
     /// * rhs - NumericLiteral.Idx
     typed_frac,
     /// A codepoint literal enclosed in single quotes
     /// Example: 'a' or 'a'.U8
     /// * main_token - Token index containing the codepoint
     /// * region - Source region containing the single quote literal
-    /// * lhs - Ident index of the optional type suffix
-    /// * rhs - Whether lhs contains a type suffix Ident index
+    /// * lhs - Extra data index of the optional LiteralTypeSuffix
+    /// * rhs - Whether lhs contains a LiteralTypeSuffix
     single_quote,
     /// DESCRIPTION
     /// Example: EXAMPLE
@@ -391,11 +391,11 @@ pub const Tag = enum {
     /// * rhs - RHS DESCRIPTION
     multiline_string,
     /// A string literal with an explicit type suffix, e.g. `"foo".MyType`
-    /// * lhs - type identifier (Ident.Idx bits)
+    /// * lhs - Extra data index of the LiteralTypeSuffix
     /// * rhs - extra_data index holding [parts.span.start, parts.span.len]
     typed_string,
     /// A multiline string literal with an explicit type suffix
-    /// * lhs - type identifier (Ident.Idx bits)
+    /// * lhs - Extra data index of the LiteralTypeSuffix
     /// * rhs - extra_data index holding [parts.span.start, parts.span.len]
     typed_multiline_string,
     /// DESCRIPTION
