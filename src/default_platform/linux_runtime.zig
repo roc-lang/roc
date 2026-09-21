@@ -8,6 +8,10 @@ const builtin = @import("builtin");
 const default_platform_options = @import("default_platform_options");
 const linux = std.os.linux;
 
+/// The runtime is single-threaded and links no libc, so nothing else in the
+/// process moves the program break.
+const heap: std.mem.Allocator = .{ .ptr = undefined, .vtable = &std.heap.BrkAllocator.vtable };
+
 const RocStr = @import("roc_str_view").RocStr;
 const roc_args = @import("roc_args");
 const RocList = @import("roc_str_view").RocList;
@@ -19,7 +23,8 @@ const stdout_fd: i32 = 1;
 const stderr_fd: i32 = 2;
 const ansi_function_name = "\x1b[94m";
 const ansi_reset = "\x1b[0m";
-const page_size: usize = 4096;
+/// Every Roc allocation is preceded by three words: the distance back to the
+/// start of the heap block, the heap block's length, and its alignment.
 const allocation_header_words = 3;
 const allocation_header_size = allocation_header_words * @sizeOf(usize);
 const alt_signal_stack_size: usize = 64 * 1024;
@@ -239,30 +244,28 @@ fn defaultExit(code: u8) callconv(.c) noreturn {
 fn rocAlloc(length: usize, alignment: usize) callconv(.c) ?*anyopaque {
     const byte_alignment = normalizedAlignment(alignment);
     const prefix = alignForward(allocation_header_size, byte_alignment);
-    const total = pageAlign(prefix + length);
-    const raw_addr = linux.mmap(
-        null,
-        total,
-        .{ .READ = true, .WRITE = true },
-        .{ .TYPE = .PRIVATE, .ANONYMOUS = true },
-        -1,
-        0,
-    );
-    if (linux.errno(raw_addr) != .SUCCESS) return null;
-
-    const raw: [*]u8 = @ptrFromInt(raw_addr);
+    const raw_len = prefix + length;
+    const raw = heap.rawAlloc(raw_len, .fromByteUnits(byte_alignment), @returnAddress()) orelse return null;
     const user = raw + prefix;
-    storeAllocationHeader(user, prefix, total, length);
+    storeAllocationHeader(user, prefix, raw_len, byte_alignment);
     return @ptrCast(user);
 }
 
 fn rocRealloc(ptr: *anyopaque, new_length: usize, alignment: usize) callconv(.c) ?*anyopaque {
     const old_user: [*]u8 = @ptrCast(ptr);
-    const old_len = allocationHeaderValue(old_user, 2);
+    const prefix = allocationHeaderValue(old_user, 0);
+    const old_raw_len = allocationHeaderValue(old_user, 1);
+    const raw_alignment = allocationHeaderValue(old_user, 2);
+    const new_raw_len = prefix + new_length;
+    const old_raw = (old_user - prefix)[0..old_raw_len];
+    if (heap.rawResize(old_raw, .fromByteUnits(raw_alignment), new_raw_len, @returnAddress())) {
+        allocationHeaderPtr(old_user, 1).* = new_raw_len;
+        return ptr;
+    }
 
     const new_ptr = rocAlloc(new_length, alignment) orelse return null;
     const new_user: [*]u8 = @ptrCast(new_ptr);
-    const copy_len = @min(old_len, new_length);
+    const copy_len = @min(old_raw_len - prefix, new_length);
     var i: usize = 0;
     while (i < copy_len) : (i += 1) {
         new_user[i] = old_user[i];
@@ -274,9 +277,9 @@ fn rocRealloc(ptr: *anyopaque, new_length: usize, alignment: usize) callconv(.c)
 fn rocDealloc(ptr: *anyopaque, _: usize) callconv(.c) void {
     const user: [*]u8 = @ptrCast(ptr);
     const prefix = allocationHeaderValue(user, 0);
-    const total = allocationHeaderValue(user, 1);
-    const raw = user - prefix;
-    _ = linux.munmap(raw, total);
+    const raw_len = allocationHeaderValue(user, 1);
+    const raw_alignment = allocationHeaderValue(user, 2);
+    heap.rawFree((user - prefix)[0..raw_len], .fromByteUnits(raw_alignment), @returnAddress());
 }
 
 fn installSignalHandlers() void {
@@ -608,10 +611,10 @@ fn lookupBacktraceEntry(ip: usize) ?BacktraceEntry {
     return best;
 }
 
-fn storeAllocationHeader(user: [*]u8, prefix: usize, total: usize, length: usize) void {
+fn storeAllocationHeader(user: [*]u8, prefix: usize, raw_len: usize, raw_alignment: usize) void {
     allocationHeaderPtr(user, 0).* = prefix;
-    allocationHeaderPtr(user, 1).* = total;
-    allocationHeaderPtr(user, 2).* = length;
+    allocationHeaderPtr(user, 1).* = raw_len;
+    allocationHeaderPtr(user, 2).* = raw_alignment;
 }
 
 fn allocationHeaderValue(user: [*]u8, index: usize) usize {
@@ -629,10 +632,6 @@ fn normalizedAlignment(alignment: usize) usize {
 
 fn alignForward(value: usize, alignment: usize) usize {
     return (value + alignment - 1) & ~(alignment - 1);
-}
-
-fn pageAlign(value: usize) usize {
-    return alignForward(value, page_size);
 }
 
 fn writeLiteral(fd: i32, comptime text: []const u8) void {
