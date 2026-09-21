@@ -11469,6 +11469,17 @@ original call operand root plus the exact instantiated descendant; it never
 changes to a sibling value merely because the substitution was learned from the
 wrapper's explicit argument metadata.
 
+A callable parameter's descriptor source survives traversal from the arguments
+into the result. A result nominal's declaration formal resolves through its
+exact actual parameter to that recorded source, including when the actual is
+runtime-bound. The source retains its operand index and exact representation,
+and records the earlier hidden descriptor argument that supplies it. Lowering
+reuses that argument's immutable local and its existing initialization, including
+its read after argument adaptation; it emits no second descriptor read.
+These callable sources are scoped to the call; nominal declaration substitutions
+remain scoped to their backing descent. Result planning does not rediscover a
+parameter descriptor from an ambient binding or require it to become static.
+
 Nested backing traversal composes the call-side declaration substitutions as
 well as the worker-side substitutions. For `Set(Str)`, the call-side backing's
 `Dict(item, {})` argument is the instantiated `Str`, even when `item` and the

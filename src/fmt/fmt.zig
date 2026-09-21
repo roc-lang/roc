@@ -1540,8 +1540,7 @@ const Formatter = struct {
                     }
                 }
                 try fmt.push('"');
-                try fmt.push('.');
-                try fmt.pushAll(fmt.ast.env.getIdent(s.type_ident));
+                try fmt.formatLiteralTypeSuffix(s.type_suffix);
             },
             .multiline_string => |s| {
                 if (!fmt.has_newline) {
@@ -1599,15 +1598,13 @@ const Formatter = struct {
                 // The type suffix lives on its own line after the string body.
                 try fmt.ensureNewline();
                 try fmt.pushIndent();
-                try fmt.push('.');
-                try fmt.pushAll(fmt.ast.env.getIdent(s.type_ident));
+                try fmt.formatLiteralTypeSuffix(s.type_suffix);
                 fmt.has_multiline_string = true;
             },
             .single_quote => |s| {
                 try fmt.pushTokenText(s.token);
-                if (s.type_ident) |type_ident| {
-                    try fmt.push('.');
-                    try fmt.pushAll(fmt.ast.env.getIdent(type_ident));
+                if (s.type_suffix) |type_suffix| {
+                    try fmt.formatLiteralTypeSuffix(type_suffix);
                 }
             },
             .ident => |i| {
@@ -1824,13 +1821,11 @@ const Formatter = struct {
             },
             .typed_int => |ti| {
                 try fmt.pushTokenText(ti.token);
-                try fmt.push('.');
-                try fmt.pushAll(fmt.ast.env.getIdent(ti.type_ident));
+                try fmt.formatLiteralTypeSuffix(ti.type_suffix);
             },
             .typed_frac => |tf| {
                 try fmt.pushTokenText(tf.token);
-                try fmt.push('.');
-                try fmt.pushAll(fmt.ast.env.getIdent(tf.type_ident));
+                try fmt.formatLiteralTypeSuffix(tf.type_suffix);
             },
             .list => |l| {
                 try fmt.formatCollection(region, fmt.ast.store.getCollectionLayout(ei), .square, AST.Expr.Idx, fmt.ast.store.exprSlice(l.items), Formatter.formatExpr);
@@ -2471,9 +2466,8 @@ const Formatter = struct {
             .single_quote => |sq| {
                 region = sq.region;
                 try fmt.formatIdent(sq.token, null);
-                if (sq.type_ident) |type_ident| {
-                    try fmt.push('.');
-                    try fmt.pushAll(fmt.ast.env.getIdent(type_ident));
+                if (sq.type_suffix) |type_suffix| {
+                    try fmt.formatLiteralTypeSuffix(type_suffix);
                 }
             },
             .int => |n| {
@@ -2487,14 +2481,12 @@ const Formatter = struct {
             .typed_int => |n| {
                 region = n.region;
                 try fmt.formatIdent(n.number_tok, null);
-                try fmt.push('.');
-                try fmt.pushAll(fmt.ast.env.getIdent(n.type_ident));
+                try fmt.formatLiteralTypeSuffix(n.type_suffix);
             },
             .typed_frac => |n| {
                 region = n.region;
                 try fmt.formatIdent(n.number_tok, null);
-                try fmt.push('.');
-                try fmt.pushAll(fmt.ast.env.getIdent(n.type_ident));
+                try fmt.formatLiteralTypeSuffix(n.type_suffix);
             },
             .record => |r| {
                 region = r.region;
@@ -3896,6 +3888,23 @@ const Formatter = struct {
         for (0..fmt.curr_indent) |_| {
             try fmt.push('\t');
         }
+    }
+
+    fn formatLiteralTypeSuffix(fmt: *Formatter, suffix: AST.LiteralTypeSuffix) error{WriteFailed}!void {
+        switch (suffix) {
+            .path => |path| {
+                for (fmt.ast.store.tokenSlice(path.qualifiers)) |qualifier| {
+                    try fmt.pushLiteralTypeSuffixSegment(fmt.ast.tokens.resolveIdentifier(@intCast(qualifier)) orelse unreachable);
+                }
+                try fmt.pushLiteralTypeSuffixSegment(fmt.ast.tokens.resolveIdentifier(path.final_token) orelse unreachable);
+            },
+            .deprecated_builtin => |type_name| try fmt.pushLiteralTypeSuffixSegment(type_name),
+        }
+    }
+
+    fn pushLiteralTypeSuffixSegment(fmt: *Formatter, segment: base.Ident.Idx) error{WriteFailed}!void {
+        try fmt.push('.');
+        try fmt.pushAll(fmt.ast.env.getIdent(segment));
     }
 
     fn pushTokenText(fmt: *Formatter, ti: Token.Idx) error{WriteFailed}!void {
