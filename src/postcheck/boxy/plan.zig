@@ -8099,9 +8099,10 @@ const Builder = struct {
             const path_step = path[path_index];
             const current_rep = self.plan.representations.items[@intFromEnum(current)];
             const children = self.plan.childSlice(current_rep.children);
-            if (current_rep.kind == .nominal) {
-                // The path only descends, so each nominal's scope stays open
-                // for the rest of the walk.
+            if (current_rep.kind == .nominal and path_step.stepKind() == .nominal_backing) {
+                // Formals are visible only inside this use's backing, and the
+                // path only descends, so the scope stays open for the rest of
+                // the walk. A `.nominal_arg` step stays in the enclosing scope.
                 _ = substitutions.enterScope();
                 var substitution_iter = self.plan.nominalBackingSubstitutions(current_rep.nominal_backing_arg_substitutions);
                 while (substitution_iter.next()) |substitution| {
@@ -14595,6 +14596,93 @@ test "evidence representation paths use exact nominal backing substitutions" {
             rootTypeRef(@enumFromInt(fixtureTableIndex(0))),
         ),
     );
+}
+
+test "evidence representation paths resolve nominal arguments in the enclosing scope" {
+    const gpa = std.testing.allocator;
+    var builder = Builder.init(gpa, .{});
+    defer builder.deinit();
+
+    // Alt(a, b) := (a, Alt(b, a)), walked from Alt(U64, Str).
+    const outer_rep: TypeRepId = @enumFromInt(1);
+    const formal_a: TypeRepId = @enumFromInt(2);
+    const formal_b: TypeRepId = @enumFromInt(3);
+    const backing_rep: TypeRepId = @enumFromInt(4);
+    const inner_rep: TypeRepId = @enumFromInt(5);
+    const u64_rep: TypeRepId = @enumFromInt(6);
+    const str_rep: TypeRepId = @enumFromInt(7);
+
+    try builder.plan.children.appendSlice(gpa, &.{
+        .{ .role = .{ .function_arg = 0 }, .source_type = rootTypeRef(@enumFromInt(1)), .rep = outer_rep },
+        .{ .role = .nominal_backing, .source_type = rootTypeRef(@enumFromInt(4)), .rep = backing_rep },
+        .{ .role = .{ .nominal_arg = 0 }, .source_type = rootTypeRef(@enumFromInt(6)), .rep = u64_rep },
+        .{ .role = .{ .nominal_arg = 1 }, .source_type = rootTypeRef(@enumFromInt(7)), .rep = str_rep },
+        .{ .role = .{ .tuple_elem = 0 }, .source_type = rootTypeRef(@enumFromInt(2)), .rep = formal_a },
+        .{ .role = .{ .tuple_elem = 1 }, .source_type = rootTypeRef(@enumFromInt(5)), .rep = inner_rep },
+        .{ .role = .nominal_backing, .source_type = rootTypeRef(@enumFromInt(4)), .rep = backing_rep },
+        .{ .role = .{ .nominal_arg = 0 }, .source_type = rootTypeRef(@enumFromInt(3)), .rep = formal_b },
+        .{ .role = .{ .nominal_arg = 1 }, .source_type = rootTypeRef(@enumFromInt(2)), .rep = formal_a },
+    });
+
+    const formals_start: u32 = @intCast(builder.plan.nominal_backing_formals.items.len);
+    for ([_]TypeRepId{ formal_a, formal_b }) |formal| {
+        const binding: TypeBindingId = @enumFromInt(@as(u32, @intCast(builder.plan.type_reps.items.len)));
+        try builder.plan.type_reps.append(gpa, .{ .source_type = rootTypeRef(@enumFromInt(@intFromEnum(formal))), .rep = formal });
+        try builder.plan.nominal_backing_formals.append(gpa, binding);
+    }
+    const outer_uses: u32 = @intCast(builder.plan.nominal_backing_uses.items.len);
+    try builder.plan.nominal_backing_uses.appendSlice(gpa, &.{ formals_start, @intFromEnum(u64_rep), @intFromEnum(str_rep) });
+    const inner_uses: u32 = @intCast(builder.plan.nominal_backing_uses.items.len);
+    try builder.plan.nominal_backing_uses.appendSlice(gpa, &.{ formals_start, @intFromEnum(formal_b), @intFromEnum(formal_a) });
+
+    try builder.plan.representations.appendSlice(gpa, &.{
+        .{ .source_type = rootTypeRef(@enumFromInt(fixtureTableIndex(0))), .kind = .{ .erased_callable = .pure }, .children = .{ .start = 0, .len = 1 } },
+        .{ .source_type = rootTypeRef(@enumFromInt(1)), .kind = .{ .nominal = .transparent }, .children = .{ .start = 1, .len = 3 }, .nominal_backing_arg_substitutions = .{ .start = outer_uses, .len = 2 } },
+        .{ .source_type = rootTypeRef(@enumFromInt(2)), .kind = .{ .dynamic = .rigid }, .contains_dynamic = true },
+        .{ .source_type = rootTypeRef(@enumFromInt(3)), .kind = .{ .dynamic = .rigid }, .contains_dynamic = true },
+        .{ .source_type = rootTypeRef(@enumFromInt(4)), .kind = .tuple, .children = .{ .start = 4, .len = 2 }, .contains_dynamic = true },
+        .{ .source_type = rootTypeRef(@enumFromInt(5)), .kind = .{ .nominal = .transparent }, .children = .{ .start = 6, .len = 3 }, .nominal_backing_arg_substitutions = .{ .start = inner_uses, .len = 2 } },
+        .{ .source_type = rootTypeRef(@enumFromInt(6)), .kind = .{ .primitive = .u64 } },
+        .{ .source_type = rootTypeRef(@enumFromInt(7)), .kind = .{ .primitive = .str } },
+    });
+
+    const Kind = static_dispatch.EvidencePathStep.Kind;
+    const Case = struct { path: []const static_dispatch.EvidencePathStep, expected: TypeRepId };
+    const cases = [_]Case{
+        // The outer backing's `a` is the outer use's first argument.
+        .{ .path = &.{
+            .{ .kind = @intFromEnum(Kind.fn_arg), .data = 0 },
+            .{ .kind = @intFromEnum(Kind.nominal_backing), .data = 0 },
+            .{ .kind = @intFromEnum(Kind.tuple_elem), .data = 0 },
+        }, .expected = u64_rep },
+        // The inner use's first argument is `b`, read in the outer backing.
+        .{ .path = &.{
+            .{ .kind = @intFromEnum(Kind.fn_arg), .data = 0 },
+            .{ .kind = @intFromEnum(Kind.nominal_backing), .data = 0 },
+            .{ .kind = @intFromEnum(Kind.tuple_elem), .data = 1 },
+            .{ .kind = @intFromEnum(Kind.nominal_arg), .data = 0 },
+        }, .expected = str_rep },
+        // The inner backing's `a` is the inner use's first argument.
+        .{ .path = &.{
+            .{ .kind = @intFromEnum(Kind.fn_arg), .data = 0 },
+            .{ .kind = @intFromEnum(Kind.nominal_backing), .data = 0 },
+            .{ .kind = @intFromEnum(Kind.tuple_elem), .data = 1 },
+            .{ .kind = @intFromEnum(Kind.nominal_backing), .data = 0 },
+            .{ .kind = @intFromEnum(Kind.tuple_elem), .data = 0 },
+        }, .expected = str_rep },
+    };
+    for (cases) |case| {
+        try std.testing.expectEqual(
+            case.expected,
+            try builder.evidenceCallRepAtPath(
+                builder.root_view,
+                case.path,
+                rootTypeRef(@enumFromInt(fixtureTableIndex(0))),
+                &.{outer_rep},
+                rootTypeRef(@enumFromInt(fixtureTableIndex(0))),
+            ),
+        );
+    }
 }
 
 test "dictionary method hidden descriptors preserve exact implementation substitutions" {
