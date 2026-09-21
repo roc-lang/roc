@@ -1751,8 +1751,8 @@ const ResultRowWidening = struct {
 
 /// Type-argument index of `Builtin.Try`'s error row. `closedResultRowOrNull`
 /// names `args[1]` as the closed row and the checker's
-/// `hostedTryAdapterCapabilityForRoot` records the same index, so this relation
-/// and the adapter open one and the same cell.
+/// `hostedTryAdapterCapabilityForCheckedRoot` records the same index, so this
+/// relation and the adapter open one and the same cell.
 const try_error_type_arg_index: usize = 1;
 
 /// Whether a node is directly function-shaped.

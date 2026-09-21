@@ -21198,16 +21198,6 @@ fn checkedRootHasClosedResultRow(
     }
 }
 
-fn hostedTryAdapterCapabilityForRoot(
-    module: TypedCIR.Module,
-    names: *canonical.CanonicalNameStore,
-    checked_types: *const CheckedTypeStore,
-    checked_fn_root: CheckedTypeId,
-) Allocator.Error!?HostedTryAdapterCapability {
-    _ = module;
-    return hostedTryAdapterCapabilityForCheckedRoot(names, checked_types, checked_fn_root);
-}
-
 fn hostedTryAdapterCapabilityForCheckedRoot(
     names: *canonical.CanonicalNameStore,
     checked_types: *const CheckedTypeStore,
@@ -21432,7 +21422,7 @@ pub const CheckedProcedureTemplateTable = struct {
                 // the stricter closed-row rule.
                 .hosted_try_adapter = if (isHostedProcedureExpr(def.expr.data) or
                     checkedRootHasClosedResultRow(&checked_type_publication.store, checked_fn_root))
-                    try hostedTryAdapterCapabilityForRoot(module, names, &checked_type_publication.store, checked_fn_root)
+                    try hostedTryAdapterCapabilityForCheckedRoot(names, &checked_type_publication.store, checked_fn_root)
                 else
                     null,
             });
@@ -21522,7 +21512,7 @@ pub const CheckedProcedureTemplateTable = struct {
                 // so Monotype never meets a closed `Try` result row without the
                 // provenance the adapter reads it through.
                 .hosted_try_adapter = if (checkedRootHasClosedResultRow(checked_types, checked_fn_root))
-                    try hostedTryAdapterCapabilityForRoot(module, names, checked_types, checked_fn_root)
+                    try hostedTryAdapterCapabilityForCheckedRoot(names, checked_types, checked_fn_root)
                 else
                     null,
             });
