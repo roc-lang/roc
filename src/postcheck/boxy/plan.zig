@@ -336,6 +336,10 @@ pub const DirectCallHiddenDescriptorArg = struct {
     rep: TypeRepId,
     source_arg_index: ?u32 = null,
     source_value_rep: ?TypeRepId = null,
+    /// Index in this call's hidden descriptor arguments of an earlier operand
+    /// descriptor supplying the same callable parameter. Lowering reuses that
+    /// local, including its exact read from the adapted operand.
+    source_descriptor_index: ?u32 = null,
     /// The call-side nominal whose backing `rep` belongs to. Such a `rep` names
     /// the declaration's formals, so its descriptor is built under this
     /// nominal's backing-argument substitutions.
@@ -8641,24 +8645,53 @@ const Builder = struct {
                     boxyPlanInvariant("boxy direct call hidden descriptor order disagreed with worker descriptor params");
                 }
                 next_param.* += 1;
-                const operand_nominal_actual = (try self.nominalBackingActualForCallRep(
-                    call_value_rep,
-                    source_value_rep,
-                    aligned_call_rep_id,
-                )) orelse try self.nominalBackingActualForFormal(source_value_rep, worker_rep_id);
-                const desc_arg_rep_id = self.repQuery().descriptorArgumentIdentityRep(
-                    operand_nominal_actual orelse aligned_call_rep_id,
-                );
-                const desc_arg_rep = self.plan.representations.items[@intFromEnum(desc_arg_rep_id)];
-                try pending.append(self.allocator, .{
-                    .worker_desc = worker_desc,
-                    .worker_rep = worker_rep_id,
-                    .source_type = desc_arg_rep.source_type,
-                    .rep = desc_arg_rep_id,
-                    .source_arg_index = source_arg_index,
-                    .source_value_rep = source_value_rep,
-                    .backing_owner = self.call_descriptor_backing_owner,
-                });
+                // Nominal result backings introduce declaration formals, but
+                // their actuals can be callable parameters already supplied by
+                // an operand. Retain that exact argument provenance across the
+                // scoped nominal descent, including dynamic actuals.
+                const call_identity = self.repQuery().descriptorArgumentIdentityRep(aligned_call_rep_id);
+                const worker_parameter = self.plan.representations.items[@intFromEnum(worker_identity)];
+                const call_parameter = self.plan.representations.items[@intFromEnum(call_identity)];
+                const bare_parameter = worker_parameter.kind == .dynamic and worker_parameter.children.len == 0 and worker_parameter.tag_variants.len == 0 and
+                    call_parameter.kind == .dynamic and call_parameter.children.len == 0 and call_parameter.tag_variants.len == 0;
+                const source_index = if (bare_parameter and source_arg_index == null) blk: {
+                    const sources = if (substitutions.argument_sources) |*sources| sources else break :blk null;
+                    break :blk sources.get(call_identity);
+                } else null;
+                const descriptor_arg: DirectCallHiddenDescriptorArg = if (source_index) |index| blk: {
+                    var source = pending.items[index];
+                    source.worker_desc = worker_desc;
+                    source.worker_rep = worker_rep_id;
+                    source.source_descriptor_index = index;
+                    break :blk source;
+                } else blk: {
+                    const operand_nominal_actual = (try self.nominalBackingActualForCallRep(
+                        call_value_rep,
+                        source_value_rep,
+                        aligned_call_rep_id,
+                    )) orelse try self.nominalBackingActualForFormal(source_value_rep, worker_rep_id);
+                    const desc_arg_rep_id = self.repQuery().descriptorArgumentIdentityRep(
+                        operand_nominal_actual orelse aligned_call_rep_id,
+                    );
+                    const desc_arg_rep = self.plan.representations.items[@intFromEnum(desc_arg_rep_id)];
+                    break :blk .{
+                        .worker_desc = worker_desc,
+                        .worker_rep = worker_rep_id,
+                        .source_type = desc_arg_rep.source_type,
+                        .rep = desc_arg_rep_id,
+                        .source_arg_index = source_arg_index,
+                        .source_value_rep = source_value_rep,
+                        .backing_owner = self.call_descriptor_backing_owner,
+                    };
+                };
+                if (bare_parameter and source_arg_index != null) {
+                    if (substitutions.argument_sources == null) {
+                        substitutions.argument_sources = collections.DenseMap(TypeRepId, u32).init(self.allocator);
+                    }
+                    const source_entry = try substitutions.argument_sources.?.getOrPut(call_identity);
+                    if (!source_entry.found_existing) source_entry.value_ptr.* = @intCast(pending.items.len);
+                }
+                try pending.append(self.allocator, descriptor_arg);
             }
         }
 
@@ -8746,9 +8779,12 @@ const Builder = struct {
 
     const CallDescriptorRepSubstitutionMap = struct {
         entries: std.ArrayList(CallDescriptorRepSubstitution) = .empty,
+        // Callable parameters outlive the nested declaration scopes in entries.
+        argument_sources: ?collections.DenseMap(TypeRepId, u32) = null,
 
         fn deinit(self: *CallDescriptorRepSubstitutionMap, allocator: Allocator) void {
             self.entries.deinit(allocator);
+            if (self.argument_sources) |*sources| sources.deinit();
         }
 
         fn get(self: *const CallDescriptorRepSubstitutionMap, worker_rep: TypeRepId) ?TypeRepId {
@@ -14410,6 +14446,79 @@ test "direct call descriptors use operand nominal substitutions over generic cal
     try std.testing.expectEqual(@as(usize, 1), pending.items.len);
     try std.testing.expectEqual(exact_operand_arg, pending.items[0].rep);
     try std.testing.expectEqual(operand_nominal, pending.items[0].source_value_rep.?);
+}
+
+test "nominal result descriptors retain a dynamic callable argument source" {
+    try expectNominalResultArgumentSource(false);
+    try expectNominalResultArgumentSource(true);
+}
+
+fn expectNominalResultArgumentSource(alias_argument: bool) (Allocator.Error || error{TestExpectedEqual})!void {
+    const gpa = std.testing.allocator;
+    var builder = Builder.init(gpa, .{});
+    defer builder.deinit();
+
+    const worker_elem: TypeRepId = @enumFromInt(fixtureTableIndex(0));
+    const worker_list: TypeRepId = @enumFromInt(1);
+    const formal: TypeRepId = @enumFromInt(2);
+    const backing: TypeRepId = @enumFromInt(3);
+    const worker_nominal: TypeRepId = @enumFromInt(4);
+    const call_elem: TypeRepId = @enumFromInt(5);
+    const call_list: TypeRepId = @enumFromInt(6);
+    const call_nominal: TypeRepId = @enumFromInt(7);
+    const operand_elem: TypeRepId = @enumFromInt(8);
+    const operand_list: TypeRepId = @enumFromInt(9);
+    const call_alias: TypeRepId = @enumFromInt(10);
+    try builder.plan.children.appendSlice(gpa, &.{
+        .{ .role = .list_elem, .source_type = rootTypeRef(@enumFromInt(fixtureTableIndex(0))), .rep = worker_elem },
+        .{ .role = .{ .tuple_elem = 0 }, .source_type = rootTypeRef(@enumFromInt(2)), .rep = formal },
+        .{ .role = .nominal_backing, .source_type = rootTypeRef(@enumFromInt(3)), .rep = backing },
+        .{ .role = .{ .nominal_arg = 0 }, .source_type = rootTypeRef(@enumFromInt(fixtureTableIndex(0))), .rep = worker_elem },
+        .{ .role = .list_elem, .source_type = rootTypeRef(if (alias_argument) @enumFromInt(10) else @enumFromInt(5)), .rep = if (alias_argument) call_alias else call_elem },
+        .{ .role = .nominal_backing, .source_type = rootTypeRef(@enumFromInt(3)), .rep = backing },
+        .{ .role = .{ .nominal_arg = 0 }, .source_type = rootTypeRef(@enumFromInt(5)), .rep = call_elem },
+        .{ .role = .list_elem, .source_type = rootTypeRef(@enumFromInt(8)), .rep = operand_elem },
+        .{ .role = .alias_backing, .source_type = rootTypeRef(@enumFromInt(5)), .rep = call_elem },
+    });
+    const worker_substitutions = try testNominalSubstitution(&builder.plan, formal, worker_elem);
+    const call_substitutions = try testNominalSubstitution(&builder.plan, formal, call_elem);
+    try builder.plan.representations.appendSlice(gpa, &.{
+        .{ .source_type = rootTypeRef(@enumFromInt(fixtureTableIndex(0))), .kind = .{ .dynamic = .rigid }, .descriptor = @enumFromInt(fixtureTableIndex(0)), .contains_dynamic = true },
+        .{ .source_type = rootTypeRef(@enumFromInt(1)), .kind = .list, .children = .{ .start = 0, .len = 1 }, .contains_dynamic = true },
+        .{ .source_type = rootTypeRef(@enumFromInt(2)), .kind = .{ .dynamic = .rigid }, .descriptor = @enumFromInt(1), .contains_dynamic = true },
+        .{ .source_type = rootTypeRef(@enumFromInt(3)), .kind = .tuple, .children = .{ .start = 1, .len = 1 }, .contains_dynamic = true },
+        .{ .source_type = rootTypeRef(@enumFromInt(4)), .kind = .{ .nominal = .transparent }, .children = .{ .start = 2, .len = 2 }, .nominal_backing_arg_substitutions = worker_substitutions, .contains_dynamic = true },
+        .{ .source_type = rootTypeRef(@enumFromInt(5)), .kind = .{ .dynamic = .rigid }, .descriptor = @enumFromInt(2), .contains_dynamic = true },
+        .{ .source_type = rootTypeRef(@enumFromInt(6)), .kind = .list, .children = .{ .start = 4, .len = 1 }, .contains_dynamic = true },
+        .{ .source_type = rootTypeRef(@enumFromInt(7)), .kind = .{ .nominal = .transparent }, .children = .{ .start = 5, .len = 2 }, .nominal_backing_arg_substitutions = call_substitutions, .contains_dynamic = true },
+        .{ .source_type = rootTypeRef(@enumFromInt(8)), .kind = .{ .dynamic = .rigid }, .descriptor = @enumFromInt(3), .contains_dynamic = true },
+        .{ .source_type = rootTypeRef(@enumFromInt(9)), .kind = .list, .children = .{ .start = 7, .len = 1 }, .contains_dynamic = true },
+        .{ .source_type = rootTypeRef(@enumFromInt(10)), .kind = .alias, .children = .{ .start = 8, .len = 1 }, .contains_dynamic = true },
+    });
+    const params = [_]HiddenDescriptorParam{
+        .{ .source_type = rootTypeRef(@enumFromInt(fixtureTableIndex(0))), .rep = worker_elem, .desc = @enumFromInt(fixtureTableIndex(0)) },
+        .{ .source_type = rootTypeRef(@enumFromInt(2)), .rep = formal, .desc = @enumFromInt(1) },
+    };
+    var pending = std.ArrayList(DirectCallHiddenDescriptorArg).empty;
+    defer pending.deinit(gpa);
+    var seen_reps = collections.DenseMap(TypeRepId, void).init(gpa);
+    defer seen_reps.deinit();
+    var seen_descriptors = collections.DenseMap(TypeRepId, void).init(gpa);
+    defer seen_descriptors.deinit();
+    var substitutions = Builder.CallDescriptorRepSubstitutionMap{};
+    defer substitutions.deinit(gpa);
+    var next_param: usize = 0;
+
+    try builder.collectCallHiddenDescriptorArgs(worker_list, call_list, call_list, operand_list, 0, &params, &next_param, &pending, &seen_reps, &seen_descriptors, &substitutions, false);
+    try builder.collectCallHiddenDescriptorArgs(worker_nominal, call_nominal, call_nominal, call_nominal, null, &params, &next_param, &pending, &seen_reps, &seen_descriptors, &substitutions, false);
+
+    try std.testing.expectEqual(@as(usize, 2), pending.items.len);
+    const result_source = pending.items[1];
+    try std.testing.expectEqual(formal, result_source.worker_rep);
+    try std.testing.expectEqual(operand_elem, result_source.rep);
+    try std.testing.expectEqual(@as(?u32, 0), result_source.source_arg_index);
+    try std.testing.expectEqual(operand_list, result_source.source_value_rep.?);
+    try std.testing.expectEqual(@as(?u32, 0), result_source.source_descriptor_index);
 }
 
 test "evidence representation paths use exact nominal backing substitutions" {
