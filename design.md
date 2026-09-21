@@ -2304,7 +2304,9 @@ Reusable modules and exact platform/app compositions are distinct checked cache
 entries. A composition entry is keyed by both immutable module identities and
 the compiler's checked and composition format versions. It contains only the
 pairing's changed metadata columns and completed app-dependent evaluation
-results, never source environments, bodies, or a live checker continuation.
+results, never source environments or a live checker continuation.
+Type-bearing body columns carry the app substitution; unchanged body columns
+remain borrowed.
 Unchanged columns borrow the exact platform identified by the key. Only a
 completed composition without diagnostics may be cached; a hit consumes its
 stored outcomes and replays its recorded debug observations without evaluation.
@@ -2702,10 +2704,15 @@ graph transitively, including captured values; it is distinct from strict
 evaluation demand, which determines scheduling.
 Its reusable module cache contains only context-independent evaluation results;
 app-dependent requests and deferred diagnostics remain explicit checked data.
-Program composition activates those recorded requests. Exact procedure aliases
+Program composition activates those recorded requests. It applies the recorded
+app substitutions to body expression, pattern, call, interpolation, and field-access
+types as well as procedure signatures and roots. One substitution memo preserves
+shared type identities across these columns. The pairing cache retains the changed
+body columns so cache hits use the same types. Exact procedure aliases
 whose required bindings are now known use the existing checked forwarding rule
 and require no compile-time evaluator. Composition borrows the platform's
-bodies, dispatch plans, declaration tables and closure inventories, and owns the
+unchanged body columns, dispatch plans, declaration tables and closure
+inventories, and owns the
 projected types, bindings, root manifests and evaluation results in a session.
 Completed independent roots are consumed as stored values and never evaluated
 again. Both lowering strategies consume this same checked view. Pairing extends the

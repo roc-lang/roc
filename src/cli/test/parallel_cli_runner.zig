@@ -427,6 +427,7 @@ const CustomCase = enum {
     cache_failing_results,
     cache_invalidated_by_source_change,
     issue_11389_check_after_test_shared_cache,
+    issue_11495_paired_body_types,
     issue_11065_duplicate_module_name_across_packages,
     cache_ignores_optimized_mode,
     cache_replays_optimized_dbg_transcript,
@@ -1876,6 +1877,7 @@ const subcommand_cases = [_]CliCase{
     .{ .id = 0, .suite = .subcommands, .name = "roc test cache invalidated by source change (interpreter)", .backend = .interpreter, .body = .{ .custom = .cache_invalidated_by_source_change } },
     .{ .id = 0, .suite = .subcommands, .name = "roc test cache invalidated by source change (dev)", .backend = .dev, .body = .{ .custom = .cache_invalidated_by_source_change } },
     .{ .id = 0, .suite = .subcommands, .name = "issue 11389: roc check succeeds on a cache roc test wrote", .body = .{ .custom = .issue_11389_check_after_test_shared_cache } },
+    .{ .id = 0, .suite = .subcommands, .name = "issue 11495: Boxy pairing keeps app body types across shared platform cache hits", .body = .{ .custom = .issue_11495_paired_body_types } },
     .{ .id = 0, .suite = .subcommands, .name = "roc test result cache ignores optimized mode", .backend = .speed, .body = .{ .custom = .cache_ignores_optimized_mode } },
     .{ .id = 0, .suite = .subcommands, .name = "roc test optimized result cache replays dbg transcript", .backend = .speed, .body = .{ .custom = .cache_replays_optimized_dbg_transcript } },
     .{ .id = 0, .suite = .subcommands, .name = "roc test result cache replays dbg transcript across backends", .backend = .speed, .body = .{ .custom = .cache_replays_dbg_transcript_across_backends } },
@@ -3244,6 +3246,7 @@ fn runCustomCase(
         .cache_failing_results => customCacheFailingResults(io, allocator, &env, &timer, timeout_ms, spec.backend orelse .interpreter),
         .cache_invalidated_by_source_change => customCacheInvalidated(io, allocator, &env, &timer, timeout_ms, spec.backend orelse .interpreter),
         .issue_11389_check_after_test_shared_cache => customIssue11389CheckAfterTestSharedCache(io, allocator, &env, &timer, timeout_ms),
+        .issue_11495_paired_body_types => customIssue11495PairedBodyTypes(io, allocator, &env, &timer, timeout_ms),
         .issue_11065_duplicate_module_name_across_packages => customIssue11065DuplicateModuleNameAcrossPackages(io, allocator, &env, &timer, timeout_ms),
         .cache_ignores_optimized_mode => customCacheIgnoresOptimizedMode(io, allocator, &env, &timer, timeout_ms),
         .cache_replays_optimized_dbg_transcript => customCacheReplaysOptimizedDbgTranscript(io, allocator, &env, &timer, timeout_ms),
@@ -7547,6 +7550,30 @@ fn customIssue11389CheckAfterTestSharedCache(
             .{ .stream = .stderr, .text = "panic" },
         },
     })) |failure| return failure;
+    return null;
+}
+
+fn customIssue11495PairedBodyTypes(
+    io: std.Io,
+    allocator: Allocator,
+    env: *const CaseEnv,
+    timer: *harness.Timer,
+    timeout_ms: u64,
+) ?TestResult {
+    // Both apps use one platform with different callable bodies. Repeat each
+    // backend to exercise the stored pairing after the other app has run.
+    for ([_][]const u8{ "--opt=interpreter", "--opt=interpreter", "--opt=dev", "--opt=dev" }) |opt| {
+        if (runRocAndCheck(io, allocator, env, timer, timeout_ms, .{
+            .args = &.{ opt, "--specialize=no" },
+            .roc_file = "test/echo/issue_11217.roc",
+            .stdout_exact = "ok\n",
+        })) |failure| return failure;
+        if (runRocAndCheck(io, allocator, env, timer, timeout_ms, .{
+            .args = &.{ opt, "--specialize=no" },
+            .roc_file = "test/echo/boxy_map_trim.roc",
+            .stdout_exact = "Alice, Bob, Charlie\n",
+        })) |failure| return failure;
+    }
     return null;
 }
 

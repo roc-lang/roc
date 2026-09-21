@@ -22782,14 +22782,19 @@ const PlatformRelationTypeSubstitutions = struct {
         if (self.formals.len == 0) return root;
         var active = collections.DenseMap(CheckedTypeId, CheckedTypeId).init(allocator);
         defer active.deinit();
-        return try store.cloneCheckedTypeRootSubstituting(
-            allocator,
-            names,
-            root,
-            self.formals,
-            self.actuals,
-            &active,
-        );
+        return try self.specializeRootWithMemo(allocator, names, store, root, &active);
+    }
+
+    fn specializeRootWithMemo(
+        self: *const PlatformRelationTypeSubstitutions,
+        allocator: Allocator,
+        names: *const canonical.CanonicalNameStore,
+        store: *CheckedTypeStore,
+        root: CheckedTypeId,
+        active: *collections.DenseMap(CheckedTypeId, CheckedTypeId),
+    ) Allocator.Error!CheckedTypeId {
+        if (self.formals.len == 0) return root;
+        return try store.cloneCheckedTypeRootSubstituting(allocator, names, root, self.formals, self.actuals, active);
     }
 
     fn deinit(self: *PlatformRelationTypeSubstitutions, allocator: Allocator) void {
@@ -25137,9 +25142,8 @@ fn buildPlatformAppRelationFromDeclarations(
     };
 }
 
-/// Copy the compact mutable columns of a pairing session. Checked expression
-/// bodies, dispatch plans, declaration tables and closure inventories stay in
-/// their immutable module. This allocator must be the session's arena.
+/// Copy a pairing session's changed columns. Unchanged columns stay in their
+/// immutable module. This allocator must be the session's arena.
 fn copyPairingColumns(comptime T: type, source: T, allocator: Allocator) Allocator.Error!T {
     if (comptime @typeInfo(T) == .pointer) {
         const pointer = @typeInfo(T).pointer;
@@ -25194,7 +25198,7 @@ fn pairingFieldNameEql(comptime a: []const u8, comptime b: []const u8) bool {
 
 /// Persisted app-specific checked columns. This is an overlay of two exact
 /// immutable artifacts, never a replacement for either module's cache entry.
-/// Bodies, source environments, declarations, and unchanged type columns remain
+/// Source environments, declarations, and unchanged body and type columns stay
 /// owned by the platform. A hit installs the finished view without evaluation.
 pub const PlatformPairing = struct {
     // Bump for changes to the borrowed-column mask interpretation as well as
@@ -25217,6 +25221,9 @@ pub const PlatformPairing = struct {
         has_dependent_evaluation: bool,
         checked_types: CheckedTypeStore.Serialized,
         templates: SerializedSlice(CheckedProcedureTemplate),
+        body_exprs: SerializedSlice(StoredCheckedExpr),
+        body_patterns: SerializedSlice(StoredCheckedPattern),
+        body_field_access_segments: SerializedSlice(CheckedFieldAccessSegment),
         canonical_names: canonical.CanonicalNameStore.Serialized,
         platform_requirement_relations: PlatformRequirementRelationTable.Serialized,
         platform_required_bindings: PlatformRequiredBindingTable.Serialized,
@@ -25248,6 +25255,9 @@ pub const PlatformPairing = struct {
             }
             try self.checked_types.serialize(&delta, gpa, writer);
             try self.templates.serialize(artifact.checked_procedure_templates.templates.items, gpa, writer);
+            try self.body_exprs.serialize(artifact.checked_bodies.stored_exprs.items, gpa, writer);
+            try self.body_patterns.serialize(artifact.checked_bodies.stored_patterns.items, gpa, writer);
+            try self.body_field_access_segments.serialize(artifact.checked_bodies.field_access_segment_pool.items, gpa, writer);
             try self.canonical_names.serialize(&artifact.canonical_names, gpa, writer);
             try self.platform_requirement_relations.serialize(&artifact.platform_requirement_relations, gpa, writer);
             try self.platform_required_bindings.serialize(&artifact.platform_required_bindings, gpa, writer);
@@ -25291,6 +25301,9 @@ pub const PlatformPairing = struct {
                 if (self.borrowed_types & (@as(u16, 1) << bit) != 0) @field(result.checked_types, field.name) = @field(platform.checked_types, field.name);
             }
             result.checked_procedure_templates.templates = artifact_serialize.arrayListFromSlice(CheckedProcedureTemplate, self.templates.deserialize(address));
+            result.checked_bodies.stored_exprs = artifact_serialize.arrayListFromSlice(StoredCheckedExpr, self.body_exprs.deserialize(address));
+            result.checked_bodies.stored_patterns = artifact_serialize.arrayListFromSlice(StoredCheckedPattern, self.body_patterns.deserialize(address));
+            result.checked_bodies.field_access_segment_pool = artifact_serialize.arrayListFromSlice(CheckedFieldAccessSegment, self.body_field_access_segments.deserialize(address));
             result.canonical_names = self.canonical_names.deserialize(address, allocator);
             result.platform_requirement_relations = self.platform_requirement_relations.deserialize(address);
             result.platform_required_bindings = self.platform_required_bindings.deserialize(address);
@@ -25360,12 +25373,75 @@ pub fn pairCheckedPlatform(
             record.ref = categorizeRequiredValueRef(required.requires_idx, &result.platform_required_declarations, &result.platform_required_bindings);
         }
     }
+    var type_memo = collections.DenseMap(CheckedTypeId, CheckedTypeId).init(session);
+    defer type_memo.deinit();
+    result.checked_bodies.stored_exprs = try copyPairingColumns(@TypeOf(platform.checked_bodies.stored_exprs), platform.checked_bodies.stored_exprs, session);
+    for (result.checked_bodies.stored_exprs.items) |*expr| {
+        expr.ty = try substitutions.specializeRootWithMemo(session, &result.canonical_names, &result.checked_types, expr.ty, &type_memo);
+        switch (expr.data) {
+            .call => |*call| call.source_fn_ty_payload = try substitutions.specializeRootWithMemo(session, &result.canonical_names, &result.checked_types, call.source_fn_ty_payload, &type_memo),
+            .interpolation => |*interpolation| interpolation.step_fn_ty = try substitutions.specializeRootWithMemo(session, &result.canonical_names, &result.checked_types, interpolation.step_fn_ty, &type_memo),
+            .pending,
+            .numeral,
+            .str_from_quote,
+            .str_segment,
+            .str,
+            .bytes_literal,
+            .lookup_local,
+            .lookup_external,
+            .lookup_required,
+            .list,
+            .empty_list,
+            .tuple,
+            .match_,
+            .if_,
+            .record,
+            .empty_record,
+            .block,
+            .tag,
+            .nominal,
+            .zero_argument_tag,
+            .closure,
+            .lambda,
+            .binop,
+            .unary_minus,
+            .unary_not,
+            .field_access,
+            .dispatch_call,
+            .structural_eq,
+            .structural_hash,
+            .method_eq,
+            .type_dispatch_call,
+            .tuple_access,
+            .runtime_error,
+            .crash,
+            .dbg,
+            .expect_err,
+            .expect,
+            .ellipsis,
+            .anno_only,
+            .break_,
+            .return_,
+            .for_,
+            .hosted_lambda,
+            .run_low_level,
+            => {},
+        }
+    }
+    result.checked_bodies.stored_patterns = try copyPairingColumns(@TypeOf(platform.checked_bodies.stored_patterns), platform.checked_bodies.stored_patterns, session);
+    for (result.checked_bodies.stored_patterns.items) |*pattern| {
+        pattern.ty = try substitutions.specializeRootWithMemo(session, &result.canonical_names, &result.checked_types, pattern.ty, &type_memo);
+    }
+    result.checked_bodies.field_access_segment_pool = try copyPairingColumns(@TypeOf(platform.checked_bodies.field_access_segment_pool), platform.checked_bodies.field_access_segment_pool, session);
+    for (result.checked_bodies.field_access_segment_pool.items) |*segment| {
+        segment.success_ty = try substitutions.specializeRootWithMemo(session, &result.canonical_names, &result.checked_types, segment.success_ty, &type_memo);
+    }
     result.checked_procedure_templates.templates = try copyPairingColumns(@TypeOf(platform.checked_procedure_templates.templates), platform.checked_procedure_templates.templates, session);
     var copied_entry_wrappers = false;
     var copied_intrinsic_wrappers = false;
     for (result.checked_procedure_templates.templates.items) |*template| {
         const source_root = template.checked_fn_root;
-        template.checked_fn_root = try substitutions.specializeRoot(session, &result.canonical_names, &result.checked_types, source_root);
+        template.checked_fn_root = try substitutions.specializeRootWithMemo(session, &result.canonical_names, &result.checked_types, source_root, &type_memo);
         if (template.checked_fn_root != source_root) {
             template.checked_fn_scheme = syntheticSchemeKeyForType(result.checked_types.roots.items[@intFromEnum(template.checked_fn_root)].key);
             template.hosted_try_adapter = try hostedTryAdapterCapabilityForCheckedRoot(&result.canonical_names, &result.checked_types, template.checked_fn_root);
@@ -25390,7 +25466,7 @@ pub fn pairCheckedPlatform(
     }
     result.provided_exports = try copyPairingColumns(ProvidedExportTable, platform.provided_exports, session);
     for (result.provided_exports.exports) |*provided| switch (provided.*) {
-        inline .procedure, .data => |*value| value.checked_type = try substitutions.specializeRoot(session, &result.canonical_names, &result.checked_types, value.checked_type),
+        inline .procedure, .data => |*value| value.checked_type = try substitutions.specializeRootWithMemo(session, &result.canonical_names, &result.checked_types, value.checked_type, &type_memo),
     };
     var roots = std.ArrayList(RootRequest).empty;
     for (platform.root_requests.requests) |request| {
@@ -25406,7 +25482,7 @@ pub fn pairCheckedPlatform(
     for (roots.items) |*request| {
         request.evaluation_complete = request.abi == .compile_time and !request.requires_pairing;
         request.requires_pairing = false;
-        request.checked_type = try substitutions.specializeRoot(session, &result.canonical_names, &result.checked_types, request.checked_type);
+        request.checked_type = try substitutions.specializeRootWithMemo(session, &result.canonical_names, &result.checked_types, request.checked_type, &type_memo);
     }
     for (result.platform_required_bindings.bindings, 0..) |binding, i| switch (binding.value_use) {
         .procedure_value => |procedure| try appendRoot(&roots, session, .{
