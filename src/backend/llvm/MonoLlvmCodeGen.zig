@@ -4158,8 +4158,11 @@ pub const MonoLlvmCodeGen = struct {
         if (self.boxy_capture_drop_helpers.get(key)) |entry| return entry.function;
 
         const builder = self.builder orelse return error.CompilationFailed;
-        const ptr_ty = try self.ptrType();
-        const fn_ty = builder.fnType(.void, &.{ ptr_ty, ptr_ty }, .normal) catch return error.OutOfMemory;
+        // A Boxy capture drop helper fills the published `Payload.on_drop` slot,
+        // so it carries the host-shaped adapter signature.
+        var param_buf: [builtins.rc_callback_abi.max_params]LlvmBuilder.Type = undefined;
+        const params = try self.rcHelperParamTypes(.host_drop, &param_buf);
+        const fn_ty = builder.fnType(.void, params, .normal) catch return error.OutOfMemory;
         const name = builder.strtabStringFmt("roc_boxy_capture_drop_{x}", .{key}) catch return error.OutOfMemory;
         const func = builder.addFunction(fn_ty, name, .default) catch return error.OutOfMemory;
         func.setLinkage(.internal, builder);
@@ -11086,6 +11089,7 @@ pub const MonoLlvmCodeGen = struct {
                 .decref,
                 .free,
                 => self.clearDeferredStrCapture(local),
+                .host_drop => llvmInvariantFmt("RC statement used a host-shaped drop adapter", .{}),
             }
             return;
         }
@@ -11136,6 +11140,25 @@ pub const MonoLlvmCodeGen = struct {
         return false;
     }
 
+    /// Build the LLVM parameter types for `op` from the canonical RC callback
+    /// ABI, so a generated helper always matches the pointer type the builtins
+    /// call it through.
+    fn rcHelperParamTypes(
+        self: *MonoLlvmCodeGen,
+        op: layout.RcOp,
+        buf: *[builtins.rc_callback_abi.max_params]LlvmBuilder.Type,
+    ) Error![]const LlvmBuilder.Type {
+        const ptr_ty = try self.ptrType();
+        const roles = layout.rc_helper.abiParams(op);
+        for (roles, 0..) |role, i| {
+            buf[i] = switch (role) {
+                .value_ptr, .ops_ptr => ptr_ty,
+                .count => self.ptrSizedIntType(),
+            };
+        }
+        return buf[0..roles.len];
+    }
+
     fn declareRcHelper(self: *MonoLlvmCodeGen, helper_key: layout.RcHelperKey, atomicity: RcAtomicity) Error!?LlvmBuilder.Function.Index {
         const builder = self.builder orelse return error.CompilationFailed;
         if (self.layouts().rcHelperPlan(helper_key) == .noop) return null;
@@ -11143,11 +11166,8 @@ pub const MonoLlvmCodeGen = struct {
         const cache_key = rcHelperCacheKey(helper_key, atomicity);
         if (self.rc_helpers.get(cache_key)) |entry| return entry.function;
 
-        const ptr_ty = try self.ptrType();
-        const params: []const LlvmBuilder.Type = switch (helper_key.op) {
-            .incref => &.{ ptr_ty, self.ptrSizedIntType() },
-            .decref, .free => &.{ptr_ty},
-        };
+        var param_buf: [builtins.rc_callback_abi.max_params]LlvmBuilder.Type = undefined;
+        const params = try self.rcHelperParamTypes(helper_key.op, &param_buf);
         const fn_ty = builder.fnType(.void, params, .normal) catch return error.OutOfMemory;
         const is_static_data_helper = self.proc_symbol_mode == .lir_symbol and
             self.staticDataRequiresRcHelper(helper_key, atomicity);
@@ -11173,7 +11193,7 @@ pub const MonoLlvmCodeGen = struct {
         try self.addGeneratedFunctionStackProbeAttrs(&attrs);
         switch (helper_key.op) {
             .incref => {},
-            .decref, .free => {
+            .decref, .free, .host_drop => {
                 // Drop/free helpers include the recursive teardown code for a layout.
                 // Keeping them out of line prevents LLVM from cloning large cleanup
                 // trees into hot callers such as generated parsers. This does not
@@ -11265,7 +11285,9 @@ pub const MonoLlvmCodeGen = struct {
         const value_ptr = wip.arg(0);
         const count_value: ?LlvmBuilder.Value = switch (helper_key.op) {
             .incref => wip.arg(1),
-            .decref, .free => null,
+            // A `host_drop` adapter's second argument is the published on-drop
+            // ABI's ops slot, which the generated body ignores.
+            .decref, .free, .host_drop => null,
         };
         const is_null = wip.icmp(.eq, value_ptr, builder.nullValue(try self.ptrType()) catch return error.OutOfMemory, "") catch return error.OutOfMemory;
         _ = wip.brCond(is_null, done, body, .else_likely) catch return error.OutOfMemory;
@@ -11317,6 +11339,7 @@ pub const MonoLlvmCodeGen = struct {
         switch (helper_key.op) {
             .incref => _ = try self.callFunctionIndex(func, &.{ value_ptr, count_value.? }, false, false),
             .decref, .free => _ = try self.callFunctionIndex(func, &.{value_ptr}, false, false),
+            .host_drop => llvmInvariantFmt("RC statement used a host-shaped drop adapter", .{}),
         }
     }
 

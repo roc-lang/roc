@@ -5216,6 +5216,49 @@ pub fn build(b: *std.Build) void {
         build_wasm_issue_11419_app.step.dependOn(build_test_hosts_step);
         build_test_wasm_static_lib_runner_step.dependOn(&build_wasm_issue_11419_app.step);
 
+        // Two `List.concat` calls over different refcounted element types keep
+        // the element incref/decref callbacks indirect, so the generated RC
+        // helpers must carry the callback ABI's signature exactly or wasm traps
+        // at the `call_indirect` (#11454). Only the optimizing backend reaches
+        // the indirect call, so this cart is built at `--opt=speed`.
+        const build_wasm_issue_11454_app = b.addRunArtifact(roc_exe);
+        build_wasm_issue_11454_app.addArgs(&.{
+            "build",
+            "test/wasm/issue_11454_concat_rc_callback_static_lib_app.roc",
+            "--opt=speed",
+            "--target=wasm32",
+            "--output=test/wasm/issue_11454_concat_rc_callback_static_lib_app.wasm",
+        });
+        build_wasm_issue_11454_app.step.dependOn(build_test_hosts_step);
+        build_test_wasm_static_lib_runner_step.dependOn(&build_wasm_issue_11454_app.step);
+
+        // A boxed erased callable whose capture is refcounted: the helper in its
+        // `Payload.on_drop` slot must carry the published host on-drop
+        // signature, which wasm checks at the runtime's `call_indirect`.
+        const build_wasm_on_drop_app = b.addRunArtifact(roc_exe);
+        build_wasm_on_drop_app.addArgs(&.{
+            "build",
+            "test/wasm/erased_callable_on_drop_static_lib_app.roc",
+            "--opt=speed",
+            "--target=wasm32",
+            "--output=test/wasm/erased_callable_on_drop_static_lib_app.wasm",
+        });
+        build_wasm_on_drop_app.step.dependOn(build_test_hosts_step);
+        build_test_wasm_static_lib_runner_step.dependOn(&build_wasm_on_drop_app.step);
+
+        // The same cart on the wasm backend, whose generated on-drop adapter is
+        // a separate code path from the optimizing backend's.
+        const build_wasm_on_drop_dev_app = b.addRunArtifact(roc_exe);
+        build_wasm_on_drop_dev_app.addArgs(&.{
+            "build",
+            "test/wasm/erased_callable_on_drop_static_lib_app.roc",
+            "--opt=dev",
+            "--target=wasm32",
+            "--output=test/wasm/erased_callable_on_drop_dev_static_lib_app.wasm",
+        });
+        build_wasm_on_drop_dev_app.step.dependOn(build_test_hosts_step);
+        build_test_wasm_static_lib_runner_step.dependOn(&build_wasm_on_drop_dev_app.step);
+
         // A nominal tag union carrying `Box({})`, a box of a zero-sized
         // payload, as the payload of a multi-variant tag union matched at a
         // runtime value. The dev wasm backend must emit a module that
@@ -5513,6 +5556,36 @@ pub fn build(b: *std.Build) void {
             });
             run_wasm_issue_11419_test.step.dependOn(build_test_wasm_static_lib_runner_step);
             run_test_wasm_static_lib_step.dependOn(&run_wasm_issue_11419_test.step);
+
+            const run_wasm_issue_11454_test = b.addRunArtifact(wasm_test_exe);
+            run_wasm_issue_11454_test.addArgs(&.{
+                "--wasm-path",
+                "test/wasm/issue_11454_concat_rc_callback_static_lib_app.wasm",
+                "--expected",
+                "{\"favoritesCount\":14} a, {\"favoritesCount\":14} b, {\"favoritesCount\":14} c, {\"favoritesCount\":14} d",
+            });
+            run_wasm_issue_11454_test.step.dependOn(build_test_wasm_static_lib_runner_step);
+            run_test_wasm_static_lib_step.dependOn(&run_wasm_issue_11454_test.step);
+
+            const run_wasm_on_drop_test = b.addRunArtifact(wasm_test_exe);
+            run_wasm_on_drop_test.addArgs(&.{
+                "--wasm-path",
+                "test/wasm/erased_callable_on_drop_static_lib_app.wasm",
+                "--expected",
+                "{\"favoritesCount\":14} ok",
+            });
+            run_wasm_on_drop_test.step.dependOn(build_test_wasm_static_lib_runner_step);
+            run_test_wasm_static_lib_step.dependOn(&run_wasm_on_drop_test.step);
+
+            const run_wasm_on_drop_dev_test = b.addRunArtifact(wasm_test_exe);
+            run_wasm_on_drop_dev_test.addArgs(&.{
+                "--wasm-path",
+                "test/wasm/erased_callable_on_drop_dev_static_lib_app.wasm",
+                "--expected",
+                "{\"favoritesCount\":14} ok",
+            });
+            run_wasm_on_drop_dev_test.step.dependOn(build_test_wasm_static_lib_runner_step);
+            run_test_wasm_static_lib_step.dependOn(&run_wasm_on_drop_dev_test.step);
 
             const run_wasm_issue_11455_test = b.addRunArtifact(wasm_test_exe);
             run_wasm_issue_11455_test.addArgs(&.{

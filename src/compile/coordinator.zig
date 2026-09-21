@@ -8598,7 +8598,7 @@ test "shared CTFE and runtime requests specialize once across workers and target
             try std.testing.expectEqual(@as(usize, 1), runtime.lir_result.root_procs.items.len);
             // The original host domain reuses the completed program, whose
             // accessor now returns the completed scalar as a literal; a
-            // forked consumer lowers its own continuation, where the read is
+            // separate consumer lowers its own continuation, where the read is
             // the literal. Either way no value slot survives.
             const frozen = runtime.frozen_static_data orelse return error.TestUnexpectedResult;
             var value_exports: usize = 0;
