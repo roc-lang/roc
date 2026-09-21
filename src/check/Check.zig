@@ -23176,15 +23176,17 @@ fn checkBlockStatements(self: *Self, statements: CIR.Statement.Span, env: *Env, 
                 }
 
                 // A local function def is a binding group of one: its pattern
-                // var lives in its own rank frame that generalizes after its
-                // RHS, so a self-recursive def's monomorphic links (see the
-                // local recursion branch in `e_lookup_local`) generalize with
-                // the def instead of pinning it at the block's rank. Applied
-                // to every function decl—a non-recursive one's frame is a
-                // cheap no-op (its pattern is already an alias of the RHS's
-                // generalized scheme by the time the frame closes), and
-                // self-recursion cannot be detected syntactically up front
-                // (a capture-free `f = |x| f(x)` has no self-capture).
+                // var and its RHS share one rank frame that generalizes once,
+                // after the pattern has unified with the RHS, so a
+                // self-recursive def's monomorphic links (see the local
+                // recursion branch in `e_lookup_local`) are part of the type
+                // that generalizes. The RHS therefore never generalizes on
+                // its own (the same rule as a recursive top-level group
+                // member): every boundary step that inspects the scheme, such
+                // as requirement deduplication, sees its final type. Applied
+                // to every function decl, since self-recursion cannot be
+                // detected syntactically up front (a capture-free
+                // `f = |x| f(x)` has no self-capture).
                 const decl_fn_frame = decl_is_fn and !decl_predeclared;
                 if (decl_fn_frame) try env.var_pool.pushRank();
 
@@ -23224,7 +23226,17 @@ fn checkBlockStatements(self: *Self, statements: CIR.Statement.Span, env: *Env, 
 
                 self.checking_binding_rhs = true;
                 self.checking_binding_rhs_pattern = decl_stmt.pattern;
+                // The frame's pattern var owns the scheme, so requirement
+                // candidates recorded while checking the RHS and at the
+                // frame's boundary belong to it.
+                const saved_active_scheme_root = self.active_scheme_root;
+                if (decl_fn_frame) {
+                    std.debug.assert(self.suppress_generalize_expr == null);
+                    self.suppress_generalize_expr = decl_stmt.expr;
+                    self.active_scheme_root = decl_pattern_var;
+                }
                 const decl_expr_does_fx = try self.checkExpr(decl_stmt.expr, env, expectation);
+                std.debug.assert(self.suppress_generalize_expr == null);
                 // The annotation bounds the definition (see `checkDef`).
                 if (decl_stmt.anno) |annotation_idx| {
                     try self.auditImplicitOpenExts(
@@ -23277,6 +23289,12 @@ fn checkBlockStatements(self: *Self, statements: CIR.Statement.Span, env: *Env, 
                     // finished scheme below. Destructure binders bind first
                     // so boundary defaulting sees them through the row (see
                     // `judgeRecordDestructBinds`).
+                    // The pattern=RHS unification above runs after the RHS's
+                    // last dispatch pass and can pin a receiver through a
+                    // recursive call (e.g. an accumulator passed as `[]`).
+                    // Resolve those dispatches before generalizing, as a
+                    // recursive top-level group's boundary does.
+                    try self.checkStaticDispatchConstraints(env, false);
                     try self.judgeRecordDestructBinds(env);
                     try self.defaultLiteralsAtGeneralizationBoundary(.{ .owner = decl_pattern_var, .interface = decl_pattern_var }, env);
                     try self.judgeFieldKindsAtBoundary(env);
@@ -23285,7 +23303,7 @@ fn checkBlockStatements(self: *Self, statements: CIR.Statement.Span, env: *Env, 
                     try self.captureEscapedSchemeDispatchRequirements(&.{.{ .owner = decl_pattern_var, .interface = decl_pattern_var }}, env);
                     try self.deduplicateGeneralizedDispatchRequirements(decl_pattern_var, env);
                     try self.publishBindingScheme(decl_pattern_var);
-                    try self.bindBindingSchemeVar(decl_pattern_var, decl_expr_var);
+                    try self.bindTypeSchemeVar(decl_pattern_var, decl_expr_var);
                     self.retireNonGeneralizedTypeSchemes(&.{.{ .owner = decl_pattern_var, .interface = decl_pattern_var }});
                     try self.retireStructurallyPublishedTypeSchemeRequirements(
                         &.{.{ .owner = decl_pattern_var, .interface = decl_pattern_var }},
@@ -23295,7 +23313,9 @@ fn checkBlockStatements(self: *Self, statements: CIR.Statement.Span, env: *Env, 
                         .owner = decl_pattern_var,
                         .interface = decl_pattern_var,
                     }});
+                    try self.judgeAmbiguityCandidatesAtGeneralization(.{ .owner = decl_pattern_var, .interface = decl_pattern_var });
                     env.var_pool.popRank();
+                    self.active_scheme_root = saved_active_scheme_root;
                 }
 
                 _ = try self.unify(stmt_var, decl_pattern_var, env);
