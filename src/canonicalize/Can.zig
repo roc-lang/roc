@@ -524,9 +524,40 @@ const SeenRecordField = struct { ident: base.Ident.Idx, region: base.Region };
 const SeenTag = struct { ident: base.Ident.Idx, region: base.Region };
 const SeenTypeParameter = struct { ident: base.Ident.Idx, region: base.Region };
 
+/// The type a type name refers to, and the name the reference is recorded under.
+const ResolvedTypePath = struct {
+    name: Ident.Idx,
+    target: Target,
+
+    const Target = union(enum) {
+        builtin: TypeAnno.Builtin,
+        local: Statement.Idx,
+        external: External,
+        rigid_var: TypeAnno.Idx,
+        malformed: Diagnostic,
+    };
+
+    const External = QualifiedTypeTarget.External;
+};
+
+/// The `map2` of the type a record builder's suffix names.
 const RecordBuilderMap2 = union(enum) {
+    /// An associated value of a type declared in this module.
     local: Pattern.Idx,
+    /// An associated item reached through a type alias declared in this
+    /// module; the checker resolves it through the alias.
+    local_associated: LocalAssociated,
+    /// An associated value of a type declared in an imported module.
     external: External,
+    /// An associated item reached through a type alias declared in an
+    /// imported module; the checker resolves it through the alias.
+    external_associated: ExternalAssociated,
+
+    const LocalAssociated = struct {
+        type_stmt: Statement.Idx,
+        type_ident: Ident.Idx,
+        map2_ident: Ident.Idx,
+    };
 
     const External = struct {
         module_idx: Import.Idx,
@@ -534,12 +565,17 @@ const RecordBuilderMap2 = union(enum) {
         ident_idx: Ident.Idx,
     };
 
-    fn localPattern(self: RecordBuilderMap2) ?Pattern.Idx {
-        return switch (self) {
-            .local => |pattern_idx| pattern_idx,
-            .external => null,
-        };
-    }
+    const ExternalAssociated = struct {
+        module_idx: Import.Idx,
+        type_node_idx: u32,
+        type_ident: Ident.Idx,
+        map2_ident: Ident.Idx,
+    };
+};
+
+const RecordBuilderMap2Resolution = union(enum) {
+    resolved: RecordBuilderMap2,
+    malformed: Diagnostic,
 };
 
 /// Both the canonicalized expression and any free variables
@@ -8440,9 +8476,7 @@ fn canonicalizeTypeAssociatedLookup(
     const is_auto_imported_type = self.hasAvailableModuleEnv(module_alias);
     if (!is_type_in_scope and !is_auto_imported_type) return null;
 
-    const type_text = self.env.getIdent(module_alias);
-    const field_text = self.env.getIdent(ident);
-    const type_qualified_idx = try self.insertQualifiedIdent(type_text, field_text);
+    const type_qualified_idx = try self.insertQualifiedIdent(self.env.getIdent(module_alias), self.env.getIdent(ident));
 
     if (local_type_binding) |binding_location| {
         if (self.typePathForBinding(binding_location.binding.*)) |owner_path| {
@@ -8483,7 +8517,7 @@ fn canonicalizeTypeAssociatedLookup(
                 }
                 const original_type_text = self.env.getIdent(ext.original_ident);
                 const qualified_type_idx = try self.insertQualifiedIdent(module_env.module_name, original_type_text);
-                const fully_qualified_idx = try self.insertQualifiedIdent(self.env.getIdent(qualified_type_idx), field_text);
+                const fully_qualified_idx = try self.insertQualifiedIdent(self.env.getIdent(qualified_type_idx), self.env.getIdent(ident));
                 const qualified_text = self.env.getIdent(fully_qualified_idx);
 
                 if (module_env.common.findIdent(qualified_text)) |qname_ident| {
@@ -8500,7 +8534,7 @@ fn canonicalizeTypeAssociatedLookup(
         if (self.lookupAvailableModuleEnv(module_alias)) |auto_imported_type_env| {
             const module_env = auto_imported_type_env.env;
             const qualified_type_text = self.env.getIdent(auto_imported_type_env.qualified_type_ident);
-            const fully_qualified_idx = try self.insertQualifiedIdent(qualified_type_text, field_text);
+            const fully_qualified_idx = try self.insertQualifiedIdent(qualified_type_text, self.env.getIdent(ident));
             const qualified_text = self.env.getIdent(fully_qualified_idx);
 
             if (module_env.common.findIdent(qualified_text)) |qname_ident| {
@@ -11550,14 +11584,6 @@ fn runExprKernel(
                         try storeExprKernelOutput(&last_expr, &child_slots, frame_allocator, current_result_target, CanonicalizedExpr{ .idx = expr_idx, .free_vars = DataSpan.empty() });
                         continue :expr_kernel_loop .dispatch;
                     }
-                    const type_name: Ident.Idx = self.parse_ir.tokens.resolveIdentifier(mapper_expr.tag.token) orelse {
-                        const malformed_idx = try self.env.pushMalformed(Expr.Idx, Diagnostic{ .expr_not_canonicalized = .{
-                            .region = region,
-                        } });
-                        try storeExprKernelOutput(&last_expr, &child_slots, frame_allocator, current_result_target, CanonicalizedExpr{ .idx = malformed_idx, .free_vars = DataSpan.empty() });
-                        continue :expr_kernel_loop .dispatch;
-                    };
-
                     var field_work: std.ArrayList(ExprRecordBuilderFieldWork) = .empty;
                     defer field_work.deinit(frame_allocator);
                     var explicit_value_count: usize = 0;
@@ -11592,7 +11618,7 @@ fn runExprKernel(
                     const fields = try field_work.toOwnedSlice(frame_allocator);
                     try stacks.pushFinishRecordBuilder(frame_allocator, .{
                         .region = region,
-                        .type_name = type_name,
+                        .mapper = mapper_expr.tag,
                         .captures_top = self.scratch_captures.top(),
                         .fields = fields,
                         .explicit_value_count = explicit_value_count,
@@ -13740,18 +13766,18 @@ fn runExprKernel(
                 }
             }
 
-            const map2_callee = (try self.resolveRecordBuilderMap2(state.type_name, state.region)) orelse {
-                child_slots.shrinkRetainingCapacity(result_start);
-                const expr_idx = try self.env.pushMalformed(Expr.Idx, Diagnostic{ .record_builder_map2_not_found = .{
-                    .type_name = state.type_name,
-                    .region = state.region,
-                } });
-                try storeExprKernelOutput(&last_expr, &child_slots, frame_allocator, current_result_target, CanonicalizedExpr{ .idx = expr_idx, .free_vars = DataSpan.empty() });
-                continue :expr_kernel_loop .dispatch;
+            const map2_callee = switch (try self.resolveRecordBuilderMap2(state.mapper, state.region)) {
+                .resolved => |map2| map2,
+                .malformed => |diagnostic| {
+                    child_slots.shrinkRetainingCapacity(result_start);
+                    const expr_idx = try self.env.pushMalformed(Expr.Idx, diagnostic);
+                    try storeExprKernelOutput(&last_expr, &child_slots, frame_allocator, current_result_target, CanonicalizedExpr{ .idx = expr_idx, .free_vars = DataSpan.empty() });
+                    continue :expr_kernel_loop .dispatch;
+                },
             };
 
-            if (map2_callee.localPattern()) |pattern_idx| {
-                try self.used_patterns.put(self.env.gpa, pattern_idx, {});
+            if (map2_callee == .local) {
+                try self.used_patterns.put(self.env.gpa, map2_callee.local, {});
             }
 
             const field_names = self.scratch_idents.slice(field_names_top, self.scratch_idents.top());
@@ -13768,9 +13794,9 @@ fn runExprKernel(
             for (captures_slice) |fv| {
                 try self.scratch_free_vars.append(fv);
             }
-            if (map2_callee.localPattern()) |pattern_idx| {
-                if (!self.isGloballyResolvablePattern(pattern_idx)) {
-                    try self.scratch_free_vars.append(pattern_idx);
+            if (map2_callee == .local) {
+                if (!self.isGloballyResolvablePattern(map2_callee.local)) {
+                    try self.scratch_free_vars.append(map2_callee.local);
                 }
             }
             const free_vars_span = self.scratch_free_vars.spanFrom(free_vars_start);
@@ -14550,64 +14576,96 @@ fn canonicalizeDoubleQuestionOp(
     return CanonicalizedExpr{ .idx = expr_idx, .free_vars = free_vars_span };
 }
 
+/// Resolve the `map2` of the type a record builder's suffix names. The suffix
+/// is resolved as a type name, exactly as it would be in a type annotation, so
+/// `map2` always comes from that type rather than from whatever value named
+/// `<suffix>.map2` happens to be in scope.
 fn resolveRecordBuilderMap2(
     self: *Self,
-    type_name: Ident.Idx,
+    mapper: AST.TagExpr,
     region: Region,
-) std.mem.Allocator.Error!?RecordBuilderMap2 {
+) std.mem.Allocator.Error!RecordBuilderMap2Resolution {
     const map2_name = try self.env.insertIdent(base.Ident.for_text("map2"));
-    const type_name_text = self.env.getIdent(type_name);
-    const qualified_map2_name = try self.insertQualifiedIdent(type_name_text, "map2");
 
-    if (try self.scopeLookupOrPrepareTypeBinding(type_name)) |binding_location| {
-        const binding = binding_location.binding.*;
-        if (self.typePathForBinding(binding)) |owner_path| {
-            if (try self.lookupOrCreateAssocValuePattern(owner_path, map2_name, qualified_map2_name, region)) |pattern_idx| {
-                return RecordBuilderMap2{ .local = pattern_idx };
-            }
+    // `F.map2` on a type-variable alias `F` is a type method call dispatched
+    // through the `where` clause, which the checker's record-builder `map2`
+    // return rule does not cover.
+    if (mapper.qualifiers.span.len == 0) {
+        const type_ident = self.parse_ir.tokens.resolveIdentifier(mapper.token) orelse unreachable;
+        if ((try self.typeDispatchOwnerStatement(type_ident, map2_name)) != null) {
+            return .{ .malformed = .{ .not_implemented = .{
+                .feature = try self.env.insertString("record builder on a type variable alias"),
+                .region = region,
+            } } };
         }
-
-        if (binding == .external_nominal) return try self.resolveRecordBuilderExternalMap2(map2_name, binding.external_nominal);
-        return null;
     }
 
-    return switch (self.scopeLookup(.ident, qualified_map2_name)) {
-        .found => |pattern_idx| RecordBuilderMap2{ .local = pattern_idx },
-        .not_found => null,
-    };
+    const resolved = try self.resolveTypePath(mapper.qualifiers, mapper.token, region);
+    const missing = RecordBuilderMap2Resolution{ .malformed = .{ .record_builder_map2_not_found = .{
+        .type_name = resolved.name,
+        .region = region,
+    } } };
+
+    switch (resolved.target) {
+        .malformed => |diagnostic| return .{ .malformed = diagnostic },
+        .rigid_var => return .{ .malformed = .{ .not_implemented = .{
+            .feature = try self.env.insertString("record builder on a type variable"),
+            .region = region,
+        } } },
+        .builtin => {
+            const builtin_type = self.lookupAvailableModuleEnv(resolved.name) orelse return missing;
+            const stmt_idx = builtin_type.statement_idx orelse return missing;
+            const import_idx = try self.getOrCreateAutoImportedTypeImport(builtin_type);
+            return try self.externalRecordBuilderMap2(import_idx, builtin_type.env, @intFromEnum(stmt_idx), resolved.name, map2_name, missing);
+        },
+        .local => |stmt_idx| {
+            if (self.env.store.getStatement(stmt_idx) == .s_alias_decl) {
+                return .{ .resolved = .{ .local_associated = .{
+                    .type_stmt = stmt_idx,
+                    .type_ident = resolved.name,
+                    .map2_ident = map2_name,
+                } } };
+            }
+            const owner_path = self.type_decl_paths.get(stmt_idx) orelse return missing;
+            const qualified_map2_name = try self.insertQualifiedIdent(self.env.getIdent(resolved.name), "map2");
+            const pattern_idx = (try self.lookupOrCreateAssocValuePattern(owner_path, map2_name, qualified_map2_name, region)) orelse return missing;
+            return .{ .resolved = .{ .local = pattern_idx } };
+        },
+        .external => |external| {
+            const external_env = external.env orelse return missing;
+            return try self.externalRecordBuilderMap2(external.import_idx, external_env, external.target_node_idx, resolved.name, map2_name, missing);
+        },
+    }
 }
 
-fn resolveRecordBuilderExternalMap2(
+fn externalRecordBuilderMap2(
     self: *Self,
+    import_idx: Import.Idx,
+    external_env: *const ModuleEnv,
+    type_node_idx: u32,
+    type_ident: Ident.Idx,
     map2_name: Ident.Idx,
-    external: Scope.ExternalTypeBinding,
-) std.mem.Allocator.Error!?RecordBuilderMap2 {
-    const import_idx = external.import_idx orelse return null;
-    const imported_type = self.lookupAvailableModuleEnv(external.module_ident) orelse
-        self.lookupAvailableModuleEnv(external.original_ident) orelse
-        return null;
-    const map2_text = self.env.getIdent(map2_name);
-
-    if (imported_type.statement_idx != null) {
-        const qualified_type_text = self.env.getIdent(imported_type.qualified_type_ident);
-        const qualified_map2_name = try self.insertQualifiedIdent(qualified_type_text, map2_text);
-        const qualified_map2_text = self.env.getIdent(qualified_map2_name);
-        const imported_ident = imported_type.env.common.findIdent(qualified_map2_text) orelse return null;
-        const target_node_idx = imported_type.env.getExposedValueNodeIndexById(imported_ident) orelse return null;
-
-        return RecordBuilderMap2{ .external = .{
+    missing: RecordBuilderMap2Resolution,
+) std.mem.Allocator.Error!RecordBuilderMap2Resolution {
+    const type_stmt: Statement.Idx = @enumFromInt(type_node_idx);
+    if (external_env.store.getStatement(type_stmt) == .s_alias_decl) {
+        return .{ .resolved = .{ .external_associated = .{
             .module_idx = import_idx,
-            .target_node_idx = target_node_idx,
-            .ident_idx = qualified_map2_name,
-        } };
+            .type_node_idx = type_node_idx,
+            .type_ident = type_ident,
+            .map2_ident = map2_name,
+        } } };
     }
 
-    const target_node_idx = (try self.lookupImportedExposedValueNode(imported_type.env, map2_text)) orelse return null;
-    return RecordBuilderMap2{ .external = .{
+    const external_map2_name = external_env.common.findIdent("map2") orelse return missing;
+    const owner = ModuleEnv.MethodOwner.init(external_env.qualified_module_ident, type_stmt);
+    const method_ident = external_env.lookupMethodIdentForMethodOwnerConst(owner, external_map2_name) orelse return missing;
+    const target_node_idx = external_env.getExposedValueNodeIndexById(method_ident) orelse return missing;
+    return .{ .resolved = .{ .external = .{
         .module_idx = import_idx,
         .target_node_idx = target_node_idx,
-        .ident_idx = map2_name,
-    } };
+        .ident_idx = try self.insertQualifiedIdent(self.env.getIdent(type_ident), "map2"),
+    } } };
 }
 
 /// Build chained map2 calls for record builder desugaring.
@@ -14672,11 +14730,22 @@ fn buildMap2Call(
         .local => |pattern_idx| try self.env.addExpr(CIR.Expr{ .e_lookup_local = .{
             .pattern_idx = pattern_idx,
         } }, region),
+        .local_associated => |associated| try self.env.addExpr(CIR.Expr{ .e_lookup_associated_local = .{
+            .type_node_idx = @intFromEnum(associated.type_stmt),
+            .type_ident = associated.type_ident,
+            .item_ident = associated.map2_ident,
+        } }, region),
         .external => |external| try self.env.addExpr(CIR.Expr{ .e_lookup_external = .{
             .module_idx = external.module_idx,
             .target_node_idx = external.target_node_idx,
             .ident_idx = external.ident_idx,
             .region = region,
+        } }, region),
+        .external_associated => |associated| try self.env.addExpr(CIR.Expr{ .e_lookup_associated = .{
+            .module_idx = associated.module_idx,
+            .type_node_idx = associated.type_node_idx,
+            .type_ident = associated.type_ident,
+            .item_ident = associated.map2_ident,
         } }, region),
     };
 
@@ -16990,7 +17059,7 @@ const ExprFinishIfWithoutElseWork = struct {
 
 const ExprFinishRecordBuilderWork = struct {
     region: Region,
-    type_name: Ident.Idx,
+    mapper: AST.TagExpr,
     captures_top: u32,
     fields: []const ExprRecordBuilderFieldWork,
     explicit_value_count: usize,
@@ -20067,72 +20136,91 @@ fn canonicalizeTypeAnnoBasicType(
     defer trace.end();
 
     const region = self.parse_ir.tokenizedRegionToRegion(ty.region);
+    const resolved = try self.resolveTypePath(ty.qualifiers, ty.token, region);
+    return switch (resolved.target) {
+        .builtin => |builtin_type| try self.env.addTypeAnno(CIR.TypeAnno{ .lookup = .{
+            .name = resolved.name,
+            .base = .{ .builtin = builtin_type },
+        } }, region),
+        .local => |decl_idx| try self.env.addTypeAnno(CIR.TypeAnno{ .lookup = .{
+            .name = resolved.name,
+            .base = .{ .local = .{ .decl_idx = decl_idx } },
+        } }, region),
+        .external => |external| try self.env.addTypeAnno(CIR.TypeAnno{ .lookup = .{
+            .name = resolved.name,
+            .base = .{ .external = .{
+                .module_idx = external.import_idx,
+                .target_node_idx = external.target_node_idx,
+            } },
+        } }, region),
+        .rigid_var => |anno_idx| try self.env.addTypeAnno(.{ .rigid_var_lookup = .{
+            .ref = anno_idx,
+        } }, region),
+        .malformed => |diagnostic| try self.env.pushMalformed(TypeAnno.Idx, diagnostic),
+    };
+}
 
-    // Get the last token of the qualifiers
-    const qualifier_toks = self.parse_ir.store.tokenSlice(ty.qualifiers);
+/// Resolve the type a (possibly qualified) type name refers to at this point
+/// in scope: a builtin, a declaration in this module, a type in an imported
+/// module, or a type variable.
+fn resolveTypePath(
+    self: *Self,
+    qualifiers: AST.Token.Span,
+    token: Token.Idx,
+    region: Region,
+) std.mem.Allocator.Error!ResolvedTypePath {
+    const qualifier_toks = self.parse_ir.store.tokenSlice(qualifiers);
 
     // Get the type ident
-    const type_name_ident = self.parse_ir.tokens.resolveIdentifier(ty.token) orelse unreachable;
-    const type_name_region = self.parse_ir.tokens.resolve(ty.token);
+    const type_name_ident = self.parse_ir.tokens.resolveIdentifier(token) orelse unreachable;
+    const type_name_region = self.parse_ir.tokens.resolve(token);
 
     if (qualifier_toks.len == 0) {
         // First, check if the type is a builtin type
         // There are always automatically in-scope
         const type_text = self.env.getIdentText(type_name_ident);
         if (TypeAnno.Builtin.fromBytes(type_text)) |builtin_type| {
-            return try self.env.addTypeAnno(CIR.TypeAnno{ .lookup = .{
-                .name = type_name_ident,
-                .base = .{ .builtin = builtin_type },
-            } }, region);
+            return .{ .name = type_name_ident, .target = .{ .builtin = builtin_type } };
         } else {
             // If it's not a builtin, look up in scope using unified type bindings
             if (try self.scopeLookupOrPrepareTypeBinding(type_name_ident)) |binding_location| {
                 const binding = binding_location.binding.*;
                 return switch (binding) {
-                    .local_nominal => |stmt| try self.env.addTypeAnno(CIR.TypeAnno{ .lookup = .{
-                        .name = type_name_ident,
-                        .base = .{ .local = .{ .decl_idx = stmt } },
-                    } }, region),
-                    .local_alias, .local_where_alias => |stmt| try self.env.addTypeAnno(CIR.TypeAnno{ .lookup = .{
-                        .name = type_name_ident,
-                        .base = .{ .local = .{ .decl_idx = stmt } },
-                    } }, region),
-                    .associated_nominal => |stmt| try self.env.addTypeAnno(CIR.TypeAnno{ .lookup = .{
-                        .name = type_name_ident,
-                        .base = .{ .local = .{ .decl_idx = stmt } },
-                    } }, region),
+                    .local_nominal => |stmt| .{ .name = type_name_ident, .target = .{ .local = stmt } },
+                    .local_alias, .local_where_alias => |stmt| .{ .name = type_name_ident, .target = .{ .local = stmt } },
+                    .associated_nominal => |stmt| .{ .name = type_name_ident, .target = .{ .local = stmt } },
                     .external_nominal => |external| blk: {
                         const import_idx = external.import_idx orelse {
-                            break :blk try self.env.pushMalformed(TypeAnno.Idx, Diagnostic{ .module_not_imported = .{
+                            break :blk .{ .name = type_name_ident, .target = .{ .malformed = .{ .module_not_imported = .{
                                 .module_name = external.module_ident,
                                 .region = type_name_region,
-                            } });
+                            } } } };
                         };
 
                         const target_node_idx = external.target_node_idx orelse {
                             // Check if the module was not found
                             if (external.module_not_found) {
-                                break :blk try self.env.pushMalformed(TypeAnno.Idx, Diagnostic{ .type_from_missing_module = .{
+                                break :blk .{ .name = type_name_ident, .target = .{ .malformed = .{ .type_from_missing_module = .{
                                     .module_name = external.module_ident,
                                     .type_name = type_name_ident,
                                     .region = type_name_region,
-                                } });
+                                } } } };
                             } else {
-                                break :blk try self.env.pushMalformed(TypeAnno.Idx, Diagnostic{ .type_not_exposed = .{
+                                break :blk .{ .name = type_name_ident, .target = .{ .malformed = .{ .type_not_exposed = .{
                                     .module_name = external.module_ident,
                                     .type_name = type_name_ident,
                                     .region = type_name_region,
-                                } });
+                                } } } };
                             }
                         };
 
-                        break :blk try self.env.addTypeAnno(CIR.TypeAnno{ .lookup = .{
-                            .name = type_name_ident,
-                            .base = .{ .external = .{
-                                .module_idx = import_idx,
-                                .target_node_idx = target_node_idx,
-                            } },
-                        } }, region);
+                        const external_env = self.lookupAvailableModuleEnv(external.module_ident) orelse
+                            self.lookupAvailableModuleEnv(external.original_ident);
+                        break :blk .{ .name = type_name_ident, .target = .{ .external = .{
+                            .import_idx = import_idx,
+                            .target_node_idx = target_node_idx,
+                            .env = if (external_env) |info| info.env else null,
+                        } } };
                     },
                 };
             }
@@ -20150,30 +20238,28 @@ fn canonicalizeTypeAnnoBasicType(
                     // Return malformed type annotation with diagnostic
                     const module_name_text = auto_imported_type.env.module_name;
                     const module_ident = try self.env.insertIdent(base.Ident.for_text(module_name_text));
-                    return try self.env.pushMalformed(TypeAnno.Idx, Diagnostic{ .nested_type_not_found = .{
+                    return .{ .name = type_name_ident, .target = .{ .malformed = .{ .nested_type_not_found = .{
                         .parent_name = module_ident,
                         .nested_name = type_name_ident,
                         .region = region,
-                    } });
+                    } } } };
                 };
                 const target_node_idx = auto_imported_type.env.getExposedNodeIndexByStatementIdx(stmt_idx) orelse {
                     // Failed to find exposed node - return malformed type annotation with diagnostic
                     const module_name_text = auto_imported_type.env.module_name;
                     const module_ident = try self.env.insertIdent(base.Ident.for_text(module_name_text));
-                    return try self.env.pushMalformed(TypeAnno.Idx, Diagnostic{ .nested_type_not_found = .{
+                    return .{ .name = type_name_ident, .target = .{ .malformed = .{ .nested_type_not_found = .{
                         .parent_name = module_ident,
                         .nested_name = type_name_ident,
                         .region = region,
-                    } });
+                    } } } };
                 };
 
-                return try self.env.addTypeAnno(CIR.TypeAnno{ .lookup = .{
-                    .name = type_name_ident,
-                    .base = .{ .external = .{
-                        .module_idx = import_idx,
-                        .target_node_idx = target_node_idx,
-                    } },
-                } }, region);
+                return .{ .name = type_name_ident, .target = .{ .external = .{
+                    .import_idx = import_idx,
+                    .target_node_idx = target_node_idx,
+                    .env = auto_imported_type.env,
+                } } };
             }
 
             // Not in type_decls, check if it's an exposed item from an imported module
@@ -20189,19 +20275,17 @@ fn canonicalizeTypeAnnoBasicType(
                                 const original_name_text = self.env.getIdent(exposed_info.original_name);
                                 if (try self.lookupImportedExposedTypeNode(auto_imported_type.env, original_name_text)) |node_idx| break :blk node_idx;
                             }
-                            return try self.env.pushMalformed(TypeAnno.Idx, CIR.Diagnostic{ .type_not_exposed = .{
+                            return .{ .name = type_name_ident, .target = .{ .malformed = .{ .type_not_exposed = .{
                                 .module_name = exposed_info.module_name,
                                 .type_name = type_name_ident,
                                 .region = type_name_region,
-                            } });
+                            } } } };
                         };
-                        return try self.env.addTypeAnno(CIR.TypeAnno{ .lookup = .{
-                            .name = type_name_ident,
-                            .base = .{ .external = .{
-                                .module_idx = import_idx,
-                                .target_node_idx = target_node_idx,
-                            } },
-                        } }, region);
+                        return .{ .name = type_name_ident, .target = .{ .external = .{
+                            .import_idx = import_idx,
+                            .target_node_idx = target_node_idx,
+                            .env = auto_imported_type.env,
+                        } } };
                     }
                 }
             }
@@ -20210,32 +20294,27 @@ fn canonicalizeTypeAnnoBasicType(
             switch (self.scopeLookupTypeVar(type_name_ident)) {
                 .found => |found_anno_idx| {
                     // Found a type variable with this name - create a reference to it
-                    return try self.env.addTypeAnno(.{ .rigid_var_lookup = .{
-                        .ref = found_anno_idx,
-                    } }, region);
+                    return .{ .name = type_name_ident, .target = .{ .rigid_var = found_anno_idx } };
                 },
                 .not_found => {},
             }
 
-            return try self.env.pushMalformed(TypeAnno.Idx, Diagnostic{ .undeclared_type = .{
+            return .{ .name = type_name_ident, .target = .{ .malformed = .{ .undeclared_type = .{
                 .name = type_name_ident,
                 .region = type_name_region,
-            } });
+            } } } };
         }
     } else {
-        const qualified_name_ident = try self.qualifiedNameIdent(ty.qualifiers, ty.token);
-        return switch (try self.resolveQualifiedTypeName(ty.qualifiers, ty.token, qualified_name_ident, region)) {
-            .found => |found| try self.env.addTypeAnno(CIR.TypeAnno{ .lookup = .{
+        const qualified_name_ident = try self.qualifiedNameIdent(qualifiers, token);
+        return switch (try self.resolveQualifiedTypeName(qualifiers, token, qualified_name_ident, region)) {
+            .found => |found| .{
                 .name = found.name,
-                .base = switch (found.target) {
-                    .local => |decl_idx| .{ .local = .{ .decl_idx = decl_idx } },
-                    .external => |external| .{ .external = .{
-                        .module_idx = external.import_idx,
-                        .target_node_idx = external.target_node_idx,
-                    } },
+                .target = switch (found.target) {
+                    .local => |decl_idx| .{ .local = decl_idx },
+                    .external => |external| .{ .external = external },
                 },
-            } }, region),
-            .malformed => |diagnostic| try self.env.pushMalformed(TypeAnno.Idx, diagnostic),
+            },
+            .malformed => |diagnostic| .{ .name = qualified_name_ident, .target = .{ .malformed = diagnostic } },
         };
     }
 }
@@ -20252,16 +20331,20 @@ const QualifiedTypeResolution = union(enum) {
 
 const QualifiedTypeTarget = union(enum) {
     local: Statement.Idx,
-    external: struct {
+    external: External,
+
+    const External = struct {
         import_idx: CIR.Import.Idx,
         target_node_idx: u32,
-    },
+        /// The imported module, when it is available to this module.
+        env: ?*const ModuleEnv,
+    };
 };
 
 /// Resolve a qualified type name, where `qualified_name_ident` is the full
-/// spelling of `qualifiers` followed by `final_token`. Type annotations and
-/// literal type suffixes (`0x05080a.Gui.Color`) share this resolution, so a
-/// qualified name means the same type in both positions.
+/// spelling of `qualifiers` followed by `final_token`. Type annotations,
+/// literal type suffixes (`0x05080a.Gui.Color`), and record builders share
+/// this resolution, so a qualified name means the same type in each position.
 fn resolveQualifiedTypeName(
     self: *Self,
     qualifiers: AST.Token.Span,
@@ -20286,6 +20369,7 @@ fn resolveQualifiedTypeName(
             return .{ .found = .{ .name = qualified_name_ident, .target = .{ .external = .{
                 .import_idx = import_idx,
                 .target_node_idx = target_node_idx,
+                .env = auto_imported_type.env,
             } } } };
         }
     }
@@ -20326,6 +20410,7 @@ fn resolveQualifiedTypeName(
         return .{ .found = .{ .name = type_path_ident, .target = .{ .external = .{
             .import_idx = import_idx,
             .target_node_idx = target_node_idx,
+            .env = imported_type.env,
         } } } };
     }
 
@@ -20403,31 +20488,27 @@ fn resolveQualifiedTypeName(
 
     // Look up the target node index in the module's exposed_nodes
     const type_name_text = self.env.getIdent(type_name_ident);
-    const target_node_idx = blk: {
-        const auto_imported_type = self.lookupAvailableModuleEnv(module_name) orelse {
-            return .{ .malformed = CIR.Diagnostic{ .type_from_missing_module = .{
-                .module_name = module_name,
-                .type_name = type_name_ident,
-                .region = type_name_region,
-            } } };
-        };
+    const auto_imported_type = self.lookupAvailableModuleEnv(module_name) orelse {
+        return .{ .malformed = CIR.Diagnostic{ .type_from_missing_module = .{
+            .module_name = module_name,
+            .type_name = type_name_ident,
+            .region = type_name_region,
+        } } };
+    };
 
-        const other_module_node_id = (try self.lookupImportedExposedTypeNode(auto_imported_type.env, type_name_text)) orelse {
-            // Type is not exposed by the module
-            return .{ .malformed = CIR.Diagnostic{ .type_not_exposed = .{
-                .module_name = module_name,
-                .type_name = type_name_ident,
-                .region = type_name_region,
-            } } };
-        };
-
-        // Successfully found the target node
-        break :blk other_module_node_id;
+    const target_node_idx = (try self.lookupImportedExposedTypeNode(auto_imported_type.env, type_name_text)) orelse {
+        // Type is not exposed by the module
+        return .{ .malformed = CIR.Diagnostic{ .type_not_exposed = .{
+            .module_name = module_name,
+            .type_name = type_name_ident,
+            .region = type_name_region,
+        } } };
     };
 
     return .{ .found = .{ .name = type_name_ident, .target = .{ .external = .{
         .import_idx = import_idx,
         .target_node_idx = target_node_idx,
+        .env = auto_imported_type.env,
     } } } };
 }
 
@@ -20513,6 +20594,7 @@ fn resolveNestedExternalType(
     return .{ .external = .{
         .import_idx = import_idx,
         .target_node_idx = target_node_idx,
+        .env = imported_type.env,
     } };
 }
 
