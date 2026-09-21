@@ -24519,7 +24519,6 @@ const ProcBodyBuilder = struct {
         can_exit: bool,
         next: LIR.CFStmtId,
     ) Allocator.Error!LIR.CFStmtId {
-        self.parent.result.store.facts.loop = true;
         const cond_expr = self.module.checked_bodies.expr(cond_id);
         const cond_local = try self.addFrameLocalForType(cond_expr.ty);
         if (self.parent.result.store.getLocal(cond_local).layout_idx != .bool) {
@@ -24533,6 +24532,7 @@ const ProcBodyBuilder = struct {
         const join_id = self.freshJoinPointId();
         const unreachable_exit = if (can_exit) null else try self.parent.result.store.addCFStmt(.runtime_error);
         const after_loop = unreachable_exit orelse next;
+        self.parent.result.store.facts.loop = true;
         try self.loop_stack.append(self.parent.allocator, .{
             .join_id = join_id,
             .result_target = loop_result,
@@ -24626,6 +24626,7 @@ const ProcBodyBuilder = struct {
         const initial_iterator = try self.addFrameLocalForRepWithFreshDescriptor(iterator_rep);
         const join_id = self.freshJoinPointId();
 
+        self.parent.result.store.facts.loop = true;
         try self.loop_stack.append(self.parent.allocator, .{
             .join_id = join_id,
             .result_target = target,

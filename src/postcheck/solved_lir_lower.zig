@@ -4572,7 +4572,9 @@ const Lowerer = struct {
     }
 
     fn noteWorkerExpr(self: *Lowerer, data: Lifted.ExprData) void {
-        if (data == .loop_) self.result.store.facts.loop = true;
+        // A lifted join point is entered again by the jumps in its body, so
+        // it lowers to the same back-edge shape as a loop.
+        if (data == .loop_ or data == .join_point) self.result.store.facts.loop = true;
         if (!self.worker_callback or self.parallel_metrics == null) return;
         if (data == .call_value) self.worker_features.indirect_call = true;
         if (data == .match_) self.worker_features.match_ = true;
