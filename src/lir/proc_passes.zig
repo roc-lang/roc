@@ -402,7 +402,6 @@ test "issue 11325 procedure counting reuses lane storage across distant local ID
             .layouts = &layouts,
             .phase = .box_reuse,
             .proc = @enumFromInt(index),
-            .callees = null,
         };
         _ = TaskContext.run(&context, .{
             .id = 0,
@@ -429,7 +428,6 @@ fn testLaneCountingAllocation(allocator: Allocator, store: *LirStore, layouts: *
         .layouts = layouts,
         .phase = .box_reuse,
         .proc = proc,
-        .callees = null,
     };
     _ = TaskContext.run(&context, .{
         .id = 0,
