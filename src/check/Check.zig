@@ -313,15 +313,12 @@ final_codec_dispatch_constraint_fns: std.AutoHashMapUnmanaged(Var, void) = .empt
 /// settled: each scheme instantiation copies and validates the exact relation.
 scheme_deferred_codec_constraint_fns: std.AutoHashMapUnmanaged(Var, void) = .empty,
 checking_final_codec_dispatch_constraints: bool = false,
-// Cache for imported types. This cache lives for the entire type-checking session
-/// of a module, so the same imported type can be reused across the entire module.
-import_cache: ImportCache,
-/// Generalized imported method schemes copied into this solver exactly once.
-/// Each use still instantiates from this immutable scheme, so polymorphic uses
-/// remain fresh without recopied import graphs. The append-only log gives
-/// speculative probes an exact rollback boundary.
-imported_method_schemes: std.ArrayListUnmanaged(ImportedMethodScheme) = .empty,
-imported_method_scheme_by_source: std.AutoHashMapUnmanaged(ImportedMethodSchemeKey, u32) = .empty,
+/// Complete imported schemes, shared by ordinary lookups and method dispatch.
+/// Each source binding is copied once; each use freshly instantiates its type
+/// and explicit requirements. The append-only log owns speculative imports so
+/// rollback discards their cache entries and scheme metadata together.
+imported_schemes: std.ArrayListUnmanaged(ImportedScheme) = .empty,
+imported_scheme_by_source: std.AutoHashMapUnmanaged(ImportedSchemeKey, u32) = .empty,
 /// Exact associated-item targets keyed by the alias declaration type var and
 /// item. Alias traversal and owner-scope lookup happen once per declaration.
 associated_lookup_cache: std.AutoHashMapUnmanaged(AssociatedLookupCacheKey, ?AssociatedLookupResolution) = .empty,
@@ -1321,13 +1318,13 @@ const SchemeReachabilityVisit = struct {
     excluded_root: Var,
 };
 
-const ImportedMethodSchemeKey = struct {
+const ImportedSchemeKey = struct {
     env: *const ModuleEnv,
     type_node_idx: CIR.Node.Idx,
 };
 
-const ImportedMethodScheme = struct {
-    key: ImportedMethodSchemeKey,
+const ImportedScheme = struct {
+    key: ImportedSchemeKey,
     scheme_var: Var,
 };
 
@@ -2650,7 +2647,6 @@ fn initAssumePrepared(
         .scratch_static_dispatch_constraints = try base.Scratch(ScratchStaticDispatchConstraint).init(gpa),
         .scratch_deferred_static_dispatch_constraints = try base.Scratch(DeferredConstraintCheck).init(gpa),
         .scratch_default_param_vars = try base.Scratch(DefaultParamVar).init(gpa),
-        .import_cache = ImportCache{},
         .associated_lookup_cache = .empty,
         .bool_var = undefined,
         .str_var = undefined,
@@ -2878,9 +2874,8 @@ pub fn deinit(self: *Self) void {
     self.scratch_default_param_vars.deinit();
     self.scratch_generated_codec_calls.deinit(self.gpa);
     self.pending_generated_parser_error_mappings.deinit(self.gpa);
-    self.import_cache.deinit(self.gpa);
-    self.imported_method_schemes.deinit(self.gpa);
-    self.imported_method_scheme_by_source.deinit(self.gpa);
+    self.imported_schemes.deinit(self.gpa);
+    self.imported_scheme_by_source.deinit(self.gpa);
     self.associated_lookup_cache.deinit(self.gpa);
     self.ident_to_var_map.deinit();
     self.checked_interpolation_part_constraints.deinit();
@@ -4876,43 +4871,6 @@ inline fn ensureTypeStoreIsFilled(self: *Self) Allocator.Error!void {
         _ = self.types.appendFromContentAssumeCapacity(.{ .flex = Flex.init() }, Rank.outermost);
     }
 }
-
-// import caches //
-
-/// Key for the import cache: module index + expression index in that module
-const ImportCacheKey = struct {
-    resolved_module_idx: u32,
-    node_idx: CIR.Node.Idx,
-};
-
-/// Cache for imported types to avoid repeated copying
-///
-/// When we import a type from another module, we need to copy it into our module's
-/// type store because type variables are module-specific. However, since we use
-/// "preserve" mode unification with imported types (meaning the imported type is
-/// read-only and never modified), we can safely cache these copies and reuse them;
-/// they will never be mutated during unification.
-///
-/// Benefits:
-/// - Reduces memory usage by avoiding duplicate copies of the same imported type
-/// - Improves performance by avoiding redundant copying operations
-/// - Particularly beneficial for commonly imported values/functions
-///
-/// Example: If a module imports `List.map` and uses it 10 times, without caching
-/// we would create 10 separate copies of the `List.map` type. With caching, we
-/// create just one copy and reuse it.
-const ImportCache = std.HashMapUnmanaged(ImportCacheKey, Var, struct {
-    pub fn hash(_: @This(), key: ImportCacheKey) u64 {
-        var hasher = std.hash.Wyhash.init(0);
-        hasher.update(std.mem.asBytes(&key.resolved_module_idx));
-        hasher.update(std.mem.asBytes(&key.node_idx));
-        return hasher.final();
-    }
-
-    pub fn eql(_: @This(), a: ImportCacheKey, b: ImportCacheKey) bool {
-        return a.resolved_module_idx == b.resolved_module_idx and a.node_idx == b.node_idx;
-    }
-}, 80);
 
 const OpenNumeralLiteral = struct {
     var_: Var,
@@ -22719,7 +22677,7 @@ fn methodTypeVarFromOriginalEnv(
     return if (is_this_module) blk: {
         break :blk try self.instantiateBindingVar(def_var, env, .use_last_var, evidence);
     } else blk: {
-        const imported_scheme = try self.importedMethodSchemeFromSource(original_env, type_node_idx);
+        const imported_scheme = try self.importedSchemeFromSource(original_env, type_node_idx);
         break :blk try self.instantiateVar(imported_scheme, env, .{ .explicit = region }, evidence);
     };
 }
@@ -26404,38 +26362,7 @@ fn resolveVarFromExternal(
         // The idx of the expression in the other module
         const target_node_idx = @as(CIR.Node.Idx, @enumFromInt(node_idx));
 
-        // Check if we've already copied this import
-        const cache_key = ImportCacheKey{
-            .resolved_module_idx = module_idx,
-            .node_idx = target_node_idx,
-        };
-
-        const copied_var = if (self.import_cache.get(cache_key)) |cached_var|
-            // Reuse the previously copied type.
-            cached_var
-        else blk: {
-            // First time importing this type - copy it and cache the result
-            const imported_var: Var = @as(Var, @enumFromInt(@intFromEnum(target_node_idx)));
-
-            // Every node should have a corresponding type entry
-            std.debug.assert(@intFromEnum(imported_var) < other_module_env.types.len());
-
-            const new_copy = try self.copyVar(imported_var, other_module_env, null);
-            if (other_module_env.nodeIsBindingScheme(target_node_idx)) {
-                try self.markBindingSchemeVar(new_copy);
-                try self.copyImportedBindingSchemeCodecRequirements(
-                    other_module_env,
-                    target_node_idx,
-                    new_copy,
-                );
-            }
-            try self.import_cache.put(self.gpa, cache_key, new_copy);
-            break :blk new_copy;
-        };
-
-        if (other_module_env.nodeIsBindingScheme(target_node_idx)) {
-            try self.markBindingSchemeVar(copied_var);
-        }
+        const copied_var = try self.importedSchemeFromSource(other_module_env, target_node_idx);
 
         return .{
             .local_var = copied_var,
@@ -27203,7 +27130,7 @@ const Probe = struct {
     accepted_nominal_constructor_backings_len: usize,
     dispatch_target_instantiations_len: usize,
     dispatch_derivations_len: usize,
-    imported_method_schemes_len: usize,
+    imported_schemes_len: usize,
 
     fn rollback(self: *Probe) void {
         std.debug.assert(self.check.probe_depth > 0);
@@ -27262,9 +27189,10 @@ const Probe = struct {
         }
         self.check.probe_depth -= 1;
         self.check.shrinkDispatchDerivationsTo(self.dispatch_derivations_len);
-        while (self.check.imported_method_schemes.items.len > self.imported_method_schemes_len) {
-            const removed = self.check.imported_method_schemes.pop().?;
-            const did_remove = self.check.imported_method_scheme_by_source.remove(removed.key);
+        while (self.check.imported_schemes.items.len > self.imported_schemes_len) {
+            const removed = self.check.imported_schemes.pop().?;
+            self.check.discardImportedSchemeMetadata(removed.scheme_var);
+            const did_remove = self.check.imported_scheme_by_source.remove(removed.key);
             std.debug.assert(did_remove);
         }
     }
@@ -27305,7 +27233,7 @@ fn beginProbe(self: *Self, env: ?*Env) std.mem.Allocator.Error!Probe {
     const accepted_nominal_constructor_backings_len = self.accepted_nominal_constructor_backings.items.len;
     const dispatch_target_instantiations_len = self.dispatch_target_instantiations.items.len;
     const dispatch_derivations_len = self.dispatch_derivations.items.len;
-    const imported_method_schemes_len = self.imported_method_schemes.items.len;
+    const imported_schemes_len = self.imported_schemes.items.len;
     const savepoint = try self.types.createSavepoint();
     self.probe_depth += 1;
     return .{
@@ -27336,7 +27264,7 @@ fn beginProbe(self: *Self, env: ?*Env) std.mem.Allocator.Error!Probe {
         .accepted_nominal_constructor_backings_len = accepted_nominal_constructor_backings_len,
         .dispatch_target_instantiations_len = dispatch_target_instantiations_len,
         .dispatch_derivations_len = dispatch_derivations_len,
-        .imported_method_schemes_len = imported_method_schemes_len,
+        .imported_schemes_len = imported_schemes_len,
         .savepoint = savepoint,
     };
 }
@@ -32119,37 +32047,56 @@ fn importedMethodScheme(
     method_lookup: StaticDispatchMethodBinding,
 ) Allocator.Error!Var {
     std.debug.assert(!method_lookup.is_this_module);
-    return self.importedMethodSchemeFromSource(method_lookup.env, method_lookup.binding.type_node_idx);
+    return self.importedSchemeFromSource(method_lookup.env, method_lookup.binding.type_node_idx);
 }
 
-fn importedMethodSchemeFromSource(
+fn importedSchemeFromSource(
     self: *Self,
     source_env: *const ModuleEnv,
     type_node_idx: CIR.Node.Idx,
 ) Allocator.Error!Var {
-    const key = ImportedMethodSchemeKey{
+    const key = ImportedSchemeKey{
         .env = source_env,
         .type_node_idx = type_node_idx,
     };
-    if (self.imported_method_scheme_by_source.get(key)) |index| {
-        return self.imported_method_schemes.items[index].scheme_var;
+    if (self.imported_scheme_by_source.get(key)) |index| {
+        return self.imported_schemes.items[index].scheme_var;
     }
 
-    try self.imported_method_schemes.ensureUnusedCapacity(self.gpa, 1);
-    try self.imported_method_scheme_by_source.ensureUnusedCapacity(self.gpa, 1);
+    try self.imported_schemes.ensureUnusedCapacity(self.gpa, 1);
+    try self.imported_scheme_by_source.ensureUnusedCapacity(self.gpa, 1);
 
     // The cached graph is the generalized import scheme, not a use. Keep it
     // source-owned and regionless; each fresh instantiation below receives its
     // own use-site region and can be unified or rejected independently.
     const source_var = ModuleEnv.varFrom(type_node_idx);
     const scheme_var = try self.copyVar(source_var, source_env, null);
-    const index: u32 = @intCast(self.imported_method_schemes.items.len);
-    self.imported_method_schemes.appendAssumeCapacity(.{
+    errdefer self.discardImportedSchemeMetadata(scheme_var);
+    if (source_env.nodeIsBindingScheme(type_node_idx)) {
+        try self.markBindingSchemeVar(scheme_var);
+        // copyVar leaves the source-to-destination map intact. Requirements
+        // must use it too, preserving every variable shared with the type.
+        try self.copyImportedBindingSchemeCodecRequirements(source_env, type_node_idx, scheme_var);
+    }
+    const index: u32 = @intCast(self.imported_schemes.items.len);
+    self.imported_schemes.appendAssumeCapacity(.{
         .key = key,
         .scheme_var = scheme_var,
     });
-    self.imported_method_scheme_by_source.putAssumeCapacityNoClobber(key, index);
+    self.imported_scheme_by_source.putAssumeCapacityNoClobber(key, index);
     return scheme_var;
+}
+
+/// A pristine imported root owns all of this metadata. No existing scheme
+/// is extended by importing another source binding, so removing an import is
+/// proportional only to that import's own requirements and index entries.
+fn discardImportedSchemeMetadata(self: *Self, scheme_var: Var) void {
+    if (self.typeSchemeIndexForRoot(scheme_var)) |scheme_idx| {
+        self.removeTypeSchemeAt(scheme_idx);
+    }
+    // Imported roots are allocated after CIR's source-node domain.
+    std.debug.assert(@intFromEnum(scheme_var) >= self.binding_scheme_nodes.bit_length);
+    _ = self.synthetic_binding_schemes.remove(scheme_var);
 }
 
 fn recordDispatchDerivations(
@@ -37621,12 +37568,83 @@ test "imported method schemes are copied once and freshly instantiated per use" 
         \\wide_result = wide.plus_wrap(3)
         \\small_result = small.plus_wrap(4)
     ;
-    var test_env = try TestEnv.init("ImportedMethodScheme", source);
+    var test_env = try TestEnv.init("ImportedScheme", source);
     defer test_env.deinit();
     try test_env.assertNoErrors();
 
-    try std.testing.expectEqual(@as(usize, 1), test_env.checker.imported_method_schemes.items.len);
-    try std.testing.expectEqual(@as(usize, 1), test_env.checker.imported_method_scheme_by_source.count());
+    try std.testing.expectEqual(@as(usize, 1), test_env.checker.imported_schemes.items.len);
+    try std.testing.expectEqual(@as(usize, 1), test_env.checker.imported_scheme_by_source.count());
+}
+
+test "issue 11444: complete imported schemes share a cache and roll back with their metadata" {
+    const TestEnv = @import("test/TestEnv.zig");
+    var source = try TestEnv.init("Codec", @import("test/issue_11444_test.zig").codec_source);
+    defer source.deinit();
+    try source.assertNoErrors();
+    var client = try TestEnv.initWithImport("Client", "import Codec\nvalue = True", "Codec", &source);
+    defer client.deinit();
+    try client.assertNoErrors();
+
+    var nodes: [2]CIR.Node.Idx = undefined;
+    inline for (.{ "encode", "encode_tuple" }, 0..) |name, i| {
+        nodes[i] = source.methodTypeNode(name) orelse return error.TestUnexpectedResult;
+        try std.testing.expect(source.module_env.bindingSchemeCodecRequirementsForNode(nodes[i]).len > 0);
+    }
+    const import_idx = client.importIndex("Codec") orelse return error.TestUnexpectedResult;
+
+    const checker = &client.checker;
+    // TestEnv's import array lives only through checkFile. This test invokes
+    // further imports, so supply the same module ordering for its duration.
+    const imported_modules = [_]*const ModuleEnv{ client.builtin_module.env, source.module_env };
+    checker.imported_modules = &imported_modules;
+    const type_count = checker.types.len();
+    const cache_count = checker.imported_schemes.items.len;
+    const scheme_count = checker.type_schemes.items.len;
+    const binding_count = checker.synthetic_binding_schemes.count();
+
+    // Repeat after rollback to exercise reuse of the discarded type indices.
+    for (0..2) |_| {
+        var transaction = try checker.beginProbe(null);
+        const ordinary = (try checker.resolveVarFromExternal(import_idx, @intFromEnum(nodes[0]))).?;
+        const copied_type_count = checker.types.len();
+        const method = try checker.importedSchemeFromSource(source.module_env, nodes[0]);
+        try std.testing.expectEqual(ordinary.local_var, method);
+        try std.testing.expectEqual(copied_type_count, checker.types.len());
+        try std.testing.expectEqual(cache_count + 1, checker.imported_schemes.items.len);
+        try std.testing.expect(checker.isBindingSchemeVar(method));
+        const scheme_idx = checker.typeSchemeIndexForRoot(method).?;
+        try std.testing.expectEqual(
+            source.module_env.bindingSchemeCodecRequirementsForNode(nodes[0]).len,
+            checker.type_schemes.items[scheme_idx].dispatch_requirements.items.len,
+        );
+
+        // Exercise method-first lookup too, followed by an ordinary hit.
+        const second_method = try checker.importedSchemeFromSource(source.module_env, nodes[1]);
+        const second_type_count = checker.types.len();
+        const second_ordinary = (try checker.resolveVarFromExternal(import_idx, @intFromEnum(nodes[1]))).?;
+        try std.testing.expectEqual(second_method, second_ordinary.local_var);
+        try std.testing.expectEqual(second_type_count, checker.types.len());
+        transaction.rollback();
+
+        try std.testing.expectEqual(type_count, checker.types.len());
+        try std.testing.expectEqual(cache_count, checker.imported_schemes.items.len);
+        try std.testing.expectEqual(cache_count, checker.imported_scheme_by_source.count());
+        try std.testing.expectEqual(scheme_count, checker.type_schemes.items.len);
+        try std.testing.expectEqual(binding_count, checker.synthetic_binding_schemes.count());
+        try std.testing.expect(checker.typeSchemeIndexForRoot(method) == null);
+        try std.testing.expect(checker.typeSchemeIndexForRoot(second_method) == null);
+    }
+
+    // A committed import survives, including across later rolled-back hits.
+    var committed = try checker.beginProbe(null);
+    const retained = try checker.importedSchemeFromSource(source.module_env, nodes[0]);
+    committed.commit();
+    var probe = try checker.beginProbe(null);
+    try std.testing.expectEqual(retained, (try checker.resolveVarFromExternal(import_idx, @intFromEnum(nodes[0]))).?.local_var);
+    probe.rollback();
+    try std.testing.expect(checker.typeSchemeIndexForRoot(retained) != null);
+    try std.testing.expect(checker.isBindingSchemeVar(retained));
+    try std.testing.expectEqual(retained, try checker.importedSchemeFromSource(source.module_env, nodes[0]));
 }
 
 // THE CLASS-HOP CONTRACT (`recordDispatchDerivations`): instantiating a
@@ -42034,7 +42052,7 @@ fn checkFlexVarConstraintCompatibility(
             continue;
         };
 
-        const imported_scheme = try self.importedMethodSchemeFromSource(builtin_env, method_binding.type_node_idx);
+        const imported_scheme = try self.importedSchemeFromSource(builtin_env, method_binding.type_node_idx);
         const target_arity = self.callableArity(imported_scheme);
         const constraint_arity = self.callableArity(constraint.fn_var);
 
