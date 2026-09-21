@@ -22628,6 +22628,7 @@ const BodyContext = struct {
         provisional_ty: Type.TypeId,
         replay_state: *InterfaceReplayState,
     ) Allocator.Error!void {
+        self.builder.count("interface_relation_requests");
         const record = self.view.resolved_refs.records[@intFromEnum(target)];
         const procedure, const root_evidence = switch (record.ref) {
             .top_level_proc,
@@ -22696,6 +22697,7 @@ const BodyContext = struct {
             {
                 continue;
             }
+            self.builder.count("interface_replay_hits");
             switch (entry.status) {
                 .expanding => try relateFunctionRequestInterface(
                     self.graph,
@@ -22809,17 +22811,30 @@ const BodyContext = struct {
             }
         }
         if (saved_use_summaries) {
-            var sealer = GraphTypeFinals.initRetainedTypeView(self.graph);
-            defer sealer.deinit();
-            const durable_request = try sealer.sealType(provisional_ty);
-            const durable_summary = try sealer.sealType(summary_ty);
             const cache = self.interfaceSummaryCache();
-            try cache.insert(self.typeStore(), self.nameStore(), .{
-                .address = address,
-                .evidence = stored_evidence,
-                .provisional_ty = durable_request,
-                .summary_ty = durable_summary,
-            });
+            if (self.typeStore() == &self.builder.program.types) {
+                // On the coordinator both views were materialized outside any
+                // transaction, so they are already permanent program types.
+                // Interning canonical copies would only re-digest them and
+                // the cache compares its entries structurally.
+                try cache.insert(self.typeStore(), self.nameStore(), .{
+                    .address = address,
+                    .evidence = stored_evidence,
+                    .provisional_ty = provisional_ty,
+                    .summary_ty = summary_ty,
+                });
+            } else {
+                var sealer = GraphTypeFinals.initRetainedTypeView(self.graph);
+                defer sealer.deinit();
+                const durable_request = try sealer.sealType(provisional_ty);
+                const durable_summary = try sealer.sealType(summary_ty);
+                try cache.insert(self.typeStore(), self.nameStore(), .{
+                    .address = address,
+                    .evidence = stored_evidence,
+                    .provisional_ty = durable_request,
+                    .summary_ty = durable_summary,
+                });
+            }
         }
     }
 
