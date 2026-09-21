@@ -33376,7 +33376,9 @@ fn checkStaticDispatchConstraints(self: *Self, env: *Env, is_numeric_default_pas
                     if (self.staticDispatchConstraintIsInactive(constraint)) continue;
                     const constraint_fn_resolved = self.types.resolveVar(constraint.fn_var).desc.content;
                     if (constraint_fn_resolved == .err) {
-                        // If this constraint is already an error, the skip this pass
+                        // An erroneous method signature was already reported and
+                        // can never be discharged, so the obligation is rejected.
+                        try self.markStaticDispatchRejected(constraint);
                         continue;
                     }
                     // A literal resolves only against the type it was annotated with:
@@ -33785,7 +33787,12 @@ fn checkStaticDispatchConstraints(self: *Self, env: *Env, is_numeric_default_pas
                     const constraint = self.types.static_dispatch_constraints.items.items[constraints_start + constraint_i];
                     if (self.staticDispatchConstraintIsInactive(constraint)) continue;
                     const constraint_fn_resolved = self.types.resolveVar(constraint.fn_var).desc.content;
-                    if (constraint_fn_resolved == .err) continue;
+                    if (constraint_fn_resolved == .err) {
+                        // An erroneous method signature was already reported and
+                        // can never be discharged, so the obligation is rejected.
+                        try self.markStaticDispatchRejected(constraint);
+                        continue;
+                    }
 
                     if (!try self.validateFromNumeralLiteralForBuiltinAlias(
                         deferred_constraint.var_,
