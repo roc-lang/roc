@@ -9,9 +9,21 @@ main!=|G|"""
 .S
 ~~~
 # EXPECTED
-NIL
+UNDECLARED TYPE - fuzz_crash_102.md:1:10:2:3
 # PROBLEMS
-NIL
+~~~clojure
+(reports
+	(report
+		(severity runtime_error)
+		(title "Undeclared Type")
+		(region (start 1 10) (end 2 3))
+		(headline
+			(reflow "The type ")
+			(annotated code "S")
+			(reflow " is not declared in this scope."))
+		(document
+			(source-region (file "fuzz_crash_102.md") (start 1 10) (end 2 3) (annotation error) (line-text "main!=|G|\"\"\"\n.S")))))
+~~~
 # TOKENS
 ~~~zig
 LowerIdent,OpAssign,OpBar,UpperIdent,OpBar,MultilineStringStart,StringPart,
