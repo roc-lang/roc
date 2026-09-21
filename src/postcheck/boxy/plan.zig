@@ -9322,10 +9322,7 @@ const Builder = struct {
                         .procedure => |procedure| self.moduleForCheckedModuleId(procedure.template.artifact),
                         .local_proc, .structural => view,
                     };
-                    const callable_type = switch (node.instantiation) {
-                        .callable => |callable_ty| typeRef(view, callable_ty),
-                        .monomorphic => typeRef(target_view, node.target.callable_ty),
-                    };
+                    const callable_type = selectedDispatchCallableType(view, target_view, node);
                     const source = self.workerSourceForMethodTarget(.{
                         .view = target_view,
                         .target = node.target,
@@ -11557,8 +11554,8 @@ const Builder = struct {
         }
         const dispatch = view.static_dispatch_plans.plans[raw];
         const dispatcher_rep = try self.analyzeType(view, dispatch.dispatcher_ty);
-        const target = directDispatchTarget(view.static_dispatch_plans, dispatch.resolution);
-        if (target == null) {
+        const evidence = directDispatchEvidence(view.static_dispatch_plans, dispatch.resolution);
+        if (evidence == null) {
             const caller = self.active_worker orelse
                 boxyPlanInvariant("boxy dictionary dispatch was analyzed outside a worker body");
             const scheme_requirement: ?DictionaryRequirementId = if (dispatch.resolution == .evidence_dependent and dispatch.resolution.evidence_dependent.scheme_param != null) blk: {
@@ -11586,14 +11583,22 @@ const Builder = struct {
                 }
             }
         }
-        const direct_target = target orelse return;
+        const selected = evidence orelse return;
         const lookup = self.dispatchMethodTargetLookup(
             view,
-            direct_target,
+            selected.target,
             typeRef(view, dispatch.dispatcher_ty),
         );
-        const source_fn_type = CheckedTypeIdentity{ .module = view.key, .ty = dispatch.callable_ty };
-        const worker = try self.ensureWorker(lookup.source, self.workerCheckedTypeForSource(lookup.source, source_fn_type), null);
+        // The worker is the target's generalized declaration; the call
+        // boundary is this edge's instantiation of it. They are separate
+        // checked identities and neither substitutes for the other.
+        const worker = try self.ensureWorker(
+            lookup.source,
+            self.workerCheckedTypeForSource(lookup.source, typeRef(view, dispatch.callable_ty)),
+            null,
+        );
+        const source_fn_type = selectedDispatchCallableType(view, lookup.view, selected);
+        _ = try self.analyzeType(self.moduleForId(source_fn_type.module), source_fn_type.ty);
         const call_ref = CheckedExprIdentity{ .module = view.key, .expr = call_expr };
         const caller = self.active_worker orelse
             boxyPlanInvariant("boxy dispatch call was analyzed outside a worker body");
@@ -11670,17 +11675,27 @@ const Builder = struct {
             }
         }
 
-        if (directDispatchTarget(view.static_dispatch_plans, call.resolution) == null) {
+        const evidence = directDispatchEvidence(view.static_dispatch_plans, call.resolution);
+        if (evidence == null) {
             try self.recordActiveWorkerDictionaryUse(dispatcher_rep);
         }
-        const target = directDispatchTarget(view.static_dispatch_plans, call.resolution) orelse return;
+        const selected = evidence orelse return;
         const lookup = self.dispatchMethodTargetLookup(
             view,
-            target,
+            selected.target,
             typeRef(view, call.dispatcher_ty),
         );
-        const source_fn_type = CheckedTypeIdentity{ .module = view.key, .ty = call.callable_ty };
-        const worker = try self.ensureWorker(lookup.source, self.workerCheckedTypeForSource(lookup.source, source_fn_type), null);
+        // As in ordinary dispatch planning, the worker is the protocol
+        // method's generalized declaration while the call boundary is this
+        // edge's instantiation of it.
+        const worker = try self.ensureWorker(
+            lookup.source,
+            self.workerCheckedTypeForSource(lookup.source, typeRef(view, call.callable_ty)),
+            null,
+        );
+        const source_fn_type = selectedDispatchCallableType(view, lookup.view, selected);
+        const source_view = self.moduleForId(source_fn_type.module);
+        _ = try self.analyzeType(source_view, source_fn_type.ty);
 
         const caller = self.active_worker orelse
             boxyPlanInvariant("boxy iterator call was analyzed outside a worker body");
@@ -11691,7 +11706,7 @@ const Builder = struct {
             return;
         }
 
-        const source_fn = checkedFunctionPayload(view, call.callable_ty);
+        const source_fn = checkedFunctionPayload(source_view, source_fn_type.ty);
         const operands = call.argsSlice(view.static_dispatch_plans);
         if (source_fn.args.len != operands.len) {
             boxyPlanInvariant("boxy iterator dispatch source function type arity disagreed with operands");
@@ -11711,12 +11726,12 @@ const Builder = struct {
                 .checked_expr => |expr_id| typeRef(view, view.checked_bodies.expr(expr_id).ty),
                 .loop_iterator_state => typeRef(view, plan.iterator_ty),
             };
-            const call_type = typeRef(view, source_arg_ty);
+            const call_type = typeRef(source_view, source_arg_ty);
             try self.plan.call_type_substitutions.append(self.allocator, .{
                 .operand_type = operand_type,
                 .operand_rep = try self.analyzeType(self.moduleForId(operand_type.module), operand_type.ty),
                 .call_type = call_type,
-                .call_rep = try self.analyzeType(view, source_arg_ty),
+                .call_rep = try self.analyzeType(source_view, source_arg_ty),
                 .worker_rep = worker_arg.rep,
             });
         }
@@ -13409,18 +13424,43 @@ fn methodOwnerInNames(
     };
 }
 
-fn directDispatchTarget(
+/// The checker-selected evidence for a resolved direct dispatch edge: the
+/// exact target and the exact callable relation checking produced while
+/// discharging that edge. Returns null for resolutions without a selected
+/// direct evidence node.
+fn directDispatchEvidence(
     plans: *const static_dispatch.StaticDispatchPlanTable,
     resolution: static_dispatch.CheckedCallResolution,
-) ?static_dispatch.MethodTarget {
+) ?static_dispatch.EvidenceNode {
     return switch (resolution) {
-        .direct_closed, .direct_parametric => |direct| plans.evidenceNode(direct.evidence).target,
+        .direct_closed, .direct_parametric => |direct| plans.evidenceNode(direct.evidence),
         .direct_pending => boxyPlanInvariant("unfinalized direct call reached Boxy planning"),
         .evidence_dependent,
         .structural,
         .checked_error,
         .@"unreachable",
         => null,
+    };
+}
+
+/// The exact checked callable relation one selected dispatch edge instantiated.
+///
+/// `site_view` owns the edge (its plan table interned the evidence node), so an
+/// edge-specific `callable` instantiation is a type in that module. A
+/// `monomorphic` target scheme has no variables, so the target's own declared
+/// callable in `target_view` is already the relation for every edge that
+/// selects it. A resolved direct edge substitutes its call boundary against
+/// this callable rather than the dispatch plan's constraint callable, whose
+/// variables may be distinct from the caller's even when the two callables
+/// describe the same shape.
+fn selectedDispatchCallableType(
+    site_view: ModuleView,
+    target_view: ModuleView,
+    node: static_dispatch.EvidenceNode,
+) CheckedTypeIdentity {
+    return switch (node.instantiation) {
+        .callable => |callable_ty| typeRef(site_view, callable_ty),
+        .monomorphic => typeRef(target_view, node.target.callable_ty),
     };
 }
 
