@@ -2019,4 +2019,23 @@ pub const tests = [_]TestCase{
         ,
         .expected = .{ .inspect_str = "\"b 1\"" },
     },
+    .{
+        // repro for https://github.com/roc-lang/roc/issues/11312
+        // A non-Str crash message is a type mismatch. Compile-time
+        // finalization and lowering must not see the message's erroneous
+        // type; the program reports the mismatch and crashes when run.
+        .name = "issue 11312: non-Str crash message reports a problem and crashes at runtime instead of panicking",
+        .source_kind = .module,
+        .source =
+        \\poly = || {
+        \\    crash YYYYY
+        \\    "x"
+        \\}
+        \\
+        \\rDsult = poly() == poly()
+        \\
+        \\main = rDsult
+        ,
+        .expected = .{ .problem_and_crash = {} },
+    },
 };
