@@ -1589,6 +1589,16 @@ pub const Store = struct {
             transaction.fill(self, destination_ty, imported);
         }
 
+        // A digest is a function of a type's structure and of its names as
+        // text, never of store-local ids, so an imported copy has exactly the
+        // digest its source already computed. Seeding the copies lets the
+        // commit intern them by lookup instead of hashing each one again.
+        for (closure.items, reserved) |source_ty, destination_ty| {
+            inline for (.{ NamedDigestMode.full, NamedDigestMode.identity_only, NamedDigestMode.equality }) |mode| {
+                if (source.cachedDigest(source_ty, mode)) |digest| self.setCachedDigest(destination_ty, mode, digest);
+            }
+        }
+
         var committed = try self.commitTransaction(destination_names, transaction, reserved[0]);
         defer committed.deinit();
         for (closure.items, reserved) |source_ty, speculative| {
@@ -2729,11 +2739,14 @@ pub const Store = struct {
     /// cached digest is permanently valid.
     fn cachedDigest(self: *const Store, ty: TypeId, mode: NamedDigestMode) ?names.TypeDigest {
         const index = @intFromEnum(ty);
-        return switch (mode) {
-            .full => self.type_digests.unsafeRawItemsForView()[index],
-            .identity_only => self.specialization_digests.unsafeRawItemsForView()[index],
-            .equality => self.equality_digests.unsafeRawItemsForView()[index],
+        // A captured input snapshot carries type rows without digest slots.
+        const slots = switch (mode) {
+            .full => self.type_digests.unsafeRawItemsForView(),
+            .identity_only => self.specialization_digests.unsafeRawItemsForView(),
+            .equality => self.equality_digests.unsafeRawItemsForView(),
         };
+        if (index >= slots.len) return null;
+        return slots[index];
     }
 
     /// Sole writer of the digest caches. Digests are content-addressed, so a
