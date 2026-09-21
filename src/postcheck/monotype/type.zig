@@ -1959,11 +1959,10 @@ pub const Store = struct {
         return self.typeDigestCached(name_store, ty, null);
     }
 
-    /// Public-interface specialization digest for `ty` (cached on first
-    /// computation). This intentionally omits exactly declared field order
-    /// and checked-public backing details, because it answers "may these two
-    /// types share a specialization?" rather than "are these the same stored
-    /// type?".
+    /// Public-interface identity digest for `ty` (cached on first computation).
+    /// Omits declared field order and checked-public backing details but keeps
+    /// checked provenance. Lookup whose collision authority is `typeEql` uses
+    /// `equalityDigest` instead.
     pub fn specializationDigest(self: *Store, name_store: *const names.NameStore, ty: TypeId) names.TypeDigest {
         return self.specializationDigestCached(name_store, ty, null);
     }
@@ -1972,7 +1971,7 @@ pub const Store = struct {
     /// Unlike the stored-identity digest, this unwraps aliases and omits
     /// checked-node provenance that does not participate in type equality.
     pub fn equalityDigest(self: *Store, name_store: *const names.NameStore, ty: TypeId) names.TypeDigest {
-        return self.computeDigest(name_store, ty, .equality, null) catch digestOutOfMemory();
+        return self.equalityDigestCached(name_store, ty, null);
     }
 
     pub const DigestStats = struct {
@@ -2203,6 +2202,18 @@ pub const Store = struct {
         return self.computeDigest(name_store, ty, .identity_only, stats) catch digestOutOfMemory();
     }
 
+    /// `equalityDigest` with optional cache statistics. Specialization lookup
+    /// uses this equivalence; stored checked provenance remains in full and
+    /// public-interface identity digests.
+    pub fn equalityDigestCached(
+        self: *Store,
+        name_store: *const names.NameStore,
+        ty: TypeId,
+        stats: ?*DigestStats,
+    ) names.TypeDigest {
+        return self.computeDigest(name_store, ty, .equality, stats) catch digestOutOfMemory();
+    }
+
     /// Exact structural equality for closed Monotype types.
     ///
     /// Aliases with backing compare as their backing, non-alias named types
@@ -2212,8 +2223,8 @@ pub const Store = struct {
     /// aliases digest as opaque nodes (deliberately), and the digest observes
     /// identity fields this comparison does not (`named_type.ty`,
     /// `tag.checked_name`, `type_name` under a `source_decl`, checked-public
-    /// backing content), which production constructs consistently for equal
-    /// types. This is the authoritative check before one specialization can
+    /// backing content). Equality digests omit those provenance distinctions.
+    /// This is the authoritative check before one specialization can
     /// reuse another.
     pub fn typeEql(
         self: *const Store,
@@ -2789,9 +2800,21 @@ pub const Store = struct {
             return digest;
         }
         if (self.borrowed_read_only) Common.invariant("borrowed Monotype digest cache miss");
+        const digest_ty = self.digestType(ty, mode);
+        if (digest_ty != ty) {
+            if (self.cachedDigest(digest_ty, mode)) |digest| {
+                self.setCachedDigest(ty, mode, digest);
+                if (stats) |s| s.cache_hits += 1;
+                return digest;
+            }
+        }
         var engine = DigestEngine.init(self, name_store, stats);
         defer engine.deinit();
-        return try engine.run(ty, mode);
+        const digest = try engine.run(digest_ty, mode);
+        // Equality unwraps aliases; cache the answer on the original query
+        // too, so repeated specialization requests need no alias traversal.
+        if (digest_ty != ty) self.setCachedDigest(ty, mode, digest);
+        return digest;
     }
 
     /// The digest byte encoding of one type node in one digest mode.
@@ -5998,6 +6021,44 @@ test "monotype digest separates tag unions by checked name" {
     const first_spec = store.specializationDigest(&name_store, first);
     const second_spec = store.specializationDigest(&name_store, second);
     try std.testing.expect(!std.mem.eql(u8, first_spec.bytes[0..], second_spec.bytes[0..]));
+}
+
+test "monotype equality digest caches alias queries without rehashing their backing" {
+    var allocations = std.testing.FailingAllocator.init(std.testing.allocator, .{});
+    var name_store = names.NameStore.init(std.testing.allocator);
+    defer name_store.deinit();
+    var store = Store.init(allocations.allocator());
+    defer store.deinit();
+
+    const module = try name_store.internModuleIdentity(&([_]u8{0xAB} ** 32));
+    const name = try name_store.internTypeName("Text");
+    const str = try store.add(.{ .primitive = .str });
+    const first = try store.add(.{ .named = .{
+        .named_type = .{ .module = .{}, .ty = @enumFromInt(1) },
+        .def = .{ .module = module, .type_name = name },
+        .kind = .alias,
+        .args = Span.empty(),
+        .backing = .{ .ty = str, .use = .inspectable },
+    } });
+    const second = try store.add(.{ .named = .{
+        .named_type = .{ .module = .{}, .ty = @enumFromInt(2) },
+        .def = .{ .module = module, .type_name = name },
+        .kind = .alias,
+        .args = Span.empty(),
+        .backing = .{ .ty = first, .use = .inspectable },
+    } });
+
+    var cold: Store.DigestStats = .{};
+    const expected = store.equalityDigestCached(&name_store, first, &cold);
+    try std.testing.expect(cold.cache_misses > 0);
+    const before = allocations.alloc_index;
+    var warm: Store.DigestStats = .{};
+    for ([_]TypeId{ first, second, second, str }) |ty| {
+        try std.testing.expectEqual(expected, store.equalityDigestCached(&name_store, ty, &warm));
+    }
+    try std.testing.expectEqual(before, allocations.alloc_index);
+    try std.testing.expectEqual(@as(u64, 4), warm.cache_hits);
+    try std.testing.expectEqual(@as(u64, 0), warm.cache_misses);
 }
 
 test "monotype digest separates named types by checked type id" {

@@ -4083,17 +4083,20 @@ const Builder = struct {
         name_store: *const names.NameStore,
         ty: Type.TypeId,
     ) names.TypeDigest {
+        // Every consumer resolves collisions with typeEql. Checked type ids
+        // and other stored provenance must not split equal requests into
+        // different buckets as worker-local representatives change.
         if (self.counters != null) {
             self.count("specialization_type_digest_requests");
             var stats: Type.Store.DigestStats = .{};
-            const digest = types_.specializationDigestCached(name_store, ty, &stats);
+            const digest = types_.equalityDigestCached(name_store, ty, &stats);
             self.addDigestStats(stats);
             self.countBy("specialization_type_digest_cache_hits", @intCast(stats.cache_hits));
             self.countBy("specialization_type_digest_cache_misses", @intCast(stats.cache_misses));
             self.countBy("specialization_type_digest_nodes_visited", @intCast(stats.nodes_visited));
             return digest;
         }
-        return types_.specializationDigestCached(name_store, ty, null);
+        return types_.equalityDigestCached(name_store, ty, null);
     }
 
     fn graphCaptureAbiDigest(
@@ -5525,7 +5528,7 @@ const Builder = struct {
         // A hosted template has no procedure of its own to cache: callers
         // reach the host directly through its declared ABI.
         if (template.target != .hosted and !try self.monoFnTypeMentionsFunction(lower_fn_ty)) {
-            const key = Ast.specIdentityKey(spec_identity, self.program.types.equalityDigest(&self.program.names, spec_identity.request_fn_ty));
+            const key = Ast.specIdentityKey(spec_identity);
             fn_template.spec_key = key;
             if (@import("builtin").link_libc and std.c.getenv("ROC_SPEC_CENSUS") != null) {
                 const proc_base = view.names.procBase(template_ref.proc_base);

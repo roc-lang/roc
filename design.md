@@ -9955,6 +9955,21 @@ callable identity, method scope, exact evidence topology, exact codec
 contract, and exact structural equality of the closed Monotype function type.
 Digest collisions are therefore harmless.
 
+Request, solved-view, and codec constructor/shape digests use the cached
+`typeEql` equivalence. Equal types must reach the same lookup bucket even when
+their checked type ids, checked tag labels, or transparent alias paths differ.
+Full stored-type and public-interface identity digests retain their existing
+provenance contract; they do not key specialization reuse. The original types
+retain the checked references needed by constant evaluation and checked-store
+re-entry. Worker-local choice of an equal representative must neither reserve
+another specialization nor consume another procedure symbol.
+
+Semantic digest computation is demand-driven and cached on immutable types,
+including an alias used as the query root. Repeated queries and aliases over
+an already-cached backing allocate no traversal storage. Draft lookup,
+coordinator reservation, and solved-view aliases consume these producer-owned
+digests; no consumer scans other buckets or reconstructs missing identity.
+
 The checked source function type a call site instantiated the callable from is
 NOT part of this identity. The callable says which checked body a request
 lowers; the checked source type is the requesting graph's instantiation and
