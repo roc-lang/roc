@@ -26637,11 +26637,11 @@ fn excludeErroneousCompileTimeRootRequests(bodies: *const CheckedBodyStore, root
 /// A compile-time root whose evaluation can call into code checking replaced
 /// with a runtime error would report that already-reported problem a second
 /// time as a compile-time crash, so it is not requested. An expect is the
-/// exception: its crash is a failed test, not a second report. Reachability follows
-/// each procedure template's explicit procedure references, constant
+/// exception: its crash is a failed test, not a second report. Reachability
+/// follows each procedure template's explicit procedure references, constant
 /// references, and closed dispatch targets, local and imported. The result is
-/// published per template so importing modules consume it directly; a module
-/// whose bodies and imports contain no checked error publishes nothing and
+/// recorded per template so importing modules consume it directly; a module
+/// whose bodies and imports contain no checked error records nothing and
 /// performs no traversal.
 const CheckedErrorReachability = struct {
     artifact_key: CheckedModuleArtifactKey,
@@ -31834,8 +31834,6 @@ pub const CheckedModuleArtifact = struct {
         );
     }
 
-    /// A platform with declared app requirements is runtime-lowerable only
-    /// after checking has published its exact app relation.
     /// Whether a compile-time root's evaluation can reach code checking
     /// reported and replaced with a runtime error, in its own body or through
     /// the procedures and constants it references. Such a root is never
@@ -31847,6 +31845,8 @@ pub const CheckedModuleArtifact = struct {
         return self.checked_procedure_templates.templateReachesCheckedError(wrapper.template.template);
     }
 
+    /// A platform with declared app requirements is runtime-lowerable only
+    /// after checking has published its exact app relation.
     pub fn hasUnboundPlatformRequirements(self: *const CheckedModuleArtifact) bool {
         return self.module_identity.kind == .platform and
             self.platform_required_declarations.declarations.len > 0 and

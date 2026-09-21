@@ -2038,4 +2038,56 @@ pub const tests = [_]TestCase{
         ,
         .expected = .{ .problem_and_crash = {} },
     },
+    .{
+        .name = "issue 11312: callable constant built from a call into a checked error crashes at runtime",
+        .source_kind = .module,
+        .source =
+        \\poly = || {
+        \\    crash YYYYY
+        \\    "x"
+        \\}
+        \\
+        \\make = |s| |_| s
+        \\
+        \\g = make(poly())
+        \\
+        \\main = g(1)
+        ,
+        .expected = .{ .problem_and_crash = {} },
+    },
+    .{
+        .name = "issue 11312: literal conversion whose method reaches a checked error crashes at runtime",
+        .source_kind = .module,
+        .source =
+        \\Tag := [Tag(Str)].{
+        \\    from_quote : Str -> Try(Tag, [BadQuotedBytes(Str)])
+        \\    from_quote = |str| {
+        \\        crash YYYYY
+        \\        Ok(Tag(str))
+        \\    }
+        \\}
+        \\
+        \\value = "one".Tag
+        \\
+        \\main = match value {
+        \\    Tag(s) => s
+        \\}
+        ,
+        .expected = .{ .problem_and_crash = {} },
+    },
+    .{
+        .name = "issue 11312: constant calling into a checked error crashes when read at runtime",
+        .source_kind = .module,
+        .source =
+        \\poly = || {
+        \\    crash YYYYY
+        \\    "x"
+        \\}
+        \\
+        \\first = poly()
+        \\
+        \\main = first
+        ,
+        .expected = .{ .problem_and_crash = {} },
+    },
 };

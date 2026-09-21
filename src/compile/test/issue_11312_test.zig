@@ -71,11 +71,14 @@ fn expectRecovery(source: []const u8, imported_source: ?[]const u8, blocked_expr
             }
             found_blocked = true;
         }
-        if (std.mem.eql(u8, expr_source, "123.U64") or std.mem.eql(u8, expr_source, "helper(1.U64)")) {
+        const is_good = std.mem.eql(u8, expr_source, "123.U64");
+        const is_fine = std.mem.eql(u8, expr_source, "helper(1.U64)");
+        if (is_good or is_fine) {
             try std.testing.expect(!artifact.compileTimeRootReachesCheckedError(root));
             try std.testing.expectEqual(.eligible, root.request_eligibility);
             try std.testing.expect(root.payload == .const_node);
-            if (expr_source[0] == '1') found_good = true else found_fine = true;
+            found_good = found_good or is_good;
+            found_fine = found_fine or is_fine;
         }
     }
     try std.testing.expect(found_blocked);
@@ -147,4 +150,29 @@ test "issue 11312: a root calling an imported function whose crash message is no
         \\}
         \\
     , "Broken.poly({}) == \"x\"");
+}
+
+test "issue 11312: a root dispatching to a method whose crash message is not a Str is not evaluated" {
+    try expectRecovery(
+        \\Thing := [Thing].{
+        \\    describe : Thing -> Str
+        \\    describe = |_| {
+        \\        crash YYYYY
+        \\        "x"
+        \\    }
+        \\}
+        \\thing : Thing
+        \\thing = Thing
+        \\result = thing.describe() == "x"
+        \\
+    , null, "thing.describe() == \"x\"");
+}
+
+test "issue 11312: a root reading an annotated constant whose initializer was rejected is not evaluated" {
+    try expectRecovery(
+        \\bad : U64
+        \\bad = "bad"
+        \\result = bad + 1
+        \\
+    , null, "bad + 1");
 }
