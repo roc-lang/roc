@@ -15721,8 +15721,8 @@ committed layout decision, and glue takes it from that layout, never from the
 type's shape. Callables that are themselves linker symbols carry their
 signature outside the type table: a hosted function's arguments and result on
 its `HostedFunctionInfo`, and a provided procedure's on its `ProvidesEntry`.
-Glue classifies each provided export as a procedure or data from the checked
-artifact's provided export table, never from the shape of its type.
+Glue classifies each provided export as a procedure or data from the
+CheckedModule's provided export table, never from the shape of its type.
 
 The platform header maps linker symbols explicitly, symbol-string first, in
 both directions:
