@@ -836,6 +836,24 @@ pub fn assertTypeErrorMsgs(self: *TestEnv, expected: []const []const u8) TestEnv
     }
 }
 
+/// Assert that checking produced exactly the expected problems (errors AND
+/// warnings), in order, each building a report with the expected title.
+pub fn assertTypeErrorTitles(self: *TestEnv, expected: []const []const u8) TestEnvError!void {
+    try self.assertNoParseProblems();
+
+    try testing.expectEqual(expected.len, self.checker.problems.problems.items.len);
+
+    var report_builder = try self.initReportBuilder();
+    defer report_builder.deinit();
+
+    for (expected, self.checker.problems.problems.items) |expected_title, problem| {
+        var report = try report_builder.build(problem);
+        defer report.deinit();
+
+        try testing.expectEqualStrings(expected_title, report.title);
+    }
+}
+
 /// Assert that canonicalization produced exactly one diagnostic with the expected title.
 pub fn assertOneCanError(self: *TestEnv, expected: []const u8) TestEnvError!void {
     try self.assertNoParseProblems();
@@ -1002,4 +1020,23 @@ fn assertNoTypeProblems(self: *TestEnv) TestEnvError!void {
     }
 
     try testing.expectEqual(0, self.checker.problems.problems.items.len);
+}
+
+/// The CIR node holding the type of the method this module defines under
+/// `name`, for tests that reach a method by the name its source declares.
+pub fn methodTypeNode(self: *const TestEnv, name: []const u8) ?CIR.Node.Idx {
+    for (self.module_env.method_defs.entries.items) |entry| {
+        const text = self.module_env.getIdentStoreConst().getText(entry.key.methodIdent());
+        if (std.mem.eql(u8, name, text)) return entry.value.type_node_idx;
+    }
+    return null;
+}
+
+/// This module's import of `module_name`, for tests that reach an import by
+/// the name its source spells.
+pub fn importIndex(self: *const TestEnv, module_name: []const u8) ?CIR.Import.Idx {
+    for (self.module_env.imports.imports.items.items, 0..) |str_idx, i| {
+        if (std.mem.eql(u8, self.module_env.getString(str_idx), module_name)) return @enumFromInt(i);
+    }
+    return null;
 }

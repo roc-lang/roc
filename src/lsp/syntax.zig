@@ -1879,7 +1879,6 @@ pub const SyntaxChecker = struct {
                     .structure => |flat| switch (flat) {
                         .nominal_type => |nom| module_env.common.idents.getText(nom.ident.ident_idx),
                         .record,
-                        .record_unbound,
                         .tuple,
                         .fn_pure,
                         .fn_effectful,
@@ -1937,7 +1936,6 @@ pub const SyntaxChecker = struct {
                 .fn_effectful,
                 .fn_unbound,
                 .record,
-                .record_unbound,
                 .tuple,
                 .empty_record,
                 .tag_union,

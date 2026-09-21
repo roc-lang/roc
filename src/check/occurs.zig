@@ -232,12 +232,6 @@ const CheckOccurs = struct {
                                             try self.pushFieldPresenceToProcess(presence);
                                         }
                                     },
-                                    .record_unbound => |fields| {
-                                        const fields_slice = self.types_store.getRecordFieldsSlice(fields);
-                                        for (fields_slice.items(.presence)) |presence| {
-                                            try self.pushFieldPresenceToProcess(presence);
-                                        }
-                                    },
                                     .tag_union => |tag_union| {
                                         try self.pushVarToProcess(tag_union.ext, Edge.none);
                                         const tags = self.types_store.getTagsSlice(tag_union.tags);

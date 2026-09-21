@@ -30,6 +30,19 @@ fn rand_token_idx(random: std.Random) AST.Token.Idx {
     return random.int(u32);
 }
 
+/// Generate a random qualified literal type suffix, such as `.Gui.Color`.
+fn rand_literal_type_suffix_path(random: std.Random) AST.LiteralTypeSuffix {
+    return .{ .path = .{
+        .qualifiers = AST.Token.Span{ .span = rand_span(random) },
+        .final_token = rand_token_idx(random),
+    } };
+}
+
+/// Generate a random deprecated literal type suffix, such as the `u64` of `123u64`.
+fn rand_literal_type_suffix_deprecated(random: std.Random) AST.LiteralTypeSuffix {
+    return .{ .deprecated_builtin = rand_idx(random, base.Ident.Idx) };
+}
+
 /// Helper to create a `TokenizedRegion` from raw start and end positions.
 fn rand_region(random: std.Random) AST.TokenizedRegion {
     const start = random.int(u32);
@@ -452,7 +465,7 @@ test "NodeStore round trip - Pattern" {
     try patterns.append(gpa, AST.Pattern{
         .typed_int = .{
             .number_tok = rand_token_idx(random),
-            .type_ident = rand_idx(random, base.Ident.Idx),
+            .type_suffix = rand_literal_type_suffix_path(random),
             .literal = rand_idx(random, NumericLiteral.Idx),
             .region = rand_region(random),
         },
@@ -460,7 +473,7 @@ test "NodeStore round trip - Pattern" {
     try patterns.append(gpa, AST.Pattern{
         .typed_frac = .{
             .number_tok = rand_token_idx(random),
-            .type_ident = rand_idx(random, base.Ident.Idx),
+            .type_suffix = rand_literal_type_suffix_deprecated(random),
             .literal = rand_idx(random, NumericLiteral.Idx),
             .region = rand_region(random),
         },
@@ -476,7 +489,7 @@ test "NodeStore round trip - Pattern" {
         .single_quote = .{
             .region = rand_region(random),
             .token = rand_token_idx(random),
-            .type_ident = rand_idx(random, base.Ident.Idx),
+            .type_suffix = rand_literal_type_suffix_path(random),
         },
     });
     try patterns.append(gpa, AST.Pattern{
@@ -699,7 +712,7 @@ test "NodeStore round trip - Expr" {
         .typed_int = .{
             .region = rand_region(random),
             .token = rand_token_idx(random),
-            .type_ident = rand_idx(random, base.Ident.Idx),
+            .type_suffix = rand_literal_type_suffix_deprecated(random),
             .literal = rand_idx(random, NumericLiteral.Idx),
         },
     });
@@ -707,7 +720,7 @@ test "NodeStore round trip - Expr" {
         .typed_frac = .{
             .region = rand_region(random),
             .token = rand_token_idx(random),
-            .type_ident = rand_idx(random, base.Ident.Idx),
+            .type_suffix = rand_literal_type_suffix_path(random),
             .literal = rand_idx(random, NumericLiteral.Idx),
         },
     });
@@ -715,7 +728,7 @@ test "NodeStore round trip - Expr" {
         .single_quote = .{
             .region = rand_region(random),
             .token = rand_token_idx(random),
-            .type_ident = rand_idx(random, base.Ident.Idx),
+            .type_suffix = rand_literal_type_suffix_deprecated(random),
         },
     });
     try expressions.append(gpa, AST.Expr{
@@ -741,7 +754,7 @@ test "NodeStore round trip - Expr" {
     try expressions.append(gpa, AST.Expr{
         .typed_string = .{
             .parts = AST.Expr.Span{ .span = rand_span(random) },
-            .type_ident = rand_idx(random, base.Ident.Idx),
+            .type_suffix = rand_literal_type_suffix_path(random),
             .region = rand_region(random),
             .token = rand_token_idx(random),
         },
@@ -749,7 +762,7 @@ test "NodeStore round trip - Expr" {
     try expressions.append(gpa, AST.Expr{
         .typed_multiline_string = .{
             .parts = AST.Expr.Span{ .span = rand_span(random) },
-            .type_ident = rand_idx(random, base.Ident.Idx),
+            .type_suffix = rand_literal_type_suffix_deprecated(random),
             .region = rand_region(random),
             .token = rand_token_idx(random),
         },
