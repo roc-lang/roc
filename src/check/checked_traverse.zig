@@ -217,12 +217,6 @@ pub fn checkedTypePayloadContainsIdentityVariables(
             }
             break :blk try traversal.visit(record.ext);
         },
-        .record_unbound => |fields| blk: {
-            for (fields) |field| {
-                if (try traversal.visit(field.ty)) break :blk true;
-            }
-            break :blk false;
-        },
         .tuple => |items| blk: {
             for (items) |item| {
                 if (try traversal.visit(item)) break :blk true;

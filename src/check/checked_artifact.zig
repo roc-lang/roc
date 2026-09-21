@@ -77,7 +77,6 @@ fn checkedFieldBackingAccess(module: TypedCIR.Module, receiver_var: Var) Checked
                     module.moduleEnvConst().selfModuleIdentity(),
                 ),
                 .record,
-                .record_unbound,
                 .tuple,
                 .fn_pure,
                 .fn_effectful,
@@ -1749,7 +1748,6 @@ fn checkedTypeIsConcreteCompileTimeRootInner(
             try checkedTypeIsConcreteCompileTimeRootInner(walk, checked_types, alias.backing, active),
         .record => |record| (try checkedFieldTypesAreConcreteCompileTimeRoots(walk, checked_types, record.fields, active)) and
             try checkedTypeIsConcreteCompileTimeRootInner(walk, checked_types, record.ext, active),
-        .record_unbound => |fields| checkedFieldTypesAreConcreteCompileTimeRoots(walk, checked_types, fields, active),
         .tuple => |items| checkedTypeSpanIsConcreteCompileTimeRoot(walk, checked_types, items, active),
         .nominal => |nominal| blk: {
             if (!try checkedTypeSpanIsConcreteCompileTimeRoot(walk, checked_types, nominal.args, active)) break :blk false;
@@ -1834,7 +1832,7 @@ test "compile-time roots reject undetermined record field kinds" {
         .ty = leaf,
         .kind = .undetermined(leaf),
     };
-    try store.payloads.append(allocator, try store.commitPayload(allocator, .{ .record_unbound = fields }));
+    try store.payloads.append(allocator, try store.commitPayload(allocator, .{ .record = .{ .fields = fields, .ext = leaf } }));
 
     try std.testing.expect(!try checkedTypeIsConcreteCompileTimeRoot(allocator, &store, root));
 }
@@ -1905,7 +1903,6 @@ const CheckedTypeErrorScan = struct {
                 try checkedTypeSliceContainsError(traversal, alias.args),
             .record => |record| (try checkedFieldsContainError(traversal, record.fields)) or
                 try traversal.visit(record.ext),
-            .record_unbound => |fields| checkedFieldsContainError(traversal, fields),
             .tuple => |items| checkedTypeSliceContainsError(traversal, items),
             .nominal => |nominal| blk: {
                 if (try checkedTypeSliceContainsError(traversal, nominal.args)) break :blk true;
@@ -3211,7 +3208,6 @@ pub const CheckedTypePayload = union(enum) {
     rigid: CheckedTypeVariable,
     alias: CheckedAliasType,
     record: CheckedRecordType,
-    record_unbound: []const CheckedRecordField,
     tuple: []const CheckedTypeId,
     nominal: CheckedNominalType,
     function: CheckedFunctionType,
@@ -3239,7 +3235,6 @@ pub const CheckedTypePayload = union(enum) {
             .err,
             .alias,
             .record,
-            .record_unbound,
             .tuple,
             .nominal,
             .function,
@@ -3261,7 +3256,6 @@ pub const CheckedTypePayloadBuild = union(enum) {
     rigid: CheckedTypeVariable,
     alias: CheckedAliasType,
     record: CheckedRecordType,
-    record_unbound: []const CheckedRecordField,
     tuple: []const CheckedTypeId,
     nominal: CheckedNominalType,
     function: CheckedFunctionType,
@@ -3335,7 +3329,6 @@ pub const StoredCheckedTypePayload = union(enum) {
     rigid: StoredTypeVariable,
     alias: StoredAlias,
     record: StoredRecord,
-    record_unbound: CheckedTypeRange,
     tuple: CheckedTypeRange,
     nominal: StoredNominal,
     function: StoredFunction,
@@ -3379,9 +3372,6 @@ fn reconstructCheckedTypePayload(pool_owner: anytype, stored: StoredCheckedTypeP
             .fields = pool_owner.recordFieldPool()[r.fields.start .. r.fields.start + r.fields.len],
             .ext = r.ext,
         } },
-        .record_unbound => |range| .{
-            .record_unbound = pool_owner.recordFieldPool()[range.start .. range.start + range.len],
-        },
         .tuple => |range| .{
             .tuple = pool_owner.typeIdPool()[range.start .. range.start + range.len],
         },
@@ -3546,7 +3536,6 @@ pub const CheckedTypeStoreView = struct {
                 .flex,
                 .rigid,
                 .record,
-                .record_unbound,
                 .tuple,
                 .nominal,
                 .function,
@@ -3757,7 +3746,6 @@ fn checkedTypeRootExactEql(
             if (!try checkedRecordFieldsExactEql(view, left_record.fields, right_record.fields, assumed)) break :blk false;
             break :blk try checkedTypeRootExactEql(view, left_record.ext, right_record.ext, assumed);
         },
-        .record_unbound => |left_fields| try checkedRecordFieldsExactEql(view, left_fields, right_payload.record_unbound, assumed),
         .tuple => |left_items| try checkedTypeRootSliceExactEql(view, left_items, right_payload.tuple, assumed),
         .nominal => |left_nominal| blk: {
             const right_nominal = right_payload.nominal;
@@ -3933,7 +3921,6 @@ fn checkedTypeRootAlphaExactEql(
         .empty_tag_union,
         .alias,
         .record,
-        .record_unbound,
         .tuple,
         .nominal,
         .function,
@@ -3966,7 +3953,6 @@ fn checkedTypeRootAlphaExactEql(
             if (!try checkedRecordFieldsAlphaExactEql(view, left_record.fields, right_record.fields, context)) break :blk false;
             break :blk try checkedTypeRootAlphaExactEql(view, left_record.ext, right_record.ext, context);
         },
-        .record_unbound => |left_fields| try checkedRecordFieldsAlphaExactEql(view, left_fields, right_payload.record_unbound, context),
         .tuple => |left_items| try checkedTypeRootSliceAlphaExactEql(view, left_items, right_payload.tuple, context),
         .nominal => |left_nominal| blk: {
             const right_nominal = right_payload.nominal;
@@ -4061,12 +4047,6 @@ pub fn checkedTypeRecordFieldChild(
                 }
                 current = record.ext;
             },
-            .record_unbound => |fields| {
-                for (fields) |field| {
-                    if (recordFieldLabelsMatch(source.names, field.name, target_names, target_field)) return field.ty;
-                }
-                return null;
-            },
             .pending,
             .err,
             .flex,
@@ -4112,7 +4092,6 @@ pub fn checkedTypeTagPayloadChild(
             .rigid,
             .alias,
             .record,
-            .record_unbound,
             .tuple,
             .nominal,
             .function,
@@ -4147,7 +4126,6 @@ fn checkedTypeViewResolvedPayload(
             .flex,
             .rigid,
             .record,
-            .record_unbound,
             .tuple,
             .function,
             .empty_record,
@@ -4184,7 +4162,6 @@ fn checkedTypeViewIsConcreteConstProducerSchemeInner(
             try checkedTypeViewSpanIsConcreteConstProducerScheme(checked_types, alias.args, active),
         .record => |record| (try checkedTypeViewRecordFieldsAreConcreteConstProducerScheme(checked_types, record.fields, active)) and
             try checkedTypeViewIsConcreteConstProducerSchemeInner(checked_types, record.ext, active),
-        .record_unbound => |fields| checkedTypeViewRecordFieldsAreConcreteConstProducerScheme(checked_types, fields, active),
         .tuple => |items| checkedTypeViewSpanIsConcreteConstProducerScheme(checked_types, items, active),
         .nominal => |nominal| blk: {
             if (!try checkedTypeViewSpanIsConcreteConstProducerScheme(checked_types, nominal.args, active)) break :blk false;
@@ -4438,7 +4415,7 @@ pub const CheckedTypeStore = struct {
     /// Flat pool of `CheckedTypeId`s for alias/nominal/function args, tuples,
     /// tag args, scheme generalized vars, and decl formal args.
     type_id_pool: std.ArrayList(CheckedTypeId) = .empty,
-    /// Flat pool of record fields backing record/record_unbound payloads.
+    /// Flat pool of record fields backing record payloads.
     record_field_pool: std.ArrayList(CheckedRecordField) = .empty,
     /// Flat pool of source-declared nominal record layout fields.
     declared_field_pool: std.ArrayList(CheckedDeclaredField) = .empty,
@@ -4599,11 +4576,6 @@ pub const CheckedTypeStore = struct {
                 const fields = try self.appendRecordFields(allocator, r.fields);
                 if (r.fields.len != 0) allocator.free(r.fields);
                 break :blk .{ .record = .{ .fields = fields, .ext = r.ext } };
-            },
-            .record_unbound => |fields| blk: {
-                const range = try self.appendRecordFields(allocator, fields);
-                if (fields.len != 0) allocator.free(fields);
-                break :blk .{ .record_unbound = range };
             },
             .tuple => |elems| blk: {
                 const range = try self.appendTypeIds(allocator, elems);
@@ -5625,7 +5597,6 @@ pub const CheckedTypeStore = struct {
                 .fields = try allocator.dupe(CheckedRecordField, r.fields),
                 .ext = r.ext,
             } },
-            .record_unbound => |fields| .{ .record_unbound = try allocator.dupe(CheckedRecordField, fields) },
             .tuple => |elems| .{ .tuple = try allocator.dupe(CheckedTypeId, elems) },
             .nominal => |n| .{ .nominal = .{
                 .name = n.name,
@@ -5698,9 +5669,6 @@ pub const CheckedTypeStore = struct {
                 .fields = try self.cloneCheckedRecordFieldsSubstituting(allocator, names, record.fields, formals, actuals, active),
                 .ext = try self.cloneCheckedTypeRootSubstituting(allocator, names, record.ext, formals, actuals, active),
             } },
-            .record_unbound => |fields| .{
-                .record_unbound = try self.cloneCheckedRecordFieldsSubstituting(allocator, names, fields, formals, actuals, active),
-            },
             .tuple => |elems| .{
                 .tuple = try self.cloneCheckedTypeIdSliceSubstituting(allocator, names, elems, formals, actuals, active),
             },
@@ -5923,7 +5891,6 @@ fn deinitCheckedTypePayloadBuild(allocator: Allocator, payload: *CheckedTypePayl
         },
         .alias => |alias| allocator.free(alias.args),
         .record => |record| allocator.free(record.fields),
-        .record_unbound => |fields| allocator.free(fields),
         .tuple => |elems| allocator.free(elems),
         .nominal => |nominal| {
             allocator.free(nominal.args);
@@ -6570,7 +6537,6 @@ fn appendInstantiatedNamedApplicationFromTemplate(
         .flex,
         .rigid,
         .record,
-        .record_unbound,
         .tuple,
         .function,
         .empty_record,
@@ -7268,15 +7234,6 @@ fn checkedTypePayloadBuildContainsIdentityVariables(
             }
             break :blk store.rootContainsIdentityVariables(record.ext);
         },
-        .record_unbound => |fields| blk: {
-            for (fields) |field| {
-                if (field.kind.undeterminedVariable()) |variable| {
-                    if (store.rootContainsIdentityVariables(variable)) break :blk true;
-                }
-                if (store.rootContainsIdentityVariables(field.ty)) break :blk true;
-            }
-            break :blk false;
-        },
         .tuple => |items| blk: {
             for (items) |item| {
                 if (store.rootContainsIdentityVariables(item)) break :blk true;
@@ -7362,10 +7319,6 @@ fn checkedTypePayloadBuildEqlStored(
             if (stored != .record) break :blk false;
             const right = stored.record;
             break :blk left.ext == right.ext and checkedRecordFieldSliceEql(left.fields, right.fields);
-        },
-        .record_unbound => |left| blk: {
-            if (stored != .record_unbound) break :blk false;
-            break :blk checkedRecordFieldSliceEql(left, stored.record_unbound);
         },
         .tuple => |left| blk: {
             if (stored != .tuple) break :blk false;
@@ -7672,7 +7625,6 @@ const SubstitutedCheckedTypeKeyBuilder = struct {
             .err,
             .alias,
             .record,
-            .record_unbound,
             .tuple,
             .nominal,
             .function,
@@ -7732,10 +7684,6 @@ const SubstitutedCheckedTypeKeyBuilder = struct {
                 self.writeU32(@intCast(alias.args.len));
                 for (alias.args) |arg| try self.writeType(arg);
             },
-            .record_unbound => |fields| {
-                self.writeTag("record_unbound");
-                try self.writeNormalizedRecordFields(fields, null);
-            },
             .record => |record| try self.writeNormalizedRecordPayload(record.fields, record.ext),
             .tuple => |tuple| {
                 self.writeTag("tuple");
@@ -7789,7 +7737,6 @@ const SubstitutedCheckedTypeKeyBuilder = struct {
             .rigid,
             .alias,
             .record,
-            .record_unbound,
             .tuple,
             .nominal,
             .function,
@@ -7813,73 +7760,6 @@ const SubstitutedCheckedTypeKeyBuilder = struct {
                 else
                     field.kind,
             });
-        }
-    }
-
-    fn writeNormalizedRecordFields(
-        self: *SubstitutedCheckedTypeKeyBuilder,
-        head: []const CheckedRecordField,
-        ext: ?CheckedTypeId,
-    ) Allocator.Error!void {
-        var fields = std.ArrayList(RecordFieldForKey).empty;
-        defer fields.deinit(self.allocator);
-        try self.appendRecordFieldsForKey(&fields, head);
-
-        var tail = if (ext) |tail_id| self.substitutedRoot(tail_id) else null;
-        var seen = collections.DenseMap(CheckedTypeId, void).init(self.allocator);
-        defer seen.deinit();
-        while (tail) |tail_id| {
-            if (self.active.contains(tail_id)) break;
-            if (seen.contains(tail_id)) break;
-            try seen.put(tail_id, {});
-            const raw: usize = @intFromEnum(tail_id);
-            if (raw >= self.store.payloadCount()) {
-                checkedArtifactInvariant("checked type substitution key row normalization referenced missing record tail", .{});
-            }
-            switch (self.store.payload(@enumFromInt(raw))) {
-                .empty_record => {
-                    tail = null;
-                    break;
-                },
-                .record => |record| {
-                    try self.appendRecordFieldsForKey(&fields, record.fields);
-                    tail = self.substitutedRoot(record.ext);
-                },
-                .record_unbound => |record_fields| {
-                    try self.appendRecordFieldsForKey(&fields, record_fields);
-                    tail = null;
-                },
-                .pending,
-                .err,
-                .flex,
-                .rigid,
-                .alias,
-                .tuple,
-                .nominal,
-                .function,
-                .tag_union,
-                .empty_tag_union,
-                => break,
-            }
-        }
-
-        if (fields.items.len > 1) {
-            self.field_ranks = try self.names.recordFieldLabelTextRanks(&self.field_rank_scratch);
-            try base.TextRankCache.sortByRank(RecordFieldForKey, fields.items, &self.field_sort_scratch, self.allocator, self, recordFieldForKeyRank);
-        }
-        self.writeU32(@intCast(fields.items.len));
-        for (fields.items, 0..) |field, index| {
-            if (index > 0 and self.names.recordFieldLabelTextEql(fields.items[index - 1].name, field.name)) {
-                checkedArtifactInvariant("checked type substitution key row normalization found duplicate record fields", .{});
-            }
-            self.writeBytes(self.names.recordFieldLabelText(field.name));
-            try self.writeCheckedFieldKind(field.kind);
-            try self.writeType(field.ty);
-        }
-        if (tail) |tail_id| {
-            try self.writeType(tail_id);
-        } else {
-            self.writeTag("empty_record");
         }
     }
 
@@ -7911,10 +7791,6 @@ const SubstitutedCheckedTypeKeyBuilder = struct {
                 .record => |record| {
                     try self.appendRecordFieldsForKey(&fields, record.fields);
                     tail = self.substitutedRoot(record.ext);
-                },
-                .record_unbound => |record_fields| {
-                    try self.appendRecordFieldsForKey(&fields, record_fields);
-                    tail = null;
                 },
                 .pending,
                 .err,
@@ -8015,7 +7891,6 @@ const SubstitutedCheckedTypeKeyBuilder = struct {
                 .rigid,
                 .alias,
                 .record,
-                .record_unbound,
                 .tuple,
                 .nominal,
                 .function,
@@ -8477,17 +8352,6 @@ const SourceTypeGraphFactsContext = struct {
                     }
                     try self.mergeVar(traversal, &facts, record.ext);
                 },
-                .record_unbound => |fields| {
-                    for (types_store.getRecordFieldsSlice(fields).items(.presence)) |presence| {
-                        switch (presence.decode()) {
-                            .required => |type_var| try self.mergeVar(traversal, &facts, type_var),
-                            .unknown => |unknown| {
-                                try self.mergeVar(traversal, &facts, unknown.presence);
-                                try self.mergeVar(traversal, &facts, unknown.var_);
-                            },
-                        }
-                    }
-                },
                 .tag_union => |tag_union| {
                     const tags = types_store.getTagsSlice(tag_union.tags);
                     for (tags.items(.args)) |args| {
@@ -8794,7 +8658,6 @@ fn applyCheckedTypeRowDefault(
         .err,
         .alias,
         .record,
-        .record_unbound,
         .tuple,
         .nominal,
         .function,
@@ -8915,9 +8778,6 @@ fn copyCheckedFlatType(
     return switch (flat) {
         .empty_record => .empty_record,
         .empty_tag_union => .empty_tag_union,
-        .record_unbound => |fields| .{
-            .record_unbound = try copyCheckedRecordFields(allocator, module, names, imports, store, active, fields),
-        },
         .record => |record| blk: {
             if (record.fields.len() == 0 and checkedRecordExtIsEmpty(module, record.ext)) {
                 break :blk .empty_record;
@@ -9449,13 +9309,7 @@ test "required record canonical keys agree across solver and checked representat
         .fields = source_head_fields,
         .ext = source_tail,
     } } });
-    const source_unbound_fields = try source_store.appendRecordFields(&.{
-        .{ .name = head_name, .presence = .required(field_var) },
-        .{ .name = tail_name, .presence = .required(field_var) },
-    });
-    const source_unbound = try source_store.freshFromContent(.{ .structure = .{ .record_unbound = source_unbound_fields } });
     const source_record_key = try canonical_type_keys.fromVar(allocator, &source_store, &env, source_record);
-    const source_unbound_key = try canonical_type_keys.fromVar(allocator, &source_store, &env, source_unbound);
 
     var names = canonical.CanonicalNameStore.init(allocator);
     defer names.deinit();
@@ -9477,15 +9331,9 @@ test "required record canonical keys agree across solver and checked representat
         .fields = checked_head_fields,
         .ext = checked_tail,
     } });
-    const checked_unbound_fields = try allocator.alloc(CheckedRecordField, 2);
-    checked_unbound_fields[0] = .{ .name = checked_head_name, .ty = checked_empty };
-    checked_unbound_fields[1] = .{ .name = checked_tail_name, .ty = checked_empty };
-    const checked_unbound = try appendExplicitCheckedTypePayload(allocator, &names, &checked_store, .{ .record_unbound = checked_unbound_fields });
     const checked_record_key = checked_store.roots.items[@intFromEnum(checked_record)].key;
-    const checked_unbound_key = checked_store.roots.items[@intFromEnum(checked_unbound)].key;
 
     try std.testing.expectEqualSlices(u8, &source_record_key.bytes, &checked_record_key.bytes);
-    try std.testing.expectEqualSlices(u8, &source_unbound_key.bytes, &checked_unbound_key.bytes);
 }
 
 test "defaulted record canonical keys agree across solver and checked representations" {
@@ -9647,7 +9495,6 @@ test "optional record fields publish through solver-side record copy" {
     const checked_record = try appendCheckedTypeRoot(allocator, module, &names, imports, &store, &active, record_var);
     const fields = switch (store.payload(checked_record)) {
         .record => |record| record.fields,
-        .record_unbound => |fields| fields,
         .pending, .err, .flex, .rigid, .alias, .tuple, .nominal, .function, .empty_record, .tag_union, .empty_tag_union => return error.TestUnexpectedResult,
     };
     try testing.expectEqual(@as(usize, 1), fields.len);
@@ -9783,7 +9630,6 @@ test "poisoned record field presence preserves its value type and canonical key"
     const checked_value = try appendCheckedTypeRoot(allocator, module, &names, imports, &store, &active, value_var);
     const fields = switch (store.payload(checked_record)) {
         .record => |record| record.fields,
-        .record_unbound => |record_fields| record_fields,
         .pending, .err, .flex, .rigid, .alias, .tuple, .nominal, .function, .empty_record, .tag_union, .empty_tag_union => return error.TestUnexpectedResult,
     };
     try testing.expectEqual(@as(usize, 1), fields.len);
@@ -15483,7 +15329,6 @@ fn checkedConcreteBuiltinForLiteralTarget(view: CheckedTypeStoreView, root: Chec
             .pending => checkedArtifactInvariant("checked builtin lookup reached a pending type payload", .{}),
             .err,
             .record,
-            .record_unbound,
             .tuple,
             .function,
             .empty_record,
@@ -19473,7 +19318,6 @@ const EvidencePass = struct {
                         } };
                     },
                     .record,
-                    .record_unbound,
                     .tuple,
                     .fn_pure,
                     .fn_effectful,
@@ -21106,7 +20950,6 @@ fn checkedTypeIsClosedTagRow(
             .pending,
             .err,
             .record,
-            .record_unbound,
             .tuple,
             .nominal,
             .function,
@@ -21202,7 +21045,6 @@ fn checkedResultRowIsClosed(
             .pending,
             .err,
             .record,
-            .record_unbound,
             .tuple,
             .nominal,
             .function,
@@ -21237,7 +21079,6 @@ fn checkedRootHasClosedResultRow(
             .flex,
             .rigid,
             .record,
-            .record_unbound,
             .tuple,
             .nominal,
             .empty_record,
@@ -21268,7 +21109,6 @@ fn checkedRootHasClosedResultRow(
             .flex,
             .rigid,
             .record,
-            .record_unbound,
             .tuple,
             .function,
             .empty_record,
@@ -21298,7 +21138,6 @@ fn hostedTryAdapterCapabilityForRoot(
             .flex,
             .rigid,
             .record,
-            .record_unbound,
             .tuple,
             .nominal,
             .empty_record,
@@ -21322,7 +21161,6 @@ fn hostedTryAdapterCapabilityForRoot(
             .flex,
             .rigid,
             .record,
-            .record_unbound,
             .tuple,
             .function,
             .empty_record,
@@ -21899,7 +21737,6 @@ const NestedProcSiteBuilder = struct {
                 try self.captureFields(record.fields);
                 try self.captureType(record.ext);
             },
-            .record_unbound => |fields| try self.captureFields(fields),
             .tuple => |items| for (items) |item| {
                 try self.captureType(item);
             },
@@ -23799,7 +23636,6 @@ fn callableIdentityIsSpecializationIndependentInner(
             try callableIdentityIsSpecializationIndependentInner(store, alias.backing, enclosing, visited),
         .record => |record| (try checkedFieldTypesAreSpecializationIndependent(store, record.fields, enclosing, visited)) and
             try callableIdentityIsSpecializationIndependentInner(store, record.ext, enclosing, visited),
-        .record_unbound => |fields| try checkedFieldTypesAreSpecializationIndependent(store, fields, enclosing, visited),
         .tuple => |elems| try checkedTypeSpanIsSpecializationIndependent(store, elems, enclosing, visited),
         .nominal => |nominal| (try checkedTypeSpanIsSpecializationIndependent(store, nominal.args, enclosing, visited)) and
             try checkedTypeSpanIsSpecializationIndependent(store, nominal.padding_field_types, enclosing, visited),
@@ -24481,7 +24317,6 @@ fn collectResolvedDispatchTargetSubstitutions(
                 .rigid,
                 .alias,
                 .record,
-                .record_unbound,
                 .tuple,
                 .nominal,
                 .empty_record,
@@ -24513,7 +24348,6 @@ fn collectResolvedDispatchTargetSubstitutions(
                 .rigid,
                 .alias,
                 .record,
-                .record_unbound,
                 .tuple,
                 .function,
                 .empty_record,
@@ -24583,7 +24417,6 @@ fn collectResolvedDispatchTargetSubstitutions(
                 .rigid,
                 .alias,
                 .record,
-                .record_unbound,
                 .nominal,
                 .function,
                 .empty_record,
@@ -24608,7 +24441,6 @@ fn collectResolvedDispatchTargetSubstitutions(
         },
         .empty_record,
         .record,
-        .record_unbound,
         => try collectResolvedDispatchRecordSubstitutions(
             allocator,
             names,
@@ -24808,7 +24640,6 @@ fn collectDispatchPlanIdentitySubstitutions(
                 .rigid,
                 .alias,
                 .record,
-                .record_unbound,
                 .tuple,
                 .nominal,
                 .empty_record,
@@ -24849,7 +24680,6 @@ fn collectDispatchPlanIdentitySubstitutions(
                 .rigid,
                 .alias,
                 .record,
-                .record_unbound,
                 .tuple,
                 .function,
                 .empty_record,
@@ -24917,7 +24747,6 @@ fn collectDispatchPlanIdentitySubstitutions(
                 .rigid,
                 .alias,
                 .record,
-                .record_unbound,
                 .nominal,
                 .function,
                 .empty_record,
@@ -24941,7 +24770,6 @@ fn collectDispatchPlanIdentitySubstitutions(
         },
         .empty_record,
         .record,
-        .record_unbound,
         => try collectDispatchPlanRecordIdentitySubstitutions(
             allocator,
             names,
@@ -25461,11 +25289,6 @@ fn flattenPlatformRequirementRecordRow(
                 try fields.appendSlice(allocator, record.fields);
                 tail = record.ext;
             },
-            .record_unbound => |tail_fields| {
-                try fields.appendSlice(allocator, tail_fields);
-                tail = null;
-                break;
-            },
             .alias => |alias| tail = alias.backing,
             .pending,
             .err,
@@ -25524,7 +25347,6 @@ fn flattenPlatformRequirementTagRow(
             .flex,
             .rigid,
             .record,
-            .record_unbound,
             .tuple,
             .nominal,
             .function,
@@ -25558,7 +25380,6 @@ fn tagUnionParts(payload: CheckedTypePayload) ?RelationTagUnionParts {
         .rigid,
         .alias,
         .record,
-        .record_unbound,
         .tuple,
         .nominal,
         .function,
@@ -25587,7 +25408,6 @@ const RelationRecordParts = struct {
 fn recordParts(payload: CheckedTypePayload) ?RelationRecordParts {
     return switch (payload) {
         .record => |record| .{ .fields = record.fields, .ext = record.ext },
-        .record_unbound => |fields| .{ .fields = fields, .ext = null },
         .empty_record => .{ .fields = &.{}, .ext = null },
         .pending,
         .err,
@@ -26285,7 +26105,6 @@ fn checkedTypeHasNoReachableCallableSlotsInner(
             if (!try checkedRecordHasNoReachableCallableSlots(checked_types, record.fields, active)) break :blk false;
             break :blk try checkedTypeHasNoReachableCallableSlotsInner(checked_types, record.ext, active);
         },
-        .record_unbound => |fields| try checkedRecordHasNoReachableCallableSlots(checked_types, fields, active),
         .tuple => |items| try checkedTypeSpanHasNoReachableCallableSlots(checked_types, items, active),
         .tag_union => |tag_union| blk: {
             if (!try checkedTagsHaveNoReachableCallableSlots(checked_types, tag_union.tags, active)) break :blk false;
@@ -29230,11 +29049,6 @@ fn appendPublicApiTypeDependencies(
             }
             try appendPublicApiTypeDependencies(allocator, names, module_identity, artifact_key, checked_types, record.ext, active, imports, available_artifacts, keys, type_owner_keys);
         },
-        .record_unbound => |fields| {
-            for (fields) |field| {
-                try appendPublicApiTypeDependencies(allocator, names, module_identity, artifact_key, checked_types, field.ty, active, imports, available_artifacts, keys, type_owner_keys);
-            }
-        },
         .tuple => |items| try appendPublicApiTypeDependencyRange(allocator, names, module_identity, artifact_key, checked_types, items, active, imports, available_artifacts, keys, type_owner_keys),
         .function => |function| {
             try appendPublicApiTypeDependencyRange(allocator, names, module_identity, artifact_key, checked_types, function.args, active, imports, available_artifacts, keys, type_owner_keys);
@@ -29756,12 +29570,6 @@ const LoweringVisibilityBuilder = struct {
                     try self.appendTypeRoot(artifact, field.ty);
                 }
                 try self.appendTypeRoot(artifact, record.ext);
-            },
-            .record_unbound => |fields| {
-                for (fields) |field| {
-                    if (field.kind.undeterminedVariable()) |variable| try self.appendTypeRoot(artifact, variable);
-                    try self.appendTypeRoot(artifact, field.ty);
-                }
             },
             .tuple => |items| try self.appendTypeRoots(artifact, items),
             .function => |function| {
@@ -32292,7 +32100,6 @@ pub const CheckedModuleArtifact = struct {
                 .rigid,
                 .alias,
                 .record,
-                .record_unbound,
                 .tuple,
                 .nominal,
                 .function,
@@ -32456,12 +32263,6 @@ pub const CheckedModuleArtifact = struct {
                     }
                     current = record.ext;
                 },
-                .record_unbound => |fields| {
-                    for (fields) |field| {
-                        if (names.recordFieldLabelTextEql(field.name, label)) return field.ty;
-                    }
-                    return null;
-                },
                 .pending,
                 .err,
                 .flex,
@@ -32506,7 +32307,6 @@ pub const CheckedModuleArtifact = struct {
                 .flex,
                 .rigid,
                 .record,
-                .record_unbound,
                 .tuple,
                 .nominal,
                 .function,
@@ -33388,7 +33188,6 @@ pub const CheckedModuleArtifact = struct {
                 .rigid,
                 .alias,
                 .record,
-                .record_unbound,
                 .tuple,
                 .nominal,
                 .function,
@@ -34183,9 +33982,6 @@ pub const CheckedTypeProjector = struct {
                 .fields = try self.projectCheckedTypeViewRecordFields(source, source_names, record.fields, active),
                 .ext = try self.projectCheckedTypeViewRootInner(source, source_names, record.ext, active),
             } },
-            .record_unbound => |fields| .{
-                .record_unbound = try self.projectCheckedTypeViewRecordFields(source, source_names, fields, active),
-            },
             .tuple => |items| .{ .tuple = try self.projectCheckedTypeViewIds(source, source_names, items, active) },
             .nominal => |nominal| .{ .nominal = .{
                 .name = try self.remapViewTypeName(source_names, nominal.name),
@@ -34493,7 +34289,6 @@ pub const CheckedTypeProjector = struct {
             .rigid => |rigid| .{ .rigid = try self.projectImportedTypeVariable(imported, rigid) },
             .alias => |alias| try self.projectImportedAlias(imported, alias),
             .record => |record| .{ .record = try self.projectImportedRecord(imported, record) },
-            .record_unbound => |fields| .{ .record_unbound = try self.projectImportedRecordFields(imported, fields) },
             .tuple => |items| .{ .tuple = try self.projectImportedTypeIds(imported, items) },
             .nominal => |nominal| try self.projectImportedNominal(imported, nominal),
             .function => |function| .{ .function = try self.projectImportedFunction(imported, function) },
@@ -34933,9 +34728,6 @@ const CheckedTypeStoreImportProjector = struct {
                 .fields = try self.projectRecordFields(record.fields),
                 .ext = try self.project(record.ext),
             } },
-            .record_unbound => |fields| .{
-                .record_unbound = try self.projectRecordFields(fields),
-            },
             .tuple => |items| .{ .tuple = try self.projectIds(items) },
             .nominal => |nominal| .{ .nominal = .{
                 .name = try self.remapTypeName(nominal.name),
@@ -38804,8 +38596,8 @@ test "SERIALIZED_VERSION_HASH golden value" {
     // `serialized_layout_version` only for semantic changes the structural hash
     // cannot observe, as documented at that discriminant.
     const golden: [32]u8 = .{
-        0xE4, 0x69, 0x6E, 0x30, 0xB3, 0x6E, 0x5B, 0x0A, 0x05, 0x66, 0x09, 0x15, 0x58, 0x72, 0x57, 0x87,
-        0xAC, 0x7B, 0x67, 0xDC, 0xCE, 0x20, 0xDE, 0x2A, 0x92, 0x53, 0x23, 0xA3, 0x77, 0x16, 0xF7, 0x3E,
+        0x70, 0x71, 0x71, 0xD9, 0x0D, 0x4F, 0x16, 0x24, 0x6D, 0x3D, 0xC9, 0xFF, 0xDB, 0x8B, 0xB0, 0x9E,
+        0xAF, 0x5A, 0xCD, 0x3D, 0x7A, 0x86, 0x6E, 0x5A, 0x2E, 0x92, 0x7E, 0x45, 0x69, 0x8A, 0x8F, 0x3A,
     };
     try std.testing.expectEqualSlices(u8, &golden, &CheckedModuleArtifact.SERIALIZED_VERSION_HASH);
 }
@@ -39272,7 +39064,6 @@ test "direct dispatch classification follows instantiation clones to the scheme 
         .rigid,
         .alias,
         .record,
-        .record_unbound,
         .tuple,
         .nominal,
         .function,
@@ -39327,7 +39118,6 @@ test "direct dispatch classification follows instantiation clones to the scheme 
         .rigid,
         .alias,
         .record,
-        .record_unbound,
         .tuple,
         .nominal,
         .function,
@@ -39351,7 +39141,6 @@ test "direct dispatch classification follows instantiation clones to the scheme 
         .rigid,
         .alias,
         .record,
-        .record_unbound,
         .tuple,
         .nominal,
         .function,
@@ -39369,7 +39158,6 @@ test "direct dispatch classification follows instantiation clones to the scheme 
         .rigid,
         .alias,
         .record,
-        .record_unbound,
         .tuple,
         .nominal,
         .function,

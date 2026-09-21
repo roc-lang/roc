@@ -2122,7 +2122,7 @@ const SpecCensus = if (builtin.os.tag == .freestanding) struct {
             if (gop.found_existing) continue;
             switch (types.payload(ty)) {
                 .pending, .err, .empty_record, .empty_tag_union => {},
-                .flex, .rigid, .record_unbound => return true,
+                .flex, .rigid => return true,
                 .alias => |alias| {
                     try stack.append(allocator, alias.backing);
                     try stack.appendSlice(allocator, alias.args);

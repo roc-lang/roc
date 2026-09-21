@@ -132,13 +132,6 @@ fn writeNestedPlaceholder(
                 out,
                 depth,
             ),
-            .record_unbound => |fields| try writeRecordPlaceholder(
-                allocator,
-                module_env,
-                module_env.types.getRecordFieldsSlice(fields),
-                out,
-                depth,
-            ),
             .tuple => |tuple| {
                 try out.appendSlice(allocator, "(");
                 for (module_env.types.sliceVars(tuple.elems), 0..) |elem_var, index| {
@@ -206,7 +199,6 @@ fn callableFunction(module_env: *const ModuleEnv, type_var: types.Var) ?types.Fu
             .fn_pure, .fn_unbound => |pure| pure,
             .fn_effectful,
             .record,
-            .record_unbound,
             .tuple,
             .nominal_type,
             .empty_record,

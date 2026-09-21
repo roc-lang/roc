@@ -188,7 +188,6 @@ pub const Content = union(enum(u8)) {
                     .record => |record| {
                         return record;
                     },
-                    .record_unbound,
                     .tuple,
                     .nominal_type,
                     .fn_pure,
@@ -213,7 +212,6 @@ pub const Content = union(enum(u8)) {
                         return tag_union;
                     },
                     .record,
-                    .record_unbound,
                     .tuple,
                     .nominal_type,
                     .fn_pure,
@@ -237,7 +235,6 @@ pub const Content = union(enum(u8)) {
                         return nominal_type;
                     },
                     .record,
-                    .record_unbound,
                     .tuple,
                     .fn_pure,
                     .fn_effectful,
@@ -261,7 +258,6 @@ pub const Content = union(enum(u8)) {
                     .fn_effectful => |func| return func,
                     .fn_unbound => |func| return func,
                     .record,
-                    .record_unbound,
                     .tuple,
                     .nominal_type,
                     .empty_record,
@@ -283,7 +279,6 @@ pub const Content = union(enum(u8)) {
                     .fn_effectful => |func| return .{ .func = func, .ext = .effectful },
                     .fn_unbound => |func| return .{ .func = func, .ext = .unbound },
                     .record,
-                    .record_unbound,
                     .tuple,
                     .nominal_type,
                     .empty_record,
@@ -537,7 +532,6 @@ pub const DefaultId = struct {
 /// takes after resolving type variables and aliases.
 pub const FlatType = union(enum(u8)) {
     record: Record,
-    record_unbound: RecordField.SafeMultiList.Range,
     tuple: Tuple,
     nominal_type: NominalType,
     fn_pure: Func,

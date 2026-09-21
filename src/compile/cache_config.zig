@@ -210,7 +210,11 @@ pub const Constants = struct {
     ///     len) instead of a capacity-sized region, and every persisted byte is
     ///     declared: `Node.Payload` variants fill the union exactly and
     ///     `NumeralLiteral` declares its trailing bytes.
-    pub const CACHE_VERSION = 97;
+    /// 97: Record types always carry an explicit extension variable; a record
+    ///     update's base row is an ordinary record whose tail is a flex var.
+    /// 98: Canonicalization caches source-local output and defers imported
+    ///     names, including literal suffixes, until imports finish checking.
+    pub const CACHE_VERSION = 98;
 };
 
 /// Configuration for the Roc cache system.

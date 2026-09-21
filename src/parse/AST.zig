@@ -881,6 +881,32 @@ fn pushQualifiedName(
     }
 }
 
+fn pushLiteralTypeSuffix(
+    self: *const AST,
+    env: *const CommonEnv,
+    tree: *SExprTree,
+    suffix: LiteralTypeSuffix,
+) std.mem.Allocator.Error!void {
+    switch (suffix) {
+        .path => |path| try self.pushQualifiedName(env, tree, "type", path.qualifiers, path.final_token),
+        .deprecated_builtin => |type_name| try tree.pushStringPair("type", env.getIdent(type_name)),
+    }
+}
+
+/// The explicit type suffix of a literal, such as the `.U64` of `123.U64` or
+/// the `.Gui.Color` of `0x05080a.Gui.Color`.
+pub const LiteralTypeSuffix = union(enum) {
+    /// A suffix written as adjacent `.Upper` segments. `qualifiers` holds every
+    /// segment before `final_token`, and is empty for an unqualified suffix.
+    path: struct {
+        qualifiers: Token.Span,
+        final_token: Token.Idx,
+    },
+    /// The builtin number type named by a deprecated suffix spelled inside the
+    /// literal token itself, such as the `u64` of `123u64`.
+    deprecated_builtin: base.Ident.Idx,
+};
+
 /// Resolves the complete target spelling selected by import parsing.
 pub fn resolveImportTarget(self: *const AST, target: ImportTarget) []const u8 {
     const start_offset: usize = self.tokens.resolve(target.start_tok).start.offset;
@@ -1429,13 +1455,13 @@ pub const Pattern = union(enum) {
     },
     typed_int: struct {
         number_tok: Token.Idx,
-        type_ident: base.Ident.Idx,
+        type_suffix: LiteralTypeSuffix,
         literal: NumericLiteral.Idx,
         region: TokenizedRegion,
     },
     typed_frac: struct {
         number_tok: Token.Idx,
-        type_ident: base.Ident.Idx,
+        type_suffix: LiteralTypeSuffix,
         literal: NumericLiteral.Idx,
         region: TokenizedRegion,
     },
@@ -1446,7 +1472,7 @@ pub const Pattern = union(enum) {
     },
     single_quote: struct {
         token: Token.Idx,
-        type_ident: ?base.Ident.Idx = null,
+        type_suffix: ?LiteralTypeSuffix = null,
         region: TokenizedRegion,
     },
     record: struct {
@@ -1576,7 +1602,7 @@ pub const Pattern = union(enum) {
                 try tree.pushStaticAtom("p-typed-int");
                 try ast.appendRegionInfoToSexprTree(env, tree, num.region);
                 try tree.pushStringPair("raw", ast.resolve(num.number_tok));
-                try tree.pushStringPair("type", env.getIdent(num.type_ident));
+                try ast.pushLiteralTypeSuffix(env, tree, num.type_suffix);
                 const attrs = tree.beginNode();
                 try tree.endNode(begin, attrs);
             },
@@ -1585,7 +1611,7 @@ pub const Pattern = union(enum) {
                 try tree.pushStaticAtom("p-typed-frac");
                 try ast.appendRegionInfoToSexprTree(env, tree, num.region);
                 try tree.pushStringPair("raw", ast.resolve(num.number_tok));
-                try tree.pushStringPair("type", env.getIdent(num.type_ident));
+                try ast.pushLiteralTypeSuffix(env, tree, num.type_suffix);
                 const attrs = tree.beginNode();
                 try tree.endNode(begin, attrs);
             },
@@ -1605,8 +1631,8 @@ pub const Pattern = union(enum) {
                 try tree.pushStaticAtom("p-single-quote");
                 try ast.appendRegionInfoToSexprTree(env, tree, sq.region);
                 try tree.pushStringPair("raw", ast.resolve(sq.token));
-                if (sq.type_ident) |type_ident| {
-                    try tree.pushStringPair("type", env.getIdent(type_ident));
+                if (sq.type_suffix) |type_suffix| {
+                    try ast.pushLiteralTypeSuffix(env, tree, type_suffix);
                 }
                 const attrs = tree.beginNode();
                 try tree.endNode(begin, attrs);
@@ -2920,7 +2946,7 @@ pub const Expr = union(enum) {
     /// Deprecated suffix syntax such as `123u64` is desugared to this form during parsing.
     typed_int: struct {
         token: Token.Idx,
-        type_ident: base.Ident.Idx,
+        type_suffix: LiteralTypeSuffix,
         literal: NumericLiteral.Idx,
         region: TokenizedRegion,
     },
@@ -2928,13 +2954,13 @@ pub const Expr = union(enum) {
     /// Deprecated suffix syntax such as `3.14dec` is desugared to this form during parsing.
     typed_frac: struct {
         token: Token.Idx,
-        type_ident: base.Ident.Idx,
+        type_suffix: LiteralTypeSuffix,
         literal: NumericLiteral.Idx,
         region: TokenizedRegion,
     },
     single_quote: struct {
         token: Token.Idx,
-        type_ident: ?base.Ident.Idx = null,
+        type_suffix: ?LiteralTypeSuffix = null,
         region: TokenizedRegion,
     },
     string_part: struct { // TODO: this should be more properly represented in its own union enum
@@ -3071,7 +3097,7 @@ pub const Expr = union(enum) {
     /// A string literal with an explicit type suffix, e.g. `"foo".MyType`.
     pub const TypedStringLike = struct {
         token: Token.Idx,
-        type_ident: base.Ident.Idx,
+        type_suffix: LiteralTypeSuffix,
         region: TokenizedRegion,
         parts: Expr.Span,
     };
@@ -3159,7 +3185,7 @@ pub const Expr = union(enum) {
                 try tree.pushStaticAtom("e-typed-int");
                 try ast.appendRegionInfoToSexprTree(env, tree, a.region);
                 try tree.pushStringPair("raw", ast.resolve(a.token));
-                try tree.pushStringPair("type", env.getIdent(a.type_ident));
+                try ast.pushLiteralTypeSuffix(env, tree, a.type_suffix);
                 const attrs = tree.beginNode();
                 try tree.endNode(begin, attrs);
             },
@@ -3168,7 +3194,7 @@ pub const Expr = union(enum) {
                 try tree.pushStaticAtom("e-typed-frac");
                 try ast.appendRegionInfoToSexprTree(env, tree, a.region);
                 try tree.pushStringPair("raw", ast.resolve(a.token));
-                try tree.pushStringPair("type", env.getIdent(a.type_ident));
+                try ast.pushLiteralTypeSuffix(env, tree, a.type_suffix);
                 const attrs = tree.beginNode();
                 try tree.endNode(begin, attrs);
             },
@@ -3177,8 +3203,8 @@ pub const Expr = union(enum) {
                 try tree.pushStaticAtom("e-single-quote");
                 try ast.appendRegionInfoToSexprTree(env, tree, a.region);
                 try tree.pushStringPair("raw", ast.resolve(a.token));
-                if (a.type_ident) |type_ident| {
-                    try tree.pushStringPair("type", env.getIdent(type_ident));
+                if (a.type_suffix) |type_suffix| {
+                    try ast.pushLiteralTypeSuffix(env, tree, type_suffix);
                 }
                 const attrs = tree.beginNode();
                 try tree.endNode(begin, attrs);
@@ -3225,7 +3251,7 @@ pub const Expr = union(enum) {
                 const begin = tree.beginNode();
                 try tree.pushStaticAtom("e-typed-string");
                 try ast.appendRegionInfoToSexprTree(env, tree, str.region);
-                try tree.pushStringPair("type", env.getIdent(str.type_ident));
+                try ast.pushLiteralTypeSuffix(env, tree, str.type_suffix);
                 const attrs = tree.beginNode();
 
                 for (ast.store.exprSlice(str.parts)) |part_id| {
@@ -3239,7 +3265,7 @@ pub const Expr = union(enum) {
                 const begin = tree.beginNode();
                 try tree.pushStaticAtom("e-typed-multiline-string");
                 try ast.appendRegionInfoToSexprTree(env, tree, str.region);
-                try tree.pushStringPair("type", env.getIdent(str.type_ident));
+                try ast.pushLiteralTypeSuffix(env, tree, str.type_suffix);
                 const attrs = tree.beginNode();
 
                 for (ast.store.exprSlice(str.parts)) |part_id| {

@@ -669,6 +669,7 @@ const Resolver = struct {
         switch (entry.kind) {
             .expr_value => try self.resolveValueEntry(entry, available, prefix, path_text),
             .receiver_method_owner, .file_import => unreachable, // handled above
+            .numeric_suffix,
             .type_anno_lookup,
             .type_anno_apply,
             .expr_nominal,
@@ -769,6 +770,17 @@ const Resolver = struct {
         const import_idx = entryImport(entry);
 
         switch (entry.kind) {
+            .numeric_suffix => {
+                const target: ModuleEnv.NumericSuffixTarget.Target = if (in_import)
+                    .{ .external = .{ .import_idx = import_idx, .target_node_idx = decl_node_idx } }
+                else
+                    .{ .external_identity = .{
+                        .module_identity = (try self.identityFor(decl_env)) orelse
+                            return self.failEntry(entry, entry.not_found_failure),
+                        .target_node_idx = decl_node_idx,
+                    } };
+                try self.env.recordNumericSuffixTarget(@enumFromInt(entry.node_idx), target);
+            },
             .type_anno_lookup => {
                 const anno_idx: CIR.TypeAnno.Idx = @enumFromInt(entry.node_idx);
                 if (in_import) {
@@ -863,6 +875,7 @@ const Resolver = struct {
                 );
             },
             .expr_value,
+            .numeric_suffix,
             .type_anno_lookup,
             .type_anno_apply,
             .receiver_method_owner,
@@ -1098,6 +1111,7 @@ const Resolver = struct {
             .expr_value,
             .expr_nominal,
             .pattern_nominal,
+            .numeric_suffix,
             .type_anno_lookup,
             .type_anno_apply,
             .receiver_method_owner,
@@ -1163,6 +1177,10 @@ const Resolver = struct {
             .pattern_nominal => {
                 const diagnostic_idx = try self.env.addDiagnostic(diagnostic);
                 self.env.store.replacePatternWithRuntimeError(@enumFromInt(entry.node_idx), diagnostic_idx);
+            },
+            .numeric_suffix => {
+                _ = try self.env.addDiagnostic(diagnostic);
+                try self.env.recordNumericSuffixTarget(@enumFromInt(entry.node_idx), .invalid);
             },
             .type_anno_lookup, .type_anno_apply => {
                 const diagnostic_idx = try self.env.addDiagnostic(diagnostic);

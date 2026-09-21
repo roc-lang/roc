@@ -8,10 +8,21 @@ type=file
 main!=|0|||"".P
 ~~~
 # EXPECTED
+UNDECLARED TYPE - fuzz_crash_108.md:1:12:1:16
 NON EXHAUSTIVE DESTRUCTURE - fuzz_crash_108.md:1:8:1:9
 # PROBLEMS
 ~~~clojure
 (reports
+	(report
+		(severity runtime_error)
+		(title "Undeclared Type")
+		(region (start 1 12) (end 1 16))
+		(headline
+			(reflow "The type ")
+			(annotated code "P")
+			(reflow " is not declared in this scope."))
+		(document
+			(source-region (file "fuzz_crash_108.md") (start 1 12) (end 1 16) (annotation error) (line-text "main!=|0|||\"\".P"))))
 	(report
 		(severity runtime_error)
 		(title "Non Exhaustive Destructure")

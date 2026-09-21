@@ -848,15 +848,20 @@ pub const NumericSuffixTarget = extern struct {
     data1: u32,
     data2: u32,
 
+    /// Stored suffix targets.
     pub const SafeList = collections.SafeList(@This());
 
+    /// Encoding of the selected suffix type.
     pub const Kind = enum(u32) {
         builtin,
         local,
         external,
+        external_identity,
+        pending,
         invalid,
     };
 
+    /// Selected type or an import awaiting resolution.
     pub const Target = union(enum) {
         builtin: CIR.NumKind,
         local: CIR.Statement.Idx,
@@ -864,9 +869,15 @@ pub const NumericSuffixTarget = extern struct {
             import_idx: CIR.Import.Idx,
             target_node_idx: u32,
         },
+        external_identity: struct {
+            module_identity: base.ModuleIdentity.Idx,
+            target_node_idx: u32,
+        },
+        pending: DeferredImportRef.Idx,
         invalid,
     };
 
+    /// Decode the stored suffix target.
     pub fn target(self: NumericSuffixTarget) Target {
         return switch (@as(Kind, @enumFromInt(self.kind))) {
             .builtin => .{ .builtin = @enumFromInt(self.data1) },
@@ -875,6 +886,11 @@ pub const NumericSuffixTarget = extern struct {
                 .import_idx = @enumFromInt(self.data1),
                 .target_node_idx = self.data2,
             } },
+            .external_identity => .{ .external_identity = .{
+                .module_identity = @enumFromInt(self.data1),
+                .target_node_idx = self.data2,
+            } },
+            .pending => .{ .pending = @enumFromInt(self.data1) },
             .invalid => .invalid,
         };
     }
@@ -1212,6 +1228,8 @@ pub const DeferredRefKind = enum(u8) {
     type_anno_lookup,
     /// A type-annotation application (`ty_apply`) naming an imported type.
     type_anno_apply,
+    /// A literal suffix naming an imported type.
+    numeric_suffix,
     /// A receiver-extension method registration whose receiver type is
     /// imported. Its owner identity is settled once the receiver type's own
     /// deferred reference resolves.
@@ -5245,6 +5263,21 @@ pub fn recordNumericSuffixTarget(
             .kind = @intFromEnum(NumericSuffixTarget.Kind.external),
             .data1 = @intFromEnum(external.import_idx),
             .data2 = external.target_node_idx,
+        },
+        .external_identity => |external| NumericSuffixTarget{
+            .node_idx = raw_node,
+            .kind = @intFromEnum(NumericSuffixTarget.Kind.external_identity),
+            .data1 = @intFromEnum(external.module_identity),
+            .data2 = external.target_node_idx,
+        },
+        .pending => |ref| blk: {
+            self.deferred_import_refs.items.items[@intFromEnum(ref)].node_idx = raw_node;
+            break :blk NumericSuffixTarget{
+                .node_idx = raw_node,
+                .kind = @intFromEnum(NumericSuffixTarget.Kind.pending),
+                .data1 = @intFromEnum(ref),
+                .data2 = 0,
+            };
         },
         .invalid => NumericSuffixTarget{
             .node_idx = raw_node,
