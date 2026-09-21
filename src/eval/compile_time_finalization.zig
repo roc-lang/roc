@@ -1901,8 +1901,8 @@ const InterpreterProgram = struct {
     slot_demand: ?SlotDemand = null,
     demand_error: ?FinalizeError = null,
     host: CompilerHost,
-    /// Literal backings owned by the root program and borrowed by its forks,
-    /// so published values may reference them for the whole finalization.
+    /// Literal backings for the program's store. The root owns them and its
+    /// forks borrow them, so they outlive every fork's interpreter.
     static_strings: Interpreter.StaticStrings.Table,
     interpreter: Interpreter,
     static_callables: std.ArrayList(Interpreter.StaticErasedCallable) = .empty,

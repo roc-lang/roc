@@ -52,6 +52,18 @@ const RuntimeState = struct {
     static_strings: eval.LirInterpreter.StaticStrings.Table,
 };
 
+/// Build the image's literal backings once, packed into one arena so each
+/// literal does not occupy its own page. The arena lives as long as the image.
+fn buildImageStaticStrings(gpa: Allocator, store: *const lir.LirStore) Allocator.Error!eval.LirInterpreter.StaticStrings.Table {
+    const arena = try gpa.create(std.heap.ArenaAllocator);
+    arena.* = .init(gpa);
+    errdefer {
+        arena.deinit();
+        gpa.destroy(arena);
+    }
+    return eval.LirInterpreter.buildStaticStrings(arena.allocator(), store);
+}
+
 const ShimError = error{
     ImageUnavailable,
     InvalidEntrypoint,
@@ -89,7 +101,7 @@ fn openRuntimeState(gpa: Allocator) RuntimeStateError!RuntimeState {
     errdefer view.deinit();
     var static_data = try eval.InterpreterStaticData.init(gpa, view.static_data, view.static_data_value_count);
     errdefer static_data.deinit();
-    const static_strings = try eval.LirInterpreter.buildStaticStrings(gpa, &view.store);
+    const static_strings = try buildImageStaticStrings(gpa, &view.store);
 
     return .{
         .source = .coordination,
@@ -279,7 +291,7 @@ fn ensureEmbeddedRuntimeState(image_base: *anyopaque, image_len: usize, ops: *Ro
         return error.OutOfMemory;
     };
     errdefer static_data.deinit();
-    const static_strings = eval.LirInterpreter.buildStaticStrings(allocator(), &view.store) catch {
+    const static_strings = buildImageStaticStrings(allocator(), &view.store) catch {
         ops.crash("LIR shim could not allocate the string literal image");
         return error.OutOfMemory;
     };
