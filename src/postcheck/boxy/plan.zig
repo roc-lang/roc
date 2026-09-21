@@ -592,6 +592,21 @@ pub const GeneratedParserFieldCapture = struct {
     optional_null: bool = false,
 };
 
+/// How one generated parser worker reports an absent required record field.
+pub const GeneratedParserMissingRequiredField = struct {
+    worker: WorkerPlanId,
+    failure: Failure,
+
+    pub const Failure = enum {
+        /// The parser error row retains `MissingRequiredField(Str)`; the
+        /// generated body constructs it with the field's renamed key.
+        missing_required_field_tag,
+        /// The parser error row omits that tag; the generated body calls the
+        /// format's checked `invalid_value` method with the remaining state.
+        invalid_value,
+    };
+};
+
 /// Exact checked JSON-style Try handling consumed by a generated parser.
 pub const GeneratedParserTryPlan = struct {
     worker: WorkerPlanId,
@@ -825,6 +840,7 @@ pub const ProgramPlan = struct {
     generated_field_iterator_links: std.ArrayList(GeneratedFieldIteratorLink),
     generated_interpolations: std.ArrayList(GeneratedInterpolationPlan),
     generated_parser_field_captures: std.ArrayList(GeneratedParserFieldCapture),
+    generated_parser_missing_required_fields: std.ArrayList(GeneratedParserMissingRequiredField),
     generated_parser_try_plans: std.ArrayList(GeneratedParserTryPlan),
     generated_parser_dictionary_field_selections: std.ArrayList(GeneratedParserDictionaryFieldSelection),
     generated_encoder_try_plans: std.ArrayList(GeneratedEncoderTryPlan),
@@ -881,6 +897,7 @@ pub const ProgramPlan = struct {
             .generated_field_iterator_links = .empty,
             .generated_interpolations = .empty,
             .generated_parser_field_captures = .empty,
+            .generated_parser_missing_required_fields = .empty,
             .generated_parser_try_plans = .empty,
             .generated_parser_dictionary_field_selections = .empty,
             .generated_encoder_try_plans = .empty,
@@ -951,6 +968,7 @@ pub const ProgramPlan = struct {
         self.generated_interpolations.deinit(self.allocator);
         self.generated_codec_calls.deinit(self.allocator);
         self.generated_parser_field_captures.deinit(self.allocator);
+        self.generated_parser_missing_required_fields.deinit(self.allocator);
         self.generated_parser_try_plans.deinit(self.allocator);
         self.generated_parser_dictionary_field_selections.deinit(self.allocator);
         self.generated_encoder_try_plans.deinit(self.allocator);
@@ -1171,6 +1189,16 @@ pub const ProgramPlan = struct {
 
     pub fn generatedCodecCallTypeSlice(self: *const ProgramPlan, span: Span) []const CheckedTypeIdentity {
         return self.generated_codec_call_types.items[span.start .. span.start + span.len];
+    }
+
+    pub fn generatedParserMissingRequiredField(
+        self: *const ProgramPlan,
+        worker: WorkerPlanId,
+    ) GeneratedParserMissingRequiredField.Failure {
+        for (self.generated_parser_missing_required_fields.items) |planned| {
+            if (planned.worker == worker) return planned.failure;
+        }
+        boxyPlanInvariant("generated record parser had no planned missing-required-field failure");
     }
 
     pub fn directWorkerForCall(
@@ -3121,12 +3149,14 @@ const Builder = struct {
             boxyPlanInvariant("generated codec constructor referenced a missing checked derivation");
         }
         const derivation = view.static_dispatch_plans.generated_codec_derivations[@intFromEnum(derivation_id)];
+        // Every generated constructor worker is requested at a source use of
+        // the contract, so it is checked against the contract's source roles.
         if (derivation.kind != expected_kind or
-            !std.meta.eql(constructor_key, view.checked_types.rootKey(derivation.constructor_ty)) or
-            !std.meta.eql(shape_key, view.checked_types.rootKey(derivation.shape_ty)) or
-            !std.meta.eql(encoding_key, view.checked_types.rootKey(derivation.encoding_ty)) or
-            !std.meta.eql(state_key, view.checked_types.rootKey(derivation.state_ty)) or
-            !std.meta.eql(view.checked_types.rootKey(runtime_type.ty), view.checked_types.rootKey(derivation.runtime_ty)))
+            !std.meta.eql(constructor_key, view.checked_types.rootKey(derivation.source_constructor_ty)) or
+            !std.meta.eql(shape_key, view.checked_types.rootKey(derivation.source_shape_ty)) or
+            !std.meta.eql(encoding_key, view.checked_types.rootKey(derivation.source_encoding_ty)) or
+            !std.meta.eql(state_key, view.checked_types.rootKey(derivation.source_state_ty)) or
+            !std.meta.eql(view.checked_types.rootKey(runtime_type.ty), view.checked_types.rootKey(derivation.source_runtime_ty)))
         {
             boxyPlanInvariant("generated codec constructor disagreed with its checked derivation reference");
         }
@@ -3583,24 +3613,22 @@ const Builder = struct {
             null;
 
         var needs_required = false;
-        var needs_optional = false;
         for (fields) |planned_field| {
             const field_view = self.moduleForId(planned_field.module);
             const field = planned_field.field;
             const field_type = typeRef(field_view, field.ty);
-            const try_payloads = checkedTryPayloads(field_view, field.ty);
-            const optional_kinds = if (try_payloads) |payloads|
-                checkedTryErrorKinds(field_view, payloads.err) orelse
-                    boxyPlanInvariant("generated record parser Try field had unsupported error tags")
+            // Only a builtin `Try(ok, [Missing])` field may be absent from the
+            // input (design.md "Derived Parser Required-Field Error Composition"); an absent
+            // key fills it with `Err(Missing)`. Every other field is required
+            // and parses at its own type, including a nullable `Try(ok, [Null])`.
+            const optional_payloads: ?CheckedTryPayloads = if (checkedTryPayloads(field_view, field.ty)) |payloads|
+                if (checkedTryErrorKinds(field_view, payloads.err)) |kinds|
+                    if (kinds.missing and !kinds.null and !kinds.other) payloads else null
+                else
+                    null
             else
                 null;
-            const optional_missing = if (optional_kinds) |kinds| kinds.missing or kinds.other else false;
-            const optional_null = if (optional_kinds) |kinds| kinds.null and !kinds.other else false;
-            const parser_wrap_ok = optional_missing and !optional_null;
-            const parse_type = if (try_payloads) |payloads|
-                if (optional_null) field_type else typeRef(field_view, payloads.ok)
-            else
-                field_type;
+            const parse_type = if (optional_payloads) |payloads| typeRef(field_view, payloads.ok) else field_type;
             try self.plan.generated_parser_field_captures.append(self.allocator, .{
                 .worker = worker,
                 .record_type = record_type,
@@ -3608,25 +3636,41 @@ const Builder = struct {
                 .field_name = field.name,
                 .source_type = rename_call.?.ret_type,
                 .parse_type = parse_type,
-                .parser_wrap_ok = parser_wrap_ok,
-                .optional_error_type = if (try_payloads) |payloads| typeRef(field_view, payloads.err) else null,
-                .optional_missing = optional_missing,
-                .optional_null = optional_null,
+                .parser_wrap_ok = optional_payloads != null,
+                .optional_error_type = if (optional_payloads) |payloads| typeRef(field_view, payloads.err) else null,
+                .optional_missing = optional_payloads != null,
             });
-            if (optional_kinds != null) {
-                if (optional_missing) {
-                    needs_optional = true;
-                } else {
-                    needs_required = true;
-                }
-                try self.planGeneratedParserShape(worker, parse_type, encoding_type);
-            } else {
-                needs_required = true;
-                try self.planGeneratedParserShape(worker, field_type, encoding_type);
-            }
+            if (optional_payloads == null) needs_required = true;
+            try self.planGeneratedParserShape(worker, parse_type, encoding_type);
         }
-        if (needs_required) _ = try self.ensureGeneratedCodecCall(worker, encoding_type, "missing_record_field", null);
-        if (needs_optional) _ = try self.ensureGeneratedCodecCall(worker, encoding_type, "missing_optional_field", null);
+        if (needs_required) try self.planGeneratedParserMissingRequiredField(worker, encoding_type);
+    }
+
+    /// Select how `worker`'s generated record parser reports an absent required
+    /// field, from the same checked error row the checker finalized
+    /// (`finalizeGeneratedParserErrorMappings`): a row that retains
+    /// `MissingRequiredField(Str)` receives that tag directly; any other row
+    /// maps the failure through the format's checked `invalid_value` method.
+    fn planGeneratedParserMissingRequiredField(
+        self: *Builder,
+        worker: WorkerPlanId,
+        encoding_type: CheckedTypeIdentity,
+    ) Allocator.Error!void {
+        for (self.plan.generated_parser_missing_required_fields.items) |planned| {
+            if (planned.worker == worker) return;
+        }
+        const contract = self.generatedCodecContractForWorker(worker);
+        const failure: GeneratedParserMissingRequiredField.Failure =
+            if (checkedErrorRowHasTag(contract.view, contract.derivation.error_ty, "MissingRequiredField"))
+                .missing_required_field_tag
+            else blk: {
+                _ = try self.ensureGeneratedCodecCall(worker, encoding_type, "invalid_value", null);
+                break :blk .invalid_value;
+            };
+        try self.plan.generated_parser_missing_required_fields.append(self.allocator, .{
+            .worker = worker,
+            .failure = failure,
+        });
     }
 
     const GeneratedRecordCheckedField = struct {
@@ -13177,6 +13221,39 @@ fn checkedTryErrorKinds(view: ModuleView, checked_ty: checked.CheckedTypeId) ?Ch
     boxyPlanInvariant("checked Try error row was cyclic");
 }
 
+/// Whether a checked error row names `tag_text`, mirroring the checker's
+/// `parserErrorRowHasTag`: an open or generalized extension has not retained
+/// the tag, and a non-row error type never does.
+fn checkedErrorRowHasTag(view: ModuleView, checked_ty: checked.CheckedTypeId, tag_text: []const u8) bool {
+    const names = view.canonical_names orelse
+        boxyPlanInvariant("generated parser error row module had no checked names");
+    var current = checked_ty;
+    var remaining = view.checked_types.payloadCount();
+    while (remaining > 0) : (remaining -= 1) {
+        switch (view.checked_types.payload(current)) {
+            .alias => |alias| current = alias.backing,
+            .tag_union => |tag_union| {
+                for (tag_union.tags) |tag| {
+                    if (std.mem.eql(u8, names.tagLabelText(tag.name), tag_text)) return true;
+                }
+                current = tag_union.ext;
+            },
+            .empty_tag_union,
+            .flex,
+            .rigid,
+            .nominal,
+            .record,
+            .tuple,
+            .function,
+            .empty_record,
+            => return false,
+            .pending => boxyPlanInvariant("pending checked type reached generated parser error row planning"),
+            .err => boxyPlanInvariant("checked error type reached generated parser error row planning"),
+        }
+    }
+    boxyPlanInvariant("checked parser error row was cyclic");
+}
+
 fn checkedTryPayloads(view: ModuleView, checked_ty: checked.CheckedTypeId) ?CheckedTryPayloads {
     const names = view.canonical_names orelse return null;
     var current = checked_ty;
@@ -13186,7 +13263,11 @@ fn checkedTryPayloads(view: ModuleView, checked_ty: checked.CheckedTypeId) ?Chec
     while (remaining > 0) : (remaining -= 1) {
         switch (view.checked_types.payload(current)) {
             .alias => |alias| current = alias.backing,
-            .nominal => |nominal| current = view.checked_types.nominalBackingTemplateForPayload(nominal) orelse return null,
+            .nominal => |nominal| {
+                if (nominal.builtin != .try_) return null;
+                if (nominal.args.len != 2) boxyPlanInvariant("Builtin.Try checked type did not have exactly two type arguments");
+                return .{ .ok = nominal.args[0], .err = nominal.args[1] };
+            },
             .tag_union => |tag_union| {
                 for (tag_union.tags) |tag| {
                     const args = tag.argsSlice(view.checked_types);

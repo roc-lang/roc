@@ -10311,7 +10311,6 @@ const ProcedureBuilder = struct {
         parser_wrap_ok: bool,
         optional_error_type: ?Plan.CheckedTypeIdentity,
         optional_missing: bool,
-        optional_null: bool,
         renamed: LIR.LocalId,
         payload: LIR.LocalId,
         index: usize,
@@ -10551,7 +10550,6 @@ const ProcedureBuilder = struct {
             var parser_wrap_ok = false;
             var optional_error_type: ?Plan.CheckedTypeIdentity = null;
             var optional_missing = false;
-            var optional_null = false;
             for (self.plan.generated_parser_field_captures.items) |capture| {
                 if (capture.worker != worker) continue;
                 const capture_view = procedureModuleById(self.modules, capture.field_module);
@@ -10572,7 +10570,6 @@ const ProcedureBuilder = struct {
                     parser_wrap_ok = capture.parser_wrap_ok;
                     optional_error_type = capture.optional_error_type;
                     optional_missing = capture.optional_missing;
-                    optional_null = capture.optional_null;
                 }
                 capture_local_index += 1;
             }
@@ -10588,7 +10585,6 @@ const ProcedureBuilder = struct {
                 .parser_wrap_ok = parser_wrap_ok,
                 .optional_error_type = optional_error_type,
                 .optional_missing = optional_missing,
-                .optional_null = optional_null,
                 .renamed = renamed orelse boxyLowerInvariant("generated parser record field had no renamed capture"),
                 .payload = undefined,
                 .index = out_index,
@@ -11007,38 +11003,76 @@ const ProcedureBuilder = struct {
         present_continuation: LIR.CFStmtId,
     ) Allocator.Error!LIR.CFStmtId {
         const field = context.fields[field_index];
-        const method = if (field.optional_missing) "missing_optional_field" else "missing_record_field";
-        const call = proc.generatedCodecCallPlan(context.worker, context.encoding_type, method, null);
-        const err_rep = proc.repForTypeRef(call.ret_type);
-        const err = try proc.addFrameLocalForRep(err_rep);
-        const continuation = if (field.optional_missing) blk: {
-            const field_err = proc.generatedParserTagVariant(field.rep, "Err");
-            break :blk try proc.assignGeneratedParserTag(
+        if (field.optional_missing) {
+            // An absent optional `Try(ok, [Missing])` field is `Err(Missing)`.
+            const error_type = field.optional_error_type orelse
+                boxyLowerInvariant("generated optional parser field had no checked error type");
+            const error_rep = proc.repForTypeRef(error_type);
+            const error_value = try proc.addFrameLocalForRep(error_rep);
+            const continuation = try proc.assignGeneratedParserTag(
                 field.payload,
                 field.rep,
-                field_err,
-                err,
-                err_rep,
+                proc.generatedParserTagVariant(field.rep, "Err"),
+                error_value,
+                error_rep,
                 present_continuation,
             );
-        } else blk: {
-            const target_err = proc.generatedParserTagVariant(context.target_rep, "Err");
-            break :blk try proc.assignGeneratedParserTag(
-                context.target,
-                context.target_rep,
-                target_err,
-                err,
-                err_rep,
-                context.next,
+            return try proc.assignGeneratedParserZeroTag(
+                error_value,
+                error_rep,
+                proc.generatedParserTagVariant(error_rep, "Missing"),
+                continuation,
             );
+        }
+
+        const target_err = proc.generatedParserTagVariant(context.target_rep, "Err");
+        return switch (self.plan.generatedParserMissingRequiredField(context.worker)) {
+            .missing_required_field_tag => blk: {
+                const err_payloads = self.plan.childSlice(target_err.variant.payloads);
+                if (err_payloads.len != 1) boxyLowerInvariant("generated parser result Err did not carry one payload");
+                const error_rep = proc.nominalBackingActualRep(context.target_rep, err_payloads[0].rep);
+                const error_value = try proc.addFrameLocalForRep(error_rep);
+                const missing = proc.generatedParserTagVariant(error_rep, "MissingRequiredField");
+                const missing_payloads = self.plan.childSlice(missing.variant.payloads);
+                if (missing_payloads.len != 1) boxyLowerInvariant("MissingRequiredField did not carry one Str payload");
+                const continuation = try proc.assignGeneratedParserTag(
+                    context.target,
+                    context.target_rep,
+                    target_err,
+                    error_value,
+                    error_rep,
+                    context.next,
+                );
+                break :blk try proc.assignGeneratedParserTag(
+                    error_value,
+                    error_rep,
+                    missing,
+                    field.renamed,
+                    missing_payloads[0].rep,
+                    continuation,
+                );
+            },
+            .invalid_value => blk: {
+                const call = proc.generatedCodecCallPlan(context.worker, context.encoding_type, "invalid_value", null);
+                const error_rep = proc.repForTypeRef(call.ret_type);
+                const error_value = try proc.addFrameLocalForRep(error_rep);
+                const continuation = try proc.assignGeneratedParserTag(
+                    context.target,
+                    context.target_rep,
+                    target_err,
+                    error_value,
+                    error_rep,
+                    context.next,
+                );
+                break :blk try self.lowerGeneratedCodecCallLocalsInto(
+                    proc,
+                    call,
+                    error_value,
+                    &.{ context.encoding, rest },
+                    continuation,
+                );
+            },
         };
-        return try self.lowerGeneratedCodecCallLocalsInto(
-            proc,
-            call,
-            err,
-            &.{ context.encoding, field.renamed, rest },
-            continuation,
-        );
     }
 
     fn lowerGeneratedFinishedRecord(
