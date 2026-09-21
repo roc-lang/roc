@@ -2018,6 +2018,140 @@ pub const tests = [_]TestCase{
         .expected = .{ .inspect_str = "64" },
     },
     .{
+        // https://github.com/roc-lang/roc/issues/11468
+        // An unannotated local closure captures a parameter of its enclosing
+        // unannotated function and passes it to a top-level helper whose
+        // inferred type carries a `where` constraint (`<`). The enclosing
+        // function is called at U64, so the helper's comparison dispatch
+        // resolves to U64's `is_lt`.
+        .name = "issue 11468: local closure forwards captured value to where-constrained helper",
+        .source_kind = .module,
+        .source =
+        \\lt = |x| x < x
+        \\
+        \\f = |x| {
+        \\    g = || lt(x)
+        \\    g()
+        \\}
+        \\
+        \\main = f(1.U64)
+        ,
+        .expected = .{ .inspect_str = "False" },
+    },
+    .{
+        // https://github.com/roc-lang/roc/issues/11468
+        // The local closure's enclosing function is itself reached through a
+        // caller's specialization interface, at two numeric types.
+        .name = "issue 11468: callee's local closure forwards captured value to where-constrained helper",
+        .source_kind = .module,
+        .source =
+        \\lt = |x| x < x
+        \\
+        \\f = |x| {
+        \\    g = || lt(x)
+        \\    g()
+        \\}
+        \\
+        \\outer = |y| f(y)
+        \\
+        \\main = (outer(1.U64), outer(2.5.F32))
+        ,
+        .expected = .{ .inspect_str = "(False, False)" },
+    },
+    .{
+        // https://github.com/roc-lang/roc/issues/11468
+        // The innermost closure compares values quantified by two different
+        // enclosing frames.
+        .name = "issue 11468: doubly nested closure compares captures from two enclosing frames",
+        .source_kind = .module,
+        .source =
+        \\lt = |a, b| a < b
+        \\
+        \\f = |x| {
+        \\    g = |y| {
+        \\        h = || lt(x, y)
+        \\        h()
+        \\    }
+        \\    g(x)
+        \\}
+        \\
+        \\main = (f(1.U64), f(2.I8))
+        ,
+        .expected = .{ .inspect_str = "(False, False)" },
+    },
+    .{
+        // https://github.com/roc-lang/roc/issues/11468
+        // A generalized callable alias of the capturing closure.
+        .name = "issue 11468: callable alias of a local closure forwarding a captured value",
+        .source_kind = .module,
+        .source =
+        \\lt = |x| x < x
+        \\
+        \\f = |x| {
+        \\    g = || lt(x)
+        \\    k = g
+        \\    k()
+        \\}
+        \\
+        \\main = f(1.U64)
+        ,
+        .expected = .{ .inspect_str = "False" },
+    },
+    .{
+        // https://github.com/roc-lang/roc/issues/11468
+        // The issue's shape: an unannotated selection sort whose local
+        // recursive closures compare elements read through unannotated
+        // `get` and `swap` helpers, so the element type is only constrained
+        // by `<`.
+        .name = "issue 11468: unannotated selection sort compares elements through unannotated get and swap helpers",
+        .source_kind = .module,
+        .source =
+        \\get = |list, idx| {
+        \\    match list.get(idx) {
+        \\        Ok(elem) => elem
+        \\        _ => crash "get unreachable"
+        \\    }
+        \\}
+        \\
+        \\swap = |list, i, j| {
+        \\    match list.swap(i, j) {
+        \\        Ok(swapped) => swapped
+        \\        _ => crash "swap unreachable"
+        \\    }
+        \\}
+        \\
+        \\selection_sort = |list| {
+        \\    len = list.len()
+        \\
+        \\    find_min = |arr, idx, min| {
+        \\        if idx >= len {
+        \\            return min
+        \\        }
+        \\
+        \\        if get(arr, idx) < get(arr, min) {
+        \\            return find_min(arr, idx + 1, idx)
+        \\        }
+        \\
+        \\        find_min(arr, idx + 1, min)
+        \\    }
+        \\
+        \\    aux = |arr, idx| {
+        \\        if idx == len {
+        \\            return arr
+        \\        }
+        \\
+        \\        minimum = find_min(arr, idx + 1, idx)
+        \\        aux(swap(arr, idx, minimum), idx + 1)
+        \\    }
+        \\
+        \\    aux(list, 0)
+        \\}
+        \\
+        \\main = selection_sort([3.U64, 1, 2])
+        ,
+        .expected = .{ .inspect_str = "[1, 2, 3]" },
+    },
+    .{
         // repro for https://github.com/roc-lang/roc/issues/11463
         // An unannotated (so generalized) helper passes a closure whose body is
         // a record update with no field access to a method call. Specializing
