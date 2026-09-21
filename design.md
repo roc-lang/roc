@@ -2127,6 +2127,17 @@ alias arguments, but references to the annotated value consume the annotation
 root. This is how alias spelling from annotations is preserved without making
 alias roots union-find representatives for concrete structures.
 
+Runtime Monotype production maps a transparent alias directly to its backing's
+type identity. Direct checked-type lowering, scoped instantiation, and stored
+constant type restoration memoize that mapping in their existing source-type
+maps; they do not allocate an alias wrapper or run a separate normalization
+pass. The mapping has the same module and instantiation lifetime as the backing
+and preserves recursive sharing. Source alias names and arguments remain in
+checked data. Nominal identities, including their type arguments and backing
+authority, remain distinct. Root requests and ordinary calls therefore agree
+on runtime type identity without alias-aware codec lookup or extra graph
+construction for already closed roots.
+
 ### Where Method Annotations
 
 A where method's type is the complete annotation written after its colon.
@@ -3088,6 +3099,17 @@ The CheckedModule data must therefore be able to contain both diagnostics and
 successful compile-time root requests. The presence of diagnostics is not an
 module-level root-selection failure.
 
+`roc test` counts each diagnostic-blocked top-level expect from the existing
+compile-time root table and the body diagnostic recorded with it.
+`runtime_entrypoint` root requests intentionally exclude these expects; their
+absence is not a test inventory. Blocked expects produce one compiler-error test result each, even
+when several diagnostics belong to one expect or one diagnostic blocks several
+expects. Independent roots still execute and may reuse cached results. Checking
+diagnostics are rendered once and are counted separately from test outcomes;
+errors outside tests also prevent an unqualified success summary. This consumes
+existing checked data only during test planning, without another checker pass
+or serialized inventory. Inline expects remain execution observations.
+
 The compiler must not create separate hoisted roots inside an ordinary top-level
 constant body. The whole top-level constant body is already a compile-time root,
 so nested hoisted roots would add metadata and scheduling work without removing
@@ -3878,6 +3900,16 @@ record evidence pairs or enumerate a scheme's evidence parameters. Real
 edges collect their substitutions in the existing variable-registration walk;
 only an empty substitution needs an evidence-parameter query to decide whether
 shared requirements need a record.
+
+Ordinary imports and selected method targets share one complete-scheme cache
+per importing checker, keyed by source module and declaration node. A cache
+miss copies the type root and its explicit codec requirements under the same
+variable mapping and records binding-scheme ownership before exposing the
+entry. Each use independently instantiates that complete scheme. A speculative
+rollback removes only the imports created in its scope, including their
+requirement tables and synthetic binding ownership. A committed import survives
+later rolled-back cache hits. No cache hit recopies a type graph or re-enumerates
+the source requirements.
 
 Every procedure evidence parameter also carries an explicit dispatcher source.
 The source is exactly one of: a checked component path over the procedure's
@@ -7033,7 +7065,11 @@ The kind rules:
   owning generalization boundary commits to `required` before the scheme
   forms; a generic update therefore has one stable field layout instead of
   adopting a different kind per caller. This realizes the SET side of the
-  typing frame in "In Progress: Unsetting an Optional Field" below.
+  typing frame in "In Progress: Unsetting an Optional Field" below. Each
+  probe (set or unset) is an ordinary record whose extension is a fresh flex
+  variable, exactly like a field access: the base's remaining row is an
+  explicit variable, so it generalizes, keys as an identity variable, and
+  makes any dispatch that mentions it `direct_parametric`.
 - Record DESTRUCTURE (IMPLEMENTED) is kind-flexible the same way: each
   destructured field probes the record with a fresh presence var and a
   FRESH payload var, and the binder stays unbound until the deferred
@@ -10428,6 +10464,20 @@ records the target's substitution the same way, so a direct target specializes
 under the exact substitution checking applied rather than under a re-derived
 one.
 
+An evidence-dependent dispatch whose checked plan authorizes nested-contract
+reuse consumes the already-materialized contract directly. Its targets and
+terminal verdicts were selected at the checked edge; composite requirements
+have no substitution slot from which to derive them again. Monotype applies
+every selected target's callable relation once, including variables reached
+only through its constraint signature, then removes the consumed edge-local
+callable identities from its targets. Nested contracts retain their
+own relations until their respective targets specialize. Normalization borrows
+the immutable vector when unchanged and copies it once on the first changed
+entry, allocating only targets whose callable identity is removed. It does not
+repeat method lookup or run the compiler-generated requirement fixpoint.
+Independent callables without the checked reuse proof still derive evidence
+against their own callable relation.
+
 Requirement forwarding carries the method ID's owning checked name store.
 Raw method IDs are comparable only within the same store; cross-module
 lookups translate the exact method name through the evidence frame's existing
@@ -12307,6 +12357,17 @@ state occupy only their live procedure domains. Subtree cloning reserves join
 identities from its explicit destination-procedure context, not from a scan of
 unrelated procedures. Active callbacks are executor-bounded; retained patches
 are proportional to the phase's procedure bodies and generated output.
+
+Operand and definition counts and reachable-statement walks retain their paged
+ID indexes and work buffers in exclusive executor-lane storage. Serial phases
+retain the same storage across procedures. Every simultaneous inventory leases
+independent storage; releasing it clears only live rows and pending work, even
+on allocation failure. The pool retains capacity up to peak simultaneous use,
+without a fixed inventory-count cutoff. Only empty storage survives a task or
+compilation: counts and visited marks are never reused after rewrites or across
+stores. Task-arena resets cannot invalidate this lane-owned storage, and emitted
+LIR retains no references to it. Sparse directory initialization and destruction
+are amortized over the owner's lifetime, never repeated for each procedure.
 
 Loop promotion identifies back edges during its body-first lexical scan and
 uses source-indexed carrier edges. Shared body/remainder continuations remain

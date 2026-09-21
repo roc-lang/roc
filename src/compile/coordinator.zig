@@ -6307,7 +6307,7 @@ test "app artifact records platform requirement solutions from checking" {
 
     // The solved requirement type is the record the app provided.
     const solved_payload = app_artifact.checked_types.payload(solution.solved_root);
-    try std.testing.expect(solved_payload == .record or solved_payload == .record_unbound);
+    try std.testing.expect(solved_payload == .record);
 
     // Exactly one identity variable (the for-clause `model`), solved to the
     // app's `Model` alias.

@@ -3114,7 +3114,6 @@ pub const ReportBuilder = struct {
                     try report.document.addLineBreak();
                 },
                 .box,
-                .record_unbound,
                 .empty_record,
                 .nominal_type,
                 .empty_tag_union,
@@ -4209,7 +4208,7 @@ pub const ReportBuilder = struct {
                     return true;
                 },
                 // Other types (box, etc.) assumed to support equality
-                .box, .record_unbound => true,
+                .box => true,
             },
             // Aliases: check the underlying type
             .alias => |alias| self.snapshotSupportsEquality(alias.backing),
@@ -4318,7 +4317,7 @@ pub const ReportBuilder = struct {
                     }
                     return false;
                 },
-                .box, .record_unbound, .empty_record, .empty_tag_union => return false,
+                .box, .empty_record, .empty_tag_union => return false,
             },
             .alias => |alias| {
                 if (!self.snapshotSupportsEquality(alias.backing)) {

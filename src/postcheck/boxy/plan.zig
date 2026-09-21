@@ -113,7 +113,6 @@ pub const RepresentationKind = union(enum) {
     erased_callable: checked.CheckedFunctionKind,
     alias,
     record,
-    record_unbound,
     tuple,
     nominal: NominalKind,
     list,
@@ -1900,7 +1899,6 @@ const Builder = struct {
             .bool_tag_union,
             .erased_callable,
             .record,
-            .record_unbound,
             .tuple,
             .list,
             .box,
@@ -2347,7 +2345,6 @@ const Builder = struct {
                 .rigid,
                 .alias,
                 .record,
-                .record_unbound,
                 .tuple,
                 .nominal,
                 .empty_record,
@@ -2366,7 +2363,6 @@ const Builder = struct {
                 .rigid,
                 .alias,
                 .record,
-                .record_unbound,
                 .tuple,
                 .function,
                 .empty_record,
@@ -2390,7 +2386,7 @@ const Builder = struct {
                     visited,
                 ),
                 .empty_record => range.len == 0,
-                .pending, .err, .flex, .rigid, .alias, .record_unbound, .tuple, .nominal, .function, .tag_union, .empty_tag_union => false,
+                .pending, .err, .flex, .rigid, .alias, .tuple, .nominal, .function, .tag_union, .empty_tag_union => false,
             },
             .tuple => |range| switch (payload) {
                 .tuple => |items| blk: {
@@ -2403,7 +2399,7 @@ const Builder = struct {
                     }
                     break :blk true;
                 },
-                .pending, .err, .flex, .rigid, .alias, .record, .record_unbound, .nominal, .function, .empty_record, .tag_union, .empty_tag_union => false,
+                .pending, .err, .flex, .rigid, .alias, .record, .nominal, .function, .empty_record, .tag_union, .empty_tag_union => false,
             },
             .tag_union => |range| switch (payload) {
                 .tag_union => |tag_union| try self.storedTagTypeMatchesChecked(
@@ -2414,7 +2410,7 @@ const Builder = struct {
                     visited,
                 ),
                 .empty_tag_union => range.len == 0,
-                .pending, .err, .flex, .rigid, .alias, .record, .record_unbound, .tuple, .nominal, .function, .empty_record => false,
+                .pending, .err, .flex, .rigid, .alias, .record, .tuple, .nominal, .function, .empty_record => false,
             },
             .list => |element| switch (payload) {
                 .nominal => |nominal| if (nominal.builtin == .list and nominal.args.len == 1)
@@ -2427,7 +2423,6 @@ const Builder = struct {
                 .rigid,
                 .alias,
                 .record,
-                .record_unbound,
                 .tuple,
                 .function,
                 .empty_record,
@@ -2446,7 +2441,6 @@ const Builder = struct {
                 .rigid,
                 .alias,
                 .record,
-                .record_unbound,
                 .tuple,
                 .function,
                 .empty_record,
@@ -2492,7 +2486,6 @@ const Builder = struct {
             .flex,
             .rigid,
             .record,
-            .record_unbound,
             .tuple,
             .function,
             .empty_record,
@@ -2556,10 +2549,6 @@ const Builder = struct {
                     try checked_fields.appendSlice(self.allocator, record.fields);
                     extension = record.ext;
                 },
-                .record_unbound => |fields| {
-                    try checked_fields.appendSlice(self.allocator, fields);
-                    break;
-                },
                 .empty_record => break,
                 .flex, .rigid => |variable| {
                     if (variable.row_default != .empty_record) return false;
@@ -2618,7 +2607,7 @@ const Builder = struct {
                     if (variable.row_default != .empty_tag_union) return false;
                     break;
                 },
-                .pending, .err, .record, .record_unbound, .tuple, .nominal, .function, .empty_record => return false,
+                .pending, .err, .record, .tuple, .nominal, .function, .empty_record => return false,
             }
         }
         if (stored_tags.len != checked_tags.items.len) return false;
@@ -3226,7 +3215,7 @@ const Builder = struct {
         switch (view.checked_types.payload(shape.ty)) {
             .pending => boxyPlanInvariant("pending checked type reached generated parser planning"),
             .err => boxyPlanInvariant("checked error type reached generated parser planning"),
-            .flex, .rigid, .record_unbound => boxyPlanInvariant("open checked type reached generated parser planning"),
+            .flex, .rigid => boxyPlanInvariant("open checked type reached generated parser planning"),
             .function, .empty_tag_union => boxyPlanInvariant("unsupported checked type reached generated parser planning"),
             .alias => |alias| {
                 const backing = typeRef(view, alias.backing);
@@ -3526,7 +3515,7 @@ const Builder = struct {
                 }
             },
             .pending => boxyPlanInvariant("pending tag row reached generated parser planning"),
-            .err, .record, .record_unbound, .tuple, .function, .empty_record => boxyPlanInvariant("generated parser tag row extension was not a tag row"),
+            .err, .record, .tuple, .function, .empty_record => boxyPlanInvariant("generated parser tag row extension was not a tag row"),
         }
     }
 
@@ -3568,7 +3557,6 @@ const Builder = struct {
                 .flex,
                 .rigid,
                 .record,
-                .record_unbound,
                 .tuple,
                 .function,
                 .empty_record,
@@ -3668,12 +3656,6 @@ const Builder = struct {
                     }
                     current = typeRef(view, record.ext);
                 },
-                .record_unbound => |tail_fields| {
-                    for (tail_fields) |field| {
-                        try fields.append(self.allocator, .{ .module = view.key, .field = field });
-                    }
-                    current = null;
-                },
                 .alias => |alias| current = typeRef(view, alias.backing),
                 .empty_record => current = null,
                 .flex, .rigid => |variable| {
@@ -3703,7 +3685,7 @@ const Builder = struct {
         switch (view.checked_types.payload(shape.ty)) {
             .pending => boxyPlanInvariant("pending checked type reached generated encoder planning"),
             .err => boxyPlanInvariant("checked error type reached generated encoder planning"),
-            .flex, .rigid, .record_unbound => boxyPlanInvariant("open checked type reached generated encoder planning"),
+            .flex, .rigid => boxyPlanInvariant("open checked type reached generated encoder planning"),
             .function, .empty_tag_union => boxyPlanInvariant("unsupported checked type reached generated encoder planning"),
             .alias => {
                 const shape_rep = try self.analyzeType(view, shape.ty);
@@ -4260,7 +4242,6 @@ const Builder = struct {
                 .primitive,
                 .erased_callable,
                 .record,
-                .record_unbound,
                 .tuple,
                 .list,
                 .box,
@@ -4467,7 +4448,7 @@ const Builder = struct {
                     // use, so it is part of the declared signature itself.
                     if (variable.numeric_default_phase != null or variable.row_default != null) return;
                 },
-                .pending, .err, .alias, .record, .record_unbound, .tuple, .nominal, .function, .empty_record, .tag_union, .empty_tag_union => return,
+                .pending, .err, .alias, .record, .tuple, .nominal, .function, .empty_record, .tag_union, .empty_tag_union => return,
             }
             const slot: HostTypeKey = .{ .source = declared_rep.source_type, .context = context };
             const entry = try self.host_slot_reps.getOrPut(self.allocator, slot);
@@ -4525,7 +4506,7 @@ const Builder = struct {
                 .primitive, .bool_tag_union => true,
                 .try_nominal, .list, .box, .dict, .set, .iterator, .parse_tag_union_spec, .fields, .field, .crypto_sha256_digest, .crypto_sha256_hasher, .crypto_blake3_digest, .crypto_blake3_hasher => false,
             } else false,
-            .pending, .err, .flex, .rigid, .alias, .record, .record_unbound, .tuple, .function, .tag_union => false,
+            .pending, .err, .flex, .rigid, .alias, .record, .tuple, .function, .tag_union => false,
         };
         if (leaf) {
             if (self.by_type.get(key.source)) |binding| {
@@ -4548,7 +4529,7 @@ const Builder = struct {
         try self.plan.representations.append(self.allocator, .{ .source_type = key.source, .kind = .in_progress });
         const shape = switch (payload) {
             .flex, .rigid => |variable| hostVariableRepresentation(key.source, variable),
-            .pending, .err, .alias, .record, .record_unbound, .tuple, .nominal, .function, .empty_record, .tag_union, .empty_tag_union => try self.buildRepresentation(view, key.source.ty),
+            .pending, .err, .alias, .record, .tuple, .nominal, .function, .empty_record, .tag_union, .empty_tag_union => try self.buildRepresentation(view, key.source.ty),
         };
         self.plan.representations.items[@intFromEnum(rep)] = shape;
         return rep;
@@ -4685,8 +4666,7 @@ const Builder = struct {
             .flex => |flex| try self.dynamicRepresentation(source_type, flex.constraints, .flex),
             .rigid => |rigid| try self.dynamicRepresentation(source_type, rigid.constraints, .rigid),
             .alias => |alias| try self.aliasRepresentation(view, source_type, alias),
-            .record => |record| try self.recordRepresentation(view, source_type, .record, record.fields, record.ext),
-            .record_unbound => |fields| try self.recordRepresentation(view, source_type, .record_unbound, fields, null),
+            .record => |record| try self.recordRepresentation(view, source_type, record.fields, record.ext),
             .tuple => |elems| try self.tupleRepresentation(view, source_type, elems),
             .nominal => |nominal| try self.nominalRepresentation(view, source_type, nominal),
             .function => |function| try self.functionRepresentation(view, source_type, function),
@@ -5145,9 +5125,8 @@ const Builder = struct {
         self: *Builder,
         view: ModuleView,
         source_type: CheckedTypeIdentity,
-        kind: RepresentationKind,
         fields: []const checked.CheckedRecordField,
-        ext: ?checked.CheckedTypeId,
+        ext: checked.CheckedTypeId,
     ) Allocator.Error!TypeRepresentation {
         var children = std.ArrayList(RepChild).empty;
         defer children.deinit(self.allocator);
@@ -5182,7 +5161,7 @@ const Builder = struct {
 
         return .{
             .source_type = source_type,
-            .kind = kind,
+            .kind = .record,
             .children = child_span,
         };
     }
@@ -5211,15 +5190,15 @@ const Builder = struct {
     }
 
     /// Flatten checked rows under their explicit ABI substitution context.
-    fn appendHostRecordRows(self: *Builder, children: *std.ArrayList(RepChild), view: ModuleView, fields: []const checked.CheckedRecordField, ext: ?checked.CheckedTypeId) Allocator.Error!bool {
+    fn appendHostRecordRows(self: *Builder, children: *std.ArrayList(RepChild), view: ModuleView, fields: []const checked.CheckedRecordField, ext: checked.CheckedTypeId) Allocator.Error!bool {
         const saved_context = self.host_context;
         defer self.host_context = saved_context;
         for (fields) |field| try self.appendRecordFieldChild(children, view, field);
-        var current: ?HostTypeKey = if (ext) |ty| .{ .source = typeRef(view, ty), .context = saved_context } else null;
+        var current: HostTypeKey = .{ .source = typeRef(view, ext), .context = saved_context };
         var seen = std.AutoHashMap(HostTypeKey, void).init(self.allocator);
         defer seen.deinit();
-        while (current) |input| {
-            const key = self.resolveHostBinding(input);
+        while (true) {
+            const key = self.resolveHostBinding(current);
             const entry = try seen.getOrPut(key);
             if (entry.found_existing) boxyPlanInvariant("cyclic checked ABI record row");
             self.host_context = key.context;
@@ -5233,16 +5212,11 @@ const Builder = struct {
                     for (row.fields) |field| try self.appendRecordFieldChild(children, row_view, field);
                     current = .{ .source = typeRef(row_view, row.ext), .context = key.context };
                 },
-                .record_unbound => |row_fields| {
-                    for (row_fields) |field| try self.appendRecordFieldChild(children, row_view, field);
-                    return true;
-                },
                 .alias => |alias| current = .{ .source = typeRef(row_view, alias.backing), .context = key.context },
                 .flex, .rigid => |variable| return variable.row_default == .empty_record,
                 .pending, .err, .tuple, .nominal, .function, .tag_union, .empty_tag_union => boxyPlanInvariant("checked ABI record extension is not a record row"),
             }
         }
-        return true;
     }
 
     fn hostTagUnionRepresentation(self: *Builder, view: ModuleView, source_type: CheckedTypeIdentity, initial: checked.CheckedTagUnionType) Allocator.Error!TypeRepresentation {
@@ -5272,7 +5246,7 @@ const Builder = struct {
                     if (variable.row_default != .empty_tag_union) open_extension = current;
                     break;
                 },
-                .pending, .err, .record, .record_unbound, .tuple, .nominal, .function, .empty_record => boxyPlanInvariant("checked ABI tag extension is not a tag row"),
+                .pending, .err, .record, .tuple, .nominal, .function, .empty_record => boxyPlanInvariant("checked ABI tag extension is not a tag row"),
             }
         }
         if (view.canonical_names != null) std.mem.sort(PendingTag, tags.items, {}, struct {
@@ -5314,7 +5288,7 @@ const Builder = struct {
         children: *std.ArrayList(RepChild),
         view: ModuleView,
         fields: []const checked.CheckedRecordField,
-        ext: ?checked.CheckedTypeId,
+        ext: checked.CheckedTypeId,
     ) Allocator.Error!bool {
         if (self.host_mode) return self.appendHostRecordRows(children, view, fields, ext);
         for (fields) |field| {
@@ -5325,12 +5299,12 @@ const Builder = struct {
         defer seen.deinit();
 
         var current = ext;
-        while (current) |ext_ty| {
-            const source = typeRef(view, ext_ty);
+        while (true) {
+            const source = typeRef(view, current);
             const entry = try seen.getOrPut(source);
             // A cycle here is only reachable through the structural `.record`/
-            // `.alias` links below (`.flex`/`.rigid`/`.record_unbound`/
-            // `.empty_record` all return on their first visit). The checker
+            // `.alias` links below (`.flex`/`.rigid`/`.empty_record` all
+            // return on their first visit). The checker
             // encodes a closed row's empty tail as a zero-field record whose
             // extension is itself, so reaching that fixpoint after collecting at
             // least one field means the whole field set is resolved and the
@@ -5340,7 +5314,7 @@ const Builder = struct {
             // instead of erasing to a dynamic box.
             if (entry.found_existing) return children.items.len > 0;
 
-            switch (view.checked_types.payload(ext_ty)) {
+            switch (view.checked_types.payload(current)) {
                 .empty_record => return true,
                 .record => |record| {
                     for (record.fields) |field| {
@@ -5348,18 +5322,11 @@ const Builder = struct {
                     }
                     current = record.ext;
                 },
-                .record_unbound => |tail_fields| {
-                    for (tail_fields) |field| {
-                        try self.appendRecordFieldChild(children, view, field);
-                    }
-                    return true;
-                },
                 .alias => |alias| current = alias.backing,
                 .flex, .rigid => |variable| return variable.row_default == .empty_record,
                 .pending, .err, .tuple, .nominal, .function, .tag_union, .empty_tag_union => return false,
             }
         }
-        return true;
     }
 
     fn appendRecordFieldChild(
@@ -5784,7 +5751,6 @@ const Builder = struct {
             .flex,
             .rigid,
             .alias,
-            .record_unbound,
             .tuple,
             .nominal,
             .function,
@@ -6052,7 +6018,7 @@ const Builder = struct {
             .empty_tag_union => true,
             .alias => |alias| try self.tagUnionExtensionIsExplicitlyClosedInner(view, alias.backing, seen),
             .flex, .rigid => |variable| variable.row_default == .empty_tag_union,
-            .pending, .err, .record, .record_unbound, .tuple, .nominal, .function, .empty_record, .tag_union => false,
+            .pending, .err, .record, .tuple, .nominal, .function, .empty_record, .tag_union => false,
         };
     }
 
@@ -6081,7 +6047,7 @@ const Builder = struct {
         return switch (view.checked_types.payload(ext_ty)) {
             .alias => |alias| try self.rowExtensionIsDefaultClosedInner(view, alias.backing, expected, seen),
             .flex, .rigid => |variable| variable.row_default == expected,
-            .pending, .err, .record, .record_unbound, .tuple, .nominal, .function, .empty_record, .tag_union, .empty_tag_union => false,
+            .pending, .err, .record, .tuple, .nominal, .function, .empty_record, .tag_union, .empty_tag_union => false,
         };
     }
 
@@ -6363,7 +6329,6 @@ const Builder = struct {
             .erased_callable,
             .alias,
             .record,
-            .record_unbound,
             .tuple,
             .nominal,
             .list,
@@ -8150,7 +8115,6 @@ const Builder = struct {
                     .erased_callable,
                     .alias,
                     .record,
-                    .record_unbound,
                     .tuple,
                     .nominal,
                     .generated_field,
@@ -8332,9 +8296,6 @@ const Builder = struct {
                     const payload = view.checked_types.payload(current.ty);
                     if (payload == .record) {
                         break :blk self.checkedRecordFieldAtEvidencePath(path_view, @enumFromInt(path_step.data), view, payload.record.fields);
-                    }
-                    if (payload == .record_unbound) {
-                        break :blk self.checkedRecordFieldAtEvidencePath(path_view, @enumFromInt(path_step.data), view, payload.record_unbound);
                     }
                     boxyPlanInvariant("worker evidence path expected a record field");
                 },
@@ -12906,7 +12867,6 @@ fn checkedFunctionPayload(view: ModuleView, checked_ty: checked.CheckedTypeId) c
             .flex,
             .rigid,
             .record,
-            .record_unbound,
             .tuple,
             .nominal,
             .empty_record,
@@ -13006,7 +12966,6 @@ fn generatedParserKeyMethod(view: ModuleView, ty: checked.CheckedTypeId) ?[]cons
         .flex,
         .rigid,
         .record,
-        .record_unbound,
         .tuple,
         .function,
         .empty_record,
@@ -13036,7 +12995,7 @@ fn checkedParserUnitTagKey(view: ModuleView, ty: checked.CheckedTypeId) bool {
             },
             .empty_tag_union => return saw_tag,
             .flex, .rigid => |variable| return saw_tag and variable.row_default == .empty_tag_union,
-            .pending, .err, .record, .record_unbound, .tuple, .function, .empty_record => return false,
+            .pending, .err, .record, .tuple, .function, .empty_record => return false,
         }
     }
     boxyPlanInvariant("checked Dict key tag row was cyclic");
@@ -13131,7 +13090,6 @@ fn generatedEncoderKeyMethod(view: ModuleView, ty: checked.CheckedTypeId) ?[]con
         .flex,
         .rigid,
         .record,
-        .record_unbound,
         .tuple,
         .function,
         .empty_record,
@@ -13213,7 +13171,7 @@ fn checkedTryErrorKinds(view: ModuleView, checked_ty: checked.CheckedTypeId) ?Ch
             .empty_tag_union => return if (has_tag) result else null,
             .flex, .rigid => |variable| return if (variable.row_default == .empty_tag_union and
                 has_tag) result else null,
-            .pending, .err, .record, .record_unbound, .tuple, .function, .empty_record => return null,
+            .pending, .err, .record, .tuple, .function, .empty_record => return null,
         }
     }
     boxyPlanInvariant("checked Try error row was cyclic");
@@ -13249,7 +13207,7 @@ fn checkedTryPayloads(view: ModuleView, checked_ty: checked.CheckedTypeId) ?Chec
             .empty_tag_union => return if (ok != null and err != null) .{ .ok = ok.?, .err = err.? } else null,
             .flex, .rigid => |variable| return if (variable.row_default == .empty_tag_union and
                 ok != null and err != null) .{ .ok = ok.?, .err = err.? } else null,
-            .pending, .err, .record, .record_unbound, .tuple, .function, .empty_record => return null,
+            .pending, .err, .record, .tuple, .function, .empty_record => return null,
         }
     }
     boxyPlanInvariant("checked Try alias chain was cyclic");
@@ -13440,7 +13398,6 @@ fn descriptorReason(kind: RepresentationKind) ?DescriptorReason {
     return switch (kind) {
         .dynamic => .dynamic_payload,
         .record,
-        .record_unbound,
         .tuple,
         .nominal,
         .tag_union,

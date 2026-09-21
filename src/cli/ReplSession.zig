@@ -968,7 +968,6 @@ pub fn inspectExpressionType(
                     break function.ret;
                 },
                 .record,
-                .record_unbound,
                 .tuple,
                 .nominal_type,
                 .empty_record,
