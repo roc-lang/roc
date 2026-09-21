@@ -40113,6 +40113,8 @@ test "boxy lowerer emits checked while statements as join-backed loops" {
         .exposure = .private,
         .procedure_template = template_ref,
     };
+    try test_fixtures.addBoolDeclaration(gpa, &checked_module, @enumFromInt(fixtureTableIndex(2)));
+
     var plan = try Plan.analyzeProgram(gpa, .{
         .root_module = .{ .module = &checked_module, .roots = undefined },
         .roots = &.{root},
@@ -40245,6 +40247,8 @@ test "boxy lowerer emits checked break as the active loop exit" {
         .exposure = .private,
         .procedure_template = template_ref,
     };
+    try test_fixtures.addBoolDeclaration(gpa, &checked_module, @enumFromInt(fixtureTableIndex(2)));
+
     var plan = try Plan.analyzeProgram(gpa, .{
         .root_module = .{ .module = &checked_module, .roots = undefined },
         .roots = &.{root},
@@ -40368,6 +40372,8 @@ test "boxy lowerer emits checked if expressions with a shared continuation join"
         .exposure = .private,
         .procedure_template = template_ref,
     };
+    try test_fixtures.addBoolDeclaration(gpa, &checked_module, @enumFromInt(fixtureTableIndex(1)));
+
     var plan = try Plan.analyzeProgram(gpa, .{
         .root_module = .{ .module = &checked_module, .roots = undefined },
         .roots = &.{root},
@@ -41807,6 +41813,8 @@ test "boxy lowerer emits checked unary not as bool low-level call" {
         .exposure = .private,
         .procedure_template = template_ref,
     };
+    try test_fixtures.addBoolDeclaration(gpa, &checked_module, @enumFromInt(fixtureTableIndex(0)));
+
     var plan = try Plan.analyzeProgram(gpa, .{
         .root_module = .{ .module = &checked_module, .roots = undefined },
         .roots = &.{root},
@@ -41912,6 +41920,8 @@ test "boxy lowerer emits short-circuit checked boolean and" {
         .exposure = .private,
         .procedure_template = template_ref,
     };
+    try test_fixtures.addBoolDeclaration(gpa, &checked_module, @enumFromInt(fixtureTableIndex(0)));
+
     var plan = try Plan.analyzeProgram(gpa, .{
         .root_module = .{ .module = &checked_module, .roots = undefined },
         .roots = &.{root},
@@ -42017,6 +42027,8 @@ test "boxy lowerer emits primitive structural equality as low-level equality" {
         .exposure = .private,
         .procedure_template = template_ref,
     };
+    try test_fixtures.addBoolDeclaration(gpa, &checked_module, @enumFromInt(fixtureTableIndex(1)));
+
     var plan = try Plan.analyzeProgram(gpa, .{
         .root_module = .{ .module = &checked_module, .roots = undefined },
         .roots = &.{root},
@@ -42161,6 +42173,8 @@ test "boxy lowerer emits tuple structural equality with field short-circuiting" 
         .exposure = .private,
         .procedure_template = template_ref,
     };
+    try test_fixtures.addBoolDeclaration(gpa, &checked_module, @enumFromInt(fixtureTableIndex(2)));
+
     var plan = try Plan.analyzeProgram(gpa, .{
         .root_module = .{ .module = &checked_module, .roots = undefined },
         .roots = &.{root},
@@ -42892,6 +42906,8 @@ test "boxy lowerer emits checked expect expressions before unit result" {
         .exposure = .private,
         .procedure_template = template_ref,
     };
+    try test_fixtures.addBoolDeclaration(gpa, &checked_module, @enumFromInt(fixtureTableIndex(1)));
+
     var plan = try Plan.analyzeProgram(gpa, .{
         .root_module = .{ .module = &checked_module, .roots = undefined },
         .roots = &.{root},
@@ -45533,6 +45549,8 @@ test "boxy lowerer emits builtin Bool tags by checked Bool names" {
         .exposure = .private,
         .procedure_template = template_ref,
     };
+    try test_fixtures.addBoolDeclaration(gpa, &checked_module, @enumFromInt(fixtureTableIndex(0)));
+
     var plan = try Plan.analyzeProgram(gpa, .{
         .root_module = .{ .module = &checked_module, .roots = undefined },
         .roots = &.{root},

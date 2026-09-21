@@ -11582,6 +11582,13 @@ descriptor inputs even when they carry a row default. Defaulted tails have an
 explicit empty representation and remain row children so generic calls can
 bind their extension parameters.
 
+A checked tag row with no declared tags uses its tail's representation and
+descriptor identity directly. It introduces no additional storage or hidden
+descriptor parameter. Builtin Bool retains its checked backing's two variants
+and closed extension in the representation plan, while keeping its dedicated
+Bool layout. Generic row calls therefore bind Bool's empty tail through the
+same explicit child mapping as other closed tag rows.
+
 The row-instantiation rule applies to both closed and dynamic tag rows. When
 the call supplies tags absent from the worker's local variants, the worker
 extension receives the complete call row's descriptor, preserving that row's

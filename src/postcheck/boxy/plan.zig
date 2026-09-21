@@ -4690,6 +4690,23 @@ const Builder = struct {
         const binding = try self.internTypeBinding(source_type);
         if (self.plan.type_reps.items[@intFromEnum(binding)].rep) |rep| return rep;
 
+        // A row with no declared tags has exactly its extension's storage
+        // and descriptor. Keep both checked types bound to that same plan.
+        var row_ty = ty;
+        var remaining = view.checked_types.payloadCount();
+        while (view.checked_types.payload(row_ty) == .tag_union) {
+            const row = view.checked_types.payload(row_ty).tag_union;
+            if (row.tags.len != 0) break;
+            if (remaining == 0) boxyPlanInvariant("cyclic checked empty tag row extension");
+            remaining -= 1;
+            row_ty = row.ext;
+        }
+        if (row_ty != ty) {
+            const rep = try self.analyzeType(view, row_ty);
+            self.plan.type_reps.items[@intFromEnum(binding)].rep = rep;
+            return rep;
+        }
+
         const rep_id: TypeRepId = @enumFromInt(@as(u32, @intCast(self.plan.representations.items.len)));
         self.plan.type_reps.items[@intFromEnum(binding)].rep = rep_id;
         try self.plan.representations.append(self.allocator, .{
@@ -5505,7 +5522,20 @@ const Builder = struct {
                     .source_type = source_type,
                     .kind = .{ .primitive = primitive },
                 },
-                .bool_tag_union => return .{ .source_type = source_type, .kind = .bool_tag_union },
+                .bool_tag_union => {
+                    const backing = try self.nominalBackingSource(view, nominal);
+                    const backing_rep_id = try self.analyzeType(backing.view, backing.ty);
+                    const backing_rep = self.plan.representations.items[@intFromEnum(backing_rep_id)];
+                    if (backing_rep.kind != .tag_union) {
+                        boxyPlanInvariant("checked Bool backing was not a closed tag union");
+                    }
+                    return .{
+                        .source_type = source_type,
+                        .kind = .bool_tag_union,
+                        .children = backing_rep.children,
+                        .tag_variants = backing_rep.tag_variants,
+                    };
+                },
                 .try_nominal,
                 .iterator,
                 => {},
@@ -10031,8 +10061,8 @@ const Builder = struct {
     ) ?TypeRepId {
         const worker_rep = self.plan.representations.items[@intFromEnum(worker_rep_id)];
         const call_rep = self.plan.representations.items[@intFromEnum(call_rep_id)];
-        if ((worker_rep.kind != .tag_union and worker_rep.kind != .dynamic) or
-            (call_rep.kind != .tag_union and call_rep.kind != .dynamic)) return null;
+        if ((worker_rep.kind != .tag_union and worker_rep.kind != .dynamic and worker_rep.kind != .bool_tag_union) or
+            (call_rep.kind != .tag_union and call_rep.kind != .dynamic and call_rep.kind != .bool_tag_union)) return null;
 
         switch (worker_child.role) {
             .tag_ext => {
@@ -14738,6 +14768,58 @@ test "boxy planner represents open record rows dynamically" {
     try std.testing.expectEqual(RepresentationKind{ .dynamic = .flex }, rep.kind);
     try std.testing.expect(rep.contains_dynamic);
     try std.testing.expect(rep.descriptor != null);
+}
+
+test "boxy empty tag rows share their tail representation and descriptor" {
+    const gpa = std.testing.allocator;
+    const tail: checked.CheckedTypeId = @enumFromInt(fixtureTableIndex(0));
+    const payloads = [_]checked.StoredCheckedTypePayload{
+        .{ .rigid = .{} },
+        .{ .tag_union = .{ .tags = .{}, .ext = tail } },
+        .{ .tag_union = .{ .tags = .{}, .ext = @enumFromInt(1) } },
+    };
+    var plan = try analyzeCheckedTypes(gpa, .{ .stored_payloads = &payloads }, &.{ tail, @enumFromInt(1), @enumFromInt(2) }, .{});
+    defer plan.deinit();
+
+    try std.testing.expectEqual(plan.root_reps.items[0], plan.root_reps.items[1]);
+    try std.testing.expectEqual(plan.root_reps.items[0], plan.root_reps.items[2]);
+    const rep = plan.representations.items[@intFromEnum(plan.root_reps.items[0])];
+    try std.testing.expectEqual(RepresentationKind{ .dynamic = .rigid }, rep.kind);
+    try std.testing.expect(rep.descriptor != null);
+}
+
+test "boxy Bool retains its closed row for generic descriptor arguments" {
+    const gpa = std.testing.allocator;
+    var module = minimalCheckedArtifact(gpa);
+    defer module.canonical_names.deinit();
+    defer module.checked_types.deinit(gpa);
+    const bool_ty: checked.CheckedTypeId = @enumFromInt(fixtureTableIndex(0));
+    try module.checked_types.payloads.append(gpa, .{ .nominal = builtinNominal(.bool, bool_ty, .{}) });
+    try test_fixtures.addBoolDeclaration(gpa, &module, bool_ty);
+    const tail: checked.CheckedTypeId = @enumFromInt(@as(u32, @intCast(module.checked_types.payloads.items.len)));
+    try module.checked_types.payloads.append(gpa, .{ .rigid = .{} });
+    const row: checked.CheckedTypeId = @enumFromInt(@as(u32, @intCast(module.checked_types.payloads.items.len)));
+    try module.checked_types.payloads.append(gpa, .{ .tag_union = .{
+        .tags = .{ .start = 0, .len = 2 },
+        .ext = tail,
+    } });
+    var plan = try analyzeProgram(gpa, .{
+        .root_view = .{ .checked_types = module.checked_types.view(), .canonical_names = &module.canonical_names },
+        .layout_requests = &.{ bool_ty, row },
+    }, .{});
+    defer plan.deinit();
+
+    const bool_rep = plan.representations.items[@intFromEnum(plan.root_reps.items[0])];
+    const worker_rep = plan.representations.items[@intFromEnum(plan.root_reps.items[1])];
+    try std.testing.expectEqual(RepresentationKind.bool_tag_union, bool_rep.kind);
+    try std.testing.expectEqual(@as(usize, 2), plan.tagVariantSlice(bool_rep.tag_variants).len);
+    try std.testing.expectEqual(@as(usize, 1), plan.childSlice(bool_rep.children).len);
+    const query = RepQuery{ .plan = &plan, .allocator = gpa };
+    const worker_tail = query.requiredSingleChild(plan.root_reps.items[1], .tag_ext);
+    const call_tail = query.requiredSingleChild(plan.root_reps.items[0], .tag_ext);
+    try std.testing.expectEqual(worker_tail.role, call_tail.role);
+    try std.testing.expectEqual(RepresentationKind.empty_tag_union, plan.representations.items[@intFromEnum(call_tail.rep)].kind);
+    try std.testing.expect(worker_rep.descriptor != null);
 }
 
 test "boxy planner represents open tag-union rows dynamically" {
