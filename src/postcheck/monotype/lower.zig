@@ -128,6 +128,47 @@ const CommittedGraphTypes = struct {
         };
     }
 
+    /// Commit several types through one import: types already relocated are
+    /// answered from the relocation map and the rest share one closure walk
+    /// and one interning transaction. The result is owned by the caller.
+    fn commitTypes(self: *CommittedGraphTypes, tys: []const Type.TypeId) Allocator.Error![]Type.TypeId {
+        const allocator = self.source_store.allocator;
+        const committed = try allocator.alloc(Type.TypeId, tys.len);
+        errdefer allocator.free(committed);
+        const destination = self.destination orelse {
+            @memcpy(committed, tys);
+            return committed;
+        };
+        var pending = std.ArrayList(Type.TypeId).empty;
+        defer pending.deinit(allocator);
+        var pending_slots = std.ArrayList(usize).empty;
+        defer pending_slots.deinit(allocator);
+        for (tys, 0..) |ty, index| {
+            if (self.graph) |graph| try graph.assertTypeHasNoActiveSnapshots(ty);
+            if (@intFromEnum(ty) >= self.source_store.epochBoundary().types) {
+                Common.compilerBug("sealed body type does not belong to its immutable store epoch");
+            }
+            if (destination.relocation.get(self.source_store, ty)) |mapped| {
+                committed[index] = mapped;
+            } else {
+                try pending.append(allocator, ty);
+                try pending_slots.append(allocator, index);
+            }
+        }
+        if (pending.items.len != 0) {
+            var imported = try destination.store.importTypes(
+                destination.names,
+                self.source_store,
+                self.source_names,
+                destination.relocation,
+                pending.items,
+            );
+            defer imported.deinit();
+            for (pending_slots.items, imported.roots) |slot, root| committed[slot] = root;
+        }
+        return committed;
+    }
+
     fn commitType(self: *CommittedGraphTypes, ty: Type.TypeId) Allocator.Error!Type.TypeId {
         if (self.graph) |graph| try graph.assertTypeHasNoActiveSnapshots(ty);
         const destination = self.destination orelse return ty;
@@ -4035,14 +4076,23 @@ const Builder = struct {
     }
 
     fn commitInterfaceSummaries(self: *Builder, entries: []const InterfaceSummaryEntry, committed_types: *CommittedGraphTypes) Allocator.Error!void {
-        for (entries) |entry| {
-            const provisional_ty = try committed_types.commitType(entry.provisional_ty);
-            const summary_ty = try committed_types.commitType(entry.summary_ty);
+        if (entries.len == 0) return;
+        // One import for every summary of the shard: the closure walk and the
+        // interning transaction are paid once instead of once per type.
+        const roots = try self.allocator.alloc(Type.TypeId, entries.len * 2);
+        defer self.allocator.free(roots);
+        for (entries, 0..) |entry, index| {
+            roots[index * 2] = entry.provisional_ty;
+            roots[index * 2 + 1] = entry.summary_ty;
+        }
+        const committed = try committed_types.commitTypes(roots);
+        defer self.allocator.free(committed);
+        for (entries, 0..) |entry, index| {
             try self.interface_summaries.insert(&self.program.types, &self.program.names, .{
                 .address = entry.address,
                 .evidence = entry.evidence,
-                .provisional_ty = provisional_ty,
-                .summary_ty = summary_ty,
+                .provisional_ty = committed[index * 2],
+                .summary_ty = committed[index * 2 + 1],
             });
         }
     }
@@ -6565,6 +6615,10 @@ const Builder = struct {
     fn compactAcceptedPendingSpecJobs(self: *Builder) void {
         const accepted = self.pending_spec_jobs_head;
         if (accepted == 0) return;
+        // Every reader of the queue starts at the head, so accepted entries
+        // only need to be dropped once they are at least half the queue; a
+        // move after every acceptance was quadratic in the job count.
+        if (accepted * 2 < self.pending_spec_jobs.items.len) return;
         const remaining = self.pending_spec_jobs.items.len - accepted;
         std.mem.copyForwards(
             PendingSpecJob,
