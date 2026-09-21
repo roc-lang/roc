@@ -13,7 +13,8 @@ import pf.ArgShape exposing [ArgShape]
 import pf.GlueInput exposing [GlueInput]
 import pf.HostedFunctionInfo exposing [HostedFunctionInfo]
 import pf.TypeNamePlan exposing [TypeNamePlan]
-import pf.FunctionRepr exposing [FunctionRepr]
+import pf.FunctionSignature exposing [FunctionSignature]
+import pf.ProvidedExport exposing [ProvidedExport]
 import pf.RecordRepr exposing [RecordRepr]
 import pf.TagUnionRepr exposing [TagUnionRepr]
 import pf.RecordField exposing [RecordField]
@@ -181,8 +182,8 @@ type_name_roots_zig = |hosted_functions, provides_list, type_table| {
 		base = name_to_struct_name(entry.name)
 		module_base = hosted_module_name_to_struct_name(entry.name)
 
-		match type_table.get(entry.type_id) {
-			RocFunction(func) => {
+		match entry.exported {
+			ProvidedProcedure(func) => {
 				var $arg_idx = 0
 				for arg_type_id in func.args {
 					arg_fallback = "${base}Arg${U64.to_str($arg_idx)}"
@@ -200,11 +201,11 @@ type_name_roots_zig = |hosted_functions, provides_list, type_table| {
 					type_id: func.ret,
 				})
 			}
-			_ => {
+			ProvidedData(type_id) => {
 				$roots = $roots.append({
-					alias_base: type_name_root_alias_base_zig(type_table, base, entry.type_id),
+					alias_base: type_name_root_alias_base_zig(type_table, base, type_id),
 					module_base,
-					type_id: entry.type_id,
+					type_id,
 				})
 			}
 		}
@@ -270,8 +271,8 @@ type_alias_roots_zig = |hosted_functions, provides_list, type_table| {
 		base = name_to_struct_name(entry.name)
 		module_base = hosted_module_name_to_struct_name(entry.name)
 
-		match type_table.get(entry.type_id) {
-			RocFunction(func) => {
+		match entry.exported {
+			ProvidedProcedure(func) => {
 				var $arg_idx = 0
 				for arg_type_id in func.args {
 					arg_fallback = "${base}Arg${U64.to_str($arg_idx)}"
@@ -281,8 +282,8 @@ type_alias_roots_zig = |hosted_functions, provides_list, type_table| {
 
 				$roots = append_type_alias_roots_zig($roots, type_table, base, module_base, func.ret, [])
 			}
-			_ => {
-				$roots = append_type_alias_roots_zig($roots, type_table, base, module_base, entry.type_id, [])
+			ProvidedData(type_id) => {
+				$roots = append_type_alias_roots_zig($roots, type_table, base, module_base, type_id, [])
 			}
 		}
 	}
@@ -397,7 +398,7 @@ type_repr_to_zig = |type_table, duplicate_tag_names, preferred_names, type_id, t
 		RocBool => "bool"
 		RocBox(inner_id) =>
 			match type_table.get(inner_id) {
-				RocFunction(_) => "RocErasedCallable"
+				RocErasedCallable => "RocErasedCallable"
 				RocUnknown(_) => "RocBox"
 				_ => {
 					inner_zig = type_id_to_zig(type_table, duplicate_tag_names, preferred_names, inner_id)
@@ -446,7 +447,7 @@ type_repr_to_zig = |type_table, duplicate_tag_names, preferred_names, type_id, t
 		RocTagUnion(tu) => resolve_tag_union_type(type_table, duplicate_tag_names, preferred_names, type_id, tu)
 		# A function stored inside a value is one erased-callable allocation,
 		# exactly like `Box(fn)`.
-		RocFunction(_) => "RocErasedCallable"
+		RocErasedCallable => "RocErasedCallable"
 		RocUnknown(_) => "*anyopaque"
 	}
 }
@@ -859,7 +860,7 @@ generate_element_type_structs = |type_table, duplicate_tag_names, preferred_name
 			RocDec => {}
 			RocF32 => {}
 			RocF64 => {}
-			RocFunction(_) => {}
+			RocErasedCallable => {}
 			RocI128 => {}
 			RocI16 => {}
 			RocI32 => {}
@@ -914,7 +915,7 @@ generate_tag_union_structs = |type_table, duplicate_tag_names, preferred_names| 
 			RocDec => {}
 			RocF32 => {}
 			RocF64 => {}
-			RocFunction(_) => {}
+			RocErasedCallable => {}
 			RocI128 => {}
 			RocI16 => {}
 			RocI32 => {}
@@ -1137,7 +1138,7 @@ release_policy_for_type_id = |type_table, duplicate_tag_names, preferred_names, 
 			}
 		RocBox(inner_id) =>
 			match type_table.get(inner_id) {
-				RocFunction(_) => "RocErasedCallableRelease"
+				RocErasedCallable => "RocErasedCallableRelease"
 				RocUnknown(_) => ""
 				_ => {
 					inner_zig = type_id_to_zig(type_table, duplicate_tag_names, preferred_names, inner_id)
@@ -1172,7 +1173,7 @@ release_policy_for_type_id = |type_table, duplicate_tag_names, preferred_names, 
 						"${tag_union_struct_name(preferred_names, duplicate_tag_names, type_id, tu)}Release"
 					}
 				}
-		RocFunction(_) => "RocErasedCallableRelease"
+		RocErasedCallable => "RocErasedCallableRelease"
 		_ => ""
 	}
 }
@@ -1187,7 +1188,7 @@ type_ident_zig = |type_table, duplicate_tag_names, preferred_names, type_id|
 		RocList(elem_id) => "ListOf${type_ident_zig(type_table, duplicate_tag_names, preferred_names, elem_id)}"
 		RocBox(inner_id) =>
 			match type_table.get(inner_id) {
-				RocFunction(_) => "ErasedCallable"
+				RocErasedCallable => "ErasedCallable"
 				_ => "BoxOf${type_ident_zig(type_table, duplicate_tag_names, preferred_names, inner_id)}"
 			}
 		RocRecord(rec) =>
@@ -1211,7 +1212,7 @@ type_ident_zig = |type_table, duplicate_tag_names, preferred_names, type_id|
 						"Type${U64.to_str(type_id)}"
 					}
 				}
-		RocFunction(_) => "ErasedCallable"
+		RocErasedCallable => "ErasedCallable"
 		_ => "Type${U64.to_str(type_id)}"
 	}
 
@@ -1245,7 +1246,7 @@ decref_stmt_for_repr = |type_table, duplicate_tag_names, preferred_names, _type_
 		}
 		RocBox(inner_id) =>
 			match type_table.get(inner_id) {
-				RocFunction(_) => "    decrefErasedCallable(${expr}, roc_host);\n"
+				RocErasedCallable => "    decrefErasedCallable(${expr}, roc_host);\n"
 				_ => {
 					inner_zig = type_id_to_zig(type_table, duplicate_tag_names, preferred_names, inner_id)
 					if inner_zig == "*anyopaque" {
@@ -1276,7 +1277,7 @@ decref_stmt_for_repr = |type_table, duplicate_tag_names, preferred_names, _type_
 					}
 				}
 			}
-		RocFunction(_) => "    decrefErasedCallable(${expr}, roc_host);\n"
+		RocErasedCallable => "    decrefErasedCallable(${expr}, roc_host);\n"
 		_ => ""
 	}
 }
@@ -1294,7 +1295,7 @@ incref_stmt_for_repr = |type_table, duplicate_tag_names, preferred_names, _type_
 		RocList(_) => "    ${expr}.incref(amount);\n"
 		RocBox(inner_id) =>
 			match type_table.get(inner_id) {
-				RocFunction(_) => "    increfErasedCallable(${expr}, amount);\n"
+				RocErasedCallable => "    increfErasedCallable(${expr}, amount);\n"
 				_ => "    increfBox(@ptrCast(${expr}), amount);\n"
 			}
 		RocRecord(rec) => {
@@ -1315,7 +1316,7 @@ incref_stmt_for_repr = |type_table, duplicate_tag_names, preferred_names, _type_
 						""
 					}
 				}
-		RocFunction(_) => "    increfErasedCallable(${expr}, amount);\n"
+		RocErasedCallable => "    increfErasedCallable(${expr}, amount);\n"
 		_ => ""
 	}
 }
@@ -1547,7 +1548,7 @@ generate_box_payload_decref_helpers = |type_table, duplicate_tag_names, preferre
 				if !(List.contains($seen_inner_ids, inner_id)) {
 					$seen_inner_ids = $seen_inner_ids.append(inner_id)
 					match type_table.get(inner_id) {
-						RocFunction(_) => {}
+						RocErasedCallable => {}
 						_ => {
 							inner_zig = type_id_to_zig(type_table, duplicate_tag_names, preferred_names, inner_id)
 							if inner_zig != "*anyopaque" and is_type_refcounted(type_table, inner_id) {
@@ -2608,16 +2609,16 @@ generate_make_roc_host =
 # Entrypoint Declarations
 # =============================================================================
 
-generate_provided_decl : ProvidesEntry, TypeTable, List(Str), TypeNamePlan.PreferredNames, TypeRepr -> Str
-generate_provided_decl = |entry, type_table, duplicate_tag_names, preferred_names, type_repr| {
-	match type_repr {
-		RocFunction(func) => {
+generate_provided_decl : ProvidesEntry, TypeTable, List(Str), TypeNamePlan.PreferredNames -> Str
+generate_provided_decl = |entry, type_table, duplicate_tag_names, preferred_names| {
+	match entry.exported {
+		ProvidedProcedure(func) => {
 			params = direct_param_list(type_table, duplicate_tag_names, preferred_names, func.args)
 			ret_zig = type_id_to_zig(type_table, duplicate_tag_names, preferred_names, func.ret)
 			"/// Entrypoint: ${entry.name}\npub extern fn ${entry.ffi_symbol}(${params}) callconv(.c) ${ret_zig};\n\n"
 		}
-		_ => {
-			value_zig = type_id_to_zig(type_table, duplicate_tag_names, preferred_names, entry.type_id)
+		ProvidedData(type_id) => {
+			value_zig = type_id_to_zig(type_table, duplicate_tag_names, preferred_names, type_id)
 			"/// Static provided value: ${entry.name}\npub extern const ${entry.ffi_symbol}: ${value_zig};\n\n"
 		}
 	}
@@ -2633,8 +2634,7 @@ generate_entrypoint_externs = |provides_list, type_table, duplicate_tag_names, p
 	var $result = "// Provided Symbols\n//\n// Roc exports these symbols from the app with their natural C ABI signatures.\n\n"
 
 	for entry in provides_list {
-		type_repr = type_table.get(entry.type_id)
-		$result = Str.concat($result, generate_provided_decl(entry, type_table, duplicate_tag_names, preferred_names, type_repr))
+		$result = Str.concat($result, generate_provided_decl(entry, type_table, duplicate_tag_names, preferred_names))
 	}
 
 	$result

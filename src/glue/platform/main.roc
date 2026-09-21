@@ -14,11 +14,12 @@ platform ""
 		ArgShape,
 		File,
 		FunctionInfo,
-		FunctionRepr,
+		FunctionSignature,
 		GlueInput,
 		HostRcPlan,
 		HostedFunctionInfo,
 		ModuleTypeInfo,
+		ProvidedExport,
 		ProvidesEntry,
 		RocName,
 		RecordField,
@@ -55,7 +56,8 @@ import HostedFunctionInfo exposing [HostedFunctionInfo]
 import GlueInput exposing [GlueInput]
 import HostRcPlan exposing [HostRcPlan]
 import RecordFieldInfo exposing [RecordFieldInfo]
-import FunctionRepr exposing [FunctionRepr]
+import FunctionSignature exposing [FunctionSignature]
+import ProvidedExport exposing [ProvidedExport]
 import RecordField exposing [RecordField]
 import RecordRepr exposing [RecordRepr]
 import TagUnionRepr exposing [TagUnionRepr]

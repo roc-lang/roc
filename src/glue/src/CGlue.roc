@@ -44,7 +44,7 @@ type_repr_to_c = |type_table, duplicate_record_names, duplicate_tag_names, prefe
 		RocBool => "bool"
 		RocBox(inner_id) =>
 			match type_table.get(inner_id) {
-				RocFunction(_) => "RocErasedCallable"
+				RocErasedCallable => "RocErasedCallable"
 				RocUnknown(_) => "RocBox"
 				_ => {
 					inner_c = type_id_to_c(type_table, duplicate_record_names, duplicate_tag_names, preferred_names, inner_id)
@@ -88,7 +88,7 @@ type_repr_to_c = |type_table, duplicate_record_names, duplicate_tag_names, prefe
 		RocTagUnion(tu) => resolve_tag_union_type_c(type_table, duplicate_record_names, duplicate_tag_names, preferred_names, type_id, tu)
 		# A function stored inside a value is one erased-callable allocation,
 		# exactly like `Box(fn)`.
-		RocFunction(_) => "RocErasedCallable"
+		RocErasedCallable => "RocErasedCallable"
 		RocUnknown(_) => "void*"
 	}
 }
@@ -353,8 +353,8 @@ type_name_roots_c = |hosted_functions, provides_list, type_table| {
 		base = name_to_struct_name(entry.name)
 		module_base = hosted_module_name_to_struct_name(entry.name)
 
-		match type_table.get(entry.type_id) {
-			RocFunction(func) => {
+		match entry.exported {
+			ProvidedProcedure(func) => {
 				var $arg_idx = 0
 				for arg_type_id in func.args {
 					arg_fallback = "${base}Arg${U64.to_str($arg_idx)}"
@@ -372,11 +372,11 @@ type_name_roots_c = |hosted_functions, provides_list, type_table| {
 					type_id: func.ret,
 				})
 			}
-			_ => {
+			ProvidedData(type_id) => {
 				$roots = $roots.append({
-					alias_base: type_name_root_alias_base_c(type_table, base, entry.type_id),
+					alias_base: type_name_root_alias_base_c(type_table, base, type_id),
 					module_base,
-					type_id: entry.type_id,
+					type_id,
 				})
 			}
 		}
@@ -442,8 +442,8 @@ type_alias_roots_c = |hosted_functions, provides_list, type_table| {
 		base = name_to_struct_name(entry.name)
 		module_base = hosted_module_name_to_struct_name(entry.name)
 
-		match type_table.get(entry.type_id) {
-			RocFunction(func) => {
+		match entry.exported {
+			ProvidedProcedure(func) => {
 				var $arg_idx = 0
 				for arg_type_id in func.args {
 					arg_fallback = "${base}Arg${U64.to_str($arg_idx)}"
@@ -453,8 +453,8 @@ type_alias_roots_c = |hosted_functions, provides_list, type_table| {
 
 				$roots = append_type_alias_roots_c($roots, type_table, base, module_base, func.ret, [])
 			}
-			_ => {
-				$roots = append_type_alias_roots_c($roots, type_table, base, module_base, entry.type_id, [])
+			ProvidedData(type_id) => {
+				$roots = append_type_alias_roots_c($roots, type_table, base, module_base, type_id, [])
 			}
 		}
 	}
@@ -1167,15 +1167,14 @@ generate_provided_symbol_decls = |provides_list, type_table, duplicate_records, 
 
 	var $decls = ""
 	for entry in provides_list {
-		type_repr = type_table.get(entry.type_id)
-		match type_repr {
-			RocFunction(func) => {
+		match entry.exported {
+			ProvidedProcedure(func) => {
 				params = direct_param_list(type_table, duplicate_records, duplicate_tags, preferred_names, func.args)
 				ret_c = type_id_to_c(type_table, duplicate_records, duplicate_tags, preferred_names, func.ret)
 				$decls = Str.concat($decls, "/* Entrypoint: ${entry.name} */\nextern ${ret_c} ${entry.ffi_symbol}(${params});\n\n")
 			}
-			_ => {
-				value_c = type_id_to_c(type_table, duplicate_records, duplicate_tags, preferred_names, entry.type_id)
+			ProvidedData(type_id) => {
+				value_c = type_id_to_c(type_table, duplicate_records, duplicate_tags, preferred_names, type_id)
 				$decls = Str.concat($decls, "/* Static provided value: ${entry.name} */\nextern const ${value_c} ${entry.ffi_symbol};\n\n")
 			}
 		}

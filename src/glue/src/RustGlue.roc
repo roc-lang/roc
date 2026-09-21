@@ -13,7 +13,8 @@ import pf.ArgShape exposing [ArgShape]
 import pf.GlueInput exposing [GlueInput]
 import pf.HostedFunctionInfo exposing [HostedFunctionInfo]
 import pf.TypeNamePlan exposing [TypeNamePlan]
-import pf.FunctionRepr exposing [FunctionRepr]
+import pf.FunctionSignature exposing [FunctionSignature]
+import pf.ProvidedExport exposing [ProvidedExport]
 import pf.RecordRepr exposing [RecordRepr]
 import pf.TagUnionRepr exposing [TagUnionRepr]
 import pf.RecordField exposing [RecordField]
@@ -93,7 +94,7 @@ type_repr_to_rust = |type_table, duplicate_names, preferred_names, type_id, type
 		RocBool => "bool"
 		RocBox(inner_id) =>
 			match type_table.get(inner_id) {
-				RocFunction(_) => "RocErasedCallable"
+				RocErasedCallable => "RocErasedCallable"
 				RocUnknown(_) => "RocBox"
 				_ => {
 					inner_rust = type_id_to_rust(type_table, duplicate_names, preferred_names, inner_id)
@@ -142,7 +143,7 @@ type_repr_to_rust = |type_table, duplicate_names, preferred_names, type_id, type
 		RocTagUnion(tu) => resolve_tag_union_type_rust(type_table, duplicate_names, preferred_names, type_id, tu)
 		# A function stored inside a value is one erased-callable allocation,
 		# exactly like `Box(fn)`.
-		RocFunction(_) => "RocErasedCallable"
+		RocErasedCallable => "RocErasedCallable"
 		RocUnknown(_) => "*mut c_void"
 	}
 }
@@ -431,8 +432,8 @@ type_name_roots_rust = |hosted_functions, provides_list, type_table| {
 		base = name_to_struct_name(entry.name)
 		module_base = hosted_module_name_to_struct_name(entry.name)
 
-		match type_table.get(entry.type_id) {
-			RocFunction(func) => {
+		match entry.exported {
+			ProvidedProcedure(func) => {
 				var $arg_idx = 0
 				for arg_type_id in func.args {
 					arg_fallback = "${base}Arg${U64.to_str($arg_idx)}"
@@ -450,11 +451,11 @@ type_name_roots_rust = |hosted_functions, provides_list, type_table| {
 					type_id: func.ret,
 				})
 			}
-			_ => {
+			ProvidedData(type_id) => {
 				$roots = $roots.append({
-					alias_base: type_name_root_alias_base_rust(type_table, base, entry.type_id),
+					alias_base: type_name_root_alias_base_rust(type_table, base, type_id),
 					module_base,
-					type_id: entry.type_id,
+					type_id,
 				})
 			}
 		}
@@ -520,8 +521,8 @@ type_alias_roots_rust = |hosted_functions, provides_list, type_table| {
 		base = name_to_struct_name(entry.name)
 		module_base = hosted_module_name_to_struct_name(entry.name)
 
-		match type_table.get(entry.type_id) {
-			RocFunction(func) => {
+		match entry.exported {
+			ProvidedProcedure(func) => {
 				var $arg_idx = 0
 				for arg_type_id in func.args {
 					arg_fallback = "${base}Arg${U64.to_str($arg_idx)}"
@@ -531,8 +532,8 @@ type_alias_roots_rust = |hosted_functions, provides_list, type_table| {
 
 				$roots = append_type_alias_roots_rust($roots, type_table, base, module_base, func.ret, [])
 			}
-			_ => {
-				$roots = append_type_alias_roots_rust($roots, type_table, base, module_base, entry.type_id, [])
+			ProvidedData(type_id) => {
+				$roots = append_type_alias_roots_rust($roots, type_table, base, module_base, type_id, [])
 			}
 		}
 	}
@@ -2330,7 +2331,7 @@ release_policy_for_type_id_rust = |type_table, duplicate_names, preferred_names,
 			}
 		RocBox(inner_id) =>
 			match type_table.get(inner_id) {
-				RocFunction(_) => "RocErasedCallableRelease"
+				RocErasedCallable => "RocErasedCallableRelease"
 				RocUnknown(_) => ""
 				_ => {
 					inner_rust = type_id_to_rust(type_table, duplicate_names, preferred_names, inner_id)
@@ -2365,7 +2366,7 @@ release_policy_for_type_id_rust = |type_table, duplicate_names, preferred_names,
 						"${tag_union_struct_name(preferred_names, duplicate_names, type_id, tu)}Release"
 					}
 				}
-		RocFunction(_) => "RocErasedCallableRelease"
+		RocErasedCallable => "RocErasedCallableRelease"
 		_ => ""
 	}
 }
@@ -2380,7 +2381,7 @@ type_ident_rust = |type_table, duplicate_names, preferred_names, type_id|
 		RocList(elem_id) => "list_of_${type_ident_rust(type_table, duplicate_names, preferred_names, elem_id)}"
 		RocBox(inner_id) =>
 			match type_table.get(inner_id) {
-				RocFunction(_) => "erased_callable"
+				RocErasedCallable => "erased_callable"
 				_ => "box_of_${type_ident_rust(type_table, duplicate_names, preferred_names, inner_id)}"
 			}
 		RocRecord(rec) =>
@@ -2404,7 +2405,7 @@ type_ident_rust = |type_table, duplicate_names, preferred_names, type_id|
 						"type${U64.to_str(type_id)}"
 					}
 				}
-		RocFunction(_) => "erased_callable"
+		RocErasedCallable => "erased_callable"
 		_ => "type${U64.to_str(type_id)}"
 	}
 
@@ -2438,7 +2439,7 @@ decref_stmt_for_repr_rust = |type_table, duplicate_names, preferred_names, _type
 		}
 		RocBox(inner_id) =>
 			match type_table.get(inner_id) {
-				RocFunction(_) => "    unsafe { decref_erased_callable(${expr}, roc_host); }\n"
+				RocErasedCallable => "    unsafe { decref_erased_callable(${expr}, roc_host); }\n"
 				_ => {
 					inner_rust = type_id_to_rust(type_table, duplicate_names, preferred_names, inner_id)
 					if inner_rust == "RocBox" or inner_rust == "*mut c_void" {
@@ -2467,7 +2468,7 @@ decref_stmt_for_repr_rust = |type_table, duplicate_names, preferred_names, _type
 						""
 					}
 				}
-		RocFunction(_) => "    unsafe { decref_erased_callable(${expr}, roc_host); }\n"
+		RocErasedCallable => "    unsafe { decref_erased_callable(${expr}, roc_host); }\n"
 		_ => ""
 	}
 }
@@ -2485,7 +2486,7 @@ incref_stmt_for_repr_rust = |type_table, duplicate_names, preferred_names, _type
 		RocList(_) => "    unsafe { ${expr}.incref(amount); }\n"
 		RocBox(inner_id) =>
 			match type_table.get(inner_id) {
-				RocFunction(_) => "    unsafe { incref_erased_callable(${expr}, amount); }\n"
+				RocErasedCallable => "    unsafe { incref_erased_callable(${expr}, amount); }\n"
 				_ => "    unsafe { incref_box(${expr} as RocBox, amount); }\n"
 			}
 		RocRecord(rec) =>
@@ -2505,7 +2506,7 @@ incref_stmt_for_repr_rust = |type_table, duplicate_names, preferred_names, _type
 						""
 					}
 				}
-		RocFunction(_) => "    unsafe { incref_erased_callable(${expr}, amount); }\n"
+		RocErasedCallable => "    unsafe { incref_erased_callable(${expr}, amount); }\n"
 		_ => ""
 	}
 }
@@ -2708,7 +2709,7 @@ generate_box_payload_decref_helpers_rust = |type_table, duplicate_names, preferr
 				if !(List.contains($seen_inner_ids, inner_id)) {
 					$seen_inner_ids = $seen_inner_ids.append(inner_id)
 					match type_table.get(inner_id) {
-						RocFunction(_) => {}
+						RocErasedCallable => {}
 						_ => {
 							inner_rust = type_id_to_rust(type_table, duplicate_names, preferred_names, inner_id)
 							if inner_rust != "RocBox" and inner_rust != "*mut c_void" and is_type_refcounted(type_table, inner_id) {
@@ -2967,10 +2968,10 @@ hosted_ownership_doc_rust = |type_table, duplicate_names, preferred_names, func|
 	Str.concat(arg_doc, ret_doc)
 }
 
-generate_provided_decl_rust : ProvidesEntry, TypeTable, List(Str), TypeNamePlan.PreferredNames, TypeRepr -> Str
-generate_provided_decl_rust = |entry, type_table, duplicate_names, preferred_names, type_repr| {
-	match type_repr {
-		RocFunction(func) => {
+generate_provided_decl_rust : ProvidesEntry, TypeTable, List(Str), TypeNamePlan.PreferredNames -> Str
+generate_provided_decl_rust = |entry, type_table, duplicate_names, preferred_names| {
+	match entry.exported {
+		ProvidedProcedure(func) => {
 			params = direct_param_list_rust(type_table, duplicate_names, preferred_names, func.args)
 			ret_rust = type_id_to_rust(type_table, duplicate_names, preferred_names, func.ret)
 			ret_suffix = if ret_rust == "()" {
@@ -2980,17 +2981,17 @@ generate_provided_decl_rust = |entry, type_table, duplicate_names, preferred_nam
 			}
 			"    /// Entrypoint: ${entry.name}\n    pub fn ${entry.ffi_symbol}(${params})${ret_suffix};\n\n"
 		}
-		_ => {
-			value_rust = type_id_to_rust(type_table, duplicate_names, preferred_names, entry.type_id)
+		ProvidedData(type_id) => {
+			value_rust = type_id_to_rust(type_table, duplicate_names, preferred_names, type_id)
 			"    /// Static provided value: ${entry.name}\n    pub static ${entry.ffi_symbol}: ${value_rust};\n\n"
 		}
 	}
 }
 
-generate_provided_owned_wrapper_rust : ProvidesEntry, TypeTable, List(Str), TypeNamePlan.PreferredNames, TypeRepr -> Str
-generate_provided_owned_wrapper_rust = |entry, type_table, duplicate_names, preferred_names, type_repr| {
-	match type_repr {
-		RocFunction(func) => {
+generate_provided_owned_wrapper_rust : ProvidesEntry, TypeTable, List(Str), TypeNamePlan.PreferredNames -> Str
+generate_provided_owned_wrapper_rust = |entry, type_table, duplicate_names, preferred_names| {
+	match entry.exported {
+		ProvidedProcedure(func) => {
 			if !is_type_refcounted(type_table, func.ret) {
 				return ""
 			}
@@ -3005,7 +3006,7 @@ generate_provided_owned_wrapper_rust = |entry, type_table, duplicate_names, pref
 			ret_rust = type_id_to_rust(type_table, duplicate_names, preferred_names, func.ret)
 			"const _: () = assert!(core::mem::size_of::<RocOwned<${ret_rust}, ${policy}>>() == core::mem::size_of::<${ret_rust}>(), \"${entry.ffi_symbol} owned result size mismatch\");\nconst _: () = assert!(core::mem::align_of::<RocOwned<${ret_rust}, ${policy}>>() == core::mem::align_of::<${ret_rust}>(), \"${entry.ffi_symbol} owned result alignment mismatch\");\n\n/// Owning wrapper for `${entry.ffi_symbol}`. The returned value is recursively\n/// released on Drop with no runtime descriptor or extra storage.\n///\n/// # Safety\n/// The raw entrypoint and its arguments must satisfy the generated host ABI.\npub unsafe fn ${entry.ffi_symbol}_owned(${params}) -> RocOwned<${ret_rust}, ${policy}> {\n    let value = unsafe { ${entry.ffi_symbol}(${args}) };\n    unsafe { RocOwned::from_raw(value) }\n}\n\n"
 		}
-		_ => ""
+		ProvidedData(_) => ""
 	}
 }
 
@@ -3020,9 +3021,8 @@ generate_entrypoint_externs_rust = |provides_list, type_table, duplicate_names, 
 	var $wrappers = ""
 
 	for entry in provides_list {
-		type_repr = type_table.get(entry.type_id)
-		$result = Str.concat($result, generate_provided_decl_rust(entry, type_table, duplicate_names, preferred_names, type_repr))
-		$wrappers = Str.concat($wrappers, generate_provided_owned_wrapper_rust(entry, type_table, duplicate_names, preferred_names, type_repr))
+		$result = Str.concat($result, generate_provided_decl_rust(entry, type_table, duplicate_names, preferred_names))
+		$wrappers = Str.concat($wrappers, generate_provided_owned_wrapper_rust(entry, type_table, duplicate_names, preferred_names))
 	}
 
 	Str.concat(Str.concat($result, "}\n\n"), $wrappers)

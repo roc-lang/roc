@@ -476,6 +476,7 @@ const CustomCase = enum {
     glue_record_function_field,
     glue_recursive_slot_box,
     glue_generic_callable_arg,
+    glue_hosted_erased_generic_callback,
     glue_c_tests,
     roc_test_skips_url_dependency_expects,
     roc_test_caches_local_dependency_expects,
@@ -972,7 +973,8 @@ const glue_cases = [_]CliCase{
     .{ .id = 0, .suite = .glue, .name = "issue 9824: glue reports an error for a by-value unresolved type variable", .body = .{ .custom = .glue_unresolved_by_value_errors } },
     .{ .id = 0, .suite = .glue, .name = "glue regression: opaque nominal record with a function field is a boxed payload", .body = .{ .custom = .glue_record_function_field } },
     .{ .id = 0, .suite = .glue, .name = "glue regression: recursive-slot boxed edges wrap by-value types and compile", .body = .{ .custom = .glue_recursive_slot_box } },
-    .{ .id = 0, .suite = .glue, .name = "glue regression: function argument mentioning a generic type parameter is a glue error", .body = .{ .custom = .glue_generic_callable_arg } },
+    .{ .id = 0, .suite = .glue, .name = "glue regression: function stored in a generic type is an erased callable in every generator", .body = .{ .custom = .glue_generic_callable_arg } },
+    .{ .id = 0, .suite = .glue, .name = "issue 11505: hosted Box of a generic function is an erased callable in every generator", .body = .{ .custom = .glue_hosted_erased_generic_callback } },
     .{ .id = 0, .suite = .glue, .name = "CGlue.roc expect tests pass", .body = .{ .custom = .glue_c_tests } },
 };
 
@@ -3289,6 +3291,7 @@ fn runCustomCase(
         .glue_record_function_field => customGlueRecordFunctionField(io, allocator, &env, &timer, timeout_ms),
         .glue_recursive_slot_box => customGlueRecursiveSlotBox(io, allocator, &env, &timer, timeout_ms),
         .glue_generic_callable_arg => customGlueGenericCallableArg(io, allocator, &env, &timer, timeout_ms),
+        .glue_hosted_erased_generic_callback => customGlueHostedErasedGenericCallback(io, allocator, &env, &timer, timeout_ms),
         .glue_c_tests => customGlueCTests(io, allocator, &env, &timer, timeout_ms),
         .roc_test_skips_url_dependency_expects => customRocTestSkipsUrlDependencyExpects(io, allocator, &env, &timer, timeout_ms),
         .roc_test_caches_local_dependency_expects => customRocTestCachesLocalDependencyExpects(io, allocator, &env, &timer, timeout_ms),
@@ -10504,26 +10507,85 @@ fn customGlueRecursiveSlotBox(io: std.Io, allocator: Allocator, env: *const Case
 
 fn customGlueGenericCallableArg(io: std.Io, allocator: Allocator, env: *const CaseEnv, timer: *harness.Timer, timeout_ms: u64) ?TestResult {
     // A function stored inside a generic nominal whose argument mentions the
-    // type parameter inside a record has no checked type for its
-    // instantiation, so glue cannot ask the compiler for that argument's
-    // layout. Glue reports the type and the boundary value instead of
-    // describing the uninstantiated template to the host.
-    const output_dir = createWorkSubdir(io, allocator, env, "glue-out") catch |err|
-        return customInfraFailure(allocator, timer, "failed to create glue output dir: {}", .{err});
-    if (runRocAndCheck(io, allocator, env, timer, timeout_ms, .{
-        .args = &.{ "glue", "--no-cache", "src/glue/src/ZigGlue.roc", output_dir, "test/glue/generic-callable-arg/main.roc" },
-        .exit = .failure,
-        .contains = &.{
-            .{ .stream = .stderr, .text = "stored inside a generic type" },
-            .{ .stream = .stderr, .text = "y : U64" },
-            .{ .stream = .stderr, .text = "in the signature of `handler`" },
-        },
-        .not_contains = &.{
-            .{ .stream = .stderr, .text = "panic" },
-            .{ .stream = .stderr, .text = "unreachable" },
-            .{ .stream = .stderr, .text = "invariant violated" },
-        },
-    })) |failure| return failure;
+    // type parameter inside a record is an erased callable value. The host
+    // receives one callable pointer whose representation does not depend on
+    // the function's argument or result types, so glue describes it without
+    // laying out the uninstantiated argument.
+    return checkErasedCallableGlue(io, allocator, env, timer, timeout_ms, "test/glue/generic-callable-arg/main.roc", .{
+        .zig = "pub extern fn handler() callconv(.c) RocErasedCallable;",
+        .c = "extern RocErasedCallable handler(void);",
+        .rust = "pub fn handler() -> RocErasedCallable;",
+    });
+}
+
+fn customGlueHostedErasedGenericCallback(io: std.Io, allocator: Allocator, env: *const CaseEnv, timer: *harness.Timer, timeout_ms: u64) ?TestResult {
+    // Issue 11505: a hosted function taking `Box(({ value : a } => {}))`
+    // passes the host one erased callable pointer, whose representation does
+    // not depend on the callable's semantic argument or result types. Every
+    // generator emits the hosted declaration over `RocErasedCallable`.
+    return checkErasedCallableGlue(io, allocator, env, timer, timeout_ms, "test/glue/hosted-erased-generic-callback/main.roc", .{
+        .zig = "pub extern fn roc_install(arg0: RocErasedCallable) callconv(.c) void;",
+        .c = "extern void roc_install(RocErasedCallable arg0);",
+        .rust = "pub fn roc_install(arg0: RocErasedCallable);",
+    });
+}
+
+/// Run every shipped generator over `platform_path`, require each output to
+/// contain its erased-callable boundary declaration, and compile the generated
+/// Zig with every declaration analyzed.
+fn checkErasedCallableGlue(
+    io: std.Io,
+    allocator: Allocator,
+    env: *const CaseEnv,
+    timer: *harness.Timer,
+    timeout_ms: u64,
+    platform_path: []const u8,
+    declarations: struct { zig: []const u8, c: []const u8, rust: []const u8 },
+) ?TestResult {
+    const Generator = struct { spec: []const u8, subdir: []const u8, file: []const u8, declaration: []const u8 };
+    var zig_output_dir: []const u8 = undefined;
+    for ([_]Generator{
+        .{ .spec = "src/glue/src/ZigGlue.roc", .subdir = "zig-glue-out", .file = "roc_platform_abi.zig", .declaration = declarations.zig },
+        .{ .spec = "src/glue/src/CGlue.roc", .subdir = "c-glue-out", .file = "roc_platform_abi.h", .declaration = declarations.c },
+        .{ .spec = "src/glue/src/RustGlue.roc", .subdir = "rust-glue-out", .file = "roc_platform_abi.rs", .declaration = declarations.rust },
+    }, 0..) |generator, index| {
+        const output_dir = createWorkSubdir(io, allocator, env, generator.subdir) catch |err|
+            return customInfraFailure(allocator, timer, "failed to create glue output dir: {}", .{err});
+        if (index == 0) zig_output_dir = output_dir;
+        if (runRocAndCheck(io, allocator, env, timer, timeout_ms, .{
+            .args = &.{ "glue", "--no-cache", generator.spec, output_dir, platform_path },
+            .not_contains = &.{
+                .{ .stream = .stderr, .text = "panic" },
+                .{ .stream = .stderr, .text = "unreachable" },
+                .{ .stream = .stderr, .text = "invariant violated" },
+            },
+        })) |failure| return failure;
+
+        const generated_path = std.fs.path.join(allocator, &.{ output_dir, generator.file }) catch |err|
+            return customInfraFailure(allocator, timer, "failed to allocate generated glue path: {}", .{err});
+        const generated = std.Io.Dir.cwd().readFileAlloc(io, generated_path, allocator, .limited(1024 * 1024)) catch |err|
+            return customFailure(allocator, timer, "failed to read generated glue file {s}: {}", .{ generator.file, err });
+        if (std.mem.find(u8, generated, generator.declaration) == null) {
+            return customFailure(allocator, timer, "{s} missing erased-callable boundary declaration {s}", .{ generator.file, generator.declaration });
+        }
+    }
+
+    const test_zig_path = std.fs.path.join(allocator, &.{ zig_output_dir, "test_abi.zig" }) catch |err|
+        return customInfraFailure(allocator, timer, "failed to allocate test Zig path: {}", .{err});
+    std.Io.Dir.cwd().writeFile(io, .{ .sub_path = test_zig_path, .data =
+        \\const std = @import("std");
+        \\const abi = @import("roc_platform_abi.zig");
+        \\comptime {
+        \\    std.testing.refAllDecls(abi);
+        \\}
+    }) catch |err|
+        return customInfraFailure(allocator, timer, "failed to write test Zig file: {}", .{err});
+    if (runRawAndCheck(io, allocator, env, timer, timeout_ms, &.{
+        "zig",
+        "build-obj",
+        "-fno-emit-bin",
+        test_zig_path,
+    }, project_root_path, .{ .args = &.{} })) |failure| return failure;
     return null;
 }
 

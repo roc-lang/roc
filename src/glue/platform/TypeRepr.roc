@@ -1,4 +1,3 @@
-import FunctionRepr exposing [FunctionRepr]
 import RecordRepr exposing [RecordRepr]
 import TagUnionRepr exposing [TagUnionRepr]
 
@@ -9,9 +8,9 @@ TypeRepr := [
 	RocBool,
 	RocBox(U64),
 	RocDec,
+	RocErasedCallable,
 	RocF32,
 	RocF64,
-	RocFunction(FunctionRepr),
 	RocI128,
 	RocI16,
 	RocI32,

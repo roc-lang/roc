@@ -15681,6 +15681,16 @@ schema logical indices; the layout store supplies their byte offsets and
 layouts. A checked-source schema regression test locks the remaining marshaller
 field names and leaf types.
 
+Glue's type table describes values. A function value, wherever it appears
+(boxed, in a record or tag payload, or as a hosted argument or result), is one
+erased-callable pointer whose runtime ABI does not depend on its argument or
+result types, so it is a leaf `RocErasedCallable` entry and its semantic
+signature contributes no entries or layout roots. Only callables that are
+themselves linker symbols carry signatures: a hosted function's arguments and
+result, and a provided procedure's arguments and result. Glue classifies each
+provided export as a procedure or data from the checked artifact's provided
+export table, never from the shape of its type.
+
 The platform header maps linker symbols explicitly, symbol-string first, in
 both directions:
 

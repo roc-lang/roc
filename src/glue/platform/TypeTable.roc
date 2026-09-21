@@ -71,7 +71,7 @@ TypeTable := { entries : List(TypeInfo) }.{
 			RocStr => Bool.True
 			RocBox(_) => Bool.True
 			RocList(_) => Bool.True
-			RocFunction(_) => Bool.True
+			RocErasedCallable => Bool.True
 			_ => Bool.False
 		}
 
@@ -147,9 +147,9 @@ TypeTable := { entries : List(TypeInfo) }.{
 			RocBool => "bool"
 			RocBox(inner) => Str.concat("box:", table.structural_token(inner))
 			RocDec => "dec"
+			RocErasedCallable => "erased_callable"
 			RocF32 => "f32"
 			RocF64 => "f64"
-			RocFunction(_) => "fn"
 			RocI128 => "i128"
 			RocI16 => "i16"
 			RocI32 => "i32"

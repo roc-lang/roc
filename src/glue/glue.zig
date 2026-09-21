@@ -219,19 +219,15 @@ fn rocGlueInner(gpa: Allocator, stderr: *std.Io.Writer, stdout: *std.Io.Writer, 
         }
     }
 
-    // 4. Register platform entrypoint and provided-function type ids from the
-    // platform main artifact's published requires/provides metadata.
+    // 4. Register platform entrypoint type ids and provided exports from the
+    // platform main artifact's published requires metadata and provided
+    // export table.
     var entrypoint_type_ids = std.StringHashMap(u64).init(gpa);
     defer entrypoint_type_ids.deinit();
-    var provides_type_ids = std.StringHashMap(u64).init(gpa);
-    defer provides_type_ids.deinit();
 
-    var provides_entries = std.ArrayList(PlatformHeaderInfo.ProvidesEntry).empty;
+    var provides_entries = std.ArrayList(CollectedProvidesEntry).empty;
     defer {
-        for (provides_entries.items) |entry| {
-            gpa.free(entry.name);
-            gpa.free(entry.ffi_symbol);
-        }
+        for (provides_entries.items) |entry| entry.deinit(gpa);
         provides_entries.deinit(gpa);
     }
 
@@ -239,13 +235,6 @@ fn rocGlueInner(gpa: Allocator, stderr: *std.Io.Writer, stdout: *std.Io.Writer, 
         if (!mod.is_platform_main) continue;
         const artifact = mod.semantic.checked_artifact orelse return error.ModuleRetrieval;
         type_table.clearVarMap();
-
-        for (artifact.provides_requires.provides) |provides_entry| {
-            try provides_entries.append(gpa, .{
-                .name = try gpa.dupe(u8, artifact.canonical_names.exportNameText(provides_entry.source_name)),
-                .ffi_symbol = try gpa.dupe(u8, artifact.canonical_names.externalSymbolNameText(provides_entry.ffi_symbol)),
-            });
-        }
 
         for (artifact.platform_required_declarations.declarations) |declaration| {
             const name = artifact.canonical_names.exportNameText(declaration.platform_name);
@@ -259,20 +248,29 @@ fn rocGlueInner(gpa: Allocator, stderr: *std.Io.Writer, stdout: *std.Io.Writer, 
             try entrypoint_type_ids.put(name, type_id);
         }
 
-        for (artifact.provides_requires.provides) |provides_entry| {
-            const def_idx = provides_entry.def;
-            const top_level = artifact.top_level_values.lookupByDef(def_idx) orelse
-                glueInvariant("provided entry has no top-level value", .{});
-            const scheme = artifact.checked_types.schemeForKey(top_level.source_scheme) orelse
-                glueInvariant("provided entry has no checked type scheme", .{});
-            type_table.boundary_value_name = artifact.canonical_names.exportNameText(provides_entry.source_name);
-            defer type_table.boundary_value_name = null;
-            const type_id = type_table.getOrInsertRoot(artifact, scheme.root) catch |err| switch (err) {
-                error.OutOfMemory => return error.OutOfMemory,
-                error.UnresolvedByValue => return reportUnresolvedTypeVariable(stderr, &type_table),
+        try provides_entries.ensureUnusedCapacity(gpa, artifact.provided_exports.exports.len);
+        for (artifact.provided_exports.exports) |provided| {
+            const source_name, const ffi_symbol = switch (provided) {
+                .procedure => |procedure| .{ procedure.source_name, procedure.ffi_symbol },
+                .data => |data| .{ data.source_name, data.ffi_symbol },
             };
-            const ffi_symbol = artifact.canonical_names.externalSymbolNameText(provides_entry.ffi_symbol);
-            try provides_type_ids.put(ffi_symbol, type_id);
+            type_table.boundary_value_name = artifact.canonical_names.exportNameText(source_name);
+            defer type_table.boundary_value_name = null;
+            const exported: CollectedProvidedExport = switch (provided) {
+                .procedure => |procedure| .{ .procedure = type_table.providedProcedureSignature(artifact, procedure.checked_type) catch |err| switch (err) {
+                    error.OutOfMemory => return error.OutOfMemory,
+                    error.UnresolvedByValue => return reportUnresolvedTypeVariable(stderr, &type_table),
+                } },
+                .data => |data| .{ .data = type_table.getOrInsertRoot(artifact, data.checked_type) catch |err| switch (err) {
+                    error.OutOfMemory => return error.OutOfMemory,
+                    error.UnresolvedByValue => return reportUnresolvedTypeVariable(stderr, &type_table),
+                } },
+            };
+            var entry = CollectedProvidesEntry{ .name = &.{}, .ffi_symbol = &.{}, .exported = exported };
+            errdefer entry.deinit(gpa);
+            entry.name = try gpa.dupe(u8, artifact.canonical_names.exportNameText(source_name));
+            entry.ffi_symbol = try gpa.dupe(u8, artifact.canonical_names.externalSymbolNameText(ffi_symbol));
+            provides_entries.appendAssumeCapacity(entry);
         }
         break;
     }
@@ -298,7 +296,7 @@ fn rocGlueInner(gpa: Allocator, stderr: *std.Io.Writer, stdout: *std.Io.Writer, 
         .schemas = &lowered.runtime_value_schemas,
         .roc_ops = runtime_env.get_ops(),
     };
-    var types_list = constructTypesRocList(&glue_writer, collected_modules.items, &platform_info, provides_entries.items, &type_table, &entrypoint_type_ids, &provides_type_ids, arg_layouts[0]);
+    var types_list = constructTypesRocList(&glue_writer, collected_modules.items, &platform_info, provides_entries.items, &type_table, &entrypoint_type_ids, arg_layouts[0]);
 
     const proc = lowered.lir_result.store.getProcSpec(glue_proc);
     const ret_size_align = lowered.lir_result.layouts.layoutSizeAlign(lowered.lir_result.layouts.getLayout(proc.ret_layout));
@@ -1238,11 +1236,6 @@ pub const PlatformHeaderInfo = struct {
         ffi_symbol: []const u8,
     };
 
-    pub const ProvidesEntry = struct {
-        name: []const u8,
-        ffi_symbol: []const u8,
-    };
-
     pub fn deinit(self: *const PlatformHeaderInfo, gpa: std.mem.Allocator) void {
         deinitPlatformRequiresEntries(gpa, self.requires_entries);
         deinitPlatformHostedEntries(gpa, self.hosted_entries);
@@ -1493,6 +1486,36 @@ const CollectedModuleTypeInfo = struct {
 /// the kind of value. Every layout fact (sizes, alignments, offsets, field
 /// order in memory, discriminants) lives in the entry's `CollectedAbiLayout`,
 /// which `attachAbiLayouts` copies out of the compiler's committed layouts.
+/// A `provides` entry and what its linker symbol exports.
+const CollectedProvidesEntry = struct {
+    name: []const u8,
+    ffi_symbol: []const u8,
+    exported: CollectedProvidedExport,
+
+    fn deinit(self: CollectedProvidesEntry, gpa: Allocator) void {
+        gpa.free(self.name);
+        gpa.free(self.ffi_symbol);
+        switch (self.exported) {
+            .procedure => |procedure| gpa.free(procedure.arg_ids),
+            .data => {},
+        }
+    }
+};
+
+/// The checked artifact's classification of a provided export. A procedure
+/// is exported as a function whose natural C ABI takes its own arguments and
+/// returns its own result, so its signature names their type entries. Data is
+/// exported as a value of its type entry.
+const CollectedProvidedExport = union(enum) {
+    procedure: CollectedProvidedProcedure,
+    data: u64,
+};
+
+const CollectedProvidedProcedure = struct {
+    arg_ids: []const u64,
+    ret_id: u64,
+};
+
 const CollectedTypeRepr = union(enum) {
     bool_,
     box: struct { inner_id: u64 },
@@ -1520,7 +1543,10 @@ const CollectedTypeRepr = union(enum) {
     str_,
     unit,
     list: struct { elem_id: u64 },
-    function: struct { arg_ids: []const u64, ret_id: u64 },
+    /// A function value: one pointer to an erased-callable allocation. Its
+    /// runtime ABI is the same for every argument and result type, so the
+    /// function's semantic signature has no entries or layout roots here.
+    erased_callable,
     record: struct { name: []const u8, anonymous: bool, fields: []const CollectedRecordField },
     tag_union: struct { name: []const u8, tags: []const CollectedTagInfo },
     unknown: struct { name: []const u8 },
@@ -1549,12 +1575,14 @@ const CollectedTagInfo = struct {
 /// The checked type behind one root glue entry, whose committed layout glue
 /// asks the compiler for directly.
 ///
-/// Roots are the types a host sees at the platform boundary (hosted function
-/// arguments and results, provided values, required entrypoints) plus the
-/// arguments and result of every function type reached from them. Every
-/// other glue type gets its layout from its parent's committed layout during
-/// `attachAbiLayouts`, so a root is the only place a checked type id crosses
-/// into the compiler's layout selection.
+/// Roots are the types a host sees at the platform boundary: hosted function
+/// arguments and results, provided procedure arguments and results, provided
+/// data, and required entrypoints. A function value reached from them is an
+/// erased callable whose layout does not depend on its argument or result
+/// types, so those types are never roots. Every other glue type gets its
+/// layout from its parent's committed layout during `attachAbiLayouts`, so a
+/// root is the only place a checked type id crosses into the compiler's
+/// layout selection.
 ///
 /// Authoritative sources:
 /// - `CheckedModuleArtifact` owns checked type ids.
@@ -1882,23 +1910,46 @@ const TypeTable = struct {
         self: *TypeTable,
         artifact: *const CheckedArtifact.CheckedModuleArtifact,
         checked_type: CheckedArtifact.CheckedTypeId,
-    ) TypeTableError!?HostedFunctionTypeMetadata {
-        const src = self.substituteFormal(artifact, checked_type);
-        return switch (checkedTypePayload(src.artifact, src.checked_type)) {
-            .function => |func| try self.metadataForFunctionPayload(src.artifact, func),
-            .alias => |alias| try self.collectHostedFunctionMetadata(src.artifact, alias.backing),
-            .nominal => |nominal| blk: {
-                const lookup = self.nominalDeclarationFor(src.artifact, nominal) orelse break :blk null;
-                const saved = try self.gpa.alloc(?BoundSource, nominal.args.len);
-                defer self.gpa.free(saved);
-                const bound_formals = try self.gpa.alloc(bool, nominal.args.len);
-                defer self.gpa.free(bound_formals);
-                try self.bindNominalFormals(src.artifact, nominal, lookup, saved, bound_formals);
-                defer self.restoreNominalFormals(lookup, saved, bound_formals);
-                break :blk try self.collectHostedFunctionMetadata(lookup.artifact, lookup.declaration.backing);
-            },
-            .pending, .err, .flex, .rigid, .record, .record_unbound, .tuple, .empty_record, .tag_union, .empty_tag_union => null,
+    ) TypeTableError!HostedFunctionTypeMetadata {
+        return self.metadataForFunctionPayload(artifact, checkedFunctionType(artifact, checked_type, "hosted declaration"));
+    }
+
+    /// The type entries of a provided procedure's arguments and result, each
+    /// registered as a root: the exported symbol takes and returns them
+    /// directly, so each needs its own committed layout.
+    fn providedProcedureSignature(
+        self: *TypeTable,
+        artifact: *const CheckedArtifact.CheckedModuleArtifact,
+        checked_type: CheckedArtifact.CheckedTypeId,
+    ) TypeTableError!CollectedProvidedProcedure {
+        const func = checkedFunctionType(artifact, checked_type, "provided procedure export");
+        const arg_ids = try self.gpa.alloc(u64, func.args.len);
+        errdefer self.gpa.free(arg_ids);
+        for (func.args, 0..) |arg, i| {
+            arg_ids[i] = try self.getOrInsertRoot(artifact, arg);
+        }
+        return .{
+            .arg_ids = arg_ids,
+            .ret_id = try self.getOrInsertRoot(artifact, func.ret),
         };
+    }
+
+    /// The function type a checked host-boundary callable has through its
+    /// aliases. Checking requires hosted declarations and provided procedures
+    /// to be functions, so any other type is an invariant violation.
+    fn checkedFunctionType(
+        artifact: *const CheckedArtifact.CheckedModuleArtifact,
+        checked_type: CheckedArtifact.CheckedTypeId,
+        comptime what: []const u8,
+    ) CheckedArtifact.CheckedFunctionType {
+        var current = checked_type;
+        while (true) {
+            switch (checkedTypePayload(artifact, current)) {
+                .alias => |alias| current = alias.backing,
+                .function => |func| return func,
+                .pending, .err, .flex, .rigid, .record, .record_unbound, .tuple, .nominal, .empty_record, .tag_union, .empty_tag_union => glueInvariant(what ++ " has a non-function checked type", .{}),
+            }
+        }
     }
 
     fn metadataForFunctionPayload(
@@ -2243,14 +2294,12 @@ const TypeTable = struct {
                 self.gpa.free(tu.tags);
                 self.freeDuped(tu.name);
             },
-            .function => |func| {
-                self.gpa.free(func.arg_ids);
-            },
             .unknown => |unknown| {
                 self.freeDuped(unknown.name);
             },
             .box,
             .list,
+            .erased_callable,
             .bool_,
             .dec,
             .f32_,
@@ -2353,121 +2402,21 @@ const TypeTable = struct {
     /// committed layout by checked type id.
     fn getOrInsertRoot(
         self: *TypeTable,
-        artifact_in: *const CheckedArtifact.CheckedModuleArtifact,
-        checked_type_in: CheckedArtifact.CheckedTypeId,
+        artifact: *const CheckedArtifact.CheckedModuleArtifact,
+        checked_type: CheckedArtifact.CheckedTypeId,
     ) TypeTableError!u64 {
-        const src = self.substituteFormal(artifact_in, checked_type_in);
-        // A root is requested from the compiler by checked type id, which
-        // names a declaration-space type when this root sits inside a nominal
-        // backing opening. Formal substitution only rewrites a type that IS a
-        // bound formal, so a type that merely mentions one has no checked id
-        // for its instantiation and the compiler would lay out the template
-        // with the formal sealed to zero size. Refuse rather than describe a
-        // wrong size to the host.
-        if (self.template_bindings.count() != 0 and try self.mentionsBoundFormal(src.artifact, src.checked_type)) {
-            try self.recordUninstantiatedRoot(src.artifact, src.checked_type);
-            return error.UnresolvedByValue;
-        }
-        const idx = try self.getOrInsert(src.artifact, src.checked_type, .boundary);
+        // The compiler lays out a root by its checked type id, which names the
+        // host-visible type only outside a nominal backing opening. Roots are
+        // boundary signature types, which conversion never reaches through an
+        // opening: a function value inside a backing is an erased callable
+        // with no roots of its own.
+        std.debug.assert(self.template_bindings.count() == 0);
+        const idx = try self.getOrInsert(artifact, checked_type, .boundary);
         const slot = try self.roots.getOrPut(self.gpa, idx);
         if (!slot.found_existing) {
-            slot.value_ptr.* = .{ .artifact = src.artifact, .checked_type = src.checked_type };
+            slot.value_ptr.* = .{ .artifact = artifact, .checked_type = checked_type };
         }
         return idx;
-    }
-
-    /// True when a checked type contains, anywhere inside it, a type variable
-    /// that the active nominal backing opening binds to an argument. The type
-    /// itself is checked after formal substitution, so only nested mentions
-    /// matter.
-    fn mentionsBoundFormal(
-        self: *TypeTable,
-        artifact: *const CheckedArtifact.CheckedModuleArtifact,
-        checked_type: CheckedArtifact.CheckedTypeId,
-    ) Allocator.Error!bool {
-        var visited = std.AutoHashMap(TypeTableKey, void).init(self.gpa);
-        defer visited.deinit();
-        return self.mentionsBoundFormalInner(artifact, checked_type, &visited);
-    }
-
-    fn mentionsBoundFormalInner(
-        self: *TypeTable,
-        artifact: *const CheckedArtifact.CheckedModuleArtifact,
-        checked_type: CheckedArtifact.CheckedTypeId,
-        visited: *std.AutoHashMap(TypeTableKey, void),
-    ) Allocator.Error!bool {
-        const key = TypeTableKey{ .artifact_key = artifact.key, .checked_type = checked_type };
-        if (visited.contains(key)) return false;
-        try visited.put(key, {});
-        switch (checkedTypePayload(artifact, checked_type)) {
-            .pending, .err, .empty_record, .empty_tag_union => return false,
-            .flex, .rigid => return self.template_bindings.contains(key),
-            .alias => |alias| return self.mentionsBoundFormalInner(artifact, alias.backing, visited),
-            .record => |record| {
-                for (record.fields) |field| {
-                    if (try self.mentionsBoundFormalInner(artifact, field.ty, visited)) return true;
-                }
-                return self.mentionsBoundFormalInner(artifact, record.ext, visited);
-            },
-            .record_unbound => |fields| {
-                for (fields) |field| {
-                    if (try self.mentionsBoundFormalInner(artifact, field.ty, visited)) return true;
-                }
-                return false;
-            },
-            .tuple => |items| {
-                for (items) |item| {
-                    if (try self.mentionsBoundFormalInner(artifact, item, visited)) return true;
-                }
-                return false;
-            },
-            .nominal => |nominal| {
-                for (nominal.args) |arg| {
-                    if (try self.mentionsBoundFormalInner(artifact, arg, visited)) return true;
-                }
-                return false;
-            },
-            .function => |func| {
-                for (func.args) |arg| {
-                    if (try self.mentionsBoundFormalInner(artifact, arg, visited)) return true;
-                }
-                return self.mentionsBoundFormalInner(artifact, func.ret, visited);
-            },
-            .tag_union => |tag_union| {
-                for (tag_union.tags) |tag| {
-                    for (tag.argsSlice(&artifact.checked_types)) |arg| {
-                        if (try self.mentionsBoundFormalInner(artifact, arg, visited)) return true;
-                    }
-                }
-                return self.mentionsBoundFormalInner(artifact, tag_union.ext, visited);
-            },
-        }
-    }
-
-    /// Record the user-facing glue error for a root type that lives inside a
-    /// generic nominal declaration and mentions one of its type parameters,
-    /// so no checked type names its instantiation. Keeps the first message.
-    fn recordUninstantiatedRoot(
-        self: *TypeTable,
-        artifact: *const CheckedArtifact.CheckedModuleArtifact,
-        checked_type: CheckedArtifact.CheckedTypeId,
-    ) Allocator.Error!void {
-        if (self.unresolved_error != null) return;
-        const type_name = try self.typeStringAllocBound(artifact, checked_type);
-        defer self.gpa.free(type_name);
-        const module_name = artifact.moduleEnvConst().module_name;
-        const value_name = self.boundary_value_name orelse "";
-        self.unresolved_error = try std.fmt.allocPrint(
-            self.gpa,
-            "The type `{s}` from module `{s}`{s}{s}{s} is the argument or result of a function stored inside a generic type, and it mentions that type's parameter inside a record, tuple, tag union, or function, so the compiler has no standalone layout for it and glue cannot generate bindings for it. Declare the function's argument and result types without the type parameter, or box the value across the host boundary.",
-            .{
-                type_name,
-                module_name,
-                if (value_name.len == 0) "" else " (in the signature of `",
-                value_name,
-                if (value_name.len == 0) "" else "`)",
-            },
-        );
     }
 
     /// Get an existing type table index for a checked type, or insert a new entry.
@@ -2611,47 +2560,6 @@ const TypeTable = struct {
             self.hashStructuralId(hasher, b.inner_id);
         } else {
             hasher.update(@tagName(repr));
-        }
-    }
-
-    /// Insert a Unit type and return its index.
-    fn insertUnit(self: *TypeTable) Allocator.Error!u64 {
-        const idx: u64 = @intCast(self.entries.items.len);
-        try self.entries.append(self.gpa, .{ .repr = .unit, .abi = zeroSizedBuiltinAbi() });
-        return idx;
-    }
-
-    /// Insert the ABI representation of a function stored inside another
-    /// value. Such a field is an opaque callable pointer; its source-level
-    /// argument and return graph does not participate in the containing value's
-    /// memory layout and may legitimately mention for-clause rigids. Its layout
-    /// is the containing value's field layout, attached with the parent.
-    fn insertOpaqueCallable(self: *TypeTable) Allocator.Error!u64 {
-        const unit_id = try self.insertUnit();
-        const arg_ids = try self.gpa.alloc(u64, 0);
-        errdefer self.gpa.free(arg_ids);
-        const idx: u64 = @intCast(self.entries.items.len);
-        try self.entries.append(self.gpa, .{
-            .repr = .{ .function = .{
-                .arg_ids = arg_ids,
-                .ret_id = unit_id,
-            } },
-        });
-        return idx;
-    }
-
-    fn checkedTypeResolvesToFunction(
-        artifact: *const CheckedArtifact.CheckedModuleArtifact,
-        checked_type: CheckedArtifact.CheckedTypeId,
-    ) bool {
-        var current = checked_type;
-        while (true) {
-            const payload = checkedTypePayload(artifact, current);
-            if (payload == .alias) {
-                current = payload.alias.backing;
-            } else {
-                return payload == .function;
-            }
         }
     }
 
@@ -2976,7 +2884,12 @@ const TypeTable = struct {
                 self.entries.items[@intCast(entry_idx)].abi = try self.abiForLayout(store, layout_idx, self.entries.items[@intCast(entry_idx)].repr);
                 try self.attachEntryLayout(store, slot.entry, slot.layout_idx);
             },
-            .function,
+            .erased_callable => {
+                if (layout_val.tag != .erased_callable) {
+                    glueInvariant("function glue type id {d} reached ABI attachment with {s} layout", .{ entry_idx, @tagName(layout_val.tag) });
+                }
+                self.entries.items[@intCast(entry_idx)].abi = try self.abiForLayout(store, layout_idx, .erased_callable);
+            },
             .unknown,
             .unit,
             .bool_,
@@ -3074,19 +2987,6 @@ const TypeTable = struct {
 
         if (populated == committed.len) return committed;
         return try self.gpa.realloc(committed, populated);
-    }
-
-    fn zeroSizedBuiltinAbi() CollectedAbiLayout {
-        return .{
-            .size_align = .{
-                .size32 = 0,
-                .alignment32 = 1,
-                .size64 = 0,
-                .alignment64 = 1,
-            },
-            .contains_refcounted = false,
-            .details = .builtin,
-        };
     }
 
     fn abiForLayout(
@@ -3376,7 +3276,7 @@ const TypeTable = struct {
             .record_unbound => |fields| try self.convertRecord(artifact, fields, null),
             .tuple => |items| try self.convertTuple(artifact, items),
             .nominal => |nominal| try self.convertNominal(artifact, nominal, position),
-            .function => |func| try self.convertFunc(artifact, func),
+            .function => .erased_callable,
             .empty_record, .empty_tag_union => .unit,
             .tag_union => |tag_union| try self.convertTagUnion(artifact, tag_union.tags, tag_union.ext),
         };
@@ -3629,10 +3529,7 @@ const TypeTable = struct {
             // host-visible signature, so one reaching glue is a checker bug.
             // An undetermined or erroneous kind never has a committed slot.
             const type_id = switch (field.kind.tag) {
-                .required, .defaulted => if (checkedTypeResolvesToFunction(artifact, field.ty))
-                    try self.insertOpaqueCallable()
-                else
-                    try self.getOrInsert(artifact, field.ty, .by_value),
+                .required, .defaulted => try self.getOrInsert(artifact, field.ty, .by_value),
                 .optional => glueInvariant("optional record field '{s}' reached glue type conversion", .{field_name}),
                 .undetermined, .err => return error.UnresolvedByValue,
             };
@@ -3777,24 +3674,6 @@ const TypeTable = struct {
     /// A function type the host calls or is handed as a value. Its arguments
     /// and result are roots of their own: the callable's committed layout says
     /// nothing about them, and hosts need their ABI to call it.
-    fn convertFunc(
-        self: *TypeTable,
-        artifact: *const CheckedArtifact.CheckedModuleArtifact,
-        func: CheckedArtifact.CheckedFunctionType,
-    ) TypeTableError!CollectedTypeRepr {
-        const arg_ids = try self.gpa.alloc(u64, func.args.len);
-        errdefer self.gpa.free(arg_ids);
-        for (func.args, 0..) |arg, i| {
-            arg_ids[i] = try self.getOrInsertRoot(artifact, arg);
-        }
-        const ret_id = try self.getOrInsertRoot(artifact, func.ret);
-
-        return .{ .function = .{
-            .arg_ids = arg_ids,
-            .ret_id = ret_id,
-        } };
-    }
-
     /// Strip "Builtin." and "Num." prefixes from type names (mirrors TypeWriter.getDisplayName).
     pub fn getTypeDisplayName(raw_name: []const u8) []const u8 {
         if (std.mem.startsWith(u8, raw_name, "Builtin.")) {
@@ -4253,20 +4132,11 @@ fn writeTypeRepr(
         .i64x2 => "RocI64x2",
         .str_ => "RocStr",
         .unit => "RocUnit",
+        .erased_callable => "RocErasedCallable",
         .list => |list| {
             const tag_index = writer.tagIndex("TypeRepr", "RocList");
             _ = writer.variantPayloadLayout(type_repr_layout, tag_index);
             writer.writeValue(value_base, u64, list.elem_id);
-            writer.writeTagDiscriminant(value_base, type_repr_layout, tag_index);
-            return;
-        },
-        .function => |func| {
-            const tag_index = writer.tagIndex("TypeRepr", "RocFunction");
-            const payload_layout = writer.variantPayloadLayout(type_repr_layout, tag_index);
-            writer.zeroValue(value_base, payload_layout);
-            const args_slot = writer.recordField(value_base, payload_layout, "FunctionRepr", "args");
-            writer.writeField(value_base, payload_layout, "FunctionRepr", "args", RocList, buildU64RocList(writer, func.arg_ids, args_slot.layout_idx));
-            writer.writeField(value_base, payload_layout, "FunctionRepr", "ret", u64, func.ret_id);
             writer.writeTagDiscriminant(value_base, type_repr_layout, tag_index);
             return;
         },
@@ -4420,8 +4290,7 @@ fn buildEntryPointList(
 
 fn buildProvidesEntryList(
     writer: *const GlueRocValueWriter,
-    provides_entries: []const PlatformHeaderInfo.ProvidesEntry,
-    provides_type_ids: *const std.StringHashMap(u64),
+    provides_entries: []const CollectedProvidesEntry,
     list_layout: layout.Idx,
 ) RocList {
     const allocated = writer.allocateList(list_layout, provides_entries.len, true);
@@ -4429,13 +4298,36 @@ fn buildProvidesEntryList(
     for (provides_entries, 0..) |entry, index| {
         const elem_base = allocated.bytes.? + index * allocated.elem_size;
         writer.zeroValue(elem_base, allocated.elem_layout);
+        const exported_slot = writer.recordField(elem_base, allocated.elem_layout, "ProvidesEntry", "exported");
+        writeProvidedExport(writer, exported_slot.ptr, exported_slot.layout_idx, entry.exported);
         writer.writeField(elem_base, allocated.elem_layout, "ProvidesEntry", "ffi_symbol", RocStr, createBigRocStr(entry.ffi_symbol, writer.roc_ops));
         writer.writeField(elem_base, allocated.elem_layout, "ProvidesEntry", "name", RocStr, createBigRocStr(entry.name, writer.roc_ops));
-        const type_id = provides_type_ids.get(entry.ffi_symbol) orelse
-            glueInvariant("provided symbol '{s}' missing reflected type id", .{entry.ffi_symbol});
-        writer.writeField(elem_base, allocated.elem_layout, "ProvidesEntry", "type_id", u64, type_id);
     }
     return allocated.list;
+}
+
+fn writeProvidedExport(
+    writer: *const GlueRocValueWriter,
+    value_base: [*]u8,
+    provided_export_layout: layout.Idx,
+    exported: CollectedProvidedExport,
+) void {
+    switch (exported) {
+        .procedure => |procedure| {
+            const tag_index = writer.tagIndex("ProvidedExport", "ProvidedProcedure");
+            const payload_layout = writer.variantPayloadLayout(provided_export_layout, tag_index);
+            const args_slot = writer.recordField(value_base, payload_layout, "FunctionSignature", "args");
+            writer.writeField(value_base, payload_layout, "FunctionSignature", "args", RocList, buildU64RocList(writer, procedure.arg_ids, args_slot.layout_idx));
+            writer.writeField(value_base, payload_layout, "FunctionSignature", "ret", u64, procedure.ret_id);
+            writer.writeTagDiscriminant(value_base, provided_export_layout, tag_index);
+        },
+        .data => |type_id| {
+            const tag_index = writer.tagIndex("ProvidedExport", "ProvidedData");
+            _ = writer.variantPayloadLayout(provided_export_layout, tag_index);
+            writer.writeValue(value_base, u64, type_id);
+            writer.writeTagDiscriminant(value_base, provided_export_layout, tag_index);
+        },
+    }
 }
 
 /// Construct the List(Types) Roc value from collected module type info.
@@ -4443,10 +4335,9 @@ fn constructTypesRocList(
     writer: *const GlueRocValueWriter,
     collected_modules: []const CollectedModuleTypeInfo,
     platform_info: *const PlatformHeaderInfo,
-    provides_entries: []const PlatformHeaderInfo.ProvidesEntry,
+    provides_entries: []const CollectedProvidesEntry,
     type_table: *const TypeTable,
     entrypoint_type_ids: *const std.StringHashMap(u64),
-    provides_type_ids: *const std.StringHashMap(u64),
     list_layout: layout.Idx,
 ) RocList {
     const allocated = writer.allocateList(list_layout, 1, true);
@@ -4461,7 +4352,7 @@ fn constructTypesRocList(
 
     writer.writeField(types_base, allocated.elem_layout, "Types", "entrypoints", RocList, buildEntryPointList(writer, platform_info, entrypoint_type_ids, entrypoints_slot.layout_idx));
     writer.writeField(types_base, allocated.elem_layout, "Types", "modules", RocList, buildModuleTypeInfoList(writer, collected_modules, modules_slot.layout_idx));
-    writer.writeField(types_base, allocated.elem_layout, "Types", "provides_entries", RocList, buildProvidesEntryList(writer, provides_entries, provides_type_ids, provides_slot.layout_idx));
+    writer.writeField(types_base, allocated.elem_layout, "Types", "provides_entries", RocList, buildProvidesEntryList(writer, provides_entries, provides_slot.layout_idx));
     writer.writeField(types_base, allocated.elem_layout, "Types", "types", RocList, buildTypeInfoRocList(writer, type_table, types_slot.layout_idx));
 
     return allocated.list;
@@ -4902,36 +4793,13 @@ fn collectModuleTypeInfo(
         errdefer gpa.free(type_str);
 
         if (hosted_proc_for_entry) |hosted_proc| {
-            // Extract record fields from function arg and return types.
-            var arg_fields: []const CollectedModuleTypeInfo.CollectedRecordFieldInfo = &.{};
-            errdefer {
-                for (arg_fields) |field| {
-                    gpa.free(field.name);
-                    gpa.free(field.type_str);
-                }
-                gpa.free(arg_fields);
-            }
-            var ret_fields: []const CollectedModuleTypeInfo.CollectedRecordFieldInfo = &.{};
-            errdefer {
-                for (ret_fields) |field| {
-                    gpa.free(field.name);
-                    gpa.free(field.type_str);
-                }
-                gpa.free(ret_fields);
-            }
-            var arg_type_ids: []const u64 = &.{};
-            errdefer if (arg_type_ids.len > 0) gpa.free(arg_type_ids);
-            var ret_type_id: u64 = 0;
-
             type_table.boundary_value_name = local_name;
             defer type_table.boundary_value_name = null;
-            if (try type_table.collectHostedFunctionMetadata(artifact, checked_type)) |metadata| {
-                ret_fields = metadata.ret_fields;
-                arg_fields = metadata.arg_fields;
-                ret_type_id = metadata.ret_type_id;
-                arg_type_ids = metadata.arg_type_ids;
-            } else {
-                ret_type_id = try type_table.insertUnit();
+            const metadata = try type_table.collectHostedFunctionMetadata(artifact, checked_type);
+            errdefer {
+                type_table.freeRecordFieldInfo(metadata.arg_fields);
+                type_table.freeRecordFieldInfo(metadata.ret_fields);
+                if (metadata.arg_type_ids.len > 0) gpa.free(metadata.arg_type_ids);
             }
 
             const bound = hostedBindingForDef(hosted_indices, artifact.key, def_idx) orelse
@@ -4946,10 +4814,10 @@ fn collectModuleTypeInfo(
                 .ffi_symbol = ffi_symbol,
                 .name = name,
                 .type_str = type_str,
-                .arg_fields = arg_fields,
-                .ret_fields = ret_fields,
-                .arg_type_ids = arg_type_ids,
-                .ret_type_id = ret_type_id,
+                .arg_fields = metadata.arg_fields,
+                .ret_fields = metadata.ret_fields,
+                .arg_type_ids = metadata.arg_type_ids,
+                .ret_type_id = metadata.ret_type_id,
             });
         } else switch (entry.value) {
             .procedure_binding => {
@@ -5019,6 +4887,8 @@ const GlueProtocolLock = struct {
         types,
         entry_point,
         provides_entry,
+        provided_export,
+        function_signature,
         module_info,
         function_info,
         hosted_info,
@@ -5033,7 +4903,6 @@ const GlueProtocolLock = struct {
         abi_tag,
         rc_plan,
         type_repr,
-        function_repr,
         record_repr,
         record_field,
         union_repr,
@@ -5080,7 +4949,9 @@ const GlueProtocolLock = struct {
                 .{ .name = "provides_entries", .type = .list_provides_entry }, .{ .name = "types", .type = .list_type_info },
             }),
             .entry_point => try self.record(idx, "EntryPoint", &.{ .{ .name = "name", .type = .str_ }, .{ .name = "type_id", .type = .u64_ } }),
-            .provides_entry => try self.record(idx, "ProvidesEntry", &.{ .{ .name = "ffi_symbol", .type = .str_ }, .{ .name = "name", .type = .str_ }, .{ .name = "type_id", .type = .u64_ } }),
+            .provides_entry => try self.record(idx, "ProvidesEntry", &.{ .{ .name = "exported", .type = .provided_export }, .{ .name = "ffi_symbol", .type = .str_ }, .{ .name = "name", .type = .str_ } }),
+            .provided_export => try self.tagUnion(idx, "ProvidedExport", &.{ .{ .name = "ProvidedData", .type = .u64_ }, .{ .name = "ProvidedProcedure", .type = .function_signature } }),
+            .function_signature => try self.record(idx, "FunctionSignature", &.{ .{ .name = "args", .type = .list_u64 }, .{ .name = "ret", .type = .u64_ } }),
             .module_info => try self.record(idx, "ModuleTypeInfo", &.{
                 .{ .name = "functions", .type = .list_function_info }, .{ .name = "hosted_functions", .type = .list_hosted_info },
                 .{ .name = "main_type", .type = .str_ },               .{ .name = "name", .type = .str_ },
@@ -5119,18 +4990,17 @@ const GlueProtocolLock = struct {
             }),
             .rc_plan => try self.tagUnion(idx, "HostRcPlan", &.{ .{ .name = "RcNoop", .type = .unit }, .{ .name = "RcRefcounted", .type = .unit } }),
             .type_repr => try self.tagUnion(idx, "TypeRepr", &.{
-                .{ .name = "RocBool", .type = .unit },          .{ .name = "RocBox", .type = .u64_ },   .{ .name = "RocDec", .type = .unit },
-                .{ .name = "RocF32", .type = .unit },           .{ .name = "RocF64", .type = .unit },   .{ .name = "RocFunction", .type = .function_repr },
-                .{ .name = "RocI128", .type = .unit },          .{ .name = "RocI16", .type = .unit },   .{ .name = "RocI32", .type = .unit },
-                .{ .name = "RocI64", .type = .unit },           .{ .name = "RocI8", .type = .unit },    .{ .name = "RocList", .type = .u64_ },
-                .{ .name = "RocRecord", .type = .record_repr }, .{ .name = "RocStr", .type = .unit },   .{ .name = "RocTagUnion", .type = .union_repr },
-                .{ .name = "RocU128", .type = .unit },          .{ .name = "RocU16", .type = .unit },   .{ .name = "RocU32", .type = .unit },
-                .{ .name = "RocU64", .type = .unit },           .{ .name = "RocU8", .type = .unit },    .{ .name = "RocU8x16", .type = .unit },
-                .{ .name = "RocI8x16", .type = .unit },         .{ .name = "RocU16x8", .type = .unit }, .{ .name = "RocI16x8", .type = .unit },
-                .{ .name = "RocU32x4", .type = .unit },         .{ .name = "RocI32x4", .type = .unit }, .{ .name = "RocU64x2", .type = .unit },
-                .{ .name = "RocI64x2", .type = .unit },         .{ .name = "RocUnit", .type = .unit },  .{ .name = "RocUnknown", .type = .str_ },
+                .{ .name = "RocBool", .type = .unit },           .{ .name = "RocBox", .type = .u64_ },   .{ .name = "RocDec", .type = .unit },
+                .{ .name = "RocErasedCallable", .type = .unit }, .{ .name = "RocF32", .type = .unit },   .{ .name = "RocF64", .type = .unit },
+                .{ .name = "RocI128", .type = .unit },           .{ .name = "RocI16", .type = .unit },   .{ .name = "RocI32", .type = .unit },
+                .{ .name = "RocI64", .type = .unit },            .{ .name = "RocI8", .type = .unit },    .{ .name = "RocList", .type = .u64_ },
+                .{ .name = "RocRecord", .type = .record_repr },  .{ .name = "RocStr", .type = .unit },   .{ .name = "RocTagUnion", .type = .union_repr },
+                .{ .name = "RocU128", .type = .unit },           .{ .name = "RocU16", .type = .unit },   .{ .name = "RocU32", .type = .unit },
+                .{ .name = "RocU64", .type = .unit },            .{ .name = "RocU8", .type = .unit },    .{ .name = "RocU8x16", .type = .unit },
+                .{ .name = "RocI8x16", .type = .unit },          .{ .name = "RocU16x8", .type = .unit }, .{ .name = "RocI16x8", .type = .unit },
+                .{ .name = "RocU32x4", .type = .unit },          .{ .name = "RocI32x4", .type = .unit }, .{ .name = "RocU64x2", .type = .unit },
+                .{ .name = "RocI64x2", .type = .unit },          .{ .name = "RocUnit", .type = .unit },  .{ .name = "RocUnknown", .type = .str_ },
             }),
-            .function_repr => try self.record(idx, "FunctionRepr", &.{ .{ .name = "args", .type = .list_u64 }, .{ .name = "ret", .type = .u64_ } }),
             .record_repr => try self.record(idx, "RecordRepr", &.{ .{ .name = "anonymous", .type = .bool_ }, .{ .name = "fields", .type = .list_record_field }, .{ .name = "name", .type = .str_ } }),
             .record_field => try self.record(idx, "RecordField", &.{ .{ .name = "is_padding", .type = .bool_ }, .{ .name = "name", .type = .str_ }, .{ .name = "type_id", .type = .u64_ } }),
             .union_repr => try self.record(idx, "TagUnionRepr", &.{ .{ .name = "name", .type = .str_ }, .{ .name = "tags", .type = .list_tag_variant } }),
@@ -5193,7 +5063,9 @@ test "glue platform schema lock rejects field rename addition and type mutation"
         .{ .path = "EntryPoint.roc", .source = "EntryPoint := { renamed : Str, type_id : U64 }" },
         .{ .path = "EntryPoint.roc", .source = "EntryPoint := { name : Str, type_id : U64, added : U64 }" },
         .{ .path = "EntryPoint.roc", .source = "EntryPoint := { name : Str, type_id : U32 }" },
-        .{ .path = "ProvidesEntry.roc", .source = "ProvidesEntry := { ffi_symbol : Str, name : Str, type_id : U32 }" },
+        .{ .path = "ProvidesEntry.roc", .source = "import ProvidedExport exposing [ProvidedExport]\nProvidesEntry := { exported : ProvidedExport, ffi_symbol : Str, name : Str, type_id : U64 }" },
+        .{ .path = "ProvidedExport.roc", .source = "import FunctionSignature exposing [FunctionSignature]\nProvidedExport := [ProvidedData(U32), ProvidedProcedure(FunctionSignature)]" },
+        .{ .path = "FunctionSignature.roc", .source = "FunctionSignature := { args : List(U64), result : U64 }" },
         .{ .path = "TypeInfo.roc", .source = "import AbiLayout exposing [AbiLayout]\nimport HostRcPlan exposing [HostRcPlan]\nimport TypeRepr exposing [TypeRepr]\nTypeInfo := { layout : AbiLayout, rc : Bool, repr : TypeRepr }" },
         .{ .path = "TypeInfo.roc", .source = "import HostRcPlan exposing [HostRcPlan]\nimport TypeRepr exposing [TypeRepr]\nTypeInfo := { layout : U64, rc : HostRcPlan, repr : TypeRepr }" },
         .{ .path = "TypeInfo.roc", .source = "import AbiLayout exposing [AbiLayout]\nimport HostRcPlan exposing [HostRcPlan]\nTypeInfo := { layout : AbiLayout, rc : HostRcPlan, repr : U64 }" },
