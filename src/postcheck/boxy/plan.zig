@@ -626,10 +626,12 @@ pub const GeneratedParserMissingRequiredField = struct {
     worker: WorkerPlanId,
     failure: Failure,
 
-    pub const Failure = enum {
+    pub const Failure = union(enum) {
         /// The parser error row retains `MissingRequiredField(Str)`; the
-        /// generated body constructs it with the field's renamed key.
-        missing_required_field_tag,
+        /// generated body constructs it with the field's renamed key at this
+        /// checked contract error row, whichever representation the body's
+        /// own result carries that row in.
+        missing_required_field_tag: CheckedTypeIdentity,
         /// The parser error row omits that tag; the generated body calls the
         /// format's checked `invalid_value` method with the remaining state.
         invalid_value,
@@ -1525,7 +1527,6 @@ pub fn analyzeProgram(
     }
 
     try builder.analyzePlannedEvidenceTypes();
-    try builder.analyzeDirectCallSchemeSubstitutions();
     builder.propagateDynamicRequirements();
     try builder.materializeDictionaryCallPlans();
     try builder.materializeGeneratedParserTagUnionPlans();
@@ -3736,9 +3737,10 @@ const Builder = struct {
         }
         const contract = self.generatedCodecContractForWorker(worker);
         const failure: GeneratedParserMissingRequiredField.Failure =
-            if (checkedErrorRowHasTag(contract.view, contract.derivation.error_ty, "MissingRequiredField"))
-                .missing_required_field_tag
-            else blk: {
+            if (checkedErrorRowHasTag(contract.view, contract.derivation.error_ty, "MissingRequiredField")) blk: {
+                _ = try self.analyzeType(contract.view, contract.derivation.error_ty);
+                break :blk .{ .missing_required_field_tag = typeRef(contract.view, contract.derivation.error_ty) };
+            } else blk: {
                 _ = try self.ensureGeneratedCodecCall(worker, encoding_type, "invalid_value", null);
                 break :blk .invalid_value;
             };
@@ -6056,7 +6058,12 @@ const Builder = struct {
                 }
             }
         }
-        const tail_payload = view.checked_types.payload(tail);
+        var tail_payload = view.checked_types.payload(tail);
+        var alias_steps = view.checked_types.payloadCount();
+        while (tail_payload == .alias) : (alias_steps -= 1) {
+            if (alias_steps == 0) boxyPlanInvariant("boxy tag-union extension alias chain was cyclic");
+            tail_payload = view.checked_types.payload(tail_payload.alias.backing);
+        }
         const default_closed_variable = switch (tail_payload) {
             .flex, .rigid => |variable| variable.row_default == .empty_tag_union,
             .pending, .err, .alias, .record, .tuple, .nominal, .function, .empty_record, .tag_union, .empty_tag_union => false,
@@ -6713,19 +6720,16 @@ const Builder = struct {
         };
     }
 
-    /// Each direct call's scheme substitution names caller-side types that
-    /// supply its callee's type-variable descriptors; they are analyzed
-    /// before descriptor requirements are fixed.
-    fn analyzeDirectCallSchemeSubstitutions(self: *Builder) Allocator.Error!void {
-        var index: usize = 0;
-        while (index < self.plan.direct_calls.items.len) : (index += 1) {
-            const substitution = self.directCallSchemeSubstitution(self.plan.direct_calls.items[index]) orelse continue;
-            for (substitution.site_types) |site_type| {
-                // Checking rejected this instantiation; the call is lowered as
-                // the reported error, so the slot supplies no descriptor.
-                if (substitution.site_view.checked_types.payload(site_type) == .err) continue;
-                _ = try self.analyzeType(substitution.site_view, site_type);
-            }
+    /// A direct call's scheme substitution names caller-side types that
+    /// supply its callee's type-variable descriptors; they are analyzed when
+    /// the call is planned, before descriptor requirements are fixed.
+    fn analyzeDirectCallSchemeSubstitution(self: *Builder, direct: DirectCallPlan) Allocator.Error!void {
+        const substitution = self.directCallSchemeSubstitution(direct) orelse return;
+        for (substitution.site_types) |site_type| {
+            // Checking rejected this instantiation; the call is lowered as
+            // the reported error, so the slot supplies no descriptor.
+            if (substitution.site_view.checked_types.payload(site_type) == .err) continue;
+            _ = try self.analyzeType(substitution.site_view, site_type);
         }
     }
 
@@ -12174,6 +12178,7 @@ const Builder = struct {
             .source_fn_type = source_fn_type,
             .operands = try self.appendCheckedCallOperands(call.args),
         });
+        try self.analyzeDirectCallSchemeSubstitution(self.plan.direct_calls.items[self.plan.direct_calls.items.len - 1]);
     }
 
     fn directTargetIsLocalProc(

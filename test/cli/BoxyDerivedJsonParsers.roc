@@ -5,6 +5,9 @@ Counted := { name : Str, count : U8 ?? 10 }.{
 	is_eq : _
 }
 
+Pair : (Str, Str)
+Inner : { k : Str }
+
 # Issue 11356: a derived record parser whose error row is inferred.
 expect {
 	v : Try({ a : Str }, _)
@@ -79,4 +82,10 @@ expect {
 	v : Try([Foo, Bar(Str), Baz(Str, Str)], [InvalidJson(Str)])
 	v = Json.parse("{\"Baz\":[\"a\",\"b\"]}")
 	v == Ok(Baz("a", "b"))
+}
+
+expect {
+	v : Try({ p : Pair, i : Inner, xs : List(Inner) }, [InvalidJson(Str), MissingRequiredField(Str)])
+	v = Json.parse("{\"p\":[\"a\",\"b\"],\"i\":{\"k\":\"x\"},\"xs\":[{\"k\":\"y\"}]}")
+	v == Ok({ p: ("a", "b"), i: { k: "x" }, xs: [{ k: "y" }] })
 }
