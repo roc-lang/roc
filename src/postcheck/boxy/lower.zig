@@ -26150,9 +26150,10 @@ const ProcBodyBuilder = struct {
         if (hidden_arg.source_value_rep == null) {
             boxyLowerInvariant("boxy hidden descriptor argument source had no planned value representation");
         }
-        const source = if (descriptor_args) |args| args[index] else source_args[index];
-        const source_rep = if (descriptor_arg_reps) |reps| reps[index].rep else source_arg_reps[index];
-        const hidden_rep = if (descriptor_arg_reps != null) hidden_arg.worker_rep else hidden_arg.rep;
+        const use_adapted = hidden_arg.argument_source == .adapted and descriptor_args != null;
+        const source = if (use_adapted) descriptor_args.?[index] else source_args[index];
+        const source_rep = if (use_adapted) descriptor_arg_reps.?[index].rep else source_arg_reps[index];
+        const hidden_rep = if (use_adapted) hidden_arg.worker_rep else hidden_arg.rep;
         const identity_source_rep = self.descriptorStorageRep(source_rep);
         const identity_hidden_rep = self.descriptorStorageRep(hidden_rep);
         if (identity_source_rep != identity_hidden_rep) {
@@ -34808,7 +34809,8 @@ const ProcBodyBuilder = struct {
                 after_read,
             );
         }
-        if (tag_rep.descriptor != null or target_desc != null) {
+        // A closed checked row can still use generic source storage.
+        if (tag_rep.descriptor != null or target_desc != null or self.parent.result.store.getLocal(source).boxy_desc != null) {
             const writable_target_desc = if (target_desc) |desc_local|
                 if (self.localIsReadOnlyDescriptorInput(desc_local)) null else desc_local
             else

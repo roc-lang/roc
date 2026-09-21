@@ -11589,6 +11589,20 @@ stored discriminants and payload layouts. A newly constructed tag payload uses
 a fresh descriptor local so its fields' descriptors can be captured without
 replacing a read-only worker input.
 
+Hidden arguments for row tails explicitly name the original call argument as
+their descriptor source. Their mapped row may be the complete caller union or
+its empty tail. They do not read the worker's declared extension from an
+adapted value whose descriptor can still describe the caller's closed union.
+Other hidden arguments continue to describe the adapted argument storage.
+
+Before assigning tag storage, Boxy planning gathers every known tag along a
+checked row's extension chain and orders the combined list. Only the terminal
+tail remains an extension child. Different checked row splits therefore use
+the same tag order and do not introduce extra boxed tag layers.
+Payload reads consume the source value's descriptor whenever it carries one,
+including when the checked row is closed and its payload type is concrete.
+Closing the row does not change storage supplied by a generic nominal backing.
+
 Tag-row reads are explicit descriptor operations. Nested payload descriptor
 read, row-extension descriptor read, and residual-row subtraction are separate
 LIR choices with separate operands. Residual-row subtraction names both the

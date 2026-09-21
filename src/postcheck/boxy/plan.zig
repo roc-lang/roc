@@ -337,6 +337,8 @@ pub const DirectCallHiddenDescriptorArg = struct {
     rep: TypeRepId,
     source_arg_index: ?u32 = null,
     source_value_rep: ?TypeRepId = null,
+    /// Row tails retain the descriptor of the original argument storage.
+    argument_source: enum { adapted, original } = .adapted,
     /// The call-side nominal whose backing `rep` belongs to. Such a `rep` names
     /// the declaration's formals, so its descriptor is built under this
     /// nominal's backing-argument substitutions.
@@ -5970,8 +5972,29 @@ const Builder = struct {
         source_type: CheckedTypeIdentity,
         tag_union: checked.CheckedTagUnionType,
     ) Allocator.Error!TypeRepresentation {
-        const closed = try self.tagUnionExtensionIsExplicitlyClosed(view, tag_union.ext);
-        const ordered_tags = try self.layoutOrderedTagUnionTags(view, tag_union.tags);
+        var tags = std.ArrayList(checked.CheckedTag).empty;
+        defer tags.deinit(self.allocator);
+        try tags.appendSlice(self.allocator, tag_union.tags);
+        var extension = tag_union.ext;
+        var seen = std.AutoHashMap(CheckedTypeIdentity, void).init(self.allocator);
+        defer seen.deinit();
+        try seen.put(source_type, {});
+        while (true) {
+            if ((try seen.getOrPut(typeRef(view, extension))).found_existing) {
+                boxyPlanInvariant("cyclic checked tag row extension");
+            }
+            switch (view.checked_types.payload(extension)) {
+                .tag_union => |row| {
+                    try tags.appendSlice(self.allocator, row.tags);
+                    extension = row.ext;
+                },
+                .alias => |alias| extension = alias.backing,
+                .flex, .rigid, .empty_tag_union => break,
+                .pending, .err, .record, .record_unbound, .tuple, .nominal, .function, .empty_record => boxyPlanInvariant("checked tag extension is not a tag row"),
+            }
+        }
+        const closed = try self.tagUnionExtensionIsExplicitlyClosed(view, extension);
+        const ordered_tags = try self.layoutOrderedTagUnionTags(view, tags.items);
         defer if (ordered_tags.owned) self.allocator.free(ordered_tags.tags);
 
         var children = std.ArrayList(RepChild).empty;
@@ -5981,7 +6004,7 @@ const Builder = struct {
                 try self.appendPendingChild(&children, view, .{ .tag_payload = .{ .tag = tag.name, .index = @intCast(index) } }, arg);
             }
         }
-        try self.appendPendingChild(&children, view, .tag_ext, tag_union.ext);
+        try self.appendPendingChild(&children, view, .tag_ext, extension);
         const child_span = try self.commitPendingChildren(children.items);
 
         const variant_start: u32 = @intCast(self.plan.tag_variants.items.len);
@@ -8731,6 +8754,10 @@ const Builder = struct {
             // descriptor once, via that sibling; skip the duplicate here to
             // mirror the worker param collection's per-rep dedup.
             if (seen_reps.contains(worker_child.rep)) continue;
+            const first_child_arg = pending.items.len;
+            defer if (worker_child.role == .tag_ext) {
+                for (pending.items[first_child_arg..]) |*arg| arg.argument_source = .original;
+            };
             if (self.rowInstantiationTarget(worker_rep_id, aligned_call_rep_id, worker_child)) |row_target| {
                 try self.collectCallHiddenDescriptorArgs(worker_child.rep, row_target, call_value_rep, source_value_rep, source_arg_index, params, next_param, pending, seen_reps, seen_descriptor_reps, substitutions, runtime_value_only);
                 continue;
@@ -14764,6 +14791,95 @@ test "boxy row instantiation retains unmatched zero-payload variants in dynamic 
                 );
             }
         }
+    }
+}
+
+test "boxy planner combines known tag rows before retaining the terminal tail" {
+    const gpa = std.testing.allocator;
+    const tail: checked.CheckedTypeId = @enumFromInt(fixtureTableIndex(0));
+    var scheme_vars = [_]checked.CheckedTypeId{tail};
+    const tags = [_]checked.CheckedTag{
+        .{ .name = @enumFromInt(1), .args_start = 0, .args_len = 0 },
+        .{ .name = @enumFromInt(2), .args_start = 0, .args_len = 0 },
+    };
+    for ([_]bool{ false, true }) |quantified| {
+        const payloads = [_]checked.StoredCheckedTypePayload{
+            .{ .flex = .{ .row_default = .empty_tag_union } },
+            .{ .tag_union = .{ .tags = .{ .start = 1, .len = 1 }, .ext = tail } },
+            .{ .tag_union = .{ .tags = .{ .start = 0, .len = 1 }, .ext = @enumFromInt(1) } },
+        };
+        const templates = checked.CheckedProcedureTemplateTable{
+            .scheme_vars_pool = if (quantified) &scheme_vars else &.{},
+        };
+        var plan = try analyzeProgram(gpa, .{
+            .root_view = .{
+                .checked_types = .{ .stored_payloads = &payloads, .tag_pool = &tags },
+                .checked_procedure_templates = &templates,
+            },
+            .layout_requests = &.{@as(checked.CheckedTypeId, @enumFromInt(2))},
+        }, .{});
+        defer plan.deinit();
+        const rep = plan.representations.items[@intFromEnum(plan.root_reps.items[0])];
+        try std.testing.expectEqual(if (quantified) RepresentationKind{ .dynamic = .flex } else RepresentationKind.tag_union, rep.kind);
+        const variants = plan.tagVariantSlice(rep.tag_variants);
+        try std.testing.expectEqual(@as(usize, 2), variants.len);
+        try std.testing.expectEqual(tags[0].name, variants[0].name);
+        try std.testing.expectEqual(tags[1].name, variants[1].name);
+        const children = plan.childSlice(rep.children);
+        try std.testing.expectEqual(@as(usize, 1), children.len);
+        try std.testing.expectEqual(ChildRole.tag_ext, children[0].role);
+        try std.testing.expectEqual(tail, children[0].source_type.ty);
+        const tail_rep = plan.representations.items[@intFromEnum(children[0].rep)];
+        try std.testing.expectEqual(if (quantified) RepresentationKind{ .dynamic = .flex } else RepresentationKind.empty_tag_union, tail_rep.kind);
+    }
+}
+
+test "boxy call row tails use original arguments for complete and empty rows" {
+    const gpa = std.testing.allocator;
+    const worker: TypeRepId = @enumFromInt(fixtureTableIndex(0));
+    const tail: TypeRepId = @enumFromInt(1);
+    const call: TypeRepId = @enumFromInt(2);
+    const empty: TypeRepId = @enumFromInt(3);
+    const worker_desc: DescriptorRequirementId = @enumFromInt(fixtureTableIndex(0));
+    const tail_desc: DescriptorRequirementId = @enumFromInt(1);
+    for ([_]bool{ false, true }) |extra_tag| {
+        var builder = Builder.init(gpa, .{});
+        defer builder.deinit();
+        try builder.plan.children.appendSlice(gpa, &.{
+            .{ .role = .tag_ext, .source_type = rootTypeRef(@enumFromInt(1)), .rep = tail },
+            .{ .role = .tag_ext, .source_type = rootTypeRef(@enumFromInt(3)), .rep = empty },
+        });
+        try builder.plan.tag_variants.appendSlice(gpa, &.{
+            .{ .name = @enumFromInt(1), .name_module = builder.root_view.key, .payloads = .{} },
+            .{ .name = @enumFromInt(1), .name_module = builder.root_view.key, .payloads = .{} },
+            .{ .name = @enumFromInt(2), .name_module = builder.root_view.key, .payloads = .{} },
+        });
+        try builder.plan.representations.appendSlice(gpa, &.{
+            .{ .source_type = rootTypeRef(@enumFromInt(fixtureTableIndex(0))), .kind = .{ .dynamic = .flex }, .children = .{ .start = 0, .len = 1 }, .tag_variants = .{ .start = 0, .len = 1 }, .descriptor = worker_desc, .contains_dynamic = true },
+            .{ .source_type = rootTypeRef(@enumFromInt(1)), .kind = .{ .dynamic = .flex }, .descriptor = tail_desc, .contains_dynamic = true },
+            .{ .source_type = rootTypeRef(@enumFromInt(2)), .kind = .tag_union, .children = .{ .start = 1, .len = 1 }, .tag_variants = .{ .start = 1, .len = if (extra_tag) 2 else 1 } },
+            .{ .source_type = rootTypeRef(@enumFromInt(3)), .kind = .empty_tag_union },
+        });
+        const params = [_]HiddenDescriptorParam{
+            .{ .source_type = rootTypeRef(@enumFromInt(fixtureTableIndex(0))), .rep = worker, .desc = worker_desc },
+            .{ .source_type = rootTypeRef(@enumFromInt(1)), .rep = tail, .desc = tail_desc },
+        };
+        var pending = std.ArrayList(DirectCallHiddenDescriptorArg).empty;
+        defer pending.deinit(gpa);
+        var seen_reps = collections.DenseMap(TypeRepId, void).init(gpa);
+        defer seen_reps.deinit();
+        var seen_descriptors = collections.DenseMap(TypeRepId, void).init(gpa);
+        defer seen_descriptors.deinit();
+        var substitutions = Builder.CallDescriptorRepSubstitutionMap{};
+        defer substitutions.deinit(gpa);
+        var next_param: usize = 0;
+        try builder.collectCallHiddenDescriptorArgs(worker, call, call, call, 0, &params, &next_param, &pending, &seen_reps, &seen_descriptors, &substitutions, true);
+
+        try std.testing.expectEqual(@as(usize, 2), pending.items.len);
+        try std.testing.expectEqual(.adapted, pending.items[0].argument_source);
+        try std.testing.expectEqual(.original, pending.items[1].argument_source);
+        try std.testing.expectEqual(if (extra_tag) call else empty, pending.items[1].rep);
+        try std.testing.expectEqual(call, pending.items[1].source_value_rep.?);
     }
 }
 
