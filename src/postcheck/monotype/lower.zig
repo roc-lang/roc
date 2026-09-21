@@ -3110,6 +3110,7 @@ const CompletedProcedureRootShard = struct {
 const SpecJobWorkerInputs = struct {
     run_id: SpecJobRunId,
     modules: Common.CheckedModules,
+    source_file_ids: *const SourceFileIds,
     snapshot: *const WorkerInputs.Snapshot,
     proc_debug_names: bool,
     interface_summaries: *const SharedSummaries,
@@ -3484,16 +3485,20 @@ fn appendRuntimeSchemaRequestToProgram(
 
 const DeclaredComptimeRootFunctions = std.AutoHashMap(EntryRoot, Ast.FnId);
 
+/// Checked artifact keys cross independent checking environments. Their local
+/// module indices do not; distinct artifacts routinely have the same index.
+const SourceFileIds = std.AutoHashMap([32]u8, u32);
+
 const Builder = struct {
     allocator: Allocator,
     spec_job_run_id: SpecJobRunId,
     modules: Common.CheckedModules,
     root_view: checked.ImportedModuleView,
     /// Program source-file id of every checked module in the lowering input,
-    /// keyed by module index. The table is seeded once in module-name and content-identity order
-    /// before any body is lowered, so the ids written into source locations
-    /// are final and independent of specialization scheduling.
-    source_file_ids: std.AutoHashMap(u32, u32),
+    /// keyed by checked artifact identity. The coordinator seeds this table
+    /// before lowering any body; workers borrow it for this lowering run.
+    source_file_ids: SourceFileIds,
+    borrowed_source_file_ids: ?*const SourceFileIds = null,
     program: *Ast.Program,
     current_loc: base.SourceLoc,
     current_region: base.Region,
@@ -3697,7 +3702,7 @@ const Builder = struct {
             .spec_job_run_id = @enumFromInt(raw_spec_job_run_id),
             .modules = modules,
             .root_view = checked.importedView(modules.root.module),
-            .source_file_ids = std.AutoHashMap(u32, u32).init(allocator),
+            .source_file_ids = SourceFileIds.init(allocator),
             .program = program,
             .current_loc = program.current_loc,
             .current_region = program.current_region,
@@ -3730,10 +3735,9 @@ const Builder = struct {
     }
 
     const SourceFileSeed = struct {
-        module_idx: u32,
+        key: [32]u8,
         name: []const u8,
         qualified_name: []const u8,
-        identity: [32]u8,
 
         fn lessThan(_: void, left: SourceFileSeed, right: SourceFileSeed) bool {
             switch (std.mem.order(u8, left.qualified_name, right.qualified_name)) {
@@ -3741,83 +3745,73 @@ const Builder = struct {
                 .gt => return false,
                 .eq => {},
             }
-            switch (std.mem.order(u8, &left.identity, &right.identity)) {
-                .lt => return true,
-                .gt => return false,
-                .eq => {},
-            }
-            return left.module_idx < right.module_idx;
+            return std.mem.lessThan(u8, &left.key, &right.key);
         }
     };
 
     /// Every checked module in the lowering input, ordered by qualified module
-    /// name and then content identity. Module indices are assigned in
-    /// discovery order and specialization bodies are lowered on parallel
-    /// lanes, so neither may decide the order of the program's source-file
-    /// table; this order depends only on the modules themselves.
+    /// name and then checked artifact identity. Module indices are local to
+    /// independently checked environments, and cannot identify source files
+    /// across those environments. Scheduling cannot decide source-file order.
     fn canonicalSourceFiles(self: *Builder) Allocator.Error![]SourceFileSeed {
-        var seeds = std.ArrayList(SourceFileSeed).empty;
+        const capacity = 1 + self.modules.imports.len + self.modules.root.relation_modules.len;
+        var seeds = try std.ArrayList(SourceFileSeed).initCapacity(self.allocator, capacity);
         errdefer seeds.deinit(self.allocator);
-        var seen = std.AutoHashMap(u32, void).init(self.allocator);
-        defer seen.deinit();
-        try appendSourceFileSeed(self.allocator, &seeds, &seen, moduleView(self.root_view));
+        try self.source_file_ids.ensureTotalCapacity(@intCast(capacity));
+        self.appendSourceFileSeed(&seeds, moduleView(self.root_view));
         for (self.modules.imports) |imported| {
-            try appendSourceFileSeed(self.allocator, &seeds, &seen, moduleView(imported));
+            self.appendSourceFileSeed(&seeds, moduleView(imported));
         }
         for (self.modules.root.relation_modules) |relation| {
-            try appendSourceFileSeed(self.allocator, &seeds, &seen, moduleView(relation));
+            self.appendSourceFileSeed(&seeds, moduleView(relation));
         }
         std.mem.sort(SourceFileSeed, seeds.items, {}, SourceFileSeed.lessThan);
         return seeds.toOwnedSlice(self.allocator);
     }
 
     fn appendSourceFileSeed(
-        allocator: Allocator,
+        self: *Builder,
         seeds: *std.ArrayList(SourceFileSeed),
-        seen: *std.AutoHashMap(u32, void),
         view: ModuleView,
-    ) Allocator.Error!void {
-        const gop = try seen.getOrPut(view.module_identity.module_idx);
+    ) void {
+        const gop = self.source_file_ids.getOrPutAssumeCapacity(view.key.bytes);
         if (gop.found_existing) return;
-        try seeds.append(allocator, .{
-            .module_idx = view.module_identity.module_idx,
+        // The sorted final ordinal replaces this reservation before workers
+        // can borrow the table. Use the same index for deduplication and lookup.
+        gop.value_ptr.* = @intCast(seeds.items.len);
+        seeds.appendAssumeCapacity(.{
+            .key = view.key.bytes,
             .name = view.module_env.module_name,
             .qualified_name = view.module_env.qualifiedModuleName(),
-            .identity = view.module_identity.stable_hash,
         });
     }
 
     /// Coordinator only: seed the ordered source-file table in the
-    /// program before any body is lowered. Worker builders share that program
-    /// read-only and derive the same ids with `initSourceFileIds`.
+    /// program before any body is lowered. The completed lookup table remains
+    /// immutable until all workers have finished this lowering run.
     fn seedProgramSourceFiles(self: *Builder) Allocator.Error!void {
+        std.debug.assert(self.borrowed_source_file_ids == null);
+        std.debug.assert(self.source_file_ids.count() == 0);
         if (self.program.sourceFileCount() != 0) {
             Common.invariant("Monotype program source files were seeded after lowering began");
         }
         const seeds = try self.canonicalSourceFiles();
         defer self.allocator.free(seeds);
-        try self.source_file_ids.ensureTotalCapacity(@intCast(seeds.len));
+        try self.program.source_files.ensureUnusedCapacity(self.allocator, seeds.len);
         for (seeds, 0..) |seed, index| {
             const id = try self.program.addSourceFile(.{ .name = seed.name, .qualified_name = seed.qualified_name });
             if (id != index) Common.invariant("Monotype program source file id did not match its sorted position");
-            self.source_file_ids.putAssumeCapacity(seed.module_idx, id);
+            self.source_file_ids.getPtr(seed.key).?.* = id;
         }
     }
 
-    /// Assign the sorted source-file ids in the worker lookup table;
-    /// the ids equal the positions assigned by `seedProgramSourceFiles`.
-    fn initSourceFileIds(self: *Builder) Allocator.Error!void {
-        const seeds = try self.canonicalSourceFiles();
-        defer self.allocator.free(seeds);
-        try self.source_file_ids.ensureTotalCapacity(@intCast(seeds.len));
-        for (seeds, 0..) |seed, index| {
-            self.source_file_ids.putAssumeCapacity(seed.module_idx, @intCast(index));
-        }
+    fn sourceFileIds(self: *const Builder) *const SourceFileIds {
+        return self.borrowed_source_file_ids orelse &self.source_file_ids;
     }
 
     /// Final program source-file id of a checked module's source locations.
     fn sourceFileId(self: *const Builder, view: ModuleView) u32 {
-        return self.source_file_ids.get(view.module_identity.module_idx) orelse
+        return self.sourceFileIds().get(view.key.bytes) orelse
             Common.invariant("checked module reached body lowering without an assigned source file id");
     }
 
@@ -3846,7 +3840,7 @@ const Builder = struct {
             .timing = null,
         });
         errdefer builder.deinit();
-        try builder.initSourceFileIds();
+        builder.borrowed_source_file_ids = inputs.source_file_ids;
         builder.borrowed_comptime_root_functions = inputs.declared_comptime_root_functions;
         builder.hosted_catalog = try worker.allocator.dupe(HostedCatalogEntry, inputs.hosted_catalog);
         builder.current_loc = inputs.current_loc;
@@ -4548,6 +4542,7 @@ const Builder = struct {
         const inputs = SpecJobWorkerInputs{
             .run_id = self.spec_job_run_id,
             .modules = self.modules,
+            .source_file_ids = self.sourceFileIds(),
             .snapshot = &snapshot,
             .proc_debug_names = self.proc_debug_names,
             .interface_summaries = &self.shared_summaries.?,
@@ -6222,6 +6217,7 @@ const Builder = struct {
                         .inputs = .{
                             .run_id = self.spec_job_run_id,
                             .modules = self.modules,
+                            .source_file_ids = self.sourceFileIds(),
                             .snapshot = &context.snapshot,
                             .proc_debug_names = self.proc_debug_names,
                             .interface_summaries = &self.shared_summaries.?,
