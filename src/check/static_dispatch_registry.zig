@@ -2047,6 +2047,7 @@ pub const StaticDispatchPlanTable = struct {
             const GeneratedCodecRoleKey = struct {
                 method: canonical.MethodNameId,
                 has_subject: bool,
+                subject_bucket: u64,
             };
             const GeneratedCodecRoleCandidate = struct {
                 subject_ty: ?CheckedTypeId,
@@ -2071,6 +2072,7 @@ pub const StaticDispatchPlanTable = struct {
                 const role_key = GeneratedCodecRoleKey{
                     .method = method,
                     .has_subject = subject_ty != null,
+                    .subject_bucket = if (subject_ty) |subject| checked_type_view.aliasTransparentBucketKey(subject) else 0,
                 };
                 const candidates_entry = try role_candidates.getOrPut(role_key);
                 if (!candidates_entry.found_existing) candidates_entry.value_ptr.* = .empty;
