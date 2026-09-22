@@ -2738,10 +2738,9 @@ const TemplateReservation = struct {
 };
 
 /// How a template specialization's body is produced once its identity is
-/// reserved. Restored constant functions and hosted adapter sources lower the
-/// body immediately; roots and seal-time symbolic requests only reserve the
-/// identity and queue the body for the scheduler's wave drain, so root bodies
-/// lower on worker lanes beside the specializations they request. Iterator
+/// reserved. Roots, restored constant functions, and hosted adapter sources
+/// lower the body immediately; a seal-time symbolic request only reserves the
+/// identity and queues the body for the scheduler's wave drain. Iterator
 /// producers needed before seal stay draft-local instead of entering this
 /// coordinator-owned path.
 const TemplateBodyScheduling = enum { immediate, queued };
@@ -5326,7 +5325,7 @@ const Builder = struct {
             .count,
             null,
             null,
-            .queued,
+            if (self.comptime_value_reads) .queued else .immediate,
             null,
             false,
         );
@@ -9036,11 +9035,11 @@ const Builder = struct {
         };
     }
 
-    /// Reserve a procedure template body for a root or wrapper path (whose
-    /// types come from the builder-global cache without body evidence) and
-    /// return the Monotype function id the call site should embed. The body
-    /// itself queues for the specialization drain that follows every root
-    /// wave, so it lowers on a worker lane like any other reservation.
+    /// Lower (or defer) a procedure template body and return the Monotype
+    /// function id the call site should embed. Inside a specialization the
+    /// request reserves an id and defers the body; outside one (root and
+    /// wrapper paths, whose types come from the builder-global cache without
+    /// body evidence), the body lowers now.
     fn lowerFnTemplateCallTarget(self: *Builder, method_scope: ModuleView, fn_template: Ast.FnTemplate, evidence: []const SpecEvidence) Allocator.Error!Ast.FnSlot {
         const template_ref = switch (fn_template.fn_def) {
             .local_template,
@@ -9087,7 +9086,7 @@ const Builder = struct {
             .count,
             null,
             null,
-            .queued,
+            .immediate,
             null,
             false,
         );
