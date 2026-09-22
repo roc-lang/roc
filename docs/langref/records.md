@@ -70,8 +70,6 @@ full_name = |person| {
 }
 ```
 
-See [Pattern Matching](pattern-matching#record-patterns) for record patterns, renamed fields, and matching records with additional fields.
-
 ### Record Types
 
 A record type gives a type to each field:
@@ -281,7 +279,7 @@ After construction, both values have both fields. Ordinary access therefore retu
 attempts = standard.retries
 ```
 
-A supplied field overrides its default. Default expressions can be more than literals; they can use blocks and call functions, and they are evaluated for a construction that omits the field:
+A supplied field overrides its default. Default expressions can be more than literals; they can use blocks and call pure functions, and they are evaluated for a construction that omits the field:
 
 ```roc
 CacheOptions := {
@@ -291,6 +289,8 @@ CacheOptions := {
     },
 }
 ```
+
+A default cannot perform effects or constrain any of the nominal type's type parameters. Defaults must also be acyclic: materializing one default cannot require another omitted default that eventually leads back to the first.
 
 Defaulted and optional fields answer different questions. A defaulted field is always present in the constructed value. An optional field preserves whether a value was supplied, so querying it returns a `Try`.
 
