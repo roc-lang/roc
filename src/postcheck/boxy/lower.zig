@@ -19476,8 +19476,16 @@ const ProcBodyBuilder = struct {
             boxyLowerInvariant("boxy call adapter tag source had no descriptor");
         const source_materialization = resultDescriptorTemplate(source_desc_info);
 
-        const source_template: ?LirProgram.BoxyTypeDesc = if (source_materialization) |source_materialize| blk: {
-            const source_template_id = switch (source_materialize.desc) {
+        // A fully concrete source has exactly one descriptor, so its static
+        // descriptor describes a source whose descriptor was read at runtime.
+        const source_template_desc: ?LIR.BoxyDescRef = if (source_materialization) |source_materialize|
+            source_materialize.desc
+        else if (self.repIsFullyConcrete(source_rep))
+            try self.parent.staticDescRefForRep(self.descriptorStorageRep(source_rep))
+        else
+            null;
+        const source_template: ?LirProgram.BoxyTypeDesc = if (source_template_desc) |template_desc| blk: {
+            const source_template_id = switch (template_desc) {
                 .static => |desc_id| desc_id,
                 .local, .runtime, .dict_method_arg, .dict_method_hidden => boxyLowerInvariant("boxy call adapter source descriptor template was not static"),
             };
