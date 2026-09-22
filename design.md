@@ -9175,14 +9175,6 @@ never share an entry. Work is therefore proportional to relation sites plus
 unique exact provisional requests, rather than to the number of duplicate call
 paths through the same interface problem.
 
-Only a settled request reads or publishes a memo entry or a retained summary:
-the provisional view defaults a request's open leaves, so an open request and
-its defaulted counterpart share one address, and replaying a finished summary
-onto the open request would close those leaves in the live graph where a fresh
-expansion leaves them open. An open request expands its callee's relations
-against its live cells; a still-active representative remains a recursive edge
-for every equivalent request.
-
 Completed interface summaries are retained across bodies by that same exact
 address. The coordinator owns interned request and summary types in the
 program store; each executor lane owns a private cumulative table in its
@@ -10444,7 +10436,14 @@ second parameter index. Forwarding follows the checked edge to its source
 requirement and places the marker in the destination requirement's slot, so
 different parameter orders across schemes require no rebasing pass or lookup
 table. Lexical `constraint` references retain their explicit depth and index.
-If compile-time evaluation stores that function inside another value before the
+A symbolic slot resolves at a request as soon as its component is a method
+owner, a structural shape, or a value proven uninhabited, and an open checked
+leaf counts as proven uninhabited when its recorded final default is: the
+checker left it unconstrained, requests are seeded before a body is lowered,
+so nothing inside the body can bind it to anything but that default, and an
+interface replay may close the same cell to that default at any moment, so
+evidence read before and after such a replay must agree. If compile-time
+evaluation stores that function inside another value before the
 callable is concrete, `ConstStore` retains the same symbolic entry in the
 function's evidence vector, including inside nested evidence trees. Pool offsets are not
 parameter positions. Restoring the function walks the vector alongside its

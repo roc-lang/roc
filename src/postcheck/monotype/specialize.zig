@@ -67,9 +67,6 @@ pub const Counters = struct {
     interface_summary_verifications: u64 = 0,
     interface_relation_requests: u64 = 0,
     interface_replay_hits: u64 = 0,
-    /// Requests whose graph type still had open leaves when their callee
-    /// interface was related, so they expanded instead of reading a summary.
-    interface_replay_open_requests: u64 = 0,
     exact_type_checks: u64 = 0,
     /// Declaration-backed nominal backings served from the per-graph
     /// instantiation cache. Reuse compares argument cells by union-find root,

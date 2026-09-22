@@ -22756,19 +22756,6 @@ const BodyContext = struct {
             .provisional_digest = provisional_digest.bytes,
         };
 
-        // The provisional view keys a request with its open leaves already
-        // defaulted, so an open request and its defaulted counterpart share
-        // one address. Replaying a finished summary onto an open request
-        // would then close those leaves in the live graph, where a fresh
-        // expansion leaves them open, and every later reading of the same
-        // cells (dispatch evidence above all) would differ from a reading
-        // taken before the replay. Only a settled request reads a summary;
-        // an open one expands its callee's relations against its live cells.
-        // Undetermined field-kind cells are the one open part a view keeps
-        // explicit, and every duplicate instantiates them afresh, so they do
-        // not make a request open here.
-        const request_settled = try self.graph.typeIsSpecializationDefaultable(request_fn_node);
-        if (!request_settled) self.builder.count("interface_replay_open_requests");
 
         if (replay_state.buckets.get(address)) |candidates| for (candidates.items) |raw_entry| {
             const entry = &replay_state.entries.items[raw_entry];
@@ -22781,7 +22768,6 @@ const BodyContext = struct {
             {
                 continue;
             }
-            if (entry.status == .ready and !request_settled) continue;
             self.builder.count("interface_replay_hits");
             switch (entry.status) {
                 .expanding => try relateFunctionRequestInterface(
@@ -22808,7 +22794,7 @@ const BodyContext = struct {
         var verify_summary: ?Type.TypeId = null;
         const saved_use_summaries = replay_state.use_finished_summaries;
         defer replay_state.use_finished_summaries = saved_use_summaries;
-        if (replay_state.use_finished_summaries and request_settled) {
+        if (replay_state.use_finished_summaries) {
             if (try self.findInterfaceSummary(address, stored_evidence, provisional_ty)) |hit| {
                 self.builder.count("interface_summary_hits");
                 // Detailed diagnostics in safety builds audit the first 16
@@ -22895,7 +22881,7 @@ const BodyContext = struct {
                 Common.compilerBug("cached interface summary disagreed with fresh checked relation expansion");
             }
         }
-        if (saved_use_summaries and request_settled) {
+        if (saved_use_summaries) {
             const cache = self.interfaceSummaryCache();
             if (self.typeStore() == &self.builder.program.types) {
                 // On the coordinator both views were materialized outside any
@@ -42770,7 +42756,8 @@ const BodyContext = struct {
                     Common.invariant("callable-derived evidence path did not match its function request");
                 const resolvable = self.methodOwnerFromNode(component_node) != null or
                     param.structural != null or
-                    try self.nodeIsProvenUninhabited(component_node);
+                    try self.nodeIsProvenUninhabited(component_node) or
+                    self.nodeFinalizesAsUninhabitedLeaf(component_node);
                 if (resolvable) {
                     const replacement = try self.synthesizeComponentEvidenceAtNodeForPurpose(
                         view,
@@ -44205,7 +44192,30 @@ const BodyContext = struct {
         }
         if (structural) |kind| return .{ .structural = .{ .derivation = structuralDerivationWithoutMap(kind) } };
         if (try self.nodeIsProvenUninhabited(component_node)) return .unreachable_value;
+        if (self.nodeFinalizesAsUninhabitedLeaf(component_node)) return .unreachable_value;
         Common.invariant("compiler-generated ownerless graph component had no checked structural or uninhabited evidence");
+    }
+
+    /// Whether an open leaf can only ever finalize as uninhabited. A checked
+    /// variable the checker left unconstrained is bound by nothing but a
+    /// specialization request, and requests are seeded before a body is
+    /// lowered, so inside a body such a leaf's final content is its recorded
+    /// default. Reading that default here keeps dispatch evidence independent
+    /// of which callee interfaces have already been related on this path: an
+    /// interface replay may close the same cell to that default at any time,
+    /// and evidence read before and after it must agree.
+    fn nodeFinalizesAsUninhabitedLeaf(self: *BodyContext, node: NodeId) bool {
+        return switch (self.graph.content(node)) {
+            .unresolved => |variable| blk: {
+                if (variable.numeric_default_phase != null) break :blk false;
+                if (variable.row_default) |row_default| break :blk row_default == .empty_tag_union;
+                break :blk switch (variable.origin) {
+                    .checked_variable => true,
+                    .row_extension, .placeholder => false,
+                };
+            },
+            .redirect, .primitive, .list, .box, .tuple, .func, .tag_union, .record, .empty_tag_union, .empty_record, .named, .erased, .zst => false,
+        };
     }
 
     /// Static-dispatch owner identity available directly from a live graph
