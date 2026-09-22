@@ -15974,6 +15974,9 @@ signature outside the type table: a hosted function's arguments and result on
 its `HostedFunctionInfo`, and a provided procedure's on its `ProvidesEntry`.
 Glue classifies each provided export as a procedure or data from the
 CheckedModule's provided export table, never from the shape of its type.
+Application `requires` declarations are Roc-internal bindings that never cross
+the host boundary, so they are neither glue layout roots nor part of the glue
+input.
 
 The platform header maps linker symbols explicitly, symbol-string first, in
 both directions:

@@ -83,7 +83,6 @@ const glue_platform_files = [_][]const u8{
     "AbiWidth.roc",
     "ArgShape.roc",
     "CallableSignature.roc",
-    "EntryPoint.roc",
     "File.roc",
     "FunctionInfo.roc",
     "FunctionSignature.roc",

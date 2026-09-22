@@ -489,6 +489,7 @@ const CustomCase = enum {
     glue_recursive_slot_box,
     glue_generic_callable_arg,
     glue_hosted_erased_generic_callback,
+    glue_application_only_requires,
     glue_c_tests,
     roc_test_skips_url_dependency_expects,
     roc_test_caches_local_dependency_expects,
@@ -1017,6 +1018,7 @@ const glue_cases = [_]CliCase{
     .{ .id = 0, .suite = .glue, .name = "glue regression: recursive-slot boxed edges wrap by-value types and compile", .body = .{ .custom = .glue_recursive_slot_box } },
     .{ .id = 0, .suite = .glue, .name = "glue regression: function stored in a generic type is an erased callable in every generator", .body = .{ .custom = .glue_generic_callable_arg } },
     .{ .id = 0, .suite = .glue, .name = "issue 11505: hosted Box of a generic function is an erased callable in every generator", .body = .{ .custom = .glue_hosted_erased_generic_callback } },
+    .{ .id = 0, .suite = .glue, .name = "issue 11504: application requirements are not glue roots", .body = .{ .custom = .glue_application_only_requires } },
     .{ .id = 0, .suite = .glue, .name = "CGlue.roc expect tests pass", .body = .{ .custom = .glue_c_tests } },
 };
 
@@ -3374,6 +3376,7 @@ fn runCustomCase(
         .glue_recursive_slot_box => customGlueRecursiveSlotBox(io, allocator, &env, &timer, timeout_ms),
         .glue_generic_callable_arg => customGlueGenericCallableArg(io, allocator, &env, &timer, timeout_ms),
         .glue_hosted_erased_generic_callback => customGlueHostedErasedGenericCallback(io, allocator, &env, &timer, timeout_ms),
+        .glue_application_only_requires => customGlueApplicationOnlyRequires(io, allocator, &env, &timer, timeout_ms),
         .glue_c_tests => customGlueCTests(io, allocator, &env, &timer, timeout_ms),
         .roc_test_skips_url_dependency_expects => customRocTestSkipsUrlDependencyExpects(io, allocator, &env, &timer, timeout_ms),
         .roc_test_caches_local_dependency_expects => customRocTestCachesLocalDependencyExpects(io, allocator, &env, &timer, timeout_ms),
@@ -10002,10 +10005,11 @@ fn customGlueDebug(io: std.Io, allocator: Allocator, env: *const CaseEnv, timer:
         return customInfraFailure(allocator, timer, "failed to create glue output dir: {}", .{err});
     if (runRocAndCheck(io, allocator, env, timer, timeout_ms, .{
         .args = &.{ "glue", "src/glue/src/DebugGlue.roc", output_dir, "test/fx/platform/main.roc" },
-        .contains = &.{.{ .stream = .stderr, .text = "name: \"main!\"" }},
+        .contains = &.{.{ .stream = .stderr, .text = "name: \"print_value!\"" }},
         .not_contains = &.{
             .{ .stream = .stderr, .text = "panic" },
             .{ .stream = .stderr, .text = "unreachable" },
+            .{ .stream = .stderr, .text = "entrypoints" },
             .{ .stream = .stderr, .text = "name: \"\"" },
         },
     })) |failure| return failure;
@@ -10017,10 +10021,11 @@ fn customGlueDebugDev(io: std.Io, allocator: Allocator, env: *const CaseEnv, tim
         return customInfraFailure(allocator, timer, "failed to create glue output dir: {}", .{err});
     if (runRocAndCheck(io, allocator, env, timer, timeout_ms, .{
         .args = &.{ "glue", "--opt=dev", "src/glue/src/DebugGlue.roc", output_dir, "test/fx/platform/main.roc" },
-        .contains = &.{.{ .stream = .stderr, .text = "name: \"main!\"" }},
+        .contains = &.{.{ .stream = .stderr, .text = "name: \"print_value!\"" }},
         .not_contains = &.{
             .{ .stream = .stderr, .text = "panic" },
             .{ .stream = .stderr, .text = "unreachable" },
+            .{ .stream = .stderr, .text = "entrypoints" },
             .{ .stream = .stderr, .text = "name: \"\"" },
         },
     })) |failure| return failure;
@@ -10042,7 +10047,7 @@ fn customGlueDevWithoutTempEnv(io: std.Io, allocator: Allocator, env: *const Cas
         return customInfraFailure(allocator, timer, "failed to create glue output dir: {}", .{err});
     if (runRocAndCheck(io, allocator, &no_temp_env, timer, timeout_ms, .{
         .args = &.{ "glue", "--opt=dev", "src/glue/src/DebugGlue.roc", output_dir, "test/fx/platform/main.roc" },
-        .contains = &.{.{ .stream = .stderr, .text = "name: \"main!\"" }},
+        .contains = &.{.{ .stream = .stderr, .text = "name: \"print_value!\"" }},
         .not_contains = &.{
             .{ .stream = .stderr, .text = "Compilation failed" },
             .{ .stream = .stderr, .text = "panic" },
@@ -10176,13 +10181,13 @@ fn customGluePluginCacheHit(io: std.Io, allocator: Allocator, env: *const CaseEn
 
     if (runRocAndCheck(io, allocator, &compile_count_env, timer, timeout_ms, .{
         .args = &.{ "glue", "--opt=dev", "src/glue/src/DebugGlue.roc", first_output_dir, "test/fx/platform/main.roc" },
-        .contains = &.{.{ .stream = .stderr, .text = "name: \"main!\"" }},
+        .contains = &.{.{ .stream = .stderr, .text = "name: \"print_value!\"" }},
         .not_contains = &common_not_contains,
     })) |failure| return failure;
 
     if (runRocAndCheck(io, allocator, &compile_count_env, timer, timeout_ms, .{
         .args = &.{ "glue", "--opt=dev", "src/glue/src/DebugGlue.roc", second_output_dir, "test/fx/platform/main.roc" },
-        .contains = &.{.{ .stream = .stderr, .text = "name: \"main!\"" }},
+        .contains = &.{.{ .stream = .stderr, .text = "name: \"print_value!\"" }},
         .not_contains = &common_not_contains,
     })) |failure| return failure;
 
@@ -10712,7 +10717,7 @@ fn customGlueGenericCallableArg(io: std.Io, allocator: Allocator, env: *const Ca
     // no standalone layout for the instantiated argument. `Box` of a nominal
     // whose backing is a function stays a box cell, exactly as the compiler
     // committed it.
-    return checkErasedCallableGlue(io, allocator, env, timer, timeout_ms, "test/glue/generic-callable-arg/main.roc", .{
+    return checkGlueOutput(io, allocator, env, timer, timeout_ms, "test/glue/generic-callable-arg/main.roc", .{
         .zig = &.{
             "pub extern fn handler() callconv(.c) RocErasedCallable;",
             "pub extern fn stepper() callconv(.c) RocErasedCallable;",
@@ -10742,7 +10747,7 @@ fn customGlueHostedErasedGenericCallback(io: std.Io, allocator: Allocator, env: 
     // concrete argument (`Box((Event => {}))`) is the same pointer, and its
     // argument type is emitted for the host to build the callable's argument
     // buffer.
-    return checkErasedCallableGlue(io, allocator, env, timer, timeout_ms, "test/glue/hosted-erased-generic-callback/main.roc", .{
+    return checkGlueOutput(io, allocator, env, timer, timeout_ms, "test/glue/hosted-erased-generic-callback/main.roc", .{
         .zig = &.{
             "pub extern fn roc_install(arg0: RocErasedCallable) callconv(.c) void;",
             "pub extern fn roc_notify(arg0: RocErasedCallable) callconv(.c) void;",
@@ -10761,12 +10766,37 @@ fn customGlueHostedErasedGenericCallback(io: std.Io, allocator: Allocator, env: 
     });
 }
 
-const ErasedCallableGlueExpectations = struct {
+fn customGlueApplicationOnlyRequires(io: std.Io, allocator: Allocator, env: *const CaseEnv, timer: *harness.Timer, timeout_ms: u64) ?TestResult {
+    // Issue 11504: an application requirement (`main : Program(state)`) is a
+    // Roc-internal binding that never crosses the host boundary, so glue
+    // neither lays it out nor describes it, and its unbound `state` does not
+    // stop generation. The hosted and provided declarations that do cross
+    // the boundary are described as usual.
+    return checkGlueOutput(io, allocator, env, timer, timeout_ms, "test/glue/application-only-requires/main.roc", .{
+        .zig = &.{
+            "pub extern fn roc_send(arg0: BoundaryShared) callconv(.c) BoundaryShared;",
+            "pub extern fn roc_echo(arg0: BoundaryShared) callconv(.c) BoundaryShared;",
+        },
+        .c = &.{
+            "extern BoundaryShared roc_send(BoundaryShared arg0);",
+            "extern BoundaryShared roc_echo(BoundaryShared arg0);",
+        },
+        .rust = &.{
+            "pub fn roc_send(arg0: BoundaryShared) -> BoundaryShared;",
+            "pub fn roc_echo(arg0: BoundaryShared) -> BoundaryShared;",
+        },
+        .absent = &.{"Program"},
+    });
+}
+
+const GlueOutputExpectations = struct {
     zig: []const []const u8,
     c: []const []const u8,
     rust: []const []const u8,
+    /// Text that must appear in none of the generated files.
+    absent: []const []const u8 = &.{},
 
-    fn forLanguage(self: ErasedCallableGlueExpectations, language: GlueLanguage) []const []const u8 {
+    fn forLanguage(self: GlueOutputExpectations, language: GlueLanguage) []const []const u8 {
         return switch (language) {
             .zig => self.zig,
             .c => self.c,
@@ -10778,14 +10808,14 @@ const ErasedCallableGlueExpectations = struct {
 /// Run every shipped generator over `platform_path`, require each output to
 /// contain its expected declarations, and semantically analyze every
 /// declaration of the generated Zig by compiling it as a test.
-fn checkErasedCallableGlue(
+fn checkGlueOutput(
     io: std.Io,
     allocator: Allocator,
     env: *const CaseEnv,
     timer: *harness.Timer,
     timeout_ms: u64,
     platform_path: []const u8,
-    expectations: ErasedCallableGlueExpectations,
+    expectations: GlueOutputExpectations,
 ) ?TestResult {
     for (std.enums.values(GlueLanguage)) |language| {
         const subdir = std.fmt.allocPrint(allocator, "{s}-glue-out", .{@tagName(language)}) catch |err|
@@ -10808,6 +10838,11 @@ fn checkErasedCallableGlue(
         for (expectations.forLanguage(language)) |needle| {
             if (std.mem.find(u8, generated, needle) == null) {
                 return customFailure(allocator, timer, "{s} missing {s}", .{ language.generatedFileName(), needle });
+            }
+        }
+        for (expectations.absent) |needle| {
+            if (std.mem.find(u8, generated, needle) != null) {
+                return customFailure(allocator, timer, "{s} unexpectedly contains {s}", .{ language.generatedFileName(), needle });
             }
         }
 
@@ -11623,7 +11658,7 @@ fn customGlueZigBangRecordFieldNames(io: std.Io, allocator: Allocator, env: *con
     const output_dir = createWorkSubdir(io, allocator, env, "glue-bang-out") catch |err|
         return customInfraFailure(allocator, timer, "failed to create glue output dir: {}", .{err});
     if (runRocAndCheck(io, allocator, env, timer, timeout_ms, .{
-        .args = &.{ "glue", "src/glue/src/ZigGlue.roc", output_dir, "test/postcheck/platform_required_init/platform/main.roc" },
+        .args = &.{ "glue", "src/glue/src/ZigGlue.roc", output_dir, "test/glue/bang-record-fields/main.roc" },
         .not_contains = &.{ .{ .stream = .stderr, .text = "panic" }, .{ .stream = .stderr, .text = "unreachable" } },
     })) |failure| return failure;
 
@@ -11635,19 +11670,10 @@ fn customGlueZigBangRecordFieldNames(io: std.Io, allocator: Allocator, env: *con
     for ([_][]const u8{
         "@\"init!\": RocErasedCallable",
         "@\"render!\": RocErasedCallable",
-        "pub const HostSet_mouseArgs = if (@sizeOf(usize) == 4) extern struct",
-        "pub extern fn roc_host_set_mouse(arg0: HostSet_mouseArgs) callconv(.c) void;",
+        "pub extern fn roc_callbacks() callconv(.c) __AnonStruct_",
     }) |needle| {
         if (std.mem.find(u8, generated, needle) == null) {
             return customFailure(allocator, timer, "generated Zig file missing {s}", .{needle});
-        }
-    }
-    for ([_][]const u8{
-        "pub extern fn roc_init_for_host(arg0:",
-        "pub extern fn roc_render_for_host(arg0: RocBox",
-    }) |needle| {
-        if (std.mem.find(u8, generated, needle) == null) {
-            return customFailure(allocator, timer, "generated Zig file missing natural entrypoint declaration {s}", .{needle});
         }
     }
     for ([_][]const u8{ "arg0: **anyopaque", "ret_ptr:", "arg_ptr:" }) |needle| {
