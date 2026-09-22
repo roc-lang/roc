@@ -67,6 +67,11 @@ pub const CheckedModules = struct {
     imports: []const checked.ImportedModuleView = &.{},
 };
 
+/// Dense id of one checked module inside a single lowering's module set; see
+/// `LIR.LoweringModuleId`, whose domain this is. Every post-check IR carries
+/// the same `lowering_modules` table and the same ids into it.
+pub const LoweringModuleId = LIR.LoweringModuleId;
+
 /// Explicit roots requested from checked module data.
 pub const RootRequests = struct {
     requests: []const checked.RootRequest = &.{},

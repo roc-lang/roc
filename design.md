@@ -8756,6 +8756,54 @@ inspect methods, descriptors, or dictionaries. This prevents reallocation from
 invalidating the current traversal and makes discovery order irrelevant to the
 planned collection contents.
 
+### Checked Module Provenance
+
+One lowering unions several checked modules: it lowers the root module's
+procedures and every imported procedure those reach, and its root request
+stream is the concatenation of several modules' compile-time requests. Checked
+ids other than a checked module's own identity are store-local to the module
+that produced them, so a post-check row that retains one—a compile-time root
+id, a checked exhaustiveness-site id—names nothing until its owner is known.
+
+Monotype lowering therefore seeds that module set once, before any body is
+lowered, as the program-local `lowering_modules` table, and assigns each module
+a dense `LoweringModuleId`. The table is never appended to afterwards, so
+parallel specialization workers borrow it and mint the same ids the coordinator
+does. Lifting, SpecConstr, lambda solving, and LIR lowering carry the table and
+the ids through unchanged, and the ids reach `Program.Result`, where checking
+finalization resolves an owner by indexing the table directly.
+
+Every row that keeps a module-local checked id carries that module's dense id
+beside it. A compile-time site records the checked module whose site ids and
+source regions it names, which is the module whose body the specialization was
+lowered from rather than the program's root module or the module of whichever
+compile-time root later executes the site. A root plan records the checked
+module that owns its compile-time root id. No consumer may recover an owner
+from a row's position in a concatenated request stream, from a source location,
+from a procedure's membership, or from any other incidental id: those are all
+wrong as soon as one program contains more than one module's code, and they
+fail silently rather than loudly.
+
+Consequently finalization selects the CheckedModule data, `ConstStore`, problem
+store, and completion state of a row's declared owner. A compile-time root's
+evaluation reaches sites belonging to several modules; each site's pending
+static exhaustiveness diagnostic is resolved or discarded in its own owner's
+problem store, and a site whose validation was delegated to a specific root is
+resolved only by that root, which only its own module's roots can name. Branch
+coverage stays with the running root's own module: one caller reaching an
+imported body is no account of that module's branches.
+
+The dense id exists so this provenance costs a `u32` per row. A checked module
+identity is a large structural key; attaching one to every root and site row,
+or hashing one per evaluated event, would pay for the provenance many times
+over. The table is also distinct from the program's source-file table even
+though both enumerate the same modules, because source-file ordinals are
+remapped when LIR images from different programs are packed together while a
+lowering module id is valid only inside its own program. Identities that must
+survive between two independently lowered programs—an evaluated root's
+completed value slot, for instance—keep the structural key, because no single
+program's table spans both.
+
 ## Monotype IR
 
 Monotype IR is the first post-check typed representation in the `.lss`

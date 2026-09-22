@@ -140,6 +140,55 @@ pub const ProgramModule = struct {
     problem_store: ?*check.problem.Store,
 };
 
+/// Resolution from one lowered program's dense checked-module ids to the
+/// modules this finalization owns.
+///
+/// A lowered program contains procedures and compile-time sites from every
+/// checked module of its lowering input, so a row's module-local checked ids
+/// belong to whichever module the producer recorded on that row. Building this
+/// once turns every later owner question into a direct array index.
+const ModuleOwners = struct {
+    modules: []const ProgramModule,
+    /// Position in `modules` per `LIR.LoweringModuleId`, or null when the
+    /// lowering carried a checked module this finalization does not complete.
+    positions: []const ?u32,
+
+    fn init(
+        allocator: Allocator,
+        result: *const LirProgram.Result,
+        modules: []const ProgramModule,
+    ) Allocator.Error!ModuleOwners {
+        const positions = try allocator.alloc(?u32, result.lowering_modules.items.len);
+        errdefer allocator.free(positions);
+        for (result.lowering_modules.items, positions) |key, *slot| {
+            slot.* = null;
+            for (modules, 0..) |entry, index| {
+                if (!std.mem.eql(u8, &entry.module.key.bytes, &key.bytes)) continue;
+                slot.* = @intCast(index);
+                break;
+            }
+        }
+        return .{ .modules = modules, .positions = positions };
+    }
+
+    fn deinit(self: *const ModuleOwners, allocator: Allocator) void {
+        allocator.free(self.positions);
+    }
+
+    fn position(self: *const ModuleOwners, id: lir.LIR.LoweringModuleId) ?u32 {
+        const raw = @intFromEnum(id);
+        if (raw >= self.positions.len) {
+            finalizationInvariant("lowered row named a checked module outside the lowering's module table");
+        }
+        return self.positions[raw];
+    }
+
+    fn get(self: *const ModuleOwners, id: lir.LIR.LoweringModuleId) ?ProgramModule {
+        const index = self.position(id) orelse return null;
+        return self.modules[index];
+    }
+};
+
 /// Retains the compilation's specialization and host lowering across checking
 /// completion. Diagnostic destinations are consumed during finalizeProgram.
 pub const ProgramSession = struct {
@@ -638,11 +687,15 @@ fn finalizeLoweredProgram(
         const State = struct {
             completion: RootCompletionState,
             coverage: ComptimeCoverage,
-            offset: usize,
+            /// Demand ordinal of each of this module's compile-time roots, by
+            /// root id. Filled from the producer's own root plans, so slot
+            /// demand resolves a declared producer by direct indexing.
+            ordinals: []?usize,
         };
         const Root = struct { module: usize, request: usize };
         allocator: Allocator,
         modules: []const ProgramModule,
+        owners: *const ModuleOwners,
         lowered: *lir.CheckedPipeline.LoweredProgram,
         program: @TypeOf(program),
         options: Options,
@@ -667,16 +720,19 @@ fn finalizeLoweredProgram(
             self.active[ordinal] = true;
             defer self.active[ordinal] = false;
             const requests = entry.module.root_requests.compile_time_requests;
-            _ = try evalProgramRoots(self.allocator, entry.module, requests[root.request..][0..1], state.completion.request_root_ids[root.request..][0..1], &state.completion, entry.problem_store, &state.coverage, self.options, self.lowered, self.lowered.lir_result.const_roots.items[ordinal..][0..1], self.program);
+            _ = try evalProgramRoots(self.allocator, entry.module, requests[root.request..][0..1], state.completion.request_root_ids[root.request..][0..1], &state.completion, entry.problem_store, &state.coverage, self.owners, self.options, self.lowered, self.lowered.lir_result.const_roots.items[ordinal..][0..1], self.program);
             if (!state.completion.isDone(id)) finalizationInvariant("demanded compile-time producer did not complete");
         }
     };
+    var owners = try ModuleOwners.init(allocator, &lowered.lir_result, modules);
+    defer owners.deinit(allocator);
     const states = try allocator.alloc(Driver.State, modules.len);
     var initialized: usize = 0;
     defer {
         for (states[0..initialized]) |*state| {
             state.completion.deinit();
             state.coverage.deinit();
+            allocator.free(state.ordinals);
         }
         allocator.free(states);
     }
@@ -688,26 +744,60 @@ fn finalizeLoweredProgram(
     const slot_roots = try allocator.alloc(?usize, lowered.lir_result.static_data_values.items.len);
     defer allocator.free(slot_roots);
     @memset(slot_roots, null);
-    const Key = struct { module: checked.ModuleId, root: checked.ComptimeRootId };
-    var root_indices = std.AutoHashMap(Key, usize).init(allocator);
-    defer root_indices.deinit();
-    var offset: usize = 0;
-    for (modules, states, 0..) |entry, *state, module_index| {
-        state.* = .{ .completion = try RootCompletionState.init(allocator, entry.module), .coverage = ComptimeCoverage.init(allocator), .offset = offset };
+    for (modules, states) |entry, *state| {
+        var completion = try RootCompletionState.init(allocator, entry.module);
+        errdefer completion.deinit();
+        const ordinals = try allocator.alloc(?usize, entry.module.compile_time_roots.roots.len);
+        @memset(ordinals, null);
+        state.* = .{ .completion = completion, .coverage = ComptimeCoverage.init(allocator), .ordinals = ordinals };
         initialized += 1;
-        for (state.completion.request_root_ids, 0..) |id, request_index| {
-            roots[offset] = .{ .module = module_index, .request = request_index };
-            try root_indices.put(.{ .module = entry.module.key, .root = id }, offset);
-            offset += 1;
+    }
+    // The producer records each root plan's owner and checked root id, so the
+    // demand order is read out of the plans themselves. Nothing here infers a
+    // module from a plan's position in the concatenated request stream.
+    const const_roots = lowered.lir_result.const_roots.items;
+    if (const_roots.len < root_count) finalizationInvariant("lowered program published fewer compile-time roots than requested");
+    for (const_roots[0..root_count], 0..) |plan, ordinal| {
+        const module_index = owners.position(plan.owner) orelse
+            finalizationInvariant("compile-time root named a checked module this finalization does not complete");
+        const root_id = plan.request.compile_time_root orelse
+            finalizationInvariant("compile-time root request reached finalization without its checked root identity");
+        const state = &states[module_index];
+        const request_index = state.completion.requestIndexForRoot(root_id);
+        roots[ordinal] = .{ .module = module_index, .request = request_index };
+        const slot = &state.ordinals[@intFromEnum(root_id)];
+        if (slot.* != null) finalizationInvariant("lowered program published one compile-time root twice");
+        slot.* = ordinal;
+    }
+    for (states) |*state| {
+        for (state.completion.request_root_ids) |id| {
+            if (state.ordinals[@intFromEnum(id)] == null) {
+                finalizationInvariant("lowered program omitted a requested compile-time root");
+            }
         }
     }
-    if (offset != root_count) finalizationInvariant("demand root partitions differ from lowering requests");
+    // Slots name their producing root by checked identity. Resolving the
+    // module id once per distinct key keeps this a direct index per slot: the
+    // value slot and failure slot of one root are adjacent.
+    var last_key: ?checked.ModuleId = null;
+    var last_module_id: lir.LIR.LoweringModuleId = undefined;
     for (lowered.lir_result.static_data_values.items, slot_roots) |slot, *owner| {
         const root = slot.compile_time_root orelse continue;
-        owner.* = root_indices.get(.{ .module = root.module, .root = root.root }) orelse
+        const reuse = if (last_key) |key| std.mem.eql(u8, &key.bytes, &root.module.bytes) else false;
+        if (!reuse) {
+            last_module_id = lowered.lir_result.loweringModuleId(root.module) orelse
+                finalizationInvariant("compile-time slot named a checked module outside the lowering's module table");
+            last_key = root.module;
+        }
+        const module_index = owners.position(last_module_id) orelse
+            finalizationInvariant("compile-time slot has no declared producer");
+        const ordinals = states[module_index].ordinals;
+        const raw_root = @intFromEnum(root.root);
+        if (raw_root >= ordinals.len) finalizationInvariant("compile-time slot named a root outside its declared owner's root table");
+        owner.* = ordinals[raw_root] orelse
             finalizationInvariant("compile-time slot has no declared producer");
     }
-    var driver: Driver = .{ .allocator = allocator, .modules = modules, .lowered = lowered, .program = program, .options = options, .states = states, .roots = roots, .active = active, .slot_roots = slot_roots };
+    var driver: Driver = .{ .allocator = allocator, .modules = modules, .owners = &owners, .lowered = lowered, .program = program, .options = options, .states = states, .roots = roots, .active = active, .slot_roots = slot_roots };
     program.slot_demand = .{ .context = &driver, .ensure = Driver.ensure };
     defer program.slot_demand = null;
     for (0..root_count) |ordinal| {
@@ -1077,6 +1167,9 @@ const RootCompletionState = struct {
     statuses: []RootStatus,
     requested_roots: []bool,
     request_root_ids: []checked.ComptimeRootId,
+    /// Position in `request_root_ids` per compile-time root id, or
+    /// `no_request` when this module requests no evaluation of that root.
+    request_index_by_root: []u32,
     visited_templates: []u32,
     visit: u32,
     current_root_id: ?checked.ComptimeRootId = null,
@@ -1095,6 +1188,9 @@ const RootCompletionState = struct {
 
         const request_root_ids = try allocator.alloc(checked.ComptimeRootId, module.root_requests.compile_time_requests.len);
         errdefer allocator.free(request_root_ids);
+        const request_index_by_root = try allocator.alloc(u32, module.compile_time_roots.roots.len);
+        errdefer allocator.free(request_index_by_root);
+        @memset(request_index_by_root, no_request);
         for (module.root_requests.compile_time_requests, 0..) |request, i| {
             const root_id = compileTimeRootForRequest(module, request);
             const raw = @intFromEnum(root_id);
@@ -1103,6 +1199,7 @@ const RootCompletionState = struct {
             }
             requested_roots[raw] = true;
             request_root_ids[i] = root_id;
+            request_index_by_root[raw] = @intCast(i);
         }
 
         const visited_templates = try allocator.alloc(u32, module.checked_procedure_templates.templates.items.len);
@@ -1115,14 +1212,35 @@ const RootCompletionState = struct {
             .statuses = statuses,
             .requested_roots = requested_roots,
             .request_root_ids = request_root_ids,
+            .request_index_by_root = request_index_by_root,
             .visited_templates = visited_templates,
             .visit = 0,
         };
     }
 
+    /// No compile-time request of this module evaluates the root.
+    const no_request: u32 = std.math.maxInt(u32);
+
+    /// Position of a compile-time root in this module's request stream. The
+    /// producer records the owner and root id on each lowered root plan, so
+    /// finalization asks the owner for the position instead of assuming the
+    /// plan appears at the same offset the request did.
+    fn requestIndexForRoot(self: *const RootCompletionState, root_id: checked.ComptimeRootId) usize {
+        const raw = @intFromEnum(root_id);
+        if (raw >= self.request_index_by_root.len) {
+            finalizationInvariant("compile-time root id is outside its declared owner's root table");
+        }
+        const index = self.request_index_by_root[raw];
+        if (index == no_request) {
+            finalizationInvariant("lowered compile-time root was not requested by its declared owner");
+        }
+        return index;
+    }
+
     fn deinit(self: *RootCompletionState) void {
         const allocator = self.allocator;
         allocator.free(self.visited_templates);
+        allocator.free(self.request_index_by_root);
         allocator.free(self.request_root_ids);
         allocator.free(self.requested_roots);
         allocator.free(self.statuses);
@@ -1395,7 +1513,9 @@ fn lowerEvalAndFinishRoots(
     );
     defer lowered.deinit();
 
-    return evalInterpreterLoweredRoots(allocator, module, lowering_imports, relation_modules, requests, root_ids, state, problem_store, coverage, options, &lowered, lowered.lir_result.const_roots.items);
+    var owners = try ModuleOwners.init(allocator, &lowered.lir_result, &.{.{ .module = module, .problem_store = problem_store }});
+    defer owners.deinit(allocator);
+    return evalInterpreterLoweredRoots(allocator, module, lowering_imports, relation_modules, requests, root_ids, state, problem_store, coverage, &owners, options, &lowered, lowered.lir_result.const_roots.items);
 }
 
 /// Execute borrowed LIR on compiler hosts that cannot run native generated code.
@@ -1409,13 +1529,14 @@ fn evalInterpreterLoweredRoots(
     state: *RootCompletionState,
     problem_store: ?*check.problem.Store,
     coverage: *ComptimeCoverage,
+    owners: *const ModuleOwners,
     options: Options,
     lowered: *lir.CheckedPipeline.LoweredProgram,
     const_roots: []const LirProgram.ConstRootPlan,
 ) FinalizeError!bool {
     const program = try InterpreterProgram.init(allocator, .{ .root = checked.loweringViewWithRelations(module, relation_modules), .imports = lowering_imports }, lowered, options);
     defer program.deinit();
-    return evalInterpreterProgramRoots(allocator, module, requests, root_ids, state, problem_store, coverage, options, lowered, const_roots, program);
+    return evalInterpreterProgramRoots(allocator, module, requests, root_ids, state, problem_store, coverage, owners, options, lowered, const_roots, program);
 }
 
 fn evalInterpreterProgramRoots(
@@ -1426,6 +1547,7 @@ fn evalInterpreterProgramRoots(
     state: *RootCompletionState,
     problem_store: ?*check.problem.Store,
     coverage: *ComptimeCoverage,
+    owners: *const ModuleOwners,
     options: Options,
     lowered: *lir.CheckedPipeline.LoweredProgram,
     const_roots: []const LirProgram.ConstRootPlan,
@@ -1493,8 +1615,8 @@ fn evalInterpreterProgramRoots(
                     try writer.storeRoot(root, eval_result.value);
             }
 
-            const eval_result = try evalCompileTimeRoot(allocator, interpreter, problem_store, module, compile_time_root, &lowered.lir_result, root.proc, root.ret_layout, &program.demand_error);
-            try recordComptimeSiteHits(problem_store, coverage, module, compile_time_root, &lowered.lir_result, interpreter.getComptimeBranchHits(), root.proc);
+            const eval_result = try evalCompileTimeRoot(allocator, interpreter, problem_store, owners, root.owner, module, compile_time_root, &lowered.lir_result, root.proc, root.ret_layout, &program.demand_error);
+            try recordComptimeSiteHits(problem_store, coverage, owners, root.owner, compile_time_root, &lowered.lir_result, interpreter.getComptimeBranchHits(), root.proc);
             switch (eval_result) {
                 .value => |value| {
                     defer interpreter.dropValue(value.value, root.ret_layout);
@@ -1863,7 +1985,9 @@ fn lowerDevEvalAndFinishRoots(
     );
     defer lowered.deinit();
 
-    return evalDevLoweredRoots(allocator, module, lowering_imports, relation_modules, requests, root_ids, state, problem_store, coverage, options, &lowered, lowered.lir_result.const_roots.items);
+    var owners = try ModuleOwners.init(allocator, &lowered.lir_result, &.{.{ .module = module, .problem_store = problem_store }});
+    defer owners.deinit(allocator);
+    return evalDevLoweredRoots(allocator, module, lowering_imports, relation_modules, requests, root_ids, state, problem_store, coverage, &owners, options, &lowered, lowered.lir_result.const_roots.items);
 }
 
 const CompletedNativeRoot = struct {
@@ -2470,6 +2594,7 @@ fn evalDevLoweredRoots(
     state: *RootCompletionState,
     problem_store: ?*check.problem.Store,
     coverage: *ComptimeCoverage,
+    owners: *const ModuleOwners,
     options: Options,
     lowered: *lir.CheckedPipeline.LoweredProgram,
     const_roots: []const LirProgram.ConstRootPlan,
@@ -2483,7 +2608,7 @@ fn evalDevLoweredRoots(
     }, lowered, options);
     defer native.deinit();
     native.codegen.static_strings = native.static_strings.view();
-    return evalDevProgramRoots(allocator, module, requests, root_ids, state, problem_store, coverage, options, lowered, const_roots, &native);
+    return evalDevProgramRoots(allocator, module, requests, root_ids, state, problem_store, coverage, owners, options, lowered, const_roots, &native);
 }
 
 fn evalProgramRoots(
@@ -2494,13 +2619,14 @@ fn evalProgramRoots(
     state: *RootCompletionState,
     problem_store: ?*check.problem.Store,
     coverage: *ComptimeCoverage,
+    owners: *const ModuleOwners,
     options: Options,
     lowered: *lir.CheckedPipeline.LoweredProgram,
     const_roots: []const LirProgram.ConstRootPlan,
     program: anytype,
 ) FinalizeError!bool {
-    if (@TypeOf(program) == *DevProgram) return evalDevProgramRoots(allocator, module, requests, root_ids, state, problem_store, coverage, options, lowered, const_roots, program);
-    if (@TypeOf(program) == *InterpreterProgram) return evalInterpreterProgramRoots(allocator, module, requests, root_ids, state, problem_store, coverage, options, lowered, const_roots, program);
+    if (@TypeOf(program) == *DevProgram) return evalDevProgramRoots(allocator, module, requests, root_ids, state, problem_store, coverage, owners, options, lowered, const_roots, program);
+    if (@TypeOf(program) == *InterpreterProgram) return evalInterpreterProgramRoots(allocator, module, requests, root_ids, state, problem_store, coverage, owners, options, lowered, const_roots, program);
     @compileError("compile-time evaluation owner must be explicit native or interpreter program");
 }
 
@@ -2512,6 +2638,7 @@ fn evalDevProgramRoots(
     state: *RootCompletionState,
     problem_store: ?*check.problem.Store,
     coverage: *ComptimeCoverage,
+    owners: *const ModuleOwners,
     options: Options,
     lowered: *lir.CheckedPipeline.LoweredProgram,
     const_roots: []const LirProgram.ConstRootPlan,
@@ -2670,6 +2797,8 @@ fn evalDevProgramRoots(
             .comptime_exhaustiveness => try devComptimeExhaustivenessRootPayload(
                 allocator,
                 problem_store,
+                owners,
+                job.root.owner,
                 module,
                 job.compile_time_root,
                 &lowered.lir_result,
@@ -2706,7 +2835,7 @@ fn evalDevProgramRoots(
         if (failure_message != null) native.slots.publishFailureOrigin(lowered, module.key, job.root_id, .{ .loc = job.host.failed_loc, .region = job.host.failed_region });
         try native.publishFailure(lowered, module.key, job.root_id, failure_message);
 
-        try recordComptimeSiteHits(problem_store, coverage, module, job.compile_time_root, &lowered.lir_result, job.host.comptime_branch_hits.items, job.root.proc);
+        try recordComptimeSiteHits(problem_store, coverage, owners, job.root.owner, job.compile_time_root, &lowered.lir_result, job.host.comptime_branch_hits.items, job.root.proc);
 
         if (try reportDevHostEvents(allocator, options, problem_store, module, job.compile_time_root, &lowered.lir_result.store, job.host.events.items)) {
             had_problem = true;
@@ -2865,6 +2994,8 @@ fn validUtf8PrefixLen(bytes: []const u8, max_bytes: usize) usize {
 fn devComptimeExhaustivenessRootPayload(
     allocator: Allocator,
     problem_store: ?*check.problem.Store,
+    owners: *const ModuleOwners,
+    root_owner: lir.LIR.LoweringModuleId,
     module: *checked.CheckedModuleArtifact,
     root: checked.CompileTimeRoot,
     lir_result: *const lir.Program.Result,
@@ -2877,10 +3008,10 @@ fn devComptimeExhaustivenessRootPayload(
         return .{ .const_node = try appendCrashConst(module, "compile-time exhaustiveness failure") };
     }
 
-    const store = problem_store orelse {
+    _ = problem_store orelse {
         finalizationInvariant("compile-time root reached an empirical exhaustiveness failure without a checking problem store");
     };
-    try appendCompileTimeExhaustivenessProblem(allocator, store, module, root, lir_result, root_proc, site_id);
+    try appendCompileTimeExhaustivenessProblem(allocator, owners, root_owner, root, lir_result, root_proc, site_id);
     had_problem.* = true;
     return try failedRootPayload(module, root, "compile-time exhaustiveness failure");
 }
@@ -3174,6 +3305,8 @@ fn evalCompileTimeRoot(
     allocator: Allocator,
     interpreter: *Interpreter,
     problem_store: ?*check.problem.Store,
+    owners: *const ModuleOwners,
+    root_owner: lir.LIR.LoweringModuleId,
     module: *checked.CheckedModuleArtifact,
     root: checked.CompileTimeRoot,
     lir_result: *const lir.Program.Result,
@@ -3192,7 +3325,7 @@ fn evalCompileTimeRoot(
                 const message = interpreter.getRuntimeErrorMessage() orelse "compile-time evaluation failed";
                 return .{ .failed = .{ .message = message, .payload = try reportCompileTimeCrash(allocator, problem_store, module, root, interpreter, message) } };
             },
-            error.ComptimeExhaustiveness => return .{ .failed = .{ .message = "compile-time exhaustiveness failure", .payload = try reportCompileTimeExhaustiveness(allocator, problem_store, module, root, lir_result, interpreter, proc) } },
+            error.ComptimeExhaustiveness => return .{ .failed = .{ .message = "compile-time exhaustiveness failure", .payload = try reportCompileTimeExhaustiveness(allocator, problem_store, owners, root_owner, module, root, lir_result, interpreter, proc) } },
             error.DivisionByZero => {
                 const message = interpreter.getRuntimeErrorMessage() orelse "Division by zero";
                 return .{ .failed = .{ .message = message, .payload = try reportCompileTimeCrash(allocator, problem_store, module, root, interpreter, message) } };
@@ -3209,26 +3342,43 @@ fn evalCompileTimeRoot(
     return .{ .value = result };
 }
 
+/// Account for the compile-time control-flow sites one root's evaluation
+/// reached.
+///
+/// A root's evaluation runs code from several checked modules, so each site is
+/// accounted for against the module the producer recorded on it, not against
+/// the module whose root is running. Branch coverage stays with the running
+/// root's own module: one caller reaching an imported body is no account of
+/// that module's branches, because its other callers are not this evaluation.
 fn recordComptimeSiteHits(
     maybe_problem_store: ?*check.problem.Store,
     coverage: *ComptimeCoverage,
-    module: *checked.CheckedModuleArtifact,
+    owners: *const ModuleOwners,
+    root_owner: lir.LIR.LoweringModuleId,
     compile_time_root: checked.CompileTimeRoot,
     lir_result: *const lir.Program.Result,
     hits: anytype,
     root_proc: lir.LIR.LirProcSpecId,
 ) Allocator.Error!void {
-    const problem_store = maybe_problem_store orelse return;
+    // An evaluation that collects no diagnostics of its own accounts for no
+    // module's sites, including other modules': it is a replay of results a
+    // diagnostic-collecting evaluation already accounted for.
+    _ = maybe_problem_store orelse return;
     for (hits) |hit| {
         const site = lir_result.comptime_sites.items[@intFromEnum(hit.site)];
         if (comptimeSiteEmpiricalKind(site.kind) != null) {
             if (site.checked_site) |checked_site| {
-                if (comptimeSiteMayResolvePending(module, compile_time_root.id, checked_site)) {
-                    problem_store.resolvePendingStaticExhaustiveness(checked_site);
+                if (owners.get(site.owner)) |owner| {
+                    if (owner.problem_store) |store| {
+                        const owning_root: ?checked.ComptimeRootId = if (site.owner == root_owner) compile_time_root.id else null;
+                        if (comptimeSiteMayResolvePending(owner.module, owning_root, checked_site)) {
+                            store.resolvePendingStaticExhaustiveness(checked_site);
+                        }
+                    }
                 }
             }
         }
-        if (reportsUnusedBranches(compile_time_root.kind) and site.proc == root_proc) {
+        if (site.owner == root_owner and reportsUnusedBranches(compile_time_root.kind) and site.proc == root_proc) {
             try coverage.record(site, hit.branch_index);
         }
     }
@@ -3252,26 +3402,28 @@ fn reportsUnusedBranches(kind: checked.CompileTimeRootKind) bool {
 fn reportCompileTimeExhaustiveness(
     allocator: Allocator,
     maybe_problem_store: ?*check.problem.Store,
+    owners: *const ModuleOwners,
+    root_owner: lir.LIR.LoweringModuleId,
     module: *checked.CheckedModuleArtifact,
     root: checked.CompileTimeRoot,
     lir_result: *const lir.Program.Result,
     interpreter: *const Interpreter,
     root_proc: lir.LIR.LirProcSpecId,
 ) FinalizeError!checked.CompileTimeRootPayload {
-    const problem_store = maybe_problem_store orelse {
+    _ = maybe_problem_store orelse {
         finalizationInvariant("compile-time root reached an empirical exhaustiveness failure without a checking problem store");
     };
     const site_id = interpreter.getComptimeFailedSite() orelse {
         finalizationInvariant("compile-time root reported empirical exhaustiveness failure without a site");
     };
-    try appendCompileTimeExhaustivenessProblem(allocator, problem_store, module, root, lir_result, root_proc, site_id);
+    try appendCompileTimeExhaustivenessProblem(allocator, owners, root_owner, root, lir_result, root_proc, site_id);
     return try failedRootPayload(module, root, "compile-time exhaustiveness failure");
 }
 
 fn appendCompileTimeExhaustivenessProblem(
     allocator: Allocator,
-    problem_store: *check.problem.Store,
-    module: *const checked.CheckedModuleArtifact,
+    owners: *const ModuleOwners,
+    root_owner: lir.LIR.LoweringModuleId,
     root: checked.CompileTimeRoot,
     lir_result: *const lir.Program.Result,
     root_proc: lir.LIR.LirProcSpecId,
@@ -3285,9 +3437,16 @@ fn appendCompileTimeExhaustivenessProblem(
     const checked_site = site.checked_site orelse {
         finalizationInvariant("empirical exhaustiveness failure had no checked site id");
     };
-    discardUnreachedRootComptimeSites(problem_store, lir_result, root_proc, checked_site, module, site_id);
-    if (!comptimeSiteMayResolvePending(module, root.id, checked_site)) {
-        const site_record = module.exhaustiveness_sites.get(checked_site);
+    const owner = owners.get(site.owner) orelse {
+        finalizationInvariant("empirical exhaustiveness failure named a checked module this finalization does not complete");
+    };
+    const problem_store = owner.problem_store orelse {
+        finalizationInvariant("compile-time root reached an empirical exhaustiveness failure without a checking problem store");
+    };
+    discardUnreachedRootComptimeSites(owners, lir_result, root_proc, site.owner, checked_site, site_id);
+    const owning_root: ?checked.ComptimeRootId = if (site.owner == root_owner) root.id else null;
+    if (!comptimeSiteMayResolvePending(owner.module, owning_root, checked_site)) {
+        const site_record = owner.module.exhaustiveness_sites.get(checked_site);
         switch (site_record.policy) {
             .runtime_reachable => {},
             .not_pending,
@@ -3303,11 +3462,11 @@ fn appendCompileTimeExhaustivenessProblem(
 }
 
 fn discardUnreachedRootComptimeSites(
-    problem_store: *check.problem.Store,
+    owners: *const ModuleOwners,
     lir_result: *const lir.Program.Result,
     root_proc: lir.LIR.LirProcSpecId,
+    failed_owner: lir.LIR.LoweringModuleId,
     failed_checked_site: checked.CheckedExhaustivenessSiteId,
-    module: *const checked.CheckedModuleArtifact,
     failed_site_id: lir.LIR.ComptimeSiteId,
 ) void {
     for (lir_result.comptime_sites.items, 0..) |root_site, raw_site_id| {
@@ -3315,8 +3474,10 @@ fn discardUnreachedRootComptimeSites(
         if (raw_site_id == @intFromEnum(failed_site_id)) continue;
         if (comptimeSiteEmpiricalKind(root_site.kind) == null) continue;
         const checked_site = root_site.checked_site orelse continue;
-        if (checked_site == failed_checked_site) continue;
-        const site = module.exhaustiveness_sites.get(checked_site);
+        if (root_site.owner == failed_owner and checked_site == failed_checked_site) continue;
+        const owner = owners.get(root_site.owner) orelse continue;
+        const problem_store = owner.problem_store orelse continue;
+        const site = owner.module.exhaustiveness_sites.get(checked_site);
         switch (site.policy) {
             .compile_time_replaced_by_root,
             .compile_time_only,
@@ -3328,14 +3489,19 @@ fn discardUnreachedRootComptimeSites(
     }
 }
 
+/// Whether reaching a site during compile-time evaluation resolves its
+/// owner's pending static diagnostic. `root_id` is the running compile-time
+/// root when that root belongs to `module`, and null otherwise: a root of
+/// another module cannot name this module's root ids, so it can never be the
+/// root a site's validation was explicitly delegated to.
 fn comptimeSiteMayResolvePending(
     module: *const checked.CheckedModuleArtifact,
-    root_id: checked.ComptimeRootId,
+    root_id: ?checked.ComptimeRootId,
     checked_site: checked.CheckedExhaustivenessSiteId,
 ) bool {
     const site = module.exhaustiveness_sites.get(checked_site);
     return switch (site.policy) {
-        .compile_time_replaced_by_root => |owner_root| owner_root == root_id,
+        .compile_time_replaced_by_root => |owner_root| if (root_id) |id| owner_root == id else false,
         .compile_time_only => true,
         .runtime_reachable,
         .not_pending,
@@ -3672,6 +3838,38 @@ fn finalizationInvariant(comptime message: []const u8) noreturn {
     unreachable;
 }
 
+test "module owners resolve a lowered program's module ids to their finalized modules" {
+    const allocator = std.testing.allocator;
+    var program = try LirProgram.Result.init(allocator, .u64);
+    defer program.deinit();
+
+    var keys: [3]checked.ModuleId = .{ .{}, .{}, .{} };
+    keys[0].bytes[0] = 1;
+    keys[1].bytes[0] = 2;
+    keys[2].bytes[0] = 3;
+    try program.setLoweringModules(&keys);
+
+    // Finalization completes a subset of the lowering's modules, in an order
+    // of its own. Only `key` is read, so the rest of each artifact stays out
+    // of this test.
+    var artifacts: [2]checked.CheckedModuleArtifact = undefined;
+    artifacts[0].key = keys[2];
+    artifacts[1].key = keys[0];
+    const modules = [_]ProgramModule{
+        .{ .module = &artifacts[0], .problem_store = null },
+        .{ .module = &artifacts[1], .problem_store = null },
+    };
+
+    var owners = try ModuleOwners.init(allocator, &program, &modules);
+    defer owners.deinit(allocator);
+    try std.testing.expectEqual(@as(?u32, 1), owners.position(@enumFromInt(0)));
+    try std.testing.expectEqual(@as(?u32, null), owners.position(@enumFromInt(1)));
+    try std.testing.expectEqual(@as(?u32, 0), owners.position(@enumFromInt(2)));
+    try std.testing.expect(owners.get(@enumFromInt(1)) == null);
+    try std.testing.expectEqual(&artifacts[0], owners.get(@enumFromInt(2)).?.module);
+    try std.testing.expectEqual(&artifacts[1], owners.get(@enumFromInt(0)).?.module);
+}
+
 test "compile-time progress elapsed rejects unset and future timestamps" {
     try std.testing.expectEqual(@as(?ProgressMillis, null), elapsedMs(10, 0));
     try std.testing.expectEqual(@as(?ProgressMillis, null), elapsedMs(10, 11));
@@ -4005,6 +4203,7 @@ fn testInterpreterSlot(failure_message: ?[]const u8, nested: bool, cycle: bool) 
                     defer child.interpreter.dropValue(value.value, .str);
                     try child.publishRoot(self.lowered, .{}, self.root_id, .{
                         .root_order = 0,
+                        .owner = @enumFromInt(0),
                         .request = .{ .order = 0, .module_idx = 0, .kind = .compile_time_constant, .source = undefined, .checked_type = undefined, .abi = .compile_time, .exposure = .private },
                         .proc = self.proc,
                         .ret_layout = .str,
@@ -4050,6 +4249,7 @@ fn testInterpreterSlot(failure_message: ?[]const u8, nested: bool, cycle: bool) 
         const value = try owner.interpreter.eval(.{ .proc_id = source_proc, .ret_layout = .str });
         try owner.publishRoot(&lowered, .{}, root_id, .{
             .root_order = 0,
+            .owner = @enumFromInt(0),
             .request = .{ .order = 0, .module_idx = 0, .kind = .compile_time_constant, .source = undefined, .checked_type = undefined, .abi = .compile_time, .exposure = .private },
             .proc = source_proc,
             .ret_layout = .str,
@@ -4113,6 +4313,7 @@ fn testNativeSlotDemand(lowered: *lir.CheckedPipeline.LoweredProgram, slots: *St
             if (child.termination != .returned) return error.Unexpected;
             try self.slots.publishRoot(self.lowered, .{}, self.root_id, .{
                 .root_order = 0,
+                .owner = @enumFromInt(0),
                 .request = .{ .order = 0, .module_idx = 0, .kind = .compile_time_constant, .source = undefined, .checked_type = undefined, .abi = .compile_time, .exposure = .private },
                 .proc = self.producer,
                 .ret_layout = .str,
@@ -4246,6 +4447,7 @@ test "shared frozen erased callables execute on interpreter dev and LLVM" {
     };
     const copied = try NativeRootExport.freezeRoot(allocator, &program, closure_slot, .{
         .root_order = 0,
+        .owner = @enumFromInt(0),
         .request = .{ .order = 0, .module_idx = 0, .kind = .compile_time_constant, .source = undefined, .checked_type = undefined, .abi = .compile_time, .exposure = .private },
         .proc = caller,
         .ret_layout = erased_layout,

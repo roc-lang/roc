@@ -104,6 +104,7 @@ pub fn run(
             owned.next_symbol,
         );
         output.comptime_value_roots = Ast.ProgramList(Common.ComptimeValueRoot, "comptime_value_roots").fromArrayList(owned.comptime_value_roots.takeArrayList());
+        output.lowering_modules = Ast.ProgramList(checked.ModuleId, "lowering_modules").fromArrayList(owned.lowering_modules.takeArrayList());
         name_store = undefined;
         types = undefined;
         const_fn_evidence = undefined;
@@ -196,6 +197,7 @@ fn movedMonoView(source: *const Mono.Program, moved: *const Ast.Program) Mono.Pr
         .static_data_values = moved_view.static_data_values,
         .comptime_value_roots = moved_view.comptime_value_roots,
         .comptime_sites = moved_view.comptime_sites,
+        .lowering_modules = moved_view.lowering_modules,
         .source_files = moved_view.source_files,
         .expr_locs = moved_view.expr_locs,
         .expr_regions = moved_view.expr_regions,
@@ -478,6 +480,7 @@ const Lifter = struct {
             try self.output.addRoot(.{
                 .fn_id = fn_id,
                 .request = root.request,
+                .owner = root.owner,
             });
         }
 
