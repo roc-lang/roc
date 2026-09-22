@@ -11538,12 +11538,15 @@ test "issue 11470: tagged shared error composition executes in both strategies" 
         const result = &lowered.lowered.lir_result;
         var runtime_env = eval.RuntimeHostEnv.init(allocator);
         defer runtime_env.deinit();
+        var static_strings = try eval.Interpreter.buildStaticStrings(allocator, &result.store);
+        defer static_strings.deinit();
         {
             var interpreter = try eval.Interpreter.initWithBoxyTables(
                 allocator,
                 &result.store,
                 &result.layouts,
                 eval.boxy_runtime.BoxyTables.fromResult(result),
+                static_strings.view(),
                 runtime_env.get_ops(),
             );
             defer interpreter.deinit();
