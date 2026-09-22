@@ -892,6 +892,15 @@ build after the first does, reaches the same constructions: the const
 store keeps an empty list's evaluated capacity and restores it as the
 `with_capacity` call, and a restored value whose parts are all
 constructions lowers as them rather than as a static-data candidate.
+A construction is the value's shape and leaves alone and names no list,
+field or payload layout: the compile-time consumer that decoded it and the
+runtime consumer that emits it lower separately and intern layouts in their
+own order, so a layout index from one program is not a name in the other.
+A read matches a construction by checked root identity; a scalar literal is
+checked against the read's scalar layout, which is the same fixed index in
+every store, and an aggregate is checked shape by shape as it is emitted,
+with the reading site's own layout supplying the item, field and
+payload layouts the emitted code needs.
 After the passes, which compact the slot table, the remaining
 aggregate slots are transcoded into the target's frozen image. The LLVM
 backend then defines each slot whose image is a link-time constant—bytes with
@@ -5107,8 +5116,15 @@ witness. ConstStore preserves that witness beside the stored value, and restore
 relates the checked public interface to it without ordinary unification.
 
 A value-producing `if` or `match` likewise owns one explicit result selection
-for all of its inhabited branches. An exact generated-private request already
-supplied by the caller remains authoritative. Otherwise, before emitting any
+for all of its inhabited branches. Selection starts with the exact specialized
+request, including its type bindings and method evidence. A finished request is
+an immutable interface, not a reason to instantiate the generic checked result
+again: branch constructors and nested callables must consume its constraints
+before selecting methods. The declared interface and selected representation
+are separate cells only when producer evidence requires a distinct representation;
+ordinary branch results reuse the request without another type instantiation or
+ownership scan. An exact generated-private request already supplied by the caller
+remains authoritative. Otherwise, before emitting any
 branch body, Monotype asks every branch's checked producer for its exact result
 evidence and joins all generated-private evidence into the shared live result
 selection. Public-only evidence does not settle the selection. Match patterns
@@ -5119,10 +5135,12 @@ minted iterator producers therefore use the ordinary graph representation join,
 which keeps a compatible static representation and reaches the defined
 forced-dynamic fixed point only when the producer topology requires it. Source
 order cannot make one already-emitted branch authoritative, and lowering never
-needs to revise emitted branch code. Only after all branches have been lowered
-does the selected result relate to the outer interface and seal. Representation
-selection never reconstructs branch evidence from finished output IR or
-reopens a durable Monotype.
+needs to revise emitted branch code. A producer that selects a distinct private
+representation relates its public interface to the request without merging or
+mutating a finished request. After all branches have been lowered, the selected
+result is validated against the declared interface and carried to sealing.
+Representation selection never reconstructs branch evidence from finished
+output IR or reopens a durable Monotype.
 
 Branches that provably terminate do not participate in result selection. If
 every branch terminates, the control-flow expression produces no runtime value:
@@ -7740,6 +7758,15 @@ statement locs, the dev backend via failure-region hooks emitted
 before each crash and each expect-failed call, passing
 file/line/column alongside region offsets.
 
+Monotype assigns source-file IDs once per program, deduplicating by checked
+module identity and ordering by qualified module name and checked module key.
+A checked module's `module_idx` belongs to its own checking environment; equal
+local indices in different checked modules never identify the same source file.
+The coordinator's completed module-to-file mapping is immutable throughout body
+lowering. Workers borrow it instead of rebuilding or sorting their own tables.
+Each body context retains its declaring module's file ID, and later IR stages
+preserve that ID together with its owning program's source-file table.
+
 Monotype default identity (`Type.FieldDefault`): the Monotype record
 field itself carries the `??` default identity—the declaring module's
 identity interned in the program name store plus the default
@@ -9927,6 +9954,21 @@ check. When a digest match is found, the store must also verify the checked
 callable identity, method scope, exact evidence topology, exact codec
 contract, and exact structural equality of the closed Monotype function type.
 Digest collisions are therefore harmless.
+
+Request, solved-view, and codec constructor/shape digests use the cached
+`typeEql` equivalence. Equal types must reach the same lookup bucket even when
+their checked type ids, checked tag labels, or transparent alias paths differ.
+Full stored-type and public-interface identity digests retain their existing
+provenance contract; they do not key specialization reuse. The original types
+retain the checked references needed by constant evaluation and checked-store
+re-entry. Worker-local choice of an equal representative must neither reserve
+another specialization nor consume another procedure symbol.
+
+Specialization digest computation is demand-driven and cached on immutable types,
+including an alias used as the query root. Repeated queries and aliases over
+an already-cached backing allocate no traversal storage. Draft lookup,
+coordinator reservation, and solved-view aliases consume these producer-owned
+digests; no consumer scans other buckets or reconstructs missing identity.
 
 The checked source function type a call site instantiated the callable from is
 NOT part of this identity. The callable says which checked body a request

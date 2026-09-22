@@ -3072,7 +3072,7 @@ const Lowerer = struct {
         }
         const stored = try arena.create(postcheck_values.Construction);
         stored.* = first;
-        return .{ .uniform_list = .{ .element = stored, .element_layout = element_layout, .count = items.len } };
+        return .{ .uniform_list = .{ .element = stored, .count = items.len } };
     }
 
     /// A packed list is uniform when every element's packed bytes match
@@ -3108,7 +3108,7 @@ const Lowerer = struct {
         const element = try decoder.decode(null, memory, 0, try self.constPlanOfType(self.listElemType(ty)), element_layout) orelse return null;
         const stored = try arena.create(postcheck_values.Construction);
         stored.* = element;
-        return .{ .uniform_list = .{ .element = stored, .element_layout = element_layout, .count = literal.len } };
+        return .{ .uniform_list = .{ .element = stored, .count = literal.len } };
     }
 
     fn constructionOfRecordExpr(self: *Lowerer, arena: std.mem.Allocator, span: Lifted.Span(Lifted.FieldExpr), ty: Type.TypeId, value_layout: layout.Layout) Common.LowerError!?postcheck_values.Construction {
@@ -12524,7 +12524,6 @@ fn constructionEql(a: postcheck_values.Construction, b: postcheck_values.Constru
         .zst, .empty_str => true,
         .empty_list => |capacity| capacity == b.empty_list,
         .uniform_list => |uniform| uniform.count == b.uniform_list.count and
-            uniform.element_layout == b.uniform_list.element_layout and
             constructionEql(uniform.element.*, b.uniform_list.element.*),
         .record => |fields| blk: {
             if (fields.len != b.record.len) break :blk false;

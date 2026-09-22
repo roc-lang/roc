@@ -374,6 +374,7 @@ const CustomCase = enum {
     default_app_all_syntax_checked_cache,
     pipeline_parity_diagnostics,
     pipeline_parity_shared_cache,
+    source_file_identity,
     issue_11344_diagnostics,
     issue_11344_shared_helper,
     issue_11344_lir_image,
@@ -1914,6 +1915,7 @@ const subcommand_cases = [_]CliCase{
     .{ .id = 0, .suite = .subcommands, .name = "roc check reports comptime division by zero without panicking", .body = .{ .command = .{ .args = &.{ "check", "--no-cache" }, .roc_file = "test/cli/comptime_div_zero.roc", .exit = .failure, .contains = &.{ .{ .stream = .stderr, .text = "compile time crash" }, .{ .stream = .stderr, .text = "I64 division by zero" } }, .not_contains = &.{.{ .stream = .stderr, .text = "panic:" }} } } },
     .{ .id = 0, .suite = .subcommands, .name = "roc check reports comptime remainder by zero without panicking", .body = .{ .command = .{ .args = &.{ "check", "--no-cache" }, .roc_file = "test/cli/comptime_mod_zero.roc", .exit = .failure, .contains = &.{ .{ .stream = .stderr, .text = "compile time crash" }, .{ .stream = .stderr, .text = "I64 remainder by zero" } }, .not_contains = &.{.{ .stream = .stderr, .text = "panic:" }} } } },
     .{ .id = 0, .suite = .subcommands, .name = "comptime crash inside an inlined foreign default names the declaring module", .body = .{ .command = .{ .args = &.{ "check", "--no-cache" }, .roc_file = "test/cli/multi_module_default_crash/Main.roc", .exit = .failure, .contains = &.{ .{ .stream = .stderr, .text = "compile time crash" }, .{ .stream = .stderr, .text = "happened in the module" }, .{ .stream = .stderr, .text = "Cfg (line 1, column" }, .{ .stream = .stderr, .text = "Integer addition overflowed" } }, .not_contains = &.{.{ .stream = .stderr, .text = "panic:" }} } } },
+    .{ .id = 0, .suite = .subcommands, .name = "comptime source file identity survives colliding module indices and cache reuse", .body = .{ .custom = .source_file_identity } },
     // Same bare module name in two packages: the provenance comparison must use
     // package-qualified module identity, or the crash is judged local and the
     // platform module's byte offsets render against the app module's source.
@@ -3191,6 +3193,7 @@ fn runCustomCase(
         .default_app_all_syntax_checked_cache => customDefaultAppAllSyntaxCheckedCache(io, allocator, &env, &timer, timeout_ms),
         .pipeline_parity_diagnostics => customPipelineParityDiagnostics(io, allocator, &env, &timer, timeout_ms),
         .pipeline_parity_shared_cache => customPipelineParitySharedCache(io, allocator, &env, &timer, timeout_ms),
+        .source_file_identity => customSourceFileIdentity(io, allocator, &env, &timer, timeout_ms),
         .issue_11344_diagnostics => customIssue11344Diagnostics(io, allocator, &env, &timer, timeout_ms),
         .issue_11344_shared_helper => customIssue11344SharedHelper(io, allocator, &env, &timer, timeout_ms),
         .issue_11344_lir_image => customIssue11344LirImage(io, allocator, &env, &timer, timeout_ms),
@@ -7414,6 +7417,47 @@ fn customIssue11344LirImage(io: std.Io, allocator: Allocator, env: *const CaseEn
             .stdout_exact = "shared:constantshared:runtime",
             .stderr_exact = "",
         })) |failure| return failure;
+    }
+    return null;
+}
+
+fn customSourceFileIdentity(io: std.Io, allocator: Allocator, env: *const CaseEnv, timer: *harness.Timer, timeout_ms: u64) ?TestResult {
+    // First and Second are checked independently with the same import list,
+    // so their module-local indices collide. Both crashes are local: neither
+    // report should invent a foreign origin. Shared can be cached between runs.
+    const cases = [_]struct { name: []const u8, args: []const []const u8 }{
+        .{ .name = "serial", .args = &.{ "check", "--jobs=1" } },
+        .{ .name = "parallel", .args = &.{ "check", "--jobs=4" } },
+        .{ .name = "glue", .args = &.{ "glue", "test/cli/source_file_identity/MinimalGlue.roc", env.dirs.work_dir } },
+    };
+    for (cases) |case| {
+        const case_dir = std.fs.path.join(allocator, &.{ env.dirs.work_dir, case.name }) catch |err|
+            return customInfraFailure(allocator, timer, "failed to allocate source identity case path: {}", .{err});
+        const cache_dir = std.fs.path.join(allocator, &.{ case_dir, "roc-cache" }) catch |err|
+            return customInfraFailure(allocator, timer, "failed to allocate source identity cache path: {}", .{err});
+        for (0..2) |run_index| {
+            const child_timeout_ms = childCommandTimeoutMs(timer, timeout_ms) orelse
+                return timeoutFailure(allocator, timer, .run, "source identity case timed out");
+            const result = runRocInCaseEnv(io, allocator, env, case_dir, case.args, "test/cli/source_file_identity/main.roc", child_timeout_ms) catch |err|
+                return customInfraFailure(allocator, timer, "source identity command failed to run: {}", .{err});
+            if (checkCommandExpectation(allocator, result, .{
+                .args = case.args,
+                .exit = .{ .code = 1 },
+                .contains = &.{
+                    .{ .stream = .stderr, .text = "First.roc:5:" },
+                    .{ .stream = .stderr, .text = "Second.roc:5:" },
+                    .{ .stream = .stderr, .text = "first module failed" },
+                    .{ .stream = .stderr, .text = "second module failed" },
+                },
+                .not_contains = &.{.{ .stream = .stderr, .text = "happened in the module" }},
+                .occurrences = &.{.{ .stream = .stderr, .text = "compile time crash", .count = 2 }},
+            })) |message| return failureFromRun(allocator, timer, result, message);
+            if (run_index == 0) {
+                const cached_modules = countCheckedModuleCacheFiles(io, allocator, cache_dir) catch |err|
+                    return customInfraFailure(allocator, timer, "failed to count source identity cache files: {}", .{err});
+                if (cached_modules == 0) return customFailure(allocator, timer, "source identity case did not populate the module cache", .{});
+            }
+        }
     }
     return null;
 }
