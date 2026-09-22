@@ -2770,7 +2770,7 @@ pub const Coordinator = struct {
     pub fn start(self: *Coordinator) (Allocator.Error || std.Thread.SpawnError)!void {
         if (self.mode == .single_threaded or self.max_threads <= 1) return;
         if (comptime !is_freestanding) {
-            const n = if (self.max_threads == 0) (std.Thread.getCpuCount() catch 1) else self.max_threads;
+            const n = if (self.max_threads == 0) base.cpu_count.workerCount() else self.max_threads;
 
             try self.workers.ensureTotalCapacity(self.gpa, n);
             var i: usize = 0;

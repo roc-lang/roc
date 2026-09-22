@@ -2598,9 +2598,33 @@ fn evalDevProgramRoots(
         0
     else
         @max(options.max_threads, 1);
-    if (native.slot_demand != null) {
+    if (native.slot_demand != null or max_threads == 1) {
         // Demands nest on this thread; each invocation owns its host and return storage.
         for (0..jobs_len) |index| devRootWorker(host_allocator, &run_context, index);
+    } else if (options.post_check_executor) |executor| {
+        // The coordinator's persistent lanes run the batch, so no threads are
+        // spawned per batch.
+        const RootTask = struct {
+            context: *DevRunContext,
+            host_allocator: Allocator,
+            index: usize,
+            fn run(ptr: *anyopaque, _: base.post_check_task_executor.Worker) ?*anyopaque {
+                const self: *@This() = @ptrCast(@alignCast(ptr));
+                devRootWorker(self.host_allocator, self.context, self.index);
+                return null;
+            }
+        };
+        const root_tasks = try allocator.alloc(RootTask, jobs_len);
+        defer allocator.free(root_tasks);
+        const tasks = try allocator.alloc(base.post_check_task_executor.Task, jobs_len);
+        defer allocator.free(tasks);
+        const completions = try allocator.alloc(base.post_check_task_executor.Completion, jobs_len);
+        defer allocator.free(completions);
+        for (root_tasks, tasks, 0..) |*root_task, *task, index| {
+            root_task.* = .{ .context = &run_context, .host_allocator = host_allocator, .index = index };
+            task.* = .{ .id = index, .context = root_task, .run = RootTask.run };
+        }
+        try executor.run(tasks, completions);
     } else {
         try base.parallel.process(
             DevRunContext,

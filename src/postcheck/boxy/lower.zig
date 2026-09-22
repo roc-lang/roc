@@ -3544,6 +3544,7 @@ const ProcedureBuilder = struct {
         const frame_span = try self.result.store.addLocalSpan(proc.frame_locals.items);
         const proc_spec = self.result.store.getProcSpecPtr(proc_id);
         proc_spec.body = body;
+        proc_spec.shapes = proc_spec.shapes.merged(self.result.store.shapes);
         proc_spec.frame_locals = frame_span;
         proc_spec.stack_probe = self.stackProbeForProc(args_span, frame_span, ret_layout);
 
@@ -4939,6 +4940,7 @@ const ProcedureBuilder = struct {
         body_stmt = try proc.prependWorkerArgumentDescriptorInitializers(body_stmt);
         const proc_spec = self.result.store.getProcSpecPtr(proc_id);
         proc_spec.body = body_stmt;
+        proc_spec.shapes = proc_spec.shapes.merged(self.result.store.shapes);
         const return_desc = try self.returnDescriptorInfoForBody(
             body_stmt,
             args_span,
@@ -5023,6 +5025,7 @@ const ProcedureBuilder = struct {
         body_stmt = try proc.prependErasedCaptureBindings(body_stmt);
         const proc_spec = self.result.store.getProcSpecPtr(proc_id);
         proc_spec.body = body_stmt;
+        proc_spec.shapes = proc_spec.shapes.merged(self.result.store.shapes);
         proc_spec.erased_arg_desc_offsets = try proc.erasedArgumentDescriptorCaptureOffsets();
         proc_spec.erased_arg_layouts = try proc.appendErasedArgumentLayouts(
             proc.arg_locals.items[0..worker_function.arg_count],
@@ -24731,6 +24734,7 @@ const ProcBodyBuilder = struct {
         const join_id = self.freshJoinPointId();
         const unreachable_exit = if (can_exit) null else try self.parent.result.store.addCFStmt(.runtime_error);
         const after_loop = unreachable_exit orelse next;
+        self.parent.result.store.shapes.loop = true;
         try self.loop_stack.append(self.parent.allocator, .{
             .join_id = join_id,
             .result_target = loop_result,
@@ -24824,6 +24828,7 @@ const ProcBodyBuilder = struct {
         const initial_iterator = try self.addFrameLocalForRepWithFreshDescriptor(iterator_rep);
         const join_id = self.freshJoinPointId();
 
+        self.parent.result.store.shapes.loop = true;
         try self.loop_stack.append(self.parent.allocator, .{
             .join_id = join_id,
             .result_target = target,
