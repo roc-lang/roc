@@ -928,6 +928,7 @@ pub const ReportBuilder = struct {
                     .list_entry => |ctx| self.buildListEntryReport(mismatch.types, ctx),
                     .interpolation_part => |region| self.buildGenericMismatchAtRegion(mismatch.types, .{ .direct = region }),
                     .fn_call_arity => |ctx| self.buildIncompatibleFnCallArity(mismatch.types, ctx),
+                    .fn_call_non_function => |ctx| self.buildFnCallNonFunction(mismatch.types, ctx),
                     .fn_call_arg => |ctx| self.buildIncompatibleFnCallArg(mismatch.types, ctx),
                     .binop_lhs => |ctx| self.buildBinopReport(mismatch.types, ctx, .lhs),
                     .binop_rhs => |ctx| self.buildBinopReport(mismatch.types, ctx, .rhs),
@@ -1803,6 +1804,46 @@ pub const ReportBuilder = struct {
         try report.document.addLineBreak();
         try report.document.addLineBreak();
         return true;
+    }
+
+    /// Build a report for a call whose callee is not a function
+    fn buildFnCallNonFunction(
+        self: *Self,
+        types: TypePair,
+        ctx: Context.FnCallNonFunctionContext,
+    ) Allocator.Error!Report {
+        var report = try Report.init(self.gpa, "Not A Function", "", .runtime_error);
+        errdefer report.deinit();
+        if (ctx.fn_name) |fn_name| {
+            try D.renderSliceInto(&.{
+                D.bytes("The"),
+                D.ident(fn_name).withAnnotation(.inline_code),
+                D.bytes("value is not a function, but it was given"),
+                D.num(ctx.actual_args),
+                D.bytes(pluralize(ctx.actual_args, "argument", "arguments")),
+                D.bytes(".").withNoPrecedingSpace(),
+            }, self, &report, &report.headline);
+        } else {
+            try D.renderSliceInto(&.{
+                D.bytes("This value is not a function, but it was given"),
+                D.num(ctx.actual_args),
+                D.bytes(pluralize(ctx.actual_args, "argument", "arguments")),
+                D.bytes(".").withNoPrecedingSpace(),
+            }, self, &report, &report.headline);
+        }
+
+        try self.addSourceHighlight(&report, regionIdxFrom(types.actual_var));
+        try report.document.addLineBreak();
+
+        try D.renderSlice(&.{
+            D.bytes("It has the type:"),
+        }, self, &report);
+        try report.document.addLineBreak();
+        try report.document.addLineBreak();
+        const expected_type_str = try report.addOwnedString(self.getFormattedString(types.expected_snapshot));
+        try report.document.addCodeBlock(expected_type_str);
+
+        return report;
     }
 
     /// Build a report for function argument type mismatch

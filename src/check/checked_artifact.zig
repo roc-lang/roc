@@ -4076,11 +4076,6 @@ pub const CheckedNominalDeclaration = struct {
     }
 };
 
-const CheckedSourceTypeRoot = struct {
-    source_var: Var,
-    checked_root: CheckedTypeId,
-};
-
 const CheckedStructuralRootEntry = struct {
     domain: CheckedStructuralKeyDomain,
     root: CheckedTypeId,
@@ -4089,7 +4084,10 @@ const CheckedStructuralRootEntry = struct {
 
 const CheckedTypePublication = struct {
     store: CheckedTypeStore,
-    source_type_roots: []CheckedSourceTypeRoot = &.{},
+    /// The source graph is immutable throughout publication. Keep its direct
+    /// index through registry construction and all remaining source consumers.
+    source_types: ?CheckedSourceTypeRoots = null,
+    imports: CheckedImportViews,
     /// Complete source-scheme IDs, scoped to this immutable source module's
     /// publication. Specialized checked roots have independent scheme keys.
     source_schemes: collections.DenseMap(Var, CheckedTypeSchemeId),
@@ -4103,26 +4101,37 @@ const CheckedTypePublication = struct {
 
     pub fn rootForSourceVar(self: *const CheckedTypePublication, module: TypedCIR.Module, var_: Var) ?CheckedTypeId {
         const resolved = module.typeStoreConst().resolveVar(var_).var_;
-        var low: usize = 0;
-        var high: usize = self.source_type_roots.len;
-        const needle = @intFromEnum(resolved);
-        while (low < high) {
-            const mid = low + (high - low) / 2;
-            const entry = self.source_type_roots[mid];
-            const candidate = @intFromEnum(entry.source_var);
-            if (candidate == needle) return entry.checked_root;
-            if (candidate < needle) {
-                low = mid + 1;
-            } else {
-                high = mid;
-            }
-        }
-        return null;
+        return self.source_types.?.get(resolved);
     }
 
-    fn deinitIndex(self: *CheckedTypePublication, allocator: Allocator) void {
-        allocator.free(self.source_type_roots);
-        self.source_type_roots = &.{};
+    /// A retained method contributes its exact callable type as a publication
+    /// root, independently of executable-body reachability. This is an ordinary
+    /// producer request, not recovery from a failed published-type lookup.
+    pub fn publishMethodCallableType(
+        self: *CheckedTypePublication,
+        allocator: Allocator,
+        module: TypedCIR.Module,
+        names: *canonical.CanonicalNameStore,
+        var_: Var,
+    ) Allocator.Error!CheckedTypeId {
+        std.debug.assert(self.source_types.?.scratch != null);
+        const first_payload = self.store.payloads.items.len;
+        const root = try appendCheckedTypeRoot(allocator, module, names, self.imports, &self.store, &self.source_types.?, var_);
+        // Only this request's new payloads need their imported declarations
+        // embedded. Other producers own the completeness of their own types.
+        try embedReachableImportedNominalDecls(allocator, &self.store, names, self.imports, first_payload);
+        return root;
+    }
+
+    /// Registry construction is the last source-type producer. Free traversal
+    /// scratch now; source-id lookups remain available until checking finalizes.
+    fn finishSourceTypes(self: *CheckedTypePublication) void {
+        self.source_types.?.releaseScratch();
+    }
+
+    fn deinitIndex(self: *CheckedTypePublication, _: Allocator) void {
+        if (self.source_types) |*source_types| source_types.deinit();
+        self.source_types = null;
         self.source_schemes.clearAndFree();
     }
 
@@ -4556,7 +4565,7 @@ pub const CheckedTypeStore = struct {
         var scheme_writer = canonical_type_keys.SchemeWriter.init(allocator, module.typeStoreConst(), module.moduleEnvConst());
         defer scheme_writer.deinit();
         var active = try CheckedSourceTypeRoots.init(allocator, module);
-        defer active.deinit();
+        errdefer active.deinit();
         var local_type_declarations = try LocalTypeDeclarationIndex.init(allocator, module, source_nodes);
         defer local_type_declarations.deinit();
         var top_level_defs = try TopLevelDefPatternIndex.init(allocator, module);
@@ -4784,14 +4793,12 @@ pub const CheckedTypeStore = struct {
         // module's artifact, so embed a copy of every imported nominal
         // declaration reachable from the published types, keyed by stable
         // content identity.
-        try embedReachableImportedNominalDecls(allocator, &store, names, import_views);
-
-        const source_type_roots = try sourceTypeRootsFromIndex(allocator, &active);
-        errdefer allocator.free(source_type_roots);
+        try embedReachableImportedNominalDecls(allocator, &store, names, import_views, 0);
 
         return .{
             .store = store,
-            .source_type_roots = source_type_roots,
+            .source_types = active,
+            .imports = import_views,
             .source_schemes = source_schemes,
         };
     }
@@ -6370,8 +6377,17 @@ fn appendCheckedTypeRootFromDeclarationAnno(
                             }
                             break :blk result;
                         },
-                        .s_nominal_decl => if (finalized != local.decl_idx) {
-                            checkedArtifactInvariant("checked declaration template generic nominal application referenced an associated-type placeholder", .{});
+                        .s_nominal_decl => {
+                            if (finalized != local.decl_idx) {
+                                checkedArtifactInvariant("checked declaration template generic nominal application referenced an associated-type placeholder", .{});
+                            }
+                            const generic_root = try appendCheckedTypeRoot(allocator, module, names, imports, store, active, ModuleEnv.varFrom(finalized));
+                            const result = try appendInstantiatedNamedApplicationFromTemplate(allocator, names, store, generic_root, actual_args);
+                            if (actual_args_owned) {
+                                allocator.free(actual_args);
+                                actual_args_owned = false;
+                            }
+                            break :blk result;
                         },
                         .s_decl,
                         .s_var,
@@ -7489,8 +7505,9 @@ fn embedReachableImportedNominalDecls(
     store: *CheckedTypeStore,
     names: *canonical.CanonicalNameStore,
     imports: CheckedImportViews,
+    first_payload: usize,
 ) Allocator.Error!void {
-    var i: usize = 0;
+    var i = first_payload;
     while (i < store.payloads.items.len) : (i += 1) {
         // Read only scalar identity fields: the payload's slice fields alias
         // pools that projection below can reallocate.
@@ -8447,21 +8464,32 @@ const SourceTypeGraphAnalysis = struct {
 };
 
 const CheckedSourceTypeRoots = struct {
-    roots: std.AutoHashMap(Var, CheckedTypeId),
-    graph_analysis: SourceTypeGraphAnalysis,
-    key_writer: canonical_type_keys.TypeWriter,
+    roots: collections.DenseMap(Var, CheckedTypeId),
+    scratch: ?struct {
+        graph_analysis: SourceTypeGraphAnalysis,
+        key_writer: canonical_type_keys.TypeWriter,
+    },
 
     fn init(allocator: Allocator, module: TypedCIR.Module) Allocator.Error!CheckedSourceTypeRoots {
         return .{
-            .roots = std.AutoHashMap(Var, CheckedTypeId).init(allocator),
-            .graph_analysis = try SourceTypeGraphAnalysis.init(allocator, @intCast(module.typeStoreConst().len())),
-            .key_writer = canonical_type_keys.TypeWriter.init(allocator, module.typeStoreConst(), module.moduleEnvConst()),
+            .roots = collections.DenseMap(Var, CheckedTypeId).init(allocator),
+            .scratch = .{
+                .graph_analysis = try SourceTypeGraphAnalysis.init(allocator, @intCast(module.typeStoreConst().len())),
+                .key_writer = canonical_type_keys.TypeWriter.init(allocator, module.typeStoreConst(), module.moduleEnvConst()),
+            },
         };
     }
 
+    fn releaseScratch(self: *CheckedSourceTypeRoots) void {
+        if (self.scratch) |*scratch| {
+            scratch.key_writer.deinit();
+            scratch.graph_analysis.deinit();
+        }
+        self.scratch = null;
+    }
+
     fn deinit(self: *CheckedSourceTypeRoots) void {
-        self.key_writer.deinit();
-        self.graph_analysis.deinit();
+        self.releaseScratch();
         self.roots.deinit();
     }
 
@@ -8473,16 +8501,12 @@ const CheckedSourceTypeRoots = struct {
         try self.roots.put(var_, root);
     }
 
-    fn ensureUnusedCapacity(self: *CheckedSourceTypeRoots, additional_count: u32) Allocator.Error!void {
-        try self.roots.ensureUnusedCapacity(additional_count);
-    }
-
     fn remove(self: *CheckedSourceTypeRoots, var_: Var) bool {
         return self.roots.remove(var_);
     }
 
     fn analyze(self: *CheckedSourceTypeRoots, module: TypedCIR.Module, var_: Var) Allocator.Error!SourceTypeGraphFacts {
-        return try self.graph_analysis.analyze(module, var_);
+        return try self.scratch.?.graph_analysis.analyze(module, var_);
     }
 };
 
@@ -8521,7 +8545,7 @@ fn appendCheckedTypeRootWithRowDefault(
             return id;
         }
 
-        const key_info = try active.key_writer.fromVar(resolved_var);
+        const key_info = try active.scratch.?.key_writer.fromVar(resolved_var);
         const id: CheckedTypeId = @enumFromInt(@as(u32, @intCast(store.roots.items.len)));
         const root = CheckedTypeRoot{
             .id = id,
@@ -8568,23 +8592,27 @@ fn appendCheckedTypeRootWithRowDefault(
         var payload_owned = true;
         errdefer if (payload_owned) deinitCheckedTypePayloadBuild(allocator, &build_payload);
 
-        try active.ensureUnusedCapacity(1);
+        // Children are complete, so no remaining operation can grow the source
+        // index. Reserve its slot once and fill it with the selected root.
+        const source_root = try active.roots.getOrPut(resolved_var);
+        std.debug.assert(!source_root.found_existing);
+        errdefer _ = active.remove(resolved_var);
         const fingerprint = checkedTypePayloadStructuralFingerprint(.source, build_payload);
         if (store.structuralRootForPayload(.source, fingerprint, build_payload)) |existing| {
             deinitCheckedTypePayloadBuild(allocator, &build_payload);
             payload_owned = false;
             applyCheckedTypeRowDefault(store, existing, row_default);
-            active.roots.putAssumeCapacityNoClobber(resolved_var, existing);
+            source_root.value_ptr.* = existing;
             return existing;
         }
 
-        const key_info = try active.key_writer.fromVar(resolved_var);
+        const key_info = try active.scratch.?.key_writer.fromVar(resolved_var);
         std.debug.assert(!key_info.contains_identity_variables);
         if (store.rootForKey(key_info.key)) |existing| {
             deinitCheckedTypePayloadBuild(allocator, &build_payload);
             payload_owned = false;
             applyCheckedTypeRowDefault(store, existing, row_default);
-            active.roots.putAssumeCapacityNoClobber(resolved_var, existing);
+            source_root.value_ptr.* = existing;
             return existing;
         }
 
@@ -8605,11 +8633,11 @@ fn appendCheckedTypeRootWithRowDefault(
         applyCheckedTypeRowDefault(store, id, row_default);
         try store.indexRoot(allocator, root);
         try store.indexStructuralRoot(allocator, .source, id, fingerprint);
-        active.roots.putAssumeCapacityNoClobber(resolved_var, id);
+        source_root.value_ptr.* = id;
         return id;
     }
 
-    const key_info = try active.key_writer.fromVar(resolved_var);
+    const key_info = try active.scratch.?.key_writer.fromVar(resolved_var);
     if (!key_info.contains_identity_variables) {
         if (store.rootForKey(key_info.key)) |id| {
             applyCheckedTypeRowDefault(store, id, row_default);
@@ -8701,28 +8729,6 @@ fn setStoredTypeVariableRowDefault(variable: *StoredTypeVariable, row_default: R
         return;
     }
     variable.row_default = row_default;
-}
-
-fn sourceTypeRootsFromIndex(
-    allocator: Allocator,
-    index: *const CheckedSourceTypeRoots,
-) Allocator.Error![]CheckedSourceTypeRoot {
-    if (index.roots.count() == 0) return &.{};
-    const out = try allocator.alloc(CheckedSourceTypeRoot, index.roots.count());
-    var it = index.roots.iterator();
-    var i: usize = 0;
-    while (it.next()) |entry| : (i += 1) {
-        out[i] = .{
-            .source_var = entry.key_ptr.*,
-            .checked_root = entry.value_ptr.*,
-        };
-    }
-    std.mem.sort(CheckedSourceTypeRoot, out, {}, checkedSourceTypeRootLessThan);
-    return out;
-}
-
-fn checkedSourceTypeRootLessThan(_: void, a: CheckedSourceTypeRoot, b: CheckedSourceTypeRoot) bool {
-    return @intFromEnum(a.source_var) < @intFromEnum(b.source_var);
 }
 
 fn copyCheckedTypePayload(
@@ -17308,6 +17314,11 @@ pub const SpecializationInterfaceRelation = struct {
         },
         procedure: struct {
             fn_ty: CheckedTypeId,
+            /// The type the body delivers at the function's return: the
+            /// body's own type, or the composed `Try` when a `?` return
+            /// composes the result and the body's value crosses the explicit
+            /// return boundary into it (design.md "Inferred Try Return-Row
+            /// Composition").
             body_ret_ty: CheckedTypeId,
             owns_scope: bool,
         },
@@ -20326,6 +20337,21 @@ const CheckedTemplateRefCollector = struct {
         try self.dispatch_ref_scopes.append(self.allocator, self.currentScope());
     }
 
+    /// The type a lambda's body delivers at its function's return. A body
+    /// whose type is the function's result delivers it directly. A body whose
+    /// type differs is a composed `?` result: its value crosses the explicit
+    /// return boundary into the function's `Try`, so what reaches the return
+    /// is that `Try`, never the body's narrower row.
+    fn lambdaDeliveredReturnType(
+        self: *const CheckedTemplateRefCollector,
+        fn_ty: CheckedTypeId,
+        body: CheckedExprId,
+    ) CheckedTypeId {
+        const body_ty = self.checked_bodies.expr(body).ty;
+        const ret_ty = checkedFunctionPayload(&self.checked_types.store, fn_ty, "checked lambda specialization relation").ret;
+        return if (body_ty == ret_ty) body_ty else ret_ty;
+    }
+
     fn appendProcedureRelation(
         self: *CheckedTemplateRefCollector,
         expr_id: CheckedExprId,
@@ -20417,12 +20443,14 @@ const CheckedTemplateRefCollector = struct {
         }
 
         const expr = self.checked_bodies.expr(expr_id);
+        // An erroneous callable publishes no procedure relation, and its type
+        // need not be a function.
+        const publishes_procedure = !self.checked_bodies.exprContainsDiagnosticError(expr_id);
         if (expr.data == .lambda) {
-            const lambda = expr.data.lambda;
-            try self.appendProcedureRelation(
+            if (publishes_procedure) try self.appendProcedureRelation(
                 expr_id,
                 expr.ty,
-                self.checked_bodies.expr(lambda.body).ty,
+                self.lambdaDeliveredReturnType(expr.ty, expr.data.lambda.body),
                 self.template_root_expr == expr_id or local_scheme != null,
             );
         } else if (expr.data == .closure) {
@@ -20431,10 +20459,10 @@ const CheckedTemplateRefCollector = struct {
             if (lambda_data != .lambda) {
                 checkedArtifactInvariant("checked closure specialization relation did not reference a lambda", .{});
             }
-            try self.appendProcedureRelation(
+            if (publishes_procedure) try self.appendProcedureRelation(
                 expr_id,
                 expr.ty,
-                self.checked_bodies.expr(lambda_data.lambda.body).ty,
+                self.lambdaDeliveredReturnType(expr.ty, lambda_data.lambda.body),
                 self.template_root_expr == expr_id or local_scheme != null,
             );
         }
@@ -22919,11 +22947,12 @@ const PlatformRelationTypeSubstitutions = struct {
         defer images.deinit();
         try seedIndependentRoots(&reaches, &images);
 
-        for (publication.source_type_roots) |*entry| {
-            if (!reaches.isSet(@intFromEnum(entry.checked_root))) continue;
-            const resolved = try self.specializeRootWithMemo(allocator, names, store, entry.checked_root, &images);
-            entry.checked_root = resolved;
-            if (publication.source_schemes.getPtr(entry.source_var)) |scheme| {
+        var source_roots = publication.source_types.?.roots.iterator();
+        while (source_roots.next()) |entry| {
+            if (!reaches.isSet(@intFromEnum(entry.value_ptr.*))) continue;
+            const resolved = try self.specializeRootWithMemo(allocator, names, store, entry.value_ptr.*, &images);
+            entry.value_ptr.* = resolved;
+            if (publication.source_schemes.getPtr(entry.key_ptr.*)) |scheme| {
                 const key = syntheticSchemeKeyForType(store.roots.items[@intFromEnum(resolved)].key);
                 scheme.* = try store.internScheme(allocator, key, resolved);
             }
@@ -36486,6 +36515,7 @@ pub fn publishFromTypedModule(
         checked_bodies,
     );
     errdefer method_registry.deinit(allocator);
+    checked_type_publication.finishSourceTypes();
 
     var plan_build_data = static_dispatch.PlanTableBuildData{};
     errdefer plan_build_data.deinit(allocator);
@@ -37149,6 +37179,7 @@ fn expectProvidedExportKind(
         builtin_bodies,
     );
     defer builtin_method_registry.deinit(allocator);
+    builtin_checked_type_publication.finishSourceTypes();
 
     const builtin_view = ImportedModuleView{
         .key = builtin_key,
@@ -37253,6 +37284,7 @@ fn expectProvidedExportKind(
         checked_bodies,
     );
     defer method_registry.deinit(allocator);
+    checked_type_publication.finishSourceTypes();
 
     var plan_build_data = static_dispatch.PlanTableBuildData{};
     defer plan_build_data.deinit(allocator);
@@ -39677,6 +39709,7 @@ test "issue 11128 source scheme publication hashes each source root once" {
     const allocator = counter.allocator();
     var publication = CheckedTypePublication{
         .store = .{},
+        .imports = .{ .current_owner = .{}, .direct = &.{} },
         .source_schemes = collections.DenseMap(Var, CheckedTypeSchemeId).init(allocator),
     };
     defer publication.deinit(allocator);

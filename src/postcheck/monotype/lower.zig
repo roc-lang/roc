@@ -19028,6 +19028,7 @@ const BodyContext = struct {
         materialized_args: struct {
             args: []const MaterializedArg,
             index: usize,
+            lambda: checked.CheckedExprId,
             body: checked.CheckedExprId,
         },
         iterator_body: struct {
@@ -23787,6 +23788,38 @@ const BodyContext = struct {
         };
     }
 
+    /// Lower a lambda body at its function's return cell.
+    ///
+    /// A divergent body uses the function's return cell without requesting
+    /// its checked value type. Otherwise, a body whose checked type is not the
+    /// function's checked result is a composed `?` result
+    /// (design.md "Try Return-Row Composition"):
+    /// the function's error row includes the body's rather than equalling it.
+    /// Such a body is lowered at its own type and crosses the explicit return
+    /// boundary to the return cell exactly as a `?` return does, so the
+    /// composed row is never forced onto the value's producer.
+    fn lowerLambdaBodyAtCell(
+        self: *BodyContext,
+        lambda_id: checked.CheckedExprId,
+        checked_body: checked.CheckedExprId,
+        ret_cell: DraftTypeCell,
+    ) Allocator.Error!DraftExprId {
+        if (self.checkedExprDivergesInLoweredRuntime(checked_body)) {
+            return try self.lowerExprAtTypeCell(checked_body, ret_cell);
+        }
+        const body_ty = self.view.bodies.expr(checked_body).ty;
+        const fn_ret_ty = self.checkedFunctionType(self.view.bodies.expr(lambda_id).ty).ret;
+        if (resolvedPayload(self.view, body_ty).root == resolvedPayload(self.view, fn_ret_ty).root) {
+            return try self.lowerExprAtTypeCell(checked_body, ret_cell);
+        }
+        // The body's residual error extension is shared with the return row
+        // and settles when the return settles, so the body is lowered at its
+        // own type's cell rather than at a type demanded up front.
+        const body_cell = DraftTypeCell.fromGraphNode(try self.lowerTypeNode(body_ty));
+        const value = try self.lowerExprAtTypeCell(checked_body, body_cell);
+        return try self.addExprWithTypeCell(ret_cell, .{ .return_ = .{ .value = value, .target = ret_cell } });
+    }
+
     fn lowerLambdaArgsAndBodyAtCell(
         self: *BodyContext,
         lambda_id: checked.CheckedExprId,
@@ -23896,11 +23929,12 @@ const BodyContext = struct {
             ret_cell;
         self.current_return_target = .{ .lambda = lambda_id, .cell = body_ret_cell };
         var body = if (materialized_args.items.len == 0)
-            try self.lowerExprAtTypeCell(checked_body, body_ret_cell)
+            try self.lowerLambdaBodyAtCell(lambda_id, checked_body, body_ret_cell)
         else
             try self.lowerBindingContinuation(.{ .materialized_args = .{
                 .args = materialized_args.items,
                 .index = 0,
+                .lambda = lambda_id,
                 .body = checked_body,
             } }, body_ret_cell);
         if (arg_literal_guards.items.len != 0) {
@@ -52279,7 +52313,7 @@ const BodyContext = struct {
             .expr => |expr| expr,
             .checked_expr => |expr| try self.lowerExprAtTypeCell(expr, result_cell),
             .materialized_args => |args| blk: {
-                if (args.index >= args.args.len) break :blk try self.lowerExprAtTypeCell(args.body, result_cell);
+                if (args.index >= args.args.len) break :blk try self.lowerLambdaBodyAtCell(args.lambda, args.body, result_cell);
                 const arg = args.args[args.index];
                 const miss = try self.addExprWithTypeCell(result_cell, .{ .crash = try self.addStringLiteral("pattern match failed") });
                 break :blk try self.lowerMaterializedPatternThen(
@@ -52290,6 +52324,7 @@ const BodyContext = struct {
                     .{ .materialized_args = .{
                         .args = args.args,
                         .index = args.index + 1,
+                        .lambda = args.lambda,
                         .body = args.body,
                     } },
                     miss,
