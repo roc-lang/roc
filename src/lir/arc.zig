@@ -63,6 +63,12 @@ pub const InsertOptions = struct {
     post_check_executor: ?*const TaskExecutor.Executor = null,
     /// Reset once on entry, then records accepted work and successful commits.
     metrics_out: ?*ParallelMetrics = null,
+    /// Base procedures planned and emitted per wave. A storage bound
+    /// independent of worker count: identity reservation and commit order do
+    /// not depend on it, since every base procedure is planned before any
+    /// queued variant. Each wave costs three coordinator synchronizations, so
+    /// production keeps it wide; wave-structure tests narrow it.
+    emission_wave_size: usize = default_emission_wave_size,
 };
 
 /// Exact work and worker callbacks for signature-dependent uniqueness solving.
@@ -578,7 +584,7 @@ pub fn insert(store: *LirStore, layouts: *const layout_mod.Store, options: Inser
     const source_prefix = store.captureBodyPrefix();
     var source_start: usize = 0;
     while (source_start < sources.len) {
-        const end = @min(source_start + emission_wave_size, sources.len);
+        const end = @min(source_start + options.emission_wave_size, sources.len);
         try runArcTasks(SourceCache, sources[source_start..end], .source, store.allocator, options);
         source_start = end;
     }
@@ -601,7 +607,7 @@ pub fn insert(store: *LirStore, layouts: *const layout_mod.Store, options: Inser
     // The wave width is a storage bound independent of worker count. Identity
     // reservation and commit order are identical for inline and pooled runs.
     while (base_index < base_proc_count or variant_index < variants.queue.items.len) {
-        const owners = try store.allocator.alloc(EmissionOwner, emission_wave_size);
+        const owners = try store.allocator.alloc(EmissionOwner, options.emission_wave_size);
         defer store.allocator.free(owners);
         var count: usize = 0;
         defer for (owners[0..count]) |*owner| owner.deinit();
@@ -678,7 +684,7 @@ pub fn insert(store: *LirStore, layouts: *const layout_mod.Store, options: Inser
     }
 }
 
-const emission_wave_size = 128;
+const default_emission_wave_size = 128;
 const ArcTaskPhase = enum { source, planning, emission };
 
 /// Submission failures stop admission, not draining. Owners remain live until
