@@ -1,3 +1,5 @@
+# Compile-Time Evaluation
+
 When possible, Roc evaluates expressions at compile time instead of at runtime. Once they have been evaluated, their values are stored in the compiled binary as static constants.
 
 ## Which Expressions Get Evaluated?
