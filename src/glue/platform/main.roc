@@ -3,7 +3,6 @@ platform ""
 		make_glue : List(Types) -> Try(List(File), Str)
 	}
 	exposes [
-		EntryPoint,
 		AbiFieldLayout,
 		AbiLayout,
 		AbiLayoutDetails,
@@ -12,13 +11,15 @@ platform ""
 		AbiTagUnionLayout,
 		AbiWidth,
 		ArgShape,
+		CallableSignature,
 		File,
 		FunctionInfo,
-		FunctionRepr,
+		FunctionSignature,
 		GlueInput,
 		HostRcPlan,
 		HostedFunctionInfo,
 		ModuleTypeInfo,
+		ProvidedExport,
 		ProvidesEntry,
 		RocName,
 		RecordField,
@@ -48,14 +49,15 @@ import AbiTagLayout exposing [AbiTagLayout]
 import AbiTagUnionLayout exposing [AbiTagUnionLayout]
 import AbiWidth exposing [AbiWidth]
 import ArgShape exposing [ArgShape]
-import EntryPoint exposing [EntryPoint]
+import CallableSignature exposing [CallableSignature]
 import ModuleTypeInfo exposing [ModuleTypeInfo]
 import FunctionInfo exposing [FunctionInfo]
 import HostedFunctionInfo exposing [HostedFunctionInfo]
 import GlueInput exposing [GlueInput]
 import HostRcPlan exposing [HostRcPlan]
 import RecordFieldInfo exposing [RecordFieldInfo]
-import FunctionRepr exposing [FunctionRepr]
+import FunctionSignature exposing [FunctionSignature]
+import ProvidedExport exposing [ProvidedExport]
 import RecordField exposing [RecordField]
 import RecordRepr exposing [RecordRepr]
 import TagUnionRepr exposing [TagUnionRepr]
