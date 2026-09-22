@@ -196,6 +196,7 @@ test "compile tests" {
     std.testing.refAllDecls(@import("test/issue_11311_test.zig"));
     std.testing.refAllDecls(@import("test/issue_11312_test.zig"));
     std.testing.refAllDecls(@import("test/issue_11338_test.zig"));
+    std.testing.refAllDecls(@import("test/issue_11358_test.zig"));
     std.testing.refAllDecls(@import("test/issue_11387_test.zig"));
     std.testing.refAllDecls(@import("test/issue_11392_test.zig"));
     std.testing.refAllDecls(@import("test/issue_11418_test.zig"));
