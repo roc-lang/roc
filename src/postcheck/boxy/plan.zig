@@ -8726,6 +8726,30 @@ const Builder = struct {
 
         if (runtime_value_only and worker_rep.kind == .erased_callable) return;
 
+        // The parameter list fixes the call ABI. A requested declaration
+        // formal is resolved in this nominal use, without walking its shared
+        // backing or adding parameters for the call's actual type.
+        if (worker_rep.kind == .nominal and call_rep.kind == .nominal) {
+            while (next_param.* < params.len) {
+                const requested_rep = params[next_param.*].rep;
+                var bindings = self.plan.nominalBackingSubstitutions(worker_rep.nominal_backing_arg_substitutions);
+                const actual = while (bindings.next()) |binding| {
+                    if (binding.formal_rep != requested_rep) continue;
+                    break self.nominalBackingArgActualRep(aligned_call_rep_id, binding.arg_index) orelse
+                        boxyPlanInvariant("checked nominal call was missing a requested formal's actual");
+                } else break;
+                const enclosing_len = substitutions.entries.items.len;
+                defer substitutions.entries.shrinkRetainingCapacity(enclosing_len);
+                const scoped_actual = substitutions.get(actual) orelse actual;
+                try substitutions.entries.append(self.allocator, .{ .worker_rep = requested_rep, .call_rep = scoped_actual });
+                const before = next_param.*;
+                try self.collectCallHiddenDescriptorArgs(requested_rep, actual, call_value_rep, source_value_rep, source_arg_index, params, next_param, pending, seen_reps, seen_descriptor_reps, substitutions, runtime_value_only);
+                if (next_param.* == before) {
+                    boxyPlanInvariant("requested nominal formal did not consume its descriptor parameter");
+                }
+            }
+        }
+
         if (worker_rep.children.len == 0) return;
 
         // The recursion can analyze new types, growing the children pool and
@@ -8814,7 +8838,10 @@ const Builder = struct {
         }
 
         fn get(self: *const CallDescriptorRepSubstitutionMap, worker_rep: TypeRepId) ?TypeRepId {
-            for (self.entries.items) |entry| {
+            var index = self.entries.items.len;
+            while (index > 0) {
+                index -= 1;
+                const entry = self.entries.items[index];
                 if (entry.worker_rep == worker_rep) return entry.call_rep;
             }
             return null;
@@ -14455,6 +14482,58 @@ fn expectNominalResultArgumentSource(alias_argument: bool) (Allocator.Error || e
     try std.testing.expectEqual(@as(?u32, 0), result_source.source_arg_index);
     try std.testing.expectEqual(operand_list, result_source.source_value_rep.?);
     try std.testing.expectEqual(@as(?u32, 0), result_source.source_descriptor_index);
+}
+
+test "nominal formal descriptor requests preserve the fixed parameter list for concrete and dynamic actuals" {
+    const gpa = std.testing.allocator;
+    for ([_]bool{ false, true }) |concrete| {
+        for ([_]bool{ false, true }) |request_formal| {
+            var builder = Builder.init(gpa, .{});
+            defer builder.deinit();
+            const worker_arg: TypeRepId = @enumFromInt(fixtureTableIndex(0));
+            const formal: TypeRepId = @enumFromInt(1);
+            const worker_nominal: TypeRepId = @enumFromInt(2);
+            const call_arg: TypeRepId = @enumFromInt(3);
+            const call_nominal: TypeRepId = @enumFromInt(4);
+            const worker_bindings = try testNominalSubstitution(&builder.plan, formal, worker_arg);
+            const call_bindings = try testNominalSubstitution(&builder.plan, formal, call_arg);
+            try builder.plan.children.appendSlice(gpa, &.{
+                .{ .role = .{ .nominal_arg = 0 }, .source_type = rootTypeRef(@enumFromInt(fixtureTableIndex(0))), .rep = worker_arg },
+                .{ .role = .{ .nominal_arg = 0 }, .source_type = rootTypeRef(@enumFromInt(3)), .rep = call_arg },
+            });
+            try builder.plan.representations.appendSlice(gpa, &.{
+                .{ .source_type = rootTypeRef(@enumFromInt(fixtureTableIndex(0))), .kind = .{ .dynamic = .rigid }, .descriptor = @enumFromInt(fixtureTableIndex(0)), .contains_dynamic = true },
+                .{ .source_type = rootTypeRef(@enumFromInt(1)), .kind = .{ .dynamic = .rigid }, .descriptor = @enumFromInt(1), .contains_dynamic = true },
+                .{ .source_type = rootTypeRef(@enumFromInt(2)), .kind = .{ .nominal = .transparent }, .children = .{ .start = 0, .len = 1 }, .nominal_backing_arg_substitutions = worker_bindings, .contains_dynamic = true },
+                .{ .source_type = rootTypeRef(@enumFromInt(3)), .kind = if (concrete) .{ .primitive = .str } else .{ .dynamic = .rigid }, .descriptor = if (concrete) null else @enumFromInt(2), .contains_dynamic = !concrete },
+                .{ .source_type = rootTypeRef(@enumFromInt(4)), .kind = .{ .nominal = .transparent }, .children = .{ .start = 1, .len = 1 }, .nominal_backing_arg_substitutions = call_bindings, .contains_dynamic = !concrete },
+            });
+            const all_params = [_]HiddenDescriptorParam{
+                .{ .source_type = rootTypeRef(@enumFromInt(1)), .rep = formal, .desc = @enumFromInt(1) },
+                .{ .source_type = rootTypeRef(@enumFromInt(fixtureTableIndex(0))), .rep = worker_arg, .desc = @enumFromInt(fixtureTableIndex(0)) },
+            };
+            const params = all_params[if (request_formal) @as(usize, 0) else 1..];
+            var pending = std.ArrayList(DirectCallHiddenDescriptorArg).empty;
+            defer pending.deinit(gpa);
+            var seen_reps = collections.DenseMap(TypeRepId, void).init(gpa);
+            defer seen_reps.deinit();
+            var seen_descriptors = collections.DenseMap(TypeRepId, void).init(gpa);
+            defer seen_descriptors.deinit();
+            var substitutions = Builder.CallDescriptorRepSubstitutionMap{};
+            defer substitutions.deinit(gpa);
+            try substitutions.put(gpa, formal, worker_arg);
+            var next_param: usize = 0;
+            try builder.collectCallHiddenDescriptorArgs(worker_nominal, call_nominal, call_nominal, call_nominal, null, params, &next_param, &pending, &seen_reps, &seen_descriptors, &substitutions, false);
+            try std.testing.expectEqual(worker_arg, substitutions.get(formal).?);
+            try std.testing.expectEqual(params.len, next_param);
+            try std.testing.expectEqual(params.len, pending.items.len);
+            for (params, pending.items) |param, arg| {
+                try std.testing.expectEqual(param.rep, arg.worker_rep);
+                try std.testing.expectEqual(param.desc, arg.worker_desc);
+                try std.testing.expectEqual(call_arg, arg.rep);
+            }
+        }
+    }
 }
 
 test "evidence representation paths use exact nominal backing substitutions" {

@@ -11492,6 +11492,13 @@ These callable sources are scoped to the call; nominal declaration substitutions
 remain scoped to their backing descent. Result planning does not rediscover a
 parameter descriptor from an ambient binding or require it to become static.
 
+The fixed hidden-parameter list also governs requests that name a declaration
+formal. At a nominal use, each such request resolves by argument index through
+that use's recorded actuals, in parameter order. This does not visit the shared
+backing or add a slot for a formal absent from the list. A concrete actual
+changes the descriptor source, never the number of arguments supplied to that
+fixed interface.
+
 Worker-body lowering that reaches into a template (construction of a nominal
 tag, record, or tuple; tag, record, and tuple patterns; structural inspect,
 equality, and hash over a nominal backing) enters that nominal's formal scope.
