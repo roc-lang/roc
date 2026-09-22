@@ -11089,7 +11089,14 @@ second parameter index. Forwarding follows the checked edge to its source
 requirement and places the marker in the destination requirement's slot, so
 different parameter orders across schemes require no rebasing pass or lookup
 table. Lexical `constraint` references retain their explicit depth and index.
-If compile-time evaluation stores that function inside another value before the
+A symbolic slot resolves at a request as soon as its component is a method
+owner, a structural shape, or a value proven uninhabited, and an open checked
+leaf counts as proven uninhabited when its recorded final default is: the
+checker left it unconstrained, requests are seeded before a body is lowered,
+so nothing inside the body can bind it to anything but that default, and an
+interface replay may close the same cell to that default at any moment, so
+evidence read before and after such a replay must agree. If compile-time
+evaluation stores that function inside another value before the
 callable is concrete, `ConstStore` retains the same symbolic entry in the
 function's evidence vector, including inside nested evidence trees. Pool offsets are not
 parameter positions. Restoring the function walks the vector alongside its

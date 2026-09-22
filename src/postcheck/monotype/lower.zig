@@ -3536,6 +3536,11 @@ const Builder = struct {
     interface_summary_checks: u32 = 0,
     spec_store: specialize.SpecBuilder,
     lowered_templates: collections.DenseMap(Ast.FnId, LoweredTemplate),
+    /// Resolved copies of symbolic callable evidence vectors, by callee
+    /// template. Repeated requests over the same open leaves resolve every
+    /// slot identically, so they read an equal copy back instead of
+    /// allocating another identical vector.
+    resolved_callable_vectors: std.AutoHashMap(u64, std.ArrayList([]const SpecEvidence)),
     /// Nested-fn specialization records keyed by function id; the durable
     /// identity and status live on the `Ast.SpecRecord`.
     lowered_nested_by_fn: collections.DenseMap(Ast.FnId, Ast.SpecId),
@@ -3712,6 +3717,7 @@ const Builder = struct {
             .interface_summaries = InterfaceSummaryCache.init(allocator),
             .spec_store = spec_store,
             .lowered_templates = collections.DenseMap(Ast.FnId, LoweredTemplate).init(allocator),
+            .resolved_callable_vectors = std.AutoHashMap(u64, std.ArrayList([]const SpecEvidence)).init(allocator),
             .lowered_nested_by_fn = collections.DenseMap(Ast.FnId, Ast.SpecId).init(allocator),
             .nested_site_cache = std.AutoHashMap(NestedSiteAddress, names.ProcSiteId).init(allocator),
             .const_expr_cache = std.AutoHashMap(ConstExprAddress, Ast.ExprId).init(allocator),
@@ -3907,6 +3913,9 @@ const Builder = struct {
         self.nested_site_cache.deinit();
         self.lowered_nested_by_fn.deinit();
         self.lowered_templates.deinit();
+        var resolved_vectors = self.resolved_callable_vectors.valueIterator();
+        while (resolved_vectors.next()) |vectors| vectors.deinit(self.allocator);
+        self.resolved_callable_vectors.deinit();
         if (self.shared_summaries) |*summaries| summaries.deinit();
         self.worker_inputs.deinit(self.allocator);
         self.interface_summaries.deinit();
@@ -5267,7 +5276,7 @@ const Builder = struct {
             .count,
             null,
             null,
-            if (self.comptime_value_reads) .queued else .immediate,
+            .queued,
             null,
             false,
         );
@@ -9149,7 +9158,7 @@ const Builder = struct {
             .count,
             null,
             null,
-            .immediate,
+            .queued,
             null,
             false,
         );
@@ -22875,6 +22884,7 @@ const BodyContext = struct {
             .evidence_digest = evidence_digest.bytes,
             .provisional_digest = provisional_digest.bytes,
         };
+
 
         if (replay_state.buckets.get(address)) |candidates| for (candidates.items) |raw_entry| {
             const entry = &replay_state.entries.items[raw_entry];
@@ -42894,7 +42904,9 @@ const BodyContext = struct {
         if (evidence.len != params.len) {
             Common.invariant("callable-derived evidence length differed from its checked template");
         }
-        var resolved: ?[]SpecEvidence = null;
+        const Replacement = struct { index: usize, entry: SpecEvidence };
+        var replacements = std.ArrayList(Replacement).empty;
+        defer replacements.deinit(self.allocator);
         var has_symbolic = false;
         for (evidence, 0..) |entry, index| switch (entry) {
             .from_callable => {
@@ -42908,28 +42920,52 @@ const BodyContext = struct {
                     Common.invariant("callable-derived evidence path did not match its function request");
                 const resolvable = self.methodOwnerFromNode(component_node) != null or
                     param.structural != null or
-                    try self.nodeIsProvenUninhabited(component_node);
+                    try self.nodeIsProvenUninhabited(component_node) or
+                    self.nodeFinalizesAsUninhabitedLeaf(component_node);
                 if (resolvable) {
-                    const replacement = try self.synthesizeComponentEvidenceAtNodeForPurpose(
-                        view,
-                        param.method,
-                        param.structural,
-                        component_node,
-                        purpose,
-                    );
-                    // Evidence can be shared with another request or lexical
-                    // frame. Copy once, only when this request resolves an entry.
-                    if (resolved == null) {
-                        resolved = try self.builder.evidence_arena.allocator().dupe(SpecEvidence, evidence);
-                        self.builder.countBodyDiagnostic("callable_evidence_vector_copies");
-                    }
-                    resolved.?[index] = replacement;
+                    try replacements.append(self.allocator, .{
+                        .index = index,
+                        .entry = try self.synthesizeComponentEvidenceAtNodeForPurpose(
+                            view,
+                            param.method,
+                            param.structural,
+                            component_node,
+                            purpose,
+                        ),
+                    });
                 }
             },
             .target, .structural, .from_scheme, .unreachable_value, .checked_error => {},
         };
         if (has_symbolic) self.builder.countBodyDiagnostic("callable_evidence_symbolic_requests");
-        return resolved orelse evidence;
+        if (replacements.items.len == 0) return evidence;
+        // Evidence can be shared with another request or lexical frame, so it
+        // is never written in place. A request that resolves every slot the
+        // way the previous request over this vector did reads that copy back.
+        // The callee template is identified by its module and its evidence
+        // parameter row, which every request over it shares.
+        var key_hasher = std.hash.Wyhash.init(0);
+        key_hasher.update(&view.key.bytes);
+        key_hasher.update(std.mem.asBytes(&@intFromPtr(params.ptr)));
+        const key = key_hasher.final();
+        const cached = try self.builder.resolved_callable_vectors.getOrPut(key);
+        if (!cached.found_existing) cached.value_ptr.* = .empty;
+        for (cached.value_ptr.items) |candidate| reuse: {
+            if (candidate.len != evidence.len) break :reuse;
+            var next_replacement: usize = 0;
+            for (candidate, evidence, 0..) |cached_entry, source_entry, index| {
+                if (next_replacement < replacements.items.len and replacements.items[next_replacement].index == index) {
+                    if (!specEvidenceEql(cached_entry, replacements.items[next_replacement].entry)) break :reuse;
+                    next_replacement += 1;
+                } else if (!specEvidenceEql(cached_entry, source_entry)) break :reuse;
+            }
+            return candidate;
+        }
+        const resolved = try self.builder.evidence_arena.allocator().dupe(SpecEvidence, evidence);
+        self.builder.countBodyDiagnostic("callable_evidence_vector_copies");
+        for (replacements.items) |replacement| resolved[replacement.index] = replacement.entry;
+        try cached.value_ptr.append(self.allocator, resolved);
+        return resolved;
     }
 
     /// The substitution and evidence the scheme instantiated at `expr` (a
@@ -44347,7 +44383,30 @@ const BodyContext = struct {
         }
         if (structural) |kind| return .{ .structural = .{ .derivation = structuralDerivationWithoutMap(kind) } };
         if (try self.nodeIsProvenUninhabited(component_node)) return .unreachable_value;
+        if (self.nodeFinalizesAsUninhabitedLeaf(component_node)) return .unreachable_value;
         Common.invariant("compiler-generated ownerless graph component had no checked structural or uninhabited evidence");
+    }
+
+    /// Whether an open leaf can only ever finalize as uninhabited. A checked
+    /// variable the checker left unconstrained is bound by nothing but a
+    /// specialization request, and requests are seeded before a body is
+    /// lowered, so inside a body such a leaf's final content is its recorded
+    /// default. Reading that default here keeps dispatch evidence independent
+    /// of which callee interfaces have already been related on this path: an
+    /// interface replay may close the same cell to that default at any time,
+    /// and evidence read before and after it must agree.
+    fn nodeFinalizesAsUninhabitedLeaf(self: *BodyContext, node: NodeId) bool {
+        return switch (self.graph.content(node)) {
+            .unresolved => |variable| blk: {
+                if (variable.numeric_default_phase != null) break :blk false;
+                if (variable.row_default) |row_default| break :blk row_default == .empty_tag_union;
+                break :blk switch (variable.origin) {
+                    .checked_variable => true,
+                    .row_extension, .placeholder => false,
+                };
+            },
+            .redirect, .primitive, .list, .box, .tuple, .func, .tag_union, .record, .empty_tag_union, .empty_record, .named, .erased, .zst => false,
+        };
     }
 
     /// Static-dispatch owner identity available directly from a live graph
