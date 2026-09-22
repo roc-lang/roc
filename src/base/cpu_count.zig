@@ -29,12 +29,10 @@ pub fn workerCount() usize {
 /// Logical CPUs on the fastest core type, or null when the machine is not
 /// hybrid or the platform does not say.
 fn fastCoreLogicalCount() ?usize {
-    return switch (builtin.os.tag) {
-        .linux => linux_topology.fastCoreLogicalCount(),
-        .macos => darwin_topology.fastCoreLogicalCount(),
-        .windows => windows_topology.fastCoreLogicalCount(),
-        else => null,
-    };
+    if (builtin.os.tag == .linux) return linux_topology.fastCoreLogicalCount();
+    if (builtin.os.tag == .macos) return darwin_topology.fastCoreLogicalCount();
+    if (builtin.os.tag == .windows) return windows_topology.fastCoreLogicalCount();
+    return null;
 }
 
 /// Bit set over CPU numbers with the layout of Linux's `cpu_set_t`.

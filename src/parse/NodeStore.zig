@@ -154,14 +154,15 @@ const TargetFileNodeTag = enum {
 };
 
 fn narrowNodeTag(comptime T: type, tag: Node.Tag) ?T {
-    // Resolved per tag at compile time, so this is a jump table rather than
-    // a string lookup at runtime.
-    switch (tag) {
-        inline else => |t| {
-            if (@hasField(T, @tagName(t))) return @field(T, @tagName(t));
-            return null;
-        },
-    }
+    const table = comptime blk: {
+        @setEvalBranchQuota(100_000);
+        var narrowed = std.EnumArray(Node.Tag, ?T).initFill(null);
+        for (std.enums.values(Node.Tag)) |t| {
+            if (@hasField(T, @tagName(t))) narrowed.set(t, @field(T, @tagName(t)));
+        }
+        break :blk narrowed;
+    };
+    return table.get(tag);
 }
 
 /// Packed optional indices store null as 0 and non-null values as value + 1.

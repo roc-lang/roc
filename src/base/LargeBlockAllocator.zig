@@ -59,10 +59,12 @@ const ClassCache = struct {
 backing: Allocator,
 classes: [class_count]ClassCache = @splat(.{}),
 
+/// A wrapper that sends small and over-aligned requests to `backing`.
 pub fn init(backing: Allocator) Self {
     return .{ .backing = backing };
 }
 
+/// The `Allocator` interface backed by this wrapper.
 pub fn allocator(self: *Self) Allocator {
     return .{ .ptr = self, .vtable = &vtable };
 }
