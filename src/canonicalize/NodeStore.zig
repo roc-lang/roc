@@ -21,7 +21,15 @@ const Ident = base.Ident;
 const NodeStore = @This();
 
 fn narrowNodeTag(comptime T: type, tag: Node.Tag) ?T {
-    return std.meta.stringToEnum(T, @tagName(tag));
+    const table = comptime blk: {
+        @setEvalBranchQuota(100_000);
+        var narrowed = std.EnumArray(Node.Tag, ?T).initFill(null);
+        for (std.enums.values(Node.Tag)) |t| {
+            if (@hasField(T, @tagName(t))) narrowed.set(t, @field(T, @tagName(t)));
+        }
+        break :blk narrowed;
+    };
+    return table.get(tag);
 }
 
 const LiteralNodeTag = enum {

@@ -14268,13 +14268,13 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
         ) void {
             const buf = self.codegen.emit.buf.items;
             // Logged references move with the body they were emitted in.
-            for (self.code_refs.items) |*ref| {
+            for (self.code_refs.items[firstEntryAtOrAfter(@TypeOf(self.code_refs.items[0]), self.code_refs.items, "site", body_start)..]) |*ref| {
                 if (ref.site >= body_start and ref.site < body_end) ref.site += prologue_size;
             }
-            for (self.line_entries.items) |*line| {
+            for (self.line_entries.items[firstEntryAtOrAfter(@TypeOf(self.line_entries.items[0]), self.line_entries.items, "offset", body_start)..]) |*line| {
                 if (line.offset >= body_start and line.offset < body_end) line.offset += @intCast(prologue_size);
             }
-            for (self.internal_call_patches.items) |*patch| {
+            for (self.internal_call_patches.items[firstEntryAtOrAfter(@TypeOf(self.internal_call_patches.items[0]), self.internal_call_patches.items, "call_offset", body_start)..]) |*patch| {
                 // Only adjust patches that were within the shifted body range
                 if (patch.call_offset >= body_start and patch.call_offset < body_end) {
                     // Update the patch's recorded position (it shifted)
@@ -14307,6 +14307,20 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
         /// After deferred-prologue proc compilation shifts its body by prepending a prologue,
         /// re-patch any ADR/LEA instructions within the shifted range that
         /// compute lambda addresses targeting code outside the shifted range.
+        /// Index of the first entry whose offset is at least `body_start`.
+        /// Every offset list here is appended in emission order, so the entries
+        /// inside a body being shifted form a suffix and a binary search finds
+        /// it without scanning the whole image.
+        fn firstEntryAtOrAfter(comptime T: type, items: []const T, comptime field: []const u8, body_start: usize) usize {
+            var lo: usize = 0;
+            var hi: usize = items.len;
+            while (lo < hi) {
+                const mid = lo + (hi - lo) / 2;
+                if (@field(items[mid], field) < body_start) lo = mid + 1 else hi = mid;
+            }
+            return lo;
+        }
+
         fn repatchInternalAddrPatches(
             self: *Self,
             body_start: usize,
@@ -14314,7 +14328,7 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
             prologue_size: usize,
             current_entry_start: usize,
         ) void {
-            for (self.internal_addr_patches.items) |*patch| {
+            for (self.internal_addr_patches.items[firstEntryAtOrAfter(@TypeOf(self.internal_addr_patches.items[0]), self.internal_addr_patches.items, "instr_offset", body_start)..]) |*patch| {
                 if (patch.instr_offset >= body_start and patch.instr_offset < body_end) {
                     // Update the patch's recorded position (it shifted)
                     patch.instr_offset += prologue_size;
@@ -14342,7 +14356,7 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
             body_end: usize,
             prologue_size: usize,
         ) void {
-            for (self.pending_calls.items) |*pending| {
+            for (self.pending_calls.items[firstEntryAtOrAfter(@TypeOf(self.pending_calls.items[0]), self.pending_calls.items, "call_site", body_start)..]) |*pending| {
                 if (pending.call_site >= body_start and pending.call_site < body_end) {
                     pending.call_site += prologue_size;
                 }
@@ -14355,7 +14369,7 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
             body_end: usize,
             prologue_size: usize,
         ) void {
-            for (self.pending_proc_addrs.items) |*pending| {
+            for (self.pending_proc_addrs.items[firstEntryAtOrAfter(@TypeOf(self.pending_proc_addrs.items[0]), self.pending_proc_addrs.items, "instr_offset", body_start)..]) |*pending| {
                 if (pending.instr_offset >= body_start and pending.instr_offset < body_end) {
                     pending.instr_offset += prologue_size;
                 }
@@ -14382,7 +14396,7 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
                 }
             }
 
-            for (self.unwind_functions.items) |*function| {
+            for (self.unwind_functions.items[firstEntryAtOrAfter(@TypeOf(self.unwind_functions.items[0]), self.unwind_functions.items, "start_offset", body_start)..]) |*function| {
                 const start_offset: usize = function.start_offset;
                 if (start_offset > body_start and start_offset < body_end) {
                     function.start_offset += @intCast(prologue_size);
@@ -14504,10 +14518,10 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
         /// Move pending RC refs emitted inside a body that shifted forward by a
         /// prepended prologue so they can still be patched later.
         fn shiftPendingRcRefs(self: *Self, body_start: usize, body_end: usize, prologue_size: usize) void {
-            for (self.pending_rc_calls.items) |*ref| {
+            for (self.pending_rc_calls.items[firstEntryAtOrAfter(@TypeOf(self.pending_rc_calls.items[0]), self.pending_rc_calls.items, "instr_offset", body_start)..]) |*ref| {
                 if (ref.instr_offset >= body_start and ref.instr_offset < body_end) ref.instr_offset += prologue_size;
             }
-            for (self.pending_rc_addrs.items) |*ref| {
+            for (self.pending_rc_addrs.items[firstEntryAtOrAfter(@TypeOf(self.pending_rc_addrs.items[0]), self.pending_rc_addrs.items, "instr_offset", body_start)..]) |*ref| {
                 if (ref.instr_offset >= body_start and ref.instr_offset < body_end) ref.instr_offset += prologue_size;
             }
         }
@@ -23842,7 +23856,7 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
         /// After a deferred-prologue body shifts forward, message address
         /// sequences emitted inside it move with it.
         fn shiftPendingMessageAddrs(self: *Self, body_start: usize, body_end: usize, prologue_size: usize) void {
-            for (self.pending_message_addrs.items) |*pending| {
+            for (self.pending_message_addrs.items[firstEntryAtOrAfter(@TypeOf(self.pending_message_addrs.items[0]), self.pending_message_addrs.items, "instr_offset", body_start)..]) |*pending| {
                 if (pending.instr_offset >= body_start and pending.instr_offset < body_end) {
                     pending.instr_offset += prologue_size;
                 }

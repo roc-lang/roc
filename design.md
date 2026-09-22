@@ -6439,8 +6439,12 @@ evidence—it may exactly when its copy descends from the slot's own
 signature—or must synthesize its own. An index naming a record of the wrong
 kind, a record missing its signature-callable copy, or a copy that does not
 resolve to the body constraint is a checked-module invariant violation, not
-a fallback. An
-implementation whose checked scheme result row is CLOSED (its body returns a
+a fallback. An independent callable also retains a slot's nested vector when
+that vector is made entirely of pathless `scheme_requirement` entries. Those
+requirements belong to the selected target instantiation and cannot vary with
+the requesting callable relation. Mixed vectors remain per-use records;
+callable-derived vectors are synthesized from the independent relation.
+An implementation whose checked scheme result row is CLOSED (its body returns a
 closed-source value: a top-level constant, an input-position parameter, a
 nominal field) still serves a widened use: the Result-Row Widening Adapter
 at the template boundary specializes that implementation at its own declared
@@ -12059,6 +12063,16 @@ mapping model. The producer derives it from checked callable types and checked
 dispatch evidence. It does not inspect the expression variant to decide whether
 the expression type or parameter type is authoritative.
 
+Tag-row representation producers explicitly mark open tag rows. Call
+substitution consumes that marker to distinguish dynamic tag rows from bare
+type parameters and open records; the number of named variants does not
+establish whether a representation is a tag row. An empty runtime tag row
+shares its tail's representation and descriptor, so its call substitution binds
+that tail directly to the complete call row. Host representation planning keeps
+an explicit open-row marker even when the row names no variants. Descriptor
+templates capture an open row's extension descriptor independently of its
+storage layout.
+
 A resolved direct-dispatch call boundary takes its call-side callable from the
 checked evidence selected for that edge. The dispatch plan's own `callable_ty`
 is the constraint callable, whose variables may be distinct from the caller's
@@ -12071,7 +12085,10 @@ authoritative for the boundary; a target scheme with no variables records
 that relation. Ordinary dispatch calls, iterator protocol calls, and dictionary
 method evidence read that same field. A dictionary dispatch has no selected
 direct node, so its boundary keeps using the plan's constraint callable, which
-is the requirement its dictionary slot is typed against. Worker identity
+is the requirement its dictionary slot is typed against. The dictionary slot's declared requirement fixes its hidden-descriptor
+interface. Invocation substitution supplies those slots in declaration order,
+even when the invocation has closed a requirement's row and needs fewer
+descriptors for its own representation. Worker identity
 remains separate data: a procedure worker is the target's generalized
 declaration whose body is shared by every edge that selects it, while the edge
 instantiation describes only one call's boundary.
@@ -12093,18 +12110,19 @@ vector lengths. Ordinary scheme instantiations still require matching lengths.
 
 Alias and nominal wrappers make substitution ordering explicit. Before the
 planner descends an alias backing, it records each checked `alias_arg` pair from
-the worker and call representations. A nominal instead records each declaration
-backing formal together with the exact `actual_rep` for that nominal use. Its
-visible `nominal_arg` child describes checked shape and may remain generalized;
-it is not evidence for the backing's concrete representation. Direct-call,
-erased-callable, and generated-callable descriptor and dictionary planning use
-the exact backing substitution. Every occurrence of that worker argument in the
-backing graph then uses the recorded call representation, independent of child
-traversal order. An identity observation cannot replace an already-recorded
-concrete instantiation, and two different concrete instantiations for one worker
-representation are an invariant failure. The descriptor source still names the
-original call operand root plus the exact instantiated descendant; it never
-changes to a sibling value merely because the substitution was learned from the
+the worker and call representations. A nominal with type arguments stores its
+declaration's shared backing template, whose formals stand for a different
+actual at every use, including a use nested inside another use of the same
+declaration (`Set(item)`'s backing `Dict(item, {})` inside
+`Dict(U8, Set(U8))`). No representation inside a template therefore names one
+runtime type, and no call-boundary walk enters one: hidden descriptor and
+dictionary parameters, call-site descriptor and dictionary arguments, and
+erased-callable and callable-adapter capture mappings align a nominal by its
+type arguments, pairing each worker `nominal_arg` with the exact `actual_rep`
+of the call's nominal use. For runtime-value walks those arguments stand in
+for the template's contents. The descriptor source still names the original
+call operand root plus the exact instantiated descendant; it never changes to
+a sibling value merely because the substitution was learned from the
 wrapper's explicit argument metadata.
 
 A callable parameter's descriptor source survives traversal from the arguments
@@ -12118,11 +12136,33 @@ These callable sources are scoped to the call; nominal declaration substitutions
 remain scoped to their backing descent. Result planning does not rediscover a
 parameter descriptor from an ambient binding or require it to become static.
 
-Nested backing traversal composes the call-side declaration substitutions as
-well as the worker-side substitutions. For `Set(Str)`, the call-side backing's
-`Dict(item, {})` argument is the instantiated `Str`, even when `item` and the
-worker's corresponding formal live in different checked modules. These scoped
-substitutions reuse the shared templates and never mutate checked types.
+The fixed hidden-parameter list also governs requests that name a declaration
+formal. At a nominal use, each such request resolves by argument index through
+that use's recorded actuals, in parameter order. This does not visit the shared
+backing or add a slot for a formal absent from the list. A concrete actual
+changes the descriptor source, never the number of arguments supplied to that
+fixed interface.
+
+Worker-body lowering that reaches into a template (construction of a nominal
+tag, record, or tuple; tag, record, and tuple patterns; structural inspect,
+equality, and hash over a nominal backing) enters that nominal's formal scope.
+The scope binds each formal to the actual its use supplies, resolved in the
+enclosing scope first, so a nested use of the same declaration shadows the
+formals it rebinds and reads the outer binding of any formal it passes along.
+Binding materializes nothing: a formal's descriptor is built from its actual
+only where lowering needs it. A representation whose description depends on an
+active binding is never bound as a type-wide descriptor slot; its descriptor
+local belongs to the scope that reserved it and is initialized, under that
+scope's bindings, above the lowering done inside it.
+
+A formal position holds its value in the worker representation of the owning
+nominal's actual argument. Tag-union and declared-aggregate boundary adapters
+therefore resolve a formal-typed payload or field to that actual before
+choosing its target descriptor, rather than preserving the source value's
+storage as they do for a bare type parameter. A worker argument's root
+descriptor may be rebuilt from the worker's own descriptors for the nominal's
+arguments. Reading a field through a nominal receiver takes the record's
+descriptor from the receiver's own descriptor.
 
 Nominal substitution identity does not demand a runtime representation. Boxy
 interns checked type bindings separately from representations; a binding receives
@@ -12149,11 +12189,9 @@ record payload at that destination preserves the supplying expression's exact
 payload descriptor; an adapted destination with a declared storage shape uses
 the destination descriptor.
 
-Nominal construction consumes the same explicit backing parameter substitution.
-The shared backing representation fixes storage; its descriptor binds each
-formal to the exact actual descriptor supplied by this nominal use. Actuals are
-resolved in the enclosing scope before the declaration's bindings are entered,
-and nested construction restores that scope on exit. Construction and its
+Nominal construction runs inside that nominal's formal scope. The shared
+backing representation fixes storage; its descriptor describes each formal by
+the actual this nominal use supplies. Construction and its
 representation adapters consume those descriptors before any field requests a
 static descriptor. No checked types or worker representation graphs are cloned
 or mutated to supply this construction context. Static descriptor construction

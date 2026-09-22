@@ -11045,6 +11045,97 @@ test "issue 11290: empty and nested containers retain distinct type arguments" {
     , 1);
 }
 
+test "issue 11358: a Set nested in a Dict keeps each level's type arguments" {
+    try expectKeyedContainersEvaluate(
+        \\main : U64 -> U64
+        \\main = |n| {
+        \\    key = Str.repeat("x", n)
+        \\    empty : Dict(U64, Set(Str))
+        \\    empty = Dict.empty()
+        \\    dictionary = empty.insert(n, Set.empty().insert(key).insert("other"))
+        \\    nested = match dictionary.get(n) {
+        \\        Ok(found) => found
+        \\        Err(_) => crash "lost nested set"
+        \\    }
+        \\    if !nested.contains(key) or !nested.contains("other") { crash "lost set item" }
+        \\    dictionary.len() + nested.len()
+        \\}
+    , 3);
+}
+
+test "issue 11358: a Dict nested in a Dict keeps each level's type arguments" {
+    try expectKeyedContainersEvaluate(
+        \\main : U64 -> U64
+        \\main = |n| {
+        \\    key = Str.repeat("x", n)
+        \\    inner = Dict.empty().insert(key, n).insert("other", 2)
+        \\    outer : Dict(Str, Dict(Str, U64))
+        \\    outer = Dict.empty().insert("first", inner).insert(key, Dict.single("z", 7))
+        \\    found_inner = match outer.get("first") {
+        \\        Ok(found) => found
+        \\        Err(_) => crash "lost inner dictionary"
+        \\    }
+        \\    value = match found_inner.get(key) {
+        \\        Ok(found) => found
+        \\        Err(_) => crash "lost inner entry"
+        \\    }
+        \\    other = match outer.get(key).map_ok(|d| d.get("z")) {
+        \\        Ok(Ok(found)) => found
+        \\        _ => crash "lost second inner entry"
+        \\    }
+        \\    value + other + outer.len()
+        \\}
+    , 49);
+}
+
+test "issue 11358: a generic function reads a Dict nested in a Dict" {
+    try expectKeyedContainersEvaluate(
+        \\total : Dict(k, Dict(k2, v)), k -> U64 where [k.is_eq : k, k -> Bool, k.to_hash : k, Hasher -> Hasher]
+        \\total = |outer, key| match outer.get(key) {
+        \\    Ok(inner) => inner.len()
+        \\    Err(_) => 0
+        \\}
+        \\
+        \\main : U64 -> U64
+        \\main = |n| {
+        \\    key = Str.repeat("x", n)
+        \\    outer = Dict.empty().insert(key, Dict.empty().insert(n, "a").insert(n + 1, "b")).insert("other", Dict.single(0.U64, "c"))
+        \\    total(outer, key) + total(outer, "other") + total(outer, "missing")
+        \\}
+    , 3);
+}
+
+test "issue 11358: a nominal nested in itself crosses generic workers" {
+    try expectKeyedContainersEvaluate(
+        \\Box2(a) := { item : a, count : U64 }
+        \\Wrap(a) := [W(a)]
+        \\
+        \\nest : a -> Box2(Box2(a))
+        \\nest = |x| { item: { item: x, count: 1 }, count: 2 }
+        \\
+        \\inner_item : Box2(Box2(a)) -> a
+        \\inner_item = |b| b.item.item
+        \\
+        \\double : a -> Wrap(Wrap(a))
+        \\double = |x| W(W(x))
+        \\
+        \\unwrap2 : Wrap(Wrap(a)) -> a
+        \\unwrap2 = |W(W(y))| y
+        \\
+        \\main : U64 -> U64
+        \\main = |n| {
+        \\    key = Str.repeat("x", n)
+        \\    concrete : Box2(Box2(Str))
+        \\    concrete = { item: { item: key, count: 1 }, count: 2 }
+        \\    from_generic = inner_item(nest(key))
+        \\    from_concrete = inner_item(concrete)
+        \\    unwrapped = unwrap2(double(key))
+        \\    list = unwrap2(W(W([n])))
+        \\    Str.count_utf8_bytes(from_generic) + Str.count_utf8_bytes(from_concrete) + Str.count_utf8_bytes(unwrapped) + List.len(list) + inner_item(nest(n))
+        \\}
+    , 161);
+}
+
 fn expectKeyedContainersEvaluate(source: []const u8, expected: u64) (TestError || eval.Interpreter.Error || eval.RuntimeHostEnv.LeakError)!void {
     const allocator = std.testing.allocator;
     for ([_]base.SpecializationStrategy{ .lss, .boxy }) |strategy| {

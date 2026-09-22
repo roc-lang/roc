@@ -128,6 +128,46 @@ const CommittedGraphTypes = struct {
         };
     }
 
+    /// Commit several types through one import: types already relocated are
+    /// answered from the relocation map and the rest share one closure walk
+    /// and one interning transaction. The result is owned by the caller.
+    fn commitTypes(self: *CommittedGraphTypes, allocator: Allocator, tys: []const Type.TypeId) Allocator.Error![]Type.TypeId {
+        const committed = try allocator.alloc(Type.TypeId, tys.len);
+        errdefer allocator.free(committed);
+        const destination = self.destination orelse {
+            @memcpy(committed, tys);
+            return committed;
+        };
+        var pending = std.ArrayList(Type.TypeId).empty;
+        defer pending.deinit(allocator);
+        var pending_slots = std.ArrayList(usize).empty;
+        defer pending_slots.deinit(allocator);
+        for (tys, 0..) |ty, index| {
+            if (self.graph) |graph| try graph.assertTypeHasNoActiveSnapshots(ty);
+            if (@intFromEnum(ty) >= self.source_store.epochBoundary().types) {
+                Common.compilerBug("sealed body type does not belong to its immutable store epoch");
+            }
+            if (destination.relocation.get(self.source_store, ty)) |mapped| {
+                committed[index] = mapped;
+            } else {
+                try pending.append(allocator, ty);
+                try pending_slots.append(allocator, index);
+            }
+        }
+        if (pending.items.len != 0) {
+            var imported = try destination.store.importTypes(
+                destination.names,
+                self.source_store,
+                self.source_names,
+                destination.relocation,
+                pending.items,
+            );
+            defer imported.deinit();
+            for (pending_slots.items, imported.roots) |slot, root| committed[slot] = root;
+        }
+        return committed;
+    }
+
     fn commitType(self: *CommittedGraphTypes, ty: Type.TypeId) Allocator.Error!Type.TypeId {
         if (self.graph) |graph| try graph.assertTypeHasNoActiveSnapshots(ty);
         const destination = self.destination orelse return ty;
@@ -753,6 +793,12 @@ fn verifyMonotypeSpecsReady(program: *const Ast.Program) void {
         }
     }
 }
+
+const ModuleIndexSlot = union(enum) {
+    root,
+    import: u32,
+    relation: u32,
+};
 
 const ModuleView = struct {
     code_generation_key: ?checked.ModuleId = null,
@@ -3431,6 +3477,9 @@ const Builder = struct {
     spec_job_run_id: SpecJobRunId,
     modules: Common.CheckedModules,
     root_view: checked.ImportedModuleView,
+    /// Checked module key -> position in the lowering input; built lazily on
+    /// first lookup (see `buildModuleIndex`).
+    module_index: std.AutoHashMap([32]u8, ModuleIndexSlot),
     /// Program source-file id of every checked module in the lowering input,
     /// keyed by checked module identity. The coordinator seeds this table
     /// before lowering any body; workers borrow it for this lowering run.
@@ -3643,6 +3692,7 @@ const Builder = struct {
             .spec_job_run_id = @enumFromInt(raw_spec_job_run_id),
             .modules = modules,
             .root_view = checked.importedView(modules.root.module),
+            .module_index = std.AutoHashMap([32]u8, ModuleIndexSlot).init(allocator),
             .source_file_ids = SourceFileIds.init(allocator),
             .program = program,
             .current_loc = program.current_loc,
@@ -3840,6 +3890,7 @@ const Builder = struct {
     fn deinit(self: *Builder) void {
         self.source_file_ids.deinit();
         self.declared_comptime_root_functions.deinit();
+        self.module_index.deinit();
         self.spec_job_task_buffers.deinit(self.allocator);
         if (self.spec_job_commit_domain) |*domain| domain.deinit();
         if (self.spec_job_worker) |*worker| worker.deinit();
@@ -3990,14 +4041,23 @@ const Builder = struct {
     }
 
     fn commitInterfaceSummaries(self: *Builder, entries: []const InterfaceSummaryEntry, committed_types: *CommittedGraphTypes) Allocator.Error!void {
-        for (entries) |entry| {
-            const provisional_ty = try committed_types.commitType(entry.provisional_ty);
-            const summary_ty = try committed_types.commitType(entry.summary_ty);
+        if (entries.len == 0) return;
+        // One import for every summary of the shard: the closure walk and the
+        // interning transaction are paid once instead of once per type.
+        const roots = try self.allocator.alloc(Type.TypeId, entries.len * 2);
+        defer self.allocator.free(roots);
+        for (entries, 0..) |entry, index| {
+            roots[index * 2] = entry.provisional_ty;
+            roots[index * 2 + 1] = entry.summary_ty;
+        }
+        const committed = try committed_types.commitTypes(self.allocator, roots);
+        defer self.allocator.free(committed);
+        for (entries, 0..) |entry, index| {
             try self.interface_summaries.insert(&self.program.types, &self.program.names, .{
                 .address = entry.address,
                 .evidence = entry.evidence,
-                .provisional_ty = provisional_ty,
-                .summary_ty = summary_ty,
+                .provisional_ty = committed[index * 2],
+                .summary_ty = committed[index * 2 + 1],
             });
         }
     }
@@ -8339,14 +8399,36 @@ const Builder = struct {
     }
 
     fn moduleForDigest(self: *Builder, module_digest: names.CheckedModuleDigest) ModuleView {
-        if (moduleBytesEqual(module_digest.bytes, self.root_view.key.bytes)) return moduleView(self.root_view);
-        for (self.modules.imports) |imported| {
-            if (moduleBytesEqual(module_digest.bytes, imported.key.bytes)) return moduleView(imported);
+        return self.moduleForKeyBytes(module_digest.bytes) orelse
+            Common.invariant("procedure template referenced a checked module that is not in the lowering input");
+    }
+
+    /// Resolve a module by its checked key. The index is built once from the
+    /// lowering input, which never changes for the builder's lifetime.
+    fn moduleForKeyBytes(self: *Builder, key: [32]u8) ?ModuleView {
+        if (self.module_index.count() == 0) self.buildModuleIndex();
+        const slot = self.module_index.get(key) orelse return null;
+        return switch (slot) {
+            .root => moduleView(self.root_view),
+            .import => |index| moduleView(self.modules.imports[index]),
+            .relation => |index| moduleView(self.modules.root.relation_modules[index]),
+        };
+    }
+
+    fn buildModuleIndex(self: *Builder) void {
+        // Lookups happen on the coordinator before any worker borrows the
+        // builder, so the index is complete before it is shared.
+        self.module_index.ensureTotalCapacity(@intCast(1 + self.modules.imports.len + self.modules.root.relation_modules.len)) catch
+            Common.compilerBug("module index allocation failed");
+        // Later entries never override earlier ones so the search order of the
+        // lowering input (root, imports, relations) is preserved exactly.
+        for (self.modules.root.relation_modules, 0..) |relation, index| {
+            self.module_index.putAssumeCapacity(relation.key.bytes, .{ .relation = @intCast(index) });
         }
-        for (self.modules.root.relation_modules) |relation| {
-            if (moduleBytesEqual(module_digest.bytes, relation.key.bytes)) return moduleView(relation);
+        for (self.modules.imports, 0..) |imported, index| {
+            self.module_index.putAssumeCapacity(imported.key.bytes, .{ .import = @intCast(index) });
         }
-        Common.invariant("procedure template referenced a checked module that is not in the lowering input");
+        self.module_index.putAssumeCapacity(self.root_view.key.bytes, .root);
     }
 
     /// The module view whose content identity matches `origin_hash`, or null
@@ -8425,14 +8507,8 @@ const Builder = struct {
     }
 
     fn moduleForId(self: *Builder, module_id: checked.ModuleId) ModuleView {
-        if (moduleBytesEqual(module_id.bytes, self.root_view.key.bytes)) return moduleView(self.root_view);
-        for (self.modules.imports) |imported| {
-            if (moduleBytesEqual(module_id.bytes, imported.key.bytes)) return moduleView(imported);
-        }
-        for (self.modules.root.relation_modules) |relation| {
-            if (moduleBytesEqual(module_id.bytes, relation.key.bytes)) return moduleView(relation);
-        }
-        Common.invariant("procedure binding referenced a checked module that is not in the lowering input");
+        return self.moduleForKeyBytes(module_id.bytes) orelse
+            Common.invariant("procedure binding referenced a checked module that is not in the lowering input");
     }
 
     const NominalDeclLookup = struct {
@@ -22675,16 +22751,23 @@ const BodyContext = struct {
         return try self.instNode(scheme_root);
     }
 
-    fn interfaceSummaryCache(self: *BodyContext) *InterfaceSummaryCache {
-        if (self.typeStore() == &self.builder.program.types) return &self.builder.interface_summaries;
+    const InterfaceSummaryCacheBinding = struct {
+        cache: *InterfaceSummaryCache,
+        types_are_durable: bool,
+    };
+
+    fn interfaceSummaryCache(self: *BodyContext) InterfaceSummaryCacheBinding {
+        if (self.typeStore() == &self.builder.program.types) {
+            return .{ .cache = &self.builder.interface_summaries, .types_are_durable = true };
+        }
         const workspace = self.draft.spec_job_workspace orelse
             Common.compilerBug("interface summary graph has no owning workspace");
         std.debug.assert(self.typeStore() == &workspace.types);
-        return &workspace.interface_summaries;
+        return .{ .cache = &workspace.interface_summaries, .types_are_durable = false };
     }
 
     fn findInterfaceSummary(self: *BodyContext, address: InterfaceReplayAddress, evidence: StoredConstFnEvidence, provisional_ty: Type.TypeId) Allocator.Error!?struct { ty: Type.TypeId, coordinator: bool } {
-        const local = self.interfaceSummaryCache();
+        const local = self.interfaceSummaryCache().cache;
         if (local.buckets.get(address)) |candidates| for (candidates.items) |index| {
             const entry = local.entries.items[index];
             if (storedConstFnEvidenceEql(entry.evidence, evidence) and
@@ -22735,6 +22818,7 @@ const BodyContext = struct {
         provisional_ty: Type.TypeId,
         replay_state: *InterfaceReplayState,
     ) Allocator.Error!void {
+        self.builder.count("interface_relation_requests");
         const record = self.view.resolved_refs.records[@intFromEnum(target)];
         const procedure, const root_evidence = switch (record.ref) {
             .top_level_proc,
@@ -22803,6 +22887,7 @@ const BodyContext = struct {
             {
                 continue;
             }
+            self.builder.count("interface_replay_hits");
             switch (entry.status) {
                 .expanding => try relateFunctionRequestInterface(
                     self.graph,
@@ -22916,17 +23001,31 @@ const BodyContext = struct {
             }
         }
         if (saved_use_summaries) {
-            var sealer = GraphTypeFinals.initRetainedTypeView(self.graph);
-            defer sealer.deinit();
-            const durable_request = try sealer.sealType(provisional_ty);
-            const durable_summary = try sealer.sealType(summary_ty);
-            const cache = self.interfaceSummaryCache();
-            try cache.insert(self.typeStore(), self.nameStore(), .{
-                .address = address,
-                .evidence = stored_evidence,
-                .provisional_ty = durable_request,
-                .summary_ty = durable_summary,
-            });
+            const cache_binding = self.interfaceSummaryCache();
+            const cache = cache_binding.cache;
+            if (cache_binding.types_are_durable) {
+                // On the coordinator both views were materialized outside any
+                // transaction, so they are already permanent program types.
+                // Interning canonical copies would only re-digest them and
+                // the cache compares its entries structurally.
+                try cache.insert(self.typeStore(), self.nameStore(), .{
+                    .address = address,
+                    .evidence = stored_evidence,
+                    .provisional_ty = provisional_ty,
+                    .summary_ty = summary_ty,
+                });
+            } else {
+                var sealer = GraphTypeFinals.initRetainedTypeView(self.graph);
+                defer sealer.deinit();
+                const durable_request = try sealer.sealType(provisional_ty);
+                const durable_summary = try sealer.sealType(summary_ty);
+                try cache.insert(self.typeStore(), self.nameStore(), .{
+                    .address = address,
+                    .evidence = stored_evidence,
+                    .provisional_ty = durable_request,
+                    .summary_ty = durable_summary,
+                });
+            }
         }
     }
 
@@ -43593,11 +43692,12 @@ const BodyContext = struct {
         return null;
     }
 
-    /// Select the nested-evidence half of an evidence-slot reuse. Ordinary
-    /// independent rank-1 callables must derive nested evidence from their own
-    /// callable relation. A recorded where-method use may keep the slot's
-    /// resolved vector: its checker instantiation copied only signature
-    /// structure, sharing every evidence-bearing non-marker leaf.
+    /// Select the nested-evidence half of an evidence-slot reuse. Independent
+    /// rank-1 callables derive callable-owned evidence from their own relation,
+    /// but keep evidence owned entirely by the selected target. A recorded
+    /// where-method use may also keep the slot's resolved vector: its checker
+    /// instantiation copied only signature structure, sharing every
+    /// evidence-bearing non-marker leaf.
     fn targetProcedureEvidenceSchema(
         self: *BodyContext,
         target: *const SpecEvidenceTarget,
@@ -43627,8 +43727,11 @@ const BodyContext = struct {
             Common.invariant("checked dispatch requested slot nested evidence without an independent callable");
         }
         if (dependent.independent_callable and !dependent.reuse_slot_nested_evidence) {
-            if (schema == .requires_record) return error.RequiresRecordSynthesis;
-            return .synthesize;
+            return switch (schema) {
+                .from_target => nested,
+                .requires_record => error.RequiresRecordSynthesis,
+                .none, .from_callable => .synthesize,
+            };
         }
         return nested;
     }
@@ -57861,7 +57964,7 @@ test "materialized evidence normalization copies once and preserves unconsumed n
     try std.testing.expect((try normalizeMaterializedEvidence(allocator, normalized)).ptr == normalized.ptr);
 }
 
-test "independent callable reuse preserves requires-record nested evidence and synthesis rejects it" {
+test "independent callable keeps target-owned evidence and rejects per-use record synthesis" {
     const resolved_entries = [_]SpecEvidence{.unreachable_value};
     const nested = NestedSpecEvidence{ .resolved = &resolved_entries };
     const reuse = static_dispatch.ConstraintEvidenceRef{
@@ -57887,6 +57990,15 @@ test "independent callable reuse preserves requires-record nested evidence and s
         .independent_callable = true,
         .reuse_slot_nested_evidence = false,
     };
+    const target_owned = try BodyContext.dependentCallableNestedEvidenceForSchema(
+        synthesize,
+        nested,
+        .from_target,
+    );
+    switch (target_owned) {
+        .resolved => |resolved| try std.testing.expect(resolved.ptr == resolved_entries[0..].ptr),
+        .synthesize => return error.TestUnexpectedResult,
+    }
     try std.testing.expectError(
         error.RequiresRecordSynthesis,
         BodyContext.dependentCallableNestedEvidenceForSchema(
