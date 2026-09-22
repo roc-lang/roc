@@ -1745,9 +1745,10 @@ pub fn addProcSpec(self: *Self, proc: LirProcSpec) Allocator.Error!LirProcSpecId
 fn noteStmtShapes(self: *Self, stmt: CFStmt) void {
     switch (stmt) {
         .assign_call => |call| {
-            if (self.tail_call_builder) |builder| {
-                if (builder.proc == call.proc) self.shapes.self_call = true;
-            }
+            // Only a tail-call builder names the procedure a statement belongs
+            // to; without one, any direct call may be a call to itself.
+            const may_call_self = if (self.tail_call_builder) |builder| builder.proc == call.proc else true;
+            if (may_call_self) self.shapes.self_call = true;
             const result_layout = self.getLocal(call.target).layout_idx;
             if (result_layout == .str) self.shapes.str_call = true;
             if (result_layout.isInterned()) self.shapes.interned_call_result = true;
