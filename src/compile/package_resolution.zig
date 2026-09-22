@@ -378,9 +378,17 @@ const Replacement = struct {
 };
 
 /// The source a declaration actually loads, after replacement.
-const EffectiveSource = struct {
-    spec: []const u8,
-    replacement: ?usize,
+const EffectiveSource = union(enum) {
+    /// The source to load: the declaration itself, or the replacement's
+    /// `new_spec` when a flag redirected it.
+    source: struct {
+        spec: []const u8,
+        replacement: ?usize,
+    },
+    /// A local declaration whose root file has no canonical path, so it has
+    /// no identity to match against replacements. Holds the lexical absolute
+    /// path for the diagnostic.
+    unresolvable_local: []const u8,
 };
 
 const GroupChoice = struct {
@@ -420,6 +428,7 @@ const Edge = struct {
         insecure_url,
         reserved_version,
         ambiguous_version,
+        unresolvable_local,
     };
 };
 
@@ -720,7 +729,19 @@ pub const Resolver = struct {
                     continue;
                 }
 
-                const effective = try self.effectiveSource(item.node.root_dir, dep.spec);
+                const effective = switch (try self.effectiveSource(item.node.root_dir, dep.spec)) {
+                    .source => |source| source,
+                    .unresolvable_local => |lexical| {
+                        try result.edges.append(self.arena(), .{
+                            .parent = item.group,
+                            .alias = dep.alias,
+                            .spec = lexical,
+                            .is_platform = dep.is_platform,
+                            .target = .{ .invalid = .unresolvable_local },
+                        });
+                        continue;
+                    },
+                };
                 const spec = effective.spec;
 
                 if (specIsUrlLike(spec)) {
@@ -1008,24 +1029,24 @@ pub const Resolver = struct {
     /// declaration alone, before version selection and before anything is
     /// fetched. Without replacements this is the identity.
     fn effectiveSource(self: *Resolver, parent_dir: []const u8, declared: []const u8) Allocator.Error!EffectiveSource {
-        if (self.replacements.len == 0) return .{ .spec = declared, .replacement = null };
+        if (self.replacements.len == 0) return .{ .source = .{ .spec = declared, .replacement = null } };
 
         if (specIsUrlLike(declared)) {
-            const index = self.replacement_index.get(declared) orelse return .{ .spec = declared, .replacement = null };
-            return .{ .spec = self.replacements[index].new_spec, .replacement = index };
+            const index = self.replacement_index.get(declared) orelse return .{ .source = .{ .spec = declared, .replacement = null } };
+            return .{ .source = .{ .spec = self.replacements[index].new_spec, .replacement = index } };
         }
 
         // Local sources compare by canonical root-file path, so every spelling
         // of one file is one source and shares one package instance. A path
-        // that cannot be canonicalized keeps its lexical form and fails later
-        // when it is loaded.
+        // with no canonical form has no identity to match, so it is reported
+        // as such rather than compared by its spelling.
         const lexical = try self.resolveLocalPath(parent_dir, declared);
         const canonical = self.canonicalizeLocal(lexical) catch |err| switch (err) {
             error.OutOfMemory => return error.OutOfMemory,
-            error.CannotCanonicalize => lexical,
+            error.CannotCanonicalize => return .{ .unresolvable_local = lexical },
         };
-        const index = self.replacement_index.get(canonical) orelse return .{ .spec = canonical, .replacement = null };
-        return .{ .spec = self.replacements[index].new_spec, .replacement = index };
+        const index = self.replacement_index.get(canonical) orelse return .{ .source = .{ .spec = canonical, .replacement = null } };
+        return .{ .source = .{ .spec = self.replacements[index].new_spec, .replacement = index } };
     }
 
     /// Replacements are exact and every flag must take effect. Checked over
@@ -1297,7 +1318,10 @@ pub const Resolver = struct {
             return compiler_platforms.groupKey(platform);
         }
 
-        const spec = (try self.effectiveSource(parent_dir, dep.spec)).spec;
+        const spec = switch (try self.effectiveSource(parent_dir, dep.spec)) {
+            .source => |source| source.spec,
+            .unresolvable_local => return null,
+        };
         if (specIsUrlLike(spec)) {
             if (!base.url.isSafeUrl(spec)) return null;
             const parsed = base.url.parseUrlPath(spec) catch return null;
@@ -1341,6 +1365,12 @@ pub const Resolver = struct {
                         .unparsable_url => try self.addDiagnostic(
                             "Invalid Package URL",
                             "{s} depends on this URL, which could not be parsed as a package URL:\n\n    {s}.",
+                            .{ owner, edge.spec },
+                        ),
+                        .unresolvable_local => try self.addDiagnostic(
+                            "Invalid Package Dependency",
+                            "{s} depends on this local path, which could not be resolved to an existing file:\n\n    {s}\n\n" ++
+                                "--replace-dep matches local dependencies by their resolved file, so every local dependency in the graph must exist.",
                             .{ owner, edge.spec },
                         ),
                     }
@@ -4188,6 +4218,33 @@ test "replace-dep: local and versionless sources match by canonical path and exa
     const mid = testFindPackage(&resolved, "/repo/mid/main.roc").?;
     try std.testing.expectEqual(root.deps[0].target, mid.deps[0].target);
     try std.testing.expectEqualStrings("../link/json/main.roc", mid.deps[0].declared_spec);
+}
+
+test "replace-dep: a local declaration with no canonical path is an error, not a lexical match" {
+    const gpa = std.testing.allocator;
+    var registry = TestRegistry.init(gpa);
+    defer registry.deinit();
+
+    try registry.locals.put("/repo/main.roc", .{ .kind = .package, .deps = &.{
+        .{ .alias = "json", .spec = "vendor/json/main.roc", .is_platform = false },
+        .{ .alias = "ghost", .spec = "missing/main.roc", .is_platform = false },
+    } });
+    try registry.locals.put("/repo/vendor/json/main.roc", .{});
+    try registry.locals.put("/work/json/main.roc", .{});
+    try registry.symlinks.put("./vendor/json/main.roc", "/repo/vendor/json/main.roc");
+
+    // `/repo/missing/main.roc` is not registered, so it cannot be
+    // canonicalized. Resolution must report that edge explicitly instead of
+    // continuing with its spelling.
+    var resolver = Resolver.init(gpa, registry.fetcher(), testReplaceConfig(&.{
+        .{ .old = "./vendor/json/main.roc", .new = "/work/json/main.roc" },
+    }));
+    defer resolver.deinit();
+    try std.testing.expectError(error.ResolutionFailed, resolver.resolve("/repo/main.roc"));
+    try testExpectDiagnostic(&resolver, "Invalid Package Dependency");
+    for (resolver.diagnostics.items) |diagnostic| {
+        try std.testing.expect(std.mem.find(u8, diagnostic.message, "/repo/missing/main.roc") != null);
+    }
 }
 
 test "replace-dep: identical aliases for unrelated sources are not conflated" {

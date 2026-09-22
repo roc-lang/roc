@@ -457,16 +457,33 @@ pub fn parseWithGlobalOptions(alloc: mem.Allocator, std_io: std.Io, args: []cons
     };
 }
 
+/// Subcommands that never load a dependency graph, so `--replace-dep` is an
+/// unexpected argument for them however the rest of the line parses.
+const commands_without_dependency_graph = [_][]const u8{
+    "install", "bundle", "unbundle", "fmt", "repl", "glue", "version", "bump", "experimental-lsp", "help", "licenses",
+};
+
 fn parseCommand(alloc: mem.Allocator, std_io: std.Io, all_args: []const []const u8) ParseError!CliArgs {
     const extraction = try extractReplaceDeps(alloc, all_args);
     defer alloc.free(extraction.args);
     if (extraction.problem) |problem| return CliArgs{ .problem = problem };
 
+    // Reject the flag by command name before command-specific parsing, so a
+    // `--help` or a missing-argument problem in that command cannot hide it.
+    if (extraction.replace_deps.len > 0 and extraction.args.len > 0) {
+        for (commands_without_dependency_graph) |cmd| {
+            if (mem.eql(u8, extraction.args[0], cmd)) {
+                return CliArgs{ .problem = .{ .unexpected_argument = .{ .cmd = cmd, .arg = replace_dep_flag } } };
+            }
+        }
+    }
+
     var parsed = try parseCommandWithoutReplaceDeps(alloc, std_io, extraction.args);
     if (extraction.replace_deps.len == 0) return parsed;
 
     // Only commands that load a dependency graph acquire replacement
-    // behavior; everywhere else the flag is an unexpected argument.
+    // behavior. The name check above already rejected everything else, so
+    // the remaining arms only keep this switch exhaustive.
     switch (parsed) {
         .run => |*run| run.resolve_limits.replace_deps = extraction.replace_deps,
         .check => |*check| check.resolve_limits.replace_deps = extraction.replace_deps,
@@ -2834,5 +2851,25 @@ test "--replace-dep rejects missing values, the = form, and non-resolving comman
     {
         const result = try parse(gpa, testing.io, &[_][]const u8{ "install", "--replace-dep", url, "../pkg/main.roc", "tool", url });
         try testing.expectEqualStrings("install", result.problem.unexpected_argument.cmd);
+    }
+    // Neither `--help` nor a missing-argument problem in the command hides the rejection.
+    {
+        const result = try parse(gpa, testing.io, &[_][]const u8{ "fmt", "--replace-dep", url, "../pkg/main.roc", "--help" });
+        try testing.expectEqualStrings("fmt", result.problem.unexpected_argument.cmd);
+        try testing.expectEqualStrings("--replace-dep", result.problem.unexpected_argument.arg);
+    }
+    {
+        const result = try parse(gpa, testing.io, &[_][]const u8{ "glue", "--replace-dep", url, "../pkg/main.roc" });
+        try testing.expectEqualStrings("glue", result.problem.unexpected_argument.cmd);
+        try testing.expectEqualStrings("--replace-dep", result.problem.unexpected_argument.arg);
+    }
+    {
+        const result = try parse(gpa, testing.io, &[_][]const u8{ "help", "--replace-dep", url, "../pkg/main.roc" });
+        try testing.expectEqualStrings("help", result.problem.unexpected_argument.cmd);
+    }
+    // Resolving commands still get their own help and problems.
+    {
+        const result = try parse(gpa, testing.io, &[_][]const u8{ "check", "--replace-dep", url, "../pkg/main.roc", "--help" });
+        try testing.expect(std.mem.find(u8, result.help, "--replace-dep OLD NEW") != null);
     }
 }

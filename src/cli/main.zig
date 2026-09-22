@@ -4611,6 +4611,7 @@ fn buildHotReloadChildArgv(
     if (args.no_cache) try appendOwnedArg(ctx.gpa, &argv, &owned, "--no-cache={}", .{@as(u8, 1)});
     try appendOwnedArg(ctx.gpa, &argv, &owned, "--no-color={}", .{if (ctx.no_color) @as(u8, 1) else @as(u8, 0)});
     try appendResolveLimitArgs(ctx.gpa, &argv, &owned, args.resolve_limits);
+    try appendHotReloadReplaceDepArgs(ctx.gpa, &argv, &owned, &args.resolve_limits.replace_deps);
 
     return .{
         .argv = try argv.toOwnedSlice(ctx.gpa),
@@ -5401,6 +5402,64 @@ test "hot reload worker args require append offset" {
     try std.testing.expectEqual(true, parsed.preserve_descriptor_refs);
     try std.testing.expectEqual(base.SpecializationStrategy.lss, parsed.specialization_strategy);
     try std.testing.expect(parsed.no_color);
+    try std.testing.expectEqual(@as(usize, 0), parsed.resolve_limits.replace_deps.len);
+
+    // Replacements arrive as old/new pairs, in order.
+    const with_replacements = try parseHotReloadDevWorkerArgs(&.{
+        "--path=app.roc",
+        "--target=x64linux",
+        "--generation=2",
+        "--descriptor-offset=7680",
+        "--image-limit=7680",
+        "--region-start=1024",
+        "--region-end=3072",
+        "--append-offset=4096",
+        "--preserve-descriptor-refs=1",
+        "--shm-handle=3",
+        "--shm-size=8192",
+        "--expected-host=" ++ zero_host,
+        "--watch-inputs-file=watch-inputs",
+        "--specialization-strategy=lss",
+        "--replace-dep-old=https://example.com/pkg/1.2.3/abc.tar.zst?x=y",
+        "--replace-dep-new=../pkg/main.roc",
+        "--replace-dep-old=./b/main.roc",
+        "--replace-dep-new=https://example.com/pkg/1.2.3/abc.tar.zst",
+    });
+    const replacements = with_replacements.resolve_limits.replace_deps.slice();
+    try std.testing.expectEqual(@as(usize, 2), replacements.len);
+    try std.testing.expectEqualStrings("https://example.com/pkg/1.2.3/abc.tar.zst?x=y", replacements[0].old);
+    try std.testing.expectEqualStrings("../pkg/main.roc", replacements[0].new);
+    try std.testing.expectEqualStrings("./b/main.roc", replacements[1].old);
+    try std.testing.expectEqualStrings("https://example.com/pkg/1.2.3/abc.tar.zst", replacements[1].new);
+
+    // A dangling old, a new without its old, and two olds in a row are all rejected.
+    for ([_][]const []const u8{
+        &.{"--replace-dep-old=./a/main.roc"},
+        &.{"--replace-dep-new=./a/main.roc"},
+        &.{ "--replace-dep-old=./a/main.roc", "--replace-dep-old=./b/main.roc", "--replace-dep-new=./c/main.roc" },
+    }) |extra| {
+        var argv = std.ArrayList([]const u8).empty;
+        defer argv.deinit(std.testing.allocator);
+        try argv.appendSlice(std.testing.allocator, &.{
+            "--path=app.roc",
+            "--target=x64linux",
+            "--generation=2",
+            "--descriptor-offset=7680",
+            "--image-limit=7680",
+            "--region-start=1024",
+            "--region-end=3072",
+            "--append-offset=4096",
+            "--preserve-descriptor-refs=1",
+            "--shm-handle=3",
+            "--shm-size=8192",
+            "--expected-host=" ++ zero_host,
+            "--watch-inputs-file=watch-inputs",
+            "--specialization-strategy=lss",
+        });
+        try argv.appendSlice(std.testing.allocator, extra);
+        try std.testing.expectError(error.InvalidArguments, parseHotReloadDevWorkerArgs(argv.items));
+    }
+
     try std.testing.expectError(error.InvalidArguments, parseHotReloadDevWorkerArgs(&.{
         "--path=app.roc",
         "--target=x64linux",
@@ -6177,6 +6236,8 @@ fn parseHotReloadDevWorkerArgs(args: []const []const u8) error{InvalidArguments}
     var no_cache: bool = false;
     var no_color: bool = false;
     var resolve_limits = cli_args.ResolveLimitArgs{};
+    // `--replace-dep-old` must be followed by its `--replace-dep-new`.
+    var pending_replace_old: ?[]const u8 = null;
 
     for (args) |arg| {
         if (hotReloadFlagValue(arg, "--path")) |value| {
@@ -6223,10 +6284,20 @@ fn parseHotReloadDevWorkerArgs(args: []const []const u8) error{InvalidArguments}
             resolve_limits.max_package_mb = std.fmt.parseInt(u32, value, 10) catch return error.InvalidArguments;
         } else if (hotReloadFlagValue(arg, "--max-transitive-mb")) |value| {
             resolve_limits.max_transitive_mb = std.fmt.parseInt(u32, value, 10) catch return error.InvalidArguments;
+        } else if (hotReloadFlagValue(arg, "--replace-dep-old")) |value| {
+            if (pending_replace_old != null) return error.InvalidArguments;
+            pending_replace_old = value;
+        } else if (hotReloadFlagValue(arg, "--replace-dep-new")) |value| {
+            const old = pending_replace_old orelse return error.InvalidArguments;
+            if (resolve_limits.replace_deps.len == cli_args.ReplaceDepArgs.max) return error.InvalidArguments;
+            resolve_limits.replace_deps.items[resolve_limits.replace_deps.len] = .{ .old = old, .new = value };
+            resolve_limits.replace_deps.len += 1;
+            pending_replace_old = null;
         } else {
             return error.InvalidArguments;
         }
     }
+    if (pending_replace_old != null) return error.InvalidArguments;
 
     return .{
         .path = path orelse return error.InvalidArguments,
@@ -14606,6 +14677,34 @@ fn appendResolveLimitArgs(
     }
 }
 
+/// Forward every `--replace-dep OLD NEW` to a watch child, which parses the
+/// public command line and so takes the flag in its public three-argument form.
+fn appendReplaceDepArgs(
+    gpa: Allocator,
+    argv: *std.ArrayList([]const u8),
+    replace_deps: *const cli_args.ReplaceDepArgs,
+) Allocator.Error!void {
+    for (replace_deps.slice()) |replacement| {
+        try argv.append(gpa, "--replace-dep");
+        try argv.append(gpa, replacement.old);
+        try argv.append(gpa, replacement.new);
+    }
+}
+
+/// Forward every `--replace-dep OLD NEW` to the hot-reload worker, whose
+/// internal argument syntax is strictly `--flag=value`, as an old/new pair.
+fn appendHotReloadReplaceDepArgs(
+    gpa: Allocator,
+    argv: *std.ArrayList([]const u8),
+    owned: *std.ArrayList([]const u8),
+    replace_deps: *const cli_args.ReplaceDepArgs,
+) Allocator.Error!void {
+    for (replace_deps.slice()) |replacement| {
+        try appendOwnedArg(gpa, argv, owned, "--replace-dep-old={s}", .{replacement.old});
+        try appendOwnedArg(gpa, argv, owned, "--replace-dep-new={s}", .{replacement.new});
+    }
+}
+
 fn buildWatchChildArgv(ctx: *CliCtx, arg0: []const u8, command: WatchCommand, inputs_path: []const u8) Allocator.Error!WatchChildArgv {
     var argv = std.ArrayList([]const u8).empty;
     errdefer argv.deinit(ctx.gpa);
@@ -14628,6 +14727,7 @@ fn buildWatchChildArgv(ctx: *CliCtx, arg0: []const u8, command: WatchCommand, in
             if (args.verbose) try argv.append(ctx.gpa, "--verbose");
             if (args.max_threads) |jobs| try appendOwnedArg(ctx.gpa, &argv, &owned, "--jobs={}", .{jobs});
             try appendResolveLimitArgs(ctx.gpa, &argv, &owned, args.resolve_limits);
+            try appendReplaceDepArgs(ctx.gpa, &argv, &args.resolve_limits.replace_deps);
             try appendOwnedArg(ctx.gpa, &argv, &owned, "--watch-inputs-file={s}", .{inputs_path});
             try argv.append(ctx.gpa, args.path);
         },
@@ -14640,6 +14740,7 @@ fn buildWatchChildArgv(ctx: *CliCtx, arg0: []const u8, command: WatchCommand, in
             if (args.verbose) try argv.append(ctx.gpa, "--verbose");
             if (args.max_threads) |jobs| try appendOwnedArg(ctx.gpa, &argv, &owned, "--jobs={}", .{jobs});
             try appendResolveLimitArgs(ctx.gpa, &argv, &owned, args.resolve_limits);
+            try appendReplaceDepArgs(ctx.gpa, &argv, &args.resolve_limits.replace_deps);
             try appendOwnedArg(ctx.gpa, &argv, &owned, "--watch-inputs-file={s}", .{inputs_path});
             try argv.append(ctx.gpa, args.path);
         },
@@ -14657,6 +14758,7 @@ fn buildWatchChildArgv(ctx: *CliCtx, arg0: []const u8, command: WatchCommand, in
             if (args.wasm_memory) |bytes| try appendOwnedArg(ctx.gpa, &argv, &owned, "--wasm-memory={}", .{bytes});
             if (args.wasm_stack_size) |bytes| try appendOwnedArg(ctx.gpa, &argv, &owned, "--wasm-stack-size={}", .{bytes});
             try appendResolveLimitArgs(ctx.gpa, &argv, &owned, args.resolve_limits);
+            try appendReplaceDepArgs(ctx.gpa, &argv, &args.resolve_limits.replace_deps);
             try appendOwnedArg(ctx.gpa, &argv, &owned, "--watch-inputs-file={s}", .{inputs_path});
             try argv.append(ctx.gpa, args.path);
         },
@@ -14666,6 +14768,43 @@ fn buildWatchChildArgv(ctx: *CliCtx, arg0: []const u8, command: WatchCommand, in
         .argv = try argv.toOwnedSlice(ctx.gpa),
         .owned = try owned.toOwnedSlice(ctx.gpa),
     };
+}
+
+test "watch child argv forwards every dependency replacement" {
+    var io = Io.create(std.testing.io);
+    var ctx = CliCtx.init(std.testing.allocator, std.testing.allocator, &io, .check);
+    ctx.initIo();
+    defer ctx.deinit();
+
+    const url = "https://example.com/pkg/1.2.3/abc.tar.zst";
+    var replace_deps = cli_args.ReplaceDepArgs{};
+    replace_deps.items[0] = .{ .old = url, .new = "../pkg/main.roc" };
+    replace_deps.items[1] = .{ .old = "./b/main.roc", .new = url };
+    replace_deps.len = 2;
+
+    const commands = [_]WatchCommand{
+        .{ .check = .{ .path = "app.roc", .main = null, .resolve_limits = .{ .replace_deps = replace_deps } } },
+        .{ .build = .{ .path = "app.roc", .opt = .dev, .resolve_limits = .{ .replace_deps = replace_deps } } },
+        .{ .test_cmd = .{ .path = "app.roc", .opt = .dev, .main = null, .resolve_limits = .{ .replace_deps = replace_deps } } },
+    };
+    for (commands) |command| {
+        var child_argv = try buildWatchChildArgv(&ctx, "roc", command, "watch-inputs");
+        defer child_argv.deinit(std.testing.allocator);
+
+        // Re-parse the child command line exactly as the child will.
+        const parsed = try cli_args.parse(std.testing.allocator, std.testing.io, child_argv.argv[1..]);
+        const limits = switch (parsed) {
+            .check => |args| args.resolve_limits,
+            .build => |args| args.resolve_limits,
+            .test_cmd => |args| args.resolve_limits,
+            .run, .docs, .deps, .help, .problem, .fmt, .bundle, .unbundle, .repl, .glue, .version, .bump, .install, .experimental_lsp, .licenses => return error.TestUnexpectedResult,
+        };
+        try std.testing.expectEqual(@as(usize, 2), limits.replace_deps.len);
+        try std.testing.expectEqualStrings(url, limits.replace_deps.slice()[0].old);
+        try std.testing.expectEqualStrings("../pkg/main.roc", limits.replace_deps.slice()[0].new);
+        try std.testing.expectEqualStrings("./b/main.roc", limits.replace_deps.slice()[1].old);
+        try std.testing.expectEqualStrings(url, limits.replace_deps.slice()[1].new);
+    }
 }
 
 test "watch child argv propagates no-color" {
