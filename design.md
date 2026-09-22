@@ -2899,7 +2899,12 @@ consume that index directly; they do not scan source statements to find builtin
 backings or duplicate the containers' storage definitions. Declaration formals
 and backing templates remain shared checked data. Each strategy substitutes the
 actual arguments only when lowering a reachable use, with Boxy preserving the
-explicit nested descriptors and ordinary LIR ownership contract.
+explicit nested descriptors and ordinary LIR ownership contract. Because every
+use of a declaration shares its formals, a substitution of those formals is
+scoped to one use's backing, with actuals resolved in the enclosing scope: in
+`Try(Try(U64, Str), Str)` the outer backing binds `ok` to `Try(U64, Str)` and
+the inner backing binds it to `U64`. The innermost binding shadows the others;
+type arguments themselves belong to the enclosing scope.
 
 ### Platform/App Relation
 
@@ -2922,7 +2927,18 @@ and pairs the platform requirement payload's identity nodes with the recorded
 solutions slot by slot. No stage after check completion resolves an app export
 by name, re-checks requirement/provided type compatibility, or re-derives
 identity bindings by structurally matching platform types against app types. A
-requirement/app mismatch is only ever a check-time diagnostic. Finalization
+requirement/app mismatch is only ever a check-time diagnostic.
+
+The requirement's identity variables stand for exactly the app's solved types,
+so a relation-bearing platform CheckedModule resolves every checked source
+root through those `formal -> actual` pairs once, before any checked body,
+pattern, template, provided export, or root request reads a type. A platform
+body that calls a requirement therefore sees the app's actual types: the
+requirement's `_` is the app's payload type, and its `..` row tail is the
+app's actual row, never a bare tail that a consumer would read as closed. The
+resolution shares one clone memo across the whole module so every other
+identity variable keeps a single root, and it clones only roots that reach a
+formal; nothing downstream re-applies the relation. Finalization
 constructs one total outcome per platform requirement: an exact relation/binding
 for a successful solution or an explicit checked-error requirement index for a
 failed solution. The relation-bearing platform CheckedModule preserves successful
@@ -2943,7 +2959,10 @@ platform requirement type supplies the solved interface, not the scheme's
 evidence identity. Checked output validates a direct procedure's root vector
 against the app template's parameter count. Monotype selects this root evidence
 before materializing an edge for a direct call, procedure value, or interface
-relation; downstream specialization receives only that selected edge.
+relation; downstream specialization receives only that selected edge. Boxy
+planning selects the same root evidence, read through the app CheckedModule's
+evidence table, for every direct call and procedure-value use of a platform
+requirement.
 
 A platform `provides` declaration must name a top-level value defined in the
 platform module. It cannot name a value from `requires` directly; a platform
@@ -4365,20 +4384,20 @@ encoding.parse_str : encoding, state -> Try({ value : Str, rest : state }, err)
 encoding.parse_u64 : encoding, state -> Try({ value : U64, rest : state }, err)
 encoding.parse_tag_union : encoding, Encoding.ParseTagUnionSpec(a), state -> Try({ value : a, rest : state }, err)
 
+encoding.parse_record_start : encoding, state -> Try([Counted({ len : U64, rest : state }), Uncounted(state)], err)
 encoding.parse_record_field : encoding, Encoding.FieldName.FieldNames(_shape), state -> Try(
 	[
 		Field({ field : Encoding.FieldName(_shape), rest : state }),
 		TryField({ name : Str, rest : state }),
 		TryFieldCaseless({ name : Str, rest : state }),
-		Continue({ rest : state }),
-		Done({ rest : state }),
+		Continue(state),
+		Done(state),
 	],
 	err,
 )
+encoding.parse_record_after_field : encoding, state -> Try([Continue(state), Done(state)], err)
 
 encoding.skip_record_field : encoding, state -> Try(state, err)
-encoding.missing_record_field : encoding, Str, state -> err
-encoding.missing_optional_field : encoding, Str, state -> optional_err
 encoding.rename_field : encoding, Str -> Str
 ```
 
@@ -4412,19 +4431,23 @@ code calls the format's `skip_record_field` method with the encoding and `rest`,
 then continues with the returned state. This avoids scanning matched values
 twice while still letting unknown fields be skipped correctly.
 
-`Continue.rest` advances the record loop after the format has consumed input
-that cannot be a relevant field. `Done.rest` is the state remaining after the
-record ends. If the generated finisher sees that a required field was never
-filled, it calls the format's `missing_record_field` method with the encoding,
-field name, and final state to produce the format's concrete parse error value.
-Optional fields are expressed by their field type, for example
-`Try(Str, [Missing])`. If an optional field is absent, the generated finisher
-calls the format's `missing_optional_field` method with the encoding, field
-name, and final state at the optional field's error type and stores
-`Err(missing)` in that field. This lets the format define the absence tag;
-`Missing`, `Absent`, or any other tag name is ordinary userspace data, not a
-compiler-known concept. A field annotated as `Try(Str, _)` can infer that error
-type from the format method's return type.
+`parse_record_start` says whether the format knows the record's entry count up
+front (`Counted`) or learns where the record ends from its events
+(`Uncounted`). `Continue` advances the record loop after the format has consumed
+a whole entry itself, and `Done` carries the state remaining after the record
+ends. After a matched field's value or a skipped entry, a counted record counts
+that entry down and an uncounted record calls `parse_record_after_field`, whose
+`Continue` or `Done` says whether another entry follows.
+
+If the generated finisher sees that a required field was never filled, the
+generated parser itself reports the failure, as described in "Derived Parser
+Required-Field Error Composition": `MissingRequiredField(field_name)` when the
+parser's error row retains that tag, otherwise the format's checked
+`invalid_value` capability. Formats implement no missing-field callback. A field
+whose key may be absent says so through its kind or type: an absent
+`Try(Str, [Missing])` field is `Err(Missing)`, an absent `?:` field is in its
+missing state, and an absent `??` field holds its default. A field annotated as
+`Try(Str, _)` has its error row pinned to `[Missing]`.
 
 Record-field dispatch is optimized around the assumption that serialized record
 field names are overwhelmingly small. JSON object keys, HTTP headers, CSV
@@ -4643,13 +4666,10 @@ Parsing a Roc `Str` from JSON succeeds only for JSON string values. JSON `null`
 and missing object fields are separate format conditions. They are surfaced only
 through field or value types that request them, such as `Try(Str, [Null])` or
 `Try(Str, [Missing])`; the plain `Str` method does not accept either condition.
-`Try(a, [Null])` is the nullable JSON value shape. A format's
-`missing_optional_field` method chooses the record-field absence tag for
-optional fields; JSON uses `Missing`, but another format may choose `Absent` or
-any other tag. `Try(a, [Missing])` and `Try(a, [Missing, Null])` are JSON's
-record-field-only shapes: missing fields parse as `Err(Missing)`, explicit
-`null` parses as `Err(Null)` only when `Null` is in the row, and encoding
-`Err(Missing)` omits the field. Missing fields and `Null` are never conflated.
+`Try(a, [Null])` is the nullable JSON value shape: explicit `null` parses as
+`Err(Null)`. `Try(a, [Missing])` is the record-field-only optional shape: a
+missing field parses as `Err(Missing)`, and encoding `Err(Missing)` omits the
+field. Missing fields and `Null` are never conflated.
 
 JSON arrays are used for lists, tuples, and sets. Tuples parse with exact arity.
 Sets preserve `Set` insertion order and parse by inserting the array items.
@@ -4666,31 +4686,31 @@ HttpHeaderState :: { raw : Str }
 
 HttpHeaderEncoding :: [Caseless].{
 	rename_field : HttpHeaderEncoding, Str -> Str
-	parse_str : HttpHeaderEncoding, HttpHeaderState -> Try({ value : Str, rest : HttpHeaderState }, HttpHeader)
-	parse_u64 : HttpHeaderEncoding, HttpHeaderState -> Try({ value : U64, rest : HttpHeaderState }, HttpHeader)
+	parse_str : HttpHeaderEncoding, HttpHeaderState -> Try({ value : Str, rest : HttpHeaderState }, [BadHeader])
+	parse_u64 : HttpHeaderEncoding, HttpHeaderState -> Try({ value : U64, rest : HttpHeaderState }, [BadHeader])
 
+	parse_record_start : HttpHeaderEncoding, HttpHeaderState -> Try([Counted({ len : U64, rest : HttpHeaderState }), Uncounted(HttpHeaderState)], [BadHeader])
 	parse_record_field : HttpHeaderEncoding, Encoding.FieldName.FieldNames(_shape), HttpHeaderState -> Try(
 		[
 			Field({ field : Encoding.FieldName(_shape), rest : HttpHeaderState }),
 			TryField({ name : Str, rest : HttpHeaderState }),
 			TryFieldCaseless({ name : Str, rest : HttpHeaderState }),
-			Continue({ rest : HttpHeaderState }),
-			Done({ rest : HttpHeaderState }),
+			Continue(HttpHeaderState),
+			Done(HttpHeaderState),
 		],
-		HttpHeader,
+		[BadHeader],
 	)
+	parse_record_after_field : HttpHeaderEncoding, HttpHeaderState -> Try([Continue(HttpHeaderState), Done(HttpHeaderState)], [BadHeader])
 
-	skip_record_field : HttpHeaderEncoding, HttpHeaderState -> Try(HttpHeaderState, HttpHeader)
-	missing_record_field : HttpHeaderEncoding, Str, HttpHeaderState -> HttpHeader
-	missing_optional_field : HttpHeaderEncoding, Str, HttpHeaderState -> [Missing]
+	skip_record_field : HttpHeaderEncoding, HttpHeaderState -> Try(HttpHeaderState, [BadHeader])
 }
 
-HttpHeader := [MissingRequired, BadHeader].{
+HttpHeader :: {}.{
 	output.Parseable(errs) : where [
 		output.parser_for : HttpHeaderEncoding -> (HttpHeaderState -> Try({ value : output, rest : HttpHeaderState }, errs)),
 	]
 
-	parser_for : () -> (Str -> Try(output, HttpHeader)) where [output.Parseable(HttpHeader)]
+	parser_for : () -> (Str -> Try(output, [BadHeader, ..errs])) where [output.Parseable([BadHeader, ..errs])]
 	parser_for = || {
 		Output : output
 		parse_output = Output.parser_for(HttpHeaderEncoding.Caseless)
@@ -4701,7 +4721,7 @@ HttpHeader := [MissingRequired, BadHeader].{
 		}
 	}
 
-	parse : Str -> Try(output, HttpHeader)
+	parse : Str -> Try(output, [BadHeader, ..errs])
 }
 ```
 
@@ -4721,15 +4741,16 @@ The exact derived parser type for a header record with mixed field shapes is:
 		},
 		rest : HttpHeaderState,
 	},
-	Encoding.HttpHeader,
+	[BadHeader, MissingRequiredField(Str)],
 ))
 ```
 
-Because `Encoding.HttpHeader` does not define `parse_tag_union`, trying to parse a
-header record that contains a tag union is a compile-time static-dispatch error:
+Because `Encoding.HttpHeaderEncoding` does not define `parse_tag_union`, trying
+to parse a header record that contains a tag union is a compile-time
+static-dispatch error:
 
 ```roc
-bad : Try({ mode : [On, Off] }, Encoding.HttpHeader)
+bad : Try({ mode : [On, Off] }, [BadHeader, MissingRequiredField(Str)])
 bad = Encoding.HttpHeader.parse("mode: On\r\n")
 ```
 
@@ -6371,19 +6392,45 @@ a `Try` of its own—the annotated result when there is one, otherwise a fresh
 An ordinary `return` remains equal to the composed result, except that a body
 not yet settled to a `Try` is settled by its ordinary returns first, exactly
 as in a lambda without `?`, and those returns remain equal to that body. A
-return generated by `?` composes its error contribution into the composed
-result: all contributions with visible tags are merged first. A tagless
-contribution keeps the ordinary full-row equality unless its error variable is
-already a structural part of the merged row; only that relation would make the
-type recursive, so that contribution is instead related to the merged row's
-residual extension. The success parameters remain equal. This applies equally
-when an annotation explicitly shares the callee error variable with the
-residual return row.
+return generated by `?` contributes its error row to that `Try` result. Success
+parameters are related first. Before relating any error rows, the checker collects the
+whole lambda's contributions and the body error row, and records which type
+variables occur inside their payloads. Aliases and row extensions preserve
+row position; payloads and their structural descendants are nested positions.
+Static-dispatch requirements are not structural children.
+
+A contribution whose row spine (including its residual extension) occurs in
+a nested position must keep its source identity. Its visible tags contribute
+through a fresh row spine that shares the ORIGINAL payload variables; after
+all visible contributions have merged, its residual tail is related to the
+result's residual tail. This is a directed relation, including when the source
+already has tags: `E = [NotFound, ..r]` and a contribution `Wrapped(E)` produce
+`[NotFound, Wrapped(E), ..r]`, without identifying `E` with that result.
+Any tags exposed in a residual source by the payload relations contribute by
+the same rule before its terminal extension is related. A tagless nested
+contribution is the zero-head instance of this same operation.
+
+A source already identical to the destination's residual tail is included
+without equating it to the whole destination row. Independent contributions
+otherwise retain ordinary full-row equality. This preserves
+normal merging of compatible overlapping tags, including overlaps exposed by
+later instantiation. Composition does not introduce general row subsumption
+or reinterpret an annotation that already identifies source and destination.
+The success parameters remain equal. Explicit shared-tail annotations obey
+the same composition rule.
+
+The nested-position inventory is one batch traversal, visiting a type-store
+class at most once per position. Its indexed scratch and row buffers retain
+capacity across lambdas and carry no meaning across mutations or boundaries.
+Only the affected row spines are allocated; payload graphs are never copied.
+The remaining dependency is represented by shared row-tail variables, so
+ordinary generalization, instantiation, and checked-module serialization carry
+it without an additional constraint kind or per-type-variable metadata.
 
 The body's own result is one more contribution, and it is INCLUDED in the
 composed result rather than equal to it: its success type is equal, its error
-row's visible tags merge in through ordinary row unification, and a tagless
-error row becomes the composed row's residual extension. Equating the rows
+row contributes through a fresh spine with unchanged payload variables when
+nested and ordinary row unification otherwise, and a tagless error row becomes the composed row's residual extension. Equating the rows
 instead writes every composed tag back into whatever produced the body's
 value. When that value is a tail call, that is the callee's own error row—for
 a callback parameter, the caller's callback—and a caller whose callback fails
@@ -6416,15 +6463,9 @@ vars, ranks, regions, and deferred constraints before the original full return
 relation reports the mismatch; the probe never weakens a non-`Try` body or
 changes its diagnostic graph.
 
-This order expresses the directed meaning of propagation without equating a
-source error row with an enclosing row that already structurally contains it.
-In particular, one bare `?` and one `? Wrapped` applied to a shared monomorphic
-error `e` infer an enclosing error row shaped like `[Wrapped(e), ..e]`; they do
-not create the recursive equation `e = [Wrapped(e), ..]`. When the bare error
-is independent of the merged row, full-row equality remains responsible for
-normal row merging. This preserves the existing normalization of overlapping
-compatible tags instead of manufacturing duplicate tag-extension chains.
-Ordinary tag-row unification remains the sole owner of tag merging.
+Ordinary tag-row unification remains the sole owner of tag merging and
+payload compatibility. Composition chooses its explicit source and destination
+rows before those relations; it never repairs a recursive solved graph.
 
 Tag names remain unique across a complete extension chain. Because an inferred
 tail can be generalized before a later use instantiates it, the checker
@@ -6453,6 +6494,8 @@ lower with the active return cell as their expected type. Lambda Solved and LIR
 consume the retained source/target relation to convert the returned value.
 
 The accepted side is pinned by
+`test/snapshots/try_tag_wrapped_shared_err_var.md`,
+`test/snapshots/issue/issue_11470_try_row_composition_controls.md`,
 `test/snapshots/issue/issue_11097_bare_and_wrapped_try_on_shared_error_var.md`
 and `test/snapshots/issue/issue_11097_try_return_composition_controls.md`,
 including its explicit shared-tail annotation, while
@@ -6474,6 +6517,16 @@ between two otherwise free row variables, which no equality-based scheme
 expresses; the checker collapses `r = err`, and a caller that re-tags the
 callback's errors then needs a recursive row. That is a bounded-row question
 for Deferred: Row Subsumption, not a defect of composition.
+
+The `composed body preserves shared tagged callback errors` checker test pins
+a tail call whose tagged source row is also a wrapper payload.
+The issue #11470 checker tests additionally reject
+incompatible payloads, an omitted wrapper in the annotation, and a wrapper
+overlap exposed by instantiation. The shared `issue_11470_source.zig` runtime
+fixture exercises success, both bare error paths, and both wrapped error paths
+with owned string payloads; an imported polymorphic callable pins shared-tail
+instantiation across checked modules. The evaluator corpus covers the execution backends,
+and `lir_inline_test.zig` executes both lowering strategies with leak checking.
 
 ### Result-Row Widening Adapter
 
@@ -8201,18 +8254,18 @@ Other solved-graph mutations:
   Required-Field Error Composition (above). A format or custom parser method's
   instantiated error extension is closed, then its concrete tags gate ordinary
   unification constraints requiring the parent parser row to include them.
-- `processReturnConstraints`—policy: Inferred Try Return-Row Composition
-  (above). A commit-probe seeds an unsettled inferred body only when ordinary
-  unification establishes a `Try`; a lambda with a `?` return then owns a
-  composed `Try` (the annotated result, or a fresh `Try` sharing the body's
-  success type) into which explicit `try_suffix` constraints with visible tags
-  are unified. The body result is included: success types unify, a tagged body
-  row unifies with the composed row, and a tagless body row unifies with the
-  composed row's residual extension. A structural reachability check selects
-  the residual extension for a tagless `?` contribution only when full equality
-  would identify it with a row that already contains it; every independent
-  `?` contribution keeps ordinary full-row equality. A failed probe is fully
-  rolled back, and no descriptor redirect or post-check restamp occurs.
+- `processReturnConstraints` / `collectTryReturnRowUses` /
+  `projectTryReturnRow`—policy: Try Return-Row Composition (above).
+  A commit-probe seeds an unsettled inferred body only when ordinary
+  unification establishes a `Try`. A lambda with a `?` return owns a composed `Try`: the annotated result,
+  or a fresh `Try` sharing the body's success type. The body participates in
+  the same batch, with a tagless body row always included in the residual
+  result tail. A batch structural inventory records nested
+  uses before error-row relations run. A source row used in a payload
+  contributes through a fresh spine with unchanged payload identities, and
+  relates its residual tail after visible tags have merged; independent
+  contributions retain full-row equality. No solved source row is redirected,
+  and no checked metadata is restamped.
 - `validateSettledValueTagRows`—policy: Inferred Try Return-Row Composition
   (above). A read-only walk rejects duplicate tag names exposed across a
   settled value row's extension chain; after every rejection is reported from
@@ -8523,6 +8576,21 @@ information needed to copy, drop, allocate, inspect, or dispatch on that
 payload is not stored in the value; it travels separately as explicit hidden
 data.
 
+A checked flex variable that no enclosing worker scheme quantifies has no hidden
+descriptor to supply its payload description; for example, the item variable of
+`[]` in a monomorphic `main! = |_| Ok([])` appears in no worker signature. Such a
+variable keeps the `erased_box` value layout, and its static descriptor
+describes the representation the variable seals to under the same rule Monotype
+applies in `lowerCheckedTypeVariable`: its numeric default when it carries a
+numeric default phase, otherwise its row default (`{}` or `[]`), otherwise the
+empty tag union. Planning records that sealed representation as explicit
+`sealed_default` data on the flex representation, so lowering reads it rather
+than re-deriving a default from the checked type. A flex variable carrying
+non-numeric static-dispatch constraints has no sealed default, because its
+dispatch needs a dictionary that only a quantifying scheme can supply; reaching
+it without a bound descriptor, like reaching an unbound rigid variable, is a
+lowering invariant violation.
+
 `erased_box` is distinct from the `box_of_zst` layout used for `Box({})`. `Box({})` is
 represented by a null pointer, owns no allocation, and is not refcounted. An
 `erased_box` is a refcounted layout even when its current descriptor names a
@@ -8679,6 +8747,14 @@ share the representation table's structural vocabulary. ABI shapes are never
 reconstructed from erased worker children. Wrappers and adapters consume the
 planned pair, including its exact tag payload types and descriptor provenance.
 Equal storage layouts alone do not permit aliasing boundary result locals.
+
+A compiler-backed low-level operation returning builtin `Try` requests an exact
+ABI representation of its checked result during planning. This opens nominal
+arguments and applies checked row defaults in the ABI context. The operation
+writes that complete concrete result, then an explicit descriptor-guided
+adapter converts it into the worker representation. Worker error-row boxes are
+not builtin result slots, and changing only the outer `Try` layout does not
+describe its nested payload storage.
 
 The host ABI is independent of lowering strategy. `.boxy` changes only private
 Roc implementation procedures. Any LIR root whose checked root metadata has
@@ -11529,15 +11605,17 @@ interchangeability bits from committed item layouts and emits either a
 constant false value or an `assign_low_level` with explicit
 `interchangeable` metadata.
 
-Typed numeric `*_from_str` operations have a closed concrete result ABI. The
-lowerer consumes the operation's `NumericParseSpec`, emits `assign_low_level`
-into a two-variant tag union whose `Err` payload is zero-sized and whose `Ok`
-payload is the specified integer, float, or decimal layout, and attaches a
-descriptor derived from the exact checked result type. When the worker result
-uses erased payload storage, a subsequent `assign_boxy_adapt` carries that
-concrete value and descriptor into the planned result representation. The
-interpreter and code-generation backends therefore receive the concrete builtin
-ABI directly; they do not select numeric payload layouts or descriptor data.
+A low-level operation whose checked result type is the builtin `Try` (the
+typed numeric `*_from_str` parsers, the checked numeric `*_try` conversions,
+and `str_from_utf8`) has a closed concrete result ABI: a two-variant tag union
+whose `Err` and `Ok` payloads use the representations of `Try`'s own `err` and
+`ok` arguments. The lowerer emits `assign_low_level` into that concrete union
+and attaches a descriptor derived from the exact checked result type. Boxy
+stores `Try` payloads in erased storage, so a subsequent `assign_boxy_adapt`
+carries that concrete value and descriptor into the planned result
+representation. The interpreter and code-generation backends therefore receive
+the concrete builtin ABI directly; they do not select payload layouts or
+descriptor data.
 
 Checked unary operator nodes use that same primitive path when they remain in a
 checked body. Unary `-` lowers as `num_negate`, so signed-integer
@@ -11557,6 +11635,38 @@ iterator calls, constant-evaluation calls, and host wrappers all use the same
 mapping model. The producer derives it from checked callable types and checked
 dispatch evidence. It does not inspect the expression variant to decide whether
 the expression type or parameter type is authoritative.
+
+A resolved direct-dispatch call boundary takes its call-side callable from the
+checked evidence selected for that edge. The dispatch plan's own `callable_ty`
+is the constraint callable, whose variables may be distinct from the caller's
+even when both callables describe the same shape; a return position over such a
+variable then has no runtime descriptor source at the call site, because the
+caller's values are bound to its own variables. The selected evidence node
+names the exact callable relation this edge instantiated and is therefore
+authoritative for the boundary; a target scheme with no variables records
+`monomorphic`, and the target's declared callable in the target's own module is
+that relation. Ordinary dispatch calls, iterator protocol calls, and dictionary
+method evidence read that same field. A dictionary dispatch has no selected
+direct node, so its boundary keeps using the plan's constraint callable, which
+is the requirement its dictionary slot is typed against. Worker identity
+remains separate data: a procedure worker is the target's generalized
+declaration whose body is shared by every edge that selects it, while the edge
+instantiation describes only one call's boundary.
+
+For an ordinary instantiated lookup, the checked call-site substitution names
+its callee scheme's exact type-variable instantiations. These bindings take
+precedence over argument pairs obtained while traversing wrappers. A wrapper
+must not replace an explicit scheme binding with a distinct checked row from
+its own callable type. Nominal declaration bindings still shadow enclosing
+bindings within their own backing scope and restore them on exit; conflicting
+wrapper bindings without an explicit scheme binding remain invariant failures.
+
+A checker-marked recursive reference uses its checked callable relation for
+worker descriptor bindings. An annotated recursive reference instantiates the
+in-flight annotation, whose variable slots can differ from the finished worker
+scheme; its site vector must not be paired with that worker scheme's slots.
+The checker-owned recursive-reference flag selects this rule independently of
+vector lengths. Ordinary scheme instantiations still require matching lengths.
 
 Alias and nominal wrappers make substitution ordering explicit. Before the
 planner descends an alias backing, it records each checked `alias_arg` pair from
@@ -11710,6 +11820,46 @@ names a logical payload beneath that storage. The operation descriptor remains
 boundary metadata; it is not attached to unchanged bytes. A boundary may relabel
 an unchanged value only when the producer has proved that the source and target
 descriptors use the same complete storage convention.
+
+Boxy worker tag rows close a variable tail only when it is an unconstrained
+flex with an empty-row default and no procedure scheme quantifies its checked
+identity. The planner indexes the checked procedure tables' quantified
+variables before analyzing representations. Quantified and rigid tails remain
+descriptor inputs even when they carry a row default. Defaulted tails have an
+explicit empty representation and remain row children so generic calls can
+bind their extension parameters.
+
+A checked tag row with no declared tags uses its tail's representation and
+descriptor identity directly. It introduces no additional storage or hidden
+descriptor parameter. Builtin Bool retains its checked backing's two variants
+and closed extension in the representation plan, while keeping its dedicated
+Bool layout. Generic row calls therefore bind Bool's empty tail through the
+same explicit child mapping as other closed tag rows.
+
+The row-instantiation rule applies to both closed and dynamic tag rows. When
+the call supplies tags absent from the worker's local variants, the worker
+extension receives the complete call row's descriptor, preserving that row's
+stored discriminants and payload layouts. This storage binding shadows the
+checked scheme's residual-row type within the row-child scope: the residual
+type alone does not describe the complete caller union's stored tag values.
+Leaving that child restores the enclosing type bindings. A newly constructed
+tag payload uses
+a fresh descriptor local so its fields' descriptors can be captured without
+replacing a read-only worker input.
+
+Hidden arguments for row tails explicitly name the original call argument as
+their descriptor source. Their mapped row may be the complete caller union or
+its empty tail. They do not read the worker's declared extension from an
+adapted value whose descriptor can still describe the caller's closed union.
+Other hidden arguments continue to describe the adapted argument storage.
+
+Before assigning tag storage, Boxy planning gathers every known tag along a
+checked row's extension chain and orders the combined list. Only the terminal
+tail remains an extension child. Different checked row splits therefore use
+the same tag order and do not introduce extra boxed tag layers.
+Payload reads consume the source value's descriptor whenever it carries one,
+including when the checked row is closed and its payload type is concrete.
+Closing the row does not change storage supplied by a generic nominal backing.
 
 Tag-row reads are explicit descriptor operations. Nested payload descriptor
 read, row-extension descriptor read, and residual-row subtraction are separate
