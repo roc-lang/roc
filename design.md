@@ -11468,6 +11468,13 @@ mapping model. The producer derives it from checked callable types and checked
 dispatch evidence. It does not inspect the expression variant to decide whether
 the expression type or parameter type is authoritative.
 
+Tag-row representation producers explicitly mark open tag rows, including rows
+with no named variants. Call substitution consumes that marker to distinguish
+dynamic tag rows from bare type parameters and open records; the number of
+named variants does not establish whether a representation is a tag row.
+Descriptor templates capture an open row's extension descriptor independently
+of the storage layout or presence of locally named variants.
+
 Alias and nominal wrappers make substitution ordering explicit. Before the
 planner descends an alias backing, it records each checked `alias_arg` pair from
 the worker and call representations. A nominal instead records each declaration

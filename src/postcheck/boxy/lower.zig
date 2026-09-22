@@ -27799,6 +27799,24 @@ const ProcBodyBuilder = struct {
             }
         }
 
+        const tag_rep_id = self.parent.tagVariantRepForDesc(identity_rep);
+        const tag_rep = self.parent.plan.representations.items[@intFromEnum(tag_rep_id)];
+        if (tag_rep.kind == .bool_tag_union) return false;
+
+        // A row with no named variants still captures its extension descriptor,
+        // independently of the storage layout used for its dynamic value.
+        var found_ext: ?Plan.TypeRepId = null;
+        for (self.parent.plan.childSlice(tag_rep.children)) |child| {
+            if (child.role != .tag_ext) continue;
+            if (found_ext != null) boxyLowerInvariant("boxy descriptor capture probe saw duplicate tag extension children");
+            found_ext = child.rep;
+        }
+        if (found_ext) |ext_rep_id| {
+            const ext_rep = self.parent.plan.representations.items[@intFromEnum(ext_rep_id)];
+            if (ext_rep_id != tag_rep_id and ext_rep.kind != .empty_tag_union and
+                self.descriptorTemplateRefNeedsCaptures(ext_rep_id, current_desc, visited)) return true;
+        }
+
         const layout_value = self.parent.result.layouts.getLayout(payload_layout);
         const tag_layout = switch (layout_value.tag) {
             .tag_union => layout_value,
@@ -27806,10 +27824,6 @@ const ProcBodyBuilder = struct {
             .scalar, .box_of_zst, .erased_box, .list, .list_of_zst, .struct_, .closure, .erased_callable, .zst, .ptr => return false,
         };
         if (tag_layout.tag != .tag_union) return false;
-
-        const tag_rep_id = self.parent.tagVariantRepForDesc(identity_rep);
-        const tag_rep = self.parent.plan.representations.items[@intFromEnum(tag_rep_id)];
-        if (tag_rep.kind == .bool_tag_union) return false;
         const tag_info = self.parent.result.layouts.getTagUnionInfo(tag_layout);
 
         for (self.parent.plan.tagVariantSlice(tag_rep.tag_variants), 0..) |variant, variant_index| {
@@ -27822,18 +27836,7 @@ const ProcBodyBuilder = struct {
             }
         }
 
-        var found_ext: ?Plan.TypeRepId = null;
-        for (self.parent.plan.childSlice(tag_rep.children)) |child| {
-            if (child.role != .tag_ext) continue;
-            if (found_ext != null) boxyLowerInvariant("boxy descriptor capture probe saw duplicate tag extension children");
-            found_ext = child.rep;
-        }
-        const ext_rep_id = found_ext orelse return false;
-        if (ext_rep_id == tag_rep_id) return false;
-
-        const ext_rep = self.parent.plan.representations.items[@intFromEnum(ext_rep_id)];
-        if (ext_rep.kind == .empty_tag_union) return false;
-        return self.descriptorTemplateRefNeedsCaptures(ext_rep_id, current_desc, visited);
+        return false;
     }
 
     fn descriptorMaterializationForSourceRep(

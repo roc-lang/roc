@@ -256,6 +256,10 @@ pub const TypeRepresentation = struct {
     kind: RepresentationKind,
     children: Span = .{},
     tag_variants: Span = .{},
+    /// Produced from a checked tag row whose extension remains open, including
+    /// rows with no named variants. Distinguishes these dynamic values from
+    /// bare type parameters and open records during call substitution.
+    is_open_tag_row: bool = false,
     /// Explicit nominal field metadata used by aggregate descriptor lowering.
     /// `record_field_order` independently controls its runtime layout.
     declared_fields: Span = .{},
@@ -5317,6 +5321,7 @@ const Builder = struct {
             .kind = if (open_extension != null) .{ .dynamic = .flex } else .tag_union,
             .children = child_span,
             .tag_variants = .{ .start = variant_start, .len = @intCast(variants.items.len) },
+            .is_open_tag_row = open_extension != null,
             .contains_dynamic = open_extension != null,
         };
     }
@@ -5985,6 +5990,7 @@ const Builder = struct {
                 .kind = .{ .dynamic = .flex },
                 .children = child_span,
                 .tag_variants = tag_variants,
+                .is_open_tag_row = true,
                 .contains_dynamic = true,
             };
         }
@@ -12708,7 +12714,7 @@ pub const RepQuery = struct {
 };
 
 fn repIsTagRow(rep: TypeRepresentation) bool {
-    return rep.kind == .tag_union or (rep.kind == .dynamic and rep.tag_variants.len != 0);
+    return rep.kind == .tag_union or rep.is_open_tag_row;
 }
 
 /// True when two child roles are the same payload-free role.
@@ -14927,6 +14933,45 @@ test "boxy planner preserves known variants on open tag-union rows" {
     const payload_children = plan.childSlice(variants[0].payloads);
     try std.testing.expectEqual(@as(usize, 1), payload_children.len);
     try std.testing.expectEqual(ChildRole{ .tag_payload = .{ .tag = tag_exit, .index = 0 } }, payload_children[0].role);
+}
+
+test "boxy call substitution recognizes open tag rows without named variants" {
+    const gpa = std.testing.allocator;
+    const tags = [_]checked.CheckedTag{
+        .{ .name = @enumFromInt(1), .args_start = 0, .args_len = 0 },
+    };
+    const payloads = [_]checked.StoredCheckedTypePayload{
+        .{ .rigid = .{} },
+        .{ .tag_union = .{ .tags = .{}, .ext = @enumFromInt(fixtureTableIndex(0)) } },
+        .{ .flex = .{ .row_default = .empty_tag_union } },
+        .{ .tag_union = .{ .tags = .{ .start = 0, .len = 1 }, .ext = @enumFromInt(2) } },
+        .{ .record = .{ .fields = .{}, .ext = @enumFromInt(fixtureTableIndex(0)) } },
+    };
+    var builder = Builder.init(gpa, .{ .checked_types = .{
+        .stored_payloads = &payloads,
+        .tag_pool = &tags,
+    } });
+    defer builder.deinit();
+
+    for ([_]bool{ false, true }) |host_mode| {
+        builder.host_mode = host_mode;
+        const open_row = try builder.analyzeType(builder.root_view, @enumFromInt(1));
+        const closed_row = try builder.analyzeType(builder.root_view, @enumFromInt(3));
+        const parameter = try builder.analyzeType(builder.root_view, @enumFromInt(fixtureTableIndex(0)));
+        const record = try builder.analyzeType(builder.root_view, @enumFromInt(4));
+        const rep = builder.plan.representations.items[@intFromEnum(open_row)];
+        try std.testing.expect(rep.is_open_tag_row);
+        try std.testing.expectEqual(@as(u32, 0), rep.tag_variants.len);
+        const children = builder.plan.childSlice(rep.children);
+        try std.testing.expectEqual(@as(usize, 1), children.len);
+        try std.testing.expectEqual(ChildRole.tag_ext, children[0].role);
+        const extension = children[0];
+        try std.testing.expectEqual(closed_row, builder.namedQuery().rowInstantiationTarget(open_row, closed_row, extension).?);
+        try std.testing.expect(!repIsTagRow(builder.plan.representations.items[@intFromEnum(parameter)]));
+        try std.testing.expect(!repIsTagRow(builder.plan.representations.items[@intFromEnum(record)]));
+        try std.testing.expectEqual(null, builder.namedQuery().rowInstantiationTarget(open_row, parameter, extension));
+        try std.testing.expectEqual(null, builder.namedQuery().rowInstantiationTarget(record, closed_row, extension));
+    }
 }
 
 test "boxy planner keeps explicit Box of dynamic payload distinct from dynamic payload representation" {
