@@ -22,16 +22,24 @@ book = {
 }
 ```
 
-The trailing comma is optional. It is often useful for multi-line records and for a single-field record, where it makes the record shape especially visible:
+The trailing comma controls how `roc fmt` lays out the record. With a trailing comma, the formatter puts the fields on separate lines. Without one, it keeps the fields on one line when they fit. A field written with its name and value does not need a trailing comma, even when it is the only field:
 
 ```roc
-settings = { theme: "dark", }
+settings = { theme: "dark" }
 ```
 
-If a variable already has the same name as a field, the field pun `{ name }` is shorthand for `{ name: name }`:
+If an identifier with the field's name is already in scope, writing just that identifier as a record field is shorthand for `name: name`:
 
 ```roc
 make_person = |name, age| { name, age }
+```
+
+A single field pun is the exception. It needs a comma because `{ name }` is a block containing the expression `name`, while `{ name, }` is a record:
+
+```roc
+make_name_record = |name| {
+    name,
+}
 ```
 
 Record literals can contain arbitrary expressions, and records can be nested:
