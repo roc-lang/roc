@@ -5300,6 +5300,27 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
                         LowLevelBuiltins.floatPow(ll.ret_layout == .f32),
                     );
                 },
+                .num_atan2 => {
+                    if (args.len != 2) unreachable;
+                    const lhs_loc = try self.emitValueLocal(GuardedList.at(args, 0));
+                    const rhs_loc = try self.emitValueLocal(GuardedList.at(args, 1));
+                    if (ll.ret_layout == .dec) {
+                        const adj_lhs = if (lhs_loc == .stack) ValueLocation{ .stack_i128 = lhs_loc.stack.offset } else lhs_loc;
+                        const adj_rhs = if (rhs_loc == .stack) ValueLocation{ .stack_i128 = rhs_loc.stack.offset } else rhs_loc;
+                        return self.callDecBinaryMathBuiltin(
+                            adj_lhs,
+                            adj_rhs,
+                            LowLevelBuiltins.decBinaryArith(.num_atan2),
+                        );
+                    }
+
+                    return self.callFloatBinaryBuiltin(
+                        lhs_loc,
+                        rhs_loc,
+                        ll.ret_layout,
+                        LowLevelBuiltins.floatAtan2(ll.ret_layout == .f32),
+                    );
+                },
                 .num_sin,
                 .num_cos,
                 .num_tan,
@@ -7441,6 +7462,7 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
                 .num_negate_checked,
                 .num_plus,
                 .num_pow,
+                .num_atan2,
                 .num_rem_by,
                 .num_rem_by_checked,
                 .num_round,

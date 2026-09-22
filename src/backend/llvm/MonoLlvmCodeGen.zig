@@ -4410,6 +4410,10 @@ pub const MonoLlvmCodeGen = struct {
                 try self.emitDecPow(target, arg_locals)
             else
                 try self.emitNumericFloatPow(target, arg_locals),
+            .num_atan2 => if (self.localLayout(target) == .dec)
+                try self.emitDecAtan2(target, arg_locals)
+            else
+                try self.emitNumericFloatAtan2(target, arg_locals),
             .num_sqrt => try self.emitNumericSqrt(target, GuardedList.at(arg_locals, 0)),
             .num_sin => try self.emitNumericUnaryMath(target, GuardedList.at(arg_locals, 0), .num_sin),
             .num_cos => try self.emitNumericUnaryMath(target, GuardedList.at(arg_locals, 0), .num_cos),
@@ -9419,10 +9423,35 @@ pub const MonoLlvmCodeGen = struct {
         try self.storeScalar(self.slot(target).ptr, target_layout, result);
     }
 
+    fn emitNumericFloatAtan2(self: *MonoLlvmCodeGen, target: LocalId, args: anytype) Error!void {
+        const target_layout = self.localLayout(target);
+        const target_ty: LlvmBuilder.Type = switch (target_layout) {
+            .f32 => .float,
+            .f64 => .double,
+            .bool, .str, .u8, .i8, .u16, .i16, .u32, .i32, .u64, .i64, .u128, .i128, .dec, .opaque_ptr, .zst, .u8x16, .i8x16, .u16x8, .i16x8, .u32x4, .i32x4, .u64x2, .i64x2, _ => return error.UnsupportedLowLevel,
+        };
+        const lhs = try self.coerceScalar(try self.loadScalar(self.slot(GuardedList.at(args, 0)).ptr, self.localLayout(GuardedList.at(args, 0))), target_ty, false);
+        const rhs = try self.coerceScalar(try self.loadScalar(self.slot(GuardedList.at(args, 1)).ptr, self.localLayout(GuardedList.at(args, 1))), target_ty, false);
+        const result = try self.callBuiltin(
+            LowLevelBuiltins.floatAtan2(target_layout == .f32).symbolName(),
+            target_ty,
+            &.{ target_ty, target_ty },
+            &.{ lhs, rhs },
+        );
+        try self.storeScalar(self.slot(target).ptr, target_layout, result);
+    }
+
     fn emitDecPow(self: *MonoLlvmCodeGen, target: LocalId, args: anytype) Error!void {
         const lhs = try self.loadScalar(self.slot(GuardedList.at(args, 0)).ptr, .dec);
         const rhs = try self.loadScalar(self.slot(GuardedList.at(args, 1)).ptr, .dec);
         const result = try self.callI128BinaryBuiltin(builtinSymbol(LowLevelBuiltins.decBinaryArith(.num_pow)), lhs, rhs);
+        try self.storeScalar(self.slot(target).ptr, .dec, result);
+    }
+
+    fn emitDecAtan2(self: *MonoLlvmCodeGen, target: LocalId, args: anytype) Error!void {
+        const lhs = try self.loadScalar(self.slot(GuardedList.at(args, 0)).ptr, .dec);
+        const rhs = try self.loadScalar(self.slot(GuardedList.at(args, 1)).ptr, .dec);
+        const result = try self.callI128BinaryBuiltin(builtinSymbol(LowLevelBuiltins.decBinaryArith(.num_atan2)), lhs, rhs);
         try self.storeScalar(self.slot(target).ptr, .dec, result);
     }
 

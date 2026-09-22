@@ -1344,6 +1344,7 @@ pub const Evaluator = struct {
             .num_abs_diff => self.numArith(args, arg_types, result_ty, .abs_diff),
 
             .num_pow => self.numFloatMath2(args, arg_types, .pow),
+            .num_atan2 => self.numFloatMath2(args, arg_types, .atan2),
             .num_sqrt => self.numFloatMath1(args, arg_types, .sqrt),
             .num_sin => self.numFloatMath1(args, arg_types, .sin),
             .num_cos => self.numFloatMath1(args, arg_types, .cos),
@@ -2118,11 +2119,17 @@ pub const Evaluator = struct {
         };
     }
 
-    fn numFloatMath2(self: *Evaluator, args: []const Value, arg_types: []const Type.TypeId, _: enum { pow }) EvalError!Value {
+    fn numFloatMath2(self: *Evaluator, args: []const Value, arg_types: []const Type.TypeId, op: enum { pow, atan2 }) EvalError!Value {
         const prim = self.primitiveOf(arg_types[0]) orelse return self.unsupported_("pow operand without primitive type");
         switch (prim) {
-            .f32 => return .{ .float32 = builtins.float_math_f32.pow(args[0].float32, args[1].float32) },
-            .f64 => return .{ .float64 = builtins.float_math_f64.pow(args[0].float64, args[1].float64) },
+            .f32 => return .{ .float32 = switch (op) {
+                .pow => builtins.float_math_f32.pow(args[0].float32, args[1].float32),
+                .atan2 => builtins.float_math_f32.atan2(args[0].float32, args[1].float32),
+            } },
+            .f64 => return .{ .float64 = switch (op) {
+                .pow => builtins.float_math_f64.pow(args[0].float64, args[1].float64),
+                .atan2 => builtins.float_math_f64.atan2(args[0].float64, args[1].float64),
+            } },
             .dec => return self.unsupported_("dec transcendental op"),
             .bool, .str, .u8, .i8, .u16, .i16, .u32, .i32, .u64, .i64, .u128, .i128, .u8x16, .i8x16, .u16x8, .i16x8, .u32x4, .i32x4, .u64x2, .i64x2 => return self.unsupported_("integer pow op"),
         }
