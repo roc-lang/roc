@@ -12,7 +12,7 @@ on:
         default: false
         description: Run everything unconditionally (nightly gate); bypasses path filters.
 
-name: CI New Compiler
+name: Core Compiler CI
 
 # Do not add permissions here! Configure them at the job level!
 permissions: {}
