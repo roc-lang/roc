@@ -5152,7 +5152,7 @@ const UniquenessStructure = struct {
         self.* = .{
             .memory = std.heap.ArenaAllocator.init(allocator),
             .store = store,
-            .rc_local = rc_local,
+            .rc_local = &.{},
             .stmt_count = store.cfStmtCount(),
             .local_count = store.localCount(),
             .proc_count = store.procSpecCount(),
@@ -5169,6 +5169,9 @@ const UniquenessStructure = struct {
         };
         errdefer self.memory.deinit();
         const arena = self.memory.allocator();
+        // The caller's table may be freed before the next settlement; the
+        // structure keeps its own copy for the reuse check.
+        self.rc_local = try arena.dupe(bool, rc_local);
         const proc_count = store.procSpecCount();
         const proc_stmts = try arena.alloc(std.ArrayList(LIR.CFStmtId), proc_count);
         @memset(proc_stmts, .empty);
