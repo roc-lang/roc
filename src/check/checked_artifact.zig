@@ -4515,11 +4515,13 @@ pub const CheckedTypeStore = struct {
     }
 
     /// Convert a build-form variable into stored form, copying its constraints
-    /// into the pool and interning its name. Frees the build constraints/name.
+    /// into the pool and interning its name. The build constraints/name are
+    /// freed only once both copies succeeded, so a failing commit leaves the
+    /// build intact for its owner to release exactly once.
     fn commitVariable(self: *CheckedTypeStore, allocator: Allocator, variable: CheckedTypeVariable) Allocator.Error!StoredTypeVariable {
         const name_id = try self.internVarName(allocator, variable.name);
-        if (variable.name) |name| allocator.free(name);
         const constraints = try self.appendConstraints(allocator, variable.constraints);
+        if (variable.name) |name| allocator.free(name);
         if (variable.constraints.len != 0) allocator.free(variable.constraints);
         return .{
             .name = name_id,
@@ -4531,6 +4533,9 @@ pub const CheckedTypeStore = struct {
 
     /// Convert a build-form payload into stored form, copying all slices into the
     /// store's pools and freeing the build memory. Takes ownership of `build`.
+    /// Copy a build payload into the store's pools. The build's own slices
+    /// are released only once every copy succeeded, so a failing commit leaves
+    /// the build intact for its owner to release exactly once.
     fn commitPayload(self: *CheckedTypeStore, allocator: Allocator, build: CheckedTypePayloadBuild) Allocator.Error!StoredCheckedTypePayload {
         return switch (build) {
             .pending => .pending,
@@ -4564,10 +4569,10 @@ pub const CheckedTypeStore = struct {
             },
             .nominal => |n| blk: {
                 const args = try self.appendTypeIds(allocator, n.args);
-                if (n.args.len != 0) allocator.free(n.args);
                 const padding_field_types = try self.appendTypeIds(allocator, n.padding_field_types);
-                if (n.padding_field_types.len != 0) allocator.free(n.padding_field_types);
                 const declared_fields = try self.appendDeclaredFields(allocator, n.declared_fields);
+                if (n.args.len != 0) allocator.free(n.args);
+                if (n.padding_field_types.len != 0) allocator.free(n.padding_field_types);
                 if (n.declared_fields.len != 0) allocator.free(n.declared_fields);
                 break :blk .{ .nominal = .{
                     .name = n.name,
@@ -4596,14 +4601,13 @@ pub const CheckedTypeStore = struct {
                 try self.tag_pool.ensureUnusedCapacity(allocator, tu.tags.len);
                 for (tu.tags) |tag| {
                     const args = try self.appendTypeIds(allocator, tag.args);
-                    if (tag.args.len != 0) allocator.free(tag.args);
                     self.tag_pool.appendAssumeCapacity(.{
                         .name = tag.name,
                         .args_start = args.start,
                         .args_len = args.len,
                     });
                 }
-                if (tu.tags.len != 0) allocator.free(tu.tags);
+                deinitCheckedTagsBuild(allocator, tu.tags);
                 break :blk .{ .tag_union = .{
                     .tags = .{ .start = tags_start, .len = @intCast(tu.tags.len) },
                     .ext = tu.ext,
@@ -5340,11 +5344,14 @@ pub const CheckedTypeStore = struct {
         }
 
         var owned_payload = build_payload;
-        errdefer deinitCheckedTypePayloadBuild(allocator, &owned_payload);
+        var build_owned = true;
+        errdefer if (build_owned) deinitCheckedTypePayloadBuild(allocator, &owned_payload);
         if (owned_payload == .flex or owned_payload == .rigid) {
             try self.synthetic_variable_roots.put(allocator, root, {});
         }
         const stored = try self.commitPayload(allocator, owned_payload);
+        // A successful commit consumed the build's slices.
+        build_owned = false;
         self.payloads.items[index] = stored;
         errdefer self.payloads.items[index] = .pending;
         try self.ensureSyntheticSchemeForRoot(allocator, root, self.roots.items[index].key);
@@ -6285,11 +6292,14 @@ fn appendCheckedTypeRootFromDeclarationAnno(
                 declaration_formals,
                 tag_union.tags,
             );
-            errdefer deinitCheckedTagsBuild(allocator, tags);
+            var tags_owned = true;
+            errdefer if (tags_owned) deinitCheckedTagsBuild(allocator, tags);
             const ext = if (tag_union.ext) |ext_anno|
                 try appendCheckedTypeRootFromDeclarationAnno(allocator, module, names, imports, store, active, local_type_declarations, declaration_formals, ext_anno)
             else
                 try appendExplicitCheckedTypePayload(allocator, names, store, .empty_tag_union);
+            // The payload owns `tags` from here and releases it on failure.
+            tags_owned = false;
             break :blk try appendExplicitCheckedTypePayload(allocator, names, store, .{ .tag_union = .{
                 .tags = tags,
                 .ext = ext,
@@ -6307,11 +6317,14 @@ fn appendCheckedTypeRootFromDeclarationAnno(
                 declaration_formals,
                 record.fields,
             );
-            errdefer allocator.free(fields);
+            var fields_owned = true;
+            errdefer if (fields_owned) allocator.free(fields);
             const ext = if (record.ext) |ext_anno|
                 try appendCheckedTypeRootFromDeclarationAnno(allocator, module, names, imports, store, active, local_type_declarations, declaration_formals, ext_anno)
             else
                 try appendExplicitCheckedTypePayload(allocator, names, store, .empty_record);
+            // The payload owns `fields` from here and releases it on failure.
+            fields_owned = false;
             break :blk try appendExplicitCheckedTypePayload(allocator, names, store, .{ .record = .{
                 .fields = fields,
                 .ext = ext,
@@ -6329,7 +6342,7 @@ fn appendCheckedTypeRootFromDeclarationAnno(
                 declaration_formals,
                 tuple.elems,
             );
-            errdefer allocator.free(elems);
+            // The payload owns `elems` and releases it on failure.
             break :blk try appendExplicitCheckedTypePayload(allocator, names, store, .{ .tuple = elems });
         },
         .@"fn" => |func| blk: {
@@ -6344,7 +6357,8 @@ fn appendCheckedTypeRootFromDeclarationAnno(
                 declaration_formals,
                 func.args,
             );
-            errdefer allocator.free(args);
+            var args_owned = true;
+            errdefer if (args_owned) allocator.free(args);
             const ret = try appendCheckedTypeRootFromDeclarationAnno(
                 allocator,
                 module,
@@ -6356,6 +6370,8 @@ fn appendCheckedTypeRootFromDeclarationAnno(
                 declaration_formals,
                 func.ret,
             );
+            // The payload owns `args` from here and releases it on failure.
+            args_owned = false;
             break :blk try appendExplicitCheckedTypePayload(allocator, names, store, .{ .function = .{
                 .kind = if (func.effectful) .effectful else .pure,
                 .args = args,
@@ -6559,8 +6575,8 @@ fn appendInstantiatedNamedApplicationFromTemplate(
                 &active,
             );
 
+            // The payload owns `payload_args` and releases it on failure.
             const payload_args = if (actual_args.len == 0) &.{} else try allocator.dupe(CheckedTypeId, actual_args);
-            errdefer if (payload_args.len != 0) allocator.free(payload_args);
 
             break :blk try appendExplicitCheckedTypePayload(allocator, names, store, .{ .alias = .{
                 .name = alias.name,
@@ -6590,13 +6606,17 @@ fn appendInstantiatedNamedApplicationFromTemplate(
                 actual_args,
                 &active,
             );
-            errdefer if (padding_field_types.len != 0) allocator.free(padding_field_types);
+            var padding_owned = true;
+            errdefer if (padding_owned and padding_field_types.len != 0) allocator.free(padding_field_types);
 
             const payload_args = if (actual_args.len == 0) &.{} else try allocator.dupe(CheckedTypeId, actual_args);
-            errdefer if (payload_args.len != 0) allocator.free(payload_args);
+            var payload_args_owned = true;
+            errdefer if (payload_args_owned and payload_args.len != 0) allocator.free(payload_args);
             const declared_fields = if (nominal.declared_fields.len == 0) &.{} else try allocator.dupe(CheckedDeclaredField, nominal.declared_fields);
-            errdefer if (declared_fields.len != 0) allocator.free(declared_fields);
 
+            // The payload owns all three slices from here and releases them on failure.
+            padding_owned = false;
+            payload_args_owned = false;
             break :blk try appendExplicitCheckedTypePayload(allocator, names, store, .{ .nominal = .{
                 .name = nominal.name,
                 .origin_module = nominal.origin_module,
@@ -6730,8 +6750,8 @@ fn appendInstantiatedAliasDeclarationApplication(
         alias.anno,
     );
 
+    // The payload owns `payload_args` and releases it on failure.
     const payload_args = if (actual_args.len == 0) &.{} else try allocator.dupe(CheckedTypeId, actual_args);
-    errdefer if (payload_args.len != 0) allocator.free(payload_args);
 
     return try appendExplicitCheckedTypePayload(allocator, names, store, .{ .alias = .{
         .name = alias_name,
@@ -8859,10 +8879,10 @@ fn copyCheckedFlatType(
             if (record.fields.len() == 0 and checkedRecordExtIsEmpty(module, record.ext)) {
                 break :blk .empty_record;
             }
-            break :blk .{ .record = .{
-                .fields = try copyCheckedRecordFields(allocator, module, names, imports, store, active, record.fields),
-                .ext = try appendCheckedTypeRootWithRowDefault(allocator, module, names, imports, store, active, record.ext, .empty_record),
-            } };
+            const fields = try copyCheckedRecordFields(allocator, module, names, imports, store, active, record.fields);
+            errdefer allocator.free(fields);
+            const ext = try appendCheckedTypeRootWithRowDefault(allocator, module, names, imports, store, active, record.ext, .empty_record);
+            break :blk .{ .record = .{ .fields = fields, .ext = ext } };
         },
         .tuple => |tuple| .{
             .tuple = try copyCheckedTypeRange(allocator, module, names, imports, store, active, module.typeStoreConst().sliceVars(tuple.elems)),
@@ -8894,10 +8914,10 @@ fn copyCheckedFlatType(
             if (tag_union.tags.len() == 0 and checkedTagUnionExtIsEmpty(module, tag_union.ext)) {
                 break :blk .empty_tag_union;
             }
-            break :blk .{ .tag_union = .{
-                .tags = try copyCheckedTags(allocator, module, names, imports, store, active, tag_union.tags),
-                .ext = try appendCheckedTypeRootWithRowDefault(allocator, module, names, imports, store, active, tag_union.ext, .empty_tag_union),
-            } };
+            const tags = try copyCheckedTags(allocator, module, names, imports, store, active, tag_union.tags);
+            errdefer deinitCheckedTagsBuild(allocator, tags);
+            const ext = try appendCheckedTypeRootWithRowDefault(allocator, module, names, imports, store, active, tag_union.ext, .empty_tag_union);
+            break :blk .{ .tag_union = .{ .tags = tags, .ext = ext } };
         },
     };
 }
@@ -8927,6 +8947,7 @@ fn copyCheckedFunctionType(
     func: types.Func,
 ) Allocator.Error!CheckedFunctionType {
     const args = try copyCheckedTypeRange(allocator, module, names, imports, store, active, module.typeStoreConst().sliceVars(func.args));
+    errdefer allocator.free(args);
     const ret = try appendCheckedTypeRoot(allocator, module, names, imports, store, active, func.ret);
     return .{
         .kind = finalizedFunctionKind(kind),
@@ -12013,8 +12034,11 @@ pub const CheckedBodyStore = struct {
         var bodies = std.ArrayList(CheckedBody).empty;
         errdefer bodies.deinit(allocator);
         var string_builder = CheckedStringLiteralBuilder.init(allocator, module);
-        errdefer string_builder.deinitAll();
+        // Deferred blocks run in reverse order: on failure `deinitAll` runs
+        // first and leaves a fresh builder behind, whose scratch table
+        // `deinitScratch` then releases exactly once.
         defer string_builder.deinitScratch();
+        errdefer string_builder.deinitAll();
         var source_node_map = try CheckedSourceNodeMap.init(allocator, module.nodeCount());
         errdefer source_node_map.deinit(allocator);
 
@@ -35054,8 +35078,12 @@ const CheckedTypeStoreImportProjector = struct {
         errdefer _ = self.active.remove(ty);
 
         const source_payload = self.imported.checked_types.payload(@enumFromInt(index));
-        const payload = try self.projectPayload(source_payload);
-        if (payload == .flex or payload == .rigid) try self.target_store.declareIdentityInstance(self.allocator, reserved);
+        var payload = try self.projectPayload(source_payload);
+        if (payload == .flex or payload == .rigid) {
+            // The fill below owns the payload; until then this frame does.
+            errdefer deinitCheckedTypePayloadBuild(self.allocator, &payload);
+            try self.target_store.declareIdentityInstance(self.allocator, reserved);
+        }
         try self.target_store.fillSyntheticTypeRoot(self.allocator, reserved, payload);
         _ = self.active.remove(ty);
         try self.projected.put(ty, reserved);
@@ -35122,32 +35150,51 @@ const CheckedTypeStoreImportProjector = struct {
                 .backing = try self.project(alias.backing),
                 .args = try self.projectIds(alias.args),
             } },
-            .record => |record| .{ .record = .{
-                .fields = try self.projectRecordFields(record.fields),
-                .ext = try self.project(record.ext),
-            } },
+            .record => |record| blk: {
+                const fields = try self.projectRecordFields(record.fields);
+                errdefer self.allocator.free(fields);
+                const ext = try self.project(record.ext);
+                break :blk .{ .record = .{ .fields = fields, .ext = ext } };
+            },
             .tuple => |items| .{ .tuple = try self.projectIds(items) },
-            .nominal => |nominal| .{ .nominal = .{
-                .name = try self.remapTypeName(nominal.name),
-                .origin_module = try self.remapModuleIdentity(nominal.origin_module),
-                .owner_module = nominal.owner_module,
-                .source_decl = nominal.source_decl,
-                .builtin = nominal.builtin,
-                .is_opaque = nominal.is_opaque,
-                .representation = try self.remapNominalRepresentation(nominal),
-                .args = try self.projectIds(nominal.args),
-                .padding_field_types = try self.projectIds(nominal.padding_field_types),
-                .declared_fields = try self.projectDeclaredFields(nominal.declared_fields),
-            } },
-            .function => |function| .{ .function = .{
-                .kind = finalizedFunctionKind(function.kind),
-                .args = try self.projectIds(function.args),
-                .ret = try self.project(function.ret),
-            } },
-            .tag_union => |tag_union| .{ .tag_union = .{
-                .tags = try self.projectTags(tag_union.tags),
-                .ext = try self.project(tag_union.ext),
-            } },
+            .nominal => |nominal| blk: {
+                const name = try self.remapTypeName(nominal.name);
+                const origin_module = try self.remapModuleIdentity(nominal.origin_module);
+                const representation = try self.remapNominalRepresentation(nominal);
+                const args = try self.projectIds(nominal.args);
+                errdefer self.allocator.free(args);
+                const padding_field_types = try self.projectIds(nominal.padding_field_types);
+                errdefer self.allocator.free(padding_field_types);
+                const declared_fields = try self.projectDeclaredFields(nominal.declared_fields);
+                break :blk .{ .nominal = .{
+                    .name = name,
+                    .origin_module = origin_module,
+                    .owner_module = nominal.owner_module,
+                    .source_decl = nominal.source_decl,
+                    .builtin = nominal.builtin,
+                    .is_opaque = nominal.is_opaque,
+                    .representation = representation,
+                    .args = args,
+                    .padding_field_types = padding_field_types,
+                    .declared_fields = declared_fields,
+                } };
+            },
+            .function => |function| blk: {
+                const args = try self.projectIds(function.args);
+                errdefer self.allocator.free(args);
+                const ret = try self.project(function.ret);
+                break :blk .{ .function = .{
+                    .kind = finalizedFunctionKind(function.kind),
+                    .args = args,
+                    .ret = ret,
+                } };
+            },
+            .tag_union => |tag_union| blk: {
+                const tags = try self.projectTags(tag_union.tags);
+                errdefer deinitCheckedTagsBuild(self.allocator, tags);
+                const ext = try self.project(tag_union.ext);
+                break :blk .{ .tag_union = .{ .tags = tags, .ext = ext } };
+            },
         };
     }
 
@@ -39168,6 +39215,88 @@ test "template dispatch classification separates direct calls from graph relatio
     try std.testing.expectEqual(plan_1, plans.direct_template_refs[1]);
     try std.testing.expectEqual(plan_2, plans.dispatch_relation_refs[0]);
     try std.testing.expectEqual(plan_3, plans.dispatch_relation_refs[1]);
+}
+
+test "publishing a module releases each resource exactly once under allocation failure" {
+    const TestEnv = @import("test/TestEnv.zig");
+    const compiled_builtins = @import("compiled_builtins");
+    const gpa = std.testing.allocator;
+
+    var builtin_module = try @import("can").BuiltinStatic.moduleView(
+        gpa,
+        compiled_builtins.builtin_bin[0..],
+        "Builtin",
+        compiled_builtins.builtin_source,
+    );
+    var artifact_owns_module = false;
+    errdefer if (!artifact_owns_module) builtin_module.deinit();
+    const blob = compiled_builtins.builtin_artifact_bin[0..];
+    const serialized_bytes = try CheckedModuleArtifact.splitVersionTrailer(blob);
+    const backing: []align(CompactWriter.SERIALIZATION_ALIGNMENT.toByteUnits()) u8 =
+        @alignCast(blob[0..serialized_bytes.len]);
+    const serialized: *const CheckedModuleArtifact.Serialized = @ptrCast(@alignCast(backing.ptr));
+    try serialized.validate(backing.len);
+    var builtin_artifact = serialized.deserializeStatic(backing, gpa, .{ .static_builtin = builtin_module.env });
+    artifact_owns_module = true;
+    defer builtin_artifact.deinit(gpa);
+
+    // Aliases only: value definitions and nominal types would request
+    // compile-time roots that only real evaluation can fill.
+    var env = try TestEnv.init("OomPublish",
+        \\Pair(a, b) : (a, b)
+        \\Wrapper(a) : { value : a, extra : Pair(a, Str) }
+        \\Choice(a) : [Missing, Found(a, List(Str))]
+        \\Step(a) : a -> Choice(a)
+    );
+    defer env.deinit();
+    try env.assertNoErrors();
+    const sources = [_]TypedCIR.Modules.SourceModule{
+        .{ .precompiled = builtin_module.env },
+        .{ .precompiled = env.module_env },
+    };
+    var modules = try TypedCIR.Modules.init(gpa, &sources);
+    defer modules.deinit();
+    const imports = [_]PublishImportArtifact{.{
+        .module_idx = 0,
+        .key = builtin_artifact.key,
+        .view = importedView(&builtin_artifact),
+    }};
+    const available = [_]ImportedModuleView{importedView(&builtin_artifact)};
+
+    const NoRoots = struct {
+        fn finalize(
+            _: ?*anyopaque,
+            _: Allocator,
+            artifact: *CheckedModuleArtifact,
+            _: []const PublishImportArtifact,
+            _: []const ImportedModuleView,
+            _: []const ImportedModuleView,
+            _: ?*problem.Store,
+        ) CompileTimeFinalizer.Error!void {
+            std.debug.assert(artifact.root_requests.requests.len == 0);
+        }
+    };
+    const finalizer = CompileTimeFinalizer{ .finalize = &NoRoots.finalize };
+
+    const Attempt = struct {
+        fn run(
+            failing: Allocator,
+            typed_modules: *const TypedCIR.Modules,
+            module_env: *ModuleEnv,
+            direct: []const PublishImportArtifact,
+            views: []const ImportedModuleView,
+            finalize: CompileTimeFinalizer,
+        ) CompileTimeFinalizer.Error!void {
+            var artifact = try publishFromTypedModule(failing, typed_modules, 1, .{
+                .module_env_storage = .{ .checked_source = module_env },
+                .imports = direct,
+                .available_artifacts = views,
+                .compile_time_finalizer = finalize,
+            });
+            artifact.deinitRetainingModuleEnv(failing);
+        }
+    };
+    try std.testing.checkAllAllocationFailures(gpa, Attempt.run, .{ &modules, env.module_env, &imports, &available, finalizer });
 }
 
 test "issue 11128 source scheme publication hashes each source root once" {

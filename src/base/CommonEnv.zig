@@ -33,13 +33,18 @@ line_starts: SafeList(u32),
 source: []const u8,
 
 pub fn init(gpa: std.mem.Allocator, source: []const u8) std.mem.Allocator.Error!CommonEnv {
+    var idents = try Ident.Store.initCapacity(gpa, 1024);
+    errdefer idents.deinit(gpa);
+    var strings = try StringLiteral.Store.initCapacityBytes(gpa, 4096);
+    errdefer strings.deinit(gpa);
+    const line_starts = try SafeList(u32).initCapacity(gpa, 256);
     return CommonEnv{
-        .idents = try Ident.Store.initCapacity(gpa, 1024),
-        .strings = try StringLiteral.Store.initCapacityBytes(gpa, 4096),
+        .idents = idents,
+        .strings = strings,
         .string_builder = .{},
         .strings_insertable = true,
         .exposed_items = ExposedItems.init(),
-        .line_starts = try SafeList(u32).initCapacity(gpa, 256),
+        .line_starts = line_starts,
         .source = source,
     };
 }
@@ -306,9 +311,10 @@ pub fn getSourceAll(self: *const CommonEnv) []const u8 {
 
 /// Calculate and store line starts from the source text
 pub fn calcLineStarts(self: *CommonEnv, gpa: std.mem.Allocator) Allocator.Error!void {
-    // Reset line_starts by creating a new SafeList
-    self.line_starts.deinit(gpa);
-    self.line_starts = try collections.SafeList(u32).initCapacity(gpa, 256);
+    // Reuse the existing storage so this cannot leave `line_starts` freed
+    // if a fresh allocation were to fail.
+    self.line_starts.items.clearRetainingCapacity();
+    try self.line_starts.items.ensureTotalCapacity(gpa, 256);
 
     // if the source is empty, we're done
     if (self.getSourceAll().len == 0) {
@@ -363,6 +369,18 @@ pub fn getSourceLine(self: *const CommonEnv, region: Region) error{ BeginTooLarg
         self.source.len;
 
     return self.source[line_start..line_end];
+}
+
+test "calcLineStarts keeps line_starts owned when its reservation fails" {
+    const Scenario = struct {
+        fn run(allocator: std.mem.Allocator) std.mem.Allocator.Error!void {
+            var env = try CommonEnv.init(allocator, "first\nsecond\nthird\n");
+            defer env.deinit(allocator);
+            try env.calcLineStarts(allocator);
+            try env.calcLineStarts(allocator);
+        }
+    };
+    try std.testing.checkAllAllocationFailures(std.testing.allocator, Scenario.run, .{});
 }
 
 test "CommonEnv.Serialized roundtrip" {

@@ -4352,12 +4352,12 @@ const Lowerer = struct {
 
     fn verifyMaterializedDecisions(self: *Lowerer) Common.LowerError!void {
         if (builtin.mode != .Debug) return;
-        var solved_clone = try cloneSolvedProgram(self.allocator, self.solved);
-        var clone_owned = true;
-        errdefer if (clone_owned) solved_clone.deinit();
+        const solved_clone = try cloneSolvedProgram(self.allocator, self.solved);
 
         var materialized_identities = std.ArrayList(LambdaMonoLower.SpecializationIdentity).empty;
         defer materialized_identities.deinit(self.allocator);
+        // `run` owns the clone from here on and releases it itself when it
+        // fails, so this frame must not also release it.
         var materialized = try LambdaMonoLower.run(self.allocator, solved_clone, self.folded_map_matches.items, .{
             .inline_expects = switch (self.inline_expects) {
                 .run => .run,
@@ -4365,7 +4365,6 @@ const Lowerer = struct {
             },
             .debug_specialization_identities = &materialized_identities,
         });
-        clone_owned = false;
         var materialized_owned = true;
         defer if (materialized_owned) materialized.deinit();
 
@@ -12831,6 +12830,14 @@ test "compact comptime root descriptors survive solved teardown and direct LIR l
         }
     };
     try std.testing.checkAllAllocationFailures(allocator, Attempt.run, .{ &solved, Lifted.Program.FoldedMatch{ .scrutinee = policy, .body = read } });
+    const Verify = struct {
+        fn run(failing: std.mem.Allocator, original: *const Solved.Program) Common.LowerError!void {
+            var lowerer = try Lowerer.init(failing, .u64, original, .{});
+            defer lowerer.deinit();
+            try lowerer.verifyMaterializedDecisions();
+        }
+    };
+    try std.testing.checkAllAllocationFailures(allocator, Verify.run, .{&solved});
     {
         var lowerer = try Lowerer.init(allocator, .u64, &solved, .{});
         defer lowerer.deinit();
