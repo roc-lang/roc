@@ -115,8 +115,91 @@ pub fn deinit(self: *AST) void {
     gpa.destroy(self);
 }
 
+/// One parse-stage diagnostic reduced to everything its report renders from:
+/// which stage reported it, its tag, the byte region it points at, and—for a
+/// parser diagnostic—the tag of the token found there. Every other input a
+/// report needs is the module's own `CommonEnv`, so a consumer that holds this
+/// record and the env renders the identical report without the AST.
+pub const ResolvedDiagnostic = struct {
+    stage: Stage,
+    /// `@intFromEnum` of `tokenize.Diagnostic.Tag` or `AST.Diagnostic.Tag`,
+    /// selected by `stage`.
+    tag: u16,
+    /// `@intFromEnum` of the `Token.Tag` at the diagnostic's first token.
+    /// Unused by a tokenizer diagnostic, which records `.EndOfFile`.
+    token_tag: u16,
+    region: base.Region,
+
+    /// Which parse stage produced a diagnostic.
+    pub const Stage = enum(u8) { tokenize, parse };
+};
+
+/// Reduce a tokenizer diagnostic to its rendering inputs.
+pub fn resolveTokenizeDiagnostic(_: *AST, diagnostic: tokenize.Diagnostic) ResolvedDiagnostic {
+    return .{
+        .stage = .tokenize,
+        .tag = @intFromEnum(diagnostic.tag),
+        .token_tag = @intFromEnum(Token.Tag.EndOfFile),
+        .region = diagnostic.region,
+    };
+}
+
+/// Reduce a parser diagnostic to its rendering inputs.
+pub fn resolveParseDiagnostic(self: *AST, diagnostic: Diagnostic) ResolvedDiagnostic {
+    const raw_region = self.tokenizedRegionToRegion(diagnostic.region);
+    const source_len = self.env.source.len;
+    const token_tag: Token.Tag = if (diagnostic.region.start < self.tokens.tokens.len)
+        self.tokens.tokens.items(.tag)[@intCast(diagnostic.region.start)]
+    else
+        .EndOfFile;
+
+    return .{
+        .stage = .parse,
+        .tag = @intFromEnum(diagnostic.tag),
+        .token_tag = @intFromEnum(token_tag),
+        .region = .{
+            .start = .{ .offset = @min(raw_region.start.offset, source_len) },
+            .end = .{ .offset = @min(@max(raw_region.end.offset, raw_region.start.offset), source_len) },
+        },
+    };
+}
+
+/// Render a resolved parse-stage diagnostic against the module environment it
+/// was produced from.
+pub fn resolvedDiagnosticToReport(
+    resolved: ResolvedDiagnostic,
+    env: *const CommonEnv,
+    allocator: std.mem.Allocator,
+    filename: []const u8,
+) Allocator.Error!reporting.Report {
+    return switch (resolved.stage) {
+        .tokenize => tokenizeReport(@enumFromInt(resolved.tag), resolved.region, env, allocator, filename),
+        .parse => parseReport(
+            .{
+                .env = env,
+                .tag = @enumFromInt(resolved.tag),
+                .token_tag = @enumFromInt(resolved.token_tag),
+                .allocator = allocator,
+                .filename = filename,
+                .region = resolved.region,
+            },
+        ),
+    };
+}
+
 /// Convert a tokenize diagnostic to a Report for rendering
 pub fn tokenizeDiagnosticToReport(self: *AST, diagnostic: tokenize.Diagnostic, allocator: std.mem.Allocator, filename: ?[]const u8) Allocator.Error!reporting.Report {
+    return tokenizeReport(diagnostic.tag, diagnostic.region, self.env, allocator, filename);
+}
+
+fn tokenizeReport(
+    tag: tokenize.Diagnostic.Tag,
+    region: base.Region,
+    source_env: *const CommonEnv,
+    allocator: std.mem.Allocator,
+    filename: ?[]const u8,
+) Allocator.Error!reporting.Report {
+    const diagnostic = tokenize.Diagnostic{ .tag = tag, .region = region };
     const title = switch (diagnostic.tag) {
         .MisplacedCarriageReturn => "Misplaced Carriage Return",
         .AsciiControl => "ASCII Control Character",
@@ -152,16 +235,16 @@ pub fn tokenizeDiagnosticToReport(self: *AST, diagnostic: tokenize.Diagnostic, a
 
     // Add the region information from the diagnostic if valid
     if (diagnostic.region.start.offset < diagnostic.region.end.offset and
-        diagnostic.region.end.offset <= self.env.source.len)
+        diagnostic.region.end.offset <= source_env.source.len)
     {
-        var env = self.env.*;
+        var env = source_env.*;
         if (env.line_starts.items.items.len == 0) {
             try env.calcLineStarts(allocator);
         }
 
         // Convert region to RegionInfo
         const region_info = base.RegionInfo.position(
-            self.env.source,
+            source_env.source,
             env.line_starts.items.items,
             diagnostic.region.start.offset,
             diagnostic.region.end.offset,
@@ -175,7 +258,7 @@ pub fn tokenizeDiagnosticToReport(self: *AST, diagnostic: tokenize.Diagnostic, a
             region_info,
             .error_highlight,
             filename,
-            self.env.source,
+            source_env.source,
             env.line_starts.items.items,
         );
     }
@@ -215,41 +298,22 @@ pub fn tokenizedRegionToRegion(self: *AST, tokenized_region: TokenizedRegion) ba
 }
 
 const ParseReportContext = struct {
-    ast: *AST,
     env: *const CommonEnv,
-    diagnostic: Diagnostic,
+    tag: Diagnostic.Tag,
+    token_tag: Token.Tag,
     allocator: Allocator,
     filename: []const u8,
     region: base.Region,
 
-    fn init(ast: *AST, env: *const CommonEnv, diagnostic: Diagnostic, allocator: Allocator, filename: []const u8) ParseReportContext {
-        const raw_region = ast.tokenizedRegionToRegion(diagnostic.region);
-        return .{
-            .ast = ast,
-            .env = env,
-            .diagnostic = diagnostic,
-            .allocator = allocator,
-            .filename = filename,
-            .region = .{
-                .start = .{ .offset = @min(raw_region.start.offset, ast.env.source.len) },
-                .end = .{ .offset = @min(@max(raw_region.end.offset, raw_region.start.offset), ast.env.source.len) },
-            },
-        };
-    }
-
     fn tokenText(self: ParseReportContext) []const u8 {
-        if (self.region.start.offset < self.region.end.offset and self.region.end.offset <= self.ast.env.source.len) {
-            return self.ast.env.source[self.region.start.offset..self.region.end.offset];
+        if (self.region.start.offset < self.region.end.offset and self.region.end.offset <= self.env.source.len) {
+            return self.env.source[self.region.start.offset..self.region.end.offset];
         }
         return "";
     }
 
     fn tokenTag(self: ParseReportContext) Token.Tag {
-        if (self.diagnostic.region.start < self.ast.tokens.tokens.len) {
-            const tags = self.ast.tokens.tokens.items(.tag);
-            return tags[@intCast(self.diagnostic.region.start)];
-        }
-        return .EndOfFile;
+        return self.token_tag;
     }
 };
 
@@ -259,8 +323,8 @@ const ParseReportOptions = struct {
 };
 
 fn finishParseReport(ctx: ParseReportContext, report: *reporting.Report) Allocator.Error!reporting.Report {
-    if (ctx.region.start.offset <= ctx.region.end.offset and ctx.region.end.offset <= ctx.ast.env.source.len) {
-        const region_info = base.RegionInfo.position(ctx.ast.env.source, ctx.env.line_starts.items.items, ctx.region.start.offset, ctx.region.end.offset) catch {
+    if (ctx.region.start.offset <= ctx.region.end.offset and ctx.region.end.offset <= ctx.env.source.len) {
+        const region_info = base.RegionInfo.position(ctx.env.source, ctx.env.line_starts.items.items, ctx.region.start.offset, ctx.region.end.offset) catch {
             return report.*;
         };
 
@@ -268,7 +332,7 @@ fn finishParseReport(ctx: ParseReportContext, report: *reporting.Report) Allocat
         try report.document.addLineBreak();
 
         const owned_filename = try report.addOwnedString(ctx.filename);
-        try report.addSourceContext(region_info, owned_filename, ctx.ast.env.source, ctx.env.line_starts.items.items);
+        try report.addSourceContext(region_info, owned_filename, ctx.env.source, ctx.env.line_starts.items.items);
     }
 
     return report.*;
@@ -410,9 +474,19 @@ fn reportDeprecatedNumberSuffix(ctx: ParseReportContext) Allocator.Error!reporti
 
 /// Convert a parse diagnostic to a Report for rendering.
 pub fn parseDiagnosticToReport(self: *AST, env: *const CommonEnv, diagnostic: Diagnostic, allocator: std.mem.Allocator, filename: []const u8) Allocator.Error!reporting.Report {
-    const ctx = ParseReportContext.init(self, env, diagnostic, allocator, filename);
+    const resolved = self.resolveParseDiagnostic(diagnostic);
+    return parseReport(.{
+        .env = env,
+        .tag = diagnostic.tag,
+        .token_tag = @enumFromInt(resolved.token_tag),
+        .allocator = allocator,
+        .filename = filename,
+        .region = resolved.region,
+    });
+}
 
-    return switch (diagnostic.tag) {
+fn parseReport(ctx: ParseReportContext) Allocator.Error!reporting.Report {
+    return switch (ctx.tag) {
         .multiple_platforms => reportParseProblem(ctx, "Multiple Platforms", "I was parsing an app or package header, and it names more than one platform.", "An app or package can use at most one `platform` entry. Keep the platform entry you want, and make every other dependency a normal package string.", .{ .example = "package [Api] { pf: platform \"../platform/main.roc\", json: \"../json/main.roc\" }" }),
         .invalid_roc_version => reportParseProblem(ctx, "Invalid Roc Version", "I was parsing the `roc` entry of a header, and I did not recognize this version.", "The `roc` entry pins the version of the Roc compiler this file is written for. It must be a string holding either a nightly tag or a release version.", .{ .example = "roc: \"nightly-2026-08-05-24f0b47\"", .show_found = false }),
         .duplicate_roc_version => reportParseProblem(ctx, "Duplicate Roc Version", "I was parsing a header, and it pins the `roc` version more than once.", "A header can pin at most one compiler version. Remove the extra `roc` entries.", .{ .example = "roc: \"nightly-2026-08-05-24f0b47\"", .show_found = false }),

@@ -132,6 +132,22 @@ Str.inspect(red)  # "Color.Red"
 Without `to_inspect`, `Str.inspect` uses Roc's built-in structural
 representation for the value.
 
+`Str.inspect` only uses a `to_inspect` method whose type is exactly `T -> Str`,
+where any type parameters of `T` are left as distinct, unconstrained type
+variables. For example, `Wrap(a) := [W(a)]` can use
+`to_inspect : Wrap(a) -> Str`, but not `to_inspect : Wrap(I64) -> Str` or one
+with a `where` clause. A `to_inspect` method with any other type is still an
+ordinary method that you can call directly; `Str.inspect` just renders the
+value with the built-in representation instead. To render a value's contents
+from inside `to_inspect`, call `Str.inspect` on them, which works for any type:
+
+```roc
+Wrap(a) := [W(a)].{
+    to_inspect : Wrap(a) -> Str
+    to_inspect = |Wrap.W(value)| "Wrap(${Str.inspect(value)})"
+}
+```
+
 ### Equality and Hashing
 
 The `is_eq` method customizes how equality is checked using the `==` and `!=` operators.

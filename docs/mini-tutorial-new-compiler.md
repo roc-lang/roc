@@ -2,9 +2,12 @@
 
 Roc is still a work in progress and has not reached a 0.1 release, so expect missing features and bugs.
 
-The [Roc website](https://www.roc-lang.org) and its [standard library and language documentation](https://www.roc-lang.org/docs/main/)
-describe the current compiler and language design. Documentation for the previous alpha4 compiler is
-[archived separately](https://alpha4-roc.cc02oj5kr.workers.dev/) and should only be used when working with alpha4 code.
+Helpful resources:
+- [Standard library docs](https://roc-lang.org/docs/main/)
+- [Examples](https://roc-lang.org/examples/)
+- [Language reference](https://roc-lang.org/docs/main/langref/)
+- [Roc syntax overview](https://github.com/roc-lang/roc/blob/main/test/echo/all_syntax_test.roc)
+- Learn roc by doing, with [exercism](https://exercism.org/tracks/roc/)
 
 If you want help, the best place to get it is [Roc Zulip](https://roc.zulipchat.com/). You're welcome to ask any questions in [#beginners](https://roc.zulipchat.com/#narrow/channel/231634-beginners/).
 
@@ -14,7 +17,7 @@ With those disclaimers in mind, let's get into the adventure!
 
 First, follow the [installation guide](https://www.roc-lang.org/install/) to install a nightly build.
 It includes an executable named `roc` (or `roc.exe` on Windows). You'll know it is available on your `PATH`
-if `roc version` prints a version beginning with `Roc compiler version nightly-`.
+if `roc version` works.
 
 Next, copy/paste this into a new file named `main.roc`:
 
@@ -290,12 +293,13 @@ digits_to_num = |digits| {
 }
 ```
 
-The archived tutorial for Roc alpha4 has [a useful section on `crash`](https://alpha4-roc.cc02oj5kr.workers.dev/tutorial#crashing). The section on [crashing for error handling](https://alpha4-roc.cc02oj5kr.workers.dev/tutorial#crashing-for-error-handling)
-is especially important, and has been copy/pasted here:
+`crash` is not for error handling.
 
-> `crash` is not for error handling.
-> The reason Roc has a `crash` keyword is for scenarios where it's expected that no error will ever happen (like in [unreachable branches](https://alpha4-roc.cc02oj5kr.workers.dev/tutorial#crashing-in-unreachable-branches)), or where graceful error handling is infeasible (like running out of memory).
-> Errors that are recoverable should be represented using normal Roc types (like `Try`) and then handled without crashing. For example, by having the application report that something went wrong, and then continue running from there.
+The reason Roc has a `crash` keyword is for scenarios where it's expected that no error will ever happen (like in unreachable branches), or where graceful error handling is infeasible (like running out of memory).
+
+Errors that are recoverable should be represented using normal Roc types (like `Try`) and then handled without crashing. For example, by having the application report that something went wrong, and then continue running from there.
+
+What happens after a crash is determined by the platform. Some may gracefully recover and have some way of continuing the process, but others may terminate the process immediately.
 
 Just like `return`, if you use `crash` in a block, you may get a warning if any statements or expressions 
 come after it in the block, as they will not be executed!
@@ -674,16 +678,11 @@ Color := [Red, Green, Blue]
 
 This is a _nominal_ type definition.
 
-## Alpha4 vs Current Roc
+## Upgrading from alpha-4
 
-| Alpha4 | Current |
-|--------|---------|
-| `List U8` | `List(U8)` |
-| `if/then/else` | `if/else` |
-| `Bool.true`/`Bool.false` | `Bool.True`/`Bool.False` |
-| `Result` | `Try` |
-| `Inspect.to_str` | `Str.inspect` |
-| `Num.to_str(123)` | `123.to_str()` |
+If you've been writing Roc before it was mainstream and you want to upgrade your code from alpha-4, compare the two all syntax examples:
+- [alpha-4 all syntax example](https://github.com/roc-lang/examples/blob/e4d7403466505c986180abc35de284b32fe2020d/examples/AllSyntax/main.roc)
+- [current all syntax example](https://github.com/roc-lang/roc/blob/main/test/echo/all_syntax_test.roc)
 
 ## Dependencies
 
@@ -711,14 +710,17 @@ Roc has a first-class concept of _platforms_ and _applications_. You can [read a
 - Every Roc application specifies [exactly one platform](https://www.roc-lang.org/faq#multiple-platforms) that it will be built on.
   A headerless app implicitly uses the Echo Platform.
 - The selected platform provides the app's I/O primitives. For example, the `basic-cli` platform gives access to the standard in and out using `Stdout` and `Stdin`, which are imported using the platform's shorthand, such as `pf.Stdout` and `pf.Stdin`.
-- Roc's standard library does not include any effectful functions; they all come from the platform. Several published platforms still use the old version of the compiler but ports are in progress!
+- Roc's standard library does not include any effectful functions; they all come from the platform. Here are some links to popular platforms:
+  - [basic-cli](https://github.com/roc-lang/basic-cli)
+  - [basic-webserver](https://github.com/roc-lang/basic-webserver)
+  - [roc-ray](https://github.com/lukewilliamboswell/roc-ray)
 
 ## Additional Resources
 
 For more, check out:
 
 - [Roc's standard library and language documentation](https://www.roc-lang.org/docs/main/)
-- [Examples built and tested with the current compiler](https://www.roc-lang.org/examples/)
-- [The source for all builtin functions](https://github.com/roc-lang/roc/blob/main/src/build/roc/Builtin.roc)
+- [Examples](https://www.roc-lang.org/examples/)
+- [The source code for all builtin functions](https://github.com/roc-lang/roc/blob/main/src/build/roc/Builtin.roc)
 - [A single file demonstrating Roc syntax](https://github.com/roc-lang/roc/blob/main/test/echo/all_syntax_test.roc)
 - [The Exercism.org Roc track](https://exercism.org/tracks/roc/)

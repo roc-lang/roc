@@ -365,8 +365,10 @@ fn compileModule(
     for (deps) |dep| {
         try imported_envs.append(gpa, dep.env);
     }
+    try can.resolveDeferredFileImports(module_env, .skip);
     module_env.imports.clearResolvedModules();
     try module_env.imports.resolveImportsByExactModuleName(module_env, imported_envs.items);
+    try can.resolveDeferredImports(module_env, .{ .imports = .{ .resolved_store = imported_envs.items } });
 
     var module_envs = std.AutoHashMap(base.Ident.Idx, Can.AutoImportedType).init(gpa);
     defer module_envs.deinit();

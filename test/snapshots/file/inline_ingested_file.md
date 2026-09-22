@@ -11,24 +11,13 @@ import Json
 foo = Json.parse(data)
 ~~~
 # EXPECTED
-FILE NOT FOUND - inline_ingested_file.md:1:1:1:34
 DUPLICATE DEFINITION - inline_ingested_file.md:2:1:2:12
+FILE NOT FOUND - inline_ingested_file.md:1:1:1:34
+MOD NOT FOUND - inline_ingested_file.md:2:1:2:12
 MISSING METHOD - inline_ingested_file.md:4:7:4:17
 # PROBLEMS
 ~~~clojure
 (reports
-	(report
-		(severity runtime_error)
-		(title "File Not Found")
-		(region (start 1 1) (end 1 34))
-		(headline
-			(reflow "The file ")
-			(annotated mod "users.json")
-			(reflow " was not found."))
-		(document
-			(reflow "Make sure the file exists relative to your source file.")
-			(line-break)
-			(source-region (file "inline_ingested_file.md") (start 1 1) (end 1 34) (annotation error) (line-text "import \"users.json\" as data : Str"))))
 	(report
 		(severity warning)
 		(title "Duplicate Definition")
@@ -50,6 +39,28 @@ MISSING METHOD - inline_ingested_file.md:4:7:4:17
 			(reflow ":")
 			(line-break)
 			(source-region (file "inline_ingested_file.md") (start 1 1) (end 1 1) (annotation dim) (line-text "import \"users.json\" as data : Str"))))
+	(report
+		(severity runtime_error)
+		(title "File Not Found")
+		(region (start 1 1) (end 1 34))
+		(headline
+			(reflow "The file ")
+			(annotated mod "users.json")
+			(reflow " was not found."))
+		(document
+			(reflow "Make sure the file exists relative to your source file.")
+			(line-break)
+			(source-region (file "inline_ingested_file.md") (start 1 1) (end 1 34) (annotation error) (line-text "import \"users.json\" as data : Str"))))
+	(report
+		(severity runtime_error)
+		(title "Mod Not Found")
+		(region (start 2 1) (end 2 12))
+		(headline
+			(text "The mod ")
+			(annotated code "Json")
+			(reflow " was not found in this Roc project."))
+		(document
+			(source-region (file "inline_ingested_file.md") (start 2 1) (end 2 12) (annotation error) (line-text "import Json"))))
 	(report
 		(severity runtime_error)
 		(title "Missing Method")

@@ -241,7 +241,9 @@ fn runRoot(lowered: *const lir.CheckedPipeline.LoweredProgram) HostRunError!void
     const ops = host.get_ops();
     ops.hosted_fns = .{ .count = @intCast(host_functions.len), .fns = &hosted_fns };
     const program = &lowered.lir_result;
-    var interpreter = try eval.LirInterpreter.initWithBoxyTables(std.testing.allocator, &program.store, &program.layouts, eval.LirInterpreter.BoxyTables.fromResult(program), ops);
+    var static_strings = try eval.LirInterpreter.buildStaticStrings(std.testing.allocator, &program.store);
+    defer static_strings.deinit();
+    var interpreter = try eval.LirInterpreter.initWithBoxyTables(std.testing.allocator, &program.store, &program.layouts, eval.LirInterpreter.BoxyTables.fromResult(program), static_strings.view(), ops);
     defer interpreter.deinit();
     try std.testing.expectEqual(@as(usize, 1), program.root_procs.items.len);
     const root_id = program.root_procs.items[0];

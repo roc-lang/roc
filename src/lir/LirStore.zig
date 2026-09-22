@@ -8,6 +8,7 @@ const layout = @import("layout");
 
 const lir_defs = @import("LIR.zig");
 const TailCallBuilder = @import("tail_call_builder.zig");
+const CheckedArithmetic = @import("checked_arithmetic.zig");
 
 const Allocator = std.mem.Allocator;
 pub const GuardedList = collections.GuardedList;
@@ -54,6 +55,7 @@ fn RewriteColumn(comptime T: type, comptime field: []const u8) type {
         ids: std.ArrayList(u32) = .empty,
         rows: GuardedList.List(T, "LirStore." ++ field) = .empty,
         dirty: std.ArrayList(bool) = .empty,
+        materialized: bool = false,
 
         const Column = @This();
 
@@ -76,13 +78,26 @@ fn RewriteColumn(comptime T: type, comptime field: []const u8) type {
             return true;
         }
 
-        fn finish(self: *Column, allocator: Allocator, source: *const Self) Allocator.Error!void {
+        /// Rows are copied from the coordinator only when first borrowed
+        /// mutably (see `mark`), so a pass that leaves a procedure untouched
+        /// never copies its body. Until then a prepared row reads through to
+        /// the frozen coordinator.
+        fn finish(self: *Column, allocator: Allocator, _: *const Self) Allocator.Error!void {
             std.mem.sort(u32, self.ids.items, {}, std.sort.asc(u32));
+            try self.rows.ensureTotalCapacity(allocator, self.ids.items.len);
+            try self.dirty.ensureTotalCapacity(allocator, self.ids.items.len);
             for (self.ids.items, 0..) |id, dense_index| {
                 self.indices.getPtr(id).?.* = @intCast(dense_index);
-                try self.rows.append(allocator, @field(source, field).get(id));
+                try self.rows.append(allocator, undefined);
                 try self.dirty.append(allocator, false);
             }
+        }
+        /// Whether this column's prepared rows hold private copies. Spans may
+        /// overlap and a read may cover more rows than an earlier write, so
+        /// the first mutable borrow copies the whole column: every read of
+        /// the column then sees one owner.
+        fn owned(self: *const Column, _: u32) bool {
+            return self.materialized;
         }
 
         fn index(self: *const Column, start: u32, len: u32) ?u32 {
@@ -97,9 +112,17 @@ fn RewriteColumn(comptime T: type, comptime field: []const u8) type {
             return first;
         }
 
-        fn mark(self: *Column, start: u32, len: u32) u32 {
+        /// Materialize the column from the coordinator on its first mutable
+        /// borrow, then record the span as written.
+        fn mark(self: *Column, source: *const Self, start: u32, len: u32) u32 {
             const first = self.index(start, len) orelse
                 @panic("LirStore invariant violated: unprepared prefix mutation");
+            if (!self.materialized) {
+                for (self.ids.items, 0..) |id, dense_index| {
+                    self.rows.getPtrImmediate(dense_index).* = @field(source, field).get(id);
+                }
+                self.materialized = true;
+            }
             @memset(self.dirty.items[first..][0..len], true);
             return first;
         }
@@ -245,8 +268,9 @@ pub fn commitProcRewriteWithJoinRelocation(self: *Self, worker: *const Self, rel
     const appended = try self.appendBodyShardWithJoinRelocation(shard, null, .empty(), relocation);
     inline for (rewrite_columns) |field|
         @field(rewrite, field).commit(self, worker.body_prefix, appended.relocation);
-    self.getProcSpecPtr(rewrite.proc_id).* =
-        relocateBodyValue(LirProcSpec, rewrite.proc, worker.body_prefix, appended.relocation);
+    const spec = self.getProcSpecPtr(rewrite.proc_id);
+    spec.* = relocateBodyValue(LirProcSpec, rewrite.proc, worker.body_prefix, appended.relocation);
+    spec.shapes = spec.shapes.merged(worker.shapes);
 }
 
 /// Lengths of the coordinator-owned prefix visible to a body worker.
@@ -791,6 +815,9 @@ current_inline_scope: InlineScopeId,
 /// Active procedure-construction scope. Never persisted in LIR images or
 /// transferred into another body worker; completed proofs live in LIR itself.
 tail_call_builder: ?*TailCallBuilder = null,
+/// Shapes of the statements appended to this store since the accumulator was
+/// last reset: the body being lowered, or a procedure rewrite's additions.
+shapes: lir_defs.ProcShapes = .{},
 
 /// Initializes empty storage for statement-only LIR.
 pub fn init(allocator: Allocator) Self {
@@ -1435,6 +1462,7 @@ pub fn getErasedCallArgOffsets(self: *const Self, plan: ErasedCallArgsPlan) Stor
 pub fn addCFStmt(self: *Self, stmt: CFStmt) Allocator.Error!CFStmtId {
     const idx = self.cf_stmts.len() + if (self.body_coordinator != null) self.body_prefix.cf_stmts else 0;
     try self.cf_stmts.append(self.allocator, stmt);
+    self.noteStmtShapes(stmt);
     const has_source = switch (stmt) {
         .incref,
         .decref,
@@ -1537,7 +1565,9 @@ pub fn getCFStmt(self: *const Self, id: CFStmtId) CFStmt {
     self.verifyCFStmtId(id);
     const index = @intFromEnum(id);
     if (self.proc_rewrite) |*rewrite| {
-        if (rewrite.cf_stmts.indices.get(index)) |private| return rewrite.cf_stmts.rows.get(private);
+        if (rewrite.cf_stmts.indices.get(index)) |private| {
+            if (rewrite.cf_stmts.owned(private)) return rewrite.cf_stmts.rows.get(private);
+        }
     }
     if (self.body_coordinator) |coordinator| {
         if (index < self.body_prefix.cf_stmts) return coordinator.getCFStmt(id);
@@ -1552,7 +1582,7 @@ pub fn getCFStmtPtr(self: *Self, id: CFStmtId) *CFStmt {
     const index = @intFromEnum(id);
     if (self.body_coordinator != null and index < self.body_prefix.cf_stmts) {
         if (self.proc_rewrite) |*rewrite| {
-            return rewrite.cf_stmts.rows.getPtrImmediate(rewrite.cf_stmts.mark(index, 1));
+            return rewrite.cf_stmts.rows.getPtrImmediate(rewrite.cf_stmts.mark(self.body_coordinator.?, index, 1));
         }
         self.assertBodyMetadataImmutable();
     }
@@ -1583,8 +1613,9 @@ pub fn addCFSwitchBranches(self: *Self, branches: []const CFSwitchBranch) Alloca
 /// Resolves a switch-branch span to its stored slice.
 pub fn getCFSwitchBranches(self: *const Self, span: CFSwitchBranchSpan) StoreSpanBorrow(CFSwitchBranch, "cf_switch_branches") {
     if (self.proc_rewrite) |*rewrite| {
-        if (rewrite.cf_switch_branches.index(span.start, span.len)) |private|
-            return rewrite.cf_switch_branches.rows.borrowSpan(private, span.len);
+        if (rewrite.cf_switch_branches.index(span.start, span.len)) |private| {
+            if (rewrite.cf_switch_branches.owned(private)) return rewrite.cf_switch_branches.rows.borrowSpan(private, span.len);
+        }
     }
     if (self.body_coordinator) |coordinator| {
         if (span.start < self.body_prefix.cf_switch_branches) return coordinator.getCFSwitchBranches(span);
@@ -1598,7 +1629,7 @@ pub fn getCFSwitchBranchesMut(self: *Self, span: CFSwitchBranchSpan) StoreSpanBo
     if (span.len == 0) return self.cf_switch_branches.borrowSpanMut(0, 0);
     if (self.body_coordinator != null and span.start < self.body_prefix.cf_switch_branches) {
         if (self.proc_rewrite) |*rewrite| {
-            const private = rewrite.cf_switch_branches.mark(span.start, span.len);
+            const private = rewrite.cf_switch_branches.mark(self.body_coordinator.?, span.start, span.len);
             return rewrite.cf_switch_branches.rows.borrowSpanMut(private, span.len);
         }
         self.assertBodyMetadataImmutable();
@@ -1636,8 +1667,9 @@ pub fn addStrMatchArms(self: *Self, arms: []const StrMatchArm) Allocator.Error!S
 /// Resolves a string-match-arm span to its stored slice.
 pub fn getStrMatchArms(self: *const Self, span: StrMatchArmSpan) StoreSpanBorrow(StrMatchArm, "str_match_arms") {
     if (self.proc_rewrite) |*rewrite| {
-        if (rewrite.str_match_arms.index(span.start, span.len)) |private|
-            return rewrite.str_match_arms.rows.borrowSpan(private, span.len);
+        if (rewrite.str_match_arms.index(span.start, span.len)) |private| {
+            if (rewrite.str_match_arms.owned(private)) return rewrite.str_match_arms.rows.borrowSpan(private, span.len);
+        }
     }
     if (self.body_coordinator) |coordinator| {
         if (span.start < self.body_prefix.str_match_arms) return coordinator.getStrMatchArms(span);
@@ -1651,7 +1683,7 @@ pub fn getStrMatchArmsMut(self: *Self, span: StrMatchArmSpan) StoreSpanBorrowMut
     if (span.len == 0) return self.str_match_arms.borrowSpanMut(0, 0);
     if (self.body_coordinator != null and span.start < self.body_prefix.str_match_arms) {
         if (self.proc_rewrite) |*rewrite| {
-            const private = rewrite.str_match_arms.mark(span.start, span.len);
+            const private = rewrite.str_match_arms.mark(self.body_coordinator.?, span.start, span.len);
             return rewrite.str_match_arms.rows.borrowSpanMut(private, span.len);
         }
         self.assertBodyMetadataImmutable();
@@ -1671,8 +1703,9 @@ pub fn addJoinPointSpan(self: *Self, join_points: []const JoinPoint) Allocator.E
 /// Resolves a join-point span to its stored slice.
 pub fn getJoinPointSpan(self: *const Self, span: JoinPointSpan) StoreSpanBorrow(JoinPoint, "join_points") {
     if (self.proc_rewrite) |*rewrite| {
-        if (rewrite.join_points.index(span.start, span.len)) |private|
-            return rewrite.join_points.rows.borrowSpan(private, span.len);
+        if (rewrite.join_points.index(span.start, span.len)) |private| {
+            if (rewrite.join_points.owned(private)) return rewrite.join_points.rows.borrowSpan(private, span.len);
+        }
     }
     if (self.body_coordinator) |coordinator| {
         if (span.start < self.body_prefix.join_points) return coordinator.getJoinPointSpan(span);
@@ -1686,7 +1719,7 @@ pub fn getJoinPointSpanMut(self: *Self, span: JoinPointSpan) StoreSpanBorrowMut(
     if (span.len == 0) return self.join_points.borrowSpanMut(0, 0);
     if (self.body_coordinator != null and span.start < self.body_prefix.join_points) {
         if (self.proc_rewrite) |*rewrite| {
-            const private = rewrite.join_points.mark(span.start, span.len);
+            const private = rewrite.join_points.mark(self.body_coordinator.?, span.start, span.len);
             return rewrite.join_points.rows.borrowSpanMut(private, span.len);
         }
         self.assertBodyMetadataImmutable();
@@ -1698,9 +1731,87 @@ pub fn getJoinPointSpanMut(self: *Self, span: JoinPointSpan) StoreSpanBorrowMut(
 pub fn addProcSpec(self: *Self, proc: LirProcSpec) Allocator.Error!LirProcSpecId {
     self.assertBodyMetadataImmutable();
     const idx = self.proc_specs.len();
-    try self.proc_specs.append(self.allocator, proc);
+    // A procedure created with a body was built from statements this store
+    // has accumulated shapes for; a placeholder is overwritten exactly when
+    // its body is lowered.
+    var spec = proc;
+    if (spec.body != null) spec.shapes = spec.shapes.merged(self.shapes);
+    try self.proc_specs.append(self.allocator, spec);
     try self.proc_locs.append(self.allocator, self.current_loc);
     return @enumFromInt(@as(u32, @intCast(idx)));
+}
+
+/// Record the statement-level procedure shapes one appended statement implies.
+fn noteStmtShapes(self: *Self, stmt: CFStmt) void {
+    switch (stmt) {
+        .assign_call => |call| {
+            // Only a tail-call builder names the procedure a statement belongs
+            // to; without one, any direct call may be a call to itself.
+            const may_call_self = if (self.tail_call_builder) |builder| builder.proc == call.proc else true;
+            if (may_call_self) self.shapes.self_call = true;
+            const result_layout = self.getLocal(call.target).layout_idx;
+            if (result_layout == .str) self.shapes.str_call = true;
+            if (result_layout.isInterned()) self.shapes.interned_call_result = true;
+        },
+        .join => |join| {
+            const params = self.getLocalSpan(join.params);
+            for (0..GuardedList.borrowLen(params)) |index| {
+                self.shapes.join_param = true;
+                const param_layout = self.getLocal(GuardedList.at(params, index)).layout_idx;
+                if (param_layout == .zst or param_layout.isInterned()) self.shapes.join_aggregate_param = true;
+            }
+        },
+        .assign_literal => |assign| switch (assign.value) {
+            .static_data, .bytes_literal => self.shapes.static_literal = true,
+            .i64_literal, .i128_literal, .f64_literal, .f32_literal, .dec_literal, .str_literal, .null_ptr, .proc_ref, .boxy_dynamic_num_literal, .boxy_dynamic_frac_literal => {},
+        },
+        .assign_low_level => |assign| {
+            if (assign.op == .box_box) self.shapes.box_box = true;
+            if (CheckedArithmetic.isFamily(assign.op)) self.shapes.checked_arithmetic = true;
+        },
+        .switch_stmt => self.shapes.switch_stmt = true,
+        .assign_struct => self.shapes.struct_build = true,
+        .assign_tag => self.shapes.tag_build = true,
+        .init_uninitialized,
+        .assign_ref,
+        .assign_call_erased,
+        .assign_packed_erased_fn,
+        .assign_boxy_desc_ref,
+        .assign_boxy_dict_ref,
+        .assign_boxy_box,
+        .assign_boxy_reuse_box,
+        .assign_boxy_unbox,
+        .assign_boxy_adapt,
+        .assign_boxy_inspect,
+        .assign_boxy_eq,
+        .assign_boxy_tag,
+        .assign_boxy_tag_payload,
+        .boxy_tag_match,
+        .assign_call_dict,
+        .assign_list,
+        .store_struct,
+        .store_tag,
+        .set_local,
+        .debug,
+        .expect,
+        .expect_err,
+        .runtime_error,
+        .comptime_exhaustiveness_failed,
+        .comptime_branch_taken,
+        .incref,
+        .decref,
+        .decref_if_initialized,
+        .free,
+        .switch_initialized_payload,
+        .str_match,
+        .str_match_set,
+        .loop_continue,
+        .loop_break,
+        .jump,
+        .ret,
+        .crash,
+        => {},
+    }
 }
 
 /// Number of stored proc specifications.
@@ -1750,7 +1861,9 @@ pub fn getProcSpec(self: *const Self, idx: LirProcSpecId) LirProcSpec {
 
 /// Updates the body for a stored proc specification.
 pub fn setProcSpecBody(self: *Self, idx: LirProcSpecId, body: ?CFStmtId) void {
-    self.getProcSpecPtr(idx).body = body;
+    const proc = self.getProcSpecPtr(idx);
+    proc.body = body;
+    proc.shapes = proc.shapes.merged(self.shapes);
 }
 
 /// Updates the final join-point span for a stored proc specification.
@@ -1763,6 +1876,7 @@ pub fn setProcSpecBodyAndJoinPoints(self: *Self, idx: LirProcSpecId, body: ?CFSt
     const proc = self.getProcSpecPtr(idx);
     proc.body = body;
     proc.join_points = join_points;
+    proc.shapes = proc.shapes.merged(self.shapes);
 }
 
 /// Returns a mutable pointer to the stored proc specification for the given id.

@@ -320,3 +320,59 @@ test "Discarded unpinned arithmetic specialization validates the default method 
     // the diagnostic instead of publishing incompatible dispatch evidence.
     try test_env.assertOneTypeError("Type Mismatch");
 }
+
+test "qualified literal suffix follows a re-exported alias to its declaring module" {
+    var gui_env = try TestEnv.init("Gui", gui_source);
+    defer gui_env.deinit();
+    try gui_env.assertNoErrors();
+
+    const facade_source =
+        \\import Gui
+        \\Facade := [].{
+        \\    Palette : Gui
+        \\}
+    ;
+    var facade_env = try TestEnv.initWithImport("Facade", facade_source, "Gui", &gui_env);
+    defer facade_env.deinit();
+    try facade_env.assertNoErrors();
+
+    const source =
+        \\import Facade
+        \\integer = 0x05080a.Facade.Palette.Color
+        \\decimal = 5.0.Facade.Palette.Color
+    ;
+    var test_env = try TestEnv.initWithImport("Theme", source, "Facade", &facade_env);
+    defer test_env.deinit();
+    try test_env.assertNoErrors();
+    try test_env.assertDefType("integer", "Gui.Color");
+    try test_env.assertDefType("decimal", "Gui.Color");
+}
+
+test "unqualified literal suffix resolves an exposed imported type" {
+    var gui_env = try TestEnv.init("Gui", gui_source);
+    defer gui_env.deinit();
+    try gui_env.assertNoErrors();
+
+    const source =
+        \\import Gui exposing [Color]
+        \\value = 42.Color
+    ;
+    var test_env = try TestEnv.initWithImport("Theme", source, "Gui", &gui_env);
+    defer test_env.deinit();
+    try test_env.assertNoErrors();
+    try test_env.assertDefType("value", "Gui.Color");
+}
+
+test "qualified literal suffix rejects a type the imported module does not expose" {
+    var gui_env = try TestEnv.init("Gui", gui_source);
+    defer gui_env.deinit();
+    try gui_env.assertNoErrors();
+
+    const source =
+        \\import Gui
+        \\value = 42.Gui.Missing
+    ;
+    var test_env = try TestEnv.initWithImport("Theme", source, "Gui", &gui_env);
+    defer test_env.deinit();
+    try test_env.assertOneCanError("Type Not Exposed");
+}

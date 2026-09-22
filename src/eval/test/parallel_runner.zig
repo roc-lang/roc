@@ -84,7 +84,7 @@ const trace = struct {
 const helpers = eval.test_helpers;
 const LoweredProgram = helpers.LoweredProgram;
 
-const RunnerError = helpers.TestHelperError || std.mem.Allocator.Error || std.process.SpawnError || std.process.Child.WaitError || std.Io.File.OpenError || std.Io.File.Reader.Error || std.Io.File.Writer.Error || std.Io.File.LockError || std.Io.Dir.RealPathFileAllocError || std.Io.Dir.WriteFileError || error{
+const RunnerError = helpers.TestHelperError || std.mem.Allocator.Error || std.fmt.ParseIntError || std.process.SpawnError || std.process.Child.WaitError || std.Io.File.OpenError || std.Io.File.Reader.Error || std.Io.File.Writer.Error || std.Io.File.LockError || std.Io.Dir.RealPathFileAllocError || std.Io.Dir.WriteFileError || error{
     NotLink,
     ProcessNotFound,
     LinkQuotaExceeded,
@@ -2190,6 +2190,19 @@ fn printHelp() void {
         \\                        LLVM eval lock slots match the worker count.
         \\  --llvm                Include the LLVM backend. Default: skip LLVM.
         \\
+        \\CHILD DEBUGGING (each test runs in a forked child):
+        \\  --fail-alloc <N|random>
+        \\                        Fail the Nth allocation in every child, or a random
+        \\                        one per child. Children log their index, so a crash
+        \\                        found with `random` reproduces with `--fail-alloc N`.
+        \\  --debug-allocator     Run children on a DebugAllocator (arenas pass every
+        \\                        allocation through), reporting double and invalid
+        \\                        frees; traces need -Ddebug-gpa-traces=true.
+        \\  --child-log-dir <DIR> Write each child's stderr to DIR/child_<index>.log,
+        \\                        headed by the test's name.
+        \\  --freeze-on-crash     Keep a segfaulting child alive (printing its pid and
+        \\                        allowing ptrace) so gdb can attach. Linux only.
+        \\
         \\COVERAGE:
         \\  Use `zig build run-coverage-eval` to build with coverage instrumentation.
         \\  This compiles with -Dcoverage=true, which at comptime: skips dev/wasm
@@ -2752,7 +2765,7 @@ pub fn main(init: std.process.Init) RunnerError!void {
     // unused (fork path doesn't re-exec) but we build it uniformly.
     const worker_argv_template = try harness.buildWorkerArgvTemplate(io, args_arena.allocator(), init.minimal.args);
 
-    Pool.runWithSpans(io, tests, results, spans, max_children, hang_timeout_ms, gpa, worker_argv_template);
+    Pool.runWithSpans(io, tests, results, spans, max_children, hang_timeout_ms, gpa, worker_argv_template, cli.child_debug);
 
     // Phase-2 retry: on Windows, a Phase-1 worker that crashed kills the
     // whole worker before per-backend details land in the wire payload. For
