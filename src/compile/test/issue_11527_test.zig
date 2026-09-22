@@ -82,7 +82,6 @@ test "issue 11527: a small uniform compile-time list constant is not rebuilt at 
     );
     defer coord.deinit();
     coord.enable_hosted_transform = true;
-    coord.setExecutableFinalizationEnabled(false);
     var arena = base.SingleThreadArena.init(allocator);
     defer arena.deinit();
     try coord.start();
