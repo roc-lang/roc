@@ -212,12 +212,14 @@ pub const Constants = struct {
     ///     `NumeralLiteral` declares its trailing bytes.
     /// 97: Record types always carry an explicit extension variable; a record
     ///     update's base row is an ordinary record whose tail is a flex var.
-    /// 98: Calls of non-function values report a dedicated diagnostic, and
+    /// 98: Checked procedure template tables publish the templates whose
+    ///     evaluation can reach code checking replaced with a runtime error.
+    /// 99: Calls of non-function values report a dedicated diagnostic, and
     ///     a call to an in-flight recursive def whose annotation is an alias
     ///     of a function type classifies its effect through the alias.
-    /// 99: A static-dispatch obligation whose where-method signature is
-    ///     erroneous is recorded as rejected on every receiver.
-    pub const CACHE_VERSION = 99;
+    /// 100: A static-dispatch obligation whose where-method signature is
+    ///      erroneous is recorded as rejected on every receiver.
+    pub const CACHE_VERSION = 100;
 };
 
 /// Configuration for the Roc cache system.

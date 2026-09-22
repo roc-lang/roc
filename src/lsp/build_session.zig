@@ -22,6 +22,9 @@ const Allocator = std.mem.Allocator;
 /// A single build session with automatic cleanup.
 /// Encapsulates URI conversion, BuildEnv setup, building, and module lookup.
 pub const BuildSession = struct {
+    /// Errors that can occur while starting a build session.
+    pub const InitError = Allocator.Error || std.Io.Dir.RealPathFileAllocError;
+
     allocator: Allocator,
     /// Borrowed pointer to the BuildEnv for this build. Ownership stays with the
     /// caller (typically SyntaxChecker via BuildEnvHandle); deinit does NOT free it.
@@ -49,7 +52,7 @@ pub const BuildSession = struct {
         uri: []const u8,
         override_text: ?[]const u8,
         workspace_root: ?[]const u8,
-    ) Allocator.Error!BuildSession {
+    ) InitError!BuildSession {
         // Convert URI to path
         const path = try uri_util.uriToPath(allocator, uri);
         defer allocator.free(path);
@@ -71,7 +74,7 @@ pub const BuildSession = struct {
             env.filesystem = saved_io;
         };
 
-        const preferred_main = try preferredMainFromWorkspace(allocator, env.filesystem, workspace_root);
+        const preferred_main = try preferredMainFromWorkspace(allocator, std_io, env.filesystem, workspace_root);
         defer if (preferred_main) |main_path| allocator.free(main_path);
 
         // Build
@@ -101,17 +104,25 @@ pub const BuildSession = struct {
     }
 
     /// If the LSP workspace root contains `main.roc`, prefer it as the package-alias root.
-    fn preferredMainFromWorkspace(allocator: Allocator, filesystem: CoreCtx, workspace_root: ?[]const u8) Allocator.Error!?[]u8 {
+    /// The workspace directory is resolved the same way as the checked file's
+    /// own path, so a checked file inside a symlinked workspace directory is
+    /// inside that package. The final `main.roc` component is kept as written:
+    /// the package's source root is the workspace directory even when
+    /// `main.roc` itself links to a file elsewhere.
+    fn preferredMainFromWorkspace(
+        allocator: Allocator,
+        std_io: std.Io,
+        filesystem: CoreCtx,
+        workspace_root: ?[]const u8,
+    ) InitError!?[]const u8 {
         const root = workspace_root orelse return null;
         const candidate = try std.fs.path.join(allocator, &.{ root, "main.roc" });
-        errdefer allocator.free(candidate);
-        if (!filesystem.fileExists(candidate)) {
-            allocator.free(candidate);
-            return null;
-        }
-        const abs = try std.fs.path.resolve(allocator, &.{candidate});
-        allocator.free(candidate);
-        return abs;
+        defer allocator.free(candidate);
+        if (!filesystem.fileExists(candidate)) return null;
+
+        const resolved_root = try std.Io.Dir.cwd().realPathFileAlloc(std_io, root, allocator);
+        defer allocator.free(resolved_root);
+        return try std.fs.path.join(allocator, &.{ resolved_root, "main.roc" });
     }
 
     /// Clean up the build session and free allocated memory.
