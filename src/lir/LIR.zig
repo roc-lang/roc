@@ -117,6 +117,8 @@ pub const ProcIdentity = struct {
 
 /// Identifier of a lowered LIR proc specification.
 pub const LirProcSpecId = enum(u32) {
+    /// The first procedure specification a store holds.
+    first = 0,
     _,
 };
 
@@ -241,7 +243,11 @@ pub const CheckedExhaustivenessSiteId = check.CheckedModule.CheckedExhaustivenes
 /// both enumerate the same modules: source-file ordinals are remapped when
 /// LIR images from different programs are packed together, while a lowering
 /// module id is valid only inside its own program and never outlives it.
-pub const LoweringModuleId = enum(u32) { _ };
+pub const LoweringModuleId = enum(u32) {
+    /// The first row of a lowering's module table.
+    first = 0,
+    _,
+};
 
 /// Source control-flow construct observed during compile-time finalization.
 pub const ComptimeSiteKind = enum {

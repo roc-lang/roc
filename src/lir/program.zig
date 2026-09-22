@@ -774,7 +774,7 @@ test "lowering module table resolves checked module provenance both ways" {
 
     // A site keeps the owner its producer recorded, not the procedure's owner.
     const owner: LIR.LoweringModuleId = @enumFromInt(2);
-    const site = try result.addComptimeSite(.destructure, owner, base.Region.zero(), @enumFromInt(41), @enumFromInt(0), &.{});
+    const site = try result.addComptimeSite(.destructure, owner, base.Region.zero(), @enumFromInt(41), .first, &.{});
     const stored = result.comptime_sites.items[@intFromEnum(site)];
     try std.testing.expectEqual(owner, stored.owner);
     try std.testing.expectEqual(@as(?LIR.CheckedExhaustivenessSiteId, @enumFromInt(41)), stored.checked_site);

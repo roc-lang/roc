@@ -3862,12 +3862,12 @@ test "module owners resolve a lowered program's module ids to their finalized mo
 
     var owners = try ModuleOwners.init(allocator, &program, &modules);
     defer owners.deinit(allocator);
-    try std.testing.expectEqual(@as(?u32, 1), owners.position(@enumFromInt(0)));
+    try std.testing.expectEqual(@as(?u32, 1), owners.position(.first));
     try std.testing.expectEqual(@as(?u32, null), owners.position(@enumFromInt(1)));
     try std.testing.expectEqual(@as(?u32, 0), owners.position(@enumFromInt(2)));
     try std.testing.expect(owners.get(@enumFromInt(1)) == null);
     try std.testing.expectEqual(&artifacts[0], owners.get(@enumFromInt(2)).?.module);
-    try std.testing.expectEqual(&artifacts[1], owners.get(@enumFromInt(0)).?.module);
+    try std.testing.expectEqual(&artifacts[1], owners.get(.first).?.module);
 }
 
 test "compile-time progress elapsed rejects unset and future timestamps" {
@@ -4203,7 +4203,7 @@ fn testInterpreterSlot(failure_message: ?[]const u8, nested: bool, cycle: bool) 
                     defer child.interpreter.dropValue(value.value, .str);
                     try child.publishRoot(self.lowered, .{}, self.root_id, .{
                         .root_order = 0,
-                        .owner = @enumFromInt(0),
+                        .owner = .first,
                         .request = .{ .order = 0, .module_idx = 0, .kind = .compile_time_constant, .source = undefined, .checked_type = undefined, .abi = .compile_time, .exposure = .private },
                         .proc = self.proc,
                         .ret_layout = .str,
@@ -4249,7 +4249,7 @@ fn testInterpreterSlot(failure_message: ?[]const u8, nested: bool, cycle: bool) 
         const value = try owner.interpreter.eval(.{ .proc_id = source_proc, .ret_layout = .str });
         try owner.publishRoot(&lowered, .{}, root_id, .{
             .root_order = 0,
-            .owner = @enumFromInt(0),
+            .owner = .first,
             .request = .{ .order = 0, .module_idx = 0, .kind = .compile_time_constant, .source = undefined, .checked_type = undefined, .abi = .compile_time, .exposure = .private },
             .proc = source_proc,
             .ret_layout = .str,
@@ -4313,7 +4313,7 @@ fn testNativeSlotDemand(lowered: *lir.CheckedPipeline.LoweredProgram, slots: *St
             if (child.termination != .returned) return error.Unexpected;
             try self.slots.publishRoot(self.lowered, .{}, self.root_id, .{
                 .root_order = 0,
-                .owner = @enumFromInt(0),
+                .owner = .first,
                 .request = .{ .order = 0, .module_idx = 0, .kind = .compile_time_constant, .source = undefined, .checked_type = undefined, .abi = .compile_time, .exposure = .private },
                 .proc = self.producer,
                 .ret_layout = .str,
@@ -4447,7 +4447,7 @@ test "shared frozen erased callables execute on interpreter dev and LLVM" {
     };
     const copied = try NativeRootExport.freezeRoot(allocator, &program, closure_slot, .{
         .root_order = 0,
-        .owner = @enumFromInt(0),
+        .owner = .first,
         .request = .{ .order = 0, .module_idx = 0, .kind = .compile_time_constant, .source = undefined, .checked_type = undefined, .abi = .compile_time, .exposure = .private },
         .proc = caller,
         .ret_layout = erased_layout,

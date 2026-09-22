@@ -15059,7 +15059,7 @@ test "SpecConstr residual block destructures preserve statement source context" 
     const stmt_loc: SourceLoc = .{ .file = 1, .line = 3, .column = 5 };
     const stmt_region = Region.from_raw_offsets(20, 40);
     const site: Ast.ComptimeSiteId = @enumFromInt(program.comptime_sites.len());
-    try program.comptime_sites.append(allocator, .{ .kind = .destructure, .owner = @enumFromInt(0), .region = stmt_region });
+    try program.comptime_sites.append(allocator, .{ .kind = .destructure, .owner = .first, .region = stmt_region });
     program.current_loc = stmt_loc;
     program.current_region = stmt_region;
     const binding = try program.addStmt(.{ .let_ = .{ .pat = pattern, .value = input_expr, .comptime_site = site } });

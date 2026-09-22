@@ -12814,7 +12814,7 @@ test "compact comptime root descriptors survive solved teardown and direct LIR l
             .body = .{ .roc = body },
             .ret = bool_ty,
         });
-        try solved.lifted.addRoot(.{ .fn_id = fn_id, .request = undefined, .owner = @enumFromInt(0) });
+        try solved.lifted.addRoot(.{ .fn_id = fn_id, .request = undefined, .owner = .first });
     }
     solved.lifted.next_symbol = 2;
     const field = try solved.lifted.names.internRecordFieldLabel("field");

@@ -61161,7 +61161,7 @@ test "body draft store appends draft-local ids spans and type cells" {
         .{ .named = field_name },
         .{ .padding = ty },
     });
-    const site = try draft.addComptimeSite(.if_, @enumFromInt(0), base.Region.zero(), null, &.{base.Region.zero()});
+    const site = try draft.addComptimeSite(.if_, .first, base.Region.zero(), null, &.{base.Region.zero()});
     const source_file = try program.addSourceFile(.{ .name = "module.roc", .qualified_name = "test.module.roc" });
     try draft.setLocalName(local, "value");
     const record_pat = try draft.addPat(.{ .ty = ty, .data = .{ .record = destruct_span } });

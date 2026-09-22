@@ -3443,15 +3443,15 @@ test "oracle demands declared roots once without executing representation witnes
     _ = try program.addComptimeValueRoot(.{ .module = .{ .bytes = @splat(1) }, .root = root.root, .const_locator = null });
     const producer_fn = try program.addFn(.{ .symbol = undefined, .args = .empty(), .body = .{ .roc = policy }, .ret = bool_ty });
     // Oracle execution consumes fn_id; source requests and linker symbols are unread.
-    try program.roots.append(allocator, .{ .fn_id = producer_fn, .request = undefined, .owner = @enumFromInt(0) });
+    try program.roots.append(allocator, .{ .fn_id = producer_fn, .request = undefined, .owner = .first });
     const root_id = try program.addComptimeValueRoot(root);
     const read = try program.addExpr(.{ .ty = bool_ty, .data = .{ .comptime_value = .{ .root = root_id, .initializer = witness } } });
     const consumer_index = program.rootCount();
     const consumer_fn = try program.addFn(.{ .symbol = undefined, .args = .empty(), .body = .{ .roc = read }, .ret = bool_ty });
-    try program.roots.append(allocator, .{ .fn_id = consumer_fn, .request = undefined, .owner = @enumFromInt(0) });
+    try program.roots.append(allocator, .{ .fn_id = consumer_fn, .request = undefined, .owner = .first });
     const policy_index = program.rootCount();
     const policy_fn = try program.addFn(.{ .symbol = undefined, .args = .empty(), .body = .{ .roc = policy }, .ret = bool_ty });
-    try program.roots.append(allocator, .{ .fn_id = policy_fn, .request = undefined, .owner = @enumFromInt(0) });
+    try program.roots.append(allocator, .{ .fn_id = policy_fn, .request = undefined, .owner = .first });
     for ([_]bool{ false, true }) |enabled| {
         var evaluator = try Evaluator.init(allocator, &program, .{ .inline_expects_enabled = enabled, .comptime_producers = &.{.{ .root = root, .root_index = producer_index }} });
         defer evaluator.deinit();
