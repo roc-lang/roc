@@ -212,9 +212,11 @@ pub const Constants = struct {
     ///     `NumeralLiteral` declares its trailing bytes.
     /// 97: Record types always carry an explicit extension variable; a record
     ///     update's base row is an ordinary record whose tail is a flex var.
-    /// 98: A use of an annotated binding's predeclared scheme is recorded
+    /// 98: Checked procedure template tables publish the templates whose
+    ///     evaluation can reach code checking replaced with a runtime error.
+    /// 99: A use of an annotated binding's predeclared scheme is recorded
     ///     against the binding's own scheme, never the predeclared copy.
-    pub const CACHE_VERSION = 98;
+    pub const CACHE_VERSION = 99;
 };
 
 /// Configuration for the Roc cache system.
