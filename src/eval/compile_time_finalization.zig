@@ -163,7 +163,7 @@ const ModuleOwners = struct {
         for (result.lowering_modules.items, positions) |key, *slot| {
             slot.* = null;
             for (modules, 0..) |entry, index| {
-                if (!std.mem.eql(u8, &entry.module.key.bytes, &key.bytes)) continue;
+                if (!entry.module.key.eql(key)) continue;
                 slot.* = @intCast(index);
                 break;
             }
@@ -783,7 +783,7 @@ fn finalizeLoweredProgram(
     var last_module_id: lir.LIR.LoweringModuleId = undefined;
     for (lowered.lir_result.static_data_values.items, slot_roots) |slot, *owner| {
         const root = slot.compile_time_root orelse continue;
-        const reuse = if (last_key) |key| std.mem.eql(u8, &key.bytes, &root.module.bytes) else false;
+        const reuse = if (last_key) |key| key.eql(root.module) else false;
         if (!reuse) {
             last_module_id = lowered.lir_result.loweringModuleId(root.module) orelse
                 finalizationInvariant("compile-time slot named a checked module outside the lowering's module table");
