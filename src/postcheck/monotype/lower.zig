@@ -15529,6 +15529,9 @@ const BodyDraftStore = struct {
     current_owner: DraftOwner,
     owner_starts: DraftCoreLengths,
     owner_runs: std.ArrayList(DraftOwnerRun),
+    /// Owner scopes currently entered. Each one holds a reserved `owner_runs`
+    /// slot so that leaving the scope never allocates.
+    pending_owner_leaves: usize = 0,
     /// Exact static-data requests are shared by child lowering contexts only
     /// within the body that owns their explicit runtime expression.
     static_data_candidate_exprs: std.AutoHashMap(StaticDataCandidateAddress, DraftExprId),
@@ -15869,6 +15872,9 @@ const BodyDraftStore = struct {
         previous: DraftOwner,
 
         fn leave(self: OwnerScope) void {
+            // `enterOwner` reserved this scope's run slot, so the switch back
+            // cannot need to grow `owner_runs`.
+            self.draft.pending_owner_leaves -= 1;
             self.draft.switchOwner(self.previous) catch |err| switch (err) {
                 error.OutOfMemory => Common.invariant("restoring body draft owner could not record its completed ownership run"),
             };
@@ -15877,6 +15883,11 @@ const BodyDraftStore = struct {
 
     fn enterOwner(self: *BodyDraftStore, owner: DraftOwner) Allocator.Error!OwnerScope {
         const previous = self.current_owner;
+        self.pending_owner_leaves += 1;
+        errdefer self.pending_owner_leaves -= 1;
+        // Reserve this scope's exit slot now, even when the owner is already
+        // current and no run gets recorded here.
+        try self.owner_runs.ensureUnusedCapacity(self.allocator, self.pending_owner_leaves + 1);
         try self.switchOwner(owner);
         return .{ .draft = self, .previous = previous };
     }
@@ -15896,7 +15907,9 @@ const BodyDraftStore = struct {
     fn closeOwnerRun(self: *BodyDraftStore) Allocator.Error!void {
         const ends = self.coreLengths();
         if (std.mem.eql(u32, self.owner_starts[0..], ends[0..])) return;
-        try self.owner_runs.append(self.allocator, .{
+        // Keep one spare slot per entered owner scope beyond this run.
+        try self.owner_runs.ensureUnusedCapacity(self.allocator, 1 + self.pending_owner_leaves);
+        self.owner_runs.appendAssumeCapacity(.{
             .owner = self.current_owner,
             .starts = self.owner_starts,
             .ends = ends,
@@ -61970,6 +61983,39 @@ test "body draft ownership runs restore the parent across nested lowering" {
         try std.testing.expectEqual(@as(u32, @intCast(index)), owner_run.starts[kind]);
         try std.testing.expectEqual(@as(u32, @intCast(index + 1)), owner_run.ends[kind]);
     }
+}
+
+test "body draft owner scopes leave without allocating under allocation failure" {
+    const Scenario = struct {
+        fn run(allocator: std.mem.Allocator) Allocator.Error!void {
+            const outer_fn: DraftFnId = @enumFromInt(10);
+            const inner_fn: DraftFnId = @enumFromInt(11);
+            var draft = BodyDraftStore.init(allocator);
+            defer draft.deinit();
+
+            try draft.expr_ids.append(allocator, @enumFromInt(20));
+            {
+                const outer = try draft.enterOwner(.{ .draft_fn = outer_fn });
+                defer outer.leave();
+                try draft.expr_ids.append(allocator, @enumFromInt(1));
+                {
+                    // Re-entering the current owner records no run on entry,
+                    // yet its exit still needs a reserved slot.
+                    const same = try draft.enterOwner(.{ .draft_fn = outer_fn });
+                    defer same.leave();
+                    try draft.expr_ids.append(allocator, @enumFromInt(2));
+                    {
+                        const inner = try draft.enterOwner(.{ .draft_fn = inner_fn });
+                        defer inner.leave();
+                        try draft.expr_ids.append(allocator, @enumFromInt(3));
+                    }
+                }
+                try draft.expr_ids.append(allocator, @enumFromInt(4));
+            }
+            try draft.finishOwnerRuns();
+        }
+    };
+    try std.testing.checkAllAllocationFailures(std.testing.allocator, Scenario.run, .{});
 }
 
 test "body draft core ownership distinguishes sibling materializations" {
