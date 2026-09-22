@@ -3760,7 +3760,7 @@ fn testReplaceConfig(args: []const ReplaceDepArg) Config {
     return config;
 }
 
-fn testExpectDiagnostic(resolver: *const Resolver, title: []const u8) !void {
+fn testExpectDiagnostic(resolver: *const Resolver, title: []const u8) error{TestExpectedDiagnostic}!void {
     for (resolver.diagnostics.items) |diagnostic| {
         if (std.mem.eql(u8, diagnostic.title, title)) return;
     }
@@ -3770,7 +3770,7 @@ fn testExpectDiagnostic(resolver: *const Resolver, title: []const u8) !void {
     return error.TestExpectedDiagnostic;
 }
 
-fn testExpectResolutionFails(registry: *TestRegistry, root: []const u8, config: Config, title: []const u8) !void {
+fn testExpectResolutionFails(registry: *TestRegistry, root: []const u8, config: Config, title: []const u8) (Allocator.Error || error{ TestExpectedDiagnostic, TestExpectedError, TestUnexpectedError })!void {
     var resolver = Resolver.init(std.testing.allocator, registry.fetcher(), config);
     defer resolver.deinit();
     try std.testing.expectError(error.ResolutionFailed, resolver.resolve(root));
@@ -3784,7 +3784,7 @@ const test_platform_url = "https://example.com/cli/0.23.0/hashCmiz23z.tar.zst";
 
 /// The proposal's worked example: an app depending on ASCII and ANSI, where
 /// ANSI depends on ASCII under a different alias.
-fn testRegisterAsciiAnsi(registry: *TestRegistry, ansi_ascii_url: []const u8) !void {
+fn testRegisterAsciiAnsi(registry: *TestRegistry, ansi_ascii_url: []const u8) Allocator.Error!void {
     try registry.locals.put("/app/main.roc", .{
         .kind = .app,
         .deps = &.{

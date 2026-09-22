@@ -388,6 +388,7 @@ pub const DepsArgs = struct {
     resolve_limits: ResolveLimitArgs = .{}, // package download size limits and dependency replacements
 };
 
+/// Arguments for `roc bump`
 pub const BumpArgs = struct {
     path: []const u8, // the new package's main .roc file
     old: []const u8, // the old package: URL, .tar.zst bundle, directory, or .roc file (REQUIRED)
