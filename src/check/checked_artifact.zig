@@ -19456,7 +19456,7 @@ const EvidencePass = struct {
                 // The checker closed an exact concrete backedge and proved
                 // every requirement is determined by the target's callable.
                 // Publish its finite recipe instead of expanding it again.
-                if (procedure_schema == .requires_record) {
+                if (procedure_schema == .requires_record or procedure_schema == .from_target) {
                     checkedArtifactInvariant("recursive dispatch target did not have callable-derived evidence", .{});
                 }
                 return try self.internEvidenceNode(.{
@@ -19487,7 +19487,7 @@ const EvidencePass = struct {
             defer _ = self.record_in_progress.remove(idx);
 
             const nested = (try self.evidenceRefsForRecord(idx, true)).?;
-            if (procedure_schema == .requires_record) {
+            if (procedure_schema == .requires_record or procedure_schema == .from_target) {
                 const target_view = self.procedureEvidenceView(target);
                 if (nested.refs.len != target_view.template.evidence_params.len) {
                     checkedArtifactInvariant("recorded procedure target evidence length differed from its declared params", .{});
@@ -19518,7 +19518,7 @@ const EvidencePass = struct {
             });
         }
 
-        if (procedure_schema == .requires_record) {
+        if (procedure_schema == .requires_record or procedure_schema == .from_target) {
             checkedArtifactInvariant("pathless procedure target evidence had no checked instantiation record", .{});
         }
         if (target.kind == .local_proc and constraint_fn_var != null and selection == .dispatch_edge) {
@@ -20042,6 +20042,28 @@ test "procedure evidence schema positively classifies callable paths and pathles
     try std.testing.expectEqual(
         EvidencePass.ProcedureEvidenceSchema.requires_record,
         EvidencePass.procedureEvidenceSchemaFromSlices(pathless_table.evidenceParams(&template), pathless_table.evidence_param_paths),
+    );
+
+    var target_params = [_]static_dispatch.EvidenceParamRecord{params[0]};
+    target_params[0].source = .scheme_requirement;
+    target_params[0].path = .{};
+    try std.testing.expectEqual(
+        EvidencePass.ProcedureEvidenceSchema.from_target,
+        EvidencePass.procedureEvidenceSchemaFromSlices(&target_params, &.{}),
+    );
+
+    target_params[0].path = .{ .start = 0, .len = 1 };
+    try std.testing.expectEqual(
+        EvidencePass.ProcedureEvidenceSchema.requires_record,
+        EvidencePass.procedureEvidenceSchemaFromSlices(&target_params, path_steps[0..1]),
+    );
+
+    var mixed_params = [_]static_dispatch.EvidenceParamRecord{ params[0], params[1] };
+    mixed_params[1].source = .scheme_requirement;
+    mixed_params[1].path = .{};
+    try std.testing.expectEqual(
+        EvidencePass.ProcedureEvidenceSchema.requires_record,
+        EvidencePass.procedureEvidenceSchemaFromSlices(&mixed_params, path_steps[0..1]),
     );
 
     var defaulted_pathless_params = pathless_params;
