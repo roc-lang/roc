@@ -113,7 +113,6 @@ pub const RepresentationKind = union(enum) {
     erased_callable: checked.CheckedFunctionKind,
     alias,
     record,
-    record_unbound,
     tuple,
     nominal: NominalKind,
     list,
@@ -337,6 +336,10 @@ pub const DirectCallHiddenDescriptorArg = struct {
     rep: TypeRepId,
     source_arg_index: ?u32 = null,
     source_value_rep: ?TypeRepId = null,
+    /// Index in this call's hidden descriptor arguments of an earlier operand
+    /// descriptor supplying the same callable parameter. Lowering reuses that
+    /// local, including its exact read from the adapted operand.
+    source_descriptor_index: ?u32 = null,
     /// The call-side nominal whose backing `rep` belongs to. Such a `rep` names
     /// the declaration's formals, so its descriptor is built under this
     /// nominal's backing-argument substitutions.
@@ -1900,7 +1903,6 @@ const Builder = struct {
             .bool_tag_union,
             .erased_callable,
             .record,
-            .record_unbound,
             .tuple,
             .list,
             .box,
@@ -2347,7 +2349,6 @@ const Builder = struct {
                 .rigid,
                 .alias,
                 .record,
-                .record_unbound,
                 .tuple,
                 .nominal,
                 .empty_record,
@@ -2366,7 +2367,6 @@ const Builder = struct {
                 .rigid,
                 .alias,
                 .record,
-                .record_unbound,
                 .tuple,
                 .function,
                 .empty_record,
@@ -2390,7 +2390,7 @@ const Builder = struct {
                     visited,
                 ),
                 .empty_record => range.len == 0,
-                .pending, .err, .flex, .rigid, .alias, .record_unbound, .tuple, .nominal, .function, .tag_union, .empty_tag_union => false,
+                .pending, .err, .flex, .rigid, .alias, .tuple, .nominal, .function, .tag_union, .empty_tag_union => false,
             },
             .tuple => |range| switch (payload) {
                 .tuple => |items| blk: {
@@ -2403,7 +2403,7 @@ const Builder = struct {
                     }
                     break :blk true;
                 },
-                .pending, .err, .flex, .rigid, .alias, .record, .record_unbound, .nominal, .function, .empty_record, .tag_union, .empty_tag_union => false,
+                .pending, .err, .flex, .rigid, .alias, .record, .nominal, .function, .empty_record, .tag_union, .empty_tag_union => false,
             },
             .tag_union => |range| switch (payload) {
                 .tag_union => |tag_union| try self.storedTagTypeMatchesChecked(
@@ -2414,7 +2414,7 @@ const Builder = struct {
                     visited,
                 ),
                 .empty_tag_union => range.len == 0,
-                .pending, .err, .flex, .rigid, .alias, .record, .record_unbound, .tuple, .nominal, .function, .empty_record => false,
+                .pending, .err, .flex, .rigid, .alias, .record, .tuple, .nominal, .function, .empty_record => false,
             },
             .list => |element| switch (payload) {
                 .nominal => |nominal| if (nominal.builtin == .list and nominal.args.len == 1)
@@ -2427,7 +2427,6 @@ const Builder = struct {
                 .rigid,
                 .alias,
                 .record,
-                .record_unbound,
                 .tuple,
                 .function,
                 .empty_record,
@@ -2446,7 +2445,6 @@ const Builder = struct {
                 .rigid,
                 .alias,
                 .record,
-                .record_unbound,
                 .tuple,
                 .function,
                 .empty_record,
@@ -2492,7 +2490,6 @@ const Builder = struct {
             .flex,
             .rigid,
             .record,
-            .record_unbound,
             .tuple,
             .function,
             .empty_record,
@@ -2556,10 +2553,6 @@ const Builder = struct {
                     try checked_fields.appendSlice(self.allocator, record.fields);
                     extension = record.ext;
                 },
-                .record_unbound => |fields| {
-                    try checked_fields.appendSlice(self.allocator, fields);
-                    break;
-                },
                 .empty_record => break,
                 .flex, .rigid => |variable| {
                     if (variable.row_default != .empty_record) return false;
@@ -2618,7 +2611,7 @@ const Builder = struct {
                     if (variable.row_default != .empty_tag_union) return false;
                     break;
                 },
-                .pending, .err, .record, .record_unbound, .tuple, .nominal, .function, .empty_record => return false,
+                .pending, .err, .record, .tuple, .nominal, .function, .empty_record => return false,
             }
         }
         if (stored_tags.len != checked_tags.items.len) return false;
@@ -3226,7 +3219,7 @@ const Builder = struct {
         switch (view.checked_types.payload(shape.ty)) {
             .pending => boxyPlanInvariant("pending checked type reached generated parser planning"),
             .err => boxyPlanInvariant("checked error type reached generated parser planning"),
-            .flex, .rigid, .record_unbound => boxyPlanInvariant("open checked type reached generated parser planning"),
+            .flex, .rigid => boxyPlanInvariant("open checked type reached generated parser planning"),
             .function, .empty_tag_union => boxyPlanInvariant("unsupported checked type reached generated parser planning"),
             .alias => |alias| {
                 const backing = typeRef(view, alias.backing);
@@ -3526,7 +3519,7 @@ const Builder = struct {
                 }
             },
             .pending => boxyPlanInvariant("pending tag row reached generated parser planning"),
-            .err, .record, .record_unbound, .tuple, .function, .empty_record => boxyPlanInvariant("generated parser tag row extension was not a tag row"),
+            .err, .record, .tuple, .function, .empty_record => boxyPlanInvariant("generated parser tag row extension was not a tag row"),
         }
     }
 
@@ -3568,7 +3561,6 @@ const Builder = struct {
                 .flex,
                 .rigid,
                 .record,
-                .record_unbound,
                 .tuple,
                 .function,
                 .empty_record,
@@ -3668,12 +3660,6 @@ const Builder = struct {
                     }
                     current = typeRef(view, record.ext);
                 },
-                .record_unbound => |tail_fields| {
-                    for (tail_fields) |field| {
-                        try fields.append(self.allocator, .{ .module = view.key, .field = field });
-                    }
-                    current = null;
-                },
                 .alias => |alias| current = typeRef(view, alias.backing),
                 .empty_record => current = null,
                 .flex, .rigid => |variable| {
@@ -3703,7 +3689,7 @@ const Builder = struct {
         switch (view.checked_types.payload(shape.ty)) {
             .pending => boxyPlanInvariant("pending checked type reached generated encoder planning"),
             .err => boxyPlanInvariant("checked error type reached generated encoder planning"),
-            .flex, .rigid, .record_unbound => boxyPlanInvariant("open checked type reached generated encoder planning"),
+            .flex, .rigid => boxyPlanInvariant("open checked type reached generated encoder planning"),
             .function, .empty_tag_union => boxyPlanInvariant("unsupported checked type reached generated encoder planning"),
             .alias => {
                 const shape_rep = try self.analyzeType(view, shape.ty);
@@ -4260,7 +4246,6 @@ const Builder = struct {
                 .primitive,
                 .erased_callable,
                 .record,
-                .record_unbound,
                 .tuple,
                 .list,
                 .box,
@@ -4467,7 +4452,7 @@ const Builder = struct {
                     // use, so it is part of the declared signature itself.
                     if (variable.numeric_default_phase != null or variable.row_default != null) return;
                 },
-                .pending, .err, .alias, .record, .record_unbound, .tuple, .nominal, .function, .empty_record, .tag_union, .empty_tag_union => return,
+                .pending, .err, .alias, .record, .tuple, .nominal, .function, .empty_record, .tag_union, .empty_tag_union => return,
             }
             const slot: HostTypeKey = .{ .source = declared_rep.source_type, .context = context };
             const entry = try self.host_slot_reps.getOrPut(self.allocator, slot);
@@ -4525,7 +4510,7 @@ const Builder = struct {
                 .primitive, .bool_tag_union => true,
                 .try_nominal, .list, .box, .dict, .set, .iterator, .parse_tag_union_spec, .fields, .field, .crypto_sha256_digest, .crypto_sha256_hasher, .crypto_blake3_digest, .crypto_blake3_hasher => false,
             } else false,
-            .pending, .err, .flex, .rigid, .alias, .record, .record_unbound, .tuple, .function, .tag_union => false,
+            .pending, .err, .flex, .rigid, .alias, .record, .tuple, .function, .tag_union => false,
         };
         if (leaf) {
             if (self.by_type.get(key.source)) |binding| {
@@ -4548,7 +4533,7 @@ const Builder = struct {
         try self.plan.representations.append(self.allocator, .{ .source_type = key.source, .kind = .in_progress });
         const shape = switch (payload) {
             .flex, .rigid => |variable| hostVariableRepresentation(key.source, variable),
-            .pending, .err, .alias, .record, .record_unbound, .tuple, .nominal, .function, .empty_record, .tag_union, .empty_tag_union => try self.buildRepresentation(view, key.source.ty),
+            .pending, .err, .alias, .record, .tuple, .nominal, .function, .empty_record, .tag_union, .empty_tag_union => try self.buildRepresentation(view, key.source.ty),
         };
         self.plan.representations.items[@intFromEnum(rep)] = shape;
         return rep;
@@ -4685,8 +4670,7 @@ const Builder = struct {
             .flex => |flex| try self.dynamicRepresentation(source_type, flex.constraints, .flex),
             .rigid => |rigid| try self.dynamicRepresentation(source_type, rigid.constraints, .rigid),
             .alias => |alias| try self.aliasRepresentation(view, source_type, alias),
-            .record => |record| try self.recordRepresentation(view, source_type, .record, record.fields, record.ext),
-            .record_unbound => |fields| try self.recordRepresentation(view, source_type, .record_unbound, fields, null),
+            .record => |record| try self.recordRepresentation(view, source_type, record.fields, record.ext),
             .tuple => |elems| try self.tupleRepresentation(view, source_type, elems),
             .nominal => |nominal| try self.nominalRepresentation(view, source_type, nominal),
             .function => |function| try self.functionRepresentation(view, source_type, function),
@@ -5145,9 +5129,8 @@ const Builder = struct {
         self: *Builder,
         view: ModuleView,
         source_type: CheckedTypeIdentity,
-        kind: RepresentationKind,
         fields: []const checked.CheckedRecordField,
-        ext: ?checked.CheckedTypeId,
+        ext: checked.CheckedTypeId,
     ) Allocator.Error!TypeRepresentation {
         var children = std.ArrayList(RepChild).empty;
         defer children.deinit(self.allocator);
@@ -5182,7 +5165,7 @@ const Builder = struct {
 
         return .{
             .source_type = source_type,
-            .kind = kind,
+            .kind = .record,
             .children = child_span,
         };
     }
@@ -5211,15 +5194,15 @@ const Builder = struct {
     }
 
     /// Flatten checked rows under their explicit ABI substitution context.
-    fn appendHostRecordRows(self: *Builder, children: *std.ArrayList(RepChild), view: ModuleView, fields: []const checked.CheckedRecordField, ext: ?checked.CheckedTypeId) Allocator.Error!bool {
+    fn appendHostRecordRows(self: *Builder, children: *std.ArrayList(RepChild), view: ModuleView, fields: []const checked.CheckedRecordField, ext: checked.CheckedTypeId) Allocator.Error!bool {
         const saved_context = self.host_context;
         defer self.host_context = saved_context;
         for (fields) |field| try self.appendRecordFieldChild(children, view, field);
-        var current: ?HostTypeKey = if (ext) |ty| .{ .source = typeRef(view, ty), .context = saved_context } else null;
+        var current: HostTypeKey = .{ .source = typeRef(view, ext), .context = saved_context };
         var seen = std.AutoHashMap(HostTypeKey, void).init(self.allocator);
         defer seen.deinit();
-        while (current) |input| {
-            const key = self.resolveHostBinding(input);
+        while (true) {
+            const key = self.resolveHostBinding(current);
             const entry = try seen.getOrPut(key);
             if (entry.found_existing) boxyPlanInvariant("cyclic checked ABI record row");
             self.host_context = key.context;
@@ -5233,16 +5216,11 @@ const Builder = struct {
                     for (row.fields) |field| try self.appendRecordFieldChild(children, row_view, field);
                     current = .{ .source = typeRef(row_view, row.ext), .context = key.context };
                 },
-                .record_unbound => |row_fields| {
-                    for (row_fields) |field| try self.appendRecordFieldChild(children, row_view, field);
-                    return true;
-                },
                 .alias => |alias| current = .{ .source = typeRef(row_view, alias.backing), .context = key.context },
                 .flex, .rigid => |variable| return variable.row_default == .empty_record,
                 .pending, .err, .tuple, .nominal, .function, .tag_union, .empty_tag_union => boxyPlanInvariant("checked ABI record extension is not a record row"),
             }
         }
-        return true;
     }
 
     fn hostTagUnionRepresentation(self: *Builder, view: ModuleView, source_type: CheckedTypeIdentity, initial: checked.CheckedTagUnionType) Allocator.Error!TypeRepresentation {
@@ -5272,7 +5250,7 @@ const Builder = struct {
                     if (variable.row_default != .empty_tag_union) open_extension = current;
                     break;
                 },
-                .pending, .err, .record, .record_unbound, .tuple, .nominal, .function, .empty_record => boxyPlanInvariant("checked ABI tag extension is not a tag row"),
+                .pending, .err, .record, .tuple, .nominal, .function, .empty_record => boxyPlanInvariant("checked ABI tag extension is not a tag row"),
             }
         }
         if (view.canonical_names != null) std.mem.sort(PendingTag, tags.items, {}, struct {
@@ -5314,7 +5292,7 @@ const Builder = struct {
         children: *std.ArrayList(RepChild),
         view: ModuleView,
         fields: []const checked.CheckedRecordField,
-        ext: ?checked.CheckedTypeId,
+        ext: checked.CheckedTypeId,
     ) Allocator.Error!bool {
         if (self.host_mode) return self.appendHostRecordRows(children, view, fields, ext);
         for (fields) |field| {
@@ -5325,12 +5303,12 @@ const Builder = struct {
         defer seen.deinit();
 
         var current = ext;
-        while (current) |ext_ty| {
-            const source = typeRef(view, ext_ty);
+        while (true) {
+            const source = typeRef(view, current);
             const entry = try seen.getOrPut(source);
             // A cycle here is only reachable through the structural `.record`/
-            // `.alias` links below (`.flex`/`.rigid`/`.record_unbound`/
-            // `.empty_record` all return on their first visit). The checker
+            // `.alias` links below (`.flex`/`.rigid`/`.empty_record` all
+            // return on their first visit). The checker
             // encodes a closed row's empty tail as a zero-field record whose
             // extension is itself, so reaching that fixpoint after collecting at
             // least one field means the whole field set is resolved and the
@@ -5340,7 +5318,7 @@ const Builder = struct {
             // instead of erasing to a dynamic box.
             if (entry.found_existing) return children.items.len > 0;
 
-            switch (view.checked_types.payload(ext_ty)) {
+            switch (view.checked_types.payload(current)) {
                 .empty_record => return true,
                 .record => |record| {
                     for (record.fields) |field| {
@@ -5348,18 +5326,11 @@ const Builder = struct {
                     }
                     current = record.ext;
                 },
-                .record_unbound => |tail_fields| {
-                    for (tail_fields) |field| {
-                        try self.appendRecordFieldChild(children, view, field);
-                    }
-                    return true;
-                },
                 .alias => |alias| current = alias.backing,
                 .flex, .rigid => |variable| return variable.row_default == .empty_record,
                 .pending, .err, .tuple, .nominal, .function, .tag_union, .empty_tag_union => return false,
             }
         }
-        return true;
     }
 
     fn appendRecordFieldChild(
@@ -5784,7 +5755,6 @@ const Builder = struct {
             .flex,
             .rigid,
             .alias,
-            .record_unbound,
             .tuple,
             .nominal,
             .function,
@@ -6052,7 +6022,7 @@ const Builder = struct {
             .empty_tag_union => true,
             .alias => |alias| try self.tagUnionExtensionIsExplicitlyClosedInner(view, alias.backing, seen),
             .flex, .rigid => |variable| variable.row_default == .empty_tag_union,
-            .pending, .err, .record, .record_unbound, .tuple, .nominal, .function, .empty_record, .tag_union => false,
+            .pending, .err, .record, .tuple, .nominal, .function, .empty_record, .tag_union => false,
         };
     }
 
@@ -6081,7 +6051,7 @@ const Builder = struct {
         return switch (view.checked_types.payload(ext_ty)) {
             .alias => |alias| try self.rowExtensionIsDefaultClosedInner(view, alias.backing, expected, seen),
             .flex, .rigid => |variable| variable.row_default == expected,
-            .pending, .err, .record, .record_unbound, .tuple, .nominal, .function, .empty_record, .tag_union, .empty_tag_union => false,
+            .pending, .err, .record, .tuple, .nominal, .function, .empty_record, .tag_union, .empty_tag_union => false,
         };
     }
 
@@ -6363,7 +6333,6 @@ const Builder = struct {
             .erased_callable,
             .alias,
             .record,
-            .record_unbound,
             .tuple,
             .nominal,
             .list,
@@ -8150,7 +8119,6 @@ const Builder = struct {
                     .erased_callable,
                     .alias,
                     .record,
-                    .record_unbound,
                     .tuple,
                     .nominal,
                     .generated_field,
@@ -8332,9 +8300,6 @@ const Builder = struct {
                     const payload = view.checked_types.payload(current.ty);
                     if (payload == .record) {
                         break :blk self.checkedRecordFieldAtEvidencePath(path_view, @enumFromInt(path_step.data), view, payload.record.fields);
-                    }
-                    if (payload == .record_unbound) {
-                        break :blk self.checkedRecordFieldAtEvidencePath(path_view, @enumFromInt(path_step.data), view, payload.record_unbound);
                     }
                     boxyPlanInvariant("worker evidence path expected a record field");
                 },
@@ -8680,24 +8645,53 @@ const Builder = struct {
                     boxyPlanInvariant("boxy direct call hidden descriptor order disagreed with worker descriptor params");
                 }
                 next_param.* += 1;
-                const operand_nominal_actual = (try self.nominalBackingActualForCallRep(
-                    call_value_rep,
-                    source_value_rep,
-                    aligned_call_rep_id,
-                )) orelse try self.nominalBackingActualForFormal(source_value_rep, worker_rep_id);
-                const desc_arg_rep_id = self.repQuery().descriptorArgumentIdentityRep(
-                    operand_nominal_actual orelse aligned_call_rep_id,
-                );
-                const desc_arg_rep = self.plan.representations.items[@intFromEnum(desc_arg_rep_id)];
-                try pending.append(self.allocator, .{
-                    .worker_desc = worker_desc,
-                    .worker_rep = worker_rep_id,
-                    .source_type = desc_arg_rep.source_type,
-                    .rep = desc_arg_rep_id,
-                    .source_arg_index = source_arg_index,
-                    .source_value_rep = source_value_rep,
-                    .backing_owner = self.call_descriptor_backing_owner,
-                });
+                // Nominal result backings introduce declaration formals, but
+                // their actuals can be callable parameters already supplied by
+                // an operand. Retain that exact argument provenance across the
+                // scoped nominal descent, including dynamic actuals.
+                const call_identity = self.repQuery().descriptorArgumentIdentityRep(aligned_call_rep_id);
+                const worker_parameter = self.plan.representations.items[@intFromEnum(worker_identity)];
+                const call_parameter = self.plan.representations.items[@intFromEnum(call_identity)];
+                const bare_parameter = worker_parameter.kind == .dynamic and worker_parameter.children.len == 0 and worker_parameter.tag_variants.len == 0 and
+                    call_parameter.kind == .dynamic and call_parameter.children.len == 0 and call_parameter.tag_variants.len == 0;
+                const source_index = if (bare_parameter and source_arg_index == null) blk: {
+                    const sources = if (substitutions.argument_sources) |*sources| sources else break :blk null;
+                    break :blk sources.get(call_identity);
+                } else null;
+                const descriptor_arg: DirectCallHiddenDescriptorArg = if (source_index) |index| blk: {
+                    var source = pending.items[index];
+                    source.worker_desc = worker_desc;
+                    source.worker_rep = worker_rep_id;
+                    source.source_descriptor_index = index;
+                    break :blk source;
+                } else blk: {
+                    const operand_nominal_actual = (try self.nominalBackingActualForCallRep(
+                        call_value_rep,
+                        source_value_rep,
+                        aligned_call_rep_id,
+                    )) orelse try self.nominalBackingActualForFormal(source_value_rep, worker_rep_id);
+                    const desc_arg_rep_id = self.repQuery().descriptorArgumentIdentityRep(
+                        operand_nominal_actual orelse aligned_call_rep_id,
+                    );
+                    const desc_arg_rep = self.plan.representations.items[@intFromEnum(desc_arg_rep_id)];
+                    break :blk .{
+                        .worker_desc = worker_desc,
+                        .worker_rep = worker_rep_id,
+                        .source_type = desc_arg_rep.source_type,
+                        .rep = desc_arg_rep_id,
+                        .source_arg_index = source_arg_index,
+                        .source_value_rep = source_value_rep,
+                        .backing_owner = self.call_descriptor_backing_owner,
+                    };
+                };
+                if (bare_parameter and source_arg_index != null) {
+                    if (substitutions.argument_sources == null) {
+                        substitutions.argument_sources = collections.DenseMap(TypeRepId, u32).init(self.allocator);
+                    }
+                    const source_entry = try substitutions.argument_sources.?.getOrPut(call_identity);
+                    if (!source_entry.found_existing) source_entry.value_ptr.* = @intCast(pending.items.len);
+                }
+                try pending.append(self.allocator, descriptor_arg);
             }
         }
 
@@ -8785,9 +8779,12 @@ const Builder = struct {
 
     const CallDescriptorRepSubstitutionMap = struct {
         entries: std.ArrayList(CallDescriptorRepSubstitution) = .empty,
+        // Callable parameters outlive the nested declaration scopes in entries.
+        argument_sources: ?collections.DenseMap(TypeRepId, u32) = null,
 
         fn deinit(self: *CallDescriptorRepSubstitutionMap, allocator: Allocator) void {
             self.entries.deinit(allocator);
+            if (self.argument_sources) |*sources| sources.deinit();
         }
 
         fn get(self: *const CallDescriptorRepSubstitutionMap, worker_rep: TypeRepId) ?TypeRepId {
@@ -12906,7 +12903,6 @@ fn checkedFunctionPayload(view: ModuleView, checked_ty: checked.CheckedTypeId) c
             .flex,
             .rigid,
             .record,
-            .record_unbound,
             .tuple,
             .nominal,
             .empty_record,
@@ -13006,7 +13002,6 @@ fn generatedParserKeyMethod(view: ModuleView, ty: checked.CheckedTypeId) ?[]cons
         .flex,
         .rigid,
         .record,
-        .record_unbound,
         .tuple,
         .function,
         .empty_record,
@@ -13036,7 +13031,7 @@ fn checkedParserUnitTagKey(view: ModuleView, ty: checked.CheckedTypeId) bool {
             },
             .empty_tag_union => return saw_tag,
             .flex, .rigid => |variable| return saw_tag and variable.row_default == .empty_tag_union,
-            .pending, .err, .record, .record_unbound, .tuple, .function, .empty_record => return false,
+            .pending, .err, .record, .tuple, .function, .empty_record => return false,
         }
     }
     boxyPlanInvariant("checked Dict key tag row was cyclic");
@@ -13131,7 +13126,6 @@ fn generatedEncoderKeyMethod(view: ModuleView, ty: checked.CheckedTypeId) ?[]con
         .flex,
         .rigid,
         .record,
-        .record_unbound,
         .tuple,
         .function,
         .empty_record,
@@ -13213,7 +13207,7 @@ fn checkedTryErrorKinds(view: ModuleView, checked_ty: checked.CheckedTypeId) ?Ch
             .empty_tag_union => return if (has_tag) result else null,
             .flex, .rigid => |variable| return if (variable.row_default == .empty_tag_union and
                 has_tag) result else null,
-            .pending, .err, .record, .record_unbound, .tuple, .function, .empty_record => return null,
+            .pending, .err, .record, .tuple, .function, .empty_record => return null,
         }
     }
     boxyPlanInvariant("checked Try error row was cyclic");
@@ -13249,7 +13243,7 @@ fn checkedTryPayloads(view: ModuleView, checked_ty: checked.CheckedTypeId) ?Chec
             .empty_tag_union => return if (ok != null and err != null) .{ .ok = ok.?, .err = err.? } else null,
             .flex, .rigid => |variable| return if (variable.row_default == .empty_tag_union and
                 ok != null and err != null) .{ .ok = ok.?, .err = err.? } else null,
-            .pending, .err, .record, .record_unbound, .tuple, .function, .empty_record => return null,
+            .pending, .err, .record, .tuple, .function, .empty_record => return null,
         }
     }
     boxyPlanInvariant("checked Try alias chain was cyclic");
@@ -13440,7 +13434,6 @@ fn descriptorReason(kind: RepresentationKind) ?DescriptorReason {
     return switch (kind) {
         .dynamic => .dynamic_payload,
         .record,
-        .record_unbound,
         .tuple,
         .nominal,
         .tag_union,
@@ -14453,6 +14446,79 @@ test "direct call descriptors use operand nominal substitutions over generic cal
     try std.testing.expectEqual(@as(usize, 1), pending.items.len);
     try std.testing.expectEqual(exact_operand_arg, pending.items[0].rep);
     try std.testing.expectEqual(operand_nominal, pending.items[0].source_value_rep.?);
+}
+
+test "nominal result descriptors retain a dynamic callable argument source" {
+    try expectNominalResultArgumentSource(false);
+    try expectNominalResultArgumentSource(true);
+}
+
+fn expectNominalResultArgumentSource(alias_argument: bool) (Allocator.Error || error{TestExpectedEqual})!void {
+    const gpa = std.testing.allocator;
+    var builder = Builder.init(gpa, .{});
+    defer builder.deinit();
+
+    const worker_elem: TypeRepId = @enumFromInt(fixtureTableIndex(0));
+    const worker_list: TypeRepId = @enumFromInt(1);
+    const formal: TypeRepId = @enumFromInt(2);
+    const backing: TypeRepId = @enumFromInt(3);
+    const worker_nominal: TypeRepId = @enumFromInt(4);
+    const call_elem: TypeRepId = @enumFromInt(5);
+    const call_list: TypeRepId = @enumFromInt(6);
+    const call_nominal: TypeRepId = @enumFromInt(7);
+    const operand_elem: TypeRepId = @enumFromInt(8);
+    const operand_list: TypeRepId = @enumFromInt(9);
+    const call_alias: TypeRepId = @enumFromInt(10);
+    try builder.plan.children.appendSlice(gpa, &.{
+        .{ .role = .list_elem, .source_type = rootTypeRef(@enumFromInt(fixtureTableIndex(0))), .rep = worker_elem },
+        .{ .role = .{ .tuple_elem = 0 }, .source_type = rootTypeRef(@enumFromInt(2)), .rep = formal },
+        .{ .role = .nominal_backing, .source_type = rootTypeRef(@enumFromInt(3)), .rep = backing },
+        .{ .role = .{ .nominal_arg = 0 }, .source_type = rootTypeRef(@enumFromInt(fixtureTableIndex(0))), .rep = worker_elem },
+        .{ .role = .list_elem, .source_type = rootTypeRef(if (alias_argument) @enumFromInt(10) else @enumFromInt(5)), .rep = if (alias_argument) call_alias else call_elem },
+        .{ .role = .nominal_backing, .source_type = rootTypeRef(@enumFromInt(3)), .rep = backing },
+        .{ .role = .{ .nominal_arg = 0 }, .source_type = rootTypeRef(@enumFromInt(5)), .rep = call_elem },
+        .{ .role = .list_elem, .source_type = rootTypeRef(@enumFromInt(8)), .rep = operand_elem },
+        .{ .role = .alias_backing, .source_type = rootTypeRef(@enumFromInt(5)), .rep = call_elem },
+    });
+    const worker_substitutions = try testNominalSubstitution(&builder.plan, formal, worker_elem);
+    const call_substitutions = try testNominalSubstitution(&builder.plan, formal, call_elem);
+    try builder.plan.representations.appendSlice(gpa, &.{
+        .{ .source_type = rootTypeRef(@enumFromInt(fixtureTableIndex(0))), .kind = .{ .dynamic = .rigid }, .descriptor = @enumFromInt(fixtureTableIndex(0)), .contains_dynamic = true },
+        .{ .source_type = rootTypeRef(@enumFromInt(1)), .kind = .list, .children = .{ .start = 0, .len = 1 }, .contains_dynamic = true },
+        .{ .source_type = rootTypeRef(@enumFromInt(2)), .kind = .{ .dynamic = .rigid }, .descriptor = @enumFromInt(1), .contains_dynamic = true },
+        .{ .source_type = rootTypeRef(@enumFromInt(3)), .kind = .tuple, .children = .{ .start = 1, .len = 1 }, .contains_dynamic = true },
+        .{ .source_type = rootTypeRef(@enumFromInt(4)), .kind = .{ .nominal = .transparent }, .children = .{ .start = 2, .len = 2 }, .nominal_backing_arg_substitutions = worker_substitutions, .contains_dynamic = true },
+        .{ .source_type = rootTypeRef(@enumFromInt(5)), .kind = .{ .dynamic = .rigid }, .descriptor = @enumFromInt(2), .contains_dynamic = true },
+        .{ .source_type = rootTypeRef(@enumFromInt(6)), .kind = .list, .children = .{ .start = 4, .len = 1 }, .contains_dynamic = true },
+        .{ .source_type = rootTypeRef(@enumFromInt(7)), .kind = .{ .nominal = .transparent }, .children = .{ .start = 5, .len = 2 }, .nominal_backing_arg_substitutions = call_substitutions, .contains_dynamic = true },
+        .{ .source_type = rootTypeRef(@enumFromInt(8)), .kind = .{ .dynamic = .rigid }, .descriptor = @enumFromInt(3), .contains_dynamic = true },
+        .{ .source_type = rootTypeRef(@enumFromInt(9)), .kind = .list, .children = .{ .start = 7, .len = 1 }, .contains_dynamic = true },
+        .{ .source_type = rootTypeRef(@enumFromInt(10)), .kind = .alias, .children = .{ .start = 8, .len = 1 }, .contains_dynamic = true },
+    });
+    const params = [_]HiddenDescriptorParam{
+        .{ .source_type = rootTypeRef(@enumFromInt(fixtureTableIndex(0))), .rep = worker_elem, .desc = @enumFromInt(fixtureTableIndex(0)) },
+        .{ .source_type = rootTypeRef(@enumFromInt(2)), .rep = formal, .desc = @enumFromInt(1) },
+    };
+    var pending = std.ArrayList(DirectCallHiddenDescriptorArg).empty;
+    defer pending.deinit(gpa);
+    var seen_reps = collections.DenseMap(TypeRepId, void).init(gpa);
+    defer seen_reps.deinit();
+    var seen_descriptors = collections.DenseMap(TypeRepId, void).init(gpa);
+    defer seen_descriptors.deinit();
+    var substitutions = Builder.CallDescriptorRepSubstitutionMap{};
+    defer substitutions.deinit(gpa);
+    var next_param: usize = 0;
+
+    try builder.collectCallHiddenDescriptorArgs(worker_list, call_list, call_list, operand_list, 0, &params, &next_param, &pending, &seen_reps, &seen_descriptors, &substitutions, false);
+    try builder.collectCallHiddenDescriptorArgs(worker_nominal, call_nominal, call_nominal, call_nominal, null, &params, &next_param, &pending, &seen_reps, &seen_descriptors, &substitutions, false);
+
+    try std.testing.expectEqual(@as(usize, 2), pending.items.len);
+    const result_source = pending.items[1];
+    try std.testing.expectEqual(formal, result_source.worker_rep);
+    try std.testing.expectEqual(operand_elem, result_source.rep);
+    try std.testing.expectEqual(@as(?u32, 0), result_source.source_arg_index);
+    try std.testing.expectEqual(operand_list, result_source.source_value_rep.?);
+    try std.testing.expectEqual(@as(?u32, 0), result_source.source_descriptor_index);
 }
 
 test "evidence representation paths use exact nominal backing substitutions" {

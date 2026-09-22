@@ -62,7 +62,6 @@ test "Monotype types are closed checked types without row tails" {
     try std.testing.expect(@hasField(MonoType.Content, "erased"));
     try std.testing.expect(@hasField(MonoType.Content, "zst"));
 
-    try std.testing.expect(!@hasField(MonoType.Content, "record_unbound"));
     try std.testing.expect(!@hasField(MonoType.Content, "empty_record"));
     try std.testing.expect(!@hasField(MonoType.Content, "empty_tag_union"));
     try std.testing.expect(!@hasField(MonoType.Content, "row_var"));
@@ -1415,11 +1414,12 @@ test "hosted Try adaptation consumes checker-recorded nominal provenance" {
 test "Monotype source locations carry final program file ids and draft compaction preserves procedure debug names" {
     const lower_source = @embedFile("monotype/lower.zig");
     // The program's source-file table is seeded in canonical order before any
-    // body is lowered, by the coordinator and derived identically by every
-    // worker, so drafts hold no source-file content of their own and sealing
+    // body is lowered, by the coordinator and borrowed by every worker,
+    // so drafts hold no source-file content of their own and sealing
     // never relocates a location's file id.
     try expectContains(lower_source, "try builder.seedProgramSourceFiles();");
-    try expectContains(lower_source, "try builder.initSourceFileIds();");
+    try expectContains(lower_source, "builder.borrowed_source_file_ids = inputs.source_file_ids;");
+    try expectNotContains(lower_source, "fn initSourceFileIds(");
     try expectContains(lower_source, "std.mem.sort(SourceFileSeed, seeds.items, {}, SourceFileSeed.lessThan);");
     try expectNotContains(lower_source, "fn sourceFileIdFor");
     try expectNotContains(lower_source, "kind == .source_files");

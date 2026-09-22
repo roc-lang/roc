@@ -195,6 +195,14 @@ const GlueLanguage = enum(u8) {
         };
     }
 
+    fn generatedFileName(self: GlueLanguage) []const u8 {
+        return switch (self) {
+            .zig => "roc_platform_abi.zig",
+            .rust => "roc_platform_abi.rs",
+            .c => "roc_platform_abi.h",
+        };
+    }
+
     fn hostFileName(self: GlueLanguage) []const u8 {
         return switch (self) {
             .zig => "host.zig",
@@ -366,6 +374,7 @@ const CustomCase = enum {
     default_app_all_syntax_checked_cache,
     pipeline_parity_diagnostics,
     pipeline_parity_shared_cache,
+    source_file_identity,
     issue_11344_diagnostics,
     issue_11344_shared_helper,
     issue_11344_lir_image,
@@ -419,6 +428,7 @@ const CustomCase = enum {
     build_int_interpreter_output_runs,
     build_int_dev_output_runs,
     issue_10492_build_default_app_args,
+    issue_11453_nested_alias_json_encode,
     build_default_app_interpreter_args,
     build_glibc_target_non_linux_error,
     build_windows_shared_library,
@@ -476,6 +486,7 @@ const CustomCase = enum {
     glue_record_function_field,
     glue_recursive_slot_box,
     glue_generic_callable_arg,
+    glue_hosted_erased_generic_callback,
     glue_c_tests,
     roc_test_skips_url_dependency_expects,
     roc_test_caches_local_dependency_expects,
@@ -879,6 +890,7 @@ else
 const issue_11217_size_expected_stdout = if (builtin.os.tag == .windows) "ok\r\n" else "ok\n";
 
 const echo_cases = [_]CliCase{
+    .{ .id = 0, .suite = .echo, .name = "echo platform: issue 11453 method encodes a record reached through three record aliases (dev, object cache on)", .backend = .dev, .body = .{ .custom = .issue_11453_nested_alias_json_encode } },
     .{ .id = 0, .suite = .echo, .name = "issue 11130: record versions and eager effects (interpreter)", .backend = .interpreter, .body = .{ .command = .{ .args = &.{ "--opt=interpreter", "--no-cache" }, .roc_file = "test/echo/issue_11130_record_versions.roc", .stdout_exact = issue_11130_expected_stdout } } },
     .{ .id = 0, .suite = .echo, .name = "issue 11130: record versions and eager effects (dev)", .backend = .dev, .body = .{ .command = .{ .args = &.{ "--opt=dev", "--no-cache" }, .roc_file = "test/echo/issue_11130_record_versions.roc", .stdout_exact = issue_11130_expected_stdout } } },
     .{ .id = 0, .suite = .echo, .name = "issue 11130: record versions and eager effects (speed)", .backend = .speed, .body = .{ .command = .{ .args = &.{ "--opt=speed", "--no-cache" }, .roc_file = "test/echo/issue_11130_record_versions.roc", .stdout_exact = issue_11130_speed_expected_stdout } } },
@@ -972,7 +984,8 @@ const glue_cases = [_]CliCase{
     .{ .id = 0, .suite = .glue, .name = "issue 9824: glue reports an error for a by-value unresolved type variable", .body = .{ .custom = .glue_unresolved_by_value_errors } },
     .{ .id = 0, .suite = .glue, .name = "glue regression: opaque nominal record with a function field is a boxed payload", .body = .{ .custom = .glue_record_function_field } },
     .{ .id = 0, .suite = .glue, .name = "glue regression: recursive-slot boxed edges wrap by-value types and compile", .body = .{ .custom = .glue_recursive_slot_box } },
-    .{ .id = 0, .suite = .glue, .name = "glue regression: function argument mentioning a generic type parameter is a glue error", .body = .{ .custom = .glue_generic_callable_arg } },
+    .{ .id = 0, .suite = .glue, .name = "glue regression: function stored in a generic type is an erased callable in every generator", .body = .{ .custom = .glue_generic_callable_arg } },
+    .{ .id = 0, .suite = .glue, .name = "issue 11505: hosted Box of a generic function is an erased callable in every generator", .body = .{ .custom = .glue_hosted_erased_generic_callback } },
     .{ .id = 0, .suite = .glue, .name = "CGlue.roc expect tests pass", .body = .{ .custom = .glue_c_tests } },
 };
 
@@ -1471,6 +1484,8 @@ const subcommand_cases = [_]CliCase{
     .{ .id = 0, .suite = .subcommands, .name = "issue 11439: blocked expect is counted (dev)", .backend = .dev, .body = .{ .command = .{ .args = &.{ "test", "--no-cache", "--no-color", "--opt=dev" }, .roc_file = "test/cli/Issue11439ExpectWithTypeError.roc", .exit = .{ .code = 1 }, .stdout_exact = "", .contains = &.{ .{ .stream = .stderr, .text = "Ran 3 tests" }, .{ .stream = .stderr, .text = "2 passed" }, .{ .stream = .stderr, .text = "0 failed" }, .{ .stream = .stderr, .text = "1 compiler errors" }, .{ .stream = .stderr, .text = "Compilation failed with 1 error." } }, .not_contains = &.{ .{ .stream = .stderr, .text = "All (" }, .{ .stream = .stderr, .text = "panic" }, .{ .stream = .stderr, .text = "Compiler Error" } } } } },
     .{ .id = 0, .suite = .subcommands, .name = "issue 11439: blocked expect is counted (size)", .backend = .size, .body = .{ .command = .{ .args = &.{ "test", "--no-cache", "--no-color", "--opt=size" }, .roc_file = "test/cli/Issue11439ExpectWithTypeError.roc", .exit = .{ .code = 1 }, .stdout_exact = "", .contains = &.{ .{ .stream = .stderr, .text = "Ran 3 tests" }, .{ .stream = .stderr, .text = "2 passed" }, .{ .stream = .stderr, .text = "0 failed" }, .{ .stream = .stderr, .text = "1 compiler errors" }, .{ .stream = .stderr, .text = "Compilation failed with 1 error." } }, .not_contains = &.{ .{ .stream = .stderr, .text = "All (" }, .{ .stream = .stderr, .text = "panic" }, .{ .stream = .stderr, .text = "Compiler Error" } } } } },
     .{ .id = 0, .suite = .subcommands, .name = "issue 11439: blocked expect is counted (speed)", .backend = .speed, .body = .{ .command = .{ .args = &.{ "test", "--no-cache", "--no-color", "--opt=speed" }, .roc_file = "test/cli/Issue11439ExpectWithTypeError.roc", .exit = .{ .code = 1 }, .stdout_exact = "", .contains = &.{ .{ .stream = .stderr, .text = "Ran 3 tests" }, .{ .stream = .stderr, .text = "2 passed" }, .{ .stream = .stderr, .text = "0 failed" }, .{ .stream = .stderr, .text = "1 compiler errors" }, .{ .stream = .stderr, .text = "Compilation failed with 1 error." } }, .not_contains = &.{ .{ .stream = .stderr, .text = "All (" }, .{ .stream = .stderr, .text = "panic" }, .{ .stream = .stderr, .text = "Compiler Error" } } } } },
+    .{ .id = 0, .suite = .subcommands, .name = "issue 11312: expect reaching a checked error fails at runtime (interpreter)", .backend = .interpreter, .body = .{ .command = .{ .args = &.{ "test", "--no-cache", "--no-color", "--opt=interpreter" }, .roc_file = "test/cli/Issue11312ExpectReachesCheckedError.roc", .exit = .{ .code = 1 }, .stdout_exact = "", .contains = &.{ .{ .stream = .stderr, .text = "Ran 2 tests" }, .{ .stream = .stderr, .text = "1 passed" }, .{ .stream = .stderr, .text = "1 failed" }, .{ .stream = .stderr, .text = "0 compiler errors" }, .{ .stream = .stderr, .text = "Compilation failed with 1 error." } }, .not_contains = &.{ .{ .stream = .stderr, .text = "panic" }, .{ .stream = .stderr, .text = "compile time crash" } } } } },
+    .{ .id = 0, .suite = .subcommands, .name = "issue 11312: expect reaching a checked error fails at runtime (dev)", .backend = .dev, .body = .{ .command = .{ .args = &.{ "test", "--no-cache", "--no-color", "--opt=dev" }, .roc_file = "test/cli/Issue11312ExpectReachesCheckedError.roc", .exit = .{ .code = 1 }, .stdout_exact = "", .contains = &.{ .{ .stream = .stderr, .text = "Ran 2 tests" }, .{ .stream = .stderr, .text = "1 passed" }, .{ .stream = .stderr, .text = "1 failed" }, .{ .stream = .stderr, .text = "0 compiler errors" }, .{ .stream = .stderr, .text = "Compilation failed with 1 error." } }, .not_contains = &.{ .{ .stream = .stderr, .text = "panic" }, .{ .stream = .stderr, .text = "compile time crash" } } } } },
     .{ .id = 0, .suite = .subcommands, .name = "issue 11439: all blocked roots count once including a nested expect", .body = .{ .command = .{ .args = &.{ "test", "--no-cache", "--no-color" }, .roc_file = "test/cli/Issue11439AllExpectsInvalid.roc", .exit = .{ .code = 1 }, .stdout_exact = "", .contains = &.{ .{ .stream = .stderr, .text = "Ran 2 tests" }, .{ .stream = .stderr, .text = "0 passed" }, .{ .stream = .stderr, .text = "0 failed" }, .{ .stream = .stderr, .text = "2 compiler errors" }, .{ .stream = .stderr, .text = "Compilation failed with 2 errors." } }, .not_contains = &.{ .{ .stream = .stderr, .text = "All (" }, .{ .stream = .stderr, .text = "panic" }, .{ .stream = .stderr, .text = "Compiler Error" } } } } },
     .{ .id = 0, .suite = .subcommands, .name = "issue 11439: multiple diagnostics in one expect count as one test", .body = .{ .command = .{ .args = &.{ "test", "--no-cache", "--no-color" }, .roc_file = "test/cli/Issue11439MultipleErrorsOneExpect.roc", .exit = .{ .code = 1 }, .stdout_exact = "", .contains = &.{ .{ .stream = .stderr, .text = "Ran 1 tests" }, .{ .stream = .stderr, .text = "0 passed" }, .{ .stream = .stderr, .text = "0 failed" }, .{ .stream = .stderr, .text = "1 compiler errors" }, .{ .stream = .stderr, .text = "Compilation failed with 2 errors." } }, .not_contains = &.{ .{ .stream = .stderr, .text = "All (" }, .{ .stream = .stderr, .text = "panic" }, .{ .stream = .stderr, .text = "Compiler Error" } } } } },
     .{ .id = 0, .suite = .subcommands, .name = "issue 11439: one erroneous dependency blocks two expects", .body = .{ .command = .{ .args = &.{ "test", "--no-cache", "--no-color" }, .roc_file = "test/cli/Issue11439SharedError.roc", .exit = .{ .code = 1 }, .stdout_exact = "", .contains = &.{ .{ .stream = .stderr, .text = "Ran 3 tests" }, .{ .stream = .stderr, .text = "1 passed" }, .{ .stream = .stderr, .text = "0 failed" }, .{ .stream = .stderr, .text = "2 compiler errors" }, .{ .stream = .stderr, .text = "Compilation failed with 1 error." } }, .not_contains = &.{ .{ .stream = .stderr, .text = "All (" }, .{ .stream = .stderr, .text = "panic" }, .{ .stream = .stderr, .text = "Compiler Error" } } } } },
@@ -1902,6 +1917,7 @@ const subcommand_cases = [_]CliCase{
     .{ .id = 0, .suite = .subcommands, .name = "roc check reports comptime division by zero without panicking", .body = .{ .command = .{ .args = &.{ "check", "--no-cache" }, .roc_file = "test/cli/comptime_div_zero.roc", .exit = .failure, .contains = &.{ .{ .stream = .stderr, .text = "compile time crash" }, .{ .stream = .stderr, .text = "I64 division by zero" } }, .not_contains = &.{.{ .stream = .stderr, .text = "panic:" }} } } },
     .{ .id = 0, .suite = .subcommands, .name = "roc check reports comptime remainder by zero without panicking", .body = .{ .command = .{ .args = &.{ "check", "--no-cache" }, .roc_file = "test/cli/comptime_mod_zero.roc", .exit = .failure, .contains = &.{ .{ .stream = .stderr, .text = "compile time crash" }, .{ .stream = .stderr, .text = "I64 remainder by zero" } }, .not_contains = &.{.{ .stream = .stderr, .text = "panic:" }} } } },
     .{ .id = 0, .suite = .subcommands, .name = "comptime crash inside an inlined foreign default names the declaring module", .body = .{ .command = .{ .args = &.{ "check", "--no-cache" }, .roc_file = "test/cli/multi_module_default_crash/Main.roc", .exit = .failure, .contains = &.{ .{ .stream = .stderr, .text = "compile time crash" }, .{ .stream = .stderr, .text = "happened in the module" }, .{ .stream = .stderr, .text = "Cfg (line 1, column" }, .{ .stream = .stderr, .text = "Integer addition overflowed" } }, .not_contains = &.{.{ .stream = .stderr, .text = "panic:" }} } } },
+    .{ .id = 0, .suite = .subcommands, .name = "comptime source file identity survives colliding module indices and cache reuse", .body = .{ .custom = .source_file_identity } },
     // Same bare module name in two packages: the provenance comparison must use
     // package-qualified module identity, or the crash is judged local and the
     // platform module's byte offsets render against the app module's source.
@@ -3179,6 +3195,7 @@ fn runCustomCase(
         .default_app_all_syntax_checked_cache => customDefaultAppAllSyntaxCheckedCache(io, allocator, &env, &timer, timeout_ms),
         .pipeline_parity_diagnostics => customPipelineParityDiagnostics(io, allocator, &env, &timer, timeout_ms),
         .pipeline_parity_shared_cache => customPipelineParitySharedCache(io, allocator, &env, &timer, timeout_ms),
+        .source_file_identity => customSourceFileIdentity(io, allocator, &env, &timer, timeout_ms),
         .issue_11344_diagnostics => customIssue11344Diagnostics(io, allocator, &env, &timer, timeout_ms),
         .issue_11344_shared_helper => customIssue11344SharedHelper(io, allocator, &env, &timer, timeout_ms),
         .issue_11344_lir_image => customIssue11344LirImage(io, allocator, &env, &timer, timeout_ms),
@@ -3232,6 +3249,7 @@ fn runCustomCase(
         .build_int_interpreter_output_runs => customBuildIntOutputRuns(io, allocator, &env, &timer, timeout_ms, .interpreter),
         .build_int_dev_output_runs => customBuildIntOutputRuns(io, allocator, &env, &timer, timeout_ms, .dev),
         .issue_10492_build_default_app_args => customBuildDefaultAppArgs(io, allocator, &env, &timer, timeout_ms, .dev),
+        .issue_11453_nested_alias_json_encode => customIssue11453NestedAliasJsonEncode(io, allocator, &env, &timer, timeout_ms),
         .build_default_app_interpreter_args => customBuildDefaultAppArgs(io, allocator, &env, &timer, timeout_ms, .interpreter),
         .build_glibc_target_non_linux_error => customGlibcTargetNonLinux(io, allocator, &env, &timer, timeout_ms),
         .build_windows_shared_library => customWindowsSharedLibrary(io, allocator, &env, &timer, timeout_ms),
@@ -3289,6 +3307,7 @@ fn runCustomCase(
         .glue_record_function_field => customGlueRecordFunctionField(io, allocator, &env, &timer, timeout_ms),
         .glue_recursive_slot_box => customGlueRecursiveSlotBox(io, allocator, &env, &timer, timeout_ms),
         .glue_generic_callable_arg => customGlueGenericCallableArg(io, allocator, &env, &timer, timeout_ms),
+        .glue_hosted_erased_generic_callback => customGlueHostedErasedGenericCallback(io, allocator, &env, &timer, timeout_ms),
         .glue_c_tests => customGlueCTests(io, allocator, &env, &timer, timeout_ms),
         .roc_test_skips_url_dependency_expects => customRocTestSkipsUrlDependencyExpects(io, allocator, &env, &timer, timeout_ms),
         .roc_test_caches_local_dependency_expects => customRocTestCachesLocalDependencyExpects(io, allocator, &env, &timer, timeout_ms),
@@ -7050,6 +7069,38 @@ fn customBuildDefaultAppArgs(
     return null;
 }
 
+/// Building the module's object-cache pack must preserve alias transparency.
+fn customIssue11453NestedAliasJsonEncode(
+    io: std.Io,
+    allocator: Allocator,
+    env: *const CaseEnv,
+    timer: *harness.Timer,
+    timeout_ms: u64,
+) ?TestResult {
+    const output_path = std.fs.path.join(allocator, &.{ env.dirs.work_dir, "issue_11453" }) catch |err|
+        return customInfraFailure(allocator, timer, "failed to allocate output path: {}", .{err});
+    const out_arg = outputArg(allocator, output_path) catch |err|
+        return customInfraFailure(allocator, timer, "failed to allocate output arg: {}", .{err});
+
+    if (runRocAndCheck(io, allocator, env, timer, timeout_ms, .{
+        .args = &.{ "build", "--opt=dev", out_arg },
+        .roc_file = "test/echo/issue_11453_nested_alias_json_encode.roc",
+        .contains = &.{.{ .stream = .stdout, .text = "successfully building" }},
+        .not_contains = &.{ .{ .stream = .stderr, .text = "panic" }, .{ .stream = .stderr, .text = "invariant violated" } },
+    })) |failure| return failure;
+
+    const executable_path = runnableOutputPath(io, allocator, output_path) catch |err|
+        return customInfraFailure(allocator, timer, "failed to find built executable: {}", .{err});
+
+    if (runRawAndCheck(io, allocator, env, timer, timeout_ms, &.{executable_path}, env.dirs.work_dir, .{
+        .args = &.{},
+        .stdout_exact = "{\"area\":{\"office\":{\"url\":\"u\"}}}",
+        .stderr_exact = "",
+    })) |failure| return failure;
+
+    return null;
+}
+
 fn customGlibcTargetNonLinux(io: std.Io, allocator: Allocator, env: *const CaseEnv, timer: *harness.Timer, timeout_ms: u64) ?TestResult {
     if (builtin.os.tag == .linux) return null;
     if (runRocAndCheck(io, allocator, env, timer, timeout_ms, .{
@@ -7368,6 +7419,47 @@ fn customIssue11344LirImage(io: std.Io, allocator: Allocator, env: *const CaseEn
             .stdout_exact = "shared:constantshared:runtime",
             .stderr_exact = "",
         })) |failure| return failure;
+    }
+    return null;
+}
+
+fn customSourceFileIdentity(io: std.Io, allocator: Allocator, env: *const CaseEnv, timer: *harness.Timer, timeout_ms: u64) ?TestResult {
+    // First and Second are checked independently with the same import list,
+    // so their module-local indices collide. Both crashes are local: neither
+    // report should invent a foreign origin. Shared can be cached between runs.
+    const cases = [_]struct { name: []const u8, args: []const []const u8 }{
+        .{ .name = "serial", .args = &.{ "check", "--jobs=1" } },
+        .{ .name = "parallel", .args = &.{ "check", "--jobs=4" } },
+        .{ .name = "glue", .args = &.{ "glue", "test/cli/source_file_identity/MinimalGlue.roc", env.dirs.work_dir } },
+    };
+    for (cases) |case| {
+        const case_dir = std.fs.path.join(allocator, &.{ env.dirs.work_dir, case.name }) catch |err|
+            return customInfraFailure(allocator, timer, "failed to allocate source identity case path: {}", .{err});
+        const cache_dir = std.fs.path.join(allocator, &.{ case_dir, "roc-cache" }) catch |err|
+            return customInfraFailure(allocator, timer, "failed to allocate source identity cache path: {}", .{err});
+        for (0..2) |run_index| {
+            const child_timeout_ms = childCommandTimeoutMs(timer, timeout_ms) orelse
+                return timeoutFailure(allocator, timer, .run, "source identity case timed out");
+            const result = runRocInCaseEnv(io, allocator, env, case_dir, case.args, "test/cli/source_file_identity/main.roc", child_timeout_ms) catch |err|
+                return customInfraFailure(allocator, timer, "source identity command failed to run: {}", .{err});
+            if (checkCommandExpectation(allocator, result, .{
+                .args = case.args,
+                .exit = .{ .code = 1 },
+                .contains = &.{
+                    .{ .stream = .stderr, .text = "First.roc:5:" },
+                    .{ .stream = .stderr, .text = "Second.roc:5:" },
+                    .{ .stream = .stderr, .text = "first module failed" },
+                    .{ .stream = .stderr, .text = "second module failed" },
+                },
+                .not_contains = &.{.{ .stream = .stderr, .text = "happened in the module" }},
+                .occurrences = &.{.{ .stream = .stderr, .text = "compile time crash", .count = 2 }},
+            })) |message| return failureFromRun(allocator, timer, result, message);
+            if (run_index == 0) {
+                const cached_modules = countCheckedModuleCacheFiles(io, allocator, cache_dir) catch |err|
+                    return customInfraFailure(allocator, timer, "failed to count source identity cache files: {}", .{err});
+                if (cached_modules == 0) return customFailure(allocator, timer, "source identity case did not populate the module cache", .{});
+            }
+        }
     }
     return null;
 }
@@ -10503,27 +10595,134 @@ fn customGlueRecursiveSlotBox(io: std.Io, allocator: Allocator, env: *const Case
 }
 
 fn customGlueGenericCallableArg(io: std.Io, allocator: Allocator, env: *const CaseEnv, timer: *harness.Timer, timeout_ms: u64) ?TestResult {
-    // A function stored inside a generic nominal whose argument mentions the
-    // type parameter inside a record has no checked type for its
-    // instantiation, so glue cannot ask the compiler for that argument's
-    // layout. Glue reports the type and the boundary value instead of
-    // describing the uninstantiated template to the host.
-    const output_dir = createWorkSubdir(io, allocator, env, "glue-out") catch |err|
-        return customInfraFailure(allocator, timer, "failed to create glue output dir: {}", .{err});
-    if (runRocAndCheck(io, allocator, env, timer, timeout_ms, .{
-        .args = &.{ "glue", "--no-cache", "src/glue/src/ZigGlue.roc", output_dir, "test/glue/generic-callable-arg/main.roc" },
-        .exit = .failure,
-        .contains = &.{
-            .{ .stream = .stderr, .text = "stored inside a generic type" },
-            .{ .stream = .stderr, .text = "y : U64" },
-            .{ .stream = .stderr, .text = "in the signature of `handler`" },
+    // Stored function values are erased callables. One whose signature has
+    // committed layouts (`Box(U64 -> Step)`) carries them, so its argument
+    // and result types are emitted for the host to fill its buffers. One
+    // inside a generic nominal whose argument mentions the type parameter
+    // (`Handler(a) := [H({ y : a } -> {})]`) is opaque, since the compiler has
+    // no standalone layout for the instantiated argument. `Box` of a nominal
+    // whose backing is a function stays a box cell, exactly as the compiler
+    // committed it.
+    return checkErasedCallableGlue(io, allocator, env, timer, timeout_ms, "test/glue/generic-callable-arg/main.roc", .{
+        .zig = &.{
+            "pub extern fn handler() callconv(.c) RocErasedCallable;",
+            "pub extern fn stepper() callconv(.c) RocErasedCallable;",
+            "pub const ShapesStepTag = enum(u8) {",
+            "pub extern fn adder() callconv(.c) *RocErasedCallable;",
         },
-        .not_contains = &.{
-            .{ .stream = .stderr, .text = "panic" },
-            .{ .stream = .stderr, .text = "unreachable" },
-            .{ .stream = .stderr, .text = "invariant violated" },
+        .c = &.{
+            "extern RocErasedCallable handler(void);",
+            "extern RocErasedCallable stepper(void);",
+            "typedef struct ShapesStep ShapesStep;",
+            "extern RocErasedCallable* adder(void);",
         },
-    })) |failure| return failure;
+        .rust = &.{
+            "pub fn handler() -> RocErasedCallable;",
+            "pub fn stepper() -> RocErasedCallable;",
+            "pub struct ShapesStep {",
+            "pub fn adder() -> *mut RocErasedCallable;",
+        },
+    });
+}
+
+fn customGlueHostedErasedGenericCallback(io: std.Io, allocator: Allocator, env: *const CaseEnv, timer: *harness.Timer, timeout_ms: u64) ?TestResult {
+    // Issue 11505: a hosted function taking `Box(({ value : a } => {}))`
+    // passes the host one erased callable pointer whose signature is opaque,
+    // so glue generates the hosted declaration over `RocErasedCallable`
+    // without laying out the unresolved argument. A hosted callback with a
+    // concrete argument (`Box((Event => {}))`) is the same pointer, and its
+    // argument type is emitted for the host to build the callable's argument
+    // buffer.
+    return checkErasedCallableGlue(io, allocator, env, timer, timeout_ms, "test/glue/hosted-erased-generic-callback/main.roc", .{
+        .zig = &.{
+            "pub extern fn roc_install(arg0: RocErasedCallable) callconv(.c) void;",
+            "pub extern fn roc_notify(arg0: RocErasedCallable) callconv(.c) void;",
+            "pub const CallbacksEvent = ",
+        },
+        .c = &.{
+            "extern void roc_install(RocErasedCallable arg0);",
+            "extern void roc_notify(RocErasedCallable arg0);",
+            "typedef struct CallbacksEvent CallbacksEvent;",
+        },
+        .rust = &.{
+            "pub fn roc_install(arg0: RocErasedCallable);",
+            "pub fn roc_notify(arg0: RocErasedCallable);",
+            "pub struct CallbacksEvent {",
+        },
+    });
+}
+
+const ErasedCallableGlueExpectations = struct {
+    zig: []const []const u8,
+    c: []const []const u8,
+    rust: []const []const u8,
+
+    fn forLanguage(self: ErasedCallableGlueExpectations, language: GlueLanguage) []const []const u8 {
+        return switch (language) {
+            .zig => self.zig,
+            .c => self.c,
+            .rust => self.rust,
+        };
+    }
+};
+
+/// Run every shipped generator over `platform_path`, require each output to
+/// contain its expected declarations, and semantically analyze every
+/// declaration of the generated Zig by compiling it as a test.
+fn checkErasedCallableGlue(
+    io: std.Io,
+    allocator: Allocator,
+    env: *const CaseEnv,
+    timer: *harness.Timer,
+    timeout_ms: u64,
+    platform_path: []const u8,
+    expectations: ErasedCallableGlueExpectations,
+) ?TestResult {
+    for (std.enums.values(GlueLanguage)) |language| {
+        const subdir = std.fmt.allocPrint(allocator, "{s}-glue-out", .{@tagName(language)}) catch |err|
+            return customInfraFailure(allocator, timer, "failed to allocate glue output dir name: {}", .{err});
+        const output_dir = createWorkSubdir(io, allocator, env, subdir) catch |err|
+            return customInfraFailure(allocator, timer, "failed to create glue output dir: {}", .{err});
+        if (runRocAndCheck(io, allocator, env, timer, timeout_ms, .{
+            .args = &.{ "glue", "--no-cache", language.glueSpec(), output_dir, platform_path },
+            .not_contains = &.{
+                .{ .stream = .stderr, .text = "panic" },
+                .{ .stream = .stderr, .text = "unreachable" },
+                .{ .stream = .stderr, .text = "invariant violated" },
+            },
+        })) |failure| return failure;
+
+        const generated_path = std.fs.path.join(allocator, &.{ output_dir, language.generatedFileName() }) catch |err|
+            return customInfraFailure(allocator, timer, "failed to allocate generated glue path: {}", .{err});
+        const generated = std.Io.Dir.cwd().readFileAlloc(io, generated_path, allocator, .limited(1024 * 1024)) catch |err|
+            return customFailure(allocator, timer, "failed to read generated glue file {s}: {}", .{ language.generatedFileName(), err });
+        for (expectations.forLanguage(language)) |needle| {
+            if (std.mem.find(u8, generated, needle) == null) {
+                return customFailure(allocator, timer, "{s} missing {s}", .{ language.generatedFileName(), needle });
+            }
+        }
+
+        if (language != .zig) continue;
+        // `refAllDecls` only references declarations inside a test build, so
+        // the generated file is compiled as a test to analyze every
+        // declaration and helper body.
+        const test_zig_path = std.fs.path.join(allocator, &.{ output_dir, "test_abi.zig" }) catch |err|
+            return customInfraFailure(allocator, timer, "failed to allocate test Zig path: {}", .{err});
+        std.Io.Dir.cwd().writeFile(io, .{ .sub_path = test_zig_path, .data =
+            \\const std = @import("std");
+            \\const abi = @import("roc_platform_abi.zig");
+            \\comptime {
+            \\    std.testing.refAllDecls(abi);
+            \\}
+        }) catch |err|
+            return customInfraFailure(allocator, timer, "failed to write test Zig file: {}", .{err});
+        if (runRawAndCheck(io, allocator, env, timer, timeout_ms, &.{
+            "zig",
+            "test",
+            "-fno-emit-bin",
+            test_zig_path,
+        }, project_root_path, .{ .args = &.{} })) |failure| return failure;
+    }
     return null;
 }
 
@@ -10739,10 +10938,13 @@ fn customGlueRustProvidedContextCallableOutcome(io: std.Io, allocator: Allocator
         return customFailure(allocator, timer, "failed to read generated Rust file: {}", .{err});
     defer allocator.free(generated);
 
+    // `SourceStep` is reachable only as the stored callable's result, and a
+    // host invoking that callable reads its result buffer with this type.
     for ([_][]const u8{
         "pub struct AbiSourceOutcome",
         "pub stream: core::mem::ManuallyDrop<RocErasedCallable>",
         "pub fn roc_make_outcome(arg0: u64, arg1: *mut c_void) -> AbiSourceOutcome;",
+        "pub struct AbiSourceStep {",
     }) |needle| {
         if (std.mem.find(u8, generated, needle) == null) {
             return customFailure(allocator, timer, "generated Rust file missing {s}", .{needle});
