@@ -492,7 +492,7 @@ predeclared_slots: std.AutoHashMapUnmanaged(CIR.Annotation.Idx, PredeclaredSlots
 predeclared_slot_vars: std.ArrayListUnmanaged(Var) = .empty,
 /// Backing storage for `PendingPredeclaredSchemeUse.fresh` and
 /// `WaitingPredeclaredDispatchUse.fresh`: one use's copies of its predeclared
-/// scheme's identity slots, in `predeclaredUseFreshVars` layout. Reclaimed
+/// scheme's identity slots, in `appendPredeclaredUseFreshVars` layout. Reclaimed
 /// once no pending or waiting use remains.
 predeclared_use_fresh_vars: std.ArrayListUnmanaged(Var) = .empty,
 /// Dispatch uses of an annotated method whose body has not generated its
@@ -13839,8 +13839,10 @@ fn predeclaredSchemeVarForAnnotation(self: *Self, annotation_idx: CIR.Annotation
 }
 
 /// The predeclared scheme's identity slots. The scheme is a generalized orphan
-/// copy that nothing unifies with, so enumerating it at first use sees exactly
-/// what enumerating it at declaration would have.
+/// copy that every use instantiates rather than unifies with (a scheme with no
+/// quantified variable is shared by its uses, but has no slots), so
+/// enumerating it at first use sees exactly what enumerating it at
+/// declaration would have.
 fn predeclaredSchemeSlots(self: *Self, annotation_idx: CIR.Annotation.Idx) Allocator.Error![]const Var {
     const slots = self.predeclaredSlotsPtr(annotation_idx);
     if (slots.predeclared == null) {
