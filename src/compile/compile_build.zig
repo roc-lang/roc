@@ -873,6 +873,35 @@ pub const BuildEnv = struct {
         }
     }
 
+    /// Resolve the dependency graph rooted at `root_file` (downloading any
+    /// uncached bundles so their headers can be read) without compiling,
+    /// materializing packages, or touching any source file. Resolution
+    /// diagnostics are emitted as workspace reports and surface as
+    /// `error.InvalidDependency`, exactly as a build would report them.
+    pub fn resolveDependencyGraph(self: *BuildEnv, root_file: []const u8) BuildError!package_resolution.Resolved {
+        const root_abs = try self.makeAbsolute(root_file);
+        self.discovered_root_abs = root_abs;
+        const root_dir = if (std.fs.path.dirname(root_abs)) |d| try std.fs.path.resolve(self.gpa, &.{d}) else try self.gpa.dupe(u8, ".");
+        self.discovered_root_dir = root_dir;
+
+        var header_info = try self.parseHeaderDeps(root_abs);
+        defer header_info.deinit(self.gpa);
+
+        try self.ensurePackageCacheDir();
+        var ctx_fetcher = self.resolutionFetcher();
+        var resolver = package_resolution.Resolver.init(self.gpa, ctx_fetcher.fetcher(), self.resolution_config);
+        defer resolver.deinit();
+        if (self.root_url) |*root_url| resolver.setRootUrl(root_url.url);
+
+        return resolver.resolveScannedRoot(header_info.resolver_root) catch |err| switch (err) {
+            error.OutOfMemory => return error.OutOfMemory,
+            error.ResolutionFailed => {
+                try self.emitResolutionFailure(&resolver);
+                return error.InvalidDependency;
+            },
+        };
+    }
+
     /// Phase 2: Initialize the Coordinator, create coordinator packages from the
     /// discovered BuildEnv packages, and run compilation to completion.
     /// Must be called after discoverDependencies().
@@ -1568,13 +1597,9 @@ pub const BuildEnv = struct {
     /// package (named by its unique identity - full URL or absolute path),
     /// wire every package's shorthand aliases to the packages its specs
     /// resolved to, and transfer platform metadata.
-    fn resolveAndMaterialize(
-        self: *BuildEnv,
-        root_pkg_name: []const u8,
-        scanned_root: package_resolution.FetchedPackage,
-    ) BuildError!void {
-        // Without a cache directory, resolution still works for graphs with
-        // no URL dependencies; URL specs report a download failure.
+    /// Without a cache directory, resolution still works for graphs with
+    /// no URL dependencies; URL specs report a download failure.
+    fn ensurePackageCacheDir(self: *BuildEnv) Allocator.Error!void {
         if (self.package_cache_dir == null) {
             self.package_cache_dir = self.getRocCacheDir(self.gpa) catch |err| switch (err) {
                 error.OutOfMemory => return error.OutOfMemory,
@@ -1606,13 +1631,34 @@ pub const BuildEnv = struct {
                 => null,
             };
         }
+    }
 
-        var ctx_fetcher = package_resolution.CtxFetcher{
+    fn resolutionFetcher(self: *BuildEnv) package_resolution.CtxFetcher {
+        return .{
             .fs = self.filesystem,
             .gpa = self.gpa,
             .cache_packages_dir = self.package_cache_dir,
             .compiler_owned_source_dir = self.compiler_owned_source_dir,
         };
+    }
+
+    fn emitResolutionFailure(self: *BuildEnv, resolver: *const package_resolution.Resolver) Allocator.Error!void {
+        for (resolver.diagnostics.items) |diagnostic| {
+            try self.emitWorkspaceReport(diagnostic.title, diagnostic.message);
+        }
+        // Build the sink order so the reports above are drainable:
+        // the build aborts here, so nothing else will order them.
+        try self.sink.buildOrder(&[_][]const u8{"workspace"}, &[_][]const u8{"root"}, &[_]u32{0});
+        self.sink.tryEmit();
+    }
+
+    fn resolveAndMaterialize(
+        self: *BuildEnv,
+        root_pkg_name: []const u8,
+        scanned_root: package_resolution.FetchedPackage,
+    ) BuildError!void {
+        try self.ensurePackageCacheDir();
+        var ctx_fetcher = self.resolutionFetcher();
         var resolver = package_resolution.Resolver.init(self.gpa, ctx_fetcher.fetcher(), self.resolution_config);
         defer resolver.deinit();
         if (self.root_url) |*root_url| resolver.setRootUrl(root_url.url);
@@ -1620,13 +1666,7 @@ pub const BuildEnv = struct {
         var resolved = resolver.resolveScannedRoot(scanned_root) catch |err| switch (err) {
             error.OutOfMemory => return error.OutOfMemory,
             error.ResolutionFailed => {
-                for (resolver.diagnostics.items) |diagnostic| {
-                    try self.emitWorkspaceReport(diagnostic.title, diagnostic.message);
-                }
-                // Build the sink order so the reports above are drainable:
-                // the build aborts here, so nothing else will order them.
-                try self.sink.buildOrder(&[_][]const u8{"workspace"}, &[_][]const u8{"root"}, &[_]u32{0});
-                self.sink.tryEmit();
+                try self.emitResolutionFailure(&resolver);
                 return error.InvalidDependency;
             },
         };
