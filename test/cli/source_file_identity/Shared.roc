@@ -1,0 +1,4 @@
+Shared := [].{
+    suffix : Str
+    suffix = "!"
+}

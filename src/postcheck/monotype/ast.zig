@@ -303,24 +303,23 @@ pub const SpecIdentity = struct {
     codec_contract_digest: names.TypeDigest,
     /// Exact collision authority for `codec_contract_digest`.
     codec_contract: ?CodecContractIdentity,
+    /// Cached typeEql digest; checked provenance stays on request_fn_ty.
     request_fn_ty_digest: names.TypeDigest,
     request_fn_ty: Type.TypeId,
 };
 
 /// Content key of a specialization identity: the callable rendered by tag
-/// and content plus every digest field except the requesting method scope
-/// and the request type's identity digest. The scope only decides how
+/// and content plus every digest field except the requesting method scope.
+/// The scope only decides how
 /// dispatch evidence was derived, and the evidence digest already names the
 /// result, so two modules requesting the same specialization get one key.
-/// The request type enters as `request_equality`, its equality digest,
-/// because the identity digest names a nominal type by the checked type id
-/// of whichever module's store lowered it, and the same type lowered from
-/// two modules would otherwise get two keys. Identical for the same request
-/// in every program, and computable the moment the request is reserved.
+/// The request type uses the same cached equality digest as local reservation,
+/// so checked type ids and alias provenance do not change the key. Identical
+/// for the same request in every program, and computable at reservation.
 /// Because the identity carries no caller provenance, neither does this key:
 /// a call site that reaches this specialization through a transparent alias
 /// computes the same key as one that names the backing type.
-pub fn specIdentityKey(identity: SpecIdentity, request_equality: names.TypeDigest) names.TypeDigest {
+pub fn specIdentityKey(identity: SpecIdentity) names.TypeDigest {
     var hasher = TypeDigestHasher.init();
     hasher.update("roc.monotype.spec-key.v3");
     switch (identity.callable) {
@@ -355,7 +354,7 @@ pub fn specIdentityKey(identity: SpecIdentity, request_equality: names.TypeDiges
     }
     hasher.update(&identity.evidence_digest.bytes);
     hasher.update(&identity.codec_contract_digest.bytes);
-    hasher.update(&request_equality.bytes);
+    hasher.update(&identity.request_fn_ty_digest.bytes);
     return .{ .bytes = hasher.finalResult() };
 }
 
