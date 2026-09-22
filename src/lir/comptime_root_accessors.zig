@@ -5,13 +5,12 @@
 //! an accessor procedure whose body is the slot read. Once the roots have
 //! completed, a root that decodes to a construction (see
 //! `ComptimeScalarValues`) is rebuilt in that body instead: an empty list
-//! becomes the `with_capacity` it was evaluated with, a uniform table its
-//! repeat loop, a record or tag of those their constructor. The call sites
-//! are untouched, so the reference counting already inserted for them stays
-//! correct: a call result is an owned value either way, and the emitted
-//! bodies are complete without a further pass. The slots those accessors no
-//! longer read become unreachable and leave the image with the next
-//! reachability pass.
+//! becomes the `with_capacity` it was evaluated with, a record or tag of
+//! those their constructor. The call sites are untouched, so the reference
+//! counting already inserted for them stays correct: a call result is an
+//! owned value either way, and the emitted bodies are complete without a
+//! further pass. The slots those accessors no longer read become
+//! unreachable and leave the image with the next reachability pass.
 const std = @import("std");
 const core = @import("lir_core");
 const postcheck = @import("postcheck");
@@ -23,29 +22,11 @@ const scalar_values = postcheck.ComptimeScalarValues;
 const EmitContext = struct {
     store: *core.LirStore,
     new_locals: *std.ArrayList(LIR.LocalId),
-    join_points: *std.ArrayList(LIR.JoinPoint),
-    next_join_point: *u32,
 
     pub fn addLocal(self: EmitContext, layout_idx: @import("layout").Idx) Allocator.Error!LIR.LocalId {
         const local = try self.store.addLocal(.{ .layout_idx = layout_idx });
         try self.new_locals.append(self.store.allocator, local);
         return local;
-    }
-
-    pub fn freshJoinPointId(self: EmitContext) LIR.JoinPointId {
-        const id: LIR.JoinPointId = @enumFromInt(self.next_join_point.*);
-        self.next_join_point.* += 1;
-        return id;
-    }
-
-    pub fn addJoin(self: EmitContext, point: LIR.JoinPoint, remainder: LIR.CFStmtId) Allocator.Error!LIR.CFStmtId {
-        try self.join_points.append(self.store.allocator, point);
-        return try self.store.addCFStmt(.{ .join = .{
-            .id = point.id,
-            .params = point.params,
-            .body = point.body,
-            .remainder = remainder,
-        } });
     }
 };
 
@@ -58,8 +39,6 @@ pub fn rebuild(allocator: Allocator, result: *Program.Result, frozen: *const Pro
     const store = &result.store;
     var new_locals: std.ArrayList(LIR.LocalId) = .empty;
     defer new_locals.deinit(allocator);
-    var join_points: std.ArrayList(LIR.JoinPoint) = .empty;
-    defer join_points.deinit(allocator);
     for (result.static_data_values.items) |*entry| {
         if (entry.accessor_rebuilt) continue;
         const accessor = entry.accessor orelse continue;
@@ -67,24 +46,14 @@ pub fn rebuild(allocator: Allocator, result: *Program.Result, frozen: *const Pro
         if (root.role != .value) continue;
         const construction = values.constructionFor(root.module, root.root, entry.layout_idx) orelse continue;
         new_locals.clearRetainingCapacity();
-        join_points.clearRetainingCapacity();
-        var next_join_point: u32 = 0;
-        const context = EmitContext{ .store = store, .new_locals = &new_locals, .join_points = &join_points, .next_join_point = &next_join_point };
+        const context = EmitContext{ .store = store, .new_locals = &new_locals };
         const value = try context.addLocal(entry.layout_idx);
         const ret = try store.addCFStmt(.{ .ret = .{ .value = value } });
         const body = try scalar_values.emit(context, store, &result.layouts, value, construction, ret) orelse continue;
-        // Nested construction emits inner joins first; final LIR requires id order.
-        std.mem.sort(LIR.JoinPoint, join_points.items, {}, struct {
-            fn lessThan(_: void, a: LIR.JoinPoint, b: LIR.JoinPoint) bool {
-                return @intFromEnum(a.id) < @intFromEnum(b.id);
-            }
-        }.lessThan);
-        const joins = try store.addJoinPointSpan(join_points.items);
         const locals = try store.addLocalSpan(new_locals.items);
         const proc = store.getProcSpecPtr(accessor);
         proc.body = body;
         proc.shapes = proc.shapes.merged(store.shapes);
-        proc.join_points = joins;
         proc.frame_locals = locals;
         if (store.procNeedsStackProbe(&result.layouts, proc.*)) proc.stack_probe = .required;
         proc.native_code_revision += 1;
