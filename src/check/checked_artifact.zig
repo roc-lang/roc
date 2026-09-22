@@ -3621,6 +3621,45 @@ pub const CheckedTypeStoreView = struct {
         return try checkedTypeRootSliceAlphaExactEql(.named, self, left, right, &context);
     }
 
+    /// Bucket key for `rootAliasTransparentEql`: a hash of the alias-resolved
+    /// root's own constructor and labels, which every alias-transparent-equal
+    /// type shares. Canonical keys retain alias identity, so callers bucket
+    /// alias-transparent comparisons by this key instead.
+    pub fn aliasTransparentBucketKey(self: CheckedTypeStoreView, raw_root: CheckedTypeId) u64 {
+        const root = checkedTypeEqualityRoot(.transparent, self, raw_root);
+        const root_payload = self.payload(root);
+        var hasher = std.hash.Wyhash.init(0);
+        std.hash.autoHash(&hasher, std.meta.activeTag(root_payload));
+        switch (root_payload) {
+            .alias => unreachable,
+            .pending, .err, .empty_record, .empty_tag_union => {},
+            .flex, .rigid => std.hash.autoHash(&hasher, root),
+            .record => |record| {
+                std.hash.autoHash(&hasher, record.fields.len);
+                for (record.fields) |field| std.hash.autoHash(&hasher, field.name);
+            },
+            .tuple => |items| std.hash.autoHash(&hasher, items.len),
+            .nominal => |nominal| {
+                std.hash.autoHash(&hasher, nominal.name);
+                std.hash.autoHash(&hasher, nominal.origin_module);
+                std.hash.autoHash(&hasher, nominal.builtin);
+                std.hash.autoHash(&hasher, nominal.args.len);
+            },
+            .function => |function| {
+                std.hash.autoHash(&hasher, finalizedFunctionKind(function.kind));
+                std.hash.autoHash(&hasher, function.args.len);
+            },
+            .tag_union => |tag_union| {
+                std.hash.autoHash(&hasher, tag_union.tags.len);
+                for (tag_union.tags) |tag| {
+                    std.hash.autoHash(&hasher, tag.name);
+                    std.hash.autoHash(&hasher, tag.args_len);
+                }
+            },
+        }
+        return hasher.final();
+    }
+
     /// Alpha-exact equality of the types a multi-root relation denotes, with
     /// transparent aliases expanded at every depth as in
     /// `rootAliasTransparentEql`. Canonical keys retain alias identity, so no
