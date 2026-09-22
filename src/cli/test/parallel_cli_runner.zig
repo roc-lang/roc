@@ -6874,8 +6874,10 @@ const llvm_scaling_slack_numerator: u64 = 3;
 const llvm_scaling_slack_denominator: u64 = 2;
 
 /// Growth ratios are only meaningful once the phase is long enough to measure,
-/// so a large app that finishes this fast satisfies the guard outright.
-const llvm_scaling_floor_ms: u64 = 250;
+/// so a large app that finishes this fast satisfies the guard outright. The
+/// Windows CI host runs several test shards at once, which moves the phase's
+/// fixed cost enough to matter at this size, so its floor is higher.
+const llvm_scaling_floor_ms: u64 = if (builtin.os.tag == .windows) 7500 else 250;
 
 fn customIssue11133LlvmEmitScaling(
     io: std.Io,
