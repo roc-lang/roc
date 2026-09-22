@@ -1,259 +1,364 @@
 # Records
 
-A record is a collection of values that each have a unique _field name_ associated with them.
+A record is a collection of values identified by unique field names. Records are useful when each value has a distinct role and naming those roles makes the code clearer.
 
 ```roc
-user = { name: "Sam", email: "sam@example.com", age: 30 }
+person = { name: "Sam", age: 32 }
 ```
+
+Here, `person` has two fields: `name`, whose value is a `Str`, and `age`, whose value is a number.
 
 ## Fields
 
-Each value in a record is stored in a _field_, which has a name and a value. In the record above,
-`name`, `email`, and `age` are field names. Field names are [lowercase names](naming#lowercase-names),
-and a record can't have two fields with the same name.
+### Record Literals
 
-The order in which fields are written doesn't matter: `{ x: 1, y: 2 }` and `{ y: 2, x: 1 }` are the
-same record.
+A record literal puts comma-separated fields between `{` and `}`. Each field has a lowercase name, a colon, and a value:
+
+```roc
+book = {
+    title: "The Left Hand of Darkness",
+    pages: 304,
+    available: True,
+}
+```
+
+The trailing comma controls how `roc fmt` lays out the record. With a trailing comma, the formatter puts the fields on separate lines. A field written with its name and value does not need a trailing comma, even when it is the only field:
+
+```roc
+settings = { theme: "dark" }
+```
+
+If an identifier with the field's name is already in scope, writing just that identifier as a record field is shorthand for `name: name`:
+
+```roc
+make_person = |name, age| { name, age }
+```
+
+A single field pun is the exception. It needs a comma because `{ name }` is a block containing the expression `name`, while `{ name, }` is a record:
+
+```roc
+make_name_record = |name| {
+    name,
+}
+```
+
+Record literals can contain arbitrary expressions, and records can be nested:
+
+```roc
+user = {
+    name: "Kim",
+    address: { city: "Oslo", postal_code: "0150" },
+}
+```
 
 ### Accessing Fields
 
-Use a `.` followed by the field name to access a field's value:
+Use a dot followed by the field name to read a required field:
 
 ```roc
-user.name # "Sam"
+city = user.address.city
 ```
 
-It's a type error to access a field the record doesn't have, so if a program compiles without
-errors, every field access will succeed at runtime.
+The compiler checks that the record has the field and that each access has the expected type. Field access does not perform a string lookup at runtime; the compiler already knows which field is being accessed.
 
-### Field Shorthand
-
-When building a record, if a field's value is a name that's the same as the field name,
-you can write the name just once. For example, these two records are the same:
+Records can also be destructured to give names to several fields at once:
 
 ```roc
-name = "Sam"
-age = 30
-
-with_shorthand = { name, age }
-without_shorthand = { name: name, age: age }
+full_name = |person| {
+    { first, last } = person
+    "${first} ${last}"
+}
 ```
 
-One thing to watch out for: a single name in braces, like `{ name }`, is a
-[block expression](expressions#block-expressions) that evaluates to `name`, not a record.
-To make a record with a single field, write the field out in full, as in `{ name: name }`.
+### Record Types
 
-The same shorthand works in [record patterns](pattern-matching#destructuring):
-`{ name, age } = user` is short for `{ name: name, age: age } = user`.
-
-### Record Update Syntax
-
-To make a new record that's the same as an existing one except for some fields, write
-`..` followed by the existing record, then the fields that should be different:
+A record type gives a type to each field:
 
 ```roc
-older_user = { ..user, age: user.age + 1 }
+Person : { name : Str, age : U64 }
+
+alice : Person
+alice = { name: "Alice", age: 30 }
 ```
 
-This doesn't modify `user`. It produces a new record which has all the same field values
-as `user`, except for `age`. (Under the hood, if nothing else is referencing `user`
-anymore, Roc's compiler may reuse its memory instead of copying it; see
-[opportunistic mutation](expressions#opportunistic-mutation).)
+`Person` is a type alias. It is another name for the structural record type, so a record with the same fields and field types is a `Person` without an explicit conversion.
 
-Record update syntax can only change the values of fields the record already has. It can't
-add new fields or remove existing ones.
+Field order is not part of a record's type. These annotations describe the same type:
 
+```roc
+PersonA : { name : Str, age : U64 }
+PersonB : { age : U64, name : Str }
+```
+
+### Updating Records
+
+Use `..` in a record literal to make a new record from an existing one while replacing fields:
+
+```roc
+have_birthday = |person| {
+    ..person,
+    age: person.age + 1,
+}
+```
+
+The original record is unchanged. The update expression creates the result using all its fields, with the listed replacements.
+
+Record update syntax can only replace fields that already exist, and each replacement must have the same type as the old field. If the new record needs an additional field or a field with a different type, construct it explicitly:
+
+```roc
+with_display_name = |person| {
+    name: person.name,
+    age: person.age,
+    display_name: "${person.name} (${person.age.to_str()})",
+}
+```
+
+This restriction makes `{ ..record, field: value }` unambiguously an update of the record's existing shape.
 
 ## Compared to Dictionaries
 
-Records are different from [dictionaries](dictionaries-and-sets) in several ways:
+Records and dictionaries both associate names or keys with values, but they serve different purposes:
 
-- A dictionary's values must all have the same type, whereas a record's values can have completely different types.
-- Record field names are a compile-time concept, and their strings are not stored at runtime by default. Instead, records have the same in-memory representation as C structs: unlabeled adjacent memory locations. (Roc's compiler translates the field names into the appropriate memory locations automatically.)
-  - Field name strings may end up being available at runtime if something like a [parser](parsers) uses a record's field names to decide what to do at runtime.
-  - In contrast, dictionaries always store all of their keys at runtime. Dictionaries can also have different types of keys, whereas record fields are always [lowercase names](naming#lowercase-names).
-    - Record field names may not contain `$`, unlike [reassignable `var` identifiers](statements#reassignment).
-  - This means that if you change a record field name in Roc, this will not change the amount of memory that record takes up at runtime, whereas if you change the size of a dictionary key, it can change the amount of memory the dictionary uses.
-- Records are stack-allocated, so putting a group of values in a record does not introduce a heap allocation. Dictionaries heap-allocate space for their stored keys and values.
-- A record's set of fields (including both their names and their types) is fixed at compile time and can't change at runtime.
-    - You can make a new record using the contents of an old one, but the new one will also need a set of fields that's fixed at compile time.
-    - In contrast, dictionaries can have arbitrary size at runtime. For example, you could parse the entire contents of a file into a dictionary, and its number of keys could vary at runtime based on the contents of the file. For a record, you couldn't do that because the record's exact number of fields is fixed at compile time and can't change at runtime.
-- Reading a key out of a dictionary always returns a [`Try`](../Try), because that key might not be present at runtime. The same is true for [optional record fields](#optional-fields), but normal record fields can be accessed without a [`Try`](../Try) because they are guaranteed to be present at runtime.
+- A record's field names and field types are fixed at compile time. A dictionary can gain and lose entries at runtime.
+- Fields in one record can have different types. All values in one dictionary have the same type.
+- Record fields always have lowercase names known to the compiler. Dictionary keys are runtime values and can have types other than strings.
+- Required record field access returns the field value directly. A dictionary lookup returns a `Try`, because the requested key might not be present.
+- Record field names normally need no runtime storage. The compiler selects fields from their known layout. A dictionary stores its keys so it can compare them at runtime.
+
+Creating a record does not by itself imply either stack or heap allocation. The compiler chooses a representation based on how the record is used, and a record can contain values such as strings and lists that manage separate storage of their own. The useful guarantee is that ordinary field access does not require a dictionary-style key lookup.
+
+Use a record when the program knows the fields in advance and each field has a particular meaning. Use a [dictionary](dictionaries-and-sets) when the set of keys varies at runtime.
 
 ## Structural Records
 
-Record literals like `{ name: "Sam", age: 30 }` are _structural_, meaning their type is
-determined entirely by their shape: the names and types of their fields. The type of that
-record is `{ name : Str, age : U64 }` (assuming `age` is a `U64`), and any other record with
-exactly those fields and field types has the same type. There's no need to declare the type anywhere
-before using it.
-
-A record type can end in `..` to indicate that it may have additional fields. This is how you
-write a function that accepts any record which has _at least_ certain fields:
+A structural record is identified by its fields rather than by a declared type name. No declaration is needed:
 
 ```roc
-full_name : { first : Str, last : Str, .. } -> Str
-full_name = |person| "${person.first} ${person.last}"
+origin = { x: 0, y: 0 }
 ```
 
-This `full_name` function can be called with `{ first: "Sam", last: "Lee" }`, but also with
-`{ first: "Sam", last: "Lee", age: 30 }` or any other record that has `first` and `last` fields
-which are strings.
+Two structural record types are the same when they have the same field names and compatible field types. This lets functions accept record literals directly:
 
-If you want to refer to "the other fields" elsewhere in the annotation, you can give them a name,
-like `..others`. See [Structural Types](types#structural-types) for details.
+```roc
+distance_squared : { x : F64, y : F64 } -> F64
+distance_squared = |point| point.x * point.x + point.y * point.y
+```
+
+### Open Record Types
+
+A closed record type lists its complete set of fields. An open record type ends with `..` and requires at least the listed fields while allowing others:
+
+```roc
+get_name : { name : Str, .. } -> Str
+get_name = |record| record.name
+
+name = get_name({ name: "Ari", age: 41 })
+```
+
+Use a named extension variable when the rest of the record's shape must be related across more than one type:
+
+```roc
+get_name_named : { name : Str, ..rest } -> Str
+get_name_named = |record| record.name
+```
+
+Here, `rest` stands for the remaining fields. An anonymous `..` introduces a fresh extension variable without giving it a name.
+
+Open record types express the fields a function needs. They are a form of structural polymorphism, not runtime-sized records: every concrete record still has a shape known at compile time.
 
 ## Optional Fields
 
-A record type can declare a field as _optional_ by writing `?:` instead of `:` after its name.
-An optional field may or may not be present at runtime:
+An optional field may be present or absent at runtime. Put `?` after its name in a record type:
 
 ```roc
-greet : { name : Str, greeting ?: Str } -> Str
-greet = |args| {
-    greeting = args.?greeting ?? "Hello"
-    "${greeting}, ${args.name}!"
-}
+Attributes : { count : U64, label ?: Str }
+
+labeled : Attributes
+labeled = { count: 3, label: "new" }
+
+unlabeled : Attributes
+unlabeled = { count: 3 }
 ```
 
-When a record literal is passed where a record with optional fields is expected, it can leave out
-any of the optional fields:
+Because the field may be absent, query it with `.?` instead of ordinary field access:
 
 ```roc
-greet({ name: "Sam" }) # "Hello, Sam!"
-greet({ name: "Sam", greeting: "Howdy" }) # "Howdy, Sam!"
+read_label : Attributes -> Try(Str, [MissingField])
+read_label = |attributes| attributes.?label
 ```
 
-### Accessing Optional Fields with `.?`
-
-Since an optional field might not be there, it can't be accessed with an ordinary `.`. (Trying to
-do that gives a compile-time error.) Instead, use `.?`, which evaluates to a [`Try`](../Try):
-`Ok` with the field's value if the field is present, or `Err(MissingField)` if it isn't.
+The query returns `Ok(value)` when the field is present and `Err(MissingField)` when it is absent. The `??` operator can supply a fallback for that `Try`:
 
 ```roc
-args.?greeting # Ok("Howdy") or Err(MissingField)
+display_label = |attributes| attributes.?label ?? "untitled"
 ```
 
-This works well with the [`??` operator](operators#-default-value-on-err), as in the
-`greet` example above, which uses `"Hello"` as the greeting if the field is missing.
-
-A chain of field accesses containing `.?`, such as `config.?server.port`, produces a single
-`Try` for the entire chain. If any optional field along the way is missing, the whole chain
-evaluates to `Err(MissingField)`.
-
-Using `.?` on a field that's always present is an error, because the `Err` case could never happen.
-Use `.` for those fields instead.
-
-### Destructuring Optional Fields
-
-When you destructure an optional field, the name it introduces has a `Try` type, the same way
-a `.?` access would:
+Optional access can continue through required fields. The whole access still returns a `Try` if an optional segment is absent:
 
 ```roc
-greet : { name : Str, greeting ?: Str } -> Str
-greet = |{ name, greeting }| match greeting {
-    Ok(custom) => "${custom}, ${name}!"
-    Err(MissingField) => "Hi, ${name}!"
-}
+city : { address ?: { city : Str } } -> Try(Str, [MissingField])
+city = |person| person.?address.city
 ```
 
-### Unsetting Optional Fields
-
-To make a record where an optional field is missing, write `_` as that field's value.
-This is most useful with [record update syntax](#record-update-syntax):
-
-```roc
-without_greeting = { ..args, greeting: _ }
-```
-
-### Optional Fields Are Not Interchangeable with Required Fields
-
-A record with a required field `{ name : Str }` and a record with an optional field
-`{ name ?: Str }` are different types, because they are stored differently in memory
-(an optional field also needs to track whether it's present). So a record whose type
-says a field is always present can't be passed where the field is expected to be optional,
-or vice versa. Record literals are the exception, because their fields can become either
-required or optional depending on how they're used.
-
-Platforms can't send records with optional fields to or from their host.
+Optional fields are useful when presence itself is runtime data, such as a field decoded from an external format. If omission should instead produce a definite value during construction, use a defaulted field.
 
 ## Nominal Records
 
-A _nominal record_ is a [nominal type](types#nominal-types) whose backing type is a record:
+A nominal record has a declared identity in addition to its fields. Declare one with `:=`:
 
 ```roc
 Point := { x : F64, y : F64 }
 ```
 
-Unlike a structural record type, `Point` is a distinct type. A function that takes a `Point` won't
-accept an ordinary `{ x : F64, y : F64 }` record which has already been given that structural type,
-and vice versa. (A record _literal_ can become a `Point` if it's used where a `Point` is expected.)
-
-To create a nominal record explicitly, write the type's name, then a `.`, then a record literal:
+Construct it explicitly by putting the type name before its record literal:
 
 ```roc
 origin = Point.{ x: 0, y: 0 }
 ```
 
-Fields of a nominal record can be accessed with `.` just like any other record,
-as in `origin.x`. (If the type is [opaque](types#opaque-nominal-types), only its
-own module can see its fields.)
+A bare record literal can also lift into a nominal record through structural unification when the surrounding context expects that nominal type. Its fields must match the nominal type's backing record:
 
-Nominal records can have [methods](static-dispatch#methods), and they can
-also have [defaulted fields](#defaulted-fields), which structural records can't.
+```roc
+unit_x : Point
+unit_x = { x: 1, y: 0 }
+```
+
+Nominal identity prevents unrelated record types with identical fields from being used interchangeably. It also gives the type a place for associated methods:
+
+```roc
+Point := { x : F64, y : F64 }.{
+    origin : Point
+    origin = Point.{ x: 0, y: 0 }
+
+    translate : Point, F64, F64 -> Point
+    translate = |point, dx, dy| {
+        ..point,
+        x: point.x + dx,
+        y: point.y + dy,
+    }
+}
+```
+
+Outside the declaration, use `Point.origin` and `point.translate(dx, dy)`. See [Nominal Types](types#nominal-types) for opaque types, explicit construction, and nesting nominal types.
+
+Declaring with `::` makes a nominal record opaque. Outside its defining module, other code knows the nominal type but cannot access its backing fields, construct it with a record literal, or destructure it as a record. The defining module can expose the operations that preserve the type's invariants:
+
+```roc
+Account :: { balance : U64 }.{
+    new : U64 -> Account
+    new = |balance| Account.{ balance }
+
+    balance : Account -> U64
+    balance = |Account.{ balance }| balance
+}
+```
+
+Code in other modules uses `Account.new` and `Account.balance` without depending on the backing record. See [Opaque Nominal Types](types#opaque-nominal-types) for the same abstraction rule with other backing types.
 
 ## Defaulted Fields
 
-A field in a nominal record's type declaration can be given a _default value_ by
-writing `??` and then an expression after the field's type:
+A defaulted field is a required field whose value can be omitted when constructing a nominal record. Write `??` after its type, followed by the default expression:
 
 ```roc
-Config := { host : Str, port : U16 ?? 8080, retries : U8 ?? 3 }
+RequestOptions := {
+    retries : U8 ?? 3,
+    timeout_ms : U64 ?? 5000,
+}
 ```
 
-When constructing a `Config`, any defaulted field can be left out, and it will be set to its
-default value:
+Omitting either field from the nominal constructor evaluates its default:
 
 ```roc
-config = Config.{ host: "localhost" }
-
-config.port # 8080
-config.retries # 3
+standard = RequestOptions.{}
+patient = RequestOptions.{ timeout_ms: 30000 }
 ```
 
-A defaulted field is always present once the record has been constructed, so it's accessed
-with an ordinary `.`, not `.?`. That's the difference between a defaulted field and an
-[optional field](#optional-fields): an omitted optional field is missing at runtime, whereas an
-omitted defaulted field is filled in with its default when the record is constructed.
-
-The default value can be any expression that doesn't call [effectful functions](functions#effectful-functions),
-including one that references other top-level values or calls functions:
+After construction, both values have both fields. Ordinary access therefore returns the value directly:
 
 ```roc
-Settings := { timeout_ms : U64 ?? default_timeout * 2, name : Str ?? "untitled" }
+attempts = standard.retries
 ```
 
-A default value can't depend on itself (for example, by constructing the same record while omitting that
-field), and a default for a field whose type is a type parameter can't be a literal, since the
-literal wouldn't work for every possible type the parameter could be.
+A supplied field overrides its default. Default expressions can be more than literals; they can use blocks and call pure functions, and they are evaluated for a construction that omits the field:
 
-Defaults can only be declared on the fields of a nominal record's type declaration. They aren't
-allowed in structural record types, including type aliases, and records nested inside a nominal
-record's fields. This is because a default belongs to a specific named type; a structural record
-type can be written in many different places, so there would be no single place its default could
-come from.
+```roc
+CacheOptions := {
+    capacity : U64 ?? {
+        kibibytes = 1024
+        8 * kibibytes
+    },
+}
+```
+
+A default cannot perform effects or constrain any of the nominal type's type parameters. Defaults must also be acyclic: materializing one default cannot require another omitted default that eventually leads back to the first.
+
+Defaulted and optional fields answer different questions. A defaulted field is always present in the constructed value. An optional field preserves whether a value was supplied, so querying it returns a `Try`.
+
+## Runtime Layout
+
+This section describes Roc's current native layout and host ABI. Most Roc programs should rely on field names and types rather than byte offsets. Code that exchanges records with a host should use generated glue as the source of truth for the selected target.
+
+A record is represented as one inline aggregate, similar to a C struct. The record does not carry its field names or type annotation at runtime; the compiler has already turned each field access into an access at a known offset. The record's fields still have their own representations. For example, an inline `Str` field contains the string's runtime representation, which may refer to separately allocated string data. Explicitly putting a record in a `Box` also gives it a boxed representation.
+
+Each field starts at an offset suitable for its alignment. The compiler inserts unused bytes when the next field needs a stricter alignment, then rounds the record's total size up to its strictest alignment. Pointer-sized values differ between targets, so the same record can have different offsets and a different total size on 32-bit and 64-bit targets. Some common current representations are:
+
+| Type | 32-bit size and alignment | 64-bit size and alignment |
+| --- | --- | --- |
+| `U8` | 1 byte, aligned to 1 | 1 byte, aligned to 1 |
+| `U32` | 4 bytes, aligned to 4 | 4 bytes, aligned to 4 |
+| `U64` | 8 bytes, aligned to 8 | 8 bytes, aligned to 8 |
+| `Str` | 12 bytes, aligned to 4 | 24 bytes, aligned to 8 |
+| `List(a)` | 12 bytes, aligned to 4 | 24 bytes, aligned to 8 |
+| `Box(a)` | 4 bytes, aligned to 4 | 8 bytes, aligned to 8 |
+
+For structural records, source order does not determine memory order. The compiler first orders fields by decreasing alignment class. Fields in the same class are ordered alphabetically by name. This produces a compact, deterministic layout. Nominal records use the same rule by default.
+
+An unnamed field in a nominal record switches that record to declared-order layout. This is useful for a host-facing type intended to mirror a C struct:
+
+```roc
+Header := {
+    tag : U8,
+    _ : {},
+    value : U32,
+}
+```
+
+Here, `_ : {}` occupies no bytes; its presence selects declared order. `tag` is therefore at offset 0, the compiler inserts three bytes to align `value`, and `value` is at offset 4. Without the unnamed field, the default layout would put `value` before `tag`.
+
+An unnamed field with a nonempty type reserves that many bytes as explicit padding. It stores no value, cannot be accessed, and has alignment 1 regardless of its type:
+
+```roc
+Padded := {
+    tag : U32,
+    _ : U32,
+    value : U32,
+}
+```
+
+This layout has `tag` at offset 0, four reserved bytes at offset 4, and `value` at offset 8. Names beginning with `_`, such as `_reserved`, can be used for the same purpose. Unnamed fields are only allowed in nominal record declarations.
+
+These layout rules matter at interoperability boundaries, but they are implementation and ABI details rather than part of structural record equality. Generated glue records the committed field order, offsets, sizes, and alignments for both pointer widths so that host code can use the exact layout chosen by the compiler.
 
 ## The Empty Record (`{}`) {#empty-record}
 
-`{}` is a record with no fields. It's the only value of its type (which is also written `{}`),
-so it carries no information at runtime, and it takes up no memory.
+`{}` is both the empty record literal and the spelling of its type. It has exactly one value and carries no fields:
 
-This makes `{}` useful when a value is required but there's no meaningful information to put in it.
-For example:
+```roc
+empty : {}
+empty = {}
+```
 
-- Functions that are only called for their [side effects](functions#side-effects) often return `{}`,
-  like an `echo!` function which prints a string and returns `{}`.
-- `Ok({})` is a common way to represent success when there's no other value to return.
-- An `if` without an `else` must evaluate to `{}`; see [`if` / `else`](if-else).
-- A [`Dict`](dictionaries-and-sets) whose values are `{}` works as a set of its keys.
-  (Roc's `Set` type is implemented this way.)
+The empty record is useful when an API needs a value but has no information to carry. It is inhabited: its one possible value is `{}`.
+
+For a utility or namespace module that only defines associated items, prefer the empty tag union `[]` as an opaque backing type. No value of `[]` can be constructed, so no value of the module type can be constructed either:
+
+```roc
+Math :: [].{
+    double : U64 -> U64
+    double = |n| n * 2
+}
+
+answer = Math.double(21)
+```
+
+`{}` is a closed record with no fields. By contrast, `{ .. }` is an open record type that accepts any record shape.
