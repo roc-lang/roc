@@ -2728,7 +2728,11 @@ Program composition activates those recorded requests. It applies the recorded
 app substitutions to body expression, pattern, call, interpolation, and field-access
 types as well as procedure signatures and roots. One substitution memo preserves
 shared type identities across these columns. The pairing cache retains the changed
-body columns so cache hits use the same types. Exact procedure aliases
+body columns so cache hits use the same types. Calls to requirement declarations
+receive their direct-call classification from the bound app procedure kind using
+the checked output rule; callable-evaluation bindings remain indirect.
+This classification is session-owned and persisted with the paired body columns.
+Exact procedure aliases
 whose required bindings are now known use the existing checked forwarding rule
 and require no compile-time evaluator. Composition borrows the platform's
 unchanged body columns, dispatch plans, declaration tables and closure

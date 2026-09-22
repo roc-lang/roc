@@ -5512,6 +5512,7 @@ const AppRootIdentity = struct {
     platform_root_publish_count: u32,
     platform_pairing_count: u32,
     where_method_scheme_use_count: usize,
+    direct_required_call_count: usize,
     /// The executable root artifact serialized exactly as the checked-module
     /// cache stores it, so tests assert byte identity between fresh and
     /// cache-relocated publications rather than key identity alone.
@@ -5651,6 +5652,14 @@ fn compileAppRootIdentityExpecting(
             where_method_scheme_use_count += 1;
         }
     }
+    var direct_required_call_count: usize = 0;
+    for (root.checked_bodies.stored_exprs.items) |expr| {
+        if (expr.data != .call) continue;
+        const target = expr.data.call.direct_target orelse continue;
+        if (root.resolved_value_refs.records[@intFromEnum(target)].ref == .platform_required_proc) {
+            direct_required_call_count += 1;
+        }
+    }
     return .{
         .compile_time_request_count = root.root_requests.compile_time_requests.len,
         .compile_time_debug_count = root.compile_time_debug.entries.len,
@@ -5660,6 +5669,7 @@ fn compileAppRootIdentityExpecting(
         .platform_root_publish_count = coord.platform_root_publish_count,
         .platform_pairing_count = coord.platform_pairing_count,
         .where_method_scheme_use_count = where_method_scheme_use_count,
+        .direct_required_call_count = direct_required_call_count,
         .executable_root_bytes = executable_root_bytes,
         .app_root_bytes = app_root_bytes,
     };
@@ -5943,6 +5953,7 @@ test "warm build reloads the immutable platform without checking or republishing
     defer cold.deinit(allocator);
     try std.testing.expectEqual(@as(u32, 1), cold.platform_root_publish_count);
     try std.testing.expect(cold.where_method_scheme_use_count > 0);
+    try std.testing.expectEqual(@as(usize, 1), cold.direct_required_call_count);
 
     // A warm build installs the completed composition without pairing again.
     var warm = try compileAppRootIdentity(allocator, cache_dir, app_path);
@@ -5951,6 +5962,7 @@ test "warm build reloads the immutable platform without checking or republishing
     try std.testing.expectEqual(@as(u32, 0), warm.platform_pairing_count);
     try std.testing.expect(warm.cache_hits > 0);
     try std.testing.expectEqual(cold.where_method_scheme_use_count, warm.where_method_scheme_use_count);
+    try std.testing.expectEqual(@as(usize, 1), warm.direct_required_call_count);
 
     // Composition is deterministic across fresh and cached source artifacts,
     // including the app's recorded requirement solutions.

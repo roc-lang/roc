@@ -25339,7 +25339,7 @@ fn pairingFieldNameEql(comptime a: []const u8, comptime b: []const u8) bool {
 pub const PlatformPairing = struct {
     // Bump for changes to the borrowed-column mask interpretation as well as
     // other semantics not visible in the serialized layout fingerprint.
-    const version_hash = artifact_serialize.layoutVersionHash(Serialized, 1);
+    const version_hash = artifact_serialize.layoutVersionHash(Serialized, 2);
 
     pub fn cacheKey(platform: CheckedModuleArtifactKey, app: CheckedModuleArtifactKey) CheckedModuleArtifactKey {
         var hash = std.crypto.hash.sha2.Sha256.init(.{});
@@ -25520,7 +25520,25 @@ pub fn pairCheckedPlatform(
     for (result.checked_bodies.stored_exprs.items) |*expr| {
         expr.ty = try substitutions.specializeRootWithMemo(session, &result.canonical_names, &result.checked_types, expr.ty, &type_memo);
         switch (expr.data) {
-            .call => |*call| call.source_fn_ty_payload = try substitutions.specializeRootWithMemo(session, &result.canonical_names, &result.checked_types, call.source_fn_ty_payload, &type_memo),
+            .call => |*call| {
+                call.source_fn_ty_payload = try substitutions.specializeRootWithMemo(session, &result.canonical_names, &result.checked_types, call.source_fn_ty_payload, &type_memo);
+                if (platform.resolved_value_refs.lookupIdByCheckedExpr(call.func)) |ref_id| {
+                    if (platform.resolved_value_refs.records[@intFromEnum(ref_id)].ref == .platform_required_declaration) {
+                        // The binding supplies the procedure kind that an
+                        // unpaired requirement cannot classify. Publish the
+                        // same direct-call decision as a resolved module.
+                        call.direct_target = directProcedureTargetForCall(
+                            &result.resolved_value_refs,
+                            call.func,
+                            result.key,
+                            &result.top_level_procedure_bindings,
+                            &.{},
+                            available_artifacts,
+                            &relations,
+                        );
+                    }
+                }
+            },
             .interpolation => |*interpolation| interpolation.step_fn_ty = try substitutions.specializeRootWithMemo(session, &result.canonical_names, &result.checked_types, interpolation.step_fn_ty, &type_memo),
             .pending,
             .numeral,
