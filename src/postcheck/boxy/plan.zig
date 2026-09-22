@@ -336,10 +336,6 @@ pub const DirectCallHiddenDescriptorArg = struct {
     rep: TypeRepId,
     source_arg_index: ?u32 = null,
     source_value_rep: ?TypeRepId = null,
-    /// The call-side nominal whose backing `rep` belongs to. Such a `rep` names
-    /// the declaration's formals, so its descriptor is built under this
-    /// nominal's backing-argument substitutions.
-    backing_owner: ?TypeRepId = null,
 };
 
 /// Exact runtime source for one dictionary method worker descriptor.
@@ -973,6 +969,34 @@ pub const ProgramPlan = struct {
         return self.children.items[span.start .. span.start + span.len];
     }
 
+    /// A nominal use with type arguments stores its declaration's shared
+    /// backing template. The template's formals stand for a different actual
+    /// at every use, including uses nested inside another use of the same
+    /// declaration, so no rep inside the template names one runtime type.
+    /// Hidden descriptors and dictionaries for such a value therefore come
+    /// from the nominal itself and its arguments, never from the template.
+    pub fn childIsSharedBackingTemplate(self: *const ProgramPlan, parent_rep_id: TypeRepId, child: RepChild) bool {
+        const parent = self.representations.items[@intFromEnum(parent_rep_id)];
+        if (parent.kind != .nominal or parent.nominal_backing_arg_substitutions.len == 0) return false;
+        return switch (child.role) {
+            .nominal_backing, .nominal_padding_field => true,
+            .nominal_arg => false,
+            .alias_arg, .alias_backing, .record_field, .record_ext, .tuple_elem, .tag_payload, .tag_ext, .list_elem, .box_payload, .function_arg, .function_ret => boxyPlanInvariant("boxy nominal representation had a non-nominal child"),
+        };
+    }
+
+    /// Whether hidden descriptor parameters and call-site descriptor arguments
+    /// continue through `child` of a runtime value. A nominal's shared backing
+    /// template is described by the nominal's type arguments, so those
+    /// arguments stand in for the template's runtime contents.
+    pub fn childCarriesHiddenDescriptor(self: *const ProgramPlan, parent_rep_id: TypeRepId, child: RepChild) bool {
+        if (self.childIsSharedBackingTemplate(parent_rep_id, child)) return false;
+        if (child.role == .nominal_arg) {
+            return self.representations.items[@intFromEnum(parent_rep_id)].nominal_backing_arg_substitutions.len != 0;
+        }
+        return childCarriesRuntimeDescriptor(child.role);
+    }
+
     /// Dictionary parameters and checked evidence share the scheme order
     /// defined by `dispatch_evidence`: alias/nominal arguments precede their
     /// backing type. Runtime representation children keep backing-first order
@@ -1587,9 +1611,6 @@ const Builder = struct {
     host_mode: bool = false,
     host_context: ?u32 = null,
     host_context_count: u32 = 0,
-    /// While collecting a direct call's hidden descriptor arguments, the
-    /// call-side nominal whose backing the walk is inside.
-    call_descriptor_backing_owner: ?TypeRepId = null,
     host_types: std.AutoHashMapUnmanaged(HostTypeKey, TypeRepId) = .{},
     host_optional_slots: std.AutoHashMapUnmanaged(HostTypeKey, TypeRepId) = .{},
     host_bindings: std.AutoHashMapUnmanaged(HostTypeKey, HostTypeKey) = .{},
@@ -8069,8 +8090,12 @@ const Builder = struct {
         start: TypeRepId,
         path: []const static_dispatch.EvidencePathStep,
     ) Allocator.Error!TypeRepId {
-        var substitutions = CallDescriptorRepSubstitutionMap{};
-        defer substitutions.deinit(self.allocator);
+        // A path can pass through a nominal's shared backing into another use
+        // of the same declaration. Each use binds its formals afresh, with
+        // actuals resolved against the bindings of the uses enclosing it; the
+        // innermost binding of a formal is the one in effect.
+        var bindings = std.ArrayList(CallDescriptorRepSubstitution).empty;
+        defer bindings.deinit(self.allocator);
 
         var current = start;
         var path_index: usize = 0;
@@ -8079,11 +8104,13 @@ const Builder = struct {
             const current_rep = self.plan.representations.items[@intFromEnum(current)];
             const children = self.plan.childSlice(current_rep.children);
             if (current_rep.kind == .nominal) {
+                const enclosing_len = bindings.items.len;
                 var substitution_iter = self.plan.nominalBackingSubstitutions(current_rep.nominal_backing_arg_substitutions);
                 while (substitution_iter.next()) |substitution| {
                     const formal_rep = substitution.formal_rep orelse continue;
-                    if (formal_rep == substitution.actual_rep) continue;
-                    try substitutions.put(self.allocator, formal_rep, substitution.actual_rep);
+                    const actual = innermostEvidencePathBinding(bindings.items[0..enclosing_len], substitution.actual_rep) orelse substitution.actual_rep;
+                    if (formal_rep == actual) continue;
+                    try bindings.append(self.allocator, .{ .worker_rep = formal_rep, .call_rep = actual });
                 }
             }
             const selected = switch (path_step.stepKind()) {
@@ -8165,18 +8192,19 @@ const Builder = struct {
                 },
                 .tag_payload_index => boxyPlanInvariant("worker evidence representation payload index had no preceding tag"),
             };
-            current = selected;
-            var substitution_depth: u16 = 0;
-            while (substitutions.get(current)) |substituted| {
-                if (substitution_depth == 1024) {
-                    boxyPlanInvariant("worker evidence representation substitution chain exceeded its limit");
-                }
-                substitution_depth += 1;
-                current = substituted;
-            }
+            current = innermostEvidencePathBinding(bindings.items, selected) orelse selected;
             path_index += 1;
         }
         return current;
+    }
+
+    fn innermostEvidencePathBinding(bindings: []const CallDescriptorRepSubstitution, formal_rep: TypeRepId) ?TypeRepId {
+        var index = bindings.len;
+        while (index > 0) {
+            index -= 1;
+            if (bindings[index].worker_rep == formal_rep) return bindings[index].call_rep;
+        }
+        return null;
     }
 
     fn evidencePathSourceArgIndex(path: []const static_dispatch.EvidencePathStep, arg_count: usize) ?u32 {
@@ -8547,6 +8575,7 @@ const Builder = struct {
         }
 
         for (self.plan.childSlice(rep.children)) |child| {
+            if (self.plan.childIsSharedBackingTemplate(rep_id, child)) continue;
             try self.collectHiddenDescriptorsForRep(child.rep, pending, seen_reps, seen_descs);
         }
     }
@@ -8577,7 +8606,7 @@ const Builder = struct {
 
         if (rep.kind == .erased_callable) return;
         for (self.plan.childSlice(rep.children)) |child| {
-            if (!childCarriesRuntimeDescriptor(child.role)) continue;
+            if (!self.plan.childCarriesHiddenDescriptor(rep_id, child)) continue;
             try self.collectRuntimeHiddenDescriptorsForRep(child.rep, pending, seen_reps, seen_descs);
         }
     }
@@ -8602,6 +8631,7 @@ const Builder = struct {
 
         var child_index: usize = 0;
         while (self.plan.dictionaryChildAt(rep_id, child_index)) |child| : (child_index += 1) {
+            if (self.plan.childIsSharedBackingTemplate(rep_id, child)) continue;
             try self.collectHiddenDictionariesForRep(child.rep, pending, seen_reps);
         }
     }
@@ -8645,7 +8675,7 @@ const Builder = struct {
                     call_value_rep,
                     source_value_rep,
                     aligned_call_rep_id,
-                )) orelse try self.nominalBackingActualForFormal(source_value_rep, worker_rep_id);
+                ));
                 const desc_arg_rep_id = self.repQuery().descriptorArgumentIdentityRep(
                     operand_nominal_actual orelse aligned_call_rep_id,
                 );
@@ -8657,7 +8687,6 @@ const Builder = struct {
                     .rep = desc_arg_rep_id,
                     .source_arg_index = source_arg_index,
                     .source_value_rep = source_value_rep,
-                    .backing_owner = self.call_descriptor_backing_owner,
                 });
             }
         }
@@ -8673,7 +8702,8 @@ const Builder = struct {
             var child_index: usize = 0;
             while (child_index < worker_rep.children.len) : (child_index += 1) {
                 const worker_child = self.plan.children.items[worker_rep.children.start + child_index];
-                if (runtime_value_only and !childCarriesRuntimeDescriptor(worker_child.role)) continue;
+                if (runtime_value_only and !self.plan.childCarriesHiddenDescriptor(worker_rep_id, worker_child)) continue;
+                if (self.plan.childIsSharedBackingTemplate(worker_rep_id, worker_child)) continue;
                 if (!try self.repQuery().repSubtreeHasDescriptor(worker_child.rep)) continue;
                 try self.collectCallHiddenDescriptorArgs(worker_child.rep, aligned_call_rep_id, call_value_rep, source_value_rep, source_arg_index, params, next_param, pending, seen_reps, seen_descriptor_reps, substitutions, runtime_value_only);
             }
@@ -8684,12 +8714,8 @@ const Builder = struct {
         while (child_index < worker_rep.children.len) : (child_index += 1) {
             const worker_child = self.plan.children.items[worker_rep.children.start + child_index];
             const call_children = self.plan.childSlice(call_rep.children);
-            if (runtime_value_only and !childCarriesRuntimeDescriptor(worker_child.role)) continue;
-            const saved_backing_owner = self.call_descriptor_backing_owner;
-            defer self.call_descriptor_backing_owner = saved_backing_owner;
-            if (worker_child.role == .nominal_backing and call_rep.nominal_backing_arg_substitutions.len != 0) {
-                self.call_descriptor_backing_owner = aligned_call_rep_id;
-            }
+            if (runtime_value_only and !self.plan.childCarriesHiddenDescriptor(worker_rep_id, worker_child)) continue;
+            if (self.plan.childIsSharedBackingTemplate(worker_rep_id, worker_child)) continue;
             if (!try self.repQuery().repSubtreeHasDescriptor(worker_child.rep)) continue;
             // A generic argument reachable through an unwrapped sibling (e.g. an
             // alias's arg that also appears inside its backing) contributes its
@@ -8756,16 +8782,6 @@ const Builder = struct {
                 if (entry.worker_rep == worker_rep) return entry.call_rep;
             }
             return null;
-        }
-
-        /// Enclosing nominal arguments can themselves be declaration formals.
-        /// Compose those explicit substitutions before entering a nested backing.
-        fn resolve(self: *const CallDescriptorRepSubstitutionMap, rep: TypeRepId) TypeRepId {
-            var current = rep;
-            for (0..self.entries.items.len + 1) |_| {
-                current = self.get(current) orelse return current;
-            }
-            boxyPlanInvariant("cyclic nominal descriptor substitution");
         }
 
         fn put(
@@ -8858,6 +8874,7 @@ const Builder = struct {
 
         const operand_children = self.plan.childSlice(operand_rep.children);
         for (self.plan.childSlice(call_rep.children)) |call_child| {
+            if (self.plan.childIsSharedBackingTemplate(call_rep_id, call_child)) continue;
             const operand_child = self.namedQuery().findMatchingChildByRole(operand_children, call_child) orelse continue;
             try self.collectNominalBackingActualForCallRep(
                 call_child.rep,
@@ -8866,52 +8883,6 @@ const Builder = struct {
                 found,
                 seen_pairs,
             );
-        }
-    }
-
-    fn nominalBackingActualForFormal(
-        self: *Builder,
-        root_rep: TypeRepId,
-        formal_rep: TypeRepId,
-    ) Allocator.Error!?TypeRepId {
-        var seen = collections.DenseMap(TypeRepId, void).init(self.allocator);
-        defer seen.deinit();
-        var found: ?TypeRepId = null;
-        try self.collectNominalBackingActualForFormal(root_rep, formal_rep, &found, &seen);
-        return found;
-    }
-
-    fn collectNominalBackingActualForFormal(
-        self: *Builder,
-        rep_id: TypeRepId,
-        formal_rep: TypeRepId,
-        found: *?TypeRepId,
-        seen: *collections.DenseMap(TypeRepId, void),
-    ) Allocator.Error!void {
-        const entry = try seen.getOrPut(rep_id);
-        if (entry.found_existing) return;
-
-        const rep = self.plan.representations.items[@intFromEnum(rep_id)];
-        var substitution_iter = self.plan.nominalBackingSubstitutions(rep.nominal_backing_arg_substitutions);
-        while (substitution_iter.next()) |substitution| {
-            if (substitution.formal_rep == formal_rep and substitution.actual_rep != formal_rep) {
-                if (found.*) |existing| {
-                    if (existing != substitution.actual_rep) {
-                        boxyPlanInvariant("one call operand assigned a nominal backing formal to two exact reps");
-                    }
-                } else {
-                    found.* = substitution.actual_rep;
-                }
-            }
-            try self.collectNominalBackingActualForFormal(substitution.actual_rep, formal_rep, found, seen);
-        }
-        for (self.plan.childSlice(rep.children)) |child| {
-            try self.collectNominalBackingActualForFormal(child.rep, formal_rep, found, seen);
-        }
-        for (self.plan.tagVariantSlice(rep.tag_variants)) |variant| {
-            for (self.plan.childSlice(variant.payloads)) |payload| {
-                try self.collectNominalBackingActualForFormal(payload.rep, formal_rep, found, seen);
-            }
         }
     }
 
@@ -8927,30 +8898,6 @@ const Builder = struct {
             (worker_rep.kind == .nominal and call_rep.kind == .nominal);
         if (!roles_match) return;
 
-        if (worker_rep.kind == .nominal) {
-            // Both sides have shared declaration templates. Descending the
-            // call-side backing must apply its formals too, e.g. Set(Str)'s
-            // backing Dict(item, {}) must supply Str, not the template's item.
-            var call_substitutions = self.plan.nominalBackingSubstitutions(call_rep.nominal_backing_arg_substitutions);
-            while (call_substitutions.next()) |call_substitution| {
-                const formal_rep = call_substitution.formal_rep orelse continue;
-                const actual = substitutions.resolve(call_substitution.actual_rep);
-                if (formal_rep != actual) {
-                    try substitutions.put(self.allocator, formal_rep, actual);
-                }
-            }
-            var backing_substitutions = self.plan.nominalBackingSubstitutions(worker_rep.nominal_backing_arg_substitutions);
-            while (backing_substitutions.next()) |backing_substitution| {
-                const call_arg_rep = self.nominalBackingArgActualRep(call_rep_id, backing_substitution.arg_index) orelse
-                    boxyPlanInvariant("checked nominal call was missing a backing argument substitution");
-                const exact_call_arg_rep = substitutions.resolve(call_arg_rep);
-                if (backing_substitution.formal_rep) |formal_rep| {
-                    if (formal_rep != exact_call_arg_rep) {
-                        try substitutions.put(self.allocator, formal_rep, exact_call_arg_rep);
-                    }
-                }
-            }
-        }
         const call_children = self.plan.childSlice(call_rep.children);
         for (self.plan.childSlice(worker_rep.children)) |worker_child| {
             if (worker_child.role != .alias_arg and worker_child.role != .nominal_arg) continue;
@@ -8962,9 +8909,8 @@ const Builder = struct {
                     boxyPlanInvariant("checked wrapper call was missing a type argument substitution");
                 break :blk call_child.rep;
             };
-            const exact_call_arg_rep = substitutions.resolve(call_arg_rep);
-            if (worker_child.rep == exact_call_arg_rep) continue;
-            try substitutions.put(self.allocator, worker_child.rep, exact_call_arg_rep);
+            if (worker_child.rep == call_arg_rep) continue;
+            try substitutions.put(self.allocator, worker_child.rep, call_arg_rep);
         }
     }
 
@@ -9067,6 +9013,7 @@ const Builder = struct {
         if (call_rep.kind == .empty_tag_union) {
             var child_index: usize = 0;
             while (self.plan.dictionaryChildAt(worker_rep_id, child_index)) |worker_child| : (child_index += 1) {
+                if (self.plan.childIsSharedBackingTemplate(worker_rep_id, worker_child)) continue;
                 if (!try self.repQuery().repSubtreeHasDictionary(worker_child.rep)) continue;
                 try self.collectCallHiddenDictionaryArgs(worker_child.rep, call_rep_id, context);
             }
@@ -9076,6 +9023,7 @@ const Builder = struct {
         var child_index: usize = 0;
         while (self.plan.dictionaryChildAt(worker_rep_id, child_index)) |worker_child| : (child_index += 1) {
             const call_children = self.plan.childSlice(call_rep.children);
+            if (self.plan.childIsSharedBackingTemplate(worker_rep_id, worker_child)) continue;
             if (!try self.repQuery().repSubtreeHasDictionary(worker_child.rep)) continue;
             // A generic argument reachable through an unwrapped sibling (e.g. an
             // alias's arg that also appears inside its backing) contributes its
@@ -9141,24 +9089,11 @@ const Builder = struct {
         if (worker_rep.dictionaries.len != 0) {
             try substitutions.put(self.allocator, worker_rep_id, call_rep_id);
         }
-        if (worker_rep.kind == .nominal and call_rep.kind == .nominal) {
-            var backing_substitution_iter = self.plan.nominalBackingSubstitutions(worker_rep.nominal_backing_arg_substitutions);
-            while (backing_substitution_iter.next()) |backing_substitution| {
-                const exact_call_arg_rep = self.nominalBackingArgActualRep(call_rep_id, backing_substitution.arg_index) orelse
-                    boxyPlanInvariant("checked nominal call was missing a backing dictionary argument substitution");
-                const formal_rep = backing_substitution.formal_rep orelse continue;
-                try self.collectCallDictionaryRepSubstitutions(
-                    formal_rep,
-                    exact_call_arg_rep,
-                    substitutions,
-                    seen,
-                );
-            }
-        }
         if (worker_rep.children.len == 0) return;
 
         if (call_rep.kind == .empty_tag_union) {
             for (self.plan.childSlice(worker_rep.children)) |worker_child| {
+                if (self.plan.childIsSharedBackingTemplate(worker_rep_id, worker_child)) continue;
                 if (!try self.repQuery().repSubtreeHasDictionary(worker_child.rep)) continue;
                 try self.collectCallDictionaryRepSubstitutions(worker_child.rep, call_rep_id, substitutions, seen);
             }
@@ -9168,6 +9103,7 @@ const Builder = struct {
         const worker_children = self.plan.childSlice(worker_rep.children);
         const call_children = self.plan.childSlice(call_rep.children);
         for (worker_children) |worker_child| {
+            if (self.plan.childIsSharedBackingTemplate(worker_rep_id, worker_child)) continue;
             if (!try self.repQuery().repSubtreeHasDictionary(worker_child.rep)) continue;
             if (substitutions.get(worker_child.rep) != null) continue;
             if (self.rowInstantiationTarget(worker_rep_id, call_rep_id, worker_child)) |row_target| {
