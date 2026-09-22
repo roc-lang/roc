@@ -4187,8 +4187,11 @@ shape so every nested subject ID remains related to its specialized shape cell,
 reserves the exact callees, and records the method identity and checker-authored
 role with each prepared call. A declaration-backed nominal has a distinct body
 shape; anonymous shapes use the public shape for both roles. Repeated
-exact subjects share one such role slot; Phase A deduplicates by that contract
-identity instead of comparing graph shapes. Freezing installs the selected role
+subjects that denote one type share one such role slot. The checker compares
+subjects with transparent aliases expanded at every depth, since Monotype
+erases them, while nominal types keep their declaration identity; subjects
+spelled through two aliases of one record therefore share a role. Phase A
+deduplicates by that contract identity instead of comparing graph shapes. Freezing installs the selected role
 in a content-addressed prepared-call index. A subject-bearing entry uses the
 cached full Monotype digest of Phase A's related shape cell as its bucket,
 while a shape-independent entry has one reusable address. Exact equality
@@ -4202,19 +4205,29 @@ frozen prepared-call plan. They do not repeat method lookup, synthesize another
 specialization request, or interpret the shape to recover a call absent from
 `StaticDispatchPlanTable.generated_codec_derivations`. Debug compiler builds
 audit that every producer-required call was consumed and that repeated roles
-have exactly equal checked type graphs. A parent structural-call edge and its
+have equal checked type graphs up to transparent aliases. A parent structural-call edge and its
 nested derivation independently snapshot one checker relation, so their debug
 audit requires equal checked root keys plus full graph equality under a bijective
 renaming of flex and rigid identities shared across both relation roots;
 variable sharing, constraints, defaults, and every non-variable payload remain
 exact. Conditional capabilities are
 omitted from the consumption requirement unless the specialization selects
-their generated-code path. A format procedure's specialization identity names
-the complete derivation boundary and instantiated constructor, not the
-individual call edge that first reached it. Equivalent checked call edges
-therefore share one specialization, while the ordinary request type and checked
-evidence still distinguish genuinely different targets. The grounding call
-index remains only activation and debug metadata. These audits and their
+their generated-code path. A format procedure's specialization identity does
+not name the individual call edge that first reached it. Equivalent checked
+call edges therefore share one specialization, while the ordinary request type
+and checked evidence still distinguish genuinely different targets. The
+grounding call index remains only activation and debug metadata. A structural edge that
+resolves to a nested derivation (a derived nominal inside a derived shape)
+activates that derivation's own contract inside the enclosing boundary, and
+its calls keep their own checker roles and anchors, because a callee such as
+`parse_tag_union` prepares its payload calls from its anchored contract.
+Phase B emits the whole boundary through one shape-addressed plan, so the root
+and a nested contract preparing one exact shape must reach one callee. Static
+dispatch for a request type has exactly one resolution, so every contract that
+prepares a codec-anchored call at an equal request type supplies equal edges:
+draft specialization identity for such a request is its request type, checked
+evidence, lexical context, and codec kind, not the contract or derivation that
+supplied the edges. These audits and their
 consumption bits are absent from release compiler builds.
 
 Backed named applications keep independent main union-find classes so each
@@ -6510,7 +6523,9 @@ row contributes no errors. This applies to first-order scalar, list, tuple,
 record, and dictionary format methods. `parse_tag_union` receives a
 `ParseTagUnionSpec` whose generated payload parsers execute at the enclosing
 contract row; its callable retains that shared row. This callback dependency
-remains part of its specialization identity. First-order format calls specialize
+remains part of its specialization identity. First-order format calls, for
+parsers and encoders alike (including `rename_field`, `invalid_value`,
+`encode_null`, scalar and key encoders, and collection helpers), specialize
 from their checked callable and evidence without inheriting the enclosing codec
 contract; unrelated parent errors therefore do not duplicate those callees.
 Composition does not widen ordinary user calls or change ordinary unification.
