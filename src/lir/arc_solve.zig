@@ -5553,9 +5553,9 @@ pub fn settleUniquenessWithOptions(
         solution.uniqueness_structure = built;
         break :blk built;
     };
-    if (structure.store != store or structure.rc_local.ptr != rc_local.ptr or structure.rc_local.len != rc_local.len or
-        structure.stmt_count != store.cfStmtCount() or structure.local_count != store.localCount() or
-        structure.proc_count != proc_count)
+    if (structure.store != store or structure.stmt_count != store.cfStmtCount() or
+        structure.local_count != store.localCount() or structure.proc_count != proc_count or
+        !sameResourceTable(structure.rc_local, rc_local))
     {
         solveInvariant("uniqueness settlement reused a structure built for a different store");
     }
@@ -5667,6 +5667,13 @@ pub fn settleUniquenessWithOptions(
             solution.unique_conds[raw] = verdict.conds[dense];
         }
     }
+}
+
+/// Whether two per-local refcount tables describe the same locals.
+fn sameResourceTable(retained: []const bool, requested: []const bool) bool {
+    if (retained.len != requested.len) return false;
+    for (retained, requested) |left, right| if (left != right) return false;
+    return true;
 }
 
 /// Whole-store reference implementation, deliberately unavailable to production.
