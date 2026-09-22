@@ -2380,4 +2380,47 @@ pub const tests = [_]TestCase{
         ,
         .expected = .{ .problem_and_crash = {} },
     },
+    .{
+        // repro for https://github.com/roc-lang/roc/issues/11489
+        // An unannotated function whose local recursive helper appends a
+        // freshly appended inner list to an outer accumulator in two match
+        // branches. Specializing it at `List(Str)` must group the items and
+        // produce `[["a"], ["b"]]` rather than failing to lower the nested
+        // `append` dispatch.
+        .name = "issue 11489: nested append in local recursive helper of generalized function",
+        .source_kind = .module,
+        .source =
+        \\split = |items| {
+        \\    aux = |rest, inner_acc, acc| match rest {
+        \\        [] => acc
+        \\        [h] => acc.append(inner_acc.append(h))
+        \\        [f, .. as t] => aux(t, [], acc.append(inner_acc.append(f)))
+        \\    }
+        \\    aux(items, [], [])
+        \\}
+        \\
+        \\main = split(["a", "b"])
+        ,
+        .expected = .{ .inspect_str = "[[\"a\"], [\"b\"]]" },
+    },
+    .{
+        // repro for https://github.com/roc-lang/roc/issues/11489
+        // The grouped result's element type is known only through the local
+        // helper's recursive call, so dispatching on each group after `map`
+        // must resolve to `List.len` and produce `[1, 1]`.
+        .name = "issue 11489: method dispatch on groups built by local recursive helper",
+        .source_kind = .module,
+        .source =
+        \\split = |items| {
+        \\    aux = |rest, inner_acc, acc| match rest {
+        \\        [] => acc
+        \\        [h, .. as t] => aux(t, [], acc.append(inner_acc.append(h)))
+        \\    }
+        \\    aux(items, [], [])
+        \\}
+        \\
+        \\main = split(["a", "b"]).map(|group| group.len())
+        ,
+        .expected = .{ .inspect_str = "[1, 1]" },
+    },
 };

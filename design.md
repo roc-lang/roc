@@ -1262,6 +1262,16 @@ fixed activation lifetime without repeatedly moving the accumulated entry
 instruction list. Slot values are available to body construction immediately;
 final instruction numbering follows the completed block order.
 
+LLVM call sites do not acquire `alwaysinline` from loop nesting. Nesting depth
+does not establish execution frequency or bound the combined body of a caller
+with many sites. Larger helpers remain ordinary calls so LLVM can simplify each
+body before considering its duplication. A callee-local LIR statement limit is
+not a bound on caller growth or on the LLVM instructions generated after builtin
+expansion. Any future Roc-directed expansion of these helpers must consume an
+explicit plan with cumulative and transitive growth accounting, separately from
+the proof that the transformation preserves meaning. LLVM-specific planning
+and representation optimization must not run in dev-backend compilations.
+
 LLVM string-literal lowering emits a complete target-layout constant when the
 literal fits the runtime's inline `RocStr` representation. It uses the runtime's
 word count and flag-byte encoding, the target pointer width and byte order, and
@@ -2624,7 +2634,11 @@ annotated members instantiate the pre-declared scheme, preserving sound
 polymorphic recursion for annotated defs. The same rule applies to
 block-local `s_decl` functions: each local function decl is a binding group
 of one with its own rank frame, and annotated (type-var-free) locals
-pre-declare their scheme. There is no deferred post-generalization validation
+pre-declare their scheme. An unannotated local's lambda stays in that frame
+like a group member's; the frame's boundary unifies the pattern with the
+RHS, re-runs dispatch for receivers that unification pinned (an accumulator
+the recursive call passes as `[]`), and only then generalizes, so
+requirement deduplication and scheme capture see the final type. There is no deferred post-generalization validation
 of recursive references anywhere; the monomorphic rule leaves nothing to
 validate afterwards. A consequence is that an unannotated recursive def
 used at two incompatible types within its own group is a type error—the
@@ -14892,8 +14906,10 @@ Branch environments use an undo journal of local-location writes. Capture
 spills resident vectors before recording a journal mark and the float-register
 mask; restoration replays writes in reverse to that mark and clears vector
 residency. Nested regions retain their enclosing journal prefix. Neither
-operation copies the local-location table, and restoration never rolls back the
-stack-slot allocator: different arms retain distinct stack slots.
+operation copies the local-location table. A procedure-local native storage plan
+assigns offsets before emission, so restoring bindings never changes storage
+assignments. Different locals may share bytes only when their planned storage
+lifetimes do not overlap.
 
 Stable does not mean distinct. Before emitting a procedure, `LirCodeGen` walks
 its exact control-flow graph and inventories every definition and indirect
@@ -14901,11 +14917,37 @@ write. A one-definition `assign_ref.local` may adopt its source's authoritative
 location only when both locals have the same runtime representation and the
 source is immutable. Multiply-defined locals, join parameters, uninitialized
 poisoning, output-pointer writes, control-flow capture writes, and aggregate
-stores therefore retain independent locations. This lets immutable alias
+stores therefore retain independent storage identities. This lets immutable alias
 chains emit no load/store copies without allowing a later source mutation to
 change an earlier snapshot. Floating-point values that require per-binding NaN
 normalization and vector values retain independent locations. The proof never
 uses emission order, last-use guesses, or an adjacent-instruction peephole.
+
+Native stack planning consumes the shared LIR read/definition inventories plus
+explicit native descriptor accesses and fused-result writes. Runtime successor
+edges distinguish join declarations from jumps, and pattern captures write only
+on their successful edges. Immutable aliases share a storage identity; their
+combined reads keep that identity live. Each instruction-selection region holds
+all its inputs and outputs simultaneously, so multiword copies cannot overwrite
+unread operands. This analysis follows explicit ARC statements as ordinary reads
+and makes no ownership decisions.
+
+The planner forms basic blocks once. Within each block it records disjoint
+read-before-write intervals, propagating only live-in requirements backward across
+block edges to a fixed point. Scratch columns are procedure-local and indexed by
+compact identities. There are no locals-wide rows per statement and no eagerly
+materialized pairwise interference graph. Slots are grouped by their required
+size and alignment and reused only after checking all remaining lifetime
+intervals, including holes and back edges. Single intervals are stored inline,
+without a heap allocation per local or slot. A queue retires occupied intervals
+so straight-line dead-temporary chains do not scan every earlier local.
+
+`ptr_alloca` backing cells have explicit procedure lifetime and are reserved
+separately from reusable local slots and instruction-selection scratch. Ordinary
+native scratch cannot escape its emission region; results are copied into their
+planned authoritative locations before the region ends. Frame construction uses
+the maximum storage required by any region and retains all ABI alignment,
+callee-save, unwind, and stack-probing requirements.
 
 Floating-point and vector locations draw from the same register-allocation mask:
 XMM registers alias on x86-64 and V registers alias on AArch64. Vector locals
@@ -15899,6 +15941,13 @@ host-facing struct of function pointers. `RocOps` survives only as an
 interpreter-internal structure (the dev-build translation shim and
 compiler-internal evaluation construct one); it is not part of any host ABI,
 and glue never emits it.
+
+Builtins compiled for a platform call the runtime symbols directly from the
+`RocOps` helper methods: the only table such a build carries is the
+symbol-backed adapter, whose entries forward to those symbols, so the
+dispatch would only add a load from a mutable global and an indirect call
+to every allocation. The dispatch stays in an in-process host, which enters
+a per-thread `RocOps` the symbols cannot name.
 
 Generated Zig and Rust bindings provide a `RocHost` helper for host-owned
 allocation state. Its fields are exactly the `env` and callback prefix of

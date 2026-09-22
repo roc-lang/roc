@@ -588,10 +588,13 @@ fn runLoweredWithHostEvents(
     var runtime_env = eval.RuntimeHostEnv.init(allocator);
     defer runtime_env.deinit();
 
+    var static_strings = try eval.Interpreter.buildStaticStrings(allocator, &lowered.lir_result.store);
+    defer static_strings.deinit();
     var interpreter = try eval.Interpreter.init(
         allocator,
         &lowered.lir_result.store,
         &lowered.lir_result.layouts,
+        static_strings.view(),
         runtime_env.get_ops(),
     );
     defer interpreter.deinit();
@@ -3423,10 +3426,13 @@ test "interpreter captures the virtual source frame of an inlined crash" {
     const store = &lowered_source.lowered.lir_result.store;
     var runtime_env = eval.RuntimeHostEnv.init(allocator);
     defer runtime_env.deinit();
+    var static_strings = try eval.Interpreter.buildStaticStrings(allocator, store);
+    defer static_strings.deinit();
     var interpreter = try eval.Interpreter.init(
         allocator,
         store,
         &lowered_source.lowered.lir_result.layouts,
+        static_strings.view(),
         runtime_env.get_ops(),
     );
     defer interpreter.deinit();
@@ -3472,11 +3478,14 @@ test "boxy lowering preserves a runtime-built crash message" {
 
     var runtime_env = eval.RuntimeHostEnv.init(allocator);
     defer runtime_env.deinit();
+    var static_strings = try eval.Interpreter.buildStaticStrings(allocator, &result.store);
+    defer static_strings.deinit();
     var interpreter = try eval.Interpreter.initWithBoxyTables(
         allocator,
         &result.store,
         &result.layouts,
         eval.boxy_runtime.BoxyTables.fromResult(result),
+        static_strings.view(),
         runtime_env.get_ops(),
     );
     defer interpreter.deinit();
@@ -4237,7 +4246,9 @@ test "issue 11317 or-pattern captures reuse one closure with and without special
         defer runtime_env.deinit();
         {
             const result = &lowered.lowered.lir_result;
-            var interpreter = try eval.Interpreter.init(allocator, &result.store, &result.layouts, runtime_env.get_ops());
+            var static_strings = try eval.Interpreter.buildStaticStrings(allocator, &result.store);
+            defer static_strings.deinit();
+            var interpreter = try eval.Interpreter.init(allocator, &result.store, &result.layouts, static_strings.view(), runtime_env.get_ops());
             defer interpreter.deinit();
             var n: u64 = 5;
             const evaluated = try interpreter.eval(.{
@@ -9394,10 +9405,13 @@ test "issue 10340 fold over effect-produced list scalarizes in root" {
 
     var runtime_env = eval.RuntimeHostEnv.init(allocator);
     defer runtime_env.deinit();
+    var static_strings = try eval.Interpreter.buildStaticStrings(allocator, &optimized.lowered.lir_result.store);
+    defer static_strings.deinit();
     var interpreter = try eval.Interpreter.init(
         allocator,
         &optimized.lowered.lir_result.store,
         &optimized.lowered.lir_result.layouts,
+        static_strings.view(),
         runtime_env.get_ops(),
     );
     defer interpreter.deinit();
@@ -10041,10 +10055,13 @@ test "owned variants take a helper parameter's fields at the call" {
 
     var runtime_env = eval.RuntimeHostEnv.init(allocator);
     defer runtime_env.deinit();
+    var static_strings = try eval.Interpreter.buildStaticStrings(allocator, &optimized.lowered.lir_result.store);
+    defer static_strings.deinit();
     var interpreter = try eval.Interpreter.init(
         allocator,
         &optimized.lowered.lir_result.store,
         &optimized.lowered.lir_result.layouts,
+        static_strings.view(),
         runtime_env.get_ops(),
     );
     defer interpreter.deinit();
@@ -10155,10 +10172,13 @@ test "issue 10435 SpecConstr preserves frozen types for partially used while sta
 
     var runtime_env = eval.RuntimeHostEnv.init(allocator);
     defer runtime_env.deinit();
+    var static_strings = try eval.Interpreter.buildStaticStrings(allocator, &optimized.lowered.lir_result.store);
+    defer static_strings.deinit();
     var interpreter = try eval.Interpreter.init(
         allocator,
         &optimized.lowered.lir_result.store,
         &optimized.lowered.lir_result.layouts,
+        static_strings.view(),
         runtime_env.get_ops(),
     );
     defer interpreter.deinit();
@@ -10252,10 +10272,13 @@ test "issue 10461 ScalarizeJoins keeps neighboring join parameter initialization
 
     var runtime_env = eval.RuntimeHostEnv.init(allocator);
     defer runtime_env.deinit();
+    var static_strings = try eval.Interpreter.buildStaticStrings(allocator, &optimized.lowered.lir_result.store);
+    defer static_strings.deinit();
     var interpreter = try eval.Interpreter.init(
         allocator,
         &optimized.lowered.lir_result.store,
         &optimized.lowered.lir_result.layouts,
+        static_strings.view(),
         runtime_env.get_ops(),
     );
     defer interpreter.deinit();
@@ -10306,10 +10329,13 @@ test "issue 10461 SpecConstr keeps outer loop back edge out of inner loop body" 
 
     var runtime_env = eval.RuntimeHostEnv.init(allocator);
     defer runtime_env.deinit();
+    var static_strings = try eval.Interpreter.buildStaticStrings(allocator, &optimized.lowered.lir_result.store);
+    defer static_strings.deinit();
     var interpreter = try eval.Interpreter.init(
         allocator,
         &optimized.lowered.lir_result.store,
         &optimized.lowered.lir_result.layouts,
+        static_strings.view(),
         runtime_env.get_ops(),
     );
     defer interpreter.deinit();
@@ -10568,10 +10594,13 @@ test "issue 10797 SpecConstr keeps the threaded var parameter bound in a special
 
     var runtime_env = eval.RuntimeHostEnv.init(allocator);
     defer runtime_env.deinit();
+    var static_strings = try eval.Interpreter.buildStaticStrings(allocator, &optimized.lowered.lir_result.store);
+    defer static_strings.deinit();
     var interpreter = try eval.Interpreter.init(
         allocator,
         &optimized.lowered.lir_result.store,
         &optimized.lowered.lir_result.layouts,
+        static_strings.view(),
         runtime_env.get_ops(),
     );
     defer interpreter.deinit();
@@ -10858,10 +10887,13 @@ test "tail calls behind an inlined loop still become jumps" {
         const result = &lowered_source.lowered.lir_result;
         var runtime_env = eval.RuntimeHostEnv.init(allocator);
         defer runtime_env.deinit();
+        var static_strings = try eval.Interpreter.buildStaticStrings(allocator, &result.store);
+        defer static_strings.deinit();
         var interpreter = try eval.Interpreter.init(
             allocator,
             &result.store,
             &result.layouts,
+            static_strings.view(),
             runtime_env.get_ops(),
         );
         defer interpreter.deinit();
@@ -10903,11 +10935,14 @@ test "tail-call lowering handles a source loop in both inline modes" {
         const result = &lowered.lowered.lir_result;
         var runtime_env = eval.RuntimeHostEnv.init(allocator);
         defer runtime_env.deinit();
+        var static_strings = try eval.Interpreter.buildStaticStrings(allocator, &result.store);
+        defer static_strings.deinit();
         var interpreter = try eval.Interpreter.initWithBoxyTables(
             allocator,
             &result.store,
             &result.layouts,
             eval.boxy_runtime.BoxyTables.fromResult(result),
+            static_strings.view(),
             runtime_env.get_ops(),
         );
         defer interpreter.deinit();
@@ -10945,7 +10980,9 @@ test "tail-call lowering preserves a failure after a recursive call" {
         const result = &lowered.lowered.lir_result;
         var runtime_env = eval.RuntimeHostEnv.init(allocator);
         defer runtime_env.deinit();
-        var interpreter = try eval.Interpreter.init(allocator, &result.store, &result.layouts, runtime_env.get_ops());
+        var static_strings = try eval.Interpreter.buildStaticStrings(allocator, &result.store);
+        defer static_strings.deinit();
+        var interpreter = try eval.Interpreter.init(allocator, &result.store, &result.layouts, static_strings.view(), runtime_env.get_ops());
         defer interpreter.deinit();
         try std.testing.expectError(error.Crash, interpreter.eval(.{ .proc_id = try rootProc(&lowered.lowered) }));
     }
@@ -11019,11 +11056,14 @@ fn expectKeyedContainersEvaluate(source: []const u8, expected: u64) (TestError |
         var runtime_env = eval.RuntimeHostEnv.init(allocator);
         defer runtime_env.deinit();
         {
+            var static_strings = try eval.Interpreter.buildStaticStrings(allocator, &result.store);
+            defer static_strings.deinit();
             var interpreter = try eval.Interpreter.initWithBoxyTables(
                 allocator,
                 &result.store,
                 &result.layouts,
                 eval.boxy_runtime.BoxyTables.fromResult(result),
+                static_strings.view(),
                 runtime_env.get_ops(),
             );
             defer interpreter.deinit();
@@ -11055,11 +11095,14 @@ test "tail-call lowering preserves boxy return adaptations" {
     const result = &lowered.lowered.lir_result;
     var runtime_env = eval.RuntimeHostEnv.init(allocator);
     defer runtime_env.deinit();
+    var static_strings = try eval.Interpreter.buildStaticStrings(allocator, &result.store);
+    defer static_strings.deinit();
     var interpreter = try eval.Interpreter.initWithBoxyTables(
         allocator,
         &result.store,
         &result.layouts,
         eval.boxy_runtime.BoxyTables.fromResult(result),
+        static_strings.view(),
         runtime_env.get_ops(),
     );
     defer interpreter.deinit();
@@ -11091,7 +11134,9 @@ test "tail-call lowering preserves owning argument permutations" {
         defer runtime_env.deinit();
         {
             const result = &lowered.lowered.lir_result;
-            var interpreter = try eval.Interpreter.init(allocator, &result.store, &result.layouts, runtime_env.get_ops());
+            var static_strings = try eval.Interpreter.buildStaticStrings(allocator, &result.store);
+            defer static_strings.deinit();
+            var interpreter = try eval.Interpreter.init(allocator, &result.store, &result.layouts, static_strings.view(), runtime_env.get_ops());
             defer interpreter.deinit();
             var count: u64 = 5;
             const evaluated = try interpreter.eval(.{
@@ -11148,7 +11193,9 @@ test "tail-call transfers preserve owning cycles and duplicated sources" {
             defer runtime_env.deinit();
             {
                 const result = &lowered.lowered.lir_result;
-                var interpreter = try eval.Interpreter.init(allocator, &result.store, &result.layouts, runtime_env.get_ops());
+                var static_strings = try eval.Interpreter.buildStaticStrings(allocator, &result.store);
+                defer static_strings.deinit();
+                var interpreter = try eval.Interpreter.init(allocator, &result.store, &result.layouts, static_strings.view(), runtime_env.get_ops());
                 defer interpreter.deinit();
                 var count: u64 = 5;
                 const evaluated = try interpreter.eval(.{
@@ -11226,11 +11273,14 @@ test "issue 11376: packed products survive Boxy boundaries and copy-on-write" {
         var runtime_env = eval.RuntimeHostEnv.init(allocator);
         defer runtime_env.deinit();
         {
+            var static_strings = try eval.Interpreter.buildStaticStrings(allocator, &result.store);
+            defer static_strings.deinit();
             var interpreter = try eval.Interpreter.initWithBoxyTables(
                 allocator,
                 &result.store,
                 &result.layouts,
                 eval.boxy_runtime.BoxyTables.fromResult(result),
+                static_strings.view(),
                 runtime_env.get_ops(),
             );
             defer interpreter.deinit();
@@ -11488,12 +11538,15 @@ test "issue 11470: tagged shared error composition executes in both strategies" 
         const result = &lowered.lowered.lir_result;
         var runtime_env = eval.RuntimeHostEnv.init(allocator);
         defer runtime_env.deinit();
+        var static_strings = try eval.Interpreter.buildStaticStrings(allocator, &result.store);
+        defer static_strings.deinit();
         {
             var interpreter = try eval.Interpreter.initWithBoxyTables(
                 allocator,
                 &result.store,
                 &result.layouts,
                 eval.boxy_runtime.BoxyTables.fromResult(result),
+                static_strings.view(),
                 runtime_env.get_ops(),
             );
             defer interpreter.deinit();
