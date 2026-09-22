@@ -5327,7 +5327,7 @@ const Builder = struct {
             .count,
             null,
             null,
-            if (self.comptime_value_reads) .queued else .immediate,
+            .queued,
             null,
             false,
         );
@@ -9087,7 +9087,7 @@ const Builder = struct {
             .count,
             null,
             null,
-            .immediate,
+            .queued,
             null,
             false,
         );
@@ -22756,6 +22756,20 @@ const BodyContext = struct {
             .provisional_digest = provisional_digest.bytes,
         };
 
+        // The provisional view keys a request with its open leaves already
+        // defaulted, so an open request and its defaulted counterpart share
+        // one address. Replaying a finished summary onto an open request
+        // would then close those leaves in the live graph, where a fresh
+        // expansion leaves them open, and every later reading of the same
+        // cells (dispatch evidence above all) would differ from a reading
+        // taken before the replay. Only a settled request reads a summary;
+        // an open one expands its callee's relations against its live cells.
+        // Undetermined field-kind cells are the one open part a view keeps
+        // explicit, and every duplicate instantiates them afresh, so they do
+        // not make a request open here.
+        const request_settled = try self.graph.typeIsSpecializationDefaultable(request_fn_node);
+        if (!request_settled) self.builder.count("interface_replay_open_requests");
+
         if (replay_state.buckets.get(address)) |candidates| for (candidates.items) |raw_entry| {
             const entry = &replay_state.entries.items[raw_entry];
             if (!storedConstFnEvidenceEql(entry.evidence, stored_evidence) or
@@ -22767,6 +22781,7 @@ const BodyContext = struct {
             {
                 continue;
             }
+            if (entry.status == .ready and !request_settled) continue;
             self.builder.count("interface_replay_hits");
             switch (entry.status) {
                 .expanding => try relateFunctionRequestInterface(
@@ -22793,7 +22808,7 @@ const BodyContext = struct {
         var verify_summary: ?Type.TypeId = null;
         const saved_use_summaries = replay_state.use_finished_summaries;
         defer replay_state.use_finished_summaries = saved_use_summaries;
-        if (replay_state.use_finished_summaries) {
+        if (replay_state.use_finished_summaries and request_settled) {
             if (try self.findInterfaceSummary(address, stored_evidence, provisional_ty)) |hit| {
                 self.builder.count("interface_summary_hits");
                 // Detailed diagnostics in safety builds audit the first 16
@@ -22880,7 +22895,7 @@ const BodyContext = struct {
                 Common.compilerBug("cached interface summary disagreed with fresh checked relation expansion");
             }
         }
-        if (saved_use_summaries) {
+        if (saved_use_summaries and request_settled) {
             const cache = self.interfaceSummaryCache();
             if (self.typeStore() == &self.builder.program.types) {
                 // On the coordinator both views were materialized outside any
