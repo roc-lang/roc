@@ -14954,15 +14954,6 @@ fn lookupImportedExposedTarget(
     return lookupExposedTargetByText(imported_env, item_text);
 }
 
-fn lookupImportedExposedValueNode(
-    self: *Self,
-    imported_env: *const ModuleEnv,
-    item_text: []const u8,
-) std.mem.Allocator.Error!?u32 {
-    const target = (try self.lookupImportedExposedTarget(imported_env, item_text)) orelse return null;
-    return target.valueDefNode();
-}
-
 fn lookupImportedExposedTypeNode(
     self: *Self,
     imported_env: *const ModuleEnv,

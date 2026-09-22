@@ -14208,15 +14208,6 @@ fn recordPredeclaredDispatchUse(
     });
 }
 
-fn annotationIdentityConstraints(self: *Self, var_: Var) []const StaticDispatchConstraint {
-    const range = switch (self.types.resolveVar(var_).desc.content) {
-        .flex => |flex| flex.constraints,
-        .rigid => |rigid| rigid.constraints,
-        .alias, .structure, .field_presence, .err => return &.{},
-    };
-    return self.types.sliceStaticDispatchConstraints(range);
-}
-
 /// Reset every type-annotation node var this annotation's generation wrote
 /// (the annotation node itself, its type tree, and its where-clause
 /// signatures) to a pristine unbound slot. Sound because nothing live
