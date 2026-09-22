@@ -484,25 +484,25 @@ pub fn atan2(y: f64, x: f64) f64 {
         return x + y;
     }
 
-    const ux: u64 = @bitCast(x);
-    var ix: u32 = @intCast(ux >> 32);
-    const lx: u32 = @intCast(ux & 0xFFFFFFFF);
+    const x_bits: u64 = @bitCast(x);
+    var x_high: u32 = @intCast(x_bits >> 32);
+    const x_low: u32 = @intCast(x_bits & 0xFFFFFFFF);
 
-    const uy: u64 = @bitCast(y);
-    var iy: u32 = @intCast(uy >> 32);
-    const ly: u32 = @intCast(uy & 0xFFFFFFFF);
+    const y_bits: u64 = @bitCast(y);
+    var y_high: u32 = @intCast(y_bits >> 32);
+    const y_low: u32 = @intCast(y_bits & 0xFFFFFFFF);
 
     // x = 1.0
-    if ((ix -% 0x3FF00000) | lx == 0) {
+    if ((x_high -% 0x3FF00000) | x_low == 0) {
         return atan(y);
     }
 
     // 2 * sign(x) + sign(y)
-    const m = ((iy >> 31) & 1) | ((ix >> 30) & 2);
-    ix &= 0x7FFFFFFF;
-    iy &= 0x7FFFFFFF;
+    const m = ((y_high >> 31) & 1) | ((x_high >> 30) & 2);
+    x_high &= 0x7FFFFFFF;
+    y_high &= 0x7FFFFFFF;
 
-    if (iy | ly == 0) {
+    if (y_high | y_low == 0) {
         switch (m) {
             0, 1 => return y, // atan(+-0, +...)
             2 => return pi, // atan(+0, -...)
@@ -511,7 +511,7 @@ pub fn atan2(y: f64, x: f64) f64 {
         }
     }
 
-    if (ix | lx == 0) {
+    if (x_high | x_low == 0) {
         if (m & 1 != 0) {
             return -pi / 2;
         } else {
@@ -519,8 +519,8 @@ pub fn atan2(y: f64, x: f64) f64 {
         }
     }
 
-    if (ix == 0x7FF00000) {
-        if (iy == 0x7FF00000) {
+    if (x_high == 0x7FF00000) {
+        if (y_high == 0x7FF00000) {
             switch (m) {
                 0 => return pi / 4, // atan(+inf, +inf)
                 1 => return -pi / 4, // atan(-inf, +inf)
@@ -540,7 +540,7 @@ pub fn atan2(y: f64, x: f64) f64 {
     }
 
     // |y / x| > 0x1p64
-    if (ix +% (64 << 20) < iy or iy == 0x7FF00000) {
+    if (x_high +% (64 << 20) < y_high or y_high == 0x7FF00000) {
         if (m & 1 != 0) {
             return -pi / 2;
         } else {
@@ -550,7 +550,7 @@ pub fn atan2(y: f64, x: f64) f64 {
 
     // z = atan(|y / x|) with correct underflow
     const z = z: {
-        if ((m & 2) != 0 and iy +% (64 << 20) < ix) {
+        if ((m & 2) != 0 and y_high +% (64 << 20) < x_high) {
             break :z 0.0;
         } else {
             break :z atan(@abs(y / x));

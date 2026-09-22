@@ -784,20 +784,20 @@ pub fn atan2(y: f32, x: f32) f32 {
         return x + y;
     }
 
-    var ix = @as(u32, @bitCast(x));
-    var iy = @as(u32, @bitCast(y));
+    var x_bits = @as(u32, @bitCast(x));
+    var y_bits = @as(u32, @bitCast(y));
 
     // x = 1.0
-    if (ix == 0x3F800000) {
+    if (x_bits == 0x3F800000) {
         return atan(y);
     }
 
     // 2 * sign(x) + sign(y)
-    const m = ((iy >> 31) & 1) | ((ix >> 30) & 2);
-    ix &= 0x7FFFFFFF;
-    iy &= 0x7FFFFFFF;
+    const m = ((y_bits >> 31) & 1) | ((x_bits >> 30) & 2);
+    x_bits &= 0x7FFFFFFF;
+    y_bits &= 0x7FFFFFFF;
 
-    if (iy == 0) {
+    if (y_bits == 0) {
         switch (m) {
             0, 1 => return y, // atan(+-0, +...)
             2 => return pi, // atan(+0, -...)
@@ -806,7 +806,7 @@ pub fn atan2(y: f32, x: f32) f32 {
         }
     }
 
-    if (ix == 0) {
+    if (x_bits == 0) {
         if (m & 1 != 0) {
             return -pi / 2;
         } else {
@@ -814,8 +814,8 @@ pub fn atan2(y: f32, x: f32) f32 {
         }
     }
 
-    if (ix == 0x7F800000) {
-        if (iy == 0x7F800000) {
+    if (x_bits == 0x7F800000) {
+        if (y_bits == 0x7F800000) {
             switch (m) {
                 0 => return pi / 4, // atan(+inf, +inf)
                 1 => return -pi / 4, // atan(-inf, +inf)
@@ -835,7 +835,7 @@ pub fn atan2(y: f32, x: f32) f32 {
     }
 
     // |y / x| > 0x1p26
-    if (ix + (26 << 23) < iy or iy == 0x7F800000) {
+    if (x_bits + (26 << 23) < y_bits or y_bits == 0x7F800000) {
         if (m & 1 != 0) {
             return -pi / 2;
         } else {
@@ -845,7 +845,7 @@ pub fn atan2(y: f32, x: f32) f32 {
 
     // z = atan(|y / x|) with correct underflow
     const z = z: {
-        if ((m & 2) != 0 and iy + (26 << 23) < ix) {
+        if ((m & 2) != 0 and y_bits + (26 << 23) < x_bits) {
             break :z 0.0;
         } else {
             break :z atan(@abs(y / x));
