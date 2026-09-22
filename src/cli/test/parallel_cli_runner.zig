@@ -884,6 +884,11 @@ else
     issue_11130_expected_stdout;
 
 const boxy_try_low_levels_expected_stdout = "Ok(\"ab\")\nErr(BadUtf8({ index: 0, problem: InvalidStartByte }))\nOk(300)\nErr(OutOfRange)\nOk(-42)\n";
+// Built Windows apps write through the CRT's text-mode stdout.
+const boxy_try_low_levels_built_expected_stdout = if (builtin.os.tag == .windows)
+    "Ok(\"ab\")\r\nErr(BadUtf8({ index: 0, problem: InvalidStartByte }))\r\nOk(300)\r\nErr(OutOfRange)\r\nOk(-42)\r\n"
+else
+    boxy_try_low_levels_expected_stdout;
 const boxy_inspect_expected_stdout = "{ label: \"hi\", nums: [1.0, 2.0] }\n{ label: \"bye\", nums: [3, 4] }\n{ label: <missing>, nums: <missing> }\nOk(3)\n";
 const boxy_inspect_size_expected_stdout = if (builtin.os.tag == .windows)
     "{ label: \"hi\", nums: [1.0, 2.0] }\r\n{ label: \"bye\", nums: [3, 4] }\r\n{ label: <missing>, nums: <missing> }\r\nOk(3)\r\n"
@@ -3287,7 +3292,7 @@ fn runCustomCase(
             .roc_file = "test/echo/boxy_try_low_levels.roc",
             .output_name = "boxy_try_low_levels",
             .exit = .success,
-            .stdout_exact = boxy_try_low_levels_expected_stdout,
+            .stdout_exact = boxy_try_low_levels_built_expected_stdout,
         }),
         .build_default_app_interpreter_args => customBuildDefaultAppArgs(io, allocator, &env, &timer, timeout_ms, .interpreter),
         .build_glibc_target_non_linux_error => customGlibcTargetNonLinux(io, allocator, &env, &timer, timeout_ms),
