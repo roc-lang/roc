@@ -203,6 +203,101 @@ const issue10703DualAliasSource =
 /// Public value `tests`.
 pub const tests = [_]TestCase{
     .{
+        .name = "issue 11471: generic alias chains preserve parser and encoder element types",
+        .source_kind = .module,
+        .source =
+        \\Item(a) : { uri : a }
+        \\Entry : Item(Str)
+        \\Envelope : { items : List(Entry) }
+        \\roundtrip : Str -> (U64, Str)
+        \\roundtrip = |json| {
+        \\    parsed : Try(Envelope, _)
+        \\    parsed = Json.parse(json)
+        \\    match parsed {
+        \\        Ok(record) => (record.items.len(), Json.to_str(record))
+        \\        Err(_) => (0, "failed")
+        \\    }
+        \\}
+        \\main = roundtrip("{\"items\":[{\"uri\":\"a\"}]}")
+        ,
+        .expected = .{ .inspect_str = "(1, \"{\\\"items\\\":[{\\\"uri\\\":\\\"a\\\"}]}\")" },
+    },
+    .{
+        .name = "issue 11471: primitive alias list elements retain their parser",
+        .source_kind = .module,
+        .source =
+        \\Item : U64
+        \\count : Str -> U64
+        \\count = |json| {
+        \\    parsed : Try({ items : List(Item) }, _)
+        \\    parsed = Json.parse(json)
+        \\    match parsed {
+        \\        Ok(record) => record.items.len()
+        \\        Err(_) => 0
+        \\    }
+        \\}
+        \\main = count("{\"items\":[1,2]}")
+        ,
+        .expected = .{ .inspect_str = "2" },
+    },
+    .{
+        .name = "issue 11471: captured aliases preserve distinct nominal method dispatch",
+        .source_kind = .module,
+        .source =
+        \\First := { value : U64 }.{
+        \\    score : First -> U64
+        \\    score = |x| x.value + 1
+        \\}
+        \\Second := { value : U64 }.{
+        \\    score : Second -> U64
+        \\    score = |x| x.value + 2
+        \\}
+        \\A : First
+        \\B : Second
+        \\capture : A, B -> ({} -> U64)
+        \\capture = |a, b| |{}| a.score() + b.score()
+        \\saved = capture(First.{ value: 10 }, Second.{ value: 10 })
+        \\main = saved({})
+        ,
+        .expected = .{ .inspect_str = "23" },
+    },
+    .{
+        .name = "issue 11471: alias over a recursive nominal preserves recursion and values",
+        .source_kind = .module,
+        .source =
+        \\Chain := [End, Next(Str, Chain)]
+        \\Link : Chain
+        \\length : Link -> U64
+        \\length = |link| match link {
+        \\    End => 0
+        \\    Next(_, rest) => 1 + length(rest)
+        \\}
+        \\stored : Link
+        \\stored = Chain.Next("a", Chain.Next("b", Chain.End))
+        \\main = length(stored)
+        ,
+        .expected = .{ .inspect_str = "2" },
+    },
+    .{
+        .name = "issue 11471: a length method call on a parsed list field of an aliased element type",
+        .source_kind = .module,
+        .source =
+        \\Item : { uri : Str }
+        \\count : Str -> U64
+        \\count = |json| {
+        \\    parsed : Try({ items : List(Item) }, _)
+        \\    parsed = Json.parse(json)
+        \\    match parsed {
+        \\        Ok(record) => record.items.len()
+        \\        Err(_) => 0
+        \\    }
+        \\}
+        \\main : U64
+        \\main = count("{\"items\":[{\"uri\":\"a\"}]}")
+        ,
+        .expected = .{ .inspect_str = "1" },
+    },
+    .{
         .name = "issue 11376: packed record constants preserve field order and mixed widths",
         .source_kind = .module,
         .source =
@@ -1980,6 +2075,178 @@ pub const tests = [_]TestCase{
         .expected = .{ .inspect_str = "1" },
     },
     .{
+        // https://github.com/roc-lang/roc/issues/11424
+        // Branch-result selection must retain the enclosing specialization's
+        // I64 constraint when constructing the inner stored closures.
+        .name = "issue 11424: tag payload lambda returns a tag whose closure differs per branch",
+        .source_kind = .module,
+        .source =
+        \\widget : I64 -> [Dyn(I64 -> [Button(I64 -> I64)])]
+        \\widget = |_x| Dyn(|m| if m > 0 { Button(|mm| mm + 1) } else { Button(|mm| mm * 2) })
+        \\
+        \\main = match widget(0) {
+        \\    Dyn(f) =>
+        \\        match (f(0), f(1)) {
+        \\            (Button(g0), Button(g1)) => g0(3) * 10 + g1(3)
+        \\        }
+        \\}
+        ,
+        .expected = .{ .inspect_str = "64" },
+    },
+    .{
+        .name = "issue 11424: match result retains I32 specialization for stored closures",
+        .source_kind = .module,
+        .source =
+        \\widget : I64 -> [Dyn(I32 -> [Button(I32 -> I32)])]
+        \\widget = |_x| Dyn(|m| match m {
+        \\    0 => Button(|mm| mm * 2)
+        \\    _ => Button(|mm| mm + 1)
+        \\})
+        \\
+        \\main = match widget(0) {
+        \\    Dyn(f) =>
+        \\        match (f(0), f(1)) {
+        \\            (Button(g0), Button(g1)) => g0(3) * 10 + g1(3)
+        \\        }
+        \\}
+        ,
+        .expected = .{ .inspect_str = "64" },
+    },
+    .{
+        // https://github.com/roc-lang/roc/issues/11468
+        // An unannotated local closure captures a parameter of its enclosing
+        // unannotated function and passes it to a top-level helper whose
+        // inferred type carries a `where` constraint (`<`). The enclosing
+        // function is called at U64, so the helper's comparison dispatch
+        // resolves to U64's `is_lt`.
+        .name = "issue 11468: local closure forwards captured value to where-constrained helper",
+        .source_kind = .module,
+        .source =
+        \\lt = |x| x < x
+        \\
+        \\f = |x| {
+        \\    g = || lt(x)
+        \\    g()
+        \\}
+        \\
+        \\main = f(1.U64)
+        ,
+        .expected = .{ .inspect_str = "False" },
+    },
+    .{
+        // https://github.com/roc-lang/roc/issues/11468
+        // The local closure's enclosing function is itself reached through a
+        // caller's specialization interface, at two numeric types.
+        .name = "issue 11468: callee's local closure forwards captured value to where-constrained helper",
+        .source_kind = .module,
+        .source =
+        \\lt = |x| x < x
+        \\
+        \\f = |x| {
+        \\    g = || lt(x)
+        \\    g()
+        \\}
+        \\
+        \\outer = |y| f(y)
+        \\
+        \\main = (outer(1.U64), outer(2.5.F32))
+        ,
+        .expected = .{ .inspect_str = "(False, False)" },
+    },
+    .{
+        // https://github.com/roc-lang/roc/issues/11468
+        // The innermost closure compares values quantified by two different
+        // enclosing frames.
+        .name = "issue 11468: doubly nested closure compares captures from two enclosing frames",
+        .source_kind = .module,
+        .source =
+        \\lt = |a, b| a < b
+        \\
+        \\f = |x| {
+        \\    g = |y| {
+        \\        h = || lt(x, y)
+        \\        h()
+        \\    }
+        \\    g(x)
+        \\}
+        \\
+        \\main = (f(1.U64), f(2.I8))
+        ,
+        .expected = .{ .inspect_str = "(False, False)" },
+    },
+    .{
+        // https://github.com/roc-lang/roc/issues/11468
+        // A generalized callable alias of the capturing closure.
+        .name = "issue 11468: callable alias of a local closure forwarding a captured value",
+        .source_kind = .module,
+        .source =
+        \\lt = |x| x < x
+        \\
+        \\f = |x| {
+        \\    g = || lt(x)
+        \\    k = g
+        \\    k()
+        \\}
+        \\
+        \\main = f(1.U64)
+        ,
+        .expected = .{ .inspect_str = "False" },
+    },
+    .{
+        // https://github.com/roc-lang/roc/issues/11468
+        // The issue's shape: an unannotated selection sort whose local
+        // recursive closures compare elements read through unannotated
+        // `get` and `swap` helpers, so the element type is only constrained
+        // by `<`.
+        .name = "issue 11468: unannotated selection sort compares elements through unannotated get and swap helpers",
+        .source_kind = .module,
+        .source =
+        \\get = |list, idx| {
+        \\    match list.get(idx) {
+        \\        Ok(elem) => elem
+        \\        _ => crash "get unreachable"
+        \\    }
+        \\}
+        \\
+        \\swap = |list, i, j| {
+        \\    match list.swap(i, j) {
+        \\        Ok(swapped) => swapped
+        \\        _ => crash "swap unreachable"
+        \\    }
+        \\}
+        \\
+        \\selection_sort = |list| {
+        \\    len = list.len()
+        \\
+        \\    find_min = |arr, idx, min| {
+        \\        if idx >= len {
+        \\            return min
+        \\        }
+        \\
+        \\        if get(arr, idx) < get(arr, min) {
+        \\            return find_min(arr, idx + 1, idx)
+        \\        }
+        \\
+        \\        find_min(arr, idx + 1, min)
+        \\    }
+        \\
+        \\    aux = |arr, idx| {
+        \\        if idx == len {
+        \\            return arr
+        \\        }
+        \\
+        \\        minimum = find_min(arr, idx + 1, idx)
+        \\        aux(swap(arr, idx, minimum), idx + 1)
+        \\    }
+        \\
+        \\    aux(list, 0)
+        \\}
+        \\
+        \\main = selection_sort([3.U64, 1, 2])
+        ,
+        .expected = .{ .inspect_str = "[1, 2, 3]" },
+    },
+    .{
         // repro for https://github.com/roc-lang/roc/issues/11463
         // An unannotated (so generalized) helper passes a closure whose body is
         // a record update with no field access to a method call. Specializing
@@ -2281,5 +2548,76 @@ pub const tests = [_]TestCase{
         \\}
         ,
         .expected = .{ .inspect_str = "\"{\\\"inner\\\":{\\\"n\\\":\\\"x\\\"},\\\"m\\\":null}\"" },
+    },
+    .{
+        // repro for https://github.com/roc-lang/roc/issues/11312
+        // A non-Str crash message is a type mismatch. Compile-time
+        // finalization and lowering must not see the message's erroneous
+        // type; the program reports the mismatch and crashes when run.
+        .name = "issue 11312: non-Str crash message reports a problem and crashes at runtime instead of panicking",
+        .source_kind = .module,
+        .source =
+        \\poly = || {
+        \\    crash YYYYY
+        \\    "x"
+        \\}
+        \\
+        \\rDsult = poly() == poly()
+        \\
+        \\main = rDsult
+        ,
+        .expected = .{ .problem_and_crash = {} },
+    },
+    .{
+        .name = "issue 11312: callable constant built from a call into a checked error crashes at runtime",
+        .source_kind = .module,
+        .source =
+        \\poly = || {
+        \\    crash YYYYY
+        \\    "x"
+        \\}
+        \\
+        \\make = |s| |_| s
+        \\
+        \\g = make(poly())
+        \\
+        \\main = g(1)
+        ,
+        .expected = .{ .problem_and_crash = {} },
+    },
+    .{
+        .name = "issue 11312: literal conversion whose method reaches a checked error crashes at runtime",
+        .source_kind = .module,
+        .source =
+        \\Tag := [Tag(Str)].{
+        \\    from_quote : Str -> Try(Tag, [BadQuotedBytes(Str)])
+        \\    from_quote = |str| {
+        \\        crash YYYYY
+        \\        Ok(Tag(str))
+        \\    }
+        \\}
+        \\
+        \\value = "one".Tag
+        \\
+        \\main = match value {
+        \\    Tag(s) => s
+        \\}
+        ,
+        .expected = .{ .problem_and_crash = {} },
+    },
+    .{
+        .name = "issue 11312: constant calling into a checked error crashes when read at runtime",
+        .source_kind = .module,
+        .source =
+        \\poly = || {
+        \\    crash YYYYY
+        \\    "x"
+        \\}
+        \\
+        \\first = poly()
+        \\
+        \\main = first
+        ,
+        .expected = .{ .problem_and_crash = {} },
     },
 };

@@ -212,10 +212,12 @@ pub const Constants = struct {
     ///     `NumeralLiteral` declares its trailing bytes.
     /// 97: Record types always carry an explicit extension variable; a record
     ///     update's base row is an ordinary record whose tail is a flex var.
-    /// 98: Generated-codec method roles identify subject types modulo
+    /// 98: Checked procedure template tables publish the templates whose
+    ///     evaluation can reach code checking replaced with a runtime error.
+    /// 99: Generated-codec method roles identify subject types modulo
     ///     transparent aliases, so subjects spelled through different aliases
     ///     of one type share a role.
-    pub const CACHE_VERSION = 98;
+    pub const CACHE_VERSION = 99;
 };
 
 /// Configuration for the Roc cache system.
