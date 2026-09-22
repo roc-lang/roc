@@ -8935,6 +8935,86 @@ fn checkedGeneratedFnCount(program: *const MonoAst.Program) usize {
     return count;
 }
 
+test "row subsumption coerced definition is reached through a generated adapter" {
+    const allocator = std.testing.allocator;
+    // The narrowest witness for row subsumption (design.md "Deferred: Row
+    // Subsumption"). `id` FORWARDS a closed value—its parameter—out through an
+    // implicitly opened result row, so it publishes an open row a caller may
+    // widen, and `wider` does. The published type says nothing about which of
+    // the two specialization strategies is correct here, so the checker's
+    // recorded coercion is what decides: the impl stays specialized at its own
+    // declared row and is reached through a generated adapter that re-tags.
+    // Running the program proves neither—it answers "A" whether the body was
+    // adapted or specialized wide—so the adapter count is the only witness.
+    const coerced =
+        \\id : [A, B] -> [A, B]
+        \\id = |x| x
+        \\
+        \\wider : [A, B] -> [A, B, C]
+        \\wider = |x| id(x)
+        \\
+        \\show : [A, B, C] -> Str
+        \\show = |v| match v { A => "A", B => "B", C => "C" }
+        \\
+        \\expect show(wider(A)) == "A"
+        \\
+        \\main = 0
+    ;
+    var coerced_lowered = try lowerMonotypeModuleWithOptions(allocator, coerced, .{
+        .root_selection = .test_expects,
+    });
+    defer coerced_lowered.deinit(allocator);
+    try std.testing.expectEqual(@as(usize, 1), checkedGeneratedFnCount(&coerced_lowered.mono));
+
+    // The first control: the same program with nothing widened. `id` is still
+    // coerced, so this also pins that the coercion alone mints nothing.
+    const exact =
+        \\id : [A, B] -> [A, B]
+        \\id = |x| x
+        \\
+        \\same : [A, B] -> [A, B]
+        \\same = |x| id(x)
+        \\
+        \\show : [A, B] -> Str
+        \\show = |v| match v { A => "A", B => "B" }
+        \\
+        \\expect show(same(A)) == "A"
+        \\
+        \\main = 0
+    ;
+    var exact_lowered = try lowerMonotypeModuleWithOptions(allocator, exact, .{
+        .root_selection = .test_expects,
+    });
+    defer exact_lowered.deinit(allocator);
+    try std.testing.expectEqual(@as(usize, 0), checkedGeneratedFnCount(&exact_lowered.mono));
+
+    // The second control, and the point of the whole design: the same
+    // signature with a CONSTRUCTING body, widened exactly as above. That body
+    // can produce the caller's wider row, so its template is specialized wide
+    // and no adapter is owed. The two programs differ only in how the body was
+    // written, they publish the same type, and they are served by opposite
+    // strategies—which is why the fact has to be recorded rather than derived.
+    const constructing =
+        \\id : [A, B] -> [A, B]
+        \\id = |_| A
+        \\
+        \\wider : [A, B] -> [A, B, C]
+        \\wider = |x| id(x)
+        \\
+        \\show : [A, B, C] -> Str
+        \\show = |v| match v { A => "A", B => "B", C => "C" }
+        \\
+        \\expect show(wider(A)) == "A"
+        \\
+        \\main = 0
+    ;
+    var constructing_lowered = try lowerMonotypeModuleWithOptions(allocator, constructing, .{
+        .root_selection = .test_expects,
+    });
+    defer constructing_lowered.deinit(allocator);
+    try std.testing.expectEqual(@as(usize, 0), checkedGeneratedFnCount(&constructing_lowered.mono));
+}
+
 test "W6b widened closed where-method impl is reached through a generated adapter" {
     const allocator = std.testing.allocator;
     // `status` is published at the closed row `[Ok(Str), Err(Str)]` while

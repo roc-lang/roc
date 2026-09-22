@@ -238,7 +238,11 @@ pub const Constants = struct {
     /// 108: Each parameterized type declaration publishes its formals'
     ///      variances and its `Try` error-cell formal, which importers consult
     ///      at an external annotation base instead of answering unknown.
-    pub const CACHE_VERSION = 108;
+    /// 109: Definitions that closed their annotated result row by FORWARDING a
+    ///      closed value publish that fact, which every use—importing modules
+    ///      included—reads to re-open its own copy of the row (design.md
+    ///      "Deferred: Row Subsumption").
+    pub const CACHE_VERSION = 109;
 };
 
 /// Configuration for the Roc cache system.

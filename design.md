@@ -6807,7 +6807,7 @@ as written, exactly as a negative position does, so a body use that tries
 to widen it is an ordinary type mismatch reported at the body use. Keeping
 the set of positions a use may WIDEN equal to the set lowering can ADAPT is
 the rule this axis holds; it is held BY HAND, by a syntactic walk that must
-grow whenever the coercion generator does (see "Two Syntactic Walks"
+grow whenever the coercion generator does (see "Three Syntactic Walks"
 below). (Decided 2026-09-03 as the converse—open
 everywhere, reject a closed implementation at the enclosing-scheme
 instantiation—and reversed 2026-09-14: that instantiation

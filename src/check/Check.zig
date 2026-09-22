@@ -14621,6 +14621,25 @@ fn checkDef(self: *Self, def_idx: CIR.Def.Idx, env: *Env) std.mem.Allocator.Erro
                 if (range.len > 0) try self.unquantified_value_implicit_open_ext_ranges.append(self.gpa, range);
             }
         }
+
+        // Row subsumption: this definition's body FORWARDED a closed value out
+        // through its annotated result row instead of constructing one, so the
+        // row it publishes is an implementation detail of the body rather than
+        // something the author asked for. Record it, and every use—here and in
+        // importing modules—re-opens its own copy of that row
+        // (`reopenCoercedResultRow`).
+        //
+        // Restricted to top-level FUNCTION definitions. A value binding has no
+        // call boundary at which a narrow value could be converted, and a local
+        // binding's callee is a `.local_proc` dispatch target with no procedure
+        // template (`lower.AdapterReachability.no_adapter`), so neither can
+        // reach the widening adapter that serves a widened use.
+        if (def_is_function) {
+            const site = self.annotationResultRowCoercedSite(annotation_idx);
+            if (site != .none) {
+                try self.cir.recordResultRowCoercion(ModuleEnv.nodeIdxFrom(def_idx), site == .try_error_row);
+            }
+        }
     }
     if (def.annotation != null) {
         if (platform_required) |required| {
@@ -16951,7 +16970,18 @@ fn generateAnnotationType(self: *Self, annotation_idx: CIR.Annotation.Idx, env: 
         .as_written
     else
         .implicit_open;
-    const ctx = GenTypeAnnoCtx{ .annotation = .{ .where = annotation.where, .opening = opening } };
+    // An ordinary annotation's walk starts at `.signature`, exactly like a
+    // where-method signature's (`Check.methodAnnotationCtx`): the function
+    // arm re-aims that to `.result` on the return and `.nested` everywhere
+    // else, and a `Try` standing at `.result` passes `.try_row` to its error
+    // argument. Under `.implicit_open` the reach decides nothing about HOW a
+    // row opens—every output-position row still gets a fresh flex—only
+    // WHICH opened row row subsumption may coerce (see `ImplicitOpenExt.result_row`).
+    const ctx = GenTypeAnnoCtx{ .annotation = .{
+        .where = annotation.where,
+        .opening = opening,
+        .adapter_reach = .signature,
+    } };
     try self.generateAnnoTypeInPlace(annotation.anno, env, ctx, .pos);
     if (annotation.where) |where_span| {
         if (try self.generateRemainingWhereConstraintOwners(where_span, env, ctx)) {
@@ -16993,6 +17023,13 @@ const ImplicitOpenExt = struct {
     /// row that can still be found in a solved type. Null where the minting
     /// site did not see the union.
     union_var: ?Var = null,
+    /// Whether this extension opens the one row per signature the Monotype
+    /// result-row widening adapter can re-tag, and which cell that is
+    /// (`AdapterReach.result` / `.try_row`). That is the only position row
+    /// subsumption coerces at (design.md "Deferred: Row Subsumption"), because
+    /// it is the only position whose closed body value lowering can adapt
+    /// rather than widen.
+    result_row: ResultRowSite = .none,
 };
 
 /// The slice of `implicit_open_exts` one annotation's generation minted.
@@ -17000,6 +17037,292 @@ const ImplicitOpenExtRange = struct {
     start: u32,
     len: u32,
 };
+
+/// Where the one row a coerced definition re-opens per use sits in its
+/// signature: the signature's direct result row, or the ERROR row of a `Try`
+/// standing as that direct result. These are exactly the two cells the Monotype
+/// result-row widening adapter can re-tag (`lower.closedResultRowOrNull`'s
+/// `ClosedResultRow.behind_try`), and the annotation walk is what decides which
+/// one this signature has (`AdapterReach.result` / `.try_row`).
+///
+/// The producer's answer travels with the coercion record rather than being
+/// re-derived at each use, so the use site never has to decide for itself
+/// whether a nominal in the result is `Try`.
+const ResultRowSite = enum {
+    /// This signature opened no adapter-reachable result row.
+    none,
+    /// The signature's own result row.
+    direct,
+    /// The error row of a `Try` standing as the signature's result.
+    try_error_row,
+};
+
+/// The one implicitly opened extension of `annotation_idx` that row subsumption
+/// may coerce, or null when the annotation opened no adapter-reachable result
+/// row.
+///
+/// More than one is not a coercion site: lowering re-tags exactly one row per
+/// template (`lower.resultRowWideningOrNull`), so a second would be a row a use
+/// could widen and no adapter could serve. Generation cannot currently mint
+/// two—the walk reaches `.result` once and `.try_row` only under it, and a `Try`
+/// at `.result` contributes only its error row—so this declines rather than
+/// asserting, and the definition keeps closing by body.
+fn coercibleResultRowExt(self: *const Self, annotation_idx: CIR.Annotation.Idx) ?ImplicitOpenExt {
+    const range = self.annotation_implicit_open_exts.get(annotation_idx) orelse return null;
+    var found: ?ImplicitOpenExt = null;
+    for (self.implicit_open_exts.items[range.start..][0..range.len]) |entry| {
+        if (entry.result_row == .none) continue;
+        if (found != null) return null;
+        found = entry;
+    }
+    return found;
+}
+
+/// Whether `annotation_idx`'s adapter-reachable result row was closed BY THE
+/// BODY—the body forwarded a value out of a closed source (an input-position
+/// parameter, a nominal field, a hosted result) instead of constructing its
+/// result—and, if so, which cell that row is.
+///
+/// This is the whole test row subsumption turns on. `unifyTwoTagUnions` reaches
+/// a closed row only through its `.exactly_the_same` arm, which grounds the
+/// annotation's extension to the empty tag union; every other way the body can
+/// touch the row leaves a flex (it produced an open row, or never touched it) or
+/// a row carrying tags (it extended the row, which the audit reports and
+/// poisons). So a ground extension means exactly "forwarded, did not construct".
+fn annotationResultRowCoercedSite(self: *const Self, annotation_idx: CIR.Annotation.Idx) ResultRowSite {
+    const entry = self.coercibleResultRowExt(annotation_idx) orelse return .none;
+    const resolved = self.types.resolveVar(entry.var_);
+    if (resolved.desc.content != .structure) return .none;
+    if (resolved.desc.content.structure != .empty_tag_union) return .none;
+    return entry.result_row;
+}
+
+/// The producing module's answer for the definition at `node_idx`: whether it
+/// closed its annotated result row by FORWARDING a closed value, and which cell
+/// that row is. Read from the module that checked the body, whether that is
+/// this one or an imported one.
+fn coercedResultRowSite(env: *const ModuleEnv, node_idx: CIR.Node.Idx) ResultRowSite {
+    const record = env.resultRowCoercionForNode(@intFromEnum(node_idx)) orelse return .none;
+    return if (record.behind_try != 0) .try_error_row else .direct;
+}
+
+/// Re-open the result row of `use_var`, one use's view of a COERCED binding
+/// (design.md "Deferred: Row Subsumption").
+///
+/// The definition publishes the row its body can actually produce—closed—so
+/// importers, stored constants and the Monotype result-row widening adapter all
+/// see the type they always did, and the adapter is minted for a widened
+/// request by the machinery that already serves a closed result row. What the
+/// coercion changes is what a USE may do with that row: a body that FORWARDS a
+/// closed value is no longer distinguishable, at its callers, from a body that
+/// CONSTRUCTS its result. So this copies the spine from the use's root down to
+/// that one row and gives the copied row a fresh extension.
+///
+/// Copying the spine, rather than re-opening the extension in place, is not
+/// optional.
+/// A forwarder's argument row and result row are ONE unification class inside
+/// its body—`id = |x| x` publishes a single row var in both positions—so
+/// writing through the extension would open the INPUT row too, and an unlisted
+/// argument would start type-checking. Every var off the spine stays shared,
+/// which is what an instantiation of a ground scheme shares today.
+///
+/// Returns `use_var` unchanged when the spine is not the shape the annotation
+/// walk recorded, or when the row is not closed after all: the definition then
+/// behaves exactly as it does without subsumption, which is the conservative
+/// answer.
+fn reopenCoercedResultRow(
+    self: *Self,
+    use_var: Var,
+    site: ResultRowSite,
+    env: *Env,
+    region: Region,
+) std.mem.Allocator.Error!Var {
+    if (site == .none) return use_var;
+    return (try self.reopenCoercedSignature(use_var, site, env, region)) orelse use_var;
+}
+
+/// The signature layer of `reopenCoercedResultRow`: alias layers are
+/// transparent and are copied around their backing; the function's arguments
+/// and effect kind are the use's own and only its return is copied.
+fn reopenCoercedSignature(
+    self: *Self,
+    var_: Var,
+    site: ResultRowSite,
+    env: *Env,
+    region: Region,
+) std.mem.Allocator.Error!?Var {
+    const resolved = self.types.resolveVar(var_);
+    switch (resolved.desc.content) {
+        .alias => |alias| {
+            const backing = (try self.reopenCoercedSignature(
+                self.types.getAliasBackingVar(alias),
+                site,
+                env,
+                region,
+            )) orelse return null;
+            return try self.copiedAliasWithBacking(alias, backing, env, region);
+        },
+        .structure => |flat| switch (flat) {
+            .fn_pure => |func| return try self.copiedFuncWithResult(.pure, func, site, env, region),
+            .fn_effectful => |func| return try self.copiedFuncWithResult(.effectful, func, site, env, region),
+            .fn_unbound => |func| return try self.copiedFuncWithResult(.unbound, func, site, env, region),
+            .record, .tuple, .nominal_type, .empty_record, .tag_union, .empty_tag_union => return null,
+        },
+        .flex, .rigid, .field_presence, .err => return null,
+    }
+}
+
+/// `reopenCoercedSignature`'s function layer.
+fn copiedFuncWithResult(
+    self: *Self,
+    kind: enum { pure, effectful, unbound },
+    func: types_mod.Func,
+    site: ResultRowSite,
+    env: *Env,
+    region: Region,
+) std.mem.Allocator.Error!?Var {
+    const ret = (try self.reopenCoercedResultCell(func.ret, site, env, region)) orelse return null;
+    // `appendVars` refuses a slice that lives in the var list it appends to,
+    // and the copy above may have grown that list, so both spans are copied out
+    // first.
+    var args_sfa = std.heap.stackFallback(16 * @sizeOf(Var), self.gpa);
+    const args_alloc = args_sfa.get();
+    const args = try args_alloc.dupe(Var, self.types.sliceVars(func.args));
+    defer args_alloc.free(args);
+    const effect_deps = try args_alloc.dupe(Var, self.types.sliceVars(func.effect_deps));
+    defer args_alloc.free(effect_deps);
+    const content = switch (kind) {
+        .pure => try self.types.mkFuncPure(args, ret),
+        .effectful => try self.types.mkFuncEffectful(args, ret),
+        .unbound => try self.types.mkFuncUnboundWithEffectDeps(args, ret, effect_deps),
+    };
+    return try self.freshFromContent(content, env, region);
+}
+
+/// The result cell of `reopenCoercedResultRow`: the row itself, or the `Try`
+/// nominal whose error argument is the row.
+fn reopenCoercedResultCell(
+    self: *Self,
+    var_: Var,
+    site: ResultRowSite,
+    env: *Env,
+    region: Region,
+) std.mem.Allocator.Error!?Var {
+    const resolved = self.types.resolveVar(var_);
+    switch (resolved.desc.content) {
+        .alias => |alias| {
+            const backing = (try self.reopenCoercedResultCell(
+                self.types.getAliasBackingVar(alias),
+                site,
+                env,
+                region,
+            )) orelse return null;
+            return try self.copiedAliasWithBacking(alias, backing, env, region);
+        },
+        .structure => |flat| switch (flat) {
+            .tag_union => |tag_union| {
+                if (site != .direct) return null;
+                return try self.reopenedTagRow(tag_union, env, region);
+            },
+            .nominal_type => |nominal| {
+                if (site != .try_error_row) return null;
+                var args_sfa = std.heap.stackFallback(8 * @sizeOf(Var), self.gpa);
+                const args_alloc = args_sfa.get();
+                const args = try args_alloc.dupe(Var, self.types.sliceNominalArgs(nominal));
+                defer args_alloc.free(args);
+                if (args.len <= try_error_type_arg_index) return null;
+                args[try_error_type_arg_index] = (try self.reopenCoercedErrorRow(
+                    args[try_error_type_arg_index],
+                    env,
+                    region,
+                )) orelse return null;
+                const content = try self.types.mkNominalWithSourceDeclAndBuiltinOrigin(
+                    nominal.ident,
+                    args,
+                    nominal.origin_module,
+                    nominal.sourceDeclOptional(),
+                    nominal.isOpaque(),
+                    nominal.originIsBuiltin(),
+                );
+                return try self.freshFromContent(content, env, region);
+            },
+            .fn_pure, .fn_effectful, .fn_unbound, .record, .tuple, .empty_record, .empty_tag_union => return null,
+        },
+        .flex, .rigid, .field_presence, .err => return null,
+    }
+}
+
+/// The `Try` error row beneath `reopenCoercedResultCell`'s nominal.
+fn reopenCoercedErrorRow(
+    self: *Self,
+    var_: Var,
+    env: *Env,
+    region: Region,
+) std.mem.Allocator.Error!?Var {
+    const resolved = self.types.resolveVar(var_);
+    switch (resolved.desc.content) {
+        .alias => |alias| {
+            const backing = (try self.reopenCoercedErrorRow(
+                self.types.getAliasBackingVar(alias),
+                env,
+                region,
+            )) orelse return null;
+            return try self.copiedAliasWithBacking(alias, backing, env, region);
+        },
+        .structure => |flat| switch (flat) {
+            .tag_union => |tag_union| return try self.reopenedTagRow(tag_union, env, region),
+            .fn_pure, .fn_effectful, .fn_unbound, .record, .tuple, .nominal_type, .empty_record, .empty_tag_union => return null,
+        },
+        .flex, .rigid, .field_presence, .err => return null,
+    }
+}
+
+/// The same row with a fresh, unbound extension—but only when the row really is
+/// closed. A row whose extension still carries something is left alone: the
+/// coercion may never DROP tags, only stop a closed tail from bounding the use.
+fn reopenedTagRow(
+    self: *Self,
+    tag_union: types_mod.TagUnion,
+    env: *Env,
+    region: Region,
+) std.mem.Allocator.Error!?Var {
+    const ext = self.types.resolveVar(tag_union.ext);
+    if (ext.desc.content != .structure) return null;
+    if (ext.desc.content.structure != .empty_tag_union) return null;
+    const fresh_ext = try self.fresh(env, region);
+    return try self.freshFromContent(
+        .{ .structure = .{ .tag_union = .{ .tags = tag_union.tags, .ext = fresh_ext } } },
+        env,
+        region,
+    );
+}
+
+/// `alias` with a copied backing and its own arguments, every identity bit
+/// preserved.
+fn copiedAliasWithBacking(
+    self: *Self,
+    alias: types_mod.Alias,
+    backing: Var,
+    env: *Env,
+    region: Region,
+) std.mem.Allocator.Error!Var {
+    // `appendVars` refuses a slice that lives in the var list it appends to,
+    // and the copy above may have grown that list, so the args are copied out
+    // first.
+    var args_sfa = std.heap.stackFallback(8 * @sizeOf(Var), self.gpa);
+    const args_alloc = args_sfa.get();
+    const args = try args_alloc.dupe(Var, self.types.sliceAliasArgs(alias));
+    defer args_alloc.free(args);
+    const content = try self.types.mkAliasWithSourceDeclAndBuiltinOrigin(
+        alias.ident,
+        backing,
+        args,
+        alias.origin_module,
+        alias.source_decl.toOptional(),
+        alias.source_decl.originIsBuiltin(),
+    );
+    return try self.freshFromContent(content, env, region);
+}
 
 /// One extension the post-body audit cleared, kept for the late audit, with
 /// the binding that owns it named by source region.
@@ -19714,6 +20037,19 @@ fn generateAnnoTypeInPlace(self: *Self, anno_idx: CIR.TypeAnno.Idx, env: *Env, c
                 // can express.
                 .nested => false,
             };
+            // The one implicitly opened row per signature that lowering can
+            // ADAPT instead of widening, and therefore the only row row
+            // subsumption coerces at (design.md "Deferred: Row Subsumption").
+            // Read only for `.implicit_open`; a `.per_use` row already defers
+            // its whole open/closed decision through `deferred_open` above.
+            const result_row_site: ResultRowSite = if (!implicitly_open) .none else switch (ctx.annotation.adapter_reach) {
+                .result => .direct,
+                .try_row => .try_error_row,
+                // A bare value annotation (`.signature` with no function
+                // between it and the row) has no call boundary to adapt at,
+                // and everything else is out of the adapter's reach.
+                .signature, .nested => .none,
+            };
             const ext_var = inner_blk: {
                 if (tag_union.ext) |ext_anno_idx| {
                     if ((implicitly_open or deferred_open) and self.annoIsAnonymousOpenExt(ext_anno_idx)) {
@@ -19732,6 +20068,7 @@ fn generateAnnoTypeInPlace(self: *Self, anno_idx: CIR.TypeAnno.Idx, env: *Env, c
                             .explicit_ext_region = self.cir.store.getNodeRegion(ModuleEnv.nodeIdxFrom(ext_anno_idx)),
                             .listed_tags = tags_range,
                             .union_var = anno_var,
+                            .result_row = result_row_site,
                         });
                         break :inner_blk open_ext_var;
                     }
@@ -19751,6 +20088,7 @@ fn generateAnnoTypeInPlace(self: *Self, anno_idx: CIR.TypeAnno.Idx, env: *Env, c
                         .region = anno_region,
                         .listed_tags = tags_range,
                         .union_var = anno_var,
+                        .result_row = result_row_site,
                     });
                     break :inner_blk open_ext_var;
                 }
@@ -22908,10 +23246,21 @@ fn checkExprWithFunctionOwner(self: *Self, expr_idx: CIR.Expr.Idx, env: *Env, ex
                 self.markCurrentHoistRuntimeDependency();
             }
 
+            // Row subsumption: a definition that forwarded a closed value out
+            // through its annotated result row publishes that row closed, and
+            // every use re-opens its own copy of it (design.md "Deferred: Row
+            // Subsumption"). Read here, where the definition this lookup names
+            // is known.
+            const coerced_result_row: ResultRowSite = if (mb_processing_def) |processing_def|
+                coercedResultRowSite(self.cir, ModuleEnv.nodeIdxFrom(processing_def.def_idx))
+            else
+                .none;
+
             const resolved_pat = self.types.resolveVar(pat_var);
             if (resolved_pat.desc.rank == Rank.generalized or self.isBindingSchemeVar(pat_var)) {
                 const instantiated = try self.instantiateBindingVar(pat_var, env, .use_last_var, .{ .value_use = expr_idx });
-                _ = try self.unify(expr_var, instantiated, env);
+                const use_var = try self.reopenCoercedResultRow(instantiated, coerced_result_row, env, expr_region);
+                _ = try self.unify(expr_var, use_var, env);
             } else {
                 // A fully checked top-level definition whose type is ground
                 // is copied at each use. Sharing its var would merge every
@@ -22923,10 +23272,18 @@ fn checkExprWithFunctionOwner(self: *Self, expr_idx: CIR.Expr.Idx, env: *Env, ex
                     processing_def.status == .processed and try self.varIsGround(pat_var)
                 else
                     false;
-                const use_var = if (checked_ground_def)
+                const copied_var = if (checked_ground_def)
                     try self.instantiateVarOrphan(pat_var, env, env.rank(), .use_last_var)
                 else
                     pat_var;
+                // A coerced definition is ground—its result row was closed by
+                // its body—so this is the branch it arrives on, and the copy
+                // above is the per-use copy the re-open needs. Copying the
+                // spine is still what separates the row from the definition's:
+                // a forwarder's argument and result rows are ONE class even in
+                // a full copy, so writing through the extension would open the
+                // input row too (see `reopenCoercedResultRow`).
+                const use_var = try self.reopenCoercedResultRow(copied_var, coerced_result_row, env, expr_region);
                 _ = try self.unify(expr_var, use_var, env);
                 if (mb_processing_def) |processing_def| {
                     try self.recordSharedSchemeUse(
@@ -22966,7 +23323,16 @@ fn checkExprWithFunctionOwner(self: *Self, expr_idx: CIR.Expr.Idx, env: *Env, ex
                         .{ .explicit = expr_region },
                         .{ .value_use = expr_idx },
                     );
-                    _ = try self.unify(expr_var, ext_instantiated_var, env);
+                    // The producing module's own answer for its definition,
+                    // read here exactly as a local use reads it (design.md
+                    // "Deferred: Row Subsumption").
+                    const ext_use_var = try self.reopenCoercedResultRow(
+                        ext_instantiated_var,
+                        coercedResultRowSite(ext_ref.other_cir, ext_ref.other_cir_node_idx),
+                        env,
+                        expr_region,
+                    );
+                    _ = try self.unify(expr_var, ext_use_var, env);
                 }
             } else {
                 try self.markErroneous(expr_var);

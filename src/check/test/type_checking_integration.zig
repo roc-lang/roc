@@ -8950,10 +8950,12 @@ test "check type - polarity - body may not widen through a callee either" {
     try checkTypesModule(source, .fail_first, "Type Mismatch");
 }
 
-test "check type - polarity - closed value closes the output row" {
+test "check type - polarity - a forwarded closed value keeps the annotated type" {
     // A value from a closed source (here an input-position parameter) flows
-    // into the output row and closes it: the definition checks, and its
-    // published row is closed.
+    // into the output row. The definition checks and publishes exactly what it
+    // says: the output row's anonymous extension is unrendered either way, so
+    // the displayed type is the same whether the row was closed by the body or
+    // coerced (design.md "Deferred: Row Subsumption").
     const source =
         \\id : [A, B] -> [A, B]
         \\id = |x| x
@@ -8961,13 +8963,76 @@ test "check type - polarity - closed value closes the output row" {
     try checkTypesModule(source, .{ .pass = .last_def }, "[A, B] -> [A, B]");
 }
 
-test "check type - polarity - closed output row cannot be widened by callers" {
+test "check type - polarity - a forwarded closed value still publishes an open row" {
+    // Row subsumption: the closed value COERCES into the annotated row instead
+    // of binding it, so what a caller may do with `id`'s result no longer
+    // depends on whether `id`'s body constructed its tags or forwarded them.
+    // `wider` is the same program as the `parse`/`a`/`b` widening above with a
+    // forwarding body instead of a constructing one, and it is accepted for
+    // the same reason.
     const source =
         \\id : [A, B] -> [A, B]
         \\id = |x| x
         \\
         \\wider : [A, B] -> [A, B, C]
         \\wider = |x| id(x)
+    ;
+    try checkTypesModule(source, .{ .pass = .last_def }, "[A, B] -> [A, B, C]");
+}
+
+test "check type - polarity - a forwarding body is still bounded by its annotation" {
+    // The coercion moves only what the definition PUBLISHES. The body is
+    // checked against the annotation's own row exactly as before, so a
+    // forwarded value carrying an unlisted tag is still the definition's error.
+    const source =
+        \\id : [A, B, C] -> [A, B]
+        \\id = |x| x
+    ;
+    try checkTypesModule(source, .fail_first, "Type Mismatch");
+}
+
+test "check type - polarity - coercion does not open an input row" {
+    // `id`'s parameter row and its result row are one unification class inside
+    // the body. Only the published result row's extension is fresh, so the
+    // input row stays closed as written and an unlisted argument is rejected.
+    const source =
+        \\id : [A, B] -> [A, B]
+        \\id = |x| x
+        \\
+        \\bad = id(C)
+    ;
+    try checkTypesModule(source, .fail, "Type Mismatch");
+}
+
+test "check type - polarity - coercion does not reach a nested result row" {
+    // Only the signature's direct result row is adapter-reachable, so only it
+    // coerces. A row inside a `List` keeps closing by body, and a caller
+    // widening it meets the ordinary rejection.
+    const source =
+        \\wrap : [A, B] -> List([A, B])
+        \\wrap = |x| [x]
+        \\
+        \\wider : [A, B] -> List([A, B, C])
+        \\wider = |x| wrap(x)
+    ;
+    try checkTypesModule(source, .fail_first, "Type Mismatch");
+}
+
+test "check type - polarity - coercion does not reach a local binding" {
+    // A local definition's callee has no procedure template, so lowering has
+    // no boundary at which to adapt a coerced row; the local keeps closing by
+    // body and the widening caller is rejected.
+    const source =
+        \\outer : [A, B] -> [A, B, C]
+        \\outer = |v| {
+        \\    id : [A, B] -> [A, B]
+        \\    id = |x| x
+        \\
+        \\    wider : [A, B] -> [A, B, C]
+        \\    wider = |y| id(y)
+        \\
+        \\    wider(v)
+        \\}
     ;
     try checkTypesModule(source, .fail_first, "Type Mismatch");
 }
@@ -9161,6 +9226,54 @@ test "check type - polarity - a formal in both positions is closed" {
 // The tests below pin both sides of that boundary. The ones that still reject
 // now reject for the reason the local spelling rejects, rather than for not
 // knowing.
+
+test "check type - polarity - an imported forwarder's result row coerces at the use" {
+    // Row subsumption travels: `Lib.id` closed its result row by FORWARDING its
+    // parameter, and the producing module records that, so an importing use
+    // re-opens its own copy of the row exactly as a use in `Lib` would. Without
+    // the record the importer would see only a closed row and reject `wider`.
+    const source_lib =
+        \\module [id]
+        \\
+        \\id : [A, B] -> [A, B]
+        \\id = |x| x
+    ;
+    var lib_env = try TestEnv.init("Lib", source_lib);
+    defer lib_env.deinit();
+
+    const source_main =
+        \\import Lib
+        \\
+        \\wider : [A, B] -> [A, B, C]
+        \\wider = |x| Lib.id(x)
+    ;
+    var main_env = try TestEnv.initWithImport("Main", source_main, "Lib", &lib_env);
+    defer main_env.deinit();
+    try main_env.assertLastDefType("[A, B] -> [A, B, C]");
+}
+
+test "check type - polarity - an imported forwarder's input row stays closed" {
+    // The other half: only the one adapter-reachable RESULT row coerces. The
+    // importer's copy keeps the input row as written, so an unlisted argument
+    // is the mismatch it always was.
+    const source_lib =
+        \\module [id]
+        \\
+        \\id : [A, B] -> [A, B]
+        \\id = |x| x
+    ;
+    var lib_env = try TestEnv.init("Lib", source_lib);
+    defer lib_env.deinit();
+
+    const source_main =
+        \\import Lib
+        \\
+        \\bad = Lib.id(C)
+    ;
+    var main_env = try TestEnv.initWithImport("Main", source_main, "Lib", &lib_env);
+    defer main_env.deinit();
+    try main_env.assertOneTypeError("Type Mismatch");
+}
 
 test "check type - polarity - imported contravariant alias closes the applied row" {
     // The cross-module half of "alias reference closes a row the declaration

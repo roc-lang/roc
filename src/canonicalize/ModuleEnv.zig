@@ -921,13 +921,43 @@ pub const BindingScheme = extern struct {
     pub const SafeList = collections.SafeList(@This());
 };
 
+/// One definition whose annotated result row row subsumption COERCED: the body
+/// FORWARDED a closed value out through an implicitly opened result row instead
+/// of constructing one (design.md "Deferred: Row Subsumption").
+///
+/// The definition still publishes the row its body can produce—closed—so
+/// importers, stored constants and Monotype's result-row widening adapter see
+/// the type they always did. What this record changes is what a USE may do with
+/// that row: each use re-opens its own copy of it, so two definitions with the
+/// same signature behave the same for their callers whether the body
+/// constructed its tags or forwarded them.
+///
+/// This is checker-authored provenance, not a property the solved type graph
+/// can be asked for. A row closed by forwarding and a row written closed are
+/// the same type; only the module that checked the body knows which it is,
+/// which is why the answer travels rather than the test.
+///
+/// `node_idx` is the DEFINITION node—the handle both a local lookup
+/// (`topLevelPattern`'s def) and an importing lookup (`resolveVarFromExternal`'s
+/// target node) already hold. Sorted by source node, like `binding_schemes`.
+pub const ResultRowCoercion = extern struct {
+    node_idx: u32,
+    /// Which cell the coerced row is: 0 for the signature's own result row, 1
+    /// for the error row of a `Try` standing as that result. The producer's
+    /// annotation walk decides this, so a use never has to work out for itself
+    /// whether a nominal in the result is `Try`.
+    behind_try: u32,
+
+    pub const SafeList = collections.SafeList(@This());
+};
+
 /// The largest declaration arity the checker's annotation walks track. Shared
 /// with `Check.max_tracked_alias_formals`, which aliases this constant so the
 /// recorded array width and the walk's own bound cannot drift apart.
 pub const max_tracked_alias_formals: usize = 8;
 
 /// One type declaration's answers for the checker's two syntactic annotation
-/// walks (design.md "Two Syntactic Walks"), authored by the declaring module's
+/// walks (design.md "Three Syntactic Walks"), authored by the declaring module's
 /// own `Check` and read verbatim by importers.
 ///
 /// A declaration's variance is a property of its own annotation, so the module
@@ -1150,6 +1180,9 @@ scheme_use_pairs: SchemeUsePair.SafeList,
 /// Exact source bindings that checking generalized into rank-1 type schemes.
 /// Sorted by source node for allocation-free cross-module lookup.
 binding_schemes: BindingScheme.SafeList,
+/// Definitions whose annotated result row row subsumption coerces at each use.
+/// Sorted by source node for allocation-free lookup, like `binding_schemes`.
+result_row_coercions: ResultRowCoercion.SafeList,
 /// Generated-codec relations carried by those schemes. Sorted by source node;
 /// multiple requirements for one binding occupy one contiguous run.
 binding_scheme_codec_requirements: BindingSchemeCodecRequirement.SafeList,
@@ -1503,6 +1536,7 @@ pub fn relocate(self: *Self, offset: isize) void {
     self.scheme_uses.relocate(offset);
     self.scheme_use_pairs.relocate(offset);
     self.binding_schemes.relocate(offset);
+    self.result_row_coercions.relocate(offset);
     self.binding_scheme_codec_requirements.relocate(offset);
     self.rejected_static_dispatches.relocate(offset);
     self.record_omitted_defaults.relocate(offset);
@@ -1608,6 +1642,7 @@ pub fn init(gpa: std.mem.Allocator, source: []const u8) std.mem.Allocator.Error!
         .scheme_uses = try SchemeUseRecord.SafeList.initCapacity(gpa, 8),
         .scheme_use_pairs = try SchemeUsePair.SafeList.initCapacity(gpa, 8),
         .binding_schemes = try BindingScheme.SafeList.initCapacity(gpa, 8),
+        .result_row_coercions = try ResultRowCoercion.SafeList.initCapacity(gpa, 8),
         .binding_scheme_codec_requirements = try BindingSchemeCodecRequirement.SafeList.initCapacity(gpa, 4),
         .generated_codec_derivations = try GeneratedCodecDerivation.SafeList.initCapacity(gpa, 4),
         .generated_codec_calls = try GeneratedCodecCall.SafeList.initCapacity(gpa, 16),
@@ -1643,6 +1678,7 @@ pub fn deinit(self: *Self) void {
     self.scheme_uses.deinit(self.gpa);
     self.scheme_use_pairs.deinit(self.gpa);
     self.binding_schemes.deinit(self.gpa);
+    self.result_row_coercions.deinit(self.gpa);
     self.binding_scheme_codec_requirements.deinit(self.gpa);
     self.generated_codec_derivations.deinit(self.gpa);
     self.generated_codec_calls.deinit(self.gpa);
@@ -1748,6 +1784,7 @@ pub fn deinitCachedModule(self: *Self) void {
     self.scheme_uses.deinit(self.gpa);
     self.scheme_use_pairs.deinit(self.gpa);
     self.binding_schemes.deinit(self.gpa);
+    self.result_row_coercions.deinit(self.gpa);
     self.binding_scheme_codec_requirements.deinit(self.gpa);
     self.generated_codec_derivations.deinit(self.gpa);
     self.generated_codec_calls.deinit(self.gpa);
@@ -4392,6 +4429,7 @@ pub const Serialized = extern struct {
     scheme_uses: SchemeUseRecord.SafeList.Serialized,
     scheme_use_pairs: SchemeUsePair.SafeList.Serialized,
     binding_schemes: BindingScheme.SafeList.Serialized,
+    result_row_coercions: ResultRowCoercion.SafeList.Serialized,
     binding_scheme_codec_requirements: BindingSchemeCodecRequirement.SafeList.Serialized,
     generated_codec_derivations: GeneratedCodecDerivation.SafeList.Serialized,
     generated_codec_calls: GeneratedCodecCall.SafeList.Serialized,
@@ -4511,6 +4549,7 @@ pub const Serialized = extern struct {
         try self.scheme_uses.serialize(&env.scheme_uses, allocator, writer);
         try self.scheme_use_pairs.serialize(&env.scheme_use_pairs, allocator, writer);
         try self.binding_schemes.serialize(&env.binding_schemes, allocator, writer);
+        try self.result_row_coercions.serialize(&env.result_row_coercions, allocator, writer);
         try self.binding_scheme_codec_requirements.serialize(&env.binding_scheme_codec_requirements, allocator, writer);
         try self.generated_codec_derivations.serialize(&env.generated_codec_derivations, allocator, writer);
         try self.generated_codec_calls.serialize(&env.generated_codec_calls, allocator, writer);
@@ -4585,6 +4624,7 @@ pub const Serialized = extern struct {
             .scheme_uses = self.scheme_uses.deserializeInto(base_addr),
             .scheme_use_pairs = self.scheme_use_pairs.deserializeInto(base_addr),
             .binding_schemes = self.binding_schemes.deserializeInto(base_addr),
+            .result_row_coercions = self.result_row_coercions.deserializeInto(base_addr),
             .binding_scheme_codec_requirements = self.binding_scheme_codec_requirements.deserializeInto(base_addr),
             .generated_codec_derivations = self.generated_codec_derivations.deserializeInto(base_addr),
             .generated_codec_calls = self.generated_codec_calls.deserializeInto(base_addr),
@@ -4661,6 +4701,7 @@ pub const Serialized = extern struct {
             .scheme_uses = self.scheme_uses.deserializeInto(base_addr),
             .scheme_use_pairs = self.scheme_use_pairs.deserializeInto(base_addr),
             .binding_schemes = self.binding_schemes.deserializeInto(base_addr),
+            .result_row_coercions = self.result_row_coercions.deserializeInto(base_addr),
             .binding_scheme_codec_requirements = self.binding_scheme_codec_requirements.deserializeInto(base_addr),
             .generated_codec_derivations = self.generated_codec_derivations.deserializeInto(base_addr),
             .generated_codec_calls = self.generated_codec_calls.deserializeInto(base_addr),
@@ -4740,6 +4781,7 @@ pub const Serialized = extern struct {
             .scheme_uses = try self.scheme_uses.deserializeWithCopy(base_addr, gpa),
             .scheme_use_pairs = try self.scheme_use_pairs.deserializeWithCopy(base_addr, gpa),
             .binding_schemes = try self.binding_schemes.deserializeWithCopy(base_addr, gpa),
+            .result_row_coercions = try self.result_row_coercions.deserializeWithCopy(base_addr, gpa),
             .binding_scheme_codec_requirements = try self.binding_scheme_codec_requirements.deserializeWithCopy(base_addr, gpa),
             .generated_codec_derivations = try self.generated_codec_derivations.deserializeWithCopy(base_addr, gpa),
             .generated_codec_calls = try self.generated_codec_calls.deserializeWithCopy(base_addr, gpa),
@@ -4831,6 +4873,7 @@ pub const Serialized = extern struct {
             .scheme_uses = try self.scheme_uses.deserializeWithCopy(base_addr, gpa),
             .scheme_use_pairs = try self.scheme_use_pairs.deserializeWithCopy(base_addr, gpa),
             .binding_schemes = try self.binding_schemes.deserializeWithCopy(base_addr, gpa),
+            .result_row_coercions = try self.result_row_coercions.deserializeWithCopy(base_addr, gpa),
             .binding_scheme_codec_requirements = try self.binding_scheme_codec_requirements.deserializeWithCopy(base_addr, gpa),
             .generated_codec_derivations = try self.generated_codec_derivations.deserializeWithCopy(base_addr, gpa),
             .generated_codec_calls = try self.generated_codec_calls.deserializeWithCopy(base_addr, gpa),
@@ -5040,6 +5083,31 @@ pub fn nodeIsBindingScheme(self: *const Self, node_idx: Node.Idx) bool {
         self.binding_schemes.items.items,
         @intFromEnum(node_idx),
     ) != null;
+}
+
+/// Record that the definition at `node_idx` closed its annotated result row by
+/// FORWARDING a closed value rather than by construction, so every use re-opens
+/// its own copy of that row. Producer-authored by the checker; see
+/// `ResultRowCoercion`.
+pub fn recordResultRowCoercion(self: *Self, node_idx: Node.Idx, behind_try: bool) std.mem.Allocator.Error!void {
+    try upsertSortedByNode(
+        ResultRowCoercion,
+        &self.result_row_coercions,
+        self.gpa,
+        .{ .node_idx = @intFromEnum(node_idx), .behind_try = @intFromBool(behind_try) },
+    );
+}
+
+/// The coerced result row of the definition at `raw_node`, or null when that
+/// definition closed its result row as written. Read by every use of the
+/// binding, in this module and in importing ones, exactly like
+/// `nodeIsBindingScheme`.
+pub fn resultRowCoercionForNode(self: *const Self, raw_node: u32) ?ResultRowCoercion {
+    return findSortedByNode(
+        ResultRowCoercion,
+        self.result_row_coercions.items.items,
+        raw_node,
+    );
 }
 
 /// Record one type declaration's answers for the checker's syntactic
