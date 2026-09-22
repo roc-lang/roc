@@ -8955,7 +8955,7 @@ test "check type - polarity - a forwarded closed value keeps the annotated type"
     // into the output row. The definition checks and publishes exactly what it
     // says: the output row's anonymous extension is unrendered either way, so
     // the displayed type is the same whether the row was closed by the body or
-    // coerced (design.md "Deferred: Row Subsumption").
+    // coerced (design.md "Row Subsumption").
     const source =
         \\id : [A, B] -> [A, B]
         \\id = |x| x

@@ -241,7 +241,7 @@ pub const Constants = struct {
     /// 109: Definitions that closed their annotated result row by FORWARDING a
     ///      closed value publish that fact, which every use—importing modules
     ///      included—reads to re-open its own copy of the row (design.md
-    ///      "Deferred: Row Subsumption").
+    ///      "Row Subsumption").
     pub const CACHE_VERSION = 109;
 };
 

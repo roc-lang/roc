@@ -17026,7 +17026,7 @@ const ImplicitOpenExt = struct {
     /// Whether this extension opens the one row per signature the Monotype
     /// result-row widening adapter can re-tag, and which cell that is
     /// (`AdapterReach.result` / `.try_row`). That is the only position row
-    /// subsumption coerces at (design.md "Deferred: Row Subsumption"), because
+    /// subsumption coerces at (design.md "Row Subsumption"), because
     /// it is the only position whose closed body value lowering can adapt
     /// rather than widen.
     result_row: ResultRowSite = .none,
@@ -17107,7 +17107,7 @@ fn coercedResultRowSite(env: *const ModuleEnv, node_idx: CIR.Node.Idx) ResultRow
 }
 
 /// Re-open the result row of `use_var`, one use's view of a COERCED binding
-/// (design.md "Deferred: Row Subsumption").
+/// (design.md "Row Subsumption").
 ///
 /// The definition publishes the row its body can actually produce—closed—so
 /// importers, stored constants and the Monotype result-row widening adapter all
@@ -20039,7 +20039,7 @@ fn generateAnnoTypeInPlace(self: *Self, anno_idx: CIR.TypeAnno.Idx, env: *Env, c
             };
             // The one implicitly opened row per signature that lowering can
             // ADAPT instead of widening, and therefore the only row row
-            // subsumption coerces at (design.md "Deferred: Row Subsumption").
+            // subsumption coerces at (design.md "Row Subsumption").
             // Read only for `.implicit_open`; a `.per_use` row already defers
             // its whole open/closed decision through `deferred_open` above.
             const result_row_site: ResultRowSite = if (!implicitly_open) .none else switch (ctx.annotation.adapter_reach) {
@@ -23325,7 +23325,7 @@ fn checkExprWithFunctionOwner(self: *Self, expr_idx: CIR.Expr.Idx, env: *Env, ex
                     );
                     // The producing module's own answer for its definition,
                     // read here exactly as a local use reads it (design.md
-                    // "Deferred: Row Subsumption").
+                    // "Row Subsumption").
                     const ext_use_var = try self.reopenCoercedResultRow(
                         ext_instantiated_var,
                         coercedResultRowSite(ext_ref.other_cir, ext_ref.other_cir_node_idx),

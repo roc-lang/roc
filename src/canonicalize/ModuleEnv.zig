@@ -923,7 +923,7 @@ pub const BindingScheme = extern struct {
 
 /// One definition whose annotated result row row subsumption COERCED: the body
 /// FORWARDED a closed value out through an implicitly opened result row instead
-/// of constructing one (design.md "Deferred: Row Subsumption").
+/// of constructing one (design.md "Row Subsumption").
 ///
 /// The definition still publishes the row its body can produce—closed—so
 /// importers, stored constants and Monotype's result-row widening adapter see

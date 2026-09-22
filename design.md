@@ -6666,7 +6666,7 @@ check, so a closed value CLOSES the row instead of widening into it: a
 definition returning a value from a closed source (an input-position
 parameter, a nominal field, a hosted result) is checked with a closed row,
 and two identically annotated definitions then behave differently for their
-callers. Deferred: Row Subsumption states what that costs, what replaces it,
+callers. Row Subsumption states what that costs, what replaces it,
 and what the replacement deletes.
 `test/fx-open/issue_9963_hosted_try_question_mark.roc` carries both halves of
 that witness in one platform module. `Fallible.via_match!` and
@@ -7012,12 +7012,51 @@ Display follows the same polarity: an anonymous, unshared, unconstrained flex
 ext in an output position is not rendered as `..`; rigid extensions are
 always rendered (a marker, which is written closed, is rendered closed).
 
-### Deferred: Row Subsumption
+### Row Subsumption
 
 Row subsumption—a closed row COERCING into an implicitly open one where the
 two meet, instead of binding the open row's extension shut—is the end state
-Polarity is written against. It is NOT implemented. This section states the
-rule it will be, what it replaces, and what it deletes.
+Polarity is written against. Its first stage is IMPLEMENTED for function
+signatures; the rest of this section states the rule, what it replaces, what
+it deletes, and what remains.
+
+The coercion is applied at the USE, not at the definition. A definition whose
+result row was closed by its body records that it was coerced
+(`ModuleEnv.ResultRowCoercion`, keyed by the definition's node and read by
+importers), the row it exposes stays CLOSED, and every use re-opens its own
+instantiated copy of that row. The definition keeps one narrow
+representation; each use may widen its own.
+
+Leaving the row OPEN instead—the extension unbound so it
+generalizes—does not work, and the reason is worth stating because it is not
+obvious. An unbound extension on a generalized definition is a quantified
+variable of that definition's scheme, and a scheme variable is a
+SPECIALIZATION INPUT: the checker records each use's instantiation of it and
+lowering replays that as the specialization substitution BEFORE the template's
+public interface node exists. The caller's extra tags are therefore already in
+the exposed row by the time anything could seal it, so the coerced extension
+becomes an input to specialization—the exact opposite of what the coercion
+means.
+
+Lowering is untouched by the coercion. A closed declared row meeting a wider
+use-site request is already what the Result-Row Widening Adapter serves, so
+the adapter that re-tags a coerced definition's result is the machinery that
+was already there. The witness is an ADAPTER COUNT rather than a program's
+output, because running a program cannot distinguish an implementation that
+was adapted from one specialized wide.
+
+The copy a use takes is the one the ground-definition lookup path already
+forces, so no second copying mechanism exists to drift out of agreement.
+Copying alone would be wrong rather than merely insufficient: a forwarder's
+argument and result rows are ONE unification class—`id = |x| x` carries a
+single row variable in both positions—so writing a fresh extension through
+the copy would open the INPUT row, and a call at an unlisted tag would begin
+to typecheck. The copy therefore duplicates only the spine down to the row
+being re-opened.
+
+What remains: deleting the CHECKER half of Hosted Try Question Widening
+(below), the `test/cli` fixture this section asks for, and the residue for
+annotated VALUE bindings, whose rows are grounded rather than coerced.
 
 The argument for it is interchangeability. A signature is the whole of what a
 caller reads, so two definitions carrying identical annotations must be usable
@@ -7029,9 +7068,15 @@ extension to `[]`. The bodies differ; the signatures do not, and a caller that
 widens the first is rejected on the second.
 
 Closedness is therefore a property a body leaks rather than one an author
-states. Under subsumption, an author who wants a genuinely closed output row
-writes the closure explicitly, in the shape of `[MyErr, ..[]]`. That spelling
-does not exist today and is not designed.
+states. The obvious consequence is that an author who wants a genuinely closed
+output row needs a way to SAY so, in the shape of `[MyErr, ..[]]`. That
+spelling does not exist, and the decision is not to add it: `[]` already
+asserts uninhabitedness, a nominal already means "this set and no other", and
+host boundaries and derivation close by rule. What is left without it is a
+dead match branch at a widening caller—a cost the language already accepts
+for every CONSTRUCTING definition, so the coercion removes an inconsistency
+rather than creating one. `.as_written` exists, so the spelling stays cheap to
+add later if the dead branch turns out to matter.
 
 The change itself is at one unification: where a closed row meets an
 implicitly open annotated output row, coerce rather than bind. An incoming row
@@ -7081,14 +7126,22 @@ a coercion that changes when an extension gains tags moves the audit with it.
 extensions of a value binding that did not generalize, and it is a backstop
 for a pre-test gap rather than a rule subsumption interacts with. The original
 claim here—that cross-module widening of an annotated value waits on the same
-coercion—was wrong and is superseded: it waits on the row being QUANTIFIED.
-`Lib.x : [A, ..]` imported and used at `[A, B]` was accepted with no
-subsumption implemented and no coercion in the picture, because a quantified
-row hands each importing use its own copy
+coercion—was wrong and is superseded: for a VALUE it waits on the row being
+QUANTIFIED. `Lib.x : [A, ..]` imported and used at `[A, B]` was accepted with
+no subsumption implemented and no coercion in the picture, because a
+quantified row hands each importing use its own copy
 (`Check.instantiateImportedBindingVar`), while the same value spelled
 `Lib.x : [A]` was rejected. Generalizing an annotated value's opened row is
 therefore a PREREQUISITE for that half of subsumption, not an independent
 cleanup, and it landed first.
+
+For a coerced FUNCTION the answer is different, and quantification is not
+what carries it: the row is not quantified at all. The producer records the
+coercion, that record crosses the module boundary, and the importing use
+re-opens its own copy—so `Lib.id` forwarding a closed row is widened by an
+importer with nothing quantified in the picture. Both halves are pinned by
+cross-module tests, including one asserting the importer does not thereby
+open the INPUT row.
 
 The acceptance bar is that no fixture is edited: a program this design says
 should typecheck must typecheck as written. The hosted instance already meets
@@ -7105,7 +7158,7 @@ unification rejects the pair, and that mismatch is a type error by design: a
 closed error row is not widened into an open annotated row at use sites
 (issue #9798's program is rejected). Under polarity a non-hosted callee's
 annotated error row is itself implicitly open, but until row subsumption
-replaces closing-by-body (see Deferred: Row Subsumption) a body that forwards
+replaces closing-by-body (see Row Subsumption) a body that forwards
 a closed value still leaves the row closed, so the pairing is not confined to
 host rows.
 At a host boundary it is GUARANTEED: `..` is rejected there by rule, so a host
@@ -7367,7 +7420,7 @@ asserts the ok type is unchanged—and neither is a row nested inside a
 `List`, a record field, a tuple, a tag payload, or a non-`Try` nominal,
 because re-tagging cannot reach into those positions without the general
 row-subsumption coercion this design intends and does not yet implement (see
-Deferred: Row Subsumption).
+Row Subsumption).
 
 The set of positions a use may WIDEN is therefore kept equal to the set
 lowering can ADAPT, and it is kept equal by construction rather than by a
