@@ -22885,7 +22885,6 @@ const BodyContext = struct {
             .provisional_digest = provisional_digest.bytes,
         };
 
-
         if (replay_state.buckets.get(address)) |candidates| for (candidates.items) |raw_entry| {
             const entry = &replay_state.entries.items[raw_entry];
             if (!storedConstFnEvidenceEql(entry.evidence, stored_evidence) or
