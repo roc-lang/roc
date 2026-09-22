@@ -1352,7 +1352,7 @@ pub const Payload = extern union {
     pub const ExposedItem = extern struct {
         name: u32,
         alias: u32,
-        is_wildcard: u32,
+        flags: u32,
         _reserved: [4]u8 = .{ 0, 0, 0, 0 },
     };
 
