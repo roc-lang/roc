@@ -120,7 +120,7 @@ Applications interact only with the _Roc API_ portion of a platform, but there i
 Anyone can implement their own platform. There is not yet an official guide about how to do this, but there are some useful examples:
 
 - [basic-cli](https://github.com/roc-lang/basic-cli)
-- [basic-webserver](https://github.com/roc-lang/basic-cli)
+- [basic-webserver](https://github.com/roc-lang/basic-webserver)
 - [roc-ray](https://github.com/lukewilliamboswell/roc-ray)
 - [Small Zig platform](https://github.com/lukewilliamboswell/roc-platform-template-zig)
 - [Small Rust platform](https://github.com/lukewilliamboswell/roc-platform-template-rust)
