@@ -4243,7 +4243,9 @@ test "replace-dep: a local declaration with no canonical path is an error, not a
     try std.testing.expectError(error.ResolutionFailed, resolver.resolve("/repo/main.roc"));
     try testExpectDiagnostic(&resolver, "Invalid Package Dependency");
     for (resolver.diagnostics.items) |diagnostic| {
-        try std.testing.expect(std.mem.find(u8, diagnostic.message, "/repo/missing/main.roc") != null);
+        // The path is joined with the host separator, so Windows reports `\repo\missing\main.roc`.
+        const expected = if (@import("builtin").os.tag == .windows) "\\repo\\missing\\main.roc" else "/repo/missing/main.roc";
+        try std.testing.expect(std.mem.find(u8, diagnostic.message, expected) != null);
     }
 }
 
