@@ -21993,7 +21993,7 @@ fn checkExprWithFunctionOwner(self: *Self, expr_idx: CIR.Expr.Idx, env: *Env, ex
                 try self.markErroneous(expr_var);
             }
         },
-        .e_run_low_level => |run_ll| {
+        .e_run_low_level => |run_ll| blk: {
             self.markCurrentHoistObservableEffect();
             // Check each argument expression in the run_low_level node
             const args = self.cir.store.exprSlice(run_ll.args);
@@ -22003,9 +22003,17 @@ fn checkExprWithFunctionOwner(self: *Self, expr_idx: CIR.Expr.Idx, env: *Env, ex
             }
             if (run_ll.op == .crash) {
                 std.debug.assert(args.len == 1);
+                // The crash owns its `Str` demand on the message: a rejected
+                // message retires the crash itself and leaves the message's
+                // independently solved type intact.
+                if (try self.retireCallLikeExprWithErroneousOperands(expr_idx, expr_var, args)) break :blk;
                 const msg_var = ModuleEnv.varFrom(args[0]);
                 const str_var = try self.freshStr(env, self.cir.store.getExprRegion(args[0]));
-                _ = try self.unify(msg_var, str_var, env);
+                const msg_result = try self.unifyOwnedRelation(str_var, msg_var, env, .none, .exact);
+                if (msg_result.isProblem()) {
+                    try self.retireCallLikeExpr(expr_idx, expr_var);
+                    break :blk;
+                }
                 try self.unifyWith(expr_var, .{ .flex = Flex.init() }, env);
             }
         },

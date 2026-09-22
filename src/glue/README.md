@@ -180,7 +180,7 @@ checked platform, including nested list elements, records, tag payloads, and
 scalar leaf types.
 A second test copies the platform sources into isolated temporary directories,
 mutates field names, field sets, scalar types, nested record types, and tag
-payloads. All nine mutated checked schemas must fail the same lock. Run both with:
+payloads. Every mutated checked schema must fail the same lock. Run both with:
 
 ```sh
 zig build run-test-zig-module-glue -- --test-filter 'glue platform'
