@@ -22,7 +22,7 @@ book = {
 }
 ```
 
-The trailing comma controls how `roc fmt` lays out the record. With a trailing comma, the formatter puts the fields on separate lines. Without one, it keeps the fields on one line when they fit. A field written with its name and value does not need a trailing comma, even when it is the only field:
+The trailing comma controls how `roc fmt` lays out the record. With a trailing comma, the formatter puts the fields on separate lines. A field written with its name and value does not need a trailing comma, even when it is the only field:
 
 ```roc
 settings = { theme: "dark" }
@@ -218,7 +218,7 @@ Construct it explicitly by putting the type name before its record literal:
 origin = Point.{ x: 0, y: 0 }
 ```
 
-When an annotation already supplies the expected nominal type, a bare record literal also works:
+A bare record literal can also lift into a nominal record through structural unification when the surrounding context expects that nominal type. Its fields must match the nominal type's backing record:
 
 ```roc
 unit_x : Point
@@ -242,6 +242,20 @@ Point := { x : F64, y : F64 }.{
 ```
 
 Outside the declaration, use `Point.origin` and `point.translate(dx, dy)`. See [Nominal Types](types#nominal-types) for opaque types, explicit construction, and nesting nominal types.
+
+Declaring with `::` makes a nominal record opaque. Outside its defining module, other code knows the nominal type but cannot access its backing fields, construct it with a record literal, or destructure it as a record. The defining module can expose the operations that preserve the type's invariants:
+
+```roc
+Account :: { balance : U64 }.{
+    new : U64 -> Account
+    new = |balance| Account.{ balance }
+
+    balance : Account -> U64
+    balance = |Account.{ balance }| balance
+}
+```
+
+Code in other modules uses `Account.new` and `Account.balance` without depending on the backing record. See [Opaque Nominal Types](types#opaque-nominal-types) for the same abstraction rule with other backing types.
 
 ## Defaulted Fields
 
@@ -279,6 +293,51 @@ CacheOptions := {
 ```
 
 Defaulted and optional fields answer different questions. A defaulted field is always present in the constructed value. An optional field preserves whether a value was supplied, so querying it returns a `Try`.
+
+## Runtime Layout
+
+This section describes Roc's current native layout and host ABI. Most Roc programs should rely on field names and types rather than byte offsets. Code that exchanges records with a host should use generated glue as the source of truth for the selected target.
+
+A record is represented as one inline aggregate, similar to a C struct. The record does not carry its field names or type annotation at runtime; the compiler has already turned each field access into an access at a known offset. The record's fields still have their own representations. For example, an inline `Str` field contains the string's runtime representation, which may refer to separately allocated string data. Explicitly putting a record in a `Box` also gives it a boxed representation.
+
+Each field starts at an offset suitable for its alignment. The compiler inserts unused bytes when the next field needs a stricter alignment, then rounds the record's total size up to its strictest alignment. Pointer-sized values differ between targets, so the same record can have different offsets and a different total size on 32-bit and 64-bit targets. Some common current representations are:
+
+| Type | 32-bit size and alignment | 64-bit size and alignment |
+| --- | --- | --- |
+| `U8` | 1 byte, aligned to 1 | 1 byte, aligned to 1 |
+| `U32` | 4 bytes, aligned to 4 | 4 bytes, aligned to 4 |
+| `U64` | 8 bytes, aligned to 8 | 8 bytes, aligned to 8 |
+| `Str` | 12 bytes, aligned to 4 | 24 bytes, aligned to 8 |
+| `List(a)` | 12 bytes, aligned to 4 | 24 bytes, aligned to 8 |
+| `Box(a)` | 4 bytes, aligned to 4 | 8 bytes, aligned to 8 |
+
+For structural records, source order does not determine memory order. The compiler first orders fields by decreasing alignment class. Fields in the same class are ordered alphabetically by name. This produces a compact, deterministic layout. Nominal records use the same rule by default.
+
+An unnamed field in a nominal record switches that record to declared-order layout. This is useful for a host-facing type intended to mirror a C struct:
+
+```roc
+Header := {
+    tag : U8,
+    _ : {},
+    value : U32,
+}
+```
+
+Here, `_ : {}` occupies no bytes; its presence selects declared order. `tag` is therefore at offset 0, the compiler inserts three bytes to align `value`, and `value` is at offset 4. Without the unnamed field, the default layout would put `value` before `tag`.
+
+An unnamed field with a nonempty type reserves that many bytes as explicit padding. It stores no value, cannot be accessed, and has alignment 1 regardless of its type:
+
+```roc
+Padded := {
+    tag : U32,
+    _ : U32,
+    value : U32,
+}
+```
+
+This layout has `tag` at offset 0, four reserved bytes at offset 4, and `value` at offset 8. Names beginning with `_`, such as `_reserved`, can be used for the same purpose. Unnamed fields are only allowed in nominal record declarations.
+
+These layout rules matter at interoperability boundaries, but they are implementation and ABI details rather than part of structural record equality. Generated glue records the committed field order, offsets, sizes, and alignments for both pointer widths so that host code can use the exact layout chosen by the compiler.
 
 ## The Empty Record (`{}`) {#empty-record}
 
