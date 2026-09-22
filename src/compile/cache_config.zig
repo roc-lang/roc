@@ -221,7 +221,12 @@ pub const Constants = struct {
     ///      erroneous is recorded as rejected on every receiver.
     /// 101: Canonicalization caches source-local output and defers imported
     ///      names, including literal suffixes, until imports finish checking.
-    pub const CACHE_VERSION = 101;
+    /// 102: Generated-codec method roles identify subject types modulo
+    ///      transparent aliases, so subjects spelled through different aliases
+    ///      of one type share a role.
+    /// 103: A use of an annotated binding's predeclared scheme is recorded
+    ///      against the binding's own scheme, never the predeclared copy.
+    pub const CACHE_VERSION = 103;
 };
 
 /// Configuration for the Roc cache system.

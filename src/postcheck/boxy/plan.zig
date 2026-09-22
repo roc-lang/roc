@@ -7719,7 +7719,7 @@ const Builder = struct {
             }
         }
         if (methodOwnerForModuleType(view, rep.source_type.ty)) |owner| {
-            if (self.lookupMethodTargetByText(view, owner, "to_inspect")) |lookup| {
+            if (self.lookupInspectOverride(view, owner)) |lookup| {
                 if (self.plan.inspectMethodForRep(rep_id) == null) {
                     const source = self.workerSourceForMethodTarget(lookup, rep.source_type, null);
                     const source_fn_type = CheckedTypeIdentity{ .module = lookup.view.key, .ty = lookup.target.callable_ty };
@@ -10429,6 +10429,48 @@ const Builder = struct {
             if (self.lookupMethodTargetInView(view, owner_view, owner, method_text)) |target| return target;
         }
         return null;
+    }
+
+    /// The checked `to_inspect` override that inspection calls for `owner`,
+    /// or null when inspection renders the owner's default form. The view
+    /// that declares `owner.to_inspect` is selected exactly as method dispatch
+    /// selects it; that declaration's checked eligibility is the answer.
+    fn lookupInspectOverride(
+        self: *Builder,
+        owner_view: ModuleView,
+        owner: static_dispatch.MethodOwner,
+    ) ?MethodTargetLookup {
+        if (inspectOverrideInView(owner_view, owner_view, owner)) |decision| return decision.target;
+        for (self.imports) |imported| {
+            const view = moduleViewFromImported(imported);
+            if (moduleKeyEqual(view.key, owner_view.key)) continue;
+            if (inspectOverrideInView(view, owner_view, owner)) |decision| return decision.target;
+        }
+        for (self.relation_modules) |relation| {
+            const view = moduleViewFromImported(relation);
+            if (moduleKeyEqual(view.key, owner_view.key)) continue;
+            if (inspectOverrideInView(view, owner_view, owner)) |decision| return decision.target;
+        }
+        return null;
+    }
+
+    const InspectOverrideDecision = struct {
+        target: ?MethodTargetLookup,
+    };
+
+    fn inspectOverrideInView(
+        candidate: ModuleView,
+        owner_view: ModuleView,
+        owner: static_dispatch.MethodOwner,
+    ) ?InspectOverrideDecision {
+        const owner_names = owner_view.canonical_names orelse return null;
+        const candidate_names = candidate.canonical_names orelse return null;
+        const candidate_owner = methodOwnerInNames(owner_names, candidate_names, owner) orelse return null;
+        const candidate_method = candidate_names.lookupMethodName("to_inspect") orelse return null;
+        const key: static_dispatch.MethodKey = .{ .owner = candidate_owner, .method = candidate_method };
+        _ = (candidate.method_registry.lookup(key) orelse return null).requireTarget("boxy inspect planning");
+        const override = candidate.method_registry.lookupInspectOverride(key) orelse return .{ .target = null };
+        return .{ .target = .{ .view = candidate, .method = candidate_method, .target = override } };
     }
 
     fn lookupMethodTargetInView(

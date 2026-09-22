@@ -2882,7 +2882,12 @@ interface once and classifies the binding as a scheme exactly when a reachable
 variable was promoted to generalized rank. This producer-side classification
 is necessary because generalization is per variable: a partially generalized
 scheme can have a monomorphic structural root and quantified descendants. Root
-rank is therefore not a valid proxy for whether a binding is a scheme.
+rank is therefore not a valid proxy for whether a binding is a scheme. The walk
+reaches exactly what instantiation copies: an alias is transparent to both, so
+the walk follows an alias's backing as well as its arguments. An implicitly
+opened row inside an aliased union (`f : U64 -> Res` where `Res : Try(U64,
+[Oops])`) is reachable only through the backing, and it makes the binding a
+scheme like any other quantified variable.
 
 Every source alias for the binding (expression, pattern, definition, or closure
 wrapper) receives the same classification explicitly. Checked module output
@@ -4345,6 +4350,13 @@ Monotype consumes the same checked method shape when generating callbacks. It
 must never assume that the two state types are equal or reconstruct one from
 the other.
 
+Container format methods receive their value writers as ordinary callable
+arguments. Those generated writers retain their own prepared codec plans;
+the format method itself needs only its checked callable type and evidence,
+so its specialization does not inherit the enclosing generated-codec contract.
+Calls from that method to ordinary helpers share specializations with calls
+from scalar format methods at the same type and evidence.
+
 Canonicalization records each recognized associated underscore opt-in as an
 `e_derived_method` CIR expression carrying its exact derived-method kind. An
 ordinary annotation without a body remains `e_anno_only`; in a platform package,
@@ -4591,10 +4603,14 @@ shape so every nested subject ID remains related to its specialized shape cell,
 reserves the exact callees, and records the method identity and checker-authored
 role with each prepared call. A declaration-backed nominal has a distinct body
 shape; anonymous shapes use the public shape for both roles. Repeated
-exact subjects share one such role slot; Phase A deduplicates by that contract
-identity instead of comparing graph shapes. Freezing installs the selected role
-in a content-addressed prepared-call index. A subject-bearing entry uses the
-cached full Monotype digest of Phase A's related shape cell as its bucket,
+subjects that denote one type share one such role slot. The checker compares
+subjects with transparent aliases expanded at every depth, since Monotype
+erases them, while nominal types keep their declaration identity; subjects
+spelled through two aliases of one record therefore share a role. Phase A
+deduplicates by that contract identity instead of comparing graph shapes.
+Freezing installs the selected role in a content-addressed prepared-call index.
+A subject-bearing entry uses the cached full Monotype digest of Phase A's
+related shape cell as its bucket,
 while a shape-independent entry has one reusable address. Exact equality
 inside one digest bucket protects correctness from digest collisions without
 scanning unrelated calls. Two distinct checker roles for one exact Monotype
@@ -4606,20 +4622,31 @@ frozen prepared-call plan. They do not repeat method lookup, synthesize another
 specialization request, or interpret the shape to recover a call absent from
 `StaticDispatchPlanTable.generated_codec_derivations`. Debug compiler builds
 audit that every producer-required call was consumed and that repeated roles
-have exactly equal checked type graphs. A parent structural-call edge and its
-nested derivation independently snapshot one checker relation, so their debug
-audit requires equal checked root keys plus full graph equality under a bijective
+have equal checked type graphs up to transparent aliases. A parent
+structural-call edge and its nested derivation independently snapshot one
+checker relation, so their debug audit requires equal checked root keys plus
+full graph equality under a bijective
 renaming of flex and rigid identities shared across both relation roots;
 variable sharing, constraints, defaults, and every non-variable payload remain
 exact. Conditional capabilities are
 omitted from the consumption requirement unless the specialization selects
-their generated-code path. A format procedure's specialization identity names
-the complete derivation boundary and instantiated constructor, not the
-individual call edge that first reached it. Equivalent checked call edges
-therefore share one specialization, while the ordinary request type and checked
-evidence still distinguish genuinely different targets. The grounding call
-index remains only activation and debug metadata. These audits and their
-consumption bits are absent from release compiler builds.
+their generated-code path. A format procedure's specialization identity does
+not name the individual call edge that first reached it. Equivalent checked
+call edges therefore share one specialization, while the ordinary request type
+and checked evidence still distinguish genuinely different targets. The
+grounding call index remains only activation and debug metadata. A structural
+edge that resolves to a nested derivation (a derived nominal inside a derived
+shape) activates that derivation's own contract inside the enclosing boundary,
+and its calls keep their own checker roles and anchors, because a callee such as
+`parse_tag_union` prepares its payload calls from its anchored contract. Phase B
+emits the whole boundary through one shape-addressed plan, so the root and a
+nested contract preparing one exact shape must reach one callee. Static dispatch
+for a request type has exactly one resolution, so every contract that prepares a
+codec-anchored call at an equal request type supplies equal edges: draft
+specialization identity for such a request is its request type, checked
+evidence, lexical context, and codec kind, not the contract or derivation that
+supplied the edges. These audits and their consumption bits are absent from
+release compiler builds.
 
 Backed named applications keep independent main union-find classes so each
 request retains its own representation witness. An explicit checked/request or
@@ -5455,7 +5482,9 @@ targets a member of a binding group still on the check stack records dedicated
 `recursive_reference` provenance, independently of the scheme-use record that
 owns the edge's substitution and evidence. An unannotated recursive reference
 has a shared scheme use, while an annotated recursive reference instantiates
-its pre-declared scheme and records that substitution normally. A non-recursive
+its pre-declared scheme and records that substitution against the def's own
+scheme (see "Predeclared scheme uses are recorded against the binding's own
+scheme" below). A non-recursive
 lookup never gains recursive provenance merely because its referenced pattern
 has not generalized yet.
 
@@ -7007,7 +7036,9 @@ row contributes no errors. This applies to first-order scalar, list, tuple,
 record, and dictionary format methods. `parse_tag_union` receives a
 `ParseTagUnionSpec` whose generated payload parsers execute at the enclosing
 contract row; its callable retains that shared row. This callback dependency
-remains part of its specialization identity. First-order format calls specialize
+remains part of its specialization identity. First-order format calls, for
+parsers and encoders alike (including `rename_field`, `invalid_value`,
+`encode_null`, scalar and key encoders, and collection helpers), specialize
 from their checked callable and evidence without inheriting the enclosing codec
 contract; unrelated parent errors therefore do not duplicate those callees.
 Composition does not widen ordinary user calls or change ordinary unification.
@@ -7136,6 +7167,39 @@ test/cli/issue_10474_record_field_interpolation.roc (a generalized numeral
 record field cannot be instantiated as `Str` by interpolation and reports a
 type mismatch without `CheckedModule` construction panicking).
 
+### Inspect Overrides
+
+Inspection (`Str.inspect`, `dbg`, and `expect` failure reports) renders every
+value. A nominal type's `to_inspect` method replaces the default rendering only
+when it is an eligible inspect override. A method named `to_inspect` is still an
+ordinary method: it may have any type, and explicit calls and `where` clauses
+dispatch to it like any other method. It is an inspect override exactly when
+its type is `T -> Str`, where `T` is the owning nominal applied to distinct type
+variables that carry no `where` constraints. `Wrap(a) -> Str` qualifies;
+`Wrap(I64) -> Str`, `Pair(a, a) -> Str`,
+`Wrap(a) -> Str where [a.to_inspect : a -> Str]`, an unconstrained `a -> Str`,
+extra arguments, effectful functions, and non-`Str` results do not. Inspection
+ignores an ineligible method and renders the value's default form; this is never
+reported.
+
+Eligibility is a property of the declaration alone, so it holds at every
+instantiation of the owner. Inspection therefore places no requirement on the
+inspected type: a generic function that inspects its argument carries none, and
+inspection reached through a record, list, tag payload, generic helper, or
+nominal backing can never select an override it cannot call. The checked method
+registry records the decision once per `to_inspect` entry
+(`MethodRegistryEntry.inspect_override`, computed by `MethodRegistry.fromModule`
+from the method's checked type). Monotype and Boxy planning and lowering select
+the declaring view exactly as method dispatch does and consume that decision
+through `MethodRegistry.lookupInspectOverride`; they never re-examine the
+method's type.
+
+This is deliberately the simplest rule, adopted to see how it works in
+practice. Later versions may admit overrides with `where` clauses, with type
+arguments bound to one another, or with concrete type arguments. Each of those
+makes eligibility depend on the instantiation, which would move the decision
+from the declaration to each inspected type.
+
 ### Pending Dispatch Requirements In Type Schemes
 
 A generalized scheme is a pair: its root type and the unresolved static-dispatch
@@ -7204,32 +7268,43 @@ uses the declared annotation immediately, but its group retains the exact use
 var and lexical attribution. Before that caller generalizes, the boundary
 checks the target body and replays the use against the complete body scheme;
 when body checking stored off-root dispatch requirements, the replay adds
-them under the caller's still-live substitution. The annotation pre-pass and
-body generation explicitly pair their annotation identity slots, including
-generation-internal open rows without CIR nodes; composing that pair table with
-the saved early-use substitution supplies the requirement copy without a
-second root unification or solved-type walk. Structurally attached
+them under the caller's still-live substitution. Structurally attached
 requirements were already present in the declared annotation and need no
-replay. If the annotation already emitted a checked-evidence use record, the
-complete replay replaces that record instead of emitting two specialization
-edges for one lookup. An annotated in-flight recursive reference remains an
-internal edge through the declared scheme; the enclosing body's own
-requirements cover that implementation cycle, so it is not replayed as a new
-external use. Together these rules cover forward and polymorphically recursive
-lookup paths without making an annotation erase requirements inferred from its
-body.
+replay. An annotated in-flight recursive reference remains an internal edge
+through the declared scheme; the enclosing body's own requirements cover that
+implementation cycle, so it is not replayed as a new external use. Together
+these rules cover forward and polymorphically recursive lookup paths without
+making an annotation erase requirements inferred from its body.
 
-Every predeclared binding, including a block-local annotated function, records
-this correspondence before its body is checked. Attached constraint callable
-identities are paired at the same point. Once checking has settled, checked
-scheme-use records are projected into the finished binding's coordinates using
-these recorded pairs. This also applies to recursive edges that need no
-requirement replay: a body can close an annotation's output row, so the
-predeclared and finished schemes need not have the same quantified slots.
-This remapping changes metadata only, never the solved type graph. Indexed joins
-compose the recorded substitutions without searching the type structure or
-matching variable names, and the correspondence is checker-local scratch.
-
+Predeclared scheme uses are recorded against the binding's own scheme. The
+predeclared scheme is a disjoint copy of the annotation, and the body can
+narrow it: an implicitly opened output row that the body closes (`Ok(_) =>
+val` returning a closed argument) is a quantified variable of the annotation
+but not of the checked def, so the two schemes can have different numbers of
+quantified variables. A scheme-use record's substitution is read against the
+scheme of the def's template, which is always the def's own scheme, so no
+record is ever rooted at a predeclared scheme; Debug builds verify this when
+checking finishes. The link between the two schemes is explicit producer data
+(`Check.PredeclaredSlots`): the pre-pass and the body generation enumerate the
+same identity slots in the same digest order, generation-internal open rows
+without CIR nodes included, so slot i of one is slot i of the other. The body
+side is enumerated at the moment the body generates the annotation, before
+anything unifies with it; it is enumerated for every predeclared annotation,
+because a use made while the body is being checked is only discovered after
+that generation. The predeclared side is enumerated at the first use. A use
+keeps only its copies of the predeclared slots (and of their where-clause
+callables), and its record pairs each body slot that is still a variable with
+the copy of the same predeclared slot. A use made while the body is in flight
+(a recursive name reference, a local recursive reference, or method-syntax
+dispatch into an in-flight method) records immediately. A name reference made
+before the body is checked records in its boundary replay, which runs for
+every such use, including targets with no off-root requirements. A dispatch
+edge to an annotated method whose body has not generated its annotation yet,
+including a generated codec call, waits and records when that generation
+happens, so checking order is unchanged. Each site keeps the record policy it
+applies to every other scheme: a value use or generated codec call with an
+empty substitution is recorded only when the scheme has evidence params, and
+a source dispatch edge to a same-module target is always recorded.
 A receiver already at `Rank.generalized` is never captured as an outer-rank
 pending requirement. Generalization boundaries cannot run inside a commit
 probe; probes may append candidates, but rollback rewinds those candidates and

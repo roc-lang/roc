@@ -2369,30 +2369,20 @@ fn optionalTypeDigestEql(left: ?names.TypeDigest, right: ?names.TypeDigest) bool
     return right == null;
 }
 
-fn optionalCodecContractAnchorEql(
-    left: ?CheckedCodecContractAnchor,
-    right: ?CheckedCodecContractAnchor,
-) bool {
-    if ((left == null) != (right == null)) return false;
-    if (left == null) return true;
-    return moduleBytesEqual(left.?.view.key.bytes, right.?.view.key.bytes) and
-        left.?.derivation == right.?.derivation and
-        left.?.kind == right.?.kind;
-}
-
-fn optionalDraftCodecContractContextEql(
-    graph: *InstGraph,
+/// Draft specialization identity of a codec-anchored request. The anchored
+/// contract supplies the body's checker-proven codec edges, and static
+/// dispatch for one request type has exactly one resolution, so every contract
+/// that prepared a call at an equal request type supplies equal edges. The
+/// request type, evidence, and lexical context therefore identify the
+/// specialization; which contract or derivation boundary supplied the edges
+/// does not, and only codec kind separates anchored requests.
+fn draftCodecContractSpecializationEql(
     left: ?DraftCodecContractContext,
     right: ?DraftCodecContractContext,
 ) bool {
     if ((left == null) != (right == null)) return false;
     if (left == null) return true;
-    return optionalCodecContractAnchorEql(left.?.anchor, right.?.anchor) and
-        graph.sameClass(left.?.shape_node, right.?.shape_node) and
-        graph.sameFunctionInterface(
-            left.?.constructor_node,
-            right.?.constructor_node,
-        );
+    return left.?.anchor.kind == right.?.anchor.kind;
 }
 
 fn evidenceChainRequiresLocalContext(evidence: EvidenceChain) bool {
@@ -3523,6 +3513,10 @@ const Builder = struct {
     /// scope; this memo only accelerates repeated exact lookups during the
     /// build and never changes the checked outcome.
     scoped_method_targets: std.AutoHashMapUnmanaged(ScopedMethodDispatch, ScopedMethodResolution) = .{},
+    /// Scoped inspect-override resolutions, memoized like
+    /// `scoped_method_targets`. `missing` means inspection renders the
+    /// owner's default form.
+    scoped_inspect_overrides: std.AutoHashMapUnmanaged(ScopedMethodDispatch, ScopedMethodResolution) = .{},
     /// Exact checked identity of the compiler-provided `Try` nominal. `Try`
     /// deliberately retains nominal static-dispatch ownership, so it cannot use
     /// `builtin_owner`; structural parser lowering still needs its producer
@@ -3850,6 +3844,7 @@ const Builder = struct {
         if (self.spec_job_commit_domain) |*domain| domain.deinit();
         if (self.spec_job_worker) |*worker| worker.deinit();
         self.scoped_method_targets.deinit(self.allocator);
+        self.scoped_inspect_overrides.deinit(self.allocator);
         self.allocator.free(self.hosted_catalog);
         self.hash_defs.deinit();
         self.equality_defs.deinit();
@@ -6949,8 +6944,7 @@ const Builder = struct {
             if (active_root.graph == source_ctx.graph and
                 active_root.family.sameRecursiveCallable(family) and
                 specEvidenceVectorEql(active_root.evidence, evidence) and
-                optionalDraftCodecContractContextEql(
-                    source_ctx.graph,
+                draftCodecContractSpecializationEql(
                     active_root.codec_contract,
                     codec_contract,
                 ))
@@ -7029,7 +7023,7 @@ const Builder = struct {
                     const spec = &source_ctx.draft.template_specs.items[raw_spec];
                     if (!specEvidenceVectorEql(spec.evidence, evidence)) continue;
                     if (!optionalTypeDigestEql(spec.lexical_context_key, lexical_context_key)) continue;
-                    if (!optionalDraftCodecContractContextEql(source_ctx.graph, spec.codec_contract, codec_contract)) continue;
+                    if (!draftCodecContractSpecializationEql(spec.codec_contract, codec_contract)) continue;
                     const spec_fn_ty = (try source_ctx.specializationLookupTypeForNode(draftTemplateSpecLookupRequestNode(spec))) orelse continue;
                     if (!try source_ctx.typeStore().typeEql(source_ctx.nameStore(), spec_fn_ty, resolved_request_ty.?)) continue;
                     if (!selection.add(raw_spec, true)) unreachable;
@@ -7059,7 +7053,7 @@ const Builder = struct {
                     const spec = &source_ctx.draft.template_specs.items[raw_spec];
                     if (!specEvidenceVectorEql(spec.evidence, evidence)) continue;
                     if (!optionalTypeDigestEql(spec.lexical_context_key, lexical_context_key)) continue;
-                    if (!optionalDraftCodecContractContextEql(source_ctx.graph, spec.codec_contract, codec_contract)) continue;
+                    if (!draftCodecContractSpecializationEql(spec.codec_contract, codec_contract)) continue;
                     const exact_interface = source_ctx.graph.sameFunctionInterface(
                         draftTemplateSpecLookupRequestNode(spec),
                         request_fn_node,
@@ -7100,7 +7094,7 @@ const Builder = struct {
                     // that they refer to the same active specialization.
                     if (!specEvidenceVectorEql(spec.evidence, evidence)) continue;
                     if (!optionalTypeDigestEql(spec.lexical_context_key, lexical_context_key)) continue;
-                    if (!optionalDraftCodecContractContextEql(source_ctx.graph, spec.codec_contract, codec_contract)) continue;
+                    if (!draftCodecContractSpecializationEql(spec.codec_contract, codec_contract)) continue;
                     const spec_fn_ty = (try source_ctx.specializationLookupTypeForNode(draftTemplateSpecLookupRequestNode(spec))) orelse continue;
                     if (!try source_ctx.typeStore().typeEql(source_ctx.nameStore(), spec_fn_ty, request_fn_ty)) continue;
                     if (!selection.add(raw_spec, true)) unreachable;
@@ -8751,6 +8745,70 @@ const Builder = struct {
         };
     }
 
+    /// The checked `to_inspect` override that inspection calls for `owner`,
+    /// or null when inspection renders the owner's default form.
+    fn lookupInspectOverride(
+        self: *Builder,
+        scope: ModuleView,
+        owner: static_dispatch.MethodOwner,
+    ) Allocator.Error!?MethodLookup {
+        const method = try self.activeNameStore().internMethodName("to_inspect");
+        const address = ScopedMethodDispatch.init(scope.key, owner, method);
+        if (self.scoped_inspect_overrides.get(address)) |resolution| {
+            return switch (resolution) {
+                .missing => null,
+                .target => |target| target,
+            };
+        }
+
+        const resolution: ScopedMethodResolution = if (self.findInspectOverrideFromStore(scope, &self.program.names, owner)) |target|
+            .{ .target = target }
+        else
+            .missing;
+
+        try self.scoped_inspect_overrides.put(self.allocator, address, resolution);
+        return switch (resolution) {
+            .missing => null,
+            .target => |target| target,
+        };
+    }
+
+    /// Selects the view that declares `owner.to_inspect` exactly as method
+    /// dispatch does; that declaration's checked eligibility is the answer.
+    fn findInspectOverrideFromStore(
+        self: *Builder,
+        scope: ModuleView,
+        owner_names: *const names.NameStore,
+        owner: static_dispatch.MethodOwner,
+    ) ?MethodLookup {
+        if (inspectOverrideInViewFromStore(scope, owner_names, owner, true)) |decision| return decision.target;
+        for (scope.method_lookup_scope) |module_id| {
+            const candidate = self.moduleForId(module_id);
+            if (inspectOverrideInViewFromStore(candidate, owner_names, owner, false)) |decision| return decision.target;
+        }
+        return null;
+    }
+
+    const InspectOverrideDecision = struct {
+        target: ?MethodLookup,
+    };
+
+    fn inspectOverrideInViewFromStore(
+        view: ModuleView,
+        owner_names: *const names.NameStore,
+        owner: static_dispatch.MethodOwner,
+        allow_local_proc: bool,
+    ) ?InspectOverrideDecision {
+        const view_owner = static_dispatch.methodOwnerInImportedStore(owner_names, view.names, owner) orelse return null;
+        const view_method = view.names.lookupMethodName("to_inspect") orelse return null;
+        const key: static_dispatch.MethodKey = .{ .owner = view_owner, .method = view_method };
+        const found = view.method_registry.lookup(key) orelse return null;
+        const target = found.requireTarget("Monotype inspect lowering");
+        if (!allow_local_proc and target.kind == .local_proc) return null;
+        const override = view.method_registry.lookupInspectOverride(key) orelse return .{ .target = null };
+        return .{ .target = .{ .view = view, .target = override } };
+    }
+
     fn findMethodTargetByName(
         self: *Builder,
         scope: ModuleView,
@@ -9289,7 +9347,7 @@ const Builder = struct {
                         continue;
                     }
                     if (!evidenceChainEql(spec.evidence, requested_evidence)) continue;
-                    if (!optionalDraftCodecContractContextEql(source_ctx.graph, spec.codec_contract, codec_contract)) continue;
+                    if (!draftCodecContractSpecializationEql(spec.codec_contract, codec_contract)) continue;
                     if (!draftCaptureEntryGuardsMatch(source_ctx.graph, spec.capture_entry_guards, capture_entry_guards)) continue;
                     if (!std.meta.eql(spec.lexical_owner, source_ctx.draft.current_owner)) continue;
                     const spec_request = try draftNestedSpecRequestNode(source_ctx.draft, source_ctx.graph, spec);
@@ -9310,7 +9368,7 @@ const Builder = struct {
                         if (spec.state != .lowered) continue;
                         if (spec.request_fn_ty != null) continue;
                         if (!evidenceChainEql(spec.evidence, requested_evidence)) continue;
-                        if (!optionalDraftCodecContractContextEql(source_ctx.graph, spec.codec_contract, codec_contract)) continue;
+                        if (!draftCodecContractSpecializationEql(spec.codec_contract, codec_contract)) continue;
                         if (!draftCaptureEntryGuardsMatch(source_ctx.graph, spec.capture_entry_guards, capture_entry_guards)) continue;
                         if (!std.meta.eql(spec.lexical_owner, source_ctx.draft.current_owner)) continue;
                         if (signature_relation == .exact_graph and
@@ -9347,7 +9405,7 @@ const Builder = struct {
                             const spec = &source_ctx.draft.nested_specs.items[raw_spec];
                             if (spec.request_fn_ty != null) continue;
                             if (!evidenceChainEql(spec.evidence, requested_evidence)) continue;
-                            if (!optionalDraftCodecContractContextEql(source_ctx.graph, spec.codec_contract, codec_contract)) continue;
+                            if (!draftCodecContractSpecializationEql(spec.codec_contract, codec_contract)) continue;
                             if (!draftCaptureEntryGuardsMatch(source_ctx.graph, spec.capture_entry_guards, capture_entry_guards)) continue;
                             if (!std.meta.eql(spec.lexical_owner, source_ctx.draft.current_owner)) continue;
                             if (signature_relation == .exact_graph and
@@ -9395,7 +9453,7 @@ const Builder = struct {
                 if (!evidenceChainEql(spec.evidence, requested_evidence)) continue;
                 if (!substitutionsShareClasses(source_ctx.graph, spec.evidence.subst, requested_evidence.subst)) continue;
                 if (!draftCaptureEntryGuardsMatch(source_ctx.graph, spec.capture_entry_guards, capture_entry_guards)) continue;
-                if (!optionalDraftCodecContractContextEql(source_ctx.graph, spec.codec_contract, codec_contract)) continue;
+                if (!draftCodecContractSpecializationEql(spec.codec_contract, codec_contract)) continue;
                 if (!source_ctx.draft.ownerDescendsFromDraftFn(request_owner, spec.fn_id)) continue;
                 const raw_spec: u32 = @intCast(raw_spec_usize);
                 if (!selection.add(raw_spec, false)) {
@@ -14677,9 +14735,10 @@ const CodecKind = enum {
     encoder,
 };
 
-/// Whether a callee actually depends on compiler-generated codec callbacks.
-/// Ordinary calls inherit their lexical contract; first-order format methods
-/// are self-contained and specialize only by their own interface and evidence.
+/// Whether a callee needs the enclosing generated-codec contract to lower
+/// intrinsics such as `ParseTagUnionSpec.parse`. Ordinary calls inherit their
+/// lexical contract; format methods using ordinary values and writer arguments
+/// specialize only by their own interface and evidence.
 const CodecContractSelection = union(enum) {
     inherit,
     independent,
@@ -18440,6 +18499,18 @@ const BodyContext = struct {
         );
     }
 
+    /// Method owners derived from graph types remain qualified by the graph's
+    /// name store, exactly as in `lookupMethodTargetByName`.
+    fn lookupInspectOverride(
+        self: *BodyContext,
+        owner: static_dispatch.MethodOwner,
+    ) Allocator.Error!?MethodLookup {
+        if (self.nameStore() == &self.builder.program.names) {
+            return try self.builder.lookupInspectOverride(self.method_scope, owner);
+        }
+        return self.builder.findInspectOverrideFromStore(self.method_scope, self.nameStore(), owner);
+    }
+
     fn lookupMethodTarget(
         self: *BodyContext,
         owner: static_dispatch.MethodOwner,
@@ -20260,10 +20331,7 @@ const BodyContext = struct {
 
     fn toInspectCall(self: *BodyContext, value: DraftExprId, value_ty: Type.TypeId, str_ty: Type.TypeId) Allocator.Error!?DraftExprId {
         const owner = methodOwnerFromType(self.typeStore(), value_ty) orelse return null;
-        const lookup = try self.withLocalProcContext((try self.lookupMethodTargetByName(owner, "to_inspect")) orelse return null);
-        if (lookup.view.types.payload(lookup.target.callable_ty) == .err) {
-            return try self.runtimeCrashExpr(str_ty, "runtime error");
-        }
+        const lookup = try self.withLocalProcContext((try self.lookupInspectOverride(owner)) orelse return null);
         const callee = if (self.frozen_inspect_method_calls) |prepared|
             prepared.get(value_ty) orelse
                 Common.invariant("deferred inspect method was not reserved before relation freeze")
@@ -20339,7 +20407,7 @@ const BodyContext = struct {
         }
     }
 
-    /// Null means the owner has no custom method; false means it was already
+    /// Null means the owner has no inspect override; false means it was already
     /// prepared. Both immediate and deferred inspection use the checked target.
     fn prepareToInspectMethodAtNode(
         self: *BodyContext,
@@ -20347,7 +20415,7 @@ const BodyContext = struct {
         str_ty: Type.TypeId,
         owner: static_dispatch.MethodOwner,
     ) Allocator.Error!?bool {
-        const raw_lookup = (try self.lookupMethodTargetByName(owner, "to_inspect")) orelse return null;
+        const raw_lookup = (try self.lookupInspectOverride(owner)) orelse return null;
         const lookup = try self.withLocalProcContext(raw_lookup);
         for (self.draft.prepared_inspect_methods.items) |prepared| {
             if (self.graph.sameClass(prepared.value_node, node)) return false;
@@ -35446,8 +35514,7 @@ const BodyContext = struct {
             if (active_root.graph == self.graph and
                 active_root.family.sameRecursiveCallable(family) and
                 specEvidenceVectorEql(active_root.evidence, spec.evidence) and
-                optionalDraftCodecContractContextEql(
-                    self.graph,
+                draftCodecContractSpecializationEql(
                     active_root.codec_contract,
                     spec.codec_contract,
                 ))
@@ -44420,8 +44487,10 @@ const BodyContext = struct {
         );
     }
 
-    /// First-order format methods have no generated payload-parser callbacks.
-    /// Their checked callable and evidence fully determine specialization.
+    /// Format methods with ordinary values and callable arguments need no
+    /// enclosing codec contract. Generated writer arguments retain their own
+    /// prepared calls; the method's checked callable and evidence fully
+    /// determine its specialization.
     fn methodTargetCalleeAtNodeForFormat(
         self: *BodyContext,
         lookup: MethodLookup,
@@ -48655,12 +48724,7 @@ const BodyContext = struct {
         try relateRequestComponent(self.graph, target.args[1], str_node);
         try relateRequestComponent(self.graph, target.ret, str_node);
 
-        const callee = try self.methodTargetCalleeAtNodeForCodec(
-            lookup,
-            target_node,
-            exact.contract,
-            exact.anchor,
-        );
+        const callee = try self.methodTargetCalleeAtNodeForFormat(lookup, target_node, exact.contract);
         try self.draft.prepared_codec_calls.append(self.allocator, .{
             .boundary_expr = boundary_expr,
             .kind = kind,
@@ -48700,12 +48764,7 @@ const BodyContext = struct {
         try relateRequestComponent(self.graph, target.args[0], state_node);
         try relateRequestComponent(self.graph, target.ret, runtime.ret);
 
-        const callee = try self.methodTargetCalleeAtNodeForCodec(
-            lookup,
-            target_node,
-            exact.contract,
-            exact.anchor,
-        );
+        const callee = try self.methodTargetCalleeAtNodeForFormat(lookup, target_node, exact.contract);
         try self.draft.prepared_codec_calls.append(self.allocator, .{
             .boundary_expr = boundary_expr,
             .kind = .encoder,
@@ -49436,7 +49495,7 @@ const BodyContext = struct {
         try relateRequestComponent(self.graph, target.args[1], state_node);
         try relateRequestComponent(self.graph, target.ret, outer_result.err);
 
-        const callee = try self.methodTargetCalleeAtNodeForCodec(lookup, target_node, exact.contract, exact.anchor);
+        const callee = try self.methodTargetCalleeAtNodeForFormat(lookup, target_node, exact.contract);
         try self.draft.prepared_codec_calls.append(self.allocator, .{
             .boundary_expr = boundary_expr,
             .kind = .parser,
@@ -49474,7 +49533,7 @@ const BodyContext = struct {
         try relateRequestComponent(self.graph, target.args[0], state_node);
         try relateRequestComponent(self.graph, target.ret, runtime.ret);
 
-        const callee = try self.methodTargetCalleeAtNodeForCodec(lookup, target_node, exact.contract, exact.anchor);
+        const callee = try self.methodTargetCalleeAtNodeForFormat(lookup, target_node, exact.contract);
         try self.draft.prepared_codec_calls.append(self.allocator, .{
             .boundary_expr = boundary_expr,
             .kind = .encoder,
@@ -49564,7 +49623,7 @@ const BodyContext = struct {
         try relateRequestComponent(self.graph, target.args[1], state_node);
         try relateRequestComponent(self.graph, target.ret, runtime.ret);
 
-        const callee = try self.methodTargetCalleeAtNodeForCodec(lookup, target_node, exact.contract, exact.anchor);
+        const callee = try self.methodTargetCalleeAtNodeForFormat(lookup, target_node, exact.contract);
         try self.draft.prepared_codec_calls.append(self.allocator, .{
             .boundary_expr = boundary_expr,
             .kind = .encoder,
@@ -49816,7 +49875,7 @@ const BodyContext = struct {
         try relateRequestComponent(self.graph, target_try.ok, state_node);
         try relateRequestComponent(self.graph, target_try.err, outer_try.err);
 
-        const callee = try self.methodTargetCalleeAtNodeForCodec(lookup, target_node, exact.contract, exact.anchor);
+        const callee = try self.methodTargetCalleeAtNodeForFormat(lookup, target_node, exact.contract);
         try self.draft.prepared_codec_calls.append(self.allocator, .{
             .boundary_expr = boundary_expr,
             .kind = .encoder,
@@ -49856,7 +49915,7 @@ const BodyContext = struct {
         try relateRequestComponent(self.graph, target.args[1], state_node);
         try relateRequestComponent(self.graph, target.ret, runtime.ret);
 
-        const callee = try self.methodTargetCalleeAtNodeForCodec(lookup, target_node, exact.contract, exact.anchor);
+        const callee = try self.methodTargetCalleeAtNodeForFormat(lookup, target_node, exact.contract);
         try self.draft.prepared_codec_calls.append(self.allocator, .{
             .boundary_expr = boundary_expr,
             .kind = .encoder,
@@ -49895,7 +49954,7 @@ const BodyContext = struct {
         }
         try relateRequestComponent(self.graph, target.ret, ret_node);
 
-        const callee = try self.methodTargetCalleeAtNodeForCodec(lookup, target_node, exact.contract, exact.anchor);
+        const callee = try self.methodTargetCalleeAtNodeForFormat(lookup, target_node, exact.contract);
         try self.draft.prepared_codec_calls.append(self.allocator, .{
             .boundary_expr = boundary_expr,
             .kind = kind,

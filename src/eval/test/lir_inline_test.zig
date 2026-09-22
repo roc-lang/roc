@@ -11512,10 +11512,10 @@ test "stored parser restore lowers a shape with an optional field" {
 }
 
 test "stored encoder_for restore lowers a shape with an optional field" {
-    // The encoder twin of the test above, and the only Monotype-level gate on
-    // `emitStoredEncoderForRuntimeBody`. Same status: W2b's own baseline,
-    // measured 2026-09-15, not a pre/post comparison; locals re-measured
-    // after the 2026-09-15 rebase (72 -> 73).
+    // Stored encoder restoration retains each generated writer's codec plan.
+    // The container and scalar format methods must share their List.append,
+    // List.reserve, list_append_unsafe, and list_reserve specializations;
+    // an enclosing codec contract must not split those ordinary helpers.
     const allocator = std.testing.allocator;
     const stats = try structuralJsonMonotypeStatsForSource(allocator, stored_encoder_optional_gate_source);
     try std.testing.expectEqual(@as(usize, 24), stats.functions);

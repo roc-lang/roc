@@ -8,6 +8,7 @@ const TestEnv = @import("./TestEnv.zig");
 const canonical = @import("../canonical_names.zig");
 const checked_ids = @import("../checked_ids.zig");
 const static_dispatch = @import("../static_dispatch_registry.zig");
+const checked_artifact = @import("../checked_artifact.zig");
 const TypedCIR = @import("../typed_cir.zig");
 const types = @import("types");
 
@@ -16,6 +17,18 @@ const ModuleEnv = can.ModuleEnv;
 const testing = std.testing;
 
 const MethodRegistryTestCheckedTypes = struct {
+    store: Store = .{},
+
+    const Store = struct {
+        pub fn payloadCount(_: Store) usize {
+            unreachable;
+        }
+
+        pub fn payload(_: Store, _: checked_ids.CheckedTypeId) checked_artifact.CheckedTypePayload {
+            unreachable;
+        }
+    };
+
     pub fn publishMethodCallableType(
         _: *const @This(),
         _: std.mem.Allocator,

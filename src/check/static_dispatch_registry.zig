@@ -588,6 +588,10 @@ pub const MethodRegistryEntry = struct {
     /// no target is what keeps a rejected method distinguishable from a method
     /// no view declares at all.
     target: ?MethodTarget,
+    /// Whether this is a `to_inspect` method that generic inspection uses for
+    /// its owner (design.md "Inspect Overrides"). Only `lookupInspectOverride`
+    /// reads it; ordinary method dispatch ignores it.
+    inspect_override: bool = false,
 };
 
 /// Public `MethodRegistry` declaration.
@@ -614,6 +618,17 @@ pub const MethodRegistry = struct {
         const found = artifact_serialize.binarySearchByKey(MethodRegistryEntry, MethodKey, self.entries, normalized, methodEntryOrder) orelse return null;
         const target = found.target orelse return .rejected;
         return .{ .target = target };
+    }
+
+    /// The `to_inspect` target that generic inspection calls for `key.owner`,
+    /// or null when the owner has no eligible override and inspection renders
+    /// the value's default form. `key.method` names `to_inspect`.
+    pub fn lookupInspectOverride(self: *const MethodRegistry, key: MethodKey) ?MethodTarget {
+        var normalized = key;
+        collections.CompactWriter.zeroValuePadding(MethodKey, @ptrCast(&normalized));
+        const found = artifact_serialize.binarySearchByKey(MethodRegistryEntry, MethodKey, self.entries, normalized, methodEntryOrder) orelse return null;
+        if (!found.inspect_override) return null;
+        return found.target;
     }
 
     /// Build-time-only teardown (see `StaticDispatchPlanTable.deinit`): a frozen
@@ -721,6 +736,7 @@ pub const MethodRegistry = struct {
                 // not static-dispatch resolutions.
                 continue;
             const callable_var = referenced_callable_var orelse methodTargetCallableVar(module, def_idx, entry.value, target_kind);
+            const callable_ty = try checked_types.publishMethodCallableType(allocator, module, names, callable_var);
 
             try entries.append(allocator, .{
                 .key = method_key,
@@ -728,8 +744,11 @@ pub const MethodRegistry = struct {
                     .module_idx = module_idx,
                     .def_idx = def_idx,
                     .kind = target_kind,
-                    .callable_ty = try checked_types.publishMethodCallableType(allocator, module, names, callable_var),
+                    .callable_ty = callable_ty,
                 },
+                .inspect_override = entry.key.methodIdent().eql(module_env.idents.to_inspect) and
+                    std.meta.activeTag(target_kind) != .structural and
+                    isInspectOverrideCallable(checked_types, method_owner, callable_ty),
             });
         }
 
@@ -2026,13 +2045,18 @@ pub const StaticDispatchPlanTable = struct {
 
         const module_env = module.moduleEnvConst();
         const checked_type_view = checked_types.store.view();
+        var subject_scratch = @TypeOf(checked_type_view).EqualityScratch.init(allocator);
+        defer subject_scratch.deinit();
         for (module_env.generated_codec_derivations.items.items) |derivation| {
             const source_calls = module_env.generated_codec_calls.items.items[derivation.calls_start..][0..derivation.calls_len];
             const calls_start: u32 = @intCast(generated_codec_calls.items.len);
+            // Roles are keyed by the type a subject denotes, so subjects
+            // spelled through different transparent aliases share a role.
+            // Canonical keys retain alias identity and cannot bucket them.
             const GeneratedCodecRoleKey = struct {
                 method: canonical.MethodNameId,
                 has_subject: bool,
-                subject_key: canonical.CanonicalTypeKey,
+                subject_bucket: u64,
             };
             const GeneratedCodecRoleCandidate = struct {
                 subject_ty: ?CheckedTypeId,
@@ -2057,7 +2081,7 @@ pub const StaticDispatchPlanTable = struct {
                 const role_key = GeneratedCodecRoleKey{
                     .method = method,
                     .has_subject = subject_ty != null,
-                    .subject_key = if (subject_ty) |subject| checked_type_view.rootKey(subject) else .{},
+                    .subject_bucket = if (subject_ty) |subject| checked_type_view.aliasTransparentBucketKey(subject) else 0,
                 };
                 const candidates_entry = try role_candidates.getOrPut(role_key);
                 if (!candidates_entry.found_existing) candidates_entry.value_ptr.* = .empty;
@@ -2068,7 +2092,7 @@ pub const StaticDispatchPlanTable = struct {
                         break;
                     }
                     if (candidate.subject_ty.? == subject_ty.? or
-                        try checked_type_view.rootExactEql(allocator, candidate.subject_ty.?, subject_ty.?))
+                        try checked_type_view.rootAliasTransparentEql(&subject_scratch, candidate.subject_ty.?, subject_ty.?))
                     {
                         method_role = candidate.role;
                         break;
@@ -2715,6 +2739,68 @@ fn checkedTypeIsBuiltinBool(checked_types: anytype, ty: CheckedTypeId) bool {
     if (std.meta.activeTag(payload) != .nominal) return false;
     const builtin_owner = payload.nominal.builtin orelse return false;
     return builtin_owner == .bool;
+}
+
+/// Whether a `to_inspect` method's type makes it the override generic
+/// inspection uses for `owner` (design.md "Inspect Overrides"): exactly
+/// `T -> Str`, where `T` is `owner` applied to distinct unconstrained type
+/// variables. Aliases are transparent names for the type they abbreviate.
+fn isInspectOverrideCallable(checked_types: anytype, owner: MethodOwner, callable_ty: CheckedTypeId) bool {
+    const store = checked_types.store;
+    const callable = store.payload(checkedTypeThroughAliases(checked_types, callable_ty));
+    if (std.meta.activeTag(callable) != .function) return false;
+    const function = callable.function;
+    if (function.kind == .effectful or function.args.len != 1) return false;
+
+    const ret = store.payload(checkedTypeThroughAliases(checked_types, function.ret));
+    if (std.meta.activeTag(ret) != .nominal) return false;
+    if ((ret.nominal.builtin orelse return false) != .str) return false;
+
+    const arg_ty = checkedTypeThroughAliases(checked_types, function.args[0]);
+    const arg_owner = methodOwnerForCheckedPayload(store.payload(arg_ty)) orelse return false;
+    if (methodOwnerOrder(arg_owner, owner) != .eq) return false;
+
+    // Checked type variables carry identity, so two occurrences of one
+    // variable share a root and distinct variables never do.
+    const type_args = store.payload(arg_ty).nominal.args;
+    for (type_args, 0..) |type_arg, index| {
+        const variable = switch (store.payload(type_arg)) {
+            .flex, .rigid => |variable| variable,
+            .pending,
+            .err,
+            .alias,
+            .record,
+            .tuple,
+            .nominal,
+            .function,
+            .empty_record,
+            .tag_union,
+            .empty_tag_union,
+            => return false,
+        };
+        if (variable.constraints.len != 0 or variable.numeric_default_phase != null) return false;
+        for (type_args[0..index]) |earlier| {
+            if (earlier == type_arg) return false;
+        }
+    }
+    return true;
+}
+
+fn checkedTypeThroughAliases(checked_types: anytype, ty: CheckedTypeId) CheckedTypeId {
+    var current = ty;
+    var remaining = checked_types.store.payloadCount();
+    while (true) {
+        const payload = checked_types.store.payload(current);
+        if (std.meta.activeTag(payload) != .alias) return current;
+        if (remaining == 0) {
+            if (@import("builtin").mode == .Debug) {
+                std.debug.panic("checked static dispatch invariant violated: checked type alias chain was cyclic", .{});
+            }
+            unreachable;
+        }
+        remaining -= 1;
+        current = payload.alias.backing;
+    }
 }
 
 /// Public `methodOwnerForCheckedType` declaration: the method owner of a

@@ -3652,16 +3652,17 @@ const ProcedureBuilder = struct {
         };
     }
 
-    fn methodWorkerForRepByName(
+    /// The planned worker for the checked `to_inspect` override of this
+    /// representation's owner, or null when inspection renders the default
+    /// form.
+    fn inspectOverrideWorkerForRep(
         self: *ProcedureBuilder,
         rep_id: Plan.TypeRepId,
-        method_text: []const u8,
     ) ?Plan.WorkerPlanId {
         const source_rep = self.plan.representations.items[@intFromEnum(rep_id)];
         const source_module = procedureModuleById(self.modules, source_rep.source_type.module);
         const owner = methodOwnerForProcedureType(source_module, source_rep.source_type.ty) orelse return null;
-        const method = source_module.canonical_names.lookupMethodName(method_text) orelse return null;
-        const target_lookup = self.lookupMethodTarget(source_module, owner, source_module, method) orelse return null;
+        const target_lookup = self.lookupInspectOverride(source_module, owner) orelse return null;
         const source = switch (target_lookup.target.kind) {
             .procedure => |procedure| Plan.WorkerSource{ .procedure_template = procedure.template },
             .local_proc,
@@ -3699,6 +3700,45 @@ const ProcedureBuilder = struct {
             if (self.lookupMethodTargetInModule(module, owner_module, owner, method_text)) |target| return target;
         }
         return null;
+    }
+
+    /// Selects the module that declares `owner.to_inspect` exactly as
+    /// `lookupMethodTarget` does; that declaration's checked eligibility is
+    /// the answer.
+    fn lookupInspectOverride(
+        self: *ProcedureBuilder,
+        owner_module: ProcedureModuleView,
+        owner: static_dispatch.MethodOwner,
+    ) ?MethodTargetLookup {
+        if (inspectOverrideInModule(owner_module, owner_module, owner)) |decision| return decision.target;
+        for (self.modules.imports) |imported| {
+            const module = procedureModuleFromImport(imported);
+            if (checked_moduleKeyEqual(module.key, owner_module.key)) continue;
+            if (inspectOverrideInModule(module, owner_module, owner)) |decision| return decision.target;
+        }
+        for (self.modules.root.relation_modules) |relation| {
+            const module = procedureModuleFromImport(relation);
+            if (checked_moduleKeyEqual(module.key, owner_module.key)) continue;
+            if (inspectOverrideInModule(module, owner_module, owner)) |decision| return decision.target;
+        }
+        return null;
+    }
+
+    const InspectOverrideDecision = struct {
+        target: ?MethodTargetLookup,
+    };
+
+    fn inspectOverrideInModule(
+        candidate: ProcedureModuleView,
+        owner_module: ProcedureModuleView,
+        owner: static_dispatch.MethodOwner,
+    ) ?InspectOverrideDecision {
+        const candidate_owner = methodOwnerInProcedureNames(owner_module.canonical_names, candidate.canonical_names, owner) orelse return null;
+        const candidate_method = candidate.canonical_names.lookupMethodName("to_inspect") orelse return null;
+        const key: static_dispatch.MethodKey = .{ .owner = candidate_owner, .method = candidate_method };
+        _ = (candidate.method_registry.lookup(key) orelse return null).requireTarget("boxy inspect lowering");
+        const override = candidate.method_registry.lookupInspectOverride(key) orelse return .{ .target = null };
+        return .{ .target = .{ .module = candidate, .target = override } };
     }
 
     fn lookupMethodTargetInModule(
@@ -28975,7 +29015,7 @@ const ProcBodyBuilder = struct {
         rep_id: Plan.TypeRepId,
         next: LIR.CFStmtId,
     ) Allocator.Error!?LIR.CFStmtId {
-        const worker_id = self.parent.methodWorkerForRepByName(rep_id, "to_inspect") orelse return null;
+        const worker_id = self.parent.inspectOverrideWorkerForRep(rep_id) orelse return null;
         return try self.lowerToInspectWorkerInto(target, source, worker_id, next);
     }
 
