@@ -455,6 +455,37 @@ pub const StandardArgs = struct {
     worker_stream: bool = false,
     /// Remaining positional args (runner-specific)
     positional: []const []const u8 = &.{},
+    /// Forked-child debugging aids; see `ChildDebugOptions`.
+    child_debug: ChildDebugOptions = .{},
+};
+
+/// Opt-in aids for hunting bugs inside the forked test children. All of them
+/// are off by default and cost nothing then.
+pub const ChildDebugOptions = struct {
+    /// Fail one allocation in every child: the Nth request (counting
+    /// allocations and growing resizes from the first one the child makes),
+    /// or a random one per child. Each child logs the index it was given, so a
+    /// crash found with `.random` is reproduced by rerunning that test with
+    /// `.{ .index = N }`.
+    fail_alloc: ?FailAlloc = null,
+    /// Give each child a `std.heap.DebugAllocator` instead of an arena, with
+    /// `SingleThreadArena.pass_through` set so every free reaches it. Double
+    /// and invalid frees are then reported with their traces (traces need
+    /// `-Ddebug-gpa-traces=true`). Leaks are not: the child exits without
+    /// tearing the allocator down, since runners rely on arena semantics.
+    debug_allocator: bool = false,
+    /// Write each child's stderr to `<dir>/child_<index>.log`, headed by the
+    /// test's name, instead of interleaving every child on the runner's stderr.
+    child_log_dir: ?[]const u8 = null,
+    /// On a segfault or bus error, print the child's pid and sleep forever
+    /// instead of dying, and allow any process to ptrace it, so a debugger can
+    /// attach to the crashed state. Linux only; ignored elsewhere.
+    freeze_on_crash: bool = false,
+
+    pub const FailAlloc = union(enum) {
+        index: usize,
+        random,
+    };
 };
 
 /// Aggregate status counts for one harness run.
@@ -743,6 +774,21 @@ pub fn parseStandardArgsFromSlice(raw_args: []const []const u8, allocator: Alloc
             if (i < raw_args.len) {
                 args.stats_json_path = raw_args[i];
             }
+        } else if (std.mem.eql(u8, arg, "--fail-alloc")) {
+            i += 1;
+            if (i < raw_args.len) {
+                args.child_debug.fail_alloc = if (std.mem.eql(u8, raw_args[i], "random"))
+                    .random
+                else
+                    .{ .index = try std.fmt.parseInt(usize, raw_args[i], 10) };
+            }
+        } else if (std.mem.eql(u8, arg, "--debug-allocator")) {
+            args.child_debug.debug_allocator = true;
+        } else if (std.mem.eql(u8, arg, "--child-log-dir")) {
+            i += 1;
+            if (i < raw_args.len) args.child_debug.child_log_dir = raw_args[i];
+        } else if (std.mem.eql(u8, arg, "--freeze-on-crash")) {
+            args.child_debug.freeze_on_crash = true;
         } else if (std.mem.eql(u8, arg, "--help") or std.mem.eql(u8, arg, "-h")) {
             args.help_requested = true;
         } else if (!std.mem.startsWith(u8, arg, "--")) {
@@ -814,6 +860,30 @@ test "parseStandardArgsFromSlice parses llvm aliases" {
 
     try std.testing.expect(args.include_llvm);
     try std.testing.expectEqual(@as(usize, 0), args.positional.len);
+}
+
+test "parseStandardArgsFromSlice parses the child debugging aids" {
+    var arena = std.heap.ArenaAllocator.init(std.testing.allocator);
+    defer arena.deinit();
+    const args = try parseStandardArgsFromSlice(&.{
+        "runner",
+        "--fail-alloc",
+        "78",
+        "--debug-allocator",
+        "--child-log-dir",
+        "/tmp/child-logs",
+        "--freeze-on-crash",
+    }, arena.allocator());
+    try std.testing.expectEqual(ChildDebugOptions.FailAlloc{ .index = 78 }, args.child_debug.fail_alloc.?);
+    try std.testing.expect(args.child_debug.debug_allocator);
+    try std.testing.expectEqualStrings("/tmp/child-logs", args.child_debug.child_log_dir.?);
+    try std.testing.expect(args.child_debug.freeze_on_crash);
+
+    const random = try parseStandardArgsFromSlice(&.{ "runner", "--fail-alloc", "random" }, arena.allocator());
+    try std.testing.expectEqual(ChildDebugOptions.FailAlloc.random, random.child_debug.fail_alloc.?);
+
+    const none = try parseStandardArgsFromSlice(&.{"runner"}, arena.allocator());
+    try std.testing.expectEqual(ChildDebugOptions{}, none.child_debug);
 }
 
 test "parseStandardArgsFromSlice parses --worker and --worker-backend without polluting positional" {
@@ -995,6 +1065,7 @@ pub fn ProcessPool(comptime Spec: type, comptime Result: type, comptime cfg: Poo
             timeout_ms: u64,
             pool_start_ns: u64,
             spans: ?[]?PoolSpan,
+            child_debug: ChildDebugOptions,
         ) bool {
             if (comptime !has_fork) return false;
 
@@ -1023,8 +1094,25 @@ pub fn ProcessPool(comptime Spec: type, comptime Result: type, comptime cfg: Poo
                     _ = std.c.setsid();
                 }
 
+                if (child_debug.child_log_dir) |dir| redirectChildStderr(dir, test_idx);
+                if (child_debug.freeze_on_crash) installFreezeOnCrash();
+                if (child_debug.child_log_dir != null and @hasField(Spec, "name")) {
+                    std.debug.print("[child] test={d} name={s}\n", .{ test_idx, specs[test_idx].name });
+                }
+
                 var arena = std.heap.ArenaAllocator.init(std.heap.smp_allocator);
-                const allocator = arena.allocator();
+                var debug_allocator: std.heap.DebugAllocator(.{
+                    .stack_trace_frames = build_options.debug_gpa_stack_trace_frames,
+                }) = .init;
+                const base_allocator = if (child_debug.debug_allocator) base: {
+                    collections.SingleThreadArena.pass_through = true;
+                    break :base debug_allocator.allocator();
+                } else arena.allocator();
+                var injector: AllocationFailureInjector = undefined;
+                const allocator = if (child_debug.fail_alloc) |fail_alloc| injected: {
+                    injector = AllocationFailureInjector.init(base_allocator, fail_alloc, test_idx);
+                    break :injected injector.allocator();
+                } else base_allocator;
 
                 const result = cfg.runTest(io, allocator, specs[test_idx], test_timeout_ms);
                 cfg.serialize(pipe_fds[1], result);
@@ -1094,7 +1182,7 @@ pub fn ProcessPool(comptime Spec: type, comptime Result: type, comptime cfg: Poo
             gpa: Allocator,
             worker_argv_template: ?[]const []const u8,
         ) void {
-            runWithSpans(io, specs, results, null, max_children, timeout_ms, gpa, worker_argv_template);
+            runWithSpans(io, specs, results, null, max_children, timeout_ms, gpa, worker_argv_template, .{});
         }
 
         pub fn runWithSpans(
@@ -1106,6 +1194,7 @@ pub fn ProcessPool(comptime Spec: type, comptime Result: type, comptime cfg: Poo
             timeout_ms: u64,
             gpa: Allocator,
             worker_argv_template: ?[]const []const u8,
+            child_debug: ChildDebugOptions,
         ) void {
             const pool_start_ns = monotonicNs();
             if (comptime !has_fork) {
@@ -1153,7 +1242,7 @@ pub fn ProcessPool(comptime Spec: type, comptime Result: type, comptime cfg: Poo
             // Fill initial slots
             for (slots, 0..) |*slot, worker_index| {
                 if (next_test >= specs.len) break;
-                if (!launchChild(io, slot, specs, next_test, worker_index, timeout_ms, pool_start_ns, spans)) {
+                if (!launchChild(io, slot, specs, next_test, worker_index, timeout_ms, pool_start_ns, spans, child_debug)) {
                     results[next_test] = cfg.default_result;
                     completed += 1;
                 }
@@ -1194,7 +1283,7 @@ pub fn ProcessPool(comptime Spec: type, comptime Result: type, comptime cfg: Poo
                         completed += 1;
 
                         if (next_test < specs.len) {
-                            if (!launchChild(io, &slots[slot_idx], specs, next_test, slot_idx, timeout_ms, pool_start_ns, spans)) {
+                            if (!launchChild(io, &slots[slot_idx], specs, next_test, slot_idx, timeout_ms, pool_start_ns, spans, child_debug)) {
                                 results[next_test] = cfg.default_result;
                                 completed += 1;
                             }
@@ -1755,3 +1844,100 @@ pub fn ProcessPool(comptime Spec: type, comptime Result: type, comptime cfg: Poo
         }
     };
 }
+
+/// Send the forked child's stderr to `<dir>/child_<index>.log`.
+fn redirectChildStderr(dir: []const u8, test_idx: usize) void {
+    var path_buf: [std.fs.max_path_bytes]u8 = undefined;
+    const path = std.fmt.bufPrintZ(&path_buf, "{s}/child_{d}.log", .{ dir, test_idx }) catch return;
+    const fd = std.c.open(path.ptr, .{ .ACCMODE = .WRONLY, .CREAT = true, .TRUNC = true }, @as(std.c.mode_t, 0o644));
+    if (fd < 0) return;
+    _ = std.c.dup2(fd, posix.STDERR_FILENO);
+    _ = std.c.close(fd);
+}
+
+/// Replace the child's segfault and bus-error handling so a crashed child
+/// stays alive for a debugger instead of dying with a trace.
+fn installFreezeOnCrash() void {
+    if (comptime builtin.os.tag != .linux) return;
+    const action = posix.Sigaction{
+        .handler = .{ .sigaction = freezeOnCrash },
+        .mask = posix.sigemptyset(),
+        .flags = posix.SA.SIGINFO,
+    };
+    posix.sigaction(.SEGV, &action, null);
+    posix.sigaction(.BUS, &action, null);
+}
+
+fn freezeOnCrash(_: posix.SIG, _: *const posix.siginfo_t, _: ?*anyopaque) callconv(.c) void {
+    const linux = std.os.linux;
+    // PR_SET_PTRACER with PR_SET_PTRACER_ANY, so `gdb -p` works even when
+    // Yama restricts ptrace to descendants.
+    _ = linux.prctl(0x59616d61, std.math.maxInt(usize), 0, 0, 0);
+    var buf: [96]u8 = undefined;
+    const message = std.fmt.bufPrint(&buf, "\n[child] frozen after crash, pid={d}\n", .{linux.getpid()}) catch "[child] frozen after crash\n";
+    _ = linux.write(posix.STDERR_FILENO, message.ptr, message.len);
+    while (true) {
+        const nap = linux.timespec{ .sec = 1000, .nsec = 0 };
+        _ = linux.nanosleep(&nap, null);
+    }
+}
+
+/// Fails exactly one allocation request in a child: the requested index, or
+/// a random one drawn log-uniformly from 1..2^23 so early and late requests
+/// are equally likely to be chosen across a suite.
+const AllocationFailureInjector = struct {
+    inner: Allocator,
+    count: usize = 0,
+    target: usize,
+    test_idx: usize,
+
+    fn init(inner: Allocator, fail_alloc: ChildDebugOptions.FailAlloc, test_idx: usize) AllocationFailureInjector {
+        const target: usize = switch (fail_alloc) {
+            .index => |index| index,
+            .random => random: {
+                const pid: u64 = @intCast(std.c.getpid());
+                var prng = std.Random.DefaultPrng.init(monotonicNs() ^ (pid << 32));
+                break :random @intFromFloat(@exp2(prng.random().float(f64) * 23.0));
+            },
+        };
+        std.debug.print("[child] test={d} fail_alloc={d}\n", .{ test_idx, target });
+        return .{ .inner = inner, .target = target, .test_idx = test_idx };
+    }
+
+    fn allocator(self: *AllocationFailureInjector) Allocator {
+        return .{ .ptr = self, .vtable = &vtable };
+    }
+
+    const vtable: Allocator.VTable = .{ .alloc = alloc, .resize = resize, .remap = remap, .free = free };
+
+    /// Count one request; true exactly for the request that must fail.
+    fn shouldFail(self: *AllocationFailureInjector) bool {
+        self.count += 1;
+        if (self.count != self.target) return false;
+        std.debug.print("[child] test={d} fail_alloc={d} fired\n", .{ self.test_idx, self.target });
+        return true;
+    }
+
+    fn alloc(ctx: *anyopaque, len: usize, alignment: std.mem.Alignment, ret_addr: usize) ?[*]u8 {
+        const self: *AllocationFailureInjector = @ptrCast(@alignCast(ctx));
+        if (self.shouldFail()) return null;
+        return self.inner.rawAlloc(len, alignment, ret_addr);
+    }
+
+    fn resize(ctx: *anyopaque, memory: []u8, alignment: std.mem.Alignment, new_len: usize, ret_addr: usize) bool {
+        const self: *AllocationFailureInjector = @ptrCast(@alignCast(ctx));
+        if (new_len > memory.len and self.shouldFail()) return false;
+        return self.inner.rawResize(memory, alignment, new_len, ret_addr);
+    }
+
+    fn remap(ctx: *anyopaque, memory: []u8, alignment: std.mem.Alignment, new_len: usize, ret_addr: usize) ?[*]u8 {
+        const self: *AllocationFailureInjector = @ptrCast(@alignCast(ctx));
+        if (new_len > memory.len and self.shouldFail()) return null;
+        return self.inner.rawRemap(memory, alignment, new_len, ret_addr);
+    }
+
+    fn free(ctx: *anyopaque, memory: []u8, alignment: std.mem.Alignment, ret_addr: usize) void {
+        const self: *AllocationFailureInjector = @ptrCast(@alignCast(ctx));
+        self.inner.rawFree(memory, alignment, ret_addr);
+    }
+};
