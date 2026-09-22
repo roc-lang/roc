@@ -1,5 +1,5 @@
 //! Regression for #11527: reading a small uniform compile-time list constant
-//! must not rebuild the list — and so allocate — at every use.
+//! must not construct the list again, and so allocate, at every use.
 
 const std = @import("std");
 const base = @import("base");
@@ -90,7 +90,7 @@ test "issue 11527: a small uniform compile-time list constant is not rebuilt at 
     try std.testing.expect(!coord.hasUserErrors());
 
     // The default target matches the compile-time host program's width and
-    // expect mode, so one program serves both consumers — the path a default
+    // expect mode, so one program serves both consumers: the path a default
     // `roc build` takes.
     const target: lir.CheckedPipeline.TargetConfig = .{};
     coord.runtime_lowering = .{ .target = target };

@@ -17,10 +17,10 @@
 //! `with_capacity` it was evaluated with, so the request survives the freeze
 //! (a frozen descriptor cannot carry capacity) and the first append goes in
 //! place. A list with elements keeps its slot however uniform its contents:
-//! rebuilding it would allocate at every read, while a consumer that mutates
-//! what it read already receives a fresh unique list from the runtime's
-//! copy-on-first-mutation, at the one allocation a rebuild would have spent
-//! anyway. Other aggregate roots keep their slots and fold in the backend;
+//! lowering it to a construction would allocate at every read, while a
+//! consumer that mutates what it read already receives a fresh unique list
+//! from the runtime's copy-on-first-mutation, at the one allocation that
+//! construction would have spent anyway. Other aggregate roots keep their slots and fold in the backend;
 //! failed roots keep the guard that crashes with the original failure.
 //!
 //! A build that restores its compile-time values from a checked module's
