@@ -1,4 +1,3 @@
-import ProvidesEntry exposing [ProvidesEntry]
 import RocName exposing [RocName]
 import TypeTable exposing [TypeTable]
 
@@ -77,14 +76,6 @@ TypeNamePlan := { table : TypeTable }.{
 		}
 
 		$state.entries
-	}
-
-	provided_entry_root_type_id : TypeNamePlan, ProvidesEntry -> U64
-	provided_entry_root_type_id = |planner, entry| {
-		match planner.table.get(entry.type_id) {
-			RocFunction(func) => func.ret
-			_ => entry.type_id
-		}
 	}
 
 	collect_preferred_for_type_id : { entries : List(PreferredName), seen_names : List(Str), seen_type_ids : List(U64) }, TypeTable, U64, Str, Str, List(U64) -> { entries : List(PreferredName), seen_names : List(Str), seen_type_ids : List(U64) }

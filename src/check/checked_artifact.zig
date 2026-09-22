@@ -24216,7 +24216,10 @@ fn instantiateResolvedDispatchTargetCallable(
     );
 }
 
-fn checkedFunctionPayload(
+/// The function payload a checked type resolves to through its alias chain.
+/// Any other payload, or a cyclic chain, is an invariant violation naming
+/// `context`.
+pub fn checkedFunctionPayload(
     store: *const CheckedTypeStore,
     root: CheckedTypeId,
     comptime context: []const u8,

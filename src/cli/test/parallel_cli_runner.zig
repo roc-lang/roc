@@ -195,6 +195,14 @@ const GlueLanguage = enum(u8) {
         };
     }
 
+    fn generatedFileName(self: GlueLanguage) []const u8 {
+        return switch (self) {
+            .zig => "roc_platform_abi.zig",
+            .rust => "roc_platform_abi.rs",
+            .c => "roc_platform_abi.h",
+        };
+    }
+
     fn hostFileName(self: GlueLanguage) []const u8 {
         return switch (self) {
             .zig => "host.zig",
@@ -477,6 +485,7 @@ const CustomCase = enum {
     glue_record_function_field,
     glue_recursive_slot_box,
     glue_generic_callable_arg,
+    glue_hosted_erased_generic_callback,
     glue_c_tests,
     roc_test_skips_url_dependency_expects,
     roc_test_caches_local_dependency_expects,
@@ -974,7 +983,8 @@ const glue_cases = [_]CliCase{
     .{ .id = 0, .suite = .glue, .name = "issue 9824: glue reports an error for a by-value unresolved type variable", .body = .{ .custom = .glue_unresolved_by_value_errors } },
     .{ .id = 0, .suite = .glue, .name = "glue regression: opaque nominal record with a function field is a boxed payload", .body = .{ .custom = .glue_record_function_field } },
     .{ .id = 0, .suite = .glue, .name = "glue regression: recursive-slot boxed edges wrap by-value types and compile", .body = .{ .custom = .glue_recursive_slot_box } },
-    .{ .id = 0, .suite = .glue, .name = "glue regression: function argument mentioning a generic type parameter is a glue error", .body = .{ .custom = .glue_generic_callable_arg } },
+    .{ .id = 0, .suite = .glue, .name = "glue regression: function stored in a generic type is an erased callable in every generator", .body = .{ .custom = .glue_generic_callable_arg } },
+    .{ .id = 0, .suite = .glue, .name = "issue 11505: hosted Box of a generic function is an erased callable in every generator", .body = .{ .custom = .glue_hosted_erased_generic_callback } },
     .{ .id = 0, .suite = .glue, .name = "CGlue.roc expect tests pass", .body = .{ .custom = .glue_c_tests } },
 };
 
@@ -3292,6 +3302,7 @@ fn runCustomCase(
         .glue_record_function_field => customGlueRecordFunctionField(io, allocator, &env, &timer, timeout_ms),
         .glue_recursive_slot_box => customGlueRecursiveSlotBox(io, allocator, &env, &timer, timeout_ms),
         .glue_generic_callable_arg => customGlueGenericCallableArg(io, allocator, &env, &timer, timeout_ms),
+        .glue_hosted_erased_generic_callback => customGlueHostedErasedGenericCallback(io, allocator, &env, &timer, timeout_ms),
         .glue_c_tests => customGlueCTests(io, allocator, &env, &timer, timeout_ms),
         .roc_test_skips_url_dependency_expects => customRocTestSkipsUrlDependencyExpects(io, allocator, &env, &timer, timeout_ms),
         .roc_test_caches_local_dependency_expects => customRocTestCachesLocalDependencyExpects(io, allocator, &env, &timer, timeout_ms),
@@ -10538,27 +10549,134 @@ fn customGlueRecursiveSlotBox(io: std.Io, allocator: Allocator, env: *const Case
 }
 
 fn customGlueGenericCallableArg(io: std.Io, allocator: Allocator, env: *const CaseEnv, timer: *harness.Timer, timeout_ms: u64) ?TestResult {
-    // A function stored inside a generic nominal whose argument mentions the
-    // type parameter inside a record has no checked type for its
-    // instantiation, so glue cannot ask the compiler for that argument's
-    // layout. Glue reports the type and the boundary value instead of
-    // describing the uninstantiated template to the host.
-    const output_dir = createWorkSubdir(io, allocator, env, "glue-out") catch |err|
-        return customInfraFailure(allocator, timer, "failed to create glue output dir: {}", .{err});
-    if (runRocAndCheck(io, allocator, env, timer, timeout_ms, .{
-        .args = &.{ "glue", "--no-cache", "src/glue/src/ZigGlue.roc", output_dir, "test/glue/generic-callable-arg/main.roc" },
-        .exit = .failure,
-        .contains = &.{
-            .{ .stream = .stderr, .text = "stored inside a generic type" },
-            .{ .stream = .stderr, .text = "y : U64" },
-            .{ .stream = .stderr, .text = "in the signature of `handler`" },
+    // Stored function values are erased callables. One whose signature has
+    // committed layouts (`Box(U64 -> Step)`) carries them, so its argument
+    // and result types are emitted for the host to fill its buffers. One
+    // inside a generic nominal whose argument mentions the type parameter
+    // (`Handler(a) := [H({ y : a } -> {})]`) is opaque, since the compiler has
+    // no standalone layout for the instantiated argument. `Box` of a nominal
+    // whose backing is a function stays a box cell, exactly as the compiler
+    // committed it.
+    return checkErasedCallableGlue(io, allocator, env, timer, timeout_ms, "test/glue/generic-callable-arg/main.roc", .{
+        .zig = &.{
+            "pub extern fn handler() callconv(.c) RocErasedCallable;",
+            "pub extern fn stepper() callconv(.c) RocErasedCallable;",
+            "pub const ShapesStepTag = enum(u8) {",
+            "pub extern fn adder() callconv(.c) *RocErasedCallable;",
         },
-        .not_contains = &.{
-            .{ .stream = .stderr, .text = "panic" },
-            .{ .stream = .stderr, .text = "unreachable" },
-            .{ .stream = .stderr, .text = "invariant violated" },
+        .c = &.{
+            "extern RocErasedCallable handler(void);",
+            "extern RocErasedCallable stepper(void);",
+            "typedef struct ShapesStep ShapesStep;",
+            "extern RocErasedCallable* adder(void);",
         },
-    })) |failure| return failure;
+        .rust = &.{
+            "pub fn handler() -> RocErasedCallable;",
+            "pub fn stepper() -> RocErasedCallable;",
+            "pub struct ShapesStep {",
+            "pub fn adder() -> *mut RocErasedCallable;",
+        },
+    });
+}
+
+fn customGlueHostedErasedGenericCallback(io: std.Io, allocator: Allocator, env: *const CaseEnv, timer: *harness.Timer, timeout_ms: u64) ?TestResult {
+    // Issue 11505: a hosted function taking `Box(({ value : a } => {}))`
+    // passes the host one erased callable pointer whose signature is opaque,
+    // so glue generates the hosted declaration over `RocErasedCallable`
+    // without laying out the unresolved argument. A hosted callback with a
+    // concrete argument (`Box((Event => {}))`) is the same pointer, and its
+    // argument type is emitted for the host to build the callable's argument
+    // buffer.
+    return checkErasedCallableGlue(io, allocator, env, timer, timeout_ms, "test/glue/hosted-erased-generic-callback/main.roc", .{
+        .zig = &.{
+            "pub extern fn roc_install(arg0: RocErasedCallable) callconv(.c) void;",
+            "pub extern fn roc_notify(arg0: RocErasedCallable) callconv(.c) void;",
+            "pub const CallbacksEvent = ",
+        },
+        .c = &.{
+            "extern void roc_install(RocErasedCallable arg0);",
+            "extern void roc_notify(RocErasedCallable arg0);",
+            "typedef struct CallbacksEvent CallbacksEvent;",
+        },
+        .rust = &.{
+            "pub fn roc_install(arg0: RocErasedCallable);",
+            "pub fn roc_notify(arg0: RocErasedCallable);",
+            "pub struct CallbacksEvent {",
+        },
+    });
+}
+
+const ErasedCallableGlueExpectations = struct {
+    zig: []const []const u8,
+    c: []const []const u8,
+    rust: []const []const u8,
+
+    fn forLanguage(self: ErasedCallableGlueExpectations, language: GlueLanguage) []const []const u8 {
+        return switch (language) {
+            .zig => self.zig,
+            .c => self.c,
+            .rust => self.rust,
+        };
+    }
+};
+
+/// Run every shipped generator over `platform_path`, require each output to
+/// contain its expected declarations, and semantically analyze every
+/// declaration of the generated Zig by compiling it as a test.
+fn checkErasedCallableGlue(
+    io: std.Io,
+    allocator: Allocator,
+    env: *const CaseEnv,
+    timer: *harness.Timer,
+    timeout_ms: u64,
+    platform_path: []const u8,
+    expectations: ErasedCallableGlueExpectations,
+) ?TestResult {
+    for (std.enums.values(GlueLanguage)) |language| {
+        const subdir = std.fmt.allocPrint(allocator, "{s}-glue-out", .{@tagName(language)}) catch |err|
+            return customInfraFailure(allocator, timer, "failed to allocate glue output dir name: {}", .{err});
+        const output_dir = createWorkSubdir(io, allocator, env, subdir) catch |err|
+            return customInfraFailure(allocator, timer, "failed to create glue output dir: {}", .{err});
+        if (runRocAndCheck(io, allocator, env, timer, timeout_ms, .{
+            .args = &.{ "glue", "--no-cache", language.glueSpec(), output_dir, platform_path },
+            .not_contains = &.{
+                .{ .stream = .stderr, .text = "panic" },
+                .{ .stream = .stderr, .text = "unreachable" },
+                .{ .stream = .stderr, .text = "invariant violated" },
+            },
+        })) |failure| return failure;
+
+        const generated_path = std.fs.path.join(allocator, &.{ output_dir, language.generatedFileName() }) catch |err|
+            return customInfraFailure(allocator, timer, "failed to allocate generated glue path: {}", .{err});
+        const generated = std.Io.Dir.cwd().readFileAlloc(io, generated_path, allocator, .limited(1024 * 1024)) catch |err|
+            return customFailure(allocator, timer, "failed to read generated glue file {s}: {}", .{ language.generatedFileName(), err });
+        for (expectations.forLanguage(language)) |needle| {
+            if (std.mem.find(u8, generated, needle) == null) {
+                return customFailure(allocator, timer, "{s} missing {s}", .{ language.generatedFileName(), needle });
+            }
+        }
+
+        if (language != .zig) continue;
+        // `refAllDecls` only references declarations inside a test build, so
+        // the generated file is compiled as a test to analyze every
+        // declaration and helper body.
+        const test_zig_path = std.fs.path.join(allocator, &.{ output_dir, "test_abi.zig" }) catch |err|
+            return customInfraFailure(allocator, timer, "failed to allocate test Zig path: {}", .{err});
+        std.Io.Dir.cwd().writeFile(io, .{ .sub_path = test_zig_path, .data =
+            \\const std = @import("std");
+            \\const abi = @import("roc_platform_abi.zig");
+            \\comptime {
+            \\    std.testing.refAllDecls(abi);
+            \\}
+        }) catch |err|
+            return customInfraFailure(allocator, timer, "failed to write test Zig file: {}", .{err});
+        if (runRawAndCheck(io, allocator, env, timer, timeout_ms, &.{
+            "zig",
+            "test",
+            "-fno-emit-bin",
+            test_zig_path,
+        }, project_root_path, .{ .args = &.{} })) |failure| return failure;
+    }
     return null;
 }
 
@@ -10774,10 +10892,13 @@ fn customGlueRustProvidedContextCallableOutcome(io: std.Io, allocator: Allocator
         return customFailure(allocator, timer, "failed to read generated Rust file: {}", .{err});
     defer allocator.free(generated);
 
+    // `SourceStep` is reachable only as the stored callable's result, and a
+    // host invoking that callable reads its result buffer with this type.
     for ([_][]const u8{
         "pub struct AbiSourceOutcome",
         "pub stream: core::mem::ManuallyDrop<RocErasedCallable>",
         "pub fn roc_make_outcome(arg0: u64, arg1: *mut c_void) -> AbiSourceOutcome;",
+        "pub struct AbiSourceStep {",
     }) |needle| {
         if (std.mem.find(u8, generated, needle) == null) {
             return customFailure(allocator, timer, "generated Rust file missing {s}", .{needle});

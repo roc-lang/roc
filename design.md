@@ -15717,6 +15717,24 @@ schema logical indices; the layout store supplies their byte offsets and
 layouts. A checked-source schema regression test locks the remaining marshaller
 field names and leaf types.
 
+Glue's type table describes values. A function value, wherever it appears
+(boxed, in a record or tag payload, or in a stored signature), is one
+erased-callable pointer whose own layout does not depend on its argument or
+result types, so it is a `RocErasedCallable` entry rather than a signature.
+That entry carries a `Known` signature naming its argument and result entries
+when every one of them has a standalone committed layout, since a host invoking
+the callable fills its argument buffer and reads its result buffer with those
+layouts; it is `Opaque` when the signature mentions an unresolved type variable
+or a generic nominal's parameter inside that nominal's backing, and the host
+can then only store the callable and hand it back to Roc. Whether `Box(fn)` is
+that callable's own allocation or a box cell over it is the compiler's
+committed layout decision, and glue takes it from that layout, never from the
+type's shape. Callables that are themselves linker symbols carry their
+signature outside the type table: a hosted function's arguments and result on
+its `HostedFunctionInfo`, and a provided procedure's on its `ProvidesEntry`.
+Glue classifies each provided export as a procedure or data from the
+CheckedModule's provided export table, never from the shape of its type.
+
 The platform header maps linker symbols explicitly, symbol-string first, in
 both directions:
 
