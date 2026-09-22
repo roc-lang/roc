@@ -1146,7 +1146,7 @@ const Pass = struct {
         fn_id: Ast.FnId,
         phase: Phase,
         discovery_admission: ?[]const SpecAdmission = null,
-        /// The function's facts excluded it from the phase; the task runs only
+        /// The function's shapes excluded it from the phase; the task runs only
         /// to verify that the phase indeed changes nothing, and is never merged.
         verify_only: bool = false,
         output: ?*Output = null,
@@ -1234,19 +1234,19 @@ const Pass = struct {
         }
     };
 
-    /// Whether a function's recorded facts admit it to a phase: the phase can
+    /// Whether a function's recorded shapes admit it to a phase: the phase can
     /// only change a function whose body has the shape it rewrites. Discovery
     /// with whole-program clone inlining can meet a known-shaped argument in
     /// any inlined callee, so there only a direct call is required.
     fn phaseAdmits(self: *const Pass, phase: Phase, fn_id: Ast.FnId) bool {
-        const facts = self.program.getFn(fn_id).facts;
+        const shapes = self.program.getFn(fn_id).shapes;
         return switch (phase) {
             .discovery => switch (self.clone_inlining) {
-                .all_calls => facts.direct_call,
-                .iterator_fusion => facts.direct_call and (facts.constructs_value or facts.iterator_call),
+                .all_calls => shapes.direct_call,
+                .iterator_fusion => shapes.direct_call and (shapes.constructs_value or shapes.iterator_call),
             },
-            .unused_loop_results => facts.loop_tuple_result,
-            .iterator_fusion => facts.iterator_producer,
+            .unused_loop_results => shapes.loop_tuple_result,
+            .iterator_fusion => shapes.iterator_producer,
         };
     }
 
@@ -1273,7 +1273,7 @@ const Pass = struct {
                     // verification for it is the producer scan itself.
                     if (phase == .iterator_fusion) {
                         if (exprContainsIteratorProducer(self.program, body.roc)) {
-                            std.debug.panic("SpecConstr iterator_fusion excluded function {d} whose facts {any} hide an iterator producer", .{ @intFromEnum(fn_id), self.program.getFn(fn_id).facts });
+                            std.debug.panic("SpecConstr iterator_fusion excluded function {d} whose shapes {any} hide an iterator producer", .{ @intFromEnum(fn_id), self.program.getFn(fn_id).shapes });
                         }
                         continue;
                     }
@@ -1327,7 +1327,7 @@ const Pass = struct {
                 const output = item.output orelse Common.invariant("SpecConstr task completed without output");
                 if (item.verify_only) {
                     if (output.changed or output.requests.items.items.len != 0) {
-                        std.debug.panic("SpecConstr {s} changed function {d} whose facts {any} excluded it from the phase", .{ @tagName(phase), @intFromEnum(item.fn_id), self.program.getFn(item.fn_id).facts });
+                        std.debug.panic("SpecConstr {s} changed function {d} whose shapes {any} excluded it from the phase", .{ @tagName(phase), @intFromEnum(item.fn_id), self.program.getFn(item.fn_id).shapes });
                     }
                     if (self.options.metrics_out) |metrics| {
                         if (self.options.executor != null) {
@@ -2719,13 +2719,13 @@ const Pass = struct {
             if (popped.fn_id != source_fn_id) Common.invariant("call-pattern inline stack was corrupted while writing specialization");
         }
 
-        const outer_facts = self.program.beginFnFacts(spec_fn_id);
+        const outer_shapes = self.program.beginFnShapes(spec_fn_id);
         const args = try cloner.buildArgs();
         const body: Ast.FnBody = switch (self.sourceBody(source_fn_id)) {
             .roc => |body_expr| .{ .roc = try cloner.cloneExpr(body_expr) },
             .hosted => Common.invariant("hosted function had a call-pattern specialization"),
         };
-        const facts = self.program.finishFnFacts(outer_facts);
+        const shapes = self.program.finishFnShapes(outer_shapes);
 
         self.program.setFn(spec_fn_id, .{
             .symbol = symbol,
@@ -2737,7 +2737,7 @@ const Pass = struct {
             .captures = source_fn.captures,
             .body = body,
             .ret = source_fn.ret,
-            .facts = facts,
+            .shapes = shapes,
         });
         try self.copyProcDebugName(source_fn.symbol, symbol);
     }
@@ -4226,11 +4226,11 @@ const Pass = struct {
             const local = GuardedList.at(captures, index).local;
             try cloner.putLocalAlias(local, local);
         }
-        const outer_facts = self.program.beginFnFacts(fn_id);
+        const outer_shapes = self.program.beginFnShapes(fn_id);
         const cloned = try cloner.cloneExpr(body);
         // Unchanged subtrees of the source body are reused rather than
-        // re-created, so the rewritten body keeps the source body's facts.
-        const facts = self.program.finishFnFacts(outer_facts).merged(fn_.facts);
+        // re-created, so the rewritten body keeps the source body's shapes.
+        const shapes = self.program.finishFnShapes(outer_shapes).merged(fn_.shapes);
         self.program.setFn(fn_id, .{
             .symbol = fn_.symbol,
             .source = fn_.source,
@@ -4242,7 +4242,7 @@ const Pass = struct {
             .captures = fn_.captures,
             .body = .{ .roc = cloned },
             .ret = fn_.ret,
-            .facts = facts,
+            .shapes = shapes,
         });
         if (fn_index < self.whole_body_cloned.len) self.whole_body_cloned[fn_index] = true;
     }
@@ -4273,11 +4273,11 @@ const Pass = struct {
             try cloner.putLocalAlias(local, local);
         }
 
-        const outer_facts = self.program.beginFnFacts(fn_id);
+        const outer_shapes = self.program.beginFnShapes(fn_id);
         const cloned = try cloner.cloneExpr(body);
         // Unchanged subtrees of the source body are reused rather than
-        // re-created, so the rewritten body keeps the source body's facts.
-        const facts = self.program.finishFnFacts(outer_facts).merged(fn_.facts);
+        // re-created, so the rewritten body keeps the source body's shapes.
+        const shapes = self.program.finishFnShapes(outer_shapes).merged(fn_.shapes);
         self.program.setFn(fn_id, .{
             .symbol = fn_.symbol,
             .source = fn_.source,
@@ -4289,7 +4289,7 @@ const Pass = struct {
             .captures = fn_.captures,
             .body = .{ .roc = cloned },
             .ret = fn_.ret,
-            .facts = facts,
+            .shapes = shapes,
         });
         if (!self.borrowed_worker) self.whole_body_cloned[fn_index] = true;
     }
@@ -4316,11 +4316,11 @@ const Pass = struct {
         var cloner = Cloner.initForLoopExitSelection(self);
         defer cloner.deinit();
         cloner.exit_demands = &demands;
-        const outer_facts = self.program.beginFnFacts(fn_id);
+        const outer_shapes = self.program.beginFnShapes(fn_id);
         const cloned = try cloner.cloneExpr(body);
         // Unchanged subtrees of the source body are reused rather than
-        // re-created, so the rewritten body keeps the source body's facts.
-        const facts = self.program.finishFnFacts(outer_facts).merged(fn_.facts);
+        // re-created, so the rewritten body keeps the source body's shapes.
+        const shapes = self.program.finishFnShapes(outer_shapes).merged(fn_.shapes);
         self.program.setFn(fn_id, .{
             .symbol = fn_.symbol,
             .source = fn_.source,
@@ -4331,7 +4331,7 @@ const Pass = struct {
             .captures = fn_.captures,
             .body = .{ .roc = cloned },
             .ret = fn_.ret,
-            .facts = facts,
+            .shapes = shapes,
         });
         return true;
     }
@@ -11944,9 +11944,9 @@ const Cloner = struct {
         // start their strip depth from zero.
         const saved_strip_depth = self.materialize_strip_depth;
         self.materialize_strip_depth = 0;
-        const outer_facts = self.pass.program.beginFnFacts(worker_fn_id);
+        const outer_shapes = self.pass.program.beginFnShapes(worker_fn_id);
         const worker_body = try self.cloneExprWithoutSourceReuse(source_body);
-        const worker_facts = self.pass.program.finishFnFacts(outer_facts);
+        const worker_shapes = self.pass.program.finishFnShapes(outer_shapes);
         self.materialize_strip_depth = saved_strip_depth;
         self.pass.program.setFn(worker_fn_id, .{
             .symbol = symbol,
@@ -11956,7 +11956,7 @@ const Cloner = struct {
             .captures = captures_span,
             .body = .{ .roc = worker_body },
             .ret = source_fn.ret,
-            .facts = worker_facts,
+            .shapes = worker_shapes,
         });
 
         return try self.materializeCallableWithCaptures(
@@ -12676,23 +12676,23 @@ const ProgramProcedureUsage = struct {
                 .roc => |body| body,
                 .hosted => continue,
             };
-            // Both walks answer questions the body's recorded facts already
+            // Both walks answer questions the body's recorded shapes already
             // settle for a body without the shape: no return expression, and
             // no self call means an empty summary.
-            const facts = program.getFnAt(owner_index).facts;
+            const shapes = program.getFnAt(owner_index).shapes;
             if (builtin.mode == .Debug) {
-                if (exprContainsReturn(program, body) and !facts.contains_return) {
-                    std.debug.panic("function {d} contains a return its facts {any} do not record", .{ owner_index, facts });
+                if (exprContainsReturn(program, body) and !shapes.contains_return) {
+                    std.debug.panic("function {d} contains a return its shapes {any} do not record", .{ owner_index, shapes });
                 }
-                if (!facts.self_call) {
+                if (!shapes.self_call) {
                     const summary = tailSelfCallSummary(program, body, owner);
                     if (!summary.valid or summary.count != 0) {
-                        std.debug.panic("function {d} calls itself although its facts {any} do not record it", .{ owner_index, facts });
+                        std.debug.panic("function {d} calls itself although its shapes {any} do not record it", .{ owner_index, shapes });
                     }
                 }
             }
-            fn_uses[owner_index].contains_return = facts.contains_return;
-            tail_self_calls[owner_index] = if (facts.self_call) tailSelfCallSummary(program, body, owner) else .{};
+            fn_uses[owner_index].contains_return = shapes.contains_return;
+            tail_self_calls[owner_index] = if (shapes.self_call) tailSelfCallSummary(program, body, owner) else .{};
             collectAllFnUsesInExpr(program, body, owner, fn_uses);
         }
         for (program.rootsView()) |root| {
@@ -13019,8 +13019,8 @@ fn tailSelfCallSummary(program: *const Ast.Program, expr_id: Ast.ExprId, target:
 
 /// Whether this body contains an exact checker-stamped iterator producer.
 /// Debug builds use this scan to verify that a function excluded from the
-/// iterator fusion phase by its recorded facts indeed has no producer; the
-/// phase itself selects bodies by the `iterator_producer` fact alone.
+/// iterator fusion phase by its recorded shapes indeed has no producer; the
+/// phase itself selects bodies by the `iterator_producer` flag alone.
 fn exprContainsIteratorProducer(program: *const Ast.Program, expr_id: Ast.ExprId) bool {
     return switch (program.getExpr(expr_id).data) {
         .local, .unit, .@"unreachable", .int_lit, .frac_f32_lit, .frac_f64_lit, .dec_lit, .str_lit, .bytes_lit, .crash, .comptime_exhaustiveness_failed, .uninitialized, .uninitialized_payload => false,
@@ -15079,7 +15079,7 @@ test "SpecConstr keeps a transparent recursive anchor and its initializer bindin
     try std.testing.expectEqual(runtime_anchor.runtime, output_block.final_expr);
 
     _ = try program.addFn(.{
-        .facts = program.finishFnFacts(.{}),
+        .shapes = program.finishFnShapes(.{}),
         .symbol = @enumFromInt(2),
         .args = .empty(),
         .captures = .empty(),
@@ -15360,7 +15360,7 @@ test "staged SpecConstr discovery admits source order with duplicates and bounde
         const unit = try program.addExpr(.{ .ty = unit_ty, .data = .unit });
         const arg = try program.addLocal(@enumFromInt(1), tag_ty);
         const target = try program.addFn(.{
-            .facts = program.finishFnFacts(.{}),
+            .shapes = program.finishFnShapes(.{}),
             .symbol = @enumFromInt(2),
             .args = try program.addTypedLocalSpan(&.{.{ .local = arg, .ty = tag_ty }}),
             .captures = .empty(),
@@ -15385,7 +15385,7 @@ test "staged SpecConstr discovery admits source order with duplicates and bounde
                 .captures = .empty(),
             } } });
             _ = try program.addFn(.{
-                .facts = program.finishFnFacts(.{}),
+                .shapes = program.finishFnShapes(.{}),
                 .symbol = @enumFromInt(@as(u32, @intCast(index + 3))),
                 .args = .empty(),
                 .captures = .empty(),
@@ -15436,7 +15436,7 @@ test "staged SpecConstr phase entry capacity fixes discovery budgets across wave
         for (&consumers, 0..) |*consumer, i| {
             const arg = try program.addLocal(@enumFromInt(@as(u32, @intCast(i))), tag_ty);
             consumer.* = try program.addFn(.{
-                .facts = program.finishFnFacts(.{}),
+                .shapes = program.finishFnShapes(.{}),
                 .symbol = @enumFromInt(@as(u32, @intCast(i + 2))),
                 .args = try program.addTypedLocalSpan(&.{.{ .local = arg, .ty = tag_ty }}),
                 .captures = .empty(),
@@ -15461,7 +15461,7 @@ test "staged SpecConstr phase entry capacity fixes discovery budgets across wave
             .final_expr = tags[0],
         } } });
         const producer = try program.addFn(.{
-            .facts = program.finishFnFacts(.{}),
+            .shapes = program.finishFnShapes(.{}),
             .symbol = @enumFromInt(4),
             .args = .empty(),
             .captures = .empty(),
@@ -15496,7 +15496,7 @@ test "staged SpecConstr phase entry capacity fixes discovery budgets across wave
             // Every body here calls a consumer with a known tag; the last one
             // reuses a body whose expressions were created before this loop.
             _ = try program.addFn(.{
-                .facts = program.finishFnFacts(.{}).merged(.{ .direct_call = true, .constructs_value = true }),
+                .shapes = program.finishFnShapes(.{}).merged(.{ .direct_call = true, .constructs_value = true }),
                 .symbol = @enumFromInt(@as(u32, @intCast(i + 5))),
                 .args = .empty(),
                 .captures = .empty(),
@@ -15589,7 +15589,7 @@ test "staged SpecConstr submission failure drains accepted tasks" {
     const unit = try program.addExpr(.{ .ty = unit_ty, .data = .unit });
     for (0..4) |index| {
         _ = try program.addFn(.{
-            .facts = program.finishFnFacts(.{}),
+            .shapes = program.finishFnShapes(.{}),
             .symbol = @enumFromInt(@as(u32, @intCast(index))),
             .args = .empty(),
             .captures = .empty(),
@@ -15649,7 +15649,7 @@ fn specConstrSelectionProgramForTest(allocator: Allocator) Allocator.Error!struc
         .rest = local_ref,
     } } });
     const fn_id = try program.addFn(.{
-        .facts = program.finishFnFacts(.{}),
+        .shapes = program.finishFnShapes(.{}),
         .symbol = symbols.fresh(),
         .args = .empty(),
         .captures = .empty(),
@@ -15703,7 +15703,7 @@ fn checkSpecConstrRequestAllocationFailure(allocator: Allocator) (Allocator.Erro
     const tuple = try program.addExpr(.{ .ty = tuple_ty, .data = .{ .tuple = try program.addExprSpan(&.{unit}) } });
     const arg = try program.addLocal(symbols.fresh(), tuple_ty);
     const target = try program.addFn(.{
-        .facts = program.finishFnFacts(.{}),
+        .shapes = program.finishFnShapes(.{}),
         .symbol = symbols.fresh(),
         .args = try program.addTypedLocalSpan(&.{.{ .local = arg, .ty = tuple_ty }}),
         .captures = .empty(),
@@ -15715,7 +15715,7 @@ fn checkSpecConstrRequestAllocationFailure(allocator: Allocator) (Allocator.Erro
         .args = try program.addExprSpan(&.{tuple}),
     } } });
     _ = try program.addFn(.{
-        .facts = program.finishFnFacts(.{}),
+        .shapes = program.finishFnShapes(.{}),
         .symbol = symbols.fresh(),
         .args = .empty(),
         .captures = .empty(),
@@ -15756,7 +15756,7 @@ test "issue 10313 value-aware call-pattern collection does not append lifted IR"
         .rest = unit_expr,
     } } });
     _ = try program.addFn(.{
-        .facts = program.finishFnFacts(.{}),
+        .shapes = program.finishFnShapes(.{}),
         .symbol = @enumFromInt(3),
         .args = try program.addTypedLocalSpan(&.{.{ .local = arg_local, .ty = unit_ty }}),
         .captures = Ast.Span(Ast.TypedLocal).empty(),
@@ -15808,7 +15808,7 @@ test "SpecConstr admission uses body size and worker count before cloning" {
     }
 
     _ = try program.addFn(.{
-        .facts = program.finishFnFacts(.{}),
+        .shapes = program.finishFnShapes(.{}),
         .symbol = @enumFromInt(1),
         .args = Ast.Span(Ast.TypedLocal).empty(),
         .captures = Ast.Span(Ast.TypedLocal).empty(),
@@ -15816,7 +15816,7 @@ test "SpecConstr admission uses body size and worker count before cloning" {
         .ret = unit_ty,
     });
     const large_fn_id = try program.addFn(.{
-        .facts = program.finishFnFacts(.{}),
+        .shapes = program.finishFnShapes(.{}),
         .symbol = @enumFromInt(2),
         .args = Ast.Span(Ast.TypedLocal).empty(),
         .captures = Ast.Span(Ast.TypedLocal).empty(),
@@ -15874,7 +15874,7 @@ test "SpecConstr bounds cumulative inlining across small acyclic wrappers" {
     const unit_expr = try program.addExpr(.{ .ty = unit_ty, .data = .unit });
     var result_ty = unit_ty;
     var callee = try program.addFn(.{
-        .facts = program.finishFnFacts(.{}),
+        .shapes = program.finishFnShapes(.{}),
         .symbol = @enumFromInt(1),
         .args = Ast.Span(Ast.TypedLocal).empty(),
         .captures = Ast.Span(Ast.TypedLocal).empty(),
@@ -15903,7 +15903,7 @@ test "SpecConstr bounds cumulative inlining across small acyclic wrappers" {
             .data = .{ .tuple = try program.addExprSpan(&.{ first, second }) },
         });
         callee = try program.addFn(.{
-            .facts = program.finishFnFacts(.{}),
+            .shapes = program.finishFnShapes(.{}),
             .symbol = @enumFromInt(@as(u32, @intCast(depth + 2))),
             .args = Ast.Span(Ast.TypedLocal).empty(),
             .captures = Ast.Span(Ast.TypedLocal).empty(),
@@ -15954,7 +15954,7 @@ test "issue 10760 SpecConstr bounds cloning of rewritten inline bodies" {
     const leaf_arg = try program.addLocal(@enumFromInt(1), pair_ty);
     var result_ty = unit_ty;
     var callee = try program.addFn(.{
-        .facts = program.finishFnFacts(.{}),
+        .shapes = program.finishFnShapes(.{}),
         .symbol = @enumFromInt(2),
         .args = try program.addTypedLocalSpan(&.{.{ .local = leaf_arg, .ty = pair_ty }}),
         .captures = Ast.Span(Ast.TypedLocal).empty(),
@@ -15987,7 +15987,7 @@ test "issue 10760 SpecConstr bounds cloning of rewritten inline bodies" {
             pair_ty,
         );
         callee = try program.addFn(.{
-            .facts = program.finishFnFacts(.{}),
+            .shapes = program.finishFnShapes(.{}),
             .symbol = @enumFromInt(@as(u32, @intCast(depth + 12))),
             .args = try program.addTypedLocalSpan(&.{.{ .local = arg, .ty = pair_ty }}),
             .captures = Ast.Span(Ast.TypedLocal).empty(),
@@ -16056,7 +16056,7 @@ test "value-aware call-pattern collection keeps generic producer calls opaque" {
     });
 
     const producer = try program.addFn(.{
-        .facts = program.finishFnFacts(.{}),
+        .shapes = program.finishFnShapes(.{}),
         .symbol = @enumFromInt(1),
         .args = Ast.Span(Ast.TypedLocal).empty(),
         .captures = Ast.Span(Ast.TypedLocal).empty(),
@@ -16066,7 +16066,7 @@ test "value-aware call-pattern collection keeps generic producer calls opaque" {
 
     const consumer_arg = try program.addLocal(@enumFromInt(2), tuple_ty);
     const consumer = try program.addFn(.{
-        .facts = program.finishFnFacts(.{}),
+        .shapes = program.finishFnShapes(.{}),
         .symbol = @enumFromInt(3),
         .args = try program.addTypedLocalSpan(&.{.{ .local = consumer_arg, .ty = tuple_ty }}),
         .captures = Ast.Span(Ast.TypedLocal).empty(),
@@ -16083,7 +16083,7 @@ test "value-aware call-pattern collection keeps generic producer calls opaque" {
         .args = try program.addExprSpan(&.{producer_call}),
     } } });
     _ = try program.addFn(.{
-        .facts = program.finishFnFacts(.{}),
+        .shapes = program.finishFnShapes(.{}),
         .symbol = @enumFromInt(4),
         .args = Ast.Span(Ast.TypedLocal).empty(),
         .captures = Ast.Span(Ast.TypedLocal).empty(),
@@ -16104,7 +16104,7 @@ test "value-aware call-pattern collection keeps generic producer calls opaque" {
         .rest = let_arg_consumer_call,
     } } });
     _ = try program.addFn(.{
-        .facts = program.finishFnFacts(.{}),
+        .shapes = program.finishFnShapes(.{}),
         .symbol = @enumFromInt(6),
         .args = Ast.Span(Ast.TypedLocal).empty(),
         .captures = Ast.Span(Ast.TypedLocal).empty(),
@@ -16138,7 +16138,7 @@ test "generic value cloning preserves a call until its result shape is demanded"
         } },
     });
     const callee = try program.addFn(.{
-        .facts = program.finishFnFacts(.{}),
+        .shapes = program.finishFnShapes(.{}),
         .symbol = @enumFromInt(1),
         .args = Ast.Span(Ast.TypedLocal).empty(),
         .captures = Ast.Span(Ast.TypedLocal).empty(),
@@ -16190,7 +16190,7 @@ test "issue 10168 SpecConstr clones every capture when nested cloning grows the 
         .ty = unit_ty,
     }});
     const nested_fn = try program.addFn(.{
-        .facts = program.finishFnFacts(.{}),
+        .shapes = program.finishFnShapes(.{}),
         .symbol = @enumFromInt(2),
         .args = Ast.Span(Ast.TypedLocal).empty(),
         .captures = nested_capture_slots,
@@ -16229,7 +16229,7 @@ test "issue 10168 SpecConstr clones every capture when nested cloning grows the 
         .{ .local = second_local, .ty = unit_ty },
     });
     const outer_fn = try program.addFn(.{
-        .facts = program.finishFnFacts(.{}),
+        .shapes = program.finishFnShapes(.{}),
         .symbol = @enumFromInt(5),
         .args = Ast.Span(Ast.TypedLocal).empty(),
         .captures = outer_capture_slots,
@@ -16584,7 +16584,7 @@ test "whole-body normalization resolves binder-equivalent argument locals" {
     const equivalent = try program.addLocalWithBinder(@enumFromInt(2), ty, binder);
     const equivalent_ref = try program.addExpr(.{ .ty = ty, .data = .{ .local = equivalent } });
     const fn_id = try program.addFn(.{
-        .facts = program.finishFnFacts(.{}),
+        .shapes = program.finishFnShapes(.{}),
         .symbol = @enumFromInt(3),
         .args = try program.addTypedLocalSpan(&.{.{ .local = argument, .ty = ty }}),
         .captures = Ast.Span(Ast.TypedLocal).empty(),
@@ -16765,7 +16765,7 @@ test "SpecConstr loop projection scan is stack safe on deep sequential expressio
 // These fixtures exercise the exit ABI independently of front-end inlining.
 fn testExitProducer(program: *Ast.Program, ty: Type.TypeId, symbol: u32) std.mem.Allocator.Error!Ast.ExprId {
     const fn_id = try program.addFn(.{
-        .facts = program.finishFnFacts(.{}),
+        .shapes = program.finishFnShapes(.{}),
         .symbol = @enumFromInt(symbol),
         .args = .empty(),
         .captures = .empty(),

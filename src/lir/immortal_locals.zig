@@ -226,7 +226,7 @@ pub fn elide(gpa: Allocator, store: *LirStore) Allocator.Error!usize {
             var check = try compute(gpa, store);
             defer check.deinit(gpa);
             for (0..store.localCount()) |index| {
-                if (check.contains(@enumFromInt(@as(u32, @intCast(index))))) immortalInvariant("a program without static-literal facts held an immortal local");
+                if (check.contains(@enumFromInt(@as(u32, @intCast(index))))) immortalInvariant("a program without static-literal shapes held an immortal local");
             }
         }
         return 0;
@@ -417,11 +417,11 @@ pub fn elide(gpa: Allocator, store: *LirStore) Allocator.Error!usize {
     return drop_count;
 }
 
-/// Whether any procedure's facts record a static-backed literal; without one
+/// Whether any procedure's shapes record a static-backed literal; without one
 /// no local can be immortal.
 fn anyStaticLiteral(store: *const LirStore) bool {
     for (0..store.procSpecCount()) |index| {
-        if (store.getProcSpec(@enumFromInt(@as(u32, @intCast(index)))).facts.static_literal) return true;
+        if (store.getProcSpec(@enumFromInt(@as(u32, @intCast(index)))).shapes.static_literal) return true;
     }
     return false;
 }

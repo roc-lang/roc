@@ -83,7 +83,7 @@ pub fn rebuild(allocator: Allocator, result: *Program.Result, frozen: *const Pro
         const locals = try store.addLocalSpan(new_locals.items);
         const proc = store.getProcSpecPtr(accessor);
         proc.body = body;
-        proc.facts = proc.facts.merged(store.facts);
+        proc.shapes = proc.shapes.merged(store.shapes);
         proc.join_points = joins;
         proc.frame_locals = locals;
         if (store.procNeedsStackProbe(&result.layouts, proc.*)) proc.stack_probe = .required;

@@ -52,12 +52,12 @@ pub fn run(store: *LirStore, layouts: *layout_mod.Store) ResourceError!void {
     var proc_index: usize = 0;
     while (proc_index < proc_count) : (proc_index += 1) {
         const proc_id: LIR.LirProcSpecId = @enumFromInt(proc_index);
-        // Only a body with the shape's fact can carry the caller shape; Debug
+        // Only a body with the shape's flag can carry the caller shape; Debug
         // builds run the excluded procedures too and verify nothing rewrites.
-        const admitted = store.getProcSpec(proc_id).facts.interned_call_result;
+        const admitted = store.getProcSpec(proc_id).shapes.interned_call_result;
         if (!admitted and builtin.mode != .Debug) continue;
         const rewrote = try pass.transformProc(proc_id);
-        if (rewrote and !admitted) @panic("return-slot pass rewrote a procedure whose facts excluded it");
+        if (rewrote and !admitted) @panic("return-slot pass rewrote a procedure whose shapes excluded it");
     }
 }
 

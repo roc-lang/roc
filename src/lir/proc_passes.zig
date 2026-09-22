@@ -85,7 +85,7 @@ const TaskContext = struct {
     layouts: *const layout.Store,
     phase: Phase,
     proc: LIR.LirProcSpecId,
-    /// The procedure's facts excluded it from this phase; the task runs only
+    /// The procedure's shapes excluded it from this phase; the task runs only
     /// to verify that the phase indeed rewrites nothing, and never commits.
     verify_only: bool = false,
     shard: ?LirStore = null,
@@ -242,7 +242,7 @@ pub fn run(
     for (contexts.items) |*context| {
         const shard = &context.shard.?;
         if (context.verify_only) {
-            if (context.changed) std.debug.panic("LIR pass {s} rewrote procedure {d} whose facts {any} excluded it from the phase", .{ @tagName(phase), @intFromEnum(context.proc), store.getProcSpec(context.proc).facts });
+            if (context.changed) std.debug.panic("LIR pass {s} rewrote procedure {d} whose shapes {any} excluded it from the phase", .{ @tagName(phase), @intFromEnum(context.proc), store.getProcSpec(context.proc).shapes });
             if (parallel) if (metrics) |counts| {
                 counts.tasks_committed +|= 1;
                 counts.committed_by_phase[@intFromEnum(phase)] +|= 1;
@@ -274,18 +274,18 @@ pub fn run(
     }
 }
 
-/// Whether the procedure's recorded facts admit it to the phase: the phase
-/// can only rewrite a shape the facts say the body contains.
+/// Whether the procedure's recorded shapes admit it to the phase: the phase
+/// can only rewrite a shape the body's flags say it contains.
 fn phaseAdmits(store: *const LirStore, phase: Phase, proc: LIR.LirProcSpecId) bool {
-    const facts = store.getProcSpec(proc).facts;
+    const shapes = store.getProcSpec(proc).shapes;
     return switch (phase) {
-        .trmc => facts.self_call,
-        .loop_append => facts.loop,
-        .forwarding_join => facts.join_param,
-        .tag_fusion => facts.join_param and facts.switch_stmt,
-        .scalarize => facts.join_aggregate_param or facts.struct_build or facts.tag_build,
-        .range => facts.checked_arithmetic or facts.switch_stmt,
-        .box_reuse => facts.box_box,
+        .trmc => shapes.self_call,
+        .loop_append => shapes.loop,
+        .forwarding_join => shapes.join_param,
+        .tag_fusion => shapes.join_param and shapes.switch_stmt,
+        .scalarize => shapes.join_aggregate_param or shapes.struct_build or shapes.tag_build,
+        .range => shapes.checked_arithmetic or shapes.switch_stmt,
+        .box_reuse => shapes.box_box,
     };
 }
 

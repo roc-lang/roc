@@ -30,12 +30,12 @@ pub fn insert(allocator: std.mem.Allocator, program: *Program.Result) std.mem.Al
         const proc_id: LIR.LirProcSpecId = @enumFromInt(@as(u32, @intCast(proc_index)));
         const proc = store.getProcSpec(proc_id);
         // A guarded read is a static-data literal, so only a procedure whose
-        // facts record one can hold a use; Debug builds scan the others too
+        // shapes record one can hold a use; Debug builds scan the others too
         // and verify they hold none.
-        const admitted = proc.facts.static_literal;
+        const admitted = proc.shapes.static_literal;
         if (!admitted and @import("builtin").mode != .Debug) continue;
         const uses_before = uses.items.len;
-        defer if (!admitted and uses.items.len != uses_before) @panic("compile-time value guards found a use in a procedure whose facts excluded it");
+        defer if (!admitted and uses.items.len != uses_before) @panic("compile-time value guards found a use in a procedure whose shapes excluded it");
         visited.clearRetainingCapacity();
         work.clearRetainingCapacity();
         if (proc.body) |body| try work.append(allocator, body);
