@@ -22664,16 +22664,23 @@ const BodyContext = struct {
         return try self.instNode(scheme_root);
     }
 
-    fn interfaceSummaryCache(self: *BodyContext) *InterfaceSummaryCache {
-        if (self.typeStore() == &self.builder.program.types) return &self.builder.interface_summaries;
+    const InterfaceSummaryCacheBinding = struct {
+        cache: *InterfaceSummaryCache,
+        types_are_durable: bool,
+    };
+
+    fn interfaceSummaryCache(self: *BodyContext) InterfaceSummaryCacheBinding {
+        if (self.typeStore() == &self.builder.program.types) {
+            return .{ .cache = &self.builder.interface_summaries, .types_are_durable = true };
+        }
         const workspace = self.draft.spec_job_workspace orelse
             Common.compilerBug("interface summary graph has no owning workspace");
         std.debug.assert(self.typeStore() == &workspace.types);
-        return &workspace.interface_summaries;
+        return .{ .cache = &workspace.interface_summaries, .types_are_durable = false };
     }
 
     fn findInterfaceSummary(self: *BodyContext, address: InterfaceReplayAddress, evidence: StoredConstFnEvidence, provisional_ty: Type.TypeId) Allocator.Error!?struct { ty: Type.TypeId, coordinator: bool } {
-        const local = self.interfaceSummaryCache();
+        const local = self.interfaceSummaryCache().cache;
         if (local.buckets.get(address)) |candidates| for (candidates.items) |index| {
             const entry = local.entries.items[index];
             if (storedConstFnEvidenceEql(entry.evidence, evidence) and
@@ -22907,8 +22914,9 @@ const BodyContext = struct {
             }
         }
         if (saved_use_summaries) {
-            const cache = self.interfaceSummaryCache();
-            if (self.typeStore() == &self.builder.program.types) {
+            const cache_binding = self.interfaceSummaryCache();
+            const cache = cache_binding.cache;
+            if (cache_binding.types_are_durable) {
                 // On the coordinator both views were materialized outside any
                 // transaction, so they are already permanent program types.
                 // Interning canonical copies would only re-digest them and

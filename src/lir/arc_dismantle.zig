@@ -83,6 +83,45 @@ fn projectionPayload(projection: u64) u16 {
     return @intCast(projection & 0xffff);
 }
 
+/// Cycle-safe check for whether a layout may hold descriptor-driven dynamic
+/// (`erased_box`) content. Recursive tag unions reference themselves through
+/// their layout indices, so the walk tracks visited indices; `visited` and
+/// `stack` are caller-owned scratch reused across queries.
+pub fn layoutMayContainBoxyDynamic(
+    allocator: Allocator,
+    layouts: *const layout_mod.Store,
+    layout_idx: layout_mod.Idx,
+    visited: *std.AutoHashMap(layout_mod.Idx, void),
+    stack: *std.ArrayList(layout_mod.Idx),
+) Error!bool {
+    visited.clearRetainingCapacity();
+    stack.clearRetainingCapacity();
+    try stack.append(allocator, layout_idx);
+    while (stack.pop()) |idx| {
+        if ((try visited.getOrPut(idx)).found_existing) continue;
+        const layout_val = layouts.getLayout(idx);
+        switch (layout_val.tag) {
+            .erased_box => return true,
+            .box, .list => try stack.append(allocator, layout_val.getIdx()),
+            .list_of_zst, .box_of_zst, .zst, .scalar, .erased_callable, .ptr => {},
+            .struct_ => {
+                const info = layouts.getStructInfo(layout_val);
+                for (0..info.fields.len) |index| {
+                    try stack.append(allocator, info.fields.get(@intCast(index)).layout);
+                }
+            },
+            .tag_union => {
+                const info = layouts.getTagUnionInfo(layout_val);
+                for (0..info.variants.len) |index| {
+                    try stack.append(allocator, info.variants.get(@intCast(index)).payload_layout);
+                }
+            },
+            .closure => try stack.append(allocator, layout_val.getClosure().captures_layout_idx),
+        }
+    }
+    return false;
+}
+
 fn structFieldBySemanticIndex(layouts: *const layout_mod.Store, struct_layout: layout_mod.Layout, field_idx: u16) ?layout_mod.StructField {
     const info = layouts.getStructInfo(struct_layout);
     for (0..info.fields.len) |index| {
@@ -443,6 +482,11 @@ const Analysis = struct {
     /// so the take dataflow rejects takes such a mention could follow.
     mention_heads: []u32,
     mention_edges: std.ArrayList(MentionEdge) = .empty,
+    /// Per-layout answers of `layoutMayContainBoxyDynamic` for field layouts
+    /// the gate has asked about, and the scratch that answers them.
+    boxy_dynamic_layouts: collections.DenseMap(layout_mod.Idx, bool),
+    layout_visited: std.AutoHashMap(layout_mod.Idx, void),
+    layout_stack: std.ArrayList(layout_mod.Idx) = .empty,
 
     fn deinit(self: *Analysis) void {
         var it = self.candidates.valueIterator();
@@ -461,6 +505,9 @@ const Analysis = struct {
         self.gpa.free(self.state);
         self.gpa.free(self.owned_demand);
         self.demand_aliases.deinit(self.gpa);
+        self.boxy_dynamic_layouts.deinit();
+        self.layout_visited.deinit();
+        self.layout_stack.deinit(self.gpa);
     }
 
     fn demandOwned(self: *Analysis, local: LIR.LocalId) void {
@@ -486,9 +533,9 @@ const Analysis = struct {
     }
 
     /// Whether the local's layout and binding shape could ever benefit from
-    /// dismantling. Cheap, no allocation; the full per-candidate work only
-    /// happens for locals that pass.
-    fn passesGate(self: *Analysis, local: LIR.LocalId) bool {
+    /// dismantling. Cheap: layout answers are memoized per field layout, and the
+    /// full per-candidate work only happens for locals that pass.
+    fn passesGate(self: *Analysis, local: LIR.LocalId) Error!bool {
         const local_index = @intFromEnum(local);
         if (local_index >= self.rc_local.len) dismantleInvariant("ARC dismantle resource table did not cover local");
         if (!self.rc_local[local_index]) return false;
@@ -505,9 +552,20 @@ const Analysis = struct {
             if (field.index >= 64) return false;
             if (self.layouts.layoutContainsRefcounted(self.layouts.getLayout(field.layout))) {
                 any_rc = true;
+                // A residual field is released through its layout's RC
+                // helper. Descriptor-driven (`erased_box`) content has no
+                // layout helper; its container is released whole instead.
+                if (try self.fieldLayoutIsBoxyDynamic(field.layout)) return false;
             }
         }
         return any_rc;
+    }
+
+    fn fieldLayoutIsBoxyDynamic(self: *Analysis, layout_idx: layout_mod.Idx) Error!bool {
+        if (self.boxy_dynamic_layouts.get(layout_idx)) |known| return known;
+        const answer = try layoutMayContainBoxyDynamic(self.gpa, self.layouts, layout_idx, &self.layout_visited, &self.layout_stack);
+        try self.boxy_dynamic_layouts.put(layout_idx, answer);
+        return answer;
     }
 
     fn entryOf(self: *Analysis, local: LIR.LocalId) Error!?*Candidate {
@@ -516,7 +574,7 @@ const Analysis = struct {
             .ineligible, .transparent_alias => return null,
             .candidate => return self.candidates.getPtr(index).?,
             .unknown => {
-                if (!self.passesGate(local)) {
+                if (!try self.passesGate(local)) {
                     self.state[index] = .ineligible;
                     return null;
                 }
@@ -1716,6 +1774,8 @@ pub fn compute(
         .explicit_init_join = explicit_init_join,
         .owned_demand = try gpa.alloc(bool, store.localCount()),
         .mention_heads = try gpa.alloc(u32, store.localCount()),
+        .boxy_dynamic_layouts = collections.DenseMap(layout_mod.Idx, bool).init(gpa),
+        .layout_visited = std.AutoHashMap(layout_mod.Idx, void).init(gpa),
     };
     defer analysis.deinit();
     @memset(analysis.state, .unknown);
