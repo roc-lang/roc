@@ -12398,7 +12398,13 @@ fn parseRunnerArgs(allocator: Allocator, process_args: std.process.Args) CliRunn
     }
 
     return .{
-        .standard = try harness.parseStandardArgsFromSlice(try standard_args.toOwnedSlice(allocator), allocator),
+        .standard = harness.parseStandardArgsFromSlice(try standard_args.toOwnedSlice(allocator), allocator) catch |err| switch (err) {
+            error.OutOfMemory => return error.OutOfMemory,
+            error.Overflow, error.InvalidCharacter => {
+                std.debug.print("invalid numeric option value\n", .{});
+                return error.InvalidArgs;
+            },
+        },
         .suites = suites,
         .glue_options = glue_options,
         .glue_roc = glue_roc,
@@ -12595,7 +12601,7 @@ pub fn main(init: std.process.Init) CliRunnerError!void {
         }
         const batch_offset_ns = wall_timer.read();
         const batch_workers = @min(max_children, batch_end - batch_start);
-        Pool.runWithSpans(init.io, tests[batch_start..batch_end], results[batch_start..batch_end], spans[batch_start..batch_end], batch_workers, timeout_ms, gpa, worker_argv_template);
+        Pool.runWithSpans(init.io, tests[batch_start..batch_end], results[batch_start..batch_end], spans[batch_start..batch_end], batch_workers, timeout_ms, gpa, worker_argv_template, args.child_debug);
         for (spans[batch_start..batch_end]) |*maybe_span| {
             if (maybe_span.*) |*span| {
                 span.start_ns += batch_offset_ns;
