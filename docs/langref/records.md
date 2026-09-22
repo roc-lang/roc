@@ -348,10 +348,12 @@ empty : {}
 empty = {}
 ```
 
-The empty record is useful when an API needs a value but has no information to carry, or as the backing type for a nominal namespace that only defines associated items:
+The empty record is useful when an API needs a value but has no information to carry. It is inhabited: its one possible value is `{}`.
+
+For a utility or namespace module that only defines associated items, prefer the empty tag union `[]` as an opaque backing type. No value of `[]` can be constructed, so no value of the module type can be constructed either:
 
 ```roc
-Math := {}.{
+Math :: [].{
     double : U64 -> U64
     double = |n| n * 2
 }
