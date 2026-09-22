@@ -1781,11 +1781,23 @@ pub const tests = [_]TestCase{
         .source_kind = .module,
         .source =
         \\Vector := U64x2.{
+        \\    to_inspect : Vector -> Str
         \\    to_inspect = |_vector| "custom vector"
         \\}
         \\main = Vector.(U64x2.default())
         ,
         .expected = .{ .inspect_str = "custom vector" },
+    },
+    .{
+        .name = "issue 11170: unconstrained custom inspect argument uses SIMD backing",
+        .source_kind = .module,
+        .source =
+        \\Vector := U64x2.{
+        \\    to_inspect = |_vector| "custom vector"
+        \\}
+        \\main = (Str.inspect(Vector.(U64x2.default())), Vector.to_inspect({}))
+        ,
+        .expected = .{ .inspect_str = "(\"U64x2(0, 0)\", \"custom vector\")" },
     },
     .{
         // https://github.com/roc-lang/roc/issues/11189

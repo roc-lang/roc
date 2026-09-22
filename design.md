@@ -3988,6 +3988,13 @@ Monotype consumes the same checked method shape when generating callbacks. It
 must never assume that the two state types are equal or reconstruct one from
 the other.
 
+Container format methods receive their value writers as ordinary callable
+arguments. Those generated writers retain their own prepared codec plans;
+the format method itself needs only its checked callable type and evidence,
+so its specialization does not inherit the enclosing generated-codec contract.
+Calls from that method to ordinary helpers share specializations with calls
+from scalar format methods at the same type and evidence.
+
 Canonicalization records each recognized associated underscore opt-in as an
 `e_derived_method` CIR expression carrying its exact derived-method kind. An
 ordinary annotation without a body remains `e_anno_only`; in a platform package,
@@ -6754,9 +6761,10 @@ dispatch to it like any other method. It is an inspect override exactly when
 its type is `T -> Str`, where `T` is the owning nominal applied to distinct type
 variables that carry no `where` constraints. `Wrap(a) -> Str` qualifies;
 `Wrap(I64) -> Str`, `Pair(a, a) -> Str`,
-`Wrap(a) -> Str where [a.to_inspect : a -> Str]`, extra arguments, effectful
-functions, and non-`Str` results do not. Inspection ignores an ineligible
-method and renders the value's default form; this is never reported.
+`Wrap(a) -> Str where [a.to_inspect : a -> Str]`, an unconstrained `a -> Str`,
+extra arguments, effectful functions, and non-`Str` results do not. Inspection
+ignores an ineligible method and renders the value's default form; this is never
+reported.
 
 Eligibility is a property of the declaration alone, so it holds at every
 instantiation of the owner. Inspection therefore places no requirement on the

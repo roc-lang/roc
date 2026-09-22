@@ -14730,9 +14730,10 @@ const CodecKind = enum {
     encoder,
 };
 
-/// Whether a callee actually depends on compiler-generated codec callbacks.
-/// Ordinary calls inherit their lexical contract; first-order format methods
-/// are self-contained and specialize only by their own interface and evidence.
+/// Whether a callee needs the enclosing generated-codec contract to lower
+/// intrinsics such as `ParseTagUnionSpec.parse`. Ordinary calls inherit their
+/// lexical contract; format methods using ordinary values and writer arguments
+/// specialize only by their own interface and evidence.
 const CodecContractSelection = union(enum) {
     inherit,
     independent,
@@ -44434,8 +44435,10 @@ const BodyContext = struct {
         );
     }
 
-    /// First-order format methods have no generated payload-parser callbacks.
-    /// Their checked callable and evidence fully determine specialization.
+    /// Format methods with ordinary values and callable arguments need no
+    /// enclosing codec contract. Generated writer arguments retain their own
+    /// prepared calls; the method's checked callable and evidence fully
+    /// determine its specialization.
     fn methodTargetCalleeAtNodeForFormat(
         self: *BodyContext,
         lookup: MethodLookup,
@@ -48709,12 +48712,7 @@ const BodyContext = struct {
         try relateRequestComponent(self.graph, target.args[0], state_node);
         try relateRequestComponent(self.graph, target.ret, runtime.ret);
 
-        const callee = try self.methodTargetCalleeAtNodeForCodec(
-            lookup,
-            target_node,
-            exact.contract,
-            exact.anchor,
-        );
+        const callee = try self.methodTargetCalleeAtNodeForFormat(lookup, target_node, exact.contract);
         try self.draft.prepared_codec_calls.append(self.allocator, .{
             .boundary_expr = boundary_expr,
             .kind = .encoder,
