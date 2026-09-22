@@ -483,25 +483,27 @@ active_scheme_root: ?Var = null,
 /// dispatch-evidence publication sees one coherent scheme); references after
 /// that use the def's own pattern var as always.
 predeclared_scheme_vars: std.ArrayListUnmanaged(?Var) = .empty,
-/// Sparse body-annotation identity slot → predeclared-copy correspondence for
-/// annotated defs actually referenced before their bodies are checked. The
-/// predeclared scheme and body generation enumerate the same canonical identity
-/// slots, including internal open-row vars with no CIR node, so an early use can
-/// compose substitutions without structural recovery.
-predeclared_identity_correspondence_by_def: std.AutoHashMapUnmanaged(CIR.Def.Idx, PredeclaredIdentityCorrespondence) = .empty,
-predeclared_annotation_pairs: std.ArrayListUnmanaged(VarPair) = .empty,
-/// Predeclared-scheme → early-use substitutions. Pending uses own ranges in
-/// this append-only pool until their caller boundary replays off-root
-/// requirements; storage is reclaimed with the checker.
-pending_predeclared_use_pairs: std.ArrayListUnmanaged(VarPair) = .empty,
-/// Annotated top-level body currently being checked. Closure wrappers delegate
-/// annotation generation to their inner lambda, so this explicit def identity
-/// carries the predeclared correspondence across that delegation.
-checking_predeclared_body_def: ?CIR.Def.Idx = null,
+/// Identity slots of every predeclared annotation (top-level and block-local),
+/// keyed by the annotation. A use of a predeclared scheme is recorded against
+/// the annotated binding's own scheme by composing through these slots; see
+/// `PredeclaredSlots`.
+predeclared_slots: std.AutoHashMapUnmanaged(CIR.Annotation.Idx, PredeclaredSlots) = .empty,
+/// Backing storage for `PredeclaredSlots` ranges.
+predeclared_slot_vars: std.ArrayListUnmanaged(Var) = .empty,
+/// Backing storage for `PendingPredeclaredSchemeUse.fresh` and
+/// `WaitingPredeclaredDispatchUse.fresh`: one use's copies of its predeclared
+/// scheme's identity slots, in `predeclaredUseFreshVars` layout. Reclaimed
+/// once no pending or waiting use remains.
+predeclared_use_fresh_vars: std.ArrayListUnmanaged(Var) = .empty,
+/// Dispatch uses of an annotated method whose body has not generated its
+/// annotation yet. Each is recorded against the method's own scheme when that
+/// body generates its annotation (`recordPredeclaredBodySlots`).
+waiting_predeclared_dispatch_uses: std.ArrayListUnmanaged(WaitingPredeclaredDispatchUse) = .empty,
 /// The block-local (`s_decl`) analogue of `predeclared_scheme_vars`, keyed by
 /// pattern and live only while the local def is in flight (entries are
-/// removed when the statement finishes).
-predeclared_local_scheme_vars: std.AutoHashMapUnmanaged(CIR.Pattern.Idx, Var) = .empty,
+/// removed when the statement finishes). The value is the def's annotation,
+/// whose `predeclared_slots` entry holds the scheme.
+predeclared_local_annotations: std.AutoHashMapUnmanaged(CIR.Pattern.Idx, CIR.Annotation.Idx) = .empty,
 /// The one expression (a recursive group member's top-level RHS) whose
 /// generalization is suppressed because it lives in its group's shared rank
 /// frame and generalizes at the group boundary instead. Consume-once, like
@@ -1276,7 +1278,20 @@ const InstantiationEvidence = union(enum) {
         /// Derived-shape validation preserves a shared receiver's original
         /// callable requirement until that receiver grounds.
         shape_validation: bool = false,
+        /// False when the instantiated scheme is an annotated method's
+        /// predeclared scheme: the edge keeps its dispatch lineage, and
+        /// `recordPredeclaredDispatchUse` records it against the method's
+        /// own scheme.
+        records_scheme_use: bool = true,
     },
+
+    fn recordsSchemeUse(self: InstantiationEvidence) bool {
+        return switch (self) {
+            .none => false,
+            .value_use, .nested_function_use => true,
+            .dispatch_target => |site| site.records_scheme_use,
+        };
+    }
 };
 
 /// The concrete method target and local method var selected for one logical
@@ -1689,31 +1704,65 @@ const PendingPredeclaredSchemeUse = struct {
     checking_executable_root: bool,
     delayed_dependency_depth: u32,
     instantiation_is_immediate_callee: bool,
-    initial_scheme_use_index: ?u32,
-    use_pairs: VarPairRange,
+    /// This use's copies of the target's predeclared identity slots, in
+    /// `predeclared_use_fresh_vars`.
+    fresh: VarRange,
 };
 
-const VarPair = struct {
-    old_var: Var,
-    fresh_var: Var,
+/// A dispatch use of an annotated method whose body has not generated its
+/// annotation yet, waiting in `waiting_predeclared_dispatch_uses` to be
+/// recorded against the method's own scheme.
+const WaitingPredeclaredDispatchUse = struct {
+    annotation: CIR.Annotation.Idx,
+    node_idx: u32,
+    constraint_fn_var: Var,
+    scheme_root: Var,
+    record_policy: PredeclaredRecordPolicy,
+    fresh: VarRange,
 };
 
-const VarPairRange = struct {
+/// Whether a use of a predeclared scheme whose substitution turns out empty
+/// still gets a record. Each use site keeps the policy it applies to every
+/// other scheme it instantiates.
+const PredeclaredRecordPolicy = enum {
+    /// Record only a nonempty substitution or a scheme with evidence params,
+    /// as `instantiateVarHelp` decides.
+    when_needed,
+    /// Always record, as `instantiateDispatchTargetMethodVar` does for every
+    /// same-module target.
+    always,
+};
+
+const VarRange = struct {
     start: u32 = 0,
     len: u32 = 0,
 
-    fn slice(self: VarPairRange, pairs: []const VarPair) []const VarPair {
-        return pairs[self.start..][0..self.len];
-    }
-
-    fn mutableSlice(self: VarPairRange, pairs: []VarPair) []VarPair {
-        return pairs[self.start..][0..self.len];
+    fn slice(self: VarRange, vars: []const Var) []const Var {
+        return vars[self.start..][0..self.len];
     }
 };
 
-const PredeclaredIdentityCorrespondence = struct {
-    pairs: VarPairRange,
-    body_recorded: bool = false,
+/// The canonical identity slots of one predeclared annotation, on both of its
+/// sides: the standalone scheme that uses before or during the body
+/// instantiate, and the annotation the body generates and shares with the
+/// binding's own scheme. Both generations enumerate the same slots in the same
+/// order, internal open-row variables with no CIR node included, so slot i of
+/// one is slot i of the other. A use's substitution for the predeclared scheme
+/// therefore composes onto the binding's own scheme without structural
+/// matching, which is what lets every use be recorded against the scheme the
+/// binding's template publishes.
+const PredeclaredSlots = struct {
+    scheme_var: Var,
+    /// Enumerated from the pristine predeclared scheme at its first use.
+    predeclared: ?VarRange = null,
+    /// Enumerated when the body generates the annotation, before anything
+    /// unifies with it. Every predeclared annotation records this, because a
+    /// use that arrives while the body is being checked is only discovered
+    /// after the generation.
+    body: ?VarRange = null,
+    /// Whether the predeclared scheme has evidence params, computed at the
+    /// first use whose substitution is otherwise empty.
+    has_evidence_params: ?bool = null,
 };
 
 const HoistPosition = enum {
@@ -2778,7 +2827,8 @@ pub fn deinit(self: *Self) void {
     self.group_stack.deinit(self.gpa);
     self.pending_dispatch_targets.deinit(self.gpa);
     self.pending_predeclared_scheme_uses.deinit(self.gpa);
-    self.pending_predeclared_use_pairs.deinit(self.gpa);
+    self.predeclared_use_fresh_vars.deinit(self.gpa);
+    self.waiting_predeclared_dispatch_uses.deinit(self.gpa);
     for (self.type_schemes.items) |*scheme| {
         scheme.indexed_vars.deinit(self.gpa);
         scheme.dispatch_requirements.deinit(self.gpa);
@@ -2796,9 +2846,9 @@ pub fn deinit(self: *Self) void {
     while (scheme_candidate_indices.next()) |indices| indices.deinit(self.gpa);
     self.scheme_requirement_candidate_indices_by_owner.deinit(self.gpa);
     self.predeclared_scheme_vars.deinit(self.gpa);
-    self.predeclared_identity_correspondence_by_def.deinit(self.gpa);
-    self.predeclared_annotation_pairs.deinit(self.gpa);
-    self.predeclared_local_scheme_vars.deinit(self.gpa);
+    self.predeclared_slots.deinit(self.gpa);
+    self.predeclared_slot_vars.deinit(self.gpa);
+    self.predeclared_local_annotations.deinit(self.gpa);
     self.value_lookup_tracking.deinit(self.gpa);
     self.erroneous_value_exprs.deinit(self.gpa);
     self.erroneous_reassignments.deinit(self.gpa);
@@ -6404,6 +6454,28 @@ fn finalizeBindingSchemeNodes(self: *Self) Allocator.Error!void {
     }
 }
 
+/// Every use of a predeclared scheme is recorded against its binding's own
+/// scheme (`PredeclaredSlots`), so once checking finishes no dispatch use may
+/// still be waiting for a body. Debug builds also confirm that no record names
+/// a predeclared scheme as its root.
+fn verifyPredeclaredSchemeUsesRecorded(self: *Self) Allocator.Error!void {
+    if (self.waiting_predeclared_dispatch_uses.items.len != 0) {
+        std.debug.panic("type checker invariant violated: a dispatch use of a predeclared scheme was never recorded", .{});
+    }
+    if (builtin.mode != .Debug) return;
+    var predeclared_roots: std.AutoHashMapUnmanaged(u32, void) = .empty;
+    defer predeclared_roots.deinit(self.gpa);
+    var slots_iter = self.predeclared_slots.valueIterator();
+    while (slots_iter.next()) |slots| try predeclared_roots.put(self.gpa, @intFromEnum(slots.scheme_var), {});
+    for (self.cir.scheme_uses.items.items) |record| {
+        if (predeclared_roots.contains(record.scheme_root)) {
+            std.debug.panic("type checker invariant violated: a {s} scheme-use record is rooted at a predeclared scheme", .{
+                @tagName(@as(ModuleEnv.SchemeUseRecord.Slot, @enumFromInt(record.slot_kind))),
+            });
+        }
+    }
+}
+
 fn bindBindingSchemeVar(self: *Self, scheme_var: Var, alias_var: Var) Allocator.Error!void {
     if (self.isBindingSchemeVar(scheme_var)) {
         try self.markBindingSchemeVar(alias_var);
@@ -6430,10 +6502,17 @@ fn typeHasGeneralizedVar(self: *Self, root_var: Var) Allocator.Error!bool {
         switch (resolved.desc.content) {
             .err, .field_presence => {},
             .flex, .rigid => {},
-            .alias => |alias| try self.binding_scheme_classification_stack.appendSlice(
-                self.gpa,
-                self.types.sliceAliasArgs(alias),
-            ),
+            // An alias is transparent: instantiation copies its backing in the
+            // alias's own position, so a quantified variable reachable only
+            // through the backing (an implicitly opened row inside an aliased
+            // union, for example) makes the binding a scheme.
+            .alias => |alias| {
+                try self.binding_scheme_classification_stack.appendSlice(
+                    self.gpa,
+                    self.types.sliceAliasArgs(alias),
+                );
+                try self.binding_scheme_classification_stack.append(self.gpa, self.types.getAliasBackingVar(alias));
+            },
             .structure => |flat| switch (flat) {
                 .empty_record, .empty_tag_union => {},
                 .tuple => |tuple| try self.binding_scheme_classification_stack.appendSlice(
@@ -6970,7 +7049,7 @@ fn instantiateVarHelp(
 
             const fresh_resolved = self.types.resolveVar(fresh_var);
 
-            if (evidence != .none) {
+            if (evidence.recordsSchemeUse()) {
                 // A constrained scheme var was copied: remember (scheme var → fresh
                 // var) so the whole instantiation can be recorded as static-dispatch
                 // evidence below. Rigid copies (annotation-kept rigidity) are
@@ -7101,7 +7180,7 @@ fn instantiateVarHelp(
         }
     }
 
-    if (evidence != .none) {
+    if (evidence.recordsSchemeUse()) {
         try self.appendSchemeRequirementEvidencePairs(instantiated_requirements.items);
         try self.canonicalizeSchemeUsePairs(&self.scratch_evidence_pairs);
         // Nonempty substitutions already require a record; only an empty
@@ -8864,6 +8943,7 @@ fn checkFileInternal(self: *Self, skip_numeric_defaults: bool) std.mem.Allocator
     try self.finalizeTopLevelDemandDependencies(&env);
     try self.finalizeExpectEffectSlots();
 
+    try self.verifyPredeclaredSchemeUsesRecorded();
     try self.finalizeBindingSchemeNodes();
 
     try self.finalizePlatformRequirementSolutions();
@@ -13403,6 +13483,7 @@ pub fn checkExprRepl(self: *Self, expr_idx: CIR.Expr.Idx) std.mem.Allocator.Erro
 
     try self.finalizeExpectEffectSlots();
 
+    try self.verifyPredeclaredSchemeUsesRecorded();
     try self.finalizeBindingSchemeNodes();
 
     self.debugAssertNominalDeclTableComplete();
@@ -13518,9 +13599,6 @@ fn checkDef(self: *Self, def_idx: CIR.Def.Idx, env: *Env) std.mem.Allocator.Erro
     defer self.checking_immediate_callee = saved_checking_immediate_callee;
     self.checking_binding_rhs = true;
     self.checking_binding_rhs_pattern = def.pattern;
-    const previous_checking_predeclared_body_def = self.checking_predeclared_body_def;
-    if (self.predeclaredSchemeVar(def_idx) != null) self.checking_predeclared_body_def = def_idx;
-    defer self.checking_predeclared_body_def = previous_checking_predeclared_body_def;
     const saved_active_scheme_root = self.active_scheme_root;
     // A singleton value definition has no scheme boundary and therefore owns
     // no side-table candidates. Recursive groups still provisionally own every
@@ -13675,6 +13753,7 @@ fn predeclareAnnotatedDefSchemes(self: *Self, env: *Env) std.mem.Allocator.Error
         if (!self.annotationIsPredeclarableScheme(def.pattern, annotation_idx)) continue;
         const scheme_var = try self.predeclareAnnotationScheme(annotation_idx, env);
         self.setPredeclaredSchemeVar(def_idx, scheme_var);
+        try self.registerPredeclaredSlots(annotation_idx, scheme_var);
     }
 }
 
@@ -13742,54 +13821,247 @@ fn predeclareAnnotationScheme(
     return scheme_var;
 }
 
-/// Initialize the sparse predeclared identity side of the correspondence only
-/// when an actual lookup reaches the annotation before its body. The pristine
-/// predeclared scheme is still available here, so canonical slot enumeration
-/// is direct producer data rather than a later reconstruction.
-fn ensurePredeclaredIdentityCorrespondence(
-    self: *Self,
-    def_idx: CIR.Def.Idx,
-    scheme_var: Var,
-) Allocator.Error!void {
-    const entry = try self.predeclared_identity_correspondence_by_def.getOrPut(self.gpa, def_idx);
-    if (entry.found_existing) return;
-    errdefer _ = self.predeclared_identity_correspondence_by_def.remove(def_idx);
-
-    const identity_vars = try self.canonical_key_writer.identityVarsFromVar(scheme_var);
-    defer self.gpa.free(identity_vars);
-    const pairs_start: u32 = @intCast(self.predeclared_annotation_pairs.items.len);
-    for (identity_vars) |identity_var| {
-        try self.predeclared_annotation_pairs.append(self.gpa, .{
-            // Replaced with the regenerated body's identity var before replay.
-            .old_var = identity_var,
-            .fresh_var = identity_var,
-        });
-    }
-    entry.value_ptr.* = .{ .pairs = .{
-        .start = pairs_start,
-        .len = @intCast(identity_vars.len),
-    } };
+/// Register a predeclared annotation's standalone scheme. Its identity slots
+/// are enumerated later; see `PredeclaredSlots`. A block-local annotation is
+/// predeclared again each time its statement is checked, and each check
+/// generates the body annotation afresh, so re-registration starts over.
+fn registerPredeclaredSlots(self: *Self, annotation_idx: CIR.Annotation.Idx, scheme_var: Var) Allocator.Error!void {
+    try self.predeclared_slots.put(self.gpa, annotation_idx, .{ .scheme_var = scheme_var });
 }
 
-/// Complete the explicit identity-slot correspondence recorded by the
-/// annotation pre-pass. Canonical identity slots include generation-internal
-/// open row vars that have no CIR node of their own, so pairing by slot here
-/// is complete where raw annotation-node pairs would not be.
-fn recordPredeclaredBodyAnnotationPairs(
-    self: *Self,
-    def_idx: CIR.Def.Idx,
-    annotation_idx: CIR.Annotation.Idx,
-) Allocator.Error!void {
-    const correspondence = self.predeclared_identity_correspondence_by_def.getPtr(def_idx) orelse return;
-    if (correspondence.body_recorded) return;
-    const range = correspondence.pairs;
-    const body_identity_vars = try self.canonical_key_writer.identityVarsFromVar(ModuleEnv.varFrom(annotation_idx));
-    defer self.gpa.free(body_identity_vars);
-    if (body_identity_vars.len != range.len) return;
-    for (body_identity_vars, range.mutableSlice(self.predeclared_annotation_pairs.items)) |body_var, *pair| {
-        pair.old_var = body_var;
+fn predeclaredSlotsPtr(self: *Self, annotation_idx: CIR.Annotation.Idx) *PredeclaredSlots {
+    return self.predeclared_slots.getPtr(annotation_idx) orelse
+        std.debug.panic("type checker invariant violated: predeclared scheme use named an annotation that was never predeclared", .{});
+}
+
+fn predeclaredSchemeVarForAnnotation(self: *Self, annotation_idx: CIR.Annotation.Idx) Var {
+    return self.predeclaredSlotsPtr(annotation_idx).scheme_var;
+}
+
+/// The predeclared scheme's identity slots. The scheme is a generalized orphan
+/// copy that nothing unifies with, so enumerating it at first use sees exactly
+/// what enumerating it at declaration would have.
+fn predeclaredSchemeSlots(self: *Self, annotation_idx: CIR.Annotation.Idx) Allocator.Error![]const Var {
+    const slots = self.predeclaredSlotsPtr(annotation_idx);
+    if (slots.predeclared == null) {
+        const start: u32 = @intCast(self.predeclared_slot_vars.items.len);
+        try self.canonical_key_writer.appendIdentityVarsFromVar(slots.scheme_var, &self.predeclared_slot_vars);
+        slots.predeclared = .{
+            .start = start,
+            .len = @intCast(self.predeclared_slot_vars.items.len - start),
+        };
     }
-    correspondence.body_recorded = true;
+    return slots.predeclared.?.slice(self.predeclared_slot_vars.items);
+}
+
+/// Record the body side of a predeclared annotation's identity slots at the
+/// moment the body generates the annotation, then record every dispatch use
+/// that was waiting for them. Annotations that were not predeclared have no
+/// entry and cost one map lookup.
+fn recordPredeclaredBodySlots(self: *Self, annotation_idx: CIR.Annotation.Idx) Allocator.Error!void {
+    const slots = self.predeclared_slots.getPtr(annotation_idx) orelse return;
+    if (slots.body != null) return;
+    const start: u32 = @intCast(self.predeclared_slot_vars.items.len);
+    try self.canonical_key_writer.appendIdentityVarsFromVar(ModuleEnv.varFrom(annotation_idx), &self.predeclared_slot_vars);
+    slots.body = .{
+        .start = start,
+        .len = @intCast(self.predeclared_slot_vars.items.len - start),
+    };
+    if (self.waiting_predeclared_dispatch_uses.items.len == 0) return;
+
+    var write: usize = 0;
+    for (self.waiting_predeclared_dispatch_uses.items) |waiting| {
+        if (waiting.annotation != annotation_idx) {
+            self.waiting_predeclared_dispatch_uses.items[write] = waiting;
+            write += 1;
+            continue;
+        }
+        self.scratch_evidence_pairs.clearRetainingCapacity();
+        try self.appendPredeclaredUsePairs(annotation_idx, waiting.fresh.slice(self.predeclared_use_fresh_vars.items));
+        try self.writePredeclaredSchemeUse(
+            annotation_idx,
+            .dispatch_target,
+            waiting.node_idx,
+            @intFromEnum(waiting.constraint_fn_var),
+            waiting.scheme_root,
+            waiting.record_policy,
+        );
+    }
+    self.waiting_predeclared_dispatch_uses.shrinkRetainingCapacity(write);
+    self.reclaimPredeclaredUseFreshVars();
+}
+
+/// Fresh-var storage is referenced only by pending and waiting uses, so it is
+/// reclaimed whenever neither list holds one.
+fn reclaimPredeclaredUseFreshVars(self: *Self) void {
+    if (self.pending_predeclared_scheme_uses.items.len == 0 and
+        self.waiting_predeclared_dispatch_uses.items.len == 0)
+    {
+        self.predeclared_use_fresh_vars.clearRetainingCapacity();
+    }
+}
+
+fn staticDispatchConstraintsOf(content: types_mod.Content) StaticDispatchConstraint.SafeList.Range {
+    return switch (content) {
+        .flex => |flex| flex.constraints,
+        .rigid => |rigid| rigid.constraints,
+        .alias, .field_presence, .structure, .err => StaticDispatchConstraint.SafeList.Range.empty(),
+    };
+}
+
+/// Capture, from the instantiation just performed into `var_map`, this use's
+/// copy of every predeclared identity slot followed by the copy of every
+/// slot's static-dispatch callable, in slot and constraint order.
+fn appendPredeclaredUseFreshVars(self: *Self, annotation_idx: CIR.Annotation.Idx) Allocator.Error!VarRange {
+    const predeclared = try self.predeclaredSchemeSlots(annotation_idx);
+    const start: u32 = @intCast(self.predeclared_use_fresh_vars.items.len);
+    for (predeclared) |slot_var| {
+        const root = self.types.resolveVar(slot_var).var_;
+        const slot_copy = self.var_map.get(root) orelse
+            std.debug.panic("type checker invariant violated: predeclared scheme instantiation did not copy an identity slot", .{});
+        try self.predeclared_use_fresh_vars.append(self.gpa, slot_copy);
+    }
+    for (predeclared) |slot_var| {
+        const constraints = staticDispatchConstraintsOf(self.types.resolveVar(slot_var).desc.content);
+        for (self.types.sliceStaticDispatchConstraints(constraints)) |constraint| {
+            const fn_root = self.types.resolveVar(constraint.fn_var).var_;
+            const fresh_fn = self.var_map.get(fn_root) orelse
+                std.debug.panic("type checker invariant violated: predeclared scheme instantiation did not copy a slot's dispatch callable", .{});
+            try self.predeclared_use_fresh_vars.append(self.gpa, fresh_fn);
+        }
+    }
+    return .{
+        .start = start,
+        .len = @intCast(self.predeclared_use_fresh_vars.items.len - start),
+    };
+}
+
+/// Append to `scratch_evidence_pairs` one use's substitution for the binding's
+/// own scheme: each body slot that is still a variable, paired with the use's
+/// copy of the same predeclared slot, and each body slot's dispatch callable
+/// paired with the copy of the same predeclared callable. A body slot that the
+/// body has already solved to structure cannot be a quantified variable of
+/// the binding's scheme, so it needs no entry.
+fn appendPredeclaredUsePairs(self: *Self, annotation_idx: CIR.Annotation.Idx, use_copies: []const Var) Allocator.Error!void {
+    const predeclared = try self.predeclaredSchemeSlots(annotation_idx);
+    const slots = self.predeclaredSlotsPtr(annotation_idx);
+    const body_range = slots.body orelse
+        std.debug.panic("type checker invariant violated: predeclared scheme use composed before its body generated the annotation", .{});
+    const body = body_range.slice(self.predeclared_slot_vars.items);
+    if (body.len != predeclared.len) {
+        std.debug.panic("type checker invariant violated: predeclared scheme and body annotation enumerated different identity slots", .{});
+    }
+    for (body, use_copies[0..body.len]) |body_var, fresh_var| {
+        const resolved = self.types.resolveVar(body_var);
+        switch (resolved.desc.content) {
+            .flex, .rigid => try self.scratch_evidence_pairs.append(self.gpa, .{
+                .old_var = @intFromEnum(resolved.var_),
+                .fresh_var = @intFromEnum(fresh_var),
+            }),
+            .alias, .field_presence, .structure, .err => {},
+        }
+    }
+    var fresh_fn_index = body.len;
+    for (body, predeclared) |body_var, predeclared_var| {
+        const predeclared_constraints = self.types.sliceStaticDispatchConstraints(
+            staticDispatchConstraintsOf(self.types.resolveVar(predeclared_var).desc.content),
+        );
+        if (predeclared_constraints.len == 0) continue;
+        const fresh_fns = use_copies[fresh_fn_index..][0..predeclared_constraints.len];
+        fresh_fn_index += predeclared_constraints.len;
+        const body_content = self.types.resolveVar(body_var).desc.content;
+        // Only a where-clause variable carries callables in a predeclared
+        // scheme, and the body's copy of it stays rigid unless the body was
+        // rejected against the annotation; a rejected body has no callable
+        // for this slot.
+        if (body_content != .rigid) continue;
+        const body_constraints = self.types.sliceStaticDispatchConstraints(body_content.rigid.constraints);
+        if (body_constraints.len != predeclared_constraints.len) {
+            std.debug.panic("type checker invariant violated: predeclared scheme and body annotation carry different where-clause callables", .{});
+        }
+        for (body_constraints, fresh_fns) |body_constraint, fresh_fn| {
+            try self.scratch_evidence_pairs.append(self.gpa, .{
+                .old_var = @intFromEnum(self.types.resolveVar(body_constraint.fn_var).var_),
+                .fresh_var = @intFromEnum(fresh_fn),
+            });
+        }
+    }
+    std.debug.assert(fresh_fn_index == use_copies.len);
+}
+
+fn predeclaredHasEvidenceParams(self: *Self, annotation_idx: CIR.Annotation.Idx) Allocator.Error!bool {
+    const slots = self.predeclaredSlotsPtr(annotation_idx);
+    if (slots.has_evidence_params) |known| return known;
+    const has_params = try self.schemeHasEvidenceParams(slots.scheme_var);
+    self.predeclaredSlotsPtr(annotation_idx).has_evidence_params = has_params;
+    return has_params;
+}
+
+/// Record the substitution in `scratch_evidence_pairs` as a use of the
+/// binding's own scheme, rooted at `scheme_root`.
+fn writePredeclaredSchemeUse(
+    self: *Self,
+    annotation_idx: CIR.Annotation.Idx,
+    slot: ModuleEnv.SchemeUseRecord.Slot,
+    node_idx: u32,
+    slot_data: u32,
+    scheme_root: Var,
+    policy: PredeclaredRecordPolicy,
+) Allocator.Error!void {
+    defer self.scratch_evidence_pairs.clearRetainingCapacity();
+    try self.canonicalizeSchemeUsePairs(&self.scratch_evidence_pairs);
+    if (policy == .when_needed and
+        self.scratch_evidence_pairs.items.len == 0 and
+        !try self.predeclaredHasEvidenceParams(annotation_idx))
+    {
+        return;
+    }
+    try self.cir.recordSchemeUse(node_idx, slot, slot_data, scheme_root, self.scratch_evidence_pairs.items);
+}
+
+/// Record a use of a predeclared scheme whose binding's body has already
+/// generated its annotation (a recursive reference made while that body, or
+/// its recursive group, is still being checked). Call immediately after the
+/// instantiation, while `var_map` still holds it.
+fn recordInFlightPredeclaredSchemeUse(
+    self: *Self,
+    annotation_idx: CIR.Annotation.Idx,
+    slot: ModuleEnv.SchemeUseRecord.Slot,
+    node_idx: u32,
+    slot_data: u32,
+    scheme_root: Var,
+    policy: PredeclaredRecordPolicy,
+) Allocator.Error!void {
+    const fresh_start = self.predeclared_use_fresh_vars.items.len;
+    defer self.predeclared_use_fresh_vars.shrinkRetainingCapacity(fresh_start);
+    const use_copies = try self.appendPredeclaredUseFreshVars(annotation_idx);
+    self.scratch_evidence_pairs.clearRetainingCapacity();
+    try self.appendPredeclaredUsePairs(annotation_idx, use_copies.slice(self.predeclared_use_fresh_vars.items));
+    try self.writePredeclaredSchemeUse(annotation_idx, slot, node_idx, slot_data, scheme_root, policy);
+}
+
+/// Record a dispatch edge to an annotated method that selected the method's
+/// predeclared scheme. Call immediately after the instantiation. If the
+/// method's body has not generated its annotation yet, the edge waits for it.
+fn recordPredeclaredDispatchUse(
+    self: *Self,
+    annotation_idx: CIR.Annotation.Idx,
+    node_idx: u32,
+    constraint_fn_var: Var,
+    scheme_root: Var,
+    policy: PredeclaredRecordPolicy,
+) Allocator.Error!void {
+    if (self.predeclaredSlotsPtr(annotation_idx).body != null) {
+        return self.recordInFlightPredeclaredSchemeUse(annotation_idx, .dispatch_target, node_idx, @intFromEnum(constraint_fn_var), scheme_root, policy);
+    }
+    try self.waiting_predeclared_dispatch_uses.append(self.gpa, .{
+        .annotation = annotation_idx,
+        .node_idx = node_idx,
+        .constraint_fn_var = constraint_fn_var,
+        .scheme_root = scheme_root,
+        .record_policy = policy,
+        .fresh = try self.appendPredeclaredUseFreshVars(annotation_idx),
+    });
 }
 
 /// Reset every type-annotation node var this annotation's generation wrote
@@ -14347,29 +14619,11 @@ fn instantiatePendingPredeclaredSchemeUse(
     source_expr: CIR.Expr.Idx,
     env: *Env,
 ) Allocator.Error!void {
-    try self.ensurePredeclaredIdentityCorrespondence(target_def, scheme_var);
-    const scheme_uses_before = self.cir.scheme_uses.items.items.len;
-    const instantiated = try self.instantiateBindingVar(scheme_var, env, .use_last_var, .{ .value_use = source_expr });
-    const use_pairs_start: u32 = @intCast(self.pending_predeclared_use_pairs.items.len);
-    var use_pairs = self.var_map.iterator();
-    while (use_pairs.next()) |pair| {
-        try self.pending_predeclared_use_pairs.append(self.gpa, .{
-            .old_var = pair.key_ptr.*,
-            .fresh_var = pair.value_ptr.*,
-        });
-    }
+    // The use is recorded only by the replay, against the def's own scheme;
+    // this instantiation keeps just its copies of the predeclared slots.
+    const instantiated = try self.instantiateBindingVar(scheme_var, env, .use_last_var, .none);
+    const use_copies = try self.appendPredeclaredUseFreshVars(self.cir.store.getDef(target_def).annotation.?);
     _ = try self.unify(use_var, instantiated, env);
-
-    var initial_scheme_use_index: ?u32 = null;
-    if (self.cir.scheme_uses.items.items.len > scheme_uses_before) {
-        const last_index = self.cir.scheme_uses.items.items.len - 1;
-        const record = self.cir.scheme_uses.items.items[last_index];
-        if (record.node_idx == @intFromEnum(source_expr) and
-            record.slot_kind == @intFromEnum(ModuleEnv.SchemeUseRecord.Slot.value_use))
-        {
-            initial_scheme_use_index = @intCast(last_index);
-        }
-    }
 
     // Pending predeclared uses are only minted while a group frame is open.
     std.debug.assert(self.group_stack.items.len > 0);
@@ -14386,11 +14640,7 @@ fn instantiatePendingPredeclaredSchemeUse(
         .checking_executable_root = self.checking_executable_root,
         .delayed_dependency_depth = self.delayed_dependency_depth,
         .instantiation_is_immediate_callee = self.instantiation_is_immediate_callee,
-        .initial_scheme_use_index = initial_scheme_use_index,
-        .use_pairs = .{
-            .start = use_pairs_start,
-            .len = @intCast(self.pending_predeclared_use_pairs.items.len - @as(usize, use_pairs_start)),
-        },
+        .fresh = use_copies,
     });
 }
 
@@ -14422,28 +14672,22 @@ fn replayPredeclaredSchemeUse(
     self.delayed_dependency_depth = pending.delayed_dependency_depth;
     self.instantiation_is_immediate_callee = pending.instantiation_is_immediate_callee;
 
-    const scheme_idx = self.typeSchemeIndexForRoot(scheme_root).?;
+    const annotation_idx = self.cir.store.getDef(pending.target_def).annotation.?;
 
-    // Compose body-scheme vars with this use through two pieces of explicit
-    // producer data: body identity-slot → predeclared-scheme pairs, then the
-    // predeclared-scheme → use pairs saved by the early instantiation.
-    // No structural matching or second root unification is involved.
+    // Compose body-scheme vars with this use through explicit producer data:
+    // the annotation's identity slots on both sides (`PredeclaredSlots`) and
+    // this use's copies of the predeclared slots, saved by the early
+    // instantiation. No structural matching or second root unification is
+    // involved.
     self.var_map.clearRetainingCapacity();
     var seeded_body_vars = std.AutoHashMap(Var, void).init(self.gpa);
     defer seeded_body_vars.deinit();
-    const annotation_pairs = self.predeclared_identity_correspondence_by_def.get(pending.target_def).?.pairs.slice(
-        self.predeclared_annotation_pairs.items,
-    );
-    const use_pairs = pending.use_pairs.slice(self.pending_predeclared_use_pairs.items);
-    for (annotation_pairs) |annotation_pair| {
-        const predeclared_root = self.types.resolveVar(annotation_pair.fresh_var).var_;
-        for (use_pairs) |use_pair| {
-            if (self.types.resolveVar(use_pair.old_var).var_ != predeclared_root) continue;
-            const body_root = self.types.resolveVar(annotation_pair.old_var).var_;
-            try self.var_map.put(body_root, use_pair.fresh_var);
-            try seeded_body_vars.put(body_root, {});
-            break;
-        }
+    self.scratch_evidence_pairs.clearRetainingCapacity();
+    try self.appendPredeclaredUsePairs(annotation_idx, pending.fresh.slice(self.predeclared_use_fresh_vars.items));
+    for (self.scratch_evidence_pairs.items) |pair| {
+        const body_root: Var = @enumFromInt(pair.old_var);
+        try self.var_map.put(body_root, @enumFromInt(pair.fresh_var));
+        try seeded_body_vars.put(body_root, {});
     }
 
     var instantiator = Instantiator{
@@ -14458,12 +14702,14 @@ fn replayPredeclaredSchemeUse(
     };
     var instantiated_requirements: std.ArrayListUnmanaged(InstantiatedSchemeDispatchRequirement) = .empty;
     defer instantiated_requirements.deinit(self.gpa);
-    try self.copySchemeDispatchRequirements(
-        scheme_idx,
-        &instantiator,
-        false,
-        &instantiated_requirements,
-    );
+    if (self.typeSchemeIndexForRoot(scheme_root)) |scheme_idx| {
+        try self.copySchemeDispatchRequirements(
+            scheme_idx,
+            &instantiator,
+            false,
+            &instantiated_requirements,
+        );
+    }
 
     // Register only vars created while copying the newly known requirements;
     // seeded body vars are the already-registered early-use vars. Build the
@@ -14534,29 +14780,7 @@ fn replayPredeclaredSchemeUse(
     }
 
     try self.appendSchemeRequirementEvidencePairs(instantiated_requirements.items);
-
-    try self.canonicalizeSchemeUsePairs(&self.scratch_evidence_pairs);
-
-    const scheme_uses_before = self.cir.scheme_uses.items.items.len;
-    try self.cir.recordSchemeUse(
-        @intFromEnum(pending.source_expr),
-        .value_use,
-        0,
-        scheme_root,
-        self.scratch_evidence_pairs.items,
-    );
-    self.scratch_evidence_pairs.clearRetainingCapacity();
-
-    // If the annotation itself already carried evidence, replace that early
-    // record with the complete body scheme's record. The replay appends exactly
-    // one value-use record; its pair range remains valid after removing the
-    // duplicate row at the tail.
-    if (pending.initial_scheme_use_index) |initial_index| {
-        std.debug.assert(self.cir.scheme_uses.items.items.len == scheme_uses_before + 1);
-        const complete_record = self.cir.scheme_uses.items.items[scheme_uses_before];
-        self.cir.scheme_uses.items.items[initial_index] = complete_record;
-        self.cir.scheme_uses.items.shrinkRetainingCapacity(scheme_uses_before);
-    }
+    try self.writePredeclaredSchemeUse(annotation_idx, .value_use, @intFromEnum(pending.source_expr), 0, scheme_root, .when_needed);
 
     for (instantiated_requirements.items) |requirement| {
         try self.registerInstantiatedSchemeRequirement(
@@ -14571,7 +14795,8 @@ fn replayPredeclaredSchemeUse(
 /// Replay this frame's early annotated uses once their target bodies have
 /// published complete schemes. `current_boundary_captured` means the current
 /// recursive/SCC roots have just been captured; a current-group target with no
-/// side-table scheme then has no hidden requirements and can be discarded.
+/// side-table scheme then has no hidden requirements, and its replay only
+/// records the use against the target's own scheme.
 fn resolvePendingPredeclaredSchemeUses(
     self: *Self,
     env: *Env,
@@ -14601,19 +14826,16 @@ fn resolvePendingPredeclaredSchemeUses(
             replayed_any = true;
             continue;
         }
-        if (target_boundary_finished) continue;
+        if (target_boundary_finished) {
+            try self.replayPredeclaredSchemeUse(pending, target_scheme_root, env);
+            continue;
+        }
 
         self.pending_predeclared_scheme_uses.items[write] = pending;
         write += 1;
     }
     self.pending_predeclared_scheme_uses.shrinkRetainingCapacity(write);
-    // Saved use pairs are referenced only through the pending entries' ranges
-    // (and only while a drain is on the stack, which keeps this list
-    // non-empty), so once every frame's suffix has drained the pair storage
-    // holds no live ranges and can be reclaimed.
-    if (self.pending_predeclared_scheme_uses.items.len == 0) {
-        self.pending_predeclared_use_pairs.clearRetainingCapacity();
-    }
+    self.reclaimPredeclaredUseFreshVars();
     return replayed_any;
 }
 
@@ -19762,9 +19984,7 @@ fn beginExprCheckFrame(
 
         if (expected.annotation) |annotation_idx| {
             try self.generateAnnotationType(annotation_idx, env);
-            if (self.checking_predeclared_body_def) |predeclared_def_idx| {
-                try self.recordPredeclaredBodyAnnotationPairs(predeclared_def_idx, annotation_idx);
-            }
+            try self.recordPredeclaredBodySlots(annotation_idx);
             const anno_var = ModuleEnv.varFrom(annotation_idx);
             const anno_var_backup = try self.instantiateVarOrphan(anno_var, env, env.rank(), .use_last_var);
             break :blk .{
@@ -20642,8 +20862,18 @@ fn checkExprWithFunctionOwner(self: *Self, expr_idx: CIR.Expr.Idx, env: *Env, ex
                             // recursion for annotated defs. This is an internal
                             // recursive edge, not an external use of the body's
                             // eventual scheme; the enclosing body's own
-                            // requirements cover the implementation cycle.
-                            const instantiated = try self.instantiateBindingVar(scheme_var, env, .use_last_var, .{ .value_use = expr_idx });
+                            // requirements cover the implementation cycle. The
+                            // edge is recorded against the def's own scheme,
+                            // which is the scheme its template publishes.
+                            const instantiated = try self.instantiateBindingVar(scheme_var, env, .use_last_var, .none);
+                            try self.recordInFlightPredeclaredSchemeUse(
+                                referenced_def.annotation.?,
+                                .value_use,
+                                @intFromEnum(expr_idx),
+                                0,
+                                ModuleEnv.varFrom(referenced_def.expr),
+                                .when_needed,
+                            );
                             _ = try self.unify(expr_var, instantiated, env);
                             try self.recordRecursiveReference(
                                 @intFromEnum(expr_idx),
@@ -20694,7 +20924,15 @@ fn checkExprWithFunctionOwner(self: *Self, expr_idx: CIR.Expr.Idx, env: *Env, ex
                                 // shared generalization boundary yet. Preserve
                                 // the annotation's polymorphic-recursion rule
                                 // until that boundary publishes the body scheme.
-                                const instantiated = try self.instantiateBindingVar(scheme_var, env, .use_last_var, .{ .value_use = expr_idx });
+                                const instantiated = try self.instantiateBindingVar(scheme_var, env, .use_last_var, .none);
+                                try self.recordInFlightPredeclaredSchemeUse(
+                                    referenced_def.annotation.?,
+                                    .value_use,
+                                    @intFromEnum(expr_idx),
+                                    0,
+                                    ModuleEnv.varFrom(referenced_def.expr),
+                                    .when_needed,
+                                );
                                 _ = try self.unify(expr_var, instantiated, env);
                                 try self.recordRecursiveReference(
                                     @intFromEnum(expr_idx),
@@ -20722,10 +20960,19 @@ fn checkExprWithFunctionOwner(self: *Self, expr_idx: CIR.Expr.Idx, env: *Env, ex
             // map (removed after it generalizes), so it falls through to the tail
             // below and instantiates normally.
             if (self.local_processing_ptrns.get(lookup.pattern_idx)) |local_def| {
-                if (self.predeclared_local_scheme_vars.get(lookup.pattern_idx)) |scheme_var| {
+                if (self.predeclared_local_annotations.get(lookup.pattern_idx)) |annotation_idx| {
                     // Annotated local self/enclosing reference: instantiate
-                    // the declared scheme (sound polymorphic recursion).
-                    const instantiated = try self.instantiateBindingVar(scheme_var, env, .use_last_var, .{ .value_use = expr_idx });
+                    // the declared scheme (sound polymorphic recursion), and
+                    // record the edge against the def's own scheme.
+                    const instantiated = try self.instantiateBindingVar(self.predeclaredSchemeVarForAnnotation(annotation_idx), env, .use_last_var, .none);
+                    try self.recordInFlightPredeclaredSchemeUse(
+                        annotation_idx,
+                        .value_use,
+                        @intFromEnum(expr_idx),
+                        0,
+                        pat_var,
+                        .when_needed,
+                    );
                     _ = try self.unify(expr_var, instantiated, env);
                     try self.recordRecursiveReference(
                         @intFromEnum(expr_idx),
@@ -23172,7 +23419,8 @@ fn checkBlockStatements(self: *Self, statements: CIR.Statement.Span, env: *Env, 
                     !self.cir.store.getAnnotation(decl_stmt.anno.?).contains_underscore;
                 if (decl_predeclared) {
                     const scheme_var = try self.predeclareAnnotationScheme(decl_stmt.anno.?, env);
-                    try self.predeclared_local_scheme_vars.put(self.gpa, decl_stmt.pattern, scheme_var);
+                    try self.registerPredeclaredSlots(decl_stmt.anno.?, scheme_var);
+                    try self.predeclared_local_annotations.put(self.gpa, decl_stmt.pattern, decl_stmt.anno.?);
                 }
 
                 // A local function def is a binding group of one: its pattern
@@ -23266,8 +23514,8 @@ fn checkBlockStatements(self: *Self, statements: CIR.Statement.Span, env: *Env, 
                     try self.recordHoistPatternProvenance(decl_stmt.pattern, decl_stmt.expr, expectation.hoist_position);
                 }
                 try self.bindTypeSchemeVar(decl_expr_var, decl_pattern_var);
-                if (self.predeclared_local_scheme_vars.get(decl_stmt.pattern)) |predeclared_scheme_var| {
-                    try self.bindTypeSchemeVar(decl_expr_var, predeclared_scheme_var);
+                if (self.predeclared_local_annotations.get(decl_stmt.pattern)) |predeclared_annotation| {
+                    try self.bindTypeSchemeVar(decl_expr_var, self.predeclaredSchemeVarForAnnotation(predeclared_annotation));
                 }
 
                 if (decl_fn_frame) {
@@ -23303,7 +23551,7 @@ fn checkBlockStatements(self: *Self, statements: CIR.Statement.Span, env: *Env, 
 
                 if (decl_is_fn) {
                     _ = self.local_processing_ptrns.remove(decl_stmt.pattern);
-                    _ = self.predeclared_local_scheme_vars.remove(decl_stmt.pattern);
+                    _ = self.predeclared_local_annotations.remove(decl_stmt.pattern);
                 }
 
                 // This statement is a binding root whose type may never be
@@ -26991,6 +27239,7 @@ const Probe = struct {
     pending_tuple_accesses_len: usize,
     scheme_uses_len: usize,
     scheme_use_pairs_len: usize,
+    waiting_predeclared_dispatch_uses_len: usize,
     generated_codec_derivations_len: usize,
     generated_codec_calls_len: usize,
     pending_generated_parser_error_mappings_len: usize,
@@ -27041,6 +27290,10 @@ const Probe = struct {
             }
         }
         self.check.cir.scheme_use_pairs.items.shrinkRetainingCapacity(self.scheme_use_pairs_len);
+        // A dispatch edge the probe selected is rolled back with
+        // `dispatch_target_instantiations` below, so its waiting record goes
+        // too. Its fresh-var range stays allocated until the next reclaim.
+        self.check.waiting_predeclared_dispatch_uses.shrinkRetainingCapacity(self.waiting_predeclared_dispatch_uses_len);
         self.check.cir.generated_codec_derivations.items.shrinkRetainingCapacity(self.generated_codec_derivations_len);
         self.check.cir.generated_codec_calls.items.shrinkRetainingCapacity(self.generated_codec_calls_len);
         self.check.pending_generated_parser_error_mappings.shrinkRetainingCapacity(self.pending_generated_parser_error_mappings_len);
@@ -27095,6 +27348,7 @@ fn beginProbe(self: *Self, env: ?*Env) std.mem.Allocator.Error!Probe {
     const pending_tuple_accesses_len = self.pending_tuple_accesses.items.len;
     const scheme_uses_len = self.cir.scheme_uses.items.items.len;
     const scheme_use_pairs_len = self.cir.scheme_use_pairs.items.items.len;
+    const waiting_predeclared_dispatch_uses_len = self.waiting_predeclared_dispatch_uses.items.len;
     const generated_codec_derivations_len = self.cir.generated_codec_derivations.items.items.len;
     const generated_codec_calls_len = self.cir.generated_codec_calls.items.items.len;
     const pending_generated_parser_error_mappings_len = self.pending_generated_parser_error_mappings.items.len;
@@ -27125,6 +27379,7 @@ fn beginProbe(self: *Self, env: ?*Env) std.mem.Allocator.Error!Probe {
         .pending_tuple_accesses_len = pending_tuple_accesses_len,
         .scheme_uses_len = scheme_uses_len,
         .scheme_use_pairs_len = scheme_use_pairs_len,
+        .waiting_predeclared_dispatch_uses_len = waiting_predeclared_dispatch_uses_len,
         .generated_codec_derivations_len = generated_codec_derivations_len,
         .generated_codec_calls_len = generated_codec_calls_len,
         .pending_generated_parser_error_mappings_len = pending_generated_parser_error_mappings_len,
@@ -32851,9 +33106,16 @@ fn instantiateDispatchTargetMethodVar(
     try self.dispatch_target_instantiations.ensureUnusedCapacity(self.gpa, 1);
     try self.dispatch_target_instantiation_by_fn_var.ensureUnusedCapacity(self.gpa, 1);
 
+    const predeclared_annotation: ?CIR.Annotation.Idx = if (cycle_method_expr_var == null and
+        method_lookup.is_this_module and
+        predeclared_scheme_for_method != null)
+        self.cir.store.getDef(method_lookup.binding.def_idx).annotation.?
+    else
+        null;
     const evidence: InstantiationEvidence = .{ .dispatch_target = .{
         .node_idx = if (constraintIntroExpr(constraint)) |expr| @intFromEnum(expr) else 0,
         .constraint_fn_var = constraint.fn_var,
+        .records_scheme_use = predeclared_annotation == null,
     } };
 
     const method_type_var: Var = ModuleEnv.varFrom(method_lookup.binding.type_node_idx);
@@ -32867,14 +33129,24 @@ fn instantiateDispatchTargetMethodVar(
         const imported_scheme = try self.importedMethodScheme(method_lookup);
         break :blk try self.instantiateVar(imported_scheme, env, .{ .explicit = region }, evidence);
     };
+    if (predeclared_annotation) |annotation_idx| {
+        try self.recordPredeclaredDispatchUse(
+            annotation_idx,
+            evidence.dispatch_target.node_idx,
+            constraint.fn_var,
+            method_type_var,
+            .always,
+        );
+    }
 
     // A target that reused an in-flight cycle var performed no instantiation,
     // but its checked scheme still owns the nested evidence contract. Publish
     // an explicit zero-pair edge so checked-artifact construction receives the
     // exact selected scheme root instead of attempting to infer it later.
     const record_scheme_root = cycle_method_expr_var orelse method_type_var;
-    var target_requires_record = cycle_method_expr_var != null or self.localProcedureMethodBinding(method_lookup);
-    if (!target_requires_record and method_lookup.is_this_module) {
+    var target_requires_record = predeclared_annotation == null and
+        (cycle_method_expr_var != null or self.localProcedureMethodBinding(method_lookup));
+    if (!target_requires_record and predeclared_annotation == null and method_lookup.is_this_module) {
         // Same-module targets can own body-introduced evidence params (for
         // example pathless literal conversions) that are not visible from the
         // surface method type alone.
@@ -39151,8 +39423,12 @@ fn instantiateGeneratedCodecMethodTarget(
     region: Region,
 ) Allocator.Error!Var {
     const method_type_var: Var = ModuleEnv.varFrom(method_lookup.binding.type_node_idx);
+    const predeclared_scheme = if (method_lookup.is_this_module)
+        self.predeclaredSchemeVar(method_lookup.binding.def_idx)
+    else
+        null;
     const scheme_var = if (method_lookup.is_this_module)
-        self.predeclaredSchemeVar(method_lookup.binding.def_idx) orelse method_type_var
+        predeclared_scheme orelse method_type_var
     else
         try self.importedMethodScheme(method_lookup);
 
@@ -39163,6 +39439,7 @@ fn instantiateGeneratedCodecMethodTarget(
             .node_idx = 0,
             .constraint_fn_var = evidence_var,
             .shape_validation = method_lookup.is_this_module,
+            .records_scheme_use = predeclared_scheme == null,
         },
     };
     const method_var = if (method_lookup.is_this_module)
@@ -39170,7 +39447,15 @@ fn instantiateGeneratedCodecMethodTarget(
     else
         try self.instantiateVar(scheme_var, env, .{ .explicit = region }, evidence);
 
-    if (self.cir.scheme_uses.items.items.len == records_before and
+    if (predeclared_scheme != null) {
+        try self.recordPredeclaredDispatchUse(
+            self.cir.store.getDef(method_lookup.binding.def_idx).annotation.?,
+            0,
+            evidence_var,
+            method_type_var,
+            .when_needed,
+        );
+    } else if (self.cir.scheme_uses.items.items.len == records_before and
         try self.schemeHasEvidenceParams(scheme_var))
     {
         try self.recordSharedSchemeUse(

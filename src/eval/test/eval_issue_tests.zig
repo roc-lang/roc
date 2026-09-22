@@ -2019,4 +2019,156 @@ pub const tests = [_]TestCase{
         ,
         .expected = .{ .inspect_str = "\"b 1\"" },
     },
+    .{
+        // repro for https://github.com/roc-lang/roc/issues/11549
+        // A self-recursive function whose argument type nests `Try` inside `Try`
+        // must specialize under the default strategy: the `Err(NoMatch)` branch
+        // recurses with `Ok(Err(Unset))`, which the `Ok(_)` branch returns.
+        .name = "issue 11549: self-recursive call with nested Try argument",
+        .source_kind = .module,
+        .source =
+        \\f : Try(Try(U64, [Unset]), [NoMatch]) -> Try(Try(U64, [Unset]), [NoMatch])
+        \\f = |val| match val {
+        \\    Err(NoMatch) => f(Ok(Err(Unset)))
+        \\    Ok(_) => val
+        \\}
+        \\
+        \\main = f(Err(NoMatch))
+        ,
+        .expected = .{ .inspect_str = "Ok(Err(Unset))" },
+    },
+    .{
+        // repro for https://github.com/roc-lang/roc/issues/11549
+        // The annotation's output error row is implicitly open, but the body
+        // returns its closed argument, so `f`'s checked type has no open rows.
+        // The self-call must be recorded against that checked type.
+        .name = "issue 11549: self-recursive call with single Try argument",
+        .source_kind = .module,
+        .source =
+        \\f : Try(U64, [NoMatch]) -> Try(U64, [NoMatch])
+        \\f = |val| match val {
+        \\    Err(NoMatch) => f(Ok(1))
+        \\    Ok(_) => val
+        \\}
+        \\
+        \\main = f(Err(NoMatch))
+        ,
+        .expected = .{ .inspect_str = "Ok(1)" },
+    },
+    .{
+        // repro for https://github.com/roc-lang/roc/issues/11549
+        // `g` calls `h` before `h` is checked, and `h` calls `g` back. Both
+        // calls must be recorded against the callee's checked type, which has
+        // no open rows, not against its annotation's implicitly open rows.
+        .name = "issue 11549: mutually recursive annotated calls with Try argument",
+        .source_kind = .module,
+        .source =
+        \\g : Try(U64, [NoMatch]) -> Try(U64, [NoMatch])
+        \\g = |val| h(val)
+        \\
+        \\h : Try(U64, [NoMatch]) -> Try(U64, [NoMatch])
+        \\h = |val| match val {
+        \\    Err(NoMatch) => g(Ok(1))
+        \\    Ok(_) => val
+        \\}
+        \\
+        \\main = g(Err(NoMatch))
+        ,
+        .expected = .{ .inspect_str = "Ok(1)" },
+    },
+    .{
+        // repro for https://github.com/roc-lang/roc/issues/11549
+        // A method that calls itself through method syntax must record that
+        // call against its checked type, which has no open rows, not against
+        // its annotation's implicitly open output row.
+        .name = "issue 11549: self-recursive method call with Try argument",
+        .source_kind = .module,
+        .source =
+        \\Counter := [Start].{
+        \\    step : Counter, Try(U64, [NoMatch]) -> Try(U64, [NoMatch])
+        \\    step = |counter, val| match val {
+        \\        Err(NoMatch) => counter.step(Ok(1))
+        \\        Ok(_) => val
+        \\    }
+        \\}
+        \\
+        \\main = {
+        \\    counter : Counter
+        \\    counter = Start
+        \\    counter.step(Err(NoMatch))
+        \\}
+        ,
+        .expected = .{ .inspect_str = "Ok(1)" },
+    },
+    .{
+        // repro for https://github.com/roc-lang/roc/issues/11549
+        // An annotated recursive function defined inside a block must record
+        // its self-call against its checked type, which has no open rows.
+        .name = "issue 11549: local self-recursive call with Try argument",
+        .source_kind = .module,
+        .source =
+        \\main = {
+        \\    f : Try(U64, [NoMatch]) -> Try(U64, [NoMatch])
+        \\    f = |val| match val {
+        \\        Err(NoMatch) => f(Ok(1))
+        \\        Ok(_) => val
+        \\    }
+        \\    f(Err(NoMatch))
+        \\}
+        ,
+        .expected = .{ .inspect_str = "Ok(1)" },
+    },
+    .{
+        // repro for https://github.com/roc-lang/roc/issues/11549
+        // `main` is checked before `step`'s body, so its method call uses
+        // `step`'s annotation, whose output error row is implicitly open. The
+        // body returns its closed argument, so `step`'s checked type has no
+        // open rows, and the call must be recorded against that checked type.
+        .name = "issue 11549: method call checked before the annotated method's body",
+        .source_kind = .module,
+        .source =
+        \\main = {
+        \\    counter : Counter
+        \\    counter = Start
+        \\    counter.step(Err(NoMatch))
+        \\}
+        \\
+        \\Counter := [Start].{
+        \\    step : Counter, Try(U64, [NoMatch]) -> Try(U64, [NoMatch])
+        \\    step = |_, val| val
+        \\}
+        ,
+        .expected = .{ .inspect_str = "Err(NoMatch)" },
+    },
+    .{
+        // A function whose result is an alias of `Try` has an implicitly open
+        // error row inside the alias. Each call must get its own copy of that
+        // row, so one caller can use the result as `[Oops, A]` and another as
+        // `[Oops, B]`.
+        .name = "aliased result with an implicitly open row is instantiated per call",
+        .source_kind = .module,
+        .source =
+        \\Res : Try(U64, [Oops])
+        \\
+        \\f : U64 -> Res
+        \\f = |_| Err(Oops)
+        \\
+        \\take_a : Try(U64, [Oops, A]) -> Str
+        \\take_a = |res| match res {
+        \\    Ok(_) => "ok"
+        \\    Err(Oops) => "oops a"
+        \\    Err(A) => "a"
+        \\}
+        \\
+        \\take_b : Try(U64, [Oops, B]) -> Str
+        \\take_b = |res| match res {
+        \\    Ok(_) => "ok"
+        \\    Err(Oops) => "oops b"
+        \\    Err(B) => "b"
+        \\}
+        \\
+        \\main = (take_a(f(1)), take_b(f(2)))
+        ,
+        .expected = .{ .inspect_str = "(\"oops a\", \"oops b\")" },
+    },
 };
