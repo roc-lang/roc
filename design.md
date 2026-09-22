@@ -6475,8 +6475,11 @@ while `e` is an open tail, but an instantiation that makes `e` itself contain
 `Wrapped` is rejected. The validation reaches each type-store class once and
 starts only at tag-row roots, so an ordinary extension chain is walked once;
 it adds no metadata to every type variable and no work to the unifier's hot
-path. Rejected rows are poisoned only after all diagnostics snapshot the same
-settled graph, keeping recovery independent of traversal order.
+path. A duplicate-tag diagnostic snapshots the offending extension but points
+at the enclosing row's source, which introduced the conflicting head tag; the
+extension's solver representative does not own that source location. Rejected
+rows are poisoned only after all diagnostics snapshot the same settled graph,
+keeping recovery independent of traversal order.
 
 The rule is confined to deferred returns carrying the explicit `try_suffix`
 return context emitted by canonicalization. Annotated returns retain the Hosted

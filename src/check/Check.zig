@@ -5496,7 +5496,10 @@ fn validateSettledValueTagRows(self: *Self, env: *Env) std.mem.Allocator.Error!v
         }
 
         if (invalid_at) |bad_var| {
-            try self.reportInvalidRow(.tag_union, bad_var, env, self.getRegionAt(row_root), .none);
+            const problem_idx = try self.reportInvalidRow(.tag_union, bad_var, env, self.getRegionAt(row_root), .none);
+            // The row head introduces the tag that conflicts with its extension.
+            // Keep the offending suffix snapshot, but blame that row head.
+            self.problems.problems.items[@intFromEnum(problem_idx)].type_mismatch.types.actual_var = row_root;
             try invalid_rows.append(self.gpa, row_root);
         }
     }
@@ -18350,7 +18353,7 @@ fn reportInvalidAliasRow(
     env: *Env,
     region: Region,
 ) Allocator.Error!void {
-    return self.reportInvalidRow(row_kind, actual_var, env, region, .type_annotation);
+    _ = try self.reportInvalidRow(row_kind, actual_var, env, region, .type_annotation);
 }
 
 fn reportInvalidRow(
@@ -18360,7 +18363,7 @@ fn reportInvalidRow(
     env: *Env,
     region: Region,
     context: problem.Context,
-) Allocator.Error!void {
+) Allocator.Error!problem.Problem.Idx {
     const expected_content: Content = switch (row_kind) {
         .record => .{ .structure = .empty_record },
         .tag_union => .{ .structure = .empty_tag_union },
@@ -18369,7 +18372,7 @@ fn reportInvalidRow(
     const expected_snapshot = try self.snapshots.snapshotVarForError(self.types, &self.type_writer, expected_var);
     const actual_snapshot = try self.snapshots.snapshotVarForError(self.types, &self.type_writer, actual_var);
 
-    _ = try self.problems.appendProblem(self.gpa, .{ .type_mismatch = .{
+    return self.problems.appendProblem(self.gpa, .{ .type_mismatch = .{
         .types = .{
             .expected_var = expected_var,
             .expected_snapshot = expected_snapshot,
