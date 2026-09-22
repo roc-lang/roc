@@ -543,6 +543,18 @@ test "NodeStore round trip - Expressions" {
         },
     });
     try expressions.append(gpa, CIR.Expr{
+        .e_deferred_import_ref = .{
+            .ref = rand_idx_u16(ModuleEnv.DeferredImportRef.Idx),
+            .backing = null,
+        },
+    });
+    try expressions.append(gpa, CIR.Expr{
+        .e_deferred_import_ref = .{
+            .ref = rand_idx_u16(ModuleEnv.DeferredImportRef.Idx),
+            .backing = .{ .expr = rand_idx(CIR.Expr.Idx), .ty = .tag },
+        },
+    });
+    try expressions.append(gpa, CIR.Expr{
         .e_ellipsis = .{},
     });
     try expressions.append(gpa, CIR.Expr{
@@ -1590,6 +1602,13 @@ test "NodeStore round trip - Pattern" {
         .nominal_external = .{
             .module_idx = rand_idx_u16(CIR.Import.Idx),
             .target_node_idx = rand.random().int(u16),
+            .backing_pattern = rand_idx(CIR.Pattern.Idx),
+            .backing_type = .tag,
+        },
+    });
+    try patterns.append(gpa, CIR.Pattern{
+        .deferred_import_ref = .{
+            .ref = rand_idx_u16(ModuleEnv.DeferredImportRef.Idx),
             .backing_pattern = rand_idx(CIR.Pattern.Idx),
             .backing_type = .tag,
         },

@@ -858,6 +858,7 @@ pub fn convertPattern(
 
         // Runtime errors match anything since we won't reach them
         .runtime_error => .anything,
+        .deferred_import_ref => exhaustiveInvariant("deferred import reference pattern reached exhaustiveness checking", .{}),
     };
 }
 

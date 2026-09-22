@@ -10,21 +10,11 @@ package
 	{ somePkg: "../main.roc", }
 ~~~
 # EXPECTED
-MOD NOT FOUND - package_header_nonempty_multiline_3.md:2:14:2:22
 EXPOSED BUT NOT DEFINED - package_header_nonempty_multiline_3.md:2:3:2:12
+MOD NOT FOUND - package_header_nonempty_multiline_3.md:2:14:2:22
 # PROBLEMS
 ~~~clojure
 (reports
-	(report
-		(severity runtime_error)
-		(title "Mod Not Found")
-		(region (start 2 14) (end 2 22))
-		(headline
-			(text "The mod ")
-			(annotated code "SomeType")
-			(reflow " was not found in this Roc project."))
-		(document
-			(source-region (file "package_header_nonempty_multiline_3.md") (start 2 14) (end 2 22) (annotation error) (line-text "\t[something, SomeType,]"))))
 	(report
 		(severity runtime_error)
 		(title "Exposed But Not Defined")
@@ -37,7 +27,17 @@ EXPOSED BUT NOT DEFINED - package_header_nonempty_multiline_3.md:2:3:2:12
 			(source-region (file "package_header_nonempty_multiline_3.md") (start 2 3) (end 2 12) (annotation error) (line-text "\t[something, SomeType,]"))
 			(reflow "You can fix this by either defining ")
 			(annotated symbol-unqualified "something")
-			(reflow " in this mod, or by removing it from the list of exposed values."))))
+			(reflow " in this mod, or by removing it from the list of exposed values.")))
+	(report
+		(severity runtime_error)
+		(title "Mod Not Found")
+		(region (start 2 14) (end 2 22))
+		(headline
+			(text "The mod ")
+			(annotated code "SomeType")
+			(reflow " was not found in this Roc project."))
+		(document
+			(source-region (file "package_header_nonempty_multiline_3.md") (start 2 14) (end 2 22) (annotation error) (line-text "\t[something, SomeType,]")))))
 ~~~
 # TOKENS
 ~~~zig

@@ -45,23 +45,29 @@ combineTrys = |result1, result2|
 ~~~
 # EXPECTED
 DUPLICATE DEFINITION - can_import_type_annotations.md:2:1:2:17
-UNDECLARED TYPE - can_import_type_annotations.md:5:18:5:25
-UNDECLARED TYPE - can_import_type_annotations.md:5:29:5:37
-NAME NOT IN SCOPE - can_import_type_annotations.md:6:24:6:44
+BUILTIN TYPE SHADOWED - can_import_type_annotations.md:3:1:3:32
 UNUSED VARIABLE - can_import_type_annotations.md:6:19:6:22
+MOD NOT FOUND - can_import_type_annotations.md:5:18:5:25
+MOD NOT FOUND - can_import_type_annotations.md:5:29:5:37
+DOES NOT EXIST - can_import_type_annotations.md:6:24:6:44
 MOD NOT FOUND - can_import_type_annotations.md:8:24:8:30
-NAME NOT IN SCOPE - can_import_type_annotations.md:9:21:9:31
+DOES NOT EXIST - can_import_type_annotations.md:9:21:9:31
 MOD NOT FOUND - can_import_type_annotations.md:11:17:11:25
+MOD NOT FOUND - can_import_type_annotations.md:11:29:11:32
 MOD NOT FOUND - can_import_type_annotations.md:11:37:11:46
 MOD NOT FOUND - can_import_type_annotations.md:11:52:11:58
-NAME NOT IN SCOPE - can_import_type_annotations.md:13:14:13:25
-NAME NOT IN SCOPE - can_import_type_annotations.md:15:24:15:36
+DOES NOT EXIST - can_import_type_annotations.md:13:14:13:25
+DOES NOT EXIST - can_import_type_annotations.md:15:24:15:36
 MOD NOT FOUND - can_import_type_annotations.md:20:14:20:21
-NAME NOT IN SCOPE - can_import_type_annotations.md:21:10:21:28
+DOES NOT EXIST - can_import_type_annotations.md:21:10:21:28
 MOD NOT FOUND - can_import_type_annotations.md:24:29:24:36
+MOD NOT FOUND - can_import_type_annotations.md:24:45:24:48
 MOD NOT FOUND - can_import_type_annotations.md:24:53:24:59
 MOD NOT FOUND - can_import_type_annotations.md:24:72:24:78
-NAME NOT IN SCOPE - can_import_type_annotations.md:25:40:25:61
+DOES NOT EXIST - can_import_type_annotations.md:25:40:25:61
+MOD NOT FOUND - can_import_type_annotations.md:28:15:28:18
+MOD NOT FOUND - can_import_type_annotations.md:28:28:28:31
+MOD NOT FOUND - can_import_type_annotations.md:28:43:28:46
 # PROBLEMS
 ~~~clojure
 (reports
@@ -87,38 +93,17 @@ NAME NOT IN SCOPE - can_import_type_annotations.md:25:40:25:61
 			(line-break)
 			(source-region (file "can_import_type_annotations.md") (start 1 1) (end 1 1) (annotation dim) (line-text "import http.Client as Http exposing [Request, Response]"))))
 	(report
-		(severity runtime_error)
-		(title "Undeclared Type")
-		(region (start 5 18) (end 5 25))
+		(severity warning)
+		(title "Builtin Type Shadowed")
+		(region (start 3 1) (end 3 32))
 		(headline
-			(reflow "The type ")
-			(annotated code "Request")
-			(reflow " is not declared in this scope."))
+			(text "The type ")
+			(annotated symbol-unqualified "Try")
+			(text " shadows a builtin type."))
 		(document
-			(source-region (file "can_import_type_annotations.md") (start 5 18) (end 5 25) (annotation error) (line-text "processRequest : Request -> Response"))))
-	(report
-		(severity runtime_error)
-		(title "Undeclared Type")
-		(region (start 5 29) (end 5 37))
-		(headline
-			(reflow "The type ")
-			(annotated code "Response")
-			(reflow " is not declared in this scope."))
-		(document
-			(source-region (file "can_import_type_annotations.md") (start 5 29) (end 5 37) (annotation error) (line-text "processRequest : Request -> Response"))))
-	(report
-		(severity runtime_error)
-		(title "Name Not In Scope")
-		(region (start 6 24) (end 6 44))
-		(headline
-			(reflow "Nothing is named ")
-			(annotated symbol-unqualified "defaultResponse")
-			(reflow " in this scope."))
-		(document
-			(reflow "Is it misspelled, or is there an import missing?")
+			(reflow "This may make the builtin type inaccessible in this scope.")
 			(line-break)
-			(line-break)
-			(source-region (file "can_import_type_annotations.md") (start 6 24) (end 6 44) (annotation error) (line-text "processRequest = |req| Http.defaultResponse"))))
+			(source-region (file "can_import_type_annotations.md") (start 3 1) (end 3 32) (annotation warning) (line-text "import utils.Try exposing [Try]"))))
 	(report
 		(severity warning)
 		(title "Unused Variable")
@@ -136,6 +121,39 @@ NAME NOT IN SCOPE - can_import_type_annotations.md:25:40:25:61
 	(report
 		(severity runtime_error)
 		(title "Mod Not Found")
+		(region (start 5 18) (end 5 25))
+		(headline
+			(text "This ")
+			(annotated code "Request")
+			(reflow " type is declared to be in ")
+			(annotated code "http.Client")
+			(reflow ", which does not exist."))
+		(document
+			(source-region (file "can_import_type_annotations.md") (start 5 18) (end 5 25) (annotation error) (line-text "processRequest : Request -> Response"))))
+	(report
+		(severity runtime_error)
+		(title "Mod Not Found")
+		(region (start 5 29) (end 5 37))
+		(headline
+			(text "This ")
+			(annotated code "Response")
+			(reflow " type is declared to be in ")
+			(annotated code "http.Client")
+			(reflow ", which does not exist."))
+		(document
+			(source-region (file "can_import_type_annotations.md") (start 5 29) (end 5 37) (annotation error) (line-text "processRequest : Request -> Response"))))
+	(report
+		(severity runtime_error)
+		(title "Does Not Exist")
+		(region (start 6 24) (end 6 44))
+		(headline
+			(annotated symbol-unqualified "Http.defaultResponse")
+			(reflow " does not exist."))
+		(document
+			(source-region (file "can_import_type_annotations.md") (start 6 24) (end 6 44) (annotation error) (line-text "processRequest = |req| Http.defaultResponse"))))
+	(report
+		(severity runtime_error)
+		(title "Mod Not Found")
 		(region (start 8 24) (end 8 30))
 		(headline
 			(text "This ")
@@ -147,16 +165,12 @@ NAME NOT IN SCOPE - can_import_type_annotations.md:25:40:25:61
 			(source-region (file "can_import_type_annotations.md") (start 8 24) (end 8 30) (annotation error) (line-text "parseJson : Str -> Json.Value"))))
 	(report
 		(severity runtime_error)
-		(title "Name Not In Scope")
+		(title "Does Not Exist")
 		(region (start 9 21) (end 9 31))
 		(headline
-			(reflow "Nothing is named ")
-			(annotated symbol-unqualified "parse")
-			(reflow " in this scope."))
+			(annotated symbol-unqualified "Json.parse")
+			(reflow " does not exist."))
 		(document
-			(reflow "Is it misspelled, or is there an import missing?")
-			(line-break)
-			(line-break)
 			(source-region (file "can_import_type_annotations.md") (start 9 21) (end 9 31) (annotation error) (line-text "parseJson = |input| Json.parse(input)"))))
 	(report
 		(severity runtime_error)
@@ -170,6 +184,18 @@ NAME NOT IN SCOPE - can_import_type_annotations.md:25:40:25:61
 			(reflow ", which does not exist."))
 		(document
 			(source-region (file "can_import_type_annotations.md") (start 11 17) (end 11 25) (annotation error) (line-text "handleApi : Http.Request -> Try(Http.Response, Json.Error)"))))
+	(report
+		(severity runtime_error)
+		(title "Mod Not Found")
+		(region (start 11 29) (end 11 32))
+		(headline
+			(text "This ")
+			(annotated code "Try")
+			(reflow " type is declared to be in ")
+			(annotated code "utils.Try")
+			(reflow ", which does not exist."))
+		(document
+			(source-region (file "can_import_type_annotations.md") (start 11 29) (end 11 32) (annotation error) (line-text "handleApi : Http.Request -> Try(Http.Response, Json.Error)"))))
 	(report
 		(severity runtime_error)
 		(title "Mod Not Found")
@@ -196,29 +222,21 @@ NAME NOT IN SCOPE - can_import_type_annotations.md:25:40:25:61
 			(source-region (file "can_import_type_annotations.md") (start 11 52) (end 11 58) (annotation error) (line-text "handleApi : Http.Request -> Try(Http.Response, Json.Error)"))))
 	(report
 		(severity runtime_error)
-		(title "Name Not In Scope")
+		(title "Does Not Exist")
 		(region (start 13 14) (end 13 25))
 		(headline
-			(reflow "Nothing is named ")
-			(annotated symbol-unqualified "decode")
-			(reflow " in this scope."))
+			(annotated symbol-unqualified "Json.decode")
+			(reflow " does not exist."))
 		(document
-			(reflow "Is it misspelled, or is there an import missing?")
-			(line-break)
-			(line-break)
 			(source-region (file "can_import_type_annotations.md") (start 13 14) (end 13 25) (annotation error) (line-text "    result = Json.decode(request.body)"))))
 	(report
 		(severity runtime_error)
-		(title "Name Not In Scope")
+		(title "Does Not Exist")
 		(region (start 15 24) (end 15 36))
 		(headline
-			(reflow "Nothing is named ")
-			(annotated symbol-unqualified "success")
-			(reflow " in this scope."))
+			(annotated symbol-unqualified "Http.success")
+			(reflow " does not exist."))
 		(document
-			(reflow "Is it misspelled, or is there an import missing?")
-			(line-break)
-			(line-break)
 			(source-region (file "can_import_type_annotations.md") (start 15 24) (end 15 36) (annotation error) (line-text "        Ok(data) => Ok(Http.success(data))"))))
 	(report
 		(severity runtime_error)
@@ -234,16 +252,12 @@ NAME NOT IN SCOPE - can_import_type_annotations.md:25:40:25:61
 			(source-region (file "can_import_type_annotations.md") (start 20 14) (end 20 21) (annotation error) (line-text "config : Json.Config"))))
 	(report
 		(severity runtime_error)
-		(title "Name Not In Scope")
+		(title "Does Not Exist")
 		(region (start 21 10) (end 21 28))
 		(headline
-			(reflow "Nothing is named ")
-			(annotated symbol-unqualified "defaultConfig")
-			(reflow " in this scope."))
+			(annotated symbol-unqualified "Json.defaultConfig")
+			(reflow " does not exist."))
 		(document
-			(reflow "Is it misspelled, or is there an import missing?")
-			(line-break)
-			(line-break)
 			(source-region (file "can_import_type_annotations.md") (start 21 10) (end 21 28) (annotation error) (line-text "config = Json.defaultConfig"))))
 	(report
 		(severity runtime_error)
@@ -257,6 +271,18 @@ NAME NOT IN SCOPE - can_import_type_annotations.md:25:40:25:61
 			(reflow ", which does not exist."))
 		(document
 			(source-region (file "can_import_type_annotations.md") (start 24 29) (end 24 36) (annotation error) (line-text "advancedParser : Json.Parser.Config, Str -> Try(Json.Value, Json.Parser.Error)"))))
+	(report
+		(severity runtime_error)
+		(title "Mod Not Found")
+		(region (start 24 45) (end 24 48))
+		(headline
+			(text "This ")
+			(annotated code "Try")
+			(reflow " type is declared to be in ")
+			(annotated code "utils.Try")
+			(reflow ", which does not exist."))
+		(document
+			(source-region (file "can_import_type_annotations.md") (start 24 45) (end 24 48) (annotation error) (line-text "advancedParser : Json.Parser.Config, Str -> Try(Json.Value, Json.Parser.Error)"))))
 	(report
 		(severity runtime_error)
 		(title "Mod Not Found")
@@ -283,17 +309,49 @@ NAME NOT IN SCOPE - can_import_type_annotations.md:25:40:25:61
 			(source-region (file "can_import_type_annotations.md") (start 24 72) (end 24 78) (annotation error) (line-text "advancedParser : Json.Parser.Config, Str -> Try(Json.Value, Json.Parser.Error)"))))
 	(report
 		(severity runtime_error)
-		(title "Name Not In Scope")
+		(title "Does Not Exist")
 		(region (start 25 40) (end 25 61))
 		(headline
-			(reflow "Nothing is named ")
-			(annotated symbol-unqualified "parseWith")
-			(reflow " in this scope."))
+			(annotated symbol-unqualified "Json.Parser.parseWith")
+			(reflow " does not exist."))
 		(document
-			(reflow "Is it misspelled, or is there an import missing?")
-			(line-break)
-			(line-break)
-			(source-region (file "can_import_type_annotations.md") (start 25 40) (end 25 61) (annotation error) (line-text "advancedParser = |parserConfig, input| Json.Parser.parseWith(parserConfig, input)")))))
+			(source-region (file "can_import_type_annotations.md") (start 25 40) (end 25 61) (annotation error) (line-text "advancedParser = |parserConfig, input| Json.Parser.parseWith(parserConfig, input)"))))
+	(report
+		(severity runtime_error)
+		(title "Mod Not Found")
+		(region (start 28 15) (end 28 18))
+		(headline
+			(text "This ")
+			(annotated code "Try")
+			(reflow " type is declared to be in ")
+			(annotated code "utils.Try")
+			(reflow ", which does not exist."))
+		(document
+			(source-region (file "can_import_type_annotations.md") (start 28 15) (end 28 18) (annotation error) (line-text "combineTrys : Try(a, err), Try(b, err) -> Try((a, b), err)"))))
+	(report
+		(severity runtime_error)
+		(title "Mod Not Found")
+		(region (start 28 28) (end 28 31))
+		(headline
+			(text "This ")
+			(annotated code "Try")
+			(reflow " type is declared to be in ")
+			(annotated code "utils.Try")
+			(reflow ", which does not exist."))
+		(document
+			(source-region (file "can_import_type_annotations.md") (start 28 28) (end 28 31) (annotation error) (line-text "combineTrys : Try(a, err), Try(b, err) -> Try((a, b), err)"))))
+	(report
+		(severity runtime_error)
+		(title "Mod Not Found")
+		(region (start 28 43) (end 28 46))
+		(headline
+			(text "This ")
+			(annotated code "Try")
+			(reflow " type is declared to be in ")
+			(annotated code "utils.Try")
+			(reflow ", which does not exist."))
+		(document
+			(source-region (file "can_import_type_annotations.md") (start 28 43) (end 28 46) (annotation error) (line-text "combineTrys : Try(a, err), Try(b, err) -> Try((a, b), err)")))))
 ~~~
 # TOKENS
 ~~~zig
@@ -541,12 +599,10 @@ combineTrys = |result1, result2|
 		(annotation
 			(ty-fn (effectful false)
 				(ty-malformed)
-				(ty-apply (name "Try") (builtin)
-					(ty-malformed)
-					(ty-malformed)))))
+				(ty-malformed))))
 	(d-let
 		(p-assign (ident "config"))
-		(e-runtime-error (tag "ident_not_in_scope"))
+		(e-runtime-error (tag "qualified_ident_does_not_exist"))
 		(annotation
 			(ty-malformed)))
 	(d-let
@@ -556,76 +612,15 @@ combineTrys = |result1, result2|
 			(ty-fn (effectful false)
 				(ty-malformed)
 				(ty-lookup (name "Str") (builtin))
-				(ty-apply (name "Try") (builtin)
-					(ty-malformed)
-					(ty-malformed)))))
+				(ty-malformed))))
 	(d-let
 		(p-assign (ident "combineTrys"))
-		(e-lambda
-			(args
-				(p-assign (ident "result1"))
-				(p-assign (ident "result2")))
-			(e-match
-				(match
-					(cond
-						(e-lookup-local
-							(p-assign (ident "result1"))))
-					(branches
-						(branch
-							(patterns
-								(pattern (degenerate false)
-									(p-applied-tag)))
-							(value
-								(e-match
-									(match
-										(cond
-											(e-lookup-local
-												(p-assign (ident "result2"))))
-										(branches
-											(branch
-												(patterns
-													(pattern (degenerate false)
-														(p-applied-tag)))
-												(value
-													(e-tag (name "Ok")
-														(args
-															(e-tuple
-																(elems
-																	(e-lookup-local
-																		(p-assign (ident "value1")))
-																	(e-lookup-local
-																		(p-assign (ident "value2")))))))))
-											(branch
-												(patterns
-													(pattern (degenerate false)
-														(p-applied-tag)))
-												(value
-													(e-tag (name "Err")
-														(args
-															(e-lookup-local
-																(p-assign (ident "err"))))))))))))
-						(branch
-							(patterns
-								(pattern (degenerate false)
-									(p-applied-tag)))
-							(value
-								(e-tag (name "Err")
-									(args
-										(e-lookup-local
-											(p-assign (ident "err")))))))))))
+		(e-runtime-error (tag "erroneous_value_expr"))
 		(annotation
 			(ty-fn (effectful false)
-				(ty-apply (name "Try") (builtin)
-					(ty-rigid-var (name "a"))
-					(ty-rigid-var (name "err")))
-				(ty-apply (name "Try") (builtin)
-					(ty-rigid-var (name "b"))
-					(ty-rigid-var-lookup (ty-rigid-var (name "err"))))
-				(ty-apply (name "Try") (builtin)
-					(ty-tuple
-						(ty-rigid-var-lookup (ty-rigid-var (name "a")))
-						(ty-rigid-var-lookup (ty-rigid-var (name "b"))))
-					(ty-rigid-var-lookup (ty-rigid-var (name "err")))))))
+				(ty-malformed)
+				(ty-malformed)
+				(ty-malformed))))
 	(s-import (mod "http.Client")
 		(exposes
 			(exposed (name "Request") (wildcard false))
@@ -642,15 +637,15 @@ combineTrys = |result1, result2|
 	(defs
 		(patt (type "Error -> Error"))
 		(patt (type "Str -> Error"))
-		(patt (type "Error -> Try(Error, Error)"))
+		(patt (type "Error -> Error"))
 		(patt (type "Error"))
-		(patt (type "Error, Str -> Try(Error, Error)"))
-		(patt (type "Try(a, err), Try(b, err) -> Try((a, b), err)")))
+		(patt (type "Error, Str -> Error"))
+		(patt (type "Error, Error -> Error")))
 	(expressions
 		(expr (type "Error -> Error"))
 		(expr (type "Str -> Error"))
-		(expr (type "Error -> Try(Error, Error)"))
+		(expr (type "Error -> Error"))
 		(expr (type "Error"))
-		(expr (type "Error, Str -> Try(Error, Error)"))
-		(expr (type "Try(a, err), Try(b, err) -> Try((a, b), err)"))))
+		(expr (type "Error, Str -> Error"))
+		(expr (type "Error, Error -> Error"))))
 ~~~

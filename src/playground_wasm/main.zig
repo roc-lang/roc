@@ -989,6 +989,7 @@ fn findDefByName(module_env: *const ModuleEnv, name: []const u8) ?can.CIR.Def.Id
             .applied_tag,
             .nominal,
             .nominal_external,
+            .deferred_import_ref,
             .record_destructure,
             .list,
             .tuple,
@@ -1472,10 +1473,14 @@ fn compileSourceWithValidation(source: []const u8, module_name: []const u8, vali
         try Can.populateModuleEnvs(auto_imported_types, type_can_ir, builtin_module.env, builtin_indices);
         result.auto_imported_types = auto_imported_types;
 
+        // File imports are not read: this compiles the editor's buffer alone.
+        try can.resolveDeferredFileImports(type_can_ir, .skip);
+
         // Resolve imports - map each import to its index in imported_envs
         type_can_ir.imports.clearResolvedModules();
         try type_can_ir.imports.resolveImportsByExactModuleName(type_can_ir, imported_envs);
         type_can_ir.imports.markUnresolvedImportsFailedBeforeChecking();
+        try can.resolveDeferredImports(type_can_ir, .{ .imports = .{ .resolved_store = imported_envs } });
 
         // Use pointer to the stored CIR to ensure solver references valid memory
         result.solver = try Check.init(allocator, &type_can_ir.types, type_can_ir, imported_envs, auto_imported_types, &type_can_ir.store.regions, module_builtin_ctx);
@@ -2123,6 +2128,7 @@ fn findHoverInfoAtPosition(data: CompilerStageData, byte_offset: u32, identifier
                 .applied_tag,
                 .nominal,
                 .nominal_external,
+                .deferred_import_ref,
                 .record_destructure,
                 .list,
                 .tuple,

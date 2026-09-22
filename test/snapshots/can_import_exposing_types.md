@@ -60,35 +60,40 @@ combineTrys = |jsonTry, httpStatus|
 ~~~
 # EXPECTED
 DUPLICATE DEFINITION - can_import_exposing_types.md:1:1:1:49
-UNDECLARED TYPE - can_import_exposing_types.md:6:24:6:29
-UNDECLARED TYPE - can_import_exposing_types.md:6:31:6:36
-NAME NOT IN SCOPE - can_import_exposing_types.md:7:21:7:31
-UNDECLARED TYPE - can_import_exposing_types.md:10:17:10:24
-UNDECLARED TYPE - can_import_exposing_types.md:10:28:10:36
-NAME NOT IN SCOPE - can_import_exposing_types.md:12:14:12:25
-NAME NOT IN SCOPE - can_import_exposing_types.md:14:22:14:29
-NAME NOT IN SCOPE - can_import_exposing_types.md:15:23:15:38
-UNDECLARED TYPE - can_import_exposing_types.md:20:15:20:21
-UNDECLARED TYPE - can_import_exposing_types.md:20:28:20:33
-UNDECLARED TYPE - can_import_exposing_types.md:20:47:20:52
-UNDECLARED TYPE - can_import_exposing_types.md:20:55:20:60
+BUILTIN TYPE SHADOWED - can_import_exposing_types.md:3:1:3:32
 DOES NOT EXIST - can_import_exposing_types.md:22:5:22:16
-NAME NOT IN SCOPE - can_import_exposing_types.md:24:13:24:30
-UNDECLARED TYPE - can_import_exposing_types.md:29:18:29:24
-UNDECLARED TYPE - can_import_exposing_types.md:30:18:30:24
-UNDECLARED TYPE - can_import_exposing_types.md:31:23:31:31
-UNDECLARED TYPE - can_import_exposing_types.md:35:16:35:22
+MOD NOT FOUND - can_import_exposing_types.md:6:20:6:23
+MOD NOT FOUND - can_import_exposing_types.md:6:24:6:29
+MOD NOT FOUND - can_import_exposing_types.md:6:31:6:36
+DOES NOT EXIST - can_import_exposing_types.md:7:21:7:31
+MOD NOT FOUND - can_import_exposing_types.md:10:17:10:24
+MOD NOT FOUND - can_import_exposing_types.md:10:28:10:36
+DOES NOT EXIST - can_import_exposing_types.md:12:14:12:25
+DOES NOT EXIST - can_import_exposing_types.md:14:22:14:29
+DOES NOT EXIST - can_import_exposing_types.md:15:23:15:38
+MOD NOT FOUND - can_import_exposing_types.md:20:15:20:21
+MOD NOT FOUND - can_import_exposing_types.md:20:28:20:33
+MOD NOT FOUND - can_import_exposing_types.md:20:38:20:41
+MOD NOT FOUND - can_import_exposing_types.md:20:47:20:52
+MOD NOT FOUND - can_import_exposing_types.md:20:55:20:60
+DOES NOT EXIST - can_import_exposing_types.md:24:13:24:30
+MOD NOT FOUND - can_import_exposing_types.md:29:18:29:24
+MOD NOT FOUND - can_import_exposing_types.md:30:18:30:24
+MOD NOT FOUND - can_import_exposing_types.md:31:23:31:31
+MOD NOT FOUND - can_import_exposing_types.md:35:16:35:22
 MOD NOT FOUND - can_import_exposing_types.md:35:30:35:37
-NAME NOT IN SCOPE - can_import_exposing_types.md:36:25:36:40
-UNDECLARED TYPE - can_import_exposing_types.md:39:18:39:26
-NAME NOT IN SCOPE - can_import_exposing_types.md:42:23:42:42
+DOES NOT EXIST - can_import_exposing_types.md:36:25:36:40
+MOD NOT FOUND - can_import_exposing_types.md:39:18:39:26
+DOES NOT EXIST - can_import_exposing_types.md:42:23:42:42
 DOES NOT EXIST - can_import_exposing_types.md:43:23:43:37
-UNDECLARED TYPE - can_import_exposing_types.md:47:19:47:24
-UNDECLARED TYPE - can_import_exposing_types.md:47:26:47:31
-UNDECLARED TYPE - can_import_exposing_types.md:47:34:47:40
-UNDECLARED TYPE - can_import_exposing_types.md:47:48:47:56
-UNDECLARED TYPE - can_import_exposing_types.md:47:58:47:63
-NAME NOT IN SCOPE - can_import_exposing_types.md:50:33:50:44
+MOD NOT FOUND - can_import_exposing_types.md:47:15:47:18
+MOD NOT FOUND - can_import_exposing_types.md:47:19:47:24
+MOD NOT FOUND - can_import_exposing_types.md:47:26:47:31
+MOD NOT FOUND - can_import_exposing_types.md:47:34:47:40
+MOD NOT FOUND - can_import_exposing_types.md:47:44:47:47
+MOD NOT FOUND - can_import_exposing_types.md:47:48:47:56
+MOD NOT FOUND - can_import_exposing_types.md:47:58:47:63
+DOES NOT EXIST - can_import_exposing_types.md:50:33:50:44
 # PROBLEMS
 ~~~clojure
 (reports
@@ -114,137 +119,17 @@ NAME NOT IN SCOPE - can_import_exposing_types.md:50:33:50:44
 			(line-break)
 			(source-region (file "can_import_exposing_types.md") (start 1 1) (end 1 1) (annotation dim) (line-text "import json.Json exposing [Value, Error, Config]"))))
 	(report
-		(severity runtime_error)
-		(title "Undeclared Type")
-		(region (start 6 24) (end 6 29))
+		(severity warning)
+		(title "Builtin Type Shadowed")
+		(region (start 3 1) (end 3 32))
 		(headline
-			(reflow "The type ")
-			(annotated code "Value")
-			(reflow " is not declared in this scope."))
+			(text "The type ")
+			(annotated symbol-unqualified "Try")
+			(text " shadows a builtin type."))
 		(document
-			(source-region (file "can_import_exposing_types.md") (start 6 24) (end 6 29) (annotation error) (line-text "parseJson : Str -> Try(Value, Error)"))))
-	(report
-		(severity runtime_error)
-		(title "Undeclared Type")
-		(region (start 6 31) (end 6 36))
-		(headline
-			(reflow "The type ")
-			(annotated code "Error")
-			(reflow " is not declared in this scope."))
-		(document
-			(source-region (file "can_import_exposing_types.md") (start 6 31) (end 6 36) (annotation error) (line-text "parseJson : Str -> Try(Value, Error)"))))
-	(report
-		(severity runtime_error)
-		(title "Name Not In Scope")
-		(region (start 7 21) (end 7 31))
-		(headline
-			(reflow "Nothing is named ")
-			(annotated symbol-unqualified "parse")
-			(reflow " in this scope."))
-		(document
-			(reflow "Is it misspelled, or is there an import missing?")
+			(reflow "This may make the builtin type inaccessible in this scope.")
 			(line-break)
-			(line-break)
-			(source-region (file "can_import_exposing_types.md") (start 7 21) (end 7 31) (annotation error) (line-text "parseJson = |input| Json.parse(input)"))))
-	(report
-		(severity runtime_error)
-		(title "Undeclared Type")
-		(region (start 10 17) (end 10 24))
-		(headline
-			(reflow "The type ")
-			(annotated code "Request")
-			(reflow " is not declared in this scope."))
-		(document
-			(source-region (file "can_import_exposing_types.md") (start 10 17) (end 10 24) (annotation error) (line-text "handleRequest : Request -> Response"))))
-	(report
-		(severity runtime_error)
-		(title "Undeclared Type")
-		(region (start 10 28) (end 10 36))
-		(headline
-			(reflow "The type ")
-			(annotated code "Response")
-			(reflow " is not declared in this scope."))
-		(document
-			(source-region (file "can_import_exposing_types.md") (start 10 28) (end 10 36) (annotation error) (line-text "handleRequest : Request -> Response"))))
-	(report
-		(severity runtime_error)
-		(title "Name Not In Scope")
-		(region (start 12 14) (end 12 25))
-		(headline
-			(reflow "Nothing is named ")
-			(annotated symbol-unqualified "decode")
-			(reflow " in this scope."))
-		(document
-			(reflow "Is it misspelled, or is there an import missing?")
-			(line-break)
-			(line-break)
-			(source-region (file "can_import_exposing_types.md") (start 12 14) (end 12 25) (annotation error) (line-text "    result = Json.decode(req.body)"))))
-	(report
-		(severity runtime_error)
-		(title "Name Not In Scope")
-		(region (start 14 22) (end 14 29))
-		(headline
-			(reflow "Nothing is named ")
-			(annotated symbol-unqualified "ok")
-			(reflow " in this scope."))
-		(document
-			(reflow "Is it misspelled, or is there an import missing?")
-			(line-break)
-			(line-break)
-			(source-region (file "can_import_exposing_types.md") (start 14 22) (end 14 29) (annotation error) (line-text "        Ok(value) => Http.ok(value)"))))
-	(report
-		(severity runtime_error)
-		(title "Name Not In Scope")
-		(region (start 15 23) (end 15 38))
-		(headline
-			(reflow "Nothing is named ")
-			(annotated symbol-unqualified "badRequest")
-			(reflow " in this scope."))
-		(document
-			(reflow "Is it misspelled, or is there an import missing?")
-			(line-break)
-			(line-break)
-			(source-region (file "can_import_exposing_types.md") (start 15 23) (end 15 38) (annotation error) (line-text "        Err(error) => Http.badRequest(error)"))))
-	(report
-		(severity runtime_error)
-		(title "Undeclared Type")
-		(region (start 20 15) (end 20 21))
-		(headline
-			(reflow "The type ")
-			(annotated code "Config")
-			(reflow " is not declared in this scope."))
-		(document
-			(source-region (file "can_import_exposing_types.md") (start 20 15) (end 20 21) (annotation error) (line-text "processData : Config, List(Value) -> Try(List(Value), Error)"))))
-	(report
-		(severity runtime_error)
-		(title "Undeclared Type")
-		(region (start 20 28) (end 20 33))
-		(headline
-			(reflow "The type ")
-			(annotated code "Value")
-			(reflow " is not declared in this scope."))
-		(document
-			(source-region (file "can_import_exposing_types.md") (start 20 28) (end 20 33) (annotation error) (line-text "processData : Config, List(Value) -> Try(List(Value), Error)"))))
-	(report
-		(severity runtime_error)
-		(title "Undeclared Type")
-		(region (start 20 47) (end 20 52))
-		(headline
-			(reflow "The type ")
-			(annotated code "Value")
-			(reflow " is not declared in this scope."))
-		(document
-			(source-region (file "can_import_exposing_types.md") (start 20 47) (end 20 52) (annotation error) (line-text "processData : Config, List(Value) -> Try(List(Value), Error)"))))
-	(report
-		(severity runtime_error)
-		(title "Undeclared Type")
-		(region (start 20 55) (end 20 60))
-		(headline
-			(reflow "The type ")
-			(annotated code "Error")
-			(reflow " is not declared in this scope."))
-		(document
-			(source-region (file "can_import_exposing_types.md") (start 20 55) (end 20 60) (annotation error) (line-text "processData : Config, List(Value) -> Try(List(Value), Error)"))))
+			(source-region (file "can_import_exposing_types.md") (start 3 1) (end 3 32) (annotation warning) (line-text "import utils.Try exposing [Try]"))))
 	(report
 		(severity runtime_error)
 		(title "Does Not Exist")
@@ -262,55 +147,215 @@ NAME NOT IN SCOPE - can_import_exposing_types.md:50:33:50:44
 			(source-region (file "can_import_exposing_types.md") (start 22 5) (end 22 16) (annotation error) (line-text "    List.mapTry("))))
 	(report
 		(severity runtime_error)
-		(title "Name Not In Scope")
+		(title "Mod Not Found")
+		(region (start 6 20) (end 6 23))
+		(headline
+			(text "This ")
+			(annotated code "Try")
+			(reflow " type is declared to be in ")
+			(annotated code "utils.Try")
+			(reflow ", which does not exist."))
+		(document
+			(source-region (file "can_import_exposing_types.md") (start 6 20) (end 6 23) (annotation error) (line-text "parseJson : Str -> Try(Value, Error)"))))
+	(report
+		(severity runtime_error)
+		(title "Mod Not Found")
+		(region (start 6 24) (end 6 29))
+		(headline
+			(text "This ")
+			(annotated code "Value")
+			(reflow " type is declared to be in ")
+			(annotated code "json.Json")
+			(reflow ", which does not exist."))
+		(document
+			(source-region (file "can_import_exposing_types.md") (start 6 24) (end 6 29) (annotation error) (line-text "parseJson : Str -> Try(Value, Error)"))))
+	(report
+		(severity runtime_error)
+		(title "Mod Not Found")
+		(region (start 6 31) (end 6 36))
+		(headline
+			(text "This ")
+			(annotated code "Error")
+			(reflow " type is declared to be in ")
+			(annotated code "json.Json")
+			(reflow ", which does not exist."))
+		(document
+			(source-region (file "can_import_exposing_types.md") (start 6 31) (end 6 36) (annotation error) (line-text "parseJson : Str -> Try(Value, Error)"))))
+	(report
+		(severity runtime_error)
+		(title "Does Not Exist")
+		(region (start 7 21) (end 7 31))
+		(headline
+			(annotated symbol-unqualified "Json.parse")
+			(reflow " does not exist."))
+		(document
+			(source-region (file "can_import_exposing_types.md") (start 7 21) (end 7 31) (annotation error) (line-text "parseJson = |input| Json.parse(input)"))))
+	(report
+		(severity runtime_error)
+		(title "Mod Not Found")
+		(region (start 10 17) (end 10 24))
+		(headline
+			(text "This ")
+			(annotated code "Request")
+			(reflow " type is declared to be in ")
+			(annotated code "http.Client")
+			(reflow ", which does not exist."))
+		(document
+			(source-region (file "can_import_exposing_types.md") (start 10 17) (end 10 24) (annotation error) (line-text "handleRequest : Request -> Response"))))
+	(report
+		(severity runtime_error)
+		(title "Mod Not Found")
+		(region (start 10 28) (end 10 36))
+		(headline
+			(text "This ")
+			(annotated code "Response")
+			(reflow " type is declared to be in ")
+			(annotated code "http.Client")
+			(reflow ", which does not exist."))
+		(document
+			(source-region (file "can_import_exposing_types.md") (start 10 28) (end 10 36) (annotation error) (line-text "handleRequest : Request -> Response"))))
+	(report
+		(severity runtime_error)
+		(title "Does Not Exist")
+		(region (start 12 14) (end 12 25))
+		(headline
+			(annotated symbol-unqualified "Json.decode")
+			(reflow " does not exist."))
+		(document
+			(source-region (file "can_import_exposing_types.md") (start 12 14) (end 12 25) (annotation error) (line-text "    result = Json.decode(req.body)"))))
+	(report
+		(severity runtime_error)
+		(title "Does Not Exist")
+		(region (start 14 22) (end 14 29))
+		(headline
+			(annotated symbol-unqualified "Http.ok")
+			(reflow " does not exist."))
+		(document
+			(source-region (file "can_import_exposing_types.md") (start 14 22) (end 14 29) (annotation error) (line-text "        Ok(value) => Http.ok(value)"))))
+	(report
+		(severity runtime_error)
+		(title "Does Not Exist")
+		(region (start 15 23) (end 15 38))
+		(headline
+			(annotated symbol-unqualified "Http.badRequest")
+			(reflow " does not exist."))
+		(document
+			(source-region (file "can_import_exposing_types.md") (start 15 23) (end 15 38) (annotation error) (line-text "        Err(error) => Http.badRequest(error)"))))
+	(report
+		(severity runtime_error)
+		(title "Mod Not Found")
+		(region (start 20 15) (end 20 21))
+		(headline
+			(text "This ")
+			(annotated code "Config")
+			(reflow " type is declared to be in ")
+			(annotated code "json.Json")
+			(reflow ", which does not exist."))
+		(document
+			(source-region (file "can_import_exposing_types.md") (start 20 15) (end 20 21) (annotation error) (line-text "processData : Config, List(Value) -> Try(List(Value), Error)"))))
+	(report
+		(severity runtime_error)
+		(title "Mod Not Found")
+		(region (start 20 28) (end 20 33))
+		(headline
+			(text "This ")
+			(annotated code "Value")
+			(reflow " type is declared to be in ")
+			(annotated code "json.Json")
+			(reflow ", which does not exist."))
+		(document
+			(source-region (file "can_import_exposing_types.md") (start 20 28) (end 20 33) (annotation error) (line-text "processData : Config, List(Value) -> Try(List(Value), Error)"))))
+	(report
+		(severity runtime_error)
+		(title "Mod Not Found")
+		(region (start 20 38) (end 20 41))
+		(headline
+			(text "This ")
+			(annotated code "Try")
+			(reflow " type is declared to be in ")
+			(annotated code "utils.Try")
+			(reflow ", which does not exist."))
+		(document
+			(source-region (file "can_import_exposing_types.md") (start 20 38) (end 20 41) (annotation error) (line-text "processData : Config, List(Value) -> Try(List(Value), Error)"))))
+	(report
+		(severity runtime_error)
+		(title "Mod Not Found")
+		(region (start 20 47) (end 20 52))
+		(headline
+			(text "This ")
+			(annotated code "Value")
+			(reflow " type is declared to be in ")
+			(annotated code "json.Json")
+			(reflow ", which does not exist."))
+		(document
+			(source-region (file "can_import_exposing_types.md") (start 20 47) (end 20 52) (annotation error) (line-text "processData : Config, List(Value) -> Try(List(Value), Error)"))))
+	(report
+		(severity runtime_error)
+		(title "Mod Not Found")
+		(region (start 20 55) (end 20 60))
+		(headline
+			(text "This ")
+			(annotated code "Error")
+			(reflow " type is declared to be in ")
+			(annotated code "json.Json")
+			(reflow ", which does not exist."))
+		(document
+			(source-region (file "can_import_exposing_types.md") (start 20 55) (end 20 60) (annotation error) (line-text "processData : Config, List(Value) -> Try(List(Value), Error)"))))
+	(report
+		(severity runtime_error)
+		(title "Does Not Exist")
 		(region (start 24 13) (end 24 30))
 		(headline
-			(reflow "Nothing is named ")
-			(annotated symbol-unqualified "validateWith")
-			(reflow " in this scope."))
+			(annotated symbol-unqualified "Json.validateWith")
+			(reflow " does not exist."))
 		(document
-			(reflow "Is it misspelled, or is there an import missing?")
-			(line-break)
-			(line-break)
 			(source-region (file "can_import_exposing_types.md") (start 24 13) (end 24 30) (annotation error) (line-text "        |v| Json.validateWith(config, v),"))))
 	(report
 		(severity runtime_error)
-		(title "Undeclared Type")
+		(title "Mod Not Found")
 		(region (start 29 18) (end 29 24))
 		(headline
-			(reflow "The type ")
+			(text "This ")
 			(annotated code "Config")
-			(reflow " is not declared in this scope."))
+			(reflow " type is declared to be in ")
+			(annotated code "json.Json")
+			(reflow ", which does not exist."))
 		(document
 			(source-region (file "can_import_exposing_types.md") (start 29 18) (end 29 24) (annotation error) (line-text "    jsonConfig : Config,"))))
 	(report
 		(severity runtime_error)
-		(title "Undeclared Type")
+		(title "Mod Not Found")
 		(region (start 30 18) (end 30 24))
 		(headline
-			(reflow "The type ")
+			(text "This ")
 			(annotated code "Status")
-			(reflow " is not declared in this scope."))
+			(reflow " type is declared to be in ")
+			(annotated code "http.Client")
+			(reflow ", which does not exist."))
 		(document
 			(source-region (file "can_import_exposing_types.md") (start 30 18) (end 30 24) (annotation error) (line-text "    httpStatus : Status,"))))
 	(report
 		(severity runtime_error)
-		(title "Undeclared Type")
+		(title "Mod Not Found")
 		(region (start 31 23) (end 31 31))
 		(headline
-			(reflow "The type ")
+			(text "This ")
 			(annotated code "Response")
-			(reflow " is not declared in this scope."))
+			(reflow " type is declared to be in ")
+			(annotated code "http.Client")
+			(reflow ", which does not exist."))
 		(document
 			(source-region (file "can_import_exposing_types.md") (start 31 23) (end 31 31) (annotation error) (line-text "    defaultResponse : Response,"))))
 	(report
 		(severity runtime_error)
-		(title "Undeclared Type")
+		(title "Mod Not Found")
 		(region (start 35 16) (end 35 22))
 		(headline
-			(reflow "The type ")
+			(text "This ")
 			(annotated code "Config")
-			(reflow " is not declared in this scope."))
+			(reflow " type is declared to be in ")
+			(annotated code "json.Json")
+			(reflow ", which does not exist."))
 		(document
 			(source-region (file "can_import_exposing_types.md") (start 35 16) (end 35 22) (annotation error) (line-text "createClient : Config -> Http.Client"))))
 	(report
@@ -327,111 +372,141 @@ NAME NOT IN SCOPE - can_import_exposing_types.md:50:33:50:44
 			(source-region (file "can_import_exposing_types.md") (start 35 30) (end 35 37) (annotation error) (line-text "createClient : Config -> Http.Client"))))
 	(report
 		(severity runtime_error)
-		(title "Name Not In Scope")
+		(title "Does Not Exist")
 		(region (start 36 25) (end 36 40))
 		(headline
-			(reflow "Nothing is named ")
-			(annotated symbol-unqualified "clientWith")
-			(reflow " in this scope."))
+			(annotated symbol-unqualified "Http.clientWith")
+			(reflow " does not exist."))
 		(document
-			(reflow "Is it misspelled, or is there an import missing?")
-			(line-break)
-			(line-break)
 			(source-region (file "can_import_exposing_types.md") (start 36 25) (end 36 40) (annotation error) (line-text "createClient = |config| Http.clientWith(config)"))))
 	(report
 		(severity runtime_error)
-		(title "Undeclared Type")
+		(title "Mod Not Found")
 		(region (start 39 18) (end 39 26))
 		(headline
-			(reflow "The type ")
+			(text "This ")
 			(annotated code "Response")
-			(reflow " is not declared in this scope."))
+			(reflow " type is declared to be in ")
+			(annotated code "http.Client")
+			(reflow ", which does not exist."))
 		(document
 			(source-region (file "can_import_exposing_types.md") (start 39 18) (end 39 26) (annotation error) (line-text "handleResponse : Response -> Str"))))
 	(report
 		(severity runtime_error)
-		(title "Name Not In Scope")
+		(title "Does Not Exist")
 		(region (start 42 23) (end 42 42))
 		(headline
-			(reflow "Nothing is named ")
-			(annotated symbol-unqualified "statusToString")
-			(reflow " in this scope."))
+			(annotated symbol-unqualified "Http.statusToString")
+			(reflow " does not exist."))
 		(document
-			(reflow "Is it misspelled, or is there an import missing?")
-			(line-break)
-			(line-break)
 			(source-region (file "can_import_exposing_types.md") (start 42 23) (end 42 42) (annotation error) (line-text "        Ok(status) => Http.statusToString(status)"))))
 	(report
 		(severity runtime_error)
 		(title "Does Not Exist")
 		(region (start 43 23) (end 43 37))
 		(headline
-			(annotated symbol-unqualified "Error.toString")
+			(annotated code "Error.toString")
 			(reflow " does not exist."))
 		(document
+			(annotated code "Error")
+			(reflow " is in scope, but it has no associated ")
+			(annotated code "toString")
+			(reflow ".")
+			(line-break)
+			(line-break)
 			(source-region (file "can_import_exposing_types.md") (start 43 23) (end 43 37) (annotation error) (line-text "        Err(error) => Error.toString(error)"))))
 	(report
 		(severity runtime_error)
-		(title "Undeclared Type")
+		(title "Mod Not Found")
+		(region (start 47 15) (end 47 18))
+		(headline
+			(text "This ")
+			(annotated code "Try")
+			(reflow " type is declared to be in ")
+			(annotated code "utils.Try")
+			(reflow ", which does not exist."))
+		(document
+			(source-region (file "can_import_exposing_types.md") (start 47 15) (end 47 18) (annotation error) (line-text "combineTrys : Try(Value, Error), Status -> Try(Response, Error)"))))
+	(report
+		(severity runtime_error)
+		(title "Mod Not Found")
 		(region (start 47 19) (end 47 24))
 		(headline
-			(reflow "The type ")
+			(text "This ")
 			(annotated code "Value")
-			(reflow " is not declared in this scope."))
+			(reflow " type is declared to be in ")
+			(annotated code "json.Json")
+			(reflow ", which does not exist."))
 		(document
 			(source-region (file "can_import_exposing_types.md") (start 47 19) (end 47 24) (annotation error) (line-text "combineTrys : Try(Value, Error), Status -> Try(Response, Error)"))))
 	(report
 		(severity runtime_error)
-		(title "Undeclared Type")
+		(title "Mod Not Found")
 		(region (start 47 26) (end 47 31))
 		(headline
-			(reflow "The type ")
+			(text "This ")
 			(annotated code "Error")
-			(reflow " is not declared in this scope."))
+			(reflow " type is declared to be in ")
+			(annotated code "json.Json")
+			(reflow ", which does not exist."))
 		(document
 			(source-region (file "can_import_exposing_types.md") (start 47 26) (end 47 31) (annotation error) (line-text "combineTrys : Try(Value, Error), Status -> Try(Response, Error)"))))
 	(report
 		(severity runtime_error)
-		(title "Undeclared Type")
+		(title "Mod Not Found")
 		(region (start 47 34) (end 47 40))
 		(headline
-			(reflow "The type ")
+			(text "This ")
 			(annotated code "Status")
-			(reflow " is not declared in this scope."))
+			(reflow " type is declared to be in ")
+			(annotated code "http.Client")
+			(reflow ", which does not exist."))
 		(document
 			(source-region (file "can_import_exposing_types.md") (start 47 34) (end 47 40) (annotation error) (line-text "combineTrys : Try(Value, Error), Status -> Try(Response, Error)"))))
 	(report
 		(severity runtime_error)
-		(title "Undeclared Type")
+		(title "Mod Not Found")
+		(region (start 47 44) (end 47 47))
+		(headline
+			(text "This ")
+			(annotated code "Try")
+			(reflow " type is declared to be in ")
+			(annotated code "utils.Try")
+			(reflow ", which does not exist."))
+		(document
+			(source-region (file "can_import_exposing_types.md") (start 47 44) (end 47 47) (annotation error) (line-text "combineTrys : Try(Value, Error), Status -> Try(Response, Error)"))))
+	(report
+		(severity runtime_error)
+		(title "Mod Not Found")
 		(region (start 47 48) (end 47 56))
 		(headline
-			(reflow "The type ")
+			(text "This ")
 			(annotated code "Response")
-			(reflow " is not declared in this scope."))
+			(reflow " type is declared to be in ")
+			(annotated code "http.Client")
+			(reflow ", which does not exist."))
 		(document
 			(source-region (file "can_import_exposing_types.md") (start 47 48) (end 47 56) (annotation error) (line-text "combineTrys : Try(Value, Error), Status -> Try(Response, Error)"))))
 	(report
 		(severity runtime_error)
-		(title "Undeclared Type")
+		(title "Mod Not Found")
 		(region (start 47 58) (end 47 63))
 		(headline
-			(reflow "The type ")
+			(text "This ")
 			(annotated code "Error")
-			(reflow " is not declared in this scope."))
+			(reflow " type is declared to be in ")
+			(annotated code "json.Json")
+			(reflow ", which does not exist."))
 		(document
 			(source-region (file "can_import_exposing_types.md") (start 47 58) (end 47 63) (annotation error) (line-text "combineTrys : Try(Value, Error), Status -> Try(Response, Error)"))))
 	(report
 		(severity runtime_error)
-		(title "Name Not In Scope")
+		(title "Does Not Exist")
 		(region (start 50 33) (end 50 44))
 		(headline
-			(reflow "Nothing is named ")
-			(annotated symbol-unqualified "to_str")
-			(reflow " in this scope."))
+			(annotated symbol-unqualified "Json.to_str")
+			(reflow " does not exist."))
 		(document
-			(reflow "Is it misspelled, or is there an import missing?")
-			(line-break)
-			(line-break)
 			(source-region (file "can_import_exposing_types.md") (start 50 33) (end 50 44) (annotation error) (line-text "        Ok(value) => Ok({ body: Json.to_str(value), status: httpStatus })")))))
 ~~~
 # TOKENS
@@ -723,9 +798,7 @@ combineTrys = |jsonTry, httpStatus|
 		(annotation
 			(ty-fn (effectful false)
 				(ty-lookup (name "Str") (builtin))
-				(ty-apply (name "Try") (builtin)
-					(ty-malformed)
-					(ty-malformed)))))
+				(ty-malformed))))
 	(d-let
 		(p-assign (ident "handleRequest"))
 		(e-runtime-error (tag "erroneous_value_expr"))
@@ -741,10 +814,7 @@ combineTrys = |jsonTry, httpStatus|
 				(ty-malformed)
 				(ty-apply (name "List") (builtin)
 					(ty-malformed))
-				(ty-apply (name "Try") (builtin)
-					(ty-apply (name "List") (builtin)
-						(ty-malformed))
-					(ty-malformed)))))
+				(ty-malformed))))
 	(d-let
 		(p-assign (ident "createClient"))
 		(e-runtime-error (tag "erroneous_value_expr"))
@@ -764,13 +834,9 @@ combineTrys = |jsonTry, httpStatus|
 		(e-runtime-error (tag "erroneous_value_expr"))
 		(annotation
 			(ty-fn (effectful false)
-				(ty-apply (name "Try") (builtin)
-					(ty-malformed)
-					(ty-malformed))
 				(ty-malformed)
-				(ty-apply (name "Try") (builtin)
-					(ty-malformed)
-					(ty-malformed)))))
+				(ty-malformed)
+				(ty-malformed))))
 	(s-import (mod "json.Json")
 		(exposes
 			(exposed (name "Value") (wildcard false))
@@ -798,20 +864,20 @@ combineTrys = |jsonTry, httpStatus|
 ~~~clojure
 (inferred-types
 	(defs
-		(patt (type "Str -> Try(Error, Error)"))
+		(patt (type "Str -> Error"))
 		(patt (type "Error -> Error"))
-		(patt (type "Error, List(Error) -> Try(List(Error), Error)"))
+		(patt (type "Error, List(Error) -> Error"))
 		(patt (type "Error -> Error"))
 		(patt (type "Error -> Str"))
-		(patt (type "Try(Error, Error), Error -> Try(Error, Error)")))
+		(patt (type "Error, Error -> Error")))
 	(type_decls
 		(alias (type "Error")
 			(ty-header (name "ServerConfig"))))
 	(expressions
-		(expr (type "Str -> Try(Error, Error)"))
+		(expr (type "Str -> Error"))
 		(expr (type "Error -> Error"))
-		(expr (type "Error, List(Error) -> Try(List(Error), Error)"))
+		(expr (type "Error, List(Error) -> Error"))
 		(expr (type "Error -> Error"))
 		(expr (type "Error -> Str"))
-		(expr (type "Try(Error, Error), Error -> Try(Error, Error)"))))
+		(expr (type "Error, Error -> Error"))))
 ~~~

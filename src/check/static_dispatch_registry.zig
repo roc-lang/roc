@@ -1035,8 +1035,8 @@ fn methodOwnerEnvForRegistryEntry(
 
     if (@import("builtin").mode == .Debug) {
         std.debug.panic(
-            "checked static dispatch registry invariant violated: could not find owner module '{s}' for receiver method",
-            .{module.getIdent(owner.moduleIdent())},
+            "checked static dispatch registry invariant violated: could not find owner module for receiver method on declaration {d} of module '{s}'",
+            .{ @intFromEnum(owner.owner), module_env.module_name },
         );
     }
     unreachable;
@@ -1046,7 +1046,7 @@ fn methodOwnerIdentityHashForRegistryEntry(
     module_env: *const ModuleEnv,
     owner: ModuleEnv.MethodOwner,
 ) *const base.ModuleIdentity.Hash {
-    if (owner.moduleIdent().eql(module_env.qualified_module_ident)) {
+    const owner_identity = owner.moduleIdentity() orelse {
         return module_env.contentIdentityHash() orelse {
             if (@import("builtin").mode == .Debug) {
                 std.debug.panic(
@@ -1056,16 +1056,6 @@ fn methodOwnerIdentityHashForRegistryEntry(
             }
             unreachable;
         };
-    }
-
-    const owner_identity = module_env.moduleIdentityForDisplayIdent(owner.moduleIdent()) orelse {
-        if (@import("builtin").mode == .Debug) {
-            std.debug.panic(
-                "checked static dispatch registry invariant violated: receiver owner module '{s}' has no content identity in module '{s}'",
-                .{ module_env.getIdent(owner.moduleIdent()), module_env.module_name },
-            );
-        }
-        unreachable;
     };
     return module_env.moduleIdentityHash(owner_identity);
 }

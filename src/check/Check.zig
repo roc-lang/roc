@@ -2090,6 +2090,7 @@ const HoistSelectionTransaction = struct {
             .e_type_method_call => |call| try self.stageExprSpanDependencies(call.args, context),
             .e_type_dispatch_call => |call| try self.stageExprSpanDependencies(call.args, context),
             .e_tuple_access => |access| try self.stageExprDependenciesInternal(access.tuple, context),
+            .e_deferred_import_ref => std.debug.panic("check invariant violated: deferred import reference reached checking", .{}),
         }
     }
 
@@ -3321,6 +3322,7 @@ fn recordHoistPatternProvenance(
         .frac_f64_literal,
         .str_literal,
         => try self.recordHoistPatternExtractionProvenanceHelp(pattern, expr, pattern, .deferred),
+        .deferred_import_ref => std.debug.panic("compiler invariant violated: deferred import reference pattern reached a stage that runs after import resolution", .{}),
     }
 }
 
@@ -3401,6 +3403,7 @@ fn patternIntroducesValueBinding(self: *const Self, pattern: CIR.Pattern.Idx) bo
         .frac_f64_literal,
         .str_literal,
         => false,
+        .deferred_import_ref => std.debug.panic("compiler invariant violated: deferred import reference pattern reached a stage that runs after import resolution", .{}),
     };
 }
 
@@ -3427,6 +3430,7 @@ fn patternCanOwnHoistedBindingRoot(self: *Self, pattern: CIR.Pattern.Idx) bool {
         .frac_f64_literal,
         .str_literal,
         => false,
+        .deferred_import_ref => std.debug.panic("compiler invariant violated: deferred import reference pattern reached a stage that runs after import resolution", .{}),
     };
 }
 
@@ -3490,6 +3494,7 @@ fn patternIsIrrefutableForHoistExtraction(self: *Self, pattern: CIR.Pattern.Idx)
         .frac_f64_literal,
         .str_literal,
         => false,
+        .deferred_import_ref => std.debug.panic("compiler invariant violated: deferred import reference pattern reached a stage that runs after import resolution", .{}),
     };
 }
 
@@ -3581,6 +3586,7 @@ fn recordHoistPatternExtractionProvenanceHelp(
         .frac_f64_literal,
         .str_literal,
         => {},
+        .deferred_import_ref => std.debug.panic("check invariant violated: deferred import reference pattern reached checking", .{}),
     }
 }
 
@@ -3661,6 +3667,7 @@ fn recordHoistContextualPatternBindings(
         .frac_f64_literal,
         .str_literal,
         => {},
+        .deferred_import_ref => std.debug.panic("compiler invariant violated: deferred import reference pattern reached a stage that runs after import resolution", .{}),
     }
 }
 
@@ -3958,6 +3965,7 @@ fn retirePatternMetadata(self: *Self, pattern_idx: CIR.Pattern.Idx, diagnostic: 
             if (diagnostic) |diag| self.cir.store.replacePatternWithRuntimeError(pattern_idx, diag);
         },
         .assign, .var_assign, .underscore, .runtime_error => {},
+        .deferred_import_ref => std.debug.panic("check invariant violated: deferred import reference pattern reached checking", .{}),
     }
 }
 
@@ -4159,6 +4167,7 @@ fn markHoistInvalidatedExprChildren(
         .e_break,
         .e_hosted_lambda,
         => {},
+        .e_deferred_import_ref => std.debug.panic("check invariant violated: deferred import reference reached checking", .{}),
     }
 }
 
@@ -4339,6 +4348,7 @@ fn firstHoistSelectionTestExpr(checker: *Self) error{ExpectedHoistSelectionTestE
             .e_lambda,
             .e_hosted_lambda,
             => {},
+            .e_deferred_import_ref => std.debug.panic("compiler invariant violated: deferred import reference reached a stage that runs after import resolution", .{}),
         }
     }
     return error.ExpectedHoistSelectionTestExpr;
@@ -4675,6 +4685,7 @@ fn exprCanBeHoistedRoot(self: *Self, expr: CIR.Expr.Idx) bool {
         .e_break,
         .e_run_low_level,
         => true,
+        .e_deferred_import_ref => std.debug.panic("compiler invariant violated: deferred import reference reached a stage that runs after import resolution", .{}),
     };
 }
 
@@ -4746,6 +4757,7 @@ fn exprCanCoverHoistedChildren(self: *Self, expr: CIR.Expr.Idx) bool {
         .e_type_dispatch_call,
         .e_tuple_access,
         => true,
+        .e_deferred_import_ref => std.debug.panic("compiler invariant violated: deferred import reference reached a stage that runs after import resolution", .{}),
     };
 }
 
@@ -4815,6 +4827,7 @@ fn exprCanBeHoistedBindingRoot(self: *Self, expr: CIR.Expr.Idx) bool {
         .e_typed_num_from_numeral,
         .e_str,
         => !self.exprHasDedicatedLiteralConversionRoot(expr),
+        .e_deferred_import_ref => std.debug.panic("compiler invariant violated: deferred import reference reached a stage that runs after import resolution", .{}),
     };
 }
 
@@ -7962,6 +7975,12 @@ fn unifyLiteralWithSuffixTarget(
                 try self.markErroneous(flex_var);
             }
         },
+        .pending => unreachable,
+        .external_identity => |external| {
+            const ext_ref = (try self.resolveVarFromExternalIdentity(external.module_identity, external.target_node_idx)) orelse unreachable;
+            const instantiated_var = try self.instantiateVar(ext_ref.local_var, env, .{ .explicit = region }, .none);
+            _ = try self.unify(flex_var, instantiated_var, env);
+        },
         .invalid => {
             try self.markErroneous(flex_var);
         },
@@ -8270,7 +8289,8 @@ fn checkNumeralLiteral(
         try self.unifyLiteralWithSuffixTarget(flex_var, target, region, env);
         const targets_dec = switch (target.target()) {
             .builtin => |kind| kind == .dec,
-            .local, .external, .invalid => false,
+            .local, .external, .external_identity, .invalid => false,
+            .pending => unreachable,
         };
         if (targets_dec) {
             _ = try self.reportInvalidBuiltinFromNumeralInfo(flex_var, .dec, num_literal_info, env);
@@ -9725,6 +9745,7 @@ fn hoistedRootDependenciesAreKeptInternal(
         )) and
             try self.hoistedRootExprSpanDependenciesAreKept(call.args, context, keep_oracle),
         .e_tuple_access => |access| self.hoistedRootDependenciesAreKeptInternal(access.tuple, context, keep_oracle),
+        .e_deferred_import_ref => std.debug.panic("check invariant violated: deferred import reference reached checking", .{}),
     };
 }
 
@@ -9848,6 +9869,7 @@ fn hoistedExprAllowsStoredConst(
         .e_return => |ret| self.hoistedExprAllowsStoredConst(module, ret.expr, context),
         .e_closure => |closure| self.hoistedExprAllowsStoredConst(module, closure.lambda_idx, context),
         .e_lambda => |lambda| self.hoistedExprAllowsStoredConst(module, lambda.body, context),
+        .e_deferred_import_ref => std.debug.panic("compiler invariant violated: deferred import reference reached a stage that runs after import resolution", .{}),
     };
 }
 
@@ -9931,6 +9953,7 @@ fn hoistedCallableDefForExpr(
         .e_return,
         .e_break,
         => null,
+        .e_deferred_import_ref => std.debug.panic("compiler invariant violated: deferred import reference reached a stage that runs after import resolution", .{}),
     };
 }
 
@@ -10030,6 +10053,7 @@ fn patternBindsNode(module: *const ModuleEnv, root: CIR.Pattern.Idx, node: CIR.N
             .underscore,
             .runtime_error,
             => {},
+            .deferred_import_ref => std.debug.panic("compiler invariant violated: deferred import reference pattern reached a stage that runs after import resolution", .{}),
         }
     }
     return false;
@@ -10154,7 +10178,9 @@ fn exprHasDedicatedLiteralConversionRoot(self: *Self, expr: CIR.Expr.Idx) bool {
                 .builtin => false,
                 .local,
                 .external,
+                .external_identity,
                 => true,
+                .pending => unreachable,
                 .invalid => false,
             };
         }
@@ -10487,6 +10513,7 @@ fn appendHoistedDependencyPatternBinders(
         .frac_f64_literal,
         .str_literal,
         => {},
+        .deferred_import_ref => std.debug.panic("compiler invariant violated: deferred import reference pattern reached a stage that runs after import resolution", .{}),
     }
 }
 
@@ -16070,6 +16097,8 @@ fn annoApplyIsBuiltinTry(self: *const Self, apply: CIR.TypeAnno.Apply) bool {
             @intFromEnum(local.decl_idx) == try_source_decl,
         .external => |ext| self.externalTypeRefTargetsBuiltin(ext.module_idx) and
             ext.target_node_idx == try_source_decl,
+        .external_identity => |ext| self.identityTypeRefTargetsBuiltin(ext.module_identity) and
+            ext.target_node_idx == try_source_decl,
     };
 }
 
@@ -16123,7 +16152,7 @@ fn applyTryErrorArgIndex(self: *const Self, apply: CIR.TypeAnno.Apply) ?usize {
         // rather than a wrong answer.
         const base_ref = switch (current.base) {
             .local => |local_ref| local_ref,
-            .builtin, .external, .pending => return null,
+            .builtin, .external, .external_identity, .pending => return null,
         };
         const alias_decl = switch (self.cir.store.getStatement(base_ref.decl_idx)) {
             .s_alias_decl => |decl| decl,
@@ -16400,6 +16429,10 @@ fn applyDeclKnowledge(self: *const Self, apply: CIR.TypeAnno.Apply) ApplyDeclKno
         else
             .unknown,
         .pending => |pend| if (self.externalTypeRefTargetsBuiltin(pend.module_idx))
+            .covariant
+        else
+            .unknown,
+        .external_identity => |ext| if (self.identityTypeRefTargetsBuiltin(ext.module_identity))
             .covariant
         else
             .unknown,
@@ -16815,6 +16848,11 @@ fn rejectWhereAliasInTypePosition(
             const stmt: CIR.Statement.Idx = @enumFromInt(@intFromEnum(ext_ref.other_cir_node_idx));
             break :blk ext_ref.other_cir.store.getStatement(stmt) == .s_where_alias_decl;
         },
+        .external_identity => |ext| blk: {
+            const ext_ref = (try self.resolveVarFromExternalIdentity(ext.module_identity, ext.target_node_idx)) orelse break :blk false;
+            const stmt: CIR.Statement.Idx = @enumFromInt(@intFromEnum(ext_ref.other_cir_node_idx));
+            break :blk ext_ref.other_cir.store.getStatement(stmt) == .s_where_alias_decl;
+        },
         .builtin, .pending => false,
     };
     if (!names_where_alias) return false;
@@ -16911,54 +16949,104 @@ fn resolveWhereAliasReference(
                 .params = params_scratch.items,
             };
         },
-        .external => |ext| {
-            const ext_ref = (try self.resolveVarFromExternal(ext.module_idx, ext.target_node_idx)) orelse {
-                // Canonicalization already reported the unresolved import.
-                return null;
-            };
-            const decl = switch (ext_ref.other_cir.store.getStatement(@enumFromInt(@intFromEnum(ext_ref.other_cir_node_idx)))) {
-                .s_where_alias_decl => |decl| decl,
-                .s_decl,
-                .s_var,
-                .s_var_uninitialized,
-                .s_reassign,
-                .s_crash,
-                .s_dbg,
-                .s_expr,
-                .s_expect,
-                .s_for,
-                .s_while,
-                .s_infinite_loop,
-                .s_breakable_loop,
-                .s_break,
-                .s_return,
-                .s_import,
-                .s_alias_decl,
-                .s_nominal_decl,
-                .s_type_anno,
-                .s_type_var_alias,
-                .s_runtime_error,
-                => return try self.reportNotAWhereAlias(name, region),
-            };
-
-            // Each parameter is copied on its own. Every type variable a where
-            // alias's constraints can mention is either the receiver or a
-            // parameter, and both are substituted by name below, so the copies
-            // do not need to share variables with each other.
-            for (ext_ref.other_cir.store.sliceTypeAnnos(ext_ref.other_cir.store.getTypeHeader(decl.header).args)) |param_anno_idx| {
-                const param_ref = (try self.resolveVarFromExternal(ext.module_idx, @intFromEnum(param_anno_idx))) orelse return null;
-                try params_scratch.append(self.gpa, param_ref.local_var);
-            }
-            return ResolvedWhereAlias{
-                .name = name,
-                .receiver = ext_ref.local_var,
-                .params = params_scratch.items,
-            };
-        },
+        .external => |ext| return try self.resolveExternalWhereAlias(
+            try self.resolveVarFromExternal(ext.module_idx, ext.target_node_idx),
+            name,
+            region,
+            params_scratch,
+        ),
+        .external_identity => |ext| return try self.resolveExternalWhereAlias(
+            try self.resolveVarFromExternalIdentity(ext.module_identity, ext.target_node_idx),
+            name,
+            region,
+            params_scratch,
+        ),
         .builtin => return try self.reportNotAWhereAlias(name, region),
         // An unresolvable import; canonicalization already reported it.
         .pending => return null,
     }
+}
+
+/// Unify a type-annotation lookup with the declaration it names in another
+/// module, from the reference this module already resolved to it.
+fn unifyAnnoWithExternalType(
+    self: *Self,
+    resolved: ?ExternalType,
+    anno_var: Var,
+    anno_region: Region,
+    polarity: Polarity,
+    ctx: GenTypeAnnoCtx,
+    env: *Env,
+) std.mem.Allocator.Error!void {
+    const ext_ref = resolved orelse {
+        // Canonicalization already reported why this reference has no
+        // referent, so this annotation is checked-error data.
+        try self.markErroneous(anno_var);
+        return;
+    };
+    const ext_instantiated_var = try self.instantiateVarPolarized(
+        ext_ref.local_var,
+        env,
+        .{ .explicit = anno_region },
+        ctx.polarityVarBehavior(),
+        polarity,
+        ctx.instantiationReach(),
+        .none,
+    );
+    _ = try self.unify(anno_var, ext_instantiated_var, env);
+}
+
+/// Resolve a where alias whose declaration lives in another module, from the
+/// reference this module already resolved to it.
+fn resolveExternalWhereAlias(
+    self: *Self,
+    resolved: ?ExternalType,
+    name: Ident.Idx,
+    region: Region,
+    params_scratch: *std.ArrayListUnmanaged(Var),
+) std.mem.Allocator.Error!?ResolvedWhereAlias {
+    const ext_ref = resolved orelse {
+        // Canonicalization already reported the unresolved import.
+        return null;
+    };
+    const decl = switch (ext_ref.other_cir.store.getStatement(@enumFromInt(@intFromEnum(ext_ref.other_cir_node_idx)))) {
+        .s_where_alias_decl => |decl| decl,
+        .s_decl,
+        .s_var,
+        .s_var_uninitialized,
+        .s_reassign,
+        .s_crash,
+        .s_dbg,
+        .s_expr,
+        .s_expect,
+        .s_for,
+        .s_while,
+        .s_infinite_loop,
+        .s_breakable_loop,
+        .s_break,
+        .s_return,
+        .s_import,
+        .s_alias_decl,
+        .s_nominal_decl,
+        .s_type_anno,
+        .s_type_var_alias,
+        .s_runtime_error,
+        => return try self.reportNotAWhereAlias(name, region),
+    };
+
+    // Each parameter is copied on its own. Every type variable a where
+    // alias's constraints can mention is either the receiver or a
+    // parameter, and both are substituted by name below, so the copies
+    // do not need to share variables with each other.
+    for (ext_ref.other_cir.store.sliceTypeAnnos(ext_ref.other_cir.store.getTypeHeader(decl.header).args)) |param_anno_idx| {
+        const param_ref = (try self.copyVarFromOtherModule(ext_ref.other_cir, ModuleEnv.nodeIdxFrom(param_anno_idx))) orelse return null;
+        try params_scratch.append(self.gpa, param_ref.local_var);
+    }
+    return ResolvedWhereAlias{
+        .name = name,
+        .receiver = ext_ref.local_var,
+        .params = params_scratch.items,
+    };
 }
 
 /// Report that a where clause named something other than a where alias. Always
@@ -17322,24 +17410,22 @@ fn generateAnnoTypeInPlace(self: *Self, anno_idx: CIR.TypeAnno.Idx, env: *Env, c
                         _ = try self.unify(anno_var, instantiated_var, env);
                     }
                 },
-                .external => |ext| {
-                    if (try self.resolveVarFromExternal(ext.module_idx, ext.target_node_idx)) |ext_ref| {
-                        const ext_instantiated_var = try self.instantiateVarPolarized(
-                            ext_ref.local_var,
-                            env,
-                            .{ .explicit = anno_region },
-                            ctx.polarityVarBehavior(),
-                            polarity,
-                            ctx.instantiationReach(),
-                            .none,
-                        );
-                        _ = try self.unify(anno_var, ext_instantiated_var, env);
-                    } else {
-                        // If this external type is unresolved, can should've reported
-                        // an error. So we set to error and continue
-                        try self.markErroneous(anno_var);
-                    }
-                },
+                .external => |ext| try self.unifyAnnoWithExternalType(
+                    try self.resolveVarFromExternal(ext.module_idx, ext.target_node_idx),
+                    anno_var,
+                    anno_region,
+                    polarity,
+                    ctx,
+                    env,
+                ),
+                .external_identity => |ext| try self.unifyAnnoWithExternalType(
+                    try self.resolveVarFromExternalIdentity(ext.module_identity, ext.target_node_idx),
+                    anno_var,
+                    anno_region,
+                    polarity,
+                    ctx,
+                    env,
+                ),
                 .pending => {
                     // If an import references a non-existent module (e.g., missing from
                     // platform bundle), the pending lookup can't be resolved. Treat as error.
@@ -17426,6 +17512,13 @@ fn generateAnnoTypeInPlace(self: *Self, anno_idx: CIR.TypeAnno.Idx, env: *Env, c
             }
             const anno_arg_vars: []Var = @ptrCast(anno_args);
 
+            // Both external forms need the same resolved reference; only how
+            // the owning module is named differs, so resolve it once.
+            const external_resolution: ?ExternalType = switch (a.base) {
+                .external => |ext| try self.resolveVarFromExternal(ext.module_idx, ext.target_node_idx),
+                .external_identity => |ext| try self.resolveVarFromExternalIdentity(ext.module_identity, ext.target_node_idx),
+                .builtin, .local, .pending => null,
+            };
             switch (a.base) {
                 .builtin => |builtin_type| {
                     try self.setBuiltinTypeContent(anno_var, a.name, builtin_type, anno_arg_vars, anno_region, env);
@@ -17569,8 +17662,8 @@ fn generateAnnoTypeInPlace(self: *Self, anno_idx: CIR.TypeAnno.Idx, env: *Env, c
                     }
                     _ = try self.unify(anno_var, instantiated_var, env);
                 },
-                .external => |ext| {
-                    if (try self.resolveVarFromExternal(ext.module_idx, ext.target_node_idx)) |ext_ref| {
+                .external, .external_identity => {
+                    if (external_resolution) |ext_ref| {
                         // Resolve the referenced type
                         const ext_resolved = self.types.resolveVar(ext_ref.local_var).desc.content;
                         const ext_is_alias = ext_resolved == .alias;
@@ -19036,6 +19129,7 @@ fn checkPatternHelp(
             valid.* = false;
             try self.markErroneous(pattern_var);
         },
+        .deferred_import_ref => std.debug.panic("check invariant violated: deferred import reference pattern reached checking", .{}),
     }
 
     return pattern_var;
@@ -19064,6 +19158,7 @@ fn getPatternIdent(self: *const Self, ptrn_idx: CIR.Pattern.Idx) ?Ident.Idx {
         .underscore,
         .runtime_error,
         => return null,
+        .deferred_import_ref => std.debug.panic("check invariant violated: deferred import reference pattern reached checking", .{}),
     }
 }
 
@@ -19097,6 +19192,7 @@ const CirPatternRefutabilityAdapter = struct {
             .str_literal,
             .str_interpolation,
             => .can_miss,
+            .deferred_import_ref => std.debug.panic("check invariant violated: deferred import reference pattern reached checking", .{}),
         };
     }
 
@@ -19123,6 +19219,7 @@ const CirPatternRefutabilityAdapter = struct {
             .underscore,
             .runtime_error,
             => unreachable,
+            .deferred_import_ref => std.debug.panic("check invariant violated: deferred import reference pattern reached checking", .{}),
         };
     }
 
@@ -19149,6 +19246,7 @@ const CirPatternRefutabilityAdapter = struct {
             .underscore,
             .runtime_error,
             => unreachable,
+            .deferred_import_ref => std.debug.panic("check invariant violated: deferred import reference pattern reached checking", .{}),
         };
     }
 
@@ -19175,6 +19273,7 @@ const CirPatternRefutabilityAdapter = struct {
             .underscore,
             .runtime_error,
             => unreachable,
+            .deferred_import_ref => std.debug.panic("check invariant violated: deferred import reference pattern reached checking", .{}),
         };
     }
 
@@ -19201,6 +19300,7 @@ const CirPatternRefutabilityAdapter = struct {
             .underscore,
             .runtime_error,
             => unreachable,
+            .deferred_import_ref => std.debug.panic("check invariant violated: deferred import reference pattern reached checking", .{}),
         };
     }
 
@@ -19231,6 +19331,7 @@ const CirPatternRefutabilityAdapter = struct {
             .underscore,
             .runtime_error,
             => unreachable,
+            .deferred_import_ref => std.debug.panic("check invariant violated: deferred import reference pattern reached checking", .{}),
         };
     }
 
@@ -19257,6 +19358,7 @@ const CirPatternRefutabilityAdapter = struct {
             .underscore,
             .runtime_error,
             => unreachable,
+            .deferred_import_ref => std.debug.panic("check invariant violated: deferred import reference pattern reached checking", .{}),
         };
     }
 
@@ -19283,6 +19385,7 @@ const CirPatternRefutabilityAdapter = struct {
             .underscore,
             .runtime_error,
             => unreachable,
+            .deferred_import_ref => std.debug.panic("check invariant violated: deferred import reference pattern reached checking", .{}),
         };
     }
 
@@ -19309,6 +19412,7 @@ const CirPatternRefutabilityAdapter = struct {
             .underscore,
             .runtime_error,
             => unreachable,
+            .deferred_import_ref => std.debug.panic("check invariant violated: deferred import reference pattern reached checking", .{}),
         };
     }
 };
@@ -19424,6 +19528,7 @@ fn collectPatternBindings(
         .underscore,
         .runtime_error,
         => {},
+        .deferred_import_ref => std.debug.panic("check invariant violated: deferred import reference pattern reached checking", .{}),
     }
 }
 
@@ -22230,6 +22335,7 @@ fn checkExprWithFunctionOwner(self: *Self, expr_idx: CIR.Expr.Idx, env: *Env, ex
         .e_runtime_error => {
             try self.markErroneous(expr_var);
         },
+        .e_deferred_import_ref => std.debug.panic("check invariant violated: deferred import reference reached checking", .{}),
     }
 
     try frame.finish(does_fx);
@@ -22780,6 +22886,7 @@ fn patternIdentInModule(module_env: *const ModuleEnv, def_idx: CIR.Def.Idx) ?Ide
         .underscore,
         .runtime_error,
         => null,
+        .deferred_import_ref => std.debug.panic("check invariant violated: deferred import reference pattern reached checking", .{}),
     };
 }
 
@@ -26464,6 +26571,45 @@ fn resolveVarFromExternal(
     }
 }
 
+/// Resolve a type reference whose owning module is recorded by content
+/// identity, which is how the import-resolution drain records a declaration it
+/// reached by following an exposed alias out of an imported module. The owner
+/// is among this check's owner modules, exactly like a resolved associated
+/// lookup's target.
+fn resolveVarFromExternalIdentity(
+    self: *Self,
+    module_identity: base.ModuleIdentity.Idx,
+    node_idx: u32,
+) std.mem.Allocator.Error!?ExternalType {
+    const target = self.moduleEnvForIdentity(self.cir, module_identity);
+    return try self.copyVarFromOtherModule(
+        target.env,
+        @enumFromInt(node_idx),
+    );
+}
+
+/// Copy one node's type out of another module's store into this one, reusing a
+/// previous copy of the same node when there is one.
+fn copyVarFromOtherModule(
+    self: *Self,
+    other_module_env: *const ModuleEnv,
+    target_node_idx: CIR.Node.Idx,
+) std.mem.Allocator.Error!?ExternalType {
+    const copied_var = try self.importedSchemeFromSource(other_module_env, target_node_idx);
+
+    return .{
+        .local_var = copied_var,
+        .other_cir_node_idx = target_node_idx,
+        .other_cir = other_module_env,
+    };
+}
+
+/// Whether a content identity in this module's table names the compiler's
+/// baked `Builtin` module.
+fn identityTypeRefTargetsBuiltin(self: *const Self, module_identity: base.ModuleIdentity.Idx) bool {
+    return module_identity == self.builtin_origin_identity;
+}
+
 fn checkAssociatedLookup(
     self: *Self,
     expr_idx: CIR.Expr.Idx,
@@ -28475,6 +28621,7 @@ fn defaultMaterializationIsRecursive(
                 .e_hosted_lambda,
                 .e_run_low_level,
                 => {},
+                .e_deferred_import_ref => std.debug.panic("check invariant violated: deferred import reference reached checking", .{}),
             }
         }
         const expr_idx = expr_work.pop() orelse break;
@@ -28685,6 +28832,7 @@ fn defaultMaterializationIsRecursive(
             .e_break,
             .e_hosted_lambda,
             => {},
+            .e_deferred_import_ref => std.debug.panic("compiler invariant violated: deferred import reference reached a stage that runs after import resolution", .{}),
         }
     }
     return false;
@@ -31962,6 +32110,7 @@ fn tailTrySuffixExpr(self: *const Self, expr_idx: CIR.Expr.Idx) ?CIR.Expr.Idx {
         .e_hosted_lambda,
         .e_run_low_level,
         => return null,
+        .e_deferred_import_ref => std.debug.panic("compiler invariant violated: deferred import reference reached a stage that runs after import resolution", .{}),
     }
 }
 

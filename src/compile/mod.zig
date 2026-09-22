@@ -21,6 +21,7 @@ pub const watch_inputs = @import("watch_inputs.zig");
 
 // Actor model components
 pub const messages = @import("messages.zig");
+pub const canonicalized_cache_entry = @import("canonicalized_cache_entry.zig");
 pub const channel = @import("channel.zig");
 pub const coordinator = @import("coordinator.zig");
 pub const app_header = @import("app_header.zig");
@@ -84,6 +85,7 @@ test "compile tests" {
     std.testing.refAllDecls(@import("cache_manager.zig"));
     std.testing.refAllDecls(@import("cache_module.zig"));
     std.testing.refAllDecls(@import("cache_reporting.zig"));
+    std.testing.refAllDecls(@import("canonicalized_cache_entry.zig"));
     std.testing.refAllDecls(@import("compile_build.zig"));
     std.testing.refAllDecls(@import("targets_config.zig"));
     std.testing.refAllDecls(@import("compile_module.zig"));

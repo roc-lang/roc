@@ -55,6 +55,8 @@ const compile_build = @import("compile_build.zig");
 const module_discovery = @import("module_discovery.zig");
 const cache_manager_mod = @import("cache_manager.zig");
 const cache_module = @import("cache_module.zig");
+const cache_key_mod = @import("cache_key.zig");
+const canonicalized_cache_entry = @import("canonicalized_cache_entry.zig");
 const package_source = @import("package_source.zig");
 const package_identity = @import("package_identity.zig");
 const compiler_platforms = @import("compiler_platforms.zig");
@@ -393,6 +395,157 @@ test "checked module cache header decodes bodies and rejects corrupt envelope" {
     try std.testing.expect(decodeCheckedModuleCacheEntry(key, &extra_byte) == null);
 }
 
+const canonicalized_module_cache_magic = "roc-can-cache-v1";
+const canonicalized_module_entry_version: u32 = 1;
+const canonicalized_module_entry_version_hash: [32]u8 = computeCanonicalizedModuleEntryVersionHash();
+
+// Header: magic, composite entry-version hash (32), canonicalized-module cache
+// key (32), env-blob length (u64), and parse-stage-record length (u64). The two
+// length-prefixed bodies follow. The entry-version hash folds the manual
+// envelope version, the parse-stage record format version, and the ModuleEnv
+// `Serialized` layout hash, so a stale body is rejected by one admission check.
+//
+// The header's length is a multiple of the 16-byte serialization alignment, so
+// the env blob that follows it is 16-byte aligned wherever the entry itself is,
+// which both the memory mapping and the aligned heap-read path guarantee.
+const canonicalized_module_cache_header_len: usize = canonicalized_module_cache_magic.len + 32 + 32 + 8 + 8;
+
+comptime {
+    if (canonicalized_module_cache_header_len % CompactWriter.SERIALIZATION_ALIGNMENT.toByteUnits() != 0) {
+        @compileError("canonicalized cache header must keep the env blob serialization-aligned");
+    }
+}
+
+fn computeCanonicalizedModuleEntryVersionHash() [32]u8 {
+    var state: u64 = 0xcbf29ce484222325;
+    checkedModuleEntryHashUpdate(&state, "roc-canonicalized-module-entry-v1");
+    checkedModuleEntryHashUpdateU32(&state, canonicalized_module_entry_version);
+    checkedModuleEntryHashUpdateU32(&state, canonicalized_cache_entry.format_version);
+    checkedModuleEntryHashUpdate(&state, &cache_module.MODULE_ENV_VERSION_HASH);
+
+    var result: [32]u8 = undefined;
+    var split_state = state;
+    inline for (0..4) |lane| {
+        split_state = checkedModuleEntrySplitmix64(split_state);
+        inline for (0..8) |byte_i| {
+            result[lane * 8 + byte_i] = @truncate(split_state >> (byte_i * 8));
+        }
+    }
+    return result;
+}
+
+/// A decoded canonicalized-module cache entry's two bodies.
+const CanonicalizedModuleCacheBodies = struct {
+    /// The serialized `ModuleEnv` canonicalization produced.
+    env_body: []const u8,
+    /// The encoded parse-stage record (diagnostics and import inventory).
+    parse_record_body: []const u8,
+};
+
+/// Write the fixed-size canonicalized-module cache header into the first
+/// `canonicalized_module_cache_header_len` bytes of `dest`.
+fn writeCanonicalizedModuleCacheHeader(
+    dest: []u8,
+    key: [32]u8,
+    env_len: usize,
+    parse_record_len: usize,
+) void {
+    var offset: usize = 0;
+    @memcpy(dest[offset..][0..canonicalized_module_cache_magic.len], canonicalized_module_cache_magic);
+    offset += canonicalized_module_cache_magic.len;
+    @memcpy(dest[offset..][0..32], &canonicalized_module_entry_version_hash);
+    offset += 32;
+    @memcpy(dest[offset..][0..32], &key);
+    offset += 32;
+    std.mem.writeInt(u64, dest[offset..][0..8], env_len, .little);
+    offset += 8;
+    std.mem.writeInt(u64, dest[offset..][0..8], parse_record_len, .little);
+}
+
+fn decodeCanonicalizedModuleCacheEntry(
+    key: [32]u8,
+    bytes: []const u8,
+) ?CanonicalizedModuleCacheBodies {
+    if (bytes.len < canonicalized_module_cache_header_len) return null;
+    var offset: usize = 0;
+    if (!std.mem.eql(u8, bytes[offset..][0..canonicalized_module_cache_magic.len], canonicalized_module_cache_magic)) return null;
+    offset += canonicalized_module_cache_magic.len;
+    if (!std.mem.eql(u8, bytes[offset..][0..32], &canonicalized_module_entry_version_hash)) return null;
+    offset += 32;
+    if (!std.mem.eql(u8, bytes[offset..][0..32], &key)) return null;
+    offset += 32;
+    const env_len = std.math.cast(usize, std.mem.readInt(u64, bytes[offset..][0..8], .little)) orelse return null;
+    offset += 8;
+    const parse_record_len = std.math.cast(usize, std.mem.readInt(u64, bytes[offset..][0..8], .little)) orelse return null;
+    offset += 8;
+
+    const remaining = bytes.len - offset;
+    if (env_len > remaining) return null;
+    if (parse_record_len > remaining - env_len) return null;
+    if (env_len + parse_record_len != remaining) return null;
+
+    const env_body = bytes[offset..][0..env_len];
+    offset += env_len;
+    const parse_record_body = bytes[offset..][0..parse_record_len];
+
+    if (env_body.len < @sizeOf(ModuleEnv.Serialized)) return null;
+    if (@intFromPtr(env_body.ptr) % CompactWriter.SERIALIZATION_ALIGNMENT.toByteUnits() != 0) return null;
+    return .{
+        .env_body = env_body,
+        .parse_record_body = parse_record_body,
+    };
+}
+
+test "canonicalized module cache header decodes bodies and rejects corrupt envelope" {
+    var key: [32]u8 = undefined;
+    @memset(&key, 0x5C);
+    const env_len = std.mem.alignForward(usize, @sizeOf(ModuleEnv.Serialized), CompactWriter.SERIALIZATION_ALIGNMENT.toByteUnits());
+    const record_len: usize = 12;
+    const total_len = canonicalized_module_cache_header_len + env_len + record_len;
+    const env_len_offset = canonicalized_module_cache_magic.len + 32 + 32;
+    const record_len_offset = env_len_offset + 8;
+
+    const entry = try std.testing.allocator.alignedAlloc(u8, CompactWriter.SERIALIZATION_ALIGNMENT, total_len);
+    defer std.testing.allocator.free(entry);
+    @memset(entry, 0);
+    writeCanonicalizedModuleCacheHeader(entry[0..canonicalized_module_cache_header_len], key, env_len, record_len);
+
+    const bodies = decodeCanonicalizedModuleCacheEntry(key, entry) orelse return error.TestExpectedEqual;
+    try std.testing.expectEqual(env_len, bodies.env_body.len);
+    try std.testing.expectEqual(record_len, bodies.parse_record_body.len);
+
+    const scratch = try std.testing.allocator.alignedAlloc(u8, CompactWriter.SERIALIZATION_ALIGNMENT, total_len + 1);
+    defer std.testing.allocator.free(scratch);
+
+    @memcpy(scratch[0..total_len], entry);
+    scratch[0] ^= 0xFF;
+    try std.testing.expect(decodeCanonicalizedModuleCacheEntry(key, scratch[0..total_len]) == null);
+
+    @memcpy(scratch[0..total_len], entry);
+    scratch[canonicalized_module_cache_magic.len] ^= 0xFF;
+    try std.testing.expect(decodeCanonicalizedModuleCacheEntry(key, scratch[0..total_len]) == null);
+
+    @memcpy(scratch[0..total_len], entry);
+    scratch[canonicalized_module_cache_magic.len + 32] ^= 0xFF;
+    try std.testing.expect(decodeCanonicalizedModuleCacheEntry(key, scratch[0..total_len]) == null);
+
+    @memcpy(scratch[0..total_len], entry);
+    try std.testing.expect(decodeCanonicalizedModuleCacheEntry(key, scratch[0 .. canonicalized_module_cache_header_len - 1]) == null);
+    try std.testing.expect(decodeCanonicalizedModuleCacheEntry(key, scratch[0 .. total_len - 1]) == null);
+
+    @memcpy(scratch[0..total_len], entry);
+    std.mem.writeInt(u64, scratch[env_len_offset..][0..8], env_len + record_len + 1, .little);
+    try std.testing.expect(decodeCanonicalizedModuleCacheEntry(key, scratch[0..total_len]) == null);
+
+    @memcpy(scratch[0..total_len], entry);
+    std.mem.writeInt(u64, scratch[record_len_offset..][0..8], record_len + 1, .little);
+    try std.testing.expect(decodeCanonicalizedModuleCacheEntry(key, scratch[0..total_len]) == null);
+
+    @memcpy(scratch[0..total_len], entry);
+    scratch[total_len] = 0;
+    try std.testing.expect(decodeCanonicalizedModuleCacheEntry(key, scratch[0 .. total_len + 1]) == null);
+}
+
 /// Maximum scratch arena capacity retained by a worker after each task.
 const worker_scratch_retain_limit = 64 * 1024 * 1024;
 
@@ -452,11 +605,15 @@ pub const Phase = enum {
     Parse,
     /// Queued for parsing (prevents double-enqueue)
     Parsing,
-    /// Parsed, needs canonicalization
+    /// Parsed, queued for canonicalization. Canonicalization reads no other
+    /// module, so this phase is entered as soon as the parse result is
+    /// handled, without waiting for any import.
     Canonicalize,
-    /// Canonicalized, waiting for imports to complete
+    /// Canonicalized, waiting for every direct import to complete before
+    /// type checking.
     WaitingOnImports,
-    /// Canonicalized app root, waiting on the platform's checked requires surface.
+    /// Canonicalized app root whose imports are complete, waiting on the
+    /// platform's checked requires surface.
     WaitingOnPlatformRequirements,
     /// Imports ready, needs type checking
     TypeCheck,
@@ -476,9 +633,10 @@ pub const Completion = enum {
 };
 
 /// Readiness of one semantic dependency. An unresolved import is intentionally
-/// distinct from a failed module: unresolved names proceed to canonicalization
-/// so that stage can report the source error, while a known failed module makes
-/// every dependent fail without consuming its partial semantic state.
+/// distinct from a failed module: a name that denotes no module is a
+/// diagnostic the import-resolution drain reports, so its dependents still
+/// reach type checking, while a known failed module makes every dependent fail
+/// without consuming its partial semantic state.
 const DependencyReadiness = enum {
     unresolved,
     waiting,
@@ -1171,6 +1329,11 @@ pub const Coordinator = struct {
     /// Build statistics
     cache_hits: u32,
     cache_misses: u32,
+    /// Modules whose canonicalization output was loaded from the
+    /// canonicalized-module cache instead of being parsed and canonicalized.
+    canonicalized_cache_hits: u32 = 0,
+    /// Modules this build parsed and canonicalized.
+    canonicalized_cache_misses: u32 = 0,
     modules_compiled: u32,
     /// Source publications of the parametric platform. Session composition
     /// consumes its checked output without publishing another module.
@@ -1257,6 +1420,8 @@ pub const Coordinator = struct {
             .ctfe_timing = eval.CompileTimeFinalization.Timing.init(roc_ctx.std_io),
             .cache_hits = 0,
             .cache_misses = 0,
+            .canonicalized_cache_hits = 0,
+            .canonicalized_cache_misses = 0,
             .modules_compiled = 0,
             .module_time_min_ns = std.math.maxInt(u64),
             .module_time_max_ns = 0,
@@ -1285,10 +1450,10 @@ pub const Coordinator = struct {
                     .parse, .post_check => {},
                     .canonicalize => |t| {
                         t.cached_ast.deinit();
-                        payload_alloc.free(t.imported_modules);
                     },
                     .type_check => |t| {
                         payload_alloc.free(t.imported_envs);
+                        payload_alloc.free(t.deferred_imports);
                         payload_alloc.free(t.imported_artifacts);
                         payload_alloc.free(t.available_artifacts);
                         payload_alloc.free(t.explicit_roots);
@@ -1828,6 +1993,9 @@ pub const Coordinator = struct {
         env: *const ModuleEnv,
     ) Allocator.Error!void {
         for (env.file_dependencies.items.items) |dep| {
+            // A module that never reached import resolution has not read its
+            // file imports, so this run read no such file.
+            if (dep.state == .pending) continue;
             const relative_path = env.fileDependencyRelativePath(dep);
             const full_path = try std.fs.path.resolve(self.gpa, &.{ source_dir, relative_path });
             defer self.gpa.free(full_path);
@@ -1852,6 +2020,9 @@ pub const Coordinator = struct {
         env: *const ModuleEnv,
     ) Allocator.Error!void {
         for (env.file_dependencies.items.items) |dep| {
+            // A module that never reached import resolution has not read its
+            // file imports, so this run observed no state for one.
+            if (dep.state == .pending) continue;
             const relative_path = env.fileDependencyRelativePath(dep);
             const full_path = try std.fs.path.resolve(self.gpa, &.{ source_dir, relative_path });
             defer self.gpa.free(full_path);
@@ -2525,6 +2696,8 @@ pub const Coordinator = struct {
                     pkg.root_dir,
                 .module_role = mod.module_role,
                 .depth = mod.depth,
+                .validation = mod.validation,
+                .is_entry_module = self.isEntryModule(pkg, module_id),
             },
         });
     }
@@ -2928,6 +3101,7 @@ pub const Coordinator = struct {
             .post_check => |completion| completion,
             .parsed,
             .canonicalized,
+            .canonicalized_cached,
             .type_checked,
             .operation_failed,
             .cycle_detected,
@@ -2961,6 +3135,30 @@ pub const Coordinator = struct {
         var owned = report;
         errdefer owned.deinit();
         try reports.append(allocator, owned);
+    }
+
+    /// Release worker-owned discovered-import lists that will not reach the
+    /// coordinator.
+    fn releaseDiscoveredImports(
+        allocator: Allocator,
+        local_imports: *std.ArrayList(DiscoveredLocalImport),
+        external_imports: *std.ArrayList(DiscoveredExternalImport),
+    ) void {
+        for (local_imports.items) |imp| {
+            allocator.free(imp.import_name);
+            switch (imp.target) {
+                .resolved => |resolved| {
+                    allocator.free(resolved.module_name);
+                    allocator.free(resolved.path);
+                },
+                .rejected => {},
+            }
+        }
+        local_imports.deinit(allocator);
+        local_imports.* = std.ArrayList(DiscoveredLocalImport).empty;
+        for (external_imports.items) |imp| allocator.free(imp.import_name);
+        external_imports.deinit(allocator);
+        external_imports.* = std.ArrayList(DiscoveredExternalImport).empty;
     }
 
     fn deinitReports(reports: *std.ArrayList(Report), allocator: Allocator) void {
@@ -3021,6 +3219,84 @@ pub const Coordinator = struct {
                 .validation = validation,
             },
         );
+    }
+
+    /// The canonicalized-module cache key for one module's canonicalization
+    /// inputs. Computed once, in the parse task, and carried through the parse
+    /// result into the canonicalize task, so the key an entry is stored under
+    /// is by construction the key the probe missed on.
+    fn canonicalizedModuleCacheKey(
+        self: *const Coordinator,
+        source: []const u8,
+        module_name: []const u8,
+        module_role: ModuleEnv.ModuleRole,
+        validation: can.Can.Validation,
+        is_entry_module: bool,
+    ) [32]u8 {
+        return cache_key_mod.canonicalizedModuleCacheKey(.{
+            .source = source,
+            .module_basename = base.module_path.getModuleBasename(module_name),
+            .is_entry_module = is_entry_module,
+            .module_role = module_role,
+            .validation = validation,
+            .compiler_version = self.compiler_version,
+            .entry_version_hash = canonicalized_module_entry_version_hash,
+        }).bytes;
+    }
+
+    /// Store one module's canonicalization output under `cache_key`.
+    ///
+    /// Called from the canonicalize task, with the env exactly as
+    /// canonicalization left it: before the file-import drain reads anything
+    /// from disk, before the coordinator stamps the package-qualified display
+    /// identity, and before the platform hosted transform. Those three are
+    /// workspace or filesystem input, so none of them belongs in an entry this
+    /// key names. A module with diagnostics is stored like any other: a warm
+    /// cache must produce the same reports a cold one does.
+    fn storeCanonicalizedModuleInCache(
+        self: *Coordinator,
+        task_allocs: WorkerTaskAllocators,
+        cache_key: [32]u8,
+        env: *const ModuleEnv,
+        parse_record: canonicalized_cache_entry.ParseStageRecord,
+    ) void {
+        const manager = self.cache_manager orelse return;
+        if (!manager.config.enabled) return;
+
+        const scratch = task_allocs.scratch;
+        const entries_dir = manager.config.getCanonicalizedModuleCacheDir(scratch) catch {
+            manager.recordStoreFailureFor(.canonicalized);
+            return;
+        };
+
+        var arena = base.SingleThreadArena.init(task_allocs.result);
+        defer arena.deinit();
+        const arena_alloc = arena.allocator();
+
+        var env_writer = CompactWriter.init();
+        serializeForCache(ModuleEnv, env, &env_writer, arena_alloc) catch {
+            manager.recordStoreFailureFor(.canonicalized);
+            return;
+        };
+
+        const env_len = env_writer.total_bytes;
+        const record_len = canonicalized_cache_entry.encodedLen(parse_record);
+
+        const entry = scratch.alloc(u8, canonicalized_module_cache_header_len + env_len + record_len) catch {
+            manager.recordStoreFailureFor(.canonicalized);
+            return;
+        };
+
+        writeCanonicalizedModuleCacheHeader(
+            entry[0..canonicalized_module_cache_header_len],
+            cache_key,
+            env_len,
+            record_len,
+        );
+        _ = env_writer.writeToBuffer(entry[canonicalized_module_cache_header_len..][0..env_len]) catch unreachable;
+        canonicalized_cache_entry.encode(parse_record, entry[canonicalized_module_cache_header_len + env_len ..][0..record_len]);
+
+        manager.storeRawBytesIn(scratch, .canonicalized, cache_key, entry, entries_dir);
     }
 
     fn resolvedDirectImportsHaveCheckedOutput(
@@ -3177,6 +3453,9 @@ pub const Coordinator = struct {
         if (!manager.config.enabled) return false;
 
         const current_env = mod.moduleEnv() orelse return false;
+        // The canonicalize task read this module's file imports, so its
+        // source-input identity is complete and the key below is exact.
+        std.debug.assert(current_env.fileDependenciesSettled());
         if (!resolvedDirectImportsHaveCheckedOutput(current_env, imported_artifacts)) return false;
         const cache_key = self.checkedModuleCacheKey(current_env, imported_envs, imported_artifacts, platform_requirement_context, explicit_roots, mod.validation) catch {
             manager.stats.recordMiss();
@@ -3580,6 +3859,7 @@ pub const Coordinator = struct {
         switch (res) {
             .parsed => |*r| try self.handleParsed(r),
             .canonicalized => |*r| try self.handleCanonicalized(r),
+            .canonicalized_cached => |*r| try self.handleCanonicalizedCached(r),
             .type_checked => |*r| try self.handleTypeChecked(r),
             .operation_failed => |r| return self.handleOperationFailed(r),
             .cycle_detected => |*r| try self.handleCycleDetected(r),
@@ -3630,10 +3910,70 @@ pub const Coordinator = struct {
         self.total_parse_ns += result.parse_ns;
         mod.compile_time_ns += result.parse_ns;
 
+        if (try self.registerDiscoveredImports(
+            pkg,
+            result.module_id,
+            result.package_name,
+            result.module_name,
+            result.discovered_local_imports.items,
+            result.discovered_external_imports.items,
+        ) == .halted) return;
+
+        // Canonicalization is a pure function of this module's own source, so
+        // it is queued now rather than after the imports complete. The module
+        // waits on its imports only once it is canonicalized.
+        const mod_after_imports = pkg.getModule(result.module_id) orelse {
+            self.bugReport("BUG: module id={} not found in package '{s}' after parse imports (module={s})\n", .{
+                result.module_id, result.package_name, result.module_name,
+            });
+            unreachable;
+        };
+        try self.enqueueCanonicalizeTask(
+            pkg,
+            result.module_id,
+            mod_after_imports,
+            result.is_entry_module,
+            result.canonicalized_cache_key,
+        );
+    }
+
+    /// What registering a module's source-local imports decided about the
+    /// module itself.
+    const ImportRegistration = enum {
+        /// The module's imports are registered and it may proceed.
+        proceed,
+        /// The module is finished for this build: it failed, closed a cycle,
+        /// or was already complete.
+        halted,
+    };
+
+    /// Register one module's discovered imports, enqueue the parses they
+    /// require, and report the ones that name nothing this package can reach.
+    ///
+    /// This is the same work whether the module was just parsed or its
+    /// canonicalization output was loaded from the canonicalized cache: the
+    /// import inventory is source-local either way, and the graph edges it
+    /// creates belong to this build, not to the cache entry.
+    fn registerDiscoveredImports(
+        self: *Coordinator,
+        pkg: *PackageState,
+        module_id: ModuleId,
+        package_name: []const u8,
+        module_name: []const u8,
+        local_imports: []const DiscoveredLocalImport,
+        external_imports: []const DiscoveredExternalImport,
+    ) Allocator.Error!ImportRegistration {
+        const mod = pkg.getModule(module_id) orelse {
+            self.bugReport("BUG: module id={} not found in package '{s}' registering imports (module={s})\n", .{
+                module_id, package_name, module_name,
+            });
+            unreachable;
+        };
+
         // A registered dependency (notably the platform root) may have failed
         // while this parse task was in flight. Retain the parsed source state for
         // diagnostics/watch inputs, but never revive the failed module.
-        if (mod.completedWithFailure()) return;
+        if (mod.completedWithFailure()) return .halted;
 
         // Imported modules are registered when their edge is scheduled. The
         // package root has no incoming edge, so register it here as well. A
@@ -3644,18 +3984,18 @@ pub const Coordinator = struct {
                 try self.appendInvalidImportReport(mod, mod.path, mod.name, problem);
                 try self.completeModulesWithFailure(&.{.{
                     .pkg_name = pkg.name,
-                    .module_id = result.module_id,
+                    .module_id = module_id,
                 }});
-                return;
+                return .halted;
             }
         }
 
-        for (result.discovered_local_imports.items) |imp| {
+        for (local_imports) |imp| {
             // Registering a sibling module can move this package's module
             // storage, so every iteration refetches the importing module.
-            const importer = pkg.getModule(result.module_id) orelse {
-                self.bugReport("BUG: module id={} not found in package '{s}' in parsed handler (module={s})\n", .{
-                    result.module_id, result.package_name, result.module_name,
+            const importer = pkg.getModule(module_id) orelse {
+                self.bugReport("BUG: module id={} not found in package '{s}' registering local import (module={s})\n", .{
+                    module_id, package_name, module_name,
                 });
                 unreachable;
             };
@@ -3675,14 +4015,14 @@ pub const Coordinator = struct {
                 continue;
             }
             const child_id = try pkg.ensureModule(self.gpa, resolved.module_name, resolved.path);
-            const current_mod = pkg.getModule(result.module_id) orelse {
-                self.bugReport("BUG: module id={} not found in package '{s}' after ensureModule in parsed handler (module={s})\n", .{
-                    result.module_id, result.package_name, result.module_name,
+            const current_mod = pkg.getModule(module_id) orelse {
+                self.bugReport("BUG: module id={} not found in package '{s}' after ensureModule (module={s})\n", .{
+                    module_id, package_name, module_name,
                 });
                 unreachable;
             };
 
-            const closes_cycle = child_id == result.module_id or pkg.moduleReaches(child_id, result.module_id);
+            const closes_cycle = child_id == module_id or pkg.moduleReaches(child_id, module_id);
 
             try current_mod.imports.append(self.gpa, .{
                 .import_name = try self.gpa.dupe(u8, imp.import_name),
@@ -3690,36 +4030,36 @@ pub const Coordinator = struct {
             });
 
             const child = pkg.getModule(child_id).?;
-            try child.dependents.append(self.gpa, result.module_id);
+            try child.dependents.append(self.gpa, module_id);
             const new_depth = current_mod.depth +| 1;
             if (new_depth < child.depth) {
                 child.depth = new_depth;
             }
 
-            try pkg.recordLocalImportReachability(self.gpa, result.module_id, child_id);
+            try pkg.recordLocalImportReachability(self.gpa, module_id, child_id);
 
             // Record the closing edge before handling the error so the graph
             // contains the exact SCC and failure propagation reaches every
             // cycle member and transitive dependent.
             if (closes_cycle) {
-                try self.handleCycleInline(pkg, result.module_id);
-                return;
+                try self.handleCycleInline(pkg, module_id);
+                return .halted;
             }
 
             if (child.phase == .Parse) {
                 pkg.remaining_modules += 1;
                 self.total_remaining += 1;
-                try self.enqueueParseTask(result.package_name, child_id);
+                try self.enqueueParseTask(package_name, child_id);
             }
         }
 
-        for (result.discovered_external_imports.items) |ext_imp| {
+        for (external_imports) |ext_imp| {
             // Scheduling can register modules in the target package, which may
             // be this package, so the module pointer is refetched afterwards.
-            const rejection = try self.scheduleExternalImport(result.package_name, ext_imp.import_name);
-            const current_mod = pkg.getModule(result.module_id) orelse {
+            const rejection = try self.scheduleExternalImport(package_name, ext_imp.import_name);
+            const current_mod = pkg.getModule(module_id) orelse {
                 self.bugReport("BUG: module id={} not found in package '{s}' after scheduling external import (module={s})\n", .{
-                    result.module_id, result.package_name, result.module_name,
+                    module_id, package_name, module_name,
                 });
                 unreachable;
             };
@@ -3738,20 +4078,19 @@ pub const Coordinator = struct {
             try self.registerCrossPackageDependent(
                 target_pkg_name,
                 target_module_id,
-                result.package_name,
-                result.module_id,
+                package_name,
+                module_id,
             );
         }
 
-        const mod_after_imports = pkg.getModule(result.module_id) orelse {
-            self.bugReport("BUG: module id={} not found in package '{s}' after parse imports (module={s})\n", .{
-                result.module_id, result.package_name, result.module_name,
+        const mod_after_imports = pkg.getModule(module_id) orelse {
+            self.bugReport("BUG: module id={} not found in package '{s}' after registering imports (module={s})\n", .{
+                module_id, package_name, module_name,
             });
             unreachable;
         };
 
-        mod_after_imports.phase = .WaitingOnImports;
-        try self.tryUnblock(pkg, result.module_id);
+        return if (mod_after_imports.completion == .pending) .proceed else .halted;
     }
 
     /// Record that import resolution rejected `import_name` for this module.
@@ -3918,10 +4257,59 @@ pub const Coordinator = struct {
             std.debug.print("[COORD] CANONICALIZED: mod.reports BEFORE: len={} cap={}\n", .{ mod.reports.items.len, mod.reports.capacity });
         }
 
+        try self.applyCanonicalizedModule(
+            mod,
+            result.package_name,
+            result.module_name,
+            result.module_env,
+            &result.reports,
+        );
+
+        self.canonicalized_cache_misses += 1;
+
+        // Update timing
+        self.total_canonicalize_ns += result.canonicalize_ns;
+        self.total_canonicalize_diag_ns += result.canonicalize_diagnostics_ns;
+        mod.compile_time_ns += result.canonicalize_ns + result.canonicalize_diagnostics_ns;
+
+        if (mod.completedWithFailure()) return;
+
+        mod.phase = .WaitingOnImports;
+        try self.tryUnblock(pkg, result.module_id);
+    }
+
+    /// Install one module's canonicalization output and the workspace
+    /// information the coordinator stamps onto it.
+    ///
+    /// This is the same work whether canonicalization just ran or its output
+    /// was loaded from the canonicalized cache: the package-qualified display
+    /// identity and the platform hosted transform are workspace input applied
+    /// after the cache boundary, never part of an entry.
+    fn applyCanonicalizedModule(
+        self: *Coordinator,
+        mod: *ModuleState,
+        package_name: []const u8,
+        module_name: []const u8,
+        module_env: *ModuleEnv,
+        reports: *std.ArrayList(Report),
+    ) (Allocator.Error || error{ UnsupportedBuiltinAnnotationOnly, BuiltinLowLevelAnnotationMustBeFunction, LowLevelOperationsNotFound })!void {
         // Take ownership of module env
-        mod.replaceModuleEnv(result.module_env);
+        mod.replaceModuleEnv(module_env);
 
         if (mod.moduleEnv()) |env| {
+            // The package-qualified display identity is workspace information,
+            // so the coordinator records it on the canonicalized environment.
+            // Two modules with the same basename in different packages share a
+            // bare display name; this identifier distinguishes them in
+            // diagnostics and in checked-artifact names. The bare
+            // `display_module_name_idx` is unchanged, and it keeps any
+            // directory segments the logical module name carries.
+            {
+                const qname = try std.fmt.allocPrint(self.gpa, "{s}.{s}", .{ package_name, module_name });
+                defer self.gpa.free(qname);
+                env.qualified_module_ident = try env.insertIdent(base.Ident.for_text(qname));
+            }
+
             if (can.BuiltinLowLevel.isBuiltinModule(env)) {
                 try can.BuiltinLowLevel.apply(env);
             } else if (self.enable_hosted_transform) {
@@ -3932,15 +4320,15 @@ pub const Coordinator = struct {
                 // those into hosted lambdas would incorrectly make the
                 // effectful-function-name check flag them as effects.
                 const is_platform_pkg = self.platform_root_package_name != null and
-                    std.mem.eql(u8, result.package_name, self.platform_root_package_name.?);
+                    std.mem.eql(u8, package_name, self.platform_root_package_name.?);
                 if (is_platform_pkg) {
                     try can.HostedCompiler.replaceAnnoOnlyWithHosted(env);
                 }
             }
         }
 
-        // Append reports - we take ownership, so clear result.reports after copying.
-        for (result.reports.items, 0..) |rep, ri| {
+        // Append reports - we take ownership, so clear them after copying.
+        for (reports.items, 0..) |rep, ri| {
             if (comptime trace_build) {
                 std.debug.print("[COORD] CANONICALIZED: result report {}: owned_strings.len={}\n", .{ ri, rep.owned_strings.items.len });
                 if (rep.owned_strings.items.len > 0) {
@@ -3950,7 +4338,7 @@ pub const Coordinator = struct {
             try mod.reports.append(self.gpa, rep);
         }
         // Clear reports to transfer ownership - prevents double-free in WorkerResult.deinit
-        result.reports.clearRetainingCapacity();
+        reports.clearRetainingCapacity();
 
         if (comptime trace_build) {
             std.debug.print("[COORD] CANONICALIZED: mod ptr={} mod.reports AFTER: len={} cap={}\n", .{ @intFromPtr(mod), mod.reports.items.len, mod.reports.capacity });
@@ -3962,21 +4350,75 @@ pub const Coordinator = struct {
                 }
             }
         }
+    }
 
-        // Update timing
-        self.total_canonicalize_ns += result.canonicalize_ns;
-        self.total_canonicalize_diag_ns += result.canonicalize_diagnostics_ns;
-        mod.compile_time_ns += result.canonicalize_ns + result.canonicalize_diagnostics_ns;
-
-        if (mod.completedWithFailure()) return;
-
-        if (self.appShouldWaitForPlatformRequirements(mod)) {
-            mod.phase = .WaitingOnPlatformRequirements;
-            mod.visit_color = .black;
-            return;
+    /// Handle a canonicalized-module cache hit.
+    ///
+    /// The parse task produced this module's canonicalization output without
+    /// parsing or canonicalizing, so the coordinator does exactly what it does
+    /// for a parse result followed by a canonicalized result, in that order
+    /// and through the same two helpers: register the source-local imports,
+    /// then install the canonicalized environment and wait on those imports.
+    fn handleCanonicalizedCached(
+        self: *Coordinator,
+        result: *messages.CanonicalizedCachedResult,
+    ) (Allocator.Error || error{ UnsupportedBuiltinAnnotationOnly, BuiltinLowLevelAnnotationMustBeFunction, LowLevelOperationsNotFound })!void {
+        if (comptime trace_build) {
+            std.debug.print("[COORD] CANONICALIZED (cached): pkg={s} module={s}\n", .{ result.package_name, result.module_name });
         }
+        const pkg = self.packages.get(result.package_name) orelse {
+            self.bugReport("BUG: package '{s}' not found for cached canonicalized result (module={s}, id={})\n", .{
+                result.package_name, result.module_name, result.module_id,
+            });
+            unreachable;
+        };
+        const mod = pkg.getModule(result.module_id) orelse {
+            self.bugReport("BUG: module id={} not found in package '{s}' for cached canonicalized result (module={s})\n", .{
+                result.module_id, result.package_name, result.module_name,
+            });
+            unreachable;
+        };
 
-        try self.scheduleTypeCheckForCanonicalizedModule(pkg, result.module_id, mod);
+        self.canonicalized_cache_hits += 1;
+
+        // The parse stage's reports come first, exactly as they do when the
+        // module is parsed, and the invalid-import reports the registration
+        // below appends follow them.
+        mod.source_file_state = result.source_file_state;
+        mod.replaceModuleEnv(result.module_env);
+        for (result.parse_reports.items) |rep| {
+            try mod.reports.append(self.gpa, rep);
+        }
+        result.parse_reports.clearRetainingCapacity();
+
+        if (try self.registerDiscoveredImports(
+            pkg,
+            result.module_id,
+            result.package_name,
+            result.module_name,
+            result.discovered_local_imports.items,
+            result.discovered_external_imports.items,
+        ) == .halted) return;
+
+        const mod_after_imports = pkg.getModule(result.module_id) orelse {
+            self.bugReport("BUG: module id={} not found in package '{s}' after cached imports (module={s})\n", .{
+                result.module_id, result.package_name, result.module_name,
+            });
+            unreachable;
+        };
+
+        try self.applyCanonicalizedModule(
+            mod_after_imports,
+            result.package_name,
+            result.module_name,
+            result.module_env,
+            &result.canonicalize_reports,
+        );
+
+        if (mod_after_imports.completedWithFailure()) return;
+
+        mod_after_imports.phase = .WaitingOnImports;
+        try self.tryUnblock(pkg, result.module_id);
     }
 
     fn platformRootCandidate(self: *Coordinator) ?RootModuleRef {
@@ -4121,6 +4563,9 @@ pub const Coordinator = struct {
         errdefer if (platform_requirement_owner_envs.len > 0) task_payload_alloc.free(platform_requirement_owner_envs);
         if (platform_surface) |*surface| surface.owner_modules = platform_requirement_owner_envs;
 
+        const deferred_imports = try self.buildCanonicalizeImports(pkg, mod, task_payload_alloc);
+        errdefer task_payload_alloc.free(deferred_imports);
+
         mod.phase = .TypeCheck;
         mod.visit_color = .black;
         try self.enqueueTask(.{
@@ -4131,6 +4576,7 @@ pub const Coordinator = struct {
                 .path = mod.path,
                 .module_env = mod.moduleEnv().?,
                 .imported_envs = imported_envs,
+                .deferred_imports = deferred_imports,
                 .imported_artifacts = imported_artifacts,
                 .available_artifacts = available_artifacts,
                 .platform_requirements = platform_surface,
@@ -4635,14 +5081,37 @@ pub const Coordinator = struct {
         }
 
         if (comptime trace_build) {
-            std.debug.print("[COORD] UNBLOCK: pkg={s} module={s} -> Canonicalize\n", .{ pkg.name, mod.name });
+            std.debug.print("[COORD] UNBLOCK: pkg={s} module={s} imports complete\n", .{ pkg.name, mod.name });
+        }
+
+        if (self.appShouldWaitForPlatformRequirements(mod)) {
+            mod.phase = .WaitingOnPlatformRequirements;
+            mod.visit_color = .black;
+            return;
+        }
+
+        try self.scheduleTypeCheckForCanonicalizedModule(pkg, module_id, mod);
+    }
+
+    /// Queue this module's canonicalization.
+    ///
+    /// Canonicalization is a pure function of the module's own source, so this
+    /// is reached straight from the parse result and depends on no other
+    /// module's progress.
+    fn enqueueCanonicalizeTask(
+        self: *Coordinator,
+        pkg: *PackageState,
+        module_id: ModuleId,
+        mod: *ModuleState,
+        is_entry_module: bool,
+        canonicalized_cache_key: [32]u8,
+    ) Allocator.Error!void {
+        if (comptime trace_build) {
+            std.debug.print("[COORD] CANONICALIZE: pkg={s} module={s}\n", .{ pkg.name, mod.name });
         }
 
         mod.phase = .Canonicalize;
         mod.visit_color = .black;
-        const task_payload_alloc = self.getWorkerAllocator();
-        const imported_modules = try self.buildCanonicalizeImports(pkg, mod, task_payload_alloc);
-        errdefer task_payload_alloc.free(imported_modules);
         try self.enqueueTask(.{
             .canonicalize = .{
                 .package_name = pkg.name,
@@ -4652,11 +5121,14 @@ pub const Coordinator = struct {
                 .source_dir = mod.canonicalSourceDir(),
                 .module_env = mod.moduleEnv().?,
                 .cached_ast = mod.cached_ast orelse
-                    std.debug.panic("compile.coordinator.tryUnblock missing cached AST for {s}", .{mod.name}),
+                    std.debug.panic("compile.coordinator.enqueueCanonicalizeTask missing cached AST for {s}", .{mod.name}),
                 .depth = mod.depth,
-                .imported_modules = imported_modules,
                 .validation = mod.validation,
-                .is_entry_module = self.isEntryModule(pkg, module_id),
+                // The parse task keyed its cache probe on this flag, so it is
+                // the flag canonicalization consumes; recomputing it here
+                // could disagree with the key the entry is stored under.
+                .is_entry_module = is_entry_module,
+                .canonicalized_cache_key = canonicalized_cache_key,
             },
         });
         mod.cached_ast = null; // The queued task now owns the AST.
@@ -4867,6 +5339,12 @@ pub const Coordinator = struct {
             .modules_total = self.cache_hits + self.modules_compiled,
             .cache_hits = self.cache_hits,
             .cache_misses = self.cache_misses,
+            .canonicalized_cache_hits = self.canonicalized_cache_hits,
+            .canonicalized_cache_misses = self.canonicalized_cache_misses,
+            .canonicalized_cache_stores = if (self.cache_manager) |manager|
+                @intCast(manager.stats.canonicalized_stores)
+            else
+                0,
             .modules_compiled = self.modules_compiled,
             .module_time_min_ns = self.module_time_min_ns,
             .module_time_max_ns = self.module_time_max_ns,
@@ -4920,11 +5398,267 @@ pub const Coordinator = struct {
         };
     }
 
+    /// Normalize one parser-recorded local import into the discovered-import
+    /// entry the coordinator registers, reporting an import that traverses
+    /// above the package source root.
+    ///
+    /// The parser's spelling is source-local, but the module name and path it
+    /// denotes are not: the name depends on the importing module's logical
+    /// path and the path on the package root, neither of which is a
+    /// canonicalization input. This is therefore run per build, from the parse
+    /// task's own inputs, whether the module was parsed or loaded from the
+    /// canonicalized cache.
+    fn appendDiscoveredLocalImport(
+        self: *Coordinator,
+        worker_alloc: Allocator,
+        scratch: Allocator,
+        task: ParseTask,
+        local_import: module_discovery.LocalImport,
+        discovered: *std.ArrayList(DiscoveredLocalImport),
+        reports: *std.ArrayList(Report),
+    ) Allocator.Error!void {
+        const owned_import_name = try worker_alloc.dupe(u8, local_import.import_name);
+        errdefer worker_alloc.free(owned_import_name);
+        const module_name = (try module_discovery.resolveLocalImportLogicalPath(scratch, task.module_name, local_import)) orelse {
+            // The import names no module inside this package. Report it here
+            // and carry the rejection as this import's resolution outcome;
+            // the rest of the module still has a complete compilation.
+            const report = try Report.init(
+                worker_alloc,
+                "Import Escapes Package Root",
+                "This relative import traverses above the current package's source root.",
+                .runtime_error,
+            );
+            try appendReportOwned(worker_alloc, reports, report);
+            try discovered.append(worker_alloc, .{
+                .import_name = owned_import_name,
+                .target = .rejected,
+            });
+            return;
+        };
+        const path = try self.resolveModulePathWithAllocator(task.package_root, module_name, worker_alloc);
+        errdefer worker_alloc.free(path);
+        const owned_name = try worker_alloc.dupe(u8, module_name);
+        errdefer worker_alloc.free(owned_name);
+        try discovered.append(worker_alloc, .{
+            .import_name = owned_import_name,
+            .target = .{ .resolved = .{
+                .module_name = owned_name,
+                .path = path,
+            } },
+        });
+    }
+
+    /// Probe the canonicalized-module cache for this module's canonicalization
+    /// output and, on a hit, produce the result the coordinator handles in
+    /// place of a parse result followed by a canonicalized result.
+    ///
+    /// On a hit this task owns the loaded environment and `source_read.source`
+    /// moves into it. On a miss (`null`) nothing is consumed and the caller
+    /// parses as usual, so a cold, warm, or disabled cache runs the same
+    /// pipeline over the same inputs.
+    fn tryLoadCanonicalizedModule(
+        self: *Coordinator,
+        task: ParseTask,
+        task_allocs: WorkerTaskAllocators,
+        cache_key: [32]u8,
+        source_read: SourceRead,
+    ) Allocator.Error!?WorkerResult {
+        const manager = self.cache_manager orelse return null;
+        if (!manager.config.enabled) return null;
+
+        const scratch = task_allocs.scratch;
+        const entries_dir = manager.config.getCanonicalizedModuleCacheDir(scratch) catch {
+            manager.recordMissFor(.canonicalized);
+            return null;
+        };
+
+        // The mapping is released before this function returns; the loaded
+        // environment owns every byte it holds, and the parse-stage record is
+        // decoded into owned results below, so nothing outlives the mapping.
+        const cache_data = manager.loadRawBytesMappedIn(scratch, .canonicalized, cache_key, entries_dir) orelse return null;
+        defer cache_data.deinit(scratch);
+
+        const bodies = decodeCanonicalizedModuleCacheEntry(cache_key, cache_data.data()) orelse {
+            manager.recordInvalidationFor(.canonicalized);
+            return null;
+        };
+
+        const module_alloc = task_allocs.module;
+        const serialized: *const ModuleEnv.Serialized = @ptrCast(@alignCast(bodies.env_body.ptr));
+        serialized.validate(bodies.env_body.len) catch {
+            manager.recordInvalidationFor(.canonicalized);
+            return null;
+        };
+
+        const env = serialized.deserializeOwned(
+            @intFromPtr(bodies.env_body.ptr),
+            module_alloc,
+            source_read.source,
+            base.module_path.getModuleBasename(task.module_name),
+        ) catch |err| switch (err) {
+            error.OutOfMemory => return error.OutOfMemory,
+        };
+        var env_owned = true;
+        defer if (env_owned) {
+            env.deinit();
+            module_alloc.destroy(env);
+        };
+        std.debug.assert(env.module_role == task.module_role);
+
+        const worker_alloc = task_allocs.result;
+
+        // Read this module's `import "path" as name` file imports, exactly as
+        // the canonicalize task does on a miss, so the module's source-input
+        // identity is complete before the checked-module cache is probed.
+        try can.resolveDeferredFileImports(env, .{ .read = .{ .ctx = self.roc_ctx, .source_dir = task.source_dir } });
+
+        var parse_reports = try std.ArrayList(Report).initCapacity(worker_alloc, 8);
+        errdefer deinitReports(&parse_reports, worker_alloc);
+
+        var discovered_local_imports = std.ArrayList(DiscoveredLocalImport).empty;
+        errdefer {
+            for (discovered_local_imports.items) |imp| {
+                worker_alloc.free(imp.import_name);
+                switch (imp.target) {
+                    .resolved => |resolved| {
+                        worker_alloc.free(resolved.module_name);
+                        worker_alloc.free(resolved.path);
+                    },
+                    .rejected => {},
+                }
+            }
+            discovered_local_imports.deinit(worker_alloc);
+        }
+
+        var discovered_external_imports = std.ArrayList(DiscoveredExternalImport).empty;
+        errdefer {
+            for (discovered_external_imports.items) |imp| worker_alloc.free(imp.import_name);
+            discovered_external_imports.deinit(worker_alloc);
+        }
+
+        // A corrupt record is a cache miss, but the environment above was
+        // already loaded, so the miss is taken by discarding everything this
+        // function produced and letting the caller parse the module.
+        var reader = canonicalized_cache_entry.Reader.init(bodies.parse_record_body);
+        self.readCanonicalizedParseRecord(
+            task,
+            task_allocs,
+            env,
+            &reader,
+            &parse_reports,
+            &discovered_local_imports,
+            &discovered_external_imports,
+        ) catch |err| switch (err) {
+            error.OutOfMemory => return error.OutOfMemory,
+            error.CorruptParseStageRecord => {
+                releaseDiscoveredImports(worker_alloc, &discovered_local_imports, &discovered_external_imports);
+                deinitReports(&parse_reports, worker_alloc);
+                manager.recordInvalidationFor(.canonicalized);
+                return null;
+            },
+        };
+
+        var canonicalize_reports = try std.ArrayList(Report).initCapacity(worker_alloc, 8);
+        errdefer deinitReports(&canonicalize_reports, worker_alloc);
+
+        const diags = try env.getDiagnostics();
+        defer env.gpa.free(diags);
+        for (diags) |d| {
+            const rep = try env.diagnosticToReport(d, worker_alloc, task.path);
+            try appendReportOwned(worker_alloc, &canonicalize_reports, rep);
+        }
+
+        env_owned = false;
+        return .{
+            .canonicalized_cached = .{
+                .package_name = task.package_name,
+                .module_id = task.module_id,
+                .module_name = task.module_name,
+                .path = task.path,
+                .source_file_state = source_read.file_state,
+                .module_env = env,
+                .discovered_local_imports = discovered_local_imports,
+                .discovered_external_imports = discovered_external_imports,
+                .parse_reports = parse_reports,
+                .canonicalize_reports = canonicalize_reports,
+            },
+        };
+    }
+
+    /// Decode the parse-stage half of a canonicalized-module cache entry into
+    /// the reports and discovered imports a parse result carries.
+    fn readCanonicalizedParseRecord(
+        self: *Coordinator,
+        task: ParseTask,
+        task_allocs: WorkerTaskAllocators,
+        env: *const ModuleEnv,
+        reader: *canonicalized_cache_entry.Reader,
+        reports: *std.ArrayList(Report),
+        discovered_local_imports: *std.ArrayList(DiscoveredLocalImport),
+        discovered_external_imports: *std.ArrayList(DiscoveredExternalImport),
+    ) (Allocator.Error || canonicalized_cache_entry.DecodeError)!void {
+        const worker_alloc = task_allocs.result;
+
+        const diagnostic_count = try reader.readCount();
+        for (0..diagnostic_count) |_| {
+            const resolved = try reader.readDiagnostic();
+            const rep = try AST.resolvedDiagnosticToReport(resolved, &env.common, worker_alloc, task.path);
+            try appendReportOwned(worker_alloc, reports, rep);
+        }
+
+        const local_count = try reader.readCount();
+        for (0..local_count) |_| {
+            const local_import = try reader.readLocalImport();
+            try self.appendDiscoveredLocalImport(
+                worker_alloc,
+                task_allocs.scratch,
+                task,
+                .{
+                    .import_name = local_import.import_name,
+                    .base = local_import.base,
+                    .parent_count = local_import.parent_count,
+                },
+                discovered_local_imports,
+                reports,
+            );
+        }
+
+        const external_count = try reader.readCount();
+        for (0..external_count) |_| {
+            const import_name = try reader.readExternalImport();
+            const owned_name = try worker_alloc.dupe(u8, import_name);
+            errdefer worker_alloc.free(owned_name);
+            try discovered_external_imports.append(worker_alloc, .{ .import_name = owned_name });
+        }
+
+        if (!reader.atEnd()) return canonicalized_cache_entry.DecodeError.CorruptParseStageRecord;
+    }
+
     fn executeParseFallible(self: *Coordinator, task: ParseTask, task_allocs: WorkerTaskAllocators) (Allocator.Error || error{ AccessDenied, FileNotFound, IoError, StreamTooLong })!WorkerResult {
         var parse_timer = startStageTimer(self.roc_ctx.std_io);
 
         const source_read = try self.readModuleSourceForParse(task.path, task_allocs.module);
         const src = source_read.source;
+
+        // Canonicalizing this module reads its source, basename, entry-module
+        // flag, role, and validation mode, and nothing else, so the key below
+        // names its complete canonicalization output. A hit skips parsing and
+        // canonicalization entirely.
+        const canonicalized_key = self.canonicalizedModuleCacheKey(
+            src,
+            task.module_name,
+            task.module_role,
+            task.validation,
+            task.is_entry_module,
+        );
+        const cached_load = self.tryLoadCanonicalizedModule(task, task_allocs, canonicalized_key, source_read) catch |err| {
+            task_allocs.module.free(src);
+            return err;
+        };
+        // A hit moves `src` into the loaded environment; a miss leaves it to
+        // the parse below.
+        if (cached_load) |cached| return cached;
 
         // Checked-module disk cache lookup happens after canonicalization, when
         // the coordinator has the exact module identity and import keys.
@@ -4952,17 +5686,6 @@ pub const Coordinator = struct {
         try env.initCIRFields(display_module_name);
         env.module_role = task.module_role;
 
-        // Set qualified_module_ident to a package-qualified identifier (e.g., "app.main", "pf.Stdout")
-        // to ensure module identity is unique across packages. Without this, two modules with
-        // the same filename in different packages (e.g., app's main.roc and platform's main.roc)
-        // get the same identity, causing nominal type origin_module collisions.
-        // display_module_name_idx stays as the bare final segment (for type
-        // module validation, error messages, etc.), while the qualified identity
-        // preserves any directory segments in task.module_name.
-        {
-            const qname = try std.fmt.allocPrint(task_allocs.scratch, "{s}.{s}", .{ task.package_name, task.module_name });
-            env.qualified_module_ident = try env.insertIdent(base.Ident.for_text(qname));
-        }
         try env.common.calcLineStarts(module_alloc);
 
         // The AST and result payloads outlive this task, so they use the result
@@ -5000,36 +5723,14 @@ pub const Coordinator = struct {
         }
         const local_imports = try module_discovery.extractImportsFromDeclIndex(parse_ast, task_allocs.scratch);
         for (local_imports) |local_import| {
-            const owned_import_name = try worker_alloc.dupe(u8, local_import.import_name);
-            errdefer worker_alloc.free(owned_import_name);
-            const module_name = (try module_discovery.resolveLocalImportLogicalPath(task_allocs.scratch, task.module_name, local_import)) orelse {
-                // The import names no module inside this package. Report it here
-                // and carry the rejection as this import's resolution outcome;
-                // the rest of the module still has a complete compilation.
-                const report = try Report.init(
-                    worker_alloc,
-                    "Import Escapes Package Root",
-                    "This relative import traverses above the current package's source root.",
-                    .runtime_error,
-                );
-                try appendReportOwned(worker_alloc, &reports, report);
-                try discovered_local_imports.append(worker_alloc, .{
-                    .import_name = owned_import_name,
-                    .target = .rejected,
-                });
-                continue;
-            };
-            const path = try self.resolveModulePathWithAllocator(task.package_root, module_name, worker_alloc);
-            errdefer worker_alloc.free(path);
-            const owned_name = try worker_alloc.dupe(u8, module_name);
-            errdefer worker_alloc.free(owned_name);
-            try discovered_local_imports.append(worker_alloc, .{
-                .import_name = owned_import_name,
-                .target = .{ .resolved = .{
-                    .module_name = owned_name,
-                    .path = path,
-                } },
-            });
+            try self.appendDiscoveredLocalImport(
+                worker_alloc,
+                task_allocs.scratch,
+                task,
+                local_import,
+                &discovered_local_imports,
+                &reports,
+            );
         }
 
         var discovered_external_imports = std.ArrayList(DiscoveredExternalImport).empty;
@@ -5059,6 +5760,8 @@ pub const Coordinator = struct {
                 .discovered_external_imports = discovered_external_imports,
                 .reports = reports,
                 .parse_ns = readStageTimer(self.roc_ctx.std_io, &parse_timer),
+                .is_entry_module = task.is_entry_module,
+                .canonicalized_cache_key = canonicalized_key,
             },
         };
     }
@@ -5074,29 +5777,63 @@ pub const Coordinator = struct {
         };
     }
 
+    /// Build this module's parse-stage record from the AST that produced the
+    /// canonicalized environment, and store both under the key the parse task
+    /// missed on.
+    ///
+    /// The record holds what the parse stage produced and the env does not:
+    /// the tokenizer and parser diagnostics, reduced to the byte region and
+    /// token tag their reports render from, and the parser's own import
+    /// inventory. A later hit renders and normalizes those exactly as this
+    /// build's parse task did.
+    fn storeCanonicalizedModuleFromAst(
+        self: *Coordinator,
+        task: CanonicalizeTask,
+        task_allocs: WorkerTaskAllocators,
+        env: *const ModuleEnv,
+        ast: *AST,
+    ) Allocator.Error!void {
+        const manager = self.cache_manager orelse return;
+        if (!manager.config.enabled) return;
+
+        const scratch = task_allocs.scratch;
+
+        var diagnostics = try std.ArrayList(AST.ResolvedDiagnostic).initCapacity(
+            scratch,
+            ast.tokenize_diagnostics.items.len + ast.parse_diagnostics.items.len,
+        );
+        for (ast.tokenize_diagnostics.items) |diagnostic| {
+            diagnostics.appendAssumeCapacity(ast.resolveTokenizeDiagnostic(diagnostic));
+        }
+        for (ast.parse_diagnostics.items) |diagnostic| {
+            diagnostics.appendAssumeCapacity(ast.resolveParseDiagnostic(diagnostic));
+        }
+
+        const parsed_local_imports = try module_discovery.extractImportsFromDeclIndex(ast, scratch);
+        var local_imports = try std.ArrayList(canonicalized_cache_entry.LocalImport).initCapacity(scratch, parsed_local_imports.len);
+        for (parsed_local_imports) |local_import| {
+            local_imports.appendAssumeCapacity(.{
+                .import_name = local_import.import_name,
+                .base = local_import.base,
+                .parent_count = local_import.parent_count,
+            });
+        }
+
+        const external_imports = try module_discovery.extractQualifiedImportsFromDeclIndex(ast, scratch);
+
+        self.storeCanonicalizedModuleInCache(task_allocs, task.canonicalized_cache_key, env, .{
+            .diagnostics = diagnostics.items,
+            .local_imports = local_imports.items,
+            .external_imports = external_imports,
+        });
+    }
+
     fn executeCanonicalizeFallible(self: *Coordinator, task: CanonicalizeTask, task_allocs: WorkerTaskAllocators) Allocator.Error!WorkerResult {
         var canonicalize_timer = startStageTimer(self.roc_ctx.std_io);
 
         const env = task.module_env;
         const ast = task.cached_ast;
-        defer task_allocs.result.free(task.imported_modules);
         defer ast.deinit();
-
-        // Build KnownModule entries for qualified imports (e.g. platform-exposed
-        // `pf.Stdout`) so canonicalization has explicit module names.
-        const qualified_imports = try module_discovery.extractQualifiedImportsFromDeclIndex(ast, task_allocs.scratch);
-        defer {
-            for (qualified_imports) |qi| task_allocs.scratch.free(qi);
-            task_allocs.scratch.free(qualified_imports);
-        }
-        var known_modules = std.ArrayList(compile_package.KnownModule).empty;
-        defer known_modules.deinit(task_allocs.scratch);
-        for (qualified_imports) |qi| {
-            try known_modules.append(task_allocs.scratch, .{
-                .qualified_name = qi,
-                .import_name = qi,
-            });
-        }
 
         try compile_package.canonicalizeModuleWithSiblings(
             self.roc_ctx,
@@ -5104,12 +5841,23 @@ pub const Coordinator = struct {
             ast,
             self.builtin_modules.builtin_module.env,
             self.builtin_modules.builtin_indices,
-            task.source_dir,
-            known_modules.items,
-            task.imported_modules,
             task.validation,
             task.is_entry_module,
         );
+
+        // The module's canonicalization output is complete above, as a
+        // function of this module's source alone, so this is where it is
+        // stored: before the file imports below read anything from disk, and
+        // before the coordinator stamps the workspace-owned display identity
+        // and applies the platform hosted transform.
+        try self.storeCanonicalizedModuleFromAst(task, task_allocs, env, ast);
+
+        // What remains in this task is this module's `import "path" as name`
+        // file imports: filesystem input that names no module, read here so
+        // that the module's source-input identity -- which the coordinator's
+        // checked-module cache probe keys on -- is complete before the module
+        // leaves the task.
+        try can.resolveDeferredFileImports(env, .{ .read = .{ .ctx = self.roc_ctx, .source_dir = task.source_dir } });
 
         const canonicalize_ns = readStageTimer(self.roc_ctx.std_io, &canonicalize_timer);
 
@@ -5176,6 +5924,7 @@ pub const Coordinator = struct {
 
         const env = task.module_env;
         defer task_allocs.result.free(task.imported_envs);
+        defer task_allocs.result.free(task.deferred_imports);
         defer task_allocs.result.free(task.imported_artifacts);
         defer task_allocs.result.free(task.available_artifacts);
         defer if (task.platform_requirements) |surface| {
@@ -5191,6 +5940,10 @@ pub const Coordinator = struct {
         var local_ctfe_timing = eval.CompileTimeFinalization.Timing.init(self.roc_ctx.std_io);
         const ctfe_timing = &local_ctfe_timing;
         const ctfe_options = compile_package.compileTimeFinalizationOptions(self.max_threads, &self.roc_ctx, ctfe_timing);
+        // Import resolution runs inside the type-check task and records its
+        // own diagnostics on the env, after the canonicalize task already
+        // reported the ones canonicalization recorded.
+        const canonicalize_diagnostics = env.diagnosticCount();
         var typecheck_output = try compile_package.typeCheckModule(
             check_alloc,
             result_alloc,
@@ -5204,6 +5957,7 @@ pub const Coordinator = struct {
             task.explicit_roots,
             task.validation,
             ctfe_options,
+            .{ .explicit = task.deferred_imports },
         );
         defer typecheck_output.deinit();
         // On error the coordinator still owns the input environment. Transfer
@@ -5238,6 +5992,13 @@ pub const Coordinator = struct {
             if (task.platform_requirements) |requirements| .{ .env = requirements.env, .filename = requirements.path } else null,
         );
         defer rb.deinit();
+
+        const import_diagnostics = try env.getDiagnosticsFrom(canonicalize_diagnostics);
+        defer env.gpa.free(import_diagnostics);
+        for (import_diagnostics) |d| {
+            const rep = try env.diagnosticToReport(d, worker_alloc, task.path);
+            try appendReportOwned(worker_alloc, &reports, rep);
+        }
 
         for (typecheck_output.checker.problems.problems.items) |prob| {
             const rep = try rb.build(prob);
@@ -5503,12 +6264,123 @@ fn compileAppWithCheckedModuleCache(
     };
 }
 
+/// Everything a build produced that must not depend on cache state: its
+/// reports, rendered in a deterministic order, and every checked artifact key
+/// it published.
+const CompiledBuildFacts = struct {
+    build: compile_build.BuildEnv.BuildStats,
+    cache: CacheStats,
+    /// Every report the build produced, each prefixed with the package and
+    /// module that owns it, sorted so hash-map iteration order cannot leak in.
+    reports: []u8,
+    /// Every published checked-artifact key, sorted.
+    artifact_keys: [][32]u8,
+
+    fn deinit(self: *CompiledBuildFacts, allocator: Allocator) void {
+        allocator.free(self.reports);
+        allocator.free(self.artifact_keys);
+        self.* = undefined;
+    }
+};
+
+fn lessThanBytes(_: void, a: [32]u8, b: [32]u8) bool {
+    return std.mem.order(u8, &a, &b) == .lt;
+}
+
+fn lessThanReportLines(_: void, a: []const u8, b: []const u8) bool {
+    return std.mem.order(u8, a, b) == .lt;
+}
+
+/// Compile an app and collect the build output that a warm cache, a cold
+/// cache, and a disabled cache must all agree on. Passing a null `cache_dir`
+/// compiles with no cache manager at all, which is what `--no-cache` does.
+fn compileAppFacts(
+    allocator: Allocator,
+    cache_dir: ?[]const u8,
+    app_path: []const u8,
+) CheckedModuleCacheRunError!CompiledBuildFacts {
+    const roc_ctx = CoreCtx.os(allocator, allocator, std.testing.io);
+    var cache_manager = CacheManager.init(allocator, .{
+        .enabled = cache_dir != null,
+        .cache_dir = cache_dir orelse "",
+    }, roc_ctx);
+
+    const builtin_modules = try sharedBuiltinModules();
+
+    var coord = try Coordinator.init(
+        allocator,
+        .single_threaded,
+        1,
+        roc_target.RocTarget.detectNative(),
+        builtin_modules,
+        build_options.compiler_version,
+        if (cache_dir == null) null else &cache_manager,
+        roc_ctx,
+    );
+    defer coord.deinit();
+    coord.enable_hosted_transform = true;
+
+    var arena_impl = base.SingleThreadArena.init(allocator);
+    defer arena_impl.deinit();
+    const arena = arena_impl.allocator();
+
+    try coord.start();
+    try coord.discoverAppFromPath(arena, .{ .entry_path = app_path });
+    try coord.coordinatorLoop();
+    // A build with user errors publishes no executable artifacts; its reports
+    // and whatever it did check are still exactly what must not depend on the
+    // cache.
+    if (!coord.hasUserErrors()) try coord.finishCheckedProgram(.executable_artifacts);
+
+    var report_lines = std.ArrayList([]const u8).empty;
+    defer report_lines.deinit(arena);
+    var report_it = coord.iterReports();
+    while (report_it.next()) |entry| {
+        var rendered = std.Io.Writer.Allocating.init(arena);
+        rendered.writer.print("{s}|{s}|", .{ entry.package_name, entry.module_name }) catch return error.OutOfMemory;
+        reporting.renderReport(entry.report, &rendered.writer, .markdown) catch |err| switch (err) {
+            error.OutOfMemory => return error.OutOfMemory,
+            error.WriteFailed => return error.OutOfMemory,
+        };
+        try report_lines.append(arena, rendered.written());
+    }
+    std.mem.sort([]const u8, report_lines.items, {}, lessThanReportLines);
+
+    var reports = std.Io.Writer.Allocating.init(arena);
+    for (report_lines.items) |line| {
+        reports.writer.writeAll(line) catch return error.OutOfMemory;
+        reports.writer.writeByte('\n') catch return error.OutOfMemory;
+    }
+    const owned_reports = try allocator.dupe(u8, reports.written());
+    errdefer allocator.free(owned_reports);
+
+    var keys = std.ArrayList([32]u8).empty;
+    errdefer keys.deinit(allocator);
+    var pkg_it = coord.packages.iterator();
+    while (pkg_it.next()) |pkg_entry| {
+        for (pkg_entry.value_ptr.*.modules.items) |*mod| {
+            if (mod.checkedArtifact()) |artifact| {
+                try keys.append(allocator, artifact.key.bytes);
+            }
+        }
+    }
+    std.mem.sort([32]u8, keys.items, {}, lessThanBytes);
+
+    return .{
+        .build = coord.getBuildStats(),
+        .cache = cache_manager.stats,
+        .reports = owned_reports,
+        .artifact_keys = try keys.toOwnedSlice(allocator),
+    };
+}
+
 const AppRootIdentity = struct {
     compile_time_request_count: usize,
     compile_time_debug_count: usize,
     artifact_key: [32]u8,
     module_identity_hash: [32]u8,
     cache_hits: u32,
+    canonicalized_cache_hits: u32,
     platform_root_publish_count: u32,
     platform_pairing_count: u32,
     where_method_scheme_use_count: usize,
@@ -5666,6 +6538,7 @@ fn compileAppRootIdentityExpecting(
         .artifact_key = root.codeGenerationKey().bytes,
         .module_identity_hash = root.module_identity.stable_hash,
         .cache_hits = coord.getBuildStats().cache_hits,
+        .canonicalized_cache_hits = coord.getBuildStats().canonicalized_cache_hits,
         .platform_root_publish_count = coord.platform_root_publish_count,
         .platform_pairing_count = coord.platform_pairing_count,
         .where_method_scheme_use_count = where_method_scheme_use_count,
@@ -5738,6 +6611,63 @@ fn writeCacheKeyPurityFixture(tmp_dir: *std.testing.TmpDir, sub_dir: []const u8)
     }
 }
 
+/// The echo platform the fixtures below build their apps on.
+const echo_platform_root_source =
+    \\platform ""
+    \\    requires {} { main! : List(Str) => Try({}, [Exit(I8), ..]) }
+    \\    exposes [Echo]
+    \\    packages {}
+    \\    provides { "roc_main": main_for_host! }
+    \\    hosted { "roc_echo_line": Echo.line! }
+    \\
+    \\import Echo
+    \\
+    \\main_for_host! : List(Str) => I8
+    \\main_for_host! = |args|
+    \\    match main!(args) {
+    \\        Ok({}) => 0
+    \\        Err(Exit(code)) => code
+    \\        Err(other) => {
+    \\            Echo.line!("Program exited with error: ${Str.inspect(other)}")
+    \\            1
+    \\        }
+    \\    }
+;
+
+const echo_platform_echo_source =
+    \\Echo := [].{
+    \\    line! : Str => {}
+    \\}
+;
+
+/// An app on the echo platform whose root module obtains one string either
+/// from an `import "path" as name` file import or from an ordinary literal.
+/// The two spellings compile the same modules, so a build of one is the
+/// control for a build of the other.
+fn writeFileImportFixture(
+    tmp_dir: *std.testing.TmpDir,
+    sub_dir: []const u8,
+    root_source: []const u8,
+) (std.Io.Dir.CreateDirPathError || std.Io.Dir.WriteFileError || std.Io.Writer.Error)!void {
+    var path_buf: [256]u8 = undefined;
+    var writer = std.Io.Writer.fixed(&path_buf);
+    try writer.print("{s}/app/.roc_echo_platform", .{sub_dir});
+    try tmp_dir.dir.createDirPath(std.testing.io, writer.buffered());
+
+    const files = [_]struct { rel: []const u8, data: []const u8 }{
+        .{ .rel = "app/message.txt", .data = "hello from an imported file" },
+        .{ .rel = "app/main.roc", .data = root_source },
+        .{ .rel = "app/.roc_echo_platform/main.roc", .data = echo_platform_root_source },
+        .{ .rel = "app/.roc_echo_platform/Echo.roc", .data = echo_platform_echo_source },
+    };
+    for (files) |file| {
+        var rel_buf: [256]u8 = undefined;
+        var rel_writer = std.Io.Writer.fixed(&rel_buf);
+        try rel_writer.print("{s}/{s}", .{ sub_dir, file.rel });
+        try tmp_dir.dir.writeFile(std.testing.io, .{ .sub_path = rel_writer.buffered(), .data = file.data });
+    }
+}
+
 fn writeIssue9883Fixture(tmp_dir: *std.testing.TmpDir, sub_dir: []const u8) (std.Io.Dir.CreateDirPathError || std.Io.Dir.WriteFileError || std.Io.Writer.Error)!void {
     var path_buf: [256]u8 = undefined;
     var writer = std.Io.Writer.fixed(&path_buf);
@@ -5765,32 +6695,8 @@ fn writeIssue9883Fixture(tmp_dir: *std.testing.TmpDir, sub_dir: []const u8) (std
         \\    SomeErrors : [ErrorA, ErrorB, ErrorC, ErrorD, ErrorE, ErrorF]
         \\}
         },
-        .{ .rel = "app/.roc_echo_platform/main.roc", .data =
-        \\platform ""
-        \\    requires {} { main! : List(Str) => Try({}, [Exit(I8), ..]) }
-        \\    exposes [Echo]
-        \\    packages {}
-        \\    provides { "roc_main": main_for_host! }
-        \\    hosted { "roc_echo_line": Echo.line! }
-        \\
-        \\import Echo
-        \\
-        \\main_for_host! : List(Str) => I8
-        \\main_for_host! = |args|
-        \\    match main!(args) {
-        \\        Ok({}) => 0
-        \\        Err(Exit(code)) => code
-        \\        Err(other) => {
-        \\            Echo.line!("Program exited with error: ${Str.inspect(other)}")
-        \\            1
-        \\        }
-        \\    }
-        },
-        .{ .rel = "app/.roc_echo_platform/Echo.roc", .data =
-        \\Echo := [].{
-        \\    line! : Str => {}
-        \\}
-        },
+        .{ .rel = "app/.roc_echo_platform/main.roc", .data = echo_platform_root_source },
+        .{ .rel = "app/.roc_echo_platform/Echo.roc", .data = echo_platform_echo_source },
     };
     for (files) |file| {
         var rel_buf: [256]u8 = undefined;
@@ -5831,6 +6737,10 @@ test "cache-key purity: identical workspaces in different directories produce bi
     // ...and the second build gets checked-cache hits from the first build's
     // entries even though it ran in a different directory.
     try std.testing.expect(second.cache_hits > 0);
+    // The canonicalized cache is pure in the same way: every module of the
+    // second workspace loads the entry the first workspace's identical module
+    // stored, from a different directory.
+    try std.testing.expect(second.canonicalized_cache_hits > 0);
     // A key match implies byte-identical relocatable artifacts.
     try std.testing.expectEqualSlices(u8, first.executable_root_bytes, second.executable_root_bytes);
     try std.testing.expectEqualSlices(u8, first.app_root_bytes, second.app_root_bytes);
@@ -7138,6 +8048,28 @@ fn overwriteFilesUnderDir(allocator: Allocator, absolute_dir: []const u8, conten
     return overwritten;
 }
 
+/// Drop the last byte of every cache entry under `absolute_dir`, leaving a body
+/// whose header lengths no longer describe it.
+fn truncateFilesUnderDir(allocator: Allocator, absolute_dir: []const u8) CorruptCheckedModuleCacheError!usize {
+    const io = std.testing.io;
+    var dir = try std.Io.Dir.openDirAbsolute(io, absolute_dir, .{ .iterate = true });
+    defer dir.close(io);
+
+    var walker = try dir.walk(allocator);
+    defer walker.deinit();
+
+    var truncated: usize = 0;
+    while (try walker.next(io)) |entry| {
+        if (entry.kind != .file) continue;
+        const contents = try dir.readFileAlloc(io, entry.path, allocator, .unlimited);
+        defer allocator.free(contents);
+        if (contents.len == 0) continue;
+        try dir.writeFile(io, .{ .sub_path = entry.path, .data = contents[0 .. contents.len - 1] });
+        truncated += 1;
+    }
+    return truncated;
+}
+
 fn corruptCheckedModuleEnvIdentBytesLens(allocator: Allocator, checked_module_cache_dir: []const u8) CorruptCheckedModuleCacheError!usize {
     const env_ident_bytes_len_offset =
         checked_module_cache_header_len +
@@ -7212,6 +8144,73 @@ test "Coordinator checked module cache hits on second compile" {
     try std.testing.expect(second.build.cache_hits > 0);
     try std.testing.expect(second.build.modules_compiled < first.build.modules_compiled);
     try std.testing.expect(second.cache.hits > 0);
+}
+
+const file_import_app_root_source =
+    \\app [main!] { pf: platform "./.roc_echo_platform/main.roc" }
+    \\
+    \\import "message.txt" as message : Str
+    \\
+    \\main! = |_args| {
+    \\    _ = message
+    \\    Ok({})
+    \\}
+;
+
+const string_literal_app_root_source =
+    \\app [main!] { pf: platform "./.roc_echo_platform/main.roc" }
+    \\
+    \\message : Str
+    \\message = "hello from an imported file"
+    \\
+    \\main! = |_args| {
+    \\    _ = message
+    \\    Ok({})
+    \\}
+;
+
+test "Coordinator checked module cache hits a module that imports a file" {
+    const allocator = std.testing.allocator;
+
+    var tmp_dir = std.testing.tmpDir(.{});
+    defer tmp_dir.cleanup();
+    try tmp_dir.dir.createDirPath(std.testing.io, "file_import_cache");
+    const file_import_cache_dir = try tmp_dir.dir.realPathFileAlloc(std.testing.io, "file_import_cache", allocator);
+    defer allocator.free(file_import_cache_dir);
+    try tmp_dir.dir.createDirPath(std.testing.io, "literal_cache");
+    const literal_cache_dir = try tmp_dir.dir.realPathFileAlloc(std.testing.io, "literal_cache", allocator);
+    defer allocator.free(literal_cache_dir);
+
+    try writeFileImportFixture(&tmp_dir, "file_import", file_import_app_root_source);
+    const file_import_app = try tmp_dir.dir.realPathFileAlloc(std.testing.io, "file_import/app/main.roc", allocator);
+    defer allocator.free(file_import_app);
+
+    try writeFileImportFixture(&tmp_dir, "literal", string_literal_app_root_source);
+    const literal_app = try tmp_dir.dir.realPathFileAlloc(std.testing.io, "literal/app/main.roc", allocator);
+    defer allocator.free(literal_app);
+
+    const file_import_first = try compileAppWithCheckedModuleCache(allocator, file_import_cache_dir, file_import_app);
+    try std.testing.expectEqual(@as(u32, 0), file_import_first.build.cache_hits);
+    try std.testing.expect(file_import_first.build.modules_compiled > 0);
+    try std.testing.expect(file_import_first.cache.stores > 0);
+    try std.testing.expectEqual(@as(u64, 0), file_import_first.cache.store_failures);
+
+    const literal_first = try compileAppWithCheckedModuleCache(allocator, literal_cache_dir, literal_app);
+    try std.testing.expectEqual(file_import_first.build.modules_compiled, literal_first.build.modules_compiled);
+
+    // The canonicalize task reads a module's file imports, so its
+    // source-input identity is complete when the checked cache is probed. A
+    // file import therefore costs exactly the cache hits an ordinary string
+    // literal in the same position does.
+    const file_import_second = try compileAppWithCheckedModuleCache(allocator, file_import_cache_dir, file_import_app);
+    const literal_second = try compileAppWithCheckedModuleCache(allocator, literal_cache_dir, literal_app);
+    try std.testing.expect(file_import_second.build.cache_hits > 0);
+    // The file import is read on a canonicalized-cache hit too, so the module's
+    // source-input identity is complete before the checked cache is probed.
+    try std.testing.expect(file_import_second.build.canonicalized_cache_hits > 0);
+    try std.testing.expectEqual(literal_second.build.cache_hits, file_import_second.build.cache_hits);
+    try std.testing.expectEqual(literal_second.build.modules_compiled, file_import_second.build.modules_compiled);
+    try std.testing.expect(file_import_second.build.modules_compiled < file_import_first.build.modules_compiled);
 }
 
 test "Coordinator checked module cache restores imported alias Try error on hit" {
@@ -7380,6 +8379,346 @@ test "Coordinator corrupt checked module cache env relocations compile from sour
     const second = try compileAppWithCheckedModuleCache(allocator, cache_dir, "test/str/app_message.roc");
     try std.testing.expect(second.build.modules_compiled > 0);
     try std.testing.expect(second.cache.invalidations > 0);
+}
+
+/// Write a two-module app whose root imports `Helper`, so a test can change one
+/// module's source and watch the other module's canonicalized entry survive.
+fn writeImporterFixture(
+    tmp_dir: *std.testing.TmpDir,
+    sub_dir: []const u8,
+    helper_source: []const u8,
+) (std.Io.Dir.CreateDirPathError || std.Io.Dir.WriteFileError || std.Io.Writer.Error)!void {
+    var path_buf: [256]u8 = undefined;
+    var writer = std.Io.Writer.fixed(&path_buf);
+    try writer.print("{s}/app/.roc_echo_platform", .{sub_dir});
+    try tmp_dir.dir.createDirPath(std.testing.io, writer.buffered());
+
+    const files = [_]struct { rel: []const u8, data: []const u8 }{
+        .{ .rel = "app/main.roc", .data =
+        \\app [main!] { pf: platform "./.roc_echo_platform/main.roc" }
+        \\
+        \\import pf.Echo
+        \\import Helper
+        \\
+        \\main! = |args| {
+        \\    Echo.line!(Helper.message)
+        \\    Ok({})
+        \\}
+        },
+        .{ .rel = "app/Helper.roc", .data = helper_source },
+        .{ .rel = "app/.roc_echo_platform/main.roc", .data = echo_platform_root_source },
+        .{ .rel = "app/.roc_echo_platform/Echo.roc", .data = echo_platform_echo_source },
+    };
+    for (files) |file| {
+        var rel_buf: [256]u8 = undefined;
+        var rel_writer = std.Io.Writer.fixed(&rel_buf);
+        try rel_writer.print("{s}/{s}", .{ sub_dir, file.rel });
+        try tmp_dir.dir.writeFile(std.testing.io, .{ .sub_path = rel_writer.buffered(), .data = file.data });
+    }
+}
+
+const helper_module_source =
+    \\Helper := {}.{
+    \\    message : Str
+    \\    message = "from helper"
+    \\}
+;
+
+/// Count the entry files one cache directory holds.
+fn countCacheEntries(allocator: Allocator, absolute_dir: []const u8) (std.Io.Dir.OpenError || std.Io.Dir.SelectiveWalker.Error || Allocator.Error)!usize {
+    const io = std.testing.io;
+    var dir = std.Io.Dir.openDirAbsolute(io, absolute_dir, .{ .iterate = true }) catch |err| switch (err) {
+        error.FileNotFound => return 0,
+        else => |e| return e,
+    };
+    defer dir.close(io);
+
+    var walker = try dir.walk(allocator);
+    defer walker.deinit();
+
+    var count: usize = 0;
+    while (try walker.next(io)) |entry| {
+        if (entry.kind == .file) count += 1;
+    }
+    return count;
+}
+
+test "canonicalized module cache hits every module on a second compile and produces identical output" {
+    const allocator = std.testing.allocator;
+
+    var tmp_dir = std.testing.tmpDir(.{});
+    defer tmp_dir.cleanup();
+    try tmp_dir.dir.createDirPath(std.testing.io, "cache");
+    const cache_dir = try tmp_dir.dir.realPathFileAlloc(std.testing.io, "cache", allocator);
+    defer allocator.free(cache_dir);
+
+    try writeImporterFixture(&tmp_dir, "warm", helper_module_source);
+    const app_path = try tmp_dir.dir.realPathFileAlloc(std.testing.io, "warm/app/main.roc", allocator);
+    defer allocator.free(app_path);
+
+    var first = try compileAppFacts(allocator, cache_dir, app_path);
+    defer first.deinit(allocator);
+    try std.testing.expect(first.reports.len > 0);
+    try std.testing.expectEqual(@as(u32, 0), first.build.canonicalized_cache_hits);
+    try std.testing.expect(first.build.canonicalized_cache_misses > 0);
+    try std.testing.expect(first.cache.canonicalized_stores > 0);
+    try std.testing.expectEqual(@as(u64, 0), first.cache.canonicalized_store_failures);
+
+    var second = try compileAppFacts(allocator, cache_dir, app_path);
+    defer second.deinit(allocator);
+
+    // Every module the first build canonicalized is loaded from the cache the
+    // second time, and nothing is canonicalized again.
+    try std.testing.expectEqual(first.build.canonicalized_cache_misses, second.build.canonicalized_cache_hits);
+    try std.testing.expectEqual(@as(u32, 0), second.build.canonicalized_cache_misses);
+    try std.testing.expectEqual(@as(u64, 0), second.cache.canonicalized_misses);
+
+    // The build's checked output is what a canonicalized hit must not change.
+    try std.testing.expectEqualStrings(first.reports, second.reports);
+    try std.testing.expectEqual(first.artifact_keys.len, second.artifact_keys.len);
+    for (first.artifact_keys, second.artifact_keys) |a, b| {
+        try std.testing.expectEqualSlices(u8, &a, &b);
+    }
+}
+
+test "canonicalized module cache entry survives a change to an imported module" {
+    const allocator = std.testing.allocator;
+
+    var tmp_dir = std.testing.tmpDir(.{});
+    defer tmp_dir.cleanup();
+    try tmp_dir.dir.createDirPath(std.testing.io, "cache");
+    const cache_dir = try tmp_dir.dir.realPathFileAlloc(std.testing.io, "cache", allocator);
+    defer allocator.free(cache_dir);
+
+    try writeImporterFixture(&tmp_dir, "imports", helper_module_source);
+    const app_path = try tmp_dir.dir.realPathFileAlloc(std.testing.io, "imports/app/main.roc", allocator);
+    defer allocator.free(app_path);
+
+    var first = try compileAppFacts(allocator, cache_dir, app_path);
+    defer first.deinit(allocator);
+    try std.testing.expect(first.build.canonicalized_cache_misses > 1);
+
+    // Only the imported module's source changes.
+    try tmp_dir.dir.writeFile(std.testing.io, .{
+        .sub_path = "imports/app/Helper.roc",
+        .data =
+        \\Helper := {}.{
+        \\    message : Str
+        \\    message = "from a changed helper"
+        \\}
+        ,
+    });
+
+    var second = try compileAppFacts(allocator, cache_dir, app_path);
+    defer second.deinit(allocator);
+
+    // Exactly one module is canonicalized again: the one whose source changed.
+    // Canonicalization reads no import, so every other module still hits its
+    // entry, the importer included.
+    try std.testing.expectEqual(@as(u32, 1), second.build.canonicalized_cache_misses);
+    try std.testing.expectEqual(first.build.canonicalized_cache_misses - 1, second.build.canonicalized_cache_hits);
+
+    // The changed module's checked entry misses, and so does its importer's,
+    // because a checked key folds in its imports' checked keys.
+    try std.testing.expect(second.build.cache_misses > 0);
+}
+
+test "canonicalized module cache shares one entry between identical modules in different packages" {
+    const allocator = std.testing.allocator;
+
+    var tmp_dir = std.testing.tmpDir(.{});
+    defer tmp_dir.cleanup();
+    try tmp_dir.dir.createDirPath(std.testing.io, "cache");
+    const cache_dir = try tmp_dir.dir.realPathFileAlloc(std.testing.io, "cache", allocator);
+    defer allocator.free(cache_dir);
+
+    // Two packages in one workspace, each holding a byte-identical `Shared.roc`.
+    try tmp_dir.dir.createDirPath(std.testing.io, "shared/app/.roc_echo_platform");
+    try tmp_dir.dir.createDirPath(std.testing.io, "shared/pkg_a");
+    try tmp_dir.dir.createDirPath(std.testing.io, "shared/pkg_b");
+
+    const shared_module =
+        \\Shared := [].{
+        \\    value : I64
+        \\    value = 7
+        \\}
+    ;
+
+    const files = [_]struct { rel: []const u8, data: []const u8 }{
+        .{ .rel = "shared/app/main.roc", .data =
+        \\app [main!] {
+        \\    pf: platform "./.roc_echo_platform/main.roc",
+        \\    a: "../pkg_a/main.roc",
+        \\    b: "../pkg_b/main.roc",
+        \\}
+        \\
+        \\import pf.Echo
+        \\import a.Shared
+        \\import b.Shared as BShared
+        \\
+        \\main! = |_args| {
+        \\    _ = Shared.value + BShared.value
+        \\    Echo.line!("ok")
+        \\    Ok({})
+        \\}
+        },
+        .{ .rel = "shared/pkg_a/main.roc", .data = "package [Shared] {}\n" },
+        .{ .rel = "shared/pkg_a/Shared.roc", .data = shared_module },
+        // Distinct bytes so the two packages are distinct packages; their
+        // `Shared.roc` modules stay byte-identical, which is what this pins.
+        .{ .rel = "shared/pkg_b/main.roc", .data = "package [Shared] {} # second package\n" },
+        .{ .rel = "shared/pkg_b/Shared.roc", .data = shared_module },
+        .{ .rel = "shared/app/.roc_echo_platform/main.roc", .data = echo_platform_root_source },
+        .{ .rel = "shared/app/.roc_echo_platform/Echo.roc", .data = echo_platform_echo_source },
+    };
+    for (files) |file| {
+        try tmp_dir.dir.writeFile(std.testing.io, .{ .sub_path = file.rel, .data = file.data });
+    }
+
+    const app_path = try tmp_dir.dir.realPathFileAlloc(std.testing.io, "shared/app/main.roc", allocator);
+    defer allocator.free(app_path);
+
+    var first = try compileAppFacts(allocator, cache_dir, app_path);
+    defer first.deinit(allocator);
+    try std.testing.expectEqualStrings("", first.reports);
+    try std.testing.expect(first.build.canonicalized_cache_misses > 1);
+
+    const config = CacheConfig{ .cache_dir = cache_dir };
+    const canonicalized_dir = try config.getCanonicalizedModuleCacheDir(allocator);
+    defer allocator.free(canonicalized_dir);
+
+    // The two byte-identical `Shared.roc` modules canonicalize to one entry:
+    // the cache holds exactly one fewer entry than the build canonicalized
+    // modules, because nothing about a module's package, path, or importers
+    // reaches its key.
+    const entry_count = try countCacheEntries(allocator, canonicalized_dir);
+    try std.testing.expectEqual(first.build.canonicalized_cache_misses - 1, @as(u32, @intCast(entry_count)));
+
+    // Both of them load that one entry on the next build.
+    var second = try compileAppFacts(allocator, cache_dir, app_path);
+    defer second.deinit(allocator);
+    try std.testing.expectEqual(first.build.canonicalized_cache_misses, second.build.canonicalized_cache_hits);
+    try std.testing.expectEqual(@as(u32, 0), second.build.canonicalized_cache_misses);
+    try std.testing.expectEqual(entry_count, try countCacheEntries(allocator, canonicalized_dir));
+    try std.testing.expectEqualStrings(first.reports, second.reports);
+}
+
+test "canonicalized module cache produces the same build as a disabled cache" {
+    const allocator = std.testing.allocator;
+
+    var tmp_dir = std.testing.tmpDir(.{});
+    defer tmp_dir.cleanup();
+    try tmp_dir.dir.createDirPath(std.testing.io, "cache");
+    const cache_dir = try tmp_dir.dir.realPathFileAlloc(std.testing.io, "cache", allocator);
+    defer allocator.free(cache_dir);
+
+    try writeImporterFixture(&tmp_dir, "nocache", helper_module_source);
+    const app_path = try tmp_dir.dir.realPathFileAlloc(std.testing.io, "nocache/app/main.roc", allocator);
+    defer allocator.free(app_path);
+
+    var cold = try compileAppFacts(allocator, cache_dir, app_path);
+    defer cold.deinit(allocator);
+    try std.testing.expect(cold.reports.len > 0);
+    var warm = try compileAppFacts(allocator, cache_dir, app_path);
+    defer warm.deinit(allocator);
+    try std.testing.expect(warm.build.canonicalized_cache_hits > 0);
+
+    var uncached = try compileAppFacts(allocator, null, app_path);
+    defer uncached.deinit(allocator);
+    try std.testing.expectEqual(@as(u32, 0), uncached.build.canonicalized_cache_hits);
+    try std.testing.expectEqual(@as(u32, 0), uncached.build.cache_hits);
+
+    // Byte-identical reports and byte-identical checked artifact keys: cache
+    // state is not a semantic switch.
+    try std.testing.expectEqualStrings(uncached.reports, cold.reports);
+    try std.testing.expectEqualStrings(uncached.reports, warm.reports);
+    try std.testing.expectEqual(uncached.artifact_keys.len, warm.artifact_keys.len);
+    for (uncached.artifact_keys, warm.artifact_keys) |a, b| {
+        try std.testing.expectEqualSlices(u8, &a, &b);
+    }
+}
+
+test "Coordinator corrupt canonicalized module cache entries compile from source" {
+    const allocator = std.testing.allocator;
+
+    var tmp_dir = std.testing.tmpDir(.{});
+    defer tmp_dir.cleanup();
+    try tmp_dir.dir.createDirPath(std.testing.io, "cache");
+    const cache_dir = try tmp_dir.dir.realPathFileAlloc(std.testing.io, "cache", allocator);
+    defer allocator.free(cache_dir);
+
+    try writeImporterFixture(&tmp_dir, "corrupt", helper_module_source);
+    const app_path = try tmp_dir.dir.realPathFileAlloc(std.testing.io, "corrupt/app/main.roc", allocator);
+    defer allocator.free(app_path);
+
+    var first = try compileAppFacts(allocator, cache_dir, app_path);
+    defer first.deinit(allocator);
+    try std.testing.expect(first.cache.canonicalized_stores > 0);
+
+    const config = CacheConfig{ .cache_dir = cache_dir };
+    const canonicalized_dir = try config.getCanonicalizedModuleCacheDir(allocator);
+    defer allocator.free(canonicalized_dir);
+
+    // A body that is not a canonicalized entry at all.
+    const overwritten = try overwriteFilesUnderDir(allocator, canonicalized_dir, "not a canonicalized module cache entry");
+    try std.testing.expect(overwritten > 0);
+
+    var second = try compileAppFacts(allocator, cache_dir, app_path);
+    defer second.deinit(allocator);
+    try std.testing.expectEqual(@as(u32, 0), second.build.canonicalized_cache_hits);
+    try std.testing.expect(second.build.canonicalized_cache_misses > 0);
+    try std.testing.expectEqualStrings(first.reports, second.reports);
+
+    // The store overwrote the corrupt entries, so the next build hits again.
+    var third = try compileAppFacts(allocator, cache_dir, app_path);
+    defer third.deinit(allocator);
+    try std.testing.expectEqual(second.build.canonicalized_cache_misses, third.build.canonicalized_cache_hits);
+    try std.testing.expectEqualStrings(first.reports, third.reports);
+
+    // A truncated body is rejected the same way.
+    const truncated = try truncateFilesUnderDir(allocator, canonicalized_dir);
+    try std.testing.expect(truncated > 0);
+
+    var fourth = try compileAppFacts(allocator, cache_dir, app_path);
+    defer fourth.deinit(allocator);
+    try std.testing.expectEqual(@as(u32, 0), fourth.build.canonicalized_cache_hits);
+    try std.testing.expectEqualStrings(first.reports, fourth.reports);
+}
+
+test "canonicalized module cache reproduces parse-error reports on a hit" {
+    const allocator = std.testing.allocator;
+
+    var tmp_dir = std.testing.tmpDir(.{});
+    defer tmp_dir.cleanup();
+    try tmp_dir.dir.createDirPath(std.testing.io, "cache");
+    const cache_dir = try tmp_dir.dir.realPathFileAlloc(std.testing.io, "cache", allocator);
+    defer allocator.free(cache_dir);
+
+    // `Helper.roc` holds a construct the parser reports on.
+    try writeImporterFixture(&tmp_dir, "parse_error",
+        \\Helper := {}.{
+        \\    message : Str ->
+        \\    message = "from helper"
+        \\}
+    );
+    const app_path = try tmp_dir.dir.realPathFileAlloc(std.testing.io, "parse_error/app/main.roc", allocator);
+    defer allocator.free(app_path);
+
+    var cold = try compileAppFacts(allocator, cache_dir, app_path);
+    defer cold.deinit(allocator);
+    try std.testing.expect(cold.reports.len > 0);
+
+    var warm = try compileAppFacts(allocator, cache_dir, app_path);
+    defer warm.deinit(allocator);
+    try std.testing.expect(warm.build.canonicalized_cache_hits > 0);
+
+    var uncached = try compileAppFacts(allocator, null, app_path);
+    defer uncached.deinit(allocator);
+
+    // A hit reproduces the tokenizer and parser reports byte for byte, source
+    // snippets and all, from the entry's recorded diagnostics.
+    try std.testing.expectEqualStrings(cold.reports, warm.reports);
+    try std.testing.expectEqualStrings(cold.reports, uncached.reports);
 }
 
 test "Coordinator basic initialization" {
@@ -7602,6 +8941,8 @@ test "Coordinator task queue" {
             .package_root = "/test/app",
             .depth = 0,
             .module_role = .user,
+            .validation = .checking,
+            .is_entry_module = false,
         },
     });
 
@@ -7648,6 +8989,8 @@ test "Coordinator isComplete logic" {
             .package_root = "/",
             .depth = 0,
             .module_role = .user,
+            .validation = .checking,
+            .is_entry_module = false,
         },
     });
     try std.testing.expect(!coord.isComplete());
@@ -7693,6 +9036,8 @@ test "Coordinator isComplete with multi_threaded max_threads=0 (inline execution
             .package_root = "/",
             .depth = 0,
             .module_role = .user,
+            .validation = .checking,
+            .is_entry_module = false,
         },
     });
     try std.testing.expectEqual(@as(usize, 0), coord.inflight.load(.monotonic));
@@ -7734,6 +9079,8 @@ test "Coordinator shutdown does not drain buffered tasks" {
                 .package_root = "/",
                 .depth = 0,
                 .module_role = .user,
+                .validation = .checking,
+                .is_entry_module = false,
             },
         });
     }
@@ -7786,6 +9133,8 @@ test "Coordinator shutdown stops spawned workers promptly" {
                 .package_root = "/",
                 .depth = 0,
                 .module_role = .user,
+                .validation = .checking,
+                .is_entry_module = false,
             },
         });
     }
@@ -8086,6 +9435,146 @@ test "platform root candidate comes from registration, not name probing" {
     const candidate = coord.platformRootCandidate() orelse return error.TestExpectedCandidate;
     try std.testing.expect(candidate.mod == pf_pkg.getModule(pf_root_id).?);
     try std.testing.expect(candidate.mod.phase != .Done);
+}
+
+/// What one module's phases were observed to be while the module it imports
+/// was still incomplete.
+const ImportPhaseObservations = struct {
+    /// The importer was canonicalized -- it reached `.WaitingOnImports` and
+    /// its environment carries canonicalization's strict-demand relation --
+    /// while the module it imports had not been canonicalized itself.
+    canonicalized_before_import_canonicalized: bool,
+    /// The importer left `.WaitingOnImports` for type checking while the
+    /// module it imports had not completed.
+    type_checked_while_import_incomplete: bool,
+    /// The importer reached type checking at all.
+    reached_type_check: bool,
+    /// Every module of the build completed successfully.
+    completed_without_errors: bool,
+};
+
+fn findModuleInPackage(pkg: *PackageState, module_name: []const u8) ?*ModuleState {
+    for (pkg.modules.items) |*mod| {
+        if (std.mem.eql(u8, mod.name, module_name)) return mod;
+    }
+    return null;
+}
+
+/// Run the whole frontend one task at a time, recording `importer_name`'s
+/// phase after every step against whether `imported_name` has completed.
+fn observeImportPhases(
+    allocator: Allocator,
+    app_path: []const u8,
+    importer_name: []const u8,
+    imported_name: []const u8,
+) CheckedModuleCacheRunError!ImportPhaseObservations {
+    const roc_ctx = CoreCtx.os(allocator, allocator, std.testing.io);
+    const builtin_modules = try sharedBuiltinModules();
+
+    var coord = try Coordinator.init(
+        allocator,
+        .single_threaded,
+        1,
+        roc_target.RocTarget.detectNative(),
+        builtin_modules,
+        build_options.compiler_version,
+        null, // cache_manager
+        roc_ctx,
+    );
+    defer coord.deinit();
+    coord.enable_hosted_transform = true;
+
+    var arena_impl = base.SingleThreadArena.init(allocator);
+    defer arena_impl.deinit();
+
+    try coord.start();
+    try coord.discoverAppFromPath(arena_impl.allocator(), .{ .entry_path = app_path });
+
+    var observations = ImportPhaseObservations{
+        .canonicalized_before_import_canonicalized = false,
+        .type_checked_while_import_incomplete = false,
+        .reached_type_check = false,
+        .completed_without_errors = false,
+    };
+
+    while (!coord.isComplete()) {
+        if (coord.task_channel.tryRecv()) |task| {
+            const result = try coord.executeTaskInline(task, coord.inline_worker_allocs.taskAllocators());
+            coord.inline_worker_allocs.resetArena();
+            try coord.handleResult(result);
+        } else if (!try coord.tryUnblockAllWaiting()) {
+            return error.TestUnexpectedResult;
+        }
+
+        const app_package_name = coord.app_package_name orelse return error.TestUnexpectedResult;
+        const app_pkg = coord.packages.get(app_package_name) orelse return error.TestUnexpectedResult;
+        const importer = findModuleInPackage(app_pkg, importer_name) orelse continue;
+        const imported = findModuleInPackage(app_pkg, imported_name) orelse continue;
+
+        const import_incomplete = imported.completion == .pending;
+        const import_not_canonicalized = switch (imported.phase) {
+            .Parse, .Parsing, .Canonicalize => true,
+            .WaitingOnImports, .WaitingOnPlatformRequirements, .TypeCheck, .Done => false,
+        };
+        switch (importer.phase) {
+            .WaitingOnImports => {
+                const importer_canonicalized = if (importer.moduleEnv()) |env|
+                    env.topLevelDemandDependenciesReady()
+                else
+                    false;
+                if (importer_canonicalized and import_not_canonicalized) {
+                    observations.canonicalized_before_import_canonicalized = true;
+                }
+            },
+            .WaitingOnPlatformRequirements, .TypeCheck => {
+                observations.reached_type_check = true;
+                if (import_incomplete) observations.type_checked_while_import_incomplete = true;
+            },
+            .Parse, .Parsing, .Canonicalize, .Done => {},
+        }
+    }
+    coord.frontend_complete = true;
+    try coord.finishCheckedProgram(.executable_artifacts);
+
+    observations.completed_without_errors = !coord.hasUserErrors();
+    return observations;
+}
+
+test "Coordinator canonicalizes a module before its import completes" {
+    const allocator = std.testing.allocator;
+
+    var tmp_dir = std.testing.tmpDir(.{});
+    defer tmp_dir.cleanup();
+    try writeIssue9883Fixture(&tmp_dir, "canonicalize_before_imports");
+    const app_path = try tmp_dir.dir.realPathFileAlloc(std.testing.io, "canonicalize_before_imports/app/main.roc", allocator);
+    defer allocator.free(app_path);
+
+    const observations = try observeImportPhases(allocator, app_path, "main", "Bar");
+
+    // Canonicalization reads no other module, so the app root is canonicalized
+    // -- reaching `.WaitingOnImports` -- while `Bar` has not been
+    // canonicalized itself.
+    try std.testing.expect(observations.canonicalized_before_import_canonicalized);
+    try std.testing.expect(observations.completed_without_errors);
+}
+
+test "Coordinator type checks a module only after its imports complete" {
+    const allocator = std.testing.allocator;
+
+    var tmp_dir = std.testing.tmpDir(.{});
+    defer tmp_dir.cleanup();
+    try writeIssue9883Fixture(&tmp_dir, "type_check_after_imports");
+    const app_path = try tmp_dir.dir.realPathFileAlloc(std.testing.io, "type_check_after_imports/app/main.roc", allocator);
+    defer allocator.free(app_path);
+
+    const observations = try observeImportPhases(allocator, app_path, "main", "Bar");
+
+    // Type checking consumes the imported module's checked output, so it is
+    // what waits: the app root leaves `.WaitingOnImports` only once `Bar` has
+    // completed.
+    try std.testing.expect(observations.reached_type_check);
+    try std.testing.expect(!observations.type_checked_while_import_incomplete);
+    try std.testing.expect(observations.completed_without_errors);
 }
 
 test "Coordinator CI failure scenario - app with platform cross-package imports" {

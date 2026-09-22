@@ -6327,6 +6327,7 @@ fn appendCheckedTypeRootFromDeclarationAnno(
             },
             .builtin,
             .external,
+            .external_identity,
             .pending,
             => try appendCheckedTypeRoot(allocator, module, names, imports, store, active, ModuleEnv.varFrom(anno_idx)),
         },
@@ -6413,6 +6414,7 @@ fn appendCheckedTypeRootFromDeclarationAnno(
                 },
                 .builtin,
                 .external,
+                .external_identity,
                 .pending,
                 => {
                     const generic_root = try appendCheckedTypeRoot(
@@ -8271,6 +8273,7 @@ fn appendStaticDispatchTypeRoots(
             .e_hosted_lambda,
             .e_run_low_level,
             => unreachable,
+            .e_deferred_import_ref => checkedArtifactInvariant("deferred import reference reached checked artifact publication", .{}),
         }
     }
 
@@ -11720,6 +11723,7 @@ const CheckedSourceNodes = struct {
             .e_break,
             => {},
             .e_lookup_associated_local, .e_lookup_associated => checkedArtifactInvariant("unresolved associated lookup reached checked source traversal", .{}),
+            .e_deferred_import_ref => checkedArtifactInvariant("deferred import reference reached checked artifact publication", .{}),
         }
     }
 
@@ -11767,6 +11771,7 @@ const CheckedSourceNodes = struct {
             .underscore,
             .runtime_error,
             => {},
+            .deferred_import_ref => checkedArtifactInvariant("deferred import reference pattern reached checked artifact publication", .{}),
         }
     }
 
@@ -14516,6 +14521,7 @@ const CheckedBodyPayloadCopier = struct {
                 .op = run.op,
                 .args = try self.copyExprSpan(run.args),
             } },
+            .e_deferred_import_ref => checkedArtifactInvariant("deferred import reference reached checked artifact publication", .{}),
         };
     }
 
@@ -14807,6 +14813,7 @@ const CheckedBodyPayloadCopier = struct {
             } },
             .underscore => .underscore,
             .runtime_error => .runtime_error,
+            .deferred_import_ref => checkedArtifactInvariant("deferred import reference pattern reached checked artifact publication", .{}),
         };
     }
 
@@ -15162,6 +15169,7 @@ const CheckedBodyPayloadCopier = struct {
             .underscore,
             .runtime_error,
             => {},
+            .deferred_import_ref => std.debug.panic("compiler invariant violated: deferred import reference pattern reached a stage that runs after import resolution", .{}),
         }
     }
 
@@ -15254,6 +15262,7 @@ const CheckedBodyPayloadCopier = struct {
             .underscore,
             .runtime_error,
             => {},
+            .deferred_import_ref => checkedArtifactInvariant("deferred import reference pattern reached checked artifact publication", .{}),
         }
     }
 
@@ -15333,6 +15342,7 @@ const CheckedBodyPayloadCopier = struct {
             .underscore,
             .runtime_error,
             => checkedArtifactInvariant("checked artifact invariant violated: non-binder pattern requested a pattern binder", .{}),
+            .deferred_import_ref => checkedArtifactInvariant("deferred import reference pattern reached checked artifact publication", .{}),
         };
     }
 
@@ -16588,6 +16598,7 @@ fn categorizeValueRef(
             }
             unreachable;
         },
+        .e_deferred_import_ref => checkedArtifactInvariant("deferred import reference reached checked artifact publication", .{}),
     };
 }
 
@@ -35978,6 +35989,7 @@ fn scanLoweringVisibleNames(module_env: *const ModuleEnv, visitor: anytype) Allo
                     .e_for,
                     .e_run_low_level,
                     => {},
+                    .e_deferred_import_ref => std.debug.panic("compiler invariant violated: deferred import reference reached a stage that runs after import resolution", .{}),
                 }
             },
             .pattern_applied_tag => {
@@ -36003,6 +36015,7 @@ fn scanLoweringVisibleNames(module_env: *const ModuleEnv, visitor: anytype) Allo
                     .underscore,
                     .runtime_error,
                     => {},
+                    .deferred_import_ref => std.debug.panic("compiler invariant violated: deferred import reference pattern reached a stage that runs after import resolution", .{}),
                 }
             },
             .type_header => {
@@ -36258,6 +36271,7 @@ fn scanLoweringVisibleNames(module_env: *const ModuleEnv, visitor: anytype) Allo
             .diag_default_not_allowed_in_structural_record,
             .diag_default_not_allowed_on_local_type_decl,
             => {},
+            .expr_deferred_import_ref, .expr_deferred_nominal_external, .pattern_deferred_import_ref => checkedArtifactInvariant("deferred import reference reached checked artifact publication", .{}),
         }
     }
 }

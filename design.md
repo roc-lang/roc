@@ -2328,6 +2328,258 @@ result payloads before their borrowed module environments are destroyed. AST
 ownership passes when canonicalization is queued; the coordinator must not
 retain an owning AST pointer while a worker consumes it.
 
+## Canonicalization Independence
+
+Canonicalization of a module is a pure function of these inputs and nothing
+else: the module's source bytes, its module basename (the file name, which a
+type module's main type must match), the entry-module flag, the `Validation`
+mode, the module role (whether the file is the compiler's own builtin source),
+and the compiler itself (its version string and its baked `Builtin` module). It
+never reads another user module's environment, the workspace's package names or
+shorthands, whether the module's package is a platform, the resolution outcome
+of any import, or any file on disk other than the module source. Two modules
+with identical bytes, basename, and flags canonicalize to byte-identical
+`ModuleEnv` data no matter which workspace, package, or directory they are
+compiled in and no matter what their imports contain.
+
+This is what makes canonicalization independent of every other module: a
+module is canonicalized as soon as it is parsed, in parallel with every other
+module, without waiting for any import to be parsed, canonicalized, or
+checked. The only cross-module question canonicalization has—"does the imported
+module expose this name, and what does it denote?"—is deferred, never
+answered early against a module that happens to be available.
+
+### Deferred import references
+
+Every reference into an imported module is emitted as an explicit **deferred
+import reference**: a CIR node that records the `Import.Idx` of the import it
+goes through, the remaining qualified path text (interned), the kind of thing
+the source position needs (value, type, tag/nominal constructor, pattern), and
+its region. Scope decisions that select this shape—whether a leading segment
+names a module alias, an exposed item from `import Foo exposing [...]`, a local
+type, or a type variable—are made from the module's own scope alone, so they
+are source-local. The canonicalizer never consults an import's exposure table,
+statements, module kind, or content identity.
+
+Each deferred reference is also appended to the env's **deferred import
+worklist** (`ModuleEnv.deferred_import_refs`, serialized with the env), which
+records the node to resolve and what to do with it. The worklist is the only
+record of deferred work. Resolution drains that list; it never walks the CIR to
+discover what needs resolving, and no new pipeline pass exists for it. Work that
+depends on a resolved reference and cannot be finished at canonicalization time
+is recorded the same way, as an entry on a worklist, with the node identity it
+needs:
+
+- receiver-extension method registrations whose receiver type is an imported
+  type (the owner's identity is unknown until the type reference resolves);
+- `import "path" as name` file imports (reading the file is filesystem input,
+  so the node is a deferred file import and the worklist entry names it; the
+  file's bytes and content hash are recorded when the entry is drained).
+
+Every other question an import decides is recorded the same way, so the
+worklist is the complete record of what canonicalization deferred:
+
+- whether the name an `import` statement spells denotes a module at all (the
+  entry names the `s_import` statement, and the drain reports `module not
+  found` for a plain name that denotes nothing; a package-qualified spelling
+  and a rejected import each carry their own diagnostic from resolution);
+- whether the module exposes each item of an `import ... exposing [...]` list,
+  and as a type or a value (one entry per item, reported at the statement);
+- a platform header's `hosted` mappings, whose target definition is an
+  ordinary external-definition identity in the module the mapping names;
+- the `map2` a record builder dispatches through when the builder's type comes
+  from an import;
+- literal type suffixes, whose imported targets use the same qualified-name
+  resolution as type annotations and retain the defining module identity when
+  an exposed alias leads into another module. The suffix table records the
+  deferred worklist entry until resolution fills its exact target; no extra
+  annotation node is allocated for a suffix.
+
+A platform or package header's `exposes` list names modules of that header's
+own package. That is source-local, so a signature in the header may name one
+before the file's own `import` statements are reached: the name binds as an
+import of that module, and the declaration it selects resolves like any other.
+
+Uses of a name from `import Foo exposing [x, Y]` bind `x`/`Y` in scope as
+exposed items of that import with no target; each use emits a deferred
+reference through the import, exactly like a qualified use. An `import` also
+binds its own name, which denotes the declaration the import selects. When an
+`exposing [...]` item carries that same name, the `exposing` item wins: it
+names one declaration of the import, which is more specific than the import's
+own name, and both name the same import, so this is not a collision and
+reports nothing.
+
+`Alias.Name(...)` written in tag position, with an import's own name as the
+qualifier, is one question with two answers, and only the import can say which:
+when the import selects a public declaration, the qualifier denotes that
+declaration and `Name` is one of its tags; when it selects none, the qualifier
+denotes the module and `Name` denotes one of its exposed types. The worklist
+entry carries both spellings and the drain answers from the import's
+declarations.
+
+Diagnostics that only the imported module can settle—type or value not exposed,
+nested type not found under an exposed type, a use of a rejected or unresolvable
+import—are produced when the reference is drained. Source-local import
+diagnostics (module not imported, duplicate import, unused import, shadowing)
+stay in canonicalization.
+
+### Resolution
+
+A module's deferred import worklist is drained once, after every direct import
+has completed and the checked-module cache has been probed and missed, at the
+start of the type-check task and before `Check.init`. The worklist's file
+imports are the exception, because they name filesystem input and no module:
+they are read in the canonicalize task, by a second entry point over the same
+worklist that drains exactly its `.file_import` entries, so the main drain
+finds them already settled. Diagnostics the drain records go at the tail of
+the module's diagnostics, after the ones
+canonicalization reported, and the type-check task renders exactly that tail; a
+diagnostic canonicalization deliberately held back stays held back. `can`
+exposes the drain as one function that every checking entry point—the coordinator, the snapshot
+tool, the LSP, the playground, and test harnesses—calls with the same inputs:
+the module env, each import's resolution outcome (an accepted module env with
+its selected public declaration, or a rejection), and the source directory for
+file imports. A checked-cache hit skips the drain: the cached entry was stored
+after its own drain, and its key covers every input the drain reads.
+
+For each entry the drain finds the target in the resolved import and rewrites
+the deferred node in place into the ordinary resolved form (`e_lookup_external`,
+`TypeAnno.LocalOrExternal.external`, the nominal-external expression or pattern,
+an associated lookup on a type module's main type), or into the malformed /
+runtime-error node carrying the diagnostic. Nested paths resolve segment by
+segment through **exposed declarations, following exposed aliases to the
+declaration they name**: if `Gui` exposes `Files : Resource.Files`, then
+`Gui.Files.Dir.Read` resolves the longest exposed prefix `Files` in `Gui`, sees
+that it is an alias whose target is an external type declaration, follows that
+declaration's own import to `Resource`, and resolves `Dir.Read` there. The
+result records the module content identity and declaration node the path
+denotes; nothing downstream re-derives it. An alias's target may live in a
+module the referencing module does not import; the drain reaches it through the
+identity the alias's owning env recorded for its own import, and the checker
+receives that module among its owner modules exactly as it receives every
+other transitively reachable checked module today.
+
+A path that resolves through an alias names one declaration, so the walk
+continues inside that declaration and reaches nothing else in its module. The
+same holds for an import that a package header narrows to one declaration:
+that declaration is the whole of what the import reaches. An import of a module
+itself reaches that module's own exposed names.
+
+A nominal construction or nominal pattern names its type through the import it
+was written with, so a declaration reachable only by following an alias out of
+that module is not one those positions can name. Values through an alias
+(`Gui.Files.pick_directory!`, `Gui.Files.Dir.value`) resolve by the same walk.
+An alias to a module's whole namespace is not a thing the language has; the
+walk only ever passes through type declarations.
+
+The resolved form of a path that stayed inside the import names the target by
+`Import.Idx`. The resolved form of a path that left it through an alias names
+the target by content identity instead, because the module it landed in need
+not be one this module imports: a type becomes
+`TypeAnno.LocalOrExternal.external_identity` (the env-local
+`ModuleIdentity.Idx` plus the declaration node), and a value becomes the
+resolved associated lookup the checker already produces
+(`e_lookup_associated_resolved`), which is identity-based for the same reason.
+
+Following an alias out of a module reads that module's own record of what its
+imports resolved to: `ModuleEnv.import_identities` maps each `Import.Idx` to
+the content identity of the module it resolved to, written by that module's own
+drain and serialized with the env. An alias's `external` annotation therefore
+reaches its target module by identity, without spelling any module's name and
+without the importing module's resolved-module indices, which are private to
+the check that produced them.
+
+Method-owner identity is content identity, never a name. `MethodOwner` refers
+to a locally declared owner with a reserved self marker and to an imported
+owner with the env-local `ModuleIdentity.Idx` interned for that import's
+content hash when the drain resolves the receiver type. Cross-env method lookup
+joins on those identities (`lookupModuleIdentity` of the owner env's content
+hash in the candidate env, or the self marker when the candidate is the owner
+env); it never spells an owner module's name and looks the text up in another
+env's ident store.
+
+The package-qualified display identity of a module (`app.main`, `pf.Stdout`)
+is workspace information. It is recorded on the env after canonicalization, by
+the coordinator, for display and diagnostics only; no canonicalized data is
+keyed by it. Likewise the platform hosted transform (annotation-only
+declarations in platform modules becoming hosted lambdas) is workspace input
+applied to the env after the canonicalized-cache boundary, before the drain.
+
+### Canonicalization output cache
+
+The canonicalized module cache stores one module's parse-and-canonicalize
+output, keyed by the SHA-256 of exactly the inputs above: the module's source
+bytes, its module basename, the entry-module flag, the `Validation` mode, the
+module role, the compiler version string, and the cache entry format's version
+hash. Every variable-length input is length-prefixed, so no two different
+inputs can split into the same hash input. Nothing about imports, packages,
+shorthands, paths, or the root module participates, and the key input type has
+no field that could express one, so an entry stays valid when any other module
+changes and is shared by identical modules in different packages, directories,
+or workspaces.
+
+An entry holds two bodies behind one header (magic, entry-version hash, the
+key, and both body lengths):
+
+- the serialized `ModuleEnv` exactly as canonicalization left it, which carries
+  its diagnostics, import store, deferred import worklist, file-dependency
+  records, and method tables;
+- the parse-stage record: the module's tokenizer and parser diagnostics, each
+  reduced to the stage, tag, byte region, and found-token tag its report
+  renders from, plus the parser's own import inventory (each local import's
+  spelling, base, and parent count, and each package-qualified import name).
+  The parse stage produces these source-local records in the AST rather than in
+  the env, and a hit has no AST, so they are encoded explicitly, field by
+  field, and decoded the same way. Nothing is re-parsed to recover them.
+
+Location-dependent import normalization is deliberately absent from an entry:
+an import's package-root-relative module name depends on the importing module's
+logical path and its filesystem path depends on the package root, and neither
+is a canonicalization input. The parse task normalizes the record's spellings
+against its own task inputs on a hit exactly as it does on a miss.
+
+The parse task probes this cache after reading the source and before parsing. A
+hit loads the env into fully owned, growable storage (every store copied, the
+identifier interner and module-identity table reopened for insertion, the
+string-literal builder rebuilt from the loaded store's own entries, and the node
+store given its scratch) because the drain patches nodes in place and appends
+nodes, diagnostics, identifiers, string literals, method rows, and module
+identities, and checking then grows types and regions. A hit then reads the
+module's file imports and renders both the parse-stage and canonicalization
+reports, and the coordinator handles it as a parse result followed by a
+canonicalized result, through the same two steps a miss takes. A miss parses,
+canonicalizes, and stores the entry before the env leaves the canonicalize task.
+A corrupt, truncated, stale, or misaligned entry is a miss.
+
+Cache state never changes compiler output: a warm, cold, or disabled
+canonicalized cache yields identical diagnostics, identical checked data, and
+identical checked cache keys.
+
+The checked-module cache is unchanged in role: it stores the fully checked
+module after the drain, keyed by content identity and the direct imports'
+checked-module cache keys, and is probed once the direct imports are complete. A
+checked hit makes the drain unnecessary; a canonicalized hit makes parsing
+unnecessary.
+
+A module's file imports are part of its source-input identity. They are read
+in the canonicalize task, after the canonicalized-cache entry is stored and
+before the module leaves that task, so every module's source-input identity is
+complete by the time the checked cache is probed.
+
+### Coordinator phases
+
+`Parse` (probe the canonicalized cache; on a hit load the env, read the file
+imports, and skip straight to the canonicalized result; on a miss parse) →
+canonicalization (enqueued as soon as the parse result is handled, never
+waiting on an import; canonicalize, store the entry, then read the file imports
+before the module leaves the task) → `WaitingOnImports` (canonicalized, waiting
+for every direct import to complete) → `WaitingOnPlatformRequirements` (app
+roots only) → `TypeCheck` (compute content identity, probe checked cache, on
+miss drain the worklist then check) → `Done`. No phase before
+`WaitingOnImports` depends on any other module. The package-qualified display
+identity is recorded on the env when the canonicalized result is handled,
+before the hosted transform, on a cache hit exactly as on a miss.
+
 ## Cache Boundary
 
 Reusable modules and exact platform/app compositions are distinct checked cache
@@ -2340,6 +2592,8 @@ remain borrowed.
 Unchanged columns borrow the exact platform identified by the key. Only a
 completed composition without diagnostics may be cached; a hit consumes its
 stored outcomes and replays its recorded debug observations without evaluation.
+The canonicalized module cache is a separate, non-checked boundary; the rules
+below bind the checked module and composition caches.
 Checked module cache entries are trusted compiler-produced cache entries, not
 adversarial inputs. Cache reads validate only the cache header,
 entry-version hash, key, serialized layout, and ordinary binary decoding. They must
@@ -2372,10 +2626,19 @@ It has no insert API and no dedup index.
 Fresh construction uses `StringLiteral.Builder` state paired with a `Store`.
 That state may live in a wrapper or in the build owner that owns the store, but
 it is always transient. The builder index is never serialized, never stored in
-LirImage, and never rebuilt on a cache hit. If a later phase needs a mutable
-string-literal builder, it must request an explicit fresh builder from source
-data or another builder-owned input; it must not reopen a cached store on the
-normal cache path.
+LirImage, and never rebuilt on a checked-cache hit. If a later phase needs a
+mutable string-literal builder, it must request an explicit fresh builder from
+source data or another builder-owned input; it must not reopen a cached store on
+the checked cache path.
+
+The canonicalized module cache is the one place that does reopen a loaded
+store, because its entry is not checked data: the module it loads still has its
+file imports to read, its deferred import worklist to drain, and its types to
+solve, and each of those appends string literals. Its load builds a fresh
+builder index by registering the entries the loaded store already holds, in
+entry order. Each of those entries was deduped when it was appended, so the
+rebuilt index is the one the appends built, and an insert after a hit returns
+the same `StringLiteral.Idx` it returns after a miss.
 
 The byte interning algorithm has one owner shared by identifier names, checked
 name stores, and string-literal builders. Storage policies own only id encoding,
