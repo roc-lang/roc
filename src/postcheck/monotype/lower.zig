@@ -4122,6 +4122,7 @@ const Builder = struct {
                 .evidence = entry.evidence,
                 .provisional_ty = committed[index * 2],
                 .summary_ty = committed[index * 2 + 1],
+                .open = entry.open,
             });
         }
     }
@@ -17928,6 +17929,11 @@ const InterfaceSummaryEntry = struct {
     evidence: StoredConstFnEvidence,
     provisional_ty: Type.TypeId,
     summary_ty: Type.TypeId,
+    /// The representative still had open leaves (beyond undetermined field
+    /// kinds) when this summary was taken, so the view defaulted them: an
+    /// open request must not read it, since a fresh expansion would leave
+    /// the request's own leaves open where this view would close them.
+    open: bool,
 };
 
 const InterfaceSummaryCache = struct {
@@ -17983,6 +17989,8 @@ const InterfaceReplayEntry = struct {
     /// the complete transitive interface constraints.
     summary_ty: ?Type.TypeId = null,
     status: InterfaceReplayStatus = .expanding,
+    /// See `InterfaceSummaryEntry.open`.
+    open: bool = false,
 };
 
 const InterfaceReplayState = struct {
@@ -22646,13 +22654,13 @@ const BodyContext = struct {
         return &workspace.interface_summaries;
     }
 
-    fn findInterfaceSummary(self: *BodyContext, address: InterfaceReplayAddress, evidence: StoredConstFnEvidence, provisional_ty: Type.TypeId) Allocator.Error!?struct { ty: Type.TypeId, coordinator: bool } {
+    fn findInterfaceSummary(self: *BodyContext, address: InterfaceReplayAddress, evidence: StoredConstFnEvidence, provisional_ty: Type.TypeId) Allocator.Error!?struct { ty: Type.TypeId, coordinator: bool, open: bool } {
         const local = self.interfaceSummaryCache();
         if (local.buckets.get(address)) |candidates| for (candidates.items) |index| {
             const entry = local.entries.items[index];
             if (storedConstFnEvidenceEql(entry.evidence, evidence) and
                 try self.typeStore().typeEql(self.nameStore(), entry.provisional_ty, provisional_ty))
-                return .{ .ty = entry.summary_ty, .coordinator = false };
+                return .{ .ty = entry.summary_ty, .coordinator = false, .open = entry.open };
         };
         if (self.builder.coordinator_interface_summaries) |published| {
             var candidates = published.get(address, self.builder.coordinator_interface_summary_end);
@@ -22666,8 +22674,9 @@ const BodyContext = struct {
                     .evidence = evidence,
                     .provisional_ty = request,
                     .summary_ty = summary,
+                    .open = entry.open,
                 });
-                return .{ .ty = summary, .coordinator = true };
+                return .{ .ty = summary, .coordinator = true, .open = entry.open };
             }
             return null;
         }
@@ -22684,8 +22693,9 @@ const BodyContext = struct {
                 .evidence = evidence,
                 .provisional_ty = request,
                 .summary_ty = summary,
+                .open = entry.open,
             });
-            return .{ .ty = summary, .coordinator = true };
+            return .{ .ty = summary, .coordinator = true, .open = entry.open };
         };
         return null;
     }
@@ -22758,15 +22768,18 @@ const BodyContext = struct {
 
         // The provisional view keys a request with its open leaves already
         // defaulted, so an open request and its defaulted counterpart share
-        // one address. Replaying a finished summary onto an open request
-        // would then close those leaves in the live graph, where a fresh
-        // expansion leaves them open, and every later reading of the same
-        // cells (dispatch evidence above all) would differ from a reading
-        // taken before the replay. Only a settled request reads a summary;
-        // an open one expands its callee's relations against its live cells.
+        // one address. A summary whose own representative still had open
+        // leaves defaulted them in the view; replaying it onto an open
+        // request would close the request's leaves in the live graph, where
+        // a fresh expansion leaves them open, and every later reading of the
+        // same cells (dispatch evidence above all) would differ from a
+        // reading taken before the replay. An open request therefore reads
+        // only summaries taken from settled representatives, whose every
+        // position a fresh expansion would close identically, and otherwise
+        // expands its callee's relations against its live cells.
         // Undetermined field-kind cells are the one open part a view keeps
         // explicit, and every duplicate instantiates them afresh, so they do
-        // not make a request open here.
+        // not make a request or a summary open here.
         const request_settled = try self.graph.typeIsSpecializationDefaultable(request_fn_node);
         if (!request_settled) self.builder.count("interface_replay_open_requests");
 
@@ -22781,7 +22794,10 @@ const BodyContext = struct {
             {
                 continue;
             }
-            if (entry.status == .ready and !request_settled) continue;
+            if (entry.status == .ready and entry.open and !request_settled) {
+                self.builder.count("interface_replay_unfaithful_skips");
+                continue;
+            }
             self.builder.count("interface_replay_hits");
             switch (entry.status) {
                 .expanding => try relateFunctionRequestInterface(
@@ -22808,8 +22824,11 @@ const BodyContext = struct {
         var verify_summary: ?Type.TypeId = null;
         const saved_use_summaries = replay_state.use_finished_summaries;
         defer replay_state.use_finished_summaries = saved_use_summaries;
-        if (replay_state.use_finished_summaries and request_settled) {
+        if (replay_state.use_finished_summaries) {
             if (try self.findInterfaceSummary(address, stored_evidence, provisional_ty)) |hit| {
+                if (hit.open and !request_settled) {
+                    self.builder.count("interface_replay_unfaithful_skips");
+                } else {
                 self.builder.count("interface_summary_hits");
                 // Detailed diagnostics in safety builds audit the first 16
                 // cross-lane hits by independently expanding checked relations.
@@ -22823,6 +22842,7 @@ const BodyContext = struct {
                 } else {
                     try relateFunctionRequestInterface(self.graph, try self.graph.instantiateProvisionalTypeView(hit.ty), request_fn_node);
                     return;
+                }
                 }
             }
         }
@@ -22885,6 +22905,7 @@ const BodyContext = struct {
             replay_state,
         );
         const entry = &replay_state.entries.items[replay_index];
+        entry.open = !try self.graph.typeIsSpecializationDefaultable(entry.representative);
         entry.summary_ty = try self.graph.provisionalTypeViewForNode(entry.representative);
         entry.status = .ready;
         const summary_ty = entry.summary_ty.?;
@@ -22895,7 +22916,8 @@ const BodyContext = struct {
                 Common.compilerBug("cached interface summary disagreed with fresh checked relation expansion");
             }
         }
-        if (saved_use_summaries and request_settled) {
+        if (saved_use_summaries) {
+            const summary_open = entry.open;
             const cache = self.interfaceSummaryCache();
             if (self.typeStore() == &self.builder.program.types) {
                 // On the coordinator both views were materialized outside any
@@ -22907,6 +22929,7 @@ const BodyContext = struct {
                     .evidence = stored_evidence,
                     .provisional_ty = provisional_ty,
                     .summary_ty = summary_ty,
+                    .open = summary_open,
                 });
             } else {
                 var sealer = GraphTypeFinals.initRetainedTypeView(self.graph);
@@ -22918,6 +22941,7 @@ const BodyContext = struct {
                     .evidence = stored_evidence,
                     .provisional_ty = durable_request,
                     .summary_ty = durable_summary,
+                    .open = summary_open,
                 });
             }
         }

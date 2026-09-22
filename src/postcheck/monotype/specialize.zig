@@ -70,6 +70,9 @@ pub const Counters = struct {
     /// Requests whose graph type still had open leaves when their callee
     /// interface was related, so they expanded instead of reading a summary.
     interface_replay_open_requests: u64 = 0,
+    /// Memo hits an open request declined because the summary's own
+    /// representative had defaulted open leaves.
+    interface_replay_unfaithful_skips: u64 = 0,
     exact_type_checks: u64 = 0,
     /// Declaration-backed nominal backings served from the per-graph
     /// instantiation cache. Reuse compares argument cells by union-find root,

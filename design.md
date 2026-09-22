@@ -9175,13 +9175,15 @@ never share an entry. Work is therefore proportional to relation sites plus
 unique exact provisional requests, rather than to the number of duplicate call
 paths through the same interface problem.
 
-Only a settled request reads or publishes a memo entry or a retained summary:
-the provisional view defaults a request's open leaves, so an open request and
-its defaulted counterpart share one address, and replaying a finished summary
-onto the open request would close those leaves in the live graph where a fresh
-expansion leaves them open. An open request expands its callee's relations
-against its live cells; a still-active representative remains a recursive edge
-for every equivalent request.
+The provisional view defaults a request's open leaves, so an open request and
+its defaulted counterpart share one address. Every entry records whether its
+representative still had open leaves when the summary was taken. A request
+with open leaves reads only summaries taken from settled representatives,
+whose every position a fresh expansion would close identically; replaying a
+summary with defaulted leaves onto it would close the request's own leaves in
+the live graph where a fresh expansion leaves them open, so such a request
+expands its callee's relations against its live cells instead. A still-active
+representative remains a recursive edge for every equivalent request.
 
 Completed interface summaries are retained across bodies by that same exact
 address. The coordinator owns interned request and summary types in the
