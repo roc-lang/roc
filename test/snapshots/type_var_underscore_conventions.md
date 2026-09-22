@@ -30,7 +30,9 @@ main = |x| "done"
 ~~~
 # EXPECTED
 UNUSED VARIABLE - type_var_underscore_conventions.md:5:15:5:16
+TYPE VARIABLE STARTING WITH DOLLAR - type_var_underscore_conventions.md:8:24:8:29
 UNUSED VARIABLE - type_var_underscore_conventions.md:9:20:9:24
+TYPE VARIABLE STARTING WITH DOLLAR - type_var_underscore_conventions.md:12:21:12:25
 UNUSED VARIABLE - type_var_underscore_conventions.md:13:17:13:18
 UNUSED VARIABLE - type_var_underscore_conventions.md:17:17:17:18
 UNUSED VARIABLE - type_var_underscore_conventions.md:22:9:22:10
@@ -54,6 +56,26 @@ TYPE MISMATCH - type_var_underscore_conventions.md:9:26:9:35
 			(source-region (file "type_var_underscore_conventions.md") (start 5 15) (end 5 16) (annotation error) (line-text "single_use = |x| \"hello\""))))
 	(report
 		(severity warning)
+		(title "Type Variable Starting With Dollar")
+		(region (start 8 24) (end 8 29))
+		(headline
+			(reflow "The type variable ")
+			(annotated code "$elem")
+			(reflow " starts with ")
+			(annotated code "$")
+			(reflow "."))
+		(document
+			(source-region (file "type_var_underscore_conventions.md") (start 8 24) (end 8 29) (annotation error) (line-text "starting_dollar : List($elem) -> $elem"))
+			(line-break)
+			(reflow "The ")
+			(annotated code "$")
+			(reflow " prefix is only for variables declared with ")
+			(annotated keyword "var")
+			(reflow ", and type variables can never be reassigned. Rename it to ")
+			(annotated code "elem")
+			(reflow " instead.")))
+	(report
+		(severity warning)
 		(title "Unused Variable")
 		(region (start 9 20) (end 9 24))
 		(headline
@@ -66,6 +88,26 @@ TYPE MISMATCH - type_var_underscore_conventions.md:9:26:9:35
 			(reflow " to suppress this warning.")
 			(line-break)
 			(source-region (file "type_var_underscore_conventions.md") (start 9 20) (end 9 24) (annotation error) (line-text "starting_dollar = |list| \"default\""))))
+	(report
+		(severity warning)
+		(title "Type Variable Starting With Dollar")
+		(region (start 12 21) (end 12 25))
+		(headline
+			(reflow "The type variable ")
+			(annotated code "$bad")
+			(reflow " starts with ")
+			(annotated code "$")
+			(reflow "."))
+		(document
+			(source-region (file "type_var_underscore_conventions.md") (start 12 21) (end 12 25) (annotation error) (line-text "combo_single : List($bad) -> Str"))
+			(line-break)
+			(reflow "The ")
+			(annotated code "$")
+			(reflow " prefix is only for variables declared with ")
+			(annotated keyword "var")
+			(reflow ", and type variables can never be reassigned. Rename it to ")
+			(annotated code "bad")
+			(reflow " instead.")))
 	(report
 		(severity warning)
 		(title "Unused Variable")

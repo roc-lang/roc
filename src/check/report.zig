@@ -56,6 +56,7 @@ const NonExhaustiveMatch = problem_mod.NonExhaustiveMatch;
 const NonExhaustiveDestructure = problem_mod.NonExhaustiveDestructure;
 const RedundantPattern = problem_mod.RedundantPattern;
 const UnmatchablePattern = problem_mod.UnmatchablePattern;
+const MatchAltBinderMissing = problem_mod.MatchAltBinderMissing;
 const UnreachableCode = problem_mod.UnreachableCode;
 const ComptimeUnusedBranch = problem_mod.ComptimeUnusedBranch;
 const ComptimeCondition = problem_mod.ComptimeCondition;
@@ -1097,6 +1098,7 @@ pub const ReportBuilder = struct {
             .redundant_pattern => |data| return self.buildRedundantPatternReport(data),
             .redundant_open_tag_union => |data| return self.buildRedundantOpenTagUnionReport(data),
             .unmatchable_pattern => |data| return self.buildUnmatchablePatternReport(data),
+            .match_alt_binder_missing => |data| return self.buildMatchAltBinderMissingReport(data),
             .unreachable_code => |data| return self.buildUnreachableCodeReport(data),
             .comptime_unused_branch => |data| return self.buildComptimeUnusedBranchReport(data),
             .comptime_condition => |data| return self.buildComptimeConditionReport(data),
@@ -1266,19 +1268,28 @@ pub const ReportBuilder = struct {
     /// Build a report for if branch type mismatch
     fn buildIfBranchReport(self: *Self, types: TypePair, ctx: Context.IfBranchContext) Allocator.Error!Report {
         const branch_index = ctx.branch_index + 1;
+        // The first branch has no previous branches, so a mismatch there is
+        // against the type the whole `if` is expected to have.
+        const is_first = ctx.branch_index == 0;
         return try self.makeMismatchReport(
             .{ .simple = regionIdxFrom(types.actual_var) },
-            &.{
+            if (is_first) &.{
+                D.bytes("The first branch of this"),
+                D.bytes("if").withAnnotation(.inline_code),
+                D.bytes("does not have the type this"),
+                D.bytes("if").withAnnotation(.inline_code),
+                D.bytes("is expected to have."),
+            } else &.{
                 D.bytes("The"),
                 D.num_ord(branch_index),
                 D.bytes("branch of this"),
                 D.bytes("if").withAnnotation(.inline_code),
                 D.bytes("does not match the previous"),
-                if (ctx.num_branches > 2)
+                if (ctx.branch_index > 1)
                     D.bytes("branches")
                 else
                     D.bytes("branch"),
-                D.bytes("."),
+                D.bytes(".").withNoPrecedingSpace(),
             },
             &.{
                 D.bytes("The"),
@@ -1286,9 +1297,13 @@ pub const ReportBuilder = struct {
                 D.bytes("branch is:"),
             },
             types.actual_snapshot,
-            &.{
+            if (is_first) &.{
+                D.bytes("But the"),
+                D.bytes("if").withAnnotation(.inline_code),
+                D.bytes("is expected to have the type:"),
+            } else &.{
                 D.bytes("But the previous"),
-                if (ctx.num_branches > 2)
+                if (ctx.branch_index > 1)
                     D.bytes("branches result")
                 else
                     D.bytes("branch results"),
@@ -1332,9 +1347,7 @@ pub const ReportBuilder = struct {
                 actual_parts,
                 types.actual_snapshot,
                 &.{
-                    D.bytes("But the expression between the"),
-                    D.bytes("match").withAnnotation(.inline_code),
-                    D.bytes("parenthesis has the type:"),
+                    D.bytes("But the value being matched on has the type:"),
                 },
                 types.expected_snapshot,
                 &.{
@@ -1383,9 +1396,7 @@ pub const ReportBuilder = struct {
                 actual_parts,
                 types.actual_snapshot,
                 &.{
-                    D.bytes("But the expression between the"),
-                    D.bytes("match").withAnnotation(.inline_code),
-                    D.bytes("parenthesis has the type:"),
+                    D.bytes("But the value being matched on has the type:"),
                 },
                 types.expected_snapshot,
                 &.{
@@ -1400,19 +1411,28 @@ pub const ReportBuilder = struct {
     /// Build a report for match branch type mismatch
     fn buildMatchBranchReport(self: *Self, types: TypePair, ctx: Context.MatchBranchContext) Allocator.Error!Report {
         const branch_index = ctx.branch_index + 1;
+        // The first branch has no previous branches, so a mismatch there is
+        // against the type the whole `match` is expected to have.
+        const is_first = ctx.branch_index == 0;
         return try self.makeMismatchReport(
             .{ .simple = regionIdxFrom(types.actual_var) },
-            &.{
+            if (is_first) &.{
+                D.bytes("The first branch of this"),
+                D.bytes("match").withAnnotation(.inline_code),
+                D.bytes("does not have the type this"),
+                D.bytes("match").withAnnotation(.inline_code),
+                D.bytes("is expected to have."),
+            } else &.{
                 D.bytes("The"),
                 D.num_ord(branch_index),
                 D.bytes("branch of this"),
                 D.bytes("match").withAnnotation(.inline_code),
                 D.bytes("does not match the previous"),
-                if (ctx.num_branches > 2)
+                if (ctx.branch_index > 1)
                     D.bytes("branches")
                 else
                     D.bytes("branch"),
-                D.bytes("."),
+                D.bytes(".").withNoPrecedingSpace(),
             },
             &.{
                 D.bytes("The"),
@@ -1420,9 +1440,13 @@ pub const ReportBuilder = struct {
                 D.bytes("branch is:"),
             },
             types.actual_snapshot,
-            &.{
+            if (is_first) &.{
+                D.bytes("But the"),
+                D.bytes("match").withAnnotation(.inline_code),
+                D.bytes("is expected to have the type:"),
+            } else &.{
                 D.bytes("But the previous"),
-                if (ctx.num_branches > 2)
+                if (ctx.branch_index > 1)
                     D.bytes("branches result")
                 else
                     D.bytes("branch results"),
@@ -1437,7 +1461,7 @@ pub const ReportBuilder = struct {
                 },
                 &.{
                     D.bytes("Note:").withAnnotation(.underline),
-                    D.bytes("You can wrap branches values in a tag to make them compatible."),
+                    D.bytes("You can wrap branch values in a tag to make them compatible."),
                 },
                 &.{
                     D.bytes("To learn about tags, see"),
@@ -3232,9 +3256,9 @@ pub const ReportBuilder = struct {
         var report = try Report.init(self.gpa, "Type Mismatch", "", .runtime_error);
         errdefer report.deinit();
         try D.renderSliceInto(&.{
-            D.bytes("This record does not have a"),
+            D.bytes("This record does not have a field named"),
             D.ident(field_name).withAnnotation(.inline_code),
-            D.bytes("field."),
+            D.bytes(".").withNoPrecedingSpace(),
         }, self, &report, &report.headline);
 
         // Add source highlight
@@ -3693,9 +3717,9 @@ pub const ReportBuilder = struct {
                 return try self.makeCustomReport(
                     region,
                     &.{
-                        D.bytes("This record does not have a"),
+                        D.bytes("This record does not have a field named"),
                         D.ident(ctx.field_name).withAnnotation(.inline_code),
-                        D.bytes("field."),
+                        D.bytes(".").withNoPrecedingSpace(),
                     },
                     &.{
                         &.{D.bytes("It is actually a record with no fields.")},
@@ -3767,13 +3791,13 @@ pub const ReportBuilder = struct {
                     if (ctx.record_name) |record_name| &.{
                         D.bytes("The"),
                         D.ident(record_name).withAnnotation(.inline_code),
-                        D.bytes("record does not have a"),
+                        D.bytes("record does not have a field named"),
                         D.ident(ctx.field_name).withAnnotation(.inline_code),
-                        D.bytes("field."),
+                        D.bytes(".").withNoPrecedingSpace(),
                     } else &.{
-                        D.bytes("This record does not have a"),
+                        D.bytes("This record does not have a field named"),
                         D.ident(ctx.field_name).withAnnotation(.inline_code),
-                        D.bytes("field."),
+                        D.bytes(".").withNoPrecedingSpace(),
                     },
                     &.{
                         &.{D.bytes("It is actually a record with no fields.")},
@@ -5250,6 +5274,35 @@ pub const ReportBuilder = struct {
 
         try D.renderSlice(&.{
             D.bytes("This pattern matches a type that has no possible values (an uninhabited type), so no value can ever match it."),
+        }, self, &report);
+
+        return report;
+    }
+
+    fn buildMatchAltBinderMissingReport(self: *Self, data: MatchAltBinderMissing) Allocator.Error!Report {
+        var report = try Report.init(self.gpa, "Name Not Bound In Every Alternative", "", .runtime_error);
+        errdefer report.deinit();
+        try D.renderSliceInto(&.{
+            D.bytes("The"),
+            D.num_ord(data.bound_pattern_index + 1),
+            D.bytes("pattern in the"),
+            D.num_ord(data.branch_index + 1),
+            D.bytes("branch of this"),
+            D.bytes("match").withAnnotation(.inline_code),
+            D.bytes("gives a value the name"),
+            D.ident(data.binder_ident).withAnnotation(.inline_code),
+            D.bytes(", but the").withNoPrecedingSpace(),
+            D.num_ord(data.missing_pattern_index + 1),
+            D.bytes("pattern does not."),
+        }, self, &report, &report.headline);
+
+        try self.addSourceHighlight(&report, regionIdxFrom(data.missing_pattern));
+        try report.document.addLineBreak();
+
+        try D.renderSlice(&.{
+            D.bytes("Every pattern separated by"),
+            D.bytes("|").withAnnotation(.inline_code),
+            D.bytes("in a branch must give values the same names, so the branch can use those names no matter which pattern matched."),
         }, self, &report);
 
         return report;
