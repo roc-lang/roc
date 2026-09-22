@@ -100,7 +100,7 @@ record_user = { name: "Sam", email: "sam@example.com", age: 30 }
 
 With the tuple, you have to remember that `tuple_user.1` is the email address, whereas with the
 record, you can write `record_user.email`. Records also have features that tuples don't, like
-[optional fields](records#optional-fields) and [record update syntax](records#record-update-syntax).
+[optional fields](records#optional-fields) and [record update syntax](records#updating-records).
 
 Tuples are most useful when the meaning of each position is obvious from context, and the
 group of values is small. Common examples include:

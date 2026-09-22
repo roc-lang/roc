@@ -254,7 +254,7 @@ The `as` keyword gives an additional name to something. It's used in a few place
 
 - In [imports](modules#renaming-imported-modules-with-as), `import json.Parser as JP` makes
   the imported type available under the name `JP` instead of `Parser`.
-- In [patterns](pattern-matching#naming-the-whole-value-with-as), `Ok(n) as result` matches
+- In [patterns](pattern-matching#nested-patterns-and-as), `Ok(n) as result` matches
   an `Ok` and names its payload `n`, and also names the whole matched value `result`.
 - In [list patterns](pattern-matching#list-patterns), `[first, .. as rest]` names the
   remaining elements of the list `rest`.
