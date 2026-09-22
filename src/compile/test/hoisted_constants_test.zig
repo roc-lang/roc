@@ -69,6 +69,7 @@ const HoistedConstantsTestError = std.mem.Allocator.Error ||
         StaticDataSymbolNotFound,
         TestExpectedEqual,
         TestUnexpectedResult,
+        UnexpectedLowLevel,
         UnsupportedBuiltinAnnotationOnly,
         UnsupportedHeader,
         UnsupportedTarget,
@@ -704,16 +705,16 @@ fn repeatedRecordListLirSize(comptime count: usize) HoistedConstantsTestError!us
     , .{count});
     return try lowerEchoApp(source, struct {
         fn inspect(result: *lir.Program.Result) HoistedConstantsTestError!usize {
-            // A list of copies of one record is its repeat loop, not bytes.
-            try std.testing.expectEqual(@as(usize, 0), result.static_data_values.items.len);
-            try expectLowLevelPresent(result, .list_with_capacity);
-            try expectLowLevelPresent(result, .list_append_unsafe);
+            // The folded table rides in static data at any element count.
+            try expectLowLevelAbsent(result, .list_with_capacity);
+            try expectLowLevelAbsent(result, .list_append_unsafe);
+            try std.testing.expect(result.static_data_values.items.len > 0);
             return try reachableStatementCount(result);
         }
     }.inspect);
 }
 
-test "a compile-time list of copies of one scalar lowers as its repeat loop" {
+test "a compile-time list of copies of one scalar is static data, not a per-read rebuild" {
     _ = try lowerEchoApp(
         \\app [main!] { pf: platform "./.roc_echo_platform/main.roc" }
         \\import pf.Echo
@@ -724,9 +725,11 @@ test "a compile-time list of copies of one scalar lowers as its repeat loop" {
         \\}
     , struct {
         fn inspect(result: *lir.Program.Result) HoistedConstantsTestError!usize {
-            try std.testing.expectEqual(@as(usize, 0), result.static_data_values.items.len);
-            try expectLowLevelPresent(result, .list_with_capacity);
-            try expectLowLevelPresent(result, .list_append_unsafe);
+            // The table rides in static data; reading it must not reserve and
+            // fill a fresh list.
+            try expectLowLevelAbsent(result, .list_with_capacity);
+            try expectLowLevelAbsent(result, .list_append_unsafe);
+            try std.testing.expect(result.static_data_values.items.len > 0);
             return 0;
         }
     }.inspect);
@@ -862,6 +865,12 @@ fn expectLowLevelPresent(result: *const lir.Program.Result, op: lir.LIR.LowLevel
         if (stmt == .assign_low_level and stmt.assign_low_level.op == op) return;
     }
     return error.StaticDataLiteralNotFound;
+}
+
+fn expectLowLevelAbsent(result: *const lir.Program.Result, op: lir.LIR.LowLevel) HoistedConstantsTestError!void {
+    for (result.store.getCFStmts()) |stmt| {
+        if (stmt == .assign_low_level and stmt.assign_low_level.op == op) return error.UnexpectedLowLevel;
+    }
 }
 
 fn expectIntLiteralPresent(result: *const lir.Program.Result, value: i128) HoistedConstantsTestError!void {

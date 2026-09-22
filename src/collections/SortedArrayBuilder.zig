@@ -408,6 +408,17 @@ pub fn SortedArrayBuilder(comptime K: type, comptime V: type) type {
                     .deduplicated = self.deduplicated,
                 };
             }
+
+            /// Deserialize into a SortedArrayBuilder that owns its entries.
+            /// The returned builder can be grown and must be released with `deinit`.
+            pub fn deserializeWithCopy(
+                self: *const Serialized,
+                base_addr: usize,
+                allocator: Allocator,
+            ) Allocator.Error!SortedArrayBuilder(K, V) {
+                const frozen = self.deserializeInto(base_addr);
+                return frozen.clone(allocator);
+            }
         };
     };
 }

@@ -377,6 +377,63 @@ pub const tests = [_]TestCase{
         .expected = .{ .inspect_str = "True" },
     },
     .{
+        .name = "low_level - F32 atan2 exact bits across backends",
+        .source =
+        \\{
+        \\    angle = |y, x, expected| F32.atan2({ x: F32.from_bits(x), y: F32.from_bits(y) }).to_bits() == expected
+        \\    angle(0, 0, 0)
+        \\    and angle(2147483648, 0, 2147483648)
+        \\    and angle(0, 2147483648, 1078530011)
+        \\    and angle(2147483648, 2147483648, 3226013659)
+        \\    and angle(1065353216, 1065353216, 1061752795)
+        \\    and angle(1065353216, 3212836864, 1075235812)
+        \\    and angle(3212836864, 1065353216, 3209236443)
+        \\    and angle(2139095040, 2139095040, 1061752795)
+        \\    and angle(2139095040, 4286578688, 1075235812)
+        \\    and angle(3212836864, 2139095040, 2147483648)
+        \\    and angle(2139095040, 1065353216, 1070141403)
+        \\    and angle(1, 1065353216, 1)
+        \\}
+        ,
+        .expected = .{ .inspect_str = "True" },
+    },
+    .{
+        .name = "low_level - F64 atan2 exact bits across backends",
+        .source =
+        \\{
+        \\    angle = |y, x, expected| F64.atan2({ x: F64.from_bits(x), y: F64.from_bits(y) }).to_bits() == expected
+        \\    angle(0, 0, 0)
+        \\    and angle(9223372036854775808, 0, 9223372036854775808)
+        \\    and angle(0, 9223372036854775808, 4614256656552045848)
+        \\    and angle(9223372036854775808, 9223372036854775808, 13837628693406821656)
+        \\    and angle(4607182418800017408, 4607182418800017408, 4605249457297304856)
+        \\    and angle(4607182418800017408, 13830554455654793216, 4612488097114038738)
+        \\    and angle(13830554455654793216, 4607182418800017408, 13828621494152080664)
+        \\    and angle(9218868437227405312, 9218868437227405312, 4605249457297304856)
+        \\    and angle(9218868437227405312, 18442240474082181120, 4612488097114038738)
+        \\    and angle(13830554455654793216, 9218868437227405312, 9223372036854775808)
+        \\    and angle(9218868437227405312, 4607182418800017408, 4609753056924675352)
+        \\    and angle(1, 4607182418800017408, 1)
+        \\}
+        ,
+        .expected = .{ .inspect_str = "True" },
+    },
+    .{
+        .name = "low_level - Dec atan2 axes quadrants and extreme ratio",
+        .source =
+        \\{
+        \\    angle = |x, y| Dec.atan2({ x, y })
+        \\    angle(0, 0) == 0
+        \\    and angle(-1, 0) == Dec.pi
+        \\    and (angle(1, 1) - Dec.pi / 4).abs() < 0.000000000000000064
+        \\    and (angle(-1, -1) + Dec.pi * 0.75).abs() < 0.000000000000000064
+        \\    and (angle(Dec.lowest, Dec.lowest) + Dec.pi * 0.75).abs() < 0.000000000000000064
+        \\    and (angle(0.000000000000000001, Dec.highest) - Dec.pi / 2).abs() < 0.000000000000000064
+        \\}
+        ,
+        .expected = .{ .inspect_str = "True" },
+    },
+    .{
         .name = "low_level - F32 transcendental exact bits agree across backends",
         .source =
         \\{

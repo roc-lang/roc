@@ -65,6 +65,7 @@ pub fn decBinaryArith(op: LowLevel) BuiltinFn {
         .{ LowLevel.num_div_by, BuiltinFn.dec_div },
         .{ LowLevel.num_div_trunc_by, BuiltinFn.dec_div_trunc },
         .{ LowLevel.num_pow, BuiltinFn.dec_pow },
+        .{ LowLevel.num_atan2, BuiltinFn.dec_atan2 },
     });
 }
 
@@ -334,4 +335,9 @@ pub fn rcHelper(helper: RcHelper, atomicity: RcAtomicity) BuiltinFn {
         .erased_callable_decref => if (single) BuiltinFn.erased_callable_decref_single_thread else BuiltinFn.erased_callable_decref,
         .erased_callable_free => .erased_callable_free,
     };
+}
+
+/// Float two-coordinate arctangent.
+pub fn floatAtan2(is_f32: bool) BuiltinFn {
+    return if (is_f32) .float_atan2_f32 else .float_atan2;
 }

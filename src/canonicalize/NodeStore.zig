@@ -21,7 +21,15 @@ const Ident = base.Ident;
 const NodeStore = @This();
 
 fn narrowNodeTag(comptime T: type, tag: Node.Tag) ?T {
-    return std.meta.stringToEnum(T, @tagName(tag));
+    const table = comptime blk: {
+        @setEvalBranchQuota(100_000);
+        var narrowed = std.EnumArray(Node.Tag, ?T).initFill(null);
+        for (std.enums.values(Node.Tag)) |t| {
+            if (@hasField(T, @tagName(t))) narrowed.set(t, @field(T, @tagName(t)));
+        }
+        break :blk narrowed;
+    };
+    return table.get(tag);
 }
 
 const LiteralNodeTag = enum {
@@ -69,6 +77,8 @@ const StatementNodeTag = enum {
 const ExprNodeTag = enum {
     expr_var,
     expr_external_lookup,
+    expr_deferred_import_ref,
+    expr_deferred_nominal_external,
     expr_associated_lookup_local,
     expr_associated_lookup,
     expr_associated_lookup_resolved,
@@ -141,6 +151,7 @@ const PatternNodeTag = enum {
     pattern_applied_tag,
     pattern_nominal,
     pattern_nominal_external,
+    pattern_deferred_import_ref,
     pattern_record_destructure,
     pattern_list,
     pattern_tuple,
@@ -819,13 +830,13 @@ pub fn relocate(store: *NodeStore, offset: isize) void {
 /// Count of the diagnostic nodes in the ModuleEnv
 pub const MODULEENV_DIAGNOSTIC_NODE_COUNT = 97;
 /// Count of the expression nodes in the ModuleEnv
-pub const MODULEENV_EXPR_NODE_COUNT = 58;
+pub const MODULEENV_EXPR_NODE_COUNT = 59;
 /// Count of the statement nodes in the ModuleEnv
 pub const MODULEENV_STATEMENT_NODE_COUNT = 21;
 /// Count of the type annotation nodes in the ModuleEnv
 pub const MODULEENV_TYPE_ANNO_NODE_COUNT = 12;
 /// Count of the pattern nodes in the ModuleEnv
-pub const MODULEENV_PATTERN_NODE_COUNT = 19;
+pub const MODULEENV_PATTERN_NODE_COUNT = 20;
 
 comptime {
     // Check the number of CIR.Diagnostic nodes
@@ -1456,6 +1467,24 @@ pub fn getExpr(store: *const NodeStore, expr: CIR.Expr.Idx) CIR.Expr {
                 .region = store.getRegionAt(node_idx),
             } };
         },
+        .expr_deferred_import_ref => {
+            const p = payload.expr_deferred_import_ref;
+            return CIR.Expr{ .e_deferred_import_ref = .{
+                .ref = @enumFromInt(p.ref),
+                .backing = null,
+            } };
+        },
+        .expr_deferred_nominal_external => {
+            const p = payload.expr_deferred_nominal_external;
+            const backing = store.span2_data.items.items[p.backing_span2_idx];
+            return CIR.Expr{ .e_deferred_import_ref = .{
+                .ref = @enumFromInt(p.ref),
+                .backing = .{
+                    .expr = @enumFromInt(backing.start),
+                    .ty = @enumFromInt(backing.len),
+                },
+            } };
+        },
         .expr_associated_lookup_local => {
             const p = payload.expr_associated_lookup_local;
             return CIR.Expr{ .e_lookup_associated_local = .{
@@ -2023,6 +2052,208 @@ pub fn replaceExprWithResolvedAssociatedLookup(
     store.nodes.set(node_idx, node);
 }
 
+/// Rewrites a deferred import reference expression into an external lookup.
+pub fn resolveDeferredExprToExternalLookup(
+    store: *NodeStore,
+    expr_idx: CIR.Expr.Idx,
+    module_idx: CIR.Import.Idx,
+    target_node_idx: u32,
+    ident_idx: Ident.Idx,
+) void {
+    const node_idx: Node.Idx = @enumFromInt(@intFromEnum(expr_idx));
+    var node = Node.init(.expr_external_lookup);
+    node.setPayload(.{ .expr_external_lookup = .{
+        .module_idx = @intFromEnum(module_idx),
+        .target_node_idx = target_node_idx,
+        .ident_idx = @bitCast(ident_idx),
+    } });
+    store.nodes.set(node_idx, node);
+}
+
+/// Rewrites a deferred file import into the text the file holds.
+pub fn resolveDeferredExprToStringSegment(
+    store: *NodeStore,
+    expr_idx: CIR.Expr.Idx,
+    literal: base.StringLiteral.Idx,
+) void {
+    const node_idx: Node.Idx = @enumFromInt(@intFromEnum(expr_idx));
+    var node = Node.init(.expr_string_segment);
+    node.setPayload(.{ .expr_string_segment = .{ .segment_idx = @intFromEnum(literal) } });
+    store.nodes.set(node_idx, node);
+}
+
+/// Rewrites a deferred file import into the raw bytes the file holds.
+pub fn resolveDeferredExprToBytesLiteral(
+    store: *NodeStore,
+    expr_idx: CIR.Expr.Idx,
+    literal: base.StringLiteral.Idx,
+) void {
+    const node_idx: Node.Idx = @enumFromInt(@intFromEnum(expr_idx));
+    var node = Node.init(.expr_bytes_literal);
+    node.setPayload(.{ .expr_string_segment = .{ .segment_idx = @intFromEnum(literal) } });
+    store.nodes.set(node_idx, node);
+}
+
+/// Rewrites a deferred import reference expression into an associated lookup
+/// on an imported type declaration.
+pub fn resolveDeferredExprToAssociatedLookup(
+    store: *NodeStore,
+    expr_idx: CIR.Expr.Idx,
+    module_idx: CIR.Import.Idx,
+    type_node_idx: u32,
+    type_ident: Ident.Idx,
+    item_ident: Ident.Idx,
+) void {
+    const node_idx: Node.Idx = @enumFromInt(@intFromEnum(expr_idx));
+    var node = Node.init(.expr_associated_lookup);
+    node.setPayload(.{ .expr_associated_lookup = .{
+        .module_idx = @intFromEnum(module_idx),
+        .type_node_idx = type_node_idx,
+        .type_ident = @bitCast(type_ident),
+        .item_ident = @bitCast(item_ident),
+    } });
+    store.nodes.set(node_idx, node);
+}
+
+/// Rewrites a deferred import reference expression into an imported nominal
+/// type applied to the backing expression the source wrote.
+pub fn resolveDeferredExprToNominalExternal(
+    store: *NodeStore,
+    expr_idx: CIR.Expr.Idx,
+    module_idx: CIR.Import.Idx,
+    target_node_idx: u32,
+    backing_expr: CIR.Expr.Idx,
+    backing_type: CIR.Expr.NominalBackingType,
+) Allocator.Error!void {
+    const node_idx: Node.Idx = @enumFromInt(@intFromEnum(expr_idx));
+    const backing_span2_idx: u32 = @intCast(store.span2_data.len());
+    _ = try store.span2_data.append(store.gpa, .{
+        .start = @intFromEnum(backing_expr),
+        .len = @intFromEnum(backing_type),
+    });
+    var node = Node.init(.expr_nominal_external);
+    node.setPayload(.{ .expr_nominal_external = .{
+        .module_idx = @intFromEnum(module_idx),
+        .target_node_idx = target_node_idx,
+        .backing_span2_idx = backing_span2_idx,
+    } });
+    store.nodes.set(node_idx, node);
+}
+
+/// Rewrites a deferred import reference pattern into an imported nominal type
+/// matched against the backing pattern the source wrote.
+pub fn resolveDeferredPatternToNominalExternal(
+    store: *NodeStore,
+    pattern_idx: CIR.Pattern.Idx,
+    module_idx: CIR.Import.Idx,
+    target_node_idx: u32,
+    backing_pattern: CIR.Pattern.Idx,
+    backing_type: CIR.Expr.NominalBackingType,
+) Allocator.Error!void {
+    const node_idx: Node.Idx = @enumFromInt(@intFromEnum(pattern_idx));
+    const backing_span2_idx: u32 = @intCast(store.span2_data.len());
+    _ = try store.span2_data.append(store.gpa, .{
+        .start = @intFromEnum(backing_pattern),
+        .len = @intFromEnum(backing_type),
+    });
+    var node = Node.init(.pattern_nominal_external);
+    node.setPayload(.{ .pattern_nominal_external = .{
+        .module_idx = @intFromEnum(module_idx),
+        .target_node_idx = target_node_idx,
+        .backing_span2_idx = backing_span2_idx,
+    } });
+    store.nodes.set(node_idx, node);
+}
+
+/// Rewrites the pending base of a type-annotation lookup (`ty_lookup`) into
+/// the external declaration the drain resolved it to.
+pub fn resolveDeferredTypeAnnoLookupBase(
+    store: *NodeStore,
+    anno_idx: CIR.TypeAnno.Idx,
+    module_idx: CIR.Import.Idx,
+    target_node_idx: u32,
+) void {
+    const node_idx: Node.Idx = @enumFromInt(@intFromEnum(anno_idx));
+    var node = store.nodes.get(node_idx);
+    var p = node.getPayload().ty_lookup;
+    store.span2_data.items.items[p.base_span2_idx] = .{
+        .start = @intFromEnum(module_idx),
+        .len = target_node_idx,
+    };
+    p.base = @intFromEnum(CIR.TypeAnno.LocalOrExternal.Tag.external);
+    node.setPayload(.{ .ty_lookup = p });
+    store.nodes.set(node_idx, node);
+}
+
+/// Rewrites the pending base of a type-annotation application (`ty_apply`)
+/// into the external declaration the drain resolved it to.
+pub fn resolveDeferredTypeAnnoApplyBase(
+    store: *NodeStore,
+    anno_idx: CIR.TypeAnno.Idx,
+    module_idx: CIR.Import.Idx,
+    target_node_idx: u32,
+) void {
+    const node_idx: Node.Idx = @enumFromInt(@intFromEnum(anno_idx));
+    const node = store.nodes.get(node_idx);
+    const p = node.getPayload().ty_apply;
+    const apply_data = &store.type_apply_data.items.items[p.type_apply_data_idx];
+    apply_data.base_tag = @intFromEnum(CIR.TypeAnno.LocalOrExternal.Tag.external);
+    apply_data.value1 = @intFromEnum(module_idx);
+    apply_data.value2 = target_node_idx;
+}
+
+/// Rewrites the pending base of a type-annotation lookup (`ty_lookup`) into a
+/// declaration in the module the drain reached by following an exposed alias.
+pub fn resolveDeferredTypeAnnoLookupBaseIdentity(
+    store: *NodeStore,
+    anno_idx: CIR.TypeAnno.Idx,
+    module_identity: base.ModuleIdentity.Idx,
+    target_node_idx: u32,
+) void {
+    const node_idx: Node.Idx = @enumFromInt(@intFromEnum(anno_idx));
+    var node = store.nodes.get(node_idx);
+    var p = node.getPayload().ty_lookup;
+    store.span2_data.items.items[p.base_span2_idx] = .{
+        .start = @intFromEnum(module_identity),
+        .len = target_node_idx,
+    };
+    p.base = @intFromEnum(CIR.TypeAnno.LocalOrExternal.Tag.external_identity);
+    node.setPayload(.{ .ty_lookup = p });
+    store.nodes.set(node_idx, node);
+}
+
+/// Rewrites the pending base of a type-annotation application (`ty_apply`)
+/// into a declaration in the module the drain reached by following an exposed
+/// alias.
+pub fn resolveDeferredTypeAnnoApplyBaseIdentity(
+    store: *NodeStore,
+    anno_idx: CIR.TypeAnno.Idx,
+    module_identity: base.ModuleIdentity.Idx,
+    target_node_idx: u32,
+) void {
+    const node_idx: Node.Idx = @enumFromInt(@intFromEnum(anno_idx));
+    const node = store.nodes.get(node_idx);
+    const p = node.getPayload().ty_apply;
+    const apply_data = &store.type_apply_data.items.items[p.type_apply_data_idx];
+    apply_data.base_tag = @intFromEnum(CIR.TypeAnno.LocalOrExternal.Tag.external_identity);
+    apply_data.value1 = @intFromEnum(module_identity);
+    apply_data.value2 = target_node_idx;
+}
+
+/// Replaces a type annotation with a runtime error node in place.
+pub fn replaceTypeAnnoWithRuntimeError(
+    store: *NodeStore,
+    anno_idx: CIR.TypeAnno.Idx,
+    diagnostic_idx: CIR.Diagnostic.Idx,
+) void {
+    const node_idx: Node.Idx = @enumFromInt(@intFromEnum(anno_idx));
+    var node = Node.init(.ty_malformed);
+    node.setPayload(.{ .ty_malformed = .{
+        .diagnostic = @intFromEnum(diagnostic_idx),
+    } });
+    store.nodes.set(node_idx, node);
+}
+
 /// Replaces an existing expression with an e_tuple expression in-place.
 /// This is used for constant folding tuples during compile-time evaluation.
 /// The elem_indices slice contains the indices of the tuple element expressions.
@@ -2473,6 +2704,15 @@ pub fn getPattern(store: *const NodeStore, pattern_idx: CIR.Pattern.Idx) CIR.Pat
                 },
             };
         },
+        .pattern_deferred_import_ref => {
+            const p = payload.pattern_deferred_import_ref;
+            const backing = store.span2_data.items.items[p.backing_span2_idx];
+            return CIR.Pattern{ .deferred_import_ref = .{
+                .ref = @enumFromInt(p.ref),
+                .backing_pattern = @enumFromInt(backing.start),
+                .backing_type = @enumFromInt(backing.len),
+            } };
+        },
         .pattern_record_destructure => {
             const p = payload.pattern_record_destructure;
             return CIR.Pattern{
@@ -2612,9 +2852,13 @@ pub fn getTypeAnno(store: *const NodeStore, typeAnno: CIR.TypeAnno.Idx) CIR.Type
                     .module_idx = @enumFromInt(apply_data.value1),
                     .target_node_idx = @intCast(apply_data.value2),
                 } },
+                .external_identity => .{ .external_identity = .{
+                    .module_identity = @enumFromInt(apply_data.value1),
+                    .target_node_idx = apply_data.value2,
+                } },
                 .pending => .{ .pending = .{
                     .module_idx = @enumFromInt(apply_data.value1),
-                    .type_name = @bitCast(apply_data.value2),
+                    .ref = @enumFromInt(apply_data.value2),
                 } },
             };
 
@@ -2648,9 +2892,13 @@ pub fn getTypeAnno(store: *const NodeStore, typeAnno: CIR.TypeAnno.Idx) CIR.Type
                     .module_idx = @enumFromInt(base_data.start),
                     .target_node_idx = @intCast(base_data.len),
                 } },
+                .external_identity => .{ .external_identity = .{
+                    .module_identity = @enumFromInt(base_data.start),
+                    .target_node_idx = base_data.len,
+                } },
                 .pending => .{ .pending = .{
                     .module_idx = @enumFromInt(base_data.start),
-                    .type_name = @bitCast(base_data.len),
+                    .ref = @enumFromInt(base_data.len),
                 } },
             };
 
@@ -2808,7 +3056,8 @@ pub fn getExposedItem(store: *const NodeStore, exposedItem: CIR.ExposedItem.Idx)
             return CIR.ExposedItem{
                 .name = @bitCast(p.name),
                 .alias = if (p.alias == 0) null else @bitCast(p.alias),
-                .is_wildcard = p.is_wildcard != 0,
+                .is_wildcard = p.flags & 1 != 0,
+                .kind = @enumFromInt((p.flags >> 1) & 1),
             };
         },
     }
@@ -3065,6 +3314,25 @@ pub fn addExpr(store: *NodeStore, expr: CIR.Expr, region: base.Region) Allocator
                 .target_node_idx = e.target_node_idx,
                 .ident_idx = @bitCast(e.ident_idx),
             } });
+        },
+        .e_deferred_import_ref => |e| {
+            if (e.backing) |backing| {
+                node.tag = .expr_deferred_nominal_external;
+                const backing_span2_idx: u32 = @intCast(store.span2_data.len());
+                _ = try store.span2_data.append(store.gpa, .{
+                    .start = @intFromEnum(backing.expr),
+                    .len = @intFromEnum(backing.ty),
+                });
+                node.setPayload(.{ .expr_deferred_nominal_external = .{
+                    .ref = @intFromEnum(e.ref),
+                    .backing_span2_idx = backing_span2_idx,
+                } });
+            } else {
+                node.tag = .expr_deferred_import_ref;
+                node.setPayload(.{ .expr_deferred_import_ref = .{
+                    .ref = @intFromEnum(e.ref),
+                } });
+            }
         },
         .e_lookup_associated_local => |e| {
             node.tag = .expr_associated_lookup_local;
@@ -3763,6 +4031,18 @@ pub fn addPattern(store: *NodeStore, pattern: CIR.Pattern, region: base.Region) 
                 .backing_span2_idx = backing_span2_idx,
             } });
         },
+        .deferred_import_ref => |p| {
+            node.tag = .pattern_deferred_import_ref;
+            const backing_span2_idx: u32 = @intCast(store.span2_data.len());
+            _ = try store.span2_data.append(store.gpa, .{
+                .start = @intFromEnum(p.backing_pattern),
+                .len = @intFromEnum(p.backing_type),
+            });
+            node.setPayload(.{ .pattern_deferred_import_ref = .{
+                .ref = @intFromEnum(p.ref),
+                .backing_span2_idx = backing_span2_idx,
+            } });
+        },
         .record_destructure => |p| {
             node.tag = .pattern_record_destructure;
             node.setPayload(.{ .pattern_record_destructure = .{
@@ -3911,11 +4191,17 @@ pub fn addTypeAnno(store: *NodeStore, typeAnno: CIR.TypeAnno, region: base.Regio
                     .value1 = @intFromEnum(ext.module_idx),
                     .value2 = @intCast(ext.target_node_idx),
                 },
+                .external_identity => |ext| .{
+                    .args_len = a.args.span.len,
+                    .base_tag = @intFromEnum(CIR.TypeAnno.LocalOrExternal.Tag.external_identity),
+                    .value1 = @intFromEnum(ext.module_identity),
+                    .value2 = ext.target_node_idx,
+                },
                 .pending => |pend| .{
                     .args_len = a.args.span.len,
                     .base_tag = @intFromEnum(CIR.TypeAnno.LocalOrExternal.Tag.pending),
                     .value1 = @intFromEnum(pend.module_idx),
-                    .value2 = @bitCast(pend.type_name),
+                    .value2 = @intFromEnum(pend.ref),
                 },
             };
             _ = try store.type_apply_data.append(store.gpa, apply_data);
@@ -3956,9 +4242,13 @@ pub fn addTypeAnno(store: *NodeStore, typeAnno: CIR.TypeAnno, region: base.Regio
                     .start = @intFromEnum(ext.module_idx),
                     .len = @intCast(ext.target_node_idx),
                 },
+                .external_identity => |ext| .{
+                    .start = @intFromEnum(ext.module_identity),
+                    .len = ext.target_node_idx,
+                },
                 .pending => |pend| .{
                     .start = @intFromEnum(pend.module_idx),
-                    .len = @bitCast(pend.type_name),
+                    .len = @intFromEnum(pend.ref),
                 },
             };
             _ = try store.span2_data.append(store.gpa, base_data);
@@ -4275,7 +4565,7 @@ pub fn addExposedItem(store: *NodeStore, exposedItem: CIR.ExposedItem, region: b
     node.setPayload(.{ .exposed_item = .{
         .name = @bitCast(exposedItem.name),
         .alias = if (exposedItem.alias) |alias| @bitCast(alias) else 0,
-        .is_wildcard = @intFromBool(exposedItem.is_wildcard),
+        .flags = @as(u32, @intFromBool(exposedItem.is_wildcard)) | (@as(u32, @intFromEnum(exposedItem.kind)) << 1),
     } });
 
     const nid = try store.nodes.append(store.gpa, node);
@@ -6454,6 +6744,45 @@ pub const Serialized = extern struct {
             .index_data = self.index_data.deserializeInto(base_addr),
             .scratch = null,
         };
+    }
+
+    /// Deserialize into a NodeStore that owns every list it holds and carries
+    /// its own scratch buffers, so later compilation stages may append nodes,
+    /// regions, and extra data to it. `deinit` releases it exactly like a
+    /// freshly constructed `NodeStore`.
+    pub fn deserializeOwned(self: *const Serialized, base_addr: usize, gpa: Allocator) Allocator.Error!NodeStore {
+        var store = NodeStore{
+            .gpa = gpa,
+            .nodes = try self.nodes.deserializeWithCopy(base_addr, gpa),
+            .regions = try self.regions.deserializeWithCopy(base_addr, gpa),
+            .write_occurrences = try self.write_occurrences.deserializeWithCopy(base_addr, gpa),
+            .int128_values = try self.int128_values.deserializeWithCopy(base_addr, gpa),
+            .literal_dispatch_plans = try self.literal_dispatch_plans.deserializeWithCopy(base_addr, gpa),
+            .literal_pattern_contexts = try self.literal_pattern_contexts.deserializeWithCopy(base_addr, gpa),
+            .interpolation_data = try self.interpolation_data.deserializeWithCopy(base_addr, gpa),
+            .span2_data = try self.span2_data.deserializeWithCopy(base_addr, gpa),
+            .span_with_node_data = try self.span_with_node_data.deserializeWithCopy(base_addr, gpa),
+            .method_call_data = try self.method_call_data.deserializeWithCopy(base_addr, gpa),
+            .match_data = try self.match_data.deserializeWithCopy(base_addr, gpa),
+            .if_data = try self.if_data.deserializeWithCopy(base_addr, gpa),
+            .match_branch_data = try self.match_branch_data.deserializeWithCopy(base_addr, gpa),
+            .closure_data = try self.closure_data.deserializeWithCopy(base_addr, gpa),
+            .zero_arg_tag_data = try self.zero_arg_tag_data.deserializeWithCopy(base_addr, gpa),
+            .def_data = try self.def_data.deserializeWithCopy(base_addr, gpa),
+            .import_data = try self.import_data.deserializeWithCopy(base_addr, gpa),
+            .type_apply_data = try self.type_apply_data.deserializeWithCopy(base_addr, gpa),
+            .pattern_list_data = try self.pattern_list_data.deserializeWithCopy(base_addr, gpa),
+            .pattern_str_interpolation_data = try self.pattern_str_interpolation_data.deserializeWithCopy(base_addr, gpa),
+            .pattern_str_interpolation_steps = try self.pattern_str_interpolation_steps.deserializeWithCopy(base_addr, gpa),
+            .where_clause_owners = try self.where_clause_owners.deserializeWithCopy(base_addr, gpa),
+            .index_data = try self.index_data.deserializeWithCopy(base_addr, gpa),
+            .scratch = null,
+        };
+        errdefer store.deinit();
+
+        try store.ensureScratch();
+
+        return store;
     }
 };
 

@@ -165,6 +165,14 @@ pub const TargetConfig = struct {
     /// shape-comparison tests turn it off because promotion intentionally
     /// changes the loop skeleton of qualifying sides.
     promote_loop_appends: bool = true,
+    /// The rewrites that exist only to make the produced program faster:
+    /// tag-case fusion, join scalarization and box reuse. `--opt=dev` skips
+    /// them, since it trades program speed for compile speed; TRMC and loop
+    /// append promotion stay on everywhere because they bound stack depth and
+    /// list copying rather than shave constant factors.
+    fuse_tag_cases: bool = true,
+    scalarize_joins: bool = true,
+    reuse_boxes: bool = true,
     /// Build ConstStore materialization plans for requested layouts.
     /// Disable this only for consumers that read requested layout metadata and
     /// never materialize requested-layout values.
@@ -1537,9 +1545,13 @@ fn finishLoweredOutput(
         // tag at once: the iterator-fusion clone in `.none`, and the checked
         // wrappers substituted at their call sites in `.wrappers`, whose
         // `Try` results the caller matches immediately.
-        try runProcedurePass(allocator, &lowered.lir_result, pass_target, .tag_fusion);
+        if (target.fuse_tag_cases) {
+            try runProcedurePass(allocator, &lowered.lir_result, pass_target, .tag_fusion);
+        }
     }
-    try runProcedurePass(allocator, &lowered.lir_result, pass_target, .scalarize);
+    if (target.scalarize_joins) {
+        try runProcedurePass(allocator, &lowered.lir_result, pass_target, .scalarize);
+    }
     if (target.promote_loop_appends) {
         try runProcedurePass(allocator, &lowered.lir_result, pass_target, .loop_append);
     }
@@ -1547,7 +1559,9 @@ fn finishLoweredOutput(
     if (target.prove_ranges) {
         try runProcedurePass(allocator, &lowered.lir_result, pass_target, .range);
     }
-    try runProcedurePass(allocator, &lowered.lir_result, pass_target, .box_reuse);
+    if (target.reuse_boxes) {
+        try runProcedurePass(allocator, &lowered.lir_result, pass_target, .box_reuse);
+    }
     try ReturnSlot.run(&lowered.lir_result.store, &lowered.lir_result.layouts);
     try StrAppend.run(&lowered.lir_result.store);
     if (target.tag_reachability) {
@@ -2062,6 +2076,7 @@ const SpecCensus = if (builtin.os.tag == .freestanding) struct {
             .underscore,
             .runtime_error,
             => "?pat",
+            .deferred_import_ref => checkedPipelineInvariant("deferred import reference pattern reached LIR lowering"),
         };
     }
 

@@ -630,11 +630,14 @@ fn compareTagUnions(
     // Gather ALL tags from expected (including extensions)
     const exp_gathered = try gatherTagsFromUnion(snap_store, exp_union, gpa, tags);
     const exp_range = exp_gathered.fields;
-    const exp_tag_names = tags.sliceRange(exp_range).items(.name);
 
     // Gather ALL tags from actual (including extensions)
     const act_gathered = try gatherTagsFromUnion(snap_store, act_union, gpa, tags);
     const act_range = act_gathered.fields;
+
+    // Slice only after both gathers: appending to `tags` can reallocate it,
+    // which would invalidate any slice taken between the two gathers.
+    const exp_tag_names = tags.sliceRange(exp_range).items(.name);
     const act_tag_names = tags.sliceRange(act_range).items(.name);
 
     // Look for tags in actual that might be typos of expected tags

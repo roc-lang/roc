@@ -469,3 +469,156 @@ test "deterministic F64 inverse trig branch bits" {
         try std.testing.expectEqual(case.expected, @as(u64, @bitCast(atan(@bitCast(case.input)))));
     }
 }
+
+// Two-argument reduction ported from musl via Zig std/math/atan2.zig.
+// Copyright (C) 1993 by Sun Microsystems, Inc. All rights reserved.
+// Permission to use, copy, modify, and distribute this software is freely
+// granted, provided that this notice is preserved.
+/// Angle of (x, y), preserving IEEE signed zeros, infinities, and NaNs.
+pub fn atan2(y: f64, x: f64) f64 {
+    @setFloatMode(.strict);
+    const pi: f64 = 3.1415926535897931160E+00;
+    const pi_lo: f64 = 1.2246467991473531772E-16;
+
+    if (std.math.isNan(x) or std.math.isNan(y)) {
+        return x + y;
+    }
+
+    const x_bits: u64 = @bitCast(x);
+    var x_high: u32 = @intCast(x_bits >> 32);
+    const x_low: u32 = @intCast(x_bits & 0xFFFFFFFF);
+
+    const y_bits: u64 = @bitCast(y);
+    var y_high: u32 = @intCast(y_bits >> 32);
+    const y_low: u32 = @intCast(y_bits & 0xFFFFFFFF);
+
+    // x = 1.0
+    if ((x_high -% 0x3FF00000) | x_low == 0) {
+        return atan(y);
+    }
+
+    // 2 * sign(x) + sign(y)
+    const m = ((y_high >> 31) & 1) | ((x_high >> 30) & 2);
+    x_high &= 0x7FFFFFFF;
+    y_high &= 0x7FFFFFFF;
+
+    if (y_high | y_low == 0) {
+        switch (m) {
+            0, 1 => return y, // atan(+-0, +...)
+            2 => return pi, // atan(+0, -...)
+            3 => return -pi, // atan(-0, -...)
+            else => unreachable,
+        }
+    }
+
+    if (x_high | x_low == 0) {
+        if (m & 1 != 0) {
+            return -pi / 2;
+        } else {
+            return pi / 2;
+        }
+    }
+
+    if (x_high == 0x7FF00000) {
+        if (y_high == 0x7FF00000) {
+            switch (m) {
+                0 => return pi / 4, // atan(+inf, +inf)
+                1 => return -pi / 4, // atan(-inf, +inf)
+                2 => return 3 * pi / 4, // atan(+inf, -inf)
+                3 => return -3 * pi / 4, // atan(-inf, -inf)
+                else => unreachable,
+            }
+        } else {
+            switch (m) {
+                0 => return 0.0, // atan(+..., +inf)
+                1 => return -0.0, // atan(-..., +inf)
+                2 => return pi, // atan(+..., -inf)
+                3 => return -pi, // atan(-...f, -inf)
+                else => unreachable,
+            }
+        }
+    }
+
+    // |y / x| > 0x1p64
+    if (x_high +% (64 << 20) < y_high or y_high == 0x7FF00000) {
+        if (m & 1 != 0) {
+            return -pi / 2;
+        } else {
+            return pi / 2;
+        }
+    }
+
+    // z = atan(|y / x|) with correct underflow
+    const z = z: {
+        if ((m & 2) != 0 and y_high +% (64 << 20) < x_high) {
+            break :z 0.0;
+        } else {
+            break :z atan(@abs(y / x));
+        }
+    };
+
+    switch (m) {
+        0 => return z, // atan(+, +)
+        1 => return -z, // atan(-, +)
+        2 => return pi - (z - pi_lo), // atan(+, -)
+        3 => return (z - pi_lo) - pi, // atan(-, -)
+        else => unreachable,
+    }
+}
+
+test "atan2 IEEE special cases and signed zero bits" {
+    const inf: f64 = @bitCast(@as(u64, 0x7ff0000000000000));
+    const pi: f64 = @bitCast(@as(u64, 0x400921fb54442d18));
+    const Case = struct { y: f64, x: f64, expected: f64 };
+    const cases = [_]Case{
+        .{ .y = 0.0, .x = 0.0, .expected = 0.0 },
+        .{ .y = -0.0, .x = 0.0, .expected = -0.0 },
+        .{ .y = 0.0, .x = -0.0, .expected = pi },
+        .{ .y = -0.0, .x = -0.0, .expected = -pi },
+        .{ .y = 0.0, .x = -1.0, .expected = pi },
+        .{ .y = -0.0, .x = -1.0, .expected = -pi },
+        .{ .y = 1.0, .x = 0.0, .expected = pi / 2 },
+        .{ .y = -1.0, .x = -0.0, .expected = -pi / 2 },
+        .{ .y = inf, .x = inf, .expected = pi / 4 },
+        .{ .y = -inf, .x = inf, .expected = -pi / 4 },
+        .{ .y = inf, .x = -inf, .expected = 3 * pi / 4 },
+        .{ .y = -inf, .x = -inf, .expected = -3 * pi / 4 },
+        .{ .y = 1.0, .x = inf, .expected = 0.0 },
+        .{ .y = -1.0, .x = inf, .expected = -0.0 },
+        .{ .y = 1.0, .x = -inf, .expected = pi },
+        .{ .y = -1.0, .x = -inf, .expected = -pi },
+        .{ .y = inf, .x = 1.0, .expected = pi / 2 },
+        .{ .y = -inf, .x = -1.0, .expected = -pi / 2 },
+    };
+    for (cases) |case| try std.testing.expectEqual(@as(u64, @bitCast(case.expected)), @as(u64, @bitCast(atan2(case.y, case.x))));
+    for ([_]f64{ 0, -0.0, 1, -1, inf, -inf, std.math.nan(f64) }) |value| {
+        try std.testing.expect(std.math.isNan(atan2(std.math.nan(f64), value)));
+        try std.testing.expect(std.math.isNan(atan2(value, std.math.nan(f64))));
+    }
+}
+
+test "atan2 finite f128 oracle within two ULP including subnormal ratios" {
+    const Case = struct { y: f64, x: f64, expected: f64 };
+    const cases = comptime blk: {
+        @setEvalBranchQuota(2_000_000);
+        const inputs = [_]f64{ @bitCast(@as(u64, 1)), @bitCast(@as(u64, 0x0010000000000000)), 0x1p-64, 0.2, 0.5, 1, 1.5, 2, 10, 0x1p64, @bitCast(@as(u64, 0x7fefffffffffffff)) };
+        var result: [inputs.len * inputs.len * 4]Case = undefined;
+        var index = 0;
+        for (inputs) |x| for (inputs) |y| {
+            for ([_]bool{ false, true }) |neg_x| for ([_]bool{ false, true }) |neg_y| {
+                var angle: f128 = std.math.atan(@as(f128, y) / @as(f128, x));
+                if (neg_x) angle = std.math.pi - angle;
+                if (neg_y) angle = -angle;
+                result[index] = .{ .x = if (neg_x) -x else x, .y = if (neg_y) -y else y, .expected = @floatCast(angle) };
+                index += 1;
+            };
+        };
+        break :blk result;
+    };
+    for (cases) |case| {
+        const actual: u64 = @bitCast(atan2(case.y, case.x));
+        const expected: u64 = @bitCast(case.expected);
+        try std.testing.expectEqual(expected >> 63, actual >> 63);
+        try std.testing.expect(@max(actual, expected) - @min(actual, expected) <= 2);
+    }
+}

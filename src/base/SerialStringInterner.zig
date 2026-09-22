@@ -306,19 +306,29 @@ pub fn relocate(self: *SerialStringInterner, offset: isize) void {
 pub fn enableRuntimeInserts(self: *SerialStringInterner, gpa: Allocator) Allocator.Error!void {
     if (self.supports_inserts) return;
 
+    self.* = try self.clone(gpa);
+}
+
+/// Preserve serial IDs and the lookup index while taking independent ownership.
+pub fn clone(self: *const SerialStringInterner, gpa: Allocator) Allocator.Error!SerialStringInterner {
     var new_bytes = try SafeList(u8).initCapacity(gpa, self.bytes.items.items.len);
+    errdefer new_bytes.deinit(gpa);
     _ = try new_bytes.appendSlice(gpa, self.bytes.items.items);
     var new_ranges = try SafeList(Range).initCapacity(gpa, self.ranges.items.items.len);
+    errdefer new_ranges.deinit(gpa);
     _ = try new_ranges.appendSlice(gpa, self.ranges.items.items);
     var new_index = try SafeList(u32).initCapacity(gpa, self.index.items.items.len);
+    errdefer new_index.deinit(gpa);
     try new_index.items.ensureTotalCapacityPrecise(gpa, self.index.items.items.len);
     new_index.items.items.len = self.index.items.items.len;
     @memcpy(new_index.items.items, self.index.items.items);
 
-    self.bytes = new_bytes;
-    self.ranges = new_ranges;
-    self.index = new_index;
-    self.supports_inserts = true;
+    return .{
+        .bytes = new_bytes,
+        .ranges = new_ranges,
+        .index = new_index,
+        .supports_inserts = true,
+    };
 }
 
 /// Relocatable serialized form. Exactly 3 relocatable base pointers.

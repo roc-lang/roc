@@ -1,4 +1,4 @@
-import FunctionRepr exposing [FunctionRepr]
+import CallableSignature exposing [CallableSignature]
 import RecordRepr exposing [RecordRepr]
 import TagUnionRepr exposing [TagUnionRepr]
 
@@ -9,9 +9,9 @@ TypeRepr := [
 	RocBool,
 	RocBox(U64),
 	RocDec,
+	RocErasedCallable(CallableSignature),
 	RocF32,
 	RocF64,
-	RocFunction(FunctionRepr),
 	RocI128,
 	RocI16,
 	RocI32,

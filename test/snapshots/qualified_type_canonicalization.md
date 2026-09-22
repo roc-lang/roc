@@ -44,7 +44,13 @@ transform = |result|
     }
 ~~~
 # EXPECTED
-DUPLICATE DEFINITION - qualified_type_canonicalization.md:1:1:1:18
+BUILTIN TYPE SHADOWED - qualified_type_canonicalization.md:1:1:1:18
+MOD NOT IMPORTED - qualified_type_canonicalization.md:15:23:15:38
+MISSING NESTED TYPE - qualified_type_canonicalization.md:19:14:19:21
+UNUSED VARIABLE - qualified_type_canonicalization.md:28:17:28:22
+MISSING NESTED TYPE - qualified_type_canonicalization.md:32:13:32:20
+MOD NOT IMPORTED - qualified_type_canonicalization.md:32:49:32:64
+UNUSED VARIABLE - qualified_type_canonicalization.md:36:17:36:20
 MOD NOT FOUND - qualified_type_canonicalization.md:1:1:1:18
 MOD NOT FOUND - qualified_type_canonicalization.md:2:1:2:13
 MOD NOT FOUND - qualified_type_canonicalization.md:3:1:3:34
@@ -53,44 +59,103 @@ MOD NOT FOUND - qualified_type_canonicalization.md:7:24:7:28
 MOD NOT FOUND - qualified_type_canonicalization.md:8:19:8:24
 MOD NOT FOUND - qualified_type_canonicalization.md:11:26:11:35
 MOD NOT FOUND - qualified_type_canonicalization.md:12:26:12:35
-MOD NOT IMPORTED - qualified_type_canonicalization.md:15:23:15:38
 DOES NOT EXIST - qualified_type_canonicalization.md:16:23:16:32
-MISSING NESTED TYPE - qualified_type_canonicalization.md:19:14:19:21
 MOD NOT FOUND - qualified_type_canonicalization.md:23:23:23:27
 MOD NOT FOUND - qualified_type_canonicalization.md:24:16:24:21
 MOD NOT FOUND - qualified_type_canonicalization.md:27:21:27:25
-UNUSED VARIABLE - qualified_type_canonicalization.md:28:17:28:22
-MISSING NESTED TYPE - qualified_type_canonicalization.md:32:13:32:20
 MOD NOT FOUND - qualified_type_canonicalization.md:32:26:32:30
 MOD NOT FOUND - qualified_type_canonicalization.md:32:38:32:44
-MOD NOT IMPORTED - qualified_type_canonicalization.md:32:49:32:64
 DOES NOT EXIST - qualified_type_canonicalization.md:35:24:35:39
 DOES NOT EXIST - qualified_type_canonicalization.md:36:25:36:38
-UNUSED VARIABLE - qualified_type_canonicalization.md:36:17:36:20
 # PROBLEMS
 ~~~clojure
 (reports
 	(report
 		(severity warning)
-		(title "Duplicate Definition")
+		(title "Builtin Type Shadowed")
 		(region (start 1 1) (end 1 18))
 		(headline
-			(reflow "The name ")
+			(text "The type ")
 			(annotated symbol-unqualified "Try")
-			(reflow " is being redeclared here:"))
+			(text " shadows a builtin type."))
 		(document
-			(source-region (file "qualified_type_canonicalization.md") (start 1 1) (end 1 18) (annotation error) (line-text "import Basics.Try"))
+			(reflow "This may make the builtin type inaccessible in this scope.")
 			(line-break)
-			(reflow "In this scope, ")
-			(annotated symbol-unqualified "Try")
-			(reflow " was already defined in ")
-			(source-location
-				(file "qualified_type_canonicalization.md")
-				(line 1)
-				(column 1))
-			(reflow ":")
+			(source-region (file "qualified_type_canonicalization.md") (start 1 1) (end 1 18) (annotation warning) (line-text "import Basics.Try"))))
+	(report
+		(severity runtime_error)
+		(title "Mod Not Imported")
+		(region (start 15 23) (end 15 38))
+		(headline
+			(text "There is no mod with the name ")
+			(annotated code "ModA.ModB")
+			(reflow " imported into this Roc file."))
+		(document
+			(source-region (file "qualified_type_canonicalization.md") (start 15 23) (end 15 38) (annotation error) (line-text "multiLevelQualified : ModA.ModB.TypeC"))))
+	(report
+		(severity runtime_error)
+		(title "Missing Nested Type")
+		(region (start 19 14) (end 19 21))
+		(headline
+			(annotated code "Try")
+			(reflow " is in scope, but it doesn't have a nested type ")
+			(reflow "that's also ")
+			(reflow "named ")
+			(annotated code "Try")
+			(reflow "."))
+		(document
+			(source-region (file "qualified_type_canonicalization.md") (start 19 14) (end 19 21) (annotation error) (line-text "resultType : Try.Try(I32, Str)"))))
+	(report
+		(severity warning)
+		(title "Unused Variable")
+		(region (start 28 17) (end 28 22))
+		(headline
+			(reflow "Variable ")
+			(annotated symbol-unqualified "color")
+			(reflow " is defined here and then never used:"))
+		(document
+			(reflow "If you don't need this variable, prefix it with an underscore like ")
+			(annotated symbol-unqualified "_color")
+			(reflow " to suppress this warning.")
 			(line-break)
-			(source-region (file "qualified_type_canonicalization.md") (start 1 1) (end 1 1) (annotation dim) (line-text "import Basics.Try"))))
+			(source-region (file "qualified_type_canonicalization.md") (start 28 17) (end 28 22) (annotation error) (line-text "processColor = |color|"))))
+	(report
+		(severity runtime_error)
+		(title "Missing Nested Type")
+		(region (start 32 13) (end 32 20))
+		(headline
+			(annotated code "Try")
+			(reflow " is in scope, but it doesn't have a nested type ")
+			(reflow "that's also ")
+			(reflow "named ")
+			(annotated code "Try")
+			(reflow "."))
+		(document
+			(source-region (file "qualified_type_canonicalization.md") (start 32 13) (end 32 20) (annotation error) (line-text "transform : Try.Try(Color.RGB, ExtMod.Error) -> ModA.ModB.TypeC"))))
+	(report
+		(severity runtime_error)
+		(title "Mod Not Imported")
+		(region (start 32 49) (end 32 64))
+		(headline
+			(text "There is no mod with the name ")
+			(annotated code "ModA.ModB")
+			(reflow " imported into this Roc file."))
+		(document
+			(source-region (file "qualified_type_canonicalization.md") (start 32 49) (end 32 64) (annotation error) (line-text "transform : Try.Try(Color.RGB, ExtMod.Error) -> ModA.ModB.TypeC"))))
+	(report
+		(severity warning)
+		(title "Unused Variable")
+		(region (start 36 17) (end 36 20))
+		(headline
+			(reflow "Variable ")
+			(annotated symbol-unqualified "err")
+			(reflow " is defined here and then never used:"))
+		(document
+			(reflow "If you don't need this variable, prefix it with an underscore like ")
+			(annotated symbol-unqualified "_err")
+			(reflow " to suppress this warning.")
+			(line-break)
+			(source-region (file "qualified_type_canonicalization.md") (start 36 17) (end 36 20) (annotation error) (line-text "        Try.Err(err) => TypeC.default"))))
 	(report
 		(severity runtime_error)
 		(title "Mod Not Found")
@@ -181,36 +246,19 @@ UNUSED VARIABLE - qualified_type_canonicalization.md:36:17:36:20
 			(source-region (file "qualified_type_canonicalization.md") (start 12 26) (end 12 35) (annotation error) (line-text "aliasedQualified = ExtMod.DataType.Default"))))
 	(report
 		(severity runtime_error)
-		(title "Mod Not Imported")
-		(region (start 15 23) (end 15 38))
-		(headline
-			(text "There is no mod with the name ")
-			(annotated code "ModA.ModB")
-			(reflow " imported into this Roc file."))
-		(document
-			(source-region (file "qualified_type_canonicalization.md") (start 15 23) (end 15 38) (annotation error) (line-text "multiLevelQualified : ModA.ModB.TypeC"))))
-	(report
-		(severity runtime_error)
 		(title "Does Not Exist")
 		(region (start 16 23) (end 16 32))
 		(headline
-			(annotated symbol-unqualified "TypeC.new")
+			(annotated code "TypeC.new")
 			(reflow " does not exist."))
 		(document
+			(annotated code "TypeC")
+			(reflow " is in scope, but it has no associated ")
+			(annotated code "new")
+			(reflow ".")
+			(line-break)
+			(line-break)
 			(source-region (file "qualified_type_canonicalization.md") (start 16 23) (end 16 32) (annotation error) (line-text "multiLevelQualified = TypeC.new"))))
-	(report
-		(severity runtime_error)
-		(title "Missing Nested Type")
-		(region (start 19 14) (end 19 21))
-		(headline
-			(annotated code "Try")
-			(reflow " is in scope, but it doesn't have a nested type ")
-			(reflow "that's also ")
-			(reflow "named ")
-			(annotated code "Try")
-			(reflow "."))
-		(document
-			(source-region (file "qualified_type_canonicalization.md") (start 19 14) (end 19 21) (annotation error) (line-text "resultType : Try.Try(I32, Str)"))))
 	(report
 		(severity runtime_error)
 		(title "Mod Not Found")
@@ -248,33 +296,6 @@ UNUSED VARIABLE - qualified_type_canonicalization.md:36:17:36:20
 		(document
 			(source-region (file "qualified_type_canonicalization.md") (start 27 21) (end 27 25) (annotation error) (line-text "processColor : Color.RGB -> Str"))))
 	(report
-		(severity warning)
-		(title "Unused Variable")
-		(region (start 28 17) (end 28 22))
-		(headline
-			(reflow "Variable ")
-			(annotated symbol-unqualified "color")
-			(reflow " is defined here and then never used:"))
-		(document
-			(reflow "If you don't need this variable, prefix it with an underscore like ")
-			(annotated symbol-unqualified "_color")
-			(reflow " to suppress this warning.")
-			(line-break)
-			(source-region (file "qualified_type_canonicalization.md") (start 28 17) (end 28 22) (annotation error) (line-text "processColor = |color|"))))
-	(report
-		(severity runtime_error)
-		(title "Missing Nested Type")
-		(region (start 32 13) (end 32 20))
-		(headline
-			(annotated code "Try")
-			(reflow " is in scope, but it doesn't have a nested type ")
-			(reflow "that's also ")
-			(reflow "named ")
-			(annotated code "Try")
-			(reflow "."))
-		(document
-			(source-region (file "qualified_type_canonicalization.md") (start 32 13) (end 32 20) (annotation error) (line-text "transform : Try.Try(Color.RGB, ExtMod.Error) -> ModA.ModB.TypeC"))))
-	(report
 		(severity runtime_error)
 		(title "Mod Not Found")
 		(region (start 32 26) (end 32 30))
@@ -300,46 +321,34 @@ UNUSED VARIABLE - qualified_type_canonicalization.md:36:17:36:20
 			(source-region (file "qualified_type_canonicalization.md") (start 32 38) (end 32 44) (annotation error) (line-text "transform : Try.Try(Color.RGB, ExtMod.Error) -> ModA.ModB.TypeC"))))
 	(report
 		(severity runtime_error)
-		(title "Mod Not Imported")
-		(region (start 32 49) (end 32 64))
-		(headline
-			(text "There is no mod with the name ")
-			(annotated code "ModA.ModB")
-			(reflow " imported into this Roc file."))
-		(document
-			(source-region (file "qualified_type_canonicalization.md") (start 32 49) (end 32 64) (annotation error) (line-text "transform : Try.Try(Color.RGB, ExtMod.Error) -> ModA.ModB.TypeC"))))
-	(report
-		(severity runtime_error)
 		(title "Does Not Exist")
 		(region (start 35 24) (end 35 39))
 		(headline
-			(annotated symbol-unqualified "TypeC.fromColor")
+			(annotated code "TypeC.fromColor")
 			(reflow " does not exist."))
 		(document
+			(annotated code "TypeC")
+			(reflow " is in scope, but it has no associated ")
+			(annotated code "fromColor")
+			(reflow ".")
+			(line-break)
+			(line-break)
 			(source-region (file "qualified_type_canonicalization.md") (start 35 24) (end 35 39) (annotation error) (line-text "        Try.Ok(rgb) => TypeC.fromColor(rgb)"))))
 	(report
 		(severity runtime_error)
 		(title "Does Not Exist")
 		(region (start 36 25) (end 36 38))
 		(headline
-			(annotated symbol-unqualified "TypeC.default")
+			(annotated code "TypeC.default")
 			(reflow " does not exist."))
 		(document
-			(source-region (file "qualified_type_canonicalization.md") (start 36 25) (end 36 38) (annotation error) (line-text "        Try.Err(err) => TypeC.default"))))
-	(report
-		(severity warning)
-		(title "Unused Variable")
-		(region (start 36 17) (end 36 20))
-		(headline
-			(reflow "Variable ")
-			(annotated symbol-unqualified "err")
-			(reflow " is defined here and then never used:"))
-		(document
-			(reflow "If you don't need this variable, prefix it with an underscore like ")
-			(annotated symbol-unqualified "_err")
-			(reflow " to suppress this warning.")
+			(annotated code "TypeC")
+			(reflow " is in scope, but it has no associated ")
+			(annotated code "default")
+			(reflow ".")
 			(line-break)
-			(source-region (file "qualified_type_canonicalization.md") (start 36 17) (end 36 20) (annotation error) (line-text "        Try.Err(err) => TypeC.default")))))
+			(line-break)
+			(source-region (file "qualified_type_canonicalization.md") (start 36 25) (end 36 38) (annotation error) (line-text "        Try.Err(err) => TypeC.default")))))
 ~~~
 # TOKENS
 ~~~zig
@@ -522,7 +531,7 @@ transform = |result|
 			(ty-malformed)))
 	(d-let
 		(p-assign (ident "multiLevelQualified"))
-		(e-runtime-error (tag "qualified_ident_does_not_exist"))
+		(e-runtime-error (tag "nested_value_not_found"))
 		(annotation
 			(ty-malformed)))
 	(d-let

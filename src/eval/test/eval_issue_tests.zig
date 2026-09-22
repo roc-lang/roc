@@ -200,8 +200,248 @@ const issue10703DualAliasSource =
     \\}
 ;
 
+// https://github.com/roc-lang/roc/issues/11377
+const issue11377GenericNominalCollectionSource =
+    \\RowsIndex(key, value) := [IndexEmpty, IndexNode({ key : key, value : value })].{
+    \\    empty : () -> RowsIndex(key, value)
+    \\    empty = || IndexEmpty
+    \\
+    \\    get : RowsIndex(key, value), key -> Try(value, [Missing])
+    \\    get = |tree, _key| match tree {
+    \\        IndexEmpty => Err(Missing)
+    \\        IndexNode(node) => Ok(node.value)
+    \\    }
+    \\
+    \\    insert : RowsIndex(key, value), key, value -> RowsIndex(key, value)
+    \\    insert = |tree, key, value| match tree {
+    \\        IndexEmpty => IndexNode({ key, value })
+    \\        IndexNode(_node) => IndexNode({ key, value })
+    \\    }
+    \\}
+    \\
+    \\RowsSlotCell(item) : [RowsSlotLive(item)]
+    \\
+    \\RowsBuild(item) : {
+    \\    chunks : RowsIndex(U64, RowsSlotCell(item)),
+    \\    key_index : RowsIndex(Str, U64),
+    \\}
+    \\
+    \\RowsError : [DuplicateKey(Str)]
+    \\
+    \\rows_build_fresh_loop : List(item), (item -> Str), U64, RowsBuild(item) -> Try(RowsBuild(item), RowsError)
+    \\rows_build_fresh_loop = |items, key_of, index, build|
+    \\    if index == items.len() {
+    \\        Ok(build)
+    \\    } else {
+    \\        item = items.get(index) ?? crash "Rows input length changed during construction"
+    \\        key = key_of(item)
+    \\        match build.key_index.get(key) {
+    \\            Ok(_) => Err(DuplicateKey(key))
+    \\            Err(_) => rows_build_fresh_loop(
+    \\                items,
+    \\                key_of,
+    \\                index + 1,
+    \\                {
+    \\                    chunks: build.chunks.insert(index, RowsSlotLive(item)),
+    \\                    key_index: build.key_index.insert(key, index),
+    \\                },
+    \\            )
+    \\        }
+    \\    }
+    \\
+    \\Rows(item) :: [Rows(RowsBuild(item))].{
+    \\    from_list : List(item), (item -> Str) -> Try(Rows(item), RowsError)
+    \\    from_list = |items, key_of| match rows_build_fresh_loop(items, key_of, 0, { chunks: RowsIndex.empty(), key_index: RowsIndex.empty() }) {
+    \\        Ok(built) => Ok(Rows(built))
+    \\        Err(DuplicateKey(key)) => Err(DuplicateKey(key))
+    \\    }
+    \\}
+    \\
+    \\main = match Rows.from_list([{ key: "same" }, { key: "same" }], |item| item.key) {
+    \\    Err(DuplicateKey(key)) => key
+    \\    Ok(_) => "no duplicate"
+    \\}
+;
+
 /// Public value `tests`.
 pub const tests = [_]TestCase{
+    .{
+        .name = "issue 11377: nested nominal alias applications retain outer parameters",
+        .source_kind = .module,
+        .source =
+        \\Cell(a) : [Live(a)]
+        \\Index(k, v) := [Node(k, v)]
+        \\Store(a) : { fixed : Index(Str, U64), cells : Index(U64, Cell(a)) }
+        \\Rows(a) := [Rows(Store(a))].{
+        \\    make : a -> Rows(a)
+        \\    make = |item| Rows({ fixed: Node("fixed", 7), cells: Node(1, Live(item)) })
+        \\    first : Rows(a) -> a
+        \\    first = |Rows(store)| match store.cells { Node(_, Live(item)) => item }
+        \\}
+        \\main = (Rows.first(Rows.make("kept")), Rows.first(Rows.make(42.U64)))
+        ,
+        .expected = .{ .inspect_str = "(\"kept\", 42)" },
+    },
+    .{
+        .name = "issue 11377: recursive annotated output row closes in body scheme",
+        .source_kind = .module,
+        .source =
+        \\Cell(a) : [Live(a)]
+        \\loop : a, U64 -> { cell : Cell(a) }
+        \\loop = |x, n| if n == 0 { { cell: Live(x) } } else { loop(x, n - 1) }
+        \\main = match loop("kept", 2).cell { Live(x) => x }
+        ,
+        .expected = .{ .inspect_str = "\"kept\"" },
+    },
+    .{
+        .name = "issue 11377: local recursive annotated output row closes in body scheme",
+        .source_kind = .module,
+        .source =
+        \\Cell(a) : [Live(a)]
+        \\main = {
+        \\    loop : Str, U64 -> { cell : Cell(Str) }
+        \\    loop = |x, n| if n == 0 { { cell: Live(x) } } else { loop(x, n - 1) }
+        \\    match loop("kept", 2).cell { Live(x) => x }
+        \\}
+        ,
+        .expected = .{ .inspect_str = "\"kept\"" },
+    },
+    .{
+        .name = "issue 11377: recursive annotated dispatch preserves evidence correspondence",
+        .source_kind = .module,
+        .source =
+        \\Cell(a) : [Live(a)]
+        \\loop : a, U64 -> { cell : Cell(a) }
+        \\    where [a.is_eq : a, a -> Bool]
+        \\loop = |x, n| if n == 0 and x.is_eq(x) { { cell: Live(x) } } else { loop(x, n - 1) }
+        \\main = match loop("kept", 2).cell { Live(x) => x }
+        ,
+        .expected = .{ .inspect_str = "\"kept\"" },
+    },
+    .{
+        .name = "issue 11377: checked generic nominal collection construction rejects a duplicate key",
+        .source_kind = .module,
+        .source = issue11377GenericNominalCollectionSource,
+        .expected = .{ .inspect_str = "\"same\"" },
+    },
+    .{
+        .name = "issue 11470: imported polymorphic error composition preserves shared tails",
+        .source_kind = .module,
+        .imports = &.{.{
+            .name = "Lookup",
+            .source = "Lookup := [].{ call = show }\n" ++ @import("issue_11470_source.zig").source,
+        }},
+        .source =
+        \\import Lookup
+        \\main = (
+        \\    Lookup.call(|_| Ok(21.U64)),
+        \\    Lookup.call(|key| if key == 0 { Ok(1.U64) } else { Err(QueryFailed("owned imported error payload")) }),
+        \\)
+        ,
+        .expected = .{ .inspect_str = "(Ok(42), Err(Wrapped(QueryFailed(\"owned imported error payload\"))))" },
+    },
+    .{
+        .name = "issue 11470: bare and wrapped shared tagged errors preserve values",
+        .source_kind = .module,
+        .source = @import("issue_11470_source.zig").source ++
+            "\nmain = (run(0), run(1), run(2), run(3), run(4))\n",
+        .expected = .{ .inspect_str = "(40, 1, 2, 3, 4)" },
+    },
+    .{
+        .name = "issue 11471: generic alias chains preserve parser and encoder element types",
+        .source_kind = .module,
+        .source =
+        \\Item(a) : { uri : a }
+        \\Entry : Item(Str)
+        \\Envelope : { items : List(Entry) }
+        \\roundtrip : Str -> (U64, Str)
+        \\roundtrip = |json| {
+        \\    parsed : Try(Envelope, _)
+        \\    parsed = Json.parse(json)
+        \\    match parsed {
+        \\        Ok(record) => (record.items.len(), Json.to_str(record))
+        \\        Err(_) => (0, "failed")
+        \\    }
+        \\}
+        \\main = roundtrip("{\"items\":[{\"uri\":\"a\"}]}")
+        ,
+        .expected = .{ .inspect_str = "(1, \"{\\\"items\\\":[{\\\"uri\\\":\\\"a\\\"}]}\")" },
+    },
+    .{
+        .name = "issue 11471: primitive alias list elements retain their parser",
+        .source_kind = .module,
+        .source =
+        \\Item : U64
+        \\count : Str -> U64
+        \\count = |json| {
+        \\    parsed : Try({ items : List(Item) }, _)
+        \\    parsed = Json.parse(json)
+        \\    match parsed {
+        \\        Ok(record) => record.items.len()
+        \\        Err(_) => 0
+        \\    }
+        \\}
+        \\main = count("{\"items\":[1,2]}")
+        ,
+        .expected = .{ .inspect_str = "2" },
+    },
+    .{
+        .name = "issue 11471: captured aliases preserve distinct nominal method dispatch",
+        .source_kind = .module,
+        .source =
+        \\First := { value : U64 }.{
+        \\    score : First -> U64
+        \\    score = |x| x.value + 1
+        \\}
+        \\Second := { value : U64 }.{
+        \\    score : Second -> U64
+        \\    score = |x| x.value + 2
+        \\}
+        \\A : First
+        \\B : Second
+        \\capture : A, B -> ({} -> U64)
+        \\capture = |a, b| |{}| a.score() + b.score()
+        \\saved = capture(First.{ value: 10 }, Second.{ value: 10 })
+        \\main = saved({})
+        ,
+        .expected = .{ .inspect_str = "23" },
+    },
+    .{
+        .name = "issue 11471: alias over a recursive nominal preserves recursion and values",
+        .source_kind = .module,
+        .source =
+        \\Chain := [End, Next(Str, Chain)]
+        \\Link : Chain
+        \\length : Link -> U64
+        \\length = |link| match link {
+        \\    End => 0
+        \\    Next(_, rest) => 1 + length(rest)
+        \\}
+        \\stored : Link
+        \\stored = Chain.Next("a", Chain.Next("b", Chain.End))
+        \\main = length(stored)
+        ,
+        .expected = .{ .inspect_str = "2" },
+    },
+    .{
+        .name = "issue 11471: a length method call on a parsed list field of an aliased element type",
+        .source_kind = .module,
+        .source =
+        \\Item : { uri : Str }
+        \\count : Str -> U64
+        \\count = |json| {
+        \\    parsed : Try({ items : List(Item) }, _)
+        \\    parsed = Json.parse(json)
+        \\    match parsed {
+        \\        Ok(record) => record.items.len()
+        \\        Err(_) => 0
+        \\    }
+        \\}
+        \\main : U64
+        \\main = count("{\"items\":[{\"uri\":\"a\"}]}")
+        ,
+        .expected = .{ .inspect_str = "1" },
+    },
     .{
         .name = "issue 11376: packed record constants preserve field order and mixed widths",
         .source_kind = .module,
@@ -1663,11 +1903,23 @@ pub const tests = [_]TestCase{
         .source_kind = .module,
         .source =
         \\Vector := U64x2.{
+        \\    to_inspect : Vector -> Str
         \\    to_inspect = |_vector| "custom vector"
         \\}
         \\main = Vector.(U64x2.default())
         ,
         .expected = .{ .inspect_str = "custom vector" },
+    },
+    .{
+        .name = "issue 11170: unconstrained custom inspect argument uses SIMD backing",
+        .source_kind = .module,
+        .source =
+        \\Vector := U64x2.{
+        \\    to_inspect = |_vector| "custom vector"
+        \\}
+        \\main = (Str.inspect(Vector.(U64x2.default())), Vector.to_inspect({}))
+        ,
+        .expected = .{ .inspect_str = "(\"U64x2(0, 0)\", \"custom vector\")" },
     },
     .{
         // https://github.com/roc-lang/roc/issues/11189
@@ -1980,6 +2232,178 @@ pub const tests = [_]TestCase{
         .expected = .{ .inspect_str = "1" },
     },
     .{
+        // https://github.com/roc-lang/roc/issues/11424
+        // Branch-result selection must retain the enclosing specialization's
+        // I64 constraint when constructing the inner stored closures.
+        .name = "issue 11424: tag payload lambda returns a tag whose closure differs per branch",
+        .source_kind = .module,
+        .source =
+        \\widget : I64 -> [Dyn(I64 -> [Button(I64 -> I64)])]
+        \\widget = |_x| Dyn(|m| if m > 0 { Button(|mm| mm + 1) } else { Button(|mm| mm * 2) })
+        \\
+        \\main = match widget(0) {
+        \\    Dyn(f) =>
+        \\        match (f(0), f(1)) {
+        \\            (Button(g0), Button(g1)) => g0(3) * 10 + g1(3)
+        \\        }
+        \\}
+        ,
+        .expected = .{ .inspect_str = "64" },
+    },
+    .{
+        .name = "issue 11424: match result retains I32 specialization for stored closures",
+        .source_kind = .module,
+        .source =
+        \\widget : I64 -> [Dyn(I32 -> [Button(I32 -> I32)])]
+        \\widget = |_x| Dyn(|m| match m {
+        \\    0 => Button(|mm| mm * 2)
+        \\    _ => Button(|mm| mm + 1)
+        \\})
+        \\
+        \\main = match widget(0) {
+        \\    Dyn(f) =>
+        \\        match (f(0), f(1)) {
+        \\            (Button(g0), Button(g1)) => g0(3) * 10 + g1(3)
+        \\        }
+        \\}
+        ,
+        .expected = .{ .inspect_str = "64" },
+    },
+    .{
+        // https://github.com/roc-lang/roc/issues/11468
+        // An unannotated local closure captures a parameter of its enclosing
+        // unannotated function and passes it to a top-level helper whose
+        // inferred type carries a `where` constraint (`<`). The enclosing
+        // function is called at U64, so the helper's comparison dispatch
+        // resolves to U64's `is_lt`.
+        .name = "issue 11468: local closure forwards captured value to where-constrained helper",
+        .source_kind = .module,
+        .source =
+        \\lt = |x| x < x
+        \\
+        \\f = |x| {
+        \\    g = || lt(x)
+        \\    g()
+        \\}
+        \\
+        \\main = f(1.U64)
+        ,
+        .expected = .{ .inspect_str = "False" },
+    },
+    .{
+        // https://github.com/roc-lang/roc/issues/11468
+        // The local closure's enclosing function is itself reached through a
+        // caller's specialization interface, at two numeric types.
+        .name = "issue 11468: callee's local closure forwards captured value to where-constrained helper",
+        .source_kind = .module,
+        .source =
+        \\lt = |x| x < x
+        \\
+        \\f = |x| {
+        \\    g = || lt(x)
+        \\    g()
+        \\}
+        \\
+        \\outer = |y| f(y)
+        \\
+        \\main = (outer(1.U64), outer(2.5.F32))
+        ,
+        .expected = .{ .inspect_str = "(False, False)" },
+    },
+    .{
+        // https://github.com/roc-lang/roc/issues/11468
+        // The innermost closure compares values quantified by two different
+        // enclosing frames.
+        .name = "issue 11468: doubly nested closure compares captures from two enclosing frames",
+        .source_kind = .module,
+        .source =
+        \\lt = |a, b| a < b
+        \\
+        \\f = |x| {
+        \\    g = |y| {
+        \\        h = || lt(x, y)
+        \\        h()
+        \\    }
+        \\    g(x)
+        \\}
+        \\
+        \\main = (f(1.U64), f(2.I8))
+        ,
+        .expected = .{ .inspect_str = "(False, False)" },
+    },
+    .{
+        // https://github.com/roc-lang/roc/issues/11468
+        // A generalized callable alias of the capturing closure.
+        .name = "issue 11468: callable alias of a local closure forwarding a captured value",
+        .source_kind = .module,
+        .source =
+        \\lt = |x| x < x
+        \\
+        \\f = |x| {
+        \\    g = || lt(x)
+        \\    k = g
+        \\    k()
+        \\}
+        \\
+        \\main = f(1.U64)
+        ,
+        .expected = .{ .inspect_str = "False" },
+    },
+    .{
+        // https://github.com/roc-lang/roc/issues/11468
+        // The issue's shape: an unannotated selection sort whose local
+        // recursive closures compare elements read through unannotated
+        // `get` and `swap` helpers, so the element type is only constrained
+        // by `<`.
+        .name = "issue 11468: unannotated selection sort compares elements through unannotated get and swap helpers",
+        .source_kind = .module,
+        .source =
+        \\get = |list, idx| {
+        \\    match list.get(idx) {
+        \\        Ok(elem) => elem
+        \\        _ => crash "get unreachable"
+        \\    }
+        \\}
+        \\
+        \\swap = |list, i, j| {
+        \\    match list.swap(i, j) {
+        \\        Ok(swapped) => swapped
+        \\        _ => crash "swap unreachable"
+        \\    }
+        \\}
+        \\
+        \\selection_sort = |list| {
+        \\    len = list.len()
+        \\
+        \\    find_min = |arr, idx, min| {
+        \\        if idx >= len {
+        \\            return min
+        \\        }
+        \\
+        \\        if get(arr, idx) < get(arr, min) {
+        \\            return find_min(arr, idx + 1, idx)
+        \\        }
+        \\
+        \\        find_min(arr, idx + 1, min)
+        \\    }
+        \\
+        \\    aux = |arr, idx| {
+        \\        if idx == len {
+        \\            return arr
+        \\        }
+        \\
+        \\        minimum = find_min(arr, idx + 1, idx)
+        \\        aux(swap(arr, idx, minimum), idx + 1)
+        \\    }
+        \\
+        \\    aux(list, 0)
+        \\}
+        \\
+        \\main = selection_sort([3.U64, 1, 2])
+        ,
+        .expected = .{ .inspect_str = "[1, 2, 3]" },
+    },
+    .{
         // repro for https://github.com/roc-lang/roc/issues/11463
         // An unannotated (so generalized) helper passes a closure whose body is
         // a record update with no field access to a method call. Specializing
@@ -2018,5 +2442,534 @@ pub const tests = [_]TestCase{
         \\}
         ,
         .expected = .{ .inspect_str = "\"b 1\"" },
+    },
+    .{
+        // repro for https://github.com/roc-lang/roc/issues/11384
+        // `Argument` and `Singleton` are distinct aliases with the same record
+        // shape, reached through two different `List` fields. Deriving the JSON
+        // parser for `ExtensionApi` must decode both lists instead of panicking
+        // with "checked generated codec contract had overlapping direct call roles".
+        .name = "issue 11384: Json.parse through two same-shaped record aliases in nested lists",
+        .source_kind = .module,
+        .source =
+        \\ExtensionApi : {
+        \\    utility_functions : List(UtilityFunction),
+        \\    singletons : List(Singleton),
+        \\}
+        \\
+        \\UtilityFunction : {
+        \\    arguments : List(Argument),
+        \\}
+        \\
+        \\Argument : {
+        \\    name : Str,
+        \\    type : Str,
+        \\}
+        \\
+        \\Singleton : {
+        \\    name : Str,
+        \\    type : Str,
+        \\}
+        \\
+        \\main : Str
+        \\main = {
+        \\    decoded : Try(ExtensionApi, [InvalidJson(Str), MissingRequiredField(Str)])
+        \\    decoded = Json.parse("{\"utility_functions\":[{\"arguments\":[{\"name\":\"angle_rad\",\"type\":\"float\"}]}],\"singletons\":[{\"name\":\"Engine\",\"type\":\"EngineType\"}]}")
+        \\    match decoded {
+        \\        Ok(api) => {
+        \\            args = List.join_map(api.utility_functions, |f| List.map(f.arguments, |a| "${a.name}:${a.type}"))
+        \\            singles = List.map(api.singletons, |s| "${s.name}:${s.type}")
+        \\            Str.join_with(List.concat(args, singles), ",")
+        \\        }
+        \\        Err(_) => "failed"
+        \\    }
+        \\}
+        ,
+        .expected = .{ .inspect_str = "\"angle_rad:float,Engine:EngineType\"" },
+    },
+    .{
+        // repro for https://github.com/roc-lang/roc/issues/11384
+        // The derived encoder for the same shape reaches `List(Argument)` and
+        // `List(Singleton)` through distinct aliases that denote one type.
+        .name = "issue 11384: Json.to_str through two same-shaped record aliases in nested lists",
+        .source_kind = .module,
+        .source =
+        \\ExtensionApi : {
+        \\    utility_functions : List(UtilityFunction),
+        \\    singletons : List(Singleton),
+        \\}
+        \\
+        \\UtilityFunction : {
+        \\    arguments : List(Argument),
+        \\}
+        \\
+        \\Argument : {
+        \\    name : Str,
+        \\    type : Str,
+        \\}
+        \\
+        \\Singleton : {
+        \\    name : Str,
+        \\    type : Str,
+        \\}
+        \\
+        \\main : Str
+        \\main = {
+        \\    api : ExtensionApi
+        \\    api = {
+        \\        utility_functions: [{ arguments: [{ name: "angle_rad", type: "float" }] }],
+        \\        singletons: [{ name: "Engine", type: "EngineType" }],
+        \\    }
+        \\    Json.to_str(api)
+        \\}
+        ,
+        .expected = .{ .inspect_str = "\"{\\\"singletons\\\":[{\\\"name\\\":\\\"Engine\\\",\\\"type\\\":\\\"EngineType\\\"}],\\\"utility_functions\\\":[{\\\"arguments\\\":[{\\\"name\\\":\\\"angle_rad\\\",\\\"type\\\":\\\"float\\\"}]}]}\"" },
+    },
+    .{
+        // repro for https://github.com/roc-lang/roc/issues/11384
+        // Same-shaped nominal types stay distinct codec subjects: each list
+        // decodes through its own nominal's derived parser.
+        .name = "issue 11384: Json.parse through two same-shaped nominal records in nested lists",
+        .source_kind = .module,
+        .source =
+        \\ExtensionApi : {
+        \\    utility_functions : List(UtilityFunction),
+        \\    singletons : List(Singleton),
+        \\}
+        \\
+        \\UtilityFunction : {
+        \\    arguments : List(Argument),
+        \\}
+        \\
+        \\Argument := { name : Str, type : Str }.{ parser_for : _ }
+        \\
+        \\Singleton := { name : Str, type : Str }.{ parser_for : _ }
+        \\
+        \\main : Str
+        \\main = {
+        \\    decoded : Try(ExtensionApi, [InvalidJson(Str), MissingRequiredField(Str)])
+        \\    decoded = Json.parse("{\"utility_functions\":[{\"arguments\":[{\"name\":\"angle_rad\",\"type\":\"float\"}]}],\"singletons\":[{\"name\":\"Engine\",\"type\":\"EngineType\"}]}")
+        \\    match decoded {
+        \\        Ok(api) => {
+        \\            args = List.join_map(api.utility_functions, |f| List.map(f.arguments, |Argument.({ name, type })| "${name}:${type}"))
+        \\            singles = List.map(api.singletons, |Singleton.({ name, type })| "${name}:${type}")
+        \\            Str.join_with(List.concat(args, singles), ",")
+        \\        }
+        \\        Err(_) => "failed"
+        \\    }
+        \\}
+        ,
+        .expected = .{ .inspect_str = "\"angle_rad:float,Engine:EngineType\"" },
+    },
+    .{
+        // repro for https://github.com/roc-lang/roc/issues/11563
+        // A record field whose type is a record-backed nominal with a derived
+        // parser parses through the nominal's own derivation, inlined into the
+        // outer record's parser.
+        .name = "issue 11563: Json.parse record field holding a derived nominal record",
+        .source_kind = .module,
+        .source =
+        \\Plain := { name : Str }.{ parser_for : _ }
+        \\
+        \\main : Str
+        \\main = {
+        \\    decoded : Try({ c : Plain }, [InvalidJson(Str), MissingRequiredField(Str)])
+        \\    decoded = Json.parse("{\"c\":{\"name\":\"n\"}}")
+        \\    match decoded {
+        \\        Ok({ c: Plain.({ name }) }) => name
+        \\        Err(_) => "failed"
+        \\    }
+        \\}
+        ,
+        .expected = .{ .inspect_str = "\"n\"" },
+    },
+    .{
+        // repro for https://github.com/roc-lang/roc/issues/11563
+        // The nested nominal has a defaulted field and sits beside a plain field.
+        .name = "issue 11563: Json.parse derived nominal with a defaulted field beside a plain field",
+        .source_kind = .module,
+        .source =
+        \\Counted := { name : Str, count : U8 ?? 10 }.{ parser_for : _ }
+        \\
+        \\main : Str
+        \\main = {
+        \\    decoded : Try({ c : Counted, k : Str }, [InvalidJson(Str), MissingRequiredField(Str)])
+        \\    decoded = Json.parse("{\"c\":{\"name\":\"n\"},\"k\":\"v\"}")
+        \\    match decoded {
+        \\        Ok({ c: Counted.({ name, count }), k }) => "${name} ${count.to_str()} ${k}"
+        \\        Err(_) => "failed"
+        \\    }
+        \\}
+        ,
+        .expected = .{ .inspect_str = "\"n 10 v\"" },
+    },
+    .{
+        // repro for https://github.com/roc-lang/roc/issues/11563
+        // The derived nominal is nested in a record inside a list.
+        .name = "issue 11563: Json.parse derived nominal inside a record inside a list",
+        .source_kind = .module,
+        .source =
+        \\Plain := { name : Str }.{ parser_for : _ }
+        \\
+        \\main : Str
+        \\main = {
+        \\    decoded : Try({ items : List({ b : Plain }) }, [InvalidJson(Str), MissingRequiredField(Str)])
+        \\    decoded = Json.parse("{\"items\":[{\"b\":{\"name\":\"x\"}},{\"b\":{\"name\":\"y\"}}]}")
+        \\    match decoded {
+        \\        Ok({ items }) => Str.join_with(List.map(items, |{ b: Plain.({ name }) }| name), ",")
+        \\        Err(_) => "failed"
+        \\    }
+        \\}
+        ,
+        .expected = .{ .inspect_str = "\"x,y\"" },
+    },
+    .{
+        // repro for https://github.com/roc-lang/roc/issues/11563
+        // The outer record and the nested nominal both parse the same tag union.
+        .name = "issue 11563: Json.parse tag union shared by a record and its nested derived nominal",
+        .source_kind = .module,
+        .source =
+        \\Choice : [A, B(Str)]
+        \\
+        \\Inner := { t : Choice }.{ parser_for : _ }
+        \\
+        \\describe : Choice -> Str
+        \\describe = |choice|
+        \\    match choice {
+        \\        A => "A"
+        \\        B(s) => "B ${s}"
+        \\    }
+        \\
+        \\main : Str
+        \\main = {
+        \\    decoded : Try({ t : Choice, inner : Inner }, [InvalidJson(Str), MissingRequiredField(Str)])
+        \\    decoded = Json.parse("{\"t\":\"A\",\"inner\":{\"t\":{\"B\":\"x\"}}}")
+        \\    match decoded {
+        \\        Ok({ t, inner: Inner.({ t: inner_t }) }) => "${describe(t)}/${describe(inner_t)}"
+        \\        Err(_) => "failed"
+        \\    }
+        \\}
+        ,
+        .expected = .{ .inspect_str = "\"A/B x\"" },
+    },
+    .{
+        // repro for https://github.com/roc-lang/roc/issues/11563
+        // The outer record and the nested nominal both encode a string and a list
+        // of strings.
+        .name = "issue 11563: Json.to_str scalar and list shared by a record and its nested derived nominal",
+        .source_kind = .module,
+        .source =
+        \\Inner := { name : Str, ys : List(Str) }.{ encoder_for : _ }
+        \\
+        \\main : Str
+        \\main = {
+        \\    value : { s : Str, xs : List(Str), inner : Inner }
+        \\    value = { s: "p", xs: ["q"], inner: Inner.({ name: "x", ys: ["y"] }) }
+        \\    Json.to_str(value)
+        \\}
+        ,
+        .expected = .{ .inspect_str = "\"{\\\"inner\\\":{\\\"name\\\":\\\"x\\\",\\\"ys\\\":[\\\"y\\\"]},\\\"s\\\":\\\"p\\\",\\\"xs\\\":[\\\"q\\\"]}\"" },
+    },
+    .{
+        // repro for https://github.com/roc-lang/roc/issues/11563
+        // The outer record and the nested nominal both encode the same tag union.
+        .name = "issue 11563: Json.to_str tag union shared by a record and its nested derived nominal",
+        .source_kind = .module,
+        .source =
+        \\Choice : [A, B(Str)]
+        \\
+        \\Inner := { t : Choice }.{ encoder_for : _ }
+        \\
+        \\main : Str
+        \\main = {
+        \\    value : { t : Choice, inner : Inner }
+        \\    value = { t: A, inner: Inner.({ t: B("x") }) }
+        \\    Json.to_str(value)
+        \\}
+        ,
+        .expected = .{ .inspect_str = "\"{\\\"inner\\\":{\\\"t\\\":{\\\"B\\\":\\\"x\\\"}},\\\"t\\\":\\\"A\\\"}\"" },
+    },
+    .{
+        // repro for https://github.com/roc-lang/roc/issues/11563
+        // The outer record and the nested nominal both encode a null.
+        .name = "issue 11563: Json.to_str null shared by a record and its nested derived nominal",
+        .source_kind = .module,
+        .source =
+        \\Inner := { n : Try(Str, [Null]) }.{ encoder_for : _ }
+        \\
+        \\main : Str
+        \\main = {
+        \\    value : { m : Try(Str, [Null]), inner : Inner }
+        \\    value = { m: Err(Null), inner: Inner.({ n: Ok("x") }) }
+        \\    Json.to_str(value)
+        \\}
+        ,
+        .expected = .{ .inspect_str = "\"{\\\"inner\\\":{\\\"n\\\":\\\"x\\\"},\\\"m\\\":null}\"" },
+    },
+    .{
+        // repro for https://github.com/roc-lang/roc/issues/11549
+        // A self-recursive function whose argument type nests `Try` inside `Try`
+        // must specialize under the default strategy: the `Err(NoMatch)` branch
+        // recurses with `Ok(Err(Unset))`, which the `Ok(_)` branch returns.
+        .name = "issue 11549: self-recursive call with nested Try argument",
+        .source_kind = .module,
+        .source =
+        \\f : Try(Try(U64, [Unset]), [NoMatch]) -> Try(Try(U64, [Unset]), [NoMatch])
+        \\f = |val| match val {
+        \\    Err(NoMatch) => f(Ok(Err(Unset)))
+        \\    Ok(_) => val
+        \\}
+        \\
+        \\main = f(Err(NoMatch))
+        ,
+        .expected = .{ .inspect_str = "Ok(Err(Unset))" },
+    },
+    .{
+        // repro for https://github.com/roc-lang/roc/issues/11549
+        // The annotation's output error row is implicitly open, but the body
+        // returns its closed argument, so `f`'s checked type has no open rows.
+        // The self-call must be recorded against that checked type.
+        .name = "issue 11549: self-recursive call with single Try argument",
+        .source_kind = .module,
+        .source =
+        \\f : Try(U64, [NoMatch]) -> Try(U64, [NoMatch])
+        \\f = |val| match val {
+        \\    Err(NoMatch) => f(Ok(1))
+        \\    Ok(_) => val
+        \\}
+        \\
+        \\main = f(Err(NoMatch))
+        ,
+        .expected = .{ .inspect_str = "Ok(1)" },
+    },
+    .{
+        // repro for https://github.com/roc-lang/roc/issues/11549
+        // `g` calls `h` before `h` is checked, and `h` calls `g` back. Both
+        // calls must be recorded against the callee's checked type, which has
+        // no open rows, not against its annotation's implicitly open rows.
+        .name = "issue 11549: mutually recursive annotated calls with Try argument",
+        .source_kind = .module,
+        .source =
+        \\g : Try(U64, [NoMatch]) -> Try(U64, [NoMatch])
+        \\g = |val| h(val)
+        \\
+        \\h : Try(U64, [NoMatch]) -> Try(U64, [NoMatch])
+        \\h = |val| match val {
+        \\    Err(NoMatch) => g(Ok(1))
+        \\    Ok(_) => val
+        \\}
+        \\
+        \\main = g(Err(NoMatch))
+        ,
+        .expected = .{ .inspect_str = "Ok(1)" },
+    },
+    .{
+        // repro for https://github.com/roc-lang/roc/issues/11549
+        // A method that calls itself through method syntax must record that
+        // call against its checked type, which has no open rows, not against
+        // its annotation's implicitly open output row.
+        .name = "issue 11549: self-recursive method call with Try argument",
+        .source_kind = .module,
+        .source =
+        \\Counter := [Start].{
+        \\    step : Counter, Try(U64, [NoMatch]) -> Try(U64, [NoMatch])
+        \\    step = |counter, val| match val {
+        \\        Err(NoMatch) => counter.step(Ok(1))
+        \\        Ok(_) => val
+        \\    }
+        \\}
+        \\
+        \\main = {
+        \\    counter : Counter
+        \\    counter = Start
+        \\    counter.step(Err(NoMatch))
+        \\}
+        ,
+        .expected = .{ .inspect_str = "Ok(1)" },
+    },
+    .{
+        // repro for https://github.com/roc-lang/roc/issues/11549
+        // An annotated recursive function defined inside a block must record
+        // its self-call against its checked type, which has no open rows.
+        .name = "issue 11549: local self-recursive call with Try argument",
+        .source_kind = .module,
+        .source =
+        \\main = {
+        \\    f : Try(U64, [NoMatch]) -> Try(U64, [NoMatch])
+        \\    f = |val| match val {
+        \\        Err(NoMatch) => f(Ok(1))
+        \\        Ok(_) => val
+        \\    }
+        \\    f(Err(NoMatch))
+        \\}
+        ,
+        .expected = .{ .inspect_str = "Ok(1)" },
+    },
+    .{
+        // repro for https://github.com/roc-lang/roc/issues/11549
+        // `main` is checked before `step`'s body, so its method call uses
+        // `step`'s annotation, whose output error row is implicitly open. The
+        // body returns its closed argument, so `step`'s checked type has no
+        // open rows, and the call must be recorded against that checked type.
+        .name = "issue 11549: method call checked before the annotated method's body",
+        .source_kind = .module,
+        .source =
+        \\main = {
+        \\    counter : Counter
+        \\    counter = Start
+        \\    counter.step(Err(NoMatch))
+        \\}
+        \\
+        \\Counter := [Start].{
+        \\    step : Counter, Try(U64, [NoMatch]) -> Try(U64, [NoMatch])
+        \\    step = |_, val| val
+        \\}
+        ,
+        .expected = .{ .inspect_str = "Err(NoMatch)" },
+    },
+    .{
+        // A function whose result is an alias of `Try` has an implicitly open
+        // error row inside the alias. Each call must get its own copy of that
+        // row, so one caller can use the result as `[Oops, A]` and another as
+        // `[Oops, B]`.
+        .name = "aliased result with an implicitly open row is instantiated per call",
+        .source_kind = .module,
+        .source =
+        \\Res : Try(U64, [Oops])
+        \\
+        \\f : U64 -> Res
+        \\f = |_| Err(Oops)
+        \\
+        \\take_a : Try(U64, [Oops, A]) -> Str
+        \\take_a = |res| match res {
+        \\    Ok(_) => "ok"
+        \\    Err(Oops) => "oops a"
+        \\    Err(A) => "a"
+        \\}
+        \\
+        \\take_b : Try(U64, [Oops, B]) -> Str
+        \\take_b = |res| match res {
+        \\    Ok(_) => "ok"
+        \\    Err(Oops) => "oops b"
+        \\    Err(B) => "b"
+        \\}
+        \\
+        \\main = (take_a(f(1)), take_b(f(2)))
+        ,
+        .expected = .{ .inspect_str = "(\"oops a\", \"oops b\")" },
+    },
+    .{
+        // repro for https://github.com/roc-lang/roc/issues/11312
+        // A non-Str crash message is a type mismatch. Compile-time
+        // finalization and lowering must not see the message's erroneous
+        // type; the program reports the mismatch and crashes when run.
+        .name = "issue 11312: non-Str crash message reports a problem and crashes at runtime instead of panicking",
+        .source_kind = .module,
+        .source =
+        \\poly = || {
+        \\    crash YYYYY
+        \\    "x"
+        \\}
+        \\
+        \\rDsult = poly() == poly()
+        \\
+        \\main = rDsult
+        ,
+        .expected = .{ .problem_and_crash = {} },
+    },
+    .{
+        .name = "issue 11312: callable constant built from a call into a checked error crashes at runtime",
+        .source_kind = .module,
+        .source =
+        \\poly = || {
+        \\    crash YYYYY
+        \\    "x"
+        \\}
+        \\
+        \\make = |s| |_| s
+        \\
+        \\g = make(poly())
+        \\
+        \\main = g(1)
+        ,
+        .expected = .{ .problem_and_crash = {} },
+    },
+    .{
+        .name = "issue 11312: literal conversion whose method reaches a checked error crashes at runtime",
+        .source_kind = .module,
+        .source =
+        \\Tag := [Tag(Str)].{
+        \\    from_quote : Str -> Try(Tag, [BadQuotedBytes(Str)])
+        \\    from_quote = |str| {
+        \\        crash YYYYY
+        \\        Ok(Tag(str))
+        \\    }
+        \\}
+        \\
+        \\value = "one".Tag
+        \\
+        \\main = match value {
+        \\    Tag(s) => s
+        \\}
+        ,
+        .expected = .{ .problem_and_crash = {} },
+    },
+    .{
+        .name = "issue 11312: constant calling into a checked error crashes when read at runtime",
+        .source_kind = .module,
+        .source =
+        \\poly = || {
+        \\    crash YYYYY
+        \\    "x"
+        \\}
+        \\
+        \\first = poly()
+        \\
+        \\main = first
+        ,
+        .expected = .{ .problem_and_crash = {} },
+    },
+    .{
+        // repro for https://github.com/roc-lang/roc/issues/11489
+        // An unannotated function whose local recursive helper appends a
+        // freshly appended inner list to an outer accumulator in two match
+        // branches. Specializing it at `List(Str)` must group the items and
+        // produce `[["a"], ["b"]]` rather than failing to lower the nested
+        // `append` dispatch.
+        .name = "issue 11489: nested append in local recursive helper of generalized function",
+        .source_kind = .module,
+        .source =
+        \\split = |items| {
+        \\    aux = |rest, inner_acc, acc| match rest {
+        \\        [] => acc
+        \\        [h] => acc.append(inner_acc.append(h))
+        \\        [f, .. as t] => aux(t, [], acc.append(inner_acc.append(f)))
+        \\    }
+        \\    aux(items, [], [])
+        \\}
+        \\
+        \\main = split(["a", "b"])
+        ,
+        .expected = .{ .inspect_str = "[[\"a\"], [\"b\"]]" },
+    },
+    .{
+        // repro for https://github.com/roc-lang/roc/issues/11489
+        // The grouped result's element type is known only through the local
+        // helper's recursive call, so dispatching on each group after `map`
+        // must resolve to `List.len` and produce `[1, 1]`.
+        .name = "issue 11489: method dispatch on groups built by local recursive helper",
+        .source_kind = .module,
+        .source =
+        \\split = |items| {
+        \\    aux = |rest, inner_acc, acc| match rest {
+        \\        [] => acc
+        \\        [h, .. as t] => aux(t, [], acc.append(inner_acc.append(h)))
+        \\    }
+        \\    aux(items, [], [])
+        \\}
+        \\
+        \\main = split(["a", "b"]).map(|group| group.len())
+        ,
+        .expected = .{ .inspect_str = "[1, 1]" },
     },
 };

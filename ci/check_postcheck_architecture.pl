@@ -306,6 +306,7 @@ sub check_body_context_output_access {
         importProgramType
         commitGraphType
         lookupMethodTargetByName
+        lookupInspectOverride
     );
     my %allowed_graph_type_egress = map { $_ => 1 } qw(
         completeDeferredIteratorResult

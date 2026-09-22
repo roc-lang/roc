@@ -86,4 +86,28 @@ describe_point = |point|
 
 ## [Tuples vs Records](#tuples-vs-records) {#tuples-vs-records}
 
-TODO
+Tuples and [records](records) are very similar. Both group a fixed number of values together,
+the values can have different types, and neither one involves a heap allocation. The difference is
+that a record gives each of its values a name, whereas a tuple identifies its values only by position.
+
+This makes records more self-documenting. Compare:
+
+```roc
+tuple_user = ("Sam", "sam@example.com", 30)
+
+record_user = { name: "Sam", email: "sam@example.com", age: 30 }
+```
+
+With the tuple, you have to remember that `tuple_user.1` is the email address, whereas with the
+record, you can write `record_user.email`. Records also have features that tuples don't, like
+[optional fields](records#optional-fields) and [record update syntax](records#updating-records).
+
+Tuples are most useful when the meaning of each position is obvious from context, and the
+group of values is small. Common examples include:
+
+- Coordinates, like `(x, y)`
+- Returning two values from a function, like a result and some updated state
+- Key-value pairs, like the `(k, v)` pairs used by [`Dict`](dictionaries-and-sets)
+
+When a tuple grows beyond two or three elements, or when it's not obvious what each position
+means, a record is usually the better choice.

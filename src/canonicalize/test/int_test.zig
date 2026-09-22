@@ -426,3 +426,31 @@ test "octal integer literals" {
         try std.testing.expectEqual(tc.expected_value, @as(i128, @bitCast(expr.e_num.value.bytes)));
     }
 }
+
+test "invalid literal payload does not schedule imported suffix resolution" {
+    const source =
+        \\import Gui
+        \\value = 42.Gui.Color
+    ;
+    var env = try ModuleEnv.init(testing.allocator, source);
+    defer env.deinit();
+    try env.initCIRFields("Test");
+    const ast = try parse.file(testing.allocator, &env.common);
+    defer ast.deinit();
+    try testing.expectEqual(@as(usize, 1), ast.store.numeric_literals.items.len);
+    ast.store.numeric_literals.items[0].compact = .invalid;
+
+    var builtin_ctx = try BuiltinTestContext.init(testing.allocator);
+    defer builtin_ctx.deinit();
+    var czer = try Can.initModule(CoreCtx.testing(testing.allocator, testing.allocator), &env, ast, builtin_ctx.canInitContext());
+    defer czer.deinit();
+    try czer.canonicalizeFile();
+
+    const diagnostics = try env.getDiagnostics();
+    defer testing.allocator.free(diagnostics);
+    try testing.expectEqual(@as(usize, 1), diagnostics.len);
+    try testing.expect(diagnostics[0] == .invalid_num_literal);
+    for (env.deferred_import_refs.items.items) |entry| {
+        try testing.expect(entry.kind != .numeric_suffix);
+    }
+}

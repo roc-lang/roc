@@ -764,7 +764,7 @@ pub fn expectPreparedFiniteCaptureFreeDirectCallsParallelismDeterministicLir() L
             const parallel = timing.monotype_parallel;
             try std.testing.expectEqual(@as(u64, 5), parallel.root_tasks_submitted);
             try std.testing.expectEqual(parallel.root_tasks_submitted, parallel.root_tasks_committed);
-            try std.testing.expectEqual(@as(u64, 10), parallel.specialization_tasks_submitted);
+            try std.testing.expectEqual(@as(u64, 11), parallel.specialization_tasks_submitted);
             try std.testing.expect(
                 parallel.specialization_tasks_submitted > parallel.peak_worker_lanes_available,
             );
@@ -773,8 +773,9 @@ pub fn expectPreparedFiniteCaptureFreeDirectCallsParallelismDeterministicLir() L
                 parallel.specialization_tasks_committed,
             );
             try std.testing.expectEqual(@as(u64, 0), parallel.specialization_tasks_discarded_ready);
-            // Ten specializations drain in one stream after the fixed root
-            // batches, independently of available lane count.
+            // Eleven specializations, the template root's own body among
+            // them, drain in one stream after the fixed root batches,
+            // independently of available lane count.
             try std.testing.expectEqual(case.monotype_task_waves, parallel.task_waves);
             try std.testing.expect(parallel.within_lowering_lane_reuse_tasks > 0);
             try std.testing.expect(parallel.peak_specialization_jobs_pending > 0);

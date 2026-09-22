@@ -68,7 +68,7 @@ const DEV_BACKEND_IMPLEMENTED = eval.backendAvailable(.dev);
 
 const BackendEvalError = helpers.TestHelperError || Interpreter.Error || Allocator.Error || error{DevBackendUnavailable};
 const StatsJsonError = Allocator.Error || std.Io.Dir.AccessError || std.Io.Dir.CreateDirPathError || std.Io.File.OpenError || std.Io.File.Writer.Error;
-const RunnerMainError = StatsJsonError || std.process.Args.ToSliceError || Allocator.Error;
+const RunnerMainError = std.fmt.ParseIntError || StatsJsonError || std.process.Args.ToSliceError || Allocator.Error;
 
 const BackendStatus = enum(u8) {
     pass,
@@ -327,11 +327,14 @@ fn runInterpreter(allocator: std.mem.Allocator, lowered: *const LoweredProgram) 
     var runtime_env = RuntimeHostEnv.init(allocator);
     defer runtime_env.deinit();
 
+    var static_strings = try Interpreter.buildStaticStrings(allocator, &lowered.view.store);
+    defer static_strings.deinit();
     var interp = try Interpreter.initWithBoxyTables(
         allocator,
         &lowered.view.store,
         &lowered.view.layouts,
         Interpreter.BoxyTables.fromImageView(&lowered.view),
+        static_strings.view(),
         runtime_env.get_ops(),
     );
     defer interp.deinit();
@@ -1155,7 +1158,7 @@ pub fn main(init: std.process.Init) RunnerMainError!void {
     // worker_argv_template is null—this runner doesn't (yet) support
     // Windows Child-based parallelism; on Windows it falls through to
     // runSequential as before.
-    Pool.runWithSpans(io, tests, results, spans, max_children, hang_timeout_ms, gpa, null);
+    Pool.runWithSpans(io, tests, results, spans, max_children, hang_timeout_ms, gpa, null, cli.child_debug);
 
     const wall_elapsed = wall_timer.read();
     var passed: usize = 0;

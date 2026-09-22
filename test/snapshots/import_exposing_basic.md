@@ -16,8 +16,8 @@ main = {
 ~~~
 # EXPECTED
 DUPLICATE DEFINITION - import_exposing_basic.md:1:1:1:43
-NAME NOT IN SCOPE - import_exposing_basic.md:5:15:5:21
-NAME NOT IN SCOPE - import_exposing_basic.md:6:15:6:21
+DOES NOT EXIST - import_exposing_basic.md:5:15:5:21
+DOES NOT EXIST - import_exposing_basic.md:6:15:6:21
 # PROBLEMS
 ~~~clojure
 (reports
@@ -44,29 +44,21 @@ NAME NOT IN SCOPE - import_exposing_basic.md:6:15:6:21
 			(source-region (file "import_exposing_basic.md") (start 1 1) (end 1 1) (annotation dim) (line-text "import json.Json exposing [decode, to_str]"))))
 	(report
 		(severity runtime_error)
-		(title "Name Not In Scope")
+		(title "Does Not Exist")
 		(region (start 5 15) (end 5 21))
 		(headline
-			(reflow "Nothing is named ")
 			(annotated symbol-unqualified "to_str")
-			(reflow " in this scope."))
+			(reflow " does not exist."))
 		(document
-			(reflow "Is it misspelled, or is there an import missing?")
-			(line-break)
-			(line-break)
 			(source-region (file "import_exposing_basic.md") (start 5 15) (end 5 21) (annotation error) (line-text "    encoded = to_str(data)"))))
 	(report
 		(severity runtime_error)
-		(title "Name Not In Scope")
+		(title "Does Not Exist")
 		(region (start 6 15) (end 6 21))
 		(headline
-			(reflow "Nothing is named ")
 			(annotated symbol-unqualified "decode")
-			(reflow " in this scope."))
+			(reflow " does not exist."))
 		(document
-			(reflow "Is it misspelled, or is there an import missing?")
-			(line-break)
-			(line-break)
 			(source-region (file "import_exposing_basic.md") (start 6 15) (end 6 21) (annotation error) (line-text "    decoded = decode(encoded)")))))
 ~~~
 # TOKENS
