@@ -18755,6 +18755,20 @@ fn warnAboutBindingName(
     } });
 }
 
+/// Type variables are never reassignable, so the `$` prefix that marks `var`
+/// bindings is not allowed on them. Reported once, where the variable is introduced.
+fn warnAboutDollarTypeVar(self: *Self, ident: Ident.Idx, region: Region) std.mem.Allocator.Error!void {
+    const name = self.env.getIdent(ident);
+    if (!std.mem.startsWith(u8, name, "$")) return;
+
+    const suggested_name = try self.env.insertIdent(Ident.for_text(std.mem.trimStart(u8, name, "$")));
+    try self.env.pushDiagnostic(.{ .type_var_starting_with_dollar = .{
+        .name = ident,
+        .suggested_name = suggested_name,
+        .region = region,
+    } });
+}
+
 // Result type for parsing fractional literals into small, Dec, or f64
 
 /// Introduce a var identifier to the current scope.
@@ -19334,6 +19348,7 @@ fn runTypeAnnoKernel(self: *Self, anno_idx: AST.TypeAnno.Idx, type_anno_ctx: *Ty
                         },
                         .not_found => {
                             if (type_anno_ctx.canIntroduceTypeVar(name_ident.attributes.ignored)) {
+                                try self.warnAboutDollarTypeVar(name_ident, region);
                                 try self.scratch_type_var_validation.append(name_ident);
                                 const new_anno_idx = try self.env.addTypeAnno(.{ .rigid_var = .{
                                     .name = name_ident,

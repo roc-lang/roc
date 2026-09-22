@@ -509,9 +509,20 @@ Poison is local to the expression or dependency region that owns the checking
 problem. It propagates only through explicit checked dependencies, such as a
 lookup of an erroneous local or top-level value, or a call whose callee's body
 contains code checking replaced with a runtime error: the post-solve walk that
-confirms a root's dependencies already follows each callee's body, and a root
-whose evaluation can reach such code is not kept, so the crash that code lowers
-to is never reported a second time as a compile-time crash. It must never become a module,
+confirms a hoisted root's dependencies already follows each callee's body, and a
+root whose evaluation can reach such code is not kept, so the crash that code
+lowers to is never reported a second time as a compile-time crash. Top-level
+roots get the same guarantee from CheckedModule construction, which records in
+`checked_error_templates` every procedure template whose evaluation can reach a
+checked runtime error. It follows each template's explicit procedure
+references, constant references, and closed dispatch targets to a fixpoint,
+reads an imported template's answer from the importing CheckedModule's view of
+that module's `checked_error_templates` list, and never requests a compile-time
+root whose entry wrapper is in the list. An expect is the exception: when only a
+callee or a referenced constant reaches the checked error, the expect still runs
+and its crash is a failed test, which is not a second report of the checked
+error. A CheckedModule whose bodies and imports contain no checked runtime error
+records an empty list and does no traversal. It must never become a module,
 package, or program flag. A checked module or checked program may contain
 user-facing diagnostics and still produce hoisted roots for every independent
 expression whose own dependency region is resolved and otherwise eligible. This
@@ -892,6 +903,15 @@ build after the first does, reaches the same constructions: the const
 store keeps an empty list's evaluated capacity and restores it as the
 `with_capacity` call, and a restored value whose parts are all
 constructions lowers as them rather than as a static-data candidate.
+A construction is the value's shape and leaves alone and names no list,
+field or payload layout: the compile-time consumer that decoded it and the
+runtime consumer that emits it lower separately and intern layouts in their
+own order, so a layout index from one program is not a name in the other.
+A read matches a construction by checked root identity; a scalar literal is
+checked against the read's scalar layout, which is the same fixed index in
+every store, and an aggregate is checked shape by shape as it is emitted,
+with the reading site's own layout supplying the item, field and
+payload layouts the emitted code needs.
 After the passes, which compact the slot table, the remaining
 aggregate slots are transcoded into the target's frozen image. The LLVM
 backend then defines each slot whose image is a link-time constant—bytes with
@@ -3738,7 +3758,10 @@ constraint callable or from a later union-find representative.
 An ordinary call judges its callee from the callable variable produced by
 scheme instantiation; imported static methods may use an erroneous source
 placeholder whose instantiated callable is valid. Its arguments consume
-`call_operand_type_error_exprs` like the other call-like forms.
+`call_operand_type_error_exprs` like the other call-like forms. A `crash` owns
+its message's `Str` demand the same way: an erroneous message retires the
+crash, and a message whose own type is not `Str` is rejected by an owned
+relation that retires the crash while the message keeps its solved type.
 Statement-owned iterator loops have no parent expression to mark; they consume
 the same operand record and leave the erroneous iterable expression in
 `erroneous_value_exprs`. Checked for-nodes require a topology plan even on
@@ -5107,8 +5130,15 @@ witness. ConstStore preserves that witness beside the stored value, and restore
 relates the checked public interface to it without ordinary unification.
 
 A value-producing `if` or `match` likewise owns one explicit result selection
-for all of its inhabited branches. An exact generated-private request already
-supplied by the caller remains authoritative. Otherwise, before emitting any
+for all of its inhabited branches. Selection starts with the exact specialized
+request, including its type bindings and method evidence. A finished request is
+an immutable interface, not a reason to instantiate the generic checked result
+again: branch constructors and nested callables must consume its constraints
+before selecting methods. The declared interface and selected representation
+are separate cells only when producer evidence requires a distinct representation;
+ordinary branch results reuse the request without another type instantiation or
+ownership scan. An exact generated-private request already supplied by the caller
+remains authoritative. Otherwise, before emitting any
 branch body, Monotype asks every branch's checked producer for its exact result
 evidence and joins all generated-private evidence into the shared live result
 selection. Public-only evidence does not settle the selection. Match patterns
@@ -5119,10 +5149,12 @@ minted iterator producers therefore use the ordinary graph representation join,
 which keeps a compatible static representation and reaches the defined
 forced-dynamic fixed point only when the producer topology requires it. Source
 order cannot make one already-emitted branch authoritative, and lowering never
-needs to revise emitted branch code. Only after all branches have been lowered
-does the selected result relate to the outer interface and seal. Representation
-selection never reconstructs branch evidence from finished output IR or
-reopens a durable Monotype.
+needs to revise emitted branch code. A producer that selects a distinct private
+representation relates its public interface to the request without merging or
+mutating a finished request. After all branches have been lowered, the selected
+result is validated against the declared interface and carried to sealing.
+Representation selection never reconstructs branch evidence from finished
+output IR or reopens a durable Monotype.
 
 Branches that provably terminate do not participate in result selection. If
 every branch terminates, the control-flow expression produces no runtime value:
@@ -7740,6 +7772,15 @@ statement locs, the dev backend via failure-region hooks emitted
 before each crash and each expect-failed call, passing
 file/line/column alongside region offsets.
 
+Monotype assigns source-file IDs once per program, deduplicating by checked
+module identity and ordering by qualified module name and checked module key.
+A checked module's `module_idx` belongs to its own checking environment; equal
+local indices in different checked modules never identify the same source file.
+The coordinator's completed module-to-file mapping is immutable throughout body
+lowering. Workers borrow it instead of rebuilding or sorting their own tables.
+Each body context retains its declaring module's file ID, and later IR stages
+preserve that ID together with its owning program's source-file table.
+
 Monotype default identity (`Type.FieldDefault`): the Monotype record
 field itself carries the `??` default identity—the declaring module's
 identity interned in the program name store plus the default
@@ -9927,6 +9968,21 @@ check. When a digest match is found, the store must also verify the checked
 callable identity, method scope, exact evidence topology, exact codec
 contract, and exact structural equality of the closed Monotype function type.
 Digest collisions are therefore harmless.
+
+Request, solved-view, and codec constructor/shape digests use the cached
+`typeEql` equivalence. Equal types must reach the same lookup bucket even when
+their checked type ids, checked tag labels, or transparent alias paths differ.
+Full stored-type and public-interface identity digests retain their existing
+provenance contract; they do not key specialization reuse. The original types
+retain the checked references needed by constant evaluation and checked-store
+re-entry. Worker-local choice of an equal representative must neither reserve
+another specialization nor consume another procedure symbol.
+
+Specialization digest computation is demand-driven and cached on immutable types,
+including an alias used as the query root. Repeated queries and aliases over
+an already-cached backing allocate no traversal storage. Draft lookup,
+coordinator reservation, and solved-view aliases consume these producer-owned
+digests; no consumer scans other buckets or reconstructs missing identity.
 
 The checked source function type a call site instantiated the callable from is
 NOT part of this identity. The callable says which checked body a request
@@ -15716,6 +15772,24 @@ stand between `src/glue/platform/*.roc` and the glue runner. Named fields select
 schema logical indices; the layout store supplies their byte offsets and
 layouts. A checked-source schema regression test locks the remaining marshaller
 field names and leaf types.
+
+Glue's type table describes values. A function value, wherever it appears
+(boxed, in a record or tag payload, or in a stored signature), is one
+erased-callable pointer whose own layout does not depend on its argument or
+result types, so it is a `RocErasedCallable` entry rather than a signature.
+That entry carries a `Known` signature naming its argument and result entries
+when every one of them has a standalone committed layout, since a host invoking
+the callable fills its argument buffer and reads its result buffer with those
+layouts; it is `Opaque` when the signature mentions an unresolved type variable
+or a generic nominal's parameter inside that nominal's backing, and the host
+can then only store the callable and hand it back to Roc. Whether `Box(fn)` is
+that callable's own allocation or a box cell over it is the compiler's
+committed layout decision, and glue takes it from that layout, never from the
+type's shape. Callables that are themselves linker symbols carry their
+signature outside the type table: a hosted function's arguments and result on
+its `HostedFunctionInfo`, and a provided procedure's on its `ProvidesEntry`.
+Glue classifies each provided export as a procedure or data from the
+CheckedModule's provided export table, never from the shape of its type.
 
 The platform header maps linker symbols explicitly, symbol-string first, in
 both directions:

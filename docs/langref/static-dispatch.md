@@ -57,7 +57,7 @@ packages can define and require their own methods with `where` clauses.
 | `range_iter` | `Range.iter`, `Range.iter_rev` | The type can iterate its stored range representation. |
 | `range_len_if_known` | Numeric range constructors, `Range.step_by` | The type can provide an exact `U64` count when representable. |
 | `negate`, `not` | Unary `-`, unary `!` | The type has a unary negation or complement operation. |
-| `from_numeral : Num.Numeral -> Try(T, [InvalidNumeral(Str)])` | Number literals with target type `T` | Plain numeric literal syntax should construct the type. |
+| `from_numeral : Numeral -> Try(T, [InvalidNumeral(Str)])` | Number literals with target type `T` | Plain numeric literal syntax should construct the type. |
 | `from_quote : Str -> Try(T, [BadQuotedBytes(Str)])` | Quoted string literals with target type `T` | Plain quoted literal syntax should construct the type. |
 | `from_interpolation : Str, Iter((item, Str)) -> T` | Interpolated string literals with target type `T` | Interpolation should construct the type. |
 | `iter : T -> Iter(item)` | `for item in value` | The type should be iterable in `for` loops. |
@@ -275,9 +275,9 @@ nominal type that defines it:
 
 ```roc
 Celsius := { degrees: I64 }.{
-    from_numeral : Num.Numeral -> Try(Celsius, [InvalidNumeral(Str)])
+    from_numeral : Numeral -> Try(Celsius, [InvalidNumeral(Str)])
     from_numeral = |n| match I64.from_numeral(n) {
-        Ok(degrees) => Ok({ degrees })
+        Ok(degrees) => Ok({ degrees: degrees })
         Err(err) => Err(err)
     }
 }
@@ -286,7 +286,7 @@ temp : Celsius
 temp = 21  # calls Celsius.from_numeral
 ```
 
-`Num.Numeral` carries the literal's exact digits, so a custom type can accept
+`Numeral` carries the literal's exact digits, so a custom type can accept
 the literal range its representation supports and reject the rest with
 `InvalidNumeral`.
 
@@ -402,8 +402,100 @@ annotation or a suffix (`5.U64`).
 
 ## Where Clauses
 
-TODO
+A function that calls a method on a value whose type is a type variable needs to say which methods
+that type must have. This is what `where` clauses are for:
+
+```roc
+show_all : List(a) -> Str where [a.to_str : a -> Str]
+show_all = |items| {
+    var $out = ""
+
+    for item in items {
+        $out = $out.concat(item.to_str()).concat(" ")
+    }
+
+    $out
+}
+```
+
+The `where [a.to_str : a -> Str]` clause says that `show_all` accepts a list of any type `a`,
+as long as `a` has a `to_str` method with the type `a -> Str`. Inside the function, that's what
+makes it possible to call `item.to_str()`, and at each call site, the compiler checks that the
+list's element type actually has that method. For example, `show_all([1.U8, 2, 3])` works because
+`U8` has a `to_str` method, whereas `show_all([{ x: 1 }])` gives an error because records don't.
+
+Since this is static dispatch, each call site knows exactly which `to_str` implementation it's using,
+and the compiled program calls it directly.
+
+If a function calls a method on a type variable, but its annotation doesn't have a `where` clause
+listing that method, the compiler reports an error. If the function doesn't have an annotation,
+the compiler infers the `where` clause automatically.
+
+A `where` clause can list multiple constraints, separated by commas, and they can involve different
+type variables:
+
+```roc
+convert_all : List(a) -> List(b) where [a.to_b : a -> b, b.is_valid : b -> Bool]
+```
+
+See [Where Clauses](types#where-clauses) in the types page for more on the syntax.
+
+### Calling Methods on Type Variables
+
+Some methods don't take a value of the type as an argument; for example, a method which creates a
+new value of the type from scratch. To call one of those on a type variable, first give the type
+variable an uppercase name by writing `UppercaseName : lowercase_type_variable` inside the function
+body. After that, the uppercase name can be used to call the type variable's methods:
+
+```roc
+make_default : {} -> thing where [thing.default : () -> thing]
+make_default = |_| {
+    Thing : thing
+
+    Thing.default()
+}
+```
+
+Here, `Thing.default()` calls whichever `default` method belongs to the type that `thing` turns out
+to be at the call site. The [`parser_for` example](#parsing-and-encoding) above uses this technique
+to call `Encoding.parse_str(…)`.
 
 ## Aliases
 
-TODO
+When the same group of `where` constraints is needed in many places, you can give the group a name
+with a _where alias_:
+
+```roc
+a.Showable : where [a.to_str : a -> Str]
+```
+
+This declares a where alias named `Showable`. Now, instead of repeating the constraint, you can
+write `a.Showable` in a `where` clause:
+
+```roc
+show_one : a -> Str where [a.Showable]
+show_one = |value| value.to_str()
+```
+
+This means exactly the same thing as `where [a.to_str : a -> Str]`. Any type that has the required
+methods satisfies the alias; there's no need to declare that a type "implements" `Showable`.
+
+A where alias can combine other where aliases, as well as individual method constraints:
+
+```roc
+a.Comparable : where [a.is_lt : a, a -> Bool]
+
+a.Sortable : where [a.Showable, a.Comparable]
+```
+
+Where aliases can also take parameters, which their constraints can mention:
+
+```roc
+a.Encodable(fmt) : where [a.encode : a, fmt -> fmt]
+
+encode_twice : a, fmt -> fmt where [a.Encodable(fmt)]
+encode_twice = |value, fmt| value.encode(value.encode(fmt))
+```
+
+A where alias describes constraints on a type, not a type itself, so it can only be used inside a
+`where` clause. Writing something like `describe : Showable -> Str` is an error.
