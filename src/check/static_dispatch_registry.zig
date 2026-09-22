@@ -2055,13 +2055,18 @@ pub const StaticDispatchPlanTable = struct {
 
         const module_env = module.moduleEnvConst();
         const checked_type_view = checked_types.store.view();
+        var subject_scratch = @TypeOf(checked_type_view).EqualityScratch.init(allocator);
+        defer subject_scratch.deinit();
         for (module_env.generated_codec_derivations.items.items) |derivation| {
             const source_calls = module_env.generated_codec_calls.items.items[derivation.calls_start..][0..derivation.calls_len];
             const calls_start: u32 = @intCast(generated_codec_calls.items.len);
+            // Roles are keyed by the type a subject denotes, so subjects
+            // spelled through different transparent aliases share a role.
+            // Canonical keys retain alias identity and cannot bucket them.
             const GeneratedCodecRoleKey = struct {
                 method: canonical.MethodNameId,
                 has_subject: bool,
-                subject_key: canonical.CanonicalTypeKey,
+                subject_bucket: u64,
             };
             const GeneratedCodecRoleCandidate = struct {
                 subject_ty: ?CheckedTypeId,
@@ -2086,7 +2091,7 @@ pub const StaticDispatchPlanTable = struct {
                 const role_key = GeneratedCodecRoleKey{
                     .method = method,
                     .has_subject = subject_ty != null,
-                    .subject_key = if (subject_ty) |subject| checked_type_view.rootKey(subject) else .{},
+                    .subject_bucket = if (subject_ty) |subject| checked_type_view.aliasTransparentBucketKey(subject) else 0,
                 };
                 const candidates_entry = try role_candidates.getOrPut(role_key);
                 if (!candidates_entry.found_existing) candidates_entry.value_ptr.* = .empty;
@@ -2097,7 +2102,7 @@ pub const StaticDispatchPlanTable = struct {
                         break;
                     }
                     if (candidate.subject_ty.? == subject_ty.? or
-                        try checked_type_view.rootExactEql(allocator, candidate.subject_ty.?, subject_ty.?))
+                        try checked_type_view.rootAliasTransparentEql(&subject_scratch, candidate.subject_ty.?, subject_ty.?))
                     {
                         method_role = candidate.role;
                         break;

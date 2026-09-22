@@ -3428,6 +3428,19 @@ const empty_builtin_nominal_declarations: BuiltinNominalDeclarationIndex = @spla
 /// `var_names` interner, so type accessors can resolve ids without holding the owning
 /// store (used by both a live store and a deserialized, buffer-backed one).
 pub const CheckedTypeStoreView = struct {
+    /// Reusable scratch for repeated `rootAliasTransparentEql` queries.
+    pub const EqualityScratch = struct {
+        assumed: std.AutoHashMap(CheckedTypeExactPair, void),
+
+        pub fn init(allocator: Allocator) EqualityScratch {
+            return .{ .assumed = std.AutoHashMap(CheckedTypeExactPair, void).init(allocator) };
+        }
+
+        pub fn deinit(self: *EqualityScratch) void {
+            self.assumed.deinit();
+        }
+    };
+
     roots: []const CheckedTypeRoot = &.{},
     schemes: []const CheckedTypeScheme = &.{},
     scheme_index: collections.SafeList(u32) = .{},
@@ -3559,7 +3572,21 @@ pub const CheckedTypeStoreView = struct {
     ) Allocator.Error!bool {
         var assumed = std.AutoHashMap(CheckedTypeExactPair, void).init(allocator);
         defer assumed.deinit();
-        return try checkedTypeRootExactEql(self, left, right, &assumed);
+        return try checkedTypeRootExactEql(.named, self, left, right, &assumed);
+    }
+
+    /// Same-store equality of the types two roots denote: transparent aliases
+    /// are expanded at every depth, while nominal types, variables, and all
+    /// other structure compare exactly as in `rootExactEql`. The scratch is
+    /// cleared on entry so one scratch serves any number of queries.
+    pub fn rootAliasTransparentEql(
+        self: CheckedTypeStoreView,
+        scratch: *EqualityScratch,
+        left: CheckedTypeId,
+        right: CheckedTypeId,
+    ) Allocator.Error!bool {
+        scratch.assumed.clearRetainingCapacity();
+        return try checkedTypeRootExactEql(.transparent, self, left, right, &scratch.assumed);
     }
 
     /// Exact same-store equality modulo a bijective renaming of flex/rigid
@@ -3591,7 +3618,62 @@ pub const CheckedTypeStoreView = struct {
         }
         var context = CheckedTypeAlphaExactContext.init(allocator);
         defer context.deinit();
-        return try checkedTypeRootSliceAlphaExactEql(self, left, right, &context);
+        return try checkedTypeRootSliceAlphaExactEql(.named, self, left, right, &context);
+    }
+
+    /// Bucket key for `rootAliasTransparentEql`: a hash of the alias-resolved
+    /// root's own constructor and labels, which every alias-transparent-equal
+    /// type shares. Canonical keys retain alias identity, so callers bucket
+    /// alias-transparent comparisons by this key instead.
+    pub fn aliasTransparentBucketKey(self: CheckedTypeStoreView, raw_root: CheckedTypeId) u64 {
+        const root = checkedTypeEqualityRoot(.transparent, self, raw_root);
+        const root_payload = self.payload(root);
+        var hasher = std.hash.Wyhash.init(0);
+        std.hash.autoHash(&hasher, std.meta.activeTag(root_payload));
+        switch (root_payload) {
+            .alias => unreachable,
+            .pending, .err, .empty_record, .empty_tag_union => {},
+            .flex, .rigid => std.hash.autoHash(&hasher, root),
+            .record => |record| {
+                std.hash.autoHash(&hasher, record.fields.len);
+                for (record.fields) |field| std.hash.autoHash(&hasher, field.name);
+            },
+            .tuple => |items| std.hash.autoHash(&hasher, items.len),
+            .nominal => |nominal| {
+                std.hash.autoHash(&hasher, nominal.name);
+                std.hash.autoHash(&hasher, nominal.origin_module);
+                std.hash.autoHash(&hasher, nominal.builtin);
+                std.hash.autoHash(&hasher, nominal.args.len);
+            },
+            .function => |function| {
+                std.hash.autoHash(&hasher, finalizedFunctionKind(function.kind));
+                std.hash.autoHash(&hasher, function.args.len);
+            },
+            .tag_union => |tag_union| {
+                std.hash.autoHash(&hasher, tag_union.tags.len);
+                for (tag_union.tags) |tag| {
+                    std.hash.autoHash(&hasher, tag.name);
+                    std.hash.autoHash(&hasher, tag.args_len);
+                }
+            },
+        }
+        return hasher.final();
+    }
+
+    /// Alpha-exact equality of the types a multi-root relation denotes, with
+    /// transparent aliases expanded at every depth as in
+    /// `rootAliasTransparentEql`. Canonical keys retain alias identity, so no
+    /// key prefilter applies.
+    pub fn rootsAliasTransparentAlphaEql(
+        self: CheckedTypeStoreView,
+        allocator: Allocator,
+        left: []const CheckedTypeId,
+        right: []const CheckedTypeId,
+    ) Allocator.Error!bool {
+        if (left.len != right.len) return false;
+        var context = CheckedTypeAlphaExactContext.init(allocator);
+        defer context.deinit();
+        return try checkedTypeRootSliceAlphaExactEql(.transparent, self, left, right, &context);
     }
 
     /// Returns whether a const producer root is already concrete for constant
@@ -3671,7 +3753,38 @@ const CheckedTypeExactPair = struct {
     right: CheckedTypeId,
 };
 
+/// How checked type equality treats transparent alias wrappers. `named`
+/// compares an alias by its declaration identity; `transparent` compares only
+/// the types aliases denote, at every depth. Nominal types keep their
+/// declaration identity in both modes.
+const CheckedAliasEquality = enum { named, transparent };
+
+fn checkedTypeEqualityRoot(
+    comptime aliases: CheckedAliasEquality,
+    view: CheckedTypeStoreView,
+    root: CheckedTypeId,
+) CheckedTypeId {
+    if (aliases == .named) return root;
+    var current = root;
+    while (true) switch (view.payload(current)) {
+        .alias => |alias| current = alias.backing,
+        .pending,
+        .err,
+        .flex,
+        .rigid,
+        .record,
+        .tuple,
+        .nominal,
+        .function,
+        .tag_union,
+        .empty_record,
+        .empty_tag_union,
+        => return current,
+    };
+}
+
 fn checkedTypeRootSliceExactEql(
+    comptime aliases: CheckedAliasEquality,
     view: CheckedTypeStoreView,
     left: []const CheckedTypeId,
     right: []const CheckedTypeId,
@@ -3679,12 +3792,13 @@ fn checkedTypeRootSliceExactEql(
 ) Allocator.Error!bool {
     if (left.len != right.len) return false;
     for (left, right) |left_ty, right_ty| {
-        if (!try checkedTypeRootExactEql(view, left_ty, right_ty, assumed)) return false;
+        if (!try checkedTypeRootExactEql(aliases, view, left_ty, right_ty, assumed)) return false;
     }
     return true;
 }
 
 fn checkedRecordFieldsExactEql(
+    comptime aliases: CheckedAliasEquality,
     view: CheckedTypeStoreView,
     left: []const CheckedRecordField,
     right: []const CheckedRecordField,
@@ -3693,7 +3807,7 @@ fn checkedRecordFieldsExactEql(
     if (left.len != right.len) return false;
     for (left, right) |left_field, right_field| {
         if (left_field.name != right_field.name or !std.meta.eql(left_field.kind, right_field.kind)) return false;
-        if (!try checkedTypeRootExactEql(view, left_field.ty, right_field.ty, assumed)) return false;
+        if (!try checkedTypeRootExactEql(aliases, view, left_field.ty, right_field.ty, assumed)) return false;
     }
     return true;
 }
@@ -3710,11 +3824,14 @@ fn checkedDeclaredFieldsExactEql(
 }
 
 fn checkedTypeRootExactEql(
+    comptime aliases: CheckedAliasEquality,
     view: CheckedTypeStoreView,
-    left: CheckedTypeId,
-    right: CheckedTypeId,
+    raw_left: CheckedTypeId,
+    raw_right: CheckedTypeId,
     assumed: *std.AutoHashMap(CheckedTypeExactPair, void),
 ) Allocator.Error!bool {
+    const left = checkedTypeEqualityRoot(aliases, view, raw_left);
+    const right = checkedTypeEqualityRoot(aliases, view, raw_right);
     if (left == right) return true;
     const pair = CheckedTypeExactPair{ .left = left, .right = right };
     if ((try assumed.getOrPut(pair)).found_existing) return true;
@@ -3728,14 +3845,16 @@ fn checkedTypeRootExactEql(
         // equality-by-id returned above handles repeated references to one.
         .flex, .rigid => false,
         .alias => |left_alias| blk: {
+            // Transparent equality resolved both sides past their aliases.
+            if (aliases == .transparent) unreachable;
             const right_alias = right_payload.alias;
             if (left_alias.name != right_alias.name or
                 left_alias.origin_module != right_alias.origin_module or
                 !std.meta.eql(left_alias.owner_module, right_alias.owner_module) or
                 left_alias.source_decl != right_alias.source_decl or
                 left_alias.builtin_origin != right_alias.builtin_origin or
-                !try checkedTypeRootSliceExactEql(view, left_alias.args, right_alias.args, assumed) or
-                !try checkedTypeRootExactEql(view, left_alias.backing, right_alias.backing, assumed))
+                !try checkedTypeRootSliceExactEql(aliases, view, left_alias.args, right_alias.args, assumed) or
+                !try checkedTypeRootExactEql(aliases, view, left_alias.backing, right_alias.backing, assumed))
             {
                 break :blk false;
             }
@@ -3743,10 +3862,10 @@ fn checkedTypeRootExactEql(
         },
         .record => |left_record| blk: {
             const right_record = right_payload.record;
-            if (!try checkedRecordFieldsExactEql(view, left_record.fields, right_record.fields, assumed)) break :blk false;
-            break :blk try checkedTypeRootExactEql(view, left_record.ext, right_record.ext, assumed);
+            if (!try checkedRecordFieldsExactEql(aliases, view, left_record.fields, right_record.fields, assumed)) break :blk false;
+            break :blk try checkedTypeRootExactEql(aliases, view, left_record.ext, right_record.ext, assumed);
         },
-        .tuple => |left_items| try checkedTypeRootSliceExactEql(view, left_items, right_payload.tuple, assumed),
+        .tuple => |left_items| try checkedTypeRootSliceExactEql(aliases, view, left_items, right_payload.tuple, assumed),
         .nominal => |left_nominal| blk: {
             const right_nominal = right_payload.nominal;
             if (left_nominal.name != right_nominal.name or
@@ -3757,8 +3876,8 @@ fn checkedTypeRootExactEql(
                 left_nominal.is_opaque != right_nominal.is_opaque or
                 !std.meta.eql(left_nominal.representation, right_nominal.representation) or
                 !checkedDeclaredFieldsExactEql(left_nominal.declared_fields, right_nominal.declared_fields) or
-                !try checkedTypeRootSliceExactEql(view, left_nominal.args, right_nominal.args, assumed) or
-                !try checkedTypeRootSliceExactEql(view, left_nominal.padding_field_types, right_nominal.padding_field_types, assumed))
+                !try checkedTypeRootSliceExactEql(aliases, view, left_nominal.args, right_nominal.args, assumed) or
+                !try checkedTypeRootSliceExactEql(aliases, view, left_nominal.padding_field_types, right_nominal.padding_field_types, assumed))
             {
                 break :blk false;
             }
@@ -3767,23 +3886,23 @@ fn checkedTypeRootExactEql(
         .function => |left_function| blk: {
             const right_function = right_payload.function;
             if (finalizedFunctionKind(left_function.kind) != finalizedFunctionKind(right_function.kind) or
-                !try checkedTypeRootSliceExactEql(view, left_function.args, right_function.args, assumed))
+                !try checkedTypeRootSliceExactEql(aliases, view, left_function.args, right_function.args, assumed))
             {
                 break :blk false;
             }
-            break :blk try checkedTypeRootExactEql(view, left_function.ret, right_function.ret, assumed);
+            break :blk try checkedTypeRootExactEql(aliases, view, left_function.ret, right_function.ret, assumed);
         },
         .tag_union => |left_union| blk: {
             const right_union = right_payload.tag_union;
             if (left_union.tags.len != right_union.tags.len) break :blk false;
             for (left_union.tags, right_union.tags) |left_tag, right_tag| {
                 if (left_tag.name != right_tag.name or
-                    !try checkedTypeRootSliceExactEql(view, left_tag.argsSlice(view), right_tag.argsSlice(view), assumed))
+                    !try checkedTypeRootSliceExactEql(aliases, view, left_tag.argsSlice(view), right_tag.argsSlice(view), assumed))
                 {
                     break :blk false;
                 }
             }
-            break :blk try checkedTypeRootExactEql(view, left_union.ext, right_union.ext, assumed);
+            break :blk try checkedTypeRootExactEql(aliases, view, left_union.ext, right_union.ext, assumed);
         },
     };
 }
@@ -3809,6 +3928,7 @@ const CheckedTypeAlphaExactContext = struct {
 };
 
 fn checkedTypeRootSliceAlphaExactEql(
+    comptime aliases: CheckedAliasEquality,
     view: CheckedTypeStoreView,
     left: []const CheckedTypeId,
     right: []const CheckedTypeId,
@@ -3816,12 +3936,13 @@ fn checkedTypeRootSliceAlphaExactEql(
 ) Allocator.Error!bool {
     if (left.len != right.len) return false;
     for (left, right) |left_ty, right_ty| {
-        if (!try checkedTypeRootAlphaExactEql(view, left_ty, right_ty, context)) return false;
+        if (!try checkedTypeRootAlphaExactEql(aliases, view, left_ty, right_ty, context)) return false;
     }
     return true;
 }
 
 fn checkedFieldKindAlphaExactEql(
+    comptime aliases: CheckedAliasEquality,
     view: CheckedTypeStoreView,
     left: CheckedFieldKind,
     right: CheckedFieldKind,
@@ -3832,12 +3953,13 @@ fn checkedFieldKindAlphaExactEql(
     const right_variable = right.variable.get();
     if ((left_variable == null) != (right_variable == null)) return false;
     return if (left_variable) |left_ty|
-        try checkedTypeRootAlphaExactEql(view, left_ty, right_variable.?, context)
+        try checkedTypeRootAlphaExactEql(aliases, view, left_ty, right_variable.?, context)
     else
         true;
 }
 
 fn checkedRecordFieldsAlphaExactEql(
+    comptime aliases: CheckedAliasEquality,
     view: CheckedTypeStoreView,
     left: []const CheckedRecordField,
     right: []const CheckedRecordField,
@@ -3846,8 +3968,8 @@ fn checkedRecordFieldsAlphaExactEql(
     if (left.len != right.len) return false;
     for (left, right) |left_field, right_field| {
         if (left_field.name != right_field.name or
-            !try checkedFieldKindAlphaExactEql(view, left_field.kind, right_field.kind, context) or
-            !try checkedTypeRootAlphaExactEql(view, left_field.ty, right_field.ty, context))
+            !try checkedFieldKindAlphaExactEql(aliases, view, left_field.kind, right_field.kind, context) or
+            !try checkedTypeRootAlphaExactEql(aliases, view, left_field.ty, right_field.ty, context))
         {
             return false;
         }
@@ -3856,6 +3978,7 @@ fn checkedRecordFieldsAlphaExactEql(
 }
 
 fn checkedTypeVariableAlphaExactEql(
+    comptime aliases: CheckedAliasEquality,
     view: CheckedTypeStoreView,
     left_id: CheckedTypeId,
     left: CheckedTypeVariable,
@@ -3877,7 +4000,7 @@ fn checkedTypeVariableAlphaExactEql(
     for (left.constraints, right.constraints) |left_constraint, right_constraint| {
         if (left_constraint.fn_name != right_constraint.fn_name or
             !std.meta.eql(left_constraint.origin, right_constraint.origin) or
-            !try checkedTypeRootAlphaExactEql(view, left_constraint.fn_ty, right_constraint.fn_ty, context))
+            !try checkedTypeRootAlphaExactEql(aliases, view, left_constraint.fn_ty, right_constraint.fn_ty, context))
         {
             return false;
         }
@@ -3886,11 +4009,14 @@ fn checkedTypeVariableAlphaExactEql(
 }
 
 fn checkedTypeRootAlphaExactEql(
+    comptime aliases: CheckedAliasEquality,
     view: CheckedTypeStoreView,
-    left: CheckedTypeId,
-    right: CheckedTypeId,
+    raw_left: CheckedTypeId,
+    raw_right: CheckedTypeId,
     context: *CheckedTypeAlphaExactContext,
 ) Allocator.Error!bool {
+    const left = checkedTypeEqualityRoot(aliases, view, raw_left);
+    const right = checkedTypeEqualityRoot(aliases, view, raw_right);
     const left_payload = view.payload(left);
     const right_payload = view.payload(right);
     if (std.meta.activeTag(left_payload) != std.meta.activeTag(right_payload)) return false;
@@ -3900,6 +4026,7 @@ fn checkedTypeRootAlphaExactEql(
     // different right variable.
     switch (left_payload) {
         .flex => |left_variable| return try checkedTypeVariableAlphaExactEql(
+            aliases,
             view,
             left,
             left_variable,
@@ -3908,6 +4035,7 @@ fn checkedTypeRootAlphaExactEql(
             context,
         ),
         .rigid => |left_variable| return try checkedTypeVariableAlphaExactEql(
+            aliases,
             view,
             left,
             left_variable,
@@ -3935,14 +4063,16 @@ fn checkedTypeRootAlphaExactEql(
         .pending, .err, .empty_record, .empty_tag_union => true,
         .flex, .rigid => unreachable,
         .alias => |left_alias| blk: {
+            // Transparent equality resolved both sides past their aliases.
+            if (aliases == .transparent) unreachable;
             const right_alias = right_payload.alias;
             if (left_alias.name != right_alias.name or
                 left_alias.origin_module != right_alias.origin_module or
                 !std.meta.eql(left_alias.owner_module, right_alias.owner_module) or
                 left_alias.source_decl != right_alias.source_decl or
                 left_alias.builtin_origin != right_alias.builtin_origin or
-                !try checkedTypeRootSliceAlphaExactEql(view, left_alias.args, right_alias.args, context) or
-                !try checkedTypeRootAlphaExactEql(view, left_alias.backing, right_alias.backing, context))
+                !try checkedTypeRootSliceAlphaExactEql(aliases, view, left_alias.args, right_alias.args, context) or
+                !try checkedTypeRootAlphaExactEql(aliases, view, left_alias.backing, right_alias.backing, context))
             {
                 break :blk false;
             }
@@ -3950,10 +4080,10 @@ fn checkedTypeRootAlphaExactEql(
         },
         .record => |left_record| blk: {
             const right_record = right_payload.record;
-            if (!try checkedRecordFieldsAlphaExactEql(view, left_record.fields, right_record.fields, context)) break :blk false;
-            break :blk try checkedTypeRootAlphaExactEql(view, left_record.ext, right_record.ext, context);
+            if (!try checkedRecordFieldsAlphaExactEql(aliases, view, left_record.fields, right_record.fields, context)) break :blk false;
+            break :blk try checkedTypeRootAlphaExactEql(aliases, view, left_record.ext, right_record.ext, context);
         },
-        .tuple => |left_items| try checkedTypeRootSliceAlphaExactEql(view, left_items, right_payload.tuple, context),
+        .tuple => |left_items| try checkedTypeRootSliceAlphaExactEql(aliases, view, left_items, right_payload.tuple, context),
         .nominal => |left_nominal| blk: {
             const right_nominal = right_payload.nominal;
             if (left_nominal.name != right_nominal.name or
@@ -3964,8 +4094,8 @@ fn checkedTypeRootAlphaExactEql(
                 left_nominal.is_opaque != right_nominal.is_opaque or
                 !std.meta.eql(left_nominal.representation, right_nominal.representation) or
                 !checkedDeclaredFieldsExactEql(left_nominal.declared_fields, right_nominal.declared_fields) or
-                !try checkedTypeRootSliceAlphaExactEql(view, left_nominal.args, right_nominal.args, context) or
-                !try checkedTypeRootSliceAlphaExactEql(view, left_nominal.padding_field_types, right_nominal.padding_field_types, context))
+                !try checkedTypeRootSliceAlphaExactEql(aliases, view, left_nominal.args, right_nominal.args, context) or
+                !try checkedTypeRootSliceAlphaExactEql(aliases, view, left_nominal.padding_field_types, right_nominal.padding_field_types, context))
             {
                 break :blk false;
             }
@@ -3974,23 +4104,23 @@ fn checkedTypeRootAlphaExactEql(
         .function => |left_function| blk: {
             const right_function = right_payload.function;
             if (finalizedFunctionKind(left_function.kind) != finalizedFunctionKind(right_function.kind) or
-                !try checkedTypeRootSliceAlphaExactEql(view, left_function.args, right_function.args, context))
+                !try checkedTypeRootSliceAlphaExactEql(aliases, view, left_function.args, right_function.args, context))
             {
                 break :blk false;
             }
-            break :blk try checkedTypeRootAlphaExactEql(view, left_function.ret, right_function.ret, context);
+            break :blk try checkedTypeRootAlphaExactEql(aliases, view, left_function.ret, right_function.ret, context);
         },
         .tag_union => |left_union| blk: {
             const right_union = right_payload.tag_union;
             if (left_union.tags.len != right_union.tags.len) break :blk false;
             for (left_union.tags, right_union.tags) |left_tag, right_tag| {
                 if (left_tag.name != right_tag.name or
-                    !try checkedTypeRootSliceAlphaExactEql(view, left_tag.argsSlice(view), right_tag.argsSlice(view), context))
+                    !try checkedTypeRootSliceAlphaExactEql(aliases, view, left_tag.argsSlice(view), right_tag.argsSlice(view), context))
                 {
                     break :blk false;
                 }
             }
-            break :blk try checkedTypeRootAlphaExactEql(view, left_union.ext, right_union.ext, context);
+            break :blk try checkedTypeRootAlphaExactEql(aliases, view, left_union.ext, right_union.ext, context);
         },
     };
 }
@@ -18444,6 +18574,8 @@ const EvidencePass = struct {
         const type_view = self.checked_types.store.view();
         for (self.plan_table.generated_codec_derivations) |derivation| {
             const calls = derivation.callsSlice(self.plan_table);
+            var subject_scratch = CheckedTypeStoreView.EqualityScratch.init(self.allocator);
+            defer subject_scratch.deinit();
             for (calls, 0..) |call, index| {
                 switch (call.resolution) {
                     .pending => checkedArtifactInvariant(
@@ -18549,7 +18681,7 @@ const EvidencePass = struct {
                         );
                     }
                     if (call.subject_ty) |subject_ty| {
-                        if (!try type_view.rootExactEql(self.allocator, previous.subject_ty.?, subject_ty)) {
+                        if (!try type_view.rootAliasTransparentEql(&subject_scratch, previous.subject_ty.?, subject_ty)) {
                             checkedArtifactInvariant(
                                 "checked generated codec method role named different subject types",
                                 .{},
@@ -18557,19 +18689,19 @@ const EvidencePass = struct {
                         }
                     }
                     // A generated body records one checked edge per source
-                    // occurrence. Repeated fields with one exact checker
-                    // subject share a role, and may share one prepared target,
+                    // occurrence. Repeated fields whose subjects denote one
+                    // type share a role, and may share one prepared target,
                     // only when the complete callable relation agrees modulo
-                    // the fresh variable names allocated for each method
-                    // instantiation.
+                    // transparent aliases and the fresh variable names
+                    // allocated for each method instantiation.
                     const call_types_equal = if (call.subject_ty) |subject_ty|
-                        try type_view.rootsAlphaExactEql(
+                        try type_view.rootsAliasTransparentAlphaEql(
                             self.allocator,
                             &.{ previous.subject_ty.?, previous.dispatcher_ty, previous.callable_ty },
                             &.{ subject_ty, call.dispatcher_ty, call.callable_ty },
                         )
                     else
-                        try type_view.rootsAlphaExactEql(
+                        try type_view.rootsAliasTransparentAlphaEql(
                             self.allocator,
                             &.{ previous.dispatcher_ty, previous.callable_ty },
                             &.{ call.dispatcher_ty, call.callable_ty },

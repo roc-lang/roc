@@ -2287,6 +2287,269 @@ pub const tests = [_]TestCase{
         .expected = .{ .inspect_str = "\"b 1\"" },
     },
     .{
+        // repro for https://github.com/roc-lang/roc/issues/11384
+        // `Argument` and `Singleton` are distinct aliases with the same record
+        // shape, reached through two different `List` fields. Deriving the JSON
+        // parser for `ExtensionApi` must decode both lists instead of panicking
+        // with "checked generated codec contract had overlapping direct call roles".
+        .name = "issue 11384: Json.parse through two same-shaped record aliases in nested lists",
+        .source_kind = .module,
+        .source =
+        \\ExtensionApi : {
+        \\    utility_functions : List(UtilityFunction),
+        \\    singletons : List(Singleton),
+        \\}
+        \\
+        \\UtilityFunction : {
+        \\    arguments : List(Argument),
+        \\}
+        \\
+        \\Argument : {
+        \\    name : Str,
+        \\    type : Str,
+        \\}
+        \\
+        \\Singleton : {
+        \\    name : Str,
+        \\    type : Str,
+        \\}
+        \\
+        \\main : Str
+        \\main = {
+        \\    decoded : Try(ExtensionApi, [InvalidJson(Str), MissingRequiredField(Str)])
+        \\    decoded = Json.parse("{\"utility_functions\":[{\"arguments\":[{\"name\":\"angle_rad\",\"type\":\"float\"}]}],\"singletons\":[{\"name\":\"Engine\",\"type\":\"EngineType\"}]}")
+        \\    match decoded {
+        \\        Ok(api) => {
+        \\            args = List.join_map(api.utility_functions, |f| List.map(f.arguments, |a| "${a.name}:${a.type}"))
+        \\            singles = List.map(api.singletons, |s| "${s.name}:${s.type}")
+        \\            Str.join_with(List.concat(args, singles), ",")
+        \\        }
+        \\        Err(_) => "failed"
+        \\    }
+        \\}
+        ,
+        .expected = .{ .inspect_str = "\"angle_rad:float,Engine:EngineType\"" },
+    },
+    .{
+        // repro for https://github.com/roc-lang/roc/issues/11384
+        // The derived encoder for the same shape reaches `List(Argument)` and
+        // `List(Singleton)` through distinct aliases that denote one type.
+        .name = "issue 11384: Json.to_str through two same-shaped record aliases in nested lists",
+        .source_kind = .module,
+        .source =
+        \\ExtensionApi : {
+        \\    utility_functions : List(UtilityFunction),
+        \\    singletons : List(Singleton),
+        \\}
+        \\
+        \\UtilityFunction : {
+        \\    arguments : List(Argument),
+        \\}
+        \\
+        \\Argument : {
+        \\    name : Str,
+        \\    type : Str,
+        \\}
+        \\
+        \\Singleton : {
+        \\    name : Str,
+        \\    type : Str,
+        \\}
+        \\
+        \\main : Str
+        \\main = {
+        \\    api : ExtensionApi
+        \\    api = {
+        \\        utility_functions: [{ arguments: [{ name: "angle_rad", type: "float" }] }],
+        \\        singletons: [{ name: "Engine", type: "EngineType" }],
+        \\    }
+        \\    Json.to_str(api)
+        \\}
+        ,
+        .expected = .{ .inspect_str = "\"{\\\"singletons\\\":[{\\\"name\\\":\\\"Engine\\\",\\\"type\\\":\\\"EngineType\\\"}],\\\"utility_functions\\\":[{\\\"arguments\\\":[{\\\"name\\\":\\\"angle_rad\\\",\\\"type\\\":\\\"float\\\"}]}]}\"" },
+    },
+    .{
+        // repro for https://github.com/roc-lang/roc/issues/11384
+        // Same-shaped nominal types stay distinct codec subjects: each list
+        // decodes through its own nominal's derived parser.
+        .name = "issue 11384: Json.parse through two same-shaped nominal records in nested lists",
+        .source_kind = .module,
+        .source =
+        \\ExtensionApi : {
+        \\    utility_functions : List(UtilityFunction),
+        \\    singletons : List(Singleton),
+        \\}
+        \\
+        \\UtilityFunction : {
+        \\    arguments : List(Argument),
+        \\}
+        \\
+        \\Argument := { name : Str, type : Str }.{ parser_for : _ }
+        \\
+        \\Singleton := { name : Str, type : Str }.{ parser_for : _ }
+        \\
+        \\main : Str
+        \\main = {
+        \\    decoded : Try(ExtensionApi, [InvalidJson(Str), MissingRequiredField(Str)])
+        \\    decoded = Json.parse("{\"utility_functions\":[{\"arguments\":[{\"name\":\"angle_rad\",\"type\":\"float\"}]}],\"singletons\":[{\"name\":\"Engine\",\"type\":\"EngineType\"}]}")
+        \\    match decoded {
+        \\        Ok(api) => {
+        \\            args = List.join_map(api.utility_functions, |f| List.map(f.arguments, |Argument.({ name, type })| "${name}:${type}"))
+        \\            singles = List.map(api.singletons, |Singleton.({ name, type })| "${name}:${type}")
+        \\            Str.join_with(List.concat(args, singles), ",")
+        \\        }
+        \\        Err(_) => "failed"
+        \\    }
+        \\}
+        ,
+        .expected = .{ .inspect_str = "\"angle_rad:float,Engine:EngineType\"" },
+    },
+    .{
+        // repro for https://github.com/roc-lang/roc/issues/11563
+        // A record field whose type is a record-backed nominal with a derived
+        // parser parses through the nominal's own derivation, inlined into the
+        // outer record's parser.
+        .name = "issue 11563: Json.parse record field holding a derived nominal record",
+        .source_kind = .module,
+        .source =
+        \\Plain := { name : Str }.{ parser_for : _ }
+        \\
+        \\main : Str
+        \\main = {
+        \\    decoded : Try({ c : Plain }, [InvalidJson(Str), MissingRequiredField(Str)])
+        \\    decoded = Json.parse("{\"c\":{\"name\":\"n\"}}")
+        \\    match decoded {
+        \\        Ok({ c: Plain.({ name }) }) => name
+        \\        Err(_) => "failed"
+        \\    }
+        \\}
+        ,
+        .expected = .{ .inspect_str = "\"n\"" },
+    },
+    .{
+        // repro for https://github.com/roc-lang/roc/issues/11563
+        // The nested nominal has a defaulted field and sits beside a plain field.
+        .name = "issue 11563: Json.parse derived nominal with a defaulted field beside a plain field",
+        .source_kind = .module,
+        .source =
+        \\Counted := { name : Str, count : U8 ?? 10 }.{ parser_for : _ }
+        \\
+        \\main : Str
+        \\main = {
+        \\    decoded : Try({ c : Counted, k : Str }, [InvalidJson(Str), MissingRequiredField(Str)])
+        \\    decoded = Json.parse("{\"c\":{\"name\":\"n\"},\"k\":\"v\"}")
+        \\    match decoded {
+        \\        Ok({ c: Counted.({ name, count }), k }) => "${name} ${count.to_str()} ${k}"
+        \\        Err(_) => "failed"
+        \\    }
+        \\}
+        ,
+        .expected = .{ .inspect_str = "\"n 10 v\"" },
+    },
+    .{
+        // repro for https://github.com/roc-lang/roc/issues/11563
+        // The derived nominal is nested in a record inside a list.
+        .name = "issue 11563: Json.parse derived nominal inside a record inside a list",
+        .source_kind = .module,
+        .source =
+        \\Plain := { name : Str }.{ parser_for : _ }
+        \\
+        \\main : Str
+        \\main = {
+        \\    decoded : Try({ items : List({ b : Plain }) }, [InvalidJson(Str), MissingRequiredField(Str)])
+        \\    decoded = Json.parse("{\"items\":[{\"b\":{\"name\":\"x\"}},{\"b\":{\"name\":\"y\"}}]}")
+        \\    match decoded {
+        \\        Ok({ items }) => Str.join_with(List.map(items, |{ b: Plain.({ name }) }| name), ",")
+        \\        Err(_) => "failed"
+        \\    }
+        \\}
+        ,
+        .expected = .{ .inspect_str = "\"x,y\"" },
+    },
+    .{
+        // repro for https://github.com/roc-lang/roc/issues/11563
+        // The outer record and the nested nominal both parse the same tag union.
+        .name = "issue 11563: Json.parse tag union shared by a record and its nested derived nominal",
+        .source_kind = .module,
+        .source =
+        \\Choice : [A, B(Str)]
+        \\
+        \\Inner := { t : Choice }.{ parser_for : _ }
+        \\
+        \\describe : Choice -> Str
+        \\describe = |choice|
+        \\    match choice {
+        \\        A => "A"
+        \\        B(s) => "B ${s}"
+        \\    }
+        \\
+        \\main : Str
+        \\main = {
+        \\    decoded : Try({ t : Choice, inner : Inner }, [InvalidJson(Str), MissingRequiredField(Str)])
+        \\    decoded = Json.parse("{\"t\":\"A\",\"inner\":{\"t\":{\"B\":\"x\"}}}")
+        \\    match decoded {
+        \\        Ok({ t, inner: Inner.({ t: inner_t }) }) => "${describe(t)}/${describe(inner_t)}"
+        \\        Err(_) => "failed"
+        \\    }
+        \\}
+        ,
+        .expected = .{ .inspect_str = "\"A/B x\"" },
+    },
+    .{
+        // repro for https://github.com/roc-lang/roc/issues/11563
+        // The outer record and the nested nominal both encode a string and a list
+        // of strings.
+        .name = "issue 11563: Json.to_str scalar and list shared by a record and its nested derived nominal",
+        .source_kind = .module,
+        .source =
+        \\Inner := { name : Str, ys : List(Str) }.{ encoder_for : _ }
+        \\
+        \\main : Str
+        \\main = {
+        \\    value : { s : Str, xs : List(Str), inner : Inner }
+        \\    value = { s: "p", xs: ["q"], inner: Inner.({ name: "x", ys: ["y"] }) }
+        \\    Json.to_str(value)
+        \\}
+        ,
+        .expected = .{ .inspect_str = "\"{\\\"inner\\\":{\\\"name\\\":\\\"x\\\",\\\"ys\\\":[\\\"y\\\"]},\\\"s\\\":\\\"p\\\",\\\"xs\\\":[\\\"q\\\"]}\"" },
+    },
+    .{
+        // repro for https://github.com/roc-lang/roc/issues/11563
+        // The outer record and the nested nominal both encode the same tag union.
+        .name = "issue 11563: Json.to_str tag union shared by a record and its nested derived nominal",
+        .source_kind = .module,
+        .source =
+        \\Choice : [A, B(Str)]
+        \\
+        \\Inner := { t : Choice }.{ encoder_for : _ }
+        \\
+        \\main : Str
+        \\main = {
+        \\    value : { t : Choice, inner : Inner }
+        \\    value = { t: A, inner: Inner.({ t: B("x") }) }
+        \\    Json.to_str(value)
+        \\}
+        ,
+        .expected = .{ .inspect_str = "\"{\\\"inner\\\":{\\\"t\\\":{\\\"B\\\":\\\"x\\\"}},\\\"t\\\":\\\"A\\\"}\"" },
+    },
+    .{
+        // repro for https://github.com/roc-lang/roc/issues/11563
+        // The outer record and the nested nominal both encode a null.
+        .name = "issue 11563: Json.to_str null shared by a record and its nested derived nominal",
+        .source_kind = .module,
+        .source =
+        \\Inner := { n : Try(Str, [Null]) }.{ encoder_for : _ }
+        \\
+        \\main : Str
+        \\main = {
+        \\    value : { m : Try(Str, [Null]), inner : Inner }
+        \\    value = { m: Err(Null), inner: Inner.({ n: Ok("x") }) }
+        \\    Json.to_str(value)
+        \\}
+        ,
+        .expected = .{ .inspect_str = "\"{\\\"inner\\\":{\\\"n\\\":\\\"x\\\"},\\\"m\\\":null}\"" },
+    },
+    .{
         // repro for https://github.com/roc-lang/roc/issues/11312
         // A non-Str crash message is a type mismatch. Compile-time
         // finalization and lowering must not see the message's erroneous

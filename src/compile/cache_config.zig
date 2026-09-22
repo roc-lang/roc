@@ -214,7 +214,10 @@ pub const Constants = struct {
     ///     update's base row is an ordinary record whose tail is a flex var.
     /// 98: Checked procedure template tables publish the templates whose
     ///     evaluation can reach code checking replaced with a runtime error.
-    pub const CACHE_VERSION = 98;
+    /// 99: Generated-codec method roles identify subject types modulo
+    ///     transparent aliases, so subjects spelled through different aliases
+    ///     of one type share a role.
+    pub const CACHE_VERSION = 99;
 };
 
 /// Configuration for the Roc cache system.
