@@ -10,22 +10,18 @@ import json.Json as MyJson
 main = MyJson.decode
 ~~~
 # EXPECTED
-NAME NOT IN SCOPE - can_import_with_alias.md:3:8:3:21
+DOES NOT EXIST - can_import_with_alias.md:3:8:3:21
 # PROBLEMS
 ~~~clojure
 (reports
 	(report
 		(severity runtime_error)
-		(title "Name Not In Scope")
+		(title "Does Not Exist")
 		(region (start 3 8) (end 3 21))
 		(headline
-			(reflow "Nothing is named ")
-			(annotated symbol-unqualified "decode")
-			(reflow " in this scope."))
+			(annotated symbol-unqualified "MyJson.decode")
+			(reflow " does not exist."))
 		(document
-			(reflow "Is it misspelled, or is there an import missing?")
-			(line-break)
-			(line-break)
 			(source-region (file "can_import_with_alias.md") (start 3 8) (end 3 21) (annotation error) (line-text "main = MyJson.decode")))))
 ~~~
 # TOKENS
@@ -53,7 +49,7 @@ NO CHANGE
 (can-ir
 	(d-let
 		(p-assign (ident "main"))
-		(e-runtime-error (tag "ident_not_in_scope")))
+		(e-runtime-error (tag "qualified_ident_does_not_exist")))
 	(s-import (mod "json.Json")
 		(exposes)))
 ~~~

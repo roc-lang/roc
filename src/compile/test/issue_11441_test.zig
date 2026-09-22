@@ -14,11 +14,14 @@ fn runApp(lowered: *const lir.CheckedPipeline.LoweredProgram) RunError!void {
     var host = eval.RuntimeHostEnv.init(std.testing.allocator);
     defer host.deinit();
     const program = &lowered.lir_result;
+    var static_strings = try eval.LirInterpreter.buildStaticStrings(std.testing.allocator, &program.store);
+    defer static_strings.deinit();
     var interpreter = try eval.LirInterpreter.initWithBoxyTables(
         std.testing.allocator,
         &program.store,
         &program.layouts,
         eval.LirInterpreter.BoxyTables.fromResult(program),
+        static_strings.view(),
         host.get_ops(),
     );
     defer interpreter.deinit();

@@ -33,17 +33,17 @@ parser = Json.Parser.Advanced.NonExistent.create
 ~~~
 # EXPECTED
 DUPLICATE DEFINITION - can_import_unresolved_qualified.md:1:1:1:17
-NAME NOT IN SCOPE - can_import_unresolved_qualified.md:5:8:5:31
+UNUSED VARIABLE - can_import_unresolved_qualified.md:13:19:13:22
+DOES NOT EXIST - can_import_unresolved_qualified.md:19:10:19:28
+DOES NOT EXIST - can_import_unresolved_qualified.md:5:8:5:31
 MOD NOT FOUND - can_import_unresolved_qualified.md:8:17:8:29
-NAME NOT IN SCOPE - can_import_unresolved_qualified.md:9:20:9:34
+DOES NOT EXIST - can_import_unresolved_qualified.md:9:20:9:34
 MOD NOT FOUND - can_import_unresolved_qualified.md:12:29:12:37
 MOD NOT FOUND - can_import_unresolved_qualified.md:12:52:12:61
-NAME NOT IN SCOPE - can_import_unresolved_qualified.md:13:24:13:51
-UNUSED VARIABLE - can_import_unresolved_qualified.md:13:19:13:22
-NAME NOT IN SCOPE - can_import_unresolved_qualified.md:16:10:16:20
-DOES NOT EXIST - can_import_unresolved_qualified.md:19:10:19:28
-NAME NOT IN SCOPE - can_import_unresolved_qualified.md:22:10:22:28
-NAME NOT IN SCOPE - can_import_unresolved_qualified.md:25:10:25:49
+DOES NOT EXIST - can_import_unresolved_qualified.md:13:24:13:51
+DOES NOT EXIST - can_import_unresolved_qualified.md:16:10:16:20
+DOES NOT EXIST - can_import_unresolved_qualified.md:22:10:22:28
+DOES NOT EXIST - can_import_unresolved_qualified.md:25:10:25:49
 # PROBLEMS
 ~~~clojure
 (reports
@@ -69,17 +69,36 @@ NAME NOT IN SCOPE - can_import_unresolved_qualified.md:25:10:25:49
 			(line-break)
 			(source-region (file "can_import_unresolved_qualified.md") (start 1 1) (end 1 1) (annotation dim) (line-text "import json.Json"))))
 	(report
+		(severity warning)
+		(title "Unused Variable")
+		(region (start 13 19) (end 13 22))
+		(headline
+			(reflow "Variable ")
+			(annotated symbol-unqualified "req")
+			(reflow " is defined here and then never used:"))
+		(document
+			(reflow "If you don't need this variable, prefix it with an underscore like ")
+			(annotated symbol-unqualified "_req")
+			(reflow " to suppress this warning.")
+			(line-break)
+			(source-region (file "can_import_unresolved_qualified.md") (start 13 19) (end 13 22) (annotation error) (line-text "processRequest = |req| Http.Server.defaultResponse"))))
+	(report
 		(severity runtime_error)
-		(title "Name Not In Scope")
+		(title "Does Not Exist")
+		(region (start 19 10) (end 19 28))
+		(headline
+			(annotated symbol-unqualified "Unknown.Mod.config")
+			(reflow " does not exist."))
+		(document
+			(source-region (file "can_import_unresolved_qualified.md") (start 19 10) (end 19 28) (annotation error) (line-text "config = Unknown.Mod.config"))))
+	(report
+		(severity runtime_error)
+		(title "Does Not Exist")
 		(region (start 5 8) (end 5 31))
 		(headline
-			(reflow "Nothing is named ")
-			(annotated symbol-unqualified "method")
-			(reflow " in this scope."))
+			(annotated symbol-unqualified "Json.NonExistent.method")
+			(reflow " does not exist."))
 		(document
-			(reflow "Is it misspelled, or is there an import missing?")
-			(line-break)
-			(line-break)
 			(source-region (file "can_import_unresolved_qualified.md") (start 5 8) (end 5 31) (annotation error) (line-text "main = Json.NonExistent.method"))))
 	(report
 		(severity runtime_error)
@@ -95,16 +114,12 @@ NAME NOT IN SCOPE - can_import_unresolved_qualified.md:25:10:25:49
 			(source-region (file "can_import_unresolved_qualified.md") (start 8 17) (end 8 29) (annotation error) (line-text "parseData : Json.InvalidType -> Str"))))
 	(report
 		(severity runtime_error)
-		(title "Name Not In Scope")
+		(title "Does Not Exist")
 		(region (start 9 20) (end 9 34))
 		(headline
-			(reflow "Nothing is named ")
-			(annotated symbol-unqualified "stringify")
-			(reflow " in this scope."))
+			(annotated symbol-unqualified "Json.stringify")
+			(reflow " does not exist."))
 		(document
-			(reflow "Is it misspelled, or is there an import missing?")
-			(line-break)
-			(line-break)
 			(source-region (file "can_import_unresolved_qualified.md") (start 9 20) (end 9 34) (annotation error) (line-text "parseData = |data| Json.stringify(data)"))))
 	(report
 		(severity runtime_error)
@@ -132,78 +147,39 @@ NAME NOT IN SCOPE - can_import_unresolved_qualified.md:25:10:25:49
 			(source-region (file "can_import_unresolved_qualified.md") (start 12 52) (end 12 61) (annotation error) (line-text "processRequest : Http.Server.Request -> Http.Server.Response"))))
 	(report
 		(severity runtime_error)
-		(title "Name Not In Scope")
+		(title "Does Not Exist")
 		(region (start 13 24) (end 13 51))
 		(headline
-			(reflow "Nothing is named ")
-			(annotated symbol-unqualified "defaultResponse")
-			(reflow " in this scope."))
+			(annotated symbol-unqualified "Http.Server.defaultResponse")
+			(reflow " does not exist."))
 		(document
-			(reflow "Is it misspelled, or is there an import missing?")
-			(line-break)
-			(line-break)
 			(source-region (file "can_import_unresolved_qualified.md") (start 13 24) (end 13 51) (annotation error) (line-text "processRequest = |req| Http.Server.defaultResponse"))))
 	(report
-		(severity warning)
-		(title "Unused Variable")
-		(region (start 13 19) (end 13 22))
-		(headline
-			(reflow "Variable ")
-			(annotated symbol-unqualified "req")
-			(reflow " is defined here and then never used:"))
-		(document
-			(reflow "If you don't need this variable, prefix it with an underscore like ")
-			(annotated symbol-unqualified "_req")
-			(reflow " to suppress this warning.")
-			(line-break)
-			(source-region (file "can_import_unresolved_qualified.md") (start 13 19) (end 13 22) (annotation error) (line-text "processRequest = |req| Http.Server.defaultResponse"))))
-	(report
 		(severity runtime_error)
-		(title "Name Not In Scope")
+		(title "Does Not Exist")
 		(region (start 16 10) (end 16 20))
 		(headline
-			(reflow "Nothing is named ")
-			(annotated symbol-unqualified "prase")
-			(reflow " in this scope."))
+			(annotated symbol-unqualified "Json.prase")
+			(reflow " does not exist."))
 		(document
-			(reflow "Is it misspelled, or is there an import missing?")
-			(line-break)
-			(line-break)
 			(source-region (file "can_import_unresolved_qualified.md") (start 16 10) (end 16 20) (annotation error) (line-text "result = Json.prase(\"test\")"))))
 	(report
 		(severity runtime_error)
 		(title "Does Not Exist")
-		(region (start 19 10) (end 19 28))
-		(headline
-			(annotated symbol-unqualified "Unknown.Mod.config")
-			(reflow " does not exist."))
-		(document
-			(source-region (file "can_import_unresolved_qualified.md") (start 19 10) (end 19 28) (annotation error) (line-text "config = Unknown.Mod.config"))))
-	(report
-		(severity runtime_error)
-		(title "Name Not In Scope")
 		(region (start 22 10) (end 22 28))
 		(headline
-			(reflow "Nothing is named ")
-			(annotated symbol-unqualified "invalidMethod")
-			(reflow " in this scope."))
+			(annotated symbol-unqualified "Http.invalidMethod")
+			(reflow " does not exist."))
 		(document
-			(reflow "Is it misspelled, or is there an import missing?")
-			(line-break)
-			(line-break)
 			(source-region (file "can_import_unresolved_qualified.md") (start 22 10) (end 22 28) (annotation error) (line-text "client = Http.invalidMethod"))))
 	(report
 		(severity runtime_error)
-		(title "Name Not In Scope")
+		(title "Does Not Exist")
 		(region (start 25 10) (end 25 49))
 		(headline
-			(reflow "Nothing is named ")
-			(annotated symbol-unqualified "create")
-			(reflow " in this scope."))
+			(annotated symbol-unqualified "Json.Parser.Advanced.NonExistent.create")
+			(reflow " does not exist."))
 		(document
-			(reflow "Is it misspelled, or is there an import missing?")
-			(line-break)
-			(line-break)
 			(source-region (file "can_import_unresolved_qualified.md") (start 25 10) (end 25 49) (annotation error) (line-text "parser = Json.Parser.Advanced.NonExistent.create")))))
 ~~~
 # TOKENS
@@ -278,7 +254,7 @@ NO CHANGE
 (can-ir
 	(d-let
 		(p-assign (ident "main"))
-		(e-runtime-error (tag "ident_not_in_scope")))
+		(e-runtime-error (tag "qualified_ident_does_not_exist")))
 	(d-let
 		(p-assign (ident "parseData"))
 		(e-runtime-error (tag "erroneous_value_expr"))
@@ -301,10 +277,10 @@ NO CHANGE
 		(e-runtime-error (tag "qualified_ident_does_not_exist")))
 	(d-let
 		(p-assign (ident "client"))
-		(e-runtime-error (tag "ident_not_in_scope")))
+		(e-runtime-error (tag "qualified_ident_does_not_exist")))
 	(d-let
 		(p-assign (ident "parser"))
-		(e-runtime-error (tag "ident_not_in_scope")))
+		(e-runtime-error (tag "qualified_ident_does_not_exist")))
 	(s-import (mod "json.Json")
 		(exposes))
 	(s-import (mod "http.Client")

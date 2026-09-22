@@ -176,11 +176,18 @@ pub const RocOps = extern struct {
     /// These are effectful operations like I/O that the platform provides to Type Modules.
     hosted_fns: HostedFunctions,
 
+    // In a platform build every `RocOps` a builtin sees is the symbol-backed
+    // adapter, whose callbacks forward to the runtime symbols, so the helpers
+    // call those symbols directly: one call to a known symbol instead of a
+    // load from a mutable table and an indirect call on every allocation.
+    // An in-process host enters a per-thread `RocOps` and needs the dispatch.
+
     /// Helper to crash the Roc program. The host does not return control to Roc.
     pub fn crash(self: *RocOps, msg: []const u8) void {
         const trace = tracy.trace(@src());
         defer trace.end();
 
+        if (comptime host_role == .platform) return extern_host.roc_crashed(msg.ptr, msg.len);
         self.roc_crashed(self, msg.ptr, msg.len);
     }
 
@@ -189,6 +196,7 @@ pub const RocOps = extern struct {
         const trace = tracy.trace(@src());
         defer trace.end();
 
+        if (comptime host_role == .platform) return extern_host.roc_dbg(msg.ptr, msg.len);
         self.roc_dbg(self, msg.ptr, msg.len);
     }
 
@@ -197,6 +205,7 @@ pub const RocOps = extern struct {
         const trace = tracy.trace(@src());
         defer trace.end();
 
+        if (comptime host_role == .platform) return extern_host.roc_expect_failed(msg.ptr, msg.len);
         self.roc_expect_failed(self, msg.ptr, msg.len);
     }
 
@@ -215,11 +224,13 @@ pub const RocOps = extern struct {
 
     /// Allocate, returning null on OOM exactly as the host reported it.
     pub fn tryAlloc(self: *RocOps, length: usize, alignment: usize) ?*anyopaque {
+        if (comptime host_role == .platform) return extern_host.roc_alloc(length, alignment);
         return self.roc_alloc(self, length, alignment);
     }
 
     /// Reallocate, returning null on OOM exactly as the host reported it.
     pub fn tryRealloc(self: *RocOps, ptr: *anyopaque, new_length: usize, alignment: usize) ?*anyopaque {
+        if (comptime host_role == .platform) return extern_host.roc_realloc(ptr, new_length, alignment);
         return self.roc_realloc(self, ptr, new_length, alignment);
     }
 
@@ -231,6 +242,7 @@ pub const RocOps = extern struct {
             tracy.free(@ptrCast(ptr));
         }
 
+        if (comptime host_role == .platform) return extern_host.roc_dealloc(ptr, alignment);
         self.roc_dealloc(self, ptr, alignment);
     }
 };

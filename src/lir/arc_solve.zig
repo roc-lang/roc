@@ -251,6 +251,9 @@ pub const Solution = struct {
     /// erased-callable, bodyless, and address-escaping procs). Pinned procs
     /// are never mode-specialized.
     pinned: std.bit_set.DynamicBitSetUnmanaged,
+    /// Store-shaped settlement inputs built by the first uniqueness
+    /// settlement and reused by every later one on this solution.
+    uniqueness_structure: ?*UniquenessStructure = null,
 
     pub fn deinit(self: *Solution) void {
         self.borrowed.deinit(self.allocator);
@@ -286,6 +289,7 @@ pub const Solution = struct {
         self.unique_born.deinit(self.allocator);
         self.allocator.free(self.unique_conds);
         self.pinned.deinit(self.allocator);
+        if (self.uniqueness_structure) |structure| structure.destroy();
     }
 
     pub fn isJoinParam(self: *const Solution, local: LIR.LocalId) bool {
@@ -5118,6 +5122,144 @@ pub fn settleUniqueness(
 
 /// Ownership components, unlike call SCCs, contain every procedure which can
 /// affect the same base-analysis local or statement. Calls only invalidate.
+/// Store-shaped inputs of a uniqueness settlement: every procedure's
+/// statement list, the partition of procedures into components that share a
+/// local or a statement, dense per-component numbering of locals and
+/// statements, and the whole-store use-order topology. None of it depends on
+/// the takes or the signatures a settlement starts from, so one solution
+/// builds it once and every settlement on that solution reuses it.
+const UniquenessStructure = struct {
+    memory: std.heap.ArenaAllocator,
+    store: *const LirStore,
+    rc_local: []const bool,
+    stmt_count: usize,
+    local_count: usize,
+    proc_count: usize,
+    proc_stmts: []std.ArrayList(LIR.CFStmtId),
+    returns: []std.ArrayList(LIR.LocalId),
+    callers: []std.ArrayList(u32),
+    local_owner: []u32,
+    stmt_owner: []u32,
+    proc_component: []u32,
+    components: std.ArrayList(UniquenessComponent),
+    local_to_dense: []u32,
+    stmt_to_dense: []u32,
+    topology: UseOrder.Topology,
+
+    fn build(allocator: Allocator, store: *const LirStore, rc_local: []const bool) SolveError!*UniquenessStructure {
+        const self = try allocator.create(UniquenessStructure);
+        errdefer allocator.destroy(self);
+        self.* = .{
+            .memory = std.heap.ArenaAllocator.init(allocator),
+            .store = store,
+            .rc_local = &.{},
+            .stmt_count = store.cfStmtCount(),
+            .local_count = store.localCount(),
+            .proc_count = store.procSpecCount(),
+            .proc_stmts = &.{},
+            .returns = &.{},
+            .callers = &.{},
+            .local_owner = &.{},
+            .stmt_owner = &.{},
+            .proc_component = &.{},
+            .components = .empty,
+            .local_to_dense = &.{},
+            .stmt_to_dense = &.{},
+            .topology = undefined,
+        };
+        errdefer self.memory.deinit();
+        const arena = self.memory.allocator();
+        // The caller's table may be freed before the next settlement; the
+        // structure keeps its own copy for the reuse check.
+        self.rc_local = try arena.dupe(bool, rc_local);
+        const proc_count = store.procSpecCount();
+        const proc_stmts = try arena.alloc(std.ArrayList(LIR.CFStmtId), proc_count);
+        @memset(proc_stmts, .empty);
+        const returns = try arena.alloc(std.ArrayList(LIR.LocalId), proc_count);
+        @memset(returns, .empty);
+        const callers = try arena.alloc(std.ArrayList(u32), proc_count);
+        @memset(callers, .empty);
+        const lists = try arena.alloc([]const LIR.CFStmtId, proc_count);
+        const parents = try arena.alloc(u32, proc_count);
+        for (parents, 0..) |*parent, index| parent.* = @intCast(index);
+        const local_owner = try arena.alloc(u32, store.localCount());
+        @memset(local_owner, no_local);
+        const stmt_owner = try arena.alloc(u32, store.cfStmtCount());
+        @memset(stmt_owner, no_local);
+        var partition = UniquenessPartition{ .parents = parents, .local_owner = local_owner, .rc_local = rc_local };
+        for (0..proc_count) |proc_index| {
+            partition.proc = @intCast(proc_index);
+            const proc = store.getProcSpec(@enumFromInt(@as(u32, @intCast(proc_index))));
+            const args = store.getLocalSpan(proc.args);
+            for (0..GuardedList.borrowLen(args)) |position| partition.local(GuardedList.at(args, position));
+            if (proc.body) |body| try collectProcStatements(arena, store, body, &proc_stmts[proc_index]);
+            lists[proc_index] = proc_stmts[proc_index].items;
+            for (proc_stmts[proc_index].items) |stmt_id| {
+                const raw = @intFromEnum(stmt_id);
+                if (stmt_owner[raw] == no_local) stmt_owner[raw] = @intCast(proc_index) else partition.unite(@intCast(proc_index), stmt_owner[raw]);
+                const stmt = store.getCFStmt(stmt_id);
+                body_clone.forEachStmtRead(store, stmt, &partition, UniquenessPartition.local);
+                body_clone.forEachStmtDef(store, stmt, &partition, UniquenessPartition.local);
+                if (stmt == .ret) try returns[proc_index].append(arena, stmt.ret.value);
+                if (stmt == .assign_call) try callers[@intFromEnum(stmt.assign_call.proc)].append(arena, @intCast(proc_index));
+            }
+        }
+        const proc_component = try arena.alloc(u32, proc_count);
+        const root_component = try arena.alloc(u32, proc_count);
+        @memset(root_component, no_local);
+        var components = std.ArrayList(UniquenessComponent).empty;
+        for (0..proc_count) |index| {
+            const root = partition.root(@intCast(index));
+            if (root_component[root] == no_local) {
+                root_component[root] = @intCast(components.items.len);
+                try components.append(arena, .{});
+            }
+            const component = root_component[root];
+            proc_component[index] = component;
+            try components.items[component].procs.append(arena, @intCast(index));
+        }
+        const local_to_dense = try arena.alloc(u32, store.localCount());
+        @memset(local_to_dense, no_local);
+        for (local_owner, 0..) |*owner, raw| {
+            if (owner.* == no_local) continue;
+            owner.* = proc_component[owner.*];
+            const component = &components.items[owner.*];
+            local_to_dense[raw] = @intCast(component.locals.items.len);
+            try component.locals.append(arena, @intCast(raw));
+        }
+        const topology = try UseOrder.initTopology(arena, store, lists);
+        const stmt_to_dense = try arena.alloc(u32, store.cfStmtCount());
+        @memset(stmt_to_dense, no_local);
+        // Ascending statement ids reproduce the legacy whole-store deduplication.
+        for (stmt_owner, 0..) |*owner, raw| {
+            if (owner.* == no_local) continue;
+            owner.* = proc_component[owner.*];
+            const component = &components.items[owner.*];
+            stmt_to_dense[raw] = @intCast(component.stmts.items.len);
+            try component.stmts.append(arena, @enumFromInt(@as(u32, @intCast(raw))));
+            if (topology.unresolved.isSet(raw)) try component.unresolved.append(arena, @intCast(raw));
+        }
+        self.proc_stmts = proc_stmts;
+        self.returns = returns;
+        self.callers = callers;
+        self.local_owner = local_owner;
+        self.stmt_owner = stmt_owner;
+        self.proc_component = proc_component;
+        self.components = components;
+        self.local_to_dense = local_to_dense;
+        self.stmt_to_dense = stmt_to_dense;
+        self.topology = topology;
+        return self;
+    }
+
+    fn destroy(self: *UniquenessStructure) void {
+        for (self.components.items) |component| if (component.result) |result| result.deinit();
+        const allocator = self.memory.child_allocator;
+        self.memory.deinit();
+        allocator.destroy(self);
+    }
+};
+
 const UniquenessComponent = struct {
     procs: std.ArrayList(u32) = .empty,
     locals: std.ArrayList(u32) = .empty,
@@ -5393,7 +5535,8 @@ fn runUniquenessTasks(
 
 /// Exact ownership components run against frozen signatures in deterministic
 /// waves. Only callers of semantically changed signatures enter the next wave.
-/// Every invocation starts all components afresh, including post-take settlement.
+/// Every invocation starts all components afresh, including post-take
+/// settlement; only the store-shaped structure is retained between them.
 pub fn settleUniquenessWithOptions(
     allocator: Allocator,
     store: *const LirStore,
@@ -5408,73 +5551,31 @@ pub fn settleUniquenessWithOptions(
     defer memory.deinit();
     const arena = memory.allocator();
     const proc_count = store.procSpecCount();
-    const proc_stmts = try arena.alloc(std.ArrayList(LIR.CFStmtId), proc_count);
-    @memset(proc_stmts, .empty);
-    const returns = try arena.alloc(std.ArrayList(LIR.LocalId), proc_count);
-    @memset(returns, .empty);
-    const callers = try arena.alloc(std.ArrayList(u32), proc_count);
-    @memset(callers, .empty);
-    const lists = try arena.alloc([]const LIR.CFStmtId, proc_count);
-    const parents = try arena.alloc(u32, proc_count);
-    for (parents, 0..) |*parent, index| parent.* = @intCast(index);
-    const local_owner = try arena.alloc(u32, store.localCount());
-    @memset(local_owner, no_local);
-    const stmt_owner = try arena.alloc(u32, store.cfStmtCount());
-    @memset(stmt_owner, no_local);
-    var partition = UniquenessPartition{ .parents = parents, .local_owner = local_owner, .rc_local = rc_local };
-    for (0..proc_count) |proc_index| {
-        partition.proc = @intCast(proc_index);
-        const proc = store.getProcSpec(@enumFromInt(@as(u32, @intCast(proc_index))));
-        const args = store.getLocalSpan(proc.args);
-        for (0..GuardedList.borrowLen(args)) |position| partition.local(GuardedList.at(args, position));
-        if (proc.body) |body| try collectProcStatements(arena, store, body, &proc_stmts[proc_index]);
-        lists[proc_index] = proc_stmts[proc_index].items;
-        for (proc_stmts[proc_index].items) |stmt_id| {
-            const raw = @intFromEnum(stmt_id);
-            if (stmt_owner[raw] == no_local) stmt_owner[raw] = @intCast(proc_index) else partition.unite(@intCast(proc_index), stmt_owner[raw]);
-            const stmt = store.getCFStmt(stmt_id);
-            body_clone.forEachStmtRead(store, stmt, &partition, UniquenessPartition.local);
-            body_clone.forEachStmtDef(store, stmt, &partition, UniquenessPartition.local);
-            if (stmt == .ret) try returns[proc_index].append(arena, stmt.ret.value);
-            if (stmt == .assign_call) try callers[@intFromEnum(stmt.assign_call.proc)].append(arena, @intCast(proc_index));
-        }
+    const structure = solution.uniqueness_structure orelse blk: {
+        const built = try UniquenessStructure.build(allocator, store, rc_local);
+        solution.uniqueness_structure = built;
+        break :blk built;
+    };
+    if (structure.store != store or structure.stmt_count != store.cfStmtCount() or
+        structure.local_count != store.localCount() or structure.proc_count != proc_count or
+        !sameResourceTable(structure.rc_local, rc_local))
+    {
+        solveInvariant("uniqueness settlement reused a structure built for a different store");
     }
-    const proc_component = try arena.alloc(u32, proc_count);
-    const root_component = try arena.alloc(u32, proc_count);
-    @memset(root_component, no_local);
-    var components = std.ArrayList(UniquenessComponent).empty;
-    for (0..proc_count) |index| {
-        const root = partition.root(@intCast(index));
-        if (root_component[root] == no_local) {
-            root_component[root] = @intCast(components.items.len);
-            try components.append(arena, .{});
-        }
-        const component = root_component[root];
-        proc_component[index] = component;
-        try components.items[component].procs.append(arena, @intCast(index));
-    }
-    defer for (components.items) |component| if (component.result) |result| result.deinit();
-    const local_to_dense = try arena.alloc(u32, store.localCount());
-    @memset(local_to_dense, no_local);
-    for (local_owner, 0..) |*owner, raw| {
-        if (owner.* == no_local) continue;
-        owner.* = proc_component[owner.*];
-        const component = &components.items[owner.*];
-        local_to_dense[raw] = @intCast(component.locals.items.len);
-        try component.locals.append(arena, @intCast(raw));
-    }
-    const topology = try UseOrder.initTopology(arena, store, lists);
-    const stmt_to_dense = try arena.alloc(u32, store.cfStmtCount());
-    @memset(stmt_to_dense, no_local);
-    // Ascending statement ids reproduce the legacy whole-store deduplication.
-    for (stmt_owner, 0..) |*owner, raw| {
-        if (owner.* == no_local) continue;
-        owner.* = proc_component[owner.*];
-        const component = &components.items[owner.*];
-        stmt_to_dense[raw] = @intCast(component.stmts.items.len);
-        try component.stmts.append(arena, @enumFromInt(@as(u32, @intCast(raw))));
-        if (topology.unresolved.isSet(raw)) try component.unresolved.append(arena, @intCast(raw));
-    }
+    const callers = structure.callers;
+    const local_owner = structure.local_owner;
+    const stmt_owner = structure.stmt_owner;
+    const proc_component = structure.proc_component;
+    const components = &structure.components;
+    const local_to_dense = structure.local_to_dense;
+    const topology = &structure.topology;
+    const stmt_to_dense = structure.stmt_to_dense;
+    const proc_stmts = structure.proc_stmts;
+    const returns = structure.returns;
+    defer for (components.items) |*component| if (component.result) |result| {
+        result.deinit();
+        component.result = null;
+    };
     const contexts = try arena.alloc(UniquenessComponentTask, components.items.len);
     var dirty = try std.bit_set.DynamicBitSetUnmanaged.initFull(arena, components.items.len);
     var local_metrics: UniquenessMetrics = .{};
@@ -5502,7 +5603,7 @@ pub fn settleUniquenessWithOptions(
                 .takes = takes,
                 .consume_dead_boxes = consume_dead_boxes,
                 .component = component,
-                .topology = &topology,
+                .topology = topology,
                 .domain = .{
                     .local_to_dense = local_to_dense,
                     .count = component.locals.items.len,
@@ -5569,6 +5670,13 @@ pub fn settleUniquenessWithOptions(
             solution.unique_conds[raw] = verdict.conds[dense];
         }
     }
+}
+
+/// Whether two per-local refcount tables describe the same locals.
+fn sameResourceTable(retained: []const bool, requested: []const bool) bool {
+    if (retained.len != requested.len) return false;
+    for (retained, requested) |left, right| if (left != right) return false;
+    return true;
 }
 
 /// Whole-store reference implementation, deliberately unavailable to production.
@@ -7127,10 +7235,11 @@ test "uniqueness fixed point propagates fresh returns through a call diamond and
     for (solution.sigs) |sig| try testing.expect(sig.ret_unique);
     try testing.expectEqual(@as(u64, 3), solution.sigOf(chain).ret_unique_fields);
     try testing.expect(solution.isUnique(fresh));
-    // Even settled signatures must receive the mandatory post-take analysis.
+    // Even settled signatures must receive the mandatory post-take analysis,
+    // over the structure the first settlement retained on the solution.
     const settled_rounds = uniqueness_analysis_rounds;
     try settleUniqueness(allocator, &f.store, &f.layouts, rc, &solution, .stamped, true);
-    try testing.expectEqual(@as(usize, 2), uniqueness_topology_builds - builds_before);
+    try testing.expectEqual(@as(usize, 1), uniqueness_topology_builds - builds_before);
     try testing.expectEqual(@as(usize, 1), uniqueness_analysis_rounds - settled_rounds);
     try testing.expectEqual(@as(u64, 3), solution.sigOf(chain).ret_unique_fields);
     UniquenessOracleState.resetCapabilities(&solution);

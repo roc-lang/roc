@@ -85,7 +85,9 @@ const TaskContext = struct {
     layouts: *const layout.Store,
     phase: Phase,
     proc: LIR.LirProcSpecId,
-    callees: ?*const LoopAppendPromote.PreparedCallees,
+    /// The procedure's shapes excluded it from this phase; the task runs only
+    /// to verify that the phase indeed rewrites nothing, and never commits.
+    verify_only: bool = false,
     shard: ?LirStore = null,
     failed: bool = false,
     completed: bool = false,
@@ -127,7 +129,7 @@ const TaskContext = struct {
                 self.fresh_join_count = joins.next_join_point - self.first_fresh_join;
             },
             .scalarize => try ScalarizeJoins.runProc(&shard, self.layouts, self.proc, scratch_allocator),
-            .loop_append => try LoopAppendPromote.runProcWithScratch(&shard, self.layouts, self.proc, scratch_allocator, self.callees.?, analysis.?),
+            .loop_append => try LoopAppendPromote.runProcWithScratch(&shard, self.layouts, self.proc, scratch_allocator, analysis.?),
             .range => try RangeProve.runProcWithScratch(&shard, self.layouts, self.proc, scratch_allocator, analysis.?),
             .box_reuse => try BoxReuse.runProcWithScratch(&shard, self.layouts, self.proc, scratch_allocator, analysis.?),
         }
@@ -151,12 +153,6 @@ pub fn run(
         .box_reuse => try BoxReuse.prepareLayouts(store, layouts),
         .forwarding_join, .tag_fusion, .scalarize, .loop_append, .range => {},
     }
-    var callees = if (phase == .loop_append)
-        try LoopAppendPromote.prepareCallees(store, allocator)
-    else
-        null;
-    defer if (callees) |*prepared| prepared.deinit();
-
     var contexts = std.ArrayList(TaskContext).empty;
     defer {
         for (contexts.items) |*context| if (context.shard) |*shard| shard.deinit();
@@ -171,18 +167,14 @@ pub fn run(
             .trmc, .loop_append, .range, .box_reuse => BodyClone.rewritableProcBody(store, proc),
         };
         if (body == null) continue;
-        // Constructor recursion is not an ordinary tail call: TRMC discovers
-        // it inside tag-union producers even when no TCE sites were recorded.
-        if (phase == .trmc) {
-            const spec = store.getProcSpec(proc);
-            if (spec.tail_calls == null and layouts.getLayout(spec.ret_layout).tag != .tag_union) continue;
-        }
+        const admitted = phaseAdmits(store, phase, proc);
+        if (!admitted and builtin.mode != .Debug) continue;
         try contexts.append(allocator, .{
             .source = store,
             .layouts = layouts,
             .phase = phase,
             .proc = proc,
-            .callees = if (callees) |*prepared| prepared else null,
+            .verify_only = !admitted,
         });
     }
     if (contexts.items.len == 0) return;
@@ -249,6 +241,16 @@ pub fn run(
     var next_fresh_join = first_fresh_join;
     for (contexts.items) |*context| {
         const shard = &context.shard.?;
+        if (context.verify_only) {
+            if (context.changed) std.debug.panic("LIR pass {s} rewrote procedure {d} whose shapes {any} excluded it from the phase", .{ @tagName(phase), @intFromEnum(context.proc), store.getProcSpec(context.proc).shapes });
+            if (parallel) if (metrics) |counts| {
+                counts.tasks_committed +|= 1;
+                counts.committed_by_phase[@intFromEnum(phase)] +|= 1;
+            };
+            shard.deinit();
+            context.shard = null;
+            continue;
+        }
         if (context.changed) {
             const reservation = reserveJoins(first_fresh_join, next_fresh_join, context.fresh_join_count) catch
                 invariant("LIR rewrite exhausted join-point identities");
@@ -270,6 +272,21 @@ pub fn run(
         shard.deinit();
         context.shard = null;
     }
+}
+
+/// Whether the procedure's recorded shapes admit it to the phase: the phase
+/// can only rewrite a shape the body's flags say it contains.
+fn phaseAdmits(store: *const LirStore, phase: Phase, proc: LIR.LirProcSpecId) bool {
+    const shapes = store.getProcSpec(proc).shapes;
+    return switch (phase) {
+        .trmc => shapes.self_call,
+        .loop_append => shapes.loop,
+        .forwarding_join => shapes.join_param,
+        .tag_fusion => shapes.join_param and shapes.switch_stmt,
+        .scalarize => shapes.join_aggregate_param or shapes.struct_build or shapes.tag_build,
+        .range => shapes.checked_arithmetic or shapes.switch_stmt,
+        .box_reuse => shapes.box_box,
+    };
 }
 
 const JoinReservation = struct {
@@ -338,7 +355,7 @@ test "procedure rewrite ownership includes statements reached through shared met
             .body = body,
             .ret_layout = .u64,
         });
-        context.* = .{ .source = &store, .layouts = undefined, .phase = .tag_fusion, .proc = proc, .callees = null };
+        context.* = .{ .source = &store, .layouts = undefined, .phase = .tag_fusion, .proc = proc };
     }
     const prefix = store.captureBodyPrefix();
     for (&contexts) |*context| {
@@ -385,7 +402,6 @@ test "issue 11325 procedure counting reuses lane storage across distant local ID
             .layouts = &layouts,
             .phase = .box_reuse,
             .proc = @enumFromInt(index),
-            .callees = null,
         };
         _ = TaskContext.run(&context, .{
             .id = 0,
@@ -412,7 +428,6 @@ fn testLaneCountingAllocation(allocator: Allocator, store: *LirStore, layouts: *
         .layouts = layouts,
         .phase = .box_reuse,
         .proc = proc,
-        .callees = null,
     };
     _ = TaskContext.run(&context, .{
         .id = 0,

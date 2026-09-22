@@ -142,7 +142,7 @@ pub const ReportBuilder = struct {
     bytes_buf: std.array_list.Managed(u8),
     module_env: *ModuleEnv,
     can_ir: *const ModuleEnv,
-    snapshots: *const snapshot.Store,
+    snapshots: ?*const snapshot.Store,
     problems: *const Store,
     source: []const u8,
     filename: []const u8,
@@ -166,7 +166,7 @@ pub const ReportBuilder = struct {
         gpa: Allocator,
         module_env: *ModuleEnv,
         can_ir: *const ModuleEnv,
-        snapshots: *const snapshot.Store,
+        snapshots: ?*const snapshot.Store,
         problems: *const Store,
         filename: []const u8,
         other_modules: []const *const ModuleEnv,
@@ -191,6 +191,18 @@ pub const ReportBuilder = struct {
             .diff_tags = try SnapshotTagSafeList.initCapacity(gpa, 8),
             .typo_suggestions = try diff.TypoSuggestion.ArrayList.initCapacity(gpa, 16),
         };
+    }
+
+    /// Evaluation consumes checked diagnostic recipes, never solver snapshots.
+    pub fn initEvaluation(
+        gpa: Allocator,
+        module_env: *ModuleEnv,
+        problems: *const Store,
+        filename: []const u8,
+        other_modules: []const *const ModuleEnv,
+        import_mapping: *const @import("types").import_mapping.ImportMapping,
+    ) Allocator.Error!Self {
+        return init(gpa, module_env, module_env, null, problems, filename, other_modules, import_mapping, &module_env.store.regions, null);
     }
 
     /// Deinit report builder, only fields it owns
@@ -615,7 +627,7 @@ pub const ReportBuilder = struct {
 
         // Generate and print type comparison hints
         const diff_hints = try diff.compareTypes(
-            self.snapshots,
+            self.snapshots.?,
             self.module_env.getIdentStoreConst(),
             expected_snapshot,
             actual_snapshot,
@@ -916,6 +928,7 @@ pub const ReportBuilder = struct {
                     .list_entry => |ctx| self.buildListEntryReport(mismatch.types, ctx),
                     .interpolation_part => |region| self.buildGenericMismatchAtRegion(mismatch.types, .{ .direct = region }),
                     .fn_call_arity => |ctx| self.buildIncompatibleFnCallArity(mismatch.types, ctx),
+                    .fn_call_non_function => |ctx| self.buildFnCallNonFunction(mismatch.types, ctx),
                     .fn_call_arg => |ctx| self.buildIncompatibleFnCallArg(mismatch.types, ctx),
                     .binop_lhs => |ctx| self.buildBinopReport(mismatch.types, ctx, .lhs),
                     .binop_rhs => |ctx| self.buildBinopReport(mismatch.types, ctx, .rhs),
@@ -1152,17 +1165,17 @@ pub const ReportBuilder = struct {
     ) Allocator.Error!bool {
         // Only a closed record pattern can be "too narrow"; an open (`..`)
         // pattern would have absorbed the extra fields rather than mismatching.
-        if (!self.snapshots.isClosedRecord(pattern_snapshot)) return false;
+        if (!self.snapshots.?.isClosedRecord(pattern_snapshot)) return false;
 
         self.diff_fields.items.clearRetainingCapacity();
 
         const pattern_range: ?SnapshotRecordFieldSafeList.Range =
-            switch (try self.snapshots.gatherRecordFields(pattern_snapshot, self.gpa, &self.diff_fields)) {
+            switch (try self.snapshots.?.gatherRecordFields(pattern_snapshot, self.gpa, &self.diff_fields)) {
                 .record => |r| r,
                 .empty_record => null,
                 .not_a_record => return false,
             };
-        const value_range = switch (try self.snapshots.gatherRecordFields(value_snapshot, self.gpa, &self.diff_fields)) {
+        const value_range = switch (try self.snapshots.?.gatherRecordFields(value_snapshot, self.gpa, &self.diff_fields)) {
             .record => |r| r,
             .empty_record, .not_a_record => return false,
         };
@@ -1764,12 +1777,12 @@ pub const ReportBuilder = struct {
     /// own type is known. Naming a bare type variable there would read as a
     /// type called `err`, so the payload is described without one.
     fn addTryErrorPayloadType(self: *Self, report: *Report, types: TypePair) Allocator.Error!bool {
-        const content = self.snapshots.getContentUnwrapAlias(types.actual_snapshot);
+        const content = self.snapshots.?.getContentUnwrapAlias(types.actual_snapshot);
         if (content != .structure or content.structure != .nominal_type) return false;
-        const snapshot_args = self.snapshots.sliceVars(content.structure.nominal_type.vars);
+        const snapshot_args = self.snapshots.?.sliceVars(content.structure.nominal_type.vars);
         if (snapshot_args.len == 0) return false;
         const err_snapshot = snapshot_args[snapshot_args.len - 1];
-        if (self.snapshots.getContent(err_snapshot) == .flex) return false;
+        if (self.snapshots.?.getContent(err_snapshot) == .flex) return false;
         const err_type = self.getFormattedString(err_snapshot);
 
         try D.renderSlice(&.{
@@ -1791,6 +1804,46 @@ pub const ReportBuilder = struct {
         try report.document.addLineBreak();
         try report.document.addLineBreak();
         return true;
+    }
+
+    /// Build a report for a call whose callee is not a function
+    fn buildFnCallNonFunction(
+        self: *Self,
+        types: TypePair,
+        ctx: Context.FnCallNonFunctionContext,
+    ) Allocator.Error!Report {
+        var report = try Report.init(self.gpa, "Not A Function", "", .runtime_error);
+        errdefer report.deinit();
+        if (ctx.fn_name) |fn_name| {
+            try D.renderSliceInto(&.{
+                D.bytes("The"),
+                D.ident(fn_name).withAnnotation(.inline_code),
+                D.bytes("value is not a function, but it was given"),
+                D.num(ctx.actual_args),
+                D.bytes(pluralize(ctx.actual_args, "argument", "arguments")),
+                D.bytes(".").withNoPrecedingSpace(),
+            }, self, &report, &report.headline);
+        } else {
+            try D.renderSliceInto(&.{
+                D.bytes("This value is not a function, but it was given"),
+                D.num(ctx.actual_args),
+                D.bytes(pluralize(ctx.actual_args, "argument", "arguments")),
+                D.bytes(".").withNoPrecedingSpace(),
+            }, self, &report, &report.headline);
+        }
+
+        try self.addSourceHighlight(&report, regionIdxFrom(types.actual_var));
+        try report.document.addLineBreak();
+
+        try D.renderSlice(&.{
+            D.bytes("It has the type:"),
+        }, self, &report);
+        try report.document.addLineBreak();
+        try report.document.addLineBreak();
+        const expected_type_str = try report.addOwnedString(self.getFormattedString(types.expected_snapshot));
+        try report.document.addCodeBlock(expected_type_str);
+
+        return report;
     }
 
     /// Build a report for function argument type mismatch
@@ -1929,17 +1982,17 @@ pub const ReportBuilder = struct {
         errdefer report.deinit();
 
         // Create actual tag str
-        const actual_content = self.snapshots.getContentUnwrapAlias(types.actual_snapshot);
+        const actual_content = self.snapshots.?.getContentUnwrapAlias(types.actual_snapshot);
         std.debug.assert(actual_content == .structure);
         std.debug.assert(actual_content.structure == .tag_union);
         std.debug.assert(actual_content.structure.tag_union.tags.len() == 1);
-        const actual_tag = self.snapshots.tags.get(actual_content.structure.tag_union.tags.start);
+        const actual_tag = self.snapshots.?.tags.get(actual_content.structure.tag_union.tags.start);
         const actual_tag_str = try report.addOwnedString(snapshot.Store.getFormattedTagString(actual_tag));
 
         // The context describes the constructor syntax the user wrote, not the
         // shape of the nominal's declared backing. In particular, tag syntax
         // can mismatch a value-, record-, tuple-, or empty-tag-backed nominal.
-        const expected_content = self.snapshots.getContentUnwrapAlias(types.expected_snapshot);
+        const expected_content = self.snapshots.?.getContentUnwrapAlias(types.expected_snapshot);
         const expected_tag_union = if (expected_content == .structure and expected_content.structure == .tag_union)
             expected_content.structure.tag_union
         else
@@ -1969,7 +2022,7 @@ pub const ReportBuilder = struct {
         // Otherwise, explain the backing shape mismatch directly.
         if (expected_tag_union) |tag_union| {
             if (tag_union.tags.len() == 1) {
-                const expected_tag = self.snapshots.tags.get(tag_union.tags.start);
+                const expected_tag = self.snapshots.?.tags.get(tag_union.tags.start);
                 const expected_tag_str = try report.addOwnedString(snapshot.Store.getFormattedTagString(expected_tag));
 
                 try report.document.addText("But the nominal type needs it to be:");
@@ -1990,7 +2043,7 @@ pub const ReportBuilder = struct {
 
             var iter = tag_union.tags.iterIndices();
             while (iter.next()) |tag_index| {
-                const cur_expected_tag = self.snapshots.tags.get(tag_index);
+                const cur_expected_tag = self.snapshots.?.tags.get(tag_index);
 
                 if (actual_tag.name.eql(cur_expected_tag.name)) {
                     const cur_expected_tag_str = try report.addOwnedString(snapshot.Store.getFormattedTagString(cur_expected_tag));
@@ -3083,7 +3136,7 @@ pub const ReportBuilder = struct {
         try report.document.addLineBreak();
 
         // Get the content and explain which parts don't support equality
-        const content = self.snapshots.getContentUnwrapAlias(data.dispatcher_snapshot);
+        const content = self.snapshots.?.getContentUnwrapAlias(data.dispatcher_snapshot);
         if (content == .structure) {
             switch (content.structure) {
                 .record => |record| {
@@ -3299,7 +3352,7 @@ pub const ReportBuilder = struct {
     /// `renderDiffHints`).
     fn findFieldDefaultMismatch(self: *Self, types: TypePair) Allocator.Error!?diff.FieldDefaultMismatch {
         const hints = try diff.compareTypes(
-            self.snapshots,
+            self.snapshots.?,
             self.module_env.getIdentStoreConst(),
             types.expected_snapshot,
             types.actual_snapshot,
@@ -3670,7 +3723,7 @@ pub const ReportBuilder = struct {
             .record => |record| record.actual_snapshot,
             .none => types.actual_snapshot,
         };
-        const record = try self.snapshots.gatherRecordFields(actual_snapshot, self.gpa, &self.diff_fields);
+        const record = try self.snapshots.?.gatherRecordFields(actual_snapshot, self.gpa, &self.diff_fields);
 
         const region = ProblemRegion{ .simple = regionIdxFrom(types.actual_var) };
         switch (record) {
@@ -3748,7 +3801,7 @@ pub const ReportBuilder = struct {
         };
 
         // Get the record data of the type we tried to  update
-        const expected_record = try self.snapshots.gatherRecordFields(expected_snapshot, self.gpa, &self.diff_fields);
+        const expected_record = try self.snapshots.?.gatherRecordFields(expected_snapshot, self.gpa, &self.diff_fields);
         switch (expected_record) {
             .not_a_record => {
                 return try self.makeBadTypeReport(
@@ -3787,7 +3840,7 @@ pub const ReportBuilder = struct {
                 // robust full record builder
 
                 // Get the record data of the type we tried to  update
-                const actual_record = try self.snapshots.gatherRecordFields(actual_snapshot, self.gpa, &self.diff_fields);
+                const actual_record = try self.snapshots.?.gatherRecordFields(actual_snapshot, self.gpa, &self.diff_fields);
                 const actual_field = switch (actual_record) {
                     .record => |fields| blk: {
                         const slice = self.diff_fields.sliceRange(fields);
@@ -3979,7 +4032,7 @@ pub const ReportBuilder = struct {
         report: *Report,
         record: snapshot.SnapshotRecord,
     ) Allocator.Error!void {
-        const fields = self.snapshots.sliceRecordFields(record.fields);
+        const fields = self.snapshots.?.sliceRecordFields(record.fields);
         var has_problem_fields = false;
 
         // First pass: check if any fields don't support equality
@@ -4031,7 +4084,7 @@ pub const ReportBuilder = struct {
         report: *Report,
         tuple: snapshot.SnapshotTuple,
     ) Allocator.Error!void {
-        const elems = self.snapshots.sliceVars(tuple.elems);
+        const elems = self.snapshots.?.sliceVars(tuple.elems);
         var has_problem_elems = false;
 
         // First pass: check if any elements don't support equality
@@ -4079,12 +4132,12 @@ pub const ReportBuilder = struct {
         report: *Report,
         tag_union: snapshot.SnapshotTagUnion,
     ) Allocator.Error!void {
-        const tags = self.snapshots.sliceTags(tag_union.tags);
+        const tags = self.snapshots.?.sliceTags(tag_union.tags);
         var has_problem_tags = false;
 
         // First pass: check if any tag payloads don't support equality
         for (tags.items(.args)) |tag_args| {
-            const args = self.snapshots.sliceVars(tag_args);
+            const args = self.snapshots.?.sliceVars(tag_args);
             for (args) |arg_content_idx| {
                 if (!self.snapshotSupportsEquality(arg_content_idx)) {
                     has_problem_tags = true;
@@ -4104,7 +4157,7 @@ pub const ReportBuilder = struct {
             const tag_names = tags.items(.name);
             const tag_args_list = tags.items(.args);
             for (tag_names, tag_args_list) |name, tag_args| {
-                const args = self.snapshots.sliceVars(tag_args);
+                const args = self.snapshots.?.sliceVars(tag_args);
                 var tag_has_problem = false;
                 for (args) |arg_content_idx| {
                     if (!self.snapshotSupportsEquality(arg_content_idx)) {
@@ -4152,7 +4205,7 @@ pub const ReportBuilder = struct {
 
     /// Check if a snapshotted type supports equality
     fn snapshotSupportsEquality(self: *Self, content_idx: snapshot.SnapshotContentIdx) bool {
-        const content = self.snapshots.getContentUnwrapAlias(content_idx);
+        const content = self.snapshots.?.getContentUnwrapAlias(content_idx);
         return switch (content) {
             .structure => |s| switch (s) {
                 // Functions never support equality
@@ -4161,7 +4214,7 @@ pub const ReportBuilder = struct {
                 .empty_record, .empty_tag_union => true,
                 // Records: all fields must support equality
                 .record => |record| {
-                    const fields = self.snapshots.sliceRecordFields(record.fields);
+                    const fields = self.snapshots.?.sliceRecordFields(record.fields);
                     for (fields.items(.content)) |field_content| {
                         if (!self.snapshotSupportsEquality(field_content)) return false;
                     }
@@ -4169,7 +4222,7 @@ pub const ReportBuilder = struct {
                 },
                 // Tuples: all elements must support equality
                 .tuple => |tuple| {
-                    const elems = self.snapshots.sliceVars(tuple.elems);
+                    const elems = self.snapshots.?.sliceVars(tuple.elems);
                     for (elems) |elem_content| {
                         if (!self.snapshotSupportsEquality(elem_content)) return false;
                     }
@@ -4177,9 +4230,9 @@ pub const ReportBuilder = struct {
                 },
                 // Tag unions: all payloads must support equality
                 .tag_union => |tag_union| {
-                    const tags_slice = self.snapshots.sliceTags(tag_union.tags);
+                    const tags_slice = self.snapshots.?.sliceTags(tag_union.tags);
                     for (tags_slice.items(.args)) |tag_args| {
-                        const args = self.snapshots.sliceVars(tag_args);
+                        const args = self.snapshots.?.sliceVars(tag_args);
                         for (args) |arg_content| {
                             if (!self.snapshotSupportsEquality(arg_content)) return false;
                         }
@@ -4188,7 +4241,7 @@ pub const ReportBuilder = struct {
                 },
                 // Nominal types: check the backing type (first element in vars)
                 .nominal_type => |nominal| {
-                    const vars = self.snapshots.sliceVars(nominal.vars);
+                    const vars = self.snapshots.?.sliceVars(nominal.vars);
                     if (vars.len > 0) {
                         // First var is the backing type
                         return self.snapshotSupportsEquality(vars[0]);
@@ -4208,7 +4261,7 @@ pub const ReportBuilder = struct {
     /// Explain why a type doesn't support equality, adding the explanation to the report.
     /// Returns true if an explanation was added.
     fn explainWhyNoEquality(self: *Self, report: *Report, content_idx: snapshot.SnapshotContentIdx, indent: []const u8) Allocator.Error!bool {
-        const content = self.snapshots.getContentUnwrapAlias(content_idx);
+        const content = self.snapshots.?.getContentUnwrapAlias(content_idx);
         switch (content) {
             .structure => |s| switch (s) {
                 .fn_pure, .fn_effectful, .fn_unbound => {
@@ -4218,7 +4271,7 @@ pub const ReportBuilder = struct {
                     return true;
                 },
                 .record => |record| {
-                    const fields = self.snapshots.sliceRecordFields(record.fields);
+                    const fields = self.snapshots.?.sliceRecordFields(record.fields);
                     const field_names = fields.items(.name);
                     const field_contents = fields.items(.content);
                     for (field_names, field_contents) |name, field_content| {
@@ -4239,7 +4292,7 @@ pub const ReportBuilder = struct {
                     return false;
                 },
                 .tuple => |tuple| {
-                    const elems = self.snapshots.sliceVars(tuple.elems);
+                    const elems = self.snapshots.?.sliceVars(tuple.elems);
                     for (elems, 0..) |elem_content, i| {
                         if (!self.snapshotSupportsEquality(elem_content)) {
                             try report.document.addText(indent);
@@ -4257,11 +4310,11 @@ pub const ReportBuilder = struct {
                     return false;
                 },
                 .tag_union => |tag_union| {
-                    const tags_slice = self.snapshots.sliceTags(tag_union.tags);
+                    const tags_slice = self.snapshots.?.sliceTags(tag_union.tags);
                     const tag_names = tags_slice.items(.name);
                     const tag_args_list = tags_slice.items(.args);
                     for (tag_names, tag_args_list) |name, tag_args| {
-                        const args = self.snapshots.sliceVars(tag_args);
+                        const args = self.snapshots.?.sliceVars(tag_args);
                         for (args, 0..) |arg_content, i| {
                             if (!self.snapshotSupportsEquality(arg_content)) {
                                 const tag_name = self.can_ir.getIdentText(name);
@@ -4286,7 +4339,7 @@ pub const ReportBuilder = struct {
                     return false;
                 },
                 .nominal_type => |nominal| {
-                    const vars = self.snapshots.sliceVars(nominal.vars);
+                    const vars = self.snapshots.?.sliceVars(nominal.vars);
                     if (vars.len > 0) {
                         const backing = vars[0];
                         if (!self.snapshotSupportsEquality(backing)) {
@@ -5129,7 +5182,7 @@ pub const ReportBuilder = struct {
             try report.document.addLineBreak();
         }
 
-        const condition_type = self.getFormattedString(data.condition_snapshot);
+        const condition_type = self.problems.getExtraString(data.condition_type);
         try D.renderSlice(&.{
             D.bytes("The value being matched on has type:"),
         }, self, &report);
@@ -5177,7 +5230,7 @@ pub const ReportBuilder = struct {
         try self.addSourceHighlight(&report, regionIdxFrom(data.pattern));
         try report.document.addLineBreak();
 
-        const value_type = self.getFormattedString(data.value_snapshot);
+        const value_type = self.problems.getExtraString(data.value_type);
         try D.renderSlice(&.{
             D.bytes("The value being destructured has type:"),
         }, self, &report);
@@ -5411,7 +5464,7 @@ pub const ReportBuilder = struct {
     /// Returns a placeholder if the formatted string is missing, allowing error reporting
     /// to continue gracefully even if snapshots are incomplete.
     fn getFormattedString(self: *const Self, idx: SnapshotContentIdx) []const u8 {
-        return self.snapshots.getFormattedString(idx) orelse "<unknown type>";
+        return self.snapshots.?.getFormattedString(idx) orelse "<unknown type>";
     }
 
     /// Returns the operator symbol for a given method ident, or null if not an operator method.

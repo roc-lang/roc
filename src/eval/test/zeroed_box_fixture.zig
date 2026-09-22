@@ -62,7 +62,9 @@ pub fn run(allocator: std.mem.Allocator) Error!void {
         .ret_layout = .u64,
     });
 
-    var interp = try eval.Interpreter.init(allocator, &store, &layouts, runtime_env.get_ops());
+    var static_strings = try eval.Interpreter.buildStaticStrings(allocator, &store);
+    defer static_strings.deinit();
+    var interp = try eval.Interpreter.init(allocator, &store, &layouts, static_strings.view(), runtime_env.get_ops());
     defer interp.deinit();
     const result = try interp.eval(.{ .proc_id = proc, .arg_layouts = &.{} });
     const value: *const u64 = @ptrCast(@alignCast(result.value.ptr));

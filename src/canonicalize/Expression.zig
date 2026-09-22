@@ -171,6 +171,20 @@ pub const Expr = union(enum) {
         ident_idx: Ident.Idx,
         region: Region,
     },
+    /// A reference into an imported module whose target is settled by `can`'s
+    /// import-resolution drain, which rewrites this node in place into
+    /// `e_lookup_external`, `e_lookup_associated`, `e_nominal_external`, or a
+    /// malformed node carrying the recorded diagnostic. The worklist entry
+    /// `ref` names holds everything resolution needs; see
+    /// `ModuleEnv.DeferredImportRef`. A deferred file import is the same
+    /// shape: the drain rewrites it into the file's text or bytes.
+    e_deferred_import_ref: struct {
+        ref: ModuleEnv.DeferredImportRef.Idx,
+        /// The backing expression an imported nominal type is applied to, when
+        /// the source position is a nominal construction. A reference that
+        /// names a value has no backing expression.
+        backing: ?DeferredBacking,
+    },
     /// An associated value selected through a local type alias declaration.
     /// Checking resolves transparent aliases and replaces this with
     /// `e_lookup_associated_resolved`.
@@ -779,6 +793,13 @@ pub const Expr = union(enum) {
     /// The type inside a nominal var
     pub const NominalBackingType = enum { tag, record, tuple, value };
 
+    /// The backing value a deferred nominal construction applies its imported
+    /// type to, kept reachable while the type reference is still deferred.
+    pub const DeferredBacking = struct {
+        expr: Expr.Idx,
+        ty: NominalBackingType,
+    };
+
     pub fn pushToSExprTree(self: *const @This(), ir: *const ModuleEnv, tree: *SExprTree, expr_idx: Self.Idx) std.mem.Allocator.Error!void {
         switch (self.*) {
             .e_num => |int_expr| {
@@ -1018,6 +1039,20 @@ pub const Expr = union(enum) {
                     try tree.pushStringPair("external-module", module_name);
                 }
 
+                try tree.endNode(begin, attrs);
+            },
+            .e_deferred_import_ref => |e| {
+                const begin = tree.beginNode();
+                try tree.pushStaticAtom("e-deferred-import-ref");
+                const region = ir.store.getExprRegion(expr_idx);
+                try ir.appendRegionInfoToSExprTreeFromRegion(tree, region);
+                const entry = ir.deferred_import_refs.items.items[@intFromEnum(e.ref)];
+                try tree.pushStringPair("module", ir.getIdent(entry.moduleName()));
+                try tree.pushStringPair("path", ir.getIdent(entry.path()));
+                const attrs = tree.beginNode();
+                if (e.backing) |backing| {
+                    try ir.store.getExpr(backing.expr).pushToSExprTree(ir, tree, backing.expr);
+                }
                 try tree.endNode(begin, attrs);
             },
             .e_lookup_associated_local => |e| {

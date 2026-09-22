@@ -36,7 +36,7 @@ Container :: [].{
     (entry
       (name "Blub")
       (kind alias)
-      (type "Blub : " (type-ref (mod "Container") (name "Container.Blub")))
+      (type "Blub : " (type-ref (mod "Container") (name "Blub")))
     )
   )
 )

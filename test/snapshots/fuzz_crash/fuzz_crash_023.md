@@ -218,18 +218,15 @@ EXPECTED RECORD ACCESSOR - fuzz_crash_023.md:154:2:154:5
 EXPECTED RECORD FIELD - fuzz_crash_023.md:178:37:178:38
 UNEXPECTED EXPRESSION SYNTAX - fuzz_crash_023.md:178:45:178:46
 EXPECTED FUNCTION ARROW - fuzz_crash_023.md:178:52:178:54
-MOD NOT FOUND - fuzz_crash_023.md:16:1:16:27
-MOD NOT FOUND - fuzz_crash_023.md:17:1:20:20
+NOT IMPLEMENTED - fuzz_crash_023.md:6:1:12:4
+NOT IMPLEMENTED - fuzz_crash_023.md:6:1:12:4
 UNDECLARED TYPE - fuzz_crash_023.md:36:8:36:11
 UNDECLARED TYPE - fuzz_crash_023.md:36:13:36:16
 UNDECLARED TYPE - fuzz_crash_023.md:39:2:39:5
 UNDECLARED TYPE - fuzz_crash_023.md:40:2:40:5
 UNDECLARED TYPE - fuzz_crash_023.md:43:19:43:21
-UNDECLARED TYPE - fuzz_crash_023.md:43:32:43:41
 UNDECLARED TYPE - fuzz_crash_023.md:45:8:45:10
-UNDECLARED TYPE - fuzz_crash_023.md:46:8:46:17
 UNDECLARED TYPE - fuzz_crash_023.md:52:4:52:6
-UNDECLARED TYPE - fuzz_crash_023.md:53:8:53:17
 NAME NOT IN SCOPE - fuzz_crash_023.md:72:4:72:13
 UNUSED VARIABLE - fuzz_crash_023.md:97:3:97:8
 UNUSED VARIABLE - fuzz_crash_023.md:102:19:102:23
@@ -250,7 +247,6 @@ VAR NAME MISSING `$` - fuzz_crash_023.md:146:6:146:12
 NAME NOT IN SCOPE - fuzz_crash_023.md:147:9:147:13
 UNRECOGNIZED SYNTAX - fuzz_crash_023.md:154:2:154:5
 NAME NOT IN SCOPE - fuzz_crash_023.md:158:2:158:11
-NAME NOT IN SCOPE - fuzz_crash_023.md:175:3:175:15
 UNRECOGNIZED SYNTAX - fuzz_crash_023.md:178:11:178:45
 UNRECOGNIZED SYNTAX - fuzz_crash_023.md:178:45:178:46
 MALFORMED TYPE - fuzz_crash_023.md:178:52:178:71
@@ -261,8 +257,6 @@ NAME NOT IN SCOPE - fuzz_crash_023.md:185:4:185:10
 NAME NOT IN SCOPE - fuzz_crash_023.md:188:22:188:25
 NAME NOT IN SCOPE - fuzz_crash_023.md:189:26:189:33
 NAME NOT IN SCOPE - fuzz_crash_023.md:189:34:189:38
-NAME NOT IN SCOPE - fuzz_crash_023.md:190:2:190:14
-NAME NOT IN SCOPE - fuzz_crash_023.md:191:2:191:14
 DOES NOT EXIST - fuzz_crash_023.md:193:4:193:13
 UNUSED VARIABLE - fuzz_crash_023.md:164:2:164:18
 UNUSED VARIABLE - fuzz_crash_023.md:178:2:178:8
@@ -271,6 +265,14 @@ UNUSED VARIABLE - fuzz_crash_023.md:180:2:180:17
 UNUSED VARIABLE - fuzz_crash_023.md:188:2:188:15
 UNUSED VARIABLE - fuzz_crash_023.md:189:2:189:23
 UNDECLARED TYPE - fuzz_crash_023.md:201:9:201:14
+MOD NOT FOUND - fuzz_crash_023.md:16:1:16:27
+MOD NOT FOUND - fuzz_crash_023.md:17:1:20:20
+MOD NOT FOUND - fuzz_crash_023.md:43:32:43:41
+MOD NOT FOUND - fuzz_crash_023.md:46:8:46:17
+MOD NOT FOUND - fuzz_crash_023.md:53:8:53:17
+DOES NOT EXIST - fuzz_crash_023.md:175:3:175:15
+DOES NOT EXIST - fuzz_crash_023.md:190:2:190:14
+DOES NOT EXIST - fuzz_crash_023.md:191:2:191:14
 TYPE MISMATCH - fuzz_crash_023.md:70:5:70:8
 MISSING METHOD - fuzz_crash_023.md:99:3:99:8
 MISSING METHOD - fuzz_crash_023.md:101:3:101:8
@@ -404,25 +406,35 @@ MISSING METHOD - fuzz_crash_023.md:189:26:189:66
 			(line-break)
 			(source-region (file "fuzz_crash_023.md") (start 178 52) (end 178 54) (annotation error) (line-text "\trecord = { foo: 123, bar: \"Hello\", ;az: tag, qux: Ok(world), punned }"))))
 	(report
-		(severity runtime_error)
-		(title "Mod Not Found")
-		(region (start 16 1) (end 16 27))
+		(severity fatal)
+		(title "Not Implemented")
+		(region (start 6 1) (end 12 4))
 		(headline
-			(text "The mod ")
-			(annotated code "BadName")
-			(reflow " was not found in this Roc project."))
+			(reflow "This feature is not yet implemented: ")
+			(annotation-start emphasis)
+			(text "Exposed item 'line!' already imported from mod 'pf.Stdout', cannot import again from mod 'pf.StdoutMultiline'")
+			(annotation-end)
+			(reflow "."))
 		(document
-			(source-region (file "fuzz_crash_023.md") (start 16 1) (end 16 27) (annotation error) (line-text "import BadName as GoodName"))))
+			(source-region (file "fuzz_crash_023.md") (start 6 1) (end 12 4) (annotation error) (line-text "import # Comment after import keyword\n\tpf # Comment after qualifier\n\t\t.StdoutMultiline # Comment after ident\n\t\texposing [ # Comment after exposing open\n\t\t\tline!, # Comment after exposed item\n\t\t\twrite!, # Another after exposed item\n\t\t] # Comment after exposing close"))
+			(line-break)
+			(reflow "This error doesn't have a proper diagnostic report yet. Let us know if you want to help improve Roc's error messages!")
+			(line-break)))
 	(report
-		(severity runtime_error)
-		(title "Mod Not Found")
-		(region (start 17 1) (end 20 20))
+		(severity fatal)
+		(title "Not Implemented")
+		(region (start 6 1) (end 12 4))
 		(headline
-			(text "The mod ")
-			(annotated code "BadNameMultiline")
-			(reflow " was not found in this Roc project."))
+			(reflow "This feature is not yet implemented: ")
+			(annotation-start emphasis)
+			(text "Exposed item 'write!' already imported from mod 'pf.Stdout', cannot import again from mod 'pf.StdoutMultiline'")
+			(annotation-end)
+			(reflow "."))
 		(document
-			(source-region (file "fuzz_crash_023.md") (start 17 1) (end 20 20) (annotation error) (line-text "import\n\tBadNameMultiline\n\t\tas\n\t\tGoodNameMultiline"))))
+			(source-region (file "fuzz_crash_023.md") (start 6 1) (end 12 4) (annotation error) (line-text "import # Comment after import keyword\n\tpf # Comment after qualifier\n\t\t.StdoutMultiline # Comment after ident\n\t\texposing [ # Comment after exposing open\n\t\t\tline!, # Comment after exposed item\n\t\t\twrite!, # Another after exposed item\n\t\t] # Comment after exposing close"))
+			(line-break)
+			(reflow "This error doesn't have a proper diagnostic report yet. Let us know if you want to help improve Roc's error messages!")
+			(line-break)))
 	(report
 		(severity runtime_error)
 		(title "Undeclared Type")
@@ -476,16 +488,6 @@ MISSING METHOD - fuzz_crash_023.md:189:26:189:66
 	(report
 		(severity runtime_error)
 		(title "Undeclared Type")
-		(region (start 43 32) (end 43 41))
-		(headline
-			(reflow "The type ")
-			(annotated code "Something")
-			(reflow " is not declared in this scope."))
-		(document
-			(source-region (file "fuzz_crash_023.md") (start 43 32) (end 43 41) (annotation error) (line-text "Some(a) : { foo : Ok(a), bar : Something }"))))
-	(report
-		(severity runtime_error)
-		(title "Undeclared Type")
 		(region (start 45 8) (end 45 10))
 		(headline
 			(reflow "The type ")
@@ -496,16 +498,6 @@ MISSING METHOD - fuzz_crash_023.md:189:26:189:66
 	(report
 		(severity runtime_error)
 		(title "Undeclared Type")
-		(region (start 46 8) (end 46 17))
-		(headline
-			(reflow "The type ")
-			(annotated code "Something")
-			(reflow " is not declared in this scope."))
-		(document
-			(source-region (file "fuzz_crash_023.md") (start 46 8) (end 46 17) (annotation error) (line-text "\tbar : Something, # After last field"))))
-	(report
-		(severity runtime_error)
-		(title "Undeclared Type")
 		(region (start 52 4) (end 52 6))
 		(headline
 			(reflow "The type ")
@@ -513,16 +505,6 @@ MISSING METHOD - fuzz_crash_023.md:189:26:189:66
 			(reflow " is not declared in this scope."))
 		(document
 			(source-region (file "fuzz_crash_023.md") (start 52 4) (end 52 6) (annotation error) (line-text "\t\t\tOk(a), # Comment after pattern record field"))))
-	(report
-		(severity runtime_error)
-		(title "Undeclared Type")
-		(region (start 53 8) (end 53 17))
-		(headline
-			(reflow "The type ")
-			(annotated code "Something")
-			(reflow " is not declared in this scope."))
-		(document
-			(source-region (file "fuzz_crash_023.md") (start 53 8) (end 53 17) (annotation error) (line-text "\tbar : Something, # Another after pattern record field"))))
 	(report
 		(severity runtime_error)
 		(title "Name Not In Scope")
@@ -804,19 +786,6 @@ MISSING METHOD - fuzz_crash_023.md:189:26:189:66
 			(source-region (file "fuzz_crash_023.md") (start 158 2) (end 158 11) (annotation error) (line-text "\tsome_func("))))
 	(report
 		(severity runtime_error)
-		(title "Name Not In Scope")
-		(region (start 175 3) (end 175 15))
-		(headline
-			(reflow "Nothing is named ")
-			(annotated symbol-unqualified "line!")
-			(reflow " in this scope."))
-		(document
-			(reflow "Is it misspelled, or is there an import missing?")
-			(line-break)
-			(line-break)
-			(source-region (file "fuzz_crash_023.md") (start 175 3) (end 175 15) (annotation error) (line-text "\t\tStdout.line!(\"Adding ${n} to ${number}\")"))))
-	(report
-		(severity runtime_error)
 		(title "Unrecognized Syntax")
 		(region (start 178 11) (end 178 45))
 		(headline
@@ -936,32 +905,6 @@ MISSING METHOD - fuzz_crash_023.md:189:26:189:66
 			(source-region (file "fuzz_crash_023.md") (start 189 34) (end 189 38) (annotation error) (line-text "\tstatic_dispatch_style = some_fn(arg1)?.static_dispatch_method()?.next_static_dispatch_method()?.record_field?"))))
 	(report
 		(severity runtime_error)
-		(title "Name Not In Scope")
-		(region (start 190 2) (end 190 14))
-		(headline
-			(reflow "Nothing is named ")
-			(annotated symbol-unqualified "line!")
-			(reflow " in this scope."))
-		(document
-			(reflow "Is it misspelled, or is there an import missing?")
-			(line-break)
-			(line-break)
-			(source-region (file "fuzz_crash_023.md") (start 190 2) (end 190 14) (annotation error) (line-text "\tStdout.line!(interpolated)?"))))
-	(report
-		(severity runtime_error)
-		(title "Name Not In Scope")
-		(region (start 191 2) (end 191 14))
-		(headline
-			(reflow "Nothing is named ")
-			(annotated symbol-unqualified "line!")
-			(reflow " in this scope."))
-		(document
-			(reflow "Is it misspelled, or is there an import missing?")
-			(line-break)
-			(line-break)
-			(source-region (file "fuzz_crash_023.md") (start 191 2) (end 191 14) (annotation error) (line-text "\tStdout.line!("))))
-	(report
-		(severity runtime_error)
 		(title "Does Not Exist")
 		(region (start 193 4) (end 193 13))
 		(headline
@@ -1063,6 +1006,89 @@ MISSING METHOD - fuzz_crash_023.md:189:26:189:66
 			(reflow " is not declared in this scope."))
 		(document
 			(source-region (file "fuzz_crash_023.md") (start 201 9) (end 201 14) (annotation error) (line-text "tuple : Value((a, b, c))"))))
+	(report
+		(severity runtime_error)
+		(title "Mod Not Found")
+		(region (start 16 1) (end 16 27))
+		(headline
+			(text "The mod ")
+			(annotated code "BadName")
+			(reflow " was not found in this Roc project."))
+		(document
+			(source-region (file "fuzz_crash_023.md") (start 16 1) (end 16 27) (annotation error) (line-text "import BadName as GoodName"))))
+	(report
+		(severity runtime_error)
+		(title "Mod Not Found")
+		(region (start 17 1) (end 20 20))
+		(headline
+			(text "The mod ")
+			(annotated code "BadNameMultiline")
+			(reflow " was not found in this Roc project."))
+		(document
+			(source-region (file "fuzz_crash_023.md") (start 17 1) (end 20 20) (annotation error) (line-text "import\n\tBadNameMultiline\n\t\tas\n\t\tGoodNameMultiline"))))
+	(report
+		(severity runtime_error)
+		(title "Mod Not Found")
+		(region (start 43 32) (end 43 41))
+		(headline
+			(text "This ")
+			(annotated code "Something")
+			(reflow " type is declared to be in ")
+			(annotated code "pkg.Something")
+			(reflow ", which does not exist."))
+		(document
+			(source-region (file "fuzz_crash_023.md") (start 43 32) (end 43 41) (annotation error) (line-text "Some(a) : { foo : Ok(a), bar : Something }"))))
+	(report
+		(severity runtime_error)
+		(title "Mod Not Found")
+		(region (start 46 8) (end 46 17))
+		(headline
+			(text "This ")
+			(annotated code "Something")
+			(reflow " type is declared to be in ")
+			(annotated code "pkg.Something")
+			(reflow ", which does not exist."))
+		(document
+			(source-region (file "fuzz_crash_023.md") (start 46 8) (end 46 17) (annotation error) (line-text "\tbar : Something, # After last field"))))
+	(report
+		(severity runtime_error)
+		(title "Mod Not Found")
+		(region (start 53 8) (end 53 17))
+		(headline
+			(text "This ")
+			(annotated code "Something")
+			(reflow " type is declared to be in ")
+			(annotated code "pkg.Something")
+			(reflow ", which does not exist."))
+		(document
+			(source-region (file "fuzz_crash_023.md") (start 53 8) (end 53 17) (annotation error) (line-text "\tbar : Something, # Another after pattern record field"))))
+	(report
+		(severity runtime_error)
+		(title "Does Not Exist")
+		(region (start 175 3) (end 175 15))
+		(headline
+			(annotated symbol-unqualified "Stdout.line!")
+			(reflow " does not exist."))
+		(document
+			(source-region (file "fuzz_crash_023.md") (start 175 3) (end 175 15) (annotation error) (line-text "\t\tStdout.line!(\"Adding ${n} to ${number}\")"))))
+	(report
+		(severity runtime_error)
+		(title "Does Not Exist")
+		(region (start 190 2) (end 190 14))
+		(headline
+			(annotated symbol-unqualified "Stdout.line!")
+			(reflow " does not exist."))
+		(document
+			(source-region (file "fuzz_crash_023.md") (start 190 2) (end 190 14) (annotation error) (line-text "\tStdout.line!(interpolated)?"))))
+	(report
+		(severity runtime_error)
+		(title "Does Not Exist")
+		(region (start 191 2) (end 191 14))
+		(headline
+			(annotated symbol-unqualified "Stdout.line!")
+			(reflow " does not exist."))
+		(document
+			(source-region (file "fuzz_crash_023.md") (start 191 2) (end 191 14) (annotation error) (line-text "\tStdout.line!("))))
 	(report
 		(severity runtime_error)
 		(title "Type Mismatch")

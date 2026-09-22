@@ -863,6 +863,9 @@ const DemandAnalyzer = struct {
             // module and are that module's own compile-time roots; only the
             // supplied values contribute local demands.
             .e_nominal_external => |nominal| try walk.push(self.allocator, .{ .visit = nominal.backing_expr }),
+            .e_deferred_import_ref => |deferred| {
+                if (deferred.backing) |backing| try walk.push(self.allocator, .{ .visit = backing.expr });
+            },
             .e_dbg => |dbg| try walk.push(self.allocator, .{ .visit = dbg.expr }),
             .e_expect_err => |expect_err| try walk.push(self.allocator, .{ .visit = expect_err.expr }),
             .e_expect => |expect| try walk.push(self.allocator, .{ .visit = expect.body }),
@@ -925,6 +928,7 @@ const DemandAnalyzer = struct {
             .applied_tag => |tag| try self.pushPatternSpanReversed(walk, tag.args),
             .nominal => |nominal| try walk.push(self.allocator, .{ .visit_pattern = nominal.backing_pattern }),
             .nominal_external => |nominal| try walk.push(self.allocator, .{ .visit_pattern = nominal.backing_pattern }),
+            .deferred_import_ref => |deferred| try walk.push(self.allocator, .{ .visit_pattern = deferred.backing_pattern }),
             .record_destructure => |record| {
                 const destructs = self.cir.store.sliceRecordDestructs(record.destructs);
                 var i = destructs.len;
@@ -1076,6 +1080,7 @@ fn appendChildPatterns(
         },
         .nominal => |nominal| try out.append(allocator, nominal.backing_pattern),
         .nominal_external => |nominal| try out.append(allocator, nominal.backing_pattern),
+        .deferred_import_ref => |deferred| try out.append(allocator, deferred.backing_pattern),
         .record_destructure => |record| {
             for (cir.store.sliceRecordDestructs(record.destructs)) |destruct_idx| {
                 const destruct = cir.store.getRecordDestruct(destruct_idx);
@@ -1148,6 +1153,7 @@ fn patternBindsName(pattern: CIR.Pattern) bool {
         .applied_tag,
         .nominal,
         .nominal_external,
+        .deferred_import_ref,
         .record_destructure,
         .list,
         .tuple,
@@ -1525,6 +1531,9 @@ pub fn collectNameReferences(
             // Foreign defaults are the foreign module's concern; only the
             // supplied values contribute local references.
             .e_nominal_external => |nominal| try scratch_stack.append(allocator, nominal.backing_expr),
+            .e_deferred_import_ref => |deferred| {
+                if (deferred.backing) |backing| try scratch_stack.append(allocator, backing.expr);
+            },
             .e_run_low_level => |run_ll| {
                 for (cir.store.sliceExpr(run_ll.args)) |arg| try scratch_stack.append(allocator, arg);
             },

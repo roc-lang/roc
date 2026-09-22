@@ -213,6 +213,7 @@ fn cleanupPersistentCache(std_io: Io, cache_base: []const u8, now_ns: i128, mayb
     };
     const subdirs = [_]PersistentSubdir{
         .{ .name = "mod", .nested_directory_depth = 1 },
+        .{ .name = "pair", .nested_directory_depth = 1 },
         .{ .name = "exe", .nested_directory_depth = 1 },
         .{ .name = "test", .nested_directory_depth = 1 },
         .{ .name = "wasm-host", .nested_directory_depth = 1 },
@@ -572,11 +573,14 @@ test "cleanupPersistentCache deletes old cache files at each family depth" {
 
     const mod_dir = std.fs.path.join(allocator, &.{ cache_base, "0.0.0-test", "mod", "aa" }) catch unreachable;
     defer allocator.free(mod_dir);
+    const pair_dir = std.fs.path.join(allocator, &.{ cache_base, "0.0.0-test", "pair", "cc" }) catch unreachable;
+    defer allocator.free(pair_dir);
     const wasm_host_dir = std.fs.path.join(allocator, &.{ cache_base, "0.0.0-test", "wasm-host", "bb" }) catch unreachable;
     defer allocator.free(wasm_host_dir);
 
     Dir.cwd().createDirPath(std.testing.io, glue_dir) catch unreachable;
     Dir.cwd().createDirPath(std.testing.io, mod_dir) catch unreachable;
+    Dir.cwd().createDirPath(std.testing.io, pair_dir) catch unreachable;
     Dir.cwd().createDirPath(std.testing.io, wasm_host_dir) catch unreachable;
 
     const glue_file = std.fs.path.join(allocator, &.{ glue_dir, "old.o" }) catch unreachable;
@@ -585,6 +589,8 @@ test "cleanupPersistentCache deletes old cache files at each family depth" {
     defer allocator.free(glue_tmp);
     const mod_file = std.fs.path.join(allocator, &.{ mod_dir, "old.rcache" }) catch unreachable;
     defer allocator.free(mod_file);
+    const pair_file = std.fs.path.join(allocator, &.{ pair_dir, "old-pairing" }) catch unreachable;
+    defer allocator.free(pair_file);
     const wasm_host_file = std.fs.path.join(allocator, &.{ wasm_host_dir, "old-host" }) catch unreachable;
     defer allocator.free(wasm_host_file);
     const wasm_host_lock = std.fs.path.join(allocator, &.{ wasm_host_dir, "old-host.lock" }) catch unreachable;
@@ -593,6 +599,7 @@ test "cleanupPersistentCache deletes old cache files at each family depth" {
     (Dir.cwd().createFile(std.testing.io, glue_file, .{}) catch unreachable).close(std.testing.io);
     (Dir.cwd().createFile(std.testing.io, glue_tmp, .{}) catch unreachable).close(std.testing.io);
     (Dir.cwd().createFile(std.testing.io, mod_file, .{}) catch unreachable).close(std.testing.io);
+    (Dir.cwd().createFile(std.testing.io, pair_file, .{}) catch unreachable).close(std.testing.io);
     (Dir.cwd().createFile(std.testing.io, wasm_host_file, .{}) catch unreachable).close(std.testing.io);
     (Dir.cwd().createFile(std.testing.io, wasm_host_lock, .{}) catch unreachable).close(std.testing.io);
 
@@ -601,7 +608,7 @@ test "cleanupPersistentCache deletes old cache files at each family depth" {
     var stats = CleanupStats{};
     cleanupPersistentCache(std.testing.io, cache_base, far_future_ns, &stats);
 
-    try std.testing.expectEqual(@as(u32, 4), stats.cache_files_deleted);
+    try std.testing.expectEqual(@as(u32, 5), stats.cache_files_deleted);
 
     Dir.cwd().access(std.testing.io, glue_file, .{}) catch |err| {
         try std.testing.expectEqual(error.FileNotFound, err);
@@ -615,5 +622,6 @@ test "cleanupPersistentCache deletes old cache files at each family depth" {
     Dir.cwd().access(std.testing.io, wasm_host_file, .{}) catch |err| {
         try std.testing.expectEqual(error.FileNotFound, err);
     };
+    try std.testing.expectError(error.FileNotFound, Dir.cwd().access(std.testing.io, pair_file, .{}));
     try Dir.cwd().access(std.testing.io, wasm_host_lock, .{});
 }
