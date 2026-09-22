@@ -2634,7 +2634,11 @@ annotated members instantiate the pre-declared scheme, preserving sound
 polymorphic recursion for annotated defs. The same rule applies to
 block-local `s_decl` functions: each local function decl is a binding group
 of one with its own rank frame, and annotated (type-var-free) locals
-pre-declare their scheme. There is no deferred post-generalization validation
+pre-declare their scheme. An unannotated local's lambda stays in that frame
+like a group member's; the frame's boundary unifies the pattern with the
+RHS, re-runs dispatch for receivers that unification pinned (an accumulator
+the recursive call passes as `[]`), and only then generalizes, so
+requirement deduplication and scheme capture see the final type. There is no deferred post-generalization validation
 of recursive references anywhere; the monomorphic rule leaves nothing to
 validate afterwards. A consequence is that an unannotated recursive def
 used at two incompatible types within its own group is a type error—the
