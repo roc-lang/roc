@@ -2283,14 +2283,13 @@ retired with its explicit subtree invalidation state.
 The compile coordinator records phase progress separately from user diagnostics.
 A source module that reaches checking has no user-error `Failure` outcome. It
 must produce its complete `ModuleEnv`, final content identity, and CheckedModule
-data required by importers. The Check type-check result carries exactly one of:
+data required by importers. After rendering static diagnostics, checking releases its solver state. Every
+module outputs its complete parametric checked interface and selected roots.
+The coordinator retains only evaluation diagnostics and their source-name
+display mapping until the selected roots complete. Platform/app composition
+consumes these checked modules; it never suspends or reconstructs a checker.
 
-- the complete CheckedModule
-- the complete checker-owned continuation for platform/app relation
-  construction, which waits for both CheckedModule inputs
-
-User diagnostics never select a third outcome and never propagate dependency
-failure. Every invalid source construct is represented at its first owning
+User diagnostics never suppress checked module output or propagate dependency failure. Every invalid source construct is represented at its first owning
 producer boundary by explicit checked data: a checked runtime-error expression,
 a checked-error dispatch plan, a crash constant, or a checked-error platform
 requirement. Importers and every post-check stage consume that data normally.
@@ -2331,7 +2330,16 @@ retain an owning AST pointer while a worker consumes it.
 
 ## Cache Boundary
 
-The checked module cache is the only checked cache boundary in this design.
+Reusable modules and exact platform/app compositions are distinct checked cache
+entries. A composition entry is keyed by both immutable module identities and
+the compiler's checked and composition format versions. It contains only the
+pairing's changed metadata columns and completed app-dependent evaluation
+results, never source environments or a live checker continuation.
+Type-bearing body columns carry the app substitution; unchanged body columns
+remain borrowed.
+Unchanged columns borrow the exact platform identified by the key. Only a
+completed composition without diagnostics may be cached; a hit consumes its
+stored outcomes and replays its recorded debug observations without evaluation.
 Checked module cache entries are trusted compiler-produced cache entries, not
 adversarial inputs. Cache reads validate only the cache header,
 entry-version hash, key, serialized layout, and ordinary binary decoding. They must
@@ -2453,8 +2461,11 @@ The cache id is not merely the module's source bytes plus recursive import
 ids. Source bytes are only one input. The id also includes the compiler build
 hash, the module identity, the checking context identity, and the ordered direct
 import checked module ids. The checking context identity includes import-name
-hashes, resolved import ids, platform requirement context, platform/app
-relation identity, and explicit root requests. Any additional checked tables
+hashes, resolved import ids, platform requirement context, and explicit root
+requests. A reusable platform module has no app relation in this identity.
+Generated code has a separate identity that includes the exact platform/app
+relation; specialization keys and object-cache entries use that identity while
+local checked references retain their immutable module owner. Any additional checked tables
 stored in the checked module cache must be deterministic output of those
 checked inputs and the checked modules they name. Such tables are serialized
 data, not new cache-id inputs.
@@ -2709,6 +2720,51 @@ part of the checked source module.
 Those forms do not survive runtime lowering. The `.lss` strategy removes them
 while producing Monotype IR. The `.boxy` strategy removes them while producing
 LIR directly from checked data.
+
+### Immutable Platform/App Composition
+
+Platform requirement declarations record their checked type roots, the
+producer-assigned order of requirement identity variables, and each for-clause alias's
+checked identity and backing roots. Pairing consumes these exact rows and the
+app's recorded solution rows; it never revisits source annotations or rebuilds
+identity order. Deferred exhaustiveness diagnostics retain checked display text,
+missing patterns, source regions, and checked site IDs as serializable data.
+Their eventual evaluation outcome never requires a solver snapshot.
+
+A parametric platform outputs every root selected by the producer, including
+roots that require app bindings, and the complete same-module evaluation order.
+Binding dependence follows the checked constant and procedure dependency
+graph transitively, including captured values; it is distinct from strict
+evaluation demand, which determines scheduling.
+Its reusable module cache contains only context-independent evaluation results;
+app-dependent requests and deferred diagnostics remain explicit checked data.
+Program composition activates those recorded requests. It applies the recorded
+app substitutions to body expression, pattern, call, interpolation, and field-access
+types as well as procedure signatures and roots. One substitution memo preserves
+shared type identities across these columns. The pairing cache retains the changed
+body columns so cache hits use the same types. Calls to requirement declarations
+receive their direct-call classification from the bound app procedure kind using
+the checked output rule; callable-evaluation bindings remain indirect.
+This classification is session-owned and persisted with the paired body columns.
+Exact procedure aliases
+whose required bindings are now known use the existing checked forwarding rule
+and require no compile-time evaluator. Composition borrows the platform's
+unchanged body columns, dispatch plans, declaration tables and closure
+inventories, and owns the
+projected types, bindings, root manifests and evaluation results in a session.
+Completed independent roots are consumed as stored values and never evaluated
+again. Both lowering strategies consume this same checked view. Pairing extends the
+platform's ordered method scope with the app and its recorded scope, retaining
+the first occurrence of each checked module. The composition cache carries this
+combined scope so generated helpers can consume the app's exact checked method
+targets on both fresh and cached pairings. A session view
+cannot be serialized into the reusable module cache. Its completed changed
+columns may be persisted in the separate composition cache described above.
+Type columns borrow the immutable platform until their first write; ownership
+is explicit for every column, and a write copies that column before mutation.
+The checked root index accompanies the scheme index, preserving the
+first representative even when distinct identity roots share a key. Pairing
+borrows those indexes and never reconstructs them from root rows.
 
 The checked boundary outputs immutable checked modules. A checked module is
 either complete or unavailable to later stages. Later stages may read checked
@@ -2996,6 +3052,14 @@ problem store, selected hoisted roots,
 requirement context, imported diagnostic environments, and CTFE options. A
 checked module cache entry contains both `ModuleEnv` bytes and `CheckedModule`
 bytes; `ModuleEnv` bytes alone cannot stand in for the retained `Check` data.
+A runtime build must not admit a relation-less platform cache entry through
+the ordinary completed-module path: that output does not contain a checking-finalization
+continuation. The platform is checked with deferral enabled, and finalization
+probes only the exact pairing-keyed completed checked module. A hit releases the
+continuation; a miss consumes its selected roots and diagnostic store directly.
+Checking finalization consumes the retained `Check` inputs directly. This
+also applies to erroneous requirement signatures, whose early checked output keeps
+the checker alive for evaluation and finalization.
 
 A relation-less platform output preserves its complete `provides` metadata for
 glue and interface consumers. If it also declares app requirements, it does not
@@ -3013,6 +3077,10 @@ dependencies are all available without runtime arguments, mutable runtime state,
 host interaction, or observable runtime effects. Its value is computed during
 checking finalization and stored in `ConstStore`; later lowering restores that
 checked value instead of emitting runtime work for the original expression.
+
+Source-file IDs are assigned by source-module identity. Discovery indices are
+local to each independently checked module graph and cannot identify files
+when a program combines cached app and platform modules.
 
 Hoisting does not move source syntax. A hoisted root points at the existing
 checked expression and its source region. User-facing compile-time diagnostics,

@@ -11,7 +11,6 @@ const can = @import("can");
 const check = @import("check");
 const parse = @import("parse");
 const reporting = @import("reporting");
-const eval = @import("eval");
 const post_check_executor = @import("base").post_check_task_executor;
 const watch_inputs = @import("watch_inputs.zig");
 
@@ -173,10 +172,6 @@ pub const TypeCheckTask = struct {
     /// an app root's entrypoint contract with its platform is enforced, and
     /// participates in the checked-artifact cache identity.
     validation: can.Can.Validation = .checking,
-    /// True when this module is the platform root of an app build: its
-    /// check-time publication is skipped so finalization publishes the
-    /// relation-bearing platform root exactly once.
-    defer_publication: bool = false,
 };
 
 /// The platform root's requirement surface, borrowed from its completed
@@ -292,10 +287,7 @@ pub const CanonicalizedResult = struct {
 };
 
 /// Worker-owned checked-module output transferred to the coordinator.
-pub const TypeCheckedPublication = union(enum) {
-    published: CheckedArtifact.CheckedModuleArtifact,
-    deferred: *DeferredPublicationState,
-};
+pub const TypeCheckedPublication = CheckedArtifact.CheckedModuleArtifact;
 
 /// Result of successfully type-checking a module.
 /// User diagnostics do not alter this outcome: import metadata is prepared
@@ -312,10 +304,7 @@ pub const OwnedSemanticModuleData = struct {
         if (self.pending_evaluation) |state| state.deinit();
         self.pending_evaluation = null;
         if (!self.publication_owned) return;
-        switch (self.publication) {
-            .published => |*artifact| artifact.deinitRetainingModuleEnv(artifact.canonical_names.allocator),
-            .deferred => |state| state.deinit(),
-        }
+        self.publication.deinitRetainingModuleEnv(self.publication.canonical_names.allocator);
     }
 };
 
@@ -342,31 +331,14 @@ pub const TypeCheckedResult = struct {
 /// Diagnostic ownership retained between checking and post-frontend evaluation.
 pub const PendingEvaluationState = struct {
     allocator: Allocator,
-    checker: check.Check,
+    problems: check.problem.Store,
+    import_mapping: @import("types").import_mapping.ImportMapping,
     imported_envs: []const *ModuleEnv,
     reported_problem_count: usize,
 
     pub fn deinit(self: *PendingEvaluationState) void {
-        self.checker.deinit();
-        self.allocator.free(self.imported_envs);
-        self.allocator.destroy(self);
-    }
-};
-
-/// Complete checker-owned continuation for a module whose checked artifact is
-/// intentionally published during executable finalization.
-pub const DeferredPublicationState = struct {
-    allocator: Allocator,
-    checker: check.Check,
-    /// Stable copy of the imported-env pointer slice needed to render any
-    /// diagnostics produced during deferred compile-time finalization.
-    imported_envs: []const *ModuleEnv,
-    ctfe_options: eval.CompileTimeFinalization.Options,
-    requirement_context: check.CheckedArtifact.PlatformRequirementContextKey,
-    reported_problem_count: usize,
-
-    pub fn deinit(self: *DeferredPublicationState) void {
-        self.checker.deinit();
+        self.problems.deinit(self.allocator);
+        self.import_mapping.deinit();
         self.allocator.free(self.imported_envs);
         self.allocator.destroy(self);
     }

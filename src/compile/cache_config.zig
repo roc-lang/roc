@@ -308,6 +308,13 @@ pub const CacheConfig = struct {
         return std.fs.path.join(allocator, &[_][]const u8{ version_dir, "mod" });
     }
 
+    /// Exact platform/app composition results, separate from reusable modules.
+    pub fn getPlatformPairingCacheDir(self: Self, allocator: Allocator) (Allocator.Error || error{NoHomeDirectory})![]u8 {
+        const version_dir = try self.getVersionCacheDir(allocator);
+        defer allocator.free(version_dir);
+        return std.fs.path.join(allocator, &.{ version_dir, "pair" });
+    }
+
     /// Get the module source cache directory for tooling-owned materialized sources.
     pub fn getModuleCacheDir(self: Self, allocator: Allocator) (Allocator.Error || error{NoHomeDirectory})![]u8 {
         const version_dir = try self.getVersionCacheDir(allocator);

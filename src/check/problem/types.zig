@@ -498,8 +498,8 @@ pub const CrossModuleImport = struct {
 /// Problem data for a non-exhaustive match expression
 pub const NonExhaustiveMatch = struct {
     match_expr: CIR.Expr.Idx,
-    /// Snapshot of the condition type for error messages
-    condition_snapshot: SnapshotContentIdx,
+    /// Checked display text, retained independently of solver snapshots.
+    condition_type: ExtraStringIdx,
     /// Range into the problems store's missing_patterns_backing for pattern indices
     missing_patterns: MissingPatternsRange,
     /// This was discovered by compile-time evaluation taking the generated miss branch.
@@ -509,8 +509,8 @@ pub const NonExhaustiveMatch = struct {
 /// Problem data for a non-exhaustive destructuring pattern
 pub const NonExhaustiveDestructure = struct {
     pattern: CIR.Pattern.Idx,
-    /// Snapshot of the destructured value type for error messages
-    value_snapshot: SnapshotContentIdx,
+    /// Checked display text, retained independently of solver snapshots.
+    value_type: ExtraStringIdx,
     /// Range into the problems store's missing_patterns_backing for pattern indices
     missing_patterns: MissingPatternsRange,
     /// This was discovered by compile-time evaluation taking the generated miss branch.

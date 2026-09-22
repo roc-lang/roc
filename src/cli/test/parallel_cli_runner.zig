@@ -438,6 +438,8 @@ const CustomCase = enum {
     cache_passing_results,
     cache_failing_results,
     cache_invalidated_by_source_change,
+    issue_11389_check_after_test_shared_cache,
+    issue_11495_paired_body_types,
     issue_11065_duplicate_module_name_across_packages,
     cache_ignores_optimized_mode,
     cache_replays_optimized_dbg_transcript,
@@ -1923,6 +1925,8 @@ const subcommand_cases = [_]CliCase{
     .{ .id = 0, .suite = .subcommands, .name = "roc test caches failing results (dev)", .backend = .dev, .body = .{ .custom = .cache_failing_results } },
     .{ .id = 0, .suite = .subcommands, .name = "roc test cache invalidated by source change (interpreter)", .backend = .interpreter, .body = .{ .custom = .cache_invalidated_by_source_change } },
     .{ .id = 0, .suite = .subcommands, .name = "roc test cache invalidated by source change (dev)", .backend = .dev, .body = .{ .custom = .cache_invalidated_by_source_change } },
+    .{ .id = 0, .suite = .subcommands, .name = "issue 11389: roc check succeeds on a cache roc test wrote", .body = .{ .custom = .issue_11389_check_after_test_shared_cache } },
+    .{ .id = 0, .suite = .subcommands, .name = "issue 11495: Boxy pairing keeps app body types across shared platform cache hits", .body = .{ .custom = .issue_11495_paired_body_types } },
     .{ .id = 0, .suite = .subcommands, .name = "roc test result cache ignores optimized mode", .backend = .speed, .body = .{ .custom = .cache_ignores_optimized_mode } },
     .{ .id = 0, .suite = .subcommands, .name = "roc test optimized result cache replays dbg transcript", .backend = .speed, .body = .{ .custom = .cache_replays_optimized_dbg_transcript } },
     .{ .id = 0, .suite = .subcommands, .name = "roc test result cache replays dbg transcript across backends", .backend = .speed, .body = .{ .custom = .cache_replays_dbg_transcript_across_backends } },
@@ -3305,6 +3309,8 @@ fn runCustomCase(
         .cache_passing_results => customCachePassingResults(io, allocator, &env, &timer, timeout_ms, spec.backend orelse .interpreter),
         .cache_failing_results => customCacheFailingResults(io, allocator, &env, &timer, timeout_ms, spec.backend orelse .interpreter),
         .cache_invalidated_by_source_change => customCacheInvalidated(io, allocator, &env, &timer, timeout_ms, spec.backend orelse .interpreter),
+        .issue_11389_check_after_test_shared_cache => customIssue11389CheckAfterTestSharedCache(io, allocator, &env, &timer, timeout_ms),
+        .issue_11495_paired_body_types => customIssue11495PairedBodyTypes(io, allocator, &env, &timer, timeout_ms),
         .issue_11065_duplicate_module_name_across_packages => customIssue11065DuplicateModuleNameAcrossPackages(io, allocator, &env, &timer, timeout_ms),
         .cache_ignores_optimized_mode => customCacheIgnoresOptimizedMode(io, allocator, &env, &timer, timeout_ms),
         .cache_replays_optimized_dbg_transcript => customCacheReplaysOptimizedDbgTranscript(io, allocator, &env, &timer, timeout_ms),
@@ -7601,14 +7607,13 @@ fn customPipelineParitySharedCache(io: std.Io, allocator: Allocator, env: *const
         return customFailure(allocator, timer, "expected roc check to populate checked-module cache entries, found 0", .{});
     }
 
-    // The first executable-mode compile may add finalized platform-relation
-    // artifacts on top of check's entries; afterwards every pipeline must hit
-    // the shared cache with zero new checked-module writes (issue 9788).
+    // Runtime composition reuses the same immutable platform module; every
+    // executable pipeline hits check's entries without extra module writes.
     if (runRocAndCheck(io, allocator, env, timer, timeout_ms, .{ .args = &.{}, .roc_file = fixture, .contains = &.{.{ .stream = .stdout, .text = "alpha[beta:parity]" }} })) |failure| return failure;
     const after_first_run = countCheckedModuleCacheFiles(io, allocator, env.dirs.roc_cache_dir) catch |err|
         return customInfraFailure(allocator, timer, "failed to count module cache files after run: {}", .{err});
-    if (after_first_run < after_check) {
-        return customFailure(allocator, timer, "run lost checked-module cache entries: {d} -> {d}", .{ after_check, after_first_run });
+    if (after_first_run != after_check) {
+        return customFailure(allocator, timer, "run changed checked-module cache entries: {d} -> {d}", .{ after_check, after_first_run });
     }
 
     const follow_ups = [_]struct {
@@ -7619,14 +7624,13 @@ fn customPipelineParitySharedCache(io: std.Io, allocator: Allocator, env: *const
         /// wrote, so they add nothing. `roc test` links no program: it checks
         /// the root under explicitly requested roots rather than its app
         /// entrypoint contract, and publishes no executable artifacts, so its
-        /// root and platform root are two checked modules the other pipelines
-        /// do not have. Both are written once and reused afterwards, by the
-        /// later pipelines too.
+        /// app root has a distinct checking context. Its parametric platform
+        /// root is shared by every pipeline, so only the app entry is added.
         added_entries: usize,
     }{
         .{ .name = "run (second)", .args = &.{}, .added_entries = 0 },
         .{ .name = "build", .args = &.{ "build", build_out_arg }, .added_entries = 0 },
-        .{ .name = "test", .args = &.{"test"}, .added_entries = 2 },
+        .{ .name = "test", .args = &.{"test"}, .added_entries = 1 },
         .{ .name = "test (second)", .args = &.{"test"}, .added_entries = 0 },
         .{ .name = "check (second)", .args = &.{"check"}, .added_entries = 0 },
         .{ .name = "run (third)", .args = &.{}, .added_entries = 0 },
@@ -7697,6 +7701,58 @@ fn customCacheInvalidated(io: std.Io, allocator: Allocator, env: *const CaseEnv,
     std.Io.Dir.cwd().writeFile(io, .{ .sub_path = file_path, .data = updated_content }) catch |err|
         return customInfraFailure(allocator, timer, "failed to update cache test file: {}", .{err});
     if (runRocAndCheck(io, allocator, env, timer, timeout_ms, .{ .args = &.{ "test", opt_arg }, .roc_file = file_path, .not_contains = &.{.{ .stream = .stdout, .text = "(cached)" }} })) |failure| return failure;
+    return null;
+}
+
+// Test and executable checking must accept each other's partial module caches.
+fn customIssue11389CheckAfterTestSharedCache(
+    io: std.Io,
+    allocator: Allocator,
+    env: *const CaseEnv,
+    timer: *harness.Timer,
+    timeout_ms: u64,
+) ?TestResult {
+    const app = "test/cli/issue_11389_check_after_test_shared_cache.roc";
+    if (runRocAndCheck(io, allocator, env, timer, timeout_ms, .{
+        .args = &.{"test"},
+        .roc_file = app,
+        .exit = .success,
+        .contains = &.{.{ .stream = .stdout, .text = "tests passed" }},
+    })) |failure| return failure;
+    if (runRocAndCheck(io, allocator, env, timer, timeout_ms, .{
+        .args = &.{"check"},
+        .roc_file = app,
+        .exit = .success,
+        .contains_any = &.{.{ .needles = &no_errors_needles }},
+        .not_contains = &.{
+            .{ .stream = .stderr, .text = "invariant violated" },
+            .{ .stream = .stderr, .text = "panic" },
+        },
+    })) |failure| return failure;
+    return null;
+}
+
+fn customIssue11495PairedBodyTypes(
+    io: std.Io,
+    allocator: Allocator,
+    env: *const CaseEnv,
+    timer: *harness.Timer,
+    timeout_ms: u64,
+) ?TestResult {
+    // Both apps use one platform with different callable bodies. Repeat each
+    // backend to exercise the stored pairing after the other app has run.
+    for ([_][]const u8{ "--opt=interpreter", "--opt=interpreter", "--opt=dev", "--opt=dev" }) |opt| {
+        if (runRocAndCheck(io, allocator, env, timer, timeout_ms, .{
+            .args = &.{ opt, "--specialize=no" },
+            .roc_file = "test/echo/issue_11217.roc",
+            .stdout_exact = "ok\n",
+        })) |failure| return failure;
+        if (runRocAndCheck(io, allocator, env, timer, timeout_ms, .{
+            .args = &.{ opt, "--specialize=no" },
+            .roc_file = "test/echo/boxy_map_trim.roc",
+            .stdout_exact = "Alice, Bob, Charlie\n",
+        })) |failure| return failure;
+    }
     return null;
 }
 
