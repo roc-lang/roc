@@ -14534,7 +14534,7 @@ fn resolveRecordBuilderMap2(
                 .path = map2_path,
                 .module_name = type_ref.module_name,
                 .item_name = map2_name,
-                .parent_name = resolved.name,
+                .parent_name = if (type_ref.qualified_name == Ident.Idx.NONE) resolved.name else type_ref.qualified_name,
                 .qualified_name = map2_path,
                 .missing_module_failure = type_ref.missing_module_failure,
                 .not_found_failure = .record_builder_map2_not_found,
