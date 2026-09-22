@@ -6027,8 +6027,12 @@ evidence—it may exactly when its copy descends from the slot's own
 signature—or must synthesize its own. An index naming a record of the wrong
 kind, a record missing its signature-callable copy, or a copy that does not
 resolve to the body constraint is a checked-module invariant violation, not
-a fallback. An
-implementation whose checked scheme result row is CLOSED (its body returns a
+a fallback. An independent callable also retains a slot's nested vector when
+that vector is made entirely of pathless `scheme_requirement` entries. Those
+requirements belong to the selected target instantiation and cannot vary with
+the requesting callable relation. Mixed vectors remain per-use records;
+callable-derived vectors are synthesized from the independent relation.
+An implementation whose checked scheme result row is CLOSED (its body returns a
 closed-source value: a top-level constant, an input-position parameter, a
 nominal field) still serves a widened use: the Result-Row Widening Adapter
 at the template boundary specializes that implementation at its own declared

@@ -43474,11 +43474,12 @@ const BodyContext = struct {
         return null;
     }
 
-    /// Select the nested-evidence half of an evidence-slot reuse. Ordinary
-    /// independent rank-1 callables must derive nested evidence from their own
-    /// callable relation. A recorded where-method use may keep the slot's
-    /// resolved vector: its checker instantiation copied only signature
-    /// structure, sharing every evidence-bearing non-marker leaf.
+    /// Select the nested-evidence half of an evidence-slot reuse. Independent
+    /// rank-1 callables derive callable-owned evidence from their own relation,
+    /// but keep evidence owned entirely by the selected target. A recorded
+    /// where-method use may also keep the slot's resolved vector: its checker
+    /// instantiation copied only signature structure, sharing every
+    /// evidence-bearing non-marker leaf.
     fn targetProcedureEvidenceSchema(
         self: *BodyContext,
         target: *const SpecEvidenceTarget,
@@ -43508,8 +43509,11 @@ const BodyContext = struct {
             Common.invariant("checked dispatch requested slot nested evidence without an independent callable");
         }
         if (dependent.independent_callable and !dependent.reuse_slot_nested_evidence) {
-            if (schema == .requires_record) return error.RequiresRecordSynthesis;
-            return .synthesize;
+            return switch (schema) {
+                .from_target => nested,
+                .requires_record => error.RequiresRecordSynthesis,
+                .none, .from_callable => .synthesize,
+            };
         }
         return nested;
     }
@@ -57749,7 +57753,7 @@ test "materialized evidence normalization copies once and preserves unconsumed n
     try std.testing.expect((try normalizeMaterializedEvidence(allocator, normalized)).ptr == normalized.ptr);
 }
 
-test "independent callable reuse preserves requires-record nested evidence and synthesis rejects it" {
+test "independent callable keeps target-owned evidence and rejects per-use record synthesis" {
     const resolved_entries = [_]SpecEvidence{.unreachable_value};
     const nested = NestedSpecEvidence{ .resolved = &resolved_entries };
     const reuse = static_dispatch.ConstraintEvidenceRef{
@@ -57775,6 +57779,15 @@ test "independent callable reuse preserves requires-record nested evidence and s
         .independent_callable = true,
         .reuse_slot_nested_evidence = false,
     };
+    const target_owned = try BodyContext.dependentCallableNestedEvidenceForSchema(
+        synthesize,
+        nested,
+        .from_target,
+    );
+    switch (target_owned) {
+        .resolved => |resolved| try std.testing.expect(resolved.ptr == resolved_entries[0..].ptr),
+        .synthesize => return error.TestUnexpectedResult,
+    }
     try std.testing.expectError(
         error.RequiresRecordSynthesis,
         BodyContext.dependentCallableNestedEvidenceForSchema(

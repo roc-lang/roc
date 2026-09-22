@@ -1340,10 +1340,10 @@ pub const EvidenceChainIndex = struct {
 
 /// Reference to an enclosing evidence slot. Explicit per-use callable
 /// instantiations can share the slot's target identity without sharing its
-/// callable instantiation. An ordinary independent rank-1 relation rebuilds
-/// nested evidence from its callable; a recorded where-method use instead
-/// reuses the slot's resolved nested vector because checking copied only the
-/// signature structure and shared every non-marker leaf.
+/// callable instantiation. An independent rank-1 relation rebuilds
+/// callable-derived nested evidence from its callable. It retains the slot's
+/// vector when the target schema is target-owned, or when a recorded
+/// where-method use proves the signature copy shares every non-marker leaf.
 pub const ConstraintEvidenceRef = struct {
     /// Composite requirements name their exact owner parameter in the checked
     /// module's evidence pool, so dictionary ABIs need no lexical type search.
@@ -1512,34 +1512,45 @@ pub const EvidenceParamSource = union(enum) {
     erased_row_remainder,
 };
 
-/// Whether a procedure target's nested evidence can be derived from its
-/// instantiated callable alone. `requires_record` includes any checked evidence
-/// entry whose dispatcher has no callable-component path; only checked per-use
-/// evidence (or an exact where-use slot reuse) can supply it.
+/// Where a procedure target's nested evidence comes from. `from_target` is a
+/// vector made entirely of captured scheme requirements: it is fixed by the
+/// selected target instantiation and is independent of the requesting callable.
+/// `requires_record` mixes sources or contains another pathless source, so only
+/// checked per-use evidence (or an exact where-use slot reuse) can supply it.
 pub const ProcedureEvidenceSchema = enum {
     none,
     from_callable,
+    from_target,
     requires_record,
 };
 
 /// Classify a procedure template's evidence parameters into the schema above.
 /// No parameters is `.none`. A scheme callable is always derivable from the
 /// instantiated callable, and so is an explicit numeric default standing at the
-/// callable root (an empty path). Every other source, and any explicit default
-/// reached through a path, needs the checked record.
+/// callable root (an empty path). A vector consisting only of captured scheme
+/// requirements belongs to the selected target. Mixed vectors and every other
+/// source need the checked per-use record.
 pub fn procedureEvidenceSchema(
     params: []const EvidenceParamRecord,
     paths: []const EvidencePathStep,
 ) ProcedureEvidenceSchema {
     if (params.len == 0) return .none;
+    var scheme_requirements: usize = 0;
     for (params) |param| {
         const path = paths[param.path.start .. param.path.start + param.path.len];
         switch (param.source) {
             .scheme_callable => {},
             .explicit_default => if (path.len != 0) return .requires_record,
-            .scheme_requirement, .constraint_callable, .use_site_only, .erased_row_remainder => return .requires_record,
+            .scheme_requirement => if (path.len == 0) {
+                scheme_requirements += 1;
+            } else {
+                return .requires_record;
+            },
+            .constraint_callable, .use_site_only, .erased_row_remainder => return .requires_record,
         }
     }
+    if (scheme_requirements == params.len) return .from_target;
+    if (scheme_requirements != 0) return .requires_record;
     return .from_callable;
 }
 
