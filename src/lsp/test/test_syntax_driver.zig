@@ -43,6 +43,12 @@ pub const TestSyntaxDriver = struct {
         range: ?LspRange,
     };
 
+    pub const CheckedModule = struct {
+        module_env: *can.ModuleEnv,
+
+        pub fn deinit(_: CheckedModule) void {}
+    };
+
     pub const DefinitionResult = struct {
         uri: []const u8,
         range: LspRange,
@@ -84,6 +90,10 @@ pub const TestSyntaxDriver = struct {
 
     pub fn getImportedModuleEnvs(self: *TestSyntaxDriver, _: []const u8) std.mem.Allocator.Error!?[]*can.ModuleEnv {
         self.imported_module_calls += 1;
+        return null;
+    }
+
+    pub fn getCheckedModuleForDocument(_: *TestSyntaxDriver, _: []const u8, _: []const u8) std.mem.Allocator.Error!?CheckedModule {
         return null;
     }
 

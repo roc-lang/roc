@@ -1033,52 +1033,13 @@ fn computeEmissionContainsRefcounted(
         if (stmt == .assign_low_level and stmt.assign_low_level.op == .erased_capture_load) {
             const target = stmt.assign_low_level.target;
             const target_layout = store.getLocal(target).layout_idx;
-            if (try layoutMayContainBoxyDynamic(allocator, layouts, target_layout, &visited, &stack)) {
+            if (try arc_dismantle.layoutMayContainBoxyDynamic(allocator, layouts, target_layout, &visited, &stack)) {
                 try contains.exclude(allocator, target);
             }
         }
     }
 
     return contains;
-}
-
-/// Cycle-safe check for whether a layout may hold descriptor-driven dynamic
-/// (`erased_box`) content. Recursive tag unions reference themselves through
-/// their layout indices, so the walk tracks visited indices; `visited` and
-/// `stack` are caller-owned scratch reused across queries.
-fn layoutMayContainBoxyDynamic(
-    allocator: Allocator,
-    layouts: *const layout_mod.Store,
-    layout_idx: layout_mod.Idx,
-    visited: *std.AutoHashMap(layout_mod.Idx, void),
-    stack: *std.ArrayList(layout_mod.Idx),
-) ResourceError!bool {
-    visited.clearRetainingCapacity();
-    stack.clearRetainingCapacity();
-    try stack.append(allocator, layout_idx);
-    while (stack.pop()) |idx| {
-        if ((try visited.getOrPut(idx)).found_existing) continue;
-        const layout_val = layouts.getLayout(idx);
-        switch (layout_val.tag) {
-            .erased_box => return true,
-            .box, .list => try stack.append(allocator, layout_val.getIdx()),
-            .list_of_zst, .box_of_zst, .zst, .scalar, .erased_callable, .ptr => {},
-            .struct_ => {
-                const info = layouts.getStructInfo(layout_val);
-                for (0..info.fields.len) |index| {
-                    try stack.append(allocator, info.fields.get(@intCast(index)).layout);
-                }
-            },
-            .tag_union => {
-                const info = layouts.getTagUnionInfo(layout_val);
-                for (0..info.variants.len) |index| {
-                    try stack.append(allocator, info.variants.get(@intCast(index)).payload_layout);
-                }
-            },
-            .closure => try stack.append(allocator, layout_val.getClosure().captures_layout_idx),
-        }
-    }
-    return false;
 }
 
 const VariantSelector = struct {

@@ -11525,3 +11525,38 @@ test "stored encoder_for restore lowers a shape with an optional field" {
     try std.testing.expectEqual(@as(u64, 19), stats.template_misses);
     try std.testing.expectEqual(@as(u64, 1), stats.nested_misses);
 }
+
+test "issue 11470: tagged shared error composition executes in both strategies" {
+    const allocator = std.testing.allocator;
+    // The helper selects a procedure root, so give it a lambda rather than a value alias.
+    const source = @import("issue_11470_source.zig").source ++ "\nmain = |mode| run(mode)\n";
+    for ([_]base.SpecializationStrategy{ .lss, .boxy }) |strategy| {
+        var lowered = try lowerModuleWithOptions(allocator, source, .none, .{
+            .specialization_strategy = strategy,
+        });
+        defer lowered.deinit(allocator);
+        const result = &lowered.lowered.lir_result;
+        var runtime_env = eval.RuntimeHostEnv.init(allocator);
+        defer runtime_env.deinit();
+        {
+            var interpreter = try eval.Interpreter.initWithBoxyTables(
+                allocator,
+                &result.store,
+                &result.layouts,
+                eval.boxy_runtime.BoxyTables.fromResult(result),
+                runtime_env.get_ops(),
+            );
+            defer interpreter.deinit();
+            for ([_]u64{ 40, 1, 2, 3, 4 }, 0..) |expected, mode| {
+                var argument: u64 = @intCast(mode);
+                const evaluated = try interpreter.eval(.{
+                    .proc_id = try rootProc(&lowered.lowered),
+                    .arg_layouts = &.{.u64},
+                    .arg_ptr = @ptrCast(&argument),
+                });
+                try std.testing.expectEqual(expected, evaluated.value.read(u64));
+            }
+        }
+        try runtime_env.checkForLeaks();
+    }
+}

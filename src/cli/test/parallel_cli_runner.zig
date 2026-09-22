@@ -430,6 +430,8 @@ const CustomCase = enum {
     build_int_dev_output_runs,
     issue_10492_build_default_app_args,
     issue_11453_nested_alias_json_encode,
+    issue_11355_boxy_built_platform_codec_root,
+    issue_11355_boxy_built_try_low_levels,
     build_default_app_interpreter_args,
     build_glibc_target_non_linux_error,
     build_windows_shared_library,
@@ -882,6 +884,12 @@ const issue_11130_speed_expected_stdout = if (builtin.os.tag == .windows)
 else
     issue_11130_expected_stdout;
 
+const boxy_try_low_levels_expected_stdout = "Ok(\"ab\")\nErr(BadUtf8({ index: 0, problem: InvalidStartByte }))\nOk(300)\nErr(OutOfRange)\nOk(-42)\n";
+// Built Windows apps write through the CRT's text-mode stdout.
+const boxy_try_low_levels_built_expected_stdout = if (builtin.os.tag == .windows)
+    "Ok(\"ab\")\r\nErr(BadUtf8({ index: 0, problem: InvalidStartByte }))\r\nOk(300)\r\nErr(OutOfRange)\r\nOk(-42)\r\n"
+else
+    boxy_try_low_levels_expected_stdout;
 const boxy_inspect_expected_stdout = "{ label: \"hi\", nums: [1.0, 2.0] }\n{ label: \"bye\", nums: [3, 4] }\n{ label: <missing>, nums: <missing> }\nOk(3)\n";
 const boxy_inspect_size_expected_stdout = if (builtin.os.tag == .windows)
     "{ label: \"hi\", nums: [1.0, 2.0] }\r\n{ label: \"bye\", nums: [3, 4] }\r\n{ label: <missing>, nums: <missing> }\r\nOk(3)\r\n"
@@ -889,6 +897,11 @@ else
     boxy_inspect_expected_stdout;
 
 const issue_11217_size_expected_stdout = if (builtin.os.tag == .windows) "ok\r\n" else "ok\n";
+const issue_11351_expected_stdout = "[]\n0\n{ a: [], b: Err([]) }\n[]\n";
+const issue_11351_size_expected_stdout = if (builtin.os.tag == .windows)
+    "[]\r\n0\r\n{ a: [], b: Err([]) }\r\n[]\r\n"
+else
+    issue_11351_expected_stdout;
 
 const echo_cases = [_]CliCase{
     .{ .id = 0, .suite = .echo, .name = "echo platform: issue 11453 method encodes a record reached through three record aliases (dev, object cache on)", .backend = .dev, .body = .{ .custom = .issue_11453_nested_alias_json_encode } },
@@ -930,8 +943,19 @@ const echo_cases = [_]CliCase{
     .{ .id = 0, .suite = .echo, .name = "echo platform: issue 11217 Boxy polymorphic captures and aliases (interpreter)", .backend = .interpreter, .body = .{ .command = .{ .args = &.{ "--opt=interpreter", "--specialize=no" }, .roc_file = "test/echo/issue_11217.roc", .stdout_exact = "ok\n" } } },
     .{ .id = 0, .suite = .echo, .name = "echo platform: issue 11217 Boxy polymorphic captures and aliases (dev)", .backend = .dev, .body = .{ .command = .{ .args = &.{ "--opt=dev", "--specialize=no" }, .roc_file = "test/echo/issue_11217.roc", .stdout_exact = "ok\n" } } },
     .{ .id = 0, .suite = .echo, .name = "echo platform: issue 11217 Boxy polymorphic captures and aliases (size)", .backend = .size, .body = .{ .command = .{ .args = &.{ "--opt=size", "--specialize=no" }, .roc_file = "test/echo/issue_11217.roc", .stdout_exact = issue_11217_size_expected_stdout } } },
+    .{ .id = 0, .suite = .echo, .name = "echo platform: issue 11351 Boxy unbound type variables use their sealed default (interpreter)", .backend = .interpreter, .body = .{ .command = .{ .args = &.{ "--opt=interpreter", "--specialize=no" }, .roc_file = "test/echo/issue_11351.roc", .stdout_exact = issue_11351_expected_stdout } } },
+    .{ .id = 0, .suite = .echo, .name = "echo platform: issue 11351 Boxy unbound type variables use their sealed default (dev)", .backend = .dev, .body = .{ .command = .{ .args = &.{ "--opt=dev", "--specialize=no" }, .roc_file = "test/echo/issue_11351.roc", .stdout_exact = issue_11351_expected_stdout } } },
+    .{ .id = 0, .suite = .echo, .name = "echo platform: issue 11351 Boxy unbound type variables use their sealed default (size)", .backend = .size, .body = .{ .command = .{ .args = &.{ "--opt=size", "--specialize=no" }, .roc_file = "test/echo/issue_11351.roc", .stdout_exact = issue_11351_size_expected_stdout } } },
+    .{ .id = 0, .suite = .echo, .name = "echo platform: issue 11355 Boxy platform root supplies its codec requirement and app error row (interpreter)", .backend = .interpreter, .body = .{ .command = .{ .args = &.{ "--opt=interpreter", "--specialize=no" }, .roc_file = "test/echo/issue_11355_platform_codec_root.roc", .exit = .{ .code = 1 }, .stdout_exact = "Program exited with error: InvalidJson(\"Invalid JSON\")\n" } } },
+    .{ .id = 0, .suite = .echo, .name = "echo platform: issue 11355 Boxy platform root supplies its codec requirement and app error row (dev)", .backend = .dev, .body = .{ .command = .{ .args = &.{ "--opt=dev", "--specialize=no" }, .roc_file = "test/echo/issue_11355_platform_codec_root.roc", .exit = .{ .code = 1 }, .stdout_exact = "Program exited with error: InvalidJson(\"Invalid JSON\")\n" } } },
+    .{ .id = 0, .suite = .echo, .name = "echo platform: issue 11355 Boxy platform root supplies its codec requirement and app error row (size, built)", .backend = .size, .body = .{ .custom = .issue_11355_boxy_built_platform_codec_root } },
+    .{ .id = 0, .suite = .echo, .name = "echo platform: boxy low-levels producing Try write its concrete ABI (interpreter)", .backend = .interpreter, .body = .{ .command = .{ .args = &.{ "--opt=interpreter", "--specialize=no" }, .roc_file = "test/echo/boxy_try_low_levels.roc", .stdout_exact = boxy_try_low_levels_expected_stdout } } },
+    .{ .id = 0, .suite = .echo, .name = "echo platform: boxy low-levels producing Try write its concrete ABI (dev)", .backend = .dev, .body = .{ .command = .{ .args = &.{ "--opt=dev", "--specialize=no" }, .roc_file = "test/echo/boxy_try_low_levels.roc", .stdout_exact = boxy_try_low_levels_expected_stdout } } },
+    .{ .id = 0, .suite = .echo, .name = "echo platform: boxy low-levels producing Try write its concrete ABI (size, built)", .backend = .size, .body = .{ .custom = .issue_11355_boxy_built_try_low_levels } },
     .{ .id = 0, .suite = .echo, .name = "echo platform: boxy List.map result boxing preserves transform payloads (interpreter)", .backend = .interpreter, .body = .{ .command = .{ .args = &.{ "--opt=interpreter", "--specialize=no" }, .roc_file = "test/echo/boxy_map_trim.roc", .stdout_exact = "Alice, Bob, Charlie\n" } } },
     .{ .id = 0, .suite = .echo, .name = "echo platform: boxy List.map result boxing preserves transform payloads (dev)", .backend = .dev, .body = .{ .command = .{ .args = &.{"--specialize=no"}, .roc_file = "test/echo/boxy_map_trim.roc", .stdout_exact = "Alice, Bob, Charlie\n" } } },
+    .{ .id = 0, .suite = .echo, .name = "echo platform: issue 11353 Boxy callable adapter reads Try backing descriptor (interpreter)", .backend = .interpreter, .body = .{ .command = .{ .args = &.{ "--opt=interpreter", "--specialize=no" }, .roc_file = "test/echo/issue_11353.roc", .stdout_exact = "[Err(Unset), Err(Unset)]\n[Ok(7), Ok(7)]\n" } } },
+    .{ .id = 0, .suite = .echo, .name = "echo platform: issue 11353 Boxy callable adapter reads Try backing descriptor (dev)", .backend = .dev, .body = .{ .command = .{ .args = &.{ "--opt=dev", "--specialize=no" }, .roc_file = "test/echo/issue_11353.roc", .stdout_exact = "[Err(Unset), Err(Unset)]\n[Ok(7), Ok(7)]\n" } } },
     .{ .id = 0, .suite = .echo, .name = "echo platform: boxy open-union argument descriptor describes the value (interpreter)", .backend = .interpreter, .body = .{ .command = .{ .args = &.{ "--opt=interpreter", "--specialize=no" }, .roc_file = "test/echo/boxy_open_union_arg.roc", .stdout_exact = "other color\nred\ngreen\n" } } },
     .{ .id = 0, .suite = .echo, .name = "echo platform: boxy Dec-defaulted numeric literals use the scaled encoding (interpreter)", .backend = .interpreter, .body = .{ .command = .{ .args = &.{ "--opt=interpreter", "--specialize=no" }, .roc_file = "test/echo/boxy_dec_literals.roc", .stdout_exact = "10.0\n" } } },
     .{ .id = 0, .suite = .echo, .name = "echo platform: boxy record destructure after erased round-trip uses field layouts (interpreter)", .backend = .interpreter, .body = .{ .command = .{ .args = &.{ "--opt=interpreter", "--specialize=no" }, .roc_file = "test/echo/boxy_record_destructure.roc", .stdout_exact = "Bob 25 99\n" } } },
@@ -1065,6 +1089,14 @@ const subcommand_cases = [_]CliCase{
     .{ .id = 0, .suite = .subcommands, .name = "issue 11277: optional literal records (specialized, dev)", .backend = .dev, .body = .{ .command = .{ .args = &.{ "test", "--specialize=yes", "--opt=dev", "--no-cache" }, .roc_file = "test/cli/Issue11277OptionalLiteralRecord.roc", .contains = &.{.{ .stream = .stdout, .text = "All (10) tests passed" }} } } },
     .{ .id = 0, .suite = .subcommands, .name = "issue 11277: optional literal records (boxy, interpreter)", .backend = .interpreter, .body = .{ .command = .{ .args = &.{ "test", "--specialize=no", "--opt=interpreter", "--no-cache" }, .roc_file = "test/cli/Issue11277OptionalLiteralRecord.roc", .contains = &.{.{ .stream = .stdout, .text = "All (10) tests passed" }} } } },
     .{ .id = 0, .suite = .subcommands, .name = "issue 11277: optional literal records (boxy, dev)", .backend = .dev, .body = .{ .command = .{ .args = &.{ "test", "--specialize=no", "--opt=dev", "--no-cache" }, .roc_file = "test/cli/Issue11277OptionalLiteralRecord.roc", .contains = &.{.{ .stream = .stdout, .text = "All (10) tests passed" }} } } },
+    .{ .id = 0, .suite = .subcommands, .name = "issue 11352: nested nominal descriptors (boxy, interpreter)", .backend = .interpreter, .body = .{ .command = .{ .args = &.{ "test", "--specialize=no", "--opt=interpreter", "--no-cache" }, .roc_file = "test/postcheck/issue_11352_nested_nominal_descriptors/main.roc", .contains = &.{.{ .stream = .stdout, .text = "All (11) tests passed" }} } } },
+    .{ .id = 0, .suite = .subcommands, .name = "issue 11352: nested nominal descriptors (boxy, dev)", .backend = .dev, .body = .{ .command = .{ .args = &.{ "test", "--specialize=no", "--opt=dev", "--no-cache" }, .roc_file = "test/postcheck/issue_11352_nested_nominal_descriptors/main.roc", .contains = &.{.{ .stream = .stdout, .text = "All (11) tests passed" }} } } },
+    .{ .id = 0, .suite = .subcommands, .name = "issue 11352: nested Dict descriptors (boxy, interpreter)", .backend = .interpreter, .body = .{ .command = .{ .args = &.{ "test", "--specialize=no", "--opt=interpreter", "--no-cache" }, .roc_file = "test/postcheck/issue_11352_nested_nominal_descriptors/dict.roc", .contains = &.{.{ .stream = .stdout, .text = "All (1) tests passed" }} } } },
+    .{ .id = 0, .suite = .subcommands, .name = "issue 11352: nested Dict descriptors (boxy, dev)", .backend = .dev, .body = .{ .command = .{ .args = &.{ "test", "--specialize=no", "--opt=dev", "--no-cache" }, .roc_file = "test/postcheck/issue_11352_nested_nominal_descriptors/dict.roc", .contains = &.{.{ .stream = .stdout, .text = "All (1) tests passed" }} } } },
+    .{ .id = 0, .suite = .subcommands, .name = "issue 11356: derived JSON parsers follow the checked parse protocol (specialized)", .body = .{ .command = .{ .args = &.{ "test", "--no-cache" }, .roc_file = "test/cli/BoxyDerivedJsonParsers.roc", .contains = &.{.{ .stream = .stdout, .text = "All (13) tests passed" }} } } },
+    .{ .id = 0, .suite = .subcommands, .name = "issue 11356: derived JSON parsers follow the checked parse protocol (boxy, interpreter)", .backend = .interpreter, .body = .{ .command = .{ .args = &.{ "test", "--specialize=no", "--opt=interpreter", "--no-cache" }, .roc_file = "test/cli/BoxyDerivedJsonParsers.roc", .contains = &.{.{ .stream = .stdout, .text = "All (13) tests passed" }} } } },
+    .{ .id = 0, .suite = .subcommands, .name = "boxy chained checked tag rows lay out as one closed row (interpreter)", .backend = .interpreter, .body = .{ .command = .{ .args = &.{ "test", "--specialize=no", "--opt=interpreter", "--no-cache" }, .roc_file = "test/cli/BoxyChainedTagRow.roc", .contains = &.{.{ .stream = .stdout, .text = "All (1) tests passed" }} } } },
+    .{ .id = 0, .suite = .subcommands, .name = "boxy chained checked tag rows lay out as one closed row (dev)", .backend = .dev, .body = .{ .command = .{ .args = &.{ "test", "--specialize=no", "--opt=dev", "--no-cache" }, .roc_file = "test/cli/BoxyChainedTagRow.roc", .contains = &.{.{ .stream = .stdout, .text = "All (1) tests passed" }} } } },
     .{ .id = 0, .suite = .subcommands, .name = "issue 11071: diagnostics use cwd-relative paths for absolute inputs", .body = .{ .command = .{ .args = &.{ "check", "--no-color", "--no-cache" }, .roc_file = "test/cli/has_type_error_annotation.roc", .exit = .failure, .contains = &.{.{ .stream = .stderr, .text = " test" ++ std.fs.path.sep_str ++ "cli" ++ std.fs.path.sep_str ++ "has_type_error_annotation.roc:" }} } } },
     .{ .id = 0, .suite = .subcommands, .name = "issue 11071: diagnostics use cwd-relative paths for relative inputs", .body = .{ .command = .{ .args = &.{ "check", "--no-color" }, .roc_file = "test/cli/has_type_error_annotation.roc", .file_path_mode = .relative, .exit = .failure, .contains = &.{.{ .stream = .stderr, .text = " test/cli/has_type_error_annotation.roc:" }} } } },
     .{ .id = 0, .suite = .subcommands, .name = "recursive equality captures local values (interpreter)", .backend = .interpreter, .body = .{ .command = .{ .args = &.{ "test", "--opt=interpreter", "--no-cache" }, .roc_file = "test/cli/RecursiveEqualityLocal.roc", .contains = &.{.{ .stream = .stdout, .text = "All (4) tests passed" }} } } },
@@ -3253,6 +3285,18 @@ fn runCustomCase(
         .build_int_dev_output_runs => customBuildIntOutputRuns(io, allocator, &env, &timer, timeout_ms, .dev),
         .issue_10492_build_default_app_args => customBuildDefaultAppArgs(io, allocator, &env, &timer, timeout_ms, .dev),
         .issue_11453_nested_alias_json_encode => customIssue11453NestedAliasJsonEncode(io, allocator, &env, &timer, timeout_ms),
+        .issue_11355_boxy_built_platform_codec_root => customBoxyBuiltEchoApp(io, allocator, &env, &timer, timeout_ms, .{
+            .roc_file = "test/echo/issue_11355_platform_codec_root.roc",
+            .output_name = "issue_11355_platform_codec_root",
+            .exit = .{ .code = 1 },
+            .stdout_exact = "",
+        }),
+        .issue_11355_boxy_built_try_low_levels => customBoxyBuiltEchoApp(io, allocator, &env, &timer, timeout_ms, .{
+            .roc_file = "test/echo/boxy_try_low_levels.roc",
+            .output_name = "boxy_try_low_levels",
+            .exit = .success,
+            .stdout_exact = boxy_try_low_levels_built_expected_stdout,
+        }),
         .build_default_app_interpreter_args => customBuildDefaultAppArgs(io, allocator, &env, &timer, timeout_ms, .interpreter),
         .build_glibc_target_non_linux_error => customGlibcTargetNonLinux(io, allocator, &env, &timer, timeout_ms),
         .build_windows_shared_library => customWindowsSharedLibrary(io, allocator, &env, &timer, timeout_ms),
@@ -7066,6 +7110,49 @@ fn customBuildDefaultAppArgs(
     if (runRawAndCheck(io, allocator, env, timer, timeout_ms, &.{ executable_path, "aaa", "bbb", "ccc" }, env.dirs.work_dir, .{
         .args = &.{},
         .stdout_exact = "[aaa][bbb][ccc]",
+        .stderr_exact = "",
+    })) |failure| return failure;
+
+    return null;
+}
+
+const BoxyBuiltEchoApp = struct {
+    roc_file: []const u8,
+    output_name: []const u8,
+    exit: ExitExpectation,
+    stdout_exact: []const u8,
+};
+
+/// A built platform executable installs the Boxy runtime and registers every
+/// dictionary worker's dispatch thunk from its entrypoint, which in-process
+/// `roc run` never does.
+fn customBoxyBuiltEchoApp(
+    io: std.Io,
+    allocator: Allocator,
+    env: *const CaseEnv,
+    timer: *harness.Timer,
+    timeout_ms: u64,
+    app: BoxyBuiltEchoApp,
+) ?TestResult {
+    const output_path = std.fs.path.join(allocator, &.{ env.dirs.work_dir, app.output_name }) catch |err|
+        return customInfraFailure(allocator, timer, "failed to allocate output path: {}", .{err});
+    const out_arg = outputArg(allocator, output_path) catch |err|
+        return customInfraFailure(allocator, timer, "failed to allocate output arg: {}", .{err});
+
+    if (runRocAndCheck(io, allocator, env, timer, timeout_ms, .{
+        .args = &.{ "build", "--opt=size", "--specialize=no", "--no-cache", out_arg },
+        .roc_file = app.roc_file,
+        .contains = &.{.{ .stream = .stdout, .text = "successfully building" }},
+        .not_contains = &.{ .{ .stream = .stderr, .text = "panic" }, .{ .stream = .stderr, .text = "invariant violated" } },
+    })) |failure| return failure;
+
+    const executable_path = runnableOutputPath(io, allocator, output_path) catch |err|
+        return customInfraFailure(allocator, timer, "failed to find built executable: {}", .{err});
+
+    if (runRawAndCheck(io, allocator, env, timer, timeout_ms, &.{executable_path}, env.dirs.work_dir, .{
+        .args = &.{},
+        .exit = app.exit,
+        .stdout_exact = app.stdout_exact,
         .stderr_exact = "",
     })) |failure| return failure;
 

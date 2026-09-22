@@ -7179,12 +7179,14 @@ fn appendNestedImportExposedItem(
     name: Ident.Idx,
     alias: ?Ident.Idx,
     is_wildcard: bool,
+    kind: CIR.ExposedItem.Kind,
     region: Region,
 ) std.mem.Allocator.Error!void {
     const item_idx = try self.env.addExposedItem(.{
         .name = name,
         .alias = alias,
         .is_wildcard = is_wildcard,
+        .kind = kind,
     }, region);
     try self.env.store.addScratchExposedItem(item_idx);
 }
@@ -7201,14 +7203,14 @@ fn convertNestedImportExposesToCIR(
             import_stmt.target.nested_start_tok.? + import_stmt.target.nested_len - 1,
         ) orelse return;
     const import_region = self.parse_ir.tokenizedRegionToRegion(import_stmt.region);
-    try self.appendNestedImportExposedItem(nested_path, selected_alias, false, import_region);
+    try self.appendNestedImportExposedItem(nested_path, selected_alias, false, .type, import_region);
 
     for (self.parse_ir.store.exposedItemSlice(import_stmt.exposes)) |ast_exposed_idx| {
         const ast_exposed = self.parse_ir.store.getExposedItem(ast_exposed_idx);
-        const ident_token, const alias_token, const is_wildcard, const tokenized_region = switch (ast_exposed) {
-            .lower_ident => |item| .{ item.ident, item.as, false, item.region },
-            .upper_ident => |item| .{ item.ident, item.as, false, item.region },
-            .upper_ident_star => |item| .{ item.ident, null, true, item.region },
+        const ident_token, const alias_token, const is_wildcard, const kind, const tokenized_region = switch (ast_exposed) {
+            .lower_ident => |item| .{ item.ident, item.as, false, CIR.ExposedItem.Kind.value, item.region },
+            .upper_ident => |item| .{ item.ident, item.as, false, CIR.ExposedItem.Kind.type, item.region },
+            .upper_ident_star => |item| .{ item.ident, null, true, CIR.ExposedItem.Kind.type, item.region },
             .malformed => continue,
         };
         const item_ident = self.parse_ir.tokens.resolveIdentifier(ident_token) orelse continue;
@@ -7226,6 +7228,7 @@ fn convertNestedImportExposesToCIR(
             qualified_item,
             local_alias,
             is_wildcard,
+            kind,
             self.parse_ir.tokenizedRegionToRegion(tokenized_region),
         );
     }
@@ -7460,10 +7463,10 @@ fn convertASTExposesToCIR(
         // Convert AST exposed item to CIR exposed item
         const cir_exposed = convert_item: {
             // Extract identifier token and alias token
-            const ident_token, const alias_token, const is_wildcard = switch (ast_exposed) {
-                .lower_ident => |ident| .{ ident.ident, ident.as, false },
-                .upper_ident => |ident| .{ ident.ident, ident.as, false },
-                .upper_ident_star => |star_ident| .{ star_ident.ident, null, true },
+            const ident_token, const alias_token, const is_wildcard, const kind = switch (ast_exposed) {
+                .lower_ident => |ident| .{ ident.ident, ident.as, false, CIR.ExposedItem.Kind.value },
+                .upper_ident => |ident| .{ ident.ident, ident.as, false, CIR.ExposedItem.Kind.type },
+                .upper_ident_star => |star_ident| .{ star_ident.ident, null, true, CIR.ExposedItem.Kind.type },
                 .malformed => continue, // Skip malformed exposed items
             };
 
@@ -7493,6 +7496,7 @@ fn convertASTExposesToCIR(
                 .name = name,
                 .alias = alias,
                 .is_wildcard = is_wildcard,
+                .kind = kind,
             };
         };
 

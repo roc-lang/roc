@@ -1479,11 +1479,13 @@ pub const MonoLlvmCodeGen = struct {
         }
         try self.declareRuntimeErrorHelper();
         try self.compileRuntimeErrorHelper();
+        // A Boxy runtime entry body registers every worker's dispatch thunk,
+        // so the thunks exist before any body is compiled.
+        try self.generateBoxyDictProcThunks();
         for (procs, 0..) |proc, i| {
             if (proc.is_static_initializer) continue;
             try self.compileProcBody(@enumFromInt(@as(u32, @intCast(i))), proc);
         }
-        try self.generateBoxyDictProcThunks();
     }
 
     fn generateBoxyDictProcThunks(self: *MonoLlvmCodeGen) Error!void {
@@ -1560,7 +1562,7 @@ pub const MonoLlvmCodeGen = struct {
             try self.boxyOutDescPtr("dict_thunk_runtime_desc")
         else
             null;
-        try self.callProcFunctionIndex(proc_fn, proc, wip.arg(3), args_buf, runtime_out_desc, false);
+        try self.callProcFunctionIndex(proc_fn, proc, wip.arg(1), args_buf, runtime_out_desc, false);
 
         const return_desc = if (runtime_out_desc) |runtime_desc_ptr|
             try self.loadPointer(runtime_desc_ptr)
