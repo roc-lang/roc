@@ -306,6 +306,9 @@ pub const BuildEnv = struct {
     discovered_root_dir: ?[]const u8 = null,
     discovered_pkg_name: ?[]const u8 = null,
     entry_module_abs: ?[]const u8 = null,
+    /// Package-root-relative logical path of `entry_module_abs`: its module
+    /// identity, derived once when the entry is set.
+    entry_module_logical_path: ?[]const u8 = null,
 
     pub fn init(gpa: Allocator, mode: Mode, max_threads: usize, target: roc_target.RocTarget, cwd: []const u8, std_io: std.Io) InitError!BuildEnv {
         // Allocate builtin modules on heap to prevent moves that would invalidate internal pointers
@@ -412,6 +415,7 @@ pub const BuildEnv = struct {
         if (self.discovered_root_abs) |ra| self.gpa.free(ra);
         if (self.discovered_root_dir) |rd| self.gpa.free(rd);
         if (self.entry_module_abs) |entry| self.gpa.free(@constCast(entry));
+        if (self.entry_module_logical_path) |logical| self.gpa.free(@constCast(logical));
         // discovered_pkg_name is borrowed from the packages map key.
 
         if (comptime trace_build) {
@@ -732,11 +736,59 @@ pub const BuildEnv = struct {
     }
 
     fn setDiscoveredEntryModule(self: *BuildEnv, root_file: []const u8) BuildError!void {
-        _ = self.discovered_pkg_name orelse return error.Internal;
+        const pkg_name = self.discovered_pkg_name orelse return error.Internal;
+        const root_pkg = self.packages.get(pkg_name) orelse return error.Internal;
         const root_abs = try self.makeAbsolute(root_file);
         errdefer self.gpa.free(root_abs);
+
+        // The entry's identity must be the same logical path an import of it
+        // resolves to, so it is taken relative to the source root that the
+        // coordinator resolves this package's imports against.
+        const source_root_override = if (self.root_source_dir_override) |source_dir|
+            try self.makeAbsolute(source_dir)
+        else
+            null;
+        defer if (source_root_override) |source_root| self.gpa.free(source_root);
+        const source_root = source_root_override orelse root_pkg.root_dir;
+
+        const logical_path = (try module_discovery.sourceFileLogicalPath(self.gpa, source_root, root_abs)) orelse {
+            try self.emitEntryOutsidePackageReport(root_abs, root_pkg.root_file, source_root);
+            try self.makeWorkspaceReportsDrainable();
+            return error.PathOutsideWorkspace;
+        };
+
         if (self.entry_module_abs) |old| self.gpa.free(@constCast(old));
+        if (self.entry_module_logical_path) |old| self.gpa.free(@constCast(old));
         self.entry_module_abs = root_abs;
+        self.entry_module_logical_path = logical_path;
+    }
+
+    fn emitEntryOutsidePackageReport(
+        self: *BuildEnv,
+        entry_abs: []const u8,
+        package_root_file: []const u8,
+        source_root: []const u8,
+    ) Allocator.Error!void {
+        var report = try Report.init(
+            self.gpa,
+            "Module Outside Package",
+            "This module is not inside the source directory of the package that supplies its dependencies.",
+            .runtime_error,
+        );
+        errdefer report.deinit();
+        try report.document.addText("Module: ");
+        try report.document.addAnnotated(entry_abs, .path);
+        try report.document.addLineBreak();
+        try report.document.addText("Package: ");
+        try report.document.addAnnotated(package_root_file, .path);
+        try report.document.addLineBreak();
+        try report.document.addText("Source directory: ");
+        try report.document.addAnnotated(source_root, .path);
+        try report.document.addLineBreak();
+        try report.document.addLineBreak();
+        try report.document.addText("The checked module must be inside the selected package's source directory.");
+
+        try self.sink.emitReport("workspace", "root", report);
     }
 
     /// Initialize the actor model coordinator.
@@ -995,7 +1047,7 @@ pub const BuildEnv = struct {
 
         if (self.entry_module_abs) |entry_file| {
             if (!std.mem.eql(u8, entry_file, pkg_root_file)) {
-                const entry_module_name = base.module_path.getModuleName(entry_file);
+                const entry_module_name = self.entry_module_logical_path orelse return error.Internal;
                 const entry_id = try coord_pkg.ensureModule(self.gpa, entry_module_name, entry_file);
                 const entry_module = &coord_pkg.modules.items[entry_id];
                 entry_module.validation = .explicit_roots;
