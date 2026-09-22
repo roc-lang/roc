@@ -22113,7 +22113,9 @@ fn getExprPatternIdent(self: *const Self, expr_idx: CIR.Expr.Idx) ?Ident.Idx {
     return null;
 }
 
-fn validateToInspectMethodTypes(self: *Self, env: *Env) Allocator.Error!void {
+/// A top-level value passed to `Str.inspect` must have a type with no
+/// unresolved content: nothing later can pick the type it is rendered at.
+fn checkInspectedTopLevelValues(self: *Self) Allocator.Error!void {
     var raw_node_idx: u32 = 0;
     while (raw_node_idx < self.cir.store.nodes.len()) : (raw_node_idx += 1) {
         const node_idx: CIR.Node.Idx = @enumFromInt(raw_node_idx);
@@ -22126,11 +22128,13 @@ fn validateToInspectMethodTypes(self: *Self, env: *Env) Allocator.Error!void {
         if (!self.exprIsBuiltinStrInspect(call.func)) continue;
         const args = self.cir.store.sliceExpr(call.args);
         if (args.len != 1) continue;
-        try self.validateToInspectMethodTypeForArg(
-            args[0],
-            env,
-            self.cir.store.getExprRegion(args[0]),
-        );
+        if (!self.exprIsTopLevelLookup(args[0])) continue;
+
+        const arg_var = ModuleEnv.varFrom(args[0]);
+        self.inspect_type_visits.clearRetainingCapacity();
+        if (try self.varHasUnresolvedInspectContent(arg_var, .value, &self.inspect_type_visits)) {
+            try self.reportPolymorphicValueProblem(arg_var, arg_var, null);
+        }
     }
 }
 
@@ -22150,139 +22154,10 @@ fn exprIsBuiltinStrInspect(self: *Self, expr_idx: CIR.Expr.Idx) bool {
     return ident.eql(other_env.idents.builtin_str_inspect);
 }
 
-fn validateToInspectMethodTypeForArg(
-    self: *Self,
-    arg_expr_idx: CIR.Expr.Idx,
-    env: *Env,
-    region: Region,
-) Allocator.Error!void {
-    const arg_var = ModuleEnv.varFrom(arg_expr_idx);
-    const resolved = self.types.resolveVar(arg_var);
-
-    if (self.exprIsTopLevelLookup(arg_expr_idx)) {
-        self.inspect_type_visits.clearRetainingCapacity();
-        if (try self.varHasUnresolvedInspectContent(arg_var, .value, &self.inspect_type_visits)) {
-            try self.reportPolymorphicValueProblem(arg_var, arg_var, null);
-            return;
-        }
-    }
-    switch (resolved.desc.content) {
-        .structure => |structure| switch (structure) {
-            .nominal_type => |nominal| try self.validateNominalToInspectMethodType(arg_var, nominal, env, region),
-            .record, .tuple, .fn_pure, .fn_effectful, .fn_unbound, .empty_record, .tag_union, .empty_tag_union => {},
-        },
-        .alias => |alias| try self.validateAliasToInspectMethodType(arg_var, alias, env, region),
-        .flex,
-        .rigid,
-        .err,
-        .field_presence,
-        => {},
-    }
-}
-
 fn exprIsTopLevelLookup(self: *Self, expr_idx: CIR.Expr.Idx) bool {
     const expr = self.cir.store.getExpr(expr_idx);
     if (expr != .e_lookup_local) return false;
     return self.patternIsTopLevelDef(expr.e_lookup_local.pattern_idx);
-}
-
-fn validateNominalToInspectMethodType(
-    self: *Self,
-    arg_var: Var,
-    nominal: types_mod.NominalType,
-    env: *Env,
-    region: Region,
-) Allocator.Error!void {
-    const method = try self.toInspectMethodVarForNominal(nominal, env, region) orelse return;
-    try self.validateToInspectMethodVar(arg_var, method.var_, method.dispatcher_name, env, region);
-}
-
-fn validateAliasToInspectMethodType(
-    self: *Self,
-    arg_var: Var,
-    alias: types_mod.Alias,
-    env: *Env,
-    region: Region,
-) Allocator.Error!void {
-    const method = try self.toInspectMethodVarForAlias(alias, env, region) orelse return;
-    try self.validateToInspectMethodVar(arg_var, method.var_, method.dispatcher_name, env, region);
-}
-
-const ToInspectMethodVar = struct {
-    var_: Var,
-    dispatcher_name: Ident.Idx,
-};
-
-fn validateToInspectMethodVar(
-    self: *Self,
-    arg_var: Var,
-    method_var: Var,
-    dispatcher_name: Ident.Idx,
-    env: *Env,
-    region: Region,
-) Allocator.Error!void {
-    const str_var = try self.freshStr(env, region);
-    const args_range = try self.types.appendVars(&.{arg_var});
-    const expected_fn_var = try self.freshFromContent(.{ .structure = .{ .fn_unbound = Func{
-        .args = args_range,
-        .ret = str_var,
-    } } }, env, region);
-
-    const result = try self.unifyInContext(method_var, expected_fn_var, env, .{ .method_type = .{
-        .constraint_var = arg_var,
-        .dispatcher_name = dispatcher_name,
-        .method_name = self.cir.idents.to_inspect,
-    } });
-    if (result.isProblem()) {
-        try self.markErroneous(expected_fn_var);
-    }
-}
-
-fn toInspectMethodVarForNominal(
-    self: *Self,
-    nominal: types_mod.NominalType,
-    env: *Env,
-    region: Region,
-) Allocator.Error!?ToInspectMethodVar {
-    const original_env, const is_this_module = try self.methodOwnerEnv(
-        nominal.origin_module,
-        nominal.sourceDeclOptional(),
-        nominal.originIsBuiltin(),
-    );
-    const method_binding = original_env.lookupMethodBindingFromEnvAndDeclConst(
-        self.cir,
-        nominal.sourceDeclOptional(),
-        self.cir.idents.to_inspect,
-    ) orelse return null;
-    return try self.methodVarFromOriginalEnv(original_env, is_this_module, method_binding.type_node_idx, nominal.ident.ident_idx, env, region);
-}
-
-fn toInspectMethodVarForAlias(
-    self: *Self,
-    alias: types_mod.Alias,
-    env: *Env,
-    region: Region,
-) Allocator.Error!?ToInspectMethodVar {
-    const original_env, const is_this_module = try self.methodOwnerEnv(
-        alias.origin_module,
-        alias.source_decl.toOptional(),
-        alias.source_decl.originIsBuiltin(),
-    );
-    const method_binding = original_env.lookupMethodBindingFromTwoEnvsAndDeclConst(
-        alias.source_decl.toOptional(),
-        self.cir,
-        self.cir.idents.to_inspect,
-    ) orelse return null;
-    return try self.methodVarFromOriginalEnv(original_env, is_this_module, method_binding.type_node_idx, alias.ident.ident_idx, env, region);
-}
-
-fn methodOwnerEnv(
-    self: *Self,
-    origin_module: base.ModuleIdentity.Idx,
-    source_decl: ?u32,
-    origin_is_builtin: bool,
-) Allocator.Error!struct { *const ModuleEnv, bool } {
-    return self.ownerEnvForOriginModule(origin_module, source_decl, origin_is_builtin, "to_inspect");
 }
 
 const OwnerEnvCandidate = struct {
@@ -22526,21 +22401,6 @@ fn ownerModuleEnvSourceDeclMatches(candidate: *const ModuleEnv, source_decl: u32
     const node_tag = candidate.store.nodes.get(node).tag;
     if (node_tag != .statement_alias_decl and node_tag != .statement_nominal_decl) return false;
     return true;
-}
-
-fn methodVarFromOriginalEnv(
-    self: *Self,
-    original_env: *const ModuleEnv,
-    is_this_module: bool,
-    type_node_idx: CIR.Node.Idx,
-    dispatcher_name: Ident.Idx,
-    env: *Env,
-    region: Region,
-) Allocator.Error!ToInspectMethodVar {
-    return .{
-        .var_ = try self.methodTypeVarFromOriginalEnv(original_env, is_this_module, type_node_idx, env, region, .none),
-        .dispatcher_name = dispatcher_name,
-    };
 }
 
 fn methodTypeVarFromOriginalEnv(
@@ -28668,7 +28528,7 @@ fn finalizeTypes(self: *Self, env: *Env, scope: FinalizeScope) std.mem.Allocator
 
     switch (scope) {
         .module => {
-            try self.validateToInspectMethodTypes(env);
+            try self.checkInspectedTopLevelValues();
             try self.checkAllFromNumeralFlexConstraintCompatibility(env, true);
         },
         // The REPL result expression is not module state; its type may have
@@ -39438,14 +39298,14 @@ fn parseFormatMethodVarForEncoding(
                     method_name,
                 ) orelse break :blk null;
                 break :blk .{
-                    .var_ = (try self.methodVarFromOriginalEnv(
+                    .var_ = try self.methodTypeVarFromOriginalEnv(
                         method_lookup.env,
                         method_lookup.is_this_module,
                         method_lookup.binding.type_node_idx,
-                        nominal.ident.ident_idx,
                         env,
                         region,
-                    )).var_,
+                        .none,
+                    ),
                     .dispatcher_name = nominal.ident.ident_idx,
                 };
             },
@@ -39473,14 +39333,14 @@ fn parseFormatMethodVarForEncoding(
                 method_name,
             ) orelse break :blk null;
             break :blk .{
-                .var_ = (try self.methodVarFromOriginalEnv(
+                .var_ = try self.methodTypeVarFromOriginalEnv(
                     method_lookup.env,
                     method_lookup.is_this_module,
                     method_lookup.binding.type_node_idx,
-                    alias.ident.ident_idx,
                     env,
                     region,
-                )).var_,
+                    .none,
+                ),
                 .dispatcher_name = alias.ident.ident_idx,
             };
         },

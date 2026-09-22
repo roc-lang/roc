@@ -6639,6 +6639,38 @@ test/cli/issue_10474_record_field_interpolation.roc (a generalized numeral
 record field cannot be instantiated as `Str` by interpolation and reports a
 type mismatch without `CheckedModule` construction panicking).
 
+### Inspect Overrides
+
+Inspection (`Str.inspect`, `dbg`, and `expect` failure reports) renders every
+value. A nominal type's `to_inspect` method replaces the default rendering only
+when it is an eligible inspect override. A method named `to_inspect` is still an
+ordinary method: it may have any type, and explicit calls and `where` clauses
+dispatch to it like any other method. It is an inspect override exactly when
+its type is `T -> Str`, where `T` is the owning nominal applied to distinct type
+variables that carry no `where` constraints. `Wrap(a) -> Str` qualifies;
+`Wrap(I64) -> Str`, `Pair(a, a) -> Str`,
+`Wrap(a) -> Str where [a.to_inspect : a -> Str]`, extra arguments, effectful
+functions, and non-`Str` results do not. Inspection ignores an ineligible
+method and renders the value's default form; this is never reported.
+
+Eligibility is a property of the declaration alone, so it holds at every
+instantiation of the owner. Inspection therefore places no requirement on the
+inspected type: a generic function that inspects its argument carries none, and
+inspection reached through a record, list, tag payload, generic helper, or
+nominal backing can never select an override it cannot call. The checked method
+registry records the decision once per `to_inspect` entry
+(`MethodRegistryEntry.inspect_override`, computed by `MethodRegistry.fromModule`
+from the published method type). Monotype and Boxy planning and lowering select
+the declaring view exactly as method dispatch does and consume that decision
+through `MethodRegistry.lookupInspectOverride`; they never re-examine the
+method's type.
+
+This is deliberately the simplest rule, adopted to see how it works in
+practice. Later versions may admit overrides with `where` clauses, with type
+arguments bound to one another, or with concrete type arguments. Each of those
+makes eligibility depend on the instantiation, which would move the decision
+from the declaration to each inspected type.
+
 ### Pending Dispatch Requirements In Type Schemes
 
 A generalized scheme is a pair: its root type and the unresolved static-dispatch

@@ -3571,6 +3571,10 @@ const Builder = struct {
     /// scope; this memo only accelerates repeated exact lookups during the
     /// build and never changes the checked outcome.
     scoped_method_targets: std.AutoHashMapUnmanaged(ScopedMethodDispatch, ScopedMethodResolution) = .{},
+    /// Scoped inspect-override resolutions, memoized like
+    /// `scoped_method_targets`. `missing` means inspection renders the
+    /// owner's default form.
+    scoped_inspect_overrides: std.AutoHashMapUnmanaged(ScopedMethodDispatch, ScopedMethodResolution) = .{},
     /// Exact checked identity of the compiler-provided `Try` nominal. `Try`
     /// deliberately retains nominal static-dispatch ownership, so it cannot use
     /// `builtin_owner`; structural parser lowering still needs its producer
@@ -3909,6 +3913,7 @@ const Builder = struct {
         if (self.spec_job_commit_domain) |*domain| domain.deinit();
         if (self.spec_job_worker) |*worker| worker.deinit();
         self.scoped_method_targets.deinit(self.allocator);
+        self.scoped_inspect_overrides.deinit(self.allocator);
         self.allocator.free(self.hosted_catalog);
         self.hash_defs.deinit();
         self.equality_defs.deinit();
@@ -8745,6 +8750,70 @@ const Builder = struct {
             .missing => null,
             .target => |target| target,
         };
+    }
+
+    /// The checked `to_inspect` override that inspection calls for `owner`,
+    /// or null when inspection renders the owner's default form.
+    fn lookupInspectOverride(
+        self: *Builder,
+        scope: ModuleView,
+        owner: static_dispatch.MethodOwner,
+    ) Allocator.Error!?MethodLookup {
+        const method = try self.activeNameStore().internMethodName("to_inspect");
+        const address = ScopedMethodDispatch.init(scope.key, owner, method);
+        if (self.scoped_inspect_overrides.get(address)) |resolution| {
+            return switch (resolution) {
+                .missing => null,
+                .target => |target| target,
+            };
+        }
+
+        const resolution: ScopedMethodResolution = if (self.findInspectOverrideFromStore(scope, &self.program.names, owner)) |target|
+            .{ .target = target }
+        else
+            .missing;
+
+        try self.scoped_inspect_overrides.put(self.allocator, address, resolution);
+        return switch (resolution) {
+            .missing => null,
+            .target => |target| target,
+        };
+    }
+
+    /// Selects the view that declares `owner.to_inspect` exactly as method
+    /// dispatch does; that declaration's checked eligibility is the answer.
+    fn findInspectOverrideFromStore(
+        self: *Builder,
+        scope: ModuleView,
+        owner_names: *const names.NameStore,
+        owner: static_dispatch.MethodOwner,
+    ) ?MethodLookup {
+        if (inspectOverrideInViewFromStore(scope, owner_names, owner, true)) |decision| return decision.target;
+        for (scope.method_lookup_scope) |module_id| {
+            const candidate = self.moduleForId(module_id);
+            if (inspectOverrideInViewFromStore(candidate, owner_names, owner, false)) |decision| return decision.target;
+        }
+        return null;
+    }
+
+    const InspectOverrideDecision = struct {
+        target: ?MethodLookup,
+    };
+
+    fn inspectOverrideInViewFromStore(
+        view: ModuleView,
+        owner_names: *const names.NameStore,
+        owner: static_dispatch.MethodOwner,
+        allow_local_proc: bool,
+    ) ?InspectOverrideDecision {
+        const view_owner = static_dispatch.methodOwnerInImportedStore(owner_names, view.names, owner) orelse return null;
+        const view_method = view.names.lookupMethodName("to_inspect") orelse return null;
+        const key: static_dispatch.MethodKey = .{ .owner = view_owner, .method = view_method };
+        const found = view.method_registry.lookup(key) orelse return null;
+        const target = found.requireTarget("Monotype inspect lowering");
+        if (!allow_local_proc and target.kind == .local_proc) return null;
+        const override = view.method_registry.lookupInspectOverride(key) orelse return .{ .target = null };
+        return .{ .target = .{ .view = view, .target = override } };
     }
 
     fn findMethodTargetByName(
@@ -18412,6 +18481,18 @@ const BodyContext = struct {
         );
     }
 
+    /// Method owners derived from graph types remain qualified by the graph's
+    /// name store, exactly as in `lookupMethodTargetByName`.
+    fn lookupInspectOverride(
+        self: *BodyContext,
+        owner: static_dispatch.MethodOwner,
+    ) Allocator.Error!?MethodLookup {
+        if (self.nameStore() == &self.builder.program.names) {
+            return try self.builder.lookupInspectOverride(self.method_scope, owner);
+        }
+        return self.builder.findInspectOverrideFromStore(self.method_scope, self.nameStore(), owner);
+    }
+
     fn lookupMethodTarget(
         self: *BodyContext,
         owner: static_dispatch.MethodOwner,
@@ -20231,10 +20312,7 @@ const BodyContext = struct {
 
     fn toInspectCall(self: *BodyContext, value: DraftExprId, value_ty: Type.TypeId, str_ty: Type.TypeId) Allocator.Error!?DraftExprId {
         const owner = methodOwnerFromType(self.typeStore(), value_ty) orelse return null;
-        const lookup = try self.withLocalProcContext((try self.lookupMethodTargetByName(owner, "to_inspect")) orelse return null);
-        if (lookup.view.types.payload(lookup.target.callable_ty) == .err) {
-            return try self.runtimeCrashExpr(str_ty, "runtime error");
-        }
+        const lookup = try self.withLocalProcContext((try self.lookupInspectOverride(owner)) orelse return null);
         const callee = if (self.frozen_inspect_method_calls) |prepared|
             prepared.get(value_ty) orelse
                 Common.invariant("deferred inspect method was not reserved before relation freeze")
@@ -20310,7 +20388,7 @@ const BodyContext = struct {
         }
     }
 
-    /// Null means the owner has no custom method; false means it was already
+    /// Null means the owner has no inspect override; false means it was already
     /// prepared. Both immediate and deferred inspection use the checked target.
     fn prepareToInspectMethodAtNode(
         self: *BodyContext,
@@ -20318,7 +20396,7 @@ const BodyContext = struct {
         str_ty: Type.TypeId,
         owner: static_dispatch.MethodOwner,
     ) Allocator.Error!?bool {
-        const raw_lookup = (try self.lookupMethodTargetByName(owner, "to_inspect")) orelse return null;
+        const raw_lookup = (try self.lookupInspectOverride(owner)) orelse return null;
         const lookup = try self.withLocalProcContext(raw_lookup);
         for (self.draft.prepared_inspect_methods.items) |prepared| {
             if (self.graph.sameClass(prepared.value_node, node)) return false;
