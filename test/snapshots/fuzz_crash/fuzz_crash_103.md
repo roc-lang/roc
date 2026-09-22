@@ -9,12 +9,39 @@ topThunk=||echo!("")main!=|_|{thunk=||echo!("")thunk()topThunk()
 ({}1E483647)}
 ~~~
 # EXPECTED
+EXPECTED TUPLE SEPARATOR - fuzz_crash_103.md:2:4:2:12
 EFFECTFUL FUNCTION NAME - fuzz_crash_103.md:1:1:1:9
 EFFECTFUL FUNCTION NAME - fuzz_crash_103.md:1:31:1:36
 INVALID NUMBER - fuzz_crash_103.md:2:4:2:12
 # PROBLEMS
 ~~~clojure
 (reports
+	(report
+		(severity runtime_error)
+		(title "Expected Tuple Separator")
+		(region (start 2 4) (end 2 12))
+		(headline
+			(reflow "I was parsing a parenthesized expression or tuple, and I expected `,` or `)`."))
+		(document
+			(reflow "Separate tuple elements with commas and close the tuple or parenthesized expression with ")
+			(annotated code ")")
+			(reflow ".")
+			(line-break)
+			(line-break)
+			(text "For example:")
+			(line-break)
+			(annotation-start code-block)
+			(indent 1)
+			(text "(x, y)")
+			(annotation-end)
+			(line-break)
+			(line-break)
+			(text "I found ")
+			(annotated code "1E483647")
+			(text " here.")
+			(line-break)
+			(line-break)
+			(source-region (file "fuzz_crash_103.md") (start 2 4) (end 2 12) (annotation error) (line-text "({}1E483647)}"))))
 	(report
 		(severity warning)
 		(title "Effectful Function Name")

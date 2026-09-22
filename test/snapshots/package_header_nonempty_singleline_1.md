@@ -8,21 +8,11 @@ type=file
 package [something, SomeType] { somePkg: "../main.roc", other: "../../other/main.roc" }
 ~~~
 # EXPECTED
-MOD NOT FOUND - package_header_nonempty_singleline_1.md:1:21:1:29
 EXPOSED BUT NOT DEFINED - package_header_nonempty_singleline_1.md:1:10:1:19
+MOD NOT FOUND - package_header_nonempty_singleline_1.md:1:21:1:29
 # PROBLEMS
 ~~~clojure
 (reports
-	(report
-		(severity runtime_error)
-		(title "Mod Not Found")
-		(region (start 1 21) (end 1 29))
-		(headline
-			(text "The mod ")
-			(annotated code "SomeType")
-			(reflow " was not found in this Roc project."))
-		(document
-			(source-region (file "package_header_nonempty_singleline_1.md") (start 1 21) (end 1 29) (annotation error) (line-text "package [something, SomeType] { somePkg: \"../main.roc\", other: \"../../other/main.roc\" }"))))
 	(report
 		(severity runtime_error)
 		(title "Exposed But Not Defined")
@@ -35,7 +25,17 @@ EXPOSED BUT NOT DEFINED - package_header_nonempty_singleline_1.md:1:10:1:19
 			(source-region (file "package_header_nonempty_singleline_1.md") (start 1 10) (end 1 19) (annotation error) (line-text "package [something, SomeType] { somePkg: \"../main.roc\", other: \"../../other/main.roc\" }"))
 			(reflow "You can fix this by either defining ")
 			(annotated symbol-unqualified "something")
-			(reflow " in this mod, or by removing it from the list of exposed values."))))
+			(reflow " in this mod, or by removing it from the list of exposed values.")))
+	(report
+		(severity runtime_error)
+		(title "Mod Not Found")
+		(region (start 1 21) (end 1 29))
+		(headline
+			(text "The mod ")
+			(annotated code "SomeType")
+			(reflow " was not found in this Roc project."))
+		(document
+			(source-region (file "package_header_nonempty_singleline_1.md") (start 1 21) (end 1 29) (annotation error) (line-text "package [something, SomeType] { somePkg: \"../main.roc\", other: \"../../other/main.roc\" }")))))
 ~~~
 # TOKENS
 ~~~zig

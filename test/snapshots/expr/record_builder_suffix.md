@@ -40,7 +40,7 @@ EndOfFile,
 ~~~
 # CANONICALIZE
 ~~~clojure
-(e-runtime-error (tag "record_builder_map2_not_found"))
+(e-runtime-error (tag "undeclared_type"))
 ~~~
 # TYPES
 ~~~clojure

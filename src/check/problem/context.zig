@@ -26,6 +26,8 @@ pub const Context = union(enum) {
     // Function-related contexts
     /// Function call
     fn_call_arity: FnCallArityContext,
+    /// Function call whose callee is not a function
+    fn_call_non_function: FnCallNonFunctionContext,
     /// Argument to a function call
     fn_call_arg: FnCallArgContext,
 
@@ -111,6 +113,14 @@ pub const Context = union(enum) {
         /// The number of args the fn expected
         expected_args: u32,
         /// The number of args the fn given
+        actual_args: u32,
+    };
+
+    /// Context for a call whose callee is not a function
+    pub const FnCallNonFunctionContext = struct {
+        /// Name of the value being called, if known
+        fn_name: ?Ident.Idx,
+        /// The number of args the call gave
         actual_args: u32,
     };
 

@@ -764,11 +764,14 @@ fn runCase(allocator: Allocator, case: Case) SweepError!void {
     var runtime_env = RuntimeHostEnv.init(allocator);
     defer runtime_env.deinit();
 
+    var static_strings = try Interpreter.buildStaticStrings(allocator, &lowered.view.store);
+    defer static_strings.deinit();
     var interp = try Interpreter.initWithBoxyTables(
         allocator,
         &lowered.view.store,
         &lowered.view.layouts,
         Interpreter.BoxyTables.fromImageView(&lowered.view),
+        static_strings.view(),
         runtime_env.get_ops(),
     );
     defer interp.deinit();

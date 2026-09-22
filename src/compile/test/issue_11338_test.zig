@@ -213,14 +213,15 @@ test "specialization discovery submits a child before an unrelated task finishes
         .solved_lir_parallel_metrics_out = &solved_lir,
     });
     try std.testing.expect(executor.discovered_while_unfinished);
-    // The controlled overlap occurs in Monotype's first session. Subsequent
-    // solved-LIR, rewrite, and ARC batches reuse this executor, but are not new specializations.
+    // The controlled overlap occurs in Monotype's first session. The root's
+    // own body is one of the queued specializations. Subsequent solved-LIR,
+    // rewrite, and ARC batches reuse this executor, but are not new specializations.
     const monotype = timing.monotype_parallel;
     const rewrites = timing.lir_pass_parallel;
     const arc = timing.arc_parallel;
     const spec_constr = timing.spec_constr_parallel;
     try std.testing.expectEqual(@as(u64, 0), monotype.root_tasks_submitted);
-    try std.testing.expectEqual(@as(u64, 12), monotype.specialization_tasks_submitted);
+    try std.testing.expectEqual(@as(u64, 13), monotype.specialization_tasks_submitted);
     try std.testing.expectEqual(monotype.specialization_tasks_submitted, monotype.specialization_tasks_committed);
     try std.testing.expectEqual(solved_lir.tasks_submitted, solved_lir.tasks_committed);
     try std.testing.expectEqual(rewrites.tasks_submitted, rewrites.tasks_committed);

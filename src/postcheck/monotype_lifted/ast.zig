@@ -132,6 +132,40 @@ pub const Fn = struct {
     captures: Span(TypedLocal),
     body: FnBody,
     ret: Type.TypeId,
+    /// What the body contains, for SpecConstr phase admission.
+    shapes: FnShapes = .{},
+};
+
+/// What a lifted function body contains, recorded by whoever emitted its
+/// expressions: the lifter as it rewrites each expression of a body, and the
+/// program's expression creation for bodies cloned afterwards. SpecConstr
+/// selects the functions each of its phases can change by these shapes
+/// instead of walking every body. A shape flag is a superset: it may be set for a
+/// body a phase then leaves alone, but a body a phase would change always
+/// carries the shape flag, and Debug builds verify that by also running each phase
+/// on the functions its shapes excluded.
+pub const FnShapes = packed struct(u8) {
+    /// A direct call.
+    direct_call: bool = false,
+    /// A tag, record, tuple, nominal, list, closure or compile-time value
+    /// construction: the only sources of a known-shaped call argument.
+    constructs_value: bool = false,
+    /// A direct call to an iterator procedure.
+    iterator_call: bool = false,
+    /// A direct call to an iterator procedure that produces an iterator value.
+    iterator_producer: bool = false,
+    /// A loop.
+    loop: bool = false,
+    /// A loop whose result is a tuple of at least two values.
+    loop_tuple_result: bool = false,
+    /// A direct call to the function itself.
+    self_call: bool = false,
+    /// A `return` expression.
+    contains_return: bool = false,
+
+    pub fn merged(self: FnShapes, other: FnShapes) FnShapes {
+        return @bitCast(@as(u8, @bitCast(self)) | @as(u8, @bitCast(other)));
+    }
 };
 
 /// Source procedure names for runtime diagnostics, keyed by generated symbol.
@@ -462,6 +496,12 @@ pub const Program = struct {
     proc_debug_names: ProcDebugNameMap,
     /// Next generated `CaptureId` index for a lift-synthesized capturable local.
     next_lift_capture_id: u32,
+    /// Shapes of the expressions created or rewritten since the accumulator was
+    /// last started; `beginFnShapes`/`finishFnShapes` bracket one body.
+    shapes: FnShapes = .{},
+    /// The function whose body the accumulator is collecting for, so a call
+    /// to it is recorded as a self call.
+    shapes_owner: ?FnId = null,
     roots: ProgramList(Root, "roots"),
     layout_requests: ProgramList(LayoutRequest, "layout_requests"),
     /// See `ProgramView.comptime_value_reads`.
@@ -510,6 +550,8 @@ pub const Program = struct {
         result.types = self.types.borrowReadOnly(allocator);
         result.next_symbol = self.next_symbol;
         result.next_lift_capture_id = self.next_lift_capture_id;
+        result.shapes = .{};
+        result.shapes_owner = null;
         result.proc_debug_names = ProcDebugNameMap.init(allocator);
         result.current_loc = self.current_loc;
         result.current_region = self.current_region;
@@ -969,7 +1011,69 @@ pub const Program = struct {
         return self.proc_debug_names.get(symbol);
     }
 
+    /// The accumulator state an enclosing body emission owns while a nested
+    /// body is collected.
+    pub const FnShapesScope = struct {
+        shapes: FnShapes = .{},
+        owner: ?FnId = null,
+    };
+
+    /// Start collecting the shapes of one function body's expressions. The
+    /// returned outer scope goes back to `finishFnShapes`, so a body emitted
+    /// while another is in progress keeps both sets exact.
+    pub fn beginFnShapes(self: *Program, owner: FnId) FnShapesScope {
+        const outer: FnShapesScope = .{ .shapes = self.shapes, .owner = self.shapes_owner };
+        self.shapes = .{};
+        self.shapes_owner = owner;
+        return outer;
+    }
+
+    /// Finish the body started by `beginFnShapes` and return its shapes.
+    pub fn finishFnShapes(self: *Program, outer: FnShapesScope) FnShapes {
+        const shapes = self.shapes;
+        self.shapes = outer.shapes;
+        self.shapes_owner = outer.owner;
+        return shapes;
+    }
+
+    /// Record the shapes one expression implies for the body being emitted.
+    pub fn noteExprShapes(self: *Program, expr: Expr) void {
+        switch (expr.data) {
+            .call_proc => |call| {
+                self.shapes.direct_call = true;
+                if (call.iterator_procedure) |procedure| {
+                    self.shapes.iterator_call = true;
+                    if (procedure.producesIteratorValue()) self.shapes.iterator_producer = true;
+                }
+                // The lifter records a call before and after it rewrites the
+                // callee to a lifted function; only the lifted form can name
+                // the owner.
+                switch (call.callee) {
+                    .lifted => |callee| if (callee == self.shapes_owner) {
+                        self.shapes.self_call = true;
+                    },
+                    .func => {},
+                }
+            },
+            .return_ => self.shapes.contains_return = true,
+            .def_ref => {
+                self.shapes.direct_call = true;
+                self.shapes.constructs_value = true;
+            },
+            .tag, .record, .record_update, .tuple, .nominal, .list, .fn_ref, .lambda, .fn_def, .static_data_candidate, .comptime_value => self.shapes.constructs_value = true,
+            .loop_ => {
+                self.shapes.loop = true;
+                const result_ty = self.types.get(expr.ty);
+                if (result_ty == .tuple and result_ty.tuple.len >= 2) {
+                    self.shapes.loop_tuple_result = true;
+                }
+            },
+            .local, .int_lit, .dec_lit, .str_lit, .bytes_lit, .inline_expects_enabled, .typed_boundary, .let_, .call_value, .low_level, .field_access, .tuple_access, .structural_eq, .structural_hash, .match_, .if_, .uninitialized_payload, .if_initialized_payload, .try_sequence, .try_record_sequence, .block, .break_, .continue_, .join_point, .jump, .crash, .comptime_branch_taken, .comptime_exhaustiveness_failed, .dbg, .expect_err, .expect, .@"unreachable", .unit, .frac_f32_lit, .frac_f64_lit, .uninitialized => {},
+        }
+    }
+
     pub fn addExpr(self: *Program, expr: Expr) std.mem.Allocator.Error!ExprId {
+        self.noteExprShapes(expr);
         const id: ExprId = @enumFromInt(@as(u32, @intCast(self.exprCount())));
         try self.exprs.ensureUnusedCapacity(self.allocator, 1);
         try self.expr_locs.ensureUnusedCapacity(self.allocator, 1);
@@ -1026,7 +1130,16 @@ pub const Program = struct {
         return id;
     }
 
+    /// Record the shapes one statement implies for the body being emitted.
+    pub fn noteStmtShapes(self: *Program, stmt_: Stmt) void {
+        switch (stmt_) {
+            .return_ => self.shapes.contains_return = true,
+            .uninitialized, .let_, .expr, .expect, .dbg, .crash => {},
+        }
+    }
+
     pub fn addStmt(self: *Program, stmt_: Stmt) std.mem.Allocator.Error!StmtId {
+        self.noteStmtShapes(stmt_);
         const id: StmtId = @enumFromInt(@as(u32, @intCast(self.stmtCount())));
         try self.stmts.ensureUnusedCapacity(self.allocator, 1);
         try self.stmt_locs.ensureUnusedCapacity(self.allocator, 1);
@@ -1187,6 +1300,7 @@ pub const Program = struct {
     }
 
     pub fn setExprData(self: *Program, id: ExprId, data: ExprData) void {
+        self.noteExprShapes(.{ .ty = self.getExpr(id).ty, .data = data });
         self.setExprDataAt(@intFromEnum(id), data);
     }
 

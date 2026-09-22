@@ -895,6 +895,7 @@ const FindTagAtOffsetContext = struct {
             .e_break,
             .e_bytes_literal,
             => {},
+            .e_deferred_import_ref => std.debug.panic("compiler invariant violated: deferred import reference reached a stage that runs after import resolution", .{}),
         }
     }
 
@@ -979,6 +980,7 @@ const FindTagAtOffsetContext = struct {
             .underscore,
             .runtime_error,
             => {},
+            .deferred_import_ref => std.debug.panic("compiler invariant violated: deferred import reference pattern reached a stage that runs after import resolution", .{}),
         }
     }
 
@@ -1634,6 +1636,7 @@ pub fn resolveSymbolAtOffset(module_env: *ModuleEnv, offset: u32) ?CIR.Pattern.I
             .e_hosted_lambda,
             .e_run_low_level,
             => null,
+            .e_deferred_import_ref => std.debug.panic("compiler invariant violated: deferred import reference reached a stage that runs after import resolution", .{}),
         },
         .field_access => null,
     };

@@ -350,12 +350,15 @@ fn runInterpreter(allocator: Allocator, program: Program, execution_host: Execut
 
     var static_data = try @import("interpreter_static_data.zig").InterpreterStaticData.init(allocator, program.static_data, program.static_data_value_count);
     defer static_data.deinit();
+    var static_strings = try Interpreter.buildStaticStrings(allocator, program.store);
+    defer static_strings.deinit();
 
     var interp = try Interpreter.initWithBoxyTablesAndHostedCallHandler(
         allocator,
         program.store,
         program.layouts,
         program.boxy_tables,
+        static_strings.view(),
         runtime_env.get_ops(),
         .{
             .context = &bound_host,

@@ -69,6 +69,9 @@ pub const Options = struct {
     stderr: ?StderrWriter = null,
     event_callback: ?EventCallback = null,
     debug_events: ?*DebugEvents = null,
+    /// A coordinator may persist an early dependency batch, then replay all
+    /// stored and new observations together with the complete program.
+    defer_debug_replay: bool = false,
     /// Completed checked artifacts contribute stored observations, without
     /// evaluating their roots again. Borrowed only for finalization.
     cached_debug_modules: []const *const checked.CheckedModuleArtifact = &.{},
@@ -447,11 +450,11 @@ pub fn finalizeProgram(
     const owned_runtime_requests = owned_runtime_roots.requests;
     if (compile_time_root_count == 0) {
         for (modules) |entry| {
-            if (entry.problem_store) |store| _ = try store.flushPendingStaticExhaustiveness(allocator);
+            if (entry.problem_store) |store| try finishPendingExhaustiveness(allocator, entry.module, store);
             try entry.module.const_store.verifyComplete();
         }
         try debug_events.persist(modules);
-        try debug_events.replay(options);
+        if (!options.defer_debug_replay) try debug_events.replay(options);
         var retained_root = lowering_modules.root;
         retained_root.relation_modules = owned_relations;
         const retained_roots = owned_runtime_roots;
@@ -565,12 +568,12 @@ pub fn finalizeProgram(
         }
     } else {
         for (modules) |entry| {
-            if (entry.problem_store) |store| _ = try store.flushPendingStaticExhaustiveness(allocator);
+            if (entry.problem_store) |store| try finishPendingExhaustiveness(allocator, entry.module, store);
             try entry.module.const_store.verifyComplete();
         }
     }
     try debug_events.persist(modules);
-    try debug_events.replay(options);
+    if (!options.defer_debug_replay) try debug_events.replay(options);
     var retained_root = lowering_modules.root;
     retained_root.relation_modules = owned_relations;
     const retained_roots = owned_runtime_roots;
@@ -718,7 +721,7 @@ fn finalizeLoweredProgram(
     }
     for (modules, states) |entry, *state| {
         try state.coverage.reportUnusedBranches(allocator, entry.problem_store);
-        if (entry.problem_store) |store| _ = try store.flushPendingStaticExhaustiveness(allocator);
+        if (entry.problem_store) |store| try finishPendingExhaustiveness(allocator, entry.module, store);
         try entry.module.const_store.verifyComplete();
     }
 }
@@ -1057,7 +1060,7 @@ fn finalize(
     }
 
     if (problem_store) |store| {
-        _ = try store.flushPendingStaticExhaustiveness(allocator);
+        try finishPendingExhaustiveness(allocator, module, store);
     }
 
     try module.const_store.verifyComplete();
@@ -1901,6 +1904,9 @@ const InterpreterProgram = struct {
     slot_demand: ?SlotDemand = null,
     demand_error: ?FinalizeError = null,
     host: CompilerHost,
+    /// Literal backings owned by the root program and borrowed by its forks,
+    /// so published values may reference them for the whole finalization.
+    static_strings: Interpreter.StaticStrings.Table,
     interpreter: Interpreter,
     static_callables: std.ArrayList(Interpreter.StaticErasedCallable) = .empty,
     stderr: ?Options.StderrWriter = null,
@@ -1922,7 +1928,9 @@ const InterpreterProgram = struct {
         errdefer self.slots.deinit();
         self.host = CompilerHost.init(allocator);
         errdefer self.host.deinit();
-        self.interpreter = try Interpreter.initWithBoxyTables(allocator, &lowered.lir_result.store, &lowered.lir_result.layouts, Interpreter.BoxyTables.fromResult(&lowered.lir_result), self.host.ops());
+        self.static_strings = try Interpreter.buildStaticStrings(allocator, &lowered.lir_result.store);
+        errdefer self.static_strings.deinit();
+        self.interpreter = try Interpreter.initWithBoxyTables(allocator, &lowered.lir_result.store, &lowered.lir_result.layouts, Interpreter.BoxyTables.fromResult(&lowered.lir_result), self.static_strings.view(), self.host.ops());
         errdefer self.interpreter.deinit();
         self.interpreter.dict_seed_mode = .comptime_zero;
         self.interpreter.failure_origins = self.slots.failure_origins;
@@ -1952,11 +1960,12 @@ const InterpreterProgram = struct {
             .stderr = self.stderr,
             .slot_demand = self.slot_demand,
             .host = CompilerHost.init(allocator),
+            .static_strings = undefined,
             .interpreter = undefined,
         };
         errdefer child.host.deinit();
         errdefer child.static_callables.deinit(allocator);
-        child.interpreter = try Interpreter.initWithBoxyTables(allocator, &lowered.lir_result.store, &lowered.lir_result.layouts, Interpreter.BoxyTables.fromResult(&lowered.lir_result), child.host.ops());
+        child.interpreter = try Interpreter.initWithBoxyTables(allocator, &lowered.lir_result.store, &lowered.lir_result.layouts, Interpreter.BoxyTables.fromResult(&lowered.lir_result), self.interpreter.static_strings, child.host.ops());
         errdefer child.interpreter.deinit();
         child.interpreter.dict_seed_mode = .comptime_zero;
         child.interpreter.failure_origins = child.slotEnvironment().failure_origins;
@@ -2016,7 +2025,10 @@ const InterpreterProgram = struct {
         self.interpreter.deinit();
         self.host.deinit();
         self.static_callables.deinit(allocator);
-        if (self.shared_slots == null) self.slots.deinit();
+        if (self.shared_slots == null) {
+            self.slots.deinit();
+            self.static_strings.deinit();
+        }
         allocator.destroy(self);
     }
 };
@@ -2598,9 +2610,33 @@ fn evalDevProgramRoots(
         0
     else
         @max(options.max_threads, 1);
-    if (native.slot_demand != null) {
+    if (native.slot_demand != null or max_threads == 1) {
         // Demands nest on this thread; each invocation owns its host and return storage.
         for (0..jobs_len) |index| devRootWorker(host_allocator, &run_context, index);
+    } else if (options.post_check_executor) |executor| {
+        // The coordinator's persistent lanes run the batch, so no threads are
+        // spawned per batch.
+        const RootTask = struct {
+            context: *DevRunContext,
+            host_allocator: Allocator,
+            index: usize,
+            fn run(ptr: *anyopaque, _: base.post_check_task_executor.Worker) ?*anyopaque {
+                const self: *@This() = @ptrCast(@alignCast(ptr));
+                devRootWorker(self.host_allocator, self.context, self.index);
+                return null;
+            }
+        };
+        const root_tasks = try allocator.alloc(RootTask, jobs_len);
+        defer allocator.free(root_tasks);
+        const tasks = try allocator.alloc(base.post_check_task_executor.Task, jobs_len);
+        defer allocator.free(tasks);
+        const completions = try allocator.alloc(base.post_check_task_executor.Completion, jobs_len);
+        defer allocator.free(completions);
+        for (root_tasks, tasks, 0..) |*root_task, *task, index| {
+            root_task.* = .{ .context = &run_context, .host_allocator = host_allocator, .index = index };
+            task.* = .{ .id = index, .context = root_task, .run = RootTask.run };
+        }
+        try executor.run(tasks, completions);
     } else {
         try base.parallel.process(
             DevRunContext,
@@ -3288,15 +3324,15 @@ fn appendCompileTimeExhaustivenessProblem(
     discardUnreachedRootComptimeSites(problem_store, lir_result, root_proc, checked_site, module, site_id);
     if (!comptimeSiteMayResolvePending(module, root.id, checked_site)) {
         const site_record = module.exhaustiveness_sites.get(checked_site);
-        switch (site_record.policy) {
+        if (!site_record.requires_pairing) switch (site_record.policy) {
             .runtime_reachable => {},
             .not_pending,
             .compile_time_only,
             .compile_time_replaced_by_root,
             => finalizationInvariant("compile-time exhaustiveness failure had an impossible site policy"),
-        }
+        };
     }
-    const matched = try problem_store.appendEmpiricalExhaustivenessFailure(allocator, checked_site);
+    const matched = try problem_store.appendEmpiricalExhaustivenessFailureRetaining(allocator, checked_site, module.exhaustiveness_sites.get(checked_site).requires_pairing);
     if (!matched) {
         finalizationInvariant("empirical exhaustiveness failure had no pending static diagnostic");
     }
@@ -3317,6 +3353,7 @@ fn discardUnreachedRootComptimeSites(
         const checked_site = root_site.checked_site orelse continue;
         if (checked_site == failed_checked_site) continue;
         const site = module.exhaustiveness_sites.get(checked_site);
+        if (site.requires_pairing) continue;
         switch (site.policy) {
             .compile_time_replaced_by_root,
             .compile_time_only,
@@ -3328,12 +3365,28 @@ fn discardUnreachedRootComptimeSites(
     }
 }
 
+/// Complete only diagnostics whose checked evaluation context is available.
+/// A generic platform carries the remaining recipes into its cache entry.
+pub fn finishPendingExhaustiveness(allocator: Allocator, module: *const checked.CheckedModuleArtifact, store: *check.problem.Store) Allocator.Error!void {
+    var retained: usize = 0;
+    for (store.pending_static_exhaustiveness.items) |pending| {
+        if (pending.site != null and module.exhaustiveness_sites.get(pending.site.?).requires_pairing) {
+            store.pending_static_exhaustiveness.items[retained] = pending;
+            retained += 1;
+        } else if (pending.mode == .static and !pending.reported) {
+            _ = try store.appendProblem(allocator, pending.problem);
+        }
+    }
+    store.pending_static_exhaustiveness.items.len = retained;
+}
+
 fn comptimeSiteMayResolvePending(
     module: *const checked.CheckedModuleArtifact,
     root_id: checked.ComptimeRootId,
     checked_site: checked.CheckedExhaustivenessSiteId,
 ) bool {
     const site = module.exhaustiveness_sites.get(checked_site);
+    if (site.requires_pairing) return false;
     return switch (site.policy) {
         .compile_time_replaced_by_root => |owner_root| owner_root == root_id,
         .compile_time_only => true,
@@ -3970,7 +4023,8 @@ fn testInterpreterSlot(failure_message: ?[]const u8, nested: bool, cycle: bool) 
     owner.slots = .{ .allocator = allocator, .materialized = materialized, .image = image, .addresses = addresses, .failure_origins = failure_origins };
     owner.host = CompilerHost.init(allocator);
     owner.static_callables = .empty;
-    owner.interpreter = try Interpreter.initWithBoxyTables(allocator, &result.store, &result.layouts, Interpreter.BoxyTables.fromResult(result), owner.host.ops());
+    owner.static_strings = try Interpreter.buildStaticStrings(allocator, &result.store);
+    owner.interpreter = try Interpreter.initWithBoxyTables(allocator, &result.store, &result.layouts, Interpreter.BoxyTables.fromResult(result), owner.static_strings.view(), owner.host.ops());
     defer owner.deinit();
     try owner.refreshCallableMetadata();
     if (nested) {
@@ -4207,7 +4261,9 @@ test "shared frozen erased callables execute on interpreter dev and LLVM" {
     defer data.deinit();
     var host = CompilerHost.init(allocator);
     defer host.deinit();
-    var interpreter = try Interpreter.initWithBoxyTables(allocator, &program.store, &program.layouts, Interpreter.BoxyTables.fromResult(&program), host.ops());
+    var static_strings = try Interpreter.buildStaticStrings(allocator, &program.store);
+    defer static_strings.deinit();
+    var interpreter = try Interpreter.initWithBoxyTables(allocator, &program.store, &program.layouts, Interpreter.BoxyTables.fromResult(&program), static_strings.view(), host.ops());
     defer interpreter.deinit();
     interpreter.setStaticData(data.addresses, &.{});
     try std.testing.expectError(error.RuntimeError, interpreter.eval(.{ .proc_id = caller, .ret_layout = .bool }));
@@ -4270,7 +4326,9 @@ test "shared frozen erased callables execute on interpreter dev and LLVM" {
     defer view.deinit();
     var mapped_data = try StaticInterpreterData.init(allocator, view.static_data, view.static_data_value_count);
     defer mapped_data.deinit();
-    var mapped_interpreter = try Interpreter.initWithBoxyTables(allocator, &view.store, &view.layouts, Interpreter.BoxyTables.fromImageView(&view), host.ops());
+    var mapped_static_strings = try Interpreter.buildStaticStrings(allocator, &view.store);
+    defer mapped_static_strings.deinit();
+    var mapped_interpreter = try Interpreter.initWithBoxyTables(allocator, &view.store, &view.layouts, Interpreter.BoxyTables.fromImageView(&view), mapped_static_strings.view(), host.ops());
     defer mapped_interpreter.deinit();
     mapped_data.install(&mapped_interpreter);
     var mapped_answer: u8 = 0;

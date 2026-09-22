@@ -11,22 +11,18 @@ hello! = Stdout.line!("Hello")
 world = "World"
 ~~~
 # EXPECTED
-NAME NOT IN SCOPE - simple_mod_no_blanks.md:2:10:2:22
+DOES NOT EXIST - simple_mod_no_blanks.md:2:10:2:22
 # PROBLEMS
 ~~~clojure
 (reports
 	(report
 		(severity runtime_error)
-		(title "Name Not In Scope")
+		(title "Does Not Exist")
 		(region (start 2 10) (end 2 22))
 		(headline
-			(reflow "Nothing is named ")
-			(annotated symbol-unqualified "line!")
-			(reflow " in this scope."))
+			(annotated symbol-unqualified "Stdout.line!")
+			(reflow " does not exist."))
 		(document
-			(reflow "Is it misspelled, or is there an import missing?")
-			(line-break)
-			(line-break)
 			(source-region (file "simple_mod_no_blanks.md") (start 2 10) (end 2 22) (annotation error) (line-text "hello! = Stdout.line!(\"Hello\")")))))
 ~~~
 # TOKENS

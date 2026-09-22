@@ -28,11 +28,31 @@ The method is selected at compile time from the operand types.
 
 ### And
 
-TODO
+`a and b` evaluates to `True` if both `a` and `b` are `True`, and `False` otherwise. Both operands must be [`Bool`](../Bool) values.
+
+The `and` operator _short-circuits_: if `a` is `False`, then `b` is not evaluated at all, because the answer is already known to be `False`. This matters when `b` is expensive to compute, or when it calls an [effectful function](functions#effectful-functions):
+
+```roc
+is_valid = input.len() > 0 and expensive_check(input)
+```
+
+Here, `expensive_check` is only called if `input.len() > 0`.
+
+Unlike most other binary operators, `and` does not desugar to a method call. See [`and` / `or`](if-else#and--or) for the equivalent `if` expression.
 
 ### Or
 
-TODO
+`a or b` evaluates to `True` if either `a` or `b` (or both) is `True`, and `False` otherwise. Both operands must be [`Bool`](../Bool) values.
+
+Like `and`, `or` short-circuits: if `a` is `True`, then `b` is not evaluated, because the answer is already known to be `True`.
+
+```roc
+use_default = config_missing or user_requested_default()
+```
+
+Here, `user_requested_default` is only called if `config_missing` is `False`.
+
+Like `and`, `or` does not desugar to a method call.
 
 ### Arithmetic Operators
 
@@ -101,8 +121,60 @@ Unary `!x` dispatches to `x.not()`. The operand and result have the same type.
 
 ### `?` (unwrap if `Ok`; early `return` if `Err`)
 
-TODO
+Writing `?` after an expression which evaluates to a [`Try`](../Try) does one of two things:
+
+- If the expression evaluated to `Ok`, the `?` expression evaluates to the `Ok` tag's payload.
+- If the expression evaluated to `Err`, the enclosing function immediately [returns](statements#return) that `Err`.
+
+For example:
+
+```roc
+parse_pair : Str, Str -> Try((U64, U64), [BadNumStr])
+parse_pair = |a, b| {
+    x = U64.from_str(a)?
+    y = U64.from_str(b)?
+
+    Ok((x, y))
+}
+```
+
+This desugars to:
+
+```roc
+parse_pair = |a, b| {
+    x = match U64.from_str(a) {
+        Ok(val) => val
+        Err(err) => return Err(err)
+    }
+    y = match U64.from_str(b) {
+        Ok(val) => val
+        Err(err) => return Err(err)
+    }
+
+    Ok((x, y))
+}
+```
+
+If `U64.from_str(a)` returns `Err(BadNumStr)`, then `parse_pair` returns `Err(BadNumStr)` right away, and `U64.from_str(b)` never runs.
+
+Since `?` can return early from the function, the function's return type must be a `Try` whose error type can hold the errors that `?` might return. When different `?` expressions in the same function have different error types, the function's error type is the union of all of them. For example, if one call can fail with `Err(BadNumStr)` and another with `Err(FileNotFound)`, then the function's return type could be `Try(…, [BadNumStr, FileNotFound])`.
+
+`?` is often more convenient than the [`??` operator](#-default-value-on-err) when the right way to handle an error is to let the caller deal with it, whereas `??` is more convenient when there's a sensible default value to use instead.
+
+When `?` is used directly inside a top-level [`expect`](statements#expect), there's no function to return from. Instead, if the expression evaluates to `Err`, the `expect` fails, and the test report shows which `Err` it was.
 
 ### `[…]` (subscript operator)
 
-TODO
+(This has not been implemented yet.)
+
+Writing `[` and `]` directly after an expression, with another expression in between them (for example, `list[index]`), will call the `subscript` method on the first expression, passing the second expression as its argument. In other words, `collection[key]` will desugar to `collection.subscript(key)`.
+
+Several builtin types already have `subscript` methods, which can be called directly in the meantime:
+
+| Expression | Equivalent to | Evaluates to |
+| --- | --- | --- |
+| `list.subscript(index)` | [`List.get`](../List#get) | `Try(item, [OutOfBounds])` |
+| `dict.subscript(key)` | [`Dict.get`](../Dict#get) | `Try(value, [KeyNotFound])` |
+| `set.subscript(item)` | [`Set.contains`](../Set#contains) | `Bool` |
+
+Since this uses [static dispatch](static-dispatch), any type can opt into subscript syntax by defining a `subscript` method.

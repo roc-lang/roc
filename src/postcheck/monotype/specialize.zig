@@ -19,6 +19,8 @@
 //! record through the request-shaped alias; it never widens the record
 //! (`design.md`'s one-way snapshot rule).
 //!
+//! Request, solved-view, and codec-type digests use the same equivalence as
+//! `typeEql`; stored checked provenance never partitions these buckets.
 //! Lookup is a digest-keyed hash map with exact structural type equality as
 //! the collision authority, so reuse checks stay O(1) expected with zero
 //! 128-bit content hash recomputation on the lookup path.
@@ -65,6 +67,8 @@ pub const Counters = struct {
     interface_summary_hits: u64 = 0,
     interface_summary_expansions: u64 = 0,
     interface_summary_verifications: u64 = 0,
+    interface_relation_requests: u64 = 0,
+    interface_replay_hits: u64 = 0,
     exact_type_checks: u64 = 0,
     /// Declaration-backed nominal backings served from the per-graph
     /// instantiation cache. Reuse compares argument cells by union-find root,
@@ -729,6 +733,57 @@ test "monotype spec builder reuses exact specialization identities" {
     try builder.markReady(first_spec, unit_ty, identity.request_fn_ty_digest);
     try std.testing.expectEqual(Ast.SpecStatus.ready, builder.records.get(@intFromEnum(first_spec)).status);
     try std.testing.expectEqual(requested_fn, builder.records.get(@intFromEnum(first_spec)).fn_id);
+    builder.validateLookupIntegrity();
+}
+
+test "monotype spec builder shares equal nominal requests while preserving checked provenance" {
+    var name_store = names.NameStore.init(std.testing.allocator);
+    defer name_store.deinit();
+    var types = Type.Store.init(std.testing.allocator);
+    defer types.deinit();
+    const module = try name_store.internModuleIdentity(&([_]u8{0xAB} ** 32));
+    const name = try name_store.internTypeName("Value");
+    const first = try types.add(.{ .named = .{
+        .named_type = .{ .module = .{}, .ty = @enumFromInt(1) },
+        .def = .{ .module = module, .type_name = name, .source_decl = 7 },
+        .kind = .nominal,
+        .args = Type.Span.empty(),
+    } });
+    const second = try types.add(.{ .named = .{
+        .named_type = .{ .module = .{}, .ty = @enumFromInt(2) },
+        .def = .{ .module = module, .type_name = name, .source_decl = 7 },
+        .kind = .nominal,
+        .args = Type.Span.empty(),
+    } });
+    const distinct = try types.add(.{ .named = .{
+        .named_type = .{ .module = .{}, .ty = @enumFromInt(3) },
+        .def = .{ .module = module, .type_name = name, .source_decl = 8 },
+        .kind = .nominal,
+        .args = Type.Span.empty(),
+    } });
+    const first_stored = types.typeDigest(&name_store, first);
+    const second_stored = types.typeDigest(&name_store, second);
+    try std.testing.expect(!digestEql(first_stored, second_stored));
+
+    var records = Ast.ProgramList(Ast.SpecRecord, "specs").empty;
+    defer records.deinit(std.testing.allocator);
+    var builder = SpecBuilder.init(std.testing.allocator, &name_store, &types, &records);
+    defer builder.deinit();
+    const first_identity = testSpecIdentity(first, types.equalityDigest(&name_store, first));
+    const second_identity = testSpecIdentity(second, types.equalityDigest(&name_store, second));
+    const distinct_identity = testSpecIdentity(distinct, types.equalityDigest(&name_store, distinct));
+    const reserved = try builder.reserve(first_identity, testEvidenceView(), @enumFromInt(1));
+    const reused = try builder.reserve(second_identity, testEvidenceView(), @enumFromInt(2));
+    const separate = try builder.reserve(distinct_identity, testEvidenceView(), @enumFromInt(3));
+    try std.testing.expect(!reused.created);
+    try std.testing.expectEqual(reserved.spec, reused.spec);
+    try std.testing.expect(separate.created);
+    try std.testing.expectEqual(@as(usize, 2), records.len());
+    // Sharing code never overwrites either checked-store re-entry reference.
+    try std.testing.expectEqual(@as(u32, 1), @intFromEnum(types.get(first).named.named_type.ty));
+    try std.testing.expectEqual(@as(u32, 2), @intFromEnum(types.get(second).named.named_type.ty));
+    try std.testing.expectEqual(first_stored, types.typeDigest(&name_store, first));
+    try std.testing.expectEqual(second_stored, types.typeDigest(&name_store, second));
     builder.validateLookupIntegrity();
 }
 

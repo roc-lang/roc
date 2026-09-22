@@ -435,6 +435,7 @@ const LoweredFnBody = struct {
     frame_locals: LIR.LocalSpan,
     stack_probe: LIR.StackProbe,
     tail_calls: ?LIR.TailCalls,
+    shapes: LIR.ProcShapes,
 };
 
 const WorkerBodyFeatures = struct {
@@ -455,6 +456,7 @@ const CompletedFnBodyShard = struct {
     frame_locals: LIR.LocalSpan,
     stack_probe: LIR.StackProbe,
     tail_calls: ?LIR.TailCalls,
+    shapes: LIR.ProcShapes,
     join_point_count: u32,
     features: WorkerBodyFeatures,
     discovered_fns: []Type.FnId,
@@ -1501,6 +1503,7 @@ const Lowerer = struct {
             .frame_locals = body.frame_locals,
             .stack_probe = body.stack_probe,
             .tail_calls = body.tail_calls,
+            .shapes = body.shapes,
             .join_point_count = worker.next_join_point,
             .features = worker.worker_features,
             .discovered_fns = discovered_fns,
@@ -2148,6 +2151,7 @@ const Lowerer = struct {
             Common.invariant("Solved-LIR committed a Roc procedure without a body");
         proc.frame_locals = appended.frame_locals;
         proc.stack_probe = shard.stack_probe;
+        proc.shapes = shard.shapes;
         proc.tail_calls = if (shard.tail_calls) |sites|
             appended.relocation.tailCalls(shard.prefix, sites)
         else
@@ -2212,6 +2216,7 @@ const Lowerer = struct {
         const frame_locals = try self.writeFrameLocals(&proc_locals);
         const proc = self.result.store.getProcSpecPtr(initializer.proc);
         proc.body = body;
+        proc.shapes = proc.shapes.merged(self.result.store.shapes);
         proc.frame_locals = frame_locals;
         proc.stack_probe = self.stackProbeForProc(proc.args, proc.frame_locals, proc.ret_layout);
     }
@@ -2223,6 +2228,11 @@ const Lowerer = struct {
         self.aggregate_bindings = &aggregates;
         defer self.aggregate_bindings = saved_aggregates;
         const proc_id = try self.procPlaceholder(fn_id);
+        // The store accumulates this body's shapes from the statements it
+        // appends; a body lowered inside another body keeps its own set.
+        const saved_shapes = self.result.store.shapes;
+        self.result.store.shapes = .{};
+        defer self.result.store.shapes = saved_shapes;
         if (self.result.store.getProcSpec(proc_id).external) {
             // The object cache provides this procedure's code; its body is
             // never lowered, and nothing it would reach is reached through it.
@@ -2293,6 +2303,7 @@ const Lowerer = struct {
                 proc_ptr.frame_locals = lowered_body.?.frame_locals;
                 proc_ptr.stack_probe = lowered_body.?.stack_probe;
                 proc_ptr.tail_calls = lowered_body.?.tail_calls;
+                proc_ptr.shapes = lowered_body.?.shapes;
                 self.fn_written.items[@intFromEnum(fn_id)] = true;
             }
             return lowered_body;
@@ -2374,6 +2385,7 @@ const Lowerer = struct {
                     .frame_locals = frame_locals,
                     .stack_probe = self.stackProbeForProc(proc.args, frame_locals, proc.ret_layout),
                     .tail_calls = try tail_calls.finish(&self.result.store),
+                    .shapes = self.result.store.shapes,
                 };
                 if (!self.worker_callback) {
                     const proc_ptr = self.result.store.getProcSpecPtr(proc_id);
@@ -2381,6 +2393,7 @@ const Lowerer = struct {
                     proc_ptr.frame_locals = frame_locals;
                     proc_ptr.stack_probe = lowered_body.?.stack_probe;
                     proc_ptr.tail_calls = lowered_body.?.tail_calls;
+                    proc_ptr.shapes = lowered_body.?.shapes;
                 }
             },
             .hosted => {
@@ -2444,6 +2457,7 @@ const Lowerer = struct {
             .frame_locals = frame_locals,
             .stack_probe = self.stackProbeForProc(proc.args, frame_locals, proc.ret_layout),
             .tail_calls = null,
+            .shapes = self.result.store.shapes,
         };
     }
 
@@ -2951,25 +2965,12 @@ const Lowerer = struct {
         };
     }
 
-    /// Emits a construction with this lowerer's locals and join points.
+    /// Emits a construction with this lowerer's locals.
     const ConstructionEmitContext = struct {
         lowerer: *Lowerer,
 
         pub fn addLocal(self: ConstructionEmitContext, layout_idx: layout.Idx) Common.LowerError!LIR.LocalId {
             return try self.lowerer.addLocalForLayout(layout_idx);
-        }
-
-        pub fn freshJoinPointId(self: ConstructionEmitContext) LIR.JoinPointId {
-            return self.lowerer.freshJoinPointId();
-        }
-
-        pub fn addJoin(self: ConstructionEmitContext, point: LIR.JoinPoint, remainder: LIR.CFStmtId) Common.LowerError!LIR.CFStmtId {
-            return try self.lowerer.result.store.addCFStmt(.{ .join = .{
-                .id = point.id,
-                .params = point.params,
-                .body = point.body,
-                .remainder = remainder,
-            } });
         }
     };
 
@@ -2979,9 +2980,9 @@ const Lowerer = struct {
 
     /// Lowers a restored compile-time value as the construction it came from
     /// when every part of it is a scalar, the empty string, an empty list,
-    /// a list of copies of one construction, or a record or tag of such
-    /// parts, exactly as a completed root decoded from a frozen image does
-    /// (see `ComptimeScalarValues`); null leaves the value to its slot.
+    /// or a record or tag of such parts, exactly as a completed root decoded
+    /// from a frozen image does (see `ComptimeScalarValues`); null leaves the
+    /// value to its slot.
     fn lowerConstructionExprInto(self: *Lowerer, target: LIR.LocalId, expr_id: Lifted.ExprId, ty: Type.TypeId, next: LIR.CFStmtId) Common.LowerError!?LIR.CFStmtId {
         var arena = std.heap.ArenaAllocator.init(self.allocator);
         defer arena.deinit();
@@ -3011,8 +3012,8 @@ const Lowerer = struct {
                 if (capacity < 0 or capacity > std.math.maxInt(u64)) break :blk null;
                 break :blk .{ .empty_list = @intCast(capacity) };
             },
-            .list => |items| try self.constructionOfListExpr(arena, items, ty, value_layout),
-            .bytes_lit => |literal| try self.constructionOfPackedList(arena, literal, ty, value_layout),
+            .list => |items| self.constructionOfListExpr(items, value_layout),
+            .bytes_lit => |literal| constructionOfPackedList(literal, value_layout),
             .record => |fields| try self.constructionOfRecordExpr(arena, fields, ty, value_layout),
             .tuple => |items| try self.constructionOfStructExprs(arena, self.solved.lifted.exprSpan(items), self.tupleItemTypes(ty), value_layout),
             .tag => |tag| try self.constructionOfTagExpr(arena, tag.name, tag.payloads, ty, layout_idx),
@@ -3059,56 +3060,22 @@ const Lowerer = struct {
         };
     }
 
-    fn constructionOfListExpr(self: *Lowerer, arena: std.mem.Allocator, span: Lifted.Span(Lifted.ExprId), ty: Type.TypeId, value_layout: layout.Layout) Common.LowerError!?postcheck_values.Construction {
+    /// A restored list lowers as a construction only when it is empty: an
+    /// empty list's `with_capacity` request cannot survive in a slot, while
+    /// a list with elements is served from static data, since rebuilding it
+    /// would allocate at every read.
+    fn constructionOfListExpr(self: *Lowerer, span: Lifted.Span(Lifted.ExprId), value_layout: layout.Layout) ?postcheck_values.Construction {
         if (value_layout.tag != .list) return null;
-        const items = self.solved.lifted.exprSpan(span);
-        if (items.len == 0) return .{ .empty_list = 0 };
-        const element_layout = value_layout.getIdx();
-        const element_ty = self.listElemType(ty);
-        const first = try self.constructionOfExpr(arena, GuardedList.at(items, 0), element_ty, element_layout) orelse return null;
-        for (1..items.len) |index| {
-            const other = try self.constructionOfExpr(arena, GuardedList.at(items, index), element_ty, element_layout) orelse return null;
-            if (!constructionEql(first, other)) return null;
-        }
-        const stored = try arena.create(postcheck_values.Construction);
-        stored.* = first;
-        return .{ .uniform_list = .{ .element = stored, .element_layout = element_layout, .count = items.len } };
+        if (self.solved.lifted.exprSpan(span).len == 0) return .{ .empty_list = 0 };
+        return null;
     }
 
-    /// A packed list is uniform when every element's packed bytes match
-    /// the first's; that element then decodes through the frozen-image
-    /// decoder, over its memory bytes.
-    fn constructionOfPackedList(self: *Lowerer, arena: std.mem.Allocator, literal: Mono.PackedListLiteral, ty: Type.TypeId, value_layout: layout.Layout) Common.LowerError!?postcheck_values.Construction {
+    /// A packed list lowers as a construction only when it is empty, for the
+    /// same reason as an unpacked one.
+    fn constructionOfPackedList(literal: Mono.PackedListLiteral, value_layout: layout.Layout) ?postcheck_values.Construction {
         if (value_layout.tag != .list) return null;
         if (literal.len == 0) return .{ .empty_list = 0 };
-        const element_layout = value_layout.getIdx();
-        const encoded = self.stringLiteral(literal.literal).text();
-        const width: usize = if (literal.element) |scalar| scalar.byteWidth() else literal.product_width;
-        if (width == 0 or encoded.len < @as(usize, literal.len) * width) return null;
-        const first = encoded[0..width];
-        for (1..literal.len) |index| {
-            if (!std.mem.eql(u8, first, encoded[index * width ..][0..width])) return null;
-        }
-        const size_align = self.result.layouts.layoutSizeAlign(self.result.layouts.getLayout(element_layout));
-        const memory = try arena.alloc(u8, size_align.size);
-        if (literal.element != null) {
-            if (memory.len != width) return null;
-            @memcpy(memory, first);
-        } else {
-            if (!self.packed_plans.contains(element_layout)) {
-                var plan = try lir_core.PackedData.Plan.init(self.allocator, &self.result.layouts, element_layout);
-                errdefer plan.deinit();
-                try self.packed_plans.put(element_layout, plan);
-            }
-            const plan = self.packed_plans.getPtr(element_layout).?;
-            if (plan.packed_width != literal.product_width or plan.memory_width != memory.len) return null;
-            plan.decode(memory, first, 1);
-        }
-        var decoder = postcheck_values.Decoder{ .program = &self.result, .frozen = null, .arena = arena };
-        const element = try decoder.decode(null, memory, 0, try self.constPlanOfType(self.listElemType(ty)), element_layout) orelse return null;
-        const stored = try arena.create(postcheck_values.Construction);
-        stored.* = element;
-        return .{ .uniform_list = .{ .element = stored, .element_layout = element_layout, .count = literal.len } };
+        return null;
     }
 
     fn constructionOfRecordExpr(self: *Lowerer, arena: std.mem.Allocator, span: Lifted.Span(Lifted.FieldExpr), ty: Type.TypeId, value_layout: layout.Layout) Common.LowerError!?postcheck_values.Construction {
@@ -4352,12 +4319,12 @@ const Lowerer = struct {
 
     fn verifyMaterializedDecisions(self: *Lowerer) Common.LowerError!void {
         if (builtin.mode != .Debug) return;
-        var solved_clone = try cloneSolvedProgram(self.allocator, self.solved);
-        var clone_owned = true;
-        errdefer if (clone_owned) solved_clone.deinit();
+        const solved_clone = try cloneSolvedProgram(self.allocator, self.solved);
 
         var materialized_identities = std.ArrayList(LambdaMonoLower.SpecializationIdentity).empty;
         defer materialized_identities.deinit(self.allocator);
+        // `run` owns the clone from here on and releases it itself when it
+        // fails, so this frame must not also release it.
         var materialized = try LambdaMonoLower.run(self.allocator, solved_clone, self.folded_map_matches.items, .{
             .inline_expects = switch (self.inline_expects) {
                 .run => .run,
@@ -4365,7 +4332,6 @@ const Lowerer = struct {
             },
             .debug_specialization_identities = &materialized_identities,
         });
-        clone_owned = false;
         var materialized_owned = true;
         defer if (materialized_owned) materialized.deinit();
 
@@ -4717,8 +4683,8 @@ const Lowerer = struct {
         const layout_idx = self.result.store.getLocal(target).layout_idx;
         const proc_id = self.current_proc orelse Common.invariant("static data candidate lowering ran without a current procedure");
         if (self.result.store.getProcSpec(proc_id).is_static_initializer) {
-            // Closed target initializers serialize the stored value, not a runtime
-            // allocation recipe; in particular, uniform lists remain literal data.
+            // Closed target initializers serialize the stored value, not a
+            // runtime construction.
             return try self.lowerExprIntoAtType(target, candidate.runtime_expr, ty, next);
         }
         if (try self.lowerConstructionExprInto(target, candidate.runtime_expr, ty, next)) |built| return built;
@@ -4733,6 +4699,9 @@ const Lowerer = struct {
     }
 
     fn noteWorkerExpr(self: *Lowerer, data: Lifted.ExprData) void {
+        // A lifted join point is entered again by the jumps in its body, so
+        // it lowers to the same back-edge shape as a loop.
+        if (data == .loop_ or data == .join_point) self.result.store.shapes.loop = true;
         if (!self.worker_callback or self.parallel_metrics == null) return;
         if (data == .call_value) self.worker_features.indirect_call = true;
         if (data == .match_) self.worker_features.match_ = true;
@@ -12516,32 +12485,6 @@ fn constBackingAuthority(authority: MonoType.BackingAuthority) const_store.TypeB
     };
 }
 
-/// Whether two constructions build the same value.
-fn constructionEql(a: postcheck_values.Construction, b: postcheck_values.Construction) bool {
-    if (std.meta.activeTag(a) != std.meta.activeTag(b)) return false;
-    return switch (a) {
-        .literal => |literal| std.meta.eql(literal, b.literal),
-        .zst, .empty_str => true,
-        .empty_list => |capacity| capacity == b.empty_list,
-        .uniform_list => |uniform| uniform.count == b.uniform_list.count and
-            uniform.element_layout == b.uniform_list.element_layout and
-            constructionEql(uniform.element.*, b.uniform_list.element.*),
-        .record => |fields| blk: {
-            if (fields.len != b.record.len) break :blk false;
-            for (fields, b.record) |field, other| {
-                if (!constructionEql(field, other)) break :blk false;
-            }
-            break :blk true;
-        },
-        .tag => |tag| blk: {
-            if (tag.variant_index != b.tag.variant_index or tag.discriminant != b.tag.discriminant) break :blk false;
-            if ((tag.payload == null) != (b.tag.payload == null)) break :blk false;
-            if (tag.payload) |payload| break :blk constructionEql(payload.*, b.tag.payload.?.*);
-            break :blk true;
-        },
-    };
-}
-
 fn lirSymbol(symbol: Common.Symbol) LIR.Symbol {
     return LIR.Symbol.fromRaw(@intCast(@intFromEnum(symbol)));
 }
@@ -12832,6 +12775,14 @@ test "compact comptime root descriptors survive solved teardown and direct LIR l
         }
     };
     try std.testing.checkAllAllocationFailures(allocator, Attempt.run, .{ &solved, Lifted.Program.FoldedMatch{ .scrutinee = policy, .body = read } });
+    const Verify = struct {
+        fn run(failing: std.mem.Allocator, original: *const Solved.Program) Common.LowerError!void {
+            var lowerer = try Lowerer.init(failing, .u64, original, .{});
+            defer lowerer.deinit();
+            try lowerer.verifyMaterializedDecisions();
+        }
+    };
+    try std.testing.checkAllAllocationFailures(allocator, Verify.run, .{&solved});
     {
         var lowerer = try Lowerer.init(allocator, .u64, &solved, .{});
         defer lowerer.deinit();
