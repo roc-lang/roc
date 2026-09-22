@@ -23289,6 +23289,7 @@ fn checkBlockStatements(self: *Self, statements: CIR.Statement.Span, env: *Env, 
                     // finished scheme below. Destructure binders bind first
                     // so boundary defaulting sees them through the row (see
                     // `judgeRecordDestructBinds`).
+                    //
                     // The pattern=RHS unification above runs after the RHS's
                     // last dispatch pass and can pin a receiver through a
                     // recursive call (e.g. an accumulator passed as `[]`).
