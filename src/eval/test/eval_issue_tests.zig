@@ -2286,4 +2286,75 @@ pub const tests = [_]TestCase{
         ,
         .expected = .{ .inspect_str = "\"b 1\"" },
     },
+    .{
+        // repro for https://github.com/roc-lang/roc/issues/11312
+        // A non-Str crash message is a type mismatch. Compile-time
+        // finalization and lowering must not see the message's erroneous
+        // type; the program reports the mismatch and crashes when run.
+        .name = "issue 11312: non-Str crash message reports a problem and crashes at runtime instead of panicking",
+        .source_kind = .module,
+        .source =
+        \\poly = || {
+        \\    crash YYYYY
+        \\    "x"
+        \\}
+        \\
+        \\rDsult = poly() == poly()
+        \\
+        \\main = rDsult
+        ,
+        .expected = .{ .problem_and_crash = {} },
+    },
+    .{
+        .name = "issue 11312: callable constant built from a call into a checked error crashes at runtime",
+        .source_kind = .module,
+        .source =
+        \\poly = || {
+        \\    crash YYYYY
+        \\    "x"
+        \\}
+        \\
+        \\make = |s| |_| s
+        \\
+        \\g = make(poly())
+        \\
+        \\main = g(1)
+        ,
+        .expected = .{ .problem_and_crash = {} },
+    },
+    .{
+        .name = "issue 11312: literal conversion whose method reaches a checked error crashes at runtime",
+        .source_kind = .module,
+        .source =
+        \\Tag := [Tag(Str)].{
+        \\    from_quote : Str -> Try(Tag, [BadQuotedBytes(Str)])
+        \\    from_quote = |str| {
+        \\        crash YYYYY
+        \\        Ok(Tag(str))
+        \\    }
+        \\}
+        \\
+        \\value = "one".Tag
+        \\
+        \\main = match value {
+        \\    Tag(s) => s
+        \\}
+        ,
+        .expected = .{ .problem_and_crash = {} },
+    },
+    .{
+        .name = "issue 11312: constant calling into a checked error crashes when read at runtime",
+        .source_kind = .module,
+        .source =
+        \\poly = || {
+        \\    crash YYYYY
+        \\    "x"
+        \\}
+        \\
+        \\first = poly()
+        \\
+        \\main = first
+        ,
+        .expected = .{ .problem_and_crash = {} },
+    },
 };
