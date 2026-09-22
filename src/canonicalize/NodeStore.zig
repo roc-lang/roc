@@ -2808,7 +2808,8 @@ pub fn getExposedItem(store: *const NodeStore, exposedItem: CIR.ExposedItem.Idx)
             return CIR.ExposedItem{
                 .name = @bitCast(p.name),
                 .alias = if (p.alias == 0) null else @bitCast(p.alias),
-                .is_wildcard = p.is_wildcard != 0,
+                .is_wildcard = p.flags & 1 != 0,
+                .kind = @enumFromInt((p.flags >> 1) & 1),
             };
         },
     }
@@ -4275,7 +4276,7 @@ pub fn addExposedItem(store: *NodeStore, exposedItem: CIR.ExposedItem, region: b
     node.setPayload(.{ .exposed_item = .{
         .name = @bitCast(exposedItem.name),
         .alias = if (exposedItem.alias) |alias| @bitCast(alias) else 0,
-        .is_wildcard = @intFromBool(exposedItem.is_wildcard),
+        .flags = @as(u32, @intFromBool(exposedItem.is_wildcard)) | (@as(u32, @intFromEnum(exposedItem.kind)) << 1),
     } });
 
     const nid = try store.nodes.append(store.gpa, node);
