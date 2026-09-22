@@ -1,1 +1,3 @@
-ProvidesEntry := { ffi_symbol : Str, name : Str, type_id : U64 }
+import ProvidedExport exposing [ProvidedExport]
+
+ProvidesEntry := { exported : ProvidedExport, ffi_symbol : Str, name : Str }
