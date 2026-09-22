@@ -6692,7 +6692,7 @@ inspection reached through a record, list, tag payload, generic helper, or
 nominal backing can never select an override it cannot call. The checked method
 registry records the decision once per `to_inspect` entry
 (`MethodRegistryEntry.inspect_override`, computed by `MethodRegistry.fromModule`
-from the published method type). Monotype and Boxy planning and lowering select
+from the method's checked type). Monotype and Boxy planning and lowering select
 the declaring view exactly as method dispatch does and consume that decision
 through `MethodRegistry.lookupInspectOverride`; they never re-examine the
 method's type.
