@@ -217,7 +217,9 @@ pub const Constants = struct {
     /// 99: Generated-codec method roles identify subject types modulo
     ///     transparent aliases, so subjects spelled through different aliases
     ///     of one type share a role.
-    pub const CACHE_VERSION = 99;
+    /// 100: A use of an annotated binding's predeclared scheme is recorded
+    ///     against the binding's own scheme, never the predeclared copy.
+    pub const CACHE_VERSION = 100;
 };
 
 /// Configuration for the Roc cache system.

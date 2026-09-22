@@ -2598,7 +2598,12 @@ interface once and classifies the binding as a scheme exactly when a reachable
 variable was promoted to generalized rank. This producer-side classification
 is necessary because generalization is per variable: a partially generalized
 scheme can have a monomorphic structural root and quantified descendants. Root
-rank is therefore not a valid proxy for whether a binding is a scheme.
+rank is therefore not a valid proxy for whether a binding is a scheme. The walk
+reaches exactly what instantiation copies: an alias is transparent to both, so
+the walk follows an alias's backing as well as its arguments. An implicitly
+opened row inside an aliased union (`f : U64 -> Res` where `Res : Try(U64,
+[Oops])`) is reachable only through the backing, and it makes the binding a
+scheme like any other quantified variable.
 
 Every source alias for the binding (expression, pattern, definition, or closure
 wrapper) receives the same classification explicitly. Checked module output
@@ -5087,7 +5092,9 @@ targets a member of a binding group still on the check stack records dedicated
 `recursive_reference` provenance, independently of the scheme-use record that
 owns the edge's substitution and evidence. An unannotated recursive reference
 has a shared scheme use, while an annotated recursive reference instantiates
-its pre-declared scheme and records that substitution normally. A non-recursive
+its pre-declared scheme and records that substitution against the def's own
+scheme (see "Predeclared scheme uses are recorded against the binding's own
+scheme" below). A non-recursive
 lookup never gains recursive provenance merely because its referenced pattern
 has not generalized yet.
 
@@ -6788,20 +6795,43 @@ uses the declared annotation immediately, but its group retains the exact use
 var and lexical attribution. Before that caller generalizes, the boundary
 checks the target body and replays the use against the complete body scheme;
 when body checking stored off-root dispatch requirements, the replay adds
-them under the caller's still-live substitution. The annotation pre-pass and
-body generation explicitly pair their annotation identity slots, including
-generation-internal open rows without CIR nodes; composing that pair table with
-the saved early-use substitution supplies the requirement copy without a
-second root unification or solved-type walk. Structurally attached
+them under the caller's still-live substitution. Structurally attached
 requirements were already present in the declared annotation and need no
-replay. If the annotation already emitted a checked-evidence use record, the
-complete replay replaces that record instead of emitting two specialization
-edges for one lookup. An annotated in-flight recursive reference remains an
-internal edge through the declared scheme; the enclosing body's own
-requirements cover that implementation cycle, so it is not replayed as a new
-external use. Together these rules cover forward and polymorphically recursive
-lookup paths without making an annotation erase requirements inferred from its
-body.
+replay. An annotated in-flight recursive reference remains an internal edge
+through the declared scheme; the enclosing body's own requirements cover that
+implementation cycle, so it is not replayed as a new external use. Together
+these rules cover forward and polymorphically recursive lookup paths without
+making an annotation erase requirements inferred from its body.
+
+Predeclared scheme uses are recorded against the binding's own scheme. The
+predeclared scheme is a disjoint copy of the annotation, and the body can
+narrow it: an implicitly opened output row that the body closes (`Ok(_) =>
+val` returning a closed argument) is a quantified variable of the annotation
+but not of the checked def, so the two schemes can have different numbers of
+quantified variables. A scheme-use record's substitution is read against the
+scheme of the def's template, which is always the def's own scheme, so no
+record is ever rooted at a predeclared scheme; Debug builds verify this when
+checking finishes. The link between the two schemes is explicit producer data
+(`Check.PredeclaredSlots`): the pre-pass and the body generation enumerate the
+same identity slots in the same digest order, generation-internal open rows
+without CIR nodes included, so slot i of one is slot i of the other. The body
+side is enumerated at the moment the body generates the annotation, before
+anything unifies with it; it is enumerated for every predeclared annotation,
+because a use made while the body is being checked is only discovered after
+that generation. The predeclared side is enumerated at the first use. A use
+keeps only its copies of the predeclared slots (and of their where-clause
+callables), and its record pairs each body slot that is still a variable with
+the copy of the same predeclared slot. A use made while the body is in flight
+(a recursive name reference, a local recursive reference, or method-syntax
+dispatch into an in-flight method) records immediately. A name reference made
+before the body is checked records in its boundary replay, which runs for
+every such use, including targets with no off-root requirements. A dispatch
+edge to an annotated method whose body has not generated its annotation yet,
+including a generated codec call, waits and records when that generation
+happens, so checking order is unchanged. Each site keeps the record policy it
+applies to every other scheme: a value use or generated codec call with an
+empty substitution is recorded only when the scheme has evidence params, and
+a source dispatch edge to a same-module target is always recorded.
 A receiver already at `Rank.generalized` is never captured as an outer-rank
 pending requirement. Generalization boundaries cannot run inside a commit
 probe; probes may append candidates, but rollback rewinds those candidates and
