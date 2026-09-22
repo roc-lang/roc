@@ -1,253 +1,327 @@
 # Pattern Matching
 
-A _pattern_ describes the shape of a value, and optionally gives names to parts of it.
-Patterns are used in [`match`](#match) branches, on the left side of
-[assignments](statements#assignment), in function arguments, and between `for` and `in` in
-[`for` loops](loops#for-loops).
+A pattern describes the shape a value must have and can give names to parts of that value. Patterns are used by [`match`](#match), destructuring assignments, function arguments, and [`for`](loops#for-loops) loops.
 
-Here are the kinds of patterns Roc supports:
-
-| Pattern | Example | Matches |
-| --- | --- | --- |
-| Name | `x` | Anything, and names it `x` |
-| Underscore | `_` | Anything, without naming it |
-| Number literal | `0` | That exact number |
-| String literal | `"hello"` | That exact string |
-| Tag | `Ok(value)` | That tag, with a payload matching the inner pattern |
-| Record | `{ x, y: 0 }` | A record whose fields match the given patterns |
-| Tuple | `(a, _)` | A tuple whose elements match the given patterns |
-| List | `[first, .. as rest]` | A list whose elements match the given patterns |
-| Alternatives | See [Branch Alternatives](#branch-alternatives) | Anything matching any of the alternatives |
-| `as` | `Ok(n) as result` | Anything matching the pattern on the left, and names the whole value |
+For example, `Ok(value)` matches an `Ok` tag with one payload and gives that payload the name `value`. It does not match an `Err` tag.
 
 ## `match`
 
-A `match` expression compares a value against a series of patterns, one _branch_ at a time,
-starting from the top. The first branch whose pattern matches is the one that runs, and the
-whole `match` expression evaluates to what that branch evaluates to.
+A `match` expression evaluates one value, compares it with each branch from top to bottom, and evaluates the body of the first branch that matches:
 
 ```roc
-describe : [Red, Green, Blue, Custom(U8)] -> Str
-describe = |color| match color {
-    Red => "red"
-    Green => "green"
-    Blue => "blue"
-    Custom(brightness) => "custom with brightness ${brightness.to_str()}"
-}
+describe = |result|
+    match result {
+        Ok(value) => "success: ${value}"
+        Err(_) => "error"
+    }
 ```
 
-Each branch is a pattern, then `=>`, then an expression. Any names the pattern introduces
-(like `brightness` above) are in scope only in that branch.
+The expression after `match` is evaluated once. Every branch pattern must accept the same type, and every branch body must produce the same type. Names introduced by a pattern are in scope in that branch's guard and body, but not in other branches.
 
-Patterns can be nested inside one another as deeply as you like:
+Branch order matters whenever patterns overlap. In this example, `0` reaches the first branch, not the second:
 
 ```roc
-greet : Try({ name : Str, age : U64 }, Str) -> Str
-greet = |result| match result {
-    Ok({ name: "", .. }) => "Hello, stranger!"
-    Ok({ name, age: 0 }) => "Hello, newborn ${name}!"
-    Ok({ name, .. }) => "Hello, ${name}!"
-    Err(problem) => "Something went wrong: ${problem}"
-}
+classify = |number|
+    match number {
+        0 => "zero"
+        _ => "another number"
+    }
 ```
-
-### List Patterns
-
-List patterns match lists based on their length and contents. A `..` inside a list pattern
-matches any number of elements (including zero), and `.. as name` gives those elements a name:
-
-```roc
-summarize : List(U64) -> Str
-summarize = |list| match list {
-    [] => "empty"
-    [only] => "just ${only.to_str()}"
-    [first, .. as rest] => "${first.to_str()} and ${rest.len().to_str()} more"
-}
-```
-
-The `..` can appear at the beginning, middle, or end of a list pattern. For example,
-`[.., last]` matches any nonempty list and names its last element.
 
 ### Branch Alternatives
 
-When several patterns should run the same code, you can put them in one branch, separated by `|`:
+Use `|` to give several patterns the same body:
 
 ```roc
-is_warm : [Red, Orange, Yellow, Green, Blue] -> Bool
-is_warm = |color| match color {
-    Red | Orange | Yellow => True
-    Green | Blue => False
-}
+is_primary = |color|
+    match color {
+        Red | Green | Blue => True
+        Yellow | Orange | Purple => False
+    }
 ```
 
-This works for any kind of pattern, including literals:
-
-```roc
-greet : Str -> Str
-greet = |name| match name {
-    "Sam" | "Sammy" => "Hey, Sam!"
-    other => "Hello, ${other}!"
-}
-```
-
-If the alternatives introduce names, every alternative must introduce the same names,
-with the same types. That way, the branch's expression can use those names no matter
-which alternative matched:
-
-```roc
-amount : [Deposit(U64), Withdrawal(U64), Fee] -> U64
-amount = |transaction| match transaction {
-    Deposit(n) | Withdrawal(n) => n
-    Fee => 1
-}
-```
+This is equivalent to writing a separate branch with the same body for each alternative. Every alternative must introduce the same names, with compatible types, because the guard and body must be valid regardless of which alternative matched.
 
 ### `if` Guards on Branches
 
-A branch's pattern can be followed by `if` and a condition. The branch is only taken
-if the pattern matches _and_ the condition evaluates to `True`. If the condition
-evaluates to `False`, matching continues with the next branch.
+A branch can have an `if` guard between its pattern and `=>`:
 
 ```roc
-describe_temp : [Celsius(I64), Kelvin(I64)] -> Str
-describe_temp = |temp| match temp {
-    Celsius(degrees) if degrees > 30 => "hot"
-    Celsius(degrees) if degrees < 5 => "cold"
-    Celsius(_) => "pleasant"
-    Kelvin(_) => "scientific"
+describe = |numbers|
+    match numbers {
+        [first, .. as rest] if first > 0 => PositiveStart(first, rest)
+        _ => Other
+    }
+```
+
+The guard must evaluate to `Bool`. It runs only after its pattern matches, so it can use names introduced by that pattern. If the guard evaluates to `False`, matching continues with the next branch.
+
+A guarded branch does not by itself cover any case for exhaustiveness. Even a pattern such as `_ if condition` needs an unguarded branch after it, because the condition can be `False`.
+
+## Pattern Forms
+
+### Bindings and Wildcards
+
+A lowercase name matches any value and binds that value to the name:
+
+```roc
+identity = |value|
+    match value {
+        anything => anything
+    }
+```
+
+`_` also matches any value, but does not bind a name. A name beginning with an underscore, such as `_ignored`, still binds a name; the prefix indicates that leaving it unused is intentional.
+
+### Literal Patterns
+
+Number and string literals match equal values:
+
+```roc
+describe = |value|
+    match value {
+        0 => "zero"
+        1 => "one"
+        _ => "many"
+    }
+```
+
+Literal patterns for types with other possible values normally need a catch-all branch. A numeric pattern can have an explicit type suffix, just like a numeric expression:
+
+```roc
+classify : F32 -> Str
+classify = |number|
+    match number {
+        1.5.F32 => "one and a half"
+        _ => "another number"
+    }
+```
+
+A single-quoted pattern matches one Unicode codepoint. It can also have a numeric type suffix:
+
+```roc
+is_ascii_a = |byte|
+    match byte {
+        'A'.U8 => True
+        _ => False
+    }
+```
+
+`True` and `False` are tags in the `Bool` type, so they use the same pattern syntax as other tags.
+
+String patterns can contain captures. A capture gives a name to the part of the string in that position:
+
+```roc
+user_id = |path|
+    match path {
+        "users/${id}" => Some(id)
+        _ => None
+    }
+```
+
+Here the literal prefix must match `"users/"`, and `id` receives the remainder of the string. A capture followed by more literal text receives everything up to the first occurrence of that text. Write `${_}` to match that portion without binding it. Two captures cannot be adjacent, because there would be no delimiter showing where the first one ends.
+
+### Tag Patterns
+
+A tag pattern matches a particular tag and can contain a pattern for each payload:
+
+```roc
+unwrap_or = |result, fallback|
+    match result {
+        Ok(value) => value
+        Err(_) => fallback
+    }
+```
+
+Payload patterns can be nested. For example, `Ok(Pair(left, right))` matches an `Ok` whose payload is a `Pair` with two payloads.
+
+### Record Patterns
+
+A record pattern destructures fields by name:
+
+```roc
+full_name = |person| {
+    { first, last } = person
+    "${first} ${last}"
 }
 ```
 
-The guard can use any names introduced by the pattern.
-
-Since the compiler can't know in advance which way a guard's condition will go,
-a branch with a guard never counts toward [exhaustiveness](#exhaustiveness). In the example above,
-removing the unguarded `Celsius(_)` branch would give an exhaustiveness error, even though
-the guards cover a lot of possible temperatures.
-
-### Naming the Whole Value with `as`
-
-Writing `as` and then a name after a pattern gives a name to the entire value that matched it,
-in addition to any names the pattern itself introduces:
+Use `:` to bind a field to a different name or to match it with another pattern:
 
 ```roc
-describe : Try(U64, Str) -> Str
-describe = |result| match result {
-    Ok(n) as ok if n > 10 => "large: ${Str.inspect(ok)}"
-    Ok(_) => "small"
-    Err(msg) => msg
+name = |person|
+    match person {
+        { name: displayed_name, active: True } => Some(displayed_name)
+        { active: False, .. } => None
+    }
+```
+
+A record pattern without `..` describes exactly the listed fields. A bare `..` leaves the remaining fields unmatched. `..rest` additionally binds a record containing those remaining fields:
+
+```roc
+remove_name = |person|
+    match person {
+        { name, ..rest } => Pair(name, rest)
+    }
+```
+
+### Tuple Patterns
+
+A tuple pattern has one pattern for each position:
+
+```roc
+swap = |pair| {
+    (first, second) = pair
+    (second, first)
 }
 ```
+
+Like tuple values, tuple patterns have at least two elements. See [Tuples](tuples#destructuring-tuples).
+
+### List Patterns
+
+A list pattern can match an exact number of elements:
+
+```roc
+describe = |items|
+    match items {
+        [] => Empty
+        [only] => One(only)
+        [first, second] => Two(first, second)
+        [_, _, ..] => Many
+    }
+```
+
+`..` matches any number of elements, including none. It can appear once and can have fixed patterns on either side:
+
+```roc
+ends = |items|
+    match items {
+        [] => None
+        [first, .., last] => Some(Pair(first, last))
+        _ => None
+    }
+```
+
+Use `.. as name` to bind the matched middle portion as a list:
+
+```roc
+split_first = |items|
+    match items {
+        [] => None
+        [first, .. as rest] => Some(Pair(first, rest))
+    }
+```
+
+### Nested Patterns and `as`
+
+Patterns can be nested wherever a value can be nested:
+
+```roc
+get_name = |response|
+    match response {
+        Ok({ user: { name, } }) => Some(name)
+        Err(_) => None
+    }
+```
+
+An `as` pattern gives a name to the whole matched value as well as destructuring its parts:
+
+```roc
+keep_point = |value|
+    match value {
+        (x, y) as point => { x, y, point }
+    }
+```
+
+### Nominal Patterns
+
+A nominal value must be destructured through its nominal type. If `Distance` is declared with `Distance := U64`, its backing value is matched with `Distance.(pattern)`:
+
+```roc
+Distance := U64
+
+unwrap : Distance -> U64
+unwrap = |distance|
+    match distance {
+        Distance.(meters) => meters
+    }
+```
+
+The same syntax wraps and unwraps tuple, tag-union, and other backing types. Nominal records have the shorthand `Type.{ fields }`, without parentheses:
+
+```roc
+Point := { x : U64, y : U64 }
+
+sum : Point -> U64
+sum = |Point.{ x, y }| x + y
+```
+
+The general form `Point.({ x, y })` is also accepted, but `Point.{ x, y }` is the conventional record-specific form.
 
 ## Exhaustiveness
 
-A `match` is _exhaustive_ if every possible value of the type being matched on is
-matched by at least one of its branches. Roc's compiler checks every `match` for
-exhaustiveness, and reports an error listing the missing patterns if it isn't exhaustive:
+Every possible input to a `match` must be handled. The compiler reports a non-exhaustive match and shows patterns for cases that are missing.
+
+Closed tag unions can be covered by listing every tag:
 
 ```roc
-to_num : [A, B, C] -> U8
-to_num = |letter| match letter {
-    A => 1
-    B => 2
-    # Error: this match doesn't cover C
-}
+is_ok = |result|
+    match result {
+        Ok(_) => True
+        Err(_) => False
+    }
 ```
 
-This check means that if you add a new tag to a tag union, the compiler will tell you
-about every `match` that needs a new branch to handle it.
+Types such as numbers and strings have too many possible values to list individually, so matches on their literals generally end with a catch-all pattern.
 
-Types with an effectively unlimited number of possible values, such as strings and numbers,
-can't be covered by listing literal patterns alone, so a `match` on them needs a
-[catch-all pattern](#underscore) somewhere.
-
-As with other compile-time errors in Roc, you can still run the program. If execution
-actually reaches a `match` that has no branch for the given value, the program will
-[crash](statements#crash).
-
-The compiler also warns about _redundant_ branches, meaning branches that can never be
-reached because earlier branches already cover every value they would match:
+The compiler also reports redundant patterns. A pattern is redundant when every value it could match was already handled by earlier branches. For example, `Ok(_)` is unreachable after `_`:
 
 ```roc
-to_num : [A, B] -> U8
-to_num = |letter| match letter {
-    A => 1
-    B => 2
-    A => 3 # Warning: this branch is redundant
+match result {
+    _ => "handled"
+    Ok(_) => "unreachable"
 }
 ```
 
 ### Catch-all Patterns (`_`) {#underscore}
 
-The `_` pattern matches any value, and does not give it a name. It's commonly used as
-the last branch of a `match` to handle "everything else":
+`_` is the usual catch-all pattern. A binding such as `other` is also a catch-all, with the difference that it makes the matched value available to the branch body.
 
-```roc
-http_status_name : U16 -> Str
-http_status_name = |code| match code {
-    200 => "OK"
-    404 => "Not Found"
-    500 => "Internal Server Error"
-    _ => "Unknown"
-}
-```
-
-A name pattern (like `other` in `other => ...`) also matches any value, but gives it
-a name you can use in the branch.
-
-`_` can also appear anywhere inside other patterns, to ignore parts of a value you
-don't care about. For example, `Ok(_)` matches any `Ok` regardless of its payload,
-and `(x, _)` matches any two-element tuple while only naming its first element.
-
-Since `_` matches everything, any branches after a top-level `_` branch are redundant.
+Catch-all branches are often last because any later branch would be redundant.
 
 ## Destructuring
 
-_Destructuring_ is using a pattern to take a value apart and give names to its parts.
-Record, tuple, and tag patterns can all be used to destructure:
-
-```roc
-{ name, email } = user
-(x, y) = point
-```
-
-In a record pattern, `{ name }` is shorthand for `{ name: name }`. To give the field's
-value a different name, write `{ name: user_name }`. To destructure a record while
-only naming some of its fields, end the pattern with `..` to indicate that the record
-may have other fields as well:
-
-```roc
-{ name, .. } = { name: "Sam", email: "sam@example.com" }
-```
-
-Function arguments are patterns too, so they can be destructured directly:
-
-```roc
-area : { width : U64, height : U64 } -> U64
-area = |{ width, height }| width * height
-
-add_pair : (U64, U64) -> U64
-add_pair = |(a, b)| a + b
-```
+Patterns also appear outside `match`. In those positions, one pattern must cover every value of the inferred type. If it can fail, the compiler reports a non-exhaustive destructure rather than inserting a runtime failure.
 
 ### Destructuring Assignments (with `=`)
 
-The left side of an [assignment](statements#assignment) is a pattern, so assignments can destructure:
+The left side of `=` can be a pattern:
 
 ```roc
-{ name, pos: (x, y) } = { name: "origin", pos: (0, 0) }
+coordinates = |point| {
+    { x, y } = point
+    (x, y)
+}
 ```
 
-This assigns `name`, `x`, and `y` all at once.
+Destructuring assignments are useful for records, tuples, nominal values, and tags that are known to be the only possible case. A refutable pattern is rejected when the value's type permits another case. For example, `Ok(value) = result` is rejected if `result` can also be `Err(_)`; use `match` to handle both cases.
 
-The pattern in an assignment must be exhaustive, because there's no other branch to fall back
-on if it doesn't match. A tag union with only one tag works, but a pattern that only
-covers some of a type's possible values does not:
+Function arguments are patterns too:
 
 ```roc
-Wrapped(n) = Wrapped(5) # OK, because Wrapped is the only possible tag
-
-Ok(item) = list.first() # Error: this doesn't handle the case where it's Err
+sum_point = |{ x, y }| x + y
 ```
 
-When a pattern only covers some possibilities, use [`match`](#match) instead.
+Their patterns must likewise cover every value accepted by the function's argument type.
+
+The binding before `in` in a `for` loop is also a pattern:
+
+```roc
+var $total = 0
+for (key, value) in [(1, 2), (3, 4)] {
+    $total = $total + key + value
+}
+```
+
+That pattern must cover every item produced by the iterator. Use a `match` inside the loop when different item shapes need different behavior.
