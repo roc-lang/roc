@@ -122,4 +122,3 @@ Note that the addresses shown in objdump may use a different offset compared to 
 
 gdb scripting is very useful, [for example](https://roc.zulipchat.com/#narrow/stream/395097-compiler-development/topic/gdb.20script/near/424422545).
 ChatGPT and Claude are good at writing those scripts as well.
-

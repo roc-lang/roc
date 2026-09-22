@@ -654,7 +654,7 @@ test "check type - record - opt - unset of missing field is a mismatch" {
     // Unsetting an Optional Field").
     try checkTypesModule(source, .fail_with,
         \\**Type Mismatch**
-        \\This record does not have a `wrold` field.
+        \\This record does not have a field named `wrold`.
         \\```roc
         \\my_record_b = { ..my_record_a, wrold: _  }
         \\```
@@ -1254,7 +1254,7 @@ test "check type - record - opt - conditional presence rejected (unannotated)" {
     // conditional stays a branch mismatch.
     try checkTypesModule(source, .fail_with,
         \\**Type Mismatch**
-        \\The second branch of this `if` does not match the previous branch .
+        \\The second branch of this `if` does not match the previous branch.
         \\```roc
         \\y_maybe = if True with_y else without_y
         \\```
@@ -2521,7 +2521,7 @@ test "check type - record - opt - optional access on missing field" {
     // Fields)", width absorption).
     try checkTypesModule(source, .fail_with,
         \\**Type Mismatch**
-        \\This record does not have a `world` field.
+        \\This record does not have a field named `world`.
         \\```roc
         \\use_it = my_record.?world ?? 7
         \\```
@@ -4581,7 +4581,7 @@ test "check type - record access - field typo" {
     ;
     try checkTypesModule(source, .fail_with,
         \\**Type Mismatch**
-        \\This record does not have a `helo` field.
+        \\This record does not have a field named `helo`.
         \\```roc
         \\x = r.helo
         \\```
@@ -4668,7 +4668,7 @@ test "check type - record - update - fail - empty record" {
     // Number literal 10 used where Str is expected (data field type)
     try checkTypesModule(source, .fail_with,
         \\**Type Mismatch**
-        \\The `r` record does not have a `hello` field.
+        \\The `r` record does not have a field named `hello`.
         \\```roc
         \\  { ..r, hello: 10.U8 }
         \\```
@@ -4692,7 +4692,7 @@ test "check type - record - update - fail - missing field" {
     // Number literal 10 used where Str is expected (data field type)
     try checkTypesModule(source, .fail_with,
         \\**Type Mismatch**
-        \\This record does not have a `hllo` field.
+        \\This record does not have a field named `hllo`.
         \\```roc
         \\  { ..r, hllo: "goodbye" }
         \\```

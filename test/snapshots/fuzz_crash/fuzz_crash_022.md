@@ -21,9 +21,16 @@ UNEXPECTED STATEMENT - fuzz_crash_022.md:1:28:1:29
 UNEXPECTED STATEMENT - fuzz_crash_022.md:1:29:1:30
 UNEXPECTED STATEMENT - fuzz_crash_022.md:1:30:1:31
 UNEXPECTED STATEMENT - fuzz_crash_022.md:1:32:1:33
+EXPECTED TUPLE SEPARATOR - fuzz_crash_022.md:6:26:6:27
 UNEXPECTED EXPRESSION SYNTAX - fuzz_crash_022.md:6:27:6:28
+EXPECTED TUPLE SEPARATOR - fuzz_crash_022.md:6:29:6:30
+EXPECTED TUPLE SEPARATOR - fuzz_crash_022.md:6:35:6:39
 UNEXPECTED EXPRESSION SYNTAX - fuzz_crash_022.md:6:35:6:39
+EXPECTED TUPLE SEPARATOR - fuzz_crash_022.md:6:40:6:41
+EXPECTED TUPLE SEPARATOR - fuzz_crash_022.md:8:1:8:2
+EXPECTED TUPLE SEPARATOR - fuzz_crash_022.md:8:7:8:8
 UNEXPECTED EXPRESSION SYNTAX - fuzz_crash_022.md:8:7:8:8
+EXPECTED TUPLE SEPARATOR - fuzz_crash_022.md:8:9:8:10
 EXPECTED TUPLE SEPARATOR - fuzz_crash_022.md:9:1:9:1
 UNEXPECTED EXPRESSION SYNTAX - fuzz_crash_022.md:9:1:9:1
 MALFORMED TYPE - fuzz_crash_022.md:1:19:1:27
@@ -190,6 +197,32 @@ DECLARATION HAS NO VALUE - fuzz_crash_022.md:5:1:5:20
 			(source-region (file "fuzz_crash_022.md") (start 1 32) (end 1 33) (annotation error) (line-text "app [main!] { |f: platform \"c\" }"))))
 	(report
 		(severity runtime_error)
+		(title "Expected Tuple Separator")
+		(region (start 6 26) (end 6 27))
+		(headline
+			(reflow "I was parsing a parenthesized expression or tuple, and I expected `,` or `)`."))
+		(document
+			(reflow "Separate tuple elements with commas and close the tuple or parenthesized expression with ")
+			(annotated code ")")
+			(reflow ".")
+			(line-break)
+			(line-break)
+			(text "For example:")
+			(line-break)
+			(annotation-start code-block)
+			(indent 1)
+			(text "(x, y)")
+			(annotation-end)
+			(line-break)
+			(line-break)
+			(text "I found ")
+			(annotated code "!")
+			(text " here.")
+			(line-break)
+			(line-break)
+			(source-region (file "fuzz_crash_022.md") (start 6 26) (end 6 27) (annotation error) (line-text "getUser = |id| if (id > 1!) \"big\" else \"l\""))))
+	(report
+		(severity runtime_error)
 		(title "Unexpected Expression Syntax")
 		(region (start 6 27) (end 6 28))
 		(headline
@@ -214,6 +247,60 @@ DECLARATION HAS NO VALUE - fuzz_crash_022.md:5:1:5:20
 			(line-break)
 			(line-break)
 			(source-region (file "fuzz_crash_022.md") (start 6 27) (end 6 28) (annotation error) (line-text "getUser = |id| if (id > 1!) \"big\" else \"l\""))))
+	(report
+		(severity runtime_error)
+		(title "Expected Tuple Separator")
+		(region (start 6 29) (end 6 30))
+		(headline
+			(reflow "I was parsing a parenthesized expression or tuple, and I expected `,` or `)`."))
+		(document
+			(reflow "Separate tuple elements with commas and close the tuple or parenthesized expression with ")
+			(annotated code ")")
+			(reflow ".")
+			(line-break)
+			(line-break)
+			(text "For example:")
+			(line-break)
+			(annotation-start code-block)
+			(indent 1)
+			(text "(x, y)")
+			(annotation-end)
+			(line-break)
+			(line-break)
+			(text "I found ")
+			(annotated code "\"")
+			(text " here.")
+			(line-break)
+			(line-break)
+			(source-region (file "fuzz_crash_022.md") (start 6 29) (end 6 30) (annotation error) (line-text "getUser = |id| if (id > 1!) \"big\" else \"l\""))))
+	(report
+		(severity runtime_error)
+		(title "Expected Tuple Separator")
+		(region (start 6 35) (end 6 39))
+		(headline
+			(reflow "I was parsing a parenthesized expression or tuple, and I expected `,` or `)`."))
+		(document
+			(reflow "Separate tuple elements with commas and close the tuple or parenthesized expression with ")
+			(annotated code ")")
+			(reflow ".")
+			(line-break)
+			(line-break)
+			(text "For example:")
+			(line-break)
+			(annotation-start code-block)
+			(indent 1)
+			(text "(x, y)")
+			(annotation-end)
+			(line-break)
+			(line-break)
+			(text "I found ")
+			(annotated code "else")
+			(text " here.")
+			(line-break)
+			(reflow "That word is reserved by Roc, so it cannot be used as a name in this position.")
+			(line-break)
+			(line-break)
+			(source-region (file "fuzz_crash_022.md") (start 6 35) (end 6 39) (annotation error) (line-text "getUser = |id| if (id > 1!) \"big\" else \"l\""))))
 	(report
 		(severity runtime_error)
 		(title "Unexpected Expression Syntax")
@@ -242,6 +329,84 @@ DECLARATION HAS NO VALUE - fuzz_crash_022.md:5:1:5:20
 			(source-region (file "fuzz_crash_022.md") (start 6 35) (end 6 39) (annotation error) (line-text "getUser = |id| if (id > 1!) \"big\" else \"l\""))))
 	(report
 		(severity runtime_error)
+		(title "Expected Tuple Separator")
+		(region (start 6 40) (end 6 41))
+		(headline
+			(reflow "I was parsing a parenthesized expression or tuple, and I expected `,` or `)`."))
+		(document
+			(reflow "Separate tuple elements with commas and close the tuple or parenthesized expression with ")
+			(annotated code ")")
+			(reflow ".")
+			(line-break)
+			(line-break)
+			(text "For example:")
+			(line-break)
+			(annotation-start code-block)
+			(indent 1)
+			(text "(x, y)")
+			(annotation-end)
+			(line-break)
+			(line-break)
+			(text "I found ")
+			(annotated code "\"")
+			(text " here.")
+			(line-break)
+			(line-break)
+			(source-region (file "fuzz_crash_022.md") (start 6 40) (end 6 41) (annotation error) (line-text "getUser = |id| if (id > 1!) \"big\" else \"l\""))))
+	(report
+		(severity runtime_error)
+		(title "Expected Tuple Separator")
+		(region (start 8 1) (end 8 2))
+		(headline
+			(reflow "I was parsing a parenthesized expression or tuple, and I expected `,` or `)`."))
+		(document
+			(reflow "Separate tuple elements with commas and close the tuple or parenthesized expression with ")
+			(annotated code ")")
+			(reflow ".")
+			(line-break)
+			(line-break)
+			(text "For example:")
+			(line-break)
+			(annotation-start code-block)
+			(indent 1)
+			(text "(x, y)")
+			(annotation-end)
+			(line-break)
+			(line-break)
+			(text "I found ")
+			(annotated code "-")
+			(text " here.")
+			(line-break)
+			(line-break)
+			(source-region (file "fuzz_crash_022.md") (start 8 1) (end 8 2) (annotation error) (line-text "-ain! = |_| getUser(900)"))))
+	(report
+		(severity runtime_error)
+		(title "Expected Tuple Separator")
+		(region (start 8 7) (end 8 8))
+		(headline
+			(reflow "I was parsing a parenthesized expression or tuple, and I expected `,` or `)`."))
+		(document
+			(reflow "Separate tuple elements with commas and close the tuple or parenthesized expression with ")
+			(annotated code ")")
+			(reflow ".")
+			(line-break)
+			(line-break)
+			(text "For example:")
+			(line-break)
+			(annotation-start code-block)
+			(indent 1)
+			(text "(x, y)")
+			(annotation-end)
+			(line-break)
+			(line-break)
+			(text "I found ")
+			(annotated code "=")
+			(text " here.")
+			(line-break)
+			(line-break)
+			(source-region (file "fuzz_crash_022.md") (start 8 7) (end 8 8) (annotation error) (line-text "-ain! = |_| getUser(900)"))))
+	(report
+		(severity runtime_error)
 		(title "Unexpected Expression Syntax")
 		(region (start 8 7) (end 8 8))
 		(headline
@@ -264,6 +429,32 @@ DECLARATION HAS NO VALUE - fuzz_crash_022.md:5:1:5:20
 			(line-break)
 			(line-break)
 			(source-region (file "fuzz_crash_022.md") (start 8 7) (end 8 8) (annotation error) (line-text "-ain! = |_| getUser(900)"))))
+	(report
+		(severity runtime_error)
+		(title "Expected Tuple Separator")
+		(region (start 8 9) (end 8 10))
+		(headline
+			(reflow "I was parsing a parenthesized expression or tuple, and I expected `,` or `)`."))
+		(document
+			(reflow "Separate tuple elements with commas and close the tuple or parenthesized expression with ")
+			(annotated code ")")
+			(reflow ".")
+			(line-break)
+			(line-break)
+			(text "For example:")
+			(line-break)
+			(annotation-start code-block)
+			(indent 1)
+			(text "(x, y)")
+			(annotation-end)
+			(line-break)
+			(line-break)
+			(text "I found ")
+			(annotated code "|")
+			(text " here.")
+			(line-break)
+			(line-break)
+			(source-region (file "fuzz_crash_022.md") (start 8 9) (end 8 10) (annotation error) (line-text "-ain! = |_| getUser(900)"))))
 	(report
 		(severity runtime_error)
 		(title "Expected Tuple Separator")

@@ -4265,11 +4265,22 @@ pub fn diagnosticToReport(self: *Self, diagnostic: CIR.Diagnostic, allocator: st
                 self.getLineStartsAll(),
             );
         },
+        .type_var_starting_with_dollar => |data| blk: {
+            const region_info = self.calcRegionInfo(data.region);
+            break :blk try CIR.Diagnostic.buildTypeVarStartingWithDollarReport(
+                allocator,
+                self.getIdent(data.name),
+                self.getIdent(data.suggested_name),
+                region_info,
+                filename,
+                self.getSourceAll(),
+                self.getLineStartsAll(),
+            );
+        },
         .invalid_string_interpolation,
         .can_lambda_not_implemented,
         .unused_type_var_name,
         .type_var_marked_unused,
-        .type_var_starting_with_dollar,
         => std.debug.panic("Unhandled canonicalize diagnostic in diagnosticToReport: {s}", .{@tagName(diagnostic)}),
     };
 }

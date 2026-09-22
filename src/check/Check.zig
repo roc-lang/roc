@@ -554,10 +554,11 @@ value_lookup_tracking: std.ArrayListUnmanaged(ValueLookupEntry),
 /// Tracks expressions whose checked type contains an error, even if annotation
 /// preservation later gives their raw expr var a non-error type.
 erroneous_value_exprs: std.AutoHashMapUnmanaged(CIR.Expr.Idx, void),
-/// Reassignments whose pattern/RHS relation was rejected. The whole statement
-/// must become an explicit runtime error before checked-body construction,
-/// because its pattern interface is erroneous independently of its RHS.
-erroneous_reassignments: std.AutoHashMapUnmanaged(CIR.Statement.Idx, CIR.Expr.Idx),
+/// Declarations and reassignments whose pattern/RHS relation was rejected. The
+/// whole statement must become an explicit runtime error before checked-body
+/// construction, because its pattern interface is erroneous independently of
+/// its RHS.
+erroneous_pattern_statements: std.AutoHashMapUnmanaged(CIR.Statement.Idx, CIR.Expr.Idx),
 /// Tracks unannotated expression identities whose checked value type contains
 /// an error and therefore cannot be used to introduce a parent call relation.
 call_operand_type_error_exprs: std.ArrayListUnmanaged(bool),
@@ -2774,7 +2775,7 @@ fn initAssumePrepared(
         .synthetic_binding_schemes = synthetic_binding_schemes,
         .value_lookup_tracking = .empty,
         .erroneous_value_exprs = .empty,
-        .erroneous_reassignments = .empty,
+        .erroneous_pattern_statements = .empty,
         .call_operand_type_error_exprs = try initNodeSlots(bool, gpa, node_count, false),
         .host_boundary_annotations = .empty,
         .implicit_open_exts = .empty,
@@ -2899,7 +2900,7 @@ pub fn deinit(self: *Self) void {
     self.predeclared_local_annotations.deinit(self.gpa);
     self.value_lookup_tracking.deinit(self.gpa);
     self.erroneous_value_exprs.deinit(self.gpa);
-    self.erroneous_reassignments.deinit(self.gpa);
+    self.erroneous_pattern_statements.deinit(self.gpa);
     self.call_operand_type_error_exprs.deinit(self.gpa);
     self.host_boundary_annotations.deinit(self.gpa);
     self.implicit_open_exts.deinit(self.gpa);
@@ -10828,6 +10829,17 @@ fn poisonLiteralFailureOwner(self: *Self, owner: CIR.Node.Idx) Allocator.Error!v
         .s_crash, .s_dbg, .s_expr, .s_expect, .s_while, .s_infinite_loop, .s_breakable_loop, .s_break, .s_return, .s_import, .s_alias_decl, .s_nominal_decl, .s_where_alias_decl, .s_type_anno, .s_type_var_alias, .s_runtime_error => unreachable,
     };
     try self.poisonPatternBindings(pattern);
+    try self.replaceRejectedPatternStatement(stmt_idx, diagnostic);
+}
+
+/// Replace a binding statement whose pattern was rejected with an explicit
+/// runtime error. Its binders must already be poisoned, so later lookups of
+/// them become runtime errors rather than reading a binder with no value.
+fn replaceRejectedPatternStatement(
+    self: *Self,
+    stmt_idx: CIR.Statement.Idx,
+    diagnostic: CIR.Diagnostic.Idx,
+) Allocator.Error!void {
     var work: std.ArrayListUnmanaged(CIR.Expr.Idx) = .empty;
     defer work.deinit(self.gpa);
     try self.markHoistInvalidatedStatementExprs(stmt_idx, &work);
@@ -19566,42 +19578,6 @@ const PatternBinding = struct {
 
 const MatchAltBaselineEntry = struct { pattern_idx: CIR.Pattern.Idx, pattern_index: u32 };
 
-fn reportMatchAltBinderProblem(
-    self: *Self,
-    expected_pattern_idx: CIR.Pattern.Idx,
-    actual_pattern_idx: CIR.Pattern.Idx,
-    binder_ident: Ident.Idx,
-    branch_index: u32,
-    first_pattern_index: u32,
-    pattern_index: u32,
-    num_branches: u32,
-    num_patterns: u32,
-    match_expr: CIR.Expr.Idx,
-) std.mem.Allocator.Error!void {
-    const expected_var = ModuleEnv.varFrom(expected_pattern_idx);
-    const actual_var = ModuleEnv.varFrom(actual_pattern_idx);
-    const expected_snapshot = try self.snapshots.snapshotVarForError(self.types, &self.type_writer, expected_var);
-    const actual_snapshot = try self.snapshots.snapshotVarForError(self.types, &self.type_writer, actual_var);
-
-    _ = try self.problems.appendProblem(self.gpa, .{ .type_mismatch = .{
-        .types = .{
-            .expected_var = expected_var,
-            .expected_snapshot = expected_snapshot,
-            .actual_var = actual_var,
-            .actual_snapshot = actual_snapshot,
-        },
-        .context = .{ .match_alt_binder = .{
-            .branch_index = branch_index,
-            .first_pattern_index = first_pattern_index,
-            .pattern_index = pattern_index,
-            .num_branches = num_branches,
-            .num_patterns = num_patterns,
-            .binder_ident = binder_ident,
-            .match_expr = match_expr,
-        } },
-    } });
-}
-
 fn collectPatternBindings(
     self: *const Self,
     pattern_idx: CIR.Pattern.Idx,
@@ -19708,17 +19684,14 @@ fn unifyMatchAltPatternBindings(
             try self.alt_pattern_current.put(key, binding.pattern_idx);
             const first = self.alt_pattern_baseline.get(key) orelse {
                 const first_branch_pattern = self.cir.store.getMatchBranchPattern(branch_ptrn_idxs[0]);
-                try self.reportMatchAltBinderProblem(
-                    first_branch_pattern.pattern,
-                    binding.pattern_idx,
-                    binding.ident,
-                    branch_index,
-                    0,
-                    @intCast(pattern_index),
-                    num_branches,
-                    @intCast(branch_ptrn_idxs.len),
-                    match_expr,
-                );
+                _ = try self.problems.appendProblem(self.gpa, .{ .match_alt_binder_missing = .{
+                    .match_expr = match_expr,
+                    .binder_ident = binding.ident,
+                    .missing_pattern = first_branch_pattern.pattern,
+                    .branch_index = branch_index,
+                    .bound_pattern_index = @intCast(pattern_index),
+                    .missing_pattern_index = 0,
+                } });
                 had_type_error = true;
                 continue;
             };
@@ -19743,18 +19716,14 @@ fn unifyMatchAltPatternBindings(
         while (baseline_iter.next()) |entry| {
             if (self.alt_pattern_current.contains(entry.key_ptr.*)) continue;
 
-            const ident: Ident.Idx = @bitCast(entry.key_ptr.*);
-            try self.reportMatchAltBinderProblem(
-                entry.value_ptr.pattern_idx,
-                branch_pattern.pattern,
-                ident,
-                branch_index,
-                entry.value_ptr.pattern_index,
-                @intCast(pattern_index),
-                num_branches,
-                @intCast(branch_ptrn_idxs.len),
-                match_expr,
-            );
+            _ = try self.problems.appendProblem(self.gpa, .{ .match_alt_binder_missing = .{
+                .match_expr = match_expr,
+                .binder_ident = @bitCast(entry.key_ptr.*),
+                .missing_pattern = branch_pattern.pattern,
+                .branch_index = branch_index,
+                .bound_pattern_index = entry.value_ptr.pattern_index,
+                .missing_pattern_index = @intCast(pattern_index),
+            } });
             had_type_error = true;
         }
     }
@@ -23586,6 +23555,8 @@ fn checkBlockStatements(self: *Self, statements: CIR.Statement.Span, env: *Env, 
 
                 if (decl_pattern_result.isProblem()) {
                     try self.erroneous_value_exprs.put(self.gpa, decl_stmt.expr, {});
+                    try self.erroneous_pattern_statements.put(self.gpa, stmt_idx, decl_stmt.expr);
+                    try self.poisonPatternBindings(decl_stmt.pattern);
                 }
 
                 if (decl_pattern_result.isEstablished()) {
@@ -23766,7 +23737,7 @@ fn checkBlockStatements(self: *Self, statements: CIR.Statement.Span, env: *Env, 
                     self.types.resolveVar(reassign_expr_var).desc.content == .err)
                 {
                     try self.erroneous_value_exprs.put(self.gpa, reassign.expr, {});
-                    try self.erroneous_reassignments.put(self.gpa, stmt_idx, reassign.expr);
+                    try self.erroneous_pattern_statements.put(self.gpa, stmt_idx, reassign.expr);
                 }
 
                 _ = try self.unify(stmt_var, reassign_expr_var, env);
@@ -27324,16 +27295,18 @@ fn poisonErroneousValueExprs(self: *Self) Allocator.Error!void {
         try self.replaceExprWithRuntimeError(expr_idx.*, diagnostic_idx);
     }
 
-    var reassignments = self.erroneous_reassignments.iterator();
-    while (reassignments.next()) |entry| {
+    var pattern_statements = self.erroneous_pattern_statements.iterator();
+    while (pattern_statements.next()) |entry| {
+        // A statement already replaced by an earlier sweep has nothing left to poison.
+        if (self.cir.store.nodes.get(ModuleEnv.nodeIdxFrom(entry.key_ptr.*)).tag == .malformed) continue;
         const poisoned_expr = self.cir.store.getExpr(entry.value_ptr.*);
         if (poisoned_expr != .e_runtime_error) {
             if (@import("builtin").mode == .Debug) {
-                std.debug.panic("check invariant violated: rejected reassignment RHS was not poisoned", .{});
+                std.debug.panic("check invariant violated: rejected pattern statement RHS was not poisoned", .{});
             }
             unreachable;
         }
-        self.cir.store.replaceStatementWithRuntimeError(entry.key_ptr.*, poisoned_expr.e_runtime_error.diagnostic);
+        try self.replaceRejectedPatternStatement(entry.key_ptr.*, poisoned_expr.e_runtime_error.diagnostic);
     }
 }
 

@@ -276,6 +276,7 @@ pub const Store = struct {
                     .literal_defaulted,
                     .redundant_pattern,
                     .unmatchable_pattern,
+                    .match_alt_binder_missing,
                     .unreachable_code,
                     .comptime_unused_branch,
                     .comptime_condition,

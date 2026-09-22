@@ -126,15 +126,8 @@ compute = {
 	(d-let
 		(p-assign (ident "compute"))
 		(e-block
-			(s-let
-				(p-record-destructure
-					(destructs
-						(record-destruct (label "x") (ident "x")
-							(required
-								(p-assign (ident "x"))))))
-				(e-runtime-error (tag "erroneous_value_expr")))
-			(e-lookup-local
-				(p-assign (ident "x"))))
+			(s-runtime-error (tag "erroneous_value_expr"))
+			(e-runtime-error (tag "erroneous_value_use")))
 		(annotation
 			(ty-lookup (name "U64") (builtin)))))
 ~~~

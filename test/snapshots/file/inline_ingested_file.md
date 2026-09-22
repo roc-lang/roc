@@ -48,7 +48,7 @@ MISSING METHOD - inline_ingested_file.md:4:7:4:17
 			(annotated mod "users.json")
 			(reflow " was not found."))
 		(document
-			(reflow "Make sure the file exists relative to your source file:")
+			(reflow "Make sure the file exists relative to your source file.")
 			(line-break)
 			(source-region (file "inline_ingested_file.md") (start 1 1) (end 1 34) (annotation error) (line-text "import \"users.json\" as data : Str"))))
 	(report
