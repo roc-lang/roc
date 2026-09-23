@@ -117,6 +117,8 @@ pub const ProcIdentity = struct {
 
 /// Identifier of a lowered LIR proc specification.
 pub const LirProcSpecId = enum(u32) {
+    /// The first procedure specification a store holds.
+    first = 0,
     _,
 };
 
@@ -224,6 +226,29 @@ pub const ExpectSite = struct {
 
 pub const CheckedExhaustivenessSiteId = check.CheckedModule.CheckedExhaustivenessSiteId;
 
+/// Dense id of one checked module inside a single lowering's module set.
+///
+/// `check.CheckedModule.ModuleId` is a large structural key, and the
+/// module-local checked ids a post-check IR retains (compile-time roots,
+/// exhaustiveness sites) name nothing without their owner. Monotype lowering
+/// therefore publishes the lowering's checked modules once, as the
+/// program-local `lowering_modules` table carried through to
+/// `Program.Result`, and every row that keeps a module-local checked id
+/// carries this dense id beside it. Consumers resolve an owner by indexing
+/// that table. Row order, source location, and procedure membership are not
+/// owners, and reading one as an owner is wrong as soon as a program contains
+/// more than one module's code.
+///
+/// This domain is separate from a program's source-file table even though
+/// both enumerate the same modules: source-file ordinals are remapped when
+/// LIR images from different programs are packed together, while a lowering
+/// module id is valid only inside its own program and never outlives it.
+pub const LoweringModuleId = enum(u32) {
+    /// The first row of a lowering's module table.
+    first = 0,
+    _,
+};
+
 /// Source control-flow construct observed during compile-time finalization.
 pub const ComptimeSiteKind = enum {
     match,
@@ -234,6 +259,11 @@ pub const ComptimeSiteKind = enum {
 /// Metadata for one compile-time-observed control-flow site.
 pub const ComptimeSite = struct {
     kind: ComptimeSiteKind,
+    /// Checked module whose `checked_site` id and source regions this site
+    /// names. One lowered program contains procedures from several checked
+    /// modules, so the site's owner is neither the program's root module nor
+    /// the module of whichever compile-time root happens to execute it.
+    owner: LoweringModuleId,
     region: base.Region,
     checked_site: ?CheckedExhaustivenessSiteId = null,
     proc: LirProcSpecId,

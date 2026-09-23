@@ -698,7 +698,7 @@ pub fn run(
 
     var builder = Builder.init(allocator, modules, &program, options);
     defer builder.deinit();
-    try builder.seedProgramSourceFiles();
+    try builder.seedProgramModuleTables();
     var digest_stats: Type.Store.DigestStats = .{};
     program.types.digest_stats = if (builder.counters != null) &digest_stats else null;
     defer {
@@ -3148,6 +3148,7 @@ const SpecJobWorkerInputs = struct {
     run_id: SpecJobRunId,
     modules: Common.CheckedModules,
     source_file_ids: *const SourceFileIds,
+    lowering_module_ids: *const LoweringModuleIds,
     snapshot: *const WorkerInputs.Snapshot,
     proc_debug_names: bool,
     interface_summaries: *const SharedSummaries,
@@ -3472,6 +3473,13 @@ const DeclaredComptimeRootFunctions = std.AutoHashMap(EntryRoot, Ast.FnId);
 /// module indices do not; distinct checked modules routinely share an index.
 const SourceFileIds = std.AutoHashMap([32]u8, u32);
 
+/// `Common.LoweringModuleId` of every checked module in the lowering input,
+/// keyed by checked module identity. Separate from `SourceFileIds` because the
+/// two domains have different lifetimes: source-file ordinals are remapped
+/// when LIR images from different programs are packed together, while a
+/// lowering module id names a row of one program's own module table.
+const LoweringModuleIds = std.AutoHashMap([32]u8, Common.LoweringModuleId);
+
 const Builder = struct {
     allocator: Allocator,
     spec_job_run_id: SpecJobRunId,
@@ -3485,6 +3493,11 @@ const Builder = struct {
     /// before lowering any body; workers borrow it for this lowering run.
     source_file_ids: SourceFileIds,
     borrowed_source_file_ids: ?*const SourceFileIds = null,
+    /// Dense module id of every checked module in the lowering input, seeded
+    /// beside `source_file_ids` and borrowed by workers the same way. Rows
+    /// that retain a module-local checked id record their owner through this.
+    lowering_module_ids: LoweringModuleIds,
+    borrowed_lowering_module_ids: ?*const LoweringModuleIds = null,
     program: *Ast.Program,
     current_loc: base.SourceLoc,
     current_region: base.Region,
@@ -3699,6 +3712,7 @@ const Builder = struct {
             .root_view = checked.importedView(modules.root.module),
             .module_index = std.AutoHashMap([32]u8, ModuleIndexSlot).init(allocator),
             .source_file_ids = SourceFileIds.init(allocator),
+            .lowering_module_ids = LoweringModuleIds.init(allocator),
             .program = program,
             .current_loc = program.current_loc,
             .current_region = program.current_region,
@@ -3732,7 +3746,7 @@ const Builder = struct {
     }
 
     const SourceFileSeed = struct {
-        key: [32]u8,
+        key: checked.ModuleId,
         name: []const u8,
         qualified_name: []const u8,
 
@@ -3742,7 +3756,7 @@ const Builder = struct {
                 .gt => return false,
                 .eq => {},
             }
-            return std.mem.lessThan(u8, &left.key, &right.key);
+            return std.mem.lessThan(u8, &left.key.bytes, &right.key.bytes);
         }
     };
 
@@ -3755,6 +3769,7 @@ const Builder = struct {
         var seeds = try std.ArrayList(SourceFileSeed).initCapacity(self.allocator, capacity);
         errdefer seeds.deinit(self.allocator);
         try self.source_file_ids.ensureTotalCapacity(@intCast(capacity));
+        try self.lowering_module_ids.ensureTotalCapacity(@intCast(capacity));
         self.appendSourceFileSeed(&seeds, moduleView(self.root_view));
         for (self.modules.imports) |imported| {
             self.appendSourceFileSeed(&seeds, moduleView(imported));
@@ -3777,33 +3792,52 @@ const Builder = struct {
         // can borrow the table. Use the same index for deduplication and lookup.
         gop.value_ptr.* = @intCast(seeds.items.len);
         seeds.appendAssumeCapacity(.{
-            .key = view.key.bytes,
+            .key = view.key,
             .name = view.module_env.module_name,
             .qualified_name = view.module_env.qualifiedModuleName(),
         });
     }
 
-    /// Coordinator only: seed the ordered source-file table in the
-    /// program before any body is lowered. The completed lookup table remains
-    /// immutable until all workers have finished this lowering run.
-    fn seedProgramSourceFiles(self: *Builder) Allocator.Error!void {
+    /// Coordinator only: seed the ordered source-file and checked-module
+    /// tables in the program before any body is lowered. Both completed lookup
+    /// tables remain immutable until all workers have finished this lowering
+    /// run, so a worker's rows name the same owners the coordinator's do.
+    fn seedProgramModuleTables(self: *Builder) Allocator.Error!void {
         std.debug.assert(self.borrowed_source_file_ids == null);
+        std.debug.assert(self.borrowed_lowering_module_ids == null);
         std.debug.assert(self.source_file_ids.count() == 0);
+        std.debug.assert(self.lowering_module_ids.count() == 0);
         if (self.program.sourceFileCount() != 0) {
             Common.invariant("Monotype program source files were seeded after lowering began");
+        }
+        if (self.program.lowering_modules.len() != 0) {
+            Common.invariant("Monotype program checked modules were seeded after lowering began");
         }
         const seeds = try self.canonicalSourceFiles();
         defer self.allocator.free(seeds);
         try self.program.source_files.ensureUnusedCapacity(self.allocator, seeds.len);
+        try self.program.lowering_modules.ensureUnusedCapacity(self.allocator, seeds.len);
         for (seeds, 0..) |seed, index| {
             const id = try self.program.addSourceFile(.{ .name = seed.name, .qualified_name = seed.qualified_name });
             if (id != index) Common.invariant("Monotype program source file id did not match its sorted position");
-            self.source_file_ids.getPtr(seed.key).?.* = id;
+            self.source_file_ids.getPtr(seed.key.bytes).?.* = id;
+            const module_id = try self.program.addLoweringModule(seed.key);
+            self.lowering_module_ids.putAssumeCapacity(seed.key.bytes, module_id);
         }
     }
 
     fn sourceFileIds(self: *const Builder) *const SourceFileIds {
         return self.borrowed_source_file_ids orelse &self.source_file_ids;
+    }
+
+    fn loweringModuleIds(self: *const Builder) *const LoweringModuleIds {
+        return self.borrowed_lowering_module_ids orelse &self.lowering_module_ids;
+    }
+
+    /// Dense id of the checked module that owns a module-local checked id.
+    fn loweringModuleId(self: *const Builder, key: checked.ModuleId) Common.LoweringModuleId {
+        return self.loweringModuleIds().get(key.bytes) orelse
+            Common.invariant("checked module reached lowering without a seeded lowering module id");
     }
 
     /// Final program source-file id of a checked module's source locations.
@@ -3838,6 +3872,7 @@ const Builder = struct {
         });
         errdefer builder.deinit();
         builder.borrowed_source_file_ids = inputs.source_file_ids;
+        builder.borrowed_lowering_module_ids = inputs.lowering_module_ids;
         builder.borrowed_comptime_root_functions = inputs.declared_comptime_root_functions;
         builder.hosted_catalog = try worker.allocator.dupe(HostedCatalogEntry, inputs.hosted_catalog);
         builder.current_loc = inputs.current_loc;
@@ -3895,6 +3930,7 @@ const Builder = struct {
 
     fn deinit(self: *Builder) void {
         self.source_file_ids.deinit();
+        self.lowering_module_ids.deinit();
         self.declared_comptime_root_functions.deinit();
         self.module_index.deinit();
         self.spec_job_task_buffers.deinit(self.allocator);
@@ -4463,7 +4499,7 @@ const Builder = struct {
         else
             Common.invariant("root request reached Monotype without a checked procedure template or procedure source");
         try self.appendRuntimeSchemaRequestsForDef(def);
-        try self.program.addRoot(.{ .def = def, .request = request });
+        try self.program.addRoot(.{ .def = def, .request = request, .owner = self.loweringModuleId(source_module) });
     }
 
     /// Procedure-use runs are the only isolated roots without an ordered
@@ -4547,6 +4583,7 @@ const Builder = struct {
             .run_id = self.spec_job_run_id,
             .modules = self.modules,
             .source_file_ids = self.sourceFileIds(),
+            .lowering_module_ids = self.loweringModuleIds(),
             .snapshot = &snapshot,
             .proc_debug_names = self.proc_debug_names,
             .interface_summaries = &self.shared_summaries.?,
@@ -4615,7 +4652,7 @@ const Builder = struct {
         for (contexts) |*context| {
             const def = try self.commitCompletedProcedureRootShard(&context.shard.?);
             try self.appendRuntimeSchemaRequestsForDef(def);
-            try self.program.addRoot(.{ .def = def, .request = context.request });
+            try self.program.addRoot(.{ .def = def, .request = context.request, .owner = self.loweringModuleId(context.source_module) });
             if (self.timing) |timing| timing.parallel.root_tasks_committed +%= 1;
             context.shard.?.deinit();
             context.shard = null;
@@ -6222,6 +6259,7 @@ const Builder = struct {
                             .run_id = self.spec_job_run_id,
                             .modules = self.modules,
                             .source_file_ids = self.sourceFileIds(),
+                            .lowering_module_ids = self.loweringModuleIds(),
                             .snapshot = &context.snapshot,
                             .proc_debug_names = self.proc_debug_names,
                             .interface_summaries = &self.shared_summaries.?,
@@ -15490,6 +15528,8 @@ const DraftSpecReuse = struct {
 const DraftRoot = struct {
     def: DraftDefId,
     request: checked.RootRequest,
+    /// See `Ast.Root.owner`.
+    owner: Common.LoweringModuleId,
 };
 
 const DraftLayoutRequest = struct {
@@ -15511,6 +15551,8 @@ const DraftDeclaredField = union(enum(u8)) {
 
 const DraftComptimeSite = struct {
     kind: Ast.ComptimeSiteKind,
+    /// See `Ast.ComptimeSite.owner`.
+    owner: Common.LoweringModuleId,
     region: base.Region,
     checked_site: ?checked.CheckedExhaustivenessSiteId = null,
     branch_regions: DraftSpan(base.Region) = .empty(),
@@ -16470,6 +16512,7 @@ const BodyDraftStore = struct {
     fn addComptimeSite(
         self: *BodyDraftStore,
         kind: Ast.ComptimeSiteKind,
+        owner: Common.LoweringModuleId,
         region: base.Region,
         checked_site: ?checked.CheckedExhaustivenessSiteId,
         branch_regions: []const base.Region,
@@ -16478,6 +16521,7 @@ const BodyDraftStore = struct {
         const branch_region_span = try self.addBranchRegionSpan(branch_regions);
         try self.comptime_sites.append(self.allocator, .{
             .kind = kind,
+            .owner = owner,
             .region = region,
             .checked_site = checked_site,
             .branch_regions = branch_region_span,
@@ -16843,7 +16887,7 @@ const BodyDraftStore = struct {
 
         for (self.comptime_sites.items, 0..) |site, index| {
             if (!ids.retained(.comptime_sites, index)) continue;
-            const id = try program.addComptimeSite(site.kind, site.region, site.checked_site, self.branchRegions(site.branch_regions));
+            const id = try program.addComptimeSite(site.kind, site.owner, site.region, site.checked_site, self.branchRegions(site.branch_regions));
             if (@intFromEnum(id) != ids.core(.comptime_sites, @intCast(index), ids.comptime_site_start)) {
                 Common.invariant("Monotype body draft compile-time site id did not append contiguously");
             }
@@ -17095,6 +17139,7 @@ const BodyDraftStore = struct {
             program.roots.appendAssumeCapacity(.{
                 .def = ids.def(root.def),
                 .request = root.request,
+                .owner = root.owner,
             });
         }
 
@@ -53173,6 +53218,10 @@ const BodyContext = struct {
         });
     }
 
+    /// Compile-time sites carry the checked module whose exhaustiveness-site
+    /// ids and regions they name. That is the view this body is lowered from,
+    /// which is not the program's root module when a specialization lowers an
+    /// imported body, and which the site's eventual procedure cannot reveal.
     fn addComptimeSite(
         self: *BodyContext,
         kind: Ast.ComptimeSiteKind,
@@ -53180,7 +53229,7 @@ const BodyContext = struct {
         checked_site: ?checked.CheckedExhaustivenessSiteId,
         branch_regions: []const base.Region,
     ) Allocator.Error!DraftComptimeSiteId {
-        return try self.draft.addComptimeSite(kind, region, checked_site, branch_regions);
+        return try self.draft.addComptimeSite(kind, self.builder.loweringModuleId(self.view.key), region, checked_site, branch_regions);
     }
 
     fn wrapComptimeBranch(
@@ -61484,7 +61533,7 @@ test "body draft store appends draft-local ids spans and type cells" {
         .{ .named = field_name },
         .{ .padding = ty },
     });
-    const site = try draft.addComptimeSite(.if_, base.Region.zero(), null, &.{base.Region.zero()});
+    const site = try draft.addComptimeSite(.if_, .first, base.Region.zero(), null, &.{base.Region.zero()});
     const source_file = try program.addSourceFile(.{ .name = "module.roc", .qualified_name = "test.module.roc" });
     try draft.setLocalName(local, "value");
     const record_pat = try draft.addPat(.{ .ty = ty, .data = .{ .record = destruct_span } });

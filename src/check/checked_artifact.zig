@@ -161,6 +161,12 @@ pub const CheckedModuleArtifactKey = extern struct {
     direct_import_artifact_keys_hash: [32]u8 = [_]u8{0} ** 32,
     bytes: [32]u8 = [_]u8{0} ** 32,
 
+    /// Integer equality over the key's identity bytes, which name the key
+    /// wholly: a single 256-bit compare, never a byte-wise comparison.
+    pub fn eql(a: CheckedModuleArtifactKey, b: CheckedModuleArtifactKey) bool {
+        return @as(u256, @bitCast(a.bytes)) == @as(u256, @bitCast(b.bytes));
+    }
+
     pub fn compute(
         source: []const u8,
         module_identity: ModuleIdentity,

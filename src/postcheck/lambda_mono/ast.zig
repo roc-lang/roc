@@ -209,6 +209,8 @@ pub const ComptimeSiteKind = Lifted.ComptimeSiteKind;
 /// Metadata for one compile-time-observed control-flow site.
 pub const ComptimeSite = struct {
     kind: ComptimeSiteKind,
+    /// See `Lifted.ComptimeSite.owner`.
+    owner: Common.LoweringModuleId,
     region: base.Region,
     checked_site: ?checked.CheckedExhaustivenessSiteId = null,
     branch_regions: []const base.Region = &.{},
@@ -463,6 +465,8 @@ pub const FnBody = union(enum) {
 pub const Root = struct {
     fn_id: FnId,
     request: checked.RootRequest,
+    /// See `Lifted.Root.owner`.
+    owner: Common.LoweringModuleId,
 };
 
 /// Runtime layout requested for a checked data value.
@@ -706,6 +710,7 @@ pub const Program = struct {
     pub fn addComptimeSite(
         self: *Program,
         kind: ComptimeSiteKind,
+        owner: Common.LoweringModuleId,
         region: base.Region,
         checked_site: ?checked.CheckedExhaustivenessSiteId,
         branch_regions: []const base.Region,
@@ -715,6 +720,7 @@ pub const Program = struct {
         const id: ComptimeSiteId = @enumFromInt(@as(u32, @intCast(self.comptime_sites.len())));
         try self.comptime_sites.append(self.allocator, .{
             .kind = kind,
+            .owner = owner,
             .region = region,
             .checked_site = checked_site,
             .branch_regions = owned_branch_regions,

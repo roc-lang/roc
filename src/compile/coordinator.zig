@@ -8539,8 +8539,15 @@ test "canonicalized module cache shares one entry between identical modules in d
 
     const shared_module =
         \\Shared := [].{
+        \\    result : Try(I64, Str)
+        \\    result = Ok(7)
         \\    value : I64
-        \\    value = 7
+        \\    value = match result {
+        \\        Ok(n) => n
+        \\    }
+        \\    numbers : List(I64)
+        \\    numbers = [value, value + 1]
+        \\    expect numbers == [7, 8]
         \\}
     ;
 
