@@ -6,6 +6,7 @@ const base = @import("base");
 const types = @import("types");
 const Var = types.Var;
 const parse = @import("parse");
+const can_mod = @import("can");
 const CIR = @import("can").CIR;
 const DependencyGraph = @import("can").DependencyGraph;
 const Can = @import("can").Can;
@@ -41,6 +42,11 @@ owns_builtin_module: bool,
 /// Heap-allocated source buffer owned by this TestEnv (if any)
 owned_source: ?[]u8 = null,
 published_owns_module_env: bool = false,
+/// Every module env reachable through this module's imports (not including
+/// this module itself). A module that imports this one hands these to the
+/// checker as owner modules, the way the build hands a module every checked
+/// artifact available through its imports.
+transitive_envs: []const *const ModuleEnv = &.{},
 
 /// Test environment for canonicalization testing, providing a convenient wrapper around ModuleEnv, AST, and Can.
 const TestEnv = @This();
@@ -128,7 +134,6 @@ pub fn initWithImport(module_name: []const u8, source: []const u8, other_module_
             .builtin_indices = builtin_indices,
         },
         .is_entry_module = true,
-        .imported_modules = &module_envs,
     });
     errdefer can.deinit();
 
@@ -171,12 +176,29 @@ pub fn initWithImport(module_name: []const u8, source: []const u8, other_module_
     module_env.imports.clearResolvedModules();
     try module_env.imports.resolveImportsByExactModuleName(module_env, imported_envs.items);
 
+    // Modules reachable through the imported module own types that can appear
+    // in this module (for example through a re-exported alias), so they are
+    // available to the checker as owner modules.
+    const transitive_envs = try gpa.alloc(*const ModuleEnv, other_test_env.transitive_envs.len + 1);
+    errdefer gpa.free(transitive_envs);
+    transitive_envs[0] = other_test_env.module_env;
+    @memcpy(transitive_envs[1..], other_test_env.transitive_envs);
+
+    // Settle this module's deferred references into its imports before any
+    // checking reads them.
+    try can_mod.resolveDeferredFileImports(module_env, .skip);
+    try can_mod.resolveDeferredImports(module_env, .{
+        .imports = .{ .resolved_store = imported_envs.items },
+        .reachable_envs = transitive_envs,
+    });
+
     // Type Check - Pass all imported modules
-    var checker = try Check.init(
+    var checker = try Check.initWithOwnerModules(
         gpa,
         &module_env.types,
         module_env,
         imported_envs.items,
+        transitive_envs,
         &module_envs,
         &module_env.store.regions,
         module_builtin_ctx,
@@ -200,6 +222,7 @@ pub fn initWithImport(module_name: []const u8, source: []const u8, other_module_
         .module_envs = module_envs,
         .builtin_module = other_test_env.builtin_module,
         .owns_builtin_module = false, // Borrowed from other_test_env
+        .transitive_envs = transitive_envs,
     };
 }
 
@@ -255,7 +278,6 @@ pub fn initWithExecutableRootNames(module_name: []const u8, source: []const u8, 
             .builtin_indices = builtin_indices,
         },
         .is_entry_module = true,
-        .imported_modules = &module_envs,
     });
     errdefer can.deinit();
 
@@ -287,6 +309,13 @@ pub fn initWithExecutableRootNames(module_name: []const u8, source: []const u8, 
     // Resolve imports - map each import to its index in imported_envs
     module_env.imports.clearResolvedModules();
     try module_env.imports.resolveImportsByExactModuleName(module_env, imported_envs.items);
+
+    // Settle this module's deferred references into its imports before any
+    // checking reads them.
+    try can_mod.resolveDeferredFileImports(module_env, .skip);
+    try can_mod.resolveDeferredImports(module_env, .{
+        .imports = .{ .resolved_store = imported_envs.items },
+    });
 
     // Type Check - Pass the imported modules in other_modules parameter
     var checker = try Check.init(
@@ -362,11 +391,15 @@ pub fn countModuleNotFoundDiagnosticsAfterCanonicalization(module_name: []const 
             .builtin_indices = builtin_indices,
         },
         .is_entry_module = true,
-        .imported_modules = &module_envs,
     });
     defer czer.deinit();
 
     try czer.canonicalizeFile();
+
+    // Whether a name denotes a module is settled by import resolution, so this
+    // count comes from the drain with no imports available.
+    try can_mod.resolveDeferredFileImports(&module_env, .skip);
+    try can_mod.resolveDeferredImports(&module_env, .{ .imports = .{ .explicit = &.{} } });
 
     const diagnostics = try module_env.getDiagnostics();
     defer gpa.free(diagnostics);
@@ -421,6 +454,7 @@ pub fn deinit(self: *TestEnv) void {
     }
 
     self.module_envs.deinit();
+    if (self.transitive_envs.len > 0) self.gpa.free(self.transitive_envs);
 
     // Clean up loaded Builtin module (only if we own it)
     if (self.owns_builtin_module) {
@@ -540,6 +574,7 @@ fn findDefVar(self: *const TestEnv, target_def_name: []const u8) TestEnvError!Va
                 .underscore,
                 .runtime_error,
                 => unreachable,
+                .deferred_import_ref => std.debug.panic("compiler invariant violated: deferred import reference pattern reached a stage that runs after import resolution", .{}),
             };
             if (std.mem.eql(u8, target_def_name, idents.getText(ident))) {
                 return ModuleEnv.varFrom(binder);
@@ -833,6 +868,24 @@ pub fn assertTypeErrorMsgs(self: *TestEnv, expected: []const []const u8) TestEnv
         try renderReportToMarkdownBuffer(&report_buf, &report);
 
         try testing.expectEqualStrings(expected_msg, report_buf.items);
+    }
+}
+
+/// Assert that checking produced exactly the expected problems (errors AND
+/// warnings), in order, each building a report with the expected title.
+pub fn assertTypeErrorTitles(self: *TestEnv, expected: []const []const u8) TestEnvError!void {
+    try self.assertNoParseProblems();
+
+    try testing.expectEqual(expected.len, self.checker.problems.problems.items.len);
+
+    var report_builder = try self.initReportBuilder();
+    defer report_builder.deinit();
+
+    for (expected, self.checker.problems.problems.items) |expected_title, problem| {
+        var report = try report_builder.build(problem);
+        defer report.deinit();
+
+        try testing.expectEqualStrings(expected_title, report.title);
     }
 }
 

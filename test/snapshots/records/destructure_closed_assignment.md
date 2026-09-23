@@ -135,23 +135,12 @@ compute = {
 	(d-let
 		(p-assign (ident "compute"))
 		(e-block
-			(s-let
-				(p-record-destructure
-					(destructs
-						(record-destruct (label "x") (ident "x")
-							(required
-								(p-assign (ident "x"))))
-						(record-destruct (label "y") (ident "y")
-							(required
-								(p-assign (ident "y"))))))
-				(e-runtime-error (tag "erroneous_value_expr")))
+			(s-runtime-error (tag "erroneous_value_expr"))
 			(e-dispatch-call (method "plus") (constraint-fn-var 257)
 				(receiver
-					(e-lookup-local
-						(p-assign (ident "x"))))
+					(e-runtime-error (tag "erroneous_value_use")))
 				(args
-					(e-lookup-local
-						(p-assign (ident "y"))))))
+					(e-runtime-error (tag "erroneous_value_use")))))
 		(annotation
 			(ty-lookup (name "U64") (builtin)))))
 ~~~

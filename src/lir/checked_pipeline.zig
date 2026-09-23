@@ -165,6 +165,14 @@ pub const TargetConfig = struct {
     /// shape-comparison tests turn it off because promotion intentionally
     /// changes the loop skeleton of qualifying sides.
     promote_loop_appends: bool = true,
+    /// The rewrites that exist only to make the produced program faster:
+    /// tag-case fusion, join scalarization and box reuse. `--opt=dev` skips
+    /// them, since it trades program speed for compile speed; TRMC and loop
+    /// append promotion stay on everywhere because they bound stack depth and
+    /// list copying rather than shave constant factors.
+    fuse_tag_cases: bool = true,
+    scalarize_joins: bool = true,
+    reuse_boxes: bool = true,
     /// Build ConstStore materialization plans for requested layouts.
     /// Disable this only for consumers that read requested layout metadata and
     /// never materialize requested-layout values.
@@ -896,7 +904,22 @@ pub const Consumer = struct {
     inline_expects: InlineExpectMode,
     /// Completed compile-time scalar roots this consumer reads as literals.
     completed_scalar_values: ?*const CompletedScalarValues = null,
+    /// Completed values produced by an earlier consumer, materialized in this
+    /// consumer's representation after LIR generation and before reachability.
+    /// The materializer receives the un-compacted target program so callable
+    /// identities can resolve against its complete representation tables.
+    frozen_materializer: ?FrozenMaterializer = null,
     observers: Observers = .{},
+};
+
+/// Materializes completed values into a program's frozen static data and
+/// applies evaluation outcomes to the guards inserted around them.
+pub const FrozenMaterializer = struct {
+    context: *anyopaque,
+    materialize: *const fn (Allocator, *anyopaque, *LirProgram.Result) Allocator.Error!LirProgram.FrozenStaticData,
+    /// Apply evaluation outcomes after guard insertion. Successful values
+    /// bypass their guards; failed values retain the emitted failure path.
+    complete_guards: *const fn (*anyopaque, *LirProgram.Result) void,
 };
 
 /// Materialized Lambda Mono program type, re-exported for harnesses that
@@ -990,6 +1013,21 @@ pub fn adoptCompletedComptimeValues(lowered: *LoweredProgram) Allocator.Error!vo
     if (lowered.lir_result.const_roots.items.len != 0) checkedPipelineInvariant("runtime consumer lowered a compile-time root");
     if (lowered.frozen_static_data == null) checkedPipelineInvariant("runtime consumer has no completed compile-time values to adopt");
     try completeComptimeValueSlots(lowered);
+}
+
+/// Adopt completed values whose frozen graph already participated in this
+/// consumer's reachability pass. This is the separate-target continuation;
+/// rerunning compaction here would repeat work after ARC and cannot discover
+/// any new procedure edge.
+pub fn adoptReachableCompletedComptimeValues(lowered: *LoweredProgram) Allocator.Error!void {
+    if (lowered.lir_result.const_roots.items.len != 0) checkedPipelineInvariant("runtime consumer lowered a compile-time root");
+    if (lowered.frozen_static_data == null) checkedPipelineInvariant("runtime consumer has no completed compile-time values to adopt");
+    const result = &lowered.lir_result;
+    result.comptime_value_guards.clearRetainingCapacity();
+    for (lowered.frozen_static_data.?.exports) |item| {
+        if (item.value_id) |id| result.static_data_values.items[@intFromEnum(id)].initializer = null;
+    }
+    for (result.static_data_values.items) |*value| value.compile_time_root = null;
 }
 
 /// The completed frozen bytes are now each compile-time value's definition, so
@@ -1388,7 +1426,12 @@ pub fn lowerPreparedSolvedToLir(prepared: PreparedSolved) LowerResourceError!Low
 pub fn lowerConsumerToLir(prepared: *PreparedSolved, consumer: Consumer) LowerResourceError!LoweredProgram {
     var generated = try generateConsumerLir(prepared, consumer);
     errdefer generated.output.deinit();
-    return finishLoweredOutput(prepared.allocator, consumerRootCount(prepared.*, consumer), generated.target, &generated.output);
+    var frozen = if (consumer.frozen_materializer) |materializer|
+        try materializer.materialize(prepared.allocator, materializer.context, &generated.output.lir_result)
+    else
+        null;
+    errdefer if (frozen) |*data| data.deinit();
+    return finishLoweredOutput(prepared.allocator, consumerRootCount(prepared.*, consumer), generated.target, &generated.output, &frozen, consumer.frozen_materializer);
 }
 
 /// Lower the producer program's last consumer, and release the producer as
@@ -1407,9 +1450,14 @@ pub fn lowerFinalConsumerToLir(prepared: PreparedSolved, consumer: Consumer) Low
     const allocator = owned.allocator;
     const root_count = consumerRootCount(owned, consumer);
     const target = generated.target;
+    var frozen = if (consumer.frozen_materializer) |materializer|
+        try materializer.materialize(allocator, materializer.context, &generated.output.lir_result)
+    else
+        null;
+    errdefer if (frozen) |*data| data.deinit();
     owned_live = false;
     owned.deinit();
-    return finishLoweredOutput(allocator, root_count, target, &generated.output);
+    return finishLoweredOutput(allocator, root_count, target, &generated.output, &frozen, consumer.frozen_materializer);
 }
 
 /// How many roots this consumer lowers: its own share, or the producer's
@@ -1511,6 +1559,8 @@ fn finishLoweredOutput(
     root_count: usize,
     target: TargetConfig,
     lowered: anytype,
+    frozen: *?LirProgram.FrozenStaticData,
+    frozen_materializer: ?FrozenMaterializer,
 ) LowerResourceError!LoweredProgram {
     verifyArithmeticBoundary(&lowered.lir_result.store, false);
     var lir_passes_timing_scope = PipelineTimingScope.begin(target.timing, .lir_passes);
@@ -1537,9 +1587,13 @@ fn finishLoweredOutput(
         // tag at once: the iterator-fusion clone in `.none`, and the checked
         // wrappers substituted at their call sites in `.wrappers`, whose
         // `Try` results the caller matches immediately.
-        try runProcedurePass(allocator, &lowered.lir_result, pass_target, .tag_fusion);
+        if (target.fuse_tag_cases) {
+            try runProcedurePass(allocator, &lowered.lir_result, pass_target, .tag_fusion);
+        }
     }
-    try runProcedurePass(allocator, &lowered.lir_result, pass_target, .scalarize);
+    if (target.scalarize_joins) {
+        try runProcedurePass(allocator, &lowered.lir_result, pass_target, .scalarize);
+    }
     if (target.promote_loop_appends) {
         try runProcedurePass(allocator, &lowered.lir_result, pass_target, .loop_append);
     }
@@ -1547,16 +1601,26 @@ fn finishLoweredOutput(
     if (target.prove_ranges) {
         try runProcedurePass(allocator, &lowered.lir_result, pass_target, .range);
     }
-    try runProcedurePass(allocator, &lowered.lir_result, pass_target, .box_reuse);
+    if (target.reuse_boxes) {
+        try runProcedurePass(allocator, &lowered.lir_result, pass_target, .box_reuse);
+    }
     try ReturnSlot.run(&lowered.lir_result.store, &lowered.lir_result.layouts);
     try StrAppend.run(&lowered.lir_result.store);
     if (target.tag_reachability) {
         try TagReachability.run(&lowered.lir_result);
     }
     if (target.keep_specialization_procs) {
-        try ReachableProcs.runKeepingSpecializations(&lowered.lir_result);
+        if (frozen.*) |*data| {
+            try ReachableProcs.runKeepingSpecializationsWithFrozen(&lowered.lir_result, data);
+        } else {
+            try ReachableProcs.runKeepingSpecializations(&lowered.lir_result);
+        }
     } else {
-        try ReachableProcs.run(&lowered.lir_result);
+        if (frozen.*) |*data| {
+            try ReachableProcs.runWithFrozen(&lowered.lir_result, data);
+        } else {
+            try ReachableProcs.run(&lowered.lir_result);
+        }
     }
     lir_passes_timing_scope.end();
 
@@ -1564,8 +1628,23 @@ fn finishLoweredOutput(
     defer arc_timing_scope.end();
     var local_arc_metrics: ArcParallelMetrics = .{};
     const arc_metrics = arcMetricsOutput(target, &local_arc_metrics);
+    var arc_roots = std.ArrayList(LIR.LirProcSpecId).empty;
+    defer arc_roots.deinit(allocator);
+    try arc_roots.appendSlice(allocator, lowered.lir_result.root_procs.items);
+    if (frozen.*) |data| {
+        var seen = try allocator.alloc(bool, lowered.lir_result.store.procSpecCount());
+        defer allocator.free(seen);
+        @memset(seen, false);
+        for (arc_roots.items) |proc| seen[@intFromEnum(proc)] = true;
+        for (data.exports) |export_| for (export_.relocations) |relocation| {
+            const proc = relocation.procedure orelse continue;
+            if (seen[@intFromEnum(proc)]) continue;
+            seen[@intFromEnum(proc)] = true;
+            try arc_roots.append(allocator, proc);
+        };
+    }
     try Arc.insert(&lowered.lir_result.store, &lowered.lir_result.layouts, .{
-        .roots = lowered.lir_result.root_procs.items,
+        .roots = arc_roots.items,
         .specialize = target.inline_mode != .none,
         .consume_dead_boxes = target.consume_dead_boxes,
         .post_check_executor = if (target.post_check_executor) |*executor| executor else null,
@@ -1579,6 +1658,9 @@ fn finishLoweredOutput(
     _ = try ImmortalLocals.elide(allocator, &lowered.lir_result.store);
 
     try @import("comptime_value_guards.zig").insert(allocator, &lowered.lir_result);
+    if (frozen_materializer) |materializer| {
+        materializer.complete_guards(materializer.context, &lowered.lir_result);
+    }
 
     try LirDump.run(&lowered.lir_result);
     if (SpecCensus.enabled()) try SpecCensus.runLir(allocator, &lowered.lir_result);
@@ -1603,6 +1685,7 @@ fn finishLoweredOutput(
         .main_proc = main_proc,
         .target_usize = target.target_usize,
         .runtime_value_schemas = runtime_value_schemas,
+        .frozen_static_data = frozen.*,
     };
 }
 
@@ -1648,7 +1731,8 @@ fn lowerBoxyCheckedModulesToLir(
     errdefer lowered.deinit();
     boxy_lower_timing_scope.end();
 
-    return finishLoweredOutput(allocator, roots.requests.len, target, &lowered);
+    var frozen: ?LirProgram.FrozenStaticData = null;
+    return finishLoweredOutput(allocator, roots.requests.len, target, &lowered, &frozen, null);
 }
 
 fn verifyArithmeticBoundary(store: *const core.LirStore, before_prover: bool) void {
@@ -2062,6 +2146,7 @@ const SpecCensus = if (builtin.os.tag == .freestanding) struct {
             .underscore,
             .runtime_error,
             => "?pat",
+            .deferred_import_ref => checkedPipelineInvariant("deferred import reference pattern reached LIR lowering"),
         };
     }
 

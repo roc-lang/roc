@@ -60,15 +60,26 @@ pub const doc_comment = @import("doc_comment.zig");
 /// Canonical byte encodings shared across compiler stages.
 pub const byte_encoding = @import("byte_encoding.zig");
 
-/// The default general-purpose allocator for the current target (fast, not leak-checking).
-/// Prefers libc's malloc (its ASan/Valgrind/LD_PRELOAD tooling, and on LLVM paths
-/// it's the allocator LLVM already uses)—except on musl, whose malloc is slow,
-/// where smp_allocator wins. Falls back to smp_allocator without libc, and to
-/// wasm_allocator on freestanding.
-pub fn defaultGpa() std.mem.Allocator {
-    if (builtin.target.os.tag == .freestanding) return std.heap.wasm_allocator;
+/// Allocator wrapper that recycles freed large blocks instead of unmapping them.
+pub const LargeBlockAllocator = @import("LargeBlockAllocator.zig");
+/// Logical CPU counts used to size worker pools.
+pub const cpu_count = @import("cpu_count.zig");
+
+var default_large_blocks: LargeBlockAllocator = LargeBlockAllocator.init(defaultBackingGpa());
+
+fn defaultBackingGpa() std.mem.Allocator {
     if (builtin.link_libc and !builtin.target.abi.isMusl()) return std.heap.c_allocator;
     return std.heap.smp_allocator;
+}
+
+/// The default general-purpose allocator for the current target (fast, not leak-checking).
+/// Large blocks are recycled by `LargeBlockAllocator`; everything else goes to libc's
+/// malloc (its ASan/Valgrind/LD_PRELOAD tooling, and on LLVM paths it's the allocator
+/// LLVM already uses)—except on musl, whose malloc is slow, where smp_allocator wins.
+/// Without libc it is smp_allocator, and wasm_allocator on freestanding.
+pub fn defaultGpa() std.mem.Allocator {
+    if (builtin.target.os.tag == .freestanding) return std.heap.wasm_allocator;
+    return default_large_blocks.allocator();
 }
 
 test {
@@ -76,6 +87,8 @@ test {
     const module_path_mod = @import("module_path.zig");
     std.testing.refAllDecls(ident);
     std.testing.refAllDecls(TextRankCache);
+    std.testing.refAllDecls(LargeBlockAllocator);
+    std.testing.refAllDecls(cpu_count);
     std.testing.refAllDecls(TypeDigestHasher);
     std.testing.refAllDecls(module_path_mod);
     std.testing.refAllDecls(@import("roc_version.zig"));

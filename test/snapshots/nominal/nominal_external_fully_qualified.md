@@ -16,13 +16,38 @@ handleTry = |result| {
 }
 ~~~
 # EXPECTED
+UNUSED VARIABLE - nominal_external_fully_qualified.md:7:32:7:36
+MOD NOT FOUND - nominal_external_fully_qualified.md:1:1:1:16
 MOD NOT FOUND - nominal_external_fully_qualified.md:3:21:3:31
 MOD NOT FOUND - nominal_external_fully_qualified.md:6:17:6:27
 MOD NOT FOUND - nominal_external_fully_qualified.md:7:17:7:27
-UNUSED VARIABLE - nominal_external_fully_qualified.md:7:32:7:36
 # PROBLEMS
 ~~~clojure
 (reports
+	(report
+		(severity warning)
+		(title "Unused Variable")
+		(region (start 7 32) (end 7 36))
+		(headline
+			(reflow "Variable ")
+			(annotated symbol-unqualified "code")
+			(reflow " is defined here and then never used:"))
+		(document
+			(reflow "If you don't need this variable, prefix it with an underscore like ")
+			(annotated symbol-unqualified "_code")
+			(reflow " to suppress this warning.")
+			(line-break)
+			(source-region (file "nominal_external_fully_qualified.md") (start 7 32) (end 7 36) (annotation error) (line-text "        MyTryMod.MyTryType.Err(code) => \"Error: $(code.toStr())\""))))
+	(report
+		(severity runtime_error)
+		(title "Mod Not Found")
+		(region (start 1 1) (end 1 16))
+		(headline
+			(text "The mod ")
+			(annotated code "MyTryMod")
+			(reflow " was not found in this Roc project."))
+		(document
+			(source-region (file "nominal_external_fully_qualified.md") (start 1 1) (end 1 16) (annotation error) (line-text "import MyTryMod"))))
 	(report
 		(severity runtime_error)
 		(title "Mod Not Found")
@@ -58,21 +83,7 @@ UNUSED VARIABLE - nominal_external_fully_qualified.md:7:32:7:36
 			(annotated code "MyTryMod")
 			(reflow ", which does not exist."))
 		(document
-			(source-region (file "nominal_external_fully_qualified.md") (start 7 17) (end 7 27) (annotation error) (line-text "        MyTryMod.MyTryType.Err(code) => \"Error: $(code.toStr())\""))))
-	(report
-		(severity warning)
-		(title "Unused Variable")
-		(region (start 7 32) (end 7 36))
-		(headline
-			(reflow "Variable ")
-			(annotated symbol-unqualified "code")
-			(reflow " is defined here and then never used:"))
-		(document
-			(reflow "If you don't need this variable, prefix it with an underscore like ")
-			(annotated symbol-unqualified "_code")
-			(reflow " to suppress this warning.")
-			(line-break)
-			(source-region (file "nominal_external_fully_qualified.md") (start 7 32) (end 7 36) (annotation error) (line-text "        MyTryMod.MyTryType.Err(code) => \"Error: $(code.toStr())\"")))))
+			(source-region (file "nominal_external_fully_qualified.md") (start 7 17) (end 7 27) (annotation error) (line-text "        MyTryMod.MyTryType.Err(code) => \"Error: $(code.toStr())\"")))))
 ~~~
 # TOKENS
 ~~~zig

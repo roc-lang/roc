@@ -217,7 +217,6 @@ test "compile-time consumer materializes only the evaluated values the program r
     );
     defer coord.deinit();
     coord.enable_hosted_transform = true;
-    coord.setExecutableFinalizationEnabled(false);
     var arena = base.SingleThreadArena.init(allocator);
     defer arena.deinit();
     try coord.start();
@@ -301,7 +300,6 @@ test "one evaluated root has one completed-value slot however many places read i
     );
     defer coord.deinit();
     coord.enable_hosted_transform = true;
-    coord.setExecutableFinalizationEnabled(false);
     var arena = base.SingleThreadArena.init(allocator);
     defer arena.deinit();
     try coord.start();
@@ -412,7 +410,6 @@ test "a separate compile-time consumer lowers no runtime-only procedure" {
     );
     defer coord.deinit();
     coord.enable_hosted_transform = true;
-    coord.setExecutableFinalizationEnabled(false);
     var arena = base.SingleThreadArena.init(allocator);
     defer arena.deinit();
     try coord.start();
@@ -490,7 +487,6 @@ test "a separate runtime consumer keeps the producer's root order and test-plan 
     );
     defer coord.deinit();
     coord.enable_hosted_transform = true;
-    coord.setExecutableFinalizationEnabled(false);
     var arena = base.SingleThreadArena.init(allocator);
     defer arena.deinit();
     try coord.start();

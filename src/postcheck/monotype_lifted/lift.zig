@@ -104,6 +104,7 @@ pub fn run(
             owned.next_symbol,
         );
         output.comptime_value_roots = Ast.ProgramList(Common.ComptimeValueRoot, "comptime_value_roots").fromArrayList(owned.comptime_value_roots.takeArrayList());
+        output.lowering_modules = Ast.ProgramList(checked.ModuleId, "lowering_modules").fromArrayList(owned.lowering_modules.takeArrayList());
         name_store = undefined;
         types = undefined;
         const_fn_evidence = undefined;
@@ -196,6 +197,7 @@ fn movedMonoView(source: *const Mono.Program, moved: *const Ast.Program) Mono.Pr
         .static_data_values = moved_view.static_data_values,
         .comptime_value_roots = moved_view.comptime_value_roots,
         .comptime_sites = moved_view.comptime_sites,
+        .lowering_modules = moved_view.lowering_modules,
         .source_files = moved_view.source_files,
         .expr_locs = moved_view.expr_locs,
         .expr_regions = moved_view.expr_regions,
@@ -478,6 +480,7 @@ const Lifter = struct {
             try self.output.addRoot(.{
                 .fn_id = fn_id,
                 .request = root.request,
+                .owner = root.owner,
             });
         }
 
@@ -512,9 +515,12 @@ const Lifter = struct {
             Common.invariant("top-level Monotype definition has free locals after checked closure collection");
         }
 
+        var shapes: Ast.FnShapes = .{};
         const body: Ast.FnBody = switch (def.body) {
             .roc => |body| blk: {
+                const outer_shapes = self.output.beginFnShapes(fn_id);
                 try self.rewriteExpr(body);
+                shapes = self.output.finishFnShapes(outer_shapes);
                 break :blk .{ .roc = body };
             },
             .hosted => .hosted,
@@ -533,12 +539,15 @@ const Lifter = struct {
             .captures = .empty(),
             .body = body,
             .ret = def.ret,
+            .shapes = shapes,
         });
         try self.initialized_fns.put(fn_id, {});
     }
 
     fn lowerNestedDef(self: *Lifter, fn_id: Ast.FnId, def: Mono.NestedDef) Allocator.Error!void {
+        const outer_shapes = self.output.beginFnShapes(fn_id);
         try self.rewriteExpr(def.body);
+        const shapes = self.output.finishFnShapes(outer_shapes);
         const capture_span = try self.output.addTypedLocalSpan(self.fn_captures[@intFromEnum(fn_id)].items);
         var source = self.nestedSource(def.fn_id, def.fn_def);
         source.frozen_fn = def.fn_id;
@@ -553,6 +562,7 @@ const Lifter = struct {
             .captures = capture_span,
             .body = .{ .roc = def.body },
             .ret = def.ret,
+            .shapes = shapes,
         });
         try self.initialized_fns.put(fn_id, {});
     }
@@ -562,7 +572,9 @@ const Lifter = struct {
         if (self.stmt_done[index]) return;
         self.stmt_done[index] = true;
 
-        switch (self.output.getStmt(stmt_id)) {
+        const stmt = self.output.getStmt(stmt_id);
+        self.output.noteStmtShapes(stmt);
+        switch (stmt) {
             .uninitialized => {},
             .let_ => |let_| try self.rewriteExpr(let_.value),
             .expr,
@@ -624,6 +636,7 @@ const Lifter = struct {
         self.expr_done[index] = true;
 
         const expr = self.output.getExpr(expr_id);
+        self.output.noteExprShapes(expr);
         switch (expr.data) {
             .@"unreachable",
             .local,
@@ -816,7 +829,9 @@ const Lifter = struct {
             .captures = capture_exprs,
         } });
 
+        const outer_shapes = self.output.beginFnShapes(fn_id);
         try self.rewriteExpr(lambda.body);
+        const shapes = self.output.finishFnShapes(outer_shapes);
         const capture_span = try self.output.addTypedLocalSpan(captures.items.items);
         var source = self.source.fnSource(lambda.fn_id);
         source.frozen_fn = lambda.fn_id;
@@ -831,6 +846,7 @@ const Lifter = struct {
             .captures = capture_span,
             .body = .{ .roc = lambda.body },
             .ret = functionRet(&self.output.types, ty),
+            .shapes = shapes,
         });
         try self.initialized_fns.put(fn_id, {});
     }

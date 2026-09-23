@@ -132,6 +132,8 @@ UNUSED VARIABLE - everything.md:73:2:73:4
 UNUSED VARIABLE - everything.md:77:2:77:4
 UNUSED VARIABLE - everything.md:81:2:81:4
 UNUSED VARIABLE - everything.md:85:2:85:4
+MOD NOT FOUND - everything.md:2:1:5:2
+MOD NOT FOUND - everything.md:6:1:9:2
 NOT A WHERE ALIAS - everything.md:60:4:60:6
 NOT A WHERE ALIAS - everything.md:61:4:61:6
 DECLARATION HAS NO VALUE - everything.md:58:1:62:3
@@ -295,6 +297,26 @@ NON EXHAUSTIVE MATCH - everything.md:90:2:113:3
 			(reflow " to suppress this warning.")
 			(line-break)
 			(source-region (file "everything.md") (start 85 2) (end 85 4) (annotation error) (line-text "\th5 = ("))))
+	(report
+		(severity runtime_error)
+		(title "Mod Not Found")
+		(region (start 2 1) (end 5 2))
+		(headline
+			(text "The mod ")
+			(annotated code "I1")
+			(reflow " was not found in this Roc project."))
+		(document
+			(source-region (file "everything.md") (start 2 1) (end 5 2) (annotation error) (line-text "import I1 exposing [\n\tI11,\n\tI12\n]"))))
+	(report
+		(severity runtime_error)
+		(title "Mod Not Found")
+		(region (start 6 1) (end 9 2))
+		(headline
+			(text "The mod ")
+			(annotated code "I2")
+			(reflow " was not found in this Roc project."))
+		(document
+			(source-region (file "everything.md") (start 6 1) (end 9 2) (annotation error) (line-text "import I2 exposing [\n\tI21 as Ias1,\n\tI22 as Ias2\n]"))))
 	(report
 		(severity runtime_error)
 		(title "Not a Where Alias")
@@ -737,7 +759,7 @@ h = |x, y| {
 												(p-assign (ident "y"))))))))))
 				(s-let
 					(p-assign (ident "h2"))
-					(e-call (constraint-fn-var 361)
+					(e-call (constraint-fn-var 363)
 						(e-lookup-local
 							(p-assign (ident "h")))
 						(e-lookup-local

@@ -366,7 +366,7 @@ pub const InterfaceConstraints = struct {
     }
 
     /// Copy into another cache's arena, relocating the interned leaves and
-    /// canonical names through its explicit store-domain mapping.
+    /// interned names through its explicit store-domain mapping.
     pub fn copy(self: InterfaceConstraints, allocator: Allocator, context: anytype) Allocator.Error!InterfaceConstraints {
         var copier = Copier(@TypeOf(context)){ .allocator = allocator, .context = context };
         return try mapValue(&copier, InterfaceConstraints, self);
@@ -459,7 +459,7 @@ pub const InterfaceConstraints = struct {
                 .@"enum" => try self.write(u64, @intCast(@intFromEnum(value))),
                 .int => {
                     // Local indices, lengths, and enum tags are predominantly
-                    // small. A canonical varint keeps exact topology compact.
+                    // small. A minimal varint keeps exact topology compact.
                     var bits: u64 = @intCast(value);
                     while (bits >= 0x80) : (bits >>= 7) try self.raw(&.{@as(u8, @truncate(bits)) | 0x80});
                     try self.raw(&.{@intCast(bits)});
@@ -588,7 +588,7 @@ pub const InterfaceConstraints = struct {
                 if (T == NodeId) return self.node(item);
                 // Even a resolved field-kind cell still carries relation
                 // evidence (required may join an explicit default). Only a
-                // producer-sealed field has committed its slot semantics.
+                // producer-sealed field has committed its slot representation.
                 if (T == InstFieldKind) return item == .sealed;
                 switch (@typeInfo(T)) {
                     .@"struct" => |info| inline for (info.fields) |field| {

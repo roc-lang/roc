@@ -799,7 +799,7 @@ const CheckTypeCheckerPatternsStep = struct {
         // report.zig compares already-formatted diagnostic text only to avoid
         // printing two visually identical types. This is presentation logic,
         // not a type-checking or identifier comparison.
-        .{ .file = "report.zig", .start = 568, .end = 568 },
+        .{ .file = "report.zig", .start = 581, .end = 581 },
     };
 
     fn isInExcludedRange(file_path: []const u8, line_number: usize) bool {
@@ -3096,6 +3096,7 @@ pub fn build(b: *std.Build) void {
     const run_test_builtin_bake_reproducible_step = b.step("run-test-builtin-bake-reproducible", "Bake the builtins in three separate processes and compare every output byte");
     const build_test_wasm_static_lib_runner_step = b.step("build-test-wasm-static-lib-runner", "Build WASM static library test runner");
     const run_test_wasm_static_lib_step = b.step("run-test-wasm-static-lib", "Run WASM static library test runner");
+    const repro_issue_11529_step = b.step("repro-issue-11529", "Build and run the wasm32 top-level boxed function regression");
     const run_test_dylib_step = b.step("run-test-dylib", "Build a Roc shared library and run it through the loader test");
     const run_test_archive_step = b.step("run-test-archive", "Build a Roc static archive, link a consumer against it, and run it");
     const run_check_machine_code_shim_archive_step = b.step("run-check-machine-code-shim-archive", "Check that the machine-code shim keeps compiler-private support local");
@@ -5274,6 +5275,18 @@ pub fn build(b: *std.Build) void {
         build_wasm_issue_11455_app.step.dependOn(build_test_hosts_step);
         build_test_wasm_static_lib_runner_step.dependOn(&build_wasm_issue_11455_app.step);
 
+        const build_wasm_issue_11529_app = b.addRunArtifact(roc_exe);
+        build_wasm_issue_11529_app.addArgs(&.{
+            "build",
+            "test/wasm/issue_11529_top_level_boxed_function_static_lib_app.roc",
+            "--opt=dev",
+            "--target=wasm32",
+            "--no-cache",
+            "--output=test/wasm/issue_11529_top_level_boxed_function_static_lib_app.wasm",
+        });
+        build_wasm_issue_11529_app.step.dependOn(wasm_host_step);
+        build_test_wasm_static_lib_runner_step.dependOn(&build_wasm_issue_11529_app.step);
+
         const wasm_test_exe = b.addExecutable(.{
             .name = "wasm_static_lib_test",
             .root_module = b.createModule(.{
@@ -5316,9 +5329,21 @@ pub fn build(b: *std.Build) void {
         run_test_wasm_static_lib_step.dependOn(&run_wasm_dce_check.step);
 
         const run_wasm_test = b.addRunArtifact(wasm_test_exe);
+        const run_wasm_issue_11529_test = b.addRunArtifact(wasm_test_exe);
+        run_wasm_issue_11529_test.addArgs(&.{
+            "--wasm-path",
+            "test/wasm/issue_11529_top_level_boxed_function_static_lib_app.wasm",
+            "--expected",
+            "x",
+        });
+        run_wasm_issue_11529_test.step.dependOn(&install.step);
+        run_wasm_issue_11529_test.step.dependOn(&build_wasm_issue_11529_app.step);
+        repro_issue_11529_step.dependOn(&run_wasm_issue_11529_test.step);
         if (run_args.len != 0) {
             run_wasm_test.addArgs(run_args);
         } else {
+            run_test_wasm_static_lib_step.dependOn(&run_wasm_issue_11529_test.step);
+
             const run_wasm_provided_callable_test = b.addRunArtifact(wasm_test_exe);
             run_wasm_provided_callable_test.addArgs(&.{
                 "--wasm-path",

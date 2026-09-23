@@ -83,6 +83,45 @@ fn projectionPayload(projection: u64) u16 {
     return @intCast(projection & 0xffff);
 }
 
+/// Cycle-safe check for whether a layout may hold descriptor-driven dynamic
+/// (`erased_box`) content. Recursive tag unions reference themselves through
+/// their layout indices, so the walk tracks visited indices; `visited` and
+/// `stack` are caller-owned scratch reused across queries.
+pub fn layoutMayContainBoxyDynamic(
+    allocator: Allocator,
+    layouts: *const layout_mod.Store,
+    layout_idx: layout_mod.Idx,
+    visited: *std.AutoHashMap(layout_mod.Idx, void),
+    stack: *std.ArrayList(layout_mod.Idx),
+) Error!bool {
+    visited.clearRetainingCapacity();
+    stack.clearRetainingCapacity();
+    try stack.append(allocator, layout_idx);
+    while (stack.pop()) |idx| {
+        if ((try visited.getOrPut(idx)).found_existing) continue;
+        const layout_val = layouts.getLayout(idx);
+        switch (layout_val.tag) {
+            .erased_box => return true,
+            .box, .list => try stack.append(allocator, layout_val.getIdx()),
+            .list_of_zst, .box_of_zst, .zst, .scalar, .erased_callable, .ptr => {},
+            .struct_ => {
+                const info = layouts.getStructInfo(layout_val);
+                for (0..info.fields.len) |index| {
+                    try stack.append(allocator, info.fields.get(@intCast(index)).layout);
+                }
+            },
+            .tag_union => {
+                const info = layouts.getTagUnionInfo(layout_val);
+                for (0..info.variants.len) |index| {
+                    try stack.append(allocator, info.variants.get(@intCast(index)).payload_layout);
+                }
+            },
+            .closure => try stack.append(allocator, layout_val.getClosure().captures_layout_idx),
+        }
+    }
+    return false;
+}
+
 fn structFieldBySemanticIndex(layouts: *const layout_mod.Store, struct_layout: layout_mod.Layout, field_idx: u16) ?layout_mod.StructField {
     const info = layouts.getStructInfo(struct_layout);
     for (0..info.fields.len) |index| {
@@ -443,6 +482,11 @@ const Analysis = struct {
     /// so the take dataflow rejects takes such a mention could follow.
     mention_heads: []u32,
     mention_edges: std.ArrayList(MentionEdge) = .empty,
+    /// Per-layout answers of `layoutMayContainBoxyDynamic` for field layouts
+    /// the gate has asked about, and the scratch that answers them.
+    boxy_dynamic_layouts: collections.DenseMap(layout_mod.Idx, bool),
+    layout_visited: std.AutoHashMap(layout_mod.Idx, void),
+    layout_stack: std.ArrayList(layout_mod.Idx) = .empty,
 
     fn deinit(self: *Analysis) void {
         var it = self.candidates.valueIterator();
@@ -461,6 +505,9 @@ const Analysis = struct {
         self.gpa.free(self.state);
         self.gpa.free(self.owned_demand);
         self.demand_aliases.deinit(self.gpa);
+        self.boxy_dynamic_layouts.deinit();
+        self.layout_visited.deinit();
+        self.layout_stack.deinit(self.gpa);
     }
 
     fn demandOwned(self: *Analysis, local: LIR.LocalId) void {
@@ -486,9 +533,9 @@ const Analysis = struct {
     }
 
     /// Whether the local's layout and binding shape could ever benefit from
-    /// dismantling. Cheap, no allocation; the full per-candidate work only
-    /// happens for locals that pass.
-    fn passesGate(self: *Analysis, local: LIR.LocalId) bool {
+    /// dismantling. Cheap: layout answers are memoized per field layout, and the
+    /// full per-candidate work only happens for locals that pass.
+    fn passesGate(self: *Analysis, local: LIR.LocalId) Error!bool {
         const local_index = @intFromEnum(local);
         if (local_index >= self.rc_local.len) dismantleInvariant("ARC dismantle resource table did not cover local");
         if (!self.rc_local[local_index]) return false;
@@ -505,9 +552,20 @@ const Analysis = struct {
             if (field.index >= 64) return false;
             if (self.layouts.layoutContainsRefcounted(self.layouts.getLayout(field.layout))) {
                 any_rc = true;
+                // A residual field is released through its layout's RC
+                // helper. Descriptor-driven (`erased_box`) content has no
+                // layout helper; its container is released whole instead.
+                if (try self.fieldLayoutIsBoxyDynamic(field.layout)) return false;
             }
         }
         return any_rc;
+    }
+
+    fn fieldLayoutIsBoxyDynamic(self: *Analysis, layout_idx: layout_mod.Idx) Error!bool {
+        if (self.boxy_dynamic_layouts.get(layout_idx)) |known| return known;
+        const answer = try layoutMayContainBoxyDynamic(self.gpa, self.layouts, layout_idx, &self.layout_visited, &self.layout_stack);
+        try self.boxy_dynamic_layouts.put(layout_idx, answer);
+        return answer;
     }
 
     fn entryOf(self: *Analysis, local: LIR.LocalId) Error!?*Candidate {
@@ -516,7 +574,7 @@ const Analysis = struct {
             .ineligible, .transparent_alias => return null,
             .candidate => return self.candidates.getPtr(index).?,
             .unknown => {
-                if (!self.passesGate(local)) {
+                if (!try self.passesGate(local)) {
                     self.state[index] = .ineligible;
                     return null;
                 }
@@ -1025,6 +1083,90 @@ fn fieldObservedAfter(
         }
     }
     return false;
+}
+
+/// Index one procedure's structural CFG. Jump targets use procedure-local
+/// identities, so a field-use walk must never resolve them through another
+/// procedure's join declaration.
+fn collectProcJoinBodies(
+    gpa: Allocator,
+    store: *const LirStore,
+    root: LIR.CFStmtId,
+    joins: *std.AutoHashMapUnmanaged(u32, LIR.CFStmtId),
+    epochs: []u32,
+    epoch: u32,
+    stack: *std.ArrayList(LIR.CFStmtId),
+) Error!void {
+    try stack.append(gpa, root);
+    while (stack.pop()) |stmt_id| {
+        const stmt_index = @intFromEnum(stmt_id);
+        if (epochs[stmt_index] == epoch) continue;
+        epochs[stmt_index] = epoch;
+        const stmt = store.getCFStmt(stmt_id);
+        if (stmt == .join) {
+            const entry = try joins.getOrPut(gpa, @intFromEnum(stmt.join.id));
+            if (entry.found_existing) {
+                if (entry.value_ptr.* != stmt.join.body) dismantleInvariant("procedure contains two bodies for one join identity");
+            } else {
+                entry.value_ptr.* = stmt.join.body;
+            }
+        }
+        try body_clone.appendSuccessorsWithAllocator(store, stack, stmt_id, gpa);
+    }
+}
+
+test "future field uses resolve joins in their procedure" {
+    const gpa = std.testing.allocator;
+    var store = LirStore.init(gpa);
+    defer store.deinit();
+    const container = try store.addLocal(.{ .layout_idx = .str });
+    const field = try store.addLocal(.{ .layout_idx = .str });
+    var join_ids = body_clone.JoinParamIndex.init(gpa);
+    defer join_ids.deinit();
+    const join_id = join_ids.freshJoinPoint();
+    const exit = try store.addCFStmt(.{ .ret = .{ .value = field } });
+    const back_edge = try store.addCFStmt(.{ .jump = .{ .target = join_id } });
+    const read = try store.addCFStmt(.{ .assign_ref = .{
+        .target = field,
+        .op = .{ .field = .{ .source = container, .field_idx = 0 } },
+        .next = back_edge,
+    } });
+    const loop_proc = try store.addCFStmt(.{ .join = .{
+        .id = join_id,
+        .params = .empty(),
+        .body = read,
+        .remainder = back_edge,
+    } });
+    const other_proc = try store.addCFStmt(.{ .join = .{
+        .id = join_id,
+        .params = .empty(),
+        .body = exit,
+        .remainder = back_edge,
+    } });
+    var loop_joins = std.AutoHashMapUnmanaged(u32, LIR.CFStmtId).empty;
+    defer loop_joins.deinit(gpa);
+    var other_joins = std.AutoHashMapUnmanaged(u32, LIR.CFStmtId).empty;
+    defer other_joins.deinit(gpa);
+    const epochs = try gpa.alloc(u32, store.cfStmtCount());
+    defer gpa.free(epochs);
+    @memset(epochs, 0);
+    var stack = std.ArrayList(LIR.CFStmtId).empty;
+    defer stack.deinit(gpa);
+    try collectProcJoinBodies(gpa, &store, loop_proc, &loop_joins, epochs, 1, &stack);
+    try collectProcJoinBodies(gpa, &store, other_proc, &other_joins, epochs, 2, &stack);
+    try std.testing.expectEqual(read, loop_joins.get(0).?);
+    try std.testing.expectEqual(exit, other_joins.get(0).?);
+
+    var reads = std.AutoHashMapUnmanaged(LIR.CFStmtId, ReadKind).empty;
+    defer reads.deinit(gpa);
+    try reads.put(gpa, read, .{ .bit = 1, .consuming = true });
+    const solution: arc_solve.Solution = undefined;
+    var future = FutureFields.init(gpa);
+    defer future.deinit(gpa);
+    try future.compute(gpa, &store, &solution, container, &reads, &loop_joins, &.{}, null);
+    try std.testing.expect(future.observed(back_edge) & 1 != 0);
+    try future.compute(gpa, &store, &solution, container, &reads, &other_joins, &.{}, null);
+    try std.testing.expect(future.observed(back_edge) & 1 == 0);
 }
 
 test "future field observations agree with per-read traversal across joins rebinds loops and outcomes" {
@@ -1716,6 +1858,8 @@ pub fn compute(
         .explicit_init_join = explicit_init_join,
         .owned_demand = try gpa.alloc(bool, store.localCount()),
         .mention_heads = try gpa.alloc(u32, store.localCount()),
+        .boxy_dynamic_layouts = collections.DenseMap(layout_mod.Idx, bool).init(gpa),
+        .layout_visited = std.AutoHashMap(layout_mod.Idx, void).init(gpa),
     };
     defer analysis.deinit();
     @memset(analysis.state, .unknown);
@@ -2082,14 +2226,45 @@ pub fn compute(
 
     var read_kinds = std.AutoHashMapUnmanaged(LIR.CFStmtId, ReadKind).empty;
     defer read_kinds.deinit(gpa);
-    var join_bodies = std.AutoHashMapUnmanaged(u32, LIR.CFStmtId).empty;
-    defer join_bodies.deinit(gpa);
-    // Candidate solving does not mutate CFG edges. The later alias
-    // materialization changes assign_ref.op only, never join ownership.
-    for (0..store.cfStmtCount()) |stmt_index| {
-        if (!visited.isSet(stmt_index)) continue;
-        const stmt = store.getCFStmt(@enumFromInt(@as(u32, @intCast(stmt_index))));
-        if (stmt == .join) try join_bodies.put(gpa, @intFromEnum(stmt.join.id), stmt.join.body);
+    const proc_joins = try gpa.alloc(std.AutoHashMapUnmanaged(u32, LIR.CFStmtId), store.procSpecCount());
+    defer {
+        for (proc_joins) |*joins| joins.deinit(gpa);
+        gpa.free(proc_joins);
+    }
+    @memset(proc_joins, .empty);
+    const joins_ready = try gpa.alloc(bool, store.procSpecCount());
+    defer gpa.free(joins_ready);
+    @memset(joins_ready, false);
+    const join_scan_epochs = try gpa.alloc(u32, store.cfStmtCount());
+    defer gpa.free(join_scan_epochs);
+    @memset(join_scan_epochs, 0);
+    var join_scan_stack = std.ArrayList(LIR.CFStmtId).empty;
+    defer join_scan_stack.deinit(gpa);
+    var join_scan_epoch: u32 = 0;
+    // Join identities belong to a procedure. The candidate's defining CFG
+    // statement identifies that procedure explicitly, including dismantle
+    // temporaries that are deliberately absent from a specialization frame.
+    const stmt_proc = try gpa.alloc(u32, store.cfStmtCount());
+    defer gpa.free(stmt_proc);
+    @memset(stmt_proc, no_index);
+    const ambiguous_proc = no_index - 1;
+    for (0..store.procSpecCount()) |proc_index| {
+        const proc = store.getProcSpec(@enumFromInt(@as(u32, @intCast(proc_index))));
+        if (proc.body == null) continue;
+        join_scan_epoch += 1;
+        try join_scan_stack.append(gpa, proc.body.?);
+        while (join_scan_stack.pop()) |stmt_id| {
+            const stmt_index = @intFromEnum(stmt_id);
+            if (join_scan_epochs[stmt_index] == join_scan_epoch) continue;
+            join_scan_epochs[stmt_index] = join_scan_epoch;
+            const owner = &stmt_proc[stmt_index];
+            if (owner.* == no_index) {
+                owner.* = @intCast(proc_index);
+            } else if (owner.* != @as(u32, @intCast(proc_index))) {
+                owner.* = ambiguous_proc;
+            }
+            try body_clone.appendSuccessorsWithAllocator(store, &join_scan_stack, stmt_id, gpa);
+        }
     }
     var future_fields = FutureFields.init(gpa);
     defer future_fields.deinit(gpa);
@@ -2243,6 +2418,11 @@ pub fn compute(
             if (read.field_idx >= 64) continue :candidates;
         }
 
+        // A container released through its Boxy descriptor has fields whose
+        // release needs that descriptor too, so they cannot be released one
+        // at a time from their layouts.
+        if (store.getLocal(local).boxy_desc != null) continue :candidates;
+
         // Only refcounted fields carry stored units worth taking; a
         // container with no refcounted take keeps its ordinary whole
         // release.
@@ -2366,9 +2546,20 @@ pub fn compute(
         candidate_mask &= rc_mask;
         if (candidate_mask == 0) continue;
 
+        if (candidate.reads.items.len == 0) dismantleInvariant("field-take candidate had no field projection");
+        const owner = stmt_proc[@intFromEnum(candidate.reads.items[0].stmt)];
+        if (owner == no_index or owner == ambiguous_proc) continue;
+        if (!joins_ready[owner]) {
+            joins_ready[owner] = true;
+            join_scan_epoch += 1;
+            const proc = store.getProcSpec(@enumFromInt(owner));
+            try collectProcJoinBodies(gpa, store, proc.body.?, &proc_joins[owner], join_scan_epochs, join_scan_epoch, &join_scan_stack);
+        }
+        const join_bodies = &proc_joins[owner];
+
         var poison: u64 = 0;
         const redefinition: ?LIR.CFStmtId = if (candidate.join_starts.items.len == 0) candidate.def_stmt else null;
-        try future_fields.compute(gpa, store, solution, local, &read_kinds, &join_bodies, field_restitutions.items, redefinition);
+        try future_fields.compute(gpa, store, solution, local, &read_kinds, join_bodies, field_restitutions.items, redefinition);
         for (candidate.reads.items) |read| {
             const kind = read_kinds.getPtr(read.stmt) orelse continue;
             if (!kind.consuming) continue;

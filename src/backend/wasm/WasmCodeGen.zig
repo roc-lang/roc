@@ -363,6 +363,7 @@ dec_div_import: ?u32 = null,
 dec_div_trunc_import: ?u32 = null,
 /// Wasm function index for imported roc_dec_pow host function.
 dec_pow_import: ?u32 = null,
+dec_atan2_import: ?u32 = null,
 /// Wasm function index for imported roc_dec_sqrt host function.
 dec_sqrt_import: ?u32 = null,
 /// Wasm function index for imported roc_dec_sin host function.
@@ -387,7 +388,9 @@ int_to_str_import: ?u32 = null,
 float_to_str_import: ?u32 = null,
 /// Wasm function index for imported roc_float_pow host function.
 float_pow_import: ?u32 = null,
+float_atan2_import: ?u32 = null,
 float_pow_f32_import: ?u32 = null,
+float_atan2_f32_import: ?u32 = null,
 /// Wasm function index for imported roc_float_rem host function.
 float_rem_import: ?u32 = null,
 float_rem_f32_import: ?u32 = null,
@@ -714,6 +717,7 @@ fn hostBuiltinImports(self: *const Self) HostBuiltinImports {
             .dec_div => self.dec_div_import,
             .dec_div_trunc => self.dec_div_trunc_import,
             .dec_pow => self.dec_pow_import,
+            .dec_atan2 => self.dec_atan2_import,
             .dec_sqrt => self.dec_sqrt_import,
             .dec_sin => self.dec_sin_import,
             .dec_cos => self.dec_cos_import,
@@ -743,7 +747,9 @@ fn hostBuiltinImports(self: *const Self) HostBuiltinImports {
             .u128_to_f64 => self.u128_to_f64_import,
             .float_to_str => self.float_to_str_import,
             .float_pow_f32 => self.float_pow_f32_import,
+            .float_atan2_f32 => self.float_atan2_f32_import,
             .float_pow => self.float_pow_import,
+            .float_atan2 => self.float_atan2_import,
             .float_rem_f32 => self.float_rem_f32_import,
             .float_rem => self.float_rem_import,
             .float_sin_f32 => self.float_sin_f32_import,
@@ -1916,6 +1922,7 @@ fn registerHostImports(self: *Self) Allocator.Error!void {
     self.dec_div_import = try self.module.addImport("env", "roc_dec_div", i128_binop_type);
     self.dec_div_trunc_import = try self.module.addImport("env", "roc_dec_div_trunc", i128_binop_type);
     self.dec_pow_import = try self.module.addImport("env", "roc_dec_pow", i128_binop_type);
+    self.dec_atan2_import = try self.module.addImport("env", "roc_dec_atan2", i128_binop_type);
 
     const i128_mul_overflow_type = try self.module.addFuncType(
         &.{ .i32, .i32, .i64, .i64, .i64, .i64 },
@@ -1979,7 +1986,9 @@ fn registerHostImports(self: *Self) Allocator.Error!void {
     const float_binary_f32_type = try self.module.addFuncType(&.{ .f32, .f32 }, &.{.f32});
     const float_binary_f64_type = try self.module.addFuncType(&.{ .f64, .f64 }, &.{.f64});
     self.float_pow_f32_import = try self.module.addImport("env", BuiltinSignatures.sigOf(.float_pow_f32).name, float_binary_f32_type);
+    self.float_atan2_f32_import = try self.module.addImport("env", BuiltinSignatures.sigOf(.float_atan2_f32).name, float_binary_f32_type);
     self.float_pow_import = try self.module.addImport("env", BuiltinSignatures.sigOf(.float_pow).name, float_binary_f64_type);
+    self.float_atan2_import = try self.module.addImport("env", BuiltinSignatures.sigOf(.float_atan2).name, float_binary_f64_type);
     self.float_rem_f32_import = try self.module.addImport("env", BuiltinSignatures.sigOf(.float_rem_f32).name, float_binary_f32_type);
     self.float_rem_import = try self.module.addImport("env", BuiltinSignatures.sigOf(.float_rem).name, float_binary_f64_type);
 
@@ -8121,17 +8130,19 @@ pub fn compileAllProcSpecs(self: *Self, proc_specs: []const LirProcSpec) Allocat
         try self.registerProcSpec(@enumFromInt(@as(u32, @intCast(i))), proc);
     }
     try self.buildProcArgCountsTable(proc_specs);
-    // Pass 2: Compile proc bodies.
-    for (proc_specs, 0..) |proc, i| {
-        if (proc.is_static_initializer) continue;
-        try self.compileProcSpecBody(@enumFromInt(@as(u32, @intCast(i))), proc);
-    }
+    // A Boxy runtime entry body registers every worker's dispatch thunk, so
+    // the thunks exist before any body is compiled.
     for (self.boxy_worker_procs) |proc_id| {
         const proc = self.store.getProcSpec(proc_id);
         if (proc.is_static_initializer or proc.abi == .erased_callable or proc.hosted != null or proc.body == null) {
             wasmInvariantFmt("Boxy worker proc {d} had a non-worker procedure shape", .{@intFromEnum(proc_id)});
         }
         try self.generateBoxyDictProcThunk(proc_id, proc);
+    }
+    // Pass 2: Compile proc bodies.
+    for (proc_specs, 0..) |proc, i| {
+        if (proc.is_static_initializer) continue;
+        try self.compileProcSpecBody(@enumFromInt(@as(u32, @intCast(i))), proc);
     }
 }
 
@@ -12367,6 +12378,13 @@ fn generateLowLevel(self: *Self, ll: anytype) Allocator.Error!void {
                 try self.emitFloatPow(args, ll.ret_layout);
             }
         },
+        .num_atan2 => {
+            if (ll.ret_layout == .dec) {
+                try self.emitDecBinaryMath(args, BuiltinSignatures.kindOf(comptime LowLevelBuiltins.decBinaryArith(.num_atan2)), self.dec_atan2_import);
+            } else {
+                try self.emitFloatAtan2(args, ll.ret_layout);
+            }
+        },
         .num_sin => {
             if (ll.ret_layout == .dec) {
                 try self.emitDecUnaryMath(GuardedList.at(args, 0), BuiltinSignatures.kindOf(comptime LowLevelBuiltins.unaryMathDec(.num_sin)), self.dec_sin_import);
@@ -15803,6 +15821,7 @@ fn numericOpFromLowLevel(op: LIR.LowLevel) NumericOp {
         .num_negate_checked,
         .num_abs_checked,
         .num_pow,
+        .num_atan2,
         .num_sqrt,
         .num_sin,
         .num_cos,
@@ -17402,6 +17421,25 @@ fn emitFloatPow(self: *Self, args: anytype, ret_layout: layout.Idx) Allocator.Er
         try self.emitBuiltinCall(.float_pow_f32, self.float_pow_f32_import);
     } else {
         try self.emitBuiltinCall(.float_pow, self.float_pow_import);
+    }
+}
+
+fn emitFloatAtan2(self: *Self, args: anytype, ret_layout: layout.Idx) Allocator.Error!void {
+    const is_f32 = switch (ret_layout) {
+        .f32 => true,
+        .f64 => false,
+        .bool, .str, .u8, .i8, .u16, .i16, .u32, .i32, .u64, .i64, .u128, .i128, .dec, .opaque_ptr, .zst, .u8x16, .i8x16, .u16x8, .i16x8, .u32x4, .i32x4, .u64x2, .i64x2, _ => wasmInvariantFmt(
+            "WASM/codegen invariant violated: num_atan2 received non-float return layout {s}",
+            .{@tagName(ret_layout)},
+        ),
+    };
+
+    try self.emitProcLocal(GuardedList.at(args, 0));
+    try self.emitProcLocal(GuardedList.at(args, 1));
+    if (is_f32) {
+        try self.emitBuiltinCall(.float_atan2_f32, self.float_atan2_f32_import);
+    } else {
+        try self.emitBuiltinCall(.float_atan2, self.float_atan2_import);
     }
 }
 

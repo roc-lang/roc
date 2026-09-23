@@ -93,7 +93,6 @@ test "issue 11418: shared LIR generation leaves runtime-only procedures to the r
     );
     defer coord.deinit();
     coord.enable_hosted_transform = true;
-    coord.setExecutableFinalizationEnabled(false);
     var arena = base.SingleThreadArena.init(allocator);
     defer arena.deinit();
     try coord.start();

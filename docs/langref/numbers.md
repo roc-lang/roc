@@ -72,34 +72,34 @@ Here are Roc's builtin integer types, along with their ranges and sizes in memor
 
 | Range                                                  | Type  | Size     |
 |--------------------------------------------------------|-------|----------|
-| `                                                -128` | [I8]  | 1 Byte   |
+| `                                                -128` | [I8](../Num#I8) | 1 Byte   |
 | `                                                 127` |       |          |
 |--------------------------------------------------------|-------|----------|
-| `                                                   0` | [U8]  | 1 Byte   |
+| `                                                   0` | [U8](../Num#U8) | 1 Byte   |
 | `                                                 255` |       |          |
 |--------------------------------------------------------|-------|----------|
-| `                                             -32_768` | [I16] | 2 Bytes  |
+| `                                             -32_768` | [I16](../Num#I16) | 2 Bytes  |
 | `                                              32_767` |       |          |
 |--------------------------------------------------------|-------|----------|
-| `                                                   0` | [U16] | 2 Bytes  |
+| `                                                   0` | [U16](../Num#U16) | 2 Bytes  |
 | `                                              65_535` |       |          |
 |--------------------------------------------------------|-------|----------|
-| `                                      -2_147_483_648` | [I32] | 4 Bytes  |
+| `                                      -2_147_483_648` | [I32](../Num#I32) | 4 Bytes  |
 | `                                       2_147_483_647` |       |          |
 |--------------------------------------------------------|-------|----------|
-| `                                                   0` | [U32] | 4 Bytes  |
+| `                                                   0` | [U32](../Num#U32) | 4 Bytes  |
 | ` (over 4 billion)                      4_294_967_295` |       |          |
 |--------------------------------------------------------|-------|----------|
-| `                          -9_223_372_036_854_775_808` | [I64] | 8 Bytes  |
+| `                          -9_223_372_036_854_775_808` | [I64](../Num#I64) | 8 Bytes  |
 | `                           9_223_372_036_854_775_807` |       |          |
 |--------------------------------------------------------|-------|----------|
-| `                                                   0` | [U64] | 8 Bytes  |
+| `                                                   0` | [U64](../Num#U64) | 8 Bytes  |
 | ` (over 18 quintillion)    18_446_744_073_709_551_615` |       |          |
 |--------------------------------------------------------|-------|----------|
-| `-170_141_183_460_469_231_731_687_303_715_884_105_728` | [I128]| 16 Bytes |
+| `-170_141_183_460_469_231_731_687_303_715_884_105_728` | [I128](../Num#I128) | 16 Bytes |
 | ` 170_141_183_460_469_231_731_687_303_715_884_105_727` |       |          |
 |--------------------------------------------------------|-------|----------|
-| ` (number below is over 340 undecillion)            0` | [U128]| 16 Bytes |
+| ` (number below is over 340 undecillion)            0` | [U128](../Num#U128) | 16 Bytes |
 | ` 340_282_366_920_938_463_463_374_607_431_768_211_455` |       |          |
 
 Integers come in two flavors: *signed* and *unsigned*.
@@ -114,6 +114,45 @@ general trade-offs are:
 * Larger integer sizes can represent a wider range of numbers. If you absolutely need to represent numbers in a certain range, make sure to pick an integer size that can hold them!
 * Smaller integer sizes take up less memory. These savings rarely matter in variables and function arguments, but the sizes of integers that you use in data structures can add up. This can also affect whether those data structures fit in [cache lines](https://en.wikipedia.org/wiki/CPU_cache#Cache_performance), which can be a performance bottleneck.
 * Certain CPUs work faster on some numeric sizes than others. If the CPU is taking too long to run numeric calculations, you may find a performance improvement by experimenting with numeric sizes that are larger than otherwise necessary. However, in practice, doing this typically degrades overall performance, so be careful to measure properly!
+
+### Fractions
+
+Roc has three builtin types for numbers that can have digits after the decimal point:
+
+| Type | Size | Representation |
+|------|------|----------------|
+| [`Dec`](../Num#Dec) | 16 Bytes | Fixed-point decimal with 18 decimal places |
+| [`F64`](../Num#F64) | 8 Bytes | 64-bit binary floating-point |
+| [`F32`](../Num#F32) | 4 Bytes | 32-bit binary floating-point |
+
+`Dec` stores numbers in base-10, so it can represent decimal fractions like `0.1` exactly. That means
+arithmetic on it gives the answers you'd get by doing the math by hand:
+
+```roc
+0.1.Dec + 0.2 == 0.3 # True
+```
+
+`Dec` has exactly 18 digits after the decimal point, and can represent numbers between
+`-170141183460469231731.687303715884105728` and `170141183460469231731.687303715884105727`. Dividing
+a `Dec` by zero crashes.
+
+`F32` and `F64` are [IEEE 754](https://en.wikipedia.org/wiki/IEEE_754) floating-point numbers, which
+store numbers in base-2. Many decimal fractions (including `0.1`) can't be represented exactly in base-2,
+so floating-point arithmetic often gives answers that are slightly off:
+
+```roc
+0.1.F64 + 0.2 == 0.3 # False, because the sum is 0.30000000000000004
+```
+
+In exchange, floating-point numbers can represent a much wider range of values (including extremely large and
+extremely small numbers), and CPUs have dedicated hardware for floating-point arithmetic, which makes it
+much faster than `Dec` arithmetic. Floats also have special values that `Dec` doesn't: dividing a float
+by zero doesn't crash, but rather evaluates to infinity (or negative infinity), and some operations
+evaluate to [NaN](https://en.wikipedia.org/wiki/NaN).
+
+As a rule of thumb, `Dec` is a good choice for things like money, where exact decimal answers matter,
+and floats are a good choice for things like graphics and scientific simulations, where speed matters more
+than exact decimal answers.
 
 ## Ranges
 
@@ -158,10 +197,6 @@ reverse iteration. Third-party numeric types can construct the stored value
 with `Range.custom` and define `range_iter` using their own arithmetic—no
 interaction with `U64` is required for the stored step.
 
-### Fractions
-
-TODO
-
 ## Custom Number Types
 
 We already saw how you can use optional [number type suffixes](#type-suffixes) to specify the type of a number literal instead of letting it be inferred. For example:
@@ -201,19 +236,112 @@ From there, everything works the same way as in the previous example with the ex
 
 ### Custom Number Types and Operators
 
-TODO
+Operators like `+` and `/` work on custom number types the same way they work on builtin ones: they
+[desugar](operators#desugaring) to method calls. So if `Ratio` has a `div_by` method, then `a / b`
+calls `Ratio.div_by(a, b)` when `a` is a `Ratio`.
 
-<!-- notes:
-- note Ratio and like `3 / 4` and compile time, including if you write `3 / 0` what happens - can either do it in the literal's `Try`, or can just let it execute and then return a `crash`; either way, that will all get executed at compile time.
--->
+Here's a `Ratio` type which supports number literals, `+`, and `/`:
+
+```roc
+Ratio := { numerator : I64, denominator : I64 }.{
+    from_numeral : Numeral -> Try(Ratio, [InvalidNumeral(Str)])
+    from_numeral = |numeral| {
+        if numeral.digits_after_pt_count() > 0 {
+            Err(InvalidNumeral("Ratio literals must be whole numbers, like 3 or 5"))
+        } else {
+            match I64.from_numeral(numeral) {
+                Ok(n) => Ok({ numerator: n, denominator: 1 })
+                Err(err) => Err(err)
+            }
+        }
+    }
+
+    plus : Ratio, Ratio -> Ratio
+    plus = |a, b| {
+        numerator: (a.numerator * b.denominator) + (b.numerator * a.denominator),
+        denominator: a.denominator * b.denominator,
+    }
+
+    div_by : Ratio, Ratio -> Ratio
+    div_by = |a, b| {
+        if b.numerator == 0 {
+            crash "Ratio division by zero"
+        } else {
+            { numerator: a.numerator * b.denominator, denominator: a.denominator * b.numerator }
+        }
+    }
+}
+```
+
+Now we can write two-thirds as a fraction:
+
+```roc
+two_thirds : Ratio
+two_thirds = 2 / 3
+```
+
+Here, the literals `2` and `3` are converted to `Ratio` values using `Ratio.from_numeral`, and then `/`
+calls `Ratio.div_by` on them. Since `two_thirds` is a top-level constant, all of this happens at
+[compile time](compile-time), so the program just has the finished `Ratio` value embedded in it.
+
+That also means problems get reported at compile time. There are two ways a custom number type can reject
+something:
+
+- `from_numeral` can return an `Err`, which rejects the literal itself. Here, `Ratio` rejects literals with
+  digits after the decimal point, so writing `2.5 / 3` would give a compile-time error with the message
+  `"Ratio literals must be whole numbers, like 3 or 5"`.
+- An operator's method can [`crash`](statements#crash), which rejects the operation. Here, `2 / 0` is made of two valid
+  literals, but dividing by zero crashes in `div_by`. Since this happens during compile-time evaluation, it's
+  reported as a compile-time error too.
+
+Of course, if the same operation happens at runtime (for example, if the denominator came from user input),
+then a crash in the operator's method would happen at runtime.
 
 ### Creating a `from_numeral` Implementation
 
-TODO
+A `from_numeral` method has this type (where `T` is the custom number type):
 
-<!-- notes:
-- it converts all other forms to this base-10 representation, so hex/octal/etc. doesn't matter (and neither do underscores ofc).
-- mention the implication that you can make arbitrary-sized nums this way
-- if the List of digits_after_decimal_pt is empty, then you know it didn't have a decimal point
-- if the List of digits_before_decimal_pt is empty, then ___________? should we allow that?
--->
+```roc
+from_numeral : Numeral -> Try(T, [InvalidNumeral(Str)])
+```
+
+The `Numeral` argument describes the literal's exact value, using these methods:
+
+| Method | Returns |
+|--------|---------|
+| `numeral.is_negative()` | `True` if the literal had a minus sign in front of it |
+| `numeral.digits_before_pt()` | A `List(U8)` of the digits before the decimal point, in base-256 |
+| `numeral.digits_after_pt()` | A `List(U8)` of the digits after the decimal point, in base-256 |
+| `numeral.digits_after_pt_count()` | How many base-10 digits the literal had after its decimal point |
+
+The digits are given in base-256, with the most significant digit first, because that uses every bit of
+each `U8`. For example, for the literal `356.5170`:
+
+- `digits_before_pt` is `[1, 100]`, because 356 = (1 × 256) + 100
+- `digits_after_pt` is `[20, 50]`, because 5170 = (20 × 256) + 50
+- `digits_after_pt_count` is `4`, because `5170` has four digits
+
+The count is needed because the digits after the point are stored as a whole number, so the count
+is what distinguishes `.5170` from `.517` or `.005170`. (For example, `1.0` has a `digits_after_pt` of `[]` and a
+`digits_after_pt_count` of `1`, whereas `1` has a `digits_after_pt_count` of `0`, which is how you can tell
+whether the literal had a decimal point.)
+
+Zero digits are represented by an empty list, so the literal `0` has a `digits_before_pt` of `[]`,
+and `0.25` has a `digits_before_pt` of `[]` and a `digits_after_pt` of `[25]`.
+
+The compiler normalizes the literal before calling `from_numeral`, so these don't need to be handled separately:
+
+- Underscores are removed, so `1_000` is the same as `1000`.
+- Base prefixes are applied, so `0xff` has a `digits_before_pt` of `[255]`, just like `255` does.
+- Scientific notation is applied, so `1e3` is the same as `1000`, and `1.5e-2` is the same as `0.015`.
+
+Since the digits can be arbitrarily long, a custom number type can support numbers of any size. For
+example, an arbitrary-precision integer type could accept literals with hundreds of digits.
+
+The simplest way to implement `from_numeral` is often to delegate to a builtin number type's
+`from_numeral`, as in `I64.from_numeral(numeral)` in the [`Ratio` example](#custom-number-types-and-operators) above,
+and then convert the result.
+
+If the literal isn't valid for the type, return `Err(InvalidNumeral(message))`. The compiler will
+report the message as a compile-time error, pointing at the literal.
+

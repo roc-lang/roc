@@ -1652,7 +1652,7 @@ pub const Diagnostic = union(enum) {
         try report.headline.addModuleName(owned_path);
         try report.headline.addReflowingText(" was not found.");
 
-        try report.document.addReflowingText("Make sure the file exists relative to your source file:");
+        try report.document.addReflowingText("Make sure the file exists relative to your source file.");
         try report.document.addLineBreak();
 
         const owned_filename = try report.addOwnedString(filename);
@@ -1746,7 +1746,7 @@ pub const Diagnostic = union(enum) {
         try report.headline.addModuleName(owned_path);
         try report.headline.addReflowingText(" is not valid UTF-8.");
 
-        try report.document.addReflowingText("To import binary files, use `List(U8)` instead of `Str`:");
+        try report.document.addReflowingText("To import binary files, use `List(U8)` instead of `Str`.");
         try report.document.addLineBreak();
 
         const owned_filename = try report.addOwnedString(filename);
@@ -2020,6 +2020,47 @@ pub const Diagnostic = union(enum) {
 
         try report.document.addLineBreak();
         try report.document.addReflowingText("Since this type variable is used multiple times, it should not start with an underscore. Try ");
+        try report.document.addInlineCode(owned_suggested_name);
+        try report.document.addReflowingText(" instead.");
+
+        return report;
+    }
+
+    /// Build a report for "type variable starting with dollar" diagnostic
+    pub fn buildTypeVarStartingWithDollarReport(
+        allocator: Allocator,
+        type_var_name: []const u8,
+        suggested_name: []const u8,
+        region_info: base.RegionInfo,
+        filename: []const u8,
+        source: []const u8,
+        line_starts: []const u32,
+    ) Allocator.Error!Report {
+        var report = try Report.init(allocator, "Type Variable Starting With Dollar", "", .warning);
+        const owned_type_var_name = try report.addOwnedString(type_var_name);
+        const owned_suggested_name = try report.addOwnedString(suggested_name);
+
+        try report.headline.addReflowingText("The type variable ");
+        try report.headline.addInlineCode(owned_type_var_name);
+        try report.headline.addReflowingText(" starts with ");
+        try report.headline.addInlineCode("$");
+        try report.headline.addReflowingText(".");
+
+        const owned_filename = try report.addOwnedString(filename);
+        try report.document.addSourceRegion(
+            region_info,
+            .error_highlight,
+            owned_filename,
+            source,
+            line_starts,
+        );
+
+        try report.document.addLineBreak();
+        try report.document.addReflowingText("The ");
+        try report.document.addInlineCode("$");
+        try report.document.addReflowingText(" prefix is only for variables declared with ");
+        try report.document.addKeyword("var");
+        try report.document.addReflowingText(", and type variables can never be reassigned. Rename it to ");
         try report.document.addInlineCode(owned_suggested_name);
         try report.document.addReflowingText(" instead.");
 

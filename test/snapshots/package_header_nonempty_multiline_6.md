@@ -16,21 +16,11 @@ package # Comment after keyword
 	}
 ~~~
 # EXPECTED
-MOD NOT FOUND - package_header_nonempty_multiline_6.md:4:3:4:11
 EXPOSED BUT NOT DEFINED - package_header_nonempty_multiline_6.md:3:3:3:12
+MOD NOT FOUND - package_header_nonempty_multiline_6.md:4:3:4:11
 # PROBLEMS
 ~~~clojure
 (reports
-	(report
-		(severity runtime_error)
-		(title "Mod Not Found")
-		(region (start 4 3) (end 4 11))
-		(headline
-			(text "The mod ")
-			(annotated code "SomeType")
-			(reflow " was not found in this Roc project."))
-		(document
-			(source-region (file "package_header_nonempty_multiline_6.md") (start 4 3) (end 4 11) (annotation error) (line-text "\t\tSomeType, # Comment after last exposed item"))))
 	(report
 		(severity runtime_error)
 		(title "Exposed But Not Defined")
@@ -43,7 +33,17 @@ EXPOSED BUT NOT DEFINED - package_header_nonempty_multiline_6.md:3:3:3:12
 			(source-region (file "package_header_nonempty_multiline_6.md") (start 3 3) (end 3 12) (annotation error) (line-text "\t\tsomething, # Comment after exposed item"))
 			(reflow "You can fix this by either defining ")
 			(annotated symbol-unqualified "something")
-			(reflow " in this mod, or by removing it from the list of exposed values."))))
+			(reflow " in this mod, or by removing it from the list of exposed values.")))
+	(report
+		(severity runtime_error)
+		(title "Mod Not Found")
+		(region (start 4 3) (end 4 11))
+		(headline
+			(text "The mod ")
+			(annotated code "SomeType")
+			(reflow " was not found in this Roc project."))
+		(document
+			(source-region (file "package_header_nonempty_multiline_6.md") (start 4 3) (end 4 11) (annotation error) (line-text "\t\tSomeType, # Comment after last exposed item")))))
 ~~~
 # TOKENS
 ~~~zig

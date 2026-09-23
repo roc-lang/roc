@@ -100,11 +100,15 @@ var view = try lir.LirImage.viewMappedImage(
 );
 defer view.deinit();
 
-// 7. Execute via the interpreter.
+// 7. Execute via the interpreter. The string-literal table must outlive any
+//    value the interpreter returns, since big strings point into it.
+var static_strings = try eval.LirInterpreter.buildStaticStrings(gpa, &view.store);
+defer static_strings.deinit();
 var interp = try eval.LirInterpreter.init(
     gpa,
     &view.store,
     &view.layouts,
+    static_strings.view(),
     &my_roc_ops,
 );
 defer interp.deinit();

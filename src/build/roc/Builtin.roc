@@ -14998,6 +14998,12 @@ Builtin :: [].{
 			atan : Dec -> Dec
 			atan = |self| dec_atan_unsafe(self)
 
+			## Return the angle of (x, y) in radians, between -pi and pi.
+			## Fixed-point approximation with 18 fractional decimal places.
+			## The origin returns zero; the negative x-axis returns positive pi.
+			atan2 : { x : Dec, y : Dec } -> Dec
+			atan2 = |{ x, y }| dec_atan2_unsafe(y, x)
+
 			## Divide the first [Dec] by the second. Crashes if the second [Dec]
 			## is zero or the result overflows. Results with more than 18
 			## fractional decimal places are truncated to [Dec] precision.
@@ -15970,6 +15976,14 @@ Builtin :: [].{
 			atan : F32 -> F32
 			atan = |self| f32_atan_unsafe(self)
 
+			## Return the angle of (x, y) in radians, between -pi and pi.
+			## Finite results are approximations in the original float width.
+			## Signed zeros and infinities follow IEEE 754; either NaN input returns NaN.
+			## For y = +/-0, negative x (including -0) returns +/-pi;
+			## positive x (including +0) returns +/-0, with the sign of y.
+			atan2 : { x : F32, y : F32 } -> F32
+			atan2 = |{ x, y }| f32_atan2_unsafe(y, x)
+
 			## Add two [F32] values. Addition is subject to IEEE 754 rounding; the
 			## result may be `inf`, `-inf`, or `NaN`.
 			## ```roc
@@ -16885,6 +16899,14 @@ Builtin :: [].{
 			## ```
 			atan : F64 -> F64
 			atan = |self| f64_atan_unsafe(self)
+
+			## Return the angle of (x, y) in radians, between -pi and pi.
+			## Finite results are approximations in the original float width.
+			## Signed zeros and infinities follow IEEE 754; either NaN input returns NaN.
+			## For y = +/-0, negative x (including -0) returns +/-pi;
+			## positive x (including +0) returns +/-0, with the sign of y.
+			atan2 : { x : F64, y : F64 } -> F64
+			atan2 = |{ x, y }| f64_atan2_unsafe(y, x)
 
 			## Add two [F64] values. Addition is subject to IEEE 754 rounding; the
 			## result may be `inf`, `-inf`, or `NaN`.
@@ -22143,6 +22165,8 @@ dec_acos_unsafe : Dec -> Dec
 
 dec_atan_unsafe : Dec -> Dec
 
+dec_atan2_unsafe : Dec, Dec -> Dec
+
 out_of_range_try : { success : U8, val_or_memory_garbage : item } -> Try(item, [OutOfRange])
 out_of_range_try = |answer|
 	if answer.success != 0 {
@@ -23444,6 +23468,8 @@ f32_acos_unsafe : F32 -> F32
 
 f32_atan_unsafe : F32 -> F32
 
+f32_atan2_unsafe : F32, F32 -> F32
+
 f64_to_i8_try_unsafe : F64 -> { success : U8, val_or_memory_garbage : I8 }
 
 f64_to_i16_try_unsafe : F64 -> { success : U8, val_or_memory_garbage : I16 }
@@ -23485,6 +23511,8 @@ f64_asin_unsafe : F64 -> F64
 f64_acos_unsafe : F64 -> F64
 
 f64_atan_unsafe : F64 -> F64
+
+f64_atan2_unsafe : F64, F64 -> F64
 
 # Private declarations used by the checked public lane and memory methods.
 

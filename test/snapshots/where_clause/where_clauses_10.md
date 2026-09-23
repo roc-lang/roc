@@ -14,19 +14,32 @@ decode_things # After member name
 				[a.Decode]
 ~~~
 # EXPECTED
-UNDECLARED TYPE - where_clauses_10.md:7:7:7:14
+MOD NOT FOUND - where_clauses_10.md:1:1:1:32
+MOD NOT FOUND - where_clauses_10.md:7:7:7:14
 DECLARATION HAS NO VALUE - where_clauses_10.md:3:1:7:15
 # PROBLEMS
 ~~~clojure
 (reports
 	(report
 		(severity runtime_error)
-		(title "Undeclared Type")
+		(title "Mod Not Found")
+		(region (start 1 1) (end 1 32))
+		(headline
+			(text "The mod ")
+			(annotated code "Decode")
+			(reflow " was not found in this Roc project."))
+		(document
+			(source-region (file "where_clauses_10.md") (start 1 1) (end 1 32) (annotation error) (line-text "import Decode exposing [Decode]"))))
+	(report
+		(severity runtime_error)
+		(title "Mod Not Found")
 		(region (start 7 7) (end 7 14))
 		(headline
-			(reflow "The type ")
+			(text "This ")
 			(annotated code "Decode")
-			(reflow " is not declared in this scope."))
+			(reflow " type is declared to be in ")
+			(annotated code "Decode")
+			(reflow ", which does not exist."))
 		(document
 			(source-region (file "where_clauses_10.md") (start 7 7) (end 7 14) (annotation error) (line-text "\t\t\t\t[a.Decode]"))))
 	(report

@@ -62,7 +62,7 @@ You can use these type parameters in type aliases:
 Letters(others) : [A, B, ..others]
 ```
 
-If you match on a [catch-all underscore pattern](pattern-matching#catch-all-patterns-_),
+If you match on a [catch-all underscore pattern](pattern-matching#underscore),
 you can accept a tag union containing _at least_ some tags, but also arbitrary others:
 
 ```roc
@@ -138,23 +138,93 @@ Nominal tag unions are like structural tag unions, except that they are neither 
 As a consequence of this, nominal tag unions don't have the optional `..others` type parameter that
 structural tag unions do.
 
+Nominal tag unions are declared with `:=`, like other [nominal types](types#nominal-types):
+
+```roc
+Color := [Red, Green, Blue, Custom(U8, U8, U8)]
+```
+
 ### Qualified Tags
 
-TODO
+A tag can be _qualified_ by writing the nominal type's name, then a `.`, then the tag. For example,
+`Color.Red` is the `Red` tag of the `Color` type, and `Color.Custom(0, 128, 255)` is its `Custom` tag
+with a payload.
+
+A qualified tag always has its nominal type. In contrast, an unqualified tag like `Red` is a
+[structural](#structural-tag-unions) tag, which only becomes a `Color` when it's used where a `Color`
+is expected (see [Structural-Nominal Compatibility](#structural-nominal-compatibility)):
+
+```roc
+a = Color.Red # a is a Color
+
+b : Color
+b = Red # b is a Color, because the annotation says so
+
+c = Red # c is a structural tag, not a Color
+```
+
+Qualified tags are also allowed in patterns:
+
+```roc
+describe : Color -> Str
+describe = |color| match color {
+    Color.Red => "red"
+    Green => "green"
+    Blue => "blue"
+    Custom(r, g, b) => "rgb(${r.to_str()}, ${g.to_str()}, ${b.to_str()})"
+}
+```
+
+Since `describe` already says its argument is a `Color`, the unqualified patterns (like `Green`)
+work too, so qualifying them is optional.
 
 ### Opaque Tag Unions
 
-TODO
+Like other [opaque nominal types](types#opaque-nominal-types), a tag union declared with `::` instead
+of `:=` hides its tags from other modules:
+
+```roc
+Level :: [Low, Medium, High].{
+    low : Level
+    low = Low
+
+    is_high : Level -> Bool
+    is_high = |level| match level {
+        High => True
+        _ => False
+    }
+}
+```
+
+Inside the module that defines `Level`, its tags can be used like any other nominal tag union's. In other
+modules, `Level.Low` and `High` can't be used to create a `Level`, and `Level` values can't be matched
+against its tags. Instead, other modules must go through the methods `Level` exposes, like
+`Level.low` and `Level.is_high`.
+
+This lets the module that defines an opaque tag union change its tags later (for example, by adding
+a `Critical` level, or renaming `Medium` to `Moderate`) without breaking any code in other modules.
 
 ### Structural-Nominal Compatibility
 
 As a convenience, you can use structural tags to represent nominal tags with the same shape.
 
-For example, you can do this:
+For example, [`Try`](../Try) is a nominal tag union defined as
+`Try(ok, err) := [Ok(ok), Err(err)]`, yet you can write `Ok` and `Err` without qualifying them:
 
 ```roc
-TODO
+parse_age : Str -> Try(U8, [InvalidAge])
+parse_age = |str| match U8.from_str(str) {
+    Ok(age) if age < 150 => Ok(age)
+    _ => Err(InvalidAge)
+}
 ```
+
+Here, `Ok(age)` and `Err(InvalidAge)` are structural tags, but since they're used where a
+`Try(U8, [InvalidAge])` is expected, they become that nominal type. The same thing happens with
+`Ok(age)` and `_` in the patterns, since they're matching on a value whose type is already known to be a `Try`.
+
+This works as long as the structural tag is one that the nominal tag union actually has, with a
+compatible payload. `Ok(1, 2)` or `Maybe(5)` could not become a `Try`.
 
 > **Note:** This does not get around opaque access boundaries.
 
@@ -167,4 +237,27 @@ However, nominal tag unions are not extensible.
 
 ## "Void" (Empty Tag Union) {#void}
 
-TODO
+The empty tag union, written `[]`, is a tag union with no tags. Since there are no tags, it's
+impossible to create a value of this type.
+
+That might not sound useful, but it can express that something is impossible. For example, a
+function that returns `Try(U64, [])` can never return an `Err`, because there would be no way to
+create the `Err` tag's payload:
+
+```roc
+always_ok : U64 -> Try(U64, [])
+always_ok = |n| Ok(n)
+```
+
+The compiler knows this too, so when matching on a `Try(U64, [])`, a branch for `Ok` alone is
+[exhaustive](pattern-matching#exhaustiveness):
+
+```roc
+unwrap : Try(U64, []) -> U64
+unwrap = |result| match result {
+    Ok(n) => n
+}
+```
+
+Similarly, `Ok(n) = always_ok(5)` is allowed as a [destructuring assignment](pattern-matching#destructuring-assignments-with-),
+because the `Err` case can't happen.

@@ -1365,6 +1365,9 @@ fn replaceProvidedByCompilerLowLevels(env: *ModuleEnv) (Allocator.Error || error
     if (env.common.findIdent("f32_atan_unsafe")) |ident| {
         try low_level_map.put(ident, .num_atan);
     }
+    if (env.common.findIdent("f32_atan2_unsafe")) |ident| {
+        try low_level_map.put(ident, .num_atan2);
+    }
     if (env.common.findIdent("dec_sqrt_unsafe")) |ident| {
         try low_level_map.put(ident, .num_sqrt);
     }
@@ -1388,6 +1391,9 @@ fn replaceProvidedByCompilerLowLevels(env: *ModuleEnv) (Allocator.Error || error
     }
     if (env.common.findIdent("dec_atan_unsafe")) |ident| {
         try low_level_map.put(ident, .num_atan);
+    }
+    if (env.common.findIdent("dec_atan2_unsafe")) |ident| {
+        try low_level_map.put(ident, .num_atan2);
     }
     if (env.common.findIdent("f32_floor_unsafe")) |ident| {
         try low_level_map.put(ident, .num_floor);
@@ -1489,6 +1495,9 @@ fn replaceProvidedByCompilerLowLevels(env: *ModuleEnv) (Allocator.Error || error
     }
     if (env.common.findIdent("f64_atan_unsafe")) |ident| {
         try low_level_map.put(ident, .num_atan);
+    }
+    if (env.common.findIdent("f64_atan2_unsafe")) |ident| {
+        try low_level_map.put(ident, .num_atan2);
     }
     if (env.common.findIdent("f64_floor_unsafe")) |ident| {
         try low_level_map.put(ident, .num_floor);

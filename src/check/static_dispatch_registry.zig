@@ -588,6 +588,10 @@ pub const MethodRegistryEntry = struct {
     /// no target is what keeps a rejected method distinguishable from a method
     /// no view declares at all.
     target: ?MethodTarget,
+    /// Whether this is a `to_inspect` method that generic inspection uses for
+    /// its owner (design.md "Inspect Overrides"). Only `lookupInspectOverride`
+    /// reads it; ordinary method dispatch ignores it.
+    inspect_override: bool = false,
 };
 
 /// Public `MethodRegistry` declaration.
@@ -614,6 +618,17 @@ pub const MethodRegistry = struct {
         const found = artifact_serialize.binarySearchByKey(MethodRegistryEntry, MethodKey, self.entries, normalized, methodEntryOrder) orelse return null;
         const target = found.target orelse return .rejected;
         return .{ .target = target };
+    }
+
+    /// The `to_inspect` target that generic inspection calls for `key.owner`,
+    /// or null when the owner has no eligible override and inspection renders
+    /// the value's default form. `key.method` names `to_inspect`.
+    pub fn lookupInspectOverride(self: *const MethodRegistry, key: MethodKey) ?MethodTarget {
+        var normalized = key;
+        collections.CompactWriter.zeroValuePadding(MethodKey, @ptrCast(&normalized));
+        const found = artifact_serialize.binarySearchByKey(MethodRegistryEntry, MethodKey, self.entries, normalized, methodEntryOrder) orelse return null;
+        if (!found.inspect_override) return null;
+        return found.target;
     }
 
     /// Build-time-only teardown (see `StaticDispatchPlanTable.deinit`): a frozen
@@ -721,6 +736,7 @@ pub const MethodRegistry = struct {
                 // not static-dispatch resolutions.
                 continue;
             const callable_var = referenced_callable_var orelse methodTargetCallableVar(module, def_idx, entry.value, target_kind);
+            const callable_ty = try checked_types.publishMethodCallableType(allocator, module, names, callable_var);
 
             try entries.append(allocator, .{
                 .key = method_key,
@@ -728,8 +744,11 @@ pub const MethodRegistry = struct {
                     .module_idx = module_idx,
                     .def_idx = def_idx,
                     .kind = target_kind,
-                    .callable_ty = try checkedTypeIdForVar(allocator, module, checked_types, callable_var),
+                    .callable_ty = callable_ty,
                 },
+                .inspect_override = entry.key.methodIdent().eql(module_env.idents.to_inspect) and
+                    std.meta.activeTag(target_kind) != .structural and
+                    isInspectOverrideCallable(checked_types, method_owner, callable_ty),
             });
         }
 
@@ -1035,8 +1054,8 @@ fn methodOwnerEnvForRegistryEntry(
 
     if (@import("builtin").mode == .Debug) {
         std.debug.panic(
-            "checked static dispatch registry invariant violated: could not find owner module '{s}' for receiver method",
-            .{module.getIdent(owner.moduleIdent())},
+            "checked static dispatch registry invariant violated: could not find owner module for receiver method on declaration {d} of module '{s}'",
+            .{ @intFromEnum(owner.owner), module_env.module_name },
         );
     }
     unreachable;
@@ -1046,7 +1065,7 @@ fn methodOwnerIdentityHashForRegistryEntry(
     module_env: *const ModuleEnv,
     owner: ModuleEnv.MethodOwner,
 ) *const base.ModuleIdentity.Hash {
-    if (owner.moduleIdent().eql(module_env.qualified_module_ident)) {
+    const owner_identity = owner.moduleIdentity() orelse {
         return module_env.contentIdentityHash() orelse {
             if (@import("builtin").mode == .Debug) {
                 std.debug.panic(
@@ -1056,16 +1075,6 @@ fn methodOwnerIdentityHashForRegistryEntry(
             }
             unreachable;
         };
-    }
-
-    const owner_identity = module_env.moduleIdentityForDisplayIdent(owner.moduleIdent()) orelse {
-        if (@import("builtin").mode == .Debug) {
-            std.debug.panic(
-                "checked static dispatch registry invariant violated: receiver owner module '{s}' has no content identity in module '{s}'",
-                .{ module_env.getIdent(owner.moduleIdent()), module_env.module_name },
-            );
-        }
-        unreachable;
     };
     return module_env.moduleIdentityHash(owner_identity);
 }
@@ -1226,6 +1235,12 @@ pub const StaticDispatchResultMode = union(enum) {
     equality: struct {
         structural_allowed: bool,
         negated: bool,
+        /// Checker-selected discriminant-only comparison. The named operand is
+        /// the value being tested; the other operand is the payload-free tag.
+        discriminant: ?struct {
+            value_operand: u32,
+            tag: canonical.TagLabelId,
+        } = null,
     },
     /// A `to_hash : self, Hasher -> Hasher` dispatch whose receiver is an
     /// anonymous structural type. When `structural_allowed` is set, lowering
@@ -1340,10 +1355,10 @@ pub const EvidenceChainIndex = struct {
 
 /// Reference to an enclosing evidence slot. Explicit per-use callable
 /// instantiations can share the slot's target identity without sharing its
-/// callable instantiation. An ordinary independent rank-1 relation rebuilds
-/// nested evidence from its callable; a recorded where-method use instead
-/// reuses the slot's resolved nested vector because checking copied only the
-/// signature structure and shared every non-marker leaf.
+/// callable instantiation. An independent rank-1 relation rebuilds
+/// callable-derived nested evidence from its callable. It retains the slot's
+/// vector when the target schema is target-owned, or when a recorded
+/// where-method use proves the signature copy shares every non-marker leaf.
 pub const ConstraintEvidenceRef = struct {
     /// Composite requirements name their exact owner parameter in the checked
     /// module's evidence pool, so dictionary ABIs need no lexical type search.
@@ -1512,34 +1527,45 @@ pub const EvidenceParamSource = union(enum) {
     erased_row_remainder,
 };
 
-/// Whether a procedure target's nested evidence can be derived from its
-/// instantiated callable alone. `requires_record` includes any checked evidence
-/// entry whose dispatcher has no callable-component path; only checked per-use
-/// evidence (or an exact where-use slot reuse) can supply it.
+/// Where a procedure target's nested evidence comes from. `from_target` is a
+/// vector made entirely of captured scheme requirements: it is fixed by the
+/// selected target instantiation and is independent of the requesting callable.
+/// `requires_record` mixes sources or contains another pathless source, so only
+/// checked per-use evidence (or an exact where-use slot reuse) can supply it.
 pub const ProcedureEvidenceSchema = enum {
     none,
     from_callable,
+    from_target,
     requires_record,
 };
 
 /// Classify a procedure template's evidence parameters into the schema above.
 /// No parameters is `.none`. A scheme callable is always derivable from the
 /// instantiated callable, and so is an explicit numeric default standing at the
-/// callable root (an empty path). Every other source, and any explicit default
-/// reached through a path, needs the checked record.
+/// callable root (an empty path). A vector consisting only of captured scheme
+/// requirements belongs to the selected target. Mixed vectors and every other
+/// source need the checked per-use record.
 pub fn procedureEvidenceSchema(
     params: []const EvidenceParamRecord,
     paths: []const EvidencePathStep,
 ) ProcedureEvidenceSchema {
     if (params.len == 0) return .none;
+    var scheme_requirements: usize = 0;
     for (params) |param| {
         const path = paths[param.path.start .. param.path.start + param.path.len];
         switch (param.source) {
             .scheme_callable => {},
             .explicit_default => if (path.len != 0) return .requires_record,
-            .scheme_requirement, .constraint_callable, .use_site_only, .erased_row_remainder => return .requires_record,
+            .scheme_requirement => if (path.len == 0) {
+                scheme_requirements += 1;
+            } else {
+                return .requires_record;
+            },
+            .constraint_callable, .use_site_only, .erased_row_remainder => return .requires_record,
         }
     }
+    if (scheme_requirements == params.len) return .from_target;
+    if (scheme_requirements != 0) return .requires_record;
     return .from_callable;
 }
 
@@ -2023,6 +2049,12 @@ pub const StaticDispatchPlanTable = struct {
                         .result_mode = .{ .equality = .{
                             .structural_allowed = true,
                             .negated = eq.negated,
+                            .discriminant = if (zeroPayloadTagIdent(module, eq.rhs)) |tag_ident|
+                                .{ .value_operand = 0, .tag = try names.internTagIdent(idents, tag_ident) }
+                            else if (zeroPayloadTagIdent(module, eq.lhs)) |tag_ident|
+                                .{ .value_operand = 1, .tag = try names.internTagIdent(idents, tag_ident) }
+                            else
+                                null,
                         } },
                     });
                     try plan_sources.append(allocator, .{
@@ -2036,13 +2068,18 @@ pub const StaticDispatchPlanTable = struct {
 
         const module_env = module.moduleEnvConst();
         const checked_type_view = checked_types.store.view();
+        var subject_scratch = @TypeOf(checked_type_view).EqualityScratch.init(allocator);
+        defer subject_scratch.deinit();
         for (module_env.generated_codec_derivations.items.items) |derivation| {
             const source_calls = module_env.generated_codec_calls.items.items[derivation.calls_start..][0..derivation.calls_len];
             const calls_start: u32 = @intCast(generated_codec_calls.items.len);
+            // Roles are keyed by the type a subject denotes, so subjects
+            // spelled through different transparent aliases share a role.
+            // Canonical keys retain alias identity and cannot bucket them.
             const GeneratedCodecRoleKey = struct {
                 method: canonical.MethodNameId,
                 has_subject: bool,
-                subject_key: canonical.CanonicalTypeKey,
+                subject_bucket: u64,
             };
             const GeneratedCodecRoleCandidate = struct {
                 subject_ty: ?CheckedTypeId,
@@ -2067,7 +2104,7 @@ pub const StaticDispatchPlanTable = struct {
                 const role_key = GeneratedCodecRoleKey{
                     .method = method,
                     .has_subject = subject_ty != null,
-                    .subject_key = if (subject_ty) |subject| checked_type_view.rootKey(subject) else .{},
+                    .subject_bucket = if (subject_ty) |subject| checked_type_view.aliasTransparentBucketKey(subject) else 0,
                 };
                 const candidates_entry = try role_candidates.getOrPut(role_key);
                 if (!candidates_entry.found_existing) candidates_entry.value_ptr.* = .empty;
@@ -2078,7 +2115,7 @@ pub const StaticDispatchPlanTable = struct {
                         break;
                     }
                     if (candidate.subject_ty.? == subject_ty.? or
-                        try checked_type_view.rootExactEql(allocator, candidate.subject_ty.?, subject_ty.?))
+                        try checked_type_view.rootAliasTransparentEql(&subject_scratch, candidate.subject_ty.?, subject_ty.?))
                     {
                         method_role = candidate.role;
                         break;
@@ -2727,6 +2764,68 @@ fn checkedTypeIsBuiltinBool(checked_types: anytype, ty: CheckedTypeId) bool {
     return builtin_owner == .bool;
 }
 
+/// Whether a `to_inspect` method's type makes it the override generic
+/// inspection uses for `owner` (design.md "Inspect Overrides"): exactly
+/// `T -> Str`, where `T` is `owner` applied to distinct unconstrained type
+/// variables. Aliases are transparent names for the type they abbreviate.
+fn isInspectOverrideCallable(checked_types: anytype, owner: MethodOwner, callable_ty: CheckedTypeId) bool {
+    const store = checked_types.store;
+    const callable = store.payload(checkedTypeThroughAliases(checked_types, callable_ty));
+    if (std.meta.activeTag(callable) != .function) return false;
+    const function = callable.function;
+    if (function.kind == .effectful or function.args.len != 1) return false;
+
+    const ret = store.payload(checkedTypeThroughAliases(checked_types, function.ret));
+    if (std.meta.activeTag(ret) != .nominal) return false;
+    if ((ret.nominal.builtin orelse return false) != .str) return false;
+
+    const arg_ty = checkedTypeThroughAliases(checked_types, function.args[0]);
+    const arg_owner = methodOwnerForCheckedPayload(store.payload(arg_ty)) orelse return false;
+    if (methodOwnerOrder(arg_owner, owner) != .eq) return false;
+
+    // Checked type variables carry identity, so two occurrences of one
+    // variable share a root and distinct variables never do.
+    const type_args = store.payload(arg_ty).nominal.args;
+    for (type_args, 0..) |type_arg, index| {
+        const variable = switch (store.payload(type_arg)) {
+            .flex, .rigid => |variable| variable,
+            .pending,
+            .err,
+            .alias,
+            .record,
+            .tuple,
+            .nominal,
+            .function,
+            .empty_record,
+            .tag_union,
+            .empty_tag_union,
+            => return false,
+        };
+        if (variable.constraints.len != 0 or variable.numeric_default_phase != null) return false;
+        for (type_args[0..index]) |earlier| {
+            if (earlier == type_arg) return false;
+        }
+    }
+    return true;
+}
+
+fn checkedTypeThroughAliases(checked_types: anytype, ty: CheckedTypeId) CheckedTypeId {
+    var current = ty;
+    var remaining = checked_types.store.payloadCount();
+    while (true) {
+        const payload = checked_types.store.payload(current);
+        if (std.meta.activeTag(payload) != .alias) return current;
+        if (remaining == 0) {
+            if (@import("builtin").mode == .Debug) {
+                std.debug.panic("checked static dispatch invariant violated: checked type alias chain was cyclic", .{});
+            }
+            unreachable;
+        }
+        remaining -= 1;
+        current = payload.alias.backing;
+    }
+}
+
 /// Public `methodOwnerForCheckedType` declaration: the method owner of a
 /// published checked type, walking alias chains transparently.
 pub fn methodOwnerForCheckedType(checked_types: anytype, ty: CheckedTypeId) ?MethodOwner {
@@ -2887,6 +2986,13 @@ fn staticDispatchOperandsForSlice(
         out[i] = .{ .checked_expr = checkedExprIdForSource(checked_bodies, expr) };
     }
     return out;
+}
+
+fn zeroPayloadTagIdent(module: TypedCIR.Module, expr_idx: CIR.Expr.Idx) ?Ident.Idx {
+    const data = module.expr(expr_idx).data;
+    if (data == .e_zero_argument_tag) return data.e_zero_argument_tag.name;
+    if (data == .e_tag and data.e_tag.args.span.len == 0) return data.e_tag.name;
+    return null;
 }
 
 fn checkedExprIdForSource(checked_bodies: anytype, expr: CIR.Expr.Idx) CheckedExprId {

@@ -48,10 +48,13 @@ const Fixture = struct {
         for (roots[0..count], 0..) |*root, index| root.* = @enumFromInt(index);
         // ABI roots own their unused string arguments, so every body must gain
         // a decref. Borrow inference cannot turn this into a no-op fixture.
+        // Forty procedures over 32-wide waves give the two base waves these
+        // tests' session and commit expectations are written against.
         try arc.insert(&self.store, &self.layouts, .{
             .roots = roots[0..count],
             .post_check_executor = runner,
             .metrics_out = metrics,
+            .emission_wave_size = 32,
         });
     }
 
