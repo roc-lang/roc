@@ -834,12 +834,9 @@ pub const InspectMethodPlan = struct {
     method_module: checked.ModuleId,
     method: MethodNameId,
     /// The planned representation of the override worker's receiver argument:
-    /// the owning nominal applied to the method's own type variables. Every
-    /// hidden descriptor of the worker resolves through this receiver's
-    /// subtree paired with `source_rep`'s instantiation (design.md "Boxy
-    /// Call-Site Substitution And Boundaries": align a nominal by its type
-    /// arguments, pairing each worker `nominal_arg` with the exact
-    /// `actual_rep` of the call's nominal use).
+    /// the owning nominal applied to the method's own type variables. Lowering
+    /// binds each of those variables to the inspected representation's type
+    /// argument at the same position to build the inspect call's descriptors.
     receiver_rep: TypeRepId,
 };
 
