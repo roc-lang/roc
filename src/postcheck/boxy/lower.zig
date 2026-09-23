@@ -4477,10 +4477,39 @@ const ProcedureBuilder = struct {
     /// order. Returns an empty span for non-record shapes (tuples and other
     /// payloads print positionally).
     fn staticFieldNamesForRep(self: *ProcedureBuilder, rep_id: Plan.TypeRepId) Allocator.Error!LIR.BoxySpan {
+        // Field names describe the same payload the nested descriptors do.
+        if (self.descriptorBackingShapeRep(rep_id)) |backing_rep| return try self.staticFieldNamesForRep(backing_rep);
         const rep = self.plan.representations.items[@intFromEnum(rep_id)];
 
         var field_name_ids = std.ArrayList(LIR.BoxyNameId).empty;
         defer field_name_ids.deinit(self.allocator);
+        if (rep.declared_fields.len != 0) {
+            // A declared field's index is its payload field index; it names
+            // the backing record field with that structural rank.
+            const backing = self.singleChildRepForDesc(rep_id, .nominal_backing) orelse
+                boxyLowerInvariant("declared-field nominal had no backing record");
+            var backing_fields = std.ArrayList(Plan.RepChild).empty;
+            defer backing_fields.deinit(self.allocator);
+            for (self.plan.childSlice(self.plan.representations.items[@intFromEnum(backing)].children)) |child| {
+                if (child.role == .record_field) try backing_fields.append(self.allocator, child);
+            }
+            const declared = self.plan.declaredFieldSlice(rep.declared_fields);
+            try field_name_ids.resize(self.allocator, declared.len);
+            for (declared) |field| {
+                if (field.is_padding) return .{};
+                if (field.index >= declared.len or field.index >= backing_fields.items.len) {
+                    boxyLowerInvariant("declared nominal field index exceeded its backing record fields");
+                }
+                const child = backing_fields.items[field.index];
+                const view = procedureModuleById(self.modules, child.source_type.module);
+                field_name_ids.items[field.index] = try self.result.store.insertBoxyName(
+                    view.canonical_names.recordFieldLabelText(child.role.record_field),
+                );
+            }
+            const start: u32 = @intCast(self.result.boxy_field_names.items.len);
+            try self.result.boxy_field_names.appendSlice(self.allocator, field_name_ids.items);
+            return .{ .start = start, .len = @intCast(field_name_ids.items.len) };
+        }
         for (self.plan.childSlice(rep.children)) |child| {
             if (child.role == .record_field) {
                 const view = procedureModuleById(self.modules, child.source_type.module);
