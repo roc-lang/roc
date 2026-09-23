@@ -530,9 +530,9 @@ test "frozen root transcode maps erased worker and drop identities across target
     defer source.deinit();
     var target = try Program.Result.init(allocator, .u32);
     defer target.deinit();
-    const source_proc = try source.store.addProcSpec(.{ .name = lir.Symbol.fromRaw(42), .identity = lir.LIR.ProcIdentity.forTest(1), .args = .empty(), .ret_layout = .zst });
-    const other_proc = try target.store.addProcSpec(.{ .name = lir.Symbol.fromRaw(71), .identity = lir.LIR.ProcIdentity.forTest(1), .args = .empty(), .ret_layout = .zst });
-    const target_proc = try target.store.addProcSpec(.{ .name = lir.Symbol.fromRaw(99), .identity = lir.LIR.ProcIdentity.forTest(1), .args = .empty(), .ret_layout = .zst });
+    const source_proc = try source.store.addProcSpec(.{ .name = lir.Symbol.fromRaw(42), .identity = lir.LIR.ProcIdentity.forTest(1), .args = .empty(), .ret_layout = .zst }, .none);
+    const other_proc = try target.store.addProcSpec(.{ .name = lir.Symbol.fromRaw(71), .identity = lir.LIR.ProcIdentity.forTest(1), .args = .empty(), .ret_layout = .zst }, .none);
+    const target_proc = try target.store.addProcSpec(.{ .name = lir.Symbol.fromRaw(99), .identity = lir.LIR.ProcIdentity.forTest(1), .args = .empty(), .ret_layout = .zst }, .none);
     const str_plan: Program.ConstPlanId = @enumFromInt(source.const_plans.items.len);
     const source_layout = try source.layouts.insertErasedCallable();
     const target_layout = try target.layouts.insertErasedCallable();

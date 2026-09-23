@@ -109,7 +109,7 @@ test "finds an overflow result through false-arm aliases" {
     const rhs_alias = try store.addLocal(.{ .layout_idx = .u64 });
     const result = try store.addLocal(.{ .layout_idx = .u64 });
 
-    const done = try store.addCFStmt(.{ .ret = .{ .value = result } });
+    const done = try store.addCFStmt(.{ .ret = .{ .value = result } }, .test_fixture);
     const consumer_args = try store.addLocalSpan(&.{ rhs_alias, lhs_alias });
     const consumer = try store.addCFStmt(.{ .assign_low_level = .{
         .target = result,
@@ -117,24 +117,24 @@ test "finds an overflow result through false-arm aliases" {
         .rc_effect = .none(),
         .args = consumer_args,
         .next = done,
-    } });
+    } }, .test_fixture);
     const alias_rhs = try store.addCFStmt(.{ .assign_ref = .{
         .target = rhs_alias,
         .op = .{ .local = rhs },
         .next = consumer,
-    } });
+    } }, .test_fixture);
     const alias_lhs = try store.addCFStmt(.{ .assign_ref = .{
         .target = lhs_alias,
         .op = .{ .local = lhs },
         .next = alias_rhs,
-    } });
-    const overflow_path = try store.addCFStmt(.runtime_error);
+    } }, .test_fixture);
+    const overflow_path = try store.addCFStmt(.runtime_error, .test_fixture);
     const branches = try store.addCFSwitchBranches(&.{.{ .value = 1, .body = overflow_path }});
     const choose = try store.addCFStmt(.{ .switch_stmt = .{
         .cond = overflowed,
         .branches = branches,
         .default_branch = alias_lhs,
-    } });
+    } }, .test_fixture);
     const predicate_args = try store.addLocalSpan(&.{ lhs, rhs });
     const predicate = try store.addCFStmt(.{ .assign_low_level = .{
         .target = overflowed,
@@ -142,7 +142,7 @@ test "finds an overflow result through false-arm aliases" {
         .rc_effect = .none(),
         .args = predicate_args,
         .next = choose,
-    } });
+    } }, .test_fixture);
 
     const matched = findResultConsumer(&store, predicate).?;
     try std.testing.expectEqual(consumer, matched.consumer_stmt);
@@ -158,7 +158,7 @@ test "does not commute subtraction operands" {
     const overflowed = try store.addLocal(.{ .layout_idx = .bool });
     const result = try store.addLocal(.{ .layout_idx = .i64 });
 
-    const done = try store.addCFStmt(.{ .ret = .{ .value = result } });
+    const done = try store.addCFStmt(.{ .ret = .{ .value = result } }, .test_fixture);
     const consumer_args = try store.addLocalSpan(&.{ rhs, lhs });
     const consumer = try store.addCFStmt(.{ .assign_low_level = .{
         .target = result,
@@ -166,14 +166,14 @@ test "does not commute subtraction operands" {
         .rc_effect = .none(),
         .args = consumer_args,
         .next = done,
-    } });
-    const overflow_path = try store.addCFStmt(.runtime_error);
+    } }, .test_fixture);
+    const overflow_path = try store.addCFStmt(.runtime_error, .test_fixture);
     const branches = try store.addCFSwitchBranches(&.{.{ .value = 1, .body = overflow_path }});
     const choose = try store.addCFStmt(.{ .switch_stmt = .{
         .cond = overflowed,
         .branches = branches,
         .default_branch = consumer,
-    } });
+    } }, .test_fixture);
     const predicate_args = try store.addLocalSpan(&.{ lhs, rhs });
     const predicate = try store.addCFStmt(.{ .assign_low_level = .{
         .target = overflowed,
@@ -181,7 +181,7 @@ test "does not commute subtraction operands" {
         .rc_effect = .none(),
         .args = predicate_args,
         .next = choose,
-    } });
+    } }, .test_fixture);
 
     try std.testing.expectEqual(@as(?Match, null), findResultConsumer(&store, predicate));
 }

@@ -201,17 +201,17 @@ test "trmc per-proc and serial TCE preserve metadata and no-op procs" {
             .args = args,
             .frame_locals = frame,
             .ret_layout = .u64,
-        });
+        }, .none);
         var builder = core.TailCallBuilder.init(allocator, proc_id);
         defer builder.deinit();
         store.tail_call_builder = &builder;
-        const ret = try store.addCFStmt(.{ .ret = .{ .value = result } });
+        const ret = try store.addCFStmt(.{ .ret = .{ .value = result } }, .test_fixture);
         const call = try store.addCFStmt(.{ .assign_call = .{
             .target = result,
             .proc = proc_id,
             .args = args,
             .next = ret,
-        } });
+        } }, .test_fixture);
         store.getProcSpecPtr(proc_id).body = call;
         const sites = try builder.finish(&store);
         store.getProcSpecPtr(proc_id).tail_calls = sites;
@@ -223,7 +223,7 @@ test "trmc per-proc and serial TCE preserve metadata and no-op procs" {
             .frame_locals = frame,
             .body = ret,
             .ret_layout = .u64,
-        });
+        }, .none);
         const untouched_before = store.getProcSpec(untouched);
         try prepareLayouts(&store, &layouts);
         const layout_count = layouts.layoutCount();
@@ -1004,6 +1004,13 @@ const Detection = struct {
 // Transform
 // ═══════════════════════════════════════════════════════════════════════════
 
+/// Origin of a statement this pass produces for, or in place of, `anchor`.
+fn trmcOrigin(anchor: LIR.StmtOrigin) LIR.StmtOrigin {
+    var origin = anchor;
+    origin.kind = .trmc;
+    return origin;
+}
+
 const Transform = struct {
     gpa: Allocator,
     store: *LirStore,
@@ -1115,25 +1122,26 @@ const Transform = struct {
     /// `ret v` becomes: write v through the hole, load the head, return it.
     fn rewriteRetEpilogue(self: *Transform, ret_stmt: CFStmtId, ret_layout: layout_mod.Idx) ResourceError!void {
         const value = self.store.getCFStmt(ret_stmt).ret.value;
+        const origin = trmcOrigin(self.store.stmtOrigin(ret_stmt));
 
         const final = try self.addLocal(ret_layout);
         const st = try self.addLocal(.zst);
-        const ret_final = try self.store.addCFStmt(.{ .ret = .{ .value = final } });
+        const ret_final = try self.store.addCFStmt(.{ .ret = .{ .value = final } }, origin);
         const load = try self.store.addCFStmt(.{ .assign_low_level = .{
             .target = final,
             .op = .ptr_load,
             .rc_effect = LowLevelOp.ptr_load.rcEffect(),
             .args = try self.store.addLocalSpan(&.{self.head}),
             .next = ret_final,
-        } });
+        } }, origin);
         const store_args = try self.store.addLocalSpan(&.{ self.hole, value });
-        self.store.getCFStmtPtr(ret_stmt).* = .{ .assign_low_level = .{
+        try self.store.replaceCFStmt(ret_stmt, .{ .assign_low_level = .{
             .target = st,
             .op = .ptr_store,
             .rc_effect = LowLevelOp.ptr_store.rcEffect(),
             .args = store_args,
             .next = load,
-        } };
+        } }, origin);
     }
 
     fn rewriteConstructSite(self: *Transform, candidate: *const Candidate, ptr_ret: layout_mod.Idx) ResourceError!void {
@@ -1143,12 +1151,14 @@ const Transform = struct {
         // 2. The heap cell is now allocated empty (and zeroed, so its own box
         //    fields read as null holes) instead of copying the call result in.
         const empty_args = try self.store.addLocalSpan(&.{});
+        const box_origin = trmcOrigin(self.store.stmtOrigin(candidate.box_stmt));
         const cell = blk: {
-            const box_ptr = self.store.getCFStmtPtr(candidate.box_stmt);
-            box_ptr.assign_low_level.op = .box_alloc_zeroed;
-            box_ptr.assign_low_level.rc_effect = LowLevelOp.box_alloc_zeroed.rcEffect();
-            box_ptr.assign_low_level.args = empty_args;
-            break :blk box_ptr.assign_low_level.target;
+            var alloc = self.store.getCFStmt(candidate.box_stmt).assign_low_level;
+            alloc.op = .box_alloc_zeroed;
+            alloc.rc_effect = LowLevelOp.box_alloc_zeroed.rcEffect();
+            alloc.args = empty_args;
+            try self.store.replaceCFStmt(candidate.box_stmt, .{ .assign_low_level = alloc }, box_origin);
+            break :blk alloc.target;
         };
 
         // 3. Peephole: take the next hole pointer right after the allocation
@@ -1161,7 +1171,7 @@ const Transform = struct {
             .rc_effect = LowLevelOp.ptr_cast.rcEffect(),
             .args = try self.store.addLocalSpan(&.{cell}),
             .next = self.nextOf(candidate.box_stmt),
-        } });
+        } }, box_origin);
         self.setNext(candidate.box_stmt, cast);
 
         // 4. Unlink the alias hops on this path: the store below uses the
@@ -1177,15 +1187,16 @@ const Transform = struct {
         // 5. The terminal becomes: fill the current hole with the node value,
         //    thread the args + new hole, and loop.
         const st = try self.addLocal(.zst);
-        const loop_back = try self.buildLoopBack(candidate.call_args, .{ .target = self.hole, .value = next_hole }, null);
+        const terminal_origin = trmcOrigin(self.store.stmtOrigin(candidate.terminal_stmt));
+        const loop_back = try self.buildLoopBack(candidate.call_args, .{ .target = self.hole, .value = next_hole }, null, trmcOrigin(self.store.stmtOrigin(candidate.call_stmt)));
         const store_args = try self.store.addLocalSpan(&.{ self.hole, candidate.head_local });
-        self.store.getCFStmtPtr(candidate.terminal_stmt).* = .{ .assign_low_level = .{
+        try self.store.replaceCFStmt(candidate.terminal_stmt, .{ .assign_low_level = .{
             .target = st,
             .op = .ptr_store,
             .rc_effect = LowLevelOp.ptr_store.rcEffect(),
             .args = store_args,
             .next = loop_back,
-        } };
+        } }, terminal_origin);
     }
 
     fn rewriteTailSites(self: *Transform) ResourceError!void {
@@ -1195,7 +1206,7 @@ const Transform = struct {
             site = call.tail_call.?.next;
             // Every incoming reference reaches the same replacement. The
             // shared return continuation remains available to other paths.
-            const loop_back = try self.buildLoopBack(call.args, null, id);
+            const loop_back = try self.buildLoopBack(call.args, null, id, trmcOrigin(self.store.stmtOrigin(id)));
             std.debug.assert(loop_back == id);
         }
     }
@@ -1219,7 +1230,7 @@ const Transform = struct {
     /// drain, the remaining components are disjoint cycles, each requiring
     /// just one temporary. Identity writes are omitted, including the hole
     /// preserved by an ordinary tail site inside a TRMC procedure.
-    fn buildLoopBack(self: *Transform, call_args: LIR.LocalSpan, extra: ?ExtraParamWrite, reuse_head: ?CFStmtId) ResourceError!CFStmtId {
+    fn buildLoopBack(self: *Transform, call_args: LIR.LocalSpan, extra: ?ExtraParamWrite, reuse_head: ?CFStmtId, origin: LIR.StmtOrigin) ResourceError!CFStmtId {
         const args = self.store.getLocalSpan(call_args);
         std.debug.assert(args.len == self.old_args.len);
         const moves = self.moves.items;
@@ -1253,7 +1264,7 @@ const Transform = struct {
         var last: ?CFStmtId = null;
         while (self.ready_moves.pop()) |index| {
             const move = &moves[index];
-            try self.appendLoopBackStmt(&first, &last, .{ .set_local = .{
+            try self.appendLoopBackStmt(&first, &last, origin, .{ .set_local = .{
                 .target = move.target,
                 .value = move.source,
                 .mode = .initialize_join_param,
@@ -1270,7 +1281,7 @@ const Transform = struct {
         for (moves, 0..) |move, start| {
             if (!move.pending) continue;
             const tmp = try self.addLocal(self.store.getLocal(move.target).layout_idx);
-            try self.appendLoopBackStmt(&first, &last, .{ .assign_ref = .{
+            try self.appendLoopBackStmt(&first, &last, origin, .{ .assign_ref = .{
                 .target = tmp,
                 .op = .{ .local = move.target },
                 .next = undefined,
@@ -1280,7 +1291,7 @@ const Transform = struct {
                 const cycle_move = &moves[index];
                 std.debug.assert(cycle_move.pending and cycle_move.readers == 1);
                 const source_index = cycle_move.source_index.?;
-                try self.appendLoopBackStmt(&first, &last, .{ .set_local = .{
+                try self.appendLoopBackStmt(&first, &last, origin, .{ .set_local = .{
                     .target = cycle_move.target,
                     .value = if (source_index == start) tmp else cycle_move.source,
                     .mode = .initialize_join_param,
@@ -1291,21 +1302,21 @@ const Transform = struct {
                 index = source_index;
             }
         }
-        try self.appendLoopBackStmt(&first, &last, .{ .jump = .{ .target = self.join_id } });
+        try self.appendLoopBackStmt(&first, &last, origin, .{ .jump = .{ .target = self.join_id } });
         return first.?;
     }
 
-    fn appendLoopBackStmt(self: *Transform, first: *?CFStmtId, last: *?CFStmtId, stmt: LIR.CFStmt) ResourceError!void {
+    fn appendLoopBackStmt(self: *Transform, first: *?CFStmtId, last: *?CFStmtId, origin: LIR.StmtOrigin, stmt: LIR.CFStmt) ResourceError!void {
         // Ordinary tail sites already own a head row. Emit into it directly,
-        // preserving its source metadata and avoiding an unreachable copy.
+        // avoiding an unreachable copy.
         if (last.* == null) {
             if (first.*) |id| {
-                self.store.getCFStmtPtr(id).* = stmt;
+                try self.store.replaceCFStmt(id, stmt, origin);
                 last.* = id;
                 return;
             }
         }
-        const id = try self.store.addCFStmt(stmt);
+        const id = try self.store.addCFStmt(stmt, origin);
         if (last.*) |previous| self.setNext(previous, id) else first.* = id;
         last.* = id;
     }
@@ -1314,6 +1325,7 @@ const Transform = struct {
     /// fresh argument locals; the original args become the join params.
     fn installWrapper(self: *Transform, comptime is_trmc: bool, initial: LocalId) ResourceError!void {
         const old_body = self.store.getProcSpec(self.proc_id).body.?;
+        const origin = trmcOrigin(self.store.stmtOrigin(old_body));
 
         const fresh = try self.gpa.alloc(LocalId, self.old_args.len);
         defer self.gpa.free(fresh);
@@ -1322,20 +1334,20 @@ const Transform = struct {
         }
 
         // Entry chain (built backward): [alloca initial;] set params; jump J.
-        var current = try self.store.addCFStmt(.{ .jump = .{ .target = self.join_id } });
+        var current = try self.store.addCFStmt(.{ .jump = .{ .target = self.join_id } }, origin);
         if (is_trmc) {
             current = try self.store.addCFStmt(.{ .set_local = .{
                 .target = self.head,
                 .value = initial,
                 .mode = .initialize_join_param,
                 .next = current,
-            } });
+            } }, origin);
             current = try self.store.addCFStmt(.{ .set_local = .{
                 .target = self.hole,
                 .value = initial,
                 .mode = .initialize_join_param,
                 .next = current,
-            } });
+            } }, origin);
         }
         var i = self.old_args.len;
         while (i > 0) {
@@ -1345,7 +1357,7 @@ const Transform = struct {
                 .value = fresh[i],
                 .mode = .initialize_join_param,
                 .next = current,
-            } });
+            } }, origin);
         }
         if (is_trmc) {
             current = try self.store.addCFStmt(.{ .assign_low_level = .{
@@ -1354,7 +1366,7 @@ const Transform = struct {
                 .rc_effect = LowLevelOp.ptr_alloca.rcEffect(),
                 .args = try self.store.addLocalSpan(&.{}),
                 .next = current,
-            } });
+            } }, origin);
         }
 
         const param_count = self.old_args.len + if (is_trmc) @as(usize, 2) else 0;
@@ -1371,7 +1383,7 @@ const Transform = struct {
             .params = try self.store.addLocalSpan(params),
             .body = old_body,
             .remainder = current,
-        } });
+        } }, origin);
 
         const fresh_span = try self.store.addLocalSpan(fresh);
         const frame_locals = try self.rebuildFrameLocals();
@@ -1388,14 +1400,15 @@ const Transform = struct {
     fn installTceLoop(self: *Transform) ResourceError!void {
         const proc_ptr = self.store.getProcSpecPtr(self.proc_id);
         const old_body = proc_ptr.body.?;
+        const origin = trmcOrigin(self.store.stmtOrigin(old_body));
 
-        const entry_jump = try self.store.addCFStmt(.{ .jump = .{ .target = self.join_id } });
+        const entry_jump = try self.store.addCFStmt(.{ .jump = .{ .target = self.join_id } }, origin);
         const join_stmt = try self.store.addCFStmt(.{ .join = .{
             .id = self.join_id,
             .params = proc_ptr.args,
             .body = old_body,
             .remainder = entry_jump,
-        } });
+        } }, origin);
 
         proc_ptr.body = join_stmt;
         proc_ptr.frame_locals = try self.rebuildFrameLocals();

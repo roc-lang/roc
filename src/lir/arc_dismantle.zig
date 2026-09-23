@@ -1091,26 +1091,26 @@ test "future field observations agree with per-read traversal across joins rebin
     defer store.deinit();
     const local = try store.addLocal(.{ .layout_idx = .str });
     const other = try store.addLocal(.{ .layout_idx = .str });
-    const exit = try store.addCFStmt(.{ .ret = .{ .value = other } });
-    const boundary = try store.addCFStmt(.loop_continue);
+    const exit = try store.addCFStmt(.{ .ret = .{ .value = other } }, .test_fixture);
+    const boundary = try store.addCFStmt(.loop_continue, .test_fixture);
     // Reserve the two procedure-local join identities before building their
     // bodies, which contain forward references to the enclosing joins.
     var join_ids: [2]LIR.JoinPointId = undefined;
     for (&join_ids, 0..) |*id, index| id.* = @enumFromInt(index);
     const outer_id = join_ids[0];
     const nested_id = join_ids[1];
-    const jump = try store.addCFStmt(.{ .jump = .{ .target = outer_id } });
+    const jump = try store.addCFStmt(.{ .jump = .{ .target = outer_id } }, .test_fixture);
     const rebind = try store.addCFStmt(.{ .set_local = .{
         .target = local,
         .value = other,
         .mode = .initialize_join_param,
         .next = jump,
-    } });
+    } }, .test_fixture);
     const read = try store.addCFStmt(.{ .assign_ref = .{
         .target = other,
         .op = .{ .field = .{ .source = local, .field_idx = 0 } },
         .next = rebind,
-    } });
+    } }, .test_fixture);
     const branch = try store.addCFStmt(.{ .switch_stmt = .{
         .cond = other,
         .branches = try store.addCFSwitchBranches(&.{
@@ -1118,20 +1118,20 @@ test "future field observations agree with per-read traversal across joins rebin
             .{ .value = 1, .body = boundary },
         }),
         .default_branch = read,
-    } });
-    const nested_jump = try store.addCFStmt(.{ .jump = .{ .target = nested_id } });
+    } }, .test_fixture);
+    const nested_jump = try store.addCFStmt(.{ .jump = .{ .target = nested_id } }, .test_fixture);
     const nested = try store.addCFStmt(.{ .join = .{
         .id = nested_id,
         .params = .empty(),
         .body = branch,
         .remainder = nested_jump,
-    } });
+    } }, .test_fixture);
     const outer = try store.addCFStmt(.{ .join = .{
         .id = outer_id,
         .params = .empty(),
         .body = nested,
         .remainder = jump,
-    } });
+    } }, .test_fixture);
     var joins = std.AutoHashMapUnmanaged(u32, LIR.CFStmtId).empty;
     defer joins.deinit(gpa);
     try joins.put(gpa, @intFromEnum(outer_id), nested);
@@ -1147,7 +1147,7 @@ test "future field observations agree with per-read traversal across joins rebin
             .target = other,
             .op = .{ .field = .{ .source = local, .field_idx = 2 } },
             .next = start,
-        } });
+        } }, .test_fixture);
         try reads.put(gpa, probe, .{ .bit = 4, .consuming = true });
     }
     // These queries consume only join membership and the outcome signature
@@ -1197,7 +1197,7 @@ test "future field observations share CFG discovery across many consuming reads"
     var store = LirStore.init(gpa);
     defer store.deinit();
     const local = try store.addLocal(.{ .layout_idx = .str });
-    var start = try store.addCFStmt(.{ .ret = .{ .value = local } });
+    var start = try store.addCFStmt(.{ .ret = .{ .value = local } }, .test_fixture);
     const exit = start;
     // Mutually exclusive consuming reads share a long continuation observing
     // another field: the old DFS cannot exit early for any of their queries.
@@ -1206,7 +1206,7 @@ test "future field observations share CFG discovery across many consuming reads"
             .target = local,
             .op = .{ .local = local },
             .next = start,
-        } });
+        } }, .test_fixture);
     }
     var reads = std.AutoHashMapUnmanaged(LIR.CFStmtId, ReadKind).empty;
     defer reads.deinit(gpa);
@@ -1225,7 +1225,7 @@ test "future field observations share CFG discovery across many consuming reads"
                 .target = local,
                 .op = .{ .field = .{ .source = local, .field_idx = 0 } },
                 .next = start,
-            } });
+            } }, .test_fixture);
             try reads.put(gpa, probe, .{ .bit = 1, .consuming = true });
         }
         var old_visits: usize = 0;

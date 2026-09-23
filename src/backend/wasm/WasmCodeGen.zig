@@ -21470,7 +21470,7 @@ test "wasm backend fuses overflow predicate with matching wrapping result" {
     const overflowed = try store.addLocal(.{ .layout_idx = .bool });
     const result = try store.addLocal(.{ .layout_idx = .u64 });
 
-    const ret_result = try store.addCFStmt(.{ .ret = .{ .value = result } });
+    const ret_result = try store.addCFStmt(.{ .ret = .{ .value = result } }, .test_fixture);
     const arithmetic_args = try store.addLocalSpan(&.{ lhs, rhs });
     const wrapping_result = try store.addCFStmt(.{ .assign_low_level = .{
         .target = result,
@@ -21478,38 +21478,38 @@ test "wasm backend fuses overflow predicate with matching wrapping result" {
         .rc_effect = LIR.LowLevel.num_int_add_wrap.rcEffect(),
         .args = arithmetic_args,
         .next = ret_result,
-    } });
-    const ret_overflow = try store.addCFStmt(.{ .ret = .{ .value = lhs } });
+    } }, .test_fixture);
+    const ret_overflow = try store.addCFStmt(.{ .ret = .{ .value = lhs } }, .test_fixture);
     const branches = try store.addCFSwitchBranches(&.{.{ .value = 1, .body = ret_overflow }});
     const choose = try store.addCFStmt(.{ .switch_stmt = .{
         .cond = overflowed,
         .branches = branches,
         .default_branch = wrapping_result,
-    } });
+    } }, .test_fixture);
     const predicate = try store.addCFStmt(.{ .assign_low_level = .{
         .target = overflowed,
         .op = .num_int_add_overflows,
         .rc_effect = LIR.LowLevel.num_int_add_overflows.rcEffect(),
         .args = arithmetic_args,
         .next = choose,
-    } });
+    } }, .test_fixture);
     const rhs_literal = try store.addCFStmt(.{ .assign_literal = .{
         .target = rhs,
         .value = .{ .i64_literal = .{ .value = 2, .layout_idx = .u64 } },
         .next = predicate,
-    } });
+    } }, .test_fixture);
     const lhs_literal = try store.addCFStmt(.{ .assign_literal = .{
         .target = lhs,
         .value = .{ .i64_literal = .{ .value = 40, .layout_idx = .u64 } },
         .next = rhs_literal,
-    } });
+    } }, .test_fixture);
     _ = try store.addProcSpec(.{
         .name = store.freshSyntheticSymbol(),
         .identity = LIR.ProcIdentity.forTest(1),
         .args = LIR.LocalSpan.empty(),
         .body = lhs_literal,
         .ret_layout = .u64,
-    });
+    }, .none);
 
     var codegen = Self.init(allocator, &store, &layouts, &.{}, &.{}, &.{}, .default);
     defer codegen.deinit();
@@ -21582,31 +21582,31 @@ fn timeProcCompileNs(allocator: Allocator, proc_count: usize) Allocator.Error!u6
         const lhs = try store.addLocal(.{ .layout_idx = .u64 });
         const rhs = try store.addLocal(.{ .layout_idx = .u64 });
         const sum = try store.addLocal(.{ .layout_idx = .u64 });
-        const ret = try store.addCFStmt(.{ .ret = .{ .value = sum } });
+        const ret = try store.addCFStmt(.{ .ret = .{ .value = sum } }, .test_fixture);
         const add = try store.addCFStmt(.{ .assign_low_level = .{
             .target = sum,
             .op = .num_int_add_wrap,
             .rc_effect = LIR.LowLevel.num_int_add_wrap.rcEffect(),
             .args = try store.addLocalSpan(&.{ lhs, rhs }),
             .next = ret,
-        } });
+        } }, .test_fixture);
         const rhs_literal = try store.addCFStmt(.{ .assign_literal = .{
             .target = rhs,
             .value = .{ .i64_literal = .{ .value = @intCast(i), .layout_idx = .u64 } },
             .next = add,
-        } });
+        } }, .test_fixture);
         const lhs_literal = try store.addCFStmt(.{ .assign_literal = .{
             .target = lhs,
             .value = .{ .i64_literal = .{ .value = 40, .layout_idx = .u64 } },
             .next = rhs_literal,
-        } });
+        } }, .test_fixture);
         _ = try store.addProcSpec(.{
             .name = store.freshSyntheticSymbol(),
             .identity = LIR.ProcIdentity.forTest(@intCast(i)),
             .args = LIR.LocalSpan.empty(),
             .body = lhs_literal,
             .ret_layout = .u64,
-        });
+        }, .none);
     }
     var codegen = Self.init(allocator, &store, &layouts, &.{}, &.{}, &.{}, .default);
     defer codegen.deinit();
@@ -21647,31 +21647,31 @@ fn procCompileBindingRowsVisited(allocator: Allocator, proc_count: usize) Alloca
         const lhs = try store.addLocal(.{ .layout_idx = .u64 });
         const rhs = try store.addLocal(.{ .layout_idx = .u64 });
         const sum = try store.addLocal(.{ .layout_idx = .u64 });
-        const ret = try store.addCFStmt(.{ .ret = .{ .value = sum } });
+        const ret = try store.addCFStmt(.{ .ret = .{ .value = sum } }, .test_fixture);
         const add = try store.addCFStmt(.{ .assign_low_level = .{
             .target = sum,
             .op = .num_int_add_wrap,
             .rc_effect = LIR.LowLevel.num_int_add_wrap.rcEffect(),
             .args = try store.addLocalSpan(&.{ lhs, rhs }),
             .next = ret,
-        } });
+        } }, .test_fixture);
         const rhs_literal = try store.addCFStmt(.{ .assign_literal = .{
             .target = rhs,
             .value = .{ .i64_literal = .{ .value = @intCast(i), .layout_idx = .u64 } },
             .next = add,
-        } });
+        } }, .test_fixture);
         const lhs_literal = try store.addCFStmt(.{ .assign_literal = .{
             .target = lhs,
             .value = .{ .i64_literal = .{ .value = 40, .layout_idx = .u64 } },
             .next = rhs_literal,
-        } });
+        } }, .test_fixture);
         _ = try store.addProcSpec(.{
             .name = store.freshSyntheticSymbol(),
             .identity = LIR.ProcIdentity.forTest(@intCast(i)),
             .args = LIR.LocalSpan.empty(),
             .body = lhs_literal,
             .ret_layout = .u64,
-        });
+        }, .none);
     }
 
     var codegen = Self.init(allocator, &store, &layouts, &.{}, &.{}, &.{}, .default);
@@ -21850,8 +21850,8 @@ fn compileJoinFixture(allocator: Allocator, shape: JoinFixtureShape) ScanError!B
     var next_join_point: u32 = 0;
     const join_id = freshJoinFixtureJoinPointId(&next_join_point);
 
-    const body_ret = try store.addCFStmt(.{ .ret = .{ .value = late } });
-    const jump_back = try store.addCFStmt(.{ .jump = .{ .target = join_id } });
+    const body_ret = try store.addCFStmt(.{ .ret = .{ .value = late } }, .test_fixture);
+    const jump_back = try store.addCFStmt(.{ .jump = .{ .target = join_id } }, .test_fixture);
 
     const proc_body = switch (shape) {
         .assign_in_remainder => blk: {
@@ -21859,13 +21859,13 @@ fn compileJoinFixture(allocator: Allocator, shape: JoinFixtureShape) ScanError!B
                 .target = late,
                 .value = .{ .i64_literal = .{ .value = join_fixture_literal, .layout_idx = .u64 } },
                 .next = jump_back,
-            } });
+            } }, .test_fixture);
             break :blk try store.addCFStmt(.{ .join = .{
                 .id = join_id,
                 .params = LIR.LocalSpan.empty(),
                 .body = body_ret,
                 .remainder = assign,
-            } });
+            } }, .test_fixture);
         },
         .assign_before_join => blk: {
             const join_stmt = try store.addCFStmt(.{ .join = .{
@@ -21873,12 +21873,12 @@ fn compileJoinFixture(allocator: Allocator, shape: JoinFixtureShape) ScanError!B
                 .params = LIR.LocalSpan.empty(),
                 .body = body_ret,
                 .remainder = jump_back,
-            } });
+            } }, .test_fixture);
             break :blk try store.addCFStmt(.{ .assign_literal = .{
                 .target = late,
                 .value = .{ .i64_literal = .{ .value = join_fixture_literal, .layout_idx = .u64 } },
                 .next = join_stmt,
-            } });
+            } }, .test_fixture);
         },
     };
 
@@ -21888,7 +21888,7 @@ fn compileJoinFixture(allocator: Allocator, shape: JoinFixtureShape) ScanError!B
         .args = LIR.LocalSpan.empty(),
         .body = proc_body,
         .ret_layout = .u64,
-    });
+    }, .none);
 
     var codegen = Self.init(allocator, &store, &layouts, &.{}, &.{}, &.{}, .default);
     defer codegen.deinit();
@@ -21931,14 +21931,14 @@ test "procedure parameters keep their ABI local indices when the body reads them
 
     const first = try store.addLocal(.{ .layout_idx = .u64 });
     const second = try store.addLocal(.{ .layout_idx = .u64 });
-    const ret = try store.addCFStmt(.{ .ret = .{ .value = second } });
+    const ret = try store.addCFStmt(.{ .ret = .{ .value = second } }, .test_fixture);
     _ = try store.addProcSpec(.{
         .name = store.freshSyntheticSymbol(),
         .identity = LIR.ProcIdentity.forTest(1),
         .args = try store.addLocalSpan(&.{ first, second }),
         .body = ret,
         .ret_layout = .u64,
-    });
+    }, .none);
 
     var codegen = Self.init(allocator, &store, &layouts, &.{}, &.{}, &.{}, .default);
     defer codegen.deinit();
@@ -21968,12 +21968,12 @@ test "sibling procedures that share LocalIds emit identical independent bodies" 
     defer layouts.deinit();
 
     const value = try store.addLocal(.{ .layout_idx = .u64 });
-    const ret = try store.addCFStmt(.{ .ret = .{ .value = value } });
+    const ret = try store.addCFStmt(.{ .ret = .{ .value = value } }, .test_fixture);
     const assign = try store.addCFStmt(.{ .assign_literal = .{
         .target = value,
         .value = .{ .i64_literal = .{ .value = join_fixture_literal, .layout_idx = .u64 } },
         .next = ret,
-    } });
+    } }, .test_fixture);
     for (0..2) |i| {
         _ = try store.addProcSpec(.{
             .name = store.freshSyntheticSymbol(),
@@ -21981,7 +21981,7 @@ test "sibling procedures that share LocalIds emit identical independent bodies" 
             .args = LIR.LocalSpan.empty(),
             .body = assign,
             .ret_layout = .u64,
-        });
+        }, .none);
     }
 
     var codegen = Self.init(allocator, &store, &layouts, &.{}, &.{}, &.{}, .default);
@@ -22005,12 +22005,12 @@ fn frameInventoryDeclaredLocals(allocator: Allocator, obsolete_locals: usize) Sc
     defer layouts.deinit();
 
     const value = try store.addLocal(.{ .layout_idx = .u64 });
-    const ret = try store.addCFStmt(.{ .ret = .{ .value = value } });
+    const ret = try store.addCFStmt(.{ .ret = .{ .value = value } }, .test_fixture);
     const assign = try store.addCFStmt(.{ .assign_literal = .{
         .target = value,
         .value = .{ .i64_literal = .{ .value = join_fixture_literal, .layout_idx = .u64 } },
         .next = ret,
-    } });
+    } }, .test_fixture);
 
     var inventory = std.ArrayList(LIR.LocalId).empty;
     defer inventory.deinit(allocator);
@@ -22027,7 +22027,7 @@ fn frameInventoryDeclaredLocals(allocator: Allocator, obsolete_locals: usize) Sc
         .frame_locals = try store.addLocalSpan(inventory.items),
         .body = assign,
         .ret_layout = .u64,
-    });
+    }, .none);
 
     var codegen = Self.init(allocator, &store, &layouts, &.{}, &.{}, &.{}, .default);
     defer codegen.deinit();

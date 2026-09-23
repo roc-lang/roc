@@ -54,7 +54,8 @@ pub const MAGIC: u32 = 0x52494c52; // "RLIR" in little-endian bytes.
 /// v31: frozen static values and explicit callable/data relocations.
 /// v32: procedure specs carry content identities.
 /// v34: procedure specs carry producer-local native code revisions.
-pub const FORMAT_VERSION: u32 = 34;
+/// v35: statements carry an explicit origin kind (`LIR.OriginKind`).
+pub const FORMAT_VERSION: u32 = 35;
 const StaticDataImage = @import("lir_image_static_data.zig").Schema(@This());
 
 /// Public `ImageError` declaration.
@@ -167,6 +168,7 @@ pub const LirStoreImage = extern struct {
     cf_stmt_locs: ArrayRef,
     cf_stmt_regions: ArrayRef,
     cf_stmt_inline_scopes: ArrayRef,
+    cf_stmt_origin_kinds: ArrayRef,
     inline_scopes: ArrayRef,
     proc_locs: ArrayRef,
     proc_debug_names: ArrayRef,
@@ -197,6 +199,7 @@ pub const LirStoreImage = extern struct {
             .cf_stmt_locs = try arrayRef(base_ptr, image_size, store.cf_stmt_locs.unsafeRawItemsForView()),
             .cf_stmt_regions = try arrayRef(base_ptr, image_size, store.cf_stmt_regions.unsafeRawItemsForView()),
             .cf_stmt_inline_scopes = try arrayRef(base_ptr, image_size, store.cf_stmt_inline_scopes.unsafeRawItemsForView()),
+            .cf_stmt_origin_kinds = try arrayRef(base_ptr, image_size, store.cf_stmt_origin_kinds.unsafeRawItemsForView()),
             .inline_scopes = try arrayRef(base_ptr, image_size, store.inline_scopes.unsafeRawItemsForView()),
             .proc_locs = try arrayRef(base_ptr, image_size, store.proc_locs.unsafeRawItemsForView()),
             .proc_debug_names = try arrayRef(base_ptr, image_size, store.proc_debug_names.unsafeRawItemsForView()),
@@ -234,6 +237,7 @@ pub const LirStoreImage = extern struct {
             .cf_stmt_locs = try copyArrayRef(allocator, base_ptr, image_capacity, store.cf_stmt_locs.unsafeRawItemsForView()),
             .cf_stmt_regions = try copyArrayRef(allocator, base_ptr, image_capacity, store.cf_stmt_regions.unsafeRawItemsForView()),
             .cf_stmt_inline_scopes = try copyArrayRef(allocator, base_ptr, image_capacity, store.cf_stmt_inline_scopes.unsafeRawItemsForView()),
+            .cf_stmt_origin_kinds = try copyArrayRef(allocator, base_ptr, image_capacity, store.cf_stmt_origin_kinds.unsafeRawItemsForView()),
             .inline_scopes = try copyArrayRef(allocator, base_ptr, image_capacity, store.inline_scopes.unsafeRawItemsForView()),
             .proc_locs = try copyArrayRef(allocator, base_ptr, image_capacity, store.proc_locs.unsafeRawItemsForView()),
             .proc_debug_names = try copyArrayRef(allocator, base_ptr, image_capacity, store.proc_debug_names.unsafeRawItemsForView()),
@@ -269,15 +273,13 @@ pub const LirStoreImage = extern struct {
             .cf_stmt_locs = try guardedListFromRef(base.SourceLoc, "LirStore.cf_stmt_locs", base_ptr, image_size, self.cf_stmt_locs),
             .cf_stmt_regions = try guardedListFromRef(base.Region, "LirStore.cf_stmt_regions", base_ptr, image_size, self.cf_stmt_regions),
             .cf_stmt_inline_scopes = try guardedListFromRef(LIR.InlineScopeId, "LirStore.cf_stmt_inline_scopes", base_ptr, image_size, self.cf_stmt_inline_scopes),
+            .cf_stmt_origin_kinds = try guardedListFromRef(LIR.OriginKind, "LirStore.cf_stmt_origin_kinds", base_ptr, image_size, self.cf_stmt_origin_kinds),
             .inline_scopes = try guardedListFromRef(LIR.InlineScope, "LirStore.inline_scopes", base_ptr, image_size, self.inline_scopes),
             .body_coordinator = null,
             .body_prefix = std.mem.zeroes(LirStore.BodyPrefix),
             .proc_locs = try guardedListFromRef(base.SourceLoc, "LirStore.proc_locs", base_ptr, image_size, self.proc_locs),
             .proc_debug_names = try guardedListFromRef(LirStore.ProcDebugName, "LirStore.proc_debug_names", base_ptr, image_size, self.proc_debug_names),
             .local_names = try guardedListFromRef(u32, "LirStore.local_names", base_ptr, image_size, self.local_names),
-            .current_loc = base.SourceLoc.none,
-            .current_region = base.Region.zero(),
-            .current_inline_scope = LIR.InlineScopeId.none,
         };
     }
 };
@@ -899,7 +901,7 @@ comptime {
     // guards cross-version mismatches. `tail_call_builder`, `proc_rewrite` and
     // `facts` are transient worker state, not serialized, and default to
     // null or empty in views.
-    std.debug.assert(@typeInfo(LirStore).@"struct".fields.len == 38);
+    std.debug.assert(@typeInfo(LirStore).@"struct".fields.len == 36);
     std.debug.assert(@typeInfo(layout_mod.Store).@"struct".fields.len == 12);
     std.debug.assert(@typeInfo(base.StringLiteral.Store).@"struct".fields.len == 1);
 }
@@ -1329,7 +1331,7 @@ test "LIR image views empty and populated boxy tables" {
         .layout_idx = .str,
         .boxy_desc = .{ .local = ret_desc_local },
     });
-    const ret_stmt = try lowered.store.addCFStmt(.{ .ret = .{ .value = ret_value } });
+    const ret_stmt = try lowered.store.addCFStmt(.{ .ret = .{ .value = ret_value } }, .test_fixture);
     const proc_id = try lowered.store.addProcSpec(.{
         .name = lowered.store.freshSyntheticSymbol(),
         .identity = LIR.ProcIdentity.forTest(3),
@@ -1338,7 +1340,7 @@ test "LIR image views empty and populated boxy tables" {
         .body = ret_stmt,
         .ret_layout = .str,
         .ret_desc = .{ .local = ret_desc_local },
-    });
+    }, .none);
 
     try fillHeaderInBuffer(header, buffer[0..].ptr, buffer.len, &lowered, &.{});
     var populated_view = try viewMappedImageWithAllocator(header, buffer[0..].ptr, buffer.len, .u64, allocator);
@@ -1437,7 +1439,7 @@ test "LIR image declarations are referenced" {
     std.testing.refAllDecls(@This());
 }
 
-/// The 22 `LirStore` array-backed lists serialized as `ArrayRef`s, in the order
+/// The 23 `LirStore` array-backed lists serialized as `ArrayRef`s, in the order
 /// they appear in `LirStoreImage`. `strings` (a sub-image) and the scalar
 /// `next_synthetic_symbol` are serialized too but exercised separately below.
 const serialized_guarded_fields = [_][]const u8{
@@ -1459,6 +1461,7 @@ const serialized_guarded_fields = [_][]const u8{
     "cf_stmt_locs",
     "cf_stmt_regions",
     "cf_stmt_inline_scopes",
+    "cf_stmt_origin_kinds",
     "inline_scopes",
     "proc_locs",
     "proc_debug_names",
@@ -1476,14 +1479,14 @@ test "LIR image round-trips ordered procedure rewrites with relocated suffixes" 
     var roots: [2]LIR.CFStmtId = undefined;
     var procs: [2]LIR.LirProcSpecId = undefined;
     for (&roots, &procs) |*root, *proc| {
-        root.* = try store.addCFStmt(.{ .ret = .{ .value = original } });
+        root.* = try store.addCFStmt(.{ .ret = .{ .value = original } }, .test_fixture);
         proc.* = try store.addProcSpec(.{
             .identity = LIR.ProcIdentity.forTest(@intCast(store.procSpecCount())),
             .name = store.freshSyntheticSymbol(),
             .args = .empty(),
             .body = root.*,
             .ret_layout = pointer_layout,
-        });
+        }, .none);
     }
     const prefix = store.captureBodyPrefix();
     var first = try store.cloneForProcRewrite(gpa, procs[0]);
@@ -1492,19 +1495,24 @@ test "LIR image round-trips ordered procedure rewrites with relocated suffixes" 
     defer second.deinit();
     // Both shards start with the same suffix identities. The second commit
     // must relocate them before the image can forget all worker overlay state.
+    const shard_loc: base.SourceLoc = .{ .file = 1, .line = 2, .column = 3 };
     for ([_]*LirStore{ &first, &second }, roots, [_][]const u8{ "first", "second" }) |worker, root, name| {
         const local = try worker.addLocal(.{ .layout_idx = pointer_layout });
         try worker.setLocalName(local, name);
         const string = try worker.insertString(name);
-        worker.current_loc = .{ .file = 1, .line = 2, .column = 3 };
-        worker.current_inline_scope = try worker.addInlineScope(.{
+        const inline_scope = try worker.addInlineScope(.{
             .source_symbol = store.getProcSpec(procs[0]).name,
             .source_name = string,
-            .source_loc = worker.current_loc,
+            .source_loc = shard_loc,
             .call_site = .{ .file = 1, .line = 4, .column = 5 },
             .parent = .none,
         });
-        const ret = try worker.addCFStmt(.{ .ret = .{ .value = local } });
+        const ret = try worker.addCFStmt(.{ .ret = .{ .value = local } }, .{
+            .loc = shard_loc,
+            .region = base.Region.zero(),
+            .inline_scope = inline_scope,
+            .kind = .source,
+        });
         worker.getCFStmtPtr(root).* = .{ .assign_ref = .{
             .target = local,
             .op = .{ .local = original },
@@ -1548,7 +1556,7 @@ test "LIR image round-trips ordered procedure rewrites with relocated suffixes" 
         try std.testing.expectEqualDeep(lowered.layouts.getLayout(pointer_layout), view.layouts.getLayout(pointer_layout));
         const scope = view.store.inlineScope(view.store.stmtInlineScope(assign.next));
         try std.testing.expectEqualStrings(name, view.store.getString(scope.source_name));
-        try std.testing.expectEqual(first.current_loc, view.store.stmtLoc(assign.next));
+        try std.testing.expectEqual(shard_loc, view.store.stmtLoc(assign.next));
     }
 }
 
@@ -1707,10 +1715,6 @@ test "LIR image copies and round-trips every populated store field" {
     try std.testing.expectEqual(@as(usize, 0), view.store.patterns.len());
     try std.testing.expectEqual(@as(usize, 0), view.store.pattern_ids.len());
 
-    // Ambient lowering state is reset by `view`; it is not image data.
-    try std.testing.expectEqual(base.SourceLoc.none, view.store.current_loc);
-    try std.testing.expectEqual(base.Region.zero(), view.store.current_region);
-    try std.testing.expectEqual(LIR.InlineScopeId.none, view.store.current_inline_scope);
     try std.testing.expectEqual(@as(?*const LirStore, null), view.store.body_coordinator);
     try std.testing.expect(view.store.proc_rewrite == null);
     try std.testing.expectEqual(std.mem.zeroes(LirStore.BodyPrefix), view.store.body_prefix);
@@ -1772,7 +1776,7 @@ test "mapped frozen graph preserves explicit data callable and helper relocation
     defer program.deinit();
     const value_slot: LIR.StaticDataId = @enumFromInt(program.static_data_values.items.len);
     try program.static_data_values.append(allocator, .{ .initializer = null, .layout_idx = .u64 });
-    const worker = try program.store.addProcSpec(.{ .name = program.store.freshSyntheticSymbol(), .identity = LIR.ProcIdentity.forTest(2), .args = .empty(), .body = null, .ret_layout = .zst });
+    const worker = try program.store.addProcSpec(.{ .name = program.store.freshSyntheticSymbol(), .identity = LIR.ProcIdentity.forTest(2), .args = .empty(), .body = null, .ret_layout = .zst }, .none);
     const memory = try allocator.alignedAlloc(u8, .@"16", 16384);
     defer allocator.free(memory);
     var fixed = std.heap.FixedBufferAllocator.init(memory);
@@ -1837,9 +1841,9 @@ test "in-place frozen image retains existing LIR arrays" {
     const value_slot: LIR.StaticDataId = @enumFromInt(program.static_data_values.items.len);
     try program.static_data_values.append(image_allocator, .{ .initializer = null, .layout_idx = .u64 });
     const local = try program.store.addLocal(.{ .layout_idx = .u64 });
-    const ret = try program.store.addCFStmt(.{ .ret = .{ .value = local } });
-    const body = try program.store.addCFStmt(.{ .assign_literal = .{ .target = local, .value = .{ .static_data = value_slot }, .next = ret } });
-    const proc = try program.store.addProcSpec(.{ .name = .fromRaw(1), .identity = LIR.ProcIdentity.forTest(1), .args = .empty(), .frame_locals = try program.store.addLocalSpan(&.{local}), .body = body, .ret_layout = .u64 });
+    const ret = try program.store.addCFStmt(.{ .ret = .{ .value = local } }, .test_fixture);
+    const body = try program.store.addCFStmt(.{ .assign_literal = .{ .target = local, .value = .{ .static_data = value_slot }, .next = ret } }, .test_fixture);
+    const proc = try program.store.addProcSpec(.{ .name = .fromRaw(1), .identity = LIR.ProcIdentity.forTest(1), .args = .empty(), .frame_locals = try program.store.addLocalSpan(&.{local}), .body = body, .ret_layout = .u64 }, .none);
     try program.root_procs.append(image_allocator, proc);
     var value: [8]u8 = undefined;
     std.mem.writeInt(u64, &value, 42, .little);

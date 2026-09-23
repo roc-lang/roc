@@ -698,7 +698,7 @@ test "native root export preserves erased callable procedure and drop helper ide
     const allocator = std.testing.allocator;
     var program = try Program.Result.init(allocator, @import("base").target.TargetUsize.native);
     defer program.deinit();
-    const proc = try program.store.addProcSpec(.{ .name = lir.Symbol.fromRaw(42), .identity = lir.LIR.ProcIdentity.forTest(1), .args = .empty(), .ret_layout = .zst });
+    const proc = try program.store.addProcSpec(.{ .name = lir.Symbol.fromRaw(42), .identity = lir.LIR.ProcIdentity.forTest(1), .args = .empty(), .ret_layout = .zst }, .none);
     const str_plan: Program.ConstPlanId = @enumFromInt(program.const_plans.items.len);
     const fn_layout = try program.layouts.insertErasedCallable();
     try program.const_plans.append(allocator, .str);

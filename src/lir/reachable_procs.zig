@@ -1042,52 +1042,52 @@ test "reachable proc pass compacts proc specs and remaps root ids" {
     defer result.deinit();
 
     const value = try result.store.addLocal(.{ .layout_idx = .zst });
-    const live_body = try result.store.addCFStmt(.{ .ret = .{ .value = value } });
+    const live_body = try result.store.addCFStmt(.{ .ret = .{ .value = value } }, .test_fixture);
     const live_proc = try result.store.addProcSpec(.{
         .name = result.store.freshSyntheticSymbol(),
         .identity = LIR.ProcIdentity.forTest(7),
         .args = LIR.LocalSpan.empty(),
         .body = live_body,
         .ret_layout = .zst,
-    });
+    }, .none);
 
-    const dead_callee_body = try result.store.addCFStmt(.runtime_error);
+    const dead_callee_body = try result.store.addCFStmt(.runtime_error, .test_fixture);
     const dead_callee = try result.store.addProcSpec(.{
         .name = result.store.freshSyntheticSymbol(),
         .identity = LIR.ProcIdentity.forTest(6),
         .args = LIR.LocalSpan.empty(),
         .body = dead_callee_body,
         .ret_layout = .zst,
-    });
-    const dead_caller_ret = try result.store.addCFStmt(.{ .ret = .{ .value = value } });
+    }, .none);
+    const dead_caller_ret = try result.store.addCFStmt(.{ .ret = .{ .value = value } }, .test_fixture);
     const dead_caller_body = try result.store.addCFStmt(.{ .assign_call = .{
         .target = value,
         .proc = dead_callee,
         .args = LIR.LocalSpan.empty(),
         .next = dead_caller_ret,
-    } });
+    } }, .test_fixture);
     _ = try result.store.addProcSpec(.{
         .name = result.store.freshSyntheticSymbol(),
         .identity = LIR.ProcIdentity.forTest(5),
         .args = LIR.LocalSpan.empty(),
         .body = dead_caller_body,
         .ret_layout = .zst,
-    });
+    }, .none);
 
-    const root_ret = try result.store.addCFStmt(.{ .ret = .{ .value = value } });
+    const root_ret = try result.store.addCFStmt(.{ .ret = .{ .value = value } }, .test_fixture);
     const root_body = try result.store.addCFStmt(.{ .assign_call = .{
         .target = value,
         .proc = live_proc,
         .args = LIR.LocalSpan.empty(),
         .next = root_ret,
-    } });
+    } }, .test_fixture);
     const root_proc = try result.store.addProcSpec(.{
         .name = result.store.freshSyntheticSymbol(),
         .identity = LIR.ProcIdentity.forTest(2),
         .args = LIR.LocalSpan.empty(),
         .body = root_body,
         .ret_layout = .zst,
-    });
+    }, .none);
     try result.root_procs.append(std.testing.allocator, root_proc);
 
     try run(&result);
@@ -1105,21 +1105,21 @@ test "reachable proc pass follows static initializer proc refs" {
     defer result.deinit();
 
     const value = try result.store.addLocal(.{ .layout_idx = .zst });
-    const callable_body = try result.store.addCFStmt(.{ .ret = .{ .value = value } });
+    const callable_body = try result.store.addCFStmt(.{ .ret = .{ .value = value } }, .test_fixture);
     const callable_proc = try result.store.addProcSpec(.{
         .name = result.store.freshSyntheticSymbol(),
         .identity = LIR.ProcIdentity.forTest(6),
         .args = LIR.LocalSpan.empty(),
         .body = callable_body,
         .ret_layout = .zst,
-    });
+    }, .none);
 
-    const initializer_ret = try result.store.addCFStmt(.{ .ret = .{ .value = value } });
+    const initializer_ret = try result.store.addCFStmt(.{ .ret = .{ .value = value } }, .test_fixture);
     const initializer_body = try result.store.addCFStmt(.{ .assign_literal = .{
         .target = value,
         .value = .{ .proc_ref = callable_proc },
         .next = initializer_ret,
-    } });
+    } }, .test_fixture);
     const initializer = try result.store.addProcSpec(.{
         .name = result.store.freshSyntheticSymbol(),
         .identity = LIR.ProcIdentity.forTest(5),
@@ -1127,7 +1127,7 @@ test "reachable proc pass follows static initializer proc refs" {
         .body = initializer_body,
         .ret_layout = .zst,
         .is_static_initializer = true,
-    });
+    }, .none);
 
     const static_data: LIR.StaticDataId = @enumFromInt(@as(u32, @intCast(result.static_data_values.items.len)));
     try result.static_data_values.append(std.testing.allocator, .{
@@ -1135,19 +1135,19 @@ test "reachable proc pass follows static initializer proc refs" {
         .layout_idx = .zst,
     });
 
-    const root_ret = try result.store.addCFStmt(.{ .ret = .{ .value = value } });
+    const root_ret = try result.store.addCFStmt(.{ .ret = .{ .value = value } }, .test_fixture);
     const root_body = try result.store.addCFStmt(.{ .assign_literal = .{
         .target = value,
         .value = .{ .static_data = static_data },
         .next = root_ret,
-    } });
+    } }, .test_fixture);
     const root_proc = try result.store.addProcSpec(.{
         .name = result.store.freshSyntheticSymbol(),
         .identity = LIR.ProcIdentity.forTest(4),
         .args = LIR.LocalSpan.empty(),
         .body = root_body,
         .ret_layout = .zst,
-    });
+    }, .none);
     try result.root_procs.append(std.testing.allocator, root_proc);
 
     try run(&result);
@@ -1167,16 +1167,16 @@ test "reachable proc pass follows packed erased callable refs in static initiali
     defer result.deinit();
 
     const value = try result.store.addLocal(.{ .layout_idx = .zst });
-    const callable_body = try result.store.addCFStmt(.{ .ret = .{ .value = value } });
+    const callable_body = try result.store.addCFStmt(.{ .ret = .{ .value = value } }, .test_fixture);
     const callable_proc = try result.store.addProcSpec(.{
         .name = result.store.freshSyntheticSymbol(),
         .identity = LIR.ProcIdentity.forTest(5),
         .args = LIR.LocalSpan.empty(),
         .body = callable_body,
         .ret_layout = .zst,
-    });
+    }, .none);
 
-    const initializer_ret = try result.store.addCFStmt(.{ .ret = .{ .value = value } });
+    const initializer_ret = try result.store.addCFStmt(.{ .ret = .{ .value = value } }, .test_fixture);
     const initializer_body = try result.store.addCFStmt(.{ .assign_packed_erased_fn = .{
         .target = value,
         .proc = callable_proc,
@@ -1184,7 +1184,7 @@ test "reachable proc pass follows packed erased callable refs in static initiali
         .capture_layout = null,
         .on_drop = .none,
         .next = initializer_ret,
-    } });
+    } }, .test_fixture);
     const initializer = try result.store.addProcSpec(.{
         .name = result.store.freshSyntheticSymbol(),
         .identity = LIR.ProcIdentity.forTest(4),
@@ -1192,7 +1192,7 @@ test "reachable proc pass follows packed erased callable refs in static initiali
         .body = initializer_body,
         .ret_layout = .zst,
         .is_static_initializer = true,
-    });
+    }, .none);
 
     const static_data: LIR.StaticDataId = @enumFromInt(@as(u32, @intCast(result.static_data_values.items.len)));
     try result.static_data_values.append(std.testing.allocator, .{
@@ -1200,19 +1200,19 @@ test "reachable proc pass follows packed erased callable refs in static initiali
         .layout_idx = .zst,
     });
 
-    const root_ret = try result.store.addCFStmt(.{ .ret = .{ .value = value } });
+    const root_ret = try result.store.addCFStmt(.{ .ret = .{ .value = value } }, .test_fixture);
     const root_body = try result.store.addCFStmt(.{ .assign_literal = .{
         .target = value,
         .value = .{ .static_data = static_data },
         .next = root_ret,
-    } });
+    } }, .test_fixture);
     const root_proc = try result.store.addProcSpec(.{
         .name = result.store.freshSyntheticSymbol(),
         .identity = LIR.ProcIdentity.forTest(3),
         .args = LIR.LocalSpan.empty(),
         .body = root_body,
         .ret_layout = .zst,
-    });
+    }, .none);
     try result.root_procs.append(std.testing.allocator, root_proc);
 
     try run(&result);
@@ -1232,7 +1232,7 @@ test "reachable proc pass publishes exact deduplicated boxy worker procs" {
     defer result.deinit();
 
     const value = try result.store.addLocal(.{ .layout_idx = .zst });
-    const ret = try result.store.addCFStmt(.{ .ret = .{ .value = value } });
+    const ret = try result.store.addCFStmt(.{ .ret = .{ .value = value } }, .test_fixture);
 
     const ignored_proc = try result.store.addProcSpec(.{
         .name = result.store.freshSyntheticSymbol(),
@@ -1240,28 +1240,28 @@ test "reachable proc pass publishes exact deduplicated boxy worker procs" {
         .args = LIR.LocalSpan.empty(),
         .body = ret,
         .ret_layout = .zst,
-    });
+    }, .none);
     const first_worker = try result.store.addProcSpec(.{
         .name = result.store.freshSyntheticSymbol(),
         .identity = LIR.ProcIdentity.forTest(3),
         .args = LIR.LocalSpan.empty(),
         .body = ret,
         .ret_layout = .zst,
-    });
+    }, .none);
     const second_worker = try result.store.addProcSpec(.{
         .name = result.store.freshSyntheticSymbol(),
         .identity = LIR.ProcIdentity.forTest(2),
         .args = LIR.LocalSpan.empty(),
         .body = ret,
         .ret_layout = .zst,
-    });
+    }, .none);
     const root_proc = try result.store.addProcSpec(.{
         .name = result.store.freshSyntheticSymbol(),
         .identity = LIR.ProcIdentity.forTest(1),
         .args = LIR.LocalSpan.empty(),
         .body = ret,
         .ret_layout = .zst,
-    });
+    }, .none);
     try result.root_procs.append(std.testing.allocator, root_proc);
 
     // This pass only inspects each slot's presence, structural-equality status,
@@ -1288,7 +1288,7 @@ test "frozen runtime data prunes witnesses and remaps callable and data identiti
     var result = try LirProgram.Result.init(allocator, base.target.TargetUsize.native);
     defer result.deinit();
     const local = try result.store.addLocal(.{ .layout_idx = .zst });
-    const ret = try result.store.addCFStmt(.{ .ret = .{ .value = local } });
+    const ret = try result.store.addCFStmt(.{ .ret = .{ .value = local } }, .test_fixture);
     _ = try result.store.addProcSpec(.{
         .name = result.store.freshSyntheticSymbol(),
         .identity = LIR.ProcIdentity.forTest(3),
@@ -1296,7 +1296,7 @@ test "frozen runtime data prunes witnesses and remaps callable and data identiti
         .body = ret,
         .ret_layout = .zst,
         .is_static_initializer = true,
-    });
+    }, .none);
     const callable = try result.store.addProcSpec(.{
         .name = result.store.freshSyntheticSymbol(),
         .identity = LIR.ProcIdentity.forTest(2),
@@ -1304,7 +1304,7 @@ test "frozen runtime data prunes witnesses and remaps callable and data identiti
         .args = .empty(),
         .body = ret,
         .ret_layout = .zst,
-    });
+    }, .none);
     const discarded_slot: LIR.StaticDataId = @enumFromInt(result.static_data_values.items.len);
     try result.static_data_values.append(allocator, .{ .initializer = null, .layout_idx = .zst });
     const retained_slot: LIR.StaticDataId = @enumFromInt(result.static_data_values.items.len);
@@ -1313,7 +1313,7 @@ test "frozen runtime data prunes witnesses and remaps callable and data identiti
         .target = local,
         .value = .{ .static_data = retained_slot },
         .next = ret,
-    } });
+    } }, .test_fixture);
     const runtime = try result.store.addProcSpec(.{
         .name = result.store.freshSyntheticSymbol(),
         .identity = LIR.ProcIdentity.forTest(1),
@@ -1321,7 +1321,7 @@ test "frozen runtime data prunes witnesses and remaps callable and data identiti
         .args = .empty(),
         .body = body,
         .ret_layout = .zst,
-    });
+    }, .none);
     try result.root_procs.append(allocator, runtime);
     const exports = try allocator.alloc(LirProgram.StaticDataExport, 3);
     for (exports, 0..) |*item, index| {
@@ -1386,7 +1386,7 @@ test "CTFE code demand retains union identities and omits runtime-only procedure
     var result = try LirProgram.Result.init(allocator, base.target.TargetUsize.native);
     defer result.deinit();
     const local = try result.store.addLocal(.{ .layout_idx = .zst });
-    const ret = try result.store.addCFStmt(.{ .ret = .{ .value = local } });
+    const ret = try result.store.addCFStmt(.{ .ret = .{ .value = local } }, .test_fixture);
     var procs: [3]LIR.LirProcSpecId = undefined;
     for (&procs) |*proc| proc.* = try result.store.addProcSpec(.{
         .name = result.store.freshSyntheticSymbol(),
@@ -1394,7 +1394,7 @@ test "CTFE code demand retains union identities and omits runtime-only procedure
         .args = .empty(),
         .body = ret,
         .ret_layout = .zst,
-    });
+    }, .none);
     try result.root_procs.appendSlice(allocator, &.{ procs[0], procs[1] });
     var exports = [_]LirProgram.StaticDataExport{.{
         .symbol_name = "callable",
@@ -1422,9 +1422,9 @@ test "erased callable pruning frees evidence for fully and partly discarded sets
     var result = try LirProgram.Result.init(allocator, base.target.TargetUsize.native);
     defer result.deinit();
     const local = try result.store.addLocal(.{ .layout_idx = .zst });
-    const body = try result.store.addCFStmt(.{ .ret = .{ .value = local } });
-    const live = try result.store.addProcSpec(.{ .name = result.store.freshSyntheticSymbol(), .identity = LIR.ProcIdentity.forTest(1), .args = .empty(), .body = body, .ret_layout = .zst });
-    const dead = try result.store.addProcSpec(.{ .name = result.store.freshSyntheticSymbol(), .identity = LIR.ProcIdentity.forTest(1), .args = .empty(), .body = body, .ret_layout = .zst });
+    const body = try result.store.addCFStmt(.{ .ret = .{ .value = local } }, .test_fixture);
+    const live = try result.store.addProcSpec(.{ .name = result.store.freshSyntheticSymbol(), .identity = LIR.ProcIdentity.forTest(1), .args = .empty(), .body = body, .ret_layout = .zst }, .none);
+    const dead = try result.store.addProcSpec(.{ .name = result.store.freshSyntheticSymbol(), .identity = LIR.ProcIdentity.forTest(1), .args = .empty(), .body = body, .ret_layout = .zst }, .none);
     try result.root_procs.append(allocator, live);
     const callable_layout = try result.layouts.insertErasedCallable();
     for ([_][]const LIR.LirProcSpecId{ &.{dead}, &.{ live, dead } }) |procs| {

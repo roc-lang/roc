@@ -222,11 +222,11 @@ test "build emits demanded literal backing with static refcount headers" {
 
     const dead = try store.insertString("compile-time-only intermediate must not be emitted");
     const local = try store.addLocal(.{ .layout_idx = .str });
-    const end = try store.addCFStmt(.{ .ret = .{ .value = local } });
-    _ = try store.addCFStmt(.{ .assign_literal = .{ .target = local, .value = .{ .str_literal = .{ .backing = dead, .offset = 0, .len = @intCast(store.getString(dead).len) } }, .next = end } });
-    const tail = try store.addCFStmt(.{ .assign_literal = .{ .target = local, .value = .{ .str_literal = .{ .backing = large, .offset = 0, .len = @intCast(store.getString(large).len) } }, .next = end } });
-    const head = try store.addCFStmt(.{ .assign_literal = .{ .target = local, .value = .{ .str_literal = .{ .backing = small, .offset = 0, .len = 5 } }, .next = tail } });
-    _ = try store.addProcSpec(.{ .name = store.freshSyntheticSymbol(), .identity = lir.LIR.ProcIdentity.forTest(1), .args = .empty(), .body = head, .ret_layout = .str });
+    const end = try store.addCFStmt(.{ .ret = .{ .value = local } }, .test_fixture);
+    _ = try store.addCFStmt(.{ .assign_literal = .{ .target = local, .value = .{ .str_literal = .{ .backing = dead, .offset = 0, .len = @intCast(store.getString(dead).len) } }, .next = end } }, .test_fixture);
+    const tail = try store.addCFStmt(.{ .assign_literal = .{ .target = local, .value = .{ .str_literal = .{ .backing = large, .offset = 0, .len = @intCast(store.getString(large).len) } }, .next = end } }, .test_fixture);
+    const head = try store.addCFStmt(.{ .assign_literal = .{ .target = local, .value = .{ .str_literal = .{ .backing = small, .offset = 0, .len = 5 } }, .next = tail } }, .test_fixture);
+    _ = try store.addProcSpec(.{ .name = store.freshSyntheticSymbol(), .identity = lir.LIR.ProcIdentity.forTest(1), .args = .empty(), .body = head, .ret_layout = .str }, .none);
 
     var table = try build(allocator, &store, .x64linux);
     defer table.deinit();

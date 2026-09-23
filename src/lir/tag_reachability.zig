@@ -787,28 +787,28 @@ test "tag reachability bypasses call result and direct payload switches" {
 
     const callee_inner = try f.local(f.inner_layout);
     const callee_ret = try f.local(f.outer_layout);
-    const callee_ret_stmt = try store.addCFStmt(.{ .ret = .{ .value = callee_ret } });
+    const callee_ret_stmt = try store.addCFStmt(.{ .ret = .{ .value = callee_ret } }, .test_fixture);
     const callee_assign_ret = try store.addCFStmt(.{ .assign_tag = .{
         .target = callee_ret,
         .variant_index = 0,
         .discriminant = 0,
         .payload = callee_inner,
         .next = callee_ret_stmt,
-    } });
+    } }, .test_fixture);
     const callee_body = try store.addCFStmt(.{ .assign_tag = .{
         .target = callee_inner,
         .variant_index = 1,
         .discriminant = 1,
         .payload = null,
         .next = callee_assign_ret,
-    } });
+    } }, .test_fixture);
     const callee = try store.addProcSpec(.{
         .name = LIR.Symbol.fromRaw(1),
         .identity = LIR.ProcIdentity.forTest(8),
         .args = LIR.LocalSpan.empty(),
         .body = callee_body,
         .ret_layout = f.outer_layout,
-    });
+    }, .none);
 
     const caller_ret = try f.local(f.inner_layout);
     const call_result = try f.local(f.outer_layout);
@@ -816,19 +816,19 @@ test "tag reachability bypasses call result and direct payload switches" {
     const payload = try f.local(f.inner_layout);
     const inner_disc = try f.local(.u16);
 
-    const success = try store.addCFStmt(.{ .ret = .{ .value = caller_ret } });
-    const bad_outer = try store.addCFStmt(.{ .runtime_error = {} });
-    const bad_inner = try store.addCFStmt(.{ .runtime_error = {} });
+    const success = try store.addCFStmt(.{ .ret = .{ .value = caller_ret } }, .test_fixture);
+    const bad_outer = try store.addCFStmt(.{ .runtime_error = {} }, .test_fixture);
+    const bad_inner = try store.addCFStmt(.{ .runtime_error = {} }, .test_fixture);
     const inner_switch = try store.addCFStmt(.{ .switch_stmt = .{
         .cond = inner_disc,
         .branches = try store.addCFSwitchBranches(&[_]LIR.CFSwitchBranch{.{ .value = 0, .body = bad_inner }}),
         .default_branch = success,
-    } });
+    } }, .test_fixture);
     const inner_disc_read = try store.addCFStmt(.{ .assign_ref = .{
         .target = inner_disc,
         .op = .{ .discriminant = .{ .source = payload } },
         .next = inner_switch,
-    } });
+    } }, .test_fixture);
     const read_payload = try store.addCFStmt(.{ .assign_ref = .{
         .target = payload,
         .op = .{ .tag_payload_struct = .{
@@ -837,30 +837,30 @@ test "tag reachability bypasses call result and direct payload switches" {
             .tag_discriminant = 0,
         } },
         .next = inner_disc_read,
-    } });
+    } }, .test_fixture);
     const outer_switch = try store.addCFStmt(.{ .switch_stmt = .{
         .cond = outer_disc,
         .branches = try store.addCFSwitchBranches(&[_]LIR.CFSwitchBranch{.{ .value = 1, .body = bad_outer }}),
         .default_branch = read_payload,
-    } });
+    } }, .test_fixture);
     const outer_disc_read = try store.addCFStmt(.{ .assign_ref = .{
         .target = outer_disc,
         .op = .{ .discriminant = .{ .source = call_result } },
         .next = outer_switch,
-    } });
+    } }, .test_fixture);
     const caller_body = try store.addCFStmt(.{ .assign_call = .{
         .target = call_result,
         .proc = callee,
         .args = LIR.LocalSpan.empty(),
         .next = outer_disc_read,
-    } });
+    } }, .test_fixture);
     const caller = try store.addProcSpec(.{
         .name = LIR.Symbol.fromRaw(2),
         .identity = LIR.ProcIdentity.forTest(3),
         .args = try store.addLocalSpan(&[_]LIR.LocalId{caller_ret}),
         .body = caller_body,
         .ret_layout = f.inner_layout,
-    });
+    }, .none);
     try f.result.root_procs.append(testing.allocator, caller);
 
     try run(&f.result);
@@ -887,57 +887,57 @@ test "tag reachability tracks per-payload tags through payload structs" {
     const second = try f.local(f.inner_layout);
     const pair = try f.local(pair_layout);
     const callee_ret = try f.local(outer_layout);
-    const callee_ret_stmt = try store.addCFStmt(.{ .ret = .{ .value = callee_ret } });
+    const callee_ret_stmt = try store.addCFStmt(.{ .ret = .{ .value = callee_ret } }, .test_fixture);
     const callee_assign_ret = try store.addCFStmt(.{ .assign_tag = .{
         .target = callee_ret,
         .variant_index = 0,
         .discriminant = 0,
         .payload = pair,
         .next = callee_ret_stmt,
-    } });
+    } }, .test_fixture);
     const fields = try store.addLocalSpan(&[_]LIR.LocalId{ first, second });
     const assign_pair = try store.addCFStmt(.{ .assign_struct = .{
         .target = pair,
         .fields = fields,
         .next = callee_assign_ret,
-    } });
+    } }, .test_fixture);
     const assign_second = try store.addCFStmt(.{ .assign_tag = .{
         .target = second,
         .variant_index = 1,
         .discriminant = 1,
         .payload = null,
         .next = assign_pair,
-    } });
+    } }, .test_fixture);
     const callee_body = try store.addCFStmt(.{ .assign_tag = .{
         .target = first,
         .variant_index = 0,
         .discriminant = 0,
         .payload = null,
         .next = assign_second,
-    } });
+    } }, .test_fixture);
     const callee = try store.addProcSpec(.{
         .name = LIR.Symbol.fromRaw(4),
         .identity = LIR.ProcIdentity.forTest(7),
         .args = LIR.LocalSpan.empty(),
         .body = callee_body,
         .ret_layout = outer_layout,
-    });
+    }, .none);
 
     const call_result = try f.local(outer_layout);
     const payload = try f.local(f.inner_layout);
     const disc = try f.local(.u16);
-    const success = try store.addCFStmt(.{ .ret = .{ .value = payload } });
-    const bad = try store.addCFStmt(.{ .runtime_error = {} });
+    const success = try store.addCFStmt(.{ .ret = .{ .value = payload } }, .test_fixture);
+    const bad = try store.addCFStmt(.{ .runtime_error = {} }, .test_fixture);
     const switch_stmt = try store.addCFStmt(.{ .switch_stmt = .{
         .cond = disc,
         .branches = try store.addCFSwitchBranches(&[_]LIR.CFSwitchBranch{.{ .value = 0, .body = bad }}),
         .default_branch = success,
-    } });
+    } }, .test_fixture);
     const disc_read = try store.addCFStmt(.{ .assign_ref = .{
         .target = disc,
         .op = .{ .discriminant = .{ .source = payload } },
         .next = switch_stmt,
-    } });
+    } }, .test_fixture);
     const read_payload = try store.addCFStmt(.{ .assign_ref = .{
         .target = payload,
         .op = .{ .tag_payload = .{
@@ -947,20 +947,20 @@ test "tag reachability tracks per-payload tags through payload structs" {
             .tag_discriminant = 0,
         } },
         .next = disc_read,
-    } });
+    } }, .test_fixture);
     const caller_body = try store.addCFStmt(.{ .assign_call = .{
         .target = call_result,
         .proc = callee,
         .args = LIR.LocalSpan.empty(),
         .next = read_payload,
-    } });
+    } }, .test_fixture);
     const caller = try store.addProcSpec(.{
         .name = LIR.Symbol.fromRaw(5),
         .identity = LIR.ProcIdentity.forTest(2),
         .args = LIR.LocalSpan.empty(),
         .body = caller_body,
         .ret_layout = f.inner_layout,
-    });
+    }, .none);
     try f.result.root_procs.append(testing.allocator, caller);
 
     try run(&f.result);
@@ -996,9 +996,9 @@ test "tag reachability preserves nested tag variants extracted across a loop joi
     const loop_inner = try f.local(f.inner_layout);
     const disc = try f.local(.u16);
 
-    const branch_zero = try store.addCFStmt(.{ .ret = .{ .value = loop_inner } });
-    const branch_one = try store.addCFStmt(.{ .ret = .{ .value = loop_inner } });
-    const bad_default = try store.addCFStmt(.{ .runtime_error = {} });
+    const branch_zero = try store.addCFStmt(.{ .ret = .{ .value = loop_inner } }, .test_fixture);
+    const branch_one = try store.addCFStmt(.{ .ret = .{ .value = loop_inner } }, .test_fixture);
+    const bad_default = try store.addCFStmt(.{ .runtime_error = {} }, .test_fixture);
     const switch_stmt = try store.addCFStmt(.{ .switch_stmt = .{
         .cond = disc,
         .branches = try store.addCFSwitchBranches(&[_]LIR.CFSwitchBranch{
@@ -1006,28 +1006,28 @@ test "tag reachability preserves nested tag variants extracted across a loop joi
             .{ .value = 1, .body = branch_one },
         }),
         .default_branch = bad_default,
-    } });
+    } }, .test_fixture);
     const disc_read = try store.addCFStmt(.{ .assign_ref = .{
         .target = disc,
         .op = .{ .discriminant = .{ .source = loop_inner } },
         .next = switch_stmt,
-    } });
+    } }, .test_fixture);
     const read_loop_inner = try store.addCFStmt(.{ .assign_ref = .{
         .target = loop_inner,
         .op = .{ .field = .{ .source = loop_slot, .field_idx = 0 } },
         .next = disc_read,
-    } });
+    } }, .test_fixture);
     const merge_successor = try store.addCFStmt(.{ .set_local = .{
         .target = loop_slot,
         .value = extracted_wrapper,
         .mode = .replace_existing,
         .next = read_loop_inner,
-    } });
+    } }, .test_fixture);
     const read_successor = try store.addCFStmt(.{ .assign_ref = .{
         .target = extracted_wrapper,
         .op = .{ .field = .{ .source = extracted_pair, .field_idx = 1 } },
         .next = merge_successor,
-    } });
+    } }, .test_fixture);
     const read_step_payload = try store.addCFStmt(.{ .assign_ref = .{
         .target = extracted_pair,
         .op = .{ .tag_payload_struct = .{
@@ -1036,56 +1036,56 @@ test "tag reachability preserves nested tag variants extracted across a loop joi
             .tag_discriminant = 0,
         } },
         .next = read_successor,
-    } });
+    } }, .test_fixture);
     const assign_step = try store.addCFStmt(.{ .assign_tag = .{
         .target = step,
         .variant_index = 0,
         .discriminant = 0,
         .payload = pair,
         .next = read_step_payload,
-    } });
+    } }, .test_fixture);
     const assign_pair = try store.addCFStmt(.{ .assign_struct = .{
         .target = pair,
         .fields = try store.addLocalSpan(&[_]LIR.LocalId{ item, successor_wrapper }),
         .next = assign_step,
-    } });
+    } }, .test_fixture);
     const assign_successor_wrapper = try store.addCFStmt(.{ .assign_struct = .{
         .target = successor_wrapper,
         .fields = try store.addLocalSpan(&[_]LIR.LocalId{successor_tag}),
         .next = assign_pair,
-    } });
+    } }, .test_fixture);
     const assign_successor_tag = try store.addCFStmt(.{ .assign_tag = .{
         .target = successor_tag,
         .variant_index = 0,
         .discriminant = 0,
         .payload = null,
         .next = assign_successor_wrapper,
-    } });
+    } }, .test_fixture);
     const seed_loop_slot = try store.addCFStmt(.{ .set_local = .{
         .target = loop_slot,
         .value = initial_wrapper,
         .mode = .initialize_join_param,
         .next = assign_successor_tag,
-    } });
+    } }, .test_fixture);
     const assign_initial_wrapper = try store.addCFStmt(.{ .assign_struct = .{
         .target = initial_wrapper,
         .fields = try store.addLocalSpan(&[_]LIR.LocalId{initial_tag}),
         .next = seed_loop_slot,
-    } });
+    } }, .test_fixture);
     const body = try store.addCFStmt(.{ .assign_tag = .{
         .target = initial_tag,
         .variant_index = 1,
         .discriminant = 1,
         .payload = null,
         .next = assign_initial_wrapper,
-    } });
+    } }, .test_fixture);
     const proc = try store.addProcSpec(.{
         .name = LIR.Symbol.fromRaw(11),
         .identity = LIR.ProcIdentity.forTest(6),
         .args = LIR.LocalSpan.empty(),
         .body = body,
         .ret_layout = f.inner_layout,
-    });
+    }, .none);
     try f.result.root_procs.append(testing.allocator, proc);
 
     try run(&f.result);
@@ -1102,9 +1102,9 @@ test "tag reachability removes impossible explicit branches from multi-value set
 
     const local = try f.local(f.inner_layout);
     const disc = try f.local(.u16);
-    const ret_stmt = try store.addCFStmt(.{ .ret = .{ .value = local } });
-    const branch_zero = try store.addCFStmt(.{ .ret = .{ .value = local } });
-    const branch_two = try store.addCFStmt(.{ .runtime_error = {} });
+    const ret_stmt = try store.addCFStmt(.{ .ret = .{ .value = local } }, .test_fixture);
+    const branch_zero = try store.addCFStmt(.{ .ret = .{ .value = local } }, .test_fixture);
+    const branch_two = try store.addCFStmt(.{ .runtime_error = {} }, .test_fixture);
     const switch_stmt = try store.addCFStmt(.{ .switch_stmt = .{
         .cond = disc,
         .branches = try store.addCFSwitchBranches(&[_]LIR.CFSwitchBranch{
@@ -1112,33 +1112,33 @@ test "tag reachability removes impossible explicit branches from multi-value set
             .{ .value = 2, .body = branch_two },
         }),
         .default_branch = ret_stmt,
-    } });
+    } }, .test_fixture);
     const disc_read = try store.addCFStmt(.{ .assign_ref = .{
         .target = disc,
         .op = .{ .discriminant = .{ .source = local } },
         .next = switch_stmt,
-    } });
+    } }, .test_fixture);
     const assign_one = try store.addCFStmt(.{ .assign_tag = .{
         .target = local,
         .variant_index = 1,
         .discriminant = 1,
         .payload = null,
         .next = disc_read,
-    } });
+    } }, .test_fixture);
     const body = try store.addCFStmt(.{ .assign_tag = .{
         .target = local,
         .variant_index = 0,
         .discriminant = 0,
         .payload = null,
         .next = assign_one,
-    } });
+    } }, .test_fixture);
     const proc = try store.addProcSpec(.{
         .name = LIR.Symbol.fromRaw(3),
         .identity = LIR.ProcIdentity.forTest(5),
         .args = LIR.LocalSpan.empty(),
         .body = body,
         .ret_layout = f.inner_layout,
-    });
+    }, .none);
     try f.result.root_procs.append(testing.allocator, proc);
 
     try run(&f.result);
@@ -1159,44 +1159,44 @@ test "tag reachability keeps unrelated live discriminant reads" {
     const disc = try f.local(.u16);
     const other_disc = try f.local(.u16);
 
-    const ret_stmt = try store.addCFStmt(.{ .ret = .{ .value = disc } });
-    const bad = try store.addCFStmt(.{ .runtime_error = {} });
+    const ret_stmt = try store.addCFStmt(.{ .ret = .{ .value = disc } }, .test_fixture);
+    const bad = try store.addCFStmt(.{ .runtime_error = {} }, .test_fixture);
     const other_switch = try store.addCFStmt(.{ .switch_stmt = .{
         .cond = other_disc,
         .branches = try store.addCFSwitchBranches(&[_]LIR.CFSwitchBranch{.{ .value = 1, .body = ret_stmt }}),
         .default_branch = bad,
-    } });
+    } }, .test_fixture);
     const disc_read = try store.addCFStmt(.{ .assign_ref = .{
         .target = disc,
         .op = .{ .discriminant = .{ .source = source } },
         .next = other_switch,
-    } });
+    } }, .test_fixture);
     const other_disc_read = try store.addCFStmt(.{ .assign_ref = .{
         .target = other_disc,
         .op = .{ .discriminant = .{ .source = other } },
         .next = disc_read,
-    } });
+    } }, .test_fixture);
     const assign_other = try store.addCFStmt(.{ .assign_tag = .{
         .target = other,
         .variant_index = 1,
         .discriminant = 1,
         .payload = null,
         .next = other_disc_read,
-    } });
+    } }, .test_fixture);
     const body = try store.addCFStmt(.{ .assign_tag = .{
         .target = source,
         .variant_index = 1,
         .discriminant = 1,
         .payload = null,
         .next = assign_other,
-    } });
+    } }, .test_fixture);
     const proc = try store.addProcSpec(.{
         .name = LIR.Symbol.fromRaw(6),
         .identity = LIR.ProcIdentity.forTest(4),
         .args = LIR.LocalSpan.empty(),
         .body = body,
         .ret_layout = .u16,
-    });
+    }, .none);
     try f.result.root_procs.append(testing.allocator, proc);
 
     try run(&f.result);
@@ -1216,9 +1216,9 @@ test "tag reachability retains branches for arg-derived tags" {
     const arg = try f.local(f.outer_layout);
     const disc = try f.local(.u16);
 
-    const ret_stmt = try store.addCFStmt(.{ .ret = .{ .value = arg } });
-    const branch_zero = try store.addCFStmt(.{ .runtime_error = {} });
-    const branch_one = try store.addCFStmt(.{ .runtime_error = {} });
+    const ret_stmt = try store.addCFStmt(.{ .ret = .{ .value = arg } }, .test_fixture);
+    const branch_zero = try store.addCFStmt(.{ .runtime_error = {} }, .test_fixture);
+    const branch_one = try store.addCFStmt(.{ .runtime_error = {} }, .test_fixture);
     const switch_stmt = try store.addCFStmt(.{ .switch_stmt = .{
         .cond = disc,
         .branches = try store.addCFSwitchBranches(&[_]LIR.CFSwitchBranch{
@@ -1226,19 +1226,19 @@ test "tag reachability retains branches for arg-derived tags" {
             .{ .value = 1, .body = branch_one },
         }),
         .default_branch = ret_stmt,
-    } });
+    } }, .test_fixture);
     const body = try store.addCFStmt(.{ .assign_ref = .{
         .target = disc,
         .op = .{ .discriminant = .{ .source = arg } },
         .next = switch_stmt,
-    } });
+    } }, .test_fixture);
     const proc = try store.addProcSpec(.{
         .name = LIR.Symbol.fromRaw(7),
         .identity = LIR.ProcIdentity.forTest(3),
         .args = try store.addLocalSpan(&[_]LIR.LocalId{arg}),
         .body = body,
         .ret_layout = f.outer_layout,
-    });
+    }, .none);
     try f.result.root_procs.append(testing.allocator, proc);
 
     try run(&f.result);
@@ -1266,36 +1266,36 @@ test "tag reachability retains branches for hosted call results" {
             .symbol = try store.insertString("roc_test_hosted"),
             .dispatch_index = 0,
         },
-    });
+    }, .none);
 
     const result = try f.local(f.outer_layout);
     const disc = try f.local(.u16);
 
-    const ret_stmt = try store.addCFStmt(.{ .ret = .{ .value = result } });
-    const bad = try store.addCFStmt(.{ .runtime_error = {} });
+    const ret_stmt = try store.addCFStmt(.{ .ret = .{ .value = result } }, .test_fixture);
+    const bad = try store.addCFStmt(.{ .runtime_error = {} }, .test_fixture);
     const switch_stmt = try store.addCFStmt(.{ .switch_stmt = .{
         .cond = disc,
         .branches = try store.addCFSwitchBranches(&[_]LIR.CFSwitchBranch{.{ .value = 0, .body = bad }}),
         .default_branch = ret_stmt,
-    } });
+    } }, .test_fixture);
     const disc_read = try store.addCFStmt(.{ .assign_ref = .{
         .target = disc,
         .op = .{ .discriminant = .{ .source = result } },
         .next = switch_stmt,
-    } });
+    } }, .test_fixture);
     const body = try store.addCFStmt(.{ .assign_call = .{
         .target = result,
         .proc = hosted,
         .args = LIR.LocalSpan.empty(),
         .next = disc_read,
-    } });
+    } }, .test_fixture);
     const proc = try store.addProcSpec(.{
         .name = LIR.Symbol.fromRaw(9),
         .identity = LIR.ProcIdentity.forTest(1),
         .args = LIR.LocalSpan.empty(),
         .body = body,
         .ret_layout = f.outer_layout,
-    });
+    }, .none);
     try f.result.root_procs.append(testing.allocator, proc);
 
     try run(&f.result);
@@ -1317,32 +1317,32 @@ test "tag reachability retains branches for erased call results" {
     const disc = try f.local(.u16);
     const arg_plan = try store.internErasedCallArgsPlan(&f.result.layouts, &.{});
 
-    const ret_stmt = try store.addCFStmt(.{ .ret = .{ .value = result } });
-    const bad = try store.addCFStmt(.{ .runtime_error = {} });
+    const ret_stmt = try store.addCFStmt(.{ .ret = .{ .value = result } }, .test_fixture);
+    const bad = try store.addCFStmt(.{ .runtime_error = {} }, .test_fixture);
     const switch_stmt = try store.addCFStmt(.{ .switch_stmt = .{
         .cond = disc,
         .branches = try store.addCFSwitchBranches(&[_]LIR.CFSwitchBranch{.{ .value = 0, .body = bad }}),
         .default_branch = ret_stmt,
-    } });
+    } }, .test_fixture);
     const disc_read = try store.addCFStmt(.{ .assign_ref = .{
         .target = disc,
         .op = .{ .discriminant = .{ .source = result } },
         .next = switch_stmt,
-    } });
+    } }, .test_fixture);
     const body = try store.addCFStmt(.{ .assign_call_erased = .{
         .target = result,
         .closure = closure,
         .args = LIR.LocalSpan.empty(),
         .arg_plan = arg_plan,
         .next = disc_read,
-    } });
+    } }, .test_fixture);
     const proc = try store.addProcSpec(.{
         .name = LIR.Symbol.fromRaw(10),
         .identity = LIR.ProcIdentity.forTest(1),
         .args = try store.addLocalSpan(&[_]LIR.LocalId{closure}),
         .body = body,
         .ret_layout = f.outer_layout,
-    });
+    }, .none);
     try f.result.root_procs.append(testing.allocator, proc);
 
     try run(&f.result);

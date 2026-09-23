@@ -174,6 +174,13 @@ fn resolveTransparentRoots(
     }
 }
 
+/// Origin of a statement this pass produces for, or in place of, `anchor`.
+fn scalarizeOrigin(anchor: LIR.StmtOrigin) LIR.StmtOrigin {
+    var origin = anchor;
+    origin.kind = .join_scalarize;
+    return origin;
+}
+
 const Pass = struct {
     metrics: ?*Metrics,
     store: *LirStore,
@@ -708,29 +715,35 @@ const Pass = struct {
         return tag_payload.payload_idx == 0;
     }
 
-    fn rewriteSingleVariantRead(self: *Pass, stmt_id: LIR.CFStmtId, payload: LIR.LocalId, payload_layout: layout_mod.Idx) void {
-        const stmt = self.store.getCFStmtPtr(stmt_id);
-        const assign = stmt.assign_ref;
-        if (assign.op == .discriminant) {
-            stmt.* = .{ .assign_literal = .{
+    /// Replaces a single-variant tag read with a direct read of `payload`.
+    /// The replacement is a `join_scalarize` statement at the read's origin.
+    fn rewriteSingleVariantRead(self: *Pass, stmt_id: LIR.CFStmtId, payload: LIR.LocalId, payload_layout: layout_mod.Idx) ScalarizeError!void {
+        const assign = self.store.getCFStmt(stmt_id).assign_ref;
+        const replacement: LIR.CFStmt = switch (assign.op) {
+            .discriminant => .{ .assign_literal = .{
                 .target = assign.target,
                 .value = .{ .i64_literal = .{
                     .value = 0,
                     .layout_idx = self.store.getLocal(assign.target).layout_idx,
                 } },
                 .next = assign.next,
-            } };
-            return;
-        }
-        if (assign.op == .tag_payload_struct) {
-            stmt.assign_ref.op = .{ .local = payload };
-            return;
-        }
-        std.debug.assert(assign.op == .tag_payload);
-        stmt.assign_ref.op = if (self.layouts.getLayout(payload_layout).tag == .struct_)
-            .{ .field = .{ .source = payload, .field_idx = assign.op.tag_payload.payload_idx } }
-        else
-            .{ .local = payload };
+            } },
+            .tag_payload_struct => blk: {
+                var updated = assign;
+                updated.op = .{ .local = payload };
+                break :blk .{ .assign_ref = updated };
+            },
+            .tag_payload => |tag_payload| blk: {
+                var updated = assign;
+                updated.op = if (self.layouts.getLayout(payload_layout).tag == .struct_)
+                    .{ .field = .{ .source = payload, .field_idx = tag_payload.payload_idx } }
+                else
+                    .{ .local = payload };
+                break :blk .{ .assign_ref = updated };
+            },
+            else => unreachable, // validSingleVariantRead admitted only these reads
+        };
+        try self.store.replaceCFStmt(stmt_id, replacement, scalarizeOrigin(self.store.stmtOrigin(stmt_id)));
     }
 
     fn validateSingleVariantReads(
@@ -750,9 +763,9 @@ const Pass = struct {
         closure_reads: []const LIR.CFStmtId,
         payload: LIR.LocalId,
         payload_layout: layout_mod.Idx,
-    ) void {
-        for (direct_reads) |stmt| self.rewriteSingleVariantRead(stmt, payload, payload_layout);
-        for (closure_reads) |stmt| self.rewriteSingleVariantRead(stmt, payload, payload_layout);
+    ) ScalarizeError!void {
+        for (direct_reads) |stmt| try self.rewriteSingleVariantRead(stmt, payload, payload_layout);
+        for (closure_reads) |stmt| try self.rewriteSingleVariantRead(stmt, payload, payload_layout);
     }
 
     fn removeAliasClosure(self: *Pass, closure: *const AliasClosure) ScalarizeError!void {
@@ -804,7 +817,7 @@ const Pass = struct {
         if (direct_reads.len == 0 and closure.tag_reads.items.len == 0) return false;
         if (!self.validateSingleVariantReads(direct_reads, closure.tag_reads.items, payload_layout)) return false;
 
-        self.rewriteSingleVariantReads(direct_reads, closure.tag_reads.items, payload, payload_layout);
+        try self.rewriteSingleVariantReads(direct_reads, closure.tag_reads.items, payload, payload_layout);
         try self.removeAliasClosure(&closure);
         try self.removed.put(site.stmt, assign.next);
         return true;
@@ -918,7 +931,7 @@ const Pass = struct {
             self.store.getCFStmtPtr(listing_id).join.params = new_param_span;
         }
 
-        self.rewriteSingleVariantReads(direct_reads, closure.tag_reads.items, payload_param, payload_layout);
+        try self.rewriteSingleVariantReads(direct_reads, closure.tag_reads.items, payload_param, payload_layout);
         for (direct_forwards) |stmt| try self.rewriteTagForward(stmt, payload_param, payload_layout);
         for (closure.tag_forwards.items) |stmt| try self.rewriteTagForward(stmt, payload_param, payload_layout);
         try self.removeAliasClosure(&closure);
@@ -933,12 +946,12 @@ const Pass = struct {
         }
         for (direct_builds) |site| {
             const assign = self.store.getCFStmt(site.stmt).assign_tag;
-            self.store.getCFStmtPtr(site.stmt).* = .{ .set_local = .{
+            try self.store.replaceCFStmt(site.stmt, .{ .set_local = .{
                 .target = payload_param,
                 .value = site.payload.?,
                 .mode = .initialize_join_param,
                 .next = assign.next,
-            } };
+            } }, scalarizeOrigin(self.store.stmtOrigin(site.stmt)));
         }
         if (param_is_proc_arg) {
             try self.seedTagProcArg(join_stmt_id, param, payload_param, payload_layout);
@@ -952,6 +965,7 @@ const Pass = struct {
         payload: LIR.LocalId,
         payload_layout: layout_mod.Idx,
     ) ScalarizeError!void {
+        const origin = scalarizeOrigin(self.store.stmtOrigin(stmt_id));
         const old = self.store.getCFStmt(stmt_id);
         const target: LIR.LocalId = if (old == .set_local)
             old.set_local.target
@@ -974,22 +988,22 @@ const Pass = struct {
                 .value = rebuilt,
                 .mode = .initialize_join_param,
                 .next = next_after,
-            } })
+            } }, origin)
         else if (old == .assign_ref)
             try self.store.addCFStmt(.{ .assign_ref = .{
                 .target = target,
                 .op = .{ .local = rebuilt },
                 .next = next_after,
-            } })
+            } }, origin)
         else
             unreachable;
-        self.store.getCFStmtPtr(stmt_id).* = .{ .assign_tag = .{
+        try self.store.replaceCFStmt(stmt_id, .{ .assign_tag = .{
             .target = rebuilt,
             .variant_index = 0,
             .discriminant = 0,
             .payload = payload,
             .next = forward,
-        } };
+        } }, origin);
         std.debug.assert(self.store.getLocal(payload).layout_idx == payload_layout);
     }
 
@@ -1001,6 +1015,7 @@ const Pass = struct {
         payload_param: LIR.LocalId,
         payload_layout: layout_mod.Idx,
     ) ScalarizeError!void {
+        const origin = scalarizeOrigin(self.store.stmtOrigin(stmt_id));
         const tmp = try self.store.addLocal(.{ .layout_idx = payload_layout });
         try self.new_locals.append(self.allocator, tmp);
         const set_stmt = try self.store.addCFStmt(.{ .set_local = .{
@@ -1008,8 +1023,8 @@ const Pass = struct {
             .value = tmp,
             .mode = .initialize_join_param,
             .next = next_after,
-        } });
-        self.store.getCFStmtPtr(stmt_id).* = .{ .assign_ref = .{
+        } }, origin);
+        try self.store.replaceCFStmt(stmt_id, .{ .assign_ref = .{
             .target = tmp,
             .op = .{ .tag_payload_struct = .{
                 .source = source,
@@ -1017,7 +1032,7 @@ const Pass = struct {
                 .tag_discriminant = 0,
             } },
             .next = set_stmt,
-        } };
+        } }, origin);
     }
 
     fn seedTagProcArg(
@@ -1027,6 +1042,7 @@ const Pass = struct {
         payload_param: LIR.LocalId,
         payload_layout: layout_mod.Idx,
     ) ScalarizeError!void {
+        const origin = scalarizeOrigin(self.store.stmtOrigin(join_stmt_id));
         const tmp = try self.store.addLocal(.{ .layout_idx = payload_layout });
         try self.new_locals.append(self.allocator, tmp);
         const old_remainder = self.store.getCFStmt(join_stmt_id).join.remainder;
@@ -1035,7 +1051,7 @@ const Pass = struct {
             .value = tmp,
             .mode = .initialize_join_param,
             .next = old_remainder,
-        } });
+        } }, origin);
         const seeded_remainder = try self.store.addCFStmt(.{ .assign_ref = .{
             .target = tmp,
             .op = .{ .tag_payload_struct = .{
@@ -1044,7 +1060,7 @@ const Pass = struct {
                 .tag_discriminant = 0,
             } },
             .next = set_stmt,
-        } });
+        } }, origin);
         self.store.getCFStmtPtr(join_stmt_id).join.remainder = seeded_remainder;
     }
 
@@ -1263,6 +1279,7 @@ const Pass = struct {
         stmt_id: LIR.CFStmtId,
         fields: []const LIR.LocalId,
     ) ScalarizeError!void {
+        const origin = scalarizeOrigin(self.store.stmtOrigin(stmt_id));
         const old = self.store.getCFStmt(stmt_id);
         const target: LIR.LocalId = if (old == .set_local)
             old.set_local.target
@@ -1284,20 +1301,20 @@ const Pass = struct {
                 .value = rebuilt,
                 .mode = .initialize_join_param,
                 .next = next_after,
-            } })
+            } }, origin)
         else if (old == .assign_ref)
             try self.store.addCFStmt(.{ .assign_ref = .{
                 .target = target,
                 .op = .{ .local = rebuilt },
                 .next = next_after,
-            } })
+            } }, origin)
         else
             unreachable;
-        self.store.getCFStmtPtr(stmt_id).* = .{ .assign_struct = .{
+        try self.store.replaceCFStmt(stmt_id, .{ .assign_struct = .{
             .target = rebuilt,
             .fields = try self.store.addLocalSpan(fields),
             .next = forward,
-        } };
+        } }, origin);
     }
 
     /// Prepend, to the join's remainder, one `ref.field arg[k]` read plus an
@@ -1310,6 +1327,7 @@ const Pass = struct {
         arg_struct: LIR.LocalId,
         field_locals: []const LIR.LocalId,
     ) ScalarizeError!void {
+        const origin = scalarizeOrigin(self.store.stmtOrigin(join_id));
         var next = self.store.getCFStmtPtr(join_id).join.remainder;
         var k: usize = field_locals.len;
         while (k > 0) {
@@ -1321,12 +1339,12 @@ const Pass = struct {
                 .value = tmp,
                 .mode = .initialize_join_param,
                 .next = next,
-            } });
+            } }, origin);
             next = try self.store.addCFStmt(.{ .assign_ref = .{
                 .target = tmp,
                 .op = .{ .field = .{ .source = arg_struct, .field_idx = @intCast(k) } },
                 .next = set_stmt,
-            } });
+            } }, origin);
         }
         self.store.getCFStmtPtr(join_id).join.remainder = next;
     }
@@ -1344,6 +1362,7 @@ const Pass = struct {
         next_after: LIR.CFStmtId,
         field_locals: []const LIR.LocalId,
     ) ScalarizeError!void {
+        const origin = scalarizeOrigin(self.store.stmtOrigin(write_stmt));
         var temps_buffer: [max_fields]LIR.LocalId = undefined;
         for (field_locals, 0..) |field_local, k| {
             const tmp = try self.store.addLocal(.{ .layout_idx = self.store.getLocal(field_local).layout_idx });
@@ -1366,23 +1385,23 @@ const Pass = struct {
                 .value = temps[k],
                 .mode = .initialize_join_param,
                 .next = next,
-            } });
+            } }, origin);
         }
         k = field_locals.len;
         while (k > 0) {
             k -= 1;
             if (k == 0) {
-                self.store.getCFStmtPtr(write_stmt).* = .{ .assign_ref = .{
+                try self.store.replaceCFStmt(write_stmt, .{ .assign_ref = .{
                     .target = temps[0],
                     .op = .{ .field = .{ .source = value, .field_idx = 0 } },
                     .next = next,
-                } };
+                } }, origin);
             } else {
                 next = try self.store.addCFStmt(.{ .assign_ref = .{
                     .target = temps[k],
                     .op = .{ .field = .{ .source = value, .field_idx = @intCast(k) } },
                     .next = next,
-                } });
+                } }, origin);
             }
         }
     }
@@ -1398,6 +1417,7 @@ const Pass = struct {
         field_locals: []const LIR.LocalId,
         operands: anytype,
     ) ScalarizeError!void {
+        const origin = scalarizeOrigin(self.store.stmtOrigin(stmt));
         var temps_buffer: [max_fields]LIR.LocalId = undefined;
         for (field_locals, 0..) |field_local, k| {
             const tmp = try self.store.addLocal(.{ .layout_idx = self.store.getLocal(field_local).layout_idx });
@@ -1415,23 +1435,23 @@ const Pass = struct {
                 .value = temps[k],
                 .mode = .initialize_join_param,
                 .next = next,
-            } });
+            } }, origin);
         }
         k = field_locals.len;
         while (k > 0) {
             k -= 1;
             if (k == 0) {
-                self.store.getCFStmtPtr(stmt).* = .{ .assign_ref = .{
+                try self.store.replaceCFStmt(stmt, .{ .assign_ref = .{
                     .target = temps[0],
                     .op = .{ .local = GuardedList.at(operands, 0) },
                     .next = next,
-                } };
+                } }, origin);
             } else {
                 next = try self.store.addCFStmt(.{ .assign_ref = .{
                     .target = temps[k],
                     .op = .{ .local = GuardedList.at(operands, k) },
                     .next = next,
-                } });
+                } }, origin);
             }
         }
     }
@@ -1977,63 +1997,63 @@ fn testLiteralInitializedStruct(procedure_local: bool) (Allocator.Error || error
     const s = try store.addLocal(.{ .layout_idx = .str });
     const join_id = f.freshJoinPointId();
 
-    const ret = try store.addCFStmt(.{ .ret = .{ .value = n } });
+    const ret = try store.addCFStmt(.{ .ret = .{ .value = n } }, .test_fixture);
     const read_s = try store.addCFStmt(.{ .assign_ref = .{
         .target = s,
         .op = .{ .field = .{ .source = state, .field_idx = 1 } },
         .next = ret,
-    } });
+    } }, .test_fixture);
     const read_n = try store.addCFStmt(.{ .assign_ref = .{
         .target = n,
         .op = .{ .field = .{ .source = state, .field_idx = 0 } },
         .next = read_s,
-    } });
+    } }, .test_fixture);
 
-    const jump = try store.addCFStmt(.{ .jump = .{ .target = join_id } });
+    const jump = try store.addCFStmt(.{ .jump = .{ .target = join_id } }, .test_fixture);
     const set_state = try store.addCFStmt(.{ .set_local = .{
         .target = state,
         .value = wrapper,
         .mode = .initialize_join_param,
         .next = jump,
-    } });
+    } }, .test_fixture);
     const build = try store.addCFStmt(.{ .assign_struct = .{
         .target = wrapper,
         .fields = try store.addLocalSpan(&.{ num, text }),
         .next = set_state,
-    } });
+    } }, .test_fixture);
     const text_assign = try store.addCFStmt(.{ .assign_literal = .{
         .target = text,
         .value = .{ .str_literal = try store.insertStringView("x", 0, 1) },
         .next = build,
-    } });
+    } }, .test_fixture);
     const num_assign = try store.addCFStmt(.{ .assign_literal = .{
         .target = num,
         .value = .{ .i64_literal = .{ .value = 1, .layout_idx = .i64 } },
         .next = text_assign,
-    } });
+    } }, .test_fixture);
     const join = try store.addCFStmt(.{ .join = .{
         .id = join_id,
         .params = try store.addLocalSpan(&.{state}),
         .body = read_n,
         .remainder = num_assign,
-    } });
+    } }, .test_fixture);
     _ = try store.addProcSpec(.{
         .name = store.freshSyntheticSymbol(),
         .identity = LIR.ProcIdentity.forTest(12),
         .args = LIR.LocalSpan.empty(),
         .body = join,
         .ret_layout = .i64,
-    });
+    }, .none);
 
     const noop_arg = try store.addLocal(.{ .layout_idx = .i64 });
-    const noop_body = try store.addCFStmt(.{ .ret = .{ .value = noop_arg } });
+    const noop_body = try store.addCFStmt(.{ .ret = .{ .value = noop_arg } }, .test_fixture);
     const noop = try store.addProcSpec(.{
         .identity = LIR.ProcIdentity.forTest(@intCast(store.procSpecCount())),
         .name = store.freshSyntheticSymbol(),
         .args = try store.addLocalSpan(&.{noop_arg}),
         .body = noop_body,
         .ret_layout = .i64,
-    });
+    }, .none);
     if (procedure_local) {
         for (0..store.procSpecCount()) |index| {
             var scratch = std.heap.ArenaAllocator.init(testing.allocator);
@@ -2090,52 +2110,52 @@ test "scalarize keeps descriptor-bearing struct join parameters" {
     const s = try store.addLocal(.{ .layout_idx = .str });
     const join_id = f.freshJoinPointId();
 
-    const ret = try store.addCFStmt(.{ .ret = .{ .value = n } });
+    const ret = try store.addCFStmt(.{ .ret = .{ .value = n } }, .test_fixture);
     const read_s = try store.addCFStmt(.{ .assign_ref = .{
         .target = s,
         .op = .{ .field = .{ .source = state, .field_idx = 1 } },
         .next = ret,
-    } });
+    } }, .test_fixture);
     const read_n = try store.addCFStmt(.{ .assign_ref = .{
         .target = n,
         .op = .{ .field = .{ .source = state, .field_idx = 0 } },
         .next = read_s,
-    } });
-    const jump = try store.addCFStmt(.{ .jump = .{ .target = join_id } });
+    } }, .test_fixture);
+    const jump = try store.addCFStmt(.{ .jump = .{ .target = join_id } }, .test_fixture);
     const set_state = try store.addCFStmt(.{ .set_local = .{
         .target = state,
         .value = wrapper,
         .mode = .initialize_join_param,
         .next = jump,
-    } });
+    } }, .test_fixture);
     const build = try store.addCFStmt(.{ .assign_struct = .{
         .target = wrapper,
         .fields = try store.addLocalSpan(&.{ num, text }),
         .next = set_state,
-    } });
+    } }, .test_fixture);
     const text_assign = try store.addCFStmt(.{ .assign_literal = .{
         .target = text,
         .value = .{ .str_literal = try store.insertStringView("x", 0, 1) },
         .next = build,
-    } });
+    } }, .test_fixture);
     const num_assign = try store.addCFStmt(.{ .assign_literal = .{
         .target = num,
         .value = .{ .i64_literal = .{ .value = 1, .layout_idx = .i64 } },
         .next = text_assign,
-    } });
+    } }, .test_fixture);
     const join = try store.addCFStmt(.{ .join = .{
         .id = join_id,
         .params = try store.addLocalSpan(&.{state}),
         .body = read_n,
         .remainder = num_assign,
-    } });
+    } }, .test_fixture);
     _ = try store.addProcSpec(.{
         .name = store.freshSyntheticSymbol(),
         .identity = LIR.ProcIdentity.forTest(11),
         .args = try store.addLocalSpan(&.{state_desc}),
         .body = join,
         .ret_layout = .i64,
-    });
+    }, .none);
 
     try run(store, &f.layouts);
 
@@ -2160,53 +2180,53 @@ test "scalarize keeps parameters with whole-value uses" {
 
     // The body copies the whole parameter, which must block scalarization.
     const ret_local = try store.addLocal(.{ .layout_idx = .i64 });
-    const ret = try store.addCFStmt(.{ .ret = .{ .value = ret_local } });
+    const ret = try store.addCFStmt(.{ .ret = .{ .value = ret_local } }, .test_fixture);
     const ret_assign = try store.addCFStmt(.{ .assign_literal = .{
         .target = ret_local,
         .value = .{ .i64_literal = .{ .value = 0, .layout_idx = .i64 } },
         .next = ret,
-    } });
+    } }, .test_fixture);
     const copy_whole = try store.addCFStmt(.{ .assign_ref = .{
         .target = whole,
         .op = .{ .local = state },
         .next = ret_assign,
-    } });
+    } }, .test_fixture);
 
-    const jump = try store.addCFStmt(.{ .jump = .{ .target = join_id } });
+    const jump = try store.addCFStmt(.{ .jump = .{ .target = join_id } }, .test_fixture);
     const set_state = try store.addCFStmt(.{ .set_local = .{
         .target = state,
         .value = wrapper,
         .mode = .initialize_join_param,
         .next = jump,
-    } });
+    } }, .test_fixture);
     const build = try store.addCFStmt(.{ .assign_struct = .{
         .target = wrapper,
         .fields = try store.addLocalSpan(&.{ num, text }),
         .next = set_state,
-    } });
+    } }, .test_fixture);
     const text_assign = try store.addCFStmt(.{ .assign_literal = .{
         .target = text,
         .value = .{ .str_literal = try store.insertStringView("x", 0, 1) },
         .next = build,
-    } });
+    } }, .test_fixture);
     const num_assign = try store.addCFStmt(.{ .assign_literal = .{
         .target = num,
         .value = .{ .i64_literal = .{ .value = 1, .layout_idx = .i64 } },
         .next = text_assign,
-    } });
+    } }, .test_fixture);
     const join = try store.addCFStmt(.{ .join = .{
         .id = join_id,
         .params = try store.addLocalSpan(&.{state}),
         .body = copy_whole,
         .remainder = num_assign,
-    } });
+    } }, .test_fixture);
     _ = try store.addProcSpec(.{
         .name = store.freshSyntheticSymbol(),
         .identity = LIR.ProcIdentity.forTest(10),
         .args = LIR.LocalSpan.empty(),
         .body = join,
         .ret_layout = .i64,
-    });
+    }, .none);
 
     try run(store, &f.layouts);
 
@@ -2232,47 +2252,47 @@ test "scalarize splits a parameter built directly by a struct literal" {
     const s = try store.addLocal(.{ .layout_idx = .str });
     const join_id = f.freshJoinPointId();
 
-    const ret = try store.addCFStmt(.{ .ret = .{ .value = n } });
+    const ret = try store.addCFStmt(.{ .ret = .{ .value = n } }, .test_fixture);
     const read_s = try store.addCFStmt(.{ .assign_ref = .{
         .target = s,
         .op = .{ .field = .{ .source = state, .field_idx = 1 } },
         .next = ret,
-    } });
+    } }, .test_fixture);
     const read_n = try store.addCFStmt(.{ .assign_ref = .{
         .target = n,
         .op = .{ .field = .{ .source = state, .field_idx = 0 } },
         .next = read_s,
-    } });
+    } }, .test_fixture);
 
-    const jump = try store.addCFStmt(.{ .jump = .{ .target = join_id } });
+    const jump = try store.addCFStmt(.{ .jump = .{ .target = join_id } }, .test_fixture);
     const build = try store.addCFStmt(.{ .assign_struct = .{
         .target = state,
         .fields = try store.addLocalSpan(&.{ num, text }),
         .next = jump,
-    } });
+    } }, .test_fixture);
     const text_assign = try store.addCFStmt(.{ .assign_literal = .{
         .target = text,
         .value = .{ .str_literal = try store.insertStringView("x", 0, 1) },
         .next = build,
-    } });
+    } }, .test_fixture);
     const num_assign = try store.addCFStmt(.{ .assign_literal = .{
         .target = num,
         .value = .{ .i64_literal = .{ .value = 1, .layout_idx = .i64 } },
         .next = text_assign,
-    } });
+    } }, .test_fixture);
     const join = try store.addCFStmt(.{ .join = .{
         .id = join_id,
         .params = try store.addLocalSpan(&.{state}),
         .body = read_n,
         .remainder = num_assign,
-    } });
+    } }, .test_fixture);
     _ = try store.addProcSpec(.{
         .name = store.freshSyntheticSymbol(),
         .identity = LIR.ProcIdentity.forTest(9),
         .args = LIR.LocalSpan.empty(),
         .body = join,
         .ret_layout = .i64,
-    });
+    }, .none);
 
     try run(store, &f.layouts);
 
@@ -2322,58 +2342,58 @@ test "scalarize sees through pure aliases to field reads" {
     const s = try store.addLocal(.{ .layout_idx = .str });
     const join_id = f.freshJoinPointId();
 
-    const ret = try store.addCFStmt(.{ .ret = .{ .value = n } });
+    const ret = try store.addCFStmt(.{ .ret = .{ .value = n } }, .test_fixture);
     const read_s = try store.addCFStmt(.{ .assign_ref = .{
         .target = s,
         .op = .{ .field = .{ .source = view, .field_idx = 1 } },
         .next = ret,
-    } });
+    } }, .test_fixture);
     const read_n = try store.addCFStmt(.{ .assign_ref = .{
         .target = n,
         .op = .{ .field = .{ .source = view, .field_idx = 0 } },
         .next = read_s,
-    } });
+    } }, .test_fixture);
     const make_view = try store.addCFStmt(.{ .assign_ref = .{
         .target = view,
         .op = .{ .local = state },
         .next = read_n,
-    } });
+    } }, .test_fixture);
 
-    const jump = try store.addCFStmt(.{ .jump = .{ .target = join_id } });
+    const jump = try store.addCFStmt(.{ .jump = .{ .target = join_id } }, .test_fixture);
     const set_state = try store.addCFStmt(.{ .set_local = .{
         .target = state,
         .value = wrapper,
         .mode = .initialize_join_param,
         .next = jump,
-    } });
+    } }, .test_fixture);
     const build = try store.addCFStmt(.{ .assign_struct = .{
         .target = wrapper,
         .fields = try store.addLocalSpan(&.{ num, text }),
         .next = set_state,
-    } });
+    } }, .test_fixture);
     const text_assign = try store.addCFStmt(.{ .assign_literal = .{
         .target = text,
         .value = .{ .str_literal = try store.insertStringView("x", 0, 1) },
         .next = build,
-    } });
+    } }, .test_fixture);
     const num_assign = try store.addCFStmt(.{ .assign_literal = .{
         .target = num,
         .value = .{ .i64_literal = .{ .value = 1, .layout_idx = .i64 } },
         .next = text_assign,
-    } });
+    } }, .test_fixture);
     const join = try store.addCFStmt(.{ .join = .{
         .id = join_id,
         .params = try store.addLocalSpan(&.{state}),
         .body = make_view,
         .remainder = num_assign,
-    } });
+    } }, .test_fixture);
     const proc = try store.addProcSpec(.{
         .name = store.freshSyntheticSymbol(),
         .identity = LIR.ProcIdentity.forTest(8),
         .args = LIR.LocalSpan.empty(),
         .body = join,
         .ret_layout = .i64,
-    });
+    }, .none);
 
     try run(store, &f.layouts);
 
@@ -2406,53 +2426,53 @@ test "scalarize keeps parameters whose alias escapes whole" {
     const n = try store.addLocal(.{ .layout_idx = .i64 });
     const join_id = f.freshJoinPointId();
 
-    const ret = try store.addCFStmt(.{ .ret = .{ .value = view } });
+    const ret = try store.addCFStmt(.{ .ret = .{ .value = view } }, .test_fixture);
     const read_n = try store.addCFStmt(.{ .assign_ref = .{
         .target = n,
         .op = .{ .field = .{ .source = view, .field_idx = 0 } },
         .next = ret,
-    } });
+    } }, .test_fixture);
     const make_view = try store.addCFStmt(.{ .assign_ref = .{
         .target = view,
         .op = .{ .local = state },
         .next = read_n,
-    } });
+    } }, .test_fixture);
 
-    const jump = try store.addCFStmt(.{ .jump = .{ .target = join_id } });
+    const jump = try store.addCFStmt(.{ .jump = .{ .target = join_id } }, .test_fixture);
     const set_state = try store.addCFStmt(.{ .set_local = .{
         .target = state,
         .value = wrapper,
         .mode = .initialize_join_param,
         .next = jump,
-    } });
+    } }, .test_fixture);
     const build = try store.addCFStmt(.{ .assign_struct = .{
         .target = wrapper,
         .fields = try store.addLocalSpan(&.{ num, text }),
         .next = set_state,
-    } });
+    } }, .test_fixture);
     const text_assign = try store.addCFStmt(.{ .assign_literal = .{
         .target = text,
         .value = .{ .str_literal = try store.insertStringView("x", 0, 1) },
         .next = build,
-    } });
+    } }, .test_fixture);
     const num_assign = try store.addCFStmt(.{ .assign_literal = .{
         .target = num,
         .value = .{ .i64_literal = .{ .value = 1, .layout_idx = .i64 } },
         .next = text_assign,
-    } });
+    } }, .test_fixture);
     const join = try store.addCFStmt(.{ .join = .{
         .id = join_id,
         .params = try store.addLocalSpan(&.{state}),
         .body = make_view,
         .remainder = num_assign,
-    } });
+    } }, .test_fixture);
     _ = try store.addProcSpec(.{
         .name = store.freshSyntheticSymbol(),
         .identity = LIR.ProcIdentity.forTest(7),
         .args = LIR.LocalSpan.empty(),
         .body = join,
         .ret_layout = f.pair,
-    });
+    }, .none);
 
     try run(store, &f.layouts);
 
@@ -2480,43 +2500,43 @@ test "scalarize seeds field parameters from a non-literal initializer" {
     const s = try store.addLocal(.{ .layout_idx = .str });
     const join_id = f.freshJoinPointId();
 
-    const ret = try store.addCFStmt(.{ .ret = .{ .value = n } });
+    const ret = try store.addCFStmt(.{ .ret = .{ .value = n } }, .test_fixture);
     const read_s = try store.addCFStmt(.{ .assign_ref = .{
         .target = s,
         .op = .{ .field = .{ .source = state, .field_idx = 1 } },
         .next = ret,
-    } });
+    } }, .test_fixture);
     const read_n = try store.addCFStmt(.{ .assign_ref = .{
         .target = n,
         .op = .{ .field = .{ .source = state, .field_idx = 0 } },
         .next = read_s,
-    } });
+    } }, .test_fixture);
 
-    const jump = try store.addCFStmt(.{ .jump = .{ .target = join_id } });
+    const jump = try store.addCFStmt(.{ .jump = .{ .target = join_id } }, .test_fixture);
     const set_state = try store.addCFStmt(.{ .set_local = .{
         .target = state,
         .value = init_value,
         .mode = .initialize_join_param,
         .next = jump,
-    } });
+    } }, .test_fixture);
     const init_assign = try store.addCFStmt(.{ .assign_literal = .{
         .target = init_value,
         .value = .{ .i64_literal = .{ .value = 0, .layout_idx = .i64 } },
         .next = set_state,
-    } });
+    } }, .test_fixture);
     const join = try store.addCFStmt(.{ .join = .{
         .id = join_id,
         .params = try store.addLocalSpan(&.{state}),
         .body = read_n,
         .remainder = init_assign,
-    } });
+    } }, .test_fixture);
     _ = try store.addProcSpec(.{
         .name = store.freshSyntheticSymbol(),
         .identity = LIR.ProcIdentity.forTest(6),
         .args = LIR.LocalSpan.empty(),
         .body = join,
         .ret_layout = .i64,
-    });
+    }, .none);
 
     try run(store, &f.layouts);
 
@@ -2570,55 +2590,55 @@ test "scalarize splits a parameter shared by two joins" {
     const outer_id = f.freshJoinPointId();
     const inner_id = f.freshJoinPointId();
 
-    const ret = try store.addCFStmt(.{ .ret = .{ .value = n } });
+    const ret = try store.addCFStmt(.{ .ret = .{ .value = n } }, .test_fixture);
     const read_n = try store.addCFStmt(.{ .assign_ref = .{
         .target = n,
         .op = .{ .field = .{ .source = state, .field_idx = 0 } },
         .next = ret,
-    } });
+    } }, .test_fixture);
 
-    const jump_outer = try store.addCFStmt(.{ .jump = .{ .target = outer_id } });
+    const jump_outer = try store.addCFStmt(.{ .jump = .{ .target = outer_id } }, .test_fixture);
     const read_s = try store.addCFStmt(.{ .assign_ref = .{
         .target = s,
         .op = .{ .field = .{ .source = state, .field_idx = 1 } },
         .next = jump_outer,
-    } });
+    } }, .test_fixture);
 
-    const jump_inner = try store.addCFStmt(.{ .jump = .{ .target = inner_id } });
+    const jump_inner = try store.addCFStmt(.{ .jump = .{ .target = inner_id } }, .test_fixture);
     const build = try store.addCFStmt(.{ .assign_struct = .{
         .target = state,
         .fields = try store.addLocalSpan(&.{ num, text }),
         .next = jump_inner,
-    } });
+    } }, .test_fixture);
     const text_assign = try store.addCFStmt(.{ .assign_literal = .{
         .target = text,
         .value = .{ .str_literal = try store.insertStringView("x", 0, 1) },
         .next = build,
-    } });
+    } }, .test_fixture);
     const num_assign = try store.addCFStmt(.{ .assign_literal = .{
         .target = num,
         .value = .{ .i64_literal = .{ .value = 1, .layout_idx = .i64 } },
         .next = text_assign,
-    } });
+    } }, .test_fixture);
     const inner = try store.addCFStmt(.{ .join = .{
         .id = inner_id,
         .params = try store.addLocalSpan(&.{state}),
         .body = read_s,
         .remainder = num_assign,
-    } });
+    } }, .test_fixture);
     const outer = try store.addCFStmt(.{ .join = .{
         .id = outer_id,
         .params = try store.addLocalSpan(&.{state}),
         .body = read_n,
         .remainder = inner,
-    } });
+    } }, .test_fixture);
     _ = try store.addProcSpec(.{
         .name = store.freshSyntheticSymbol(),
         .identity = LIR.ProcIdentity.forTest(5),
         .args = LIR.LocalSpan.empty(),
         .body = outer,
         .ret_layout = .i64,
-    });
+    }, .none);
 
     try run(store, &f.layouts);
 
@@ -2657,7 +2677,7 @@ test "scalarize batches independent constructors without recollecting each one" 
     const store = &fixture.store;
     const number = try store.addLocal(.{ .layout_idx = .i64 });
     const text = try store.addLocal(.{ .layout_idx = .str });
-    var body = try store.addCFStmt(.{ .ret = .{ .value = number } });
+    var body = try store.addCFStmt(.{ .ret = .{ .value = number } }, .test_fixture);
     for (0..500) |_| {
         const wrapper = try store.addLocal(.{ .layout_idx = fixture.pair });
         const projected = try store.addLocal(.{ .layout_idx = .i64 });
@@ -2665,12 +2685,12 @@ test "scalarize batches independent constructors without recollecting each one" 
             .target = projected,
             .op = .{ .field = .{ .source = wrapper, .field_idx = 0 } },
             .next = body,
-        } });
+        } }, .test_fixture);
         body = try store.addCFStmt(.{ .assign_struct = .{
             .target = wrapper,
             .fields = try store.addLocalSpan(&.{ number, text }),
             .next = body,
-        } });
+        } }, .test_fixture);
     }
     _ = try store.addProcSpec(.{
         .name = store.freshSyntheticSymbol(),
@@ -2678,7 +2698,7 @@ test "scalarize batches independent constructors without recollecting each one" 
         .args = try store.addLocalSpan(&.{ number, text }),
         .body = body,
         .ret_layout = .i64,
-    });
+    }, .none);
     var metrics = Metrics{};
     try runMeasured(store, &fixture.layouts, &metrics);
     try testing.expect(metrics.collected_statements < 5000);
@@ -2690,14 +2710,14 @@ test "scalarize propagates escaping alias chains in linear work" {
     const store = &fixture.store;
     var aliases: [1001]LIR.LocalId = undefined;
     for (&aliases) |*alias| alias.* = try store.addLocal(.{ .layout_idx = fixture.pair });
-    var body = try store.addCFStmt(.{ .ret = .{ .value = aliases[1000] } });
+    var body = try store.addCFStmt(.{ .ret = .{ .value = aliases[1000] } }, .test_fixture);
     var index: usize = 1000;
     while (index != 0) {
         body = try store.addCFStmt(.{ .assign_ref = .{
             .target = aliases[index],
             .op = .{ .local = aliases[index - 1] },
             .next = body,
-        } });
+        } }, .test_fixture);
         index -= 1;
     }
     _ = try store.addProcSpec(.{
@@ -2706,7 +2726,7 @@ test "scalarize propagates escaping alias chains in linear work" {
         .args = try store.addLocalSpan(aliases[0..1]),
         .body = body,
         .ret_layout = fixture.pair,
-    });
+    }, .none);
     var metrics = Metrics{};
     try runMeasured(store, &fixture.layouts, &metrics);
     try testing.expect(metrics.alias_edges <= aliases.len);
@@ -2723,34 +2743,34 @@ test "scalarize keeps a constructor with an alias definition and its source" {
     const source = try store.addLocal(.{ .layout_idx = fixture.pair });
     const alias = try store.addLocal(.{ .layout_idx = fixture.pair });
     const result = try store.addLocal(.{ .layout_idx = .i64 });
-    const ret = try store.addCFStmt(.{ .ret = .{ .value = result } });
+    const ret = try store.addCFStmt(.{ .ret = .{ .value = result } }, .test_fixture);
     const overwrite = try store.addCFStmt(.{ .assign_struct = .{
         .target = alias,
         .fields = try store.addLocalSpan(&.{ second, text }),
         .next = ret,
-    } });
+    } }, .test_fixture);
     const read = try store.addCFStmt(.{ .assign_ref = .{
         .target = result,
         .op = .{ .field = .{ .source = alias, .field_idx = 0 } },
         .next = overwrite,
-    } });
+    } }, .test_fixture);
     const copy = try store.addCFStmt(.{ .assign_ref = .{
         .target = alias,
         .op = .{ .local = source },
         .next = read,
-    } });
+    } }, .test_fixture);
     const original = try store.addCFStmt(.{ .assign_struct = .{
         .target = source,
         .fields = try store.addLocalSpan(&.{ first, text }),
         .next = copy,
-    } });
+    } }, .test_fixture);
     const proc = try store.addProcSpec(.{
         .name = store.freshSyntheticSymbol(),
         .identity = LIR.ProcIdentity.forTest(2),
         .args = try store.addLocalSpan(&.{ first, second, text }),
         .body = original,
         .ret_layout = .i64,
-    });
+    }, .none);
     try run(store, &fixture.layouts);
     try testing.expectEqual(original, store.getProcSpec(proc).body.?);
     try testing.expect(store.getCFStmt(read).assign_ref.op == .field);
@@ -2770,7 +2790,7 @@ test "scalarize propagates an escaping whole value through a long alias chain" {
     try locals.append(testing.allocator, record);
     for (0..5000) |_| try locals.append(testing.allocator, try store.addLocal(.{ .layout_idx = f.pair }));
     const result = locals.items[locals.items.len - 1];
-    const ret = try store.addCFStmt(.{ .ret = .{ .value = result } });
+    const ret = try store.addCFStmt(.{ .ret = .{ .value = result } }, .test_fixture);
     var body = ret;
     var index = locals.items.len - 1;
     while (index > 0) : (index -= 1) {
@@ -2778,11 +2798,11 @@ test "scalarize propagates an escaping whole value through a long alias chain" {
             .target = locals.items[index],
             .op = .{ .local = locals.items[index - 1] },
             .next = body,
-        } });
+        } }, .test_fixture);
     }
-    body = try store.addCFStmt(.{ .assign_ref = .{ .target = field, .op = .{ .field = .{ .source = record, .field_idx = 0 } }, .next = body } });
-    const build = try store.addCFStmt(.{ .assign_struct = .{ .target = record, .fields = try store.addLocalSpan(&.{ num, text }), .next = body } });
-    const proc_id = try store.addProcSpec(.{ .name = store.freshSyntheticSymbol(), .identity = LIR.ProcIdentity.forTest(1), .args = try store.addLocalSpan(&.{ num, text }), .body = build, .ret_layout = f.pair });
+    body = try store.addCFStmt(.{ .assign_ref = .{ .target = field, .op = .{ .field = .{ .source = record, .field_idx = 0 } }, .next = body } }, .test_fixture);
+    const build = try store.addCFStmt(.{ .assign_struct = .{ .target = record, .fields = try store.addLocalSpan(&.{ num, text }), .next = body } }, .test_fixture);
+    const proc_id = try store.addProcSpec(.{ .name = store.freshSyntheticSymbol(), .identity = LIR.ProcIdentity.forTest(1), .args = try store.addLocalSpan(&.{ num, text }), .body = build, .ret_layout = f.pair }, .none);
     try run(store, &f.layouts);
     // The field read does not justify deleting the constructor: the last
     // alias returns the entire record, so that use must reach its producer.
