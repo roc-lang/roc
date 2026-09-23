@@ -1311,22 +1311,29 @@ const Lowerer = struct {
     fn captureRecordType(self: *Lowerer, captures: CaptureSpanId) Allocator.Error!Type.TypeId {
         if (self.capture_types.get(captures)) |existing| return existing;
 
+        // A capture may contain a callable whose lambda set refers back to
+        // this span. Reserve the record before descending into its fields.
+        const ty = try self.program.types.add(.zst);
+        try self.capture_types.put(captures, ty);
+        errdefer {
+            if (self.capture_types.get(captures) == ty) _ = self.capture_types.remove(captures);
+        }
+
         const capture_items = self.captureSpan(captures);
         const fields = try self.allocator.alloc(Type.CaptureField, capture_items.len);
         defer self.allocator.free(fields);
         for (capture_items, 0..) |capture, i| {
-            const ty = try self.lowerType(capture.ty);
+            const capture_ty = try self.lowerType(capture.ty);
             fields[i] = .{
                 .symbol = capture.symbol,
                 .binder = capture.binder,
                 .capture_id = capture.capture_id,
                 .checked_capture_id = capture.checked_capture_id,
-                .ty = ty,
-                .storage_ty = ty,
+                .ty = capture_ty,
+                .storage_ty = capture_ty,
             };
         }
-        const ty = try self.program.types.add(.{ .capture_record = try self.program.types.addCaptureFields(fields) });
-        try self.capture_types.put(captures, ty);
+        self.program.types.set(ty, .{ .capture_record = try self.program.types.addCaptureFields(fields) });
         return ty;
     }
 

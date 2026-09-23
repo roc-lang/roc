@@ -44968,8 +44968,22 @@ const BodyContext = struct {
         }
 
         if (try self.graph.typeIsResolved(fn_nodes.args[0])) {
+            const operand_ty = try self.activeTypeFromNode(fn_nodes.args[0]);
+            if (self.typeStore().get(operand_ty) == .tag_union) {
+                const checked_operands = plan.argsSlice(self.view.static_dispatch_plans);
+                if (checked_operands[1] == .checked_expr) {
+                    if (try self.checkedZeroPayloadTagName(checked_operands[1].checked_expr)) |tag_name| {
+                        return try self.lowerEqualityAgainstTag(operands[0], operand_ty, tag_name, eq.negated, ret_ty);
+                    }
+                }
+                if (checked_operands[0] == .checked_expr) {
+                    if (try self.checkedZeroPayloadTagName(checked_operands[0].checked_expr)) |tag_name| {
+                        return try self.lowerEqualityAgainstTag(operands[1], operand_ty, tag_name, eq.negated, ret_ty);
+                    }
+                }
+            }
             return try self.lowerStructuralEqFromOperands(
-                try self.activeTypeFromNode(fn_nodes.args[0]),
+                operand_ty,
                 operands[0],
                 operands[1],
                 eq.negated,
@@ -51101,7 +51115,24 @@ const BodyContext = struct {
     ) Allocator.Error!DraftExprId {
         const lhs = try self.lowerExprAtType(lhs_checked, operand_ty);
         const rhs = try self.lowerExprAtType(rhs_checked, operand_ty);
+        if (self.typeStore().get(operand_ty) == .tag_union) {
+            if (try self.checkedZeroPayloadTagName(rhs_checked)) |tag_name| {
+                return try self.lowerEqualityAgainstTag(lhs, operand_ty, tag_name, negated, ret_ty);
+            }
+            if (try self.checkedZeroPayloadTagName(lhs_checked)) |tag_name| {
+                return try self.lowerEqualityAgainstTag(rhs, operand_ty, tag_name, negated, ret_ty);
+            }
+        }
         return try self.lowerStructuralEqFromOperands(operand_ty, lhs, rhs, negated, ret_ty);
+    }
+
+    fn checkedZeroPayloadTagName(self: *BodyContext, expr_id: checked.CheckedExprId) Allocator.Error!?names.TagNameId {
+        const expr = self.view.bodies.expr(expr_id);
+        return switch (expr.data) {
+            .zero_argument_tag => |tag| try self.tagName(self.view, tag.name),
+            .tag => |tag| if (tag.args.len == 0) try self.tagName(self.view, tag.name) else null,
+            else => null,
+        };
     }
 
     fn lowerStructuralEqFromOperands(
@@ -51112,11 +51143,48 @@ const BodyContext = struct {
         negated: bool,
         ret_ty: Type.TypeId,
     ) Allocator.Error!DraftExprId {
+        // A zero-payload tag only needs a discriminant comparison. In particular,
+        // `value == None` is valid even when another variant of value contains a
+        // payload without equality (such as Box). Do not derive equality for
+        // variants the literal can never have.
+        if (self.typeStore().get(operand_ty) == .tag_union) {
+            const lhs_data = self.draft.exprs.items[@intFromEnum(lhs)].data;
+            const rhs_data = self.draft.exprs.items[@intFromEnum(rhs)].data;
+            if (rhs_data == .tag and self.exprSpan(rhs_data.tag.payloads).len == 0) {
+                return try self.lowerEqualityAgainstTag(lhs, operand_ty, rhs_data.tag.name, negated, ret_ty);
+            }
+            if (lhs_data == .tag and self.exprSpan(lhs_data.tag.payloads).len == 0) {
+                return try self.lowerEqualityAgainstTag(rhs, operand_ty, lhs_data.tag.name, negated, ret_ty);
+            }
+        }
         var result = try self.lowerEqualityExpr(operand_ty, lhs, rhs, "is_eq", ret_ty);
         if (negated) {
             result = try self.lowLevelExpr(.bool_not, &.{result}, ret_ty);
         }
         return result;
+    }
+
+    fn lowerEqualityAgainstTag(
+        self: *BodyContext,
+        value: DraftExprId,
+        value_ty: Type.TypeId,
+        tag_name: names.TagNameId,
+        negated: bool,
+        ret_ty: Type.TypeId,
+    ) Allocator.Error!DraftExprId {
+        const tag_pat = try self.addPat(.{ .ty = value_ty, .data = .{ .tag = .{
+            .name = tag_name,
+            .payloads = .empty(),
+        } } });
+        const other_pat = try self.addPat(.{ .ty = value_ty, .data = .wildcard });
+        const branches = [_]DraftBranch{
+            .{ .pat = tag_pat, .body = try self.boolLiteral(!negated, ret_ty) },
+            .{ .pat = other_pat, .body = try self.boolLiteral(negated, ret_ty) },
+        };
+        return try self.addExpr(.{ .ty = ret_ty, .data = .{ .match_ = .{
+            .scrutinee = value,
+            .branches = try self.addBranchSpan(&branches),
+        } } });
     }
 
     const StructuralEqualityOperand = union(enum) {
