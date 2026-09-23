@@ -13,14 +13,17 @@ install-latest-release: rebase install-release
 
 # clean build and install
 [linux]
-install-dev: clean && install-rust-glue
+install-dev: clean && finish-install
     zig build roc
-    cp ./zig-out/bin/roc ~/.local/bin/
 
 # clean build and install release-fast
 [linux]
-install-release: clean && install-rust-glue
+install-release: clean && finish-install
     zig build build-release
+
+# add roc to local bin, update skill, install rust_glue
+[linux]
+finish-install: && install-rust-glue
     cp ./zig-out/bin/roc ~/.local/bin/
     just sync-roc-coding
 
