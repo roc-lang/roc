@@ -287,6 +287,19 @@ pub const OriginKind = union(enum(u8)) {
     /// a proven boolean parameter, at the origin of the join or jump split.
     range_prove,
 
+    /// True for statements ARC inserted (`arc_incref`, `arc_decref`,
+    /// `arc_dismantle`). Their origin carries the location of the statement
+    /// whose ownership decision produced them, but backends do not attribute
+    /// them to a source line for debugger stepping: LLVM gives them line 0
+    /// (compiler-generated) and the dev backend emits no line-table row for
+    /// them. The decision is read from the stated origin kind only.
+    pub fn isArcInserted(self: OriginKind) bool {
+        return switch (self) {
+            .arc_incref, .arc_decref, .arc_dismantle => true,
+            else => false,
+        };
+    }
+
     /// Subject of an ARC-inserted RC statement and the solver decision that
     /// produced it.
     pub const ArcRc = struct {

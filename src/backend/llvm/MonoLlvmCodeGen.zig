@@ -2981,7 +2981,10 @@ pub const MonoLlvmCodeGen = struct {
             LlvmBuilder.Metadata.Optional.none
         else
             (try self.debugInlineCallsite(inline_scope)).toOptional();
+        // ARC-inserted statements get line 0 so they do not affect stepping;
+        // see `OriginKind.isArcInserted`.
         const has_compatible_location = loc.hasLocation() and
+            !self.store.stmtOriginKind(stmt_id).isArcInserted() and
             (inline_scope != lir.LIR.InlineScopeId.none or loc.file == self.current_debug_file);
         wip.debug_location = .{ .location = .{
             .line = if (has_compatible_location) loc.line else 0,

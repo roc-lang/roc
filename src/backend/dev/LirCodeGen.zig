@@ -22452,7 +22452,9 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
                     try self.stmt_locations.put(stmt_key, self.codegen.currentOffset());
 
                     const stmt_loc = self.store.stmtLoc(stmt_id);
-                    if (stmt_loc.hasLocation()) {
+                    // ARC-inserted statements get no line-table row so they
+                    // do not affect stepping; see `OriginKind.isArcInserted`.
+                    if (stmt_loc.hasLocation() and !self.store.stmtOriginKind(stmt_id).isArcInserted()) {
                         try self.line_entries.append(self.allocator, .{
                             .offset = @intCast(self.codegen.currentOffset()),
                             .loc = stmt_loc,
