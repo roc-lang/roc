@@ -5325,7 +5325,7 @@ const Builder = struct {
     /// structurally with no owner (Check's ambiguity judgment applies the same
     /// carve-out), so planning seals the variable like an unconstrained one and
     /// records no dictionary for it. A quantified variable's `is_eq` erased
-/// requirement
+    /// requirement
     /// is owned instead—the scheme forwards it as compiler-derived structural
     /// evidence—so it keeps its dictionary requirement.
     fn constraintIsOwnerlessStructuralEquality(
