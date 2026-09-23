@@ -6482,10 +6482,9 @@ const ProcedureBuilder = struct {
             .encoder_record_fields => try self.lowerGeneratedEncoderRecordFieldsInto(proc, source, target, next),
             .encoder_dict_fields => try self.lowerGeneratedEncoderDictFieldsInto(proc, source, target, next),
             .encoder_sequence_elements => try self.lowerGeneratedEncoderSequenceElementsInto(proc, source, target, next),
-            .encoder_tag_field => try self.lowerGeneratedEncoderTagFieldInto(proc, source, target, next),
-            .encoder_tag_payload_thunk => try self.lowerGeneratedEncoderTagPayloadThunkInto(proc, source, target, next),
             .encoder_tag_payload_elements => try self.lowerGeneratedEncoderTagPayloadElementsInto(proc, source, target, next),
             .encoder_value_thunk => try self.lowerGeneratedEncoderValueThunkInto(proc, source, target, next),
+            .encoder_dict_key_thunk => try self.lowerGeneratedEncoderDictKeyThunkInto(proc, source, target, next),
         };
     }
 
@@ -6722,6 +6721,7 @@ const ProcedureBuilder = struct {
                 source,
                 schema_type,
                 subject_type,
+                subject_type,
                 value,
                 state,
                 target,
@@ -6732,6 +6732,7 @@ const ProcedureBuilder = struct {
                 proc,
                 source,
                 schema_type,
+                subject_type,
                 value,
                 state,
                 target,
@@ -6741,6 +6742,7 @@ const ProcedureBuilder = struct {
                 proc,
                 source,
                 schema_type,
+                subject_type,
                 value,
                 state,
                 target,
@@ -6791,6 +6793,7 @@ const ProcedureBuilder = struct {
                 proc,
                 source,
                 schema_type,
+                subject_type,
                 subject_type,
                 value,
                 state,
@@ -7025,6 +7028,7 @@ const ProcedureBuilder = struct {
         source: Plan.GeneratedCodecSource,
         shape_type: Plan.CheckedTypeIdentity,
         value_type: Plan.CheckedTypeIdentity,
+        call_subject_type: Plan.CheckedTypeIdentity,
         value: LIR.LocalId,
         state: LIR.LocalId,
         target: LIR.LocalId,
@@ -7035,7 +7039,7 @@ const ProcedureBuilder = struct {
         const contract_worker = source.contract_worker orelse caller;
         const encoding_type = source.capture_type orelse
             boxyLowerInvariant("generated sequence encoder had no encoding type");
-        const call = proc.generatedCodecCallPlan(caller, encoding_type, method_text, value_type);
+        const call = proc.generatedCodecCallPlan(caller, encoding_type, method_text, call_subject_type);
         const arg_types = self.plan.generatedCodecCallTypeSlice(call.arg_types);
         if (arg_types.len != 3) boxyLowerInvariant("generated sequence encoder call did not have three arguments");
         const callback_source = Plan.GeneratedCodecSource{
@@ -7094,6 +7098,7 @@ const ProcedureBuilder = struct {
         proc: *ProcBodyBuilder,
         source: Plan.GeneratedCodecSource,
         set_type: Plan.CheckedTypeIdentity,
+        subject_type: Plan.CheckedTypeIdentity,
         value: LIR.LocalId,
         state: LIR.LocalId,
         target: LIR.LocalId,
@@ -7107,6 +7112,7 @@ const ProcedureBuilder = struct {
             source,
             to_list.ret_type,
             to_list.ret_type,
+            subject_type,
             list,
             state,
             target,
@@ -7128,6 +7134,7 @@ const ProcedureBuilder = struct {
         proc: *ProcBodyBuilder,
         source: Plan.GeneratedCodecSource,
         dict_type: Plan.CheckedTypeIdentity,
+        subject_type: Plan.CheckedTypeIdentity,
         value: LIR.LocalId,
         state: LIR.LocalId,
         target: LIR.LocalId,
@@ -7140,9 +7147,9 @@ const ProcedureBuilder = struct {
         const to_list = proc.generatedCodecCallPlan(caller, dict_type, "to_list", dict_type);
         const entries_type = to_list.ret_type;
         const entries = try proc.addFrameLocalForRep(proc.repForTypeRef(entries_type));
-        const call = proc.generatedCodecCallPlan(caller, encoding_type, "encode_record", null);
+        const call = proc.generatedCodecCallPlan(caller, encoding_type, "encode_dict", subject_type);
         const arg_types = self.plan.generatedCodecCallTypeSlice(call.arg_types);
-        if (arg_types.len != 3) boxyLowerInvariant("generated Dict encode_record call did not have three arguments");
+        if (arg_types.len != 3) boxyLowerInvariant("generated Dict encode_dict call did not have three arguments");
         const callback_source = Plan.GeneratedCodecSource{
             .kind = .encoder_dict_fields,
             .shape = entries_type,
@@ -7200,75 +7207,15 @@ const ProcedureBuilder = struct {
         target: LIR.LocalId,
         next: LIR.CFStmtId,
     ) Allocator.Error!LIR.CFStmtId {
-        const variants = try self.generatedEncoderTagVariants(proc, shape_type, false);
-        defer self.allocator.free(variants);
-        const bodies = try self.allocator.alloc(LIR.CFStmtId, variants.len);
-        defer self.allocator.free(bodies);
-        for (variants, bodies) |variant, *body| {
-            const payloads = self.plan.childSlice(variant.variant.payloads);
-            body.* = if (payloads.len == 0)
-                try self.lowerGeneratedUnitTagEncoderInto(proc, source, variant, state, target, next)
-            else
-                try self.lowerGeneratedPayloadTagEncoderInto(
-                    proc,
-                    source,
-                    shape_type,
-                    value_type,
-                    value,
-                    variant,
-                    state,
-                    target,
-                    next,
-                );
-        }
-        return try self.lowerGeneratedEncoderTagDispatch(proc, value, variants, bodies);
-    }
-
-    fn lowerGeneratedUnitTagEncoderInto(
-        self: *ProcedureBuilder,
-        proc: *ProcBodyBuilder,
-        source: Plan.GeneratedCodecSource,
-        variant: GeneratedParserTagVariant,
-        state: LIR.LocalId,
-        target: LIR.LocalId,
-        next: LIR.CFStmtId,
-    ) Allocator.Error!LIR.CFStmtId {
-        const caller = proc.worker_layout.worker;
-        const encoding_type = source.capture_type orelse
-            boxyLowerInvariant("generated unit-tag encoder had no encoding type");
-        const call = proc.generatedCodecCallPlanForMethod(caller, encoding_type, "encode_str");
-        const tag_name = try proc.addFrameLocal(.str);
-        const continuation = try self.lowerGeneratedCodecCallLocalsInto(
-            proc,
-            call,
-            target,
-            &.{ tag_name, state },
-            next,
-        );
-        return try proc.assignStringBytesLiteral(tag_name, proc.tagVariantNameText(variant.variant), continuation);
-    }
-
-    fn lowerGeneratedPayloadTagEncoderInto(
-        self: *ProcedureBuilder,
-        proc: *ProcBodyBuilder,
-        source: Plan.GeneratedCodecSource,
-        shape_type: Plan.CheckedTypeIdentity,
-        value_type: Plan.CheckedTypeIdentity,
-        value: LIR.LocalId,
-        _: GeneratedParserTagVariant,
-        state: LIR.LocalId,
-        target: LIR.LocalId,
-        next: LIR.CFStmtId,
-    ) Allocator.Error!LIR.CFStmtId {
         const caller = proc.worker_layout.worker;
         const contract_worker = source.contract_worker orelse caller;
         const encoding_type = source.capture_type orelse
-            boxyLowerInvariant("generated payload-tag encoder had no encoding type");
-        const call = proc.generatedCodecCallPlan(caller, encoding_type, "encode_record", null);
+            boxyLowerInvariant("generated tag encoder had no encoding type");
+        const call = proc.generatedCodecCallPlan(caller, encoding_type, "encode_tag", value_type);
         const arg_types = self.plan.generatedCodecCallTypeSlice(call.arg_types);
-        if (arg_types.len != 3) boxyLowerInvariant("generated tag encode_record call did not have three arguments");
+        if (arg_types.len != 4) boxyLowerInvariant("generated tag encode_tag call did not have four arguments");
         const callback_source = Plan.GeneratedCodecSource{
-            .kind = .encoder_tag_field,
+            .kind = .encoder_tag_payload_elements,
             .shape = shape_type,
             .value_type = value_type,
             .capture_type = encoding_type,
@@ -7277,33 +7224,48 @@ const ProcedureBuilder = struct {
         };
         const callback_worker = self.plan.workerForSourceType(
             .{ .generated_codec = callback_source },
-            arg_types[2],
-        ) orelse boxyLowerInvariant("generated tag encoder had no planned field callback");
-        const callback = try proc.addFrameLocalForRep(proc.repForTypeRef(arg_types[2]));
-        const count = try proc.addFrameLocal(.u64);
+            arg_types[3],
+        ) orelse boxyLowerInvariant("generated tag encoder had no planned payload callback");
         const name_captures = self.generatedEncoderNameCaptureLocals(proc, contract_worker);
-        const capture_values = try self.allocator.alloc(LIR.LocalId, 2 + name_captures.len);
-        defer self.allocator.free(capture_values);
-        capture_values[0] = proc.erased_capture_locals.items[0];
-        capture_values[1] = value;
-        @memcpy(capture_values[2..], name_captures);
 
-        var continuation = try self.lowerGeneratedCodecCallLocalsInto(
-            proc,
-            call,
-            target,
-            &.{ state, count, callback },
-            next,
-        );
-        continuation = try self.packGeneratedCodecCallable(
-            proc,
-            callback,
-            proc.repForTypeRef(arg_types[2]),
-            callback_worker,
-            capture_values,
-            continuation,
-        );
-        return try proc.assignIntLiteral(count, 1, continuation);
+        const variants = try self.generatedEncoderTagVariants(proc, shape_type, false);
+        defer self.allocator.free(variants);
+        const bodies = try self.allocator.alloc(LIR.CFStmtId, variants.len);
+        defer self.allocator.free(bodies);
+        for (variants, bodies) |variant, *body| {
+            const tag_name = try proc.addFrameLocal(.str);
+            const count = try proc.addFrameLocal(.u64);
+            const callback_rep = proc.repForTypeRef(arg_types[3]);
+            const callback = try proc.addFrameLocalForRep(callback_rep);
+            const capture_values = try self.allocator.alloc(LIR.LocalId, 2 + name_captures.len);
+            defer self.allocator.free(capture_values);
+            capture_values[0] = proc.erased_capture_locals.items[0];
+            capture_values[1] = value;
+            @memcpy(capture_values[2..], name_captures);
+
+            var continuation = try self.lowerGeneratedCodecCallLocalsInto(
+                proc,
+                call,
+                target,
+                &.{ state, tag_name, count, callback },
+                next,
+            );
+            continuation = try self.packGeneratedCodecCallable(
+                proc,
+                callback,
+                callback_rep,
+                callback_worker,
+                capture_values,
+                continuation,
+            );
+            continuation = try proc.assignIntLiteral(
+                count,
+                @intCast(self.plan.childSlice(variant.variant.payloads).len),
+                continuation,
+            );
+            body.* = try proc.assignStringBytesLiteral(tag_name, proc.tagVariantNameText(variant.variant), continuation);
+        }
+        return try self.lowerGeneratedEncoderTagDispatch(proc, value, variants, bodies);
     }
 
     fn generatedEncoderTagVariants(
@@ -8202,147 +8164,139 @@ const ProcedureBuilder = struct {
         next: LIR.CFStmtId,
     ) Allocator.Error!LIR.CFStmtId {
         const writer_fn = proc.functionChildrenForRep(field_writer_rep) orelse
-            boxyLowerInvariant("generated Dict field writer was not callable");
+            boxyLowerInvariant("generated Dict entry writer was not callable");
         const writer_children = self.plan.childSlice(self.plan.representations.items[@intFromEnum(writer_fn.rep)].children);
         const writer_args = writer_children[writer_fn.args_start..][0..writer_fn.arg_count];
-        if (writer_args.len != 3) boxyLowerInvariant("generated Dict field writer had an unexpected arity");
-        const thunk_type = writer_args[2].source_type;
+        if (writer_args.len != 3) boxyLowerInvariant("generated Dict entry writer had an unexpected arity");
+        const key_thunk_type = writer_args[1].source_type;
+        const value_thunk_type = writer_args[2].source_type;
         const contract_worker = source.contract_worker orelse
-            boxyLowerInvariant("generated Dict field callback had no contract worker");
+            boxyLowerInvariant("generated Dict entry callback had no contract worker");
+        const key_item = entry_items[0];
         const value_item = entry_items[1];
-        const thunk_source = Plan.GeneratedCodecSource{
+        const key_thunk_worker = self.plan.workerForSourceType(.{ .generated_codec = .{
+            .kind = .encoder_dict_key_thunk,
+            .shape = key_item.source_type,
+            .capture_type = source.capture_type,
+            .contract_worker = contract_worker,
+            .contract_expr = source.contract_expr,
+        } }, key_thunk_type) orelse
+            boxyLowerInvariant("generated Dict key had no planned key writer");
+        const value_thunk_worker = self.plan.workerForSourceType(.{ .generated_codec = .{
             .kind = .encoder_value_thunk,
             .shape = value_item.source_type,
             .capture_type = source.capture_type,
             .contract_worker = contract_worker,
             .contract_expr = source.contract_expr,
-        };
-        const thunk_worker = self.plan.workerForSourceType(.{ .generated_codec = thunk_source }, thunk_type) orelse
+        } }, value_thunk_type) orelse
             boxyLowerInvariant("generated Dict value had no planned encoder thunk");
         const entry_value = try proc.addFrameLocalForRep(entry.rep);
-        const key_value = try proc.addFrameLocalForRep(entry_items[0].rep);
+        const key_value = try proc.addFrameLocalForRep(key_item.rep);
         const item_value = try proc.addFrameLocalForRep(value_item.rep);
-        const key_str = try proc.addFrameLocal(.str);
-        const thunk_rep = proc.repForTypeRef(thunk_type);
-        const thunk = try proc.addFrameLocalForRep(thunk_rep);
-        const field_result = try proc.addFrameLocalForRepWithRequiredFreshDescriptor(target_rep);
+        const key_thunk_rep = proc.repForTypeRef(key_thunk_type);
+        const key_thunk = try proc.addFrameLocalForRep(key_thunk_rep);
+        const value_thunk_rep = proc.repForTypeRef(value_thunk_type);
+        const value_thunk = try proc.addFrameLocalForRep(value_thunk_rep);
+        const entry_result = try proc.addFrameLocalForRepWithRequiredFreshDescriptor(target_rep);
         const ok = proc.generatedParserTagVariant(target_rep, "Ok");
         const ok_payload = try proc.generatedParserSingleTagPayloadLocal(ok);
         const one = try proc.addFrameLocal(.u64);
         const next_index = try proc.addFrameLocal(.u64);
 
-        var field_success = try self.result.store.addCFStmt(.{ .jump = .{ .target = join_id } });
-        field_success = try proc.setLocalInitializeJoinParamFromRep(state, ok_payload.local, ok_payload.child.rep, field_success);
-        field_success = try proc.setLocalInitializeJoinParam(index, next_index, field_success);
-        field_success = try proc.generatedParserReadTagPayload(field_result, ok, ok_payload, field_success);
-        const field_err = try proc.assignRepresentationBoundary(target, field_result, target_rep, target_rep, next);
-        const field_variants = [_]GeneratedParserTagVariant{ok};
-        const field_bodies = [_]LIR.CFStmtId{field_success};
-        var write_field = try proc.generatedParserTagDispatch(
-            field_result,
+        var entry_success = try self.result.store.addCFStmt(.{ .jump = .{ .target = join_id } });
+        entry_success = try proc.setLocalInitializeJoinParamFromRep(state, ok_payload.local, ok_payload.child.rep, entry_success);
+        entry_success = try proc.setLocalInitializeJoinParam(index, next_index, entry_success);
+        entry_success = try proc.generatedParserReadTagPayload(entry_result, ok, ok_payload, entry_success);
+        const entry_err = try proc.assignRepresentationBoundary(target, entry_result, target_rep, target_rep, next);
+        const entry_variants = [_]GeneratedParserTagVariant{ok};
+        const entry_bodies = [_]LIR.CFStmtId{entry_success};
+        var write_entry = try proc.generatedParserTagDispatch(
+            entry_result,
             target_rep,
-            &field_variants,
-            &field_bodies,
-            field_err,
+            &entry_variants,
+            &entry_bodies,
+            entry_err,
         );
-        write_field = try proc.lowerErasedCallLocalsInto(
-            field_result,
+        write_entry = try proc.lowerErasedCallLocalsInto(
+            entry_result,
             target_rep,
             field_writer_rep,
             field_writer,
-            &.{ state, key_str, thunk },
-            &.{ state_rep, writer_args[1].rep, thunk_rep },
-            write_field,
+            &.{ state, key_thunk, value_thunk },
+            &.{ state_rep, key_thunk_rep, value_thunk_rep },
+            write_entry,
         );
         const name_captures = self.generatedEncoderNameCaptureLocals(proc, contract_worker);
         const capture_values = try self.allocator.alloc(LIR.LocalId, 2 + name_captures.len);
         defer self.allocator.free(capture_values);
         capture_values[0] = proc.erased_capture_locals.items[0];
-        capture_values[1] = item_value;
         @memcpy(capture_values[2..], name_captures);
-        write_field = try self.packGeneratedCodecCallable(proc, thunk, thunk_rep, thunk_worker, capture_values, write_field);
-        write_field = try proc.assignBinaryLowLevel(next_index, .num_int_add_crash_on_overflow, index, one, write_field);
-        write_field = try proc.assignIntLiteral(one, 1, write_field);
-
-        var encode_key = try self.lowerGeneratedDictKeyInto(
-            proc,
-            source,
-            entry_items[0],
-            key_value,
-            key_str,
-            target,
-            target_rep,
-            write_field,
-            next,
-        );
-        encode_key = try proc.lowerTupleFieldReadInto(
-            item_value,
-            entry_value,
-            entry.rep,
-            1,
-            encode_key,
-        );
-        encode_key = try proc.lowerTupleFieldReadInto(
-            key_value,
-            entry_value,
-            entry.rep,
-            0,
-            encode_key,
-        );
+        capture_values[1] = item_value;
+        write_entry = try self.packGeneratedCodecCallable(proc, value_thunk, value_thunk_rep, value_thunk_worker, capture_values, write_entry);
+        capture_values[1] = key_value;
+        write_entry = try self.packGeneratedCodecCallable(proc, key_thunk, key_thunk_rep, key_thunk_worker, capture_values, write_entry);
+        write_entry = try proc.assignBinaryLowLevel(next_index, .num_int_add_crash_on_overflow, index, one, write_entry);
+        write_entry = try proc.assignIntLiteral(one, 1, write_entry);
+        write_entry = try proc.lowerTupleFieldReadInto(item_value, entry_value, entry.rep, 1, write_entry);
+        write_entry = try proc.lowerTupleFieldReadInto(key_value, entry_value, entry.rep, 0, write_entry);
         if (!proc.isZstLocal(entry_value)) {
-            encode_key = try proc.assignBinaryLowLevel(entry_value, .list_get_unsafe, entries, index, encode_key);
+            write_entry = try proc.assignBinaryLowLevel(entry_value, .list_get_unsafe, entries, index, write_entry);
         }
-        return encode_key;
+        return write_entry;
     }
 
-    fn lowerGeneratedDictKeyInto(
+    /// Write one dict key with the key protocol the checker validated for
+    /// it: a scalar key method, a unit tag's name through `encode_key_str`,
+    /// or `encode_key_start` followed by the key's own encoder.
+    fn lowerGeneratedEncoderDictKeyThunkInto(
         self: *ProcedureBuilder,
         proc: *ProcBodyBuilder,
         source: Plan.GeneratedCodecSource,
-        key: GeneratedParserTupleItem,
-        key_value: LIR.LocalId,
-        key_str: LIR.LocalId,
         target: LIR.LocalId,
-        target_rep: Plan.TypeRepId,
-        success: LIR.CFStmtId,
         next: LIR.CFStmtId,
     ) Allocator.Error!LIR.CFStmtId {
+        const worker = self.plan.workers.items[@intFromEnum(proc.worker_layout.worker)];
+        const function = proc.functionChildrenForRep(worker.rep) orelse
+            boxyLowerInvariant("generated Dict key writer was not callable");
+        if (function.arg_count != 1 or proc.arg_locals.items.len < 1 or proc.erased_capture_locals.items.len < 2) {
+            boxyLowerInvariant("generated Dict key writer did not bind encoding, key, and state");
+        }
         const caller = proc.worker_layout.worker;
         const encoding_type = source.capture_type orelse
-            boxyLowerInvariant("generated Dict key encoder had no encoding type");
+            boxyLowerInvariant("generated Dict key writer had no encoding type");
+        const encoding = proc.erased_capture_locals.items[0];
+        const key_value = proc.erased_capture_locals.items[1];
+        const state = proc.arg_locals.items[0];
+        const key_type = source.shape;
+
         if (generatedEncoderKeyMethodForType(
-            procedureModuleById(self.modules, key.source_type.module),
-            key.source_type.ty,
+            procedureModuleById(self.modules, key_type.module),
+            key_type.ty,
         )) |method_text| {
-            const call = proc.generatedCodecCallPlan(caller, encoding_type, method_text, key.source_type);
-            const key_result_rep = proc.repForTypeRef(call.ret_type);
-            const key_result = try proc.addFrameLocalForRep(key_result_rep);
-            const ok = proc.generatedParserTagVariant(key_result_rep, "Ok");
-            const err = proc.generatedParserTagVariant(key_result_rep, "Err");
+            const call = proc.generatedCodecCallPlan(caller, encoding_type, method_text, key_type);
+            return try self.lowerGeneratedCodecCallLocalsInto(proc, call, target, &.{ encoding, key_value, state }, next);
+        }
+
+        if (proc.generatedCodecCallPlanOrNull(caller, encoding_type, "encode_key_start", key_type)) |start_call| {
+            const opened_rep = proc.repForTypeRef(start_call.ret_type);
+            const opened = try proc.addFrameLocalForRep(opened_rep);
+            const ok = proc.generatedParserTagVariant(opened_rep, "Ok");
+            const err = proc.generatedParserTagVariant(opened_rep, "Err");
             const ok_payload = try proc.generatedParserSingleTagPayloadLocal(ok);
-            var ok_body = try proc.assignRepresentationBoundary(
-                key_str,
-                ok_payload.local,
-                ok_payload.child.rep,
-                ok_payload.child.rep,
-                success,
-            );
-            ok_body = try proc.generatedParserReadTagPayload(key_result, ok, ok_payload, ok_body);
-            const err_body = try proc.forwardGeneratedParserError(target, target_rep, key_result, err, next);
+            var ok_body = try self.lowerGeneratedEncoderShapeInto(proc, source, key_type, key_value, ok_payload.local, target, next);
+            ok_body = try proc.generatedParserReadTagPayload(opened, ok, ok_payload, ok_body);
+            const err_body = try proc.forwardGeneratedParserError(target, function.ret, opened, err, next);
             const variants = [_]GeneratedParserTagVariant{ ok, err };
             const bodies = [_]LIR.CFStmtId{ ok_body, err_body };
             const impossible = try self.result.store.addCFStmt(.runtime_error);
-            const dispatch = try proc.generatedParserTagDispatch(key_result, key_result_rep, &variants, &bodies, impossible);
-            return try self.lowerGeneratedCodecCallLocalsInto(
-                proc,
-                call,
-                key_result,
-                &.{ proc.erased_capture_locals.items[0], key_value },
-                dispatch,
-            );
+            const dispatch = try proc.generatedParserTagDispatch(opened, opened_rep, &variants, &bodies, impossible);
+            return try self.lowerGeneratedCodecCallLocalsInto(proc, start_call, opened, &.{ encoding, state }, dispatch);
         }
 
-        const variants = try self.generatedEncoderTagVariants(proc, key.source_type, false);
+        const str_call = proc.generatedCodecCallPlanForMethod(caller, encoding_type, "encode_key_str");
+        const key_str = try proc.addFrameLocal(.str);
+        const write_key = try self.lowerGeneratedCodecCallLocalsInto(proc, str_call, target, &.{ encoding, key_str, state }, next);
+        const variants = try self.generatedEncoderTagVariants(proc, key_type, false);
         defer self.allocator.free(variants);
         const bodies = try self.allocator.alloc(LIR.CFStmtId, variants.len);
         defer self.allocator.free(bodies);
@@ -8350,212 +8304,9 @@ const ProcedureBuilder = struct {
             if (self.plan.childSlice(variant.variant.payloads).len != 0) {
                 boxyLowerInvariant("generated Dict tag key carried a payload");
             }
-            body.* = try proc.assignStringBytesLiteral(key_str, proc.tagVariantNameText(variant.variant), success);
+            body.* = try proc.assignStringBytesLiteral(key_str, proc.tagVariantNameText(variant.variant), write_key);
         }
         return try self.lowerGeneratedEncoderTagDispatch(proc, key_value, variants, bodies);
-    }
-
-    fn lowerGeneratedEncoderTagFieldInto(
-        self: *ProcedureBuilder,
-        proc: *ProcBodyBuilder,
-        source: Plan.GeneratedCodecSource,
-        target: LIR.LocalId,
-        next: LIR.CFStmtId,
-    ) Allocator.Error!LIR.CFStmtId {
-        const worker = self.plan.workers.items[@intFromEnum(proc.worker_layout.worker)];
-        const function = proc.functionChildrenForRep(worker.rep) orelse
-            boxyLowerInvariant("generated tag field callback was not callable");
-        if (function.arg_count != 2 or proc.arg_locals.items.len < 2 or proc.erased_capture_locals.items.len < 2) {
-            boxyLowerInvariant("generated tag field callback had invalid arguments or captures");
-        }
-        const children = self.plan.childSlice(self.plan.representations.items[@intFromEnum(function.rep)].children);
-        const args = children[function.args_start..][0..function.arg_count];
-        const writer_fn = proc.functionChildrenForRep(args[1].rep) orelse
-            boxyLowerInvariant("generated tag field writer was not callable");
-        const writer_children = self.plan.childSlice(self.plan.representations.items[@intFromEnum(writer_fn.rep)].children);
-        const writer_args = writer_children[writer_fn.args_start..][0..writer_fn.arg_count];
-        if (writer_args.len != 3) boxyLowerInvariant("generated tag field writer had an unexpected arity");
-        const thunk_type = writer_args[2].source_type;
-        const contract_worker = source.contract_worker orelse
-            boxyLowerInvariant("generated tag field callback had no contract worker");
-        const thunk_source = Plan.GeneratedCodecSource{
-            .kind = .encoder_tag_payload_thunk,
-            .shape = source.shape,
-            .value_type = source.value_type,
-            .capture_type = source.capture_type,
-            .contract_worker = contract_worker,
-            .contract_expr = source.contract_expr,
-        };
-        const thunk_worker = self.plan.workerForSourceType(.{ .generated_codec = thunk_source }, thunk_type) orelse
-            boxyLowerInvariant("generated tag field callback had no planned payload thunk");
-        const variants = try self.generatedEncoderTagVariants(proc, source.shape, true);
-        defer self.allocator.free(variants);
-        const bodies = try self.allocator.alloc(LIR.CFStmtId, variants.len);
-        defer self.allocator.free(bodies);
-        const name_captures = self.generatedEncoderNameCaptureLocals(proc, contract_worker);
-
-        for (variants, bodies) |variant, *body| {
-            const tag_name = try proc.addFrameLocal(.str);
-            const thunk_rep = proc.repForTypeRef(thunk_type);
-            const thunk = try proc.addFrameLocalForRep(thunk_rep);
-            const capture_values = try self.allocator.alloc(LIR.LocalId, 2 + name_captures.len);
-            defer self.allocator.free(capture_values);
-            capture_values[0] = proc.erased_capture_locals.items[0];
-            capture_values[1] = proc.erased_capture_locals.items[1];
-            @memcpy(capture_values[2..], name_captures);
-
-            var continuation = try proc.lowerErasedCallLocalsInto(
-                target,
-                function.ret,
-                args[1].rep,
-                proc.arg_locals.items[1],
-                &.{ proc.arg_locals.items[0], tag_name, thunk },
-                &.{ args[0].rep, writer_args[1].rep, thunk_rep },
-                next,
-            );
-            continuation = try self.packGeneratedCodecCallable(
-                proc,
-                thunk,
-                thunk_rep,
-                thunk_worker,
-                capture_values,
-                continuation,
-            );
-            body.* = try proc.assignStringBytesLiteral(
-                tag_name,
-                proc.tagVariantNameText(variant.variant),
-                continuation,
-            );
-        }
-        return try self.lowerGeneratedEncoderTagDispatch(
-            proc,
-            proc.erased_capture_locals.items[1],
-            variants,
-            bodies,
-        );
-    }
-
-    fn lowerGeneratedEncoderTagPayloadThunkInto(
-        self: *ProcedureBuilder,
-        proc: *ProcBodyBuilder,
-        source: Plan.GeneratedCodecSource,
-        target: LIR.LocalId,
-        next: LIR.CFStmtId,
-    ) Allocator.Error!LIR.CFStmtId {
-        const worker = self.plan.workers.items[@intFromEnum(proc.worker_layout.worker)];
-        const function = proc.functionChildrenForRep(worker.rep) orelse
-            boxyLowerInvariant("generated tag payload thunk was not callable");
-        if (function.arg_count != 1 or proc.arg_locals.items.len < 1 or proc.erased_capture_locals.items.len < 2) {
-            boxyLowerInvariant("generated tag payload thunk had invalid arguments or captures");
-        }
-        const tag_value = proc.erased_capture_locals.items[1];
-        const variants = try self.generatedEncoderTagVariants(proc, source.shape, true);
-        defer self.allocator.free(variants);
-        const bodies = try self.allocator.alloc(LIR.CFStmtId, variants.len);
-        defer self.allocator.free(bodies);
-        const tag_rep = variants[0].tag_rep;
-        const tag_rep_plan = self.plan.representations.items[@intFromEnum(tag_rep)];
-
-        for (variants, bodies) |variant, *body| {
-            const payloads = self.plan.childSlice(variant.variant.payloads);
-            if (payloads.len == 1) {
-                const extracted = try proc.addExtractedTagPayloadLocal(
-                    payloads[0].rep,
-                    tag_rep_plan.descriptor != null,
-                );
-                const continuation = try self.lowerGeneratedEncoderShapeInto(
-                    proc,
-                    source,
-                    payloads[0].source_type,
-                    extracted.local,
-                    proc.arg_locals.items[0],
-                    target,
-                    next,
-                );
-                body.* = try proc.assignConcreteTagPayloadRead(
-                    extracted.local,
-                    payloads[0].rep,
-                    extracted.desc_local,
-                    tag_value,
-                    tag_rep,
-                    variant.variant.name,
-                    variant.index,
-                    0,
-                    1,
-                    continuation,
-                );
-            } else {
-                body.* = try self.lowerGeneratedTagPayloadSequenceEncoderInto(
-                    proc,
-                    source,
-                    variant,
-                    proc.arg_locals.items[0],
-                    target,
-                    next,
-                );
-            }
-        }
-        return try self.lowerGeneratedEncoderTagDispatch(proc, tag_value, variants, bodies);
-    }
-
-    fn lowerGeneratedTagPayloadSequenceEncoderInto(
-        self: *ProcedureBuilder,
-        proc: *ProcBodyBuilder,
-        source: Plan.GeneratedCodecSource,
-        variant: GeneratedParserTagVariant,
-        state: LIR.LocalId,
-        target: LIR.LocalId,
-        next: LIR.CFStmtId,
-    ) Allocator.Error!LIR.CFStmtId {
-        const caller = proc.worker_layout.worker;
-        const contract_worker = source.contract_worker orelse
-            boxyLowerInvariant("generated tag payload thunk had no contract worker");
-        const encoding_type = source.capture_type orelse
-            boxyLowerInvariant("generated tag payload thunk had no encoding type");
-        const call = proc.generatedCodecCallPlan(caller, encoding_type, "encode_tuple", null);
-        const arg_types = self.plan.generatedCodecCallTypeSlice(call.arg_types);
-        if (arg_types.len != 3) boxyLowerInvariant("generated tag payload encode_tuple call did not have three arguments");
-        const callback_source = Plan.GeneratedCodecSource{
-            .kind = .encoder_tag_payload_elements,
-            .shape = source.shape,
-            .value_type = source.value_type,
-            .capture_type = encoding_type,
-            .contract_worker = contract_worker,
-            .contract_expr = source.contract_expr,
-        };
-        const callback_worker = self.plan.workerForSourceType(
-            .{ .generated_codec = callback_source },
-            arg_types[2],
-        ) orelse boxyLowerInvariant("generated tag payload had no planned element callback");
-        const callback = try proc.addFrameLocalForRep(proc.repForTypeRef(arg_types[2]));
-        const count = try proc.addFrameLocal(.u64);
-        const name_captures = self.generatedEncoderNameCaptureLocals(proc, contract_worker);
-        const capture_values = try self.allocator.alloc(LIR.LocalId, 2 + name_captures.len);
-        defer self.allocator.free(capture_values);
-        capture_values[0] = proc.erased_capture_locals.items[0];
-        capture_values[1] = proc.erased_capture_locals.items[1];
-        @memcpy(capture_values[2..], name_captures);
-
-        var continuation = try self.lowerGeneratedCodecCallLocalsInto(
-            proc,
-            call,
-            target,
-            &.{ state, count, callback },
-            next,
-        );
-        continuation = try self.packGeneratedCodecCallable(
-            proc,
-            callback,
-            proc.repForTypeRef(arg_types[2]),
-            callback_worker,
-            capture_values,
-            continuation,
-        );
-        return try proc.assignIntLiteral(
-            count,
-            @intCast(self.plan.childSlice(variant.variant.payloads).len),
-            continuation,
-        );
     }
 
     fn lowerGeneratedEncoderTagPayloadElementsInto(
@@ -8573,27 +8324,16 @@ const ProcedureBuilder = struct {
         }
         const children = self.plan.childSlice(self.plan.representations.items[@intFromEnum(function.rep)].children);
         const args = children[function.args_start..][0..function.arg_count];
-        const all_payload_variants = try self.generatedEncoderTagVariants(proc, source.shape, true);
-        defer self.allocator.free(all_payload_variants);
-        var multi_count: usize = 0;
-        for (all_payload_variants) |variant| {
-            if (self.plan.childSlice(variant.variant.payloads).len > 1) multi_count += 1;
-        }
-        if (multi_count == 0) boxyLowerInvariant("generated tag payload element callback had no multi-payload variants");
-        const variants = try self.allocator.alloc(GeneratedParserTagVariant, multi_count);
+        const variants = try self.generatedEncoderTagVariants(proc, source.shape, false);
         defer self.allocator.free(variants);
-        const bodies = try self.allocator.alloc(LIR.CFStmtId, multi_count);
+        const bodies = try self.allocator.alloc(LIR.CFStmtId, variants.len);
         defer self.allocator.free(bodies);
-        var out_index: usize = 0;
-        for (all_payload_variants) |variant| {
-            const payloads = self.plan.childSlice(variant.variant.payloads);
-            if (payloads.len <= 1) continue;
-            variants[out_index] = variant;
-            bodies[out_index] = try self.lowerGeneratedEncoderTagPayloadElementsFrom(
+        for (variants, bodies) |variant, *body| {
+            body.* = try self.lowerGeneratedEncoderTagPayloadElementsFrom(
                 proc,
                 source,
                 variant,
-                payloads,
+                self.plan.childSlice(variant.variant.payloads),
                 0,
                 proc.erased_capture_locals.items[1],
                 proc.arg_locals.items[0],
@@ -8604,7 +8344,6 @@ const ProcedureBuilder = struct {
                 target,
                 next,
             );
-            out_index += 1;
         }
         return try self.lowerGeneratedEncoderTagDispatch(
             proc,
@@ -13200,10 +12939,9 @@ const ProcBodyBuilder = struct {
                 .encoder_record_fields,
                 .encoder_dict_fields,
                 .encoder_sequence_elements,
-                .encoder_tag_field,
-                .encoder_tag_payload_thunk,
                 .encoder_tag_payload_elements,
                 .encoder_value_thunk,
+                .encoder_dict_key_thunk,
                 => true,
                 .parser_constructor, .encoder_constructor => false,
             },
@@ -13675,10 +13413,9 @@ const ProcBodyBuilder = struct {
                 .encoder_record_fields,
                 .encoder_dict_fields,
                 .encoder_sequence_elements,
-                .encoder_tag_field,
-                .encoder_tag_payload_thunk,
                 .encoder_tag_payload_elements,
                 .encoder_value_thunk,
+                .encoder_dict_key_thunk,
                 => true,
                 .parser_constructor, .encoder_constructor => false,
             },

@@ -507,10 +507,9 @@ pub const GeneratedCodecKind = enum {
     encoder_record_fields,
     encoder_dict_fields,
     encoder_sequence_elements,
-    encoder_tag_field,
-    encoder_tag_payload_thunk,
     encoder_tag_payload_elements,
     encoder_value_thunk,
+    encoder_dict_key_thunk,
 };
 
 /// Checked source metadata for one compiler-generated codec worker.
@@ -2265,10 +2264,9 @@ const Builder = struct {
                 .encoder_record_fields,
                 .encoder_dict_fields,
                 .encoder_sequence_elements,
-                .encoder_tag_field,
-                .encoder_tag_payload_thunk,
                 .encoder_tag_payload_elements,
                 .encoder_value_thunk,
+                .encoder_dict_key_thunk,
                 => boxyPlanInvariant("generated stored capture referenced a non-runtime codec worker"),
             },
             .procedure_template,
@@ -2950,10 +2948,9 @@ const Builder = struct {
                                 .encoder_record_fields,
                                 .encoder_dict_fields,
                                 .encoder_sequence_elements,
-                                .encoder_tag_field,
-                                .encoder_tag_payload_thunk,
                                 .encoder_tag_payload_elements,
                                 .encoder_value_thunk,
+                                .encoder_dict_key_thunk,
                                 => unreachable,
                             },
                             .shape = typeRef(contract.view, contract.derivation.shape_ty),
@@ -3005,10 +3002,9 @@ const Builder = struct {
                 .encoder_record_fields,
                 .encoder_dict_fields,
                 .encoder_sequence_elements,
-                .encoder_tag_field,
-                .encoder_tag_payload_thunk,
                 .encoder_tag_payload_elements,
                 .encoder_value_thunk,
+                .encoder_dict_key_thunk,
                 => {},
             },
             .generated_field_iterator => {},
@@ -3237,10 +3233,9 @@ const Builder = struct {
             .encoder_record_fields,
             .encoder_dict_fields,
             .encoder_sequence_elements,
-            .encoder_tag_field,
-            .encoder_tag_payload_thunk,
             .encoder_tag_payload_elements,
             .encoder_value_thunk,
+            .encoder_dict_key_thunk,
             => boxyPlanInvariant("generated codec constructor contract requested for a runtime worker"),
         };
         const view = self.moduleForId(runtime_type.module);
@@ -3317,10 +3312,9 @@ const Builder = struct {
             .encoder_record_fields,
             .encoder_dict_fields,
             .encoder_sequence_elements,
-            .encoder_tag_field,
-            .encoder_tag_payload_thunk,
             .encoder_tag_payload_elements,
             .encoder_value_thunk,
+            .encoder_dict_key_thunk,
             => .encoder,
             .parser_constructor, .encoder_constructor => boxyPlanInvariant("generated codec call was planned from a constructor worker"),
         };
@@ -3953,6 +3947,7 @@ const Builder = struct {
                                 contract_worker,
                                 shape,
                                 subject_type,
+                                subject_type,
                                 typeRef(view, nominal.args[0]),
                                 encoding_type,
                             );
@@ -3965,6 +3960,7 @@ const Builder = struct {
                                 contract_worker,
                                 to_list.ret_type,
                                 to_list.ret_type,
+                                subject_type,
                                 typeRef(view, nominal.args[0]),
                                 encoding_type,
                             );
@@ -3975,6 +3971,7 @@ const Builder = struct {
                                 worker,
                                 contract_worker,
                                 shape,
+                                subject_type,
                                 typeRef(view, nominal.args[0]),
                                 typeRef(view, nominal.args[1]),
                                 encoding_type,
@@ -4150,10 +4147,11 @@ const Builder = struct {
         contract_worker: WorkerPlanId,
         list_shape: CheckedTypeIdentity,
         list_type: CheckedTypeIdentity,
+        encode_subject_type: CheckedTypeIdentity,
         elem_type: CheckedTypeIdentity,
         encoding_type: CheckedTypeIdentity,
     ) Allocator.Error!void {
-        const encode_call = try self.ensureGeneratedCodecCall(worker, encoding_type, "encode_list", list_type);
+        const encode_call = try self.ensureGeneratedCodecCall(worker, encoding_type, "encode_list", encode_subject_type);
         const arg_types = self.plan.generatedCodecCallTypeSlice(encode_call.arg_types);
         if (arg_types.len != 3) boxyPlanInvariant("generated list encoder call did not have three arguments");
         const body_rep = try self.analyzeType(self.moduleForId(arg_types[2].module), arg_types[2].ty);
@@ -4194,19 +4192,23 @@ const Builder = struct {
         );
     }
 
+    /// A dict is written through the checked `encode_dict` method. Each entry
+    /// hands the format's entry writer one key writer and one value writer;
+    /// the key writer uses the key protocol the checker validated for it.
     fn planGeneratedEncoderDict(
         self: *Builder,
         worker: WorkerPlanId,
         contract_worker: WorkerPlanId,
         dict_shape: CheckedTypeIdentity,
+        dict_type: CheckedTypeIdentity,
         key_type: CheckedTypeIdentity,
         value_type: CheckedTypeIdentity,
         encoding_type: CheckedTypeIdentity,
     ) Allocator.Error!void {
         const to_list = try self.ensureGeneratedCodecCall(worker, dict_shape, "to_list", dict_shape);
-        const encode_record = try self.ensureGeneratedCodecCall(worker, encoding_type, "encode_record", null);
-        const arg_types = self.plan.generatedCodecCallTypeSlice(encode_record.arg_types);
-        if (arg_types.len != 3) boxyPlanInvariant("generated Dict encode_record call did not have three arguments");
+        const encode_dict = try self.ensureGeneratedCodecCall(worker, encoding_type, "encode_dict", dict_type);
+        const arg_types = self.plan.generatedCodecCallTypeSlice(encode_dict.arg_types);
+        if (arg_types.len != 3) boxyPlanInvariant("generated Dict encode_dict call did not have three arguments");
         const body_rep = try self.analyzeType(self.moduleForId(arg_types[2].module), arg_types[2].ty);
         const body_fn = (self.repQuery().functionChildren(body_rep)) orelse
             boxyPlanInvariant("generated Dict encoder body argument was not callable");
@@ -4214,37 +4216,47 @@ const Builder = struct {
         const body_children = self.plan.childSlice(self.plan.representations.items[@intFromEnum(body_fn.rep)].children);
         const body_args = body_children[body_fn.args_start..][0..body_fn.arg_count];
         const writer_fn = (self.repQuery().functionChildren(body_args[1].rep)) orelse
-            boxyPlanInvariant("generated Dict field writer was not callable");
-        if (writer_fn.arg_count != 3) boxyPlanInvariant("generated Dict field writer had an unexpected arity");
+            boxyPlanInvariant("generated Dict entry writer was not callable");
+        if (writer_fn.arg_count != 3) boxyPlanInvariant("generated Dict entry writer had an unexpected arity");
         const writer_children = self.plan.childSlice(self.plan.representations.items[@intFromEnum(writer_fn.rep)].children);
         const writer_args = writer_children[writer_fn.args_start..][0..writer_fn.arg_count];
-        const thunk_type = writer_args[2].source_type;
+        const key_thunk_type = writer_args[1].source_type;
+        const value_thunk_type = writer_args[2].source_type;
         const contract_expr = self.generatedCodecSourceForWorker(contract_worker).contract_expr;
-        const callback_source = GeneratedCodecSource{
+        _ = try self.ensureWorker(.{ .generated_codec = .{
             .kind = .encoder_dict_fields,
             .shape = to_list.ret_type,
             .value_type = to_list.ret_type,
             .capture_type = encoding_type,
             .contract_worker = contract_worker,
             .contract_expr = contract_expr,
-        };
-        const callback_worker = try self.ensureWorker(
-            .{ .generated_codec = callback_source },
-            arg_types[2],
-            null,
-        );
+        } }, arg_types[2], null);
+
+        const key_thunk_worker = try self.ensureWorker(.{ .generated_codec = .{
+            .kind = .encoder_dict_key_thunk,
+            .shape = key_type,
+            .capture_type = encoding_type,
+            .contract_worker = contract_worker,
+            .contract_expr = contract_expr,
+        } }, key_thunk_type, null);
         if (generatedEncoderKeyMethod(self.moduleForId(key_type.module), key_type.ty)) |method_text| {
-            _ = try self.ensureGeneratedCodecCall(callback_worker, encoding_type, method_text, key_type);
+            _ = try self.ensureGeneratedCodecCall(key_thunk_worker, encoding_type, method_text, key_type);
+        } else if (self.generatedCodecContractRecordsCall(key_thunk_worker, encoding_type, "encode_key_start", key_type)) {
+            _ = try self.ensureGeneratedCodecCall(key_thunk_worker, encoding_type, "encode_key_start", key_type);
+            try self.planGeneratedEncoderShape(key_thunk_worker, contract_worker, key_type, key_type, encoding_type);
+        } else {
+            _ = try self.ensureGeneratedCodecCallWithCheckedSubject(key_thunk_worker, encoding_type, "encode_key_str");
         }
-        const thunk_worker = try self.ensureWorker(.{ .generated_codec = .{
+
+        const value_thunk_worker = try self.ensureWorker(.{ .generated_codec = .{
             .kind = .encoder_value_thunk,
             .shape = value_type,
             .capture_type = encoding_type,
             .contract_worker = contract_worker,
             .contract_expr = contract_expr,
-        } }, thunk_type, null);
+        } }, value_thunk_type, null);
         try self.planGeneratedEncoderShape(
-            thunk_worker,
+            value_thunk_worker,
             contract_worker,
             value_type,
             value_type,
@@ -4252,6 +4264,30 @@ const Builder = struct {
         );
     }
 
+    /// Whether the checked contract of `caller` recorded a call to
+    /// `method_text` on `dispatch_type` with exactly this subject.
+    fn generatedCodecContractRecordsCall(
+        self: *Builder,
+        caller: WorkerPlanId,
+        dispatch_type: CheckedTypeIdentity,
+        method_text: []const u8,
+        subject_type: CheckedTypeIdentity,
+    ) bool {
+        const contract = self.generatedCodecContractForWorker(caller);
+        const names = contract.view.canonical_names orelse
+            boxyPlanInvariant("generated codec contract module had no checked names");
+        for (contract.derivation.callsSlice(contract.view.static_dispatch_plans)) |candidate| {
+            if (!std.mem.eql(u8, names.methodNameText(candidate.method), method_text)) continue;
+            if (!moduleKeyEqual(dispatch_type.module, contract.view.key) or candidate.dispatcher_ty != dispatch_type.ty) continue;
+            const candidate_subject = candidate.subject_ty orelse continue;
+            if (typeRefEql(typeRef(contract.view, candidate_subject), subject_type)) return true;
+        }
+        return false;
+    }
+
+    /// Every variant is written through the checked `encode_tag` method: its
+    /// tag name, payload count, and a callback that writes each payload with
+    /// the container's element writer.
     fn planGeneratedEncoderTagUnion(
         self: *Builder,
         worker: WorkerPlanId,
@@ -4264,150 +4300,57 @@ const Builder = struct {
         const row_reps = try self.generatedEncoderTagRowReps(tag_rep);
         defer self.allocator.free(row_reps);
 
-        var has_unit = false;
-        var has_payload = false;
-        var has_multiple_payloads = false;
+        var has_variant = false;
         for (row_reps) |row_rep| {
             const row = self.plan.representations.items[@intFromEnum(row_rep)];
-            for (self.plan.tagVariantSlice(row.tag_variants)) |variant| {
-                const payloads = self.plan.childSlice(variant.payloads);
-                if (payloads.len == 0) {
-                    has_unit = true;
-                } else {
-                    has_payload = true;
-                    has_multiple_payloads = has_multiple_payloads or payloads.len > 1;
-                }
-            }
+            if (row.tag_variants.len != 0) has_variant = true;
         }
-        if (!has_unit and !has_payload) {
-            boxyPlanInvariant("generated encoder tag union had no variants");
-        }
+        if (!has_variant) boxyPlanInvariant("generated encoder tag union had no variants");
 
-        if (has_unit) {
-            _ = try self.ensureGeneratedCodecCallWithCheckedSubject(worker, encoding_type, "encode_str");
-        }
-        if (!has_payload) return;
-        const encode_record = try self.ensureGeneratedCodecCall(worker, encoding_type, "encode_record", null);
-        const record_arg_types = self.plan.generatedCodecCallTypeSlice(encode_record.arg_types);
-        if (record_arg_types.len != 3) {
-            boxyPlanInvariant("generated tag encoder encode_record call did not have three arguments");
-        }
-        const record_body_rep = try self.analyzeType(
-            self.moduleForId(record_arg_types[2].module),
-            record_arg_types[2].ty,
-        );
-        const record_body_fn = (self.repQuery().functionChildren(record_body_rep)) orelse
-            boxyPlanInvariant("generated tag encoder record body was not callable");
-        if (record_body_fn.arg_count != 2) {
-            boxyPlanInvariant("generated tag encoder record body had an unexpected arity");
-        }
-        const record_body_children = self.plan.childSlice(
-            self.plan.representations.items[@intFromEnum(record_body_fn.rep)].children,
-        );
-        const record_body_args = record_body_children[record_body_fn.args_start..][0..record_body_fn.arg_count];
-        const field_writer_fn = (self.repQuery().functionChildren(record_body_args[1].rep)) orelse
-            boxyPlanInvariant("generated tag encoder field writer was not callable");
-        if (field_writer_fn.arg_count != 3) {
-            boxyPlanInvariant("generated tag encoder field writer had an unexpected arity");
-        }
-        const field_writer_children = self.plan.childSlice(
-            self.plan.representations.items[@intFromEnum(field_writer_fn.rep)].children,
-        );
-        const field_writer_args = field_writer_children[field_writer_fn.args_start..][0..field_writer_fn.arg_count];
-        const payload_thunk_type = field_writer_args[2].source_type;
+        const encode_tag = try self.ensureGeneratedCodecCall(worker, encoding_type, "encode_tag", tag_type);
+        const arg_types = self.plan.generatedCodecCallTypeSlice(encode_tag.arg_types);
+        if (arg_types.len != 4) boxyPlanInvariant("generated tag encoder encode_tag call did not have four arguments");
+        const body_rep = try self.analyzeType(self.moduleForId(arg_types[3].module), arg_types[3].ty);
+        const body_fn = (self.repQuery().functionChildren(body_rep)) orelse
+            boxyPlanInvariant("generated tag encoder payload body was not callable");
+        if (body_fn.arg_count != 2) boxyPlanInvariant("generated tag encoder payload body had an unexpected arity");
+        const body_children = self.plan.childSlice(self.plan.representations.items[@intFromEnum(body_fn.rep)].children);
+        const body_args = body_children[body_fn.args_start..][0..body_fn.arg_count];
+        const writer_fn = (self.repQuery().functionChildren(body_args[1].rep)) orelse
+            boxyPlanInvariant("generated tag payload element writer was not callable");
+        if (writer_fn.arg_count != 2) boxyPlanInvariant("generated tag payload element writer had an unexpected arity");
+        const writer_children = self.plan.childSlice(self.plan.representations.items[@intFromEnum(writer_fn.rep)].children);
+        const writer_args = writer_children[writer_fn.args_start..][0..writer_fn.arg_count];
+        const thunk_type = writer_args[1].source_type;
         const contract_expr = self.generatedCodecSourceForWorker(contract_worker).contract_expr;
 
         _ = try self.ensureWorker(.{ .generated_codec = .{
-            .kind = .encoder_tag_field,
+            .kind = .encoder_tag_payload_elements,
             .shape = tag_shape,
             .value_type = tag_type,
             .capture_type = encoding_type,
             .contract_worker = contract_worker,
             .contract_expr = contract_expr,
-        } }, record_arg_types[2], null);
-        const payload_thunk_worker = try self.ensureWorker(.{ .generated_codec = .{
-            .kind = .encoder_tag_payload_thunk,
-            .shape = tag_shape,
-            .value_type = tag_type,
-            .capture_type = encoding_type,
-            .contract_worker = contract_worker,
-            .contract_expr = contract_expr,
-        } }, payload_thunk_type, null);
-
-        var element_thunk_type: ?CheckedTypeIdentity = null;
-        if (has_multiple_payloads) {
-            const encode_tuple = try self.ensureGeneratedCodecCall(
-                payload_thunk_worker,
-                encoding_type,
-                "encode_tuple",
-                null,
-            );
-            const tuple_arg_types = self.plan.generatedCodecCallTypeSlice(encode_tuple.arg_types);
-            if (tuple_arg_types.len != 3) {
-                boxyPlanInvariant("generated tag payload encode_tuple call did not have three arguments");
-            }
-            const tuple_body_rep = try self.analyzeType(
-                self.moduleForId(tuple_arg_types[2].module),
-                tuple_arg_types[2].ty,
-            );
-            const tuple_body_fn = (self.repQuery().functionChildren(tuple_body_rep)) orelse
-                boxyPlanInvariant("generated tag payload tuple body was not callable");
-            if (tuple_body_fn.arg_count != 2) {
-                boxyPlanInvariant("generated tag payload tuple body had an unexpected arity");
-            }
-            const tuple_body_children = self.plan.childSlice(
-                self.plan.representations.items[@intFromEnum(tuple_body_fn.rep)].children,
-            );
-            const tuple_body_args = tuple_body_children[tuple_body_fn.args_start..][0..tuple_body_fn.arg_count];
-            const element_writer_fn = (self.repQuery().functionChildren(tuple_body_args[1].rep)) orelse
-                boxyPlanInvariant("generated tag payload element writer was not callable");
-            if (element_writer_fn.arg_count != 2) {
-                boxyPlanInvariant("generated tag payload element writer had an unexpected arity");
-            }
-            const element_writer_children = self.plan.childSlice(
-                self.plan.representations.items[@intFromEnum(element_writer_fn.rep)].children,
-            );
-            const element_writer_args = element_writer_children[element_writer_fn.args_start..][0..element_writer_fn.arg_count];
-            element_thunk_type = element_writer_args[1].source_type;
-            _ = try self.ensureWorker(.{ .generated_codec = .{
-                .kind = .encoder_tag_payload_elements,
-                .shape = tag_shape,
-                .value_type = tag_type,
-                .capture_type = encoding_type,
-                .contract_worker = contract_worker,
-                .contract_expr = contract_expr,
-            } }, tuple_arg_types[2], null);
-        }
+        } }, arg_types[3], null);
 
         for (row_reps) |row_rep| {
             const row = self.plan.representations.items[@intFromEnum(row_rep)];
             for (self.plan.tagVariantSlice(row.tag_variants)) |variant| {
-                const payloads = self.plan.childSlice(variant.payloads);
-                if (payloads.len == 1) {
+                for (self.plan.childSlice(variant.payloads)) |payload| {
+                    const thunk_worker = try self.ensureWorker(.{ .generated_codec = .{
+                        .kind = .encoder_value_thunk,
+                        .shape = payload.source_type,
+                        .capture_type = encoding_type,
+                        .contract_worker = contract_worker,
+                        .contract_expr = contract_expr,
+                    } }, thunk_type, null);
                     try self.planGeneratedEncoderShape(
-                        payload_thunk_worker,
+                        thunk_worker,
                         contract_worker,
-                        payloads[0].source_type,
-                        payloads[0].source_type,
+                        payload.source_type,
+                        payload.source_type,
                         encoding_type,
                     );
-                } else if (payloads.len > 1) {
-                    for (payloads) |payload| {
-                        const thunk_worker = try self.ensureWorker(.{ .generated_codec = .{
-                            .kind = .encoder_value_thunk,
-                            .shape = payload.source_type,
-                            .capture_type = encoding_type,
-                            .contract_worker = contract_worker,
-                            .contract_expr = contract_expr,
-                        } }, element_thunk_type.?, null);
-                        try self.planGeneratedEncoderShape(
-                            thunk_worker,
-                            contract_worker,
-                            payload.source_type,
-                            payload.source_type,
-                            encoding_type,
-                        );
-                    }
                 }
             }
         }
@@ -6712,10 +6655,9 @@ const Builder = struct {
                     .encoder_record_fields,
                     .encoder_dict_fields,
                     .encoder_sequence_elements,
-                    .encoder_tag_field,
-                    .encoder_tag_payload_thunk,
                     .encoder_tag_payload_elements,
                     .encoder_value_thunk,
+                    .encoder_dict_key_thunk,
                     => {
                         const capture_type = codec.capture_type orelse
                             boxyPlanInvariant("generated encoder callback had no encoding capture type");
@@ -7185,7 +7127,6 @@ const Builder = struct {
                     .encoder_record_fields,
                     .encoder_dict_fields,
                     .encoder_sequence_elements,
-                    .encoder_tag_field,
                     .encoder_tag_payload_elements,
                     => {
                         const capture_type = codec.capture_type orelse
@@ -7223,7 +7164,7 @@ const Builder = struct {
                             capture_index += 1;
                         }
                     },
-                    .encoder_tag_payload_thunk, .encoder_value_thunk => {
+                    .encoder_value_thunk, .encoder_dict_key_thunk => {
                         const capture_type = codec.capture_type orelse
                             boxyPlanInvariant("generated encoder value thunk had no encoding capture type");
                         const capture_rep = self.plan.repForSourceType(capture_type) orelse
@@ -7420,10 +7361,9 @@ const Builder = struct {
                 .encoder_record_fields,
                 .encoder_dict_fields,
                 .encoder_sequence_elements,
-                .encoder_tag_field,
-                .encoder_tag_payload_thunk,
                 .encoder_tag_payload_elements,
                 .encoder_value_thunk,
+                .encoder_dict_key_thunk,
                 => boxyPlanInvariant("non-runtime generated codec had an unpersisted stored capture"),
             },
             .procedure_template,
@@ -10138,10 +10078,9 @@ const Builder = struct {
                     .encoder_record_fields,
                     .encoder_dict_fields,
                     .encoder_sequence_elements,
-                    .encoder_tag_field,
-                    .encoder_tag_payload_thunk,
                     .encoder_tag_payload_elements,
                     .encoder_value_thunk,
+                    .encoder_dict_key_thunk,
                     => null,
                 },
                 .procedure_template,
