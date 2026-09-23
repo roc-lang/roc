@@ -61,6 +61,7 @@ test "check tests" {
     std.testing.refAllDecls(@import("const_store.zig"));
     std.testing.refAllDecls(@import("artifact_serialize.zig"));
     std.testing.refAllDecls(@import("checked_artifact.zig"));
+    std.testing.refAllDecls(@import("evaluation_diagnostics.zig"));
     std.testing.refAllDecls(@import("checked_ids.zig"));
     std.testing.refAllDecls(@import("typed_cir.zig"));
     std.testing.refAllDecls(@import("snapshot.zig"));
@@ -105,9 +106,15 @@ test "check tests" {
     std.testing.refAllDecls(@import("test/issue_11128_test.zig"));
     std.testing.refAllDecls(@import("test/issue_11229_test.zig"));
     std.testing.refAllDecls(@import("test/issue_11245_test.zig"));
+    std.testing.refAllDecls(@import("test/issue_11587_test.zig"));
     std.testing.refAllDecls(@import("test/issue_11246_test.zig"));
     std.testing.refAllDecls(@import("test/issue_11214_test.zig"));
     std.testing.refAllDecls(@import("test/issue_11248_test.zig"));
+    std.testing.refAllDecls(@import("test/issue_11489_test.zig"));
+    std.testing.refAllDecls(@import("test/issue_11407_test.zig"));
+    std.testing.refAllDecls(@import("test/issue_11390_test.zig"));
+    std.testing.refAllDecls(@import("test/issue_11465_test.zig"));
+    std.testing.refAllDecls(@import("test/issue_11464_test.zig"));
     std.testing.refAllDecls(@import("test/nominal_decl_growth_test.zig"));
 
     // Cross-module monomorphization tests

@@ -141,7 +141,21 @@ This can be a source of bugs! One way to prevent this problem is to perform stri
 
 ## String normalization
 
-TODO
+_Normalization_ converts a string into a standard form, so that strings which render identically also
+have identical code points. The Unicode standard defines several normalization forms, the most common
+of which are:
+
+- **NFC** (Normalization Form C, for "Composed"), which uses a single code point wherever possible. In NFC, `"cafe\u(301)"` becomes `"caf\u(e9)"`.
+- **NFD** (Normalization Form D, for "Decomposed"), which splits characters into multiple code points wherever possible. In NFD, `"caf\u(e9)"` becomes `"cafe\u(301)"`.
+
+After two strings have both been normalized to the same form, comparing them with `==` gives the answer
+you'd expect based on how they're rendered.
+
+A good time to normalize strings is when they first enter the program, such as when reading user input or
+parsing a file. That way, the rest of the program can compare them using `==` without having to worry about
+the same text being represented using different code points.
+
+Roc's builtin `Str` module does not perform normalization.
 
 ## Why not normalize automatically
 
@@ -149,7 +163,34 @@ It would be possible for Roc to perform string normalization automatically on ev
 
 ## UTF-8
 
-TODO
+Roc strings are stored in memory as [UTF-8](https://en.wikipedia.org/wiki/UTF-8), which encodes each
+code point as a sequence of between one and four bytes. ASCII characters like `a` take up one byte each,
+whereas other code points take up more. For example, `é` (`\u(e9)`) takes two bytes, and many emoji take four.
+
+Every `Str` is guaranteed to be valid UTF-8. For this reason, converting a `Str` to bytes always succeeds,
+whereas converting bytes to a `Str` can fail:
+
+```roc
+"café".to_utf8() # [99, 97, 102, 195, 169]
+
+Str.from_utf8([99, 97, 102, 195, 169]) # Ok("café")
+
+Str.from_utf8([99, 255]) # Err(BadUtf8({ index: 1, problem: InvalidStartByte }))
+```
+
+If you'd rather replace invalid bytes than get an error, [`Str.from_utf8_lossy`](../Str#from_utf8_lossy)
+replaces each invalid byte sequence with the Unicode replacement character (`�`).
+
+Since code points can take up different numbers of bytes, the number of bytes in a string isn't necessarily
+the number of code points, let alone the number of graphemes. This is why `Str.len` doesn't return a number;
+instead, it returns a `LearnAboutStringsInRoc` tag containing an explanation of this. To get the number of bytes,
+use [`Str.count_utf8_bytes`](../Str#count_utf8_bytes), which returns exactly what its name says:
+
+```roc
+"café".count_utf8_bytes() # 5, because é takes 2 bytes
+```
+
+(To check whether a string is empty, use [`Str.is_empty`](../Str#is_empty).)
 
 ## When to use each of these
 

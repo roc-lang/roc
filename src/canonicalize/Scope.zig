@@ -23,6 +23,15 @@ pub const ExternalTypeBinding = struct {
     /// True if the module was attempted to be imported but was not found.
     /// This allows us to emit a more specific diagnostic when the type is used.
     module_not_found: bool,
+    /// True when the compiler installed this binding for its own baked
+    /// `Builtin` module, which every module gets without asking. A name a
+    /// module's own `import` brings in takes precedence over it.
+    is_compiler_builtin: bool = false,
+    /// True when this binding is an import's own name, which denotes the
+    /// declaration the import selects -- a type module's main type, or the
+    /// declaration a package header makes public -- rather than a name
+    /// inside the module.
+    names_import_main_type: bool = false,
 };
 
 /// A unified type binding that can represent either a locally declared type or an externally imported type.
@@ -163,6 +172,9 @@ pub const ExposedItemInfo = struct {
     module_name: Ident.Idx,
     original_name: Ident.Idx,
     target: ?collections.ExposedItemTarget = null,
+    /// True when this item is an import's own name, which denotes the
+    /// declaration the import selects rather than a name inside the module.
+    names_import_main_type: bool = false,
 };
 
 /// Result of looking up an exposed item
@@ -194,6 +206,9 @@ pub const TypeBindingDecision = union(enum) {
     inserted,
     inserted_shadowing_parent: TypeBinding,
     replaced_current_external: ExternalTypeBinding,
+    /// An `exposing [...]` item replaced the binding the same import's own
+    /// alias made. Both name the same import, so this is not a collision.
+    narrowed_import_alias,
     idempotent_current,
     rejected_current_conflict: TypeBinding,
     redeclared_current: TypeBinding,
@@ -323,8 +338,19 @@ fn currentCollisionDecision(existing: TypeBinding, incoming: TypeBindingInput) T
 
     return switch (incoming) {
         .external_nominal => |incoming_external| switch (existing) {
-            .external_nominal => |existing_external| if (sameExternal(existing_external, incoming_external))
+            .external_nominal => |existing_external| if (existing_external.names_import_main_type and
+                !incoming_external.names_import_main_type and
+                existing_external.import_idx == incoming_external.import_idx)
+                // An `exposing [...]` item names one declaration of the
+                // import, so it takes precedence over the binding the
+                // import's own alias made for the same import.
+                TypeBindingDecision.narrowed_import_alias
+            else if (sameExternal(existing_external, incoming_external))
                 .idempotent_current
+            else if (existing_external.is_compiler_builtin and !incoming_external.is_compiler_builtin)
+                // A name this module imports takes precedence over the same
+                // name the compiler auto-imports from its baked `Builtin`.
+                TypeBindingDecision{ .replaced_current_external = existing_external }
             else
                 TypeBindingDecision{ .rejected_current_conflict = existing },
             .local_nominal, .local_alias, .local_where_alias, .associated_nominal => TypeBindingDecision{ .rejected_current_conflict = existing },
@@ -353,7 +379,7 @@ pub fn introduceTypeBinding(
     if (scope.type_bindings.get(name)) |existing| {
         const decision = currentCollisionDecision(existing, incoming);
         switch (decision) {
-            .replaced_current_external => {
+            .replaced_current_external, .narrowed_import_alias => {
                 try scope.type_bindings.put(gpa, name, incoming_binding);
             },
             .inserted,

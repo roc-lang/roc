@@ -111,6 +111,7 @@ pub const SyntaxChecker = struct {
     const owner_build = "build_env";
     const owner_previous = "previous_build_env";
     const owner_snapshot = "snapshot";
+    const owner_semantic_tokens = "semantic_tokens";
     pub const CheckError = SyntaxCheckError;
     pub const QueryError = SyntaxQueryError;
 
@@ -765,6 +766,34 @@ pub const SyntaxChecker = struct {
     pub fn getModuleEnvByPath(self: *SyntaxChecker, path: []const u8) ?*ModuleEnv {
         const env = self.getModuleLookupEnv() orelse return null;
         return self.getModuleEnvByPathInEnv(env, path);
+    }
+
+    /// Return checked CIR only when a retained build was produced from these
+    /// exact document bytes.
+    pub const CheckedModule = struct {
+        module_env: *ModuleEnv,
+        handle: *BuildEnvHandle,
+
+        pub fn deinit(self: CheckedModule) void {
+            self.handle.release(owner_semantic_tokens);
+        }
+    };
+
+    pub fn getCheckedModuleForDocument(
+        self: *SyntaxChecker,
+        uri: []const u8,
+        text: []const u8,
+    ) Allocator.Error!?CheckedModule {
+        self.mutex.lockUncancelable(self.std_io);
+        defer self.mutex.unlock(self.std_io);
+
+        var document = try self.documentIdentityFromText(uri, text);
+        defer document.deinit(self.allocator);
+
+        const handle = self.matchingBuildEnvHandle(document.absolute_path, document.content_hash) orelse return null;
+        const module_env = self.getModuleEnvByPathInEnv(handle.envPtr(), document.absolute_path) orelse return null;
+        handle.retain(owner_semantic_tokens);
+        return .{ .module_env = module_env, .handle = handle };
     }
 
     /// Look up a ModuleEnv by its file path from a specific BuildEnv.
@@ -2643,6 +2672,15 @@ pub const SyntaxChecker = struct {
                 }
                 return self.findModuleByName(build_env, doc_path, type_name, oom);
             },
+            .external_identity => |ext| {
+                // The declaration lives in the module an exposed alias named,
+                // which this module records by content identity.
+                const module_name = module_env.moduleIdentityDisplayText(ext.module_identity);
+                if (module_name.len > 0) {
+                    return self.findDefinitionInModule(build_env, doc_path, module_name, type_name, oom);
+                }
+                return self.findModuleByName(build_env, doc_path, type_name, oom);
+            },
         }
     }
 
@@ -2913,6 +2951,7 @@ pub const SyntaxChecker = struct {
             .e_for,
             .e_run_low_level,
             => return null,
+            .e_deferred_import_ref => std.debug.panic("compiler invariant violated: deferred import reference reached a stage that runs after import resolution", .{}),
         }
     }
 
@@ -4383,6 +4422,7 @@ fn renameTargetAt(module_env: *ModuleEnv, offset: u32) ?RenameTarget {
         .underscore,
         .runtime_error,
         => null,
+        .deferred_import_ref => std.debug.panic("compiler invariant violated: deferred import reference pattern reached a stage that runs after import resolution", .{}),
     };
 }
 

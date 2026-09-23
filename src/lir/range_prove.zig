@@ -3207,6 +3207,7 @@ const Pass = struct {
             .num_negate_checked,
             .num_abs_checked,
             .num_pow,
+            .num_atan2,
             .num_sqrt,
             .num_sin,
             .num_cos,

@@ -138,6 +138,12 @@ pub const TypeAnno = union(enum) {
                         const module_name = ir.common.strings.get(string_lit_idx);
                         try tree.pushStringPair("pending-module", module_name);
                     },
+                    .external_identity => |external| {
+                        try tree.pushStringPair(
+                            "external-module",
+                            ir.moduleIdentityDisplayText(external.module_identity),
+                        );
+                    },
                 }
 
                 const attrs = tree.beginNode();
@@ -213,6 +219,12 @@ pub const TypeAnno = union(enum) {
                         const string_lit_idx = ir.imports.imports.items.items[module_idx_int];
                         const module_name = ir.common.strings.get(string_lit_idx);
                         try tree.pushStringPair("pending-module", module_name);
+                    },
+                    .external_identity => |external| {
+                        try tree.pushStringPair(
+                            "external-module",
+                            ir.moduleIdentityDisplayText(external.module_identity),
+                        );
                     },
                 }
 
@@ -362,10 +374,24 @@ pub const TypeAnno = union(enum) {
             module_idx: CIR.Import.Idx,
             target_node_idx: u32,
         },
-        /// Pending external lookup - deferred until dependencies are canonicalized
+        /// A type declaration reached by following an exposed alias out of the
+        /// imported module the source path named. The owning module is
+        /// recorded by content identity because an alias's target may live in
+        /// a module this one does not import; the checker finds it among its
+        /// owner modules by that identity.
+        external_identity: struct {
+            module_identity: base.ModuleIdentity.Idx,
+            target_node_idx: u32,
+        },
+        /// A type named through an import, whose target declaration is settled
+        /// by `can`'s import-resolution drain. The drain rewrites the base in
+        /// place into `external`, or replaces the whole annotation node with a
+        /// malformed node carrying the recorded diagnostic. `ref` names the
+        /// worklist entry holding the path and diagnostics; see
+        /// `ModuleEnv.DeferredImportRef`.
         pending: struct {
             module_idx: CIR.Import.Idx,
-            type_name: Ident.Idx,
+            ref: ModuleEnv.DeferredImportRef.Idx,
         },
 
         // Just the tag of this union enum

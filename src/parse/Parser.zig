@@ -4143,8 +4143,13 @@ fn runExprStatementKernel(
                         open_syntax.popExprMarker(.expr_collection_item);
                         last_expr = null;
                         try self.store.addScratchExpr(completed);
-                        if (self.peek() == .Comma) {
+                        const after_item = self.peek();
+                        if (after_item == .Comma) {
                             self.advance();
+                        } else if (after_item != .CloseRound and after_item != .CloseSquare and after_item != .EndOfFile) {
+                            // Another item follows without a separating comma. Closing
+                            // tokens and end of file are handled by `.collection_next`.
+                            try self.pushDiagnostic(expr_collections.active().close_error, .{ .start = self.pos, .end = self.pos + 1 });
                         }
                         continue :expr_kernel .collection_next;
                     },

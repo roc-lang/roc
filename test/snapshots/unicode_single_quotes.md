@@ -46,6 +46,7 @@ UNEXPECTED EXPRESSION SYNTAX - unicode_single_quotes.md:6:5:6:10
 UNEXPECTED EXPRESSION SYNTAX - unicode_single_quotes.md:7:5:7:10
 UNEXPECTED EXPRESSION SYNTAX - unicode_single_quotes.md:8:5:8:11
 UNEXPECTED EXPRESSION SYNTAX - unicode_single_quotes.md:10:5:10:17
+EXPECTED TUPLE SEPARATOR - unicode_single_quotes.md:11:5:11:12
 UNEXPECTED EXPRESSION SYNTAX - unicode_single_quotes.md:11:5:11:12
 UNEXPECTED EXPRESSION SYNTAX - unicode_single_quotes.md:14:5:14:7
 UNEXPECTED EXPRESSION SYNTAX - unicode_single_quotes.md:15:5:15:11
@@ -281,6 +282,32 @@ UNRECOGNIZED SYNTAX - unicode_single_quotes.md:19:5:19:7
 			(line-break)
 			(line-break)
 			(source-region (file "unicode_single_quotes.md") (start 10 5) (end 10 17) (annotation error) (line-text "    '\\u(EDA0B5)'"))))
+	(report
+		(severity runtime_error)
+		(title "Expected Tuple Separator")
+		(region (start 11 5) (end 11 12))
+		(headline
+			(reflow "I was parsing a parenthesized expression or tuple, and I expected `,` or `)`."))
+		(document
+			(reflow "Separate tuple elements with commas and close the tuple or parenthesized expression with ")
+			(annotated code ")")
+			(reflow ".")
+			(line-break)
+			(line-break)
+			(text "For example:")
+			(line-break)
+			(annotation-start code-block)
+			(indent 1)
+			(text "(x, y)")
+			(annotation-end)
+			(line-break)
+			(line-break)
+			(text "I found ")
+			(annotated code "'\\u(K)'")
+			(text " here.")
+			(line-break)
+			(line-break)
+			(source-region (file "unicode_single_quotes.md") (start 11 5) (end 11 12) (annotation error) (line-text "    '\\u(K)',"))))
 	(report
 		(severity runtime_error)
 		(title "Unexpected Expression Syntax")

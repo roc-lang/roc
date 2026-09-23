@@ -14,6 +14,7 @@ main = 42
 ~~~
 # EXPECTED
 DUPLICATE DEFINITION - can_import_type_alias_conflict.md:1:1:1:38
+TYPE REDECLARED - can_import_type_alias_conflict.md:4:1:4:16
 # PROBLEMS
 ~~~clojure
 (reports
@@ -37,7 +38,28 @@ DUPLICATE DEFINITION - can_import_type_alias_conflict.md:1:1:1:38
 				(column 1))
 			(reflow ":")
 			(line-break)
-			(source-region (file "can_import_type_alias_conflict.md") (start 1 1) (end 1 1) (annotation dim) (line-text "import json.Json exposing [JsonValue]")))))
+			(source-region (file "can_import_type_alias_conflict.md") (start 1 1) (end 1 1) (annotation dim) (line-text "import json.Json exposing [JsonValue]"))))
+	(report
+		(severity runtime_error)
+		(title "Type Redeclared")
+		(region (start 4 1) (end 4 16))
+		(headline
+			(reflow "The type ")
+			(annotated code "JsonValue")
+			(reflow " is being redeclared."))
+		(document
+			(source-region (file "can_import_type_alias_conflict.md") (start 4 1) (end 4 16) (annotation error) (line-text "JsonValue : U64"))
+			(line-break)
+			(reflow "But ")
+			(annotated type "JsonValue")
+			(reflow " was already declared in ")
+			(source-location
+				(file "can_import_type_alias_conflict.md")
+				(line 1)
+				(column 1))
+			(reflow ":")
+			(line-break)
+			(source-region (file "can_import_type_alias_conflict.md") (start 1 1) (end 1 38) (annotation dim) (line-text "import json.Json exposing [JsonValue]")))))
 ~~~
 # TOKENS
 ~~~zig

@@ -22,11 +22,10 @@ TYPE MISMATCH - record_access_missing_field_keeps_record_type.md:6:17:6:23
 		(title "Type Mismatch")
 		(region (start 6 17) (end 6 23))
 		(headline
-			(reflow "This record does not have a")
+			(reflow "This record does not have a field named")
 			(reflow " ")
 			(annotated code "gamma")
-			(reflow " ")
-			(reflow "field."))
+			(reflow "."))
 		(document
 			(source-region (file "record_access_missing_field_keeps_record_type.md") (start 6 17) (end 6 23) (annotation error) (line-text "missing = record.gamma"))
 			(line-break)

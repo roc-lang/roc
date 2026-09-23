@@ -300,6 +300,11 @@ pub const io_spec_tests = [_]TestSpec{
         .description = "Inspect without to_inspect method",
     },
     .{
+        .roc_file = "test/fx/inspect_wrong_sig_test.roc",
+        .io_spec = "1>Result: Red",
+        .description = "Inspect ignores a to_inspect that does not return Str",
+    },
+    .{
         .roc_file = "test/fx/inspect_record_test.roc",
         .io_spec = "1>{ count: 42.0, name: \"test\" }",
         .description = "Record inspection",

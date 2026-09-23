@@ -475,6 +475,18 @@ pub fn exportAtan(comptime T: type, comptime name: []const u8) void {
     @export(&f, .{ .name = name ++ @typeName(T), .linkage = .strong });
 }
 
+/// Export two-coordinate arctangent (y, x).
+pub fn exportAtan2(comptime T: type, comptime name: []const u8) void {
+    const f = struct {
+        fn func(y: T, x: T) callconv(.c) T {
+            if (T == f32) return float_math_f32.atan2(y, x);
+            if (T == f64) return float_math_f64.atan2(y, x);
+            @compileError("arctangent supports only F32 and F64");
+        }
+    }.func;
+    @export(&f, .{ .name = name ++ @typeName(T), .linkage = .strong });
+}
+
 /// Compute sine using Roc's width-specific float implementation.
 pub fn exportSin(comptime T: type, comptime name: []const u8) void {
     const f = struct {
