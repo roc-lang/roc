@@ -1708,6 +1708,8 @@ pub const BoxyRuntime = struct {
         target.structural_eq = source.structural_eq;
         target.structural_hash = source.structural_hash;
         target.inspect_method = source.inspect_method;
+        target.inspect_hidden_descs = try self.copyBoxyDescRefSpanToRuntime(hooks, source.inspect_hidden_descs, copied, allow_global_reuse);
+        target.inspect_arg_descs = try self.copyBoxyDescRefSpanToRuntime(hooks, source.inspect_arg_descs, copied, allow_global_reuse);
         // Field names are immutable static-pool data; runtime copies keep the
         // static span.
         target.field_names = source.field_names;
@@ -7424,16 +7426,19 @@ pub const BoxyRuntime = struct {
             );
         }
 
-        const dict = LirProgram.BoxyDict{ .method_slots = .{
-            .start = @intFromEnum(slot_id),
-            .len = 1,
-        } };
-        const prepared = try self.prepareDictCall(
+        // The inspected descriptor carries the worker's hidden descriptors
+        // for its own type arguments.
+        const inspected_desc = source.source_desc orelse return self.invariantFailedError(
+            "LIR/interpreter invariant violated: inspect method call had no source descriptor",
+            .{},
+        );
+        var inspect_slot = slot.*;
+        inspect_slot.hidden_descs = inspected_desc.inspect_hidden_descs;
+        inspect_slot.adapter.arg_descs = inspected_desc.inspect_arg_descs;
+        const prepared = try self.prepareMethodSlotCall(
             hooks,
             alloc,
-            &dict,
-            0,
-            @intFromEnum(slot.method),
+            inspect_slot,
             &.{source},
             &.{},
             .borrow,
@@ -7613,6 +7618,18 @@ pub const BoxyRuntime = struct {
         argument_mode: CallArgumentMode,
     ) Error!PreparedDictCall {
         const method_slot = try self.dictionaryMethodSlot(dict, method_slot_index, required_method);
+        return try self.prepareMethodSlotCall(hooks, alloc, method_slot, args, hidden_args, argument_mode);
+    }
+
+    fn prepareMethodSlotCall(
+        self: *const BoxyRuntime,
+        hooks: anytype,
+        alloc: Allocator,
+        method_slot: LirProgram.BoxyMethodSlot,
+        args: []const DictCallArg,
+        hidden_args: []const Value,
+        argument_mode: CallArgumentMode,
+    ) Error!PreparedDictCall {
         if (method_slot.structural_eq) {
             if (args.len != 2) {
                 return self.invariantFailedError(

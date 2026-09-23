@@ -1158,18 +1158,11 @@ const CallableAdapterDescriptorCapture = struct {
     desc: Plan.DescriptorRequirementId,
     rep: Plan.TypeRepId,
     materialize_rep: Plan.TypeRepId,
-    materialize_read_path: Plan.Span = .{},
     source_type: Plan.CheckedTypeIdentity,
-};
-
-const CallableAdapterDescriptorCaptureSource = struct {
-    rep: Plan.TypeRepId,
-    read_path: Plan.Span = .{},
 };
 
 const ErasedCaptureDescriptorSource = struct {
     rep: Plan.TypeRepId,
-    read_path: Plan.Span = .{},
 };
 
 const DescriptorCaptureSets = struct {
@@ -1625,43 +1618,125 @@ const ProcedureBuilder = struct {
             .proc = undefined,
         });
 
-        var descriptor_sources = StaticDescriptorSourceMap{};
-        defer descriptor_sources.deinit(self.allocator);
-        try self.collectStaticDictionaryDescriptorSources(
-            inspect.worker,
-            rep_id,
-            self.plan.representations.items[@intFromEnum(rep_id)].source_type,
-            worker.checked_type,
-            &descriptor_sources,
-        );
-        var desc_context = StaticDescInstantiationContext{};
-        defer desc_context.deinit(self.allocator);
-        var hidden_desc_refs = std.ArrayList(LIR.BoxyDescRef).empty;
-        defer hidden_desc_refs.deinit(self.allocator);
         var nested_dict_refs = std.ArrayList(LIR.BoxyDictRef).empty;
         defer nested_dict_refs.deinit(self.allocator);
-        try self.collectStaticHiddenDescRefsForWorker(inspect.worker, &descriptor_sources, &desc_context, &hidden_desc_refs);
         try self.collectStaticHiddenDictRefsForWorker(inspect.worker, &nested_dict_refs);
+
+        // The inspected descriptor supplies the argument descriptor and the
+        // worker's hidden descriptors (`inspect_arg_descs`,
+        // `inspect_hidden_descs`), so the shared slot names only their order.
+        const worker_layout = self.layout_plan.workerLayoutFor(inspect.worker);
+        const worker_args = self.layout_plan.workerLayoutSlice(worker_layout.args);
+        if (worker_args.len != 1) boxyLowerInvariant("boxy inspect worker did not take exactly one argument");
+        const arg_layouts_start: u32 = @intCast(self.result.boxy_method_arg_layouts.items.len);
+        try self.result.boxy_method_arg_layouts.append(self.allocator, worker_args[0].layoutIdx());
+        const params = self.plan.hiddenDescriptorParamSlice(worker.hidden_descs);
+        const hidden_sources_start: u32 = @intCast(self.result.boxy_method_hidden_desc_sources.items.len);
+        for (0..params.len) |slot_index| {
+            try self.result.boxy_method_hidden_desc_sources.append(self.allocator, .{ .slot = @intCast(slot_index) });
+        }
 
         const slot = LirProgram.BoxyMethodSlot{
             .method = method,
             .proc = try self.emitWorker(inspect.worker),
-            .hidden_descs = try self.appendStaticHiddenDescRefs(hidden_desc_refs.items),
             .nested_dicts = try self.appendStaticHiddenDictRefs(nested_dict_refs.items),
-            .adapter = try self.staticMethodAdapterForWorker(
-                inspect.worker,
-                worker.checked_type,
-                &descriptor_sources,
-                &desc_context,
-                null,
-                null,
-                null,
-                null,
-                null,
-            ),
+            .adapter = .{
+                .arg_layouts = .{ .start = arg_layouts_start, .len = 1 },
+                .hidden_desc_sources = .{ .start = hidden_sources_start, .len = @intCast(params.len) },
+            },
         };
         self.result.boxy_method_slots.items[@intFromEnum(slot_id)] = slot;
         return slot_id;
+    }
+
+    /// The planned inspect worker's hidden descriptors for `rep_id`, built
+    /// statically; `sources` instantiates a worker representation whose
+    /// descriptor sources were planned by an enclosing dictionary method.
+    fn staticInspectHiddenDescsForRep(
+        self: *ProcedureBuilder,
+        rep_id: Plan.TypeRepId,
+        self_desc: LIR.BoxyTypeDescId,
+        sources: ?*const StaticDescriptorSourceMap,
+        context: ?*StaticDescInstantiationContext,
+    ) Allocator.Error!LIR.BoxySpan {
+        const inspect = self.plan.inspectMethodForRep(rep_id) orelse return .{};
+        const args = self.plan.directCallHiddenDescriptorArgSlice(inspect.hidden_desc_args);
+        if (args.len == 0) return .{};
+        const refs = try self.allocator.alloc(LIR.BoxyDescRef, args.len);
+        defer self.allocator.free(refs);
+        const identity_rep = self.descriptorIdentityRep(rep_id);
+        for (args, refs) |arg, *ref| {
+            // The whole inspected value is described by the descriptor under
+            // construction.
+            ref.* = if (self.descriptorIdentityRep(arg.rep) == identity_rep)
+                .{ .static = self_desc }
+            else if (sources) |source_map|
+                try self.staticDescRefForWorkerRepWithSourceMap(arg.rep, null, source_map, context.?)
+            else
+                try self.staticDescRefForRep(arg.rep);
+        }
+        return try self.appendStaticHiddenDescRefs(refs);
+    }
+
+    /// The inspected value's descriptor in the inspect worker's parameter
+    /// storage: the worker parameter instantiated by the planned hidden
+    /// descriptor arguments.
+    fn staticInspectArgDescsForRep(
+        self: *ProcedureBuilder,
+        rep_id: Plan.TypeRepId,
+        self_desc: LIR.BoxyTypeDescId,
+        building_worker_rep: ?Plan.TypeRepId,
+        sources: ?*const StaticDescriptorSourceMap,
+        context: ?*StaticDescInstantiationContext,
+    ) Allocator.Error!LIR.BoxySpan {
+        const inspect = self.plan.inspectMethodForRep(rep_id) orelse return .{};
+        // A descriptor already built as the worker parameter's instantiation
+        // describes the value in that parameter's storage.
+        const is_worker_instantiation = if (building_worker_rep) |building|
+            self.descriptorIdentityRep(building) == self.descriptorIdentityRep(self.inspectWorkerArgRep(inspect))
+        else
+            false;
+        if (is_worker_instantiation or self.inspectArgumentIsIdentity(inspect)) {
+            return try self.appendStaticHiddenDescRefs(&.{.{ .static = self_desc }});
+        }
+        const worker_arg = self.inspectWorkerArgRep(inspect);
+        var arg_sources = StaticDescriptorSourceMap{};
+        defer arg_sources.deinit(self.allocator);
+        // The worker parameter's own structure is instantiated at the
+        // descriptors of its type parameters.
+        for (self.plan.directCallHiddenDescriptorArgSlice(inspect.hidden_desc_args)) |arg| {
+            const worker_param = self.plan.representations.items[@intFromEnum(self.descriptorIdentityRep(arg.worker_rep))];
+            if (worker_param.kind != .dynamic or worker_param.children.len != 0 or worker_param.tag_variants.len != 0) continue;
+            const source_rep = if (sources) |source_map|
+                source_map.get(self.plan.representations.items[@intFromEnum(arg.rep)].descriptor orelse arg.worker_desc) orelse arg.rep
+            else
+                arg.rep;
+            try arg_sources.put(self.allocator, arg.worker_desc, source_rep);
+        }
+        var local_context = StaticDescInstantiationContext{};
+        defer local_context.deinit(self.allocator);
+        const ref = try self.staticDescRefForWorkerRepWithSourceMap(worker_arg, null, &arg_sources, context orelse &local_context);
+        return try self.appendStaticHiddenDescRefs(&.{ref});
+    }
+
+    /// Whether the inspect call instantiates its worker at the worker's own
+    /// type parameters; the inspected descriptor then already describes the
+    /// value in the worker parameter's storage.
+    fn inspectArgumentIsIdentity(self: *const ProcedureBuilder, inspect: Plan.InspectMethodPlan) bool {
+        if (self.descriptorIdentityRep(inspect.source_rep) != self.descriptorIdentityRep(self.inspectWorkerArgRep(inspect))) return false;
+        for (self.plan.directCallHiddenDescriptorArgSlice(inspect.hidden_desc_args)) |arg| {
+            if (self.descriptorIdentityRep(arg.rep) != self.descriptorIdentityRep(arg.worker_rep)) return false;
+        }
+        return true;
+    }
+
+    fn inspectWorkerArgRep(self: *const ProcedureBuilder, inspect: Plan.InspectMethodPlan) Plan.TypeRepId {
+        const worker = self.plan.workers.items[@intFromEnum(inspect.worker)];
+        const function = self.repQuery().functionChildren(worker.rep) orelse
+            boxyLowerInvariant("boxy inspect worker was not callable");
+        if (function.arg_count != 1) boxyLowerInvariant("boxy inspect worker did not take exactly one argument");
+        const children = self.plan.childSlice(self.plan.representations.items[@intFromEnum(function.rep)].children);
+        return children[function.args_start].rep;
     }
 
     fn collectStaticHiddenDescRefsForWorker(
@@ -2900,15 +2975,25 @@ const ProcedureBuilder = struct {
 
         const outer_env = context.env;
         defer context.env = outer_env;
-        var substitutions = self.plan.nominalBackingSubstitutions(worker_rep.nominal_backing_arg_substitutions);
-        if (worker_rep.nominal_backing_arg_substitutions.len != 0) {
+        // The descriptor describes the complete backing-shape chain, so every
+        // nominal on it binds its formals, outermost first.
+        var shape_worker: ?Plan.TypeRepId = identity_worker;
+        var shape_source = identity_source;
+        while (shape_worker) |current_worker| : ({
+            shape_worker = self.descriptorBackingShapeRep(current_worker);
+            shape_source = if (shape_source) |current_source| self.descriptorBackingShapeRep(current_source) else null;
+        }) {
+            const current_rep = self.plan.representations.items[@intFromEnum(current_worker)];
+            if (current_rep.nominal_backing_arg_substitutions.len == 0) continue;
+            const level_env = context.env;
+            var substitutions = self.plan.nominalBackingSubstitutions(current_rep.nominal_backing_arg_substitutions);
             var bindings = std.ArrayList(StaticDescInstantiationContext.Binding).empty;
             defer bindings.deinit(self.allocator);
             while (substitutions.next()) |substitution| {
                 const formal_rep = substitution.formal_rep orelse continue;
                 const formal = self.plan.representations.items[@intFromEnum(formal_rep)];
                 if (formal.descriptor == null) continue;
-                const actual_source = if (identity_source) |source| blk: {
+                const actual_source = if (shape_source) |source| blk: {
                     const source_rep = self.plan.representations.items[@intFromEnum(source)];
                     break :blk self.plan.nominalBackingActual(source_rep.nominal_backing_arg_substitutions, substitution.arg_index);
                 } else null;
@@ -2918,7 +3003,7 @@ const ProcedureBuilder = struct {
                     .formal = formal_rep,
                     .actual = substitution.actual_rep,
                     .source = actual_source,
-                    .env = outer_env,
+                    .env = level_env,
                 };
                 // A formal forwarded from an enclosing nominal retains that
                 // nominal's environment, rather than referring to this new scope.
@@ -2928,7 +3013,7 @@ const ProcedureBuilder = struct {
                     binding.env = forwarded.env;
                     context.env = forwarded.env;
                 }
-                context.env = outer_env;
+                context.env = level_env;
                 if (!self.plan.representations.items[@intFromEnum(binding.actual)].contains_dynamic) binding.env = 0;
                 try bindings.append(self.allocator, binding);
             }
@@ -2978,6 +3063,14 @@ const ProcedureBuilder = struct {
             .field_names = try self.staticFieldNamesForRep(identity_worker),
             .inspect_opaque = self.repInspectsOpaque(identity_worker),
             .inspect_method = try self.staticInspectMethodForRep(identity_source orelse identity_worker),
+            .inspect_hidden_descs = if (identity_source) |source_rep|
+                try self.staticInspectHiddenDescsForRep(source_rep, desc_id, null, null)
+            else
+                try self.staticInspectHiddenDescsForRep(identity_worker, desc_id, descriptor_sources, context),
+            .inspect_arg_descs = if (identity_source) |source_rep|
+                try self.staticInspectArgDescsForRep(source_rep, desc_id, identity_worker, null, null)
+            else
+                try self.staticInspectArgDescsForRep(identity_worker, desc_id, identity_worker, descriptor_sources, context),
             .presence_slot_present_discriminant = worker_rep.presence_slot_present_discriminant,
             .debug_checked_type = worker_rep.source_type.ty,
         };
@@ -3855,6 +3948,8 @@ const ProcedureBuilder = struct {
             .field_names = try self.staticFieldNamesForRep(rep_id),
             .inspect_opaque = self.repInspectsOpaque(rep_id),
             .inspect_method = try self.staticInspectMethodForRep(rep_id),
+            .inspect_hidden_descs = try self.staticInspectHiddenDescsForRep(rep_id, desc_id, null, null),
+            .inspect_arg_descs = try self.staticInspectArgDescsForRep(rep_id, desc_id, null, null, null),
             .presence_slot_present_discriminant = rep.presence_slot_present_discriminant,
             .debug_checked_type = rep.source_type.ty,
         };
@@ -4418,10 +4513,39 @@ const ProcedureBuilder = struct {
     /// order. Returns an empty span for non-record shapes (tuples and other
     /// payloads print positionally).
     fn staticFieldNamesForRep(self: *ProcedureBuilder, rep_id: Plan.TypeRepId) Allocator.Error!LIR.BoxySpan {
+        // Field names describe the same payload the nested descriptors do.
+        if (self.descriptorBackingShapeRep(rep_id)) |backing_rep| return try self.staticFieldNamesForRep(backing_rep);
         const rep = self.plan.representations.items[@intFromEnum(rep_id)];
 
         var field_name_ids = std.ArrayList(LIR.BoxyNameId).empty;
         defer field_name_ids.deinit(self.allocator);
+        if (rep.declared_fields.len != 0) {
+            // A declared field's index is its payload field index; it names
+            // the backing record field with that structural rank.
+            const backing = self.singleChildRepForDesc(rep_id, .nominal_backing) orelse
+                boxyLowerInvariant("declared-field nominal had no backing record");
+            var backing_fields = std.ArrayList(Plan.RepChild).empty;
+            defer backing_fields.deinit(self.allocator);
+            for (self.plan.childSlice(self.plan.representations.items[@intFromEnum(backing)].children)) |child| {
+                if (child.role == .record_field) try backing_fields.append(self.allocator, child);
+            }
+            const declared = self.plan.declaredFieldSlice(rep.declared_fields);
+            try field_name_ids.resize(self.allocator, declared.len);
+            for (declared) |field| {
+                if (field.is_padding) return .{};
+                if (field.index >= declared.len or field.index >= backing_fields.items.len) {
+                    boxyLowerInvariant("declared nominal field index exceeded its backing record fields");
+                }
+                const child = backing_fields.items[field.index];
+                const view = procedureModuleById(self.modules, child.source_type.module);
+                field_name_ids.items[field.index] = try self.result.store.insertBoxyName(
+                    view.canonical_names.recordFieldLabelText(child.role.record_field),
+                );
+            }
+            const start: u32 = @intCast(self.result.boxy_field_names.items.len);
+            try self.result.boxy_field_names.appendSlice(self.allocator, field_name_ids.items);
+            return .{ .start = start, .len = @intCast(field_name_ids.items.len) };
+        }
         for (self.plan.childSlice(rep.children)) |child| {
             if (child.role == .record_field) {
                 const view = procedureModuleById(self.modules, child.source_type.module);
@@ -6489,10 +6613,9 @@ const ProcedureBuilder = struct {
             .encoder_record_fields => try self.lowerGeneratedEncoderRecordFieldsInto(proc, source, target, next),
             .encoder_dict_fields => try self.lowerGeneratedEncoderDictFieldsInto(proc, source, target, next),
             .encoder_sequence_elements => try self.lowerGeneratedEncoderSequenceElementsInto(proc, source, target, next),
-            .encoder_tag_field => try self.lowerGeneratedEncoderTagFieldInto(proc, source, target, next),
-            .encoder_tag_payload_thunk => try self.lowerGeneratedEncoderTagPayloadThunkInto(proc, source, target, next),
             .encoder_tag_payload_elements => try self.lowerGeneratedEncoderTagPayloadElementsInto(proc, source, target, next),
             .encoder_value_thunk => try self.lowerGeneratedEncoderValueThunkInto(proc, source, target, next),
+            .encoder_dict_key_thunk => try self.lowerGeneratedEncoderDictKeyThunkInto(proc, source, target, next),
         };
     }
 
@@ -6729,6 +6852,7 @@ const ProcedureBuilder = struct {
                 source,
                 schema_type,
                 subject_type,
+                subject_type,
                 value,
                 state,
                 target,
@@ -6739,6 +6863,7 @@ const ProcedureBuilder = struct {
                 proc,
                 source,
                 schema_type,
+                subject_type,
                 value,
                 state,
                 target,
@@ -6748,6 +6873,7 @@ const ProcedureBuilder = struct {
                 proc,
                 source,
                 schema_type,
+                subject_type,
                 value,
                 state,
                 target,
@@ -6798,6 +6924,7 @@ const ProcedureBuilder = struct {
                 proc,
                 source,
                 schema_type,
+                subject_type,
                 subject_type,
                 value,
                 state,
@@ -7032,6 +7159,7 @@ const ProcedureBuilder = struct {
         source: Plan.GeneratedCodecSource,
         shape_type: Plan.CheckedTypeIdentity,
         value_type: Plan.CheckedTypeIdentity,
+        call_subject_type: Plan.CheckedTypeIdentity,
         value: LIR.LocalId,
         state: LIR.LocalId,
         target: LIR.LocalId,
@@ -7042,7 +7170,7 @@ const ProcedureBuilder = struct {
         const contract_worker = source.contract_worker orelse caller;
         const encoding_type = source.capture_type orelse
             boxyLowerInvariant("generated sequence encoder had no encoding type");
-        const call = proc.generatedCodecCallPlan(caller, encoding_type, method_text, value_type);
+        const call = proc.generatedCodecCallPlan(caller, encoding_type, method_text, call_subject_type);
         const arg_types = self.plan.generatedCodecCallTypeSlice(call.arg_types);
         if (arg_types.len != 3) boxyLowerInvariant("generated sequence encoder call did not have three arguments");
         const callback_source = Plan.GeneratedCodecSource{
@@ -7101,6 +7229,7 @@ const ProcedureBuilder = struct {
         proc: *ProcBodyBuilder,
         source: Plan.GeneratedCodecSource,
         set_type: Plan.CheckedTypeIdentity,
+        subject_type: Plan.CheckedTypeIdentity,
         value: LIR.LocalId,
         state: LIR.LocalId,
         target: LIR.LocalId,
@@ -7114,6 +7243,7 @@ const ProcedureBuilder = struct {
             source,
             to_list.ret_type,
             to_list.ret_type,
+            subject_type,
             list,
             state,
             target,
@@ -7135,6 +7265,7 @@ const ProcedureBuilder = struct {
         proc: *ProcBodyBuilder,
         source: Plan.GeneratedCodecSource,
         dict_type: Plan.CheckedTypeIdentity,
+        subject_type: Plan.CheckedTypeIdentity,
         value: LIR.LocalId,
         state: LIR.LocalId,
         target: LIR.LocalId,
@@ -7147,9 +7278,9 @@ const ProcedureBuilder = struct {
         const to_list = proc.generatedCodecCallPlan(caller, dict_type, "to_list", dict_type);
         const entries_type = to_list.ret_type;
         const entries = try proc.addFrameLocalForRep(proc.repForTypeRef(entries_type));
-        const call = proc.generatedCodecCallPlan(caller, encoding_type, "encode_record", null);
+        const call = proc.generatedCodecCallPlan(caller, encoding_type, "encode_dict", subject_type);
         const arg_types = self.plan.generatedCodecCallTypeSlice(call.arg_types);
-        if (arg_types.len != 3) boxyLowerInvariant("generated Dict encode_record call did not have three arguments");
+        if (arg_types.len != 3) boxyLowerInvariant("generated Dict encode_dict call did not have three arguments");
         const callback_source = Plan.GeneratedCodecSource{
             .kind = .encoder_dict_fields,
             .shape = entries_type,
@@ -7207,75 +7338,15 @@ const ProcedureBuilder = struct {
         target: LIR.LocalId,
         next: LIR.CFStmtId,
     ) Allocator.Error!LIR.CFStmtId {
-        const variants = try self.generatedEncoderTagVariants(proc, shape_type, false);
-        defer self.allocator.free(variants);
-        const bodies = try self.allocator.alloc(LIR.CFStmtId, variants.len);
-        defer self.allocator.free(bodies);
-        for (variants, bodies) |variant, *body| {
-            const payloads = self.plan.childSlice(variant.variant.payloads);
-            body.* = if (payloads.len == 0)
-                try self.lowerGeneratedUnitTagEncoderInto(proc, source, variant, state, target, next)
-            else
-                try self.lowerGeneratedPayloadTagEncoderInto(
-                    proc,
-                    source,
-                    shape_type,
-                    value_type,
-                    value,
-                    variant,
-                    state,
-                    target,
-                    next,
-                );
-        }
-        return try self.lowerGeneratedEncoderTagDispatch(proc, value, variants, bodies);
-    }
-
-    fn lowerGeneratedUnitTagEncoderInto(
-        self: *ProcedureBuilder,
-        proc: *ProcBodyBuilder,
-        source: Plan.GeneratedCodecSource,
-        variant: GeneratedParserTagVariant,
-        state: LIR.LocalId,
-        target: LIR.LocalId,
-        next: LIR.CFStmtId,
-    ) Allocator.Error!LIR.CFStmtId {
-        const caller = proc.worker_layout.worker;
-        const encoding_type = source.capture_type orelse
-            boxyLowerInvariant("generated unit-tag encoder had no encoding type");
-        const call = proc.generatedCodecCallPlanForMethod(caller, encoding_type, "encode_str");
-        const tag_name = try proc.addFrameLocal(.str);
-        const continuation = try self.lowerGeneratedCodecCallLocalsInto(
-            proc,
-            call,
-            target,
-            &.{ tag_name, state },
-            next,
-        );
-        return try proc.assignStringBytesLiteral(tag_name, proc.tagVariantNameText(variant.variant), continuation);
-    }
-
-    fn lowerGeneratedPayloadTagEncoderInto(
-        self: *ProcedureBuilder,
-        proc: *ProcBodyBuilder,
-        source: Plan.GeneratedCodecSource,
-        shape_type: Plan.CheckedTypeIdentity,
-        value_type: Plan.CheckedTypeIdentity,
-        value: LIR.LocalId,
-        _: GeneratedParserTagVariant,
-        state: LIR.LocalId,
-        target: LIR.LocalId,
-        next: LIR.CFStmtId,
-    ) Allocator.Error!LIR.CFStmtId {
         const caller = proc.worker_layout.worker;
         const contract_worker = source.contract_worker orelse caller;
         const encoding_type = source.capture_type orelse
-            boxyLowerInvariant("generated payload-tag encoder had no encoding type");
-        const call = proc.generatedCodecCallPlan(caller, encoding_type, "encode_record", null);
+            boxyLowerInvariant("generated tag encoder had no encoding type");
+        const call = proc.generatedCodecCallPlan(caller, encoding_type, "encode_tag", value_type);
         const arg_types = self.plan.generatedCodecCallTypeSlice(call.arg_types);
-        if (arg_types.len != 3) boxyLowerInvariant("generated tag encode_record call did not have three arguments");
+        if (arg_types.len != 4) boxyLowerInvariant("generated tag encode_tag call did not have four arguments");
         const callback_source = Plan.GeneratedCodecSource{
-            .kind = .encoder_tag_field,
+            .kind = .encoder_tag_payload_elements,
             .shape = shape_type,
             .value_type = value_type,
             .capture_type = encoding_type,
@@ -7284,33 +7355,48 @@ const ProcedureBuilder = struct {
         };
         const callback_worker = self.plan.workerForSourceType(
             .{ .generated_codec = callback_source },
-            arg_types[2],
-        ) orelse boxyLowerInvariant("generated tag encoder had no planned field callback");
-        const callback = try proc.addFrameLocalForRep(proc.repForTypeRef(arg_types[2]));
-        const count = try proc.addFrameLocal(.u64);
+            arg_types[3],
+        ) orelse boxyLowerInvariant("generated tag encoder had no planned payload callback");
         const name_captures = self.generatedEncoderNameCaptureLocals(proc, contract_worker);
-        const capture_values = try self.allocator.alloc(LIR.LocalId, 2 + name_captures.len);
-        defer self.allocator.free(capture_values);
-        capture_values[0] = proc.erased_capture_locals.items[0];
-        capture_values[1] = value;
-        @memcpy(capture_values[2..], name_captures);
 
-        var continuation = try self.lowerGeneratedCodecCallLocalsInto(
-            proc,
-            call,
-            target,
-            &.{ state, count, callback },
-            next,
-        );
-        continuation = try self.packGeneratedCodecCallable(
-            proc,
-            callback,
-            proc.repForTypeRef(arg_types[2]),
-            callback_worker,
-            capture_values,
-            continuation,
-        );
-        return try proc.assignIntLiteral(count, 1, continuation);
+        const variants = try self.generatedEncoderTagVariants(proc, shape_type, false);
+        defer self.allocator.free(variants);
+        const bodies = try self.allocator.alloc(LIR.CFStmtId, variants.len);
+        defer self.allocator.free(bodies);
+        for (variants, bodies) |variant, *body| {
+            const tag_name = try proc.addFrameLocal(.str);
+            const count = try proc.addFrameLocal(.u64);
+            const callback_rep = proc.repForTypeRef(arg_types[3]);
+            const callback = try proc.addFrameLocalForRep(callback_rep);
+            const capture_values = try self.allocator.alloc(LIR.LocalId, 2 + name_captures.len);
+            defer self.allocator.free(capture_values);
+            capture_values[0] = proc.erased_capture_locals.items[0];
+            capture_values[1] = value;
+            @memcpy(capture_values[2..], name_captures);
+
+            var continuation = try self.lowerGeneratedCodecCallLocalsInto(
+                proc,
+                call,
+                target,
+                &.{ state, tag_name, count, callback },
+                next,
+            );
+            continuation = try self.packGeneratedCodecCallable(
+                proc,
+                callback,
+                callback_rep,
+                callback_worker,
+                capture_values,
+                continuation,
+            );
+            continuation = try proc.assignIntLiteral(
+                count,
+                @intCast(self.plan.childSlice(variant.variant.payloads).len),
+                continuation,
+            );
+            body.* = try proc.assignStringBytesLiteral(tag_name, proc.tagVariantNameText(variant.variant), continuation);
+        }
+        return try self.lowerGeneratedEncoderTagDispatch(proc, value, variants, bodies);
     }
 
     fn generatedEncoderTagVariants(
@@ -8209,147 +8295,139 @@ const ProcedureBuilder = struct {
         next: LIR.CFStmtId,
     ) Allocator.Error!LIR.CFStmtId {
         const writer_fn = proc.functionChildrenForRep(field_writer_rep) orelse
-            boxyLowerInvariant("generated Dict field writer was not callable");
+            boxyLowerInvariant("generated Dict entry writer was not callable");
         const writer_children = self.plan.childSlice(self.plan.representations.items[@intFromEnum(writer_fn.rep)].children);
         const writer_args = writer_children[writer_fn.args_start..][0..writer_fn.arg_count];
-        if (writer_args.len != 3) boxyLowerInvariant("generated Dict field writer had an unexpected arity");
-        const thunk_type = writer_args[2].source_type;
+        if (writer_args.len != 3) boxyLowerInvariant("generated Dict entry writer had an unexpected arity");
+        const key_thunk_type = writer_args[1].source_type;
+        const value_thunk_type = writer_args[2].source_type;
         const contract_worker = source.contract_worker orelse
-            boxyLowerInvariant("generated Dict field callback had no contract worker");
+            boxyLowerInvariant("generated Dict entry callback had no contract worker");
+        const key_item = entry_items[0];
         const value_item = entry_items[1];
-        const thunk_source = Plan.GeneratedCodecSource{
+        const key_thunk_worker = self.plan.workerForSourceType(.{ .generated_codec = .{
+            .kind = .encoder_dict_key_thunk,
+            .shape = key_item.source_type,
+            .capture_type = source.capture_type,
+            .contract_worker = contract_worker,
+            .contract_expr = source.contract_expr,
+        } }, key_thunk_type) orelse
+            boxyLowerInvariant("generated Dict key had no planned key writer");
+        const value_thunk_worker = self.plan.workerForSourceType(.{ .generated_codec = .{
             .kind = .encoder_value_thunk,
             .shape = value_item.source_type,
             .capture_type = source.capture_type,
             .contract_worker = contract_worker,
             .contract_expr = source.contract_expr,
-        };
-        const thunk_worker = self.plan.workerForSourceType(.{ .generated_codec = thunk_source }, thunk_type) orelse
+        } }, value_thunk_type) orelse
             boxyLowerInvariant("generated Dict value had no planned encoder thunk");
         const entry_value = try proc.addFrameLocalForRep(entry.rep);
-        const key_value = try proc.addFrameLocalForRep(entry_items[0].rep);
+        const key_value = try proc.addFrameLocalForRep(key_item.rep);
         const item_value = try proc.addFrameLocalForRep(value_item.rep);
-        const key_str = try proc.addFrameLocal(.str);
-        const thunk_rep = proc.repForTypeRef(thunk_type);
-        const thunk = try proc.addFrameLocalForRep(thunk_rep);
-        const field_result = try proc.addFrameLocalForRepWithRequiredFreshDescriptor(target_rep);
+        const key_thunk_rep = proc.repForTypeRef(key_thunk_type);
+        const key_thunk = try proc.addFrameLocalForRep(key_thunk_rep);
+        const value_thunk_rep = proc.repForTypeRef(value_thunk_type);
+        const value_thunk = try proc.addFrameLocalForRep(value_thunk_rep);
+        const entry_result = try proc.addFrameLocalForRepWithRequiredFreshDescriptor(target_rep);
         const ok = proc.generatedParserTagVariant(target_rep, "Ok");
         const ok_payload = try proc.generatedParserSingleTagPayloadLocal(ok);
         const one = try proc.addFrameLocal(.u64);
         const next_index = try proc.addFrameLocal(.u64);
 
-        var field_success = try self.result.store.addCFStmt(.{ .jump = .{ .target = join_id } });
-        field_success = try proc.setLocalInitializeJoinParamFromRep(state, ok_payload.local, ok_payload.child.rep, field_success);
-        field_success = try proc.setLocalInitializeJoinParam(index, next_index, field_success);
-        field_success = try proc.generatedParserReadTagPayload(field_result, ok, ok_payload, field_success);
-        const field_err = try proc.assignRepresentationBoundary(target, field_result, target_rep, target_rep, next);
-        const field_variants = [_]GeneratedParserTagVariant{ok};
-        const field_bodies = [_]LIR.CFStmtId{field_success};
-        var write_field = try proc.generatedParserTagDispatch(
-            field_result,
+        var entry_success = try self.result.store.addCFStmt(.{ .jump = .{ .target = join_id } });
+        entry_success = try proc.setLocalInitializeJoinParamFromRep(state, ok_payload.local, ok_payload.child.rep, entry_success);
+        entry_success = try proc.setLocalInitializeJoinParam(index, next_index, entry_success);
+        entry_success = try proc.generatedParserReadTagPayload(entry_result, ok, ok_payload, entry_success);
+        const entry_err = try proc.assignRepresentationBoundary(target, entry_result, target_rep, target_rep, next);
+        const entry_variants = [_]GeneratedParserTagVariant{ok};
+        const entry_bodies = [_]LIR.CFStmtId{entry_success};
+        var write_entry = try proc.generatedParserTagDispatch(
+            entry_result,
             target_rep,
-            &field_variants,
-            &field_bodies,
-            field_err,
+            &entry_variants,
+            &entry_bodies,
+            entry_err,
         );
-        write_field = try proc.lowerErasedCallLocalsInto(
-            field_result,
+        write_entry = try proc.lowerErasedCallLocalsInto(
+            entry_result,
             target_rep,
             field_writer_rep,
             field_writer,
-            &.{ state, key_str, thunk },
-            &.{ state_rep, writer_args[1].rep, thunk_rep },
-            write_field,
+            &.{ state, key_thunk, value_thunk },
+            &.{ state_rep, key_thunk_rep, value_thunk_rep },
+            write_entry,
         );
         const name_captures = self.generatedEncoderNameCaptureLocals(proc, contract_worker);
         const capture_values = try self.allocator.alloc(LIR.LocalId, 2 + name_captures.len);
         defer self.allocator.free(capture_values);
         capture_values[0] = proc.erased_capture_locals.items[0];
-        capture_values[1] = item_value;
         @memcpy(capture_values[2..], name_captures);
-        write_field = try self.packGeneratedCodecCallable(proc, thunk, thunk_rep, thunk_worker, capture_values, write_field);
-        write_field = try proc.assignBinaryLowLevel(next_index, .num_int_add_crash_on_overflow, index, one, write_field);
-        write_field = try proc.assignIntLiteral(one, 1, write_field);
-
-        var encode_key = try self.lowerGeneratedDictKeyInto(
-            proc,
-            source,
-            entry_items[0],
-            key_value,
-            key_str,
-            target,
-            target_rep,
-            write_field,
-            next,
-        );
-        encode_key = try proc.lowerTupleFieldReadInto(
-            item_value,
-            entry_value,
-            entry.rep,
-            1,
-            encode_key,
-        );
-        encode_key = try proc.lowerTupleFieldReadInto(
-            key_value,
-            entry_value,
-            entry.rep,
-            0,
-            encode_key,
-        );
+        capture_values[1] = item_value;
+        write_entry = try self.packGeneratedCodecCallable(proc, value_thunk, value_thunk_rep, value_thunk_worker, capture_values, write_entry);
+        capture_values[1] = key_value;
+        write_entry = try self.packGeneratedCodecCallable(proc, key_thunk, key_thunk_rep, key_thunk_worker, capture_values, write_entry);
+        write_entry = try proc.assignBinaryLowLevel(next_index, .num_int_add_crash_on_overflow, index, one, write_entry);
+        write_entry = try proc.assignIntLiteral(one, 1, write_entry);
+        write_entry = try proc.lowerTupleFieldReadInto(item_value, entry_value, entry.rep, 1, write_entry);
+        write_entry = try proc.lowerTupleFieldReadInto(key_value, entry_value, entry.rep, 0, write_entry);
         if (!proc.isZstLocal(entry_value)) {
-            encode_key = try proc.assignBinaryLowLevel(entry_value, .list_get_unsafe, entries, index, encode_key);
+            write_entry = try proc.assignBinaryLowLevel(entry_value, .list_get_unsafe, entries, index, write_entry);
         }
-        return encode_key;
+        return write_entry;
     }
 
-    fn lowerGeneratedDictKeyInto(
+    /// Write one dict key with the key protocol the checker validated for
+    /// it: a scalar key method, a unit tag's name through `encode_key_str`,
+    /// or `encode_key_start` followed by the key's own encoder.
+    fn lowerGeneratedEncoderDictKeyThunkInto(
         self: *ProcedureBuilder,
         proc: *ProcBodyBuilder,
         source: Plan.GeneratedCodecSource,
-        key: GeneratedParserTupleItem,
-        key_value: LIR.LocalId,
-        key_str: LIR.LocalId,
         target: LIR.LocalId,
-        target_rep: Plan.TypeRepId,
-        success: LIR.CFStmtId,
         next: LIR.CFStmtId,
     ) Allocator.Error!LIR.CFStmtId {
+        const worker = self.plan.workers.items[@intFromEnum(proc.worker_layout.worker)];
+        const function = proc.functionChildrenForRep(worker.rep) orelse
+            boxyLowerInvariant("generated Dict key writer was not callable");
+        if (function.arg_count != 1 or proc.arg_locals.items.len < 1 or proc.erased_capture_locals.items.len < 2) {
+            boxyLowerInvariant("generated Dict key writer did not bind encoding, key, and state");
+        }
         const caller = proc.worker_layout.worker;
         const encoding_type = source.capture_type orelse
-            boxyLowerInvariant("generated Dict key encoder had no encoding type");
+            boxyLowerInvariant("generated Dict key writer had no encoding type");
+        const encoding = proc.erased_capture_locals.items[0];
+        const key_value = proc.erased_capture_locals.items[1];
+        const state = proc.arg_locals.items[0];
+        const key_type = source.shape;
+
         if (generatedEncoderKeyMethodForType(
-            procedureModuleById(self.modules, key.source_type.module),
-            key.source_type.ty,
+            procedureModuleById(self.modules, key_type.module),
+            key_type.ty,
         )) |method_text| {
-            const call = proc.generatedCodecCallPlan(caller, encoding_type, method_text, key.source_type);
-            const key_result_rep = proc.repForTypeRef(call.ret_type);
-            const key_result = try proc.addFrameLocalForRep(key_result_rep);
-            const ok = proc.generatedParserTagVariant(key_result_rep, "Ok");
-            const err = proc.generatedParserTagVariant(key_result_rep, "Err");
+            const call = proc.generatedCodecCallPlan(caller, encoding_type, method_text, key_type);
+            return try self.lowerGeneratedCodecCallLocalsInto(proc, call, target, &.{ encoding, key_value, state }, next);
+        }
+
+        if (proc.generatedCodecCallPlanOrNull(caller, encoding_type, "encode_key_start", key_type)) |start_call| {
+            const opened_rep = proc.repForTypeRef(start_call.ret_type);
+            const opened = try proc.addFrameLocalForRep(opened_rep);
+            const ok = proc.generatedParserTagVariant(opened_rep, "Ok");
+            const err = proc.generatedParserTagVariant(opened_rep, "Err");
             const ok_payload = try proc.generatedParserSingleTagPayloadLocal(ok);
-            var ok_body = try proc.assignRepresentationBoundary(
-                key_str,
-                ok_payload.local,
-                ok_payload.child.rep,
-                ok_payload.child.rep,
-                success,
-            );
-            ok_body = try proc.generatedParserReadTagPayload(key_result, ok, ok_payload, ok_body);
-            const err_body = try proc.forwardGeneratedParserError(target, target_rep, key_result, err, next);
+            var ok_body = try self.lowerGeneratedEncoderShapeInto(proc, source, key_type, key_value, ok_payload.local, target, next);
+            ok_body = try proc.generatedParserReadTagPayload(opened, ok, ok_payload, ok_body);
+            const err_body = try proc.forwardGeneratedParserError(target, function.ret, opened, err, next);
             const variants = [_]GeneratedParserTagVariant{ ok, err };
             const bodies = [_]LIR.CFStmtId{ ok_body, err_body };
             const impossible = try self.result.store.addCFStmt(.runtime_error);
-            const dispatch = try proc.generatedParserTagDispatch(key_result, key_result_rep, &variants, &bodies, impossible);
-            return try self.lowerGeneratedCodecCallLocalsInto(
-                proc,
-                call,
-                key_result,
-                &.{ proc.erased_capture_locals.items[0], key_value },
-                dispatch,
-            );
+            const dispatch = try proc.generatedParserTagDispatch(opened, opened_rep, &variants, &bodies, impossible);
+            return try self.lowerGeneratedCodecCallLocalsInto(proc, start_call, opened, &.{ encoding, state }, dispatch);
         }
 
-        const variants = try self.generatedEncoderTagVariants(proc, key.source_type, false);
+        const str_call = proc.generatedCodecCallPlanForMethod(caller, encoding_type, "encode_key_str");
+        const key_str = try proc.addFrameLocal(.str);
+        const write_key = try self.lowerGeneratedCodecCallLocalsInto(proc, str_call, target, &.{ encoding, key_str, state }, next);
+        const variants = try self.generatedEncoderTagVariants(proc, key_type, false);
         defer self.allocator.free(variants);
         const bodies = try self.allocator.alloc(LIR.CFStmtId, variants.len);
         defer self.allocator.free(bodies);
@@ -8357,212 +8435,9 @@ const ProcedureBuilder = struct {
             if (self.plan.childSlice(variant.variant.payloads).len != 0) {
                 boxyLowerInvariant("generated Dict tag key carried a payload");
             }
-            body.* = try proc.assignStringBytesLiteral(key_str, proc.tagVariantNameText(variant.variant), success);
+            body.* = try proc.assignStringBytesLiteral(key_str, proc.tagVariantNameText(variant.variant), write_key);
         }
         return try self.lowerGeneratedEncoderTagDispatch(proc, key_value, variants, bodies);
-    }
-
-    fn lowerGeneratedEncoderTagFieldInto(
-        self: *ProcedureBuilder,
-        proc: *ProcBodyBuilder,
-        source: Plan.GeneratedCodecSource,
-        target: LIR.LocalId,
-        next: LIR.CFStmtId,
-    ) Allocator.Error!LIR.CFStmtId {
-        const worker = self.plan.workers.items[@intFromEnum(proc.worker_layout.worker)];
-        const function = proc.functionChildrenForRep(worker.rep) orelse
-            boxyLowerInvariant("generated tag field callback was not callable");
-        if (function.arg_count != 2 or proc.arg_locals.items.len < 2 or proc.erased_capture_locals.items.len < 2) {
-            boxyLowerInvariant("generated tag field callback had invalid arguments or captures");
-        }
-        const children = self.plan.childSlice(self.plan.representations.items[@intFromEnum(function.rep)].children);
-        const args = children[function.args_start..][0..function.arg_count];
-        const writer_fn = proc.functionChildrenForRep(args[1].rep) orelse
-            boxyLowerInvariant("generated tag field writer was not callable");
-        const writer_children = self.plan.childSlice(self.plan.representations.items[@intFromEnum(writer_fn.rep)].children);
-        const writer_args = writer_children[writer_fn.args_start..][0..writer_fn.arg_count];
-        if (writer_args.len != 3) boxyLowerInvariant("generated tag field writer had an unexpected arity");
-        const thunk_type = writer_args[2].source_type;
-        const contract_worker = source.contract_worker orelse
-            boxyLowerInvariant("generated tag field callback had no contract worker");
-        const thunk_source = Plan.GeneratedCodecSource{
-            .kind = .encoder_tag_payload_thunk,
-            .shape = source.shape,
-            .value_type = source.value_type,
-            .capture_type = source.capture_type,
-            .contract_worker = contract_worker,
-            .contract_expr = source.contract_expr,
-        };
-        const thunk_worker = self.plan.workerForSourceType(.{ .generated_codec = thunk_source }, thunk_type) orelse
-            boxyLowerInvariant("generated tag field callback had no planned payload thunk");
-        const variants = try self.generatedEncoderTagVariants(proc, source.shape, true);
-        defer self.allocator.free(variants);
-        const bodies = try self.allocator.alloc(LIR.CFStmtId, variants.len);
-        defer self.allocator.free(bodies);
-        const name_captures = self.generatedEncoderNameCaptureLocals(proc, contract_worker);
-
-        for (variants, bodies) |variant, *body| {
-            const tag_name = try proc.addFrameLocal(.str);
-            const thunk_rep = proc.repForTypeRef(thunk_type);
-            const thunk = try proc.addFrameLocalForRep(thunk_rep);
-            const capture_values = try self.allocator.alloc(LIR.LocalId, 2 + name_captures.len);
-            defer self.allocator.free(capture_values);
-            capture_values[0] = proc.erased_capture_locals.items[0];
-            capture_values[1] = proc.erased_capture_locals.items[1];
-            @memcpy(capture_values[2..], name_captures);
-
-            var continuation = try proc.lowerErasedCallLocalsInto(
-                target,
-                function.ret,
-                args[1].rep,
-                proc.arg_locals.items[1],
-                &.{ proc.arg_locals.items[0], tag_name, thunk },
-                &.{ args[0].rep, writer_args[1].rep, thunk_rep },
-                next,
-            );
-            continuation = try self.packGeneratedCodecCallable(
-                proc,
-                thunk,
-                thunk_rep,
-                thunk_worker,
-                capture_values,
-                continuation,
-            );
-            body.* = try proc.assignStringBytesLiteral(
-                tag_name,
-                proc.tagVariantNameText(variant.variant),
-                continuation,
-            );
-        }
-        return try self.lowerGeneratedEncoderTagDispatch(
-            proc,
-            proc.erased_capture_locals.items[1],
-            variants,
-            bodies,
-        );
-    }
-
-    fn lowerGeneratedEncoderTagPayloadThunkInto(
-        self: *ProcedureBuilder,
-        proc: *ProcBodyBuilder,
-        source: Plan.GeneratedCodecSource,
-        target: LIR.LocalId,
-        next: LIR.CFStmtId,
-    ) Allocator.Error!LIR.CFStmtId {
-        const worker = self.plan.workers.items[@intFromEnum(proc.worker_layout.worker)];
-        const function = proc.functionChildrenForRep(worker.rep) orelse
-            boxyLowerInvariant("generated tag payload thunk was not callable");
-        if (function.arg_count != 1 or proc.arg_locals.items.len < 1 or proc.erased_capture_locals.items.len < 2) {
-            boxyLowerInvariant("generated tag payload thunk had invalid arguments or captures");
-        }
-        const tag_value = proc.erased_capture_locals.items[1];
-        const variants = try self.generatedEncoderTagVariants(proc, source.shape, true);
-        defer self.allocator.free(variants);
-        const bodies = try self.allocator.alloc(LIR.CFStmtId, variants.len);
-        defer self.allocator.free(bodies);
-        const tag_rep = variants[0].tag_rep;
-        const tag_rep_plan = self.plan.representations.items[@intFromEnum(tag_rep)];
-
-        for (variants, bodies) |variant, *body| {
-            const payloads = self.plan.childSlice(variant.variant.payloads);
-            if (payloads.len == 1) {
-                const extracted = try proc.addExtractedTagPayloadLocal(
-                    payloads[0].rep,
-                    tag_rep_plan.descriptor != null,
-                );
-                const continuation = try self.lowerGeneratedEncoderShapeInto(
-                    proc,
-                    source,
-                    payloads[0].source_type,
-                    extracted.local,
-                    proc.arg_locals.items[0],
-                    target,
-                    next,
-                );
-                body.* = try proc.assignConcreteTagPayloadRead(
-                    extracted.local,
-                    payloads[0].rep,
-                    extracted.desc_local,
-                    tag_value,
-                    tag_rep,
-                    variant.variant.name,
-                    variant.index,
-                    0,
-                    1,
-                    continuation,
-                );
-            } else {
-                body.* = try self.lowerGeneratedTagPayloadSequenceEncoderInto(
-                    proc,
-                    source,
-                    variant,
-                    proc.arg_locals.items[0],
-                    target,
-                    next,
-                );
-            }
-        }
-        return try self.lowerGeneratedEncoderTagDispatch(proc, tag_value, variants, bodies);
-    }
-
-    fn lowerGeneratedTagPayloadSequenceEncoderInto(
-        self: *ProcedureBuilder,
-        proc: *ProcBodyBuilder,
-        source: Plan.GeneratedCodecSource,
-        variant: GeneratedParserTagVariant,
-        state: LIR.LocalId,
-        target: LIR.LocalId,
-        next: LIR.CFStmtId,
-    ) Allocator.Error!LIR.CFStmtId {
-        const caller = proc.worker_layout.worker;
-        const contract_worker = source.contract_worker orelse
-            boxyLowerInvariant("generated tag payload thunk had no contract worker");
-        const encoding_type = source.capture_type orelse
-            boxyLowerInvariant("generated tag payload thunk had no encoding type");
-        const call = proc.generatedCodecCallPlan(caller, encoding_type, "encode_tuple", null);
-        const arg_types = self.plan.generatedCodecCallTypeSlice(call.arg_types);
-        if (arg_types.len != 3) boxyLowerInvariant("generated tag payload encode_tuple call did not have three arguments");
-        const callback_source = Plan.GeneratedCodecSource{
-            .kind = .encoder_tag_payload_elements,
-            .shape = source.shape,
-            .value_type = source.value_type,
-            .capture_type = encoding_type,
-            .contract_worker = contract_worker,
-            .contract_expr = source.contract_expr,
-        };
-        const callback_worker = self.plan.workerForSourceType(
-            .{ .generated_codec = callback_source },
-            arg_types[2],
-        ) orelse boxyLowerInvariant("generated tag payload had no planned element callback");
-        const callback = try proc.addFrameLocalForRep(proc.repForTypeRef(arg_types[2]));
-        const count = try proc.addFrameLocal(.u64);
-        const name_captures = self.generatedEncoderNameCaptureLocals(proc, contract_worker);
-        const capture_values = try self.allocator.alloc(LIR.LocalId, 2 + name_captures.len);
-        defer self.allocator.free(capture_values);
-        capture_values[0] = proc.erased_capture_locals.items[0];
-        capture_values[1] = proc.erased_capture_locals.items[1];
-        @memcpy(capture_values[2..], name_captures);
-
-        var continuation = try self.lowerGeneratedCodecCallLocalsInto(
-            proc,
-            call,
-            target,
-            &.{ state, count, callback },
-            next,
-        );
-        continuation = try self.packGeneratedCodecCallable(
-            proc,
-            callback,
-            proc.repForTypeRef(arg_types[2]),
-            callback_worker,
-            capture_values,
-            continuation,
-        );
-        return try proc.assignIntLiteral(
-            count,
-            @intCast(self.plan.childSlice(variant.variant.payloads).len),
-            continuation,
-        );
     }
 
     fn lowerGeneratedEncoderTagPayloadElementsInto(
@@ -8580,27 +8455,16 @@ const ProcedureBuilder = struct {
         }
         const children = self.plan.childSlice(self.plan.representations.items[@intFromEnum(function.rep)].children);
         const args = children[function.args_start..][0..function.arg_count];
-        const all_payload_variants = try self.generatedEncoderTagVariants(proc, source.shape, true);
-        defer self.allocator.free(all_payload_variants);
-        var multi_count: usize = 0;
-        for (all_payload_variants) |variant| {
-            if (self.plan.childSlice(variant.variant.payloads).len > 1) multi_count += 1;
-        }
-        if (multi_count == 0) boxyLowerInvariant("generated tag payload element callback had no multi-payload variants");
-        const variants = try self.allocator.alloc(GeneratedParserTagVariant, multi_count);
+        const variants = try self.generatedEncoderTagVariants(proc, source.shape, false);
         defer self.allocator.free(variants);
-        const bodies = try self.allocator.alloc(LIR.CFStmtId, multi_count);
+        const bodies = try self.allocator.alloc(LIR.CFStmtId, variants.len);
         defer self.allocator.free(bodies);
-        var out_index: usize = 0;
-        for (all_payload_variants) |variant| {
-            const payloads = self.plan.childSlice(variant.variant.payloads);
-            if (payloads.len <= 1) continue;
-            variants[out_index] = variant;
-            bodies[out_index] = try self.lowerGeneratedEncoderTagPayloadElementsFrom(
+        for (variants, bodies) |variant, *body| {
+            body.* = try self.lowerGeneratedEncoderTagPayloadElementsFrom(
                 proc,
                 source,
                 variant,
-                payloads,
+                self.plan.childSlice(variant.variant.payloads),
                 0,
                 proc.erased_capture_locals.items[1],
                 proc.arg_locals.items[0],
@@ -8611,7 +8475,6 @@ const ProcedureBuilder = struct {
                 target,
                 next,
             );
-            out_index += 1;
         }
         return try self.lowerGeneratedEncoderTagDispatch(
             proc,
@@ -13207,10 +13070,9 @@ const ProcBodyBuilder = struct {
                 .encoder_record_fields,
                 .encoder_dict_fields,
                 .encoder_sequence_elements,
-                .encoder_tag_field,
-                .encoder_tag_payload_thunk,
                 .encoder_tag_payload_elements,
                 .encoder_value_thunk,
+                .encoder_dict_key_thunk,
                 => true,
                 .parser_constructor, .encoder_constructor => false,
             },
@@ -13682,10 +13544,9 @@ const ProcBodyBuilder = struct {
                 .encoder_record_fields,
                 .encoder_dict_fields,
                 .encoder_sequence_elements,
-                .encoder_tag_field,
-                .encoder_tag_payload_thunk,
                 .encoder_tag_payload_elements,
                 .encoder_value_thunk,
+                .encoder_dict_key_thunk,
                 => true,
                 .parser_constructor, .encoder_constructor => false,
             },
@@ -17074,7 +16935,6 @@ const ProcBodyBuilder = struct {
                 break :blk .{
                     .local = field_local,
                     .materialize = materialization.desc,
-                    .read_path = desc_source.read_path,
                     .captures = materialization.captures,
                 };
             };
@@ -18865,7 +18725,7 @@ const ProcBodyBuilder = struct {
         if (self.module.checked_bodies.expr(planned.call.expr).data == .str_from_quote) {
             try self.bindQuoteDictionaryDescriptorArgs(hidden_desc_args, dict_local, required_method, match.slot, &pre_arg_descriptor_initializers);
         }
-        const hidden_desc_locals = try self.lowerDirectCallHiddenDescriptorArgs(hidden_desc_args, arg_types, lowered, arg_reps, null, null, &pre_arg_descriptor_initializers);
+        const hidden_desc_locals = try self.lowerDirectCallHiddenDescriptorArgs(hidden_desc_args, lowered, arg_reps, arg_reps);
         defer self.parent.allocator.free(hidden_desc_locals);
 
         const hidden_arg_locals = try self.parent.allocator.alloc(LIR.LocalId, hidden_desc_locals.len);
@@ -19275,15 +19135,12 @@ const ProcBodyBuilder = struct {
         }
         var pre_adaptation_descriptor_initializers = std.ArrayList(DescriptorArgLocal).empty;
         defer pre_adaptation_descriptor_initializers.deinit(self.parent.allocator);
-        const hidden_desc_locals = try self.lowerDirectCallHiddenDescriptorArgs(
-            hidden_desc_args,
-            hidden_desc_arg_types,
-            source_args,
-            source_arg_reps,
-            adapted_args,
-            worker_arg_children,
-            &pre_adaptation_descriptor_initializers,
-        );
+        const call_arg_reps = try self.parent.allocator.alloc(Plan.TypeRepId, source_args.len);
+        defer self.parent.allocator.free(call_arg_reps);
+        for (call_arg_reps, arg_types, 0..) |*call_arg_rep, arg_type, arg_index| {
+            call_arg_rep.* = if (arg_substitutions) |substitutions| substitutions[arg_index].call_rep else self.repForTypeRef(arg_type);
+        }
+        const hidden_desc_locals = try self.lowerDirectCallHiddenDescriptorArgs(hidden_desc_args, source_args, source_arg_reps, call_arg_reps);
         defer self.parent.allocator.free(hidden_desc_locals);
         const call_descriptor_snapshot = try self.snapshotDescriptorBindings();
         defer call_descriptor_snapshot.deinit(self.parent.allocator);
@@ -19428,14 +19285,17 @@ const ProcBodyBuilder = struct {
                 boxyLowerInvariant("boxy direct call result descriptor materialization had no descriptor");
             continuation = try self.prependDescriptorArgMaterialization(materialize, desc, continuation);
         }
-        continuation = try self.prependHiddenDescriptorArgMaterialization(hidden_desc_locals, continuation);
         continuation = try self.prependHiddenDictionaryArgMaterialization(hidden_dict_locals, continuation);
-        self.restoreDescriptorBindings(call_descriptor_snapshot);
-        call_descriptor_bindings_restored = true;
+        // Hidden descriptors read only the original operands and the caller
+        // frame, so they are initialized before the operands are adapted and
+        // describe the worker representations those adaptations target.
         const enclosing_call_boundary_substitution = self.call_boundary_substitution;
         self.call_boundary_substitution = hidden_desc_args;
         defer self.call_boundary_substitution = enclosing_call_boundary_substitution;
         continuation = try self.prependWorkerCallArgAdaptations(arg_types, source_args, adapted_args, worker_arg_children, actual_arg_reps, arg_substitutions, continuation);
+        continuation = try self.prependHiddenDescriptorArgMaterialization(hidden_desc_locals, continuation);
+        self.restoreDescriptorBindings(call_descriptor_snapshot);
+        call_descriptor_bindings_restored = true;
         return try self.prependDescriptorArgMaterializations(pre_adaptation_descriptor_initializers.items, continuation);
     }
 
@@ -25660,7 +25520,7 @@ const ProcBodyBuilder = struct {
             &call_arg_descriptor_initializers,
         );
         defer self.parent.allocator.free(argument_desc_locals);
-        const hidden_desc_locals = try self.lowerDirectCallHiddenDescriptorArgs(hidden_desc_args, arg_types, arg_locals, arg_reps, null, null, &pre_arg_descriptor_initializers);
+        const hidden_desc_locals = try self.lowerDirectCallHiddenDescriptorArgs(hidden_desc_args, arg_locals, arg_reps, arg_reps);
         defer self.parent.allocator.free(hidden_desc_locals);
         try self.recordDirectCallResultDescriptorEnvironment(
             target,
@@ -26588,23 +26448,12 @@ const ProcBodyBuilder = struct {
     fn lowerDirectCallHiddenDescriptorArgs(
         self: *ProcBodyBuilder,
         hidden_args: []const Plan.DirectCallHiddenDescriptorArg,
-        call_arg_types: []const Plan.CheckedTypeIdentity,
         source_args: []const LIR.LocalId,
         source_arg_reps: []const Plan.TypeRepId,
-        descriptor_args: ?[]const LIR.LocalId,
-        descriptor_arg_reps: ?[]const Plan.RepChild,
-        pre_arg_descriptor_initializers: *std.ArrayList(DescriptorArgLocal),
+        call_arg_reps: []const Plan.TypeRepId,
     ) Allocator.Error![]DescriptorArgLocal {
-        if (call_arg_types.len != source_args.len or source_arg_reps.len != source_args.len) {
+        if (source_arg_reps.len != source_args.len or call_arg_reps.len != source_args.len) {
             boxyLowerInvariant("boxy direct call hidden descriptor source metadata length mismatch");
-        }
-        if ((descriptor_args == null) != (descriptor_arg_reps == null)) {
-            boxyLowerInvariant("boxy direct call descriptor value and representation plans disagreed");
-        }
-        if (descriptor_args) |args| {
-            if (args.len != source_args.len or descriptor_arg_reps.?.len != source_args.len) {
-                boxyLowerInvariant("boxy direct call adapted descriptor source arity disagreed with operands");
-            }
         }
         const lowered = try self.parent.allocator.alloc(DescriptorArgLocal, hidden_args.len);
         errdefer self.parent.allocator.free(lowered);
@@ -26620,23 +26469,19 @@ const ProcBodyBuilder = struct {
                 local.* = .{ .local = lowered[source_index].local, .from_source_value = true };
                 continue;
             }
-            if (try self.sourceValueDescriptorLocalForHiddenArg(
-                arg,
-                call_arg_types,
-                source_args,
-                source_arg_reps,
-                descriptor_args,
-                descriptor_arg_reps,
-                pre_arg_descriptor_initializers,
-            )) |source_desc| {
-                local.* = source_desc;
-                continue;
-            }
+            // A bare type parameter receives the descriptor of the caller
+            // type the call substitutes for it: the operand's own descriptor
+            // when the plan names one, otherwise the caller frame's. A
+            // compound worker parameter is the worker representation
+            // instantiated with those descriptors; it is materialized below,
+            // once they are bound.
             if (self.directCallHiddenDescriptorUsesCallShape(arg)) {
-                if (try self.descriptorLocalForMatchingSourceArg(arg, call_arg_types, source_args, pre_arg_descriptor_initializers)) |desc_local| {
-                    local.* = desc_local;
+                if (try self.sourceValueDescriptorLocalForHiddenArg(arg, source_args, source_arg_reps, call_arg_reps)) |source_desc| {
+                    local.* = source_desc;
                     continue;
                 }
+            }
+            if (self.directCallHiddenDescriptorUsesCallShape(arg)) {
                 const identity_rep = self.descriptorStorageRep(arg.rep);
                 const rep = self.parent.plan.representations.items[@intFromEnum(identity_rep)];
                 const desc = rep.descriptor orelse {
@@ -26714,119 +26559,41 @@ const ProcBodyBuilder = struct {
         return lowered;
     }
 
+    /// A planned argument source reads the original operand's own
+    /// descriptor: the whole descriptor when the operand is the hidden
+    /// representation, or the nested descriptor at the representation path
+    /// from the operand to it.
     fn sourceValueDescriptorLocalForHiddenArg(
         self: *ProcBodyBuilder,
         hidden_arg: Plan.DirectCallHiddenDescriptorArg,
-        arg_types: []const Plan.CheckedTypeIdentity,
         source_args: []const LIR.LocalId,
         source_arg_reps: []const Plan.TypeRepId,
-        descriptor_args: ?[]const LIR.LocalId,
-        descriptor_arg_reps: ?[]const Plan.RepChild,
-        pre_arg_descriptor_initializers: *std.ArrayList(DescriptorArgLocal),
+        call_arg_reps: []const Plan.TypeRepId,
     ) Allocator.Error!?DescriptorArgLocal {
         const source_arg_index = hidden_arg.source_arg_index orelse return null;
         const index: usize = @intCast(source_arg_index);
-        if (index >= arg_types.len or index >= source_args.len or index >= source_arg_reps.len) {
+        if (index >= source_args.len or index >= source_arg_reps.len) {
             boxyLowerInvariant("boxy direct call hidden descriptor source argument index exceeded call arity");
         }
-
-        if (hidden_arg.source_value_rep == null) {
-            boxyLowerInvariant("boxy hidden descriptor argument source had no planned value representation");
-        }
-        const use_adapted = hidden_arg.argument_source == .adapted and descriptor_args != null;
-        const source = if (use_adapted) descriptor_args.?[index] else source_args[index];
-        const source_rep = if (use_adapted) descriptor_arg_reps.?[index].rep else source_arg_reps[index];
-        const hidden_rep = if (use_adapted) hidden_arg.worker_rep else hidden_arg.rep;
-        const identity_source_rep = self.descriptorStorageRep(source_rep);
-        const identity_hidden_rep = self.descriptorStorageRep(hidden_rep);
-        if (identity_source_rep != identity_hidden_rep) {
-            // A planned source argument's live descriptor is authoritative for
-            // descriptor-bearing children stored in that value. Its local
-            // environment can also contain bindings for other values that
-            // share the same generic representation.
-            if (try self.sourceNestedDescriptorLocalForHiddenArg(source, source_rep, hidden_rep)) |projected| {
-                return projected;
-            }
-        }
-        if (self.localDescriptorEnvironmentForLocal(source)) |env| {
-            const call_identity_rep = self.descriptorStorageRep(hidden_arg.rep);
-            try self.bindLocalDescriptorEnvironment(source);
-            const source_template = try self.descriptorMaterializationForKnownRep(call_identity_rep);
-            for (env.bindings) |binding| {
-                if (self.descriptorStorageRep(binding.rep) != call_identity_rep) continue;
-                if (identity_hidden_rep == call_identity_rep) {
-                    return .{ .local = binding.local, .from_source_value = true };
-                }
-
-                const adapted = try self.adapterDescriptorForCallBoundary(
-                    identity_hidden_rep,
-                    call_identity_rep,
-                    .{
-                        .desc = .{ .local = binding.local },
-                        .template = source_template,
-                    },
-                    pre_arg_descriptor_initializers,
-                );
-                if (adapted.prerequisite) |prerequisite| {
-                    try pre_arg_descriptor_initializers.append(self.parent.allocator, prerequisite);
-                }
-                const adapted_desc = adapted.desc orelse
-                    boxyLowerInvariant("boxy hidden descriptor representation adapter produced no descriptor");
-                if (adapted.materialize) |materialize| {
-                    if (adapted_desc.localOrNull() != materialize.local) {
-                        boxyLowerInvariant("boxy hidden descriptor adapter materialization did not produce its result descriptor");
-                    }
-                    return materialize;
-                }
-                return .{
-                    .local = try self.addFrameLocal(.opaque_ptr),
-                    .materialize = adapted_desc,
-                };
-            }
-        }
-        if (identity_source_rep != identity_hidden_rep) {
-            return null;
-        }
-
-        // The source value's live descriptor describes it in the concrete
-        // call-site representation. When the worker receives the argument as
-        // aggregate storage whose runtime layout differs from that concrete
-        // source, a generic child was boxed as the value crossed the call
-        // boundary, and the concrete descriptor lacks the nested descriptors
-        // the worker navigates. The worker representation must then supply the
-        // descriptor, so defer to the worker-rep path. Tag unions (which
-        // reshape by row extension, not child boxing) and whole-value boxing
-        // into an opaque worker scalar both keep the concrete source
-        // descriptor.
-        const worker_canonical_rep = self.parent.plan.representations.items[@intFromEnum(self.descriptorStorageRep(hidden_arg.worker_rep))];
-        const worker_uses_aggregate_storage = worker_canonical_rep.tag_variants.len == 0 and switch (worker_canonical_rep.kind) {
-            .record, .tuple, .nominal, .list, .box => true,
-            .in_progress, .dynamic, .primitive, .bool_tag_union, .erased_callable, .alias, .generated_field, .generated_field_names, .generated_tag_union_spec, .empty_record, .tag_union, .empty_tag_union => false,
-        };
-        if (worker_uses_aggregate_storage) {
-            const source_layout = self.parent.result.store.getLocal(source).layout_idx;
-            const worker_layout = self.workerRuntimeLayoutForRep(hidden_arg.worker_rep);
-            if (source_layout != worker_layout.layoutIdx()) {
-                return null;
-            }
+        const source = source_args[index];
+        const source_rep = source_arg_reps[index];
+        // The operand and the call's instantiated parameter are one checked
+        // type, so either names the whole operand.
+        const hidden_identity = self.descriptorStorageRep(hidden_arg.rep);
+        const whole_operand = hidden_arg.whole_operand or
+            self.descriptorStorageRep(source_rep) == hidden_identity or
+            self.descriptorStorageRep(call_arg_reps[index]) == hidden_identity;
+        if (!whole_operand) {
+            return try self.sourceNestedDescriptorLocalForHiddenArg(source, source_rep, hidden_arg.rep);
         }
         if (self.parent.result.store.getLocal(source).boxy_desc) |existing| {
             if (existing.localOrNull()) |existing_local| {
-                // The producer that assigned `source` also assigned this
-                // descriptor local. It is the exact metadata for the live
-                // value and must cross the call boundary unchanged.
                 return .{ .local = existing_local, .from_source_value = true };
             }
-
-            if (worker_uses_aggregate_storage) {
-                return null;
-            }
         }
-
         const materialization = try self.descriptorMaterializationForSourceStorageLocalRep(source, source_rep);
-        const local = try self.addFrameLocal(.opaque_ptr);
         return .{
-            .local = local,
+            .local = try self.addFrameLocal(.opaque_ptr),
             .materialize = materialization.desc,
             .captures = materialization.captures,
             .from_source_value = true,
@@ -26970,14 +26737,15 @@ const ProcBodyBuilder = struct {
                     break :blk layout_idx;
                 },
                 .tuple_elem => |index| self.parent.recordPayloadFieldLayout(payload_layout, index),
-                .box_payload => self.parent.descriptorPayloadLayoutForRep(child.rep),
                 .list_elem => self.parent.listElementLayout(payload_layout),
-                .alias_backing, .alias_arg, .nominal_backing, .nominal_arg, .nominal_padding_field, .record_ext, .function_arg, .function_ret, .tag_payload, .tag_ext => continue,
+                // A Box payload read is its own descriptor operation, not a
+                // nested-index read.
+                .box_payload, .alias_backing, .alias_arg, .nominal_backing, .nominal_arg, .nominal_padding_field, .record_ext, .function_arg, .function_ret, .tag_payload, .tag_ext => continue,
             };
             const nested = self.nestedDescriptorRepForStorage(
                 child.rep,
                 field_layout,
-                child.role == .box_payload or self.parent.layoutIsBoxStorage(field_layout),
+                self.parent.layoutIsBoxStorage(field_layout),
             ) orelse continue;
             try read_path.append(self.parent.allocator, .{ .nested = nested_index });
             if (try self.findDescriptorReadPath(nested, target_rep_id, read_path, active)) return true;
@@ -28440,11 +28208,96 @@ const ProcBodyBuilder = struct {
             .field_names = try self.parent.staticFieldNamesForRep(rep_id),
             .inspect_opaque = self.parent.repInspectsOpaque(rep_id),
             .inspect_method = try self.parent.staticInspectMethodForRep(rep_id),
+            .inspect_hidden_descs = try self.templateInspectHiddenDescsForRep(rep_id, desc_id, current_desc, captures, context),
+            .inspect_arg_descs = try self.templateInspectArgDescsForRep(rep_id, desc_id, current_desc, captures, context),
             .presence_slot_present_discriminant = rep.presence_slot_present_discriminant,
             .debug_checked_type = rep.source_type.ty,
         };
         self.parent.result.boxy_type_descs.items[@intFromEnum(desc_id)] = completed_desc;
         return desc_id;
+    }
+
+    /// The planned inspect worker's hidden descriptors for `rep_id`, in the
+    /// template's substitution environment.
+    fn templateInspectHiddenDescsForRep(
+        self: *ProcBodyBuilder,
+        rep_id: Plan.TypeRepId,
+        self_desc: LIR.BoxyTypeDescId,
+        current_desc: ?Plan.DescriptorRequirementId,
+        captures: *std.ArrayList(LIR.LocalId),
+        context: *DescriptorTemplateContext,
+    ) Allocator.Error!LIR.BoxySpan {
+        const inspect = self.parent.plan.inspectMethodForRep(rep_id) orelse return .{};
+        const args = self.parent.plan.directCallHiddenDescriptorArgSlice(inspect.hidden_desc_args);
+        if (args.len == 0) return .{};
+        const refs = try self.parent.allocator.alloc(LIR.BoxyDescRef, args.len);
+        defer self.parent.allocator.free(refs);
+        const identity_rep = self.parent.descriptorIdentityRep(rep_id);
+        for (args, refs) |arg, *ref| {
+            // The whole inspected value is described by the descriptor under
+            // construction.
+            ref.* = if (self.parent.descriptorIdentityRep(arg.rep) == identity_rep)
+                .{ .static = self_desc }
+            else
+                try self.descriptorTemplateRefForRep(arg.rep, current_desc, captures, context);
+        }
+        return try self.parent.appendStaticHiddenDescRefs(refs);
+    }
+
+    /// The inspected value's descriptor in the inspect worker's parameter
+    /// storage, with each worker type parameter bound to its planned
+    /// argument in this template's environment.
+    fn templateInspectArgDescsForRep(
+        self: *ProcBodyBuilder,
+        rep_id: Plan.TypeRepId,
+        self_desc: LIR.BoxyTypeDescId,
+        current_desc: ?Plan.DescriptorRequirementId,
+        captures: *std.ArrayList(LIR.LocalId),
+        context: *DescriptorTemplateContext,
+    ) Allocator.Error!LIR.BoxySpan {
+        const inspect = self.parent.plan.inspectMethodForRep(rep_id) orelse return .{};
+        if (self.parent.inspectArgumentIsIdentity(inspect)) return try self.parent.appendStaticHiddenDescRefs(&.{.{ .static = self_desc }});
+        const worker_arg = self.parent.inspectWorkerArgRep(inspect);
+        const scope = DescriptorTemplateScope{
+            .bindings_start = context.bindings.items.len,
+            .env = context.env,
+        };
+        defer popDescriptorTemplateExactReps(context, scope);
+        for (self.parent.plan.directCallHiddenDescriptorArgSlice(inspect.hidden_desc_args)) |arg| {
+            if (!self.repIsBareDynamic(arg.worker_rep)) continue;
+            try self.bindDescriptorTemplateExactRep(arg.worker_rep, arg.rep, context);
+        }
+        const ref = try self.descriptorTemplateRefForRep(worker_arg, current_desc, captures, context);
+        return try self.parent.appendStaticHiddenDescRefs(&.{ref});
+    }
+
+    /// Bind one formal to its actual in the template environment; the
+    /// caller's scope restores it.
+    fn bindDescriptorTemplateExactRep(
+        self: *const ProcBodyBuilder,
+        formal: Plan.TypeRepId,
+        actual_rep: Plan.TypeRepId,
+        context: *DescriptorTemplateContext,
+    ) Allocator.Error!void {
+        const actual = self.descriptorTemplateExactRep(actual_rep, context);
+        const outer = context.exact_reps[@intFromEnum(formal)];
+        if (formal == actual or outer == actual) return;
+        try context.bindings.append(self.parent.allocator, .{
+            .formal = formal,
+            .outer = outer,
+            .actual = actual,
+        });
+        context.exact_reps[@intFromEnum(formal)] = actual;
+        const key = DescriptorTemplateEnvKey{
+            .parent = context.env,
+            .formal = formal,
+            .actual = actual,
+        };
+        const entry = try context.env_ids.getOrPut(key);
+        if (!entry.found_existing) {
+            entry.value_ptr.* = @enumFromInt(@as(u32, @intCast(context.env_ids.count())));
+        }
+        context.env = entry.value_ptr.*;
     }
 
     fn templateNestedDescRefsForRep(
@@ -31586,12 +31439,9 @@ const ProcBodyBuilder = struct {
                 boxyLowerInvariant("boxy callable adapter capture descriptor exceeded descriptor table");
             }
             const materializes_capture_rep =
-                capture.materialize_read_path.len != 0 or
                 self.descriptorStorageRep(capture.materialize_rep) == self.descriptorStorageRep(capture.rep);
             const force_materialize_self_tag_descriptor =
-                materializes_capture_rep and
-                capture.materialize_read_path.len == 0 and
-                self.tagVariantRepForBoundary(capture.rep) != null;
+                materializes_capture_rep and self.tagVariantRepForBoundary(capture.rep) != null;
             if (!force_materialize_self_tag_descriptor) {
                 if (self.localEnvironmentDescriptorForRequirementAndRep(
                     source,
@@ -31602,9 +31452,7 @@ const ProcBodyBuilder = struct {
                     capture_needs_materialization[index] = false;
                     continue;
                 }
-                if (capture.materialize_read_path.len == 0 and
-                    self.descriptorStorageRep(capture.materialize_rep) == self.descriptorStorageRep(capture.rep))
-                {
+                if (materializes_capture_rep) {
                     if (self.descriptorLocalForRequirementAndRepOrNull(capture.desc, capture.rep)) |local| {
                         if (self.descriptorLocalAvailableFromSource(source, local)) {
                             capture_fields[1 + index] = local;
@@ -31613,16 +31461,14 @@ const ProcBodyBuilder = struct {
                         }
                     }
                 }
-                if (capture.materialize_read_path.len == 0) {
-                    if (self.localEnvironmentDescriptorForRequirementAndRep(
-                        source,
-                        capture.desc,
-                        capture.materialize_rep,
-                    )) |local| {
-                        capture_fields[1 + index] = local;
-                        capture_needs_materialization[index] = false;
-                        continue;
-                    }
+                if (self.localEnvironmentDescriptorForRequirementAndRep(
+                    source,
+                    capture.desc,
+                    capture.materialize_rep,
+                )) |local| {
+                    capture_fields[1 + index] = local;
+                    capture_needs_materialization[index] = false;
+                    continue;
                 }
                 if (self.descriptorLocalForRequirementAndRepOrNull(capture.desc, capture.materialize_rep)) |local| {
                     if (self.descriptorLocalAvailableFromSource(source, local)) {
@@ -31632,29 +31478,27 @@ const ProcBodyBuilder = struct {
                     }
                 }
                 // The capture requirement belongs to the adapted function,
-                // while materialize_rep belongs to the source function and can
-                // therefore have a different requirement id. Reuse the source
+                // while materialize_rep belongs to the enclosing frame and can
+                // therefore have a different requirement id. Reuse the frame
                 // rep's explicit descriptor binding when it exists; rebuilding
                 // its descriptor can lose the exact runtime box allocation
                 // identity already established at the call site.
-                if (capture.materialize_read_path.len == 0) {
-                    if (self.descriptorLocalForRepOrNull(capture.materialize_rep)) |local| {
-                        if (self.descriptorLocalAvailableFromSource(source, local)) {
-                            capture_fields[1 + index] = local;
-                            capture_needs_materialization[index] = false;
-                            continue;
-                        }
+                if (self.descriptorLocalForRepOrNull(capture.materialize_rep)) |local| {
+                    if (self.descriptorLocalAvailableFromSource(source, local)) {
+                        capture_fields[1 + index] = local;
+                        capture_needs_materialization[index] = false;
+                        continue;
                     }
                 }
             }
 
-            const local = try self.addFrameLocal(.opaque_ptr);
-            try self.setDescriptorRequirementLocalForRep(capture.desc, capture.materialize_rep, local);
-            try self.setDescriptorRequirementLocalForRep(capture.desc, capture.rep, local);
-            capture_fields[1 + index] = local;
+            capture_fields[1 + index] = try self.addFrameLocal(.opaque_ptr);
             capture_needs_materialization[index] = true;
         }
 
+        // Every fresh capture copies a descriptor out of the enclosing frame,
+        // so its materialization is chosen before the capture locals describe
+        // those representations inside the adapter window.
         for (descriptor_captures, capture_fields[1..], capture_needs_materialization) |capture, local, needs_materialization| {
             if (!needs_materialization) continue;
             const materialization: DescriptorMaterialization = if (self.static_descriptor_materialization_scope) |scope|
@@ -31664,28 +31508,18 @@ const ProcBodyBuilder = struct {
                     scope.sources,
                     scope.context,
                 ) }
-            else if (capture.materialize_read_path.len != 0) blk: {
-                const root_rep = self.descriptorStorageRep(capture.materialize_rep);
-                const root_desc = self.parent.plan.representations.items[@intFromEnum(root_rep)].descriptor orelse
-                    boxyLowerInvariant("boxy callable adapter descriptor read path had no root descriptor requirement");
-                const root_local = self.descriptorLocalForRequirementAndRepOrNull(root_desc, root_rep) orelse
-                    boxyLowerInvariant("boxy callable adapter descriptor read path had no bound root descriptor");
-                break :blk .{ .desc = .{ .local = root_local } };
-            } else try self.descriptorMaterializationForSourceRep(capture.materialize_rep);
-            if (materialization.captures.len == 0) {
-                if (materialization.desc.localOrNull()) |materialized_local| {
-                    if (materialized_local == local) {
-                        continue;
-                    }
-                }
-            }
-
+            else
+                try self.descriptorMaterializationForSourceRep(capture.materialize_rep);
             try descriptor_materializations.append(self.parent.allocator, .{
                 .local = local,
                 .materialize = materialization.desc,
-                .read_path = capture.materialize_read_path,
                 .captures = materialization.captures,
             });
+        }
+        for (descriptor_captures, capture_fields[1..], capture_needs_materialization) |capture, local, needs_materialization| {
+            if (!needs_materialization) continue;
+            try self.setDescriptorRequirementLocalForRep(capture.desc, capture.materialize_rep, local);
+            try self.setDescriptorRequirementLocalForRep(capture.desc, capture.rep, local);
         }
 
         var target_capture_index = descriptor_captures.len;
@@ -32108,671 +31942,6 @@ const ProcBodyBuilder = struct {
         return rep_id;
     }
 
-    fn appendMissingCallableAdapterResultDescriptorCaptures(
-        self: *ProcBodyBuilder,
-        function: FunctionChildren,
-        materialize_from: FunctionChildren,
-        pending: *std.ArrayList(CallableAdapterDescriptorCapture),
-        seen_descs: *collections.DenseMap(Plan.DescriptorRequirementId, usize),
-    ) Allocator.Error!void {
-        var candidates = std.ArrayList(CallableAdapterDescriptorCapture).empty;
-        defer candidates.deinit(self.parent.allocator);
-        var candidate_seen = collections.DenseMap(Plan.DescriptorRequirementId, usize).init(self.parent.allocator);
-        defer candidate_seen.deinit();
-        try self.collectCallableAdapterDescriptorCapturesForFunction(
-            function,
-            materialize_from,
-            false,
-            true,
-            &candidates,
-            &candidate_seen,
-        );
-
-        for (candidates.items) |capture| {
-            if (seen_descs.contains(capture.desc)) continue;
-            try seen_descs.put(capture.desc, pending.items.len);
-            try pending.append(self.parent.allocator, capture);
-        }
-    }
-
-    fn collectCallableAdapterSourceArgumentDescriptorCaptures(
-        self: *ProcBodyBuilder,
-        source_function: FunctionChildren,
-        target_function: FunctionChildren,
-        pending: *std.ArrayList(CallableAdapterDescriptorCapture),
-        seen_descs: *collections.DenseMap(Plan.DescriptorRequirementId, usize),
-    ) Allocator.Error!void {
-        if (source_function.arg_count != target_function.arg_count) {
-            boxyLowerInvariant("boxy callable adapter source descriptor capture saw mismatched arity");
-        }
-
-        var source_seen_reps = collections.DenseMap(Plan.TypeRepId, void).init(self.parent.allocator);
-        defer source_seen_reps.deinit();
-        var source_seen_descs = collections.DenseMap(Plan.DescriptorRequirementId, void).init(self.parent.allocator);
-        defer source_seen_descs.deinit();
-        for (self.functionArgChildren(source_function)) |arg| {
-            var params = std.ArrayList(Plan.HiddenDescriptorParam).empty;
-            defer params.deinit(self.parent.allocator);
-            try self.collectHiddenDescriptorParamsForRep(arg.rep, &params, &source_seen_reps, &source_seen_descs);
-            for (params.items) |param| {
-                const is_root = self.repOwnsShapeDescriptor(param.rep, param.desc) and
-                    self.descriptorShapeIdentityRep(arg.rep) == self.descriptorShapeIdentityRep(param.rep);
-                if (is_root or seen_descs.contains(param.desc)) continue;
-
-                const index = pending.items.len;
-                try seen_descs.put(param.desc, index);
-                try pending.append(self.parent.allocator, .{
-                    .desc = param.desc,
-                    .rep = param.rep,
-                    .materialize_rep = param.rep,
-                    .source_type = param.source_type,
-                });
-            }
-        }
-    }
-
-    fn collectCallableWorkerDescriptorCaptures(
-        self: *ProcBodyBuilder,
-        worker_function: FunctionChildren,
-        call_function: FunctionChildren,
-    ) Allocator.Error![]CallableAdapterDescriptorCapture {
-        return try self.collectCallableDescriptorCaptures(worker_function, call_function);
-    }
-
-    fn collectCallableDescriptorCaptures(
-        self: *ProcBodyBuilder,
-        source_function: FunctionChildren,
-        target_function: FunctionChildren,
-    ) Allocator.Error![]CallableAdapterDescriptorCapture {
-        var captures = std.ArrayList(CallableAdapterDescriptorCapture).empty;
-        defer captures.deinit(self.parent.allocator);
-        var seen_descs = collections.DenseMap(Plan.DescriptorRequirementId, usize).init(self.parent.allocator);
-        defer seen_descs.deinit();
-
-        try self.collectCallableAdapterDescriptorCapturesForFunction(source_function, target_function, true, true, &captures, &seen_descs);
-        try self.collectCallableAdapterDescriptorCapturesForFunction(target_function, source_function, true, true, &captures, &seen_descs);
-
-        return try captures.toOwnedSlice(self.parent.allocator);
-    }
-
-    fn collectCallableAdapterDescriptorCapturesForFunction(
-        self: *ProcBodyBuilder,
-        function: FunctionChildren,
-        materialize_from: FunctionChildren,
-        include_args: bool,
-        include_return: bool,
-        pending: *std.ArrayList(CallableAdapterDescriptorCapture),
-        seen_descs: *collections.DenseMap(Plan.DescriptorRequirementId, usize),
-    ) Allocator.Error!void {
-        if (function.arg_count != materialize_from.arg_count) {
-            boxyLowerInvariant("boxy callable adapter descriptor capture saw mismatched function arity");
-        }
-
-        var params = std.ArrayList(Plan.HiddenDescriptorParam).empty;
-        defer params.deinit(self.parent.allocator);
-        var seen_reps = collections.DenseMap(Plan.TypeRepId, void).init(self.parent.allocator);
-        defer seen_reps.deinit();
-        var seen_requirements = collections.DenseMap(Plan.DescriptorRequirementId, void).init(self.parent.allocator);
-        defer seen_requirements.deinit();
-        if (include_args) {
-            for (self.functionArgChildren(function)) |arg| {
-                try self.collectHiddenDescriptorParamsForRep(arg.rep, &params, &seen_reps, &seen_requirements);
-            }
-        }
-        if (include_return) {
-            try self.collectHiddenDescriptorParamsForRep(function.ret, &params, &seen_reps, &seen_requirements);
-        }
-        if (params.items.len == 0) return;
-
-        var mapped = collections.DenseMap(Plan.DescriptorRequirementId, CallableAdapterDescriptorCaptureSource).init(self.parent.allocator);
-        defer mapped.deinit();
-        var seen_rep_pairs = std.AutoHashMap(u64, void).init(self.parent.allocator);
-        defer seen_rep_pairs.deinit();
-
-        if (include_args) {
-            const function_args = self.functionArgChildren(function);
-            const materialize_args = self.functionArgChildren(materialize_from);
-            for (function_args, materialize_args) |function_arg, materialize_arg| {
-                if (!try self.collectCallableAdapterDescriptorCaptureSources(function_arg.rep, materialize_arg.rep, params.items, &mapped, &seen_rep_pairs, false)) {
-                    boxyLowerInvariant("boxy callable adapter descriptor mapping saw mismatched argument reps");
-                }
-            }
-        }
-        if (include_return) {
-            if (!try self.collectCallableAdapterDescriptorCaptureSources(function.ret, materialize_from.ret, params.items, &mapped, &seen_rep_pairs, true)) {
-                boxyLowerInvariant("boxy callable adapter descriptor mapping saw mismatched return reps");
-            }
-        }
-
-        for (params.items) |param| {
-            const materialize_source = mapped.get(param.desc) orelse blk: {
-                const identity_param_rep = self.repQuery().descriptorArgumentIdentityRep(param.rep);
-                if (identity_param_rep != param.rep) {
-                    const identity_rep = self.parent.plan.representations.items[@intFromEnum(identity_param_rep)];
-                    if (identity_rep.descriptor) |identity_desc| {
-                        if (mapped.get(identity_desc)) |source| break :blk source;
-                    }
-                }
-                self.tempdebugDumpRep("FUNCTION", function.rep, 0);
-                self.tempdebugDumpRep("MATERIALIZE_FROM", materialize_from.rep, 0);
-                self.tempdebugDumpRep("MISSING PARAM", param.rep, 0);
-                boxyLowerInvariant("boxy callable adapter descriptor mapping did not cover a descriptor capture");
-            };
-            const materialize_rep = materialize_source.rep;
-            if (seen_descs.get(param.desc)) |existing_index| {
-                const existing = pending.items[existing_index];
-                if (self.descriptorStorageRep(existing.materialize_rep) != self.descriptorStorageRep(materialize_rep) or
-                    !self.descriptorReadPathSpansEql(existing.materialize_read_path, materialize_source.read_path))
-                {
-                    const existing_materializes_self =
-                        existing.materialize_read_path.len == 0 and
-                        self.descriptorStorageRep(existing.materialize_rep) == self.descriptorStorageRep(existing.rep);
-                    const new_materializes_self =
-                        materialize_source.read_path.len == 0 and
-                        self.descriptorStorageRep(materialize_rep) == self.descriptorStorageRep(param.rep);
-                    if (existing_materializes_self) continue;
-                    if (new_materializes_self) {
-                        pending.items[existing_index].materialize_rep = materialize_rep;
-                        pending.items[existing_index].materialize_read_path = materialize_source.read_path;
-                        continue;
-                    }
-                    boxyLowerInvariant("boxy callable adapter mapped one descriptor capture to incompatible materialization reps");
-                }
-                continue;
-            }
-
-            const index = pending.items.len;
-            try seen_descs.put(param.desc, index);
-            try pending.append(self.parent.allocator, .{
-                .desc = param.desc,
-                .rep = param.rep,
-                .materialize_rep = materialize_rep,
-                .materialize_read_path = materialize_source.read_path,
-                .source_type = param.source_type,
-            });
-        }
-    }
-
-    fn tempdebugDumpRep(self: *ProcBodyBuilder, label: []const u8, rep_id: Plan.TypeRepId, depth: usize) void {
-        if (depth == 0) std.debug.print("TEMPDEBUG {s}\n", .{label});
-        if (depth > 7) return;
-        const rep = self.parent.plan.representations.items[@intFromEnum(rep_id)];
-        for (0..depth) |_| std.debug.print("  ", .{});
-        std.debug.print("rep {d} kind={s} desc={?d} ty={d} open_row={}\n", .{ @intFromEnum(rep_id), @tagName(rep.kind), if (rep.descriptor) |d| @intFromEnum(d) else null, @intFromEnum(rep.source_type.ty), rep.is_open_tag_row });
-        for (self.parent.plan.tagVariantSlice(rep.tag_variants)) |v| {
-            for (0..depth + 1) |_| std.debug.print("  ", .{});
-            std.debug.print("variant {s}\n", .{self.tagVariantNameText(v)});
-            for (self.parent.plan.childSlice(v.payloads)) |c| self.tempdebugDumpRep("", c.rep, depth + 2);
-        }
-        for (self.parent.plan.childSlice(rep.children)) |c| {
-            for (0..depth + 1) |_| std.debug.print("  ", .{});
-            std.debug.print("child {s}\n", .{@tagName(c.role)});
-            self.tempdebugDumpRep("", c.rep, depth + 2);
-        }
-    }
-
-    fn descriptorReadPathSpansEql(
-        self: *const ProcBodyBuilder,
-        a: Plan.Span,
-        b: Plan.Span,
-    ) bool {
-        const a_steps = self.parent.descriptorReadPathSlice(a);
-        const b_steps = self.parent.descriptorReadPathSlice(b);
-        if (a_steps.len != b_steps.len) return false;
-        for (a_steps, b_steps) |a_step, b_step| {
-            if (!std.meta.eql(a_step, b_step)) return false;
-        }
-        return true;
-    }
-
-    fn collectCallableAdapterDescriptorCaptureSources(
-        self: *ProcBodyBuilder,
-        function_rep_id: Plan.TypeRepId,
-        materialize_rep_id: Plan.TypeRepId,
-        params: []const Plan.HiddenDescriptorParam,
-        mapped: *collections.DenseMap(Plan.DescriptorRequirementId, CallableAdapterDescriptorCaptureSource),
-        seen_rep_pairs: *std.AutoHashMap(u64, void),
-        allow_missing_tag_payloads: bool,
-    ) Allocator.Error!bool {
-        const effective_materialize_rep_id = materialize_rep_id;
-
-        const identity_function_rep = self.repQuery().descriptorArgumentIdentityRep(function_rep_id);
-        const identity_materialize_rep = self.repQuery().descriptorArgumentIdentityRep(effective_materialize_rep_id);
-        if (identity_function_rep != function_rep_id or identity_materialize_rep != effective_materialize_rep_id) {
-            return try self.collectCallableAdapterDescriptorCaptureSources(
-                identity_function_rep,
-                identity_materialize_rep,
-                params,
-                mapped,
-                seen_rep_pairs,
-                allow_missing_tag_payloads,
-            );
-        }
-
-        const pair_key = (@as(u64, @intFromEnum(function_rep_id)) << 32) |
-            @as(u64, @intFromEnum(materialize_rep_id));
-        const entry = try seen_rep_pairs.getOrPut(pair_key);
-        if (entry.found_existing) return true;
-
-        const function_rep = self.parent.plan.representations.items[@intFromEnum(function_rep_id)];
-        const materialize_rep = self.parent.plan.representations.items[@intFromEnum(materialize_rep_id)];
-
-        if (function_rep.descriptor) |function_desc| {
-            try self.requireCallableAdapterDescriptorParam(params, function_desc);
-            const capture_materialize_rep = try self.descriptorCaptureMaterializeRep(function_rep_id, effective_materialize_rep_id);
-            try self.putCallableAdapterDescriptorCaptureSource(mapped, function_desc, .{
-                .rep = capture_materialize_rep,
-            });
-        }
-
-        if (function_rep.children.len == 0) return true;
-
-        if (materialize_rep.kind == .empty_tag_union) {
-            for (self.parent.plan.childSlice(function_rep.children)) |function_child| {
-                if (self.parent.plan.childIsSharedBackingTemplate(function_rep_id, function_child)) continue;
-                if (!try self.repQuery().repSubtreeHasDescriptor(function_child.rep)) continue;
-                if (!try self.collectCallableAdapterDescriptorCaptureSources(function_child.rep, effective_materialize_rep_id, params, mapped, seen_rep_pairs, allow_missing_tag_payloads)) return false;
-            }
-            return true;
-        }
-
-        if (materialize_rep.kind == .dynamic and materialize_rep.descriptor != null and materialize_rep.children.len == 0) {
-            var projected_seen = collections.DenseMap(Plan.TypeRepId, void).init(self.parent.allocator);
-            defer projected_seen.deinit();
-            var read_path = std.ArrayList(DescriptorReadStep).empty;
-            defer read_path.deinit(self.parent.allocator);
-            try self.collectCallableAdapterProjectedDescriptorCaptureSources(
-                function_rep_id,
-                materialize_rep_id,
-                params,
-                mapped,
-                &projected_seen,
-                &read_path,
-            );
-            return true;
-        }
-
-        const function_children = self.parent.plan.childSlice(function_rep.children);
-        const materialize_children = self.parent.plan.childSlice(materialize_rep.children);
-        for (function_children) |function_child| {
-            if (self.parent.plan.childIsSharedBackingTemplate(function_rep_id, function_child)) continue;
-            if (!try self.repQuery().repSubtreeHasDescriptor(function_child.rep)) continue;
-            if (self.namedQuery().findMatchingChildByRole(materialize_children, function_child)) |materialize_child| {
-                if (!try self.collectCallableAdapterDescriptorCaptureSources(function_child.rep, materialize_child.rep, params, mapped, seen_rep_pairs, allow_missing_tag_payloads)) return false;
-                continue;
-            }
-            if (self.repQuery().structuralWrapperBackingRep(effective_materialize_rep_id)) |materialize_backing| {
-                const backing_children = self.parent.plan.childSlice(self.parent.plan.representations.items[@intFromEnum(materialize_backing)].children);
-                if (self.namedQuery().findMatchingChildByRole(backing_children, function_child)) |materialize_child| {
-                    if (!try self.collectCallableAdapterDescriptorCaptureSources(function_child.rep, materialize_child.rep, params, mapped, seen_rep_pairs, allow_missing_tag_payloads)) return false;
-                    continue;
-                }
-            }
-            if (try self.namedQuery().findMatchingTagPayloadInRowExtension(materialize_children, function_child)) |materialize_child| {
-                if (!try self.collectCallableAdapterDescriptorCaptureSources(function_child.rep, materialize_child.rep, params, mapped, seen_rep_pairs, allow_missing_tag_payloads)) return false;
-                continue;
-            }
-            if (try self.repQuery().findMatchingChildBySourceType(materialize_children, function_child)) |materialize_child| {
-                if (!try self.collectCallableAdapterDescriptorCaptureSources(function_child.rep, materialize_child.rep, params, mapped, seen_rep_pairs, allow_missing_tag_payloads)) return false;
-                continue;
-            }
-            if (try self.repQuery().workerChildCanMatchUnwrappedCallRep(function_rep_id, function_child)) {
-                if (!try self.collectCallableAdapterDescriptorCaptureSources(function_child.rep, effective_materialize_rep_id, params, mapped, seen_rep_pairs, allow_missing_tag_payloads)) return false;
-                continue;
-            }
-            if (function_child.role == .tag_ext and materialize_children.len == 0 and materialize_rep.descriptor != null) {
-                if (!try self.collectCallableAdapterDescriptorCaptureSources(function_child.rep, effective_materialize_rep_id, params, mapped, seen_rep_pairs, allow_missing_tag_payloads)) return false;
-                continue;
-            }
-            if (allow_missing_tag_payloads and function_child.role == .tag_payload and materialize_rep.kind == .tag_union) {
-                var known_seen = collections.DenseMap(Plan.TypeRepId, void).init(self.parent.allocator);
-                defer known_seen.deinit();
-                try self.collectCallableAdapterKnownDescriptorCaptureSources(
-                    function_child.rep,
-                    params,
-                    mapped,
-                    &known_seen,
-                );
-                continue;
-            }
-            return false;
-        }
-        return true;
-    }
-
-    fn descriptorCaptureMaterializeRep(
-        self: *ProcBodyBuilder,
-        function_rep_id: Plan.TypeRepId,
-        materialize_rep_id: Plan.TypeRepId,
-    ) Allocator.Error!Plan.TypeRepId {
-        const identity_materialize_rep = self.repQuery().descriptorArgumentIdentityRep(materialize_rep_id);
-        if (try self.descriptorCaptureCanUseMaterializeRep(function_rep_id, identity_materialize_rep)) {
-            return identity_materialize_rep;
-        }
-        const identity_function_rep = self.repQuery().descriptorArgumentIdentityRep(function_rep_id);
-        return if (self.repIsFullyConcrete(identity_function_rep))
-            identity_function_rep
-        else
-            identity_materialize_rep;
-    }
-
-    fn descriptorCaptureCanUseMaterializeRep(
-        self: *ProcBodyBuilder,
-        function_rep_id: Plan.TypeRepId,
-        materialize_rep_id: Plan.TypeRepId,
-    ) Allocator.Error!bool {
-        const function_tag_rep = self.tagVariantRepForBoundary(function_rep_id) orelse return true;
-        const materialize_tag_rep = self.tagVariantRepForBoundary(materialize_rep_id) orelse {
-            const materialize_rep = self.parent.plan.representations.items[@intFromEnum(materialize_rep_id)];
-            return materialize_rep.kind == .dynamic and materialize_rep.descriptor != null and materialize_rep.children.len == 0;
-        };
-
-        const function_variants = self.parent.plan.tagVariantSlice(self.parent.plan.representations.items[@intFromEnum(function_tag_rep)].tag_variants);
-        const materialize_variants = self.parent.plan.tagVariantSlice(self.parent.plan.representations.items[@intFromEnum(materialize_tag_rep)].tag_variants);
-        if (function_variants.len != materialize_variants.len) return false;
-
-        for (function_variants, materialize_variants) |function_variant, materialize_variant| {
-            if (!std.mem.eql(u8, self.tagVariantNameText(function_variant), self.tagVariantNameText(materialize_variant))) {
-                return false;
-            }
-        }
-        return true;
-    }
-
-    fn collectCallableAdapterKnownDescriptorCaptureSources(
-        self: *ProcBodyBuilder,
-        rep_id: Plan.TypeRepId,
-        params: []const Plan.HiddenDescriptorParam,
-        mapped: *collections.DenseMap(Plan.DescriptorRequirementId, CallableAdapterDescriptorCaptureSource),
-        seen_reps: *collections.DenseMap(Plan.TypeRepId, void),
-    ) Allocator.Error!void {
-        const identity_rep = self.repQuery().descriptorArgumentIdentityRep(rep_id);
-        const entry = try seen_reps.getOrPut(identity_rep);
-        if (entry.found_existing) return;
-
-        const rep = self.parent.plan.representations.items[@intFromEnum(identity_rep)];
-        if (rep.descriptor) |desc| {
-            try self.requireCallableAdapterDescriptorParam(params, desc);
-            try self.putCallableAdapterDescriptorCaptureSource(mapped, desc, .{
-                .rep = try self.descriptorCaptureMaterializeRep(identity_rep, identity_rep),
-            });
-        }
-
-        for (self.parent.plan.childSlice(rep.children)) |child| {
-            if (self.parent.plan.childIsSharedBackingTemplate(identity_rep, child)) continue;
-            try self.collectCallableAdapterKnownDescriptorCaptureSources(
-                child.rep,
-                params,
-                mapped,
-                seen_reps,
-            );
-        }
-    }
-
-    fn collectCallableAdapterProjectedDescriptorCaptureSources(
-        self: *ProcBodyBuilder,
-        current_rep_id: Plan.TypeRepId,
-        root_materialize_rep: Plan.TypeRepId,
-        params: []const Plan.HiddenDescriptorParam,
-        mapped: *collections.DenseMap(Plan.DescriptorRequirementId, CallableAdapterDescriptorCaptureSource),
-        seen_reps: *collections.DenseMap(Plan.TypeRepId, void),
-        read_path: *std.ArrayList(DescriptorReadStep),
-    ) Allocator.Error!void {
-        const identity_current = self.descriptorStorageRep(current_rep_id);
-        const entry = try seen_reps.getOrPut(identity_current);
-        if (entry.found_existing) return;
-
-        const current_rep = self.parent.plan.representations.items[@intFromEnum(identity_current)];
-        if (current_rep.descriptor) |desc| {
-            if (self.callableAdapterHasDescriptorParam(params, desc)) {
-                try self.putCallableAdapterProjectedDescriptorCaptureSource(
-                    mapped,
-                    desc,
-                    root_materialize_rep,
-                    read_path.items,
-                );
-            }
-        }
-
-        // A nominal's runtime descriptor is built from its backing shape, so
-        // the backing's own requirement is read from the same descriptor.
-        if (self.parent.descriptorBackingShapeRep(identity_current)) |backing_rep| {
-            try self.collectCallableAdapterProjectedDescriptorCaptureSources(
-                backing_rep,
-                root_materialize_rep,
-                params,
-                mapped,
-                seen_reps,
-                read_path,
-            );
-            return;
-        }
-
-        if (self.tagVariantRepForBoundary(identity_current)) |tag_rep_id| {
-            const tag_rep = self.parent.plan.representations.items[@intFromEnum(tag_rep_id)];
-            const variants = self.parent.plan.tagVariantSlice(tag_rep.tag_variants);
-            const descriptor_layout = self.parent.descriptorPayloadLayoutForRep(identity_current);
-            const descriptor_layout_value = self.parent.result.layouts.getLayout(descriptor_layout);
-            const tag_layout = switch (descriptor_layout_value.tag) {
-                .tag_union => descriptor_layout_value,
-                .box => self.parent.result.layouts.getLayout(descriptor_layout_value.getIdx()),
-                .zst => null,
-                .scalar, .box_of_zst, .erased_box, .list, .list_of_zst, .struct_, .closure, .erased_callable, .ptr => boxyLowerInvariant("boxy callable descriptor read_path tag had a non-tag payload layout"),
-            };
-            if (tag_layout) |layout_value| {
-                if (layout_value.tag != .tag_union) {
-                    boxyLowerInvariant("boxy callable descriptor read_path tag box had a non-tag payload");
-                }
-                const tag_info = self.parent.result.layouts.getTagUnionInfo(layout_value);
-                if (tag_info.variants.len < variants.len) {
-                    boxyLowerInvariant("boxy callable descriptor read_path tag layout had too few variants");
-                }
-                for (variants, 0..) |variant, variant_index| {
-                    try self.collectCallableAdapterTagPayloadDescriptorCaptureSources(
-                        variant,
-                        tag_info.variants.get(variant_index).payload_layout,
-                        root_materialize_rep,
-                        params,
-                        mapped,
-                        seen_reps,
-                        read_path,
-                    );
-                }
-            } else {
-                if (variants.len != 1) {
-                    boxyLowerInvariant("boxy callable zero-sized tag read_path had multiple variants");
-                }
-                try self.collectCallableAdapterTagPayloadDescriptorCaptureSources(
-                    variants[0],
-                    .zst,
-                    root_materialize_rep,
-                    params,
-                    mapped,
-                    seen_reps,
-                    read_path,
-                );
-            }
-
-            var ext_rep: ?Plan.TypeRepId = null;
-            for (self.parent.plan.childSlice(tag_rep.children)) |child| {
-                if (child.role != .tag_ext) continue;
-                if (ext_rep != null) {
-                    boxyLowerInvariant("boxy callable descriptor read_path tag had duplicate row extensions");
-                }
-                ext_rep = child.rep;
-            }
-            if (ext_rep) |rep_id| {
-                const ext = self.parent.plan.representations.items[@intFromEnum(rep_id)];
-                if (rep_id != tag_rep_id and ext.kind != .empty_tag_union) {
-                    try read_path.append(self.parent.allocator, .tag_ext);
-                    try self.collectCallableAdapterProjectedDescriptorCaptureSources(
-                        rep_id,
-                        root_materialize_rep,
-                        params,
-                        mapped,
-                        seen_reps,
-                        read_path,
-                    );
-                    read_path.items.len -= 1;
-                }
-            }
-            return;
-        }
-
-        const payload_layout = self.parent.descriptorPayloadLayoutForRep(identity_current);
-        var nested_index: u32 = 0;
-
-        if (current_rep.declared_fields.len != 0) {
-            for (self.parent.plan.declaredFieldSlice(current_rep.declared_fields)) |field| {
-                const field_layout = self.parent.recordPayloadFieldLayout(payload_layout, field.index);
-                const force_field = self.parent.layoutIsBoxStorage(field_layout);
-                const nested_rep = self.nestedDescriptorRepForStorage(field.rep, field_layout, force_field) orelse continue;
-                try read_path.append(self.parent.allocator, .{ .nested = nested_index });
-                try self.collectCallableAdapterProjectedDescriptorCaptureSources(
-                    nested_rep,
-                    root_materialize_rep,
-                    params,
-                    mapped,
-                    seen_reps,
-                    read_path,
-                );
-                read_path.items.len -= 1;
-                nested_index += 1;
-            }
-            return;
-        }
-
-        var record_field_index: u32 = 0;
-        for (self.parent.plan.childSlice(current_rep.children)) |child| {
-            if (child.role == .tag_ext) continue;
-            const field_layout = switch (child.role) {
-                .record_field => blk: {
-                    const field_layout = self.parent.recordPayloadFieldLayout(payload_layout, record_field_index);
-                    record_field_index += 1;
-                    break :blk field_layout;
-                },
-                .tuple_elem => |index| self.parent.recordPayloadFieldLayout(payload_layout, index),
-                .box_payload => self.parent.descriptorPayloadLayoutForRep(child.rep),
-                .list_elem => self.parent.listElementLayout(payload_layout),
-                .alias_backing, .alias_arg, .nominal_backing, .nominal_arg, .nominal_padding_field, .record_ext, .function_arg, .function_ret, .tag_payload, .tag_ext => continue,
-            };
-            const force_desc = child.role == .box_payload or self.parent.layoutIsBoxStorage(field_layout);
-            const nested_rep = self.nestedDescriptorRepForStorage(child.rep, field_layout, force_desc) orelse continue;
-            try read_path.append(self.parent.allocator, .{ .nested = nested_index });
-            try self.collectCallableAdapterProjectedDescriptorCaptureSources(
-                nested_rep,
-                root_materialize_rep,
-                params,
-                mapped,
-                seen_reps,
-                read_path,
-            );
-            read_path.items.len -= 1;
-            nested_index += 1;
-        }
-    }
-
-    fn collectCallableAdapterTagPayloadDescriptorCaptureSources(
-        self: *ProcBodyBuilder,
-        variant: Plan.TagVariant,
-        variant_payload_layout: layout.Idx,
-        root_materialize_rep: Plan.TypeRepId,
-        params: []const Plan.HiddenDescriptorParam,
-        mapped: *collections.DenseMap(Plan.DescriptorRequirementId, CallableAdapterDescriptorCaptureSource),
-        seen_reps: *collections.DenseMap(Plan.TypeRepId, void),
-        read_path: *std.ArrayList(DescriptorReadStep),
-    ) Allocator.Error!void {
-        const payloads = self.parent.plan.childSlice(variant.payloads);
-        for (payloads, 0..) |payload, payload_index| {
-            const field_layout = self.parent.tagVariantPayloadFieldLayout(
-                variant_payload_layout,
-                payload_index,
-                payloads.len,
-            );
-            const payload_rep = self.parent.tagPayloadStorageDescRepForLayout(payload.rep, field_layout, true) orelse continue;
-            try read_path.append(self.parent.allocator, .{ .tag_payload = .{
-                .tag_name = try self.lirTagNameForVariant(variant),
-                .payload_index = @intCast(payload_index),
-            } });
-            try self.collectCallableAdapterProjectedDescriptorCaptureSources(
-                payload_rep,
-                root_materialize_rep,
-                params,
-                mapped,
-                seen_reps,
-                read_path,
-            );
-            read_path.items.len -= 1;
-        }
-    }
-
-    fn putCallableAdapterProjectedDescriptorCaptureSource(
-        self: *ProcBodyBuilder,
-        mapped: *collections.DenseMap(Plan.DescriptorRequirementId, CallableAdapterDescriptorCaptureSource),
-        desc: Plan.DescriptorRequirementId,
-        root_materialize_rep: Plan.TypeRepId,
-        read_path: []const DescriptorReadStep,
-    ) Allocator.Error!void {
-        if (mapped.contains(desc)) return;
-        try self.putCallableAdapterDescriptorCaptureSource(mapped, desc, .{
-            .rep = root_materialize_rep,
-            .read_path = try self.parent.addDescriptorReadPath(read_path),
-        });
-    }
-
-    fn callableAdapterHasDescriptorParam(
-        self: *ProcBodyBuilder,
-        params: []const Plan.HiddenDescriptorParam,
-        desc: Plan.DescriptorRequirementId,
-    ) bool {
-        return self.hiddenDescriptorParamForRequirement(params, desc) != null;
-    }
-
-    fn hiddenDescriptorParamForRequirement(
-        self: *ProcBodyBuilder,
-        params: []const Plan.HiddenDescriptorParam,
-        desc: Plan.DescriptorRequirementId,
-    ) ?Plan.HiddenDescriptorParam {
-        const requirement = self.parent.plan.descriptors.items[@intFromEnum(desc)];
-        const identity_rep = self.repQuery().descriptorArgumentIdentityRep(requirement.rep);
-        var identity_match: ?Plan.HiddenDescriptorParam = null;
-        for (params) |param| {
-            if (param.desc == desc) return param;
-            if (self.repQuery().descriptorArgumentIdentityRep(param.rep) != identity_rep) continue;
-            if (identity_match != null) {
-                boxyLowerInvariant("boxy hidden descriptor ABI contained duplicate parameters for one identity");
-            }
-            identity_match = param;
-        }
-        return identity_match;
-    }
-
-    fn requireCallableAdapterDescriptorParam(
-        self: *ProcBodyBuilder,
-        params: []const Plan.HiddenDescriptorParam,
-        desc: Plan.DescriptorRequirementId,
-    ) Allocator.Error!void {
-        if (self.callableAdapterHasDescriptorParam(params, desc)) return;
-        boxyLowerInvariant("boxy callable adapter descriptor mapping found descriptor outside function params");
-    }
-
-    fn putCallableAdapterDescriptorCaptureSource(
-        _: *ProcBodyBuilder,
-        mapped: *collections.DenseMap(Plan.DescriptorRequirementId, CallableAdapterDescriptorCaptureSource),
-        desc: Plan.DescriptorRequirementId,
-        source: CallableAdapterDescriptorCaptureSource,
-    ) Allocator.Error!void {
-        const put = try mapped.getOrPut(desc);
-        if (put.found_existing) {
-            // Every insertion is derived from a representation whose exact
-            // descriptor requirement is `desc`. Repeated paths therefore
-            // describe the same immutable runtime descriptor identity; retain
-            // the first validated source as the capture read path.
-            return;
-        }
-        put.value_ptr.* = source;
-    }
-
     fn callableAdapterCaptureLayout(
         self: *ProcBodyBuilder,
         source_closure_layout: layout.Idx,
@@ -32827,7 +31996,7 @@ const ProcBodyBuilder = struct {
     ) Allocator.Error!void {
         try self.ensureDescriptorLocals();
         try self.markReadOnlyDescriptorInput(local);
-        const source_rep = self.callableAdapterCaptureSourceRep(capture);
+        const source_rep = capture.materialize_rep;
         try self.bindDescriptorRequirementLocalForRep(capture.desc, source_rep, local, false);
         try self.bindDescriptorIdentityLocalForRep(source_rep, local, false);
     }
@@ -32838,7 +32007,7 @@ const ProcBodyBuilder = struct {
         source_local: LIR.LocalId,
         initializers: *std.ArrayList(DescriptorArgLocal),
     ) Allocator.Error!void {
-        const source_rep = self.callableAdapterCaptureSourceRep(capture);
+        const source_rep = capture.materialize_rep;
         const target_local = if (self.representationBoundaryIsDirect(capture.rep, source_rep))
             source_local
         else adapted: {
@@ -32863,16 +32032,6 @@ const ProcBodyBuilder = struct {
 
         try self.bindDescriptorRequirementLocalForRep(capture.desc, capture.rep, target_local, true);
         try self.bindDescriptorIdentityLocalForRep(capture.rep, target_local, true);
-    }
-
-    fn callableAdapterCaptureSourceRep(
-        _: *const ProcBodyBuilder,
-        capture: CallableAdapterDescriptorCapture,
-    ) Plan.TypeRepId {
-        return if (capture.materialize_read_path.len == 0)
-            capture.materialize_rep
-        else
-            capture.rep;
     }
 
     fn repOwnsDescriptor(
@@ -37340,83 +36499,6 @@ const ProcBodyBuilder = struct {
                 boxyLowerInvariant("boxy callable use did not plan a descriptor capture source");
         }
         return result;
-    }
-
-    fn collectErasedCaptureDescriptorReps(
-        self: *ProcBodyBuilder,
-        worker_rep_id: Plan.TypeRepId,
-        call_rep_id: Plan.TypeRepId,
-        params: []const Plan.HiddenDescriptorParam,
-        mapped: *collections.DenseMap(Plan.DescriptorRequirementId, Plan.TypeRepId),
-        seen_rep_pairs: *std.AutoHashMap(u64, void),
-    ) Allocator.Error!bool {
-        const effective_call_rep_id = call_rep_id;
-        const pair_key = (@as(u64, @intFromEnum(worker_rep_id)) << 32) |
-            @as(u64, @intFromEnum(effective_call_rep_id));
-        const entry = try seen_rep_pairs.getOrPut(pair_key);
-        if (entry.found_existing) return true;
-
-        const worker_rep = self.parent.plan.representations.items[@intFromEnum(worker_rep_id)];
-        const call_rep = self.parent.plan.representations.items[@intFromEnum(effective_call_rep_id)];
-
-        if (worker_rep.descriptor) |worker_desc| {
-            const param = self.hiddenDescriptorParamForRequirement(params, worker_desc) orelse {
-                boxyLowerInvariant("boxy erased callable descriptor mapping found descriptor outside worker params");
-            };
-            const mapped_rep = try self.descriptorCaptureMaterializeRep(worker_rep_id, effective_call_rep_id);
-            const put = try mapped.getOrPut(param.desc);
-            if (put.found_existing and put.value_ptr.* != mapped_rep) {
-                boxyLowerInvariant("boxy erased callable descriptor mapping assigned one worker descriptor to two reps");
-            }
-            put.value_ptr.* = mapped_rep;
-        }
-
-        if (worker_rep.children.len == 0) return true;
-
-        if (call_rep.kind == .empty_tag_union) {
-            for (self.parent.plan.childSlice(worker_rep.children)) |worker_child| {
-                if (self.parent.plan.childIsSharedBackingTemplate(worker_rep_id, worker_child)) continue;
-                if (!try self.repQuery().repSubtreeHasDescriptor(worker_child.rep)) continue;
-                if (!try self.collectErasedCaptureDescriptorReps(worker_child.rep, effective_call_rep_id, params, mapped, seen_rep_pairs)) return false;
-            }
-            return true;
-        }
-
-        const worker_children = self.parent.plan.childSlice(worker_rep.children);
-        const call_children = self.parent.plan.childSlice(call_rep.children);
-        for (worker_children) |worker_child| {
-            if (self.parent.plan.childIsSharedBackingTemplate(worker_rep_id, worker_child)) continue;
-            if (!try self.repQuery().repSubtreeHasDescriptor(worker_child.rep)) continue;
-            if (self.namedQuery().findMatchingChildByRole(call_children, worker_child)) |call_child| {
-                if (!try self.collectErasedCaptureDescriptorReps(worker_child.rep, call_child.rep, params, mapped, seen_rep_pairs)) return false;
-                continue;
-            }
-            if (self.repQuery().structuralWrapperBackingRep(effective_call_rep_id)) |call_backing| {
-                const backing_children = self.parent.plan.childSlice(self.parent.plan.representations.items[@intFromEnum(call_backing)].children);
-                if (self.namedQuery().findMatchingChildByRole(backing_children, worker_child)) |call_child| {
-                    if (!try self.collectErasedCaptureDescriptorReps(worker_child.rep, call_child.rep, params, mapped, seen_rep_pairs)) return false;
-                    continue;
-                }
-            }
-            if (try self.namedQuery().findMatchingTagPayloadInRowExtension(call_children, worker_child)) |call_child| {
-                if (!try self.collectErasedCaptureDescriptorReps(worker_child.rep, call_child.rep, params, mapped, seen_rep_pairs)) return false;
-                continue;
-            }
-            if (try self.repQuery().findMatchingChildBySourceType(call_children, worker_child)) |call_child| {
-                if (!try self.collectErasedCaptureDescriptorReps(worker_child.rep, call_child.rep, params, mapped, seen_rep_pairs)) return false;
-                continue;
-            }
-            if (try self.repQuery().workerChildCanMatchUnwrappedCallRep(worker_rep_id, worker_child)) {
-                if (!try self.collectErasedCaptureDescriptorReps(worker_child.rep, effective_call_rep_id, params, mapped, seen_rep_pairs)) return false;
-                continue;
-            }
-            if (worker_child.role == .tag_ext and call_children.len == 0 and call_rep.descriptor != null) {
-                if (!try self.collectErasedCaptureDescriptorReps(worker_child.rep, effective_call_rep_id, params, mapped, seen_rep_pairs)) return false;
-                continue;
-            }
-            return false;
-        }
-        return true;
     }
 
     /// The value-side representation of each dictionary capture that the use's
