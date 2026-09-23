@@ -2952,10 +2952,24 @@ enclosing frame is generalization-safe in every nested frame, and re-recording
 it there would check the target's topological prefix inside the nested frame,
 where a prefix group can name that frame's still in-flight def and merge with
 it monomorphically instead of instantiating its finished scheme. The outermost
-active frame owns every remaining waiting constraint. A group checked from inside
-another definition's boundary also runs with no active scheme owner, exactly
-like a driver-initiated check, so a def's recorded scheme contents never
-depend on which definition's boundary caused it to be checked.
+active frame owns every remaining waiting constraint.
+
+The same nesting discipline governs a waiting constraint whose target is in
+flight. A constraint owned by frame F may merge monomorphically with a
+not-yet-generalized target (an in-flight def, or a checked member of a
+recursive group whose shared boundary has not run) only when the frame that
+will generalize the target is F itself (self-dispatch, an in-group member) or
+encloses F (a nested group's back-edge into a suspended ancestor's live vars).
+When the target's frame is nested inside F—F's own boundary is checking the
+target's group to resolve this constraint—the constraint keeps waiting and
+resolves against the target's finished scheme once that frame pops. Merging
+there would pull F's call-site types into the target's definition before it
+generalizes, so the target's own annotation would no longer match its body.
+
+A group checked from inside another definition's boundary also runs with no
+active scheme owner, exactly like a driver-initiated check, so a def's
+recorded scheme contents never depend on which definition's boundary caused it
+to be checked.
 
 Group suspension and merge need no dedicated machinery: a suspended group's
 members are `.processed` with still-live, not-yet-generalized vars, so a
