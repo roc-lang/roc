@@ -2020,7 +2020,15 @@ const ProcedureBuilder = struct {
         for (descriptor_sources.entries.items) |entry| {
             try slot_sources.put(self.allocator, entry.worker_desc, entry.source_rep);
         }
+        // The requirement's argument descriptors are attached to the adapter's
+        // argument locals from `requirement_sources` above; this scope
+        // materializes the worker's descriptors. A requirement descriptor can
+        // name a worker descriptor only when the worker is the method whose
+        // own requirement it satisfies at another instantiation (`Dict.is_eq`
+        // comparing a nested `Dict`), and there the worker's instantiation
+        // governs.
         for (requirement_sources.entries.items) |entry| {
+            if (descriptor_sources.get(entry.worker_desc) != null) continue;
             try slot_sources.put(self.allocator, entry.worker_desc, entry.source_rep);
         }
         var desc_context = StaticDescInstantiationContext{};
@@ -4908,6 +4916,8 @@ const ProcedureBuilder = struct {
         for (self.result.boxy_type_descs.items, 0..) |desc, parent_index| {
             const parent: LIR.BoxyTypeDescId = @enumFromInt(@as(u32, @intCast(parent_index)));
             try self.collectDescriptorGraphRefs(desc.nested_descs, parent, captures, parents);
+            try self.collectDescriptorGraphRefs(desc.inspect_arg_descs, parent, captures, parents);
+            try self.collectDescriptorGraphRefs(desc.inspect_hidden_descs, parent, captures, parents);
             if (desc.tag_ext_desc) |desc_ref| {
                 try self.collectDescriptorGraphRef(desc_ref, parent, captures, parents);
             }
@@ -12712,6 +12722,9 @@ const ProcBodyBuilder = struct {
         env_ids: std.AutoHashMap(DescriptorTemplateEnvKey, DescriptorTemplateEnvId),
         bindings: std.ArrayList(DescriptorTemplateBinding),
         forced_refs: []?LIR.LocalId,
+        /// The environment of the root's own instantiation, where descriptor
+        /// locals named by representation describe what they were bound to.
+        root_env: ?DescriptorTemplateEnvId = null,
         exact_reps: []?Plan.TypeRepId,
         exact_storage: bool,
         env: DescriptorTemplateEnvId = .empty,
@@ -14611,41 +14624,23 @@ const ProcBodyBuilder = struct {
         next: LIR.CFStmtId,
     ) Allocator.Error!LIR.CFStmtId {
         const plan = self.staticDispatchPlan(maybe_plan);
-        const eq = switch (plan.result_mode) {
-            .equality => |eq| eq,
+        switch (plan.result_mode) {
+            .equality => {},
             .value, .hash, .parser_for, .encoder_for, .map, .map_effectful => boxyLowerInvariant("checked method equality used a non-equality dispatch plan"),
-        };
-        switch (plan.resolution) {
-            .direct_closed, .direct_parametric => {
-                if (!checkedTypeUsesBuiltinStructuralEquality(self.module, plan.dispatcher_ty)) {
-                    return try self.lowerDispatchCallInto(target, plan.expr, maybe_plan, next);
-                }
-            },
-            .direct_pending => boxyLowerInvariant("unfinalized direct call reached Boxy lowering"),
+        }
+        // Equality follows the checked resolution: a builtin nominal's
+        // `is_eq` is its own method (`Dict` and `Set` compare contents, not
+        // their hash tables), exactly as for any other nominal.
+        return switch (plan.resolution) {
+            .direct_closed,
+            .direct_parametric,
             .evidence_dependent,
             .structural,
-            => return try self.lowerDispatchCallInto(target, plan.expr, maybe_plan, next),
-            .checked_error => return try self.lowerUnexecutableDispatchInto("method dispatch failed to check"),
-            .@"unreachable" => return try self.lowerUnexecutableDispatchInto("dispatch on a value that can never exist"),
-        }
-
-        if (!eq.structural_allowed) {
-            boxyLowerInvariant("checked method equality reached structural lowering without structural equality permission");
-        }
-
-        const operands = plan.argsSlice(self.module.static_dispatch_plans);
-        if (operands.len != 2) {
-            boxyLowerInvariant("checked method equality dispatch plan did not carry two operands");
-        }
-        const lhs = switch (operands[0]) {
-            .checked_expr => |expr| expr,
-            .generated_interpolation_iter, .generated_numeral, .generated_quote => boxyLowerInvariant("checked method equality lhs was not a checked expression operand"),
+            => try self.lowerDispatchCallInto(target, plan.expr, maybe_plan, next),
+            .direct_pending => boxyLowerInvariant("unfinalized direct call reached Boxy lowering"),
+            .checked_error => try self.lowerUnexecutableDispatchInto("method dispatch failed to check"),
+            .@"unreachable" => try self.lowerUnexecutableDispatchInto("dispatch on a value that can never exist"),
         };
-        const rhs = switch (operands[1]) {
-            .checked_expr => |expr| expr,
-            .generated_interpolation_iter, .generated_numeral, .generated_quote => boxyLowerInvariant("checked method equality rhs was not a checked expression operand"),
-        };
-        return try self.lowerStructuralEqInto(target, lhs, rhs, self.repForType(plan.dispatcher_ty), eq.negated, next);
     }
 
     fn staticDispatchPlan(
@@ -20304,6 +20299,17 @@ const ProcBodyBuilder = struct {
         });
     }
 
+    /// Whether a boxed target position's formal is bound, by an enclosing
+    /// nominal scope, to a known actual. Such a box stores the actual's own
+    /// representation, which the target template describes; materialization
+    /// converts the source payload into it rather than boxing the source's
+    /// storage.
+    fn boxedTargetHasBoundActual(self: *const ProcBodyBuilder, rep_id: Plan.TypeRepId) bool {
+        const identity = self.descriptorStorageRep(rep_id);
+        const actual = self.nominalFormalActualBelow(self.nominal_formal_bindings.items.len, identity) orelse return false;
+        return !self.repIsBareDynamic(actual);
+    }
+
     fn adapterTupleDescriptorForCallBoundary(
         self: *ProcBodyBuilder,
         target_rep: Plan.TypeRepId,
@@ -20349,6 +20355,7 @@ const ProcBodyBuilder = struct {
             };
             const storage_layout = self.parent.recordPayloadFieldLayout(target_template.payload_layout, target_index);
             if (!self.parent.layoutIsBoxStorage(storage_layout)) continue;
+            if (self.boxedTargetHasBoundActual(target_child.rep)) continue;
 
             const target_nested_index = self.tupleElemNestedDescriptorIndex(target_tuple_rep, target_index) orelse
                 boxyLowerInvariant("erased boxy tuple adapter element had no target nested descriptor");
@@ -27791,6 +27798,13 @@ const ProcBodyBuilder = struct {
         rep_id: Plan.TypeRepId,
     ) Allocator.Error!LIR.BoxyDescRef {
         const identity_rep = self.parent.descriptorIdentityRep(rep_id);
+        if (try self.repDependsOnNominalFormals(identity_rep)) {
+            const materialization = try self.descriptorMaterializationForKnownRep(identity_rep);
+            if (materialization.captures.len != 0) {
+                boxyLowerInvariant("boxy descriptor reading bound nominal formals needed captured descriptors");
+            }
+            return materialization.desc;
+        }
         const rep = self.parent.plan.representations.items[@intFromEnum(identity_rep)];
         if (rep.descriptor) |desc| {
             if (self.descriptorBindingIsBoundForRep(identity_rep)) {
@@ -28610,7 +28624,13 @@ const ProcBodyBuilder = struct {
         const identity_payload_layout = self.parent.descriptorTemplatePayloadLayoutForRep(identity_rep);
         const shares_identity_storage = exact_payload_layout == identity_payload_layout;
         const may_reuse_whole_descriptor = !context.exact_storage or self.repIsBareDynamic(rep_id);
-        if (shares_identity_storage and may_reuse_whole_descriptor) {
+        // A local named by representation describes it under the bindings
+        // where it was made. A nominal's backing is shared by every
+        // instantiation, so a nested instantiation of the same nominal (a
+        // `Dict` inside a `Dict`) reaches the same rep as a different value.
+        const may_reuse_rep_local = shares_identity_storage and may_reuse_whole_descriptor and
+            !try self.descriptorTemplateRebindsRep(identity_rep, context);
+        if (may_reuse_rep_local) {
             if (context.forced_refs[@intFromEnum(identity_rep)]) |local| {
                 if (context.excluded_local == local) {
                     return .{ .static = try self.descriptorTemplateTypeDescForRep(rep_id, captures, context) };
@@ -28620,7 +28640,7 @@ const ProcBodyBuilder = struct {
             }
         }
         const rep = self.parent.plan.representations.items[@intFromEnum(identity_rep)];
-        if (shares_identity_storage and may_reuse_whole_descriptor) if (rep.descriptor) |desc| {
+        if (may_reuse_rep_local) if (rep.descriptor) |desc| {
             if (parent_desc == null or desc != parent_desc.?) {
                 if (self.descriptorLocalForRequirementAndRepOrNull(desc, identity_rep)) |local| {
                     if (self.descriptorBindingIsBoundForRep(identity_rep) and context.excluded_local != local) {
@@ -28633,6 +28653,54 @@ const ProcBodyBuilder = struct {
         return .{ .static = try self.descriptorTemplateTypeDescForRep(rep_id, captures, context) };
     }
 
+    /// Whether describing `rep_id` here reads a formal that this template's
+    /// descent has bound differently from the root's instantiation.
+    fn descriptorTemplateRebindsRep(
+        self: *ProcBodyBuilder,
+        rep_id: Plan.TypeRepId,
+        context: *const DescriptorTemplateContext,
+    ) Allocator.Error!bool {
+        const root_env = context.root_env orelse return false;
+        if (context.env == root_env or context.bindings.items.len == 0) return false;
+        var seen = collections.DenseMap(Plan.TypeRepId, void).init(self.parent.allocator);
+        defer seen.deinit();
+        return try self.descriptorTemplateRepReadsBoundFormal(rep_id, context, &seen);
+    }
+
+    fn descriptorTemplateRepReadsBoundFormal(
+        self: *ProcBodyBuilder,
+        rep_id: Plan.TypeRepId,
+        context: *const DescriptorTemplateContext,
+        seen: *collections.DenseMap(Plan.TypeRepId, void),
+    ) Allocator.Error!bool {
+        const entry = try seen.getOrPut(rep_id);
+        if (entry.found_existing) return false;
+        for (context.bindings.items) |binding| {
+            if (binding.formal == rep_id) return true;
+        }
+        const plan = self.parent.plan;
+        const rep = plan.representations.items[@intFromEnum(rep_id)];
+        // A nested nominal rebinds its own formals: only its actuals can read
+        // an enclosing binding.
+        if (rep.kind == .nominal and rep.nominal_backing_arg_substitutions.len != 0) {
+            var substitutions = plan.nominalBackingSubstitutions(rep.nominal_backing_arg_substitutions);
+            while (substitutions.next()) |substitution| {
+                if (try self.descriptorTemplateRepReadsBoundFormal(substitution.actual_rep, context, seen)) return true;
+            }
+            return false;
+        }
+        for (plan.childSlice(rep.children)) |child| {
+            if (!Plan.childCarriesRuntimeDescriptor(child.role)) continue;
+            if (try self.descriptorTemplateRepReadsBoundFormal(child.rep, context, seen)) return true;
+        }
+        for (plan.tagVariantSlice(rep.tag_variants)) |variant| {
+            for (plan.childSlice(variant.payloads)) |payload| {
+                if (try self.descriptorTemplateRepReadsBoundFormal(payload.rep, context, seen)) return true;
+            }
+        }
+        return false;
+    }
+
     fn descriptorTemplateTypeDescForRep(
         self: *ProcBodyBuilder,
         rep_id: Plan.TypeRepId,
@@ -28642,6 +28710,7 @@ const ProcBodyBuilder = struct {
         const rep_index = @intFromEnum(rep_id);
         const scope = try self.pushDescriptorTemplateExactReps(rep_id, context);
         defer popDescriptorTemplateExactReps(context, scope);
+        if (context.root_env == null) context.root_env = context.env;
         const desc_key = DescriptorTemplateDescKey{ .rep = rep_id, .env = context.env };
         if (context.ids.get(desc_key)) |existing| return existing;
 
@@ -30271,14 +30340,38 @@ const ProcBodyBuilder = struct {
             eq_target = raw;
         }
 
-        const source_desc = try self.descriptorRefForLocalOrKnownRep(lhs, rep_id);
-        return try self.parent.result.store.addCFStmt(.{ .assign_boxy_eq = .{
+        // A representation reading formals an enclosing nominal scope binds is
+        // described by a template, which may capture descriptor locals.
+        const identity_rep = self.parent.descriptorIdentityRep(rep_id);
+        const materialization: ?DescriptorMaterialization = if (self.parent.result.store.getLocal(lhs).boxy_desc == null and
+            try self.repDependsOnNominalFormals(identity_rep))
+            try self.descriptorMaterializationForKnownRep(identity_rep)
+        else
+            null;
+        const desc_local: ?LIR.LocalId = if (materialization) |m|
+            if (m.captures.len != 0) try self.addFrameLocal(.opaque_ptr) else null
+        else
+            null;
+        const source_desc: LIR.BoxyDescRef = if (desc_local) |local|
+            .{ .local = local }
+        else if (materialization) |m|
+            m.desc
+        else
+            try self.descriptorRefForLocalOrKnownRep(lhs, rep_id);
+        const eq = try self.parent.result.store.addCFStmt(.{ .assign_boxy_eq = .{
             .target = eq_target,
             .lhs = lhs,
             .rhs = rhs,
             .source_desc = source_desc,
             .source_mode = .borrow,
             .next = continuation,
+        } });
+        const local = desc_local orelse return eq;
+        return try self.parent.result.store.addCFStmt(.{ .assign_boxy_desc_ref = .{
+            .target = local,
+            .desc = materialization.?.desc,
+            .captures = materialization.?.captures,
+            .next = eq,
         } });
     }
 
@@ -33852,7 +33945,9 @@ const ProcBodyBuilder = struct {
                     try self.assignDynamicBoxToDynamicBoundary(target, source, identity_target_rep, identity_source_rep, next)
                 else
                     try self.assignDynamicBoxToDynamicBoundary(target, source, identity_target_rep, identity_source_rep, next),
-                .concrete => if (try self.assignConcreteTagUnionToDynamicBoundary(target, source, identity_target_rep, identity_source_rep, next)) |adapted|
+                .concrete => if (try self.assignConcreteToBoundDynamicBoundary(target, source, identity_target_rep, identity_source_rep, next)) |adapted|
+                    adapted
+                else if (try self.assignConcreteTagUnionToDynamicBoundary(target, source, identity_target_rep, identity_source_rep, next)) |adapted|
                     adapted
                 else blk: {
                     const source_info = if (self.parent.result.store.getLocal(source).boxy_desc) |desc|
@@ -33980,6 +34075,26 @@ const ProcBodyBuilder = struct {
                     ),
             },
         };
+    }
+
+    /// A dynamic target whose formal an enclosing nominal scope binds to a
+    /// known actual stores that actual's own representation. When the source
+    /// stores the actual differently, convert it into the actual's
+    /// representation first, then box that.
+    fn assignConcreteToBoundDynamicBoundary(
+        self: *ProcBodyBuilder,
+        target: LIR.LocalId,
+        source: LIR.LocalId,
+        target_rep: Plan.TypeRepId,
+        source_rep: Plan.TypeRepId,
+        next: LIR.CFStmtId,
+    ) Allocator.Error!?LIR.CFStmtId {
+        const actual = self.nominalFormalActualBelow(self.nominal_formal_bindings.items.len, target_rep) orelse return null;
+        if (self.repIsBareDynamic(actual)) return null;
+        if (self.representationBoundaryIsDirect(actual, source_rep)) return null;
+        const converted = try self.addFrameBoundaryTargetLocalForRep(actual);
+        const boxed = try self.assignRepresentationBoundary(target, converted, target_rep, actual, next);
+        return try self.assignRepresentationBoundary(converted, source, actual, source_rep, boxed);
     }
 
     fn assignDescriptorAwareNominalBoundary(
@@ -38315,25 +38430,6 @@ fn dispatchPlanForGeneratedRuntime(
         boxyLowerInvariant("stored serialization dispatch plan was outside its checked table");
     }
     return module.static_dispatch_plans.plans[raw];
-}
-
-fn checkedTypeUsesBuiltinStructuralEquality(module: ProcedureModuleView, checked_ty: checked.CheckedTypeId) bool {
-    return switch (resolvedTypePayload(module, checked_ty)) {
-        .nominal => |nominal| nominal.builtin != null,
-        .record,
-        .tuple,
-        .empty_record,
-        .tag_union,
-        .empty_tag_union,
-        => true,
-        .pending,
-        .err,
-        .flex,
-        .rigid,
-        .alias,
-        .function,
-        => false,
-    };
 }
 
 fn constTupleItemTypes(module: ProcedureModuleView, checked_ty: checked.CheckedTypeId) []const checked.CheckedTypeId {

@@ -9807,7 +9807,11 @@ const Builder = struct {
         var methods = std.ArrayList(DictionaryMethodEvidence).empty;
         defer methods.deinit(self.allocator);
         try methods.ensureTotalCapacity(self.allocator, selected.items.len);
-        for (selected.items, self.plan.dictionarySlice(dictionaries)) |entry, requirement| {
+        // analyzeType/ensureWorker can append dictionary requirements, growing
+        // the pool and invalidating any held slice; requirements are re-read
+        // by index on every iteration.
+        for (selected.items, 0..) |entry, requirement_index| {
+            const requirement = self.plan.dictionaries.items[dictionaries.start + requirement_index];
             const planned: DictionaryMethodEvidence = switch (entry.resolution) {
                 .direct => |node_id| blk: {
                     const node = view.static_dispatch_plans.evidenceNode(node_id);
