@@ -1152,6 +1152,8 @@ const DescriptorReadStep = union(enum) {
     nested: u32,
     tag_payload: LIR.BoxyTagPayloadRead,
     tag_ext,
+    /// The payload descriptor of a value stored in this committed Box layout.
+    box_payload: layout.Idx,
 };
 
 const CallableAdapterDescriptorCapture = struct {
@@ -1977,7 +1979,7 @@ const ProcedureBuilder = struct {
             !proc.representationBoundaryIsDirect(requirement_function.ret, worker_function.ret);
         for (worker_args, worker_arg_layouts, requirement_args) |worker_arg, worker_arg_layout, requirement_arg| {
             if (worker_arg_layout.layoutIdx() != proc.workerRuntimeLayoutForRep(requirement_arg.rep).layoutIdx() or
-                !proc.callableArgumentBoundaryIsDirect(worker_arg.rep, requirement_arg.rep))
+                !try proc.callableArgumentBoundaryIsDirect(worker_arg.rep, requirement_arg.rep))
             {
                 needs_adapter = true;
                 break;
@@ -2041,7 +2043,7 @@ const ProcedureBuilder = struct {
         defer self.allocator.free(worker_call_args);
         for (worker_args, worker_arg_layouts, requirement_args, 0..) |worker_arg, worker_arg_layout, requirement_arg, arg_index| {
             worker_call_args[arg_index] = if (worker_arg_layout.layoutIdx() == self.result.store.getLocal(proc.arg_locals.items[arg_index]).layout_idx and
-                proc.callableArgumentBoundaryIsDirect(worker_arg.rep, requirement_arg.rep))
+                try proc.callableArgumentBoundaryIsDirect(worker_arg.rep, requirement_arg.rep))
                 proc.arg_locals.items[arg_index]
             else
                 try proc.addFrameLocalForRuntimeRep(worker_arg_layout, worker_arg.rep);
@@ -11679,7 +11681,7 @@ const ProcedureBuilder = struct {
             if (function.arg_count != worker_fn.arg_count) boxyLowerInvariant("host wrapper argument arity mismatch");
             for (host_children[function.args_start..][0..function.arg_count], worker_children[worker_fn.args_start..][0..worker_fn.arg_count], 0..) |host_arg, worker_arg, index| {
                 const arg = try proc.addArgLocalForRep(host_arg.rep);
-                call_locals[index] = if (proc.callableArgumentBoundaryIsDirect(worker_arg.rep, host_arg.rep)) arg else try proc.addFrameLocalForRep(worker_arg.rep);
+                call_locals[index] = if (try proc.callableArgumentBoundaryIsDirect(worker_arg.rep, host_arg.rep)) arg else try proc.addFrameLocalForRep(worker_arg.rep);
             }
         }
         for (call_locals[host_args.len..]) |*local| local.* = try proc.addFrameLocal(.opaque_ptr);
@@ -26584,7 +26586,8 @@ const ProcBodyBuilder = struct {
             self.descriptorStorageRep(source_rep) == hidden_identity or
             self.descriptorStorageRep(call_arg_reps[index]) == hidden_identity;
         if (!whole_operand) {
-            return try self.sourceNestedDescriptorLocalForHiddenArg(source, source_rep, hidden_arg.rep);
+            const operand_position = hidden_arg.source_operand_rep orelse return null;
+            return try self.sourceNestedDescriptorLocalForHiddenArg(source, source_rep, self.descriptorStorageRep(operand_position));
         }
         if (self.parent.result.store.getLocal(source).boxy_desc) |existing| {
             if (existing.localOrNull()) |existing_local| {
@@ -26727,6 +26730,16 @@ const ProcBodyBuilder = struct {
             return false;
         }
 
+        if (current_rep.kind == .box) {
+            // A Box payload read is its own descriptor operation: Box
+            // descriptors are box-self or payload-direct.
+            const payload = self.parent.repQuery().requiredSingleChild(current_rep_identity, .box_payload);
+            try read_path.append(self.parent.allocator, .{ .box_payload = self.workerRuntimeLayoutForRep(current_rep_identity).layoutIdx() });
+            if (try self.findDescriptorReadPath(payload.rep, target_rep_id, read_path, active)) return true;
+            read_path.items.len -= 1;
+            return false;
+        }
+
         var record_field_index: u32 = 0;
         for (self.parent.plan.childSlice(current_rep.children)) |child| {
             if (child.role == .tag_ext) continue;
@@ -26738,8 +26751,6 @@ const ProcBodyBuilder = struct {
                 },
                 .tuple_elem => |index| self.parent.recordPayloadFieldLayout(payload_layout, index),
                 .list_elem => self.parent.listElementLayout(payload_layout),
-                // A Box payload read is its own descriptor operation, not a
-                // nested-index read.
                 .box_payload, .alias_backing, .alias_arg, .nominal_backing, .nominal_arg, .nominal_padding_field, .record_ext, .function_arg, .function_ret, .tag_payload, .tag_ext => continue,
             };
             const nested = self.nestedDescriptorRepForStorage(
@@ -28719,18 +28730,22 @@ const ProcBodyBuilder = struct {
                 .desc = source_desc,
                 .nested_index = switch (step) {
                     .nested => |nested_index| nested_index,
-                    .tag_payload, .tag_ext => null,
+                    .tag_payload, .tag_ext, .box_payload => null,
+                },
+                .box_payload_layout = switch (step) {
+                    .box_payload => |box_layout| box_layout,
+                    .nested, .tag_payload, .tag_ext => null,
                 },
                 .tag_payload = switch (step) {
                     .tag_payload => |payload| .{
                         .tag_name = payload.tag_name,
                         .payload_index = payload.payload_index,
                     },
-                    .nested, .tag_ext => null,
+                    .nested, .tag_ext, .box_payload => null,
                 },
                 .tag_ext = switch (step) {
                     .tag_ext => true,
-                    .nested, .tag_payload => false,
+                    .nested, .tag_payload, .box_payload => false,
                 },
                 .captures = if (read_index == 0) hidden.captures else LIR.LocalSpan.empty(),
                 .next = continuation,
@@ -31575,7 +31590,7 @@ const ProcBodyBuilder = struct {
         const target_args = self.functionArgChildren(target_function);
         const source_args = self.functionArgChildren(source_function);
         for (target_args, source_args) |target_arg, source_arg| {
-            if (!self.callableArgumentBoundaryIsDirect(target_arg.rep, source_arg.rep)) return true;
+            if (!try self.callableArgumentBoundaryIsDirect(target_arg.rep, source_arg.rep)) return true;
         }
 
         return !self.representationBoundaryIsDirect(target_function.ret, source_function.ret);
@@ -31631,10 +31646,21 @@ const ProcBodyBuilder = struct {
         self: *ProcBodyBuilder,
         target_rep: Plan.TypeRepId,
         source_rep: Plan.TypeRepId,
-    ) bool {
+    ) Allocator.Error!bool {
         if (!self.representationBoundaryIsDirect(target_rep, source_rep)) return false;
         if (target_rep == source_rep) return true;
-        return self.repIsFullyConcrete(target_rep) and self.repIsFullyConcrete(source_rep);
+        if (!self.repIsFullyConcrete(target_rep) or !self.repIsFullyConcrete(source_rep)) return false;
+        // An erased call passes each argument's descriptors keyed by that
+        // argument's descriptor positions, so the two sides must agree on them.
+        return !try self.repHasHiddenDescriptorParams(target_rep) and
+            !try self.repHasHiddenDescriptorParams(source_rep);
+    }
+
+    fn repHasHiddenDescriptorParams(self: *ProcBodyBuilder, rep_id: Plan.TypeRepId) Allocator.Error!bool {
+        var params = std.ArrayList(Plan.HiddenDescriptorParam).empty;
+        defer params.deinit(self.parent.allocator);
+        try self.collectAllHiddenDescriptorParamsForRep(rep_id, &params);
+        return params.items.len != 0;
     }
 
     fn emitCallableAdapterProc(
@@ -31745,7 +31771,7 @@ const ProcBodyBuilder = struct {
         const call_args = try self.parent.allocator.alloc(LIR.LocalId, source_function.arg_count);
         defer self.parent.allocator.free(call_args);
         for (source_args, target_args, target_arg_locals, call_args) |source_arg, target_arg, target_arg_local, *call_arg| {
-            call_arg.* = if (adapter_proc.callableArgumentBoundaryIsDirect(source_arg.rep, target_arg.rep))
+            call_arg.* = if (try adapter_proc.callableArgumentBoundaryIsDirect(source_arg.rep, target_arg.rep))
                 target_arg_local
             else
                 try adapter_proc.addFrameBoundaryTargetLocalForRep(source_arg.rep);

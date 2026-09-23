@@ -369,6 +369,9 @@ pub const DirectCallHiddenDescriptorArg = struct {
     /// The hidden representation is the entire call argument at
     /// `source_arg_index`, so the operand's own descriptor supplies it.
     whole_operand: bool = false,
+    /// The operand's representation at the hidden parameter's position in
+    /// the worker argument, when the operand's own descriptor reaches it.
+    source_operand_rep: ?TypeRepId = null,
     /// Row tails retain the descriptor of the original argument storage.
     argument_source: enum { adapted, original } = .adapted,
     /// Index in this call's hidden descriptor arguments of an earlier operand
@@ -8624,6 +8627,9 @@ const Builder = struct {
             const worker_arg = final_worker_children[worker_function.args_start + index];
             arg.whole_operand = self.repQuery().descriptorArgumentIdentityRep(arg.worker_rep) ==
                 self.repQuery().descriptorArgumentIdentityRep(worker_arg.rep);
+            if (!arg.whole_operand) {
+                arg.source_operand_rep = try self.operandRepAtWorkerPosition(worker_arg.rep, arg.worker_rep, operand_arg_reps[index]);
+            }
         }
 
         if (next_param != ordinary_params.len or pending.items.len != ordinary_params.len) {
@@ -9610,6 +9616,57 @@ const Builder = struct {
             }
             boxyPlanInvariant("boxy direct call hidden descriptor mapping saw mismatched child roles");
         }
+    }
+
+    /// The representation inside `operand_root` at the position `target`
+    /// occupies inside `worker_root`: the worker's runtime path to `target`,
+    /// followed role by role through the operand.
+    fn operandRepAtWorkerPosition(
+        self: *Builder,
+        worker_root: TypeRepId,
+        target: TypeRepId,
+        operand_root: TypeRepId,
+    ) Allocator.Error!?TypeRepId {
+        var path = std.ArrayList(RepChild).empty;
+        defer path.deinit(self.allocator);
+        var active = collections.DenseMap(TypeRepId, void).init(self.allocator);
+        defer active.deinit();
+        if (!try self.findWorkerRuntimePath(worker_root, self.repQuery().descriptorArgumentIdentityRep(target), &path, &active)) return null;
+
+        var current = operand_root;
+        for (path.items) |step| {
+            var candidate = current;
+            const next: RepChild = while (true) {
+                const children = self.plan.childSlice(self.plan.representations.items[@intFromEnum(candidate)].children);
+                if (self.namedQuery().findMatchingChildByRole(children, step)) |child| break child;
+                candidate = self.repQuery().structuralWrapperBackingRep(candidate) orelse return null;
+            };
+            current = next.rep;
+        }
+        return current;
+    }
+
+    fn findWorkerRuntimePath(
+        self: *Builder,
+        current: TypeRepId,
+        target: TypeRepId,
+        path: *std.ArrayList(RepChild),
+        active: *collections.DenseMap(TypeRepId, void),
+    ) Allocator.Error!bool {
+        if (self.repQuery().descriptorArgumentIdentityRep(current) == target) return true;
+        const entry = try active.getOrPut(current);
+        if (entry.found_existing) return false;
+        defer _ = active.remove(current);
+        var index: usize = 0;
+        while (index < self.plan.representations.items[@intFromEnum(current)].children.len) : (index += 1) {
+            const child = self.plan.children.items[self.plan.representations.items[@intFromEnum(current)].children.start + index];
+            if (!childCarriesRuntimeDescriptor(child.role)) continue;
+            if (self.plan.childIsSharedBackingTemplate(current, child)) continue;
+            try path.append(self.allocator, child);
+            if (try self.findWorkerRuntimePath(child.rep, target, path, active)) return true;
+            path.items.len -= 1;
+        }
+        return false;
     }
 
     const CallDescriptorRepSubstitution = struct {
