@@ -16672,7 +16672,6 @@ const ProcBodyBuilder = struct {
             boxyLowerInvariant("boxy nested callable use type was not a function representation");
         const capture_desc_sources = try self.erasedCaptureDescriptorSourcesForFunctionUse(
             worker_id,
-            value_function,
             captures,
             self.parent.plan.directCallHiddenDescriptorArgSlice(use.hidden_desc_args),
         );
