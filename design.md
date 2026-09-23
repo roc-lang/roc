@@ -12591,6 +12591,18 @@ been matched by checked tag identity, their payload descriptors align by the
 checked payload index. The adapter does not search ambient descriptor locals or
 reconstruct a nested source from layout shape.
 
+A dictionary requirement's type is written in the scheme variables of the
+worker receiving the dictionary, and a variable can appear there only inside a
+function-typed argument, or only in a where-clause and never in the worker's
+signature. The checked substitution of the call, callable use, or dispatch
+evidence edge that supplies a static dictionary names the type each of those
+variables took, so the plan records it as representation pairs on every
+dictionary method it builds. The adapter describes requirement positions that
+the call descriptors do not cover with those pairs. A dictionary method's own
+worker is likewise instantiated by its evidence edge's recorded substitution
+(`EvidenceNode.subst`); its enclosing descriptors take their types from that
+substitution.
+
 Boxy box/unbox/adapt operations are explicit LIR statements or explicit helper
 calls selected by the lowerer:
 

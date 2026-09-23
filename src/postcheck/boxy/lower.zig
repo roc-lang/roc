@@ -1525,6 +1525,7 @@ const ProcedureBuilder = struct {
                 if (exact_method) |method| method.worker_desc_args else null,
                 if (exact_method) |method| method.requirement_desc_sources else null,
                 if (exact_method) |method| method.hidden_desc_sources else null,
+                if (exact_method) |method| method.requirement_substitution else .{},
             );
             const method_adapter = try self.staticMethodAdapterForWorker(
                 resolved,
@@ -1944,6 +1945,7 @@ const ProcedureBuilder = struct {
         worker_desc_args: ?Plan.Span,
         requirement_desc_sources: ?Plan.Span,
         hidden_desc_sources: ?Plan.Span,
+        requirement_substitution: Plan.Span,
     ) Allocator.Error!LIR.LirProcSpecId {
         const worker = self.plan.workers.items[@intFromEnum(worker_id)];
         const worker_function = self.staticMethodFunctionForRep(worker.rep) orelse
@@ -2009,6 +2011,15 @@ const ProcedureBuilder = struct {
         var requirement_sources = StaticDescriptorSourceMap{};
         defer requirement_sources.deinit(self.allocator);
         try self.collectStaticMethodRequirementDescriptorSources(&descriptor_mapping, &requirement_sources);
+        // The requirement type is written in the scheme variables of the
+        // worker receiving this dictionary. Positions the call descriptors do
+        // not cover, such as inside a function-typed argument, take the type the
+        // supplying call's checked substitution gave the variable.
+        for (self.plan.schemeRepSubstitutionSlice(requirement_substitution)) |pair| {
+            const desc = self.plan.representations.items[@intFromEnum(pair.scheme_rep)].descriptor orelse continue;
+            if (requirement_sources.get(desc) != null) continue;
+            try requirement_sources.put(self.allocator, desc, pair.site_rep);
+        }
         var slot_sources = StaticDescriptorSourceMap{};
         defer slot_sources.deinit(self.allocator);
         for (descriptor_sources.entries.items) |entry| {

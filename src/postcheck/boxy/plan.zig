@@ -424,6 +424,22 @@ pub const DictionaryMethodEvidence = struct {
     requirement_desc_sources: Span = .{},
     requirement_desc_args: Span = .{},
     hidden_desc_sources: Span = .{},
+    /// The checked evidence edge that selected this method's target. Its
+    /// recorded substitution names the type each variable of the target's
+    /// scheme took at this edge, including variables its signature never
+    /// mentions (those reached only through its own where-clauses).
+    evidence_edge: ?EvidenceEdge = null,
+
+    /// The scheme variables of the worker this dictionary is passed to, as
+    /// the checked call supplying it instantiated them. The requirement type
+    /// is written in those variables, so a static dictionary's adapter
+    /// describes them with these representations.
+    requirement_substitution: Span = .{},
+
+    pub const EvidenceEdge = struct {
+        module: checked.ModuleId,
+        node: static_dispatch.EvidenceNodeId,
+    };
 
     pub const Resolution = union(enum) {
         worker: WorkerPlanId,
@@ -432,6 +448,13 @@ pub const DictionaryMethodEvidence = struct {
         checked_error,
         unreachable_value,
     };
+};
+
+/// One variable of a called worker's scheme together with the caller-side
+/// representation the call's checked substitution gave it.
+pub const SchemeRepSubstitution = struct {
+    scheme_rep: TypeRepId,
+    site_rep: TypeRepId,
 };
 
 /// One checked call-site instantiation of a worker type position.
@@ -945,6 +968,7 @@ pub const ProgramPlan = struct {
     dictionary_method_evidence: std.ArrayList(DictionaryMethodEvidence),
     dictionary_method_desc_sources: std.ArrayList(DictionaryMethodDescriptorSource),
     dictionary_method_hidden_desc_sources: std.ArrayList(DictionaryMethodHiddenDescriptorSource),
+    scheme_rep_substitutions: std.ArrayList(SchemeRepSubstitution),
     call_type_substitutions: std.ArrayList(CallTypeSubstitution),
     erased_captures: std.ArrayList(ErasedCapture),
     dictionaries: std.ArrayList(DictionaryRequirement),
@@ -999,6 +1023,7 @@ pub const ProgramPlan = struct {
             .dictionary_method_evidence = .empty,
             .dictionary_method_desc_sources = .empty,
             .dictionary_method_hidden_desc_sources = .empty,
+            .scheme_rep_substitutions = .empty,
             .call_type_substitutions = .empty,
             .erased_captures = .empty,
             .dictionaries = .empty,
@@ -1019,6 +1044,7 @@ pub const ProgramPlan = struct {
         self.erased_captures.deinit(self.allocator);
         self.call_type_substitutions.deinit(self.allocator);
         self.dictionary_method_hidden_desc_sources.deinit(self.allocator);
+        self.scheme_rep_substitutions.deinit(self.allocator);
         self.dictionary_method_desc_sources.deinit(self.allocator);
         self.dictionary_method_evidence.deinit(self.allocator);
         self.direct_call_hidden_dict_args.deinit(self.allocator);
@@ -1280,6 +1306,10 @@ pub const ProgramPlan = struct {
         span: Span,
     ) []const DictionaryMethodHiddenDescriptorSource {
         return self.dictionary_method_hidden_desc_sources.items[span.start .. span.start + span.len];
+    }
+
+    pub fn schemeRepSubstitutionSlice(self: *const ProgramPlan, span: Span) []const SchemeRepSubstitution {
+        return self.scheme_rep_substitutions.items[span.start .. span.start + span.len];
     }
 
     pub fn callTypeSubstitutionSlice(self: *const ProgramPlan, span: Span) []const CallTypeSubstitution {
@@ -8383,6 +8413,7 @@ const Builder = struct {
                 direct.ret_substitution.?.call_type,
                 call_view,
                 checked_evidence,
+                self.directCallSchemeSubstitution(direct),
             );
             self.plan.direct_calls.items[direct_index].hidden_dict_args = hidden_dict_args;
         }
@@ -8434,6 +8465,7 @@ const Builder = struct {
                     call.ret_type,
                     call_view,
                     checked_evidence,
+                    null,
                 );
         }
     }
@@ -9159,6 +9191,7 @@ const Builder = struct {
             ret_type,
             null,
             null,
+            null,
         );
     }
 
@@ -9170,10 +9203,12 @@ const Builder = struct {
         ret_type: CheckedTypeIdentity,
         evidence_view: ?ModuleView,
         evidence: ?[]const static_dispatch.CheckedEvidence,
+        scheme_substitution: ?SchemeCallSubstitution,
     ) Allocator.Error!Span {
         const worker = self.plan.workers.items[@intFromEnum(worker_id)];
         const params = self.plan.hiddenDictionaryParamSlice(worker.hidden_dicts);
         if (params.len == 0) return .{};
+        const requirement_substitution = try self.appendSchemeRepSubstitutions(scheme_substitution);
 
         const worker_function = (self.repQuery().functionChildren(worker.rep)) orelse
             boxyPlanInvariant("boxy worker call target with hidden dictionaries was not a function worker");
@@ -9258,6 +9293,7 @@ const Builder = struct {
                 evidence,
                 &next_evidence,
                 param.dictionaries,
+                requirement_substitution,
             );
             if (evidence_source.bound_evidence) |bound| {
                 const caller = caller_id orelse boxyPlanInvariant("forwarded checked dictionary had no calling worker");
@@ -9940,17 +9976,6 @@ const Builder = struct {
         }
     }
 
-    const CallDictionaryContext = struct {
-        caller_id: ?WorkerPlanId,
-        params: []const HiddenDictionaryParam,
-        next_param: *usize,
-        evidence_view: ?ModuleView,
-        evidence: ?[]const static_dispatch.CheckedEvidence,
-        next_evidence: *usize,
-        pending: *std.ArrayList(DirectCallHiddenDictionaryArg),
-        seen_reps: *collections.DenseMap(TypeRepId, void),
-    };
-
     const CallDictionaryRepSubstitution = struct {
         worker_rep: TypeRepId,
         call_rep: TypeRepId,
@@ -9986,118 +10011,6 @@ const Builder = struct {
             try self.entries.append(allocator, .{ .worker_rep = worker_rep, .call_rep = call_rep });
         }
     };
-
-    fn collectCallHiddenDictionaryArgs(
-        self: *Builder,
-        worker_rep_id: TypeRepId,
-        call_rep_id: TypeRepId,
-        context: *CallDictionaryContext,
-    ) Allocator.Error!void {
-        const rep_entry = try context.seen_reps.getOrPut(worker_rep_id);
-        if (rep_entry.found_existing) return;
-
-        const worker_rep = self.plan.representations.items[@intFromEnum(worker_rep_id)];
-        const call_rep = self.plan.representations.items[@intFromEnum(call_rep_id)];
-
-        if (worker_rep.dictionaries.len != 0) {
-            if (context.next_param.* >= context.params.len or !std.meta.eql(context.params[context.next_param.*].dictionaries, worker_rep.dictionaries)) {
-                boxyPlanInvariant("boxy direct call hidden dictionary order disagreed with worker dictionary params");
-            }
-            context.next_param.* += 1;
-            var dict_arg_rep_id = self.repQuery().dictionaryArgumentIdentityRep(call_rep_id);
-            const evidence_source = try self.callableEvidenceSource(context, worker_rep.dictionaries);
-            if (evidence_source.rep) |evidence_rep| {
-                dict_arg_rep_id = self.repQuery().dictionaryArgumentIdentityRep(evidence_rep);
-            }
-            const dict_arg_rep = self.plan.representations.items[@intFromEnum(dict_arg_rep_id)];
-            const source_is_bound = context.caller_id != null and self.workerBindsDictionarySpan(context.caller_id.?, dict_arg_rep.dictionaries);
-            var planned_method_evidence = evidence_source.method_evidence;
-            if (!source_is_bound) {
-                planned_method_evidence = try self.ensureStaticDictionaryWorkers(
-                    dict_arg_rep_id,
-                    worker_rep.dictionaries,
-                    evidence_source.method_evidence,
-                );
-            }
-            try context.pending.append(self.allocator, .{
-                .worker_dictionaries = worker_rep.dictionaries,
-                .source_type = dict_arg_rep.source_type,
-                .rep = dict_arg_rep_id,
-                .method_evidence = planned_method_evidence,
-                .source = if (source_is_bound)
-                    .{ .bound_dictionaries = dict_arg_rep.dictionaries }
-                else
-                    .{ .static_rep = dict_arg_rep_id },
-            });
-        }
-
-        if (worker_rep.children.len == 0) return;
-
-        // The recursion can analyze new types, growing the children pool and
-        // invalidating any held slice; children are re-read by index on every
-        // iteration.
-        if (call_rep.kind == .empty_tag_union) {
-            var child_index: usize = 0;
-            while (self.plan.dictionaryChildAt(worker_rep_id, child_index)) |worker_child| : (child_index += 1) {
-                if (self.plan.childIsSharedBackingTemplate(worker_rep_id, worker_child)) continue;
-                if (!try self.repQuery().repSubtreeHasDictionary(worker_child.rep)) continue;
-                try self.collectCallHiddenDictionaryArgs(worker_child.rep, call_rep_id, context);
-            }
-            return;
-        }
-
-        var child_index: usize = 0;
-        while (self.plan.dictionaryChildAt(worker_rep_id, child_index)) |worker_child| : (child_index += 1) {
-            const call_children = self.plan.childSlice(call_rep.children);
-            if (self.plan.childIsSharedBackingTemplate(worker_rep_id, worker_child)) continue;
-            if (!try self.repQuery().repSubtreeHasDictionary(worker_child.rep)) continue;
-            // A generic argument reachable through an unwrapped sibling (e.g. an
-            // alias's arg that also appears inside its backing) contributes its
-            // dictionary once, via that sibling; skip the duplicate here to
-            // mirror the worker param collection's per-rep dedup.
-            if (context.seen_reps.contains(worker_child.rep)) continue;
-            if (self.namedQuery().rowInstantiationTarget(worker_rep_id, call_rep_id, worker_child)) |row_target| {
-                try self.collectCallHiddenDictionaryArgs(worker_child.rep, row_target, context);
-                continue;
-            }
-            if (self.namedQuery().findMatchingChildByRole(call_children, worker_child)) |call_child| {
-                try self.collectCallHiddenDictionaryArgs(worker_child.rep, call_child.rep, context);
-                continue;
-            }
-            if (self.repQuery().structuralWrapperBackingRep(call_rep_id)) |call_backing| {
-                const backing_children = self.plan.childSlice(self.plan.representations.items[@intFromEnum(call_backing)].children);
-                if (self.namedQuery().findMatchingChildByRole(backing_children, worker_child)) |call_child| {
-                    try self.collectCallHiddenDictionaryArgs(worker_child.rep, call_child.rep, context);
-                    continue;
-                }
-            }
-            if (try self.namedQuery().findMatchingTagPayloadInRowExtension(call_children, worker_child)) |call_child| {
-                try self.collectCallHiddenDictionaryArgs(worker_child.rep, call_child.rep, context);
-                continue;
-            }
-            if (try self.repQuery().findMatchingDictionaryChildBySourceType(call_children, worker_child)) |call_child| {
-                try self.collectCallHiddenDictionaryArgs(worker_child.rep, call_child.rep, context);
-                continue;
-            }
-            if (self.workerPresenceSlotPayloadMatchesUnwrappedCallRep(worker_rep_id, call_rep_id, worker_child)) {
-                try self.collectCallHiddenDictionaryArgs(worker_child.rep, call_rep_id, context);
-                continue;
-            }
-            if (try self.repQuery().workerChildCanMatchUnwrappedCallRepForDictionaries(worker_rep_id, worker_child)) {
-                try self.collectCallHiddenDictionaryArgs(worker_child.rep, call_rep_id, context);
-                continue;
-            }
-            if (worker_child.role == .tag_ext and call_children.len == 0 and call_rep.dictionaries.len != 0) {
-                try self.collectCallHiddenDictionaryArgs(worker_child.rep, call_rep_id, context);
-                continue;
-            }
-            if (call_rep.kind == .dynamic and call_rep.children.len == 0 and call_rep.dictionaries.len != 0) {
-                try self.collectCallHiddenDictionaryArgs(worker_child.rep, call_rep_id, context);
-                continue;
-            }
-            boxyPlanInvariant("boxy direct call hidden dictionary mapping saw mismatched child roles");
-        }
-    }
 
     fn collectCallDictionaryRepSubstitutions(
         self: *Builder,
@@ -10186,25 +10099,13 @@ const Builder = struct {
         method_evidence: Span = .{},
     };
 
-    fn callableEvidenceSource(
-        self: *Builder,
-        context: *CallDictionaryContext,
-        dictionaries: Span,
-    ) Allocator.Error!CallableEvidenceSource {
-        return try self.evidenceDictionarySource(
-            context.evidence_view,
-            context.evidence,
-            context.next_evidence,
-            dictionaries,
-        );
-    }
-
     fn evidenceDictionarySource(
         self: *Builder,
         maybe_view: ?ModuleView,
         maybe_entries: ?[]const static_dispatch.CheckedEvidence,
         next_evidence: *usize,
         dictionaries: Span,
+        requirement_substitution: Span,
     ) Allocator.Error!CallableEvidenceSource {
         const entries = maybe_entries orelse return .{};
         const view = maybe_view orelse
@@ -10232,7 +10133,7 @@ const Builder = struct {
         for (selected.items, 0..) |entry, requirement_index| {
             // Analysis below can append requirements, so each one is read by id.
             const requirement = self.plan.dictionaries.items[dictionaries.start + requirement_index];
-            const planned: DictionaryMethodEvidence = switch (entry.resolution) {
+            var planned: DictionaryMethodEvidence = switch (entry.resolution) {
                 .direct => |node_id| blk: {
                     const node = view.static_dispatch_plans.evidenceNode(node_id);
                     const dispatcher = node.dispatcher_ty orelse
@@ -10262,15 +10163,19 @@ const Builder = struct {
                         self.workerCheckedTypeForSource(source, callable_type),
                         null,
                     );
+                    const evidence_edge: DictionaryMethodEvidence.EvidenceEdge = .{ .module = view.key, .node = node_id };
+                    try self.analyzeEvidenceEdgeSchemeSubstitution(evidence_edge);
                     break :blk .{
                         .requirement_type = requirement.fn_ty,
                         .callable_type = callable_type,
                         .resolution = .{ .worker = worker },
+                        .evidence_edge = evidence_edge,
                         .nested_dict_args = try self.materializeDictionaryMethodHiddenArgs(
                             worker,
                             callable_type,
                             view,
                             view.static_dispatch_plans.nestedEvidence(node),
+                            evidence_edge,
                         ),
                     };
                 },
@@ -10336,6 +10241,7 @@ const Builder = struct {
                     .resolution = .unreachable_value,
                 },
             };
+            planned.requirement_substitution = requirement_substitution;
             methods.appendAssumeCapacity(planned);
         }
         const method_start: u32 = @intCast(self.plan.dictionary_method_evidence.items.len);
@@ -10353,6 +10259,7 @@ const Builder = struct {
         callable_type: CheckedTypeIdentity,
         evidence_view: ModuleView,
         evidence: []const static_dispatch.CheckedEvidence,
+        evidence_edge: DictionaryMethodEvidence.EvidenceEdge,
     ) Allocator.Error!Span {
         const worker = self.plan.workers.items[@intFromEnum(worker_id)];
         if (worker.hidden_dicts.len == 0) return .{};
@@ -10376,6 +10283,7 @@ const Builder = struct {
             ret_type,
             evidence_view,
             evidence,
+            self.evidenceEdgeSchemeSubstitution(worker_id, evidence_edge),
         );
     }
 
@@ -10493,6 +10401,7 @@ const Builder = struct {
         self: *Builder,
         worker_id: WorkerPlanId,
         boundary_type: CheckedTypeIdentity,
+        evidence_edge: ?DictionaryMethodEvidence.EvidenceEdge,
     ) Allocator.Error!Span {
         const boundary_rep = self.plan.repForSourceType(boundary_type) orelse
             boxyPlanInvariant("dictionary method descriptor boundary type was not analyzed");
@@ -10507,12 +10416,77 @@ const Builder = struct {
             arg_type.* = arg.source_type;
         }
         const ret_type = self.plan.representations.items[@intFromEnum(boundary_function.ret)].source_type;
-        return try self.materializeWorkerCallHiddenDescriptorArgs(
+        return try self.materializeWorkerCallHiddenDescriptorArgsWithSubstitution(
             worker_id,
             arg_types,
             arg_types,
             ret_type,
+            null,
+            null,
+            if (evidence_edge) |edge| self.evidenceEdgeSchemeSubstitution(worker_id, edge) else null,
         );
+    }
+
+    /// The checked substitution a dispatch evidence edge applied to its
+    /// target's scheme, when checking instantiated one there.
+    fn evidenceEdgeSchemeSubstitution(
+        self: *Builder,
+        worker_id: WorkerPlanId,
+        edge: DictionaryMethodEvidence.EvidenceEdge,
+    ) ?SchemeCallSubstitution {
+        const site_view = self.moduleForId(edge.module);
+        const site_types = evidenceEdgeSiteTypes(site_view, edge.node);
+        if (site_types.len == 0) return null;
+        const scheme = self.workerSchemeVars(self.plan.workers.items[@intFromEnum(worker_id)].source) orelse return null;
+        if (scheme.vars.len != site_types.len) {
+            boxyPlanInvariant("checked evidence-edge substitution disagreed with its target scheme's variables");
+        }
+        return .{
+            .callee_view = scheme.view,
+            .scheme_vars = scheme.vars,
+            .site_view = site_view,
+            .site_types = site_types,
+        };
+    }
+
+    /// A call's checked substitution for its callee scheme, as representation
+    /// pairs.
+    fn appendSchemeRepSubstitutions(self: *Builder, maybe_substitution: ?SchemeCallSubstitution) Allocator.Error!Span {
+        const substitution = maybe_substitution orelse return .{};
+        const start: u32 = @intCast(self.plan.scheme_rep_substitutions.items.len);
+        for (substitution.scheme_vars, substitution.site_types) |scheme_var, site_type| {
+            if (substitution.site_view.checked_types.payload(site_type) == .err) continue;
+            const scheme_rep = self.plan.repForSourceType(typeRef(substitution.callee_view, scheme_var)) orelse continue;
+            const site_rep = self.plan.repForSourceType(typeRef(substitution.site_view, site_type)) orelse
+                boxyPlanInvariant("checked call-site substitution type was not analyzed");
+            try self.plan.scheme_rep_substitutions.append(self.allocator, .{
+                .scheme_rep = scheme_rep,
+                .site_rep = site_rep,
+            });
+        }
+        return .{ .start = start, .len = @as(u32, @intCast(self.plan.scheme_rep_substitutions.items.len)) - start };
+    }
+
+    /// An evidence edge's substitution names caller-side types that supply
+    /// its target's type-variable descriptors; they are analyzed when the
+    /// edge is planned, before descriptor requirements are fixed.
+    fn analyzeEvidenceEdgeSchemeSubstitution(self: *Builder, edge: DictionaryMethodEvidence.EvidenceEdge) Allocator.Error!void {
+        const site_view = self.moduleForId(edge.module);
+        for (evidenceEdgeSiteTypes(site_view, edge.node)) |site_type| {
+            if (site_view.checked_types.payload(site_type) == .err) continue;
+            _ = try self.analyzeType(site_view, site_type);
+        }
+    }
+
+    fn evidenceEdgeSiteTypes(view: ModuleView, node_id: static_dispatch.EvidenceNodeId) []const checked.CheckedTypeId {
+        const table = view.static_dispatch_plans;
+        const node = table.evidenceNode(node_id);
+        const start: usize = node.subst.start;
+        const len: usize = node.subst.len;
+        if (start > table.site_substitutions.len or len > table.site_substitutions.len - start) {
+            boxyPlanInvariant("checked evidence-edge substitution range was outside its checked module");
+        }
+        return table.site_substitutions[start .. start + len];
     }
 
     fn dictionaryMethodHiddenDescriptorSources(
@@ -10588,7 +10562,7 @@ const Builder = struct {
         for (self.plan.dictionary_method_evidence.items) |*method| {
             switch (method.resolution) {
                 .worker => |worker| {
-                    method.worker_desc_args = try self.dictionaryMethodWorkerDescriptorArgs(worker, method.callable_type);
+                    method.worker_desc_args = try self.dictionaryMethodWorkerDescriptorArgs(worker, method.callable_type, method.evidence_edge);
                     const requirement_plan = try self.dictionaryMethodRequirementDescriptorSources(
                         method.requirement_type,
                         method.callable_type,
@@ -12285,6 +12259,7 @@ const Builder = struct {
                     ret_type,
                     evidence.view,
                     evidence.entries,
+                    self.useSchemeSubstitution(use.worker, use.use),
                 );
         }
 
@@ -12398,6 +12373,7 @@ const Builder = struct {
             ret_type,
             view,
             evidence,
+            self.useSchemeSubstitution(use.worker, use.use),
         );
     }
 
