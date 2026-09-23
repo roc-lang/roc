@@ -328,7 +328,7 @@ associated_lookup_cache: std.AutoHashMapUnmanaged(AssociatedLookupCacheKey, ?Ass
 bool_var: Var,
 /// Copied Str type from Builtin module (for use in string literals, etc.)
 str_var: Var,
-/// Copied U64 type from Builtin module (for use in generated structural metadata counts, etc.)
+/// Copied U64 type from Builtin module (for generated structural metadata counts, etc.)
 u64_var: Var,
 /// Builtin type vars are initialized during Check.init and may be reused by later entrypoints.
 builtin_types_copied: bool,
