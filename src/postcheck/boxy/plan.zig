@@ -7785,7 +7785,11 @@ const Builder = struct {
                 .builtin_method => {},
             }
         }
-        if (methodOwnerForModuleType(view, rep.source_type.ty)) |owner| {
+        // Only the nominal's own representation owns its inspect method. A
+        // wrapper that shares the nominal's checked type (an alias, or a
+        // field-presence slot around it) reaches the method through its child.
+        const owns_methods = rep.kind == .nominal or rep.kind == .primitive;
+        if (if (owns_methods) methodOwnerForModuleType(view, rep.source_type.ty) else null) |owner| {
             if (self.lookupInspectOverride(view, owner)) |lookup| {
                 if (self.plan.inspectMethodForRep(rep_id) == null) {
                     const source = self.workerSourceForMethodTarget(lookup, rep.source_type, null);
