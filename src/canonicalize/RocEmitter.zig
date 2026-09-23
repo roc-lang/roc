@@ -406,6 +406,7 @@ fn fieldAccessPathReceiverNeedsParens(self: *Self, receiver_idx: Expr.Idx) bool 
             // so iteratively peel them before classifying surface precedence.
             .e_nominal => |nominal| current_idx = nominal.backing_expr,
             .e_nominal_external => |nominal| current_idx = nominal.backing_expr,
+            .e_deferred_import_ref => std.debug.panic("compiler invariant violated: deferred import reference reached Roc source emission", .{}),
 
             .e_str_segment,
             .e_str,
@@ -886,6 +887,7 @@ fn emitExprFrame(
         },
         .e_nominal => |nominal| try frames.append(allocator, .{ .expr = nominal.backing_expr }),
         .e_nominal_external => |nominal| try frames.append(allocator, .{ .expr = nominal.backing_expr }),
+        .e_deferred_import_ref => std.debug.panic("compiler invariant violated: deferred import reference reached Roc source emission", .{}),
         .e_lookup_required => try self.write("<required>"),
         .e_for => |for_expr| {
             try frames.append(allocator, .{ .expr = for_expr.body });
@@ -992,6 +994,7 @@ fn emitPatternFrame(
         .runtime_error => try self.write("<pattern_error>"),
         .nominal => |nom| try frames.append(allocator, .{ .pattern = nom.backing_pattern }),
         .nominal_external => |nom| try frames.append(allocator, .{ .pattern = nom.backing_pattern }),
+        .deferred_import_ref => std.debug.panic("compiler invariant violated: deferred import reference pattern reached Roc source emission", .{}),
         .small_dec_literal => |dec| try self.emitSmallDec(dec.value),
         .dec_literal => |dec| try self.emitScaledDec(dec.value.num, false),
         .frac_f32_literal => |frac| {

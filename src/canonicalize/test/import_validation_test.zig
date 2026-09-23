@@ -15,6 +15,7 @@ const Can = @import("../Can.zig");
 const ModuleEnv = @import("../ModuleEnv.zig");
 const CIR = @import("../CIR.zig");
 const BuiltinTestContext = @import("./BuiltinTestContext.zig").BuiltinTestContext;
+const ImportResolution = @import("../ImportResolution.zig");
 
 const CoreCtx = @import("ctx").CoreCtx;
 const testing = std.testing;
@@ -37,7 +38,6 @@ fn expectNoZeroTargetExternalLookup(env: *const ModuleEnv) error{TestUnexpectedR
 fn parseAndCanonicalizeSource(
     allocator: std.mem.Allocator,
     source: []const u8,
-    module_envs: ?*std.AutoHashMap(base.Ident.Idx, Can.AutoImportedType),
 ) Allocator.Error!struct {
     parse_env: *ModuleEnv,
     ast: *parse.AST,
@@ -66,7 +66,6 @@ fn parseAndCanonicalizeSource(
             .builtin_indices = builtin_ctx.builtin_indices,
         },
         .is_entry_module = true,
-        .imported_modules = module_envs,
     });
 
     return .{
@@ -75,6 +74,29 @@ fn parseAndCanonicalizeSource(
         .can = can,
         .builtin_ctx = builtin_ctx,
     };
+}
+
+/// Drain a canonicalized module's deferred import references against the same
+/// module environments the test set up as its imports.
+fn drainImports(
+    allocator: Allocator,
+    env: *ModuleEnv,
+    module_envs: *const std.AutoHashMap(base.Ident.Idx, Can.AutoImportedType),
+) Allocator.Error!void {
+    var imports = std.ArrayList(ImportResolution.ResolvedImport).empty;
+    defer imports.deinit(allocator);
+    var it = module_envs.iterator();
+    while (it.next()) |entry| {
+        try imports.append(allocator, .{
+            .import_name = env.getIdent(entry.key_ptr.*),
+            .resolution = .{ .available = .{
+                .module_env = entry.value_ptr.env,
+                .selected_type_decl = entry.value_ptr.statement_idx,
+            } },
+        });
+    }
+    try ImportResolution.resolveDeferredFileImports(env, .skip);
+    try ImportResolution.resolveDeferredImports(env, .{ .imports = .{ .explicit = imports.items } });
 }
 
 test "file imports reject absolute paths before recording dependencies" {
@@ -88,7 +110,7 @@ test "file imports reject absolute paths before recording dependencies" {
         \\main = data
     ;
 
-    var result = try parseAndCanonicalizeSource(allocator, source, null);
+    var result = try parseAndCanonicalizeSource(allocator, source);
     defer {
         result.can.deinit();
         allocator.destroy(result.can);
@@ -205,10 +227,10 @@ test "import validation - mix of MODULE NOT FOUND, TYPE NOT EXPOSED, VALUE NOT E
             .builtin_indices = builtin_ctx.builtin_indices,
         },
         .is_entry_module = true,
-        .imported_modules = &module_envs,
     });
     defer can.deinit();
     try can.canonicalizeFile();
+    try drainImports(allocator, parse_env, &module_envs);
     // Collect all diagnostics
     var module_not_found_count: u32 = 0;
     var value_not_exposed_count: u32 = 0;
@@ -322,10 +344,10 @@ test "import validation - type module associated values are importable via expos
             .builtin_indices = importer_builtin_ctx.builtin_indices,
         },
         .is_entry_module = true,
-        .imported_modules = &module_envs,
     });
     defer importer_can.deinit();
     try importer_can.canonicalizeFile();
+    try drainImports(allocator, importer_env, &module_envs);
 
     // The exposed associated value must resolve cleanly: no "value not exposed"
     // at the import, and no unresolved reference where `square` is used.
@@ -420,10 +442,10 @@ test "import validation - exposed nested type associated function resolves via s
             .builtin_indices = importer_builtin_ctx.builtin_indices,
         },
         .is_entry_module = true,
-        .imported_modules = &module_envs,
     });
     defer importer_can.deinit();
     try importer_can.canonicalizeFile();
+    try drainImports(allocator, importer_env, &module_envs);
 
     // The associated function reached through the exposed short name must
     // resolve. Any of these diagnostics on the importer means `Square.create`
@@ -524,10 +546,10 @@ test "import validation - exposing a type module's main type by name is not a re
             .builtin_indices = importer_builtin_ctx.builtin_indices,
         },
         .is_entry_module = true,
-        .imported_modules = &module_envs,
     });
     defer importer_can.deinit();
     try importer_can.canonicalizeFile();
+    try drainImports(allocator, importer_env, &module_envs);
 
     const diagnostics = try importer_env.getDiagnostics();
     defer allocator.free(diagnostics);
@@ -608,10 +630,10 @@ test "aliased package-qualified import resolves before the import statement" {
             .builtin_indices = app_builtin_ctx.builtin_indices,
         },
         .is_entry_module = true,
-        .imported_modules = &module_envs,
     });
     defer app_can.deinit();
     try app_can.canonicalizeFile();
+    try drainImports(allocator, &app_env, &module_envs);
 
     const make_ident = try app_env.insertIdent(base.Ident.for_text("make"));
     var found_make_lookup = false;
@@ -691,10 +713,10 @@ test "unresolved exposed value is not imported as external lookup target zero" {
             .builtin_indices = builtin_ctx.builtin_indices,
         },
         .is_entry_module = true,
-        .imported_modules = &module_envs,
     });
     defer importer_can.deinit();
     try importer_can.canonicalizeFile();
+    try drainImports(allocator, &importer_env, &module_envs);
 
     var found_missing_f = false;
     const importer_diagnostics = try importer_env.getDiagnostics();
@@ -767,7 +789,7 @@ test "import interner - Import.Idx functionality" {
         \\main = "test"
     ;
     // Parse and canonicalize without module validation to focus on Import.Idx
-    var result = try parseAndCanonicalizeSource(allocator, source, null);
+    var result = try parseAndCanonicalizeSource(allocator, source);
     defer {
         result.can.deinit();
         allocator.destroy(result.can);
@@ -825,7 +847,7 @@ test "import interner - many imports keep stable module identity keys" {
     }
     try source.appendSlice(allocator, "\nmain = \"test\"\n");
 
-    var result = try parseAndCanonicalizeSource(allocator, source.items, null);
+    var result = try parseAndCanonicalizeSource(allocator, source.items);
     defer {
         result.can.deinit();
         allocator.destroy(result.can);
@@ -903,10 +925,10 @@ test "imported type-module tag rejects alias target" {
             .builtin_indices = builtin_ctx.builtin_indices,
         },
         .is_entry_module = true,
-        .imported_modules = &module_envs,
     });
     defer can.deinit();
     try can.canonicalizeFile();
+    try drainImports(allocator, &env, &module_envs);
 
     const diagnostics = try env.getDiagnostics();
     defer allocator.free(diagnostics);
@@ -989,10 +1011,10 @@ test "imported nested associated types resolve by qualified export key" {
             .builtin_indices = builtin_ctx.builtin_indices,
         },
         .is_entry_module = true,
-        .imported_modules = &module_envs,
     });
     defer can.deinit();
     try can.canonicalizeFile();
+    try drainImports(allocator, &env, &module_envs);
 
     const diagnostics = try env.getDiagnostics();
     defer allocator.free(diagnostics);

@@ -1232,6 +1232,7 @@ fn countMatchExprRoots(test_env: *const TestEnv) usize {
             .e_break,
             .e_run_low_level,
             => {},
+            .e_deferred_import_ref => std.debug.panic("compiler invariant violated: deferred import reference reached a stage that runs after import resolution", .{}),
         }
     }
     return count;

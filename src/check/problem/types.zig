@@ -82,6 +82,7 @@ pub const Problem = union(enum) {
     non_exhaustive_destructure: NonExhaustiveDestructure,
     redundant_pattern: RedundantPattern,
     unmatchable_pattern: UnmatchablePattern,
+    match_alt_binder_missing: MatchAltBinderMissing,
     unreachable_code: UnreachableCode,
     comptime_unused_branch: ComptimeUnusedBranch,
     comptime_condition: ComptimeCondition,
@@ -498,8 +499,8 @@ pub const CrossModuleImport = struct {
 /// Problem data for a non-exhaustive match expression
 pub const NonExhaustiveMatch = struct {
     match_expr: CIR.Expr.Idx,
-    /// Snapshot of the condition type for error messages
-    condition_snapshot: SnapshotContentIdx,
+    /// Checked display text, retained independently of solver snapshots.
+    condition_type: ExtraStringIdx,
     /// Range into the problems store's missing_patterns_backing for pattern indices
     missing_patterns: MissingPatternsRange,
     /// This was discovered by compile-time evaluation taking the generated miss branch.
@@ -509,8 +510,8 @@ pub const NonExhaustiveMatch = struct {
 /// Problem data for a non-exhaustive destructuring pattern
 pub const NonExhaustiveDestructure = struct {
     pattern: CIR.Pattern.Idx,
-    /// Snapshot of the destructured value type for error messages
-    value_snapshot: SnapshotContentIdx,
+    /// Checked display text, retained independently of solver snapshots.
+    value_type: ExtraStringIdx,
     /// Range into the problems store's missing_patterns_backing for pattern indices
     missing_patterns: MissingPatternsRange,
     /// This was discovered by compile-time evaluation taking the generated miss branch.
@@ -549,6 +550,20 @@ pub const UnmatchablePattern = struct {
     match_expr: CIR.Expr.Idx,
     num_branches: u32,
     problem_branch_index: u32,
+};
+
+/// A name bound by one `|` alternative of a match branch but not by another,
+/// so the branch body could not know its value when the other alternative matched.
+pub const MatchAltBinderMissing = struct {
+    match_expr: CIR.Expr.Idx,
+    binder_ident: Ident.Idx,
+    /// The alternative that does not bind the name.
+    missing_pattern: CIR.Pattern.Idx,
+    branch_index: u32,
+    /// Zero-based index of an alternative that binds the name.
+    bound_pattern_index: u32,
+    /// Zero-based index of the alternative that does not bind the name.
+    missing_pattern_index: u32,
 };
 
 /// Code that appears after an expression or statement that never returns.

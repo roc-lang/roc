@@ -81,6 +81,8 @@ pub const Tag = enum {
     expr_type_dispatch_call,
     expr_static_dispatch,
     expr_external_lookup,
+    expr_deferred_import_ref,
+    expr_deferred_nominal_external,
     expr_associated_lookup_local,
     expr_associated_lookup,
     expr_associated_lookup_resolved,
@@ -157,6 +159,7 @@ pub const Tag = enum {
     pattern_applied_tag,
     pattern_nominal,
     pattern_nominal_external,
+    pattern_deferred_import_ref,
     pattern_record_destructure,
     pattern_list,
     pattern_tuple,
@@ -337,6 +340,8 @@ pub const Payload = extern union {
     // === Expression payloads ===
     expr_var: ExprVar,
     expr_external_lookup: ExprExternalLookup,
+    expr_deferred_import_ref: ExprDeferredImportRef,
+    expr_deferred_nominal_external: ExprDeferredNominalExternal,
     expr_associated_lookup_local: ExprAssociatedLookupLocal,
     expr_associated_lookup: ExprAssociatedLookup,
     expr_associated_lookup_resolved: ExprAssociatedLookupResolved,
@@ -400,6 +405,7 @@ pub const Payload = extern union {
     pattern_num_literal: PatternNumLiteral,
     pattern_nominal: PatternNominal,
     pattern_nominal_external: PatternNominalExternal,
+    pattern_deferred_import_ref: PatternDeferredImportRef,
     pattern_small_dec_literal: PatternSmallDecLiteral,
     pattern_dec_literal: PatternDecLiteral,
     pattern_num_from_numeral_literal: PatternNumFromNumeralLiteral,
@@ -577,6 +583,22 @@ pub const Payload = extern union {
         module_idx: u32,
         target_node_idx: u32,
         ident_idx: u32,
+        _reserved: [4]u8 = .{ 0, 0, 0, 0 },
+    };
+    /// expr_deferred_import_ref: the deferred worklist entry that resolves
+    /// this node.
+    pub const ExprDeferredImportRef = extern struct {
+        ref: u32,
+        _unused: [2]u32 = .{ 0, 0 },
+        _reserved: [4]u8 = .{ 0, 0, 0, 0 },
+    };
+    /// expr_deferred_nominal_external: the deferred worklist entry that
+    /// resolves this node, and the backing value the imported nominal type is
+    /// applied to.
+    pub const ExprDeferredNominalExternal = extern struct {
+        ref: u32,
+        backing_span2_idx: u32, // Index into span2_data: (backing_expr, backing_type)
+        _unused: u32 = 0,
         _reserved: [4]u8 = .{ 0, 0, 0, 0 },
     };
 
@@ -987,6 +1009,15 @@ pub const Payload = extern union {
         module_idx: u32,
         target_node_idx: u32,
         backing_span2_idx: u32, // Index into span2_data: (backing_pattern, backing_type)
+        _reserved: [4]u8 = .{ 0, 0, 0, 0 },
+    };
+    /// pattern_deferred_import_ref: the deferred worklist entry that resolves
+    /// this node, and the backing pattern the imported nominal type is
+    /// matched against.
+    pub const PatternDeferredImportRef = extern struct {
+        ref: u32,
+        backing_span2_idx: u32, // Index into span2_data: (backing_pattern, backing_type)
+        _unused: u32 = 0,
         _reserved: [4]u8 = .{ 0, 0, 0, 0 },
     };
 

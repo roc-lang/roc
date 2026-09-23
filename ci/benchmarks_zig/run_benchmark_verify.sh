@@ -49,7 +49,6 @@ is_intentional_error_fixture() {
         allow_errors_type_mismatch.roc|\
         division_by_zero.roc|\
         erroneous_branch_not_taken.roc|\
-        inspect_wrong_sig_test.roc|\
         issue8433.roc|\
         issue8517.roc|\
         issue8826_full.roc|\

@@ -21,22 +21,18 @@ process! = |x| print_number!(multiply(x, 2))
 main! = process!(42)
 ~~~
 # EXPECTED
-NAME NOT IN SCOPE - function_no_annotation.md:9:21:9:33
+DOES NOT EXIST - function_no_annotation.md:9:21:9:33
 # PROBLEMS
 ~~~clojure
 (reports
 	(report
 		(severity runtime_error)
-		(title "Name Not In Scope")
+		(title "Does Not Exist")
 		(region (start 9 21) (end 9 33))
 		(headline
-			(reflow "Nothing is named ")
-			(annotated symbol-unqualified "line!")
-			(reflow " in this scope."))
+			(annotated symbol-unqualified "Stdout.line!")
+			(reflow " does not exist."))
 		(document
-			(reflow "Is it misspelled, or is there an import missing?")
-			(line-break)
-			(line-break)
 			(source-region (file "function_no_annotation.md") (start 9 21) (end 9 33) (annotation error) (line-text "print_number! = |n| Stdout.line!(n)")))))
 ~~~
 # TOKENS

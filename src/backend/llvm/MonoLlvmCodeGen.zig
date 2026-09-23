@@ -240,16 +240,6 @@ const max_wrapper_inline_stmts: usize = 32;
 /// size of a compressor's match extender, whose per-call cost in its callers'
 /// loops exceeds the work it does.
 const max_leaf_inline_stmts: usize = 400;
-/// Statement budget for a proc whose every callee is itself inlined
-/// everywhere, which makes it a leaf once those are expanded, to be inlined
-/// at call sites nested in at least two loops of the caller: a compressor's
-/// match search built on such a helper, called once per input position with
-/// a dozen words of arguments and results passing through memory. A site that
-/// deep pays the call often enough to be worth the body; one in an outer loop
-/// alone, run once per block, would only crowd the caller's inner loops.
-const max_expanded_leaf_inline_stmts: usize = 900;
-/// Loop nesting a call site needs before an expanded leaf is inlined there.
-const min_inline_site_loop_depth: u32 = 2;
 
 /// Lowers statement-only LIR procedures to LLVM bitcode.
 pub const MonoLlvmCodeGen = struct {
@@ -264,12 +254,6 @@ pub const MonoLlvmCodeGen = struct {
     /// Per proc, whether it is marked always-inline; see
     /// `computeInlineEverywhere`.
     inline_everywhere: std.ArrayList(bool) = .empty,
-    /// Per proc, whether its calls from deep inside a caller's loops are
-    /// marked always-inline; see `computeInlineEverywhere`.
-    inline_at_loop_sites: std.ArrayList(bool) = .empty,
-    /// For the proc being compiled, how many of its loops each statement
-    /// lies inside; absent means none.
-    stmts_in_loops: std.AutoHashMap(u32, u32),
     target: std.Target,
     triple: []const u8,
     data_layout: []const u8,
@@ -569,7 +553,6 @@ pub const MonoLlvmCodeGen = struct {
             .compiled_joins = std.AutoHashMap(u32, void).init(allocator),
             .stmt_incoming_counts = std.AutoHashMap(u32, u32).init(allocator),
             .stmt_entry_blocks = std.AutoHashMap(u32, LlvmBuilder.Function.Block.Index).init(allocator),
-            .stmts_in_loops = std.AutoHashMap(u32, u32).init(allocator),
             .loop_continue_blocks = .empty,
             .loop_break_blocks = .empty,
             .debug_inline_subprograms = std.AutoHashMap(u32, LlvmBuilder.Metadata).init(allocator),
@@ -615,8 +598,6 @@ pub const MonoLlvmCodeGen = struct {
     /// Releases backend-owned scratch maps.
     pub fn deinit(self: *MonoLlvmCodeGen) void {
         self.inline_everywhere.deinit(self.allocator);
-        self.inline_at_loop_sites.deinit(self.allocator);
-        self.stmts_in_loops.deinit();
         self.local_slot_storage.deinit(self.allocator);
         self.deferred_str_capture_storage.deinit(self.allocator);
         self.deferred_str_capture_actives.deinit(self.allocator);
@@ -1581,7 +1562,7 @@ pub const MonoLlvmCodeGen = struct {
             try self.boxyOutDescPtr("dict_thunk_runtime_desc")
         else
             null;
-        try self.callProcFunctionIndex(proc_fn, proc, wip.arg(1), args_buf, runtime_out_desc, false, false);
+        try self.callProcFunctionIndex(proc_fn, proc, wip.arg(1), args_buf, runtime_out_desc, false);
 
         const return_desc = if (runtime_out_desc) |runtime_desc_ptr|
             try self.loadPointer(runtime_desc_ptr)
@@ -1838,7 +1819,6 @@ pub const MonoLlvmCodeGen = struct {
         self.loop_break_blocks.clearRetainingCapacity();
         self.debug_inline_subprograms.clearRetainingCapacity();
         self.debug_inline_callsites.clearRetainingCapacity();
-        if (proc.body) |body| try self.collectStmtsInLoops(body) else self.stmts_in_loops.clearRetainingCapacity();
 
         const outer_subprogram = self.current_subprogram;
         const outer_debug_file = self.current_debug_file;
@@ -2096,7 +2076,7 @@ pub const MonoLlvmCodeGen = struct {
                 try self.boxyOutDescPtr("entry_runtime_desc")
             else
                 null;
-            try self.callProcFunctionIndex(proc_fn.?, proc, ret_slot, args_buf, runtime_out_desc, false, false);
+            try self.callProcFunctionIndex(proc_fn.?, proc, ret_slot, args_buf, runtime_out_desc, false);
         }
 
         if (ret_registers) |registers| {
@@ -2159,7 +2139,7 @@ pub const MonoLlvmCodeGen = struct {
             try self.boxyOutDescPtr("entry_runtime_desc")
         else
             null;
-        try self.callProcFunctionIndex(proc_fn, proc, ret_ptr, args_buf, runtime_out_desc, false, false);
+        try self.callProcFunctionIndex(proc_fn, proc, ret_ptr, args_buf, runtime_out_desc, false);
         _ = wip.retVoid() catch return error.OutOfMemory;
         try self.finishCurrentWipFunction();
     }
@@ -2815,10 +2795,9 @@ pub const MonoLlvmCodeGen = struct {
     /// checked wrapper around one operation, or a helper whose bounds checks
     /// each expand into a compare-and-branch pair, looks far larger to it
     /// than its LIR is. Two shapes are inlined everywhere: a handful of
-    /// statements with no loop, and a leaf of moderate size. A third, a
-    /// larger proc whose every callee is one of those, is inlined at the
-    /// call sites nested deep in a caller's loops, where the call is paid
-    /// often.
+    /// statements with no loop, and a leaf of moderate size. Larger bodies
+    /// remain ordinary calls, so LLVM can simplify them before deciding
+    /// whether to duplicate them into their callers.
     fn computeInlineEverywhere(self: *MonoLlvmCodeGen, procs: []const LirProcSpec) Error!void {
         const shapes = try self.allocator.alloc(InlineShape, procs.len);
         defer {
@@ -2832,79 +2811,12 @@ pub const MonoLlvmCodeGen = struct {
         }
         self.inline_everywhere.clearRetainingCapacity();
         try self.inline_everywhere.appendNTimes(self.allocator, false, procs.len);
-        self.inline_at_loop_sites.clearRetainingCapacity();
-        try self.inline_at_loop_sites.appendNTimes(self.allocator, false, procs.len);
         for (procs, 0..) |proc, i| {
             if (proc.body == null or proc.is_static_initializer) continue;
             const shape = &shapes[i];
             const wrapper = shape.count <= max_wrapper_inline_stmts and !shape.has_loop;
             const leaf = shape.count <= max_leaf_inline_stmts and shape.callees.items.len == 0 and !shape.opaque_call;
             self.inline_everywhere.items[i] = wrapper or leaf;
-        }
-        // A proc with one call site is LLVM's to inline: it does so once the
-        // callee has been simplified on its own, which comes out ahead of
-        // forcing the raw body in first. The forced sites are for procs with
-        // several callers, which LLVM prices by their expanded size.
-        const call_sites = try self.allocator.alloc(u32, procs.len);
-        defer self.allocator.free(call_sites);
-        @memset(call_sites, 0);
-        for (shapes) |shape| {
-            for (shape.callees.items) |callee| call_sites[@intFromEnum(callee)] += 1;
-        }
-        for (procs, 0..) |proc, i| {
-            if (proc.body == null or proc.is_static_initializer or self.inline_everywhere.items[i]) continue;
-            const shape = &shapes[i];
-            if (shape.opaque_call or shape.count > max_expanded_leaf_inline_stmts or call_sites[i] < 2) continue;
-            var expanded_leaf = true;
-            for (shape.callees.items) |callee| {
-                if (!self.inline_everywhere.items[@intFromEnum(callee)]) {
-                    expanded_leaf = false;
-                    break;
-                }
-            }
-            self.inline_at_loop_sites.items[i] = expanded_leaf;
-        }
-    }
-
-    /// Record how many loops each statement of `body` lies inside: a loop is
-    /// a join that one of the statements reachable from its body jumps back
-    /// to, and its members are everything so reachable.
-    fn collectStmtsInLoops(self: *MonoLlvmCodeGen, body: CFStmtId) Error!void {
-        self.stmts_in_loops.clearRetainingCapacity();
-        var visited = std.AutoHashMap(u32, void).init(self.allocator);
-        defer visited.deinit();
-        var work = std.ArrayList(CFStmtId).empty;
-        defer work.deinit(self.allocator);
-        var joins = std.ArrayList(struct { id: lir.LIR.JoinPointId, body: CFStmtId }).empty;
-        defer joins.deinit(self.allocator);
-        try work.append(self.allocator, body);
-        while (work.pop()) |stmt_id| {
-            const entry = try visited.getOrPut(@intFromEnum(stmt_id));
-            if (entry.found_existing) continue;
-            const stmt = self.store.getCFStmt(stmt_id);
-            if (stmt == .join) try joins.append(self.allocator, .{ .id = stmt.join.id, .body = stmt.join.body });
-            try lir.BodyClone.appendSuccessors(self.store, &work, stmt_id);
-        }
-        for (joins.items) |join| {
-            visited.clearRetainingCapacity();
-            var members = std.ArrayList(CFStmtId).empty;
-            defer members.deinit(self.allocator);
-            var loops = false;
-            try work.append(self.allocator, join.body);
-            while (work.pop()) |stmt_id| {
-                const entry = try visited.getOrPut(@intFromEnum(stmt_id));
-                if (entry.found_existing) continue;
-                try members.append(self.allocator, stmt_id);
-                const stmt = self.store.getCFStmt(stmt_id);
-                if (stmt == .jump and stmt.jump.target == join.id) loops = true;
-                try lir.BodyClone.appendSuccessors(self.store, &work, stmt_id);
-            }
-            if (!loops) continue;
-            for (members.items) |member| {
-                const depth = try self.stmts_in_loops.getOrPut(@intFromEnum(member));
-                if (!depth.found_existing) depth.value_ptr.* = 0;
-                depth.value_ptr.* += 1;
-            }
         }
     }
 
@@ -3854,7 +3766,6 @@ pub const MonoLlvmCodeGen = struct {
         args_ptr: LlvmBuilder.Value,
         out_desc_ptr: ?LlvmBuilder.Value,
         is_cold: bool,
-        inline_here: bool,
     ) Error!void {
         if ((proc.runtime_ret_desc != null) != (out_desc_ptr != null)) {
             llvmInvariantFmt(
@@ -3863,9 +3774,9 @@ pub const MonoLlvmCodeGen = struct {
             );
         }
         if (out_desc_ptr) |desc_ptr| {
-            _ = try self.callFunctionIndex(func, &.{ ret_ptr, args_ptr, desc_ptr }, is_cold, inline_here);
+            _ = try self.callFunctionIndex(func, &.{ ret_ptr, args_ptr, desc_ptr }, is_cold);
         } else {
-            _ = try self.callFunctionIndex(func, &.{ ret_ptr, args_ptr }, is_cold, inline_here);
+            _ = try self.callFunctionIndex(func, &.{ ret_ptr, args_ptr }, is_cold);
         }
     }
 
@@ -3919,11 +3830,7 @@ pub const MonoLlvmCodeGen = struct {
             try self.boxyOutDescPtr("direct_call_desc")
         else
             null;
-        const inline_here = !is_cold and !self.enable_default_platform_diagnostics and
-            self.inline_at_loop_sites.items.len > @intFromEnum(proc_id) and
-            self.inline_at_loop_sites.items[@intFromEnum(proc_id)] and
-            if (self.current_source_stmt) |stmt| (self.stmts_in_loops.get(@intFromEnum(stmt)) orelse 0) >= min_inline_site_loop_depth else false;
-        try self.callProcFunctionIndex(func, proc, self.slot(target).ptr, args_buf, out_desc_ptr, is_cold, inline_here);
+        try self.callProcFunctionIndex(func, proc, self.slot(target).ptr, args_buf, out_desc_ptr, is_cold);
         if (out_desc) |desc_local| {
             try self.prepareLocalWrite(desc_local);
             try self.storePointer(self.slot(desc_local).ptr, try self.loadPointer(out_desc_ptr.?));
@@ -4503,6 +4410,10 @@ pub const MonoLlvmCodeGen = struct {
                 try self.emitDecPow(target, arg_locals)
             else
                 try self.emitNumericFloatPow(target, arg_locals),
+            .num_atan2 => if (self.localLayout(target) == .dec)
+                try self.emitDecAtan2(target, arg_locals)
+            else
+                try self.emitNumericFloatAtan2(target, arg_locals),
             .num_sqrt => try self.emitNumericSqrt(target, GuardedList.at(arg_locals, 0)),
             .num_sin => try self.emitNumericUnaryMath(target, GuardedList.at(arg_locals, 0), .num_sin),
             .num_cos => try self.emitNumericUnaryMath(target, GuardedList.at(arg_locals, 0), .num_cos),
@@ -9512,10 +9423,35 @@ pub const MonoLlvmCodeGen = struct {
         try self.storeScalar(self.slot(target).ptr, target_layout, result);
     }
 
+    fn emitNumericFloatAtan2(self: *MonoLlvmCodeGen, target: LocalId, args: anytype) Error!void {
+        const target_layout = self.localLayout(target);
+        const target_ty: LlvmBuilder.Type = switch (target_layout) {
+            .f32 => .float,
+            .f64 => .double,
+            .bool, .str, .u8, .i8, .u16, .i16, .u32, .i32, .u64, .i64, .u128, .i128, .dec, .opaque_ptr, .zst, .u8x16, .i8x16, .u16x8, .i16x8, .u32x4, .i32x4, .u64x2, .i64x2, _ => return error.UnsupportedLowLevel,
+        };
+        const lhs = try self.coerceScalar(try self.loadScalar(self.slot(GuardedList.at(args, 0)).ptr, self.localLayout(GuardedList.at(args, 0))), target_ty, false);
+        const rhs = try self.coerceScalar(try self.loadScalar(self.slot(GuardedList.at(args, 1)).ptr, self.localLayout(GuardedList.at(args, 1))), target_ty, false);
+        const result = try self.callBuiltin(
+            LowLevelBuiltins.floatAtan2(target_layout == .f32).symbolName(),
+            target_ty,
+            &.{ target_ty, target_ty },
+            &.{ lhs, rhs },
+        );
+        try self.storeScalar(self.slot(target).ptr, target_layout, result);
+    }
+
     fn emitDecPow(self: *MonoLlvmCodeGen, target: LocalId, args: anytype) Error!void {
         const lhs = try self.loadScalar(self.slot(GuardedList.at(args, 0)).ptr, .dec);
         const rhs = try self.loadScalar(self.slot(GuardedList.at(args, 1)).ptr, .dec);
         const result = try self.callI128BinaryBuiltin(builtinSymbol(LowLevelBuiltins.decBinaryArith(.num_pow)), lhs, rhs);
+        try self.storeScalar(self.slot(target).ptr, .dec, result);
+    }
+
+    fn emitDecAtan2(self: *MonoLlvmCodeGen, target: LocalId, args: anytype) Error!void {
+        const lhs = try self.loadScalar(self.slot(GuardedList.at(args, 0)).ptr, .dec);
+        const rhs = try self.loadScalar(self.slot(GuardedList.at(args, 1)).ptr, .dec);
+        const result = try self.callI128BinaryBuiltin(builtinSymbol(LowLevelBuiltins.decBinaryArith(.num_atan2)), lhs, rhs);
         try self.storeScalar(self.slot(target).ptr, .dec, result);
     }
 
@@ -11339,8 +11275,8 @@ pub const MonoLlvmCodeGen = struct {
     fn emitRcHelperCall(self: *MonoLlvmCodeGen, helper_key: layout.RcHelperKey, atomicity: RcAtomicity, value_ptr: LlvmBuilder.Value, count_value: ?LlvmBuilder.Value) Error!void {
         const func = (try self.declareRcHelper(helper_key, atomicity)) orelse return;
         switch (helper_key.op) {
-            .incref => _ = try self.callFunctionIndex(func, &.{ value_ptr, count_value.? }, false, false),
-            .decref, .free => _ = try self.callFunctionIndex(func, &.{value_ptr}, false, false),
+            .incref => _ = try self.callFunctionIndex(func, &.{ value_ptr, count_value.? }, false),
+            .decref, .free => _ = try self.callFunctionIndex(func, &.{value_ptr}, false),
             .host_drop => llvmInvariantFmt("RC statement used a host-shaped drop adapter", .{}),
         }
     }
@@ -13042,18 +12978,14 @@ pub const MonoLlvmCodeGen = struct {
         return func;
     }
 
-    fn callFunctionIndex(self: *MonoLlvmCodeGen, func: LlvmBuilder.Function.Index, args: []const LlvmBuilder.Value, is_cold: bool, inline_here: bool) Error!LlvmBuilder.Value {
+    fn callFunctionIndex(self: *MonoLlvmCodeGen, func: LlvmBuilder.Function.Index, args: []const LlvmBuilder.Value, is_cold: bool) Error!LlvmBuilder.Value {
         const builder = self.builder orelse return error.CompilationFailed;
         const wip = self.wip orelse return error.CompilationFailed;
-        if (is_cold or inline_here) {
+        if (is_cold) {
             var attrs: LlvmBuilder.FunctionAttributes.Wip = .{};
             defer attrs.deinit(builder);
-            if (is_cold) {
-                try attrs.addFnAttr(.cold, builder);
-                try attrs.addFnAttr(.@"noinline", builder);
-            } else {
-                try attrs.addFnAttr(.alwaysinline, builder);
-            }
+            try attrs.addFnAttr(.cold, builder);
+            try attrs.addFnAttr(.@"noinline", builder);
             return wip.call(.normal, .ccc, attrs.finish(builder) catch return error.OutOfMemory, func.typeOf(builder), func.toValue(builder), args, "") catch return error.OutOfMemory;
         }
         return wip.call(.normal, .ccc, .none, func.typeOf(builder), func.toValue(builder), args, "") catch return error.OutOfMemory;
@@ -13548,4 +13480,157 @@ test "frozen callable procedures and explicit drop helpers are DLL exports on Wi
             try std.testing.expectEqual(.default, global.dll_storage_class);
         }
     }
+}
+
+/// Counts the call sites inside `function_name`'s printed body that carry a
+/// forced-inline attribute group. Textual IR names each distinct attribute
+/// group once and refers to it by index, so the forced groups are collected
+/// first and the call sites referring to them counted second.
+fn forcedInlineCallSites(gpa: Allocator, ir: []const u8, function_name: []const u8) (Allocator.Error || error{FunctionNotPrinted})!usize {
+    var forced_groups = std.AutoHashMap(u32, void).init(gpa);
+    defer forced_groups.deinit();
+    var groups = std.mem.splitScalar(u8, ir, '\n');
+    while (groups.next()) |line| {
+        const prefix = "attributes #";
+        if (!std.mem.startsWith(u8, line, prefix)) continue;
+        const rest = line[prefix.len..];
+        const digits_end = std.mem.findScalar(u8, rest, ' ') orelse continue;
+        if (std.mem.find(u8, rest, "alwaysinline") == null) continue;
+        try forced_groups.put(std.fmt.parseInt(u32, rest[0..digits_end], 10) catch continue, {});
+    }
+
+    const declaration = try std.fmt.allocPrint(gpa, "@{s}(", .{function_name});
+    defer gpa.free(declaration);
+    var sites: usize = 0;
+    var in_function = false;
+    var found_function = false;
+    var lines = std.mem.splitScalar(u8, ir, '\n');
+    while (lines.next()) |line| {
+        if (std.mem.startsWith(u8, line, "define ")) {
+            in_function = std.mem.find(u8, line, declaration) != null;
+            found_function = found_function or in_function;
+            continue;
+        }
+        if (std.mem.startsWith(u8, line, "}")) {
+            in_function = false;
+            continue;
+        }
+        if (!in_function) continue;
+        const hash = std.mem.findScalarLast(u8, line, '#') orelse continue;
+        if (hash == 0 or line[hash - 1] != ' ') continue;
+        const group = std.fmt.parseInt(u32, line[hash + 1 ..], 10) catch continue;
+        if (forced_groups.contains(group)) sites += 1;
+    }
+    // A zero count means nothing unless the caller was actually found.
+    if (!found_function) return error.FunctionNotPrinted;
+    return sites;
+}
+
+// repro for https://github.com/roc-lang/roc/issues/11451
+test "issue 11451: forced inlining at deep call sites is capped per caller" {
+    const gpa = std.testing.allocator;
+    var store = lir.LirStore.init(gpa);
+    defer store.deinit();
+    var layouts = try layout.Store.init(gpa, .u64);
+    defer layouts.deinit();
+
+    // A callee LLVM prices by its expanded size: past the leaf budget that
+    // would inline it everywhere, inside the expanded-leaf budget that forces
+    // it at call sites nested two loops deep, and calling nothing itself.
+    const callee_stmts = 880;
+    var callee_locals = std.ArrayList(LocalId).empty;
+    defer callee_locals.deinit(gpa);
+    const callee_arg = try store.addLocal(.{ .layout_idx = .i64 });
+    try callee_locals.append(gpa, callee_arg);
+    var callee_body = try store.addCFStmt(.{ .ret = .{ .value = callee_arg } });
+    for (0..callee_stmts) |_| {
+        const scratch = try store.addLocal(.{ .layout_idx = .i64 });
+        try callee_locals.append(gpa, scratch);
+        callee_body = try store.addCFStmt(.{ .assign_literal = .{
+            .target = scratch,
+            .value = .{ .i64_literal = .{ .value = 1, .layout_idx = .i64 } },
+            .next = callee_body,
+        } });
+    }
+    const callee_args = try store.addLocalSpan(&.{callee_arg});
+    const callee = try store.addProcSpec(.{
+        .name = .fromRaw(1),
+        .identity = lir.LIR.ProcIdentity.forTest(1),
+        .args = callee_args,
+        .frame_locals = try store.addLocalSpan(callee_locals.items),
+        .body = callee_body,
+        .ret_layout = .i64,
+    });
+
+    // One caller holding many of those call sites, each its own pair of
+    // nested loops, exactly as a view walker calling one step function from
+    // each of its loops does.
+    const deep_sites = 256;
+    var caller_locals = std.ArrayList(LocalId).empty;
+    defer caller_locals.deinit(gpa);
+    const caller_arg = try store.addLocal(.{ .layout_idx = .i64 });
+    try caller_locals.append(gpa, caller_arg);
+    const call_args = try store.addLocalSpan(&.{caller_arg});
+    var caller_body = try store.addCFStmt(.{ .ret = .{ .value = caller_arg } });
+    for (0..deep_sites) |site| {
+        const outer: lir.LIR.JoinPointId = @enumFromInt(@as(u32, @intCast(2 * site)));
+        const inner: lir.LIR.JoinPointId = @enumFromInt(@as(u32, @intCast(2 * site + 1)));
+        const result = try store.addLocal(.{ .layout_idx = .i64 });
+        try caller_locals.append(gpa, result);
+        const repeat_inner = try store.addCFStmt(.{ .jump = .{ .target = inner } });
+        const call = try store.addCFStmt(.{ .assign_call = .{
+            .target = result,
+            .proc = callee,
+            .args = call_args,
+            .next = repeat_inner,
+        } });
+        const repeat_outer = try store.addCFStmt(.{ .jump = .{ .target = outer } });
+        const inner_loop = try store.addCFStmt(.{ .join = .{
+            .id = inner,
+            .params = .empty(),
+            .body = call,
+            .remainder = repeat_outer,
+        } });
+        caller_body = try store.addCFStmt(.{ .join = .{
+            .id = outer,
+            .params = .empty(),
+            .body = inner_loop,
+            .remainder = caller_body,
+        } });
+    }
+    const caller = try store.addProcSpec(.{
+        .name = .fromRaw(2),
+        .identity = lir.LIR.ProcIdentity.forTest(2),
+        .args = .empty(),
+        .frame_locals = try store.addLocalSpan(caller_locals.items),
+        .body = caller_body,
+        .ret_layout = .i64,
+    });
+
+    var codegen = MonoLlvmCodeGen.init(gpa, &store, &.{}, &.{}, &.{});
+    defer codegen.deinit();
+    codegen.layout_store = &layouts;
+    var builder = try codegen.createBuilder("inline_budget");
+    defer builder.deinit();
+    codegen.builder = &builder;
+    defer codegen.builder = null;
+    try codegen.compileAllProcSpecs(store.getProcSpecs());
+
+    var ir: std.Io.Writer.Allocating = .init(gpa);
+    defer ir.deinit();
+    try builder.print(&ir.writer);
+    const caller_name = try std.fmt.allocPrint(gpa, "roc_proc_{d}", .{@intFromEnum(caller)});
+    defer gpa.free(caller_name);
+    const forced_sites = try forcedInlineCallSites(gpa, ir.written(), caller_name);
+
+    // What each forced site costs is the callee's whole body, expanded before
+    // LLVM simplifies it, and the passes that then run over the caller cost
+    // more than linearly in its size. Whatever budget the caller is given, it
+    // is a budget: it cannot be one copy per call site.
+    const max_forced_sites = 16;
+    if (forced_sites > max_forced_sites) std.debug.print(
+        "caller forced {d} of {d} call sites always-inline, {d} statements each\n",
+        .{ forced_sites, deep_sites, callee_stmts + 1 },
+    );
+    try std.testing.expect(forced_sites <= max_forced_sites);
 }

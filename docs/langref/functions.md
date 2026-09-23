@@ -43,11 +43,57 @@ that can reasonably be considered side effects:
 
 ## Effectful Functions
 
-TODO
+An _effectful function_ is a function that may perform [side effects](#side-effects) when it's called.
+For example, `echo!` is an effectful function which prints a string:
+
+```roc
+greet! : Str => {}
+greet! = |name| echo!("Hello, ${name}!")
+```
+
+A function is effectful if it calls another effectful function. Here, `greet!` is effectful because
+it calls `echo!`. The type of an effectful function uses `=>` instead of `->` (see
+[Function Type Annotations](#function-type-annotations)), and its name ends in `!` (see
+[`!` suffix in function names](#-suffix-in-function-names)).
+
+Effectful functions can only be called from within other effectful functions. That means
+[pure functions](#pure-functions) can't call them, and neither can top-level constants:
+
+```roc
+message = greet!("Sam") # Error: top-level values can't perform effects
+
+shout : Str -> {}
+shout = |name| greet!(name) # Error: this function is annotated as pure
+```
+
+This rule is what makes it possible for Roc to evaluate top-level constants and pure function calls
+at [compile time](compile-time), because it guarantees none of them will ever perform effects.
+
+Ultimately, every effectful function traces back to one provided by the [platform](platforms),
+because Roc code can only perform side effects by calling functions that the platform provides.
+The program's entry point is also effectful (for example, `main!`), so that it can call those
+functions. When the program runs, the platform calls the entry point, and the entry point calls
+other effectful functions as needed.
 
 ### Side Effects
 
-TODO
+A _side effect_ is anything a function does other than computing its return value from its
+arguments. Common examples include:
+
+- Reading or writing files
+- Printing to the terminal
+- Sending or receiving network requests
+- Reading the current time
+- Generating random numbers
+- Reading or changing any state that lives outside the function
+
+A function without side effects always returns the same answer when given the same arguments.
+That's not true of a function that reads the current time or a random number, and it's not true of
+a function whose return value depends on the contents of a file (which could change between calls).
+In Roc, those functions are all effectful.
+
+Some things that might seem like side effects are allowed in pure functions, such as crashing,
+memory allocation, and `dbg`; see [Pure Functions](#pure-functions) for details.
 
 ## Function Type Annotations
 
@@ -150,7 +196,36 @@ can be to other functions too.
 
 ### Self-Tail Calls
 
-TODO
+A _self-tail call_ is a tail call where a function calls itself. For example, here's a
+function which computes a factorial:
+
+```roc
+factorial : U64 -> U64
+factorial = |n| if n <= 1 1 else n * factorial(n - 1)
+```
+
+The recursive call `factorial(n - 1)` is _not_ a tail call, because after it returns, there's still
+work to do: its result gets multiplied by `n`. That means each call needs to remember its `n` until
+the recursive call returns, so calling `factorial(n)` requires `n` nested calls to be in progress
+at the same time, each one using some stack space.
+
+Here's a version that uses a self-tail call instead, by passing along an accumulated result as an
+extra argument:
+
+```roc
+factorial : U64 -> U64
+factorial = |n| factorial_help(n, 1)
+
+factorial_help : U64, U64 -> U64
+factorial_help = |n, acc| if n <= 1 acc else factorial_help(n - 1, n * acc)
+```
+
+Now the recursive call `factorial_help(n - 1, n * acc)` is the last thing the function does, so it's
+a self-tail call. This version is eligible for [tail-call optimization](#tail-call-optimization),
+which means it will run as a loop and can't overflow the stack.
+
+Rewriting a function to pass along an accumulator like this is a common way to turn a recursive
+call into a self-tail call.
 
 ### Tail-Call Optimization
 
@@ -160,7 +235,35 @@ Compilers can optimize tail calls in various ways. Here are some that Roc's comp
 
 #### Modulo Cons
 
-TODO
+Some recursive calls aren't tail calls, but are _almost_ tail calls: the only thing that happens
+to the result of the recursive call is that it gets wrapped in a tag, which is then returned.
+This is sometimes described as being a tail call _modulo cons_, where "cons" refers to constructing
+a value. Here's an example:
+
+```roc
+LinkedList(a) := [Nil, Cons(a, LinkedList(a))]
+
+count_up : U64, U64 -> LinkedList(U64)
+count_up = |current, end| {
+    if current >= end {
+        Nil
+    } else {
+        Cons(current, count_up(current + 1, end))
+    }
+}
+```
+
+The recursive call `count_up(current + 1, end)` is not a tail call, because after it returns, its
+result gets put inside a `Cons` tag. However, Roc's compiler performs an optimization called
+_tail recursion modulo cons_: when a self-recursive function's result is a tag of its own
+(recursive) return type, and a recursive call's result goes directly into that tag, the compiler
+allocates the tag first, and then has the recursive call write its result directly into the tag's
+payload. This way, nothing is left to do after the recursive call, so it becomes a loop just like
+a self-tail call would.
+
+This means that `count_up(0, 1_000_000)` builds a linked list with a million elements without
+overflowing the stack. It also means you don't need to rewrite functions like this one using an
+accumulator in order to get this benefit.
 
 ## Mutually Recursive Functions
 

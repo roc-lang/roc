@@ -8,6 +8,7 @@ const TestEnv = @import("./TestEnv.zig");
 const canonical = @import("../canonical_names.zig");
 const checked_ids = @import("../checked_ids.zig");
 const static_dispatch = @import("../static_dispatch_registry.zig");
+const checked_artifact = @import("../checked_artifact.zig");
 const TypedCIR = @import("../typed_cir.zig");
 const types = @import("types");
 
@@ -16,11 +17,25 @@ const ModuleEnv = can.ModuleEnv;
 const testing = std.testing;
 
 const MethodRegistryTestCheckedTypes = struct {
-    pub fn rootForSourceVar(
+    store: Store = .{},
+
+    const Store = struct {
+        pub fn payloadCount(_: Store) usize {
+            unreachable;
+        }
+
+        pub fn payload(_: Store, _: checked_ids.CheckedTypeId) checked_artifact.CheckedTypePayload {
+            unreachable;
+        }
+    };
+
+    pub fn publishMethodCallableType(
         _: *const @This(),
+        _: std.mem.Allocator,
         _: TypedCIR.Module,
+        _: *canonical.CanonicalNameStore,
         _: types.Var,
-    ) ?checked_ids.CheckedTypeId {
+    ) std.mem.Allocator.Error!checked_ids.CheckedTypeId {
         unreachable;
     }
 };
@@ -639,7 +654,7 @@ test "check type - record - opt - unset of missing field is a mismatch" {
     // Unsetting an Optional Field").
     try checkTypesModule(source, .fail_with,
         \\**Type Mismatch**
-        \\This record does not have a `wrold` field.
+        \\This record does not have a field named `wrold`.
         \\```roc
         \\my_record_b = { ..my_record_a, wrold: _  }
         \\```
@@ -1239,7 +1254,7 @@ test "check type - record - opt - conditional presence rejected (unannotated)" {
     // conditional stays a branch mismatch.
     try checkTypesModule(source, .fail_with,
         \\**Type Mismatch**
-        \\The second branch of this `if` does not match the previous branch .
+        \\The second branch of this `if` does not match the previous branch.
         \\```roc
         \\y_maybe = if True with_y else without_y
         \\```
@@ -2506,7 +2521,7 @@ test "check type - record - opt - optional access on missing field" {
     // Fields)", width absorption).
     try checkTypesModule(source, .fail_with,
         \\**Type Mismatch**
-        \\This record does not have a `world` field.
+        \\This record does not have a field named `world`.
         \\```roc
         \\use_it = my_record.?world ?? 7
         \\```
@@ -3304,6 +3319,58 @@ test "check type - def - call with wrong fn arity - too few" {
         \\    Str, U8 -> Str
         \\
         \\Are there any missing commas?
+        \\
+        \\
+        ,
+    );
+}
+
+test "check type - def - call of a non-function value" {
+    const source =
+        \\greeting : Str
+        \\greeting = "hello"
+        \\
+        \\test = greeting("world", 10.U8)
+    ;
+    try checkTypesModule(
+        source,
+        .fail_with,
+        \\**Not A Function**
+        \\The `greeting` value is not a function, but it was given 2 arguments.
+        \\```roc
+        \\test = greeting("world", 10.U8)
+        \\```
+        \\       ^^^^^^^^^^^^^^^^^^^^^^^^
+        \\
+        \\It has the type:
+        \\
+        \\    Str
+        \\
+        \\
+        ,
+    );
+}
+
+test "check type - def - call of an unnamed non-function value" {
+    const source =
+        \\r : { a : Str }
+        \\r = { a: "x" }
+        \\
+        \\test = (r.a)(1)
+    ;
+    try checkTypesModule(
+        source,
+        .fail_with,
+        \\**Not A Function**
+        \\This value is not a function, but it was given 1 argument.
+        \\```roc
+        \\test = (r.a)(1)
+        \\```
+        \\       ^^^^^^^^
+        \\
+        \\It has the type:
+        \\
+        \\    Str
         \\
         \\
         ,
@@ -4514,7 +4581,7 @@ test "check type - record access - field typo" {
     ;
     try checkTypesModule(source, .fail_with,
         \\**Type Mismatch**
-        \\This record does not have a `helo` field.
+        \\This record does not have a field named `helo`.
         \\```roc
         \\x = r.helo
         \\```
@@ -4601,7 +4668,7 @@ test "check type - record - update - fail - empty record" {
     // Number literal 10 used where Str is expected (data field type)
     try checkTypesModule(source, .fail_with,
         \\**Type Mismatch**
-        \\The `r` record does not have a `hello` field.
+        \\The `r` record does not have a field named `hello`.
         \\```roc
         \\  { ..r, hello: 10.U8 }
         \\```
@@ -4625,7 +4692,7 @@ test "check type - record - update - fail - missing field" {
     // Number literal 10 used where Str is expected (data field type)
     try checkTypesModule(source, .fail_with,
         \\**Type Mismatch**
-        \\This record does not have a `hllo` field.
+        \\This record does not have a field named `hllo`.
         \\```roc
         \\  { ..r, hllo: "goodbye" }
         \\```
@@ -6930,6 +6997,59 @@ test "qualified imports don't produce MODULE NOT FOUND during canonicalization" 
 }
 
 // Try with match and error propagation //
+
+test "check type - composed body preserves shared tagged callback errors" {
+    const source =
+        \\find = |query| {
+        \\    value = query({})?
+        \\    if value == 0 { Err(NotFound) } else { Ok(value) }
+        \\}
+        \\transaction = |query| {
+        \\    _ = find(query) ? Wrapped
+        \\    find(query)
+        \\}
+        \\success = transaction(|_| Ok(1.U64))
+        \\failure = transaction(|_| Err(QueryFailed("owned callback error")))
+    ;
+    var test_env = try TestEnv.init("Test", source);
+    defer test_env.deinit();
+    try test_env.assertNoErrors();
+}
+
+test "check type - wrapped try overlap reports the wrapper in either source order" {
+    for ([_]struct { source: []const u8, wrapper_line: u32 }{
+        .{
+            .source =
+            \\run = |save| {
+            \\    _ = save({})?
+            \\    _ = save({}) ? PersistFailed
+            \\    Ok({})
+            \\}
+            \\use = run(|_| Err(PersistFailed(Foo)))
+            ,
+            .wrapper_line = 3,
+        },
+        .{
+            .source =
+            \\run = |save| {
+            \\    _ = save({}) ? PersistFailed
+            \\    _ = save({})?
+            \\    Ok({})
+            \\}
+            \\use = run(|_| Err(PersistFailed(Foo)))
+            ,
+            .wrapper_line = 2,
+        },
+    }) |case| {
+        var test_env = try TestEnv.init("Test", case.source);
+        defer test_env.deinit();
+        try test_env.assertOneTypeErrorHighlightsWithin("Type Mismatch", .{
+            .line = case.wrapper_line,
+            .start_column = 9,
+            .end_column = 33,
+        });
+    }
+}
 
 test "check type - issue 11470 rejects wrapper overlap after instantiation" {
     const source =
@@ -11982,6 +12102,64 @@ test "check type - dispatch - inferred recursive nominal equality closes a concr
     var test_env = try TestEnv.init("Test", source);
     defer test_env.deinit();
     try test_env.assertNoErrors();
+}
+
+test "check type - recursive equality captures local values" {
+    var test_env = try TestEnv.init("Test",
+        \\compare_with = |expected, value| {
+        \\    Expr := [Leaf(Str), Next(Expr)].{
+        \\        is_eq = |self, other|
+        \\            match (self, other) {
+        \\                (Leaf(left), Leaf(right)) => left == expected and right == expected
+        \\                (Next(left), Next(right)) => left == right
+        \\                _ => False
+        \\            }
+        \\    }
+        \\    Expr.Next(Expr.Leaf(value)) == Expr.Next(Expr.Leaf(value))
+        \\}
+        \\same = compare_with("a", "a")
+        \\different = compare_with("b", "a")
+    );
+    defer test_env.deinit();
+    try test_env.assertNoErrors();
+}
+
+test "check type - recursive method captures a local comparison" {
+    var test_env = try TestEnv.init("Test",
+        \\compare_with = |expected, value| {
+        \\    Expr := [Leaf(Str), Next(Expr)].{
+        \\        matches = |self|
+        \\            match self {
+        \\                Next(next) => next.matches()
+        \\                Leaf(left) => left == expected
+        \\            }
+        \\    }
+        \\    Expr.Next(Expr.Leaf(value)).matches()
+        \\}
+        \\same = compare_with("a", "a")
+        \\different = compare_with("b", "a")
+    );
+    defer test_env.deinit();
+    try test_env.assertNoErrors();
+}
+
+test "check type - recursive equality rejects an unsupported captured comparison" {
+    var test_env = try TestEnv.init("Test",
+        \\compare_with = |expected, value| {
+        \\    Expr := [Leaf(Str -> Str), Next(Expr)].{
+        \\        is_eq = |self, other|
+        \\            match (self, other) {
+        \\                (Leaf(left), Leaf(right)) => left == expected and right == expected
+        \\                (Next(left), Next(right)) => left == right
+        \\                _ => False
+        \\            }
+        \\    }
+        \\    Expr.Next(Expr.Leaf(value)) == Expr.Next(Expr.Leaf(value))
+        \\}
+        \\result = compare_with(|x| x, |x| x)
+    );
+    defer test_env.deinit();
+    try test_env.assertFirstTypeError("Type Does Not Support Equality");
 }
 
 test "check type - recursive equality does not discharge a sibling missing method" {
