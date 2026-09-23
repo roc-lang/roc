@@ -649,22 +649,14 @@ pub const GeneratedParserFieldKind = union(enum) {
     },
 };
 
-/// How one generated parser worker reports an absent required record field.
+/// The checked error row one generated parser worker reports an absent
+/// required record field in. The row carries `MissingRequiredField(Str)`; the
+/// generated body constructs it with the field's renamed key at this checked
+/// contract error row, whichever representation the body's own result carries
+/// that row in.
 pub const GeneratedParserMissingRequiredField = struct {
     worker: WorkerPlanId,
-    failure: Failure,
-
-    /// The checked missing-field failure selected for this worker.
-    pub const Failure = union(enum) {
-        /// The parser error row retains `MissingRequiredField(Str)`; the
-        /// generated body constructs it with the field's renamed key at this
-        /// checked contract error row, whichever representation the body's
-        /// own result carries that row in.
-        missing_required_field_tag: CheckedTypeIdentity,
-        /// The parser error row omits that tag; the generated body calls the
-        /// format's checked `invalid_value` method with the remaining state.
-        invalid_value,
-    };
+    error_type: CheckedTypeIdentity,
 };
 
 /// Exact checked JSON-style Try handling consumed by a generated parser.
@@ -1284,13 +1276,14 @@ pub const ProgramPlan = struct {
         return self.generated_codec_call_types.items[span.start .. span.start + span.len];
     }
 
-    /// Returns the checked missing-field failure selected for a parser worker.
+    /// Returns the checked error row a parser worker reports a missing
+    /// required field in.
     pub fn generatedParserMissingRequiredField(
         self: *const ProgramPlan,
         worker: WorkerPlanId,
-    ) GeneratedParserMissingRequiredField.Failure {
+    ) CheckedTypeIdentity {
         for (self.generated_parser_missing_required_fields.items) |planned| {
-            if (planned.worker == worker) return planned.failure;
+            if (planned.worker == worker) return planned.error_type;
         }
         boxyPlanInvariant("generated record parser had no planned missing-required-field failure");
     }
@@ -3753,7 +3746,7 @@ const Builder = struct {
             }
             try self.planGeneratedParserShape(worker, parse_type, encoding_type);
         }
-        if (needs_required) try self.planGeneratedParserMissingRequiredField(worker, encoding_type);
+        if (needs_required) try self.planGeneratedParserMissingRequiredField(worker);
     }
 
     /// The format calls a generated list-shaped parser (a `List`, or a `Set`
@@ -3801,31 +3794,24 @@ const Builder = struct {
         _ = try self.ensureGeneratedCodecCall(worker, encoding_type, "skip_record_field", null);
     }
 
-    /// Select how `worker`'s generated record parser reports an absent required
-    /// field, from the same checked error row the checker finalized
-    /// (`finalizeGeneratedParserErrorMappings`): a row that retains
-    /// `MissingRequiredField(Str)` receives that tag directly; any other row
-    /// maps the failure through the format's checked `invalid_value` method.
+    /// Record the checked error row `worker`'s generated record parser reports
+    /// an absent required field in. The checker adds `MissingRequiredField(Str)`
+    /// to the error row of every derived parser that owns a required field.
     fn planGeneratedParserMissingRequiredField(
         self: *Builder,
         worker: WorkerPlanId,
-        encoding_type: CheckedTypeIdentity,
     ) Allocator.Error!void {
         for (self.plan.generated_parser_missing_required_fields.items) |planned| {
             if (planned.worker == worker) return;
         }
         const contract = self.generatedCodecContractForWorker(worker);
-        const failure: GeneratedParserMissingRequiredField.Failure =
-            if (checkedErrorRowHasTag(contract.view, contract.derivation.error_ty, "MissingRequiredField")) blk: {
-                _ = try self.analyzeType(contract.view, contract.derivation.error_ty);
-                break :blk .{ .missing_required_field_tag = typeRef(contract.view, contract.derivation.error_ty) };
-            } else blk: {
-                _ = try self.ensureGeneratedCodecCall(worker, encoding_type, "invalid_value", null);
-                break :blk .invalid_value;
-            };
+        if (!checkedErrorRowHasTag(contract.view, contract.derivation.error_ty, "MissingRequiredField")) {
+            boxyPlanInvariant("derived parser with a required field had no MissingRequiredField in its checked error row");
+        }
+        _ = try self.analyzeType(contract.view, contract.derivation.error_ty);
         try self.plan.generated_parser_missing_required_fields.append(self.allocator, .{
             .worker = worker,
-            .failure = failure,
+            .error_type = typeRef(contract.view, contract.derivation.error_ty),
         });
     }
 
