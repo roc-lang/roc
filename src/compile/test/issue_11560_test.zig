@@ -14,6 +14,7 @@ const alias_payload_app_path = "test/postcheck/issue_11560_unannotated_try_match
 const user_nominal_app_path = "test/postcheck/issue_11560_unannotated_try_match/user_nominal.roc";
 const opaque_record_app_path = "test/postcheck/issue_11560_unannotated_try_match/opaque_record.roc";
 const record_field_app_path = "test/postcheck/issue_11560_unannotated_try_match/record_field.roc";
+const callback_slot_app_path = "test/postcheck/issue_11560_unannotated_try_match/callback_slot.roc";
 
 fn runApp(lowered: *const lir.CheckedPipeline.LoweredProgram) RunError!void {
     var host = eval.RuntimeHostEnv.init(std.testing.allocator);
@@ -119,4 +120,14 @@ test "issue 11560: LSS lowers and runs the unannotated Try match through a recor
 // Boxy aligns both its descriptor and dictionary parameters through `Try`.
 test "issue 11560: Boxy lowers and runs the unannotated Try match through a record field" {
     try harness.runAppPathLoweredInspection(record_field_app_path, .{ .specialization_strategy = .boxy }, expectAppRunsSuccessfully);
+}
+
+test "issue 11560: LSS lowers and runs an unannotated closure in a Try callback slot" {
+    try harness.runAppPathLoweredInspection(callback_slot_app_path, .{ .specialization_strategy = .lss }, expectAppRunsSuccessfully);
+}
+
+// The closure's result is a structural row where the callback slot names
+// `Try`; Boxy aligns the callable through `Try` at the call and in its adapter.
+test "issue 11560: Boxy lowers and runs an unannotated closure in a Try callback slot" {
+    try harness.runAppPathLoweredInspection(callback_slot_app_path, .{ .specialization_strategy = .boxy }, expectAppRunsSuccessfully);
 }
