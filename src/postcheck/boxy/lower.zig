@@ -1681,7 +1681,7 @@ const ProcedureBuilder = struct {
         for (self.plan.childSlice(self.plan.representations.items[@intFromEnum(inspect.receiver_rep)].children)) |receiver_child| {
             const arg_index = switch (receiver_child.role) {
                 .nominal_arg => |index| index,
-                else => continue,
+                .alias_backing, .alias_arg, .nominal_backing, .nominal_padding_field, .record_field, .record_ext, .tuple_elem, .function_arg, .function_ret, .tag_payload, .tag_ext, .list_elem, .box_payload => continue,
             };
             const actual = self.nominalArgRep(worker_rep_id, arg_index) orelse
                 boxyLowerInvariant("inspected boxy representation lacked a type argument of its inspect override receiver");
@@ -1731,7 +1731,7 @@ const ProcedureBuilder = struct {
         for (self.plan.childSlice(self.plan.representations.items[@intFromEnum(rep_id)].children)) |child| {
             switch (child.role) {
                 .nominal_arg => |index| if (child.rep == arg_rep) return index,
-                else => {},
+                .alias_backing, .alias_arg, .nominal_backing, .nominal_padding_field, .record_field, .record_ext, .tuple_elem, .function_arg, .function_ret, .tag_payload, .tag_ext, .list_elem, .box_payload => {},
             }
         }
         return null;
@@ -1741,7 +1741,7 @@ const ProcedureBuilder = struct {
         for (self.plan.childSlice(self.plan.representations.items[@intFromEnum(rep_id)].children)) |child| {
             switch (child.role) {
                 .nominal_arg => |index| if (index == arg_index) return child.rep,
-                else => {},
+                .alias_backing, .alias_arg, .nominal_backing, .nominal_padding_field, .record_field, .record_ext, .tuple_elem, .function_arg, .function_ret, .tag_payload, .tag_ext, .list_elem, .box_payload => {},
             }
         }
         return null;
@@ -19798,8 +19798,8 @@ const ProcBodyBuilder = struct {
 
     /// The static template `info`'s descriptor instantiates, if any. A
     /// materialization that reads a nested descriptor instantiates the static
-    /// nested descriptor of its parent's template; other projections have no
-    /// static template.
+    /// nested descriptor of its parent's template; a read path, tag extension
+    /// read, or tag residual has no static template.
     fn resultDescriptorTemplate(
         info: ResultDescriptorSource,
         type_descs: []const LirProgram.BoxyTypeDesc,
@@ -28554,7 +28554,7 @@ const ProcBodyBuilder = struct {
         for (plan.childSlice(plan.representations.items[@intFromEnum(inspect.receiver_rep)].children)) |receiver_child| {
             const arg_index = switch (receiver_child.role) {
                 .nominal_arg => |index| index,
-                else => continue,
+                .alias_backing, .alias_arg, .nominal_backing, .nominal_padding_field, .record_field, .record_ext, .tuple_elem, .function_arg, .function_ret, .tag_payload, .tag_ext, .list_elem, .box_payload => continue,
             };
             const actual_arg = self.parent.nominalArgRep(rep_id, arg_index) orelse
                 boxyLowerInvariant("inspected boxy representation lacked a type argument of its inspect override receiver");
