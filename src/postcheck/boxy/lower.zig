@@ -4446,9 +4446,23 @@ const ProcedureBuilder = struct {
 
     /// Record field names for a record-shaped representation, in payload field
     /// order. Returns an empty span for non-record shapes (tuples and other
-    /// payloads print positionally).
+    /// payloads print positionally). An alias or backed nominal without
+    /// declared padding stores exactly its backing's fields in the backing's
+    /// order, so it names them; a structural record can then receive it by
+    /// field name.
     fn staticFieldNamesForRep(self: *ProcedureBuilder, rep_id: Plan.TypeRepId) Allocator.Error!LIR.BoxySpan {
-        const rep = self.plan.representations.items[@intFromEnum(rep_id)];
+        var structure_rep_id = rep_id;
+        for (0..self.plan.representations.items.len) |_| {
+            const wrapper = self.plan.representations.items[@intFromEnum(structure_rep_id)];
+            for (self.plan.declaredFieldSlice(wrapper.declared_fields)) |declared| {
+                if (declared.is_padding) break;
+            } else {
+                structure_rep_id = self.repQuery().structureBackingRep(structure_rep_id) orelse break;
+                continue;
+            }
+            break;
+        } else boxyLowerInvariant("cyclic record field name wrapper chain");
+        const rep = self.plan.representations.items[@intFromEnum(structure_rep_id)];
 
         var field_name_ids = std.ArrayList(LIR.BoxyNameId).empty;
         defer field_name_ids.deinit(self.allocator);
@@ -21418,7 +21432,7 @@ const ProcBodyBuilder = struct {
             ),
             .nominal => |kind| switch (kind) {
                 .transparent, .builtin_other => {
-                    const backing_ty = resolvedNominalBacking(self.module, tag_ty);
+                    const backing_ty = checkedTypeAtNominalBacking(self.module, tag_ty);
                     const backing_rep = self.repQuery().requiredSingleChild(rep_id, .nominal_backing).rep;
                     const scope = try self.enterNominalBackingFormalScope(rep_id);
                     defer self.dropNominalBackingFormalScope(scope);
@@ -24016,7 +24030,7 @@ const ProcBodyBuilder = struct {
             ),
             .nominal => |kind| switch (kind) {
                 .transparent, .builtin_other => {
-                    const backing_ty = resolvedNominalBacking(self.module, tag_ty);
+                    const backing_ty = checkedTypeAtNominalBacking(self.module, tag_ty);
                     const backing_rep = self.repQuery().requiredSingleChild(rep_id, .nominal_backing).rep;
                     const scope = try self.enterNominalBackingFormalScope(rep_id);
                     defer self.dropNominalBackingFormalScope(scope);
@@ -36840,7 +36854,7 @@ const ProcBodyBuilder = struct {
             ),
             .nominal => |kind| switch (kind) {
                 .transparent, .builtin_other => {
-                    const backing_ty = resolvedNominalBacking(self.module, tag_ty);
+                    const backing_ty = checkedTypeAtNominalBacking(self.module, tag_ty);
                     const backing_rep = self.repQuery().requiredSingleChild(rep_id, .nominal_backing).rep;
                     return try self.appliedTagPatternRepCanMiss(backing_ty, backing_rep, name, args, payload_can_miss);
                 },
@@ -38343,6 +38357,17 @@ fn resolvedNominalPayload(module: ProcedureModuleView, checked_ty: checked.Check
     return switch (resolvedTypePayload(module, checked_ty)) {
         .nominal => |nominal| nominal,
         .pending, .err, .flex, .rigid, .alias, .record, .tuple, .function, .empty_record, .tag_union, .empty_tag_union => boxyLowerInvariant("ConstStore nominal child lookup reached a non-nominal checked type"),
+    };
+}
+
+/// The checked type at a nominal representation's backing. A checked nominal
+/// names its backing template. Any other checked type is already the
+/// structure that the nominal instantiates at this position, as when an
+/// unannotated worker's structural row is instantiated by a call's `Try`.
+fn checkedTypeAtNominalBacking(module: ProcedureModuleView, checked_ty: checked.CheckedTypeId) checked.CheckedTypeId {
+    return switch (resolvedTypePayload(module, checked_ty)) {
+        .nominal => resolvedNominalBacking(module, checked_ty),
+        .pending, .err, .flex, .rigid, .alias, .record, .tuple, .function, .empty_record, .tag_union, .empty_tag_union => checked_ty,
     };
 }
 

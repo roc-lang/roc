@@ -12158,7 +12158,12 @@ formal bindings. Hidden descriptor and dictionary parameters, dictionary-call
 descriptors, erased captures, static dictionary descriptor sources, and
 callable adapters all use this one relation; an adapter relates its two
 callables in both directions, so it applies the relation with the wrapper on
-either side.
+either side. Lowering follows the same relation where a value crosses it: a
+tag expression or pattern whose checked type is the structure while its
+representation is the wrapper descends the wrapper's backing with the checked
+type unchanged, and the descriptor of an alias or backed nominal without
+declared padding names its backing record's fields, so a structural record
+receives the wrapper's value by field name.
 
 A callable parameter's descriptor source survives traversal from the arguments
 into the result. A result nominal's declaration formal resolves through its

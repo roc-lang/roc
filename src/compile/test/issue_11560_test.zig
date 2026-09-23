@@ -15,6 +15,8 @@ const user_nominal_app_path = "test/postcheck/issue_11560_unannotated_try_match/
 const opaque_record_app_path = "test/postcheck/issue_11560_unannotated_try_match/opaque_record.roc";
 const record_field_app_path = "test/postcheck/issue_11560_unannotated_try_match/record_field.roc";
 const callback_slot_app_path = "test/postcheck/issue_11560_unannotated_try_match/callback_slot.roc";
+const record_nominal_field_app_path = "test/postcheck/issue_11560_unannotated_try_match/record_nominal_field.roc";
+const function_value_app_path = "test/postcheck/issue_11560_unannotated_try_match/function_value.roc";
 
 fn runApp(lowered: *const lir.CheckedPipeline.LoweredProgram) RunError!void {
     var host = eval.RuntimeHostEnv.init(std.testing.allocator);
@@ -130,4 +132,24 @@ test "issue 11560: LSS lowers and runs an unannotated closure in a Try callback 
 // `Try`; Boxy aligns the callable through `Try` at the call and in its adapter.
 test "issue 11560: Boxy lowers and runs an unannotated closure in a Try callback slot" {
     try harness.runAppPathLoweredInspection(callback_slot_app_path, .{ .specialization_strategy = .boxy }, expectAppRunsSuccessfully);
+}
+
+test "issue 11560: LSS lowers and runs an unannotated field read on a transparent record nominal" {
+    try harness.runAppPathLoweredInspection(record_nominal_field_app_path, .{ .specialization_strategy = .lss }, expectAppRunsSuccessfully);
+}
+
+// The callee's open record receives the nominal's backing record by field
+// name, and the nominal's descriptor inspects as that record.
+test "issue 11560: Boxy lowers and runs an unannotated field read on a transparent record nominal" {
+    try harness.runAppPathLoweredInspection(record_nominal_field_app_path, .{ .specialization_strategy = .boxy }, expectAppRunsSuccessfully);
+}
+
+test "issue 11560: LSS lowers and runs an unannotated Try match passed as a function value" {
+    try harness.runAppPathLoweredInspection(function_value_app_path, .{ .specialization_strategy = .lss }, expectAppRunsSuccessfully);
+}
+
+// The erased worker's tag pattern has the callee's structural checked type
+// and the call's `Try` representation; Boxy matches through `Try`'s backing.
+test "issue 11560: Boxy lowers and runs an unannotated Try match passed as a function value" {
+    try harness.runAppPathLoweredInspection(function_value_app_path, .{ .specialization_strategy = .boxy }, expectAppRunsSuccessfully);
 }
