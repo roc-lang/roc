@@ -4515,6 +4515,26 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
                         return .{ .stack = .{ .offset = result_offset } };
                     }
 
+                    if (try self.boxyListElementDescForLocals(list_abi, &.{list_local}, null)) |boxy_elem| {
+                        const base_reg = frame_ptr;
+                        var builder = try Builder.init(&self.codegen.emit, &self.codegen.stack_offset);
+                        try builder.addLeaArg(base_reg, result_offset + list_field_offset);
+                        try builder.addMemArg(base_reg, list_off);
+                        try builder.addMemArg(base_reg, list_off + 8);
+                        try builder.addMemArg(base_reg, list_off + 16);
+                        try builder.addImmArg(@intCast(list_abi.alignment_bytes));
+                        try builder.addMemArg(base_reg, index_off);
+                        try builder.addLeaArg(base_reg, elem_off);
+                        try builder.addImmArg(@intCast(list_abi.elem_size_align.size));
+                        try builder.addLeaArg(base_reg, result_offset + value_field_offset);
+                        try builder.addImmArg(@intFromEnum(boxy_elem.elem_layout));
+                        try builder.addMemArg(base_reg, boxy_elem.desc_slot);
+                        try builder.addImmArg(updateModeImmForArg0(ll.unique_args));
+
+                        try self.callBoxyBuiltin(&builder, .list_replace);
+                        return .{ .stack = .{ .offset = result_offset } };
+                    }
+
                     const elem_incref_reg = if (list_abi.elem_layout_idx) |idx| try self.emitBuiltinInternalOptionalRcHelperAddress(.incref, idx) else null;
                     defer if (elem_incref_reg) |reg| self.codegen.freeGeneral(reg);
                     const elem_decref_reg = if (list_abi.elem_layout_idx) |idx| try self.emitBuiltinInternalOptionalRcHelperAddress(.decref, idx) else null;

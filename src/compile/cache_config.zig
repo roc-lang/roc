@@ -226,7 +226,7 @@ pub const Constants = struct {
     ///      of one type share a role.
     /// 103: A use of an annotated binding's predeclared scheme is recorded
     ///      against the binding's own scheme, never the predeclared copy.
-    pub const CACHE_VERSION = 103;
+    pub const CACHE_VERSION = 104;
 };
 
 /// Configuration for the Roc cache system.

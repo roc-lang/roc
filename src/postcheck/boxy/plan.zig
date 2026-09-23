@@ -733,6 +733,12 @@ pub const WorkerPlan = struct {
     stored_fn: ?StoredFnSource = null,
     hidden_descs: Span = .{},
     body_hidden_descs: Span = .{},
+    /// Descriptors the worker's body needs that neither its signature nor its
+    /// checked evidence supplies: type variables of an enclosing scope that a
+    /// nested callable's body mentions, and scheme variables only its body
+    /// mentions. Each use supplies them from its checked call-site substitution
+    /// or, for an enclosing scope's variable, from the frame creating the use.
+    enclosing_descs: Span = .{},
     evidence_only_descs: Span = .{},
     evidence_descs: Span = .{},
     hidden_dicts: Span = .{},
@@ -1705,6 +1711,11 @@ const Builder = struct {
     body_statements_seen: std.AutoHashMap(BodyStatementVisit, void),
     generated_codec_shapes_seen: std.AutoHashMap(GeneratedCodecShapeVisit, void),
     worker_dictionary_uses: std.ArrayList(WorkerDictionaryUse),
+    /// Each checked expression and pattern type a worker's own body mentions;
+    /// a nested callable's signature belongs to that callable's worker.
+    worker_body_types: std.ArrayList(WorkerDictionaryUse),
+    worker_body_types_seen: std.AutoHashMap(WorkerDictionaryUse, void),
+    analyzing_nested_callable_args: bool = false,
     scheme_dictionary_params: collections.DenseMap(WorkerPlanId, []const HiddenDictionaryParam),
     scheme_dictionaries: std.AutoHashMap(SchemeDictionaryKey, HiddenDictionaryParam),
     scheme_dictionary_uses: std.ArrayList(struct { worker: WorkerPlanId, param: HiddenDictionaryParam }),
@@ -1781,6 +1792,8 @@ const Builder = struct {
             .body_statements_seen = std.AutoHashMap(BodyStatementVisit, void).init(allocator),
             .generated_codec_shapes_seen = std.AutoHashMap(GeneratedCodecShapeVisit, void).init(allocator),
             .worker_dictionary_uses = .empty,
+            .worker_body_types = .empty,
+            .worker_body_types_seen = std.AutoHashMap(WorkerDictionaryUse, void).init(allocator),
             .scheme_dictionary_params = collections.DenseMap(WorkerPlanId, []const HiddenDictionaryParam).init(allocator),
             .scheme_dictionaries = std.AutoHashMap(SchemeDictionaryKey, HiddenDictionaryParam).init(allocator),
             .scheme_dictionary_uses = .empty,
@@ -1798,6 +1811,8 @@ const Builder = struct {
         self.host_optional_slots.deinit(self.allocator);
         self.hosted_host_requests.deinit(self.allocator);
         self.worker_dictionary_uses.deinit(self.allocator);
+        self.worker_body_types.deinit(self.allocator);
+        self.worker_body_types_seen.deinit();
         var scheme_params = self.scheme_dictionary_params.valueIterator();
         while (scheme_params.next()) |params| self.allocator.free(params.*);
         self.scheme_dictionary_params.deinit();
@@ -4833,7 +4848,15 @@ const Builder = struct {
                 .{ .source_type = source_type, .kind = .empty_tag_union }
             else blk: {
                 var rep = try self.dynamicRepresentation(source_type, flex.constraints, .flex);
-                if (!self.host_mode and (!self.flexConstraintsRequireScheme(source_type, flex.constraints) or flex.numeric_default_phase != null)) {
+                // A literal's numeric default applies only if nothing resolves
+                // it: when a scheme quantifies the variable, each instantiation
+                // supplies its type through the descriptor the scheme's uses
+                // pass, so only an unquantified one seals to that default.
+                const seals = if (flex.numeric_default_phase != null)
+                    !self.quantified_variables.contains(source_type)
+                else
+                    !self.flexConstraintsRequireScheme(source_type, flex.constraints);
+                if (!self.host_mode and seals) {
                     rep.sealed_default = @enumFromInt(@as(u32, @intCast(self.plan.representations.items.len)));
                     try self.plan.representations.append(self.allocator, .{
                         .source_type = source_type,
@@ -6610,7 +6633,256 @@ const Builder = struct {
         }
     }
 
+    /// An unsealed type variable whose values a worker must describe through a
+    /// hidden descriptor.
+    fn isDescriptorLeaf(self: *const Builder, rep_id: TypeRepId) bool {
+        const rep = self.plan.representations.items[@intFromEnum(rep_id)];
+        return rep.kind == .dynamic and rep.children.len == 0 and rep.tag_variants.len == 0 and
+            rep.descriptor != null and rep.sealed_default == null;
+    }
+
+    fn collectDescriptorLeaves(
+        self: *Builder,
+        rep_id: TypeRepId,
+        leaves: *WorkerDescriptorLeaves,
+        seen: *collections.DenseMap(TypeRepId, void),
+    ) Allocator.Error!void {
+        if ((try seen.getOrPut(rep_id)).found_existing) return;
+        if (self.isDescriptorLeaf(rep_id)) _ = try leaves.add(self.allocator, rep_id);
+        const children = self.plan.representations.items[@intFromEnum(rep_id)].children;
+        var index: usize = 0;
+        while (index < children.len) : (index += 1) {
+            const child = self.plan.children.items[children.start + index];
+            if (self.plan.childIsSharedBackingTemplate(rep_id, child)) continue;
+            try self.collectDescriptorLeaves(child.rep, leaves, seen);
+        }
+    }
+
+    const WorkerDescriptorLeaves = struct {
+        set: collections.DenseMap(TypeRepId, void),
+        order: std.ArrayList(TypeRepId) = .empty,
+
+        fn add(self: *WorkerDescriptorLeaves, allocator: Allocator, rep: TypeRepId) Allocator.Error!bool {
+            if ((try self.set.getOrPut(rep)).found_existing) return false;
+            try self.order.append(allocator, rep);
+            return true;
+        }
+
+        fn deinit(self: *WorkerDescriptorLeaves, allocator: Allocator) void {
+            self.set.deinit();
+            self.order.deinit(allocator);
+        }
+    };
+
+    /// Every descriptor leaf each worker's body needs: the leaves of the types
+    /// its own body mentions, plus whatever each callable it creates or calls
+    /// needs beyond that callable's own scheme variables, which the use
+    /// instantiates. The relation is monotone over finitely many leaves, so
+    /// propagation reaches its fixpoint.
+    fn computeWorkerDescriptorLeaves(self: *Builder) Allocator.Error![]WorkerDescriptorLeaves {
+        const worker_count = self.plan.workers.items.len;
+        const needs = try self.allocator.alloc(WorkerDescriptorLeaves, worker_count);
+        for (needs) |*need| need.* = .{ .set = collections.DenseMap(TypeRepId, void).init(self.allocator) };
+        errdefer {
+            for (needs) |*need| need.deinit(self.allocator);
+            self.allocator.free(needs);
+        }
+
+        const body_types = try self.allocator.dupe(WorkerDictionaryUse, self.worker_body_types.items);
+        defer self.allocator.free(body_types);
+        std.mem.sort(WorkerDictionaryUse, body_types, {}, struct {
+            fn lessThan(_: void, a: WorkerDictionaryUse, b: WorkerDictionaryUse) bool {
+                return @intFromEnum(a.worker) < @intFromEnum(b.worker);
+            }
+        }.lessThan);
+        var edges = std.ArrayList(WorkerEdge).empty;
+        defer edges.deinit(self.allocator);
+        for (self.plan.nested_callable_uses.items) |use| try edges.append(self.allocator, .{ .caller = use.caller, .callee = use.worker });
+        for (self.plan.callable_uses.items) |use| try edges.append(self.allocator, .{ .caller = use.caller, .callee = use.worker });
+        for (self.plan.direct_calls.items) |call| try edges.append(self.allocator, .{ .caller = call.caller, .callee = call.worker });
+
+        var scopes = try self.computeWorkerScopeChains(edges.items);
+        defer scopes.deinit(self.allocator);
+
+        var seen = collections.DenseMap(TypeRepId, void).init(self.allocator);
+        defer seen.deinit();
+        var direct = WorkerDescriptorLeaves{ .set = collections.DenseMap(TypeRepId, void).init(self.allocator) };
+        defer direct.deinit(self.allocator);
+        var index: usize = 0;
+        while (index < body_types.len) {
+            const worker = body_types[index].worker;
+            seen.clearRetainingCapacity();
+            direct.set.clearRetainingCapacity();
+            direct.order.clearRetainingCapacity();
+            while (index < body_types.len and body_types[index].worker == worker) : (index += 1) {
+                try self.collectDescriptorLeaves(body_types[index].rep, &direct, &seen);
+            }
+            for (direct.order.items) |leaf| {
+                if (scopes.allows(worker, leaf)) _ = try needs[@intFromEnum(worker)].add(self.allocator, leaf);
+            }
+        }
+
+        const own_scheme = try self.allocator.alloc(collections.DenseMap(TypeRepId, void), worker_count);
+        for (own_scheme) |*set| set.* = collections.DenseMap(TypeRepId, void).init(self.allocator);
+        defer {
+            for (own_scheme) |*set| set.deinit();
+            self.allocator.free(own_scheme);
+        }
+        const signature = try self.allocator.alloc(WorkerDescriptorLeaves, worker_count);
+        for (signature) |*leaves| leaves.* = .{ .set = collections.DenseMap(TypeRepId, void).init(self.allocator) };
+        defer {
+            for (signature) |*leaves| leaves.deinit(self.allocator);
+            self.allocator.free(signature);
+        }
+        for (self.plan.workers.items, 0..) |worker, worker_index| {
+            seen.clearRetainingCapacity();
+            try self.collectDescriptorLeaves(worker.rep, &signature[worker_index], &seen);
+            const scheme = self.workerSchemeVars(worker.source) orelse continue;
+            for (scheme.vars) |variable| {
+                const rep = self.plan.repForSourceType(typeRef(scheme.view, variable)) orelse continue;
+                try own_scheme[worker_index].put(rep, {});
+            }
+        }
+
+        var changed = true;
+        while (changed) {
+            changed = false;
+            for (edges.items) |edge| {
+                if (edge.caller == edge.callee) continue;
+                const callee = @intFromEnum(edge.callee);
+                const caller = &needs[@intFromEnum(edge.caller)];
+                for ([_][]const TypeRepId{ signature[callee].order.items, needs[callee].order.items }) |leaves| {
+                    for (leaves) |leaf| {
+                        if (own_scheme[callee].contains(leaf)) continue;
+                        if (!scopes.allows(edge.caller, leaf)) continue;
+                        if (try caller.add(self.allocator, leaf)) changed = true;
+                    }
+                }
+            }
+        }
+        return needs;
+    }
+
+    const WorkerEdge = struct { caller: WorkerPlanId, callee: WorkerPlanId };
+
+    const ScopeKey = struct { module: checked.ModuleId, scope: u32 };
+
+    /// The generalized-local scopes whose quantified variables each worker's
+    /// frame describes. A local scope's variables reach a worker's body types
+    /// uninstantiated only through that scope's own binders, so a worker may
+    /// supply one only when the scope is its own or lexically encloses it.
+    const WorkerScopeChains = struct {
+        owner: collections.DenseMap(TypeRepId, ScopeKey),
+        chains: []std.AutoHashMap(ScopeKey, void),
+
+        fn allows(self: *const WorkerScopeChains, worker: WorkerPlanId, leaf: TypeRepId) bool {
+            const owner = self.owner.get(leaf) orelse return true;
+            return self.chains[@intFromEnum(worker)].contains(owner);
+        }
+
+        fn deinit(self: *WorkerScopeChains, allocator: Allocator) void {
+            self.owner.deinit();
+            for (self.chains) |*chain| chain.deinit();
+            allocator.free(self.chains);
+        }
+    };
+
+    /// Index each generalized-local scope variable by the outermost scope that
+    /// lists it. A scope's list names the enclosing variables its scheme
+    /// mentions as well as its own; the variable belongs to the outermost of
+    /// them, and a variable a template's own scheme lists belongs to no local.
+    fn indexScopeVariables(self: *Builder, view: ModuleView, owner: *collections.DenseMap(TypeRepId, ScopeKey)) Allocator.Error!void {
+        const templates = view.checked_procedure_templates;
+        var root_owned = collections.DenseMap(TypeRepId, void).init(self.allocator);
+        defer root_owned.deinit();
+        for (templates.templates.items) |*template| {
+            for (templates.templateSchemeVars(template)) |variable| {
+                const rep = self.plan.repForSourceType(typeRef(view, variable)) orelse continue;
+                try root_owned.put(rep, {});
+            }
+        }
+        var depths = collections.DenseMap(TypeRepId, u32).init(self.allocator);
+        defer depths.deinit();
+        for (templates.dispatch_scopes, 0..) |*scope, scope_index| {
+            var depth: u32 = 0;
+            var parent = scope.parent;
+            while (parent) |ancestor| : (depth += 1) parent = templates.dispatch_scopes[@intFromEnum(ancestor)].parent;
+            for (templates.scopeSchemeVars(scope)) |variable| {
+                const rep = self.plan.repForSourceType(typeRef(view, variable)) orelse continue;
+                if (root_owned.contains(rep)) continue;
+                const entry = try depths.getOrPut(rep);
+                if (entry.found_existing and entry.value_ptr.* <= depth) continue;
+                entry.value_ptr.* = depth;
+                try owner.put(rep, .{ .module = view.key, .scope = @intCast(scope_index) });
+            }
+        }
+    }
+
+    fn computeWorkerScopeChains(self: *Builder, edges: []const WorkerEdge) Allocator.Error!WorkerScopeChains {
+        var owner = collections.DenseMap(TypeRepId, ScopeKey).init(self.allocator);
+        errdefer owner.deinit();
+        try self.indexScopeVariables(self.root_view, &owner);
+        for (self.extra_module_views) |view| try self.indexScopeVariables(view, &owner);
+        for (self.imports) |imported| try self.indexScopeVariables(moduleViewFromImported(imported), &owner);
+        for (self.relation_modules) |imported| try self.indexScopeVariables(moduleViewFromImported(imported), &owner);
+
+        const chains = try self.allocator.alloc(std.AutoHashMap(ScopeKey, void), self.plan.workers.items.len);
+        for (chains) |*chain| chain.* = std.AutoHashMap(ScopeKey, void).init(self.allocator);
+        var result = WorkerScopeChains{ .owner = owner, .chains = chains };
+        errdefer result.deinit(self.allocator);
+
+        for (self.plan.workers.items, 0..) |worker, worker_index| {
+            // A worker's own scope is the generalized-local scope its checked
+            // body roots, when that body is itself a local function.
+            const view, const site_expr = switch (worker.source) {
+                .nested_expr => |expr_ref| blk: {
+                    const view = self.moduleForId(expr_ref.module);
+                    break :blk .{ view, self.nestedCallableSiteExprForExpr(view, expr_ref.expr) orelse expr_ref.expr };
+                },
+                .procedure_template, .procedure_binding, .procedure_use => blk: {
+                    if (self.root_module == null) continue;
+                    switch (self.rootWorkerBody(worker.source)) {
+                        .checked_expr => |body| break :blk .{ body.view, body.root_expr },
+                        .intrinsic_wrapper, .hosted_proc, .unimplemented => continue,
+                    }
+                },
+                .generated_codec, .generated_field_iterator, .generated_interpolation_step => continue,
+            };
+            const templates = view.checked_procedure_templates;
+            for (templates.dispatch_scopes, 0..) |*scope, scope_index| {
+                if (scope.checked_expr != site_expr) continue;
+                var current: ?u32 = @intCast(scope_index);
+                while (current) |index| {
+                    try chains[worker_index].put(.{ .module = view.key, .scope = index }, {});
+                    current = if (templates.dispatch_scopes[index].parent) |parent| @intFromEnum(parent) else null;
+                }
+                break;
+            }
+        }
+
+        // A nested callable lies inside every frame that creates it, so it
+        // sees each scope those frames see.
+        var changed = true;
+        while (changed) {
+            changed = false;
+            for (edges) |edge| {
+                if (edge.caller == edge.callee) continue;
+                if (self.plan.workers.items[@intFromEnum(edge.callee)].source != .nested_expr) continue;
+                var keys = chains[@intFromEnum(edge.caller)].keyIterator();
+                while (keys.next()) |key| {
+                    if (!(try chains[@intFromEnum(edge.callee)].getOrPut(key.*)).found_existing) changed = true;
+                }
+            }
+        }
+        return result;
+    }
+
     fn materializeWorkerHiddenDescriptorParams(self: *Builder) Allocator.Error!void {
+        const worker_leaves = try self.computeWorkerDescriptorLeaves();
+        defer {
+            for (worker_leaves) |*leaves| leaves.deinit(self.allocator);
+            self.allocator.free(worker_leaves);
+        }
         for (self.plan.workers.items, 0..) |worker, worker_index| {
             // A hosted worker's signature can hold its declaration's type
             // variable slots, so its caller describes them like any other
@@ -6618,6 +6890,7 @@ const Builder = struct {
             if (worker.source == .generated_field_iterator) {
                 self.plan.workers.items[worker_index].hidden_descs = .{};
                 self.plan.workers.items[worker_index].body_hidden_descs = .{};
+                self.plan.workers.items[worker_index].enclosing_descs = .{};
                 self.plan.workers.items[worker_index].evidence_only_descs = .{};
                 self.plan.workers.items[worker_index].evidence_descs = .{};
                 continue;
@@ -6702,16 +6975,36 @@ const Builder = struct {
                 => {},
             }
 
+            const enclosing_start: u32 = @intCast(pending.items.len);
+            {
+                var evidence_reps = collections.DenseMap(TypeRepId, void).init(self.allocator);
+                defer evidence_reps.deinit();
+                if (self.workerEvidenceParams(worker.source)) |worker_evidence| {
+                    for (worker_evidence.params) |evidence_param| {
+                        const rep = self.plan.repForSourceType(typeRef(worker_evidence.view, evidence_param.dispatcher_ty)) orelse continue;
+                        try evidence_reps.put(rep, {});
+                    }
+                }
+                for (worker_leaves[worker_index].order.items) |leaf| {
+                    if (seen_reps.contains(leaf) or evidence_reps.contains(leaf)) continue;
+                    try self.collectHiddenDescriptorsForRep(leaf, &pending, &seen_reps, &seen_descs);
+                }
+            }
+
             const evidence_only_start: u32 = @intCast(pending.items.len);
             const evidence_start: u32 = @intCast(self.plan.worker_evidence_descriptor_params.items.len);
             if (self.workerEvidenceParams(worker.source)) |worker_evidence| {
                 for (worker_evidence.params, 0..) |evidence_param, evidence_index| {
-                    if (evidence_param.runtime_dictionary) continue;
                     const source_type = typeRef(worker_evidence.view, evidence_param.dispatcher_ty);
                     const rep_id = self.plan.repForSourceType(source_type) orelse
                         boxyPlanInvariant("checked literal evidence dispatcher type was not analyzed for its worker body");
                     const rep = self.plan.representations.items[@intFromEnum(rep_id)];
                     const desc = rep.descriptor orelse continue;
+                    // A runtime dictionary supplies this dispatcher's methods, but
+                    // a literal at its type still encodes itself against its
+                    // descriptor. When the signature does not already describe
+                    // the dispatcher, its evidence is the descriptor's source.
+                    if (evidence_param.runtime_dictionary and seen_reps.contains(rep_id)) continue;
                     try self.collectHiddenDescriptorsForRep(rep_id, &pending, &seen_reps, &seen_descs);
 
                     var hidden_desc_index: ?u32 = null;
@@ -6738,6 +7031,10 @@ const Builder = struct {
             self.plan.workers.items[worker_index].body_hidden_descs = .{
                 .start = start + body_start,
                 .len = @intCast(pending.items.len - body_start),
+            };
+            self.plan.workers.items[worker_index].enclosing_descs = .{
+                .start = start + enclosing_start,
+                .len = evidence_only_start - enclosing_start,
             };
             self.plan.workers.items[worker_index].evidence_only_descs = .{
                 .start = start + evidence_only_start,
@@ -6853,6 +7150,32 @@ const Builder = struct {
     /// A direct call's scheme substitution names caller-side types that
     /// supply its callee's type-variable descriptors; they are analyzed when
     /// the call is planned, before descriptor requirements are fixed.
+    /// The checked substitution a callable-value or stored nested-function use
+    /// applied to its worker's scheme, when checking instantiated one there.
+    fn useSchemeSubstitution(self: *Builder, worker_id: WorkerPlanId, use: CheckedExprIdentity) ?SchemeCallSubstitution {
+        const site_view = self.moduleForId(use.module);
+        const site_types = site_view.static_dispatch_plans.siteSubstitution(use.expr) orelse return null;
+        if (site_types.len == 0) return null;
+        const scheme = self.workerSchemeVars(self.plan.workers.items[@intFromEnum(worker_id)].source) orelse return null;
+        if (scheme.vars.len != site_types.len) {
+            boxyPlanInvariant("checked use-site substitution disagreed with its worker scheme's variables");
+        }
+        return .{
+            .callee_view = scheme.view,
+            .scheme_vars = scheme.vars,
+            .site_view = site_view,
+            .site_types = site_types,
+        };
+    }
+
+    fn analyzeUseSchemeSubstitution(self: *Builder, worker_id: WorkerPlanId, use: CheckedExprIdentity) Allocator.Error!void {
+        const substitution = self.useSchemeSubstitution(worker_id, use) orelse return;
+        for (substitution.site_types) |site_type| {
+            if (substitution.site_view.checked_types.payload(site_type) == .err) continue;
+            _ = try self.analyzeType(substitution.site_view, site_type);
+        }
+    }
+
     fn analyzeDirectCallSchemeSubstitution(self: *Builder, direct: DirectCallPlan) Allocator.Error!void {
         const substitution = self.directCallSchemeSubstitution(direct) orelse return;
         for (substitution.site_types) |site_type| {
@@ -7729,7 +8052,11 @@ const Builder = struct {
                 .builtin_method => {},
             }
         }
-        if (methodOwnerForModuleType(view, rep.source_type.ty)) |owner| {
+        // Only the nominal's own representation owns its inspect method. A
+        // wrapper that shares the nominal's checked type (an alias, or a
+        // field-presence slot around it) reaches the method through its child.
+        const owns_methods = rep.kind == .nominal or rep.kind == .primitive;
+        if (if (owns_methods) methodOwnerForModuleType(view, rep.source_type.ty) else null) |owner| {
             if (self.lookupInspectOverride(view, owner)) |lookup| {
                 if (self.plan.inspectMethodForRep(rep_id) == null) {
                     const source = self.workerSourceForMethodTarget(lookup, rep.source_type, null);
@@ -7790,6 +8117,7 @@ const Builder = struct {
                 use.callable_ty,
                 evidence.view,
                 evidence.entries,
+                self.useSchemeSubstitution(use.worker, use.use),
             );
         }
         for (self.plan.nested_callable_uses.items) |*use| {
@@ -7802,6 +8130,7 @@ const Builder = struct {
                 use.callable_ty,
                 evidence.view,
                 evidence.entries,
+                self.useSchemeSubstitution(use.worker, use.use),
             );
         }
 
@@ -7848,6 +8177,7 @@ const Builder = struct {
         callable_type: CheckedTypeIdentity,
         view: ModuleView,
         evidence: ?[]const static_dispatch.CheckedEvidence,
+        scheme_substitution: ?SchemeCallSubstitution,
     ) Allocator.Error!Span {
         const callable_rep = self.plan.repForSourceType(callable_type) orelse
             boxyPlanInvariant("boxy callable use type was not analyzed for descriptor captures");
@@ -7860,20 +8190,23 @@ const Builder = struct {
             arg_type.* = self.plan.representations.items[@intFromEnum(child.rep)].source_type;
         }
         const ret_type = self.plan.representations.items[@intFromEnum(function.ret)].source_type;
-        return try self.materializeWorkerCallHiddenDescriptorArgsWithEvidence(
+        return try self.materializeWorkerCallHiddenDescriptorArgsWithSubstitution(
             worker,
             arg_types,
             arg_types,
             ret_type,
             view,
             evidence,
+            scheme_substitution,
         );
     }
 
+    /// Whether one of the worker's hidden descriptors can only be sourced from a
+    /// use's checked evidence vector.
     fn workerHasPathlessEvidence(self: *Builder, worker: WorkerPlan) bool {
         const evidence = self.workerEvidenceParams(worker.source) orelse return false;
-        for (evidence.params) |param| {
-            if (param.runtime_dictionary) continue;
+        for (self.plan.workerEvidenceDescriptorParamSlice(worker.evidence_descs)) |mapping| {
+            const param = evidence.params[mapping.evidence_index];
             if (evidence.view.checked_procedure_templates.evidenceParamPath(param).len == 0) return true;
         }
         return false;
@@ -8250,7 +8583,11 @@ const Builder = struct {
         {
             boxyPlanInvariant("boxy evidence-only worker descriptors were not a suffix of hidden descriptors");
         }
-        const ordinary_params = params[0..evidence_only_start];
+        const enclosing_start: usize = worker.enclosing_descs.start - worker.hidden_descs.start;
+        if (enclosing_start + worker.enclosing_descs.len != evidence_only_start) {
+            boxyPlanInvariant("boxy enclosing worker descriptors did not precede its evidence-only descriptors");
+        }
+        const ordinary_params = params[0..enclosing_start];
         var next_param: usize = 0;
 
         const worker_children = self.plan.childSlice(self.plan.representations.items[@intFromEnum(worker_function.rep)].children);
@@ -8279,6 +8616,19 @@ const Builder = struct {
 
         if (next_param != ordinary_params.len or pending.items.len != ordinary_params.len) {
             boxyPlanInvariant("boxy worker call hidden descriptor mapping did not cover every ordinary worker descriptor param");
+        }
+
+        // A callee scheme variable takes this call's checked instantiation. Any
+        // other body descriptor names a variable of the scope creating this
+        // use, which the calling frame describes.
+        for (params[enclosing_start..evidence_only_start]) |param| {
+            const rep = substitutions.get(param.rep) orelse param.rep;
+            try pending.append(self.allocator, .{
+                .worker_desc = param.desc,
+                .worker_rep = param.rep,
+                .source_type = self.plan.representations.items[@intFromEnum(rep)].source_type,
+                .rep = rep,
+            });
         }
 
         try self.appendEvidenceOnlyCallHiddenDescriptorArgs(
@@ -8411,9 +8761,6 @@ const Builder = struct {
             boxyPlanInvariant("worker evidence descriptor index exceeded its checked parameter vector");
         }
         const param = worker_evidence.params[evidence_index];
-        if (param.runtime_dictionary) {
-            boxyPlanInvariant("worker literal-evidence descriptor mapped to a runtime dictionary entry");
-        }
         const path_view = worker_evidence.view;
         const path = path_view.checked_procedure_templates.evidenceParamPath(param);
         const call_path: []const static_dispatch.EvidencePathStep = switch (param.source) {
@@ -8428,11 +8775,7 @@ const Builder = struct {
             if (evidence_index >= evidence.len) {
                 boxyPlanInvariant("worker literal evidence index exceeded the checked call-site vector");
             }
-            const entry = evidence[evidence_index];
-            if (entry.runtime_dictionary) {
-                boxyPlanInvariant("worker literal-evidence descriptor selected a runtime dictionary entry");
-            }
-            break :blk typeRef(view, entry.dispatcher_ty);
+            break :blk typeRef(view, evidence[evidence_index].dispatcher_ty);
         } else try self.checkedTypeAtEvidenceCallPath(
             worker_evidence.view,
             call_path,
@@ -8499,6 +8842,17 @@ const Builder = struct {
         var path_index: usize = 0;
         while (path_index < path.len) {
             const path_step = path[path_index];
+            // An alias is transparent: a use can instantiate a path's structural
+            // step at an alias of that structure, and the step applies to its
+            // backing.
+            switch (path_step.stepKind()) {
+                .alias_arg, .alias_backing => {},
+                .fn_arg, .fn_ret, .nominal_arg, .nominal_backing, .tuple_elem, .record_field, .tag_payload_tag, .tag_payload_index => {
+                    while (self.plan.representations.items[@intFromEnum(current)].kind == .alias) {
+                        current = self.repQuery().requiredSingleChild(current, .alias_backing).rep;
+                    }
+                },
+            }
             const current_rep = self.plan.representations.items[@intFromEnum(current)];
             const children = self.plan.childSlice(current_rep.children);
             if (current_rep.kind == .nominal) {
@@ -11254,7 +11608,9 @@ const Builder = struct {
         const bodies = view.checked_bodies;
         const expr = bodies.expr(expr_id);
         if (expr.data == .runtime_error) return;
-        _ = try self.analyzeType(view, expr.ty);
+        const expr_rep = try self.analyzeType(view, expr.ty);
+        // A nested callable's own type belongs to that callable's worker.
+        if (expr.data != .lambda and expr.data != .closure) try self.recordWorkerBodyType(worker, expr_rep);
 
         switch (expr.data) {
             .pending => boxyPlanInvariant("pending checked expression reached boxy body type planning"),
@@ -11338,6 +11694,9 @@ const Builder = struct {
             },
             .lambda => |lambda| {
                 try self.recordNestedCallableExprUse(view, expr_id);
+                const outer = self.analyzing_nested_callable_args;
+                self.analyzing_nested_callable_args = true;
+                defer self.analyzing_nested_callable_args = outer;
                 for (lambda.args) |arg| try self.analyzePatternTypes(view, arg);
             },
             .binop => |binop| {
@@ -11502,6 +11861,7 @@ const Builder = struct {
         const use = CheckedExprIdentity{ .module = view.key, .expr = expr_id };
         const caller = self.active_worker orelse
             boxyPlanInvariant("boxy callable lookup was analyzed outside a worker body");
+        try self.analyzeUseSchemeSubstitution(worker, use);
         if (self.plan.callableUsePlan(use, caller) == null) {
             try self.plan.callable_uses.append(self.allocator, .{
                 .use = use,
@@ -11754,10 +12114,14 @@ const Builder = struct {
     ) Allocator.Error!void {
         const caller = self.active_worker orelse
             boxyPlanInvariant("boxy nested callable value was analyzed outside a worker body");
+        // A generalized function stored in a containing value is used as the
+        // instance checking stored there, not as its own generalized type.
+        const use_ty = view.static_dispatch_plans.siteInstanceType(expr_id) orelse view.checked_bodies.expr(expr_id).ty;
+        _ = try self.analyzeType(view, use_ty);
         return try self.recordNestedCallableExprUseForCaller(
             view,
             expr_id,
-            typeRef(view, view.checked_bodies.expr(expr_id).ty),
+            typeRef(view, use_ty),
             caller,
         );
     }
@@ -11779,6 +12143,7 @@ const Builder = struct {
             }
         }
         const worker = try self.ensureNestedCallableWorker(view, expr_id);
+        try self.analyzeUseSchemeSubstitution(worker, use);
         try self.plan.nested_callable_uses.append(self.allocator, .{
             .use = use,
             .caller = caller,
@@ -12152,6 +12517,12 @@ const Builder = struct {
         });
     }
 
+    fn recordWorkerBodyType(self: *Builder, worker: WorkerPlanId, rep: TypeRepId) Allocator.Error!void {
+        const use = WorkerDictionaryUse{ .worker = worker, .rep = rep };
+        if ((try self.worker_body_types_seen.getOrPut(use)).found_existing) return;
+        try self.worker_body_types.append(self.allocator, use);
+    }
+
     fn recordActiveWorkerDictionaryUse(self: *Builder, rep: TypeRepId) Allocator.Error!void {
         const worker = self.active_worker orelse
             boxyPlanInvariant("unresolved dictionary dispatch was analyzed outside a worker body");
@@ -12399,7 +12770,8 @@ const Builder = struct {
         if (entry.found_existing) return;
 
         const pattern = view.checked_bodies.pattern(pattern_id);
-        _ = try self.analyzeType(view, pattern.ty);
+        const pattern_rep = try self.analyzeType(view, pattern.ty);
+        if (!self.analyzing_nested_callable_args) try self.recordWorkerBodyType(worker, pattern_rep);
         switch (pattern.data) {
             .pending => boxyPlanInvariant("pending checked pattern reached boxy body type planning"),
             .assign,

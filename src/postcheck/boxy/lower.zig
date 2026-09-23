@@ -16537,14 +16537,14 @@ const ProcBodyBuilder = struct {
             self.parent.plan.directCallHiddenDescriptorArgSlice(use.hidden_desc_args),
         );
         defer self.parent.allocator.free(capture_desc_sources);
-        const capture_dict_reps = try self.erasedCaptureDictionaryRepsForFunctionUse(worker_id, value_function, captures);
-        defer self.parent.allocator.free(capture_dict_reps);
         const planned_dict_args = self.parent.plan.directCallHiddenDictionaryArgSlice(use.hidden_dict_args);
+        const capture_dict_reps = try self.erasedCaptureDictionaryRepsForFunctionUse(worker_id, value_function, captures, planned_dict_args.len);
+        defer self.parent.allocator.free(capture_dict_reps);
         var planned_dict_index = planned_dict_args.len;
 
         for (captures, capture_desc_sources, capture_dict_reps) |capture, desc_source, dict_rep| {
             switch (capture.kind) {
-                .hidden_desc => if (!self.canMaterializeDescriptorRefForKnownRep(desc_source.rep)) return false,
+                .hidden_desc => if (!try self.canMaterializeDescriptorRefForKnownRep(desc_source.rep)) return false,
                 .hidden_dict => {
                     if (planned_dict_index != 0) {
                         planned_dict_index -= 1;
@@ -16561,14 +16561,32 @@ const ProcBodyBuilder = struct {
         return true;
     }
 
+    /// Whether this frame can describe `rep_id`: through its bound descriptor,
+    /// or, for a representation built from others, through a template whose
+    /// type-variable leaves are each bound or sealed to their default.
     fn canMaterializeDescriptorRefForKnownRep(
         self: *ProcBodyBuilder,
         rep_id: Plan.TypeRepId,
-    ) bool {
+    ) Allocator.Error!bool {
+        var visited = collections.DenseMap(Plan.TypeRepId, void).init(self.parent.allocator);
+        defer visited.deinit();
+        return try self.canMaterializeDescriptorRefForKnownRepVisited(rep_id, &visited);
+    }
+
+    fn canMaterializeDescriptorRefForKnownRepVisited(
+        self: *ProcBodyBuilder,
+        rep_id: Plan.TypeRepId,
+        visited: *collections.DenseMap(Plan.TypeRepId, void),
+    ) Allocator.Error!bool {
         const identity_rep = self.descriptorStorageRep(rep_id);
+        if ((try visited.getOrPut(identity_rep)).found_existing) return true;
         const rep = self.parent.plan.representations.items[@intFromEnum(identity_rep)];
-        if (rep.descriptor) |desc| {
-            return self.descriptorBindingIsBoundForRep(identity_rep) and self.descriptorLocalForRequirementAndRepOrNull(desc, identity_rep) != null;
+        const desc = rep.descriptor orelse return true;
+        if (self.descriptorBindingIsBoundForRep(identity_rep) and self.descriptorLocalForRequirementAndRepOrNull(desc, identity_rep) != null) return true;
+        if (rep.kind == .dynamic and rep.children.len == 0 and rep.tag_variants.len == 0) return rep.sealed_default != null;
+        for (self.parent.plan.childSlice(rep.children)) |child| {
+            if (self.parent.plan.childIsSharedBackingTemplate(identity_rep, child)) continue;
+            if (!try self.canMaterializeDescriptorRefForKnownRepVisited(child.rep, visited)) return false;
         }
         return true;
     }
@@ -16796,7 +16814,7 @@ const ProcBodyBuilder = struct {
             hidden_desc_args orelse &.{},
         );
         defer self.parent.allocator.free(capture_desc_sources);
-        const capture_dict_reps = try self.erasedCaptureDictionaryRepsForFunctionUse(worker_id, value_function, captures);
+        const capture_dict_reps = try self.erasedCaptureDictionaryRepsForFunctionUse(worker_id, value_function, captures, if (hidden_dict_args) |args| args.len else 0);
         defer self.parent.allocator.free(capture_dict_reps);
         var result_desc_initializers = std.ArrayList(DescriptorArgLocal).empty;
         defer result_desc_initializers.deinit(self.parent.allocator);
@@ -27552,14 +27570,11 @@ const ProcBodyBuilder = struct {
         for (fields) |field| {
             const field_layout = self.parent.result.store.getLocal(field.local).layout_idx;
             const target_desc_rep = self.parent.tagPayloadStorageDescRepIfNeeded(field.target_rep) orelse continue;
-            // The source identity describes the specialized bytes in the field;
-            // the target identity names the generic descriptor requirement those
-            // bytes satisfy. Only the source descriptor must match the committed
-            // field layout.
-            // The field local contains the result of adaptation. A concrete
-            // target has its own exact descriptor; the pre-conversion erased
-            // source descriptor describes different storage.
-            const storage_rep = if (self.repIsFullyConcrete(field.target_rep)) field.target_rep else field.source_rep;
+            // The field local holds the adapted value, stored as the target
+            // representation lays it out. A bare type parameter has no storage
+            // shape of its own, so there the value keeps the descriptor of the
+            // payload that was boxed into it.
+            const storage_rep = self.constructedFieldStorageRep(field);
             const source_desc_rep = self.parent.tagPayloadStorageDescRepForLayout(storage_rep, field_layout, true) orelse
                 boxyLowerInvariant("constructed aggregate source field had no storage descriptor representation");
             const desc_local = try self.prepareConstructedFieldDescriptorLocal(field.local, source_desc_rep, &field_initializers);
@@ -27615,10 +27630,11 @@ const ProcBodyBuilder = struct {
         for (fields) |field| {
             const field_layout = self.parent.result.store.getLocal(field.local).layout_idx;
             const target_desc_rep = self.parent.tagPayloadStorageDescRepIfNeeded(field.target_rep) orelse continue;
-            // The field local contains the result of adaptation. A concrete
-            // target has its own exact descriptor; the pre-conversion erased
-            // source descriptor describes different storage.
-            const storage_rep = if (self.repIsFullyConcrete(field.target_rep)) field.target_rep else field.source_rep;
+            // The field local holds the adapted value, stored as the target
+            // representation lays it out. A bare type parameter has no storage
+            // shape of its own, so there the value keeps the descriptor of the
+            // payload that was boxed into it.
+            const storage_rep = self.constructedFieldStorageRep(field);
             const source_desc_rep = self.parent.tagPayloadStorageDescRepForLayout(storage_rep, field_layout, true) orelse
                 boxyLowerInvariant("constructed tag source payload had no storage descriptor representation");
             const desc_local = try self.prepareConstructedFieldDescriptorLocal(field.local, source_desc_rep, &field_initializers);
@@ -27663,7 +27679,7 @@ const ProcBodyBuilder = struct {
             const field_layout = self.parent.result.store.getLocal(field.local).layout_idx;
             const force_field = self.parent.layoutIsBoxStorage(field_layout);
             if (!force_field and !self.parent.layoutNeedsNestedBoxyDesc(field_layout)) continue;
-            const storage_rep = if (self.repIsFullyConcrete(field.target_rep)) field.target_rep else field.source_rep;
+            const storage_rep = self.constructedFieldStorageRep(field);
             const desc_rep = self.parent.tagPayloadStorageDescRepForLayout(storage_rep, field_layout, force_field) orelse continue;
             const desc_local = try self.prepareConstructedFieldDescriptorLocal(field.local, desc_rep, &field_initializers);
             try refs.append(self.parent.allocator, .{ .local = desc_local });
@@ -32572,6 +32588,13 @@ const ProcBodyBuilder = struct {
         return planTypeRefEql(a_rep.source_type, b_rep.source_type);
     }
 
+    /// The representation that describes a constructed aggregate field's
+    /// stored bytes: the target's, except at a bare type parameter, whose
+    /// erased box holds the supplying payload as the source describes it.
+    fn constructedFieldStorageRep(self: *const ProcBodyBuilder, field: AggregateDescriptorField) Plan.TypeRepId {
+        return if (self.repIsBareDynamic(field.target_rep)) field.source_rep else field.target_rep;
+    }
+
     /// A bare dynamic representation carries no structural payload shape of
     /// its own. When a concrete value is boxed into it, the source descriptor is
     /// the only explicit description of the allocation that was actually made.
@@ -32781,6 +32804,39 @@ const ProcBodyBuilder = struct {
             }
         }
 
+        // Adapting structure reaches into a nominal's shared backing template;
+        // the target's formals describe that storage by the actuals this use
+        // supplies, so the adapter runs inside the target's formal scopes.
+        const scope = try self.enterNominalWrapperFormalScopes(target_rep);
+        errdefer self.dropNominalBackingFormalScope(scope);
+        const body = try self.assignStructuralRepresentationBoundary(
+            target,
+            source,
+            target_rep,
+            source_rep,
+            identity_target_rep,
+            identity_source_rep,
+            target_layout,
+            source_layout,
+            dynamic_box_source_mode,
+            next,
+        );
+        return try self.leaveNominalBackingFormalScope(scope, body);
+    }
+
+    fn assignStructuralRepresentationBoundary(
+        self: *ProcBodyBuilder,
+        target: LIR.LocalId,
+        source: LIR.LocalId,
+        target_rep: Plan.TypeRepId,
+        source_rep: Plan.TypeRepId,
+        identity_target_rep: Plan.TypeRepId,
+        identity_source_rep: Plan.TypeRepId,
+        target_layout: layout.Idx,
+        source_layout: layout.Idx,
+        dynamic_box_source_mode: LIR.BoxyTransferMode,
+        next: LIR.CFStmtId,
+    ) Allocator.Error!LIR.CFStmtId {
         return switch (self.workerRuntimeLayoutForRep(identity_target_rep)) {
             .dynamic_box => switch (self.workerRuntimeLayoutForRep(identity_source_rep)) {
                 .dynamic_box => if (try self.assignDynamicTagUnionToDynamicBoundary(target, source, identity_target_rep, identity_source_rep, next)) |adapted|
@@ -36444,11 +36500,14 @@ const ProcBodyBuilder = struct {
         return result;
     }
 
+    /// The value-side representation of each dictionary capture that the use's
+    /// planned dictionary arguments do not supply.
     fn erasedCaptureDictionaryRepsForFunctionUse(
         self: *ProcBodyBuilder,
         worker_id: Plan.WorkerPlanId,
         value_function: FunctionChildren,
         captures: []const Plan.ErasedCapture,
+        planned_dict_count: usize,
     ) Allocator.Error![]Plan.TypeRepId {
         const result = try self.parent.allocator.alloc(Plan.TypeRepId, captures.len);
         errdefer self.parent.allocator.free(result);
@@ -36458,7 +36517,7 @@ const ProcBodyBuilder = struct {
 
         const worker = self.parent.plan.workers.items[@intFromEnum(worker_id)];
         const params = self.parent.plan.hiddenDictionaryParamSlice(worker.hidden_dicts);
-        if (params.len == 0) return result;
+        if (params.len == 0 or planned_dict_count >= params.len) return result;
 
         const worker_function = self.functionChildrenForRep(worker.rep) orelse
             boxyLowerInvariant("boxy erased callable with hidden dictionaries was not a function worker");
