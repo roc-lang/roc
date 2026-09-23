@@ -1133,6 +1133,8 @@ const StaticDescriptorMaterializationScope = struct {
 const CallableAdapterCacheEntry = struct {
     source_rep: Plan.TypeRepId,
     target_rep: Plan.TypeRepId,
+    /// The capture sources the adapter body was built against, in capture order.
+    materialize_reps: []const Plan.TypeRepId,
     proc: LIR.LirProcSpecId,
     capture_layout: layout.Idx,
 };
@@ -1302,6 +1304,7 @@ const ProcedureBuilder = struct {
         self.source_file_ids.deinit(self.allocator);
         self.descriptor_read_steps.deinit(self.allocator);
         self.pending_direct_call_descriptor_abis.deinit(self.allocator);
+        for (self.callable_adapter_cache.items) |entry| self.allocator.free(entry.materialize_reps);
         self.callable_adapter_cache.deinit(self.allocator);
         self.static_inspect_method_cache.deinit(self.allocator);
         self.static_dict_cache.deinit(self.allocator);
@@ -12363,6 +12366,11 @@ const ProcBodyBuilder = struct {
     local_descriptor_environments: std.ArrayList(LocalDescriptorEnvironment),
     descriptor_transfer_aliases: std.ArrayList(DescriptorTransferAlias),
     static_descriptor_materialization_scope: ?StaticDescriptorMaterializationScope,
+    /// The planned hidden descriptor arguments of the direct call whose
+    /// operands are being adapted. They name, for each callee worker
+    /// descriptor representation, the caller representation it stands for
+    /// at this call.
+    call_boundary_substitution: []const Plan.DirectCallHiddenDescriptorArg = &.{},
     read_only_descriptor_inputs: std.ArrayList(LIR.LocalId),
     dictionary_locals: []?LIR.LocalId,
     dictionary_bound: []bool,
@@ -16883,11 +16891,13 @@ const ProcBodyBuilder = struct {
                 stored_capture_sources,
                 worker_id,
                 value_function,
-                value_function,
                 hidden_desc_args,
                 hidden_dict_args,
                 boundary_placeholder,
             );
+            const enclosing_call_boundary_substitution = self.call_boundary_substitution;
+            self.call_boundary_substitution = hidden_desc_args orelse &.{};
+            defer self.call_boundary_substitution = enclosing_call_boundary_substitution;
             const adapted = try self.assignErasedCallableBoundary(
                 target,
                 raw_target,
@@ -16899,7 +16909,7 @@ const ProcBodyBuilder = struct {
             return raw_entry;
         }
 
-        return try self.lowerRawWorkerValueInto(target, source, maybe_expr, stored_capture_sources, worker_id, value_function, value_function, hidden_desc_args, hidden_dict_args, next);
+        return try self.lowerRawWorkerValueInto(target, source, maybe_expr, stored_capture_sources, worker_id, value_function, hidden_desc_args, hidden_dict_args, next);
     }
 
     fn lowerRawWorkerValueInto(
@@ -16909,7 +16919,6 @@ const ProcBodyBuilder = struct {
         maybe_expr: ?checked.CheckedExprId,
         stored_capture_sources: []const Plan.StoredCallableCaptureSource,
         worker_id: Plan.WorkerPlanId,
-        call_function: FunctionChildren,
         value_function: FunctionChildren,
         hidden_desc_args: ?[]const Plan.DirectCallHiddenDescriptorArg,
         hidden_dict_args: ?[]const Plan.DirectCallHiddenDictionaryArg,
@@ -16923,7 +16932,6 @@ const ProcBodyBuilder = struct {
         const captures = self.parent.plan.erasedCaptureSlice(worker.erased_captures);
         const capture_desc_sources = try self.erasedCaptureDescriptorSourcesForFunctionUse(
             worker_id,
-            call_function,
             captures,
             hidden_desc_args orelse &.{},
         );
@@ -17024,19 +17032,12 @@ const ProcBodyBuilder = struct {
         defer descriptor_snapshot.deinit(self.parent.allocator);
         defer self.restoreDescriptorBindings(descriptor_snapshot);
 
-        try self.bindErasedCaptureDescriptorFieldLocals(captures, field_locals, capture_desc_sources);
-
         const hidden_desc_initializers = try self.parent.allocator.alloc(?DescriptorArgLocal, captures.len);
         defer self.parent.allocator.free(hidden_desc_initializers);
         @memset(hidden_desc_initializers, null);
-        var hidden_desc_index = captures.len;
-        while (hidden_desc_index > 0) {
-            hidden_desc_index -= 1;
-            const capture = captures[hidden_desc_index];
+        for (captures, field_locals, capture_desc_sources, hidden_desc_initializers) |capture, field_local, desc_source, *hidden_desc_initializer| {
             if (capture.kind != .hidden_desc) continue;
-            const field_local = field_locals[hidden_desc_index];
-            const desc_source = capture_desc_sources[hidden_desc_index];
-            hidden_desc_initializers[hidden_desc_index] = if (try self.erasedCaptureHiddenDescriptorFromCapturedValue(
+            hidden_desc_initializer.* = if (try self.erasedCaptureHiddenDescriptorFromCapturedValue(
                 captures,
                 field_locals,
                 local_desc_snapshot,
@@ -17060,6 +17061,14 @@ const ProcBodyBuilder = struct {
                     .captures = materialization.captures,
                 };
             };
+        }
+
+        // Each hidden descriptor field copies a descriptor from the enclosing
+        // environment, so its initializer is chosen before the field locals
+        // describe those representations inside this capture window.
+        try self.bindErasedCaptureDescriptorFieldLocals(captures, field_locals, capture_desc_sources);
+        for (captures, capture_desc_sources) |capture, desc_source| {
+            if (capture.kind != .hidden_desc) continue;
             const desc = capture.desc orelse
                 boxyLowerInvariant("boxy hidden descriptor erased capture had no descriptor requirement");
             self.markDescriptorRequirementBoundForRep(desc, capture.rep);
@@ -19406,6 +19415,9 @@ const ProcBodyBuilder = struct {
         continuation = try self.prependHiddenDictionaryArgMaterialization(hidden_dict_locals, continuation);
         self.restoreDescriptorBindings(call_descriptor_snapshot);
         call_descriptor_bindings_restored = true;
+        const enclosing_call_boundary_substitution = self.call_boundary_substitution;
+        self.call_boundary_substitution = hidden_desc_args;
+        defer self.call_boundary_substitution = enclosing_call_boundary_substitution;
         continuation = try self.prependWorkerCallArgAdaptations(arg_types, source_args, adapted_args, worker_arg_children, actual_arg_reps, arg_substitutions, continuation);
         return try self.prependDescriptorArgMaterializations(pre_adaptation_descriptor_initializers.items, continuation);
     }
@@ -31785,12 +31797,19 @@ const ProcBodyBuilder = struct {
             boxyLowerInvariant("boxy callable adapter requested for mismatched function arity");
         }
 
-        for (self.parent.callable_adapter_cache.items) |entry| {
-            if (entry.source_rep == source_function.rep and entry.target_rep == target_function.rep) return entry;
-        }
-
         const descriptor_captures = try self.collectCallableAdapterDescriptorCaptures(source_function, target_function);
         defer self.parent.allocator.free(descriptor_captures);
+        cached: for (self.parent.callable_adapter_cache.items) |entry| {
+            if (entry.source_rep != source_function.rep or entry.target_rep != target_function.rep) continue;
+            if (entry.materialize_reps.len != descriptor_captures.len) continue;
+            for (entry.materialize_reps, descriptor_captures) |materialize_rep, capture| {
+                if (materialize_rep != capture.materialize_rep) continue :cached;
+            }
+            return entry;
+        }
+        const materialize_reps = try self.parent.allocator.alloc(Plan.TypeRepId, descriptor_captures.len);
+        errdefer self.parent.allocator.free(materialize_reps);
+        for (materialize_reps, descriptor_captures) |*materialize_rep, capture| materialize_rep.* = capture.materialize_rep;
 
         const source_closure_layout = self.workerRuntimeLayoutForRep(source_function.rep).layoutIdx();
         const capture_layout = try self.callableAdapterCaptureLayout(source_closure_layout, descriptor_captures.len);
@@ -31850,6 +31869,7 @@ const ProcBodyBuilder = struct {
         const cache_entry = CallableAdapterCacheEntry{
             .source_rep = source_function.rep,
             .target_rep = target_function.rep,
+            .materialize_reps = materialize_reps,
             .proc = proc_id,
             .capture_layout = capture_layout,
         };
@@ -32027,49 +32047,50 @@ const ProcBodyBuilder = struct {
         };
     }
 
+    /// Every descriptor requirement in either callable signature becomes one
+    /// adapter capture. A requirement of the callee side of a planned call
+    /// boundary is materialized from the caller representation the call's
+    /// substitution names for it; every other requirement is described by the
+    /// enclosing frame's own descriptor for that representation.
     fn collectCallableAdapterDescriptorCaptures(
         self: *ProcBodyBuilder,
         source_function: FunctionChildren,
         target_function: FunctionChildren,
     ) Allocator.Error![]CallableAdapterDescriptorCapture {
-        var captures = std.ArrayList(CallableAdapterDescriptorCapture).empty;
-        defer captures.deinit(self.parent.allocator);
-        var seen_descs = collections.DenseMap(Plan.DescriptorRequirementId, usize).init(self.parent.allocator);
+        var params = std.ArrayList(Plan.HiddenDescriptorParam).empty;
+        defer params.deinit(self.parent.allocator);
+        var seen_reps = collections.DenseMap(Plan.TypeRepId, void).init(self.parent.allocator);
+        defer seen_reps.deinit();
+        var seen_descs = collections.DenseMap(Plan.DescriptorRequirementId, void).init(self.parent.allocator);
         defer seen_descs.deinit();
+        for ([_]FunctionChildren{ target_function, source_function }) |function| {
+            for (self.functionArgChildren(function)) |arg| {
+                try self.collectHiddenDescriptorParamsForRep(arg.rep, &params, &seen_reps, &seen_descs);
+            }
+            try self.collectHiddenDescriptorParamsForRep(function.ret, &params, &seen_reps, &seen_descs);
+        }
 
-        // Target argument descriptor slots are overwritten by each invocation,
-        // but the closure still needs valid initial descriptor values. Derive
-        // those values from the corresponding source arguments. Nested
-        // requirements unique to the source signature are immutable identities
-        // of the wrapped callable and must be captured separately: an incoming
-        // concrete root descriptor may legitimately omit them.
-        try self.collectCallableAdapterDescriptorCapturesForFunction(
-            target_function,
-            source_function,
-            true,
-            false,
-            &captures,
-            &seen_descs,
-        );
-        try self.collectCallableAdapterSourceArgumentDescriptorCaptures(
-            source_function,
-            target_function,
-            &captures,
-            &seen_descs,
-        );
-        try self.appendMissingCallableAdapterResultDescriptorCaptures(
-            source_function,
-            target_function,
-            &captures,
-            &seen_descs,
-        );
-        try self.appendMissingCallableAdapterResultDescriptorCaptures(
-            target_function,
-            source_function,
-            &captures,
-            &seen_descs,
-        );
-        return try captures.toOwnedSlice(self.parent.allocator);
+        const captures = try self.parent.allocator.alloc(CallableAdapterDescriptorCapture, params.items.len);
+        for (params.items, captures) |param, *capture| {
+            capture.* = .{
+                .desc = param.desc,
+                .rep = param.rep,
+                .materialize_rep = self.callBoundarySubstitutedRep(param.rep),
+                .source_type = param.source_type,
+            };
+        }
+        return captures;
+    }
+
+    /// The caller representation the active call boundary substitutes for
+    /// a callee worker representation, or the representation itself when it
+    /// already belongs to the enclosing frame.
+    fn callBoundarySubstitutedRep(self: *ProcBodyBuilder, rep_id: Plan.TypeRepId) Plan.TypeRepId {
+        const identity_rep = self.repQuery().descriptorArgumentIdentityRep(rep_id);
+        for (self.call_boundary_substitution) |arg| {
+            if (self.repQuery().descriptorArgumentIdentityRep(arg.worker_rep) == identity_rep) return arg.rep;
+        }
+        return rep_id;
     }
 
     fn appendMissingCallableAdapterResultDescriptorCaptures(
@@ -32217,6 +32238,9 @@ const ProcBodyBuilder = struct {
                         if (mapped.get(identity_desc)) |source| break :blk source;
                     }
                 }
+                self.tempdebugDumpRep("FUNCTION", function.rep, 0);
+                self.tempdebugDumpRep("MATERIALIZE_FROM", materialize_from.rep, 0);
+                self.tempdebugDumpRep("MISSING PARAM", param.rep, 0);
                 boxyLowerInvariant("boxy callable adapter descriptor mapping did not cover a descriptor capture");
             };
             const materialize_rep = materialize_source.rep;
@@ -32251,6 +32275,24 @@ const ProcBodyBuilder = struct {
                 .materialize_read_path = materialize_source.read_path,
                 .source_type = param.source_type,
             });
+        }
+    }
+
+    fn tempdebugDumpRep(self: *ProcBodyBuilder, label: []const u8, rep_id: Plan.TypeRepId, depth: usize) void {
+        if (depth == 0) std.debug.print("TEMPDEBUG {s}\n", .{label});
+        if (depth > 7) return;
+        const rep = self.parent.plan.representations.items[@intFromEnum(rep_id)];
+        for (0..depth) |_| std.debug.print("  ", .{});
+        std.debug.print("rep {d} kind={s} desc={?d} ty={d} open_row={}\n", .{ @intFromEnum(rep_id), @tagName(rep.kind), if (rep.descriptor) |d| @intFromEnum(d) else null, @intFromEnum(rep.source_type.ty), rep.is_open_tag_row });
+        for (self.parent.plan.tagVariantSlice(rep.tag_variants)) |v| {
+            for (0..depth + 1) |_| std.debug.print("  ", .{});
+            std.debug.print("variant {s}\n", .{self.tagVariantNameText(v)});
+            for (self.parent.plan.childSlice(v.payloads)) |c| self.tempdebugDumpRep("", c.rep, depth + 2);
+        }
+        for (self.parent.plan.childSlice(rep.children)) |c| {
+            for (0..depth + 1) |_| std.debug.print("  ", .{});
+            std.debug.print("child {s}\n", .{@tagName(c.role)});
+            self.tempdebugDumpRep("", c.rep, depth + 2);
         }
     }
 
@@ -37205,10 +37247,13 @@ const ProcBodyBuilder = struct {
         }
     }
 
+    /// Each hidden descriptor captured by a callable value comes from the
+    /// planned hidden descriptor argument of this use: the caller
+    /// representation the use's substitution names for that worker
+    /// descriptor.
     fn erasedCaptureDescriptorSourcesForFunctionUse(
         self: *ProcBodyBuilder,
         worker_id: Plan.WorkerPlanId,
-        call_function: FunctionChildren,
         captures: []const Plan.ErasedCapture,
         planned_hidden_args: []const Plan.DirectCallHiddenDescriptorArg,
     ) Allocator.Error![]ErasedCaptureDescriptorSource {
@@ -37221,94 +37266,25 @@ const ProcBodyBuilder = struct {
         const worker = self.parent.plan.workers.items[@intFromEnum(worker_id)];
         const params = self.parent.plan.hiddenDescriptorParamSlice(worker.hidden_descs);
         if (params.len == 0) return result;
-        if (planned_hidden_args.len != 0 and planned_hidden_args.len != params.len) {
-            boxyLowerInvariant("boxy callable descriptor capture plan disagreed with worker hidden parameters");
+        if (planned_hidden_args.len != params.len) {
+            boxyLowerInvariant("boxy callable value use had no planned hidden descriptor arguments");
         }
-
-        const worker_function = self.functionChildrenForRep(worker.rep) orelse
-            boxyLowerInvariant("boxy erased callable with hidden descriptors was not a function worker");
-        if (worker_function.arg_count != call_function.arg_count) {
-            boxyLowerInvariant("boxy erased callable descriptor mapping saw mismatched function arity");
-        }
-
-        if (try self.callableBoundaryNeedsAdapter(call_function, worker_function)) {
-            const adapter_captures = try self.collectCallableWorkerDescriptorCaptures(worker_function, call_function);
-            defer self.parent.allocator.free(adapter_captures);
-
-            for (captures, result) |capture, *source| {
-                if (capture.kind != .hidden_desc or capture.body_descriptor) continue;
-                const desc = capture.desc orelse
-                    boxyLowerInvariant("boxy hidden descriptor erased capture had no descriptor requirement");
-                var found: ?CallableAdapterDescriptorCapture = null;
-                for (adapter_captures) |adapter_capture| {
-                    if (adapter_capture.desc != desc) continue;
-                    if (found != null) {
-                        boxyLowerInvariant("boxy erased callable descriptor source plan contained duplicate requirements");
-                    }
-                    found = adapter_capture;
-                }
-                const adapter_capture = found orelse
-                    boxyLowerInvariant("boxy erased callable adapter did not plan a hidden descriptor source");
-                source.* = .{
-                    .rep = adapter_capture.materialize_rep,
-                    .read_path = adapter_capture.materialize_read_path,
-                };
-            }
-            self.applyPlannedBodyDescriptorCaptureSources(captures, result, planned_hidden_args);
-            return result;
-        }
-
-        var mapped = collections.DenseMap(Plan.DescriptorRequirementId, Plan.TypeRepId).init(self.parent.allocator);
-        defer mapped.deinit();
-        var seen = std.AutoHashMap(u64, void).init(self.parent.allocator);
-        defer seen.deinit();
-
-        const worker_children = self.parent.plan.childSlice(self.parent.plan.representations.items[@intFromEnum(worker_function.rep)].children);
-        const call_children = self.parent.plan.childSlice(self.parent.plan.representations.items[@intFromEnum(call_function.rep)].children);
-        const worker_args = worker_children[worker_function.args_start..][0..worker_function.arg_count];
-        const call_args = call_children[call_function.args_start..][0..call_function.arg_count];
-        for (worker_args, call_args) |worker_child, call_child| {
-            if (!try self.collectErasedCaptureDescriptorReps(worker_child.rep, call_child.rep, params, &mapped, &seen)) {
-                boxyLowerInvariant("boxy erased callable descriptor mapping saw mismatched child roles");
-            }
-        }
-        if (!try self.collectErasedCaptureDescriptorReps(worker_function.ret, call_function.ret, params, &mapped, &seen)) {
-            boxyLowerInvariant("boxy erased callable descriptor mapping saw mismatched child roles");
-        }
-
         for (captures, result) |capture, *source| {
-            if (capture.kind != .hidden_desc or capture.body_descriptor) continue;
+            if (capture.kind != .hidden_desc) continue;
             const desc = capture.desc orelse
                 boxyLowerInvariant("boxy hidden descriptor erased capture had no descriptor requirement");
-            source.rep = mapped.get(desc) orelse
-                boxyLowerInvariant("boxy erased callable descriptor mapping did not cover a signature descriptor capture");
-        }
-        self.applyPlannedBodyDescriptorCaptureSources(captures, result, planned_hidden_args);
-        return result;
-    }
-
-    fn applyPlannedBodyDescriptorCaptureSources(
-        _: *ProcBodyBuilder,
-        captures: []const Plan.ErasedCapture,
-        sources: []ErasedCaptureDescriptorSource,
-        planned_hidden_args: []const Plan.DirectCallHiddenDescriptorArg,
-    ) void {
-        for (captures, sources) |capture, *source| {
-            if (capture.kind != .hidden_desc or !capture.body_descriptor) continue;
-            const desc = capture.desc orelse
-                boxyLowerInvariant("boxy body descriptor capture had no descriptor requirement");
             var found: ?Plan.TypeRepId = null;
             for (planned_hidden_args) |arg| {
                 if (arg.worker_desc != desc) continue;
                 if (found != null and found.? != arg.rep) {
-                    boxyLowerInvariant("boxy callable use planned conflicting body descriptor sources");
+                    boxyLowerInvariant("boxy callable use planned conflicting descriptor capture sources");
                 }
                 found = arg.rep;
             }
             source.rep = found orelse
-                boxyLowerInvariant("boxy callable use did not plan a body descriptor capture source");
-            source.read_path = .{};
+                boxyLowerInvariant("boxy callable use did not plan a descriptor capture source");
         }
+        return result;
     }
 
     fn collectErasedCaptureDescriptorReps(
