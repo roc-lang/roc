@@ -1469,6 +1469,11 @@ pub const SiteEvidenceEntry = extern struct {
     /// at this site, in the scheme's `scheme_vars` order.
     subst_start: u32 = 0,
     subst_len: u32 = 0,
+    /// For a stored nested-function use, `@intFromEnum` of the checked type of
+    /// the instance the containing value stores; `no_site_instance` otherwise.
+    instance_ty: u32 = no_site_instance,
+
+    pub const no_site_instance = std.math.maxInt(u32);
 };
 
 /// Public `EvidencePathStep` declaration: one semantic step from a type to a
@@ -2503,6 +2508,14 @@ pub const StaticDispatchPlanTable = struct {
     /// type per quantified variable of that scheme, in the scheme's
     /// `scheme_vars` order. Null when the expression has no site entry at
     /// all; empty when its entry recorded no instantiation.
+    /// The checked type of the instance a stored nested-function use at
+    /// `expr` places into its containing value.
+    pub fn siteInstanceType(self: *const StaticDispatchPlanTable, expr: CheckedExprId) ?CheckedTypeId {
+        const found = artifact_serialize.binarySearchByKey(SiteEvidenceEntry, u32, self.site_evidence, @intFromEnum(expr), siteEvidenceOrder) orelse return null;
+        if (found.instance_ty == SiteEvidenceEntry.no_site_instance) return null;
+        return @enumFromInt(found.instance_ty);
+    }
+
     pub fn siteSubstitution(self: *const StaticDispatchPlanTable, expr: CheckedExprId) ?[]const CheckedTypeId {
         const found = artifact_serialize.binarySearchByKey(SiteEvidenceEntry, u32, self.site_evidence, @intFromEnum(expr), siteEvidenceOrder) orelse return null;
         return self.site_substitutions[found.subst_start .. found.subst_start + found.subst_len];

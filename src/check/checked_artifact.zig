@@ -4895,7 +4895,8 @@ pub const CheckedTypeStore = struct {
         for (module_env.scheme_uses.items.items) |record| {
             if (record.slot_kind == @intFromEnum(ModuleEnv.SchemeUseRecord.Slot.dispatch_target) or
                 record.slot_kind == @intFromEnum(ModuleEnv.SchemeUseRecord.Slot.recursive_dispatch_target) or
-                record.slot_kind == @intFromEnum(ModuleEnv.SchemeUseRecord.Slot.where_method_use))
+                record.slot_kind == @intFromEnum(ModuleEnv.SchemeUseRecord.Slot.where_method_use) or
+                record.slot_kind == @intFromEnum(ModuleEnv.SchemeUseRecord.Slot.nested_function_use))
             {
                 _ = try appendCheckedTypeRoot(allocator, module, names, import_views, &store, &active, @enumFromInt(record.slot_data));
             }
@@ -18346,6 +18347,7 @@ const EvidencePass = struct {
                     .len = spans.refs.len,
                     .subst_start = spans.subst.start,
                     .subst_len = spans.subst.len,
+                    .instance_ty = self.siteInstanceType(deferred.record_idx),
                 });
             }
         }
@@ -19868,13 +19870,12 @@ const EvidencePass = struct {
             entries.appendAssumeCapacity(evidence);
         }
 
-        // A nested-function-use record's scheme root is the stored
-        // expression's own type; only a value use instantiates a referenced
-        // scheme, so only value uses carry a substitution for one.
-        const nested = record.slot_kind == @intFromEnum(ModuleEnv.SchemeUseRecord.Slot.nested_function_use);
+        // A value use instantiates the referenced scheme; a nested-function use
+        // instantiates the stored expression's own scheme for the value that
+        // stores it. Either way the pairs name each quantified variable's copy.
         return .{
             .refs = try self.appendEvidenceRefs(entries.items),
-            .subst = if (nested) .{} else try self.appendSiteSubstitution(@enumFromInt(record.scheme_root), pairs),
+            .subst = try self.appendSiteSubstitution(@enumFromInt(record.scheme_root), pairs),
         };
     }
 
@@ -20171,7 +20172,20 @@ const EvidencePass = struct {
             .len = spans.refs.len,
             .subst_start = spans.subst.start,
             .subst_len = spans.subst.len,
+            .instance_ty = self.siteInstanceType(record_idx),
         });
+    }
+
+    /// The instance a stored nested-function use places into its containing
+    /// value, as a `SiteEvidenceEntry.instance_ty`.
+    fn siteInstanceType(self: *EvidencePass, record_idx: u32) u32 {
+        const record = self.module.moduleEnvConst().scheme_uses.items.items[record_idx];
+        if (record.slot_kind != @intFromEnum(ModuleEnv.SchemeUseRecord.Slot.nested_function_use)) {
+            return static_dispatch.SiteEvidenceEntry.no_site_instance;
+        }
+        const instance = self.checked_types.rootForSourceVar(self.module, @enumFromInt(record.slot_data)) orelse
+            checkedArtifactInvariant("stored nested function instance type was not published", .{});
+        return @intFromEnum(instance);
     }
 
     /// Publish the complete construction recipe for a generalized nested
@@ -32338,6 +32352,7 @@ pub const DispatchEvidenceFailure = struct {
         site_evidence_key_out_of_bounds,
         site_evidence_refs_out_of_bounds,
         site_substitution_out_of_bounds,
+        site_instance_type_out_of_bounds,
         scheme_vars_out_of_bounds,
         evidence_param_slot_out_of_bounds,
         site_evidence_keys_unsorted,
@@ -33701,6 +33716,11 @@ pub const CheckedModuleArtifact = struct {
             }
             if (@as(u64, entry.subst_start) + entry.subst_len > table.site_substitutions.len) {
                 return .{ .kind = .site_substitution_out_of_bounds, .index = @intCast(i) };
+            }
+            if (entry.instance_ty != static_dispatch.SiteEvidenceEntry.no_site_instance and
+                entry.instance_ty >= self.checked_types.payloadCount())
+            {
+                return .{ .kind = .site_instance_type_out_of_bounds, .index = @intCast(i) };
             }
             if (i > 0 and table.site_evidence[i - 1].key >= entry.key) {
                 return .{ .kind = .site_evidence_keys_unsorted, .index = @intCast(i) };
