@@ -34015,6 +34015,7 @@ fn checkStaticDispatchConstraints(self: *Self, env: *Env, is_numeric_default_pas
                                 );
                                 continue;
                             }
+                            try self.deriveStructuralEqHashComponentObligations(deferred_constraint.var_, .equality, constraint, env);
                             try self.satisfyDerivedIsEqConstraint(
                                 deferred_constraint.var_,
                                 constraint,
@@ -34036,6 +34037,7 @@ fn checkStaticDispatchConstraints(self: *Self, env: *Env, is_numeric_default_pas
                                 );
                                 continue;
                             }
+                            try self.deriveStructuralEqHashComponentObligations(deferred_constraint.var_, .hash, constraint, env);
                             try self.satisfyDerivedToHashConstraint(
                                 deferred_constraint.var_,
                                 constraint,
@@ -34383,6 +34385,7 @@ fn checkStaticDispatchConstraints(self: *Self, env: *Env, is_numeric_default_pas
                         if (method_lookup == null or staticDispatchBindingIsDerivedMarker(method_lookup.?)) {
                             const backing_var = self.types.getAliasBackingVar(alias);
                             if (try self.varSupportsIsEq(backing_var)) {
+                                try self.deriveStructuralEqHashComponentObligations(backing_var, .equality, constraint, env);
                                 try self.satisfyDerivedIsEqConstraint(
                                     deferred_constraint.var_,
                                     constraint,
@@ -34411,6 +34414,7 @@ fn checkStaticDispatchConstraints(self: *Self, env: *Env, is_numeric_default_pas
                         if (method_lookup == null or staticDispatchBindingIsDerivedMarker(method_lookup.?)) {
                             const backing_var = self.types.getAliasBackingVar(alias);
                             if (try self.varSupportsToHash(backing_var)) {
+                                try self.deriveStructuralEqHashComponentObligations(backing_var, .hash, constraint, env);
                                 try self.satisfyDerivedToHashConstraint(
                                     deferred_constraint.var_,
                                     constraint,
@@ -34694,6 +34698,7 @@ fn checkStaticDispatchConstraints(self: *Self, env: *Env, is_numeric_default_pas
                     if (constraint.fn_name.eql(self.cir.idents.is_eq)) {
                         // Check if all components of this anonymous type support is_eq
                         if (try self.typeSupportsIsEq(dispatcher_content.structure)) {
+                            try self.deriveStructuralEqHashComponentObligations(deferred_constraint.var_, .equality, constraint, env);
                             try self.satisfyDerivedIsEqConstraint(
                                 deferred_constraint.var_,
                                 constraint,
@@ -34714,6 +34719,7 @@ fn checkStaticDispatchConstraints(self: *Self, env: *Env, is_numeric_default_pas
                         // Anonymous structural types have derived to_hash if all their
                         // components also support to_hash.
                         if (try self.typeSupportsToHash(dispatcher_content.structure)) {
+                            try self.deriveStructuralEqHashComponentObligations(deferred_constraint.var_, .hash, constraint, env);
                             try self.satisfyDerivedToHashConstraint(
                                 deferred_constraint.var_,
                                 constraint,
@@ -35112,7 +35118,12 @@ fn ensureCustomInterpolationPartsChecked(
 
 const EqHashDerivation = enum { equality, hash };
 
-/// Whether a structural type supports `is_eq` or `to_hash`. Anonymous
+/// Whether a structural type's shape can support `is_eq` or `to_hash` at all:
+/// this classifies only the leaves that can never qualify (functions, and
+/// nominals that declare neither derivation). Generic components and nominal
+/// components with their own method are admitted here; actually resolving
+/// those component comparisons is `deriveStructuralEqHashComponentObligations`'s
+/// job, which treats each one as if it were written directly. Anonymous
 /// structures recurse through their components, but a nominal component is a
 /// method boundary: it must explicitly declare the active method. A derived
 /// marker on that nominal is valid only when its backing shape also qualifies.
@@ -35684,10 +35695,12 @@ fn typeSupportsToHash(self: *Self, flat_type: types_mod.FlatType) std.mem.Alloca
     return try self.typeSupportsStructuralDeriveInternal(flat_type, .hash, &self.var_set);
 }
 
-/// Resolve a type variable and report whether its content supports the
-/// structural derivations is_eq and to_hash. Flex/rigid vars are optimistically
-/// admitted: if later unified with a non-deriving type (a function),
-/// unification fails. Already-visited vars (recursive types) return true.
+/// Resolve a type variable and report whether its content's shape can support
+/// the structural derivations is_eq and to_hash. Flex/rigid vars are
+/// optimistically admitted: if later unified with a non-deriving type (a
+/// function), unification fails. Already-visited vars (recursive types) return
+/// true. This is the shape classifier only; the component comparisons it
+/// admits are resolved by `deriveStructuralEqHashComponentObligations`.
 fn varSupportsStructuralDeriveInternal(
     self: *Self,
     var_: Var,
@@ -35732,6 +35745,164 @@ fn nominalSupportsStructuralDerive(self: *Self, nominal_type: types_mod.NominalT
     }
     const template = self.nominalDeclBackingTemplate(nominal_type) orelse return true;
     return try self.varSupportsStructuralDeriveInternal(template, derivation, &self.var_set);
+}
+
+/// Decompose a supported derived `is_eq`/`to_hash` comparison into
+/// per-component obligations. The boolean walk above has already rejected the
+/// leaves that can never qualify (functions, nominals declaring neither
+/// derivation); this pass then resolves every remaining component comparison
+/// exactly as if it were written directly: structural components and
+/// derived-marker nominals recurse, while a generic (flex/rigid) component or
+/// a nominal component with its own method enqueues a child static-dispatch
+/// obligation on the component. Without this pass the parent comparison is
+/// satisfied structurally even though a component's comparability was never
+/// resolved, and lowering panics later (issue 11575).
+fn deriveStructuralEqHashComponentObligations(
+    self: *Self,
+    dispatcher_var: Var,
+    derivation: EqHashDerivation,
+    parent_constraint: StaticDispatchConstraint,
+    env: *Env,
+) Allocator.Error!void {
+    self.var_set.clearRetainingCapacity();
+    try self.varDeriveComponentObligations(dispatcher_var, derivation, &self.var_set, env, parent_constraint, false);
+}
+
+fn varDeriveComponentObligations(
+    self: *Self,
+    var_: Var,
+    derivation: EqHashDerivation,
+    visited: *std.AutoHashMap(Var, void),
+    env: *Env,
+    parent_constraint: StaticDispatchConstraint,
+    admit_rigids: bool,
+) Allocator.Error!void {
+    const resolved = self.types.resolveVar(var_);
+    if (visited.contains(resolved.var_)) return;
+    try visited.put(resolved.var_, {});
+
+    switch (resolved.desc.content) {
+        .structure => |s| switch (s) {
+            // The boolean walk already rejected these; nothing to delegate.
+            .fn_pure, .fn_effectful, .fn_unbound => return,
+            .empty_record, .empty_tag_union => return,
+            .record => |record| {
+                const fields_slice = self.types.getRecordFieldsSlice(record.fields);
+                for (fields_slice.items(.presence)) |presence| {
+                    try self.varDeriveComponentObligations(presence.typeVar(), derivation, visited, env, parent_constraint, admit_rigids);
+                }
+            },
+            .tuple => |tuple| {
+                const elems = self.types.sliceVars(tuple.elems);
+                for (elems) |elem_var| {
+                    try self.varDeriveComponentObligations(elem_var, derivation, visited, env, parent_constraint, admit_rigids);
+                }
+            },
+            .tag_union => |tag_union| {
+                const tags_slice = self.types.getTagsSlice(tag_union.tags);
+                for (tags_slice.items(.args)) |tag_args| {
+                    const args = self.types.sliceVars(tag_args);
+                    for (args) |arg_var| {
+                        try self.varDeriveComponentObligations(arg_var, derivation, visited, env, parent_constraint, admit_rigids);
+                    }
+                }
+            },
+            .nominal_type => |nominal| {
+                const method_lookup = self.nominalEqHashMethod(nominal, derivation) orelse return;
+                if (!staticDispatchBindingIsDerivedMarker(method_lookup)) {
+                    if (admit_rigids) return;
+                    // The nominal's own method is the component comparison:
+                    // dispatch it exactly like a direct comparison would.
+                    try self.mkDerivedComponentConstraint(resolved.var_, derivation, parent_constraint, env);
+                    return;
+                }
+                if (self.nominalIsBoxType(nominal)) return;
+                for (self.types.sliceNominalArgs(nominal)) |arg_var| {
+                    try self.varDeriveComponentObligations(arg_var, derivation, visited, env, parent_constraint, admit_rigids);
+                }
+                const template = self.nominalDeclBackingTemplate(nominal) orelse return;
+                // Formals in the template stand for the args checked above; a
+                // method nominal inside a template compares formal-typed values,
+                // whose contracts belong to the derived method's own design, so
+                // the whole template is admitted rather than dispatched.
+                try self.varDeriveComponentObligations(template, derivation, visited, env, parent_constraint, true);
+            },
+        },
+        .flex, .rigid => {
+            if (admit_rigids) return;
+            try self.mkDerivedComponentConstraint(resolved.var_, derivation, parent_constraint, env);
+        },
+        .alias => |alias| {
+            try self.varDeriveComponentObligations(self.types.getAliasBackingVar(alias), derivation, visited, env, parent_constraint, admit_rigids);
+        },
+        .err, .field_presence => return,
+    }
+}
+
+/// Enqueue the static-dispatch obligation that a direct comparison on
+/// `component_var` would create: `is_eq : component, component -> Bool` or
+/// `to_hash : component, Hasher -> Hasher`, carrying the parent comparison's
+/// origin and provenance so failures report at the same site. Unifying the
+/// constrained receiver into the component routes the obligation through the
+/// ordinary dispatch machinery: a flex component defers it into a `where`
+/// requirement on the enclosing scheme at generalization, a rigid component
+/// discharges it against the receiver's where clauses (or reports a missing
+/// method), and a nominal component instantiates its method and checks that
+/// method's own where clause.
+fn mkDerivedComponentConstraint(
+    self: *Self,
+    component_var: Var,
+    derivation: EqHashDerivation,
+    parent_constraint: StaticDispatchConstraint,
+    env: *Env,
+) Allocator.Error!void {
+    const method_name = switch (derivation) {
+        .equality => self.cir.idents.is_eq,
+        .hash => self.cir.idents.to_hash,
+    };
+    const region = self.getRegionAt(parent_constraint.fn_var);
+    const arg1_var = switch (derivation) {
+        .equality => component_var,
+        // The component is hashed with the parent comparison's own hasher: share
+        // the hasher argument from the parent's `to_hash : _, Hasher -> Hasher`
+        // signature when it has one, so the child contract is the real one.
+        .hash => blk: {
+            const resolved_parent = self.types.resolveVar(parent_constraint.fn_var);
+            if (resolved_parent.desc.content.unwrapFunc()) |parent_func| {
+                const parent_args = self.types.sliceVars(parent_func.args);
+                if (parent_args.len == 2) break :blk parent_args[1];
+            }
+            break :blk try self.freshFromContent(.{ .flex = Flex.init() }, env, region);
+        },
+    };
+    const ret_var = switch (derivation) {
+        .equality => try self.freshBool(env, region),
+        // `to_hash` threads its Hasher argument straight through to the return.
+        .hash => arg1_var,
+    };
+    const args_range = try self.types.appendVars(&.{ component_var, arg1_var });
+    const constraint_fn_var = try self.freshFromContent(.{ .structure = .{ .fn_unbound = Func{
+        .args = args_range,
+        .ret = ret_var,
+    } } }, env, region);
+
+    const constraint = StaticDispatchConstraint{
+        .fn_name = method_name,
+        .fn_var = constraint_fn_var,
+        .origin = parent_constraint.origin,
+        .provenance = parent_constraint.provenance,
+    };
+    try self.recordCurrentExpectDispatchWatcher(constraint_fn_var);
+    const constraint_range = try self.types.appendStaticDispatchConstraints(&.{constraint});
+
+    const constrained_var = try self.freshFromContent(
+        .{ .flex = Flex{ .name = null, .constraints = constraint_range } },
+        env,
+        region,
+    );
+    _ = try self.unify(constrained_var, component_var, env);
+    try self.recordSchemeRequirementCandidate(component_var, constraint, .creation, null, false);
+    try self.recordAmbiguityCandidate(component_var, .creation, constraintIntroExpr(constraint));
 }
 
 /// Check if a type variable supports is_eq. See
