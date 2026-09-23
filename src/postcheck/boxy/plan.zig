@@ -832,6 +832,9 @@ pub const InspectMethodPlan = struct {
     worker: WorkerPlanId,
     method_module: checked.ModuleId,
     method: MethodNameId,
+    /// The worker's hidden descriptors for the call `to_inspect(value)` at
+    /// `source_rep`, in worker parameter order.
+    hidden_desc_args: Span = .{},
 };
 
 /// Which protocol operation an iterator call performs.
@@ -1595,6 +1598,7 @@ pub fn analyzeProgram(
     try builder.materializeDescriptorRequirements();
     try builder.materializeWorkerHiddenDescriptorParams();
     try builder.materializeCallableUseHiddenDescriptorArgs();
+    try builder.materializeInspectMethodHiddenDescriptorArgs();
     try builder.materializeDictionaryMethodDescriptorSources();
     try builder.materializeWorkerHiddenDictionaryParams();
     try builder.materializeWorkerErasedCaptures();
@@ -7806,6 +7810,35 @@ const Builder = struct {
         }
         for (self.plan.nested_callable_uses.items) |*use| {
             try self.fillCallableUseHiddenDescriptorArgs(use.worker, use.caller, &use.hidden_desc_args);
+        }
+    }
+
+    /// An inspect slot invokes its worker as `to_inspect(value)` with the
+    /// inspected representation as the argument, so the slot's hidden
+    /// descriptors are that call's descriptor arguments.
+    fn materializeInspectMethodHiddenDescriptorArgs(self: *Builder) Allocator.Error!void {
+        var index: usize = 0;
+        while (index < self.plan.inspect_methods.items.len) : (index += 1) {
+            const method = self.plan.inspect_methods.items[index];
+            const worker = self.plan.workers.items[@intFromEnum(method.worker)];
+            if (worker.hidden_descs.len == 0) continue;
+            const function = (self.repQuery().functionChildren(worker.rep)) orelse
+                boxyPlanInvariant("boxy inspect worker was not callable");
+            if (function.arg_count != 1) boxyPlanInvariant("boxy inspect worker did not take exactly one argument");
+            const source_type = self.plan.representations.items[@intFromEnum(method.source_rep)].source_type;
+            const ret_type = self.plan.representations.items[@intFromEnum(function.ret)].source_type;
+            const hidden_desc_args = try self.materializeWorkerCallHiddenDescriptorArgsForRepsWithEvidence(
+                method.worker,
+                &.{method.source_rep},
+                &.{method.source_rep},
+                function.ret,
+                &.{source_type},
+                ret_type,
+                null,
+                null,
+                null,
+            );
+            self.plan.inspect_methods.items[index].hidden_desc_args = hidden_desc_args;
         }
     }
 

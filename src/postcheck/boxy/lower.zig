@@ -1618,43 +1618,99 @@ const ProcedureBuilder = struct {
             .proc = undefined,
         });
 
-        var descriptor_sources = StaticDescriptorSourceMap{};
-        defer descriptor_sources.deinit(self.allocator);
-        try self.collectStaticDictionaryDescriptorSources(
-            inspect.worker,
-            rep_id,
-            self.plan.representations.items[@intFromEnum(rep_id)].source_type,
-            worker.checked_type,
-            &descriptor_sources,
-        );
-        var desc_context = StaticDescInstantiationContext{};
-        defer desc_context.deinit(self.allocator);
-        var hidden_desc_refs = std.ArrayList(LIR.BoxyDescRef).empty;
-        defer hidden_desc_refs.deinit(self.allocator);
         var nested_dict_refs = std.ArrayList(LIR.BoxyDictRef).empty;
         defer nested_dict_refs.deinit(self.allocator);
-        try self.collectStaticHiddenDescRefsForWorker(inspect.worker, &descriptor_sources, &desc_context, &hidden_desc_refs);
         try self.collectStaticHiddenDictRefsForWorker(inspect.worker, &nested_dict_refs);
+
+        // The inspected descriptor supplies the argument descriptor and the
+        // worker's hidden descriptors (`inspect_arg_descs`,
+        // `inspect_hidden_descs`), so the shared slot names only their order.
+        const worker_layout = self.layout_plan.workerLayoutFor(inspect.worker);
+        const worker_args = self.layout_plan.workerLayoutSlice(worker_layout.args);
+        if (worker_args.len != 1) boxyLowerInvariant("boxy inspect worker did not take exactly one argument");
+        const arg_layouts_start: u32 = @intCast(self.result.boxy_method_arg_layouts.items.len);
+        try self.result.boxy_method_arg_layouts.append(self.allocator, worker_args[0].layoutIdx());
+        const params = self.plan.hiddenDescriptorParamSlice(worker.hidden_descs);
+        const hidden_sources_start: u32 = @intCast(self.result.boxy_method_hidden_desc_sources.items.len);
+        for (0..params.len) |slot_index| {
+            try self.result.boxy_method_hidden_desc_sources.append(self.allocator, .{ .slot = @intCast(slot_index) });
+        }
 
         const slot = LirProgram.BoxyMethodSlot{
             .method = method,
             .proc = try self.emitWorker(inspect.worker),
-            .hidden_descs = try self.appendStaticHiddenDescRefs(hidden_desc_refs.items),
             .nested_dicts = try self.appendStaticHiddenDictRefs(nested_dict_refs.items),
-            .adapter = try self.staticMethodAdapterForWorker(
-                inspect.worker,
-                worker.checked_type,
-                &descriptor_sources,
-                &desc_context,
-                null,
-                null,
-                null,
-                null,
-                null,
-            ),
+            .adapter = .{
+                .arg_layouts = .{ .start = arg_layouts_start, .len = 1 },
+                .hidden_desc_sources = .{ .start = hidden_sources_start, .len = @intCast(params.len) },
+            },
         };
         self.result.boxy_method_slots.items[@intFromEnum(slot_id)] = slot;
         return slot_id;
+    }
+
+    /// The planned inspect worker's hidden descriptors for `rep_id`, built
+    /// statically; `sources` instantiates a worker representation whose
+    /// descriptor sources were planned by an enclosing dictionary method.
+    fn staticInspectHiddenDescsForRep(
+        self: *ProcedureBuilder,
+        rep_id: Plan.TypeRepId,
+        self_desc: LIR.BoxyTypeDescId,
+        sources: ?*const StaticDescriptorSourceMap,
+        context: ?*StaticDescInstantiationContext,
+    ) Allocator.Error!LIR.BoxySpan {
+        const inspect = self.plan.inspectMethodForRep(rep_id) orelse return .{};
+        const args = self.plan.directCallHiddenDescriptorArgSlice(inspect.hidden_desc_args);
+        if (args.len == 0) return .{};
+        const refs = try self.allocator.alloc(LIR.BoxyDescRef, args.len);
+        defer self.allocator.free(refs);
+        const identity_rep = self.descriptorIdentityRep(rep_id);
+        for (args, refs) |arg, *ref| {
+            // The whole inspected value is described by the descriptor under
+            // construction.
+            ref.* = if (self.descriptorIdentityRep(arg.rep) == identity_rep)
+                .{ .static = self_desc }
+            else if (sources) |source_map|
+                try self.staticDescRefForWorkerRepWithSourceMap(arg.rep, null, source_map, context.?)
+            else
+                try self.staticDescRefForRep(arg.rep);
+        }
+        return try self.appendStaticHiddenDescRefs(refs);
+    }
+
+    /// The inspected value's descriptor in the inspect worker's parameter
+    /// storage: the worker parameter instantiated by the planned hidden
+    /// descriptor arguments.
+    fn staticInspectArgDescsForRep(
+        self: *ProcedureBuilder,
+        rep_id: Plan.TypeRepId,
+        sources: ?*const StaticDescriptorSourceMap,
+        context: ?*StaticDescInstantiationContext,
+    ) Allocator.Error!LIR.BoxySpan {
+        const inspect = self.plan.inspectMethodForRep(rep_id) orelse return .{};
+        const worker_arg = self.inspectWorkerArgRep(inspect);
+        var arg_sources = StaticDescriptorSourceMap{};
+        defer arg_sources.deinit(self.allocator);
+        for (self.plan.directCallHiddenDescriptorArgSlice(inspect.hidden_desc_args)) |arg| {
+            const source_rep = if (sources) |source_map|
+                source_map.get(self.plan.representations.items[@intFromEnum(arg.rep)].descriptor orelse arg.worker_desc) orelse arg.rep
+            else
+                arg.rep;
+            try arg_sources.put(self.allocator, arg.worker_desc, source_rep);
+        }
+        var local_context = StaticDescInstantiationContext{};
+        defer local_context.deinit(self.allocator);
+        const ref = try self.staticDescRefForWorkerRepWithSourceMap(worker_arg, null, &arg_sources, context orelse &local_context);
+        return try self.appendStaticHiddenDescRefs(&.{ref});
+    }
+
+    fn inspectWorkerArgRep(self: *const ProcedureBuilder, inspect: Plan.InspectMethodPlan) Plan.TypeRepId {
+        const worker = self.plan.workers.items[@intFromEnum(inspect.worker)];
+        const function = self.repQuery().functionChildren(worker.rep) orelse
+            boxyLowerInvariant("boxy inspect worker was not callable");
+        if (function.arg_count != 1) boxyLowerInvariant("boxy inspect worker did not take exactly one argument");
+        const children = self.plan.childSlice(self.plan.representations.items[@intFromEnum(function.rep)].children);
+        return children[function.args_start].rep;
     }
 
     fn collectStaticHiddenDescRefsForWorker(
@@ -2971,6 +3027,14 @@ const ProcedureBuilder = struct {
             .field_names = try self.staticFieldNamesForRep(identity_worker),
             .inspect_opaque = self.repInspectsOpaque(identity_worker),
             .inspect_method = try self.staticInspectMethodForRep(identity_source orelse identity_worker),
+            .inspect_hidden_descs = if (identity_source) |source_rep|
+                try self.staticInspectHiddenDescsForRep(source_rep, desc_id, null, null)
+            else
+                try self.staticInspectHiddenDescsForRep(identity_worker, desc_id, descriptor_sources, context),
+            .inspect_arg_descs = if (identity_source) |source_rep|
+                try self.staticInspectArgDescsForRep(source_rep, null, null)
+            else
+                try self.staticInspectArgDescsForRep(identity_worker, descriptor_sources, context),
             .presence_slot_present_discriminant = worker_rep.presence_slot_present_discriminant,
             .debug_checked_type = worker_rep.source_type.ty,
         };
@@ -3848,6 +3912,8 @@ const ProcedureBuilder = struct {
             .field_names = try self.staticFieldNamesForRep(rep_id),
             .inspect_opaque = self.repInspectsOpaque(rep_id),
             .inspect_method = try self.staticInspectMethodForRep(rep_id),
+            .inspect_hidden_descs = try self.staticInspectHiddenDescsForRep(rep_id, desc_id, null, null),
+            .inspect_arg_descs = try self.staticInspectArgDescsForRep(rep_id, null, null),
             .presence_slot_present_discriminant = rep.presence_slot_present_discriminant,
             .debug_checked_type = rep.source_type.ty,
         };
@@ -28153,11 +28219,94 @@ const ProcBodyBuilder = struct {
             .field_names = try self.parent.staticFieldNamesForRep(rep_id),
             .inspect_opaque = self.parent.repInspectsOpaque(rep_id),
             .inspect_method = try self.parent.staticInspectMethodForRep(rep_id),
+            .inspect_hidden_descs = try self.templateInspectHiddenDescsForRep(rep_id, desc_id, current_desc, captures, context),
+            .inspect_arg_descs = try self.templateInspectArgDescsForRep(rep_id, current_desc, captures, context),
             .presence_slot_present_discriminant = rep.presence_slot_present_discriminant,
             .debug_checked_type = rep.source_type.ty,
         };
         self.parent.result.boxy_type_descs.items[@intFromEnum(desc_id)] = completed_desc;
         return desc_id;
+    }
+
+    /// The planned inspect worker's hidden descriptors for `rep_id`, in the
+    /// template's substitution environment.
+    fn templateInspectHiddenDescsForRep(
+        self: *ProcBodyBuilder,
+        rep_id: Plan.TypeRepId,
+        self_desc: LIR.BoxyTypeDescId,
+        current_desc: ?Plan.DescriptorRequirementId,
+        captures: *std.ArrayList(LIR.LocalId),
+        context: *DescriptorTemplateContext,
+    ) Allocator.Error!LIR.BoxySpan {
+        const inspect = self.parent.plan.inspectMethodForRep(rep_id) orelse return .{};
+        const args = self.parent.plan.directCallHiddenDescriptorArgSlice(inspect.hidden_desc_args);
+        if (args.len == 0) return .{};
+        const refs = try self.parent.allocator.alloc(LIR.BoxyDescRef, args.len);
+        defer self.parent.allocator.free(refs);
+        const identity_rep = self.parent.descriptorIdentityRep(rep_id);
+        for (args, refs) |arg, *ref| {
+            // The whole inspected value is described by the descriptor under
+            // construction.
+            ref.* = if (self.parent.descriptorIdentityRep(arg.rep) == identity_rep)
+                .{ .static = self_desc }
+            else
+                try self.descriptorTemplateRefForRep(arg.rep, current_desc, captures, context);
+        }
+        return try self.parent.appendStaticHiddenDescRefs(refs);
+    }
+
+    /// The inspected value's descriptor in the inspect worker's parameter
+    /// storage, with each worker type parameter bound to its planned
+    /// argument in this template's environment.
+    fn templateInspectArgDescsForRep(
+        self: *ProcBodyBuilder,
+        rep_id: Plan.TypeRepId,
+        current_desc: ?Plan.DescriptorRequirementId,
+        captures: *std.ArrayList(LIR.LocalId),
+        context: *DescriptorTemplateContext,
+    ) Allocator.Error!LIR.BoxySpan {
+        const inspect = self.parent.plan.inspectMethodForRep(rep_id) orelse return .{};
+        const worker_arg = self.parent.inspectWorkerArgRep(inspect);
+        const scope = DescriptorTemplateScope{
+            .bindings_start = context.bindings.items.len,
+            .env = context.env,
+        };
+        defer popDescriptorTemplateExactReps(context, scope);
+        for (self.parent.plan.directCallHiddenDescriptorArgSlice(inspect.hidden_desc_args)) |arg| {
+            if (!self.repIsBareDynamic(arg.worker_rep)) continue;
+            try self.bindDescriptorTemplateExactRep(arg.worker_rep, arg.rep, context);
+        }
+        const ref = try self.descriptorTemplateRefForRep(worker_arg, current_desc, captures, context);
+        return try self.parent.appendStaticHiddenDescRefs(&.{ref});
+    }
+
+    /// Bind one formal to its actual in the template environment; the
+    /// caller's scope restores it.
+    fn bindDescriptorTemplateExactRep(
+        self: *const ProcBodyBuilder,
+        formal: Plan.TypeRepId,
+        actual_rep: Plan.TypeRepId,
+        context: *DescriptorTemplateContext,
+    ) Allocator.Error!void {
+        const actual = self.descriptorTemplateExactRep(actual_rep, context);
+        const outer = context.exact_reps[@intFromEnum(formal)];
+        if (formal == actual or outer == actual) return;
+        try context.bindings.append(self.parent.allocator, .{
+            .formal = formal,
+            .outer = outer,
+            .actual = actual,
+        });
+        context.exact_reps[@intFromEnum(formal)] = actual;
+        const key = DescriptorTemplateEnvKey{
+            .parent = context.env,
+            .formal = formal,
+            .actual = actual,
+        };
+        const entry = try context.env_ids.getOrPut(key);
+        if (!entry.found_existing) {
+            entry.value_ptr.* = @enumFromInt(@as(u32, @intCast(context.env_ids.count())));
+        }
+        context.env = entry.value_ptr.*;
     }
 
     fn templateNestedDescRefsForRep(

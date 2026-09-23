@@ -321,6 +321,13 @@ pub const BoxyTypeDesc = struct {
     structural_eq: ?LIR.LirProcSpecId = null,
     structural_hash: ?LIR.LirProcSpecId = null,
     inspect_method: ?BoxyMethodSlotId = null,
+    /// The hidden descriptors `inspect_method`'s worker receives, in worker
+    /// parameter order. They describe this descriptor's own type arguments,
+    /// so a runtime-instantiated descriptor carries its own copies.
+    inspect_hidden_descs: BoxySpan = .{},
+    /// One descriptor: this value in the storage of `inspect_method`'s
+    /// worker parameter, instantiated at this descriptor's type arguments.
+    inspect_arg_descs: BoxySpan = .{},
     debug_checked_type: ?checked.CheckedTypeId = null,
 };
 
