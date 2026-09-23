@@ -8498,6 +8498,19 @@ const Builder = struct {
                     try bindings.append(self.allocator, .{ .worker_rep = formal_rep, .call_rep = actual });
                 }
             }
+            // The path is written against the callee's type. Where that type
+            // names a structure and the call site names a wrapper that
+            // checking related to it, the structural step applies to the
+            // wrapper's backing, under the formal bindings recorded above.
+            switch (path_step.stepKind()) {
+                .fn_arg, .fn_ret, .tuple_elem, .record_field, .tag_payload_tag => {
+                    if (self.repQuery().structureBackingRep(current)) |backing| {
+                        current = backing;
+                        continue;
+                    }
+                },
+                .alias_arg, .alias_backing, .nominal_arg, .nominal_backing, .tag_payload_index => {},
+            }
             const selected = switch (path_step.stepKind()) {
                 .fn_arg => for (children) |child| {
                     if (child.role == .function_arg and child.role.function_arg == path_step.data) break child.rep;
@@ -9133,10 +9146,18 @@ const Builder = struct {
 
         if (worker_rep.children.len == 0) return;
 
+        // The descriptor above belongs to the call's own value. Its children
+        // align with the structure that value stands for, which is the call
+        // representation itself unless a structural worker position was
+        // instantiated by a wrapper of that structure.
+        const structure_call_rep_id = try self.repQuery().bindCallWrappedStructure(self.allocator, worker_rep_id, aligned_call_rep_id, substitutions);
+        const through_wrapper = structure_call_rep_id != aligned_call_rep_id;
+        const structure_rep = self.plan.representations.items[@intFromEnum(structure_call_rep_id)];
+
         // The recursion can analyze new types, growing the children pool and
         // invalidating any held slice; children are re-read by index on every
         // iteration.
-        if (call_rep.kind == .empty_tag_union) {
+        if (structure_rep.kind == .empty_tag_union) {
             var child_index: usize = 0;
             while (child_index < worker_rep.children.len) : (child_index += 1) {
                 const worker_child = self.plan.children.items[worker_rep.children.start + child_index];
@@ -9156,7 +9177,7 @@ const Builder = struct {
         var child_index: usize = 0;
         while (child_index < worker_rep.children.len) : (child_index += 1) {
             const worker_child = self.plan.children.items[worker_rep.children.start + child_index];
-            const call_children = self.plan.childSlice(call_rep.children);
+            const call_children = self.plan.childSlice(structure_rep.children);
             if (runtime_value_only and !self.plan.childCarriesHiddenDescriptor(worker_rep_id, worker_child)) continue;
             if (self.plan.childIsSharedBackingTemplate(worker_rep_id, worker_child)) continue;
             if (!try self.repQuery().repSubtreeHasDescriptor(worker_child.rep)) continue;
@@ -9174,9 +9195,14 @@ const Builder = struct {
             if (childIsInNominalDeclarationScope(worker_child.role)) {
                 try self.bindCallNominalFormals(worker_rep_id, aligned_call_rep_id, substitutions);
             }
-            if (self.rowInstantiationTarget(worker_rep_id, aligned_call_rep_id, worker_child)) |row_target| {
+            if (self.rowInstantiationTarget(worker_rep_id, structure_call_rep_id, worker_child)) |structure_row_target| {
                 // The residual checked type does not replace the complete
                 // caller row's storage descriptor or its tag discriminants.
+                // A complete row seen through a wrapper is the wrapper's value.
+                const row_target = if (structure_row_target == structure_call_rep_id)
+                    aligned_call_rep_id
+                else
+                    structureChildCallRep(substitutions, through_wrapper, structure_row_target);
                 try substitutions.bindScoped(self.allocator, worker_child.rep, row_target);
                 try self.collectCallHiddenDescriptorArgs(worker_child.rep, row_target, call_value_rep, source_value_rep, source_arg_index, params, next_param, pending, seen_reps, seen_descriptor_reps, substitutions, runtime_value_only);
                 continue;
@@ -9189,7 +9215,7 @@ const Builder = struct {
                 continue;
             }
             if (self.namedQuery().findMatchingChildByRole(call_children, worker_child)) |call_child| {
-                try self.collectCallHiddenDescriptorArgs(worker_child.rep, call_child.rep, call_value_rep, source_value_rep, source_arg_index, params, next_param, pending, seen_reps, seen_descriptor_reps, substitutions, runtime_value_only);
+                try self.collectCallHiddenDescriptorArgs(worker_child.rep, structureChildCallRep(substitutions, through_wrapper, call_child.rep), call_value_rep, source_value_rep, source_arg_index, params, next_param, pending, seen_reps, seen_descriptor_reps, substitutions, runtime_value_only);
                 continue;
             }
             if (self.repQuery().structuralWrapperBackingRep(aligned_call_rep_id)) |call_backing| {
@@ -9200,11 +9226,11 @@ const Builder = struct {
                 }
             }
             if (try self.namedQuery().findMatchingTagPayloadInRowExtension(call_children, worker_child)) |call_child| {
-                try self.collectCallHiddenDescriptorArgs(worker_child.rep, call_child.rep, call_value_rep, source_value_rep, source_arg_index, params, next_param, pending, seen_reps, seen_descriptor_reps, substitutions, runtime_value_only);
+                try self.collectCallHiddenDescriptorArgs(worker_child.rep, structureChildCallRep(substitutions, through_wrapper, call_child.rep), call_value_rep, source_value_rep, source_arg_index, params, next_param, pending, seen_reps, seen_descriptor_reps, substitutions, runtime_value_only);
                 continue;
             }
             if (try self.repQuery().findMatchingChildBySourceType(call_children, worker_child)) |call_child| {
-                try self.collectCallHiddenDescriptorArgs(worker_child.rep, call_child.rep, call_value_rep, source_value_rep, source_arg_index, params, next_param, pending, seen_reps, seen_descriptor_reps, substitutions, runtime_value_only);
+                try self.collectCallHiddenDescriptorArgs(worker_child.rep, structureChildCallRep(substitutions, through_wrapper, call_child.rep), call_value_rep, source_value_rep, source_arg_index, params, next_param, pending, seen_reps, seen_descriptor_reps, substitutions, runtime_value_only);
                 continue;
             }
             if (self.workerPresenceSlotPayloadMatchesUnwrappedCallRep(worker_rep_id, aligned_call_rep_id, worker_child)) {
@@ -9219,7 +9245,7 @@ const Builder = struct {
                 try self.collectCallHiddenDescriptorArgs(worker_child.rep, aligned_call_rep_id, call_value_rep, source_value_rep, source_arg_index, params, next_param, pending, seen_reps, seen_descriptor_reps, substitutions, runtime_value_only);
                 continue;
             }
-            if (call_rep.kind == .dynamic and call_rep.children.len == 0 and call_rep.descriptor != null) {
+            if (structure_rep.kind == .dynamic and structure_rep.children.len == 0 and call_rep.descriptor != null) {
                 try self.collectCallHiddenDescriptorArgs(worker_child.rep, aligned_call_rep_id, call_value_rep, source_value_rep, source_arg_index, params, next_param, pending, seen_reps, seen_descriptor_reps, substitutions, runtime_value_only);
                 continue;
             }
@@ -9591,10 +9617,17 @@ const Builder = struct {
 
         if (worker_rep.children.len == 0) return;
 
+        // Children align with the structure the call's value stands for.
+        var wrapper_bindings: CallWrapperBindings = .{};
+        defer wrapper_bindings.deinit(self.allocator);
+        const structure_call_rep_id = try self.repQuery().bindCallWrappedStructure(self.allocator, worker_rep_id, call_rep_id, &wrapper_bindings);
+        const through_wrapper = structure_call_rep_id != call_rep_id;
+        const structure_rep = self.plan.representations.items[@intFromEnum(structure_call_rep_id)];
+
         // The recursion can analyze new types, growing the children pool and
         // invalidating any held slice; children are re-read by index on every
         // iteration.
-        if (call_rep.kind == .empty_tag_union) {
+        if (structure_rep.kind == .empty_tag_union) {
             var child_index: usize = 0;
             while (self.plan.dictionaryChildAt(worker_rep_id, child_index)) |worker_child| : (child_index += 1) {
                 if (self.plan.childIsSharedBackingTemplate(worker_rep_id, worker_child)) continue;
@@ -9606,7 +9639,7 @@ const Builder = struct {
 
         var child_index: usize = 0;
         while (self.plan.dictionaryChildAt(worker_rep_id, child_index)) |worker_child| : (child_index += 1) {
-            const call_children = self.plan.childSlice(call_rep.children);
+            const call_children = self.plan.childSlice(structure_rep.children);
             if (self.plan.childIsSharedBackingTemplate(worker_rep_id, worker_child)) continue;
             if (!try self.repQuery().repSubtreeHasDictionary(worker_child.rep)) continue;
             // A generic argument reachable through an unwrapped sibling (e.g. an
@@ -9614,12 +9647,16 @@ const Builder = struct {
             // dictionary once, via that sibling; skip the duplicate here to
             // mirror the worker param collection's per-rep dedup.
             if (context.seen_reps.contains(worker_child.rep)) continue;
-            if (self.namedQuery().rowInstantiationTarget(worker_rep_id, call_rep_id, worker_child)) |row_target| {
+            if (self.namedQuery().rowInstantiationTarget(worker_rep_id, structure_call_rep_id, worker_child)) |structure_row_target| {
+                const row_target = if (structure_row_target == structure_call_rep_id)
+                    call_rep_id
+                else
+                    structureChildCallRep(&wrapper_bindings, through_wrapper, structure_row_target);
                 try self.collectCallHiddenDictionaryArgs(worker_child.rep, row_target, context);
                 continue;
             }
             if (self.namedQuery().findMatchingChildByRole(call_children, worker_child)) |call_child| {
-                try self.collectCallHiddenDictionaryArgs(worker_child.rep, call_child.rep, context);
+                try self.collectCallHiddenDictionaryArgs(worker_child.rep, structureChildCallRep(&wrapper_bindings, through_wrapper, call_child.rep), context);
                 continue;
             }
             if (self.repQuery().structuralWrapperBackingRep(call_rep_id)) |call_backing| {
@@ -9630,11 +9667,11 @@ const Builder = struct {
                 }
             }
             if (try self.namedQuery().findMatchingTagPayloadInRowExtension(call_children, worker_child)) |call_child| {
-                try self.collectCallHiddenDictionaryArgs(worker_child.rep, call_child.rep, context);
+                try self.collectCallHiddenDictionaryArgs(worker_child.rep, structureChildCallRep(&wrapper_bindings, through_wrapper, call_child.rep), context);
                 continue;
             }
             if (try self.repQuery().findMatchingDictionaryChildBySourceType(call_children, worker_child)) |call_child| {
-                try self.collectCallHiddenDictionaryArgs(worker_child.rep, call_child.rep, context);
+                try self.collectCallHiddenDictionaryArgs(worker_child.rep, structureChildCallRep(&wrapper_bindings, through_wrapper, call_child.rep), context);
                 continue;
             }
             if (self.workerPresenceSlotPayloadMatchesUnwrappedCallRep(worker_rep_id, call_rep_id, worker_child)) {
@@ -9649,7 +9686,7 @@ const Builder = struct {
                 try self.collectCallHiddenDictionaryArgs(worker_child.rep, call_rep_id, context);
                 continue;
             }
-            if (call_rep.kind == .dynamic and call_rep.children.len == 0 and call_rep.dictionaries.len != 0) {
+            if (structure_rep.kind == .dynamic and structure_rep.children.len == 0 and call_rep.dictionaries.len != 0) {
                 try self.collectCallHiddenDictionaryArgs(worker_child.rep, call_rep_id, context);
                 continue;
             }
@@ -9675,7 +9712,14 @@ const Builder = struct {
         }
         if (worker_rep.children.len == 0) return;
 
-        if (call_rep.kind == .empty_tag_union) {
+        // Children align with the structure the call's value stands for.
+        var wrapper_bindings: CallWrapperBindings = .{};
+        defer wrapper_bindings.deinit(self.allocator);
+        const structure_call_rep_id = try self.repQuery().bindCallWrappedStructure(self.allocator, worker_rep_id, call_rep_id, &wrapper_bindings);
+        const through_wrapper = structure_call_rep_id != call_rep_id;
+        const structure_rep = self.plan.representations.items[@intFromEnum(structure_call_rep_id)];
+
+        if (structure_rep.kind == .empty_tag_union) {
             for (self.plan.childSlice(worker_rep.children)) |worker_child| {
                 if (self.plan.childIsSharedBackingTemplate(worker_rep_id, worker_child)) continue;
                 if (!try self.repQuery().repSubtreeHasDictionary(worker_child.rep)) continue;
@@ -9685,12 +9729,16 @@ const Builder = struct {
         }
 
         const worker_children = self.plan.childSlice(worker_rep.children);
-        const call_children = self.plan.childSlice(call_rep.children);
+        const call_children = self.plan.childSlice(structure_rep.children);
         for (worker_children) |worker_child| {
             if (self.plan.childIsSharedBackingTemplate(worker_rep_id, worker_child)) continue;
             if (!try self.repQuery().repSubtreeHasDictionary(worker_child.rep)) continue;
             if (substitutions.get(worker_child.rep) != null) continue;
-            if (self.namedQuery().rowInstantiationTarget(worker_rep_id, call_rep_id, worker_child)) |row_target| {
+            if (self.namedQuery().rowInstantiationTarget(worker_rep_id, structure_call_rep_id, worker_child)) |structure_row_target| {
+                const row_target = if (structure_row_target == structure_call_rep_id)
+                    call_rep_id
+                else
+                    structureChildCallRep(&wrapper_bindings, through_wrapper, structure_row_target);
                 try self.collectCallDictionaryRepSubstitutions(worker_child.rep, row_target, substitutions, seen);
                 continue;
             }
@@ -9702,7 +9750,7 @@ const Builder = struct {
                 }
             }
             if (self.namedQuery().findMatchingChildByRole(call_children, worker_child)) |call_child| {
-                try self.collectCallDictionaryRepSubstitutions(worker_child.rep, call_child.rep, substitutions, seen);
+                try self.collectCallDictionaryRepSubstitutions(worker_child.rep, structureChildCallRep(&wrapper_bindings, through_wrapper, call_child.rep), substitutions, seen);
                 continue;
             }
             if (self.repQuery().structuralWrapperBackingRep(call_rep_id)) |call_backing| {
@@ -9713,11 +9761,11 @@ const Builder = struct {
                 }
             }
             if (try self.namedQuery().findMatchingTagPayloadInRowExtension(call_children, worker_child)) |call_child| {
-                try self.collectCallDictionaryRepSubstitutions(worker_child.rep, call_child.rep, substitutions, seen);
+                try self.collectCallDictionaryRepSubstitutions(worker_child.rep, structureChildCallRep(&wrapper_bindings, through_wrapper, call_child.rep), substitutions, seen);
                 continue;
             }
             if (try self.repQuery().findMatchingDictionaryChildBySourceType(call_children, worker_child)) |call_child| {
-                try self.collectCallDictionaryRepSubstitutions(worker_child.rep, call_child.rep, substitutions, seen);
+                try self.collectCallDictionaryRepSubstitutions(worker_child.rep, structureChildCallRep(&wrapper_bindings, through_wrapper, call_child.rep), substitutions, seen);
                 continue;
             }
             if (self.workerPresenceSlotPayloadMatchesUnwrappedCallRep(worker_rep_id, call_rep_id, worker_child)) {
@@ -9732,7 +9780,7 @@ const Builder = struct {
                 try self.collectCallDictionaryRepSubstitutions(worker_child.rep, call_rep_id, substitutions, seen);
                 continue;
             }
-            if (call_rep.kind == .dynamic and call_rep.children.len == 0 and call_rep.dictionaries.len != 0) {
+            if (structure_rep.kind == .dynamic and structure_rep.children.len == 0 and call_rep.dictionaries.len != 0) {
                 try self.collectCallDictionaryRepSubstitutions(worker_child.rep, call_rep_id, substitutions, seen);
             }
         }
@@ -13073,6 +13121,75 @@ pub const RepQuery = struct {
         return null;
     }
 
+    /// The structure a call representation stands for at a worker position
+    /// of a call boundary. A structural worker position instantiated by a
+    /// call-side alias or nominal was related to that wrapper's backing by
+    /// checking (see `structureBackingRep`), so every such wrapper is seen
+    /// through, binding each nominal use's
+    /// declaration formals in `env` so the backing's children resolve to that
+    /// use's actuals. A wrapper worker position aligns with the call's
+    /// wrapper itself.
+    ///
+    /// `env` provides `resolve(rep)` and `bindScoped(allocator, formal, actual)`.
+    pub fn bindCallWrappedStructure(
+        self: RepQuery,
+        allocator: Allocator,
+        worker_rep_id: TypeRepId,
+        call_rep_id: TypeRepId,
+        env: anytype,
+    ) Allocator.Error!TypeRepId {
+        const worker_kind = self.rep(worker_rep_id).kind;
+        if (worker_kind == .alias or worker_kind == .nominal) return call_rep_id;
+
+        var current = call_rep_id;
+        var depth: u16 = 0;
+        while (self.structureBackingRep(current)) |backing| {
+            if (depth == 1024) boxyPlanInvariant("call wrapper chain exceeded boxy planner limit");
+            depth += 1;
+            var backing_substitutions = self.plan.nominalBackingSubstitutions(self.rep(current).nominal_backing_arg_substitutions);
+            while (backing_substitutions.next()) |backing_substitution| {
+                const formal_rep = backing_substitution.formal_rep orelse continue;
+                const actual = env.resolve(backing_substitution.actual_rep);
+                if (formal_rep != actual) try env.bindScoped(allocator, formal_rep, actual);
+            }
+            current = env.resolve(backing);
+        }
+        return current;
+    }
+
+    /// The backing an alias or backed nominal stands for where checking
+    /// related it to a structure. Checking unifies a nominal with its
+    /// backing's structure when the declaration is transparent (`:=`), or
+    /// inside its origin module when it is opaque, so a structural position
+    /// of a callee's type can be instantiated at a call by such a wrapper of
+    /// that structure.
+    pub fn structureBackingRep(self: RepQuery, rep_id: TypeRepId) ?TypeRepId {
+        const current = self.rep(rep_id);
+        return switch (current.kind) {
+            .alias => self.requiredSingleChild(rep_id, .alias_backing).rep,
+            .nominal => |kind| switch (kind) {
+                .transparent, .builtin_other => self.requiredSingleChild(rep_id, .nominal_backing).rep,
+                .opaque_nominal => null,
+            },
+            .in_progress,
+            .dynamic,
+            .primitive,
+            .bool_tag_union,
+            .erased_callable,
+            .record,
+            .tuple,
+            .list,
+            .box,
+            .generated_field,
+            .generated_field_names,
+            .generated_tag_union_spec,
+            .empty_record,
+            .tag_union,
+            .empty_tag_union,
+            => null,
+        };
+    }
+
     /// The representation a descriptor argument is keyed by: wrappers unwrap
     /// until an inspect method, a nominal-backing substitution, or a
     /// non-wrapper is reached.
@@ -13211,6 +13328,41 @@ pub const RepQuery = struct {
         return found;
     }
 };
+
+/// Formal bindings of the wrappers one call-boundary node was
+/// seen through, for walks that keep no lexical substitution scope.
+pub const CallWrapperBindings = struct {
+    const Binding = struct {
+        formal_rep: TypeRepId,
+        actual_rep: TypeRepId,
+    };
+
+    entries: std.ArrayList(Binding) = .empty,
+
+    pub fn deinit(self: *CallWrapperBindings, allocator: Allocator) void {
+        self.entries.deinit(allocator);
+    }
+
+    /// The innermost binding of `rep`, or `rep` itself when it is unbound.
+    pub fn resolve(self: *const CallWrapperBindings, rep: TypeRepId) TypeRepId {
+        var index = self.entries.items.len;
+        while (index > 0) {
+            index -= 1;
+            if (self.entries.items[index].formal_rep == rep) return self.entries.items[index].actual_rep;
+        }
+        return rep;
+    }
+
+    pub fn bindScoped(self: *CallWrapperBindings, allocator: Allocator, formal_rep: TypeRepId, actual_rep: TypeRepId) Allocator.Error!void {
+        try self.entries.append(allocator, .{ .formal_rep = formal_rep, .actual_rep = actual_rep });
+    }
+};
+
+/// A call child found in a structure seen through a wrapper can be one of
+/// that wrapper's declaration formals, which names the use's actual.
+pub fn structureChildCallRep(env: anytype, through_wrapper: bool, call_child_rep: TypeRepId) TypeRepId {
+    return if (through_wrapper) env.resolve(call_child_rep) else call_child_rep;
+}
 
 fn repIsTagRow(rep: TypeRepresentation) bool {
     return rep.kind == .tag_union or rep.is_open_tag_row;

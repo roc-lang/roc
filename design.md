@@ -12142,6 +12142,21 @@ call operand root plus the exact instantiated descendant; it never changes to
 a sibling value merely because the substitution was learned from the
 wrapper's explicit argument metadata.
 
+Checking also relates a wrapper to its backing's structure without a wrapper
+on the other side: an alias always, a nominal whenever its declaration is
+transparent (`:=`) or, when opaque, inside its origin module. An unannotated
+callee that matches on `Ok` therefore has a structural parameter row, while
+its call passes `Try(U64, U8)`. At such a boundary the worker position is a
+structure and the call position is a wrapper of it; the wrapper's own value
+supplies the position's descriptor, and the structure's children align with
+the wrapper's backing, seen through every alias and nominal layer. Each
+nominal layer binds its use's formals for that descent, so a backing child
+resolves to the use's exact actual, never to the shared template. Evidence
+paths are written against the callee's type in the same way: a structural
+step that reaches a call-side wrapper applies to its backing under that use's
+formal bindings. Hidden descriptor and dictionary parameters use this one
+relation.
+
 A callable parameter's descriptor source survives traversal from the arguments
 into the result. A result nominal's declaration formal resolves through its
 exact actual parameter to that recorded source, including when the actual is
