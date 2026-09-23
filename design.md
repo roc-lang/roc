@@ -9043,10 +9043,17 @@ numeric default phase, otherwise its row default (`{}` or `[]`), otherwise the
 empty tag union. Planning records that sealed representation as explicit
 `sealed_default` data on the flex representation, so lowering reads it rather
 than re-deriving a default from the checked type. A flex variable carrying
-non-numeric static-dispatch constraints has no sealed default, because its
-dispatch needs a dictionary that only a quantifying scheme can supply; reaching
-it without a bound descriptor, like reaching an unbound rigid variable, is a
-lowering invariant violation.
+static-dispatch constraints that a quantifying scheme would have to own has no
+sealed default, because each of those needs a dictionary only a quantifying
+scheme can supply; reaching it without a bound descriptor, like reaching an
+unbound rigid variable, is a lowering invariant violation. The derived `is_eq`
+equality placeholder Check leaves on an undetermined variable inside values
+compared with structural equality is not such a constraint: it discharges by
+comparing structurally with no owner (the same carve-out Check's ambiguity
+judgment applies), so planning seals the variable exactly like an unconstrained
+one and records no dictionary for it. A quantified variable's `is_eq` erased
+requirement is owned instead—the scheme forwards it as compiler-derived structural
+evidence—so it keeps its dictionary requirement.
 
 `erased_box` is distinct from the `box_of_zst` layout used for `Box({})`. `Box({})` is
 represented by a null pointer, owns no allocation, and is not refcounted. An

@@ -4886,7 +4886,7 @@ const Builder = struct {
                 .{ .source_type = source_type, .kind = .empty_tag_union }
             else blk: {
                 var rep = try self.dynamicRepresentation(source_type, flex.constraints, .flex);
-                if (!self.host_mode and (flex.constraints.len == 0 or flex.numeric_default_phase != null)) {
+                if (!self.host_mode and (!self.flexConstraintsRequireScheme(source_type, flex.constraints) or flex.numeric_default_phase != null)) {
                     rep.sealed_default = @enumFromInt(@as(u32, @intCast(self.plan.representations.items.len)));
                     try self.plan.representations.append(self.allocator, .{
                         .source_type = source_type,
@@ -5316,6 +5316,44 @@ const Builder = struct {
                 kind == .generated_field_names or
                 kind == .generated_tag_union_spec,
         };
+    }
+
+    /// Whether the checked constraint is the ownerless structural-equality
+    /// placeholder on a bare flex variable that no enclosing scheme quantifies.
+    /// Check leaves that placeholder on undetermined variables inside values
+    /// compared with structural equality; it discharges by comparing
+    /// structurally with no owner (Check's ambiguity judgment applies the same
+    /// carve-out), so planning seals the variable like an unconstrained one and
+    /// records no dictionary for it. A quantified variable's `is_eq` erased
+    /// requirement
+    /// is owned instead—the scheme forwards it as compiler-derived structural
+    /// evidence—so it keeps its dictionary requirement.
+    fn constraintIsOwnerlessStructuralEquality(
+        self: *Builder,
+        source_type: CheckedTypeIdentity,
+        constraint: checked.CheckedStaticDispatchConstraint,
+    ) bool {
+        if (self.quantified_variables.contains(source_type)) return false;
+        const names = self.moduleForId(source_type.module).canonical_names orelse return false;
+        for (static_dispatch.structural_method_kinds) |entry| {
+            if (entry.kind != .equality) continue;
+            if (std.mem.eql(u8, names.methodNameText(constraint.fn_name), entry.method_name)) return true;
+        }
+        return false;
+    }
+
+    /// Whether the bare flex variable carries any checked constraint a
+    /// quantifying scheme would have to own. The ownerless structural-equality
+    /// placeholder does not count.
+    fn flexConstraintsRequireScheme(
+        self: *Builder,
+        source_type: CheckedTypeIdentity,
+        constraints: []const checked.CheckedStaticDispatchConstraint,
+    ) bool {
+        for (constraints) |constraint| {
+            if (!self.constraintIsOwnerlessStructuralEquality(source_type, constraint)) return true;
+        }
+        return false;
     }
 
     fn dynamicRepresentation(
@@ -6294,6 +6332,7 @@ const Builder = struct {
     ) Allocator.Error!Span {
         const start: u32 = @intCast(self.plan.dictionaries.items.len);
         for (constraints, 0..) |constraint, index| {
+            if (self.constraintIsOwnerlessStructuralEquality(source_type, constraint)) continue;
             if (!static_dispatch.requiresRuntimeDictionary(constraint.origin)) continue;
             try self.plan.dictionaries.append(self.allocator, .{
                 .source_type = source_type,
@@ -6308,6 +6347,7 @@ const Builder = struct {
         }
         const view = self.moduleForId(source_type.module);
         for (constraints) |constraint| {
+            if (self.constraintIsOwnerlessStructuralEquality(source_type, constraint)) continue;
             _ = try self.analyzeType(view, constraint.fn_ty);
         }
         return .{
@@ -14889,10 +14929,14 @@ test "boxy dictionary slots are stable across module ids and requirement subsets
     var source_names = checked_names.CanonicalNameStore.init(gpa);
     defer source_names.deinit();
 
-    const root_is_eq = try root_names.internMethodName("is_eq");
+    // `is_eq` on an unquantified bare variable is the ownerless structural
+    // equality placeholder and yields no dictionary slot (see
+    // `constraintIsOwnerlessStructuralEquality`), so the fixture uses another
+    // structural method that still requires a runtime dictionary.
+    const root_parser_for = try root_names.internMethodName("parser_for");
     const root_to_hash = try root_names.internMethodName("to_hash");
     const source_to_hash = try source_names.internMethodName("to_hash");
-    _ = try source_names.internMethodName("is_eq");
+    _ = try source_names.internMethodName("parser_for");
     try std.testing.expect(root_to_hash != source_to_hash);
 
     const payloads = [_]checked.StoredCheckedTypePayload{
@@ -14919,7 +14963,7 @@ test "boxy dictionary slots are stable across module ids and requirement subsets
     const root_span = try builder.appendDictionaryRequirements(
         .{ .module = root_key, .ty = @enumFromInt(fixtureTableIndex(0)) },
         &.{
-            .{ .fn_name = root_is_eq, .fn_ty = @enumFromInt(fixtureTableIndex(0)), .origin = .method_call },
+            .{ .fn_name = root_parser_for, .fn_ty = @enumFromInt(fixtureTableIndex(0)), .origin = .method_call },
             .{ .fn_name = root_to_hash, .fn_ty = @enumFromInt(fixtureTableIndex(0)), .origin = .method_call },
         },
     );
