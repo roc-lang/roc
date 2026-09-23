@@ -12252,10 +12252,7 @@ fn lambdaBodyIsEffectful(self: *Self, lambda_idx: CIR.Expr.Idx) Allocator.Error!
 /// members' vars are not yet generalized.
 fn defInOnStackGroup(self: *const Self, def_idx: CIR.Def.Idx) bool {
     const group_index = self.defGroupIndex(def_idx) orelse return false;
-    for (self.group_stack.items) |frame| {
-        if (frame.group_index == group_index) return true;
-    }
-    return false;
+    return self.activeGroupFrameIndex(group_index) != null;
 }
 
 /// Whether a call's callee is a recursive reference to a def that has not
@@ -14263,13 +14260,130 @@ fn activeDeferredDispatchObligationOwnerFrame(
     self: *const Self,
     owner_group_index: ?u32,
 ) ?usize {
-    const owner_group = owner_group_index orelse return null;
+    return self.activeGroupFrameIndex(owner_group_index orelse return null);
+}
+
+/// The `group_stack` index of the active frame checking `group_index`, or
+/// null when that group is not on the stack.
+fn activeGroupFrameIndex(self: *const Self, group_index: u32) ?usize {
     var frame_idx = self.group_stack.items.len;
     while (frame_idx > 0) {
         frame_idx -= 1;
-        if (self.group_stack.items[frame_idx].group_index == owner_group) return frame_idx;
+        if (self.group_stack.items[frame_idx].group_index == group_index) return frame_idx;
     }
     return null;
+}
+
+/// Whether a same-module dispatch target whose def var has not generalized
+/// yet—an in-flight def, or a checked member of a recursive group whose
+/// shared boundary has not run—is being checked in a frame nested inside the
+/// frame that owns the obligation. The binding-group recursion rule merges an
+/// obligation monomorphically with such a target only when the frame that
+/// will generalize the target is the owner frame itself (self-dispatch, an
+/// in-group member) or encloses it (a nested group's back-edge into a
+/// suspended ancestor's live vars). A target frame nested inside the owner
+/// frame is the owner's own boundary checking the target's group to resolve
+/// this obligation: merging there would pull the owner's call-site types into
+/// the target's not-yet-generalized definition, so the obligation keeps
+/// waiting for the target's finished scheme instead. An orphan obligation is
+/// owned by the outermost frame, exactly as when it is adopted.
+fn dispatchTargetFrameNestedInsideObligationOwner(
+    self: *const Self,
+    target_def_idx: CIR.Def.Idx,
+    owner_group_index: ?u32,
+) bool {
+    const target_group = self.defGroupIndex(target_def_idx) orelse return false;
+    const target_frame = self.activeGroupFrameIndex(target_group) orelse return false;
+    const owner_frame = self.activeDeferredDispatchObligationOwnerFrame(owner_group_index) orelse 0;
+    return target_frame > owner_frame;
+}
+
+/// How a dispatch obligation reaches a same-module top-level target, decided
+/// by the target def's checking status.
+const LocalDispatchTargetResolution = union(enum) {
+    /// The target's own def var: its published scheme, or the live var of a
+    /// suspended group member that the obligation shares by the binding-group
+    /// rule.
+    def_var,
+    /// Instantiate the target's pre-declared annotation scheme.
+    predeclared_scheme: Var,
+    /// Merge monomorphically with the target's in-flight right-hand side.
+    in_flight_rhs: Var,
+    /// The obligation stays deferred until the target is checked.
+    waiting,
+    /// The target is a value def caught in a recursive cycle; the obligation
+    /// has been rejected and its receiver marked erroneous.
+    rejected,
+};
+
+/// Decide how an obligation reaches a same-module target from the target
+/// def's status. An annotated target whose body is unchecked or in flight
+/// resolves through its pre-declared scheme. An unannotated unchecked target
+/// is recorded for the owning group's boundary and the obligation waits. A
+/// not-yet-generalized target (in flight, or a checked member of a still-open
+/// recursive group) merges monomorphically by the binding-group recursion
+/// rule when its frame is the obligation's owner frame or encloses it, and
+/// otherwise waits: the owner's boundary is checking that target's group to
+/// resolve this very obligation, and merging would leak the owner's call-site
+/// types into the target's definition before it generalizes.
+fn resolveLocalDispatchTargetByStatus(
+    self: *Self,
+    deferred_constraint: DeferredConstraintCheck,
+    constraint: StaticDispatchConstraint,
+    processing_def: DefProcessed,
+    def_idx: CIR.Def.Idx,
+    def: CIR.Def,
+    env: *Env,
+    failure_expr: ?CIR.Expr.Idx,
+) Allocator.Error!LocalDispatchTargetResolution {
+    std.debug.assert(processing_def.def_idx == def_idx);
+    const mb_predeclared_scheme = self.predeclaredSchemeVar(def_idx);
+    switch (processing_def.status) {
+        .not_processed => {
+            if (mb_predeclared_scheme) |scheme_var| return .{ .predeclared_scheme = scheme_var };
+            // Unannotated, unchecked local target. A dispatch edge cannot be
+            // in the name graph, so this is discovered here—but never checked
+            // here: the obligation's owning group frame records the target
+            // for its boundary, the relation is pinned at that boundary's
+            // rank (Invariant D), and the constraint stays deferred. A
+            // relation owned by an enclosing frame only waits here.
+            try self.deferDispatchObligationForUncheckedTarget(deferred_constraint, constraint, def_idx, env);
+            return .waiting;
+        },
+        .processing => {
+            if (mb_predeclared_scheme) |scheme_var| return .{ .predeclared_scheme = scheme_var };
+            if (self.dispatchTargetFrameNestedInsideObligationOwner(def_idx, deferred_constraint.owner_group_index)) {
+                try self.deferDispatchObligationForUncheckedTarget(deferred_constraint, constraint, def_idx, env);
+                return .waiting;
+            }
+            if (!isFunctionDef(&self.cir.store, self.cir.store.getExpr(def.expr)) and self.delayed_dependency_depth == 0) {
+                try self.poisonRecursiveNonFunctionProcessingDef(processing_def, null, env);
+                try self.poisonConstraintFailure(deferred_constraint.var_, constraint, env, failure_expr);
+                try self.markStaticDispatchRejected(constraint);
+                try self.markErroneous(deferred_constraint.var_);
+                return .rejected;
+            }
+            // In-flight unannotated target (self-dispatch, an in-group member,
+            // or a suspended ancestor at its boundary): the binding-group
+            // recursion rule—link monomorphically to the def's in-flight RHS
+            // var, which lives in the frame that generalizes it.
+            return .{ .in_flight_rhs = ModuleEnv.varFrom(def.expr) };
+        },
+        .processed => {
+            if (!self.defInOnStackGroup(def_idx)) return .def_var;
+            // A previously checked member of a still-open recursive group has
+            // not reached the shared generalization boundary, so its def var
+            // is not a scheme yet. Dispatch instantiates the predeclared
+            // scheme—the same polymorphic-recursion rule a name reference to
+            // such a member follows.
+            if (mb_predeclared_scheme) |scheme_var| return .{ .predeclared_scheme = scheme_var };
+            if (self.dispatchTargetFrameNestedInsideObligationOwner(def_idx, deferred_constraint.owner_group_index)) {
+                try self.deferDispatchObligationForUncheckedTarget(deferred_constraint, constraint, def_idx, env);
+                return .waiting;
+            }
+            return .def_var;
+        },
+    }
 }
 
 /// Whether the frame currently being checked may take over a deferred
@@ -14339,16 +14453,20 @@ fn enqueueDeferredDispatchConstraint(
 }
 
 /// Re-defer a dispatch obligation whose method target is an unchecked,
-/// unannotated local def. The obligation's owning group frame records the
-/// target for its own boundary and pins the relation there; any other frame
-/// leaves the obligation waiting, because recording it as a nested frame's
-/// pending target would check the target's topological prefix inside that
-/// frame, where a prefix group can name the nested frame's still in-flight
-/// def and merge with it monomorphically instead of instantiating its
-/// finished scheme. An orphan obligation—one whose stamp names no active
-/// frame, or that carries no stamp—goes to the outermost active frame for the
-/// same reason; only that frame (and the frameless context) encloses no def
-/// that a prefix group could capture. A frame that does not adopt still pins
+/// unannotated local def, or a not-yet-generalized def being checked in a
+/// frame nested inside the obligation's owner frame. The obligation's owning
+/// group frame records an unchecked target for its own boundary and pins the
+/// relation there; any other frame leaves the obligation waiting, because
+/// recording it as a nested frame's pending target would check the target's
+/// topological prefix inside that frame, where a prefix group can name the
+/// nested frame's still in-flight def and merge with it monomorphically
+/// instead of instantiating its finished scheme. A nested in-flight target
+/// is already being checked to resolve this obligation, so no frame records
+/// it again; the obligation only waits for the target's frame to finish. An
+/// orphan obligation—one whose stamp names no active frame, or that carries
+/// no stamp—goes to the outermost active frame for the same reason; only
+/// that frame (and the frameless context) encloses no def that a prefix
+/// group could capture. A frame that does not adopt still pins
 /// the callable and receiver at the adopting frame's boundary rank
 /// (Invariant D): the obligation stays waiting across every nested boundary
 /// between here and its owner, and nothing it touches may generalize before
@@ -33698,76 +33816,23 @@ fn checkStaticDispatchConstraints(self: *Self, env: *Env, is_numeric_default_pas
                     const method_binding = method_lookup.binding;
                     const def_idx = method_binding.def_idx;
                     const def = method_env.store.getDef(def_idx);
-                    // Track whether we just processed or referenced a cycle participant.
                     var cycle_method_expr_var: ?Var = null;
-
                     var predeclared_scheme_for_method: ?Var = null;
                     if (method_is_this_module) {
-                        // Check if we've processed this def already. An
-                        // annotated def whose body is unchecked or in flight
-                        // resolves through its pre-declared scheme instead.
-                        const mb_processing_def = self.topLevelPattern(def.pattern);
-                        if (mb_processing_def) |processing_def| {
-                            std.debug.assert(processing_def.def_idx == def_idx);
-                            const mb_predeclared_scheme = self.predeclaredSchemeVar(def_idx);
-                            switch (processing_def.status) {
-                                .not_processed => if (mb_predeclared_scheme) |scheme_var| {
-                                    predeclared_scheme_for_method = scheme_var;
-                                } else {
-                                    // Unannotated, unchecked local target. A
-                                    // dispatch edge cannot be in the name
-                                    // graph, so this is discovered here—but
-                                    // never checked here: the obligation's
-                                    // owning group frame records the target
-                                    // for its boundary, the relation is
-                                    // pinned at that boundary's rank
-                                    // (Invariant D), and the constraint stays
-                                    // deferred. A relation owned by an
-                                    // enclosing frame only waits here.
-                                    try self.deferDispatchObligationForUncheckedTarget(
-                                        deferred_constraint,
-                                        constraint,
-                                        def_idx,
-                                        env,
-                                    );
-                                    continue;
-                                },
-                                .processing => if (mb_predeclared_scheme) |scheme_var| {
-                                    predeclared_scheme_for_method = scheme_var;
-                                } else {
-                                    if (!isFunctionDef(&self.cir.store, self.cir.store.getExpr(def.expr))) {
-                                        if (self.delayed_dependency_depth == 0) {
-                                            try self.poisonRecursiveNonFunctionProcessingDef(processing_def, null, env);
-                                            try self.poisonConstraintFailure(deferred_constraint.var_, constraint, env, failure_expr);
-                                            try self.markStaticDispatchRejected(constraint);
-                                            try self.markErroneous(deferred_constraint.var_);
-                                            continue;
-                                        } else {
-                                            cycle_method_expr_var = ModuleEnv.varFrom(def.expr);
-                                        }
-                                    } else {
-                                        // In-flight unannotated target (self-
-                                        // dispatch, or an in-group member):
-                                        // the binding-group recursion rule—
-                                        // link monomorphically to the def's
-                                        // in-flight RHS var, which lives in
-                                        // the frame that generalizes it.
-                                        cycle_method_expr_var = ModuleEnv.varFrom(def.expr);
-                                    }
-                                },
-                                .processed => if (mb_predeclared_scheme) |scheme_var| {
-                                    if (self.defInOnStackGroup(def_idx)) {
-                                        // A previously checked member of this
-                                        // still-open recursive group has not
-                                        // reached the shared generalization
-                                        // boundary, so its def var is not a
-                                        // scheme yet. Dispatch instantiates
-                                        // the predeclared scheme—the same
-                                        // polymorphic-recursion rule a name
-                                        // reference to such a member follows.
-                                        predeclared_scheme_for_method = scheme_var;
-                                    }
-                                },
+                        if (self.topLevelPattern(def.pattern)) |processing_def| {
+                            switch (try self.resolveLocalDispatchTargetByStatus(
+                                deferred_constraint,
+                                constraint,
+                                processing_def,
+                                def_idx,
+                                def,
+                                env,
+                                failure_expr,
+                            )) {
+                                .def_var => {},
+                                .predeclared_scheme => |scheme_var| predeclared_scheme_for_method = scheme_var,
+                                .in_flight_rhs => |rhs_var| cycle_method_expr_var = rhs_var,
+                                .waiting, .rejected => continue,
                             }
                         }
                     }
@@ -34109,54 +34174,20 @@ fn checkStaticDispatchConstraints(self: *Self, env: *Env, is_numeric_default_pas
                     var cycle_method_expr_var: ?Var = null;
                     var predeclared_scheme_for_method: ?Var = null;
                     if (method_is_this_module) {
-                        // See the nominal branch above: annotated targets
-                        // resolve through their pre-declared scheme;
-                        // unannotated unchecked targets are recorded for the
-                        // group boundary; in-flight unannotated targets link
-                        // monomorphically (the binding-group recursion rule).
-                        const mb_processing_def = self.topLevelPattern(def.pattern);
-                        if (mb_processing_def) |processing_def| {
-                            std.debug.assert(processing_def.def_idx == def_idx);
-                            const mb_predeclared_scheme = self.predeclaredSchemeVar(def_idx);
-                            switch (processing_def.status) {
-                                .not_processed => if (mb_predeclared_scheme) |scheme_var| {
-                                    predeclared_scheme_for_method = scheme_var;
-                                } else {
-                                    try self.deferDispatchObligationForUncheckedTarget(
-                                        deferred_constraint,
-                                        constraint,
-                                        def_idx,
-                                        env,
-                                    );
-                                    continue;
-                                },
-                                .processing => if (mb_predeclared_scheme) |scheme_var| {
-                                    predeclared_scheme_for_method = scheme_var;
-                                } else {
-                                    if (!isFunctionDef(&self.cir.store, self.cir.store.getExpr(def.expr))) {
-                                        if (self.delayed_dependency_depth == 0) {
-                                            try self.poisonRecursiveNonFunctionProcessingDef(processing_def, null, env);
-                                            try self.poisonConstraintFailure(deferred_constraint.var_, constraint, env, failure_expr);
-                                            try self.markStaticDispatchRejected(constraint);
-                                            try self.markErroneous(deferred_constraint.var_);
-                                            continue;
-                                        } else {
-                                            cycle_method_expr_var = ModuleEnv.varFrom(def.expr);
-                                        }
-                                    } else {
-                                        cycle_method_expr_var = ModuleEnv.varFrom(def.expr);
-                                    }
-                                },
-                                .processed => if (mb_predeclared_scheme) |scheme_var| {
-                                    if (self.defInOnStackGroup(def_idx)) {
-                                        // See the nominal branch: a checked
-                                        // member of a still-open group
-                                        // dispatches through its predeclared
-                                        // scheme until the shared boundary
-                                        // publishes the body scheme.
-                                        predeclared_scheme_for_method = scheme_var;
-                                    }
-                                },
+                        if (self.topLevelPattern(def.pattern)) |processing_def| {
+                            switch (try self.resolveLocalDispatchTargetByStatus(
+                                deferred_constraint,
+                                constraint,
+                                processing_def,
+                                def_idx,
+                                def,
+                                env,
+                                failure_expr,
+                            )) {
+                                .def_var => {},
+                                .predeclared_scheme => |scheme_var| predeclared_scheme_for_method = scheme_var,
+                                .in_flight_rhs => |rhs_var| cycle_method_expr_var = rhs_var,
+                                .waiting, .rejected => continue,
                             }
                         }
                     }
