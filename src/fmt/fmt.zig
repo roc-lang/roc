@@ -1540,8 +1540,7 @@ const Formatter = struct {
                     }
                 }
                 try fmt.push('"');
-                try fmt.push('.');
-                try fmt.pushAll(fmt.ast.env.getIdent(s.type_ident));
+                try fmt.formatLiteralTypeSuffix(s.type_suffix);
             },
             .multiline_string => |s| {
                 if (!fmt.has_newline) {
@@ -1599,15 +1598,13 @@ const Formatter = struct {
                 // The type suffix lives on its own line after the string body.
                 try fmt.ensureNewline();
                 try fmt.pushIndent();
-                try fmt.push('.');
-                try fmt.pushAll(fmt.ast.env.getIdent(s.type_ident));
+                try fmt.formatLiteralTypeSuffix(s.type_suffix);
                 fmt.has_multiline_string = true;
             },
             .single_quote => |s| {
                 try fmt.pushTokenText(s.token);
-                if (s.type_ident) |type_ident| {
-                    try fmt.push('.');
-                    try fmt.pushAll(fmt.ast.env.getIdent(type_ident));
+                if (s.type_suffix) |type_suffix| {
+                    try fmt.formatLiteralTypeSuffix(type_suffix);
                 }
             },
             .ident => |i| {
@@ -1824,13 +1821,11 @@ const Formatter = struct {
             },
             .typed_int => |ti| {
                 try fmt.pushTokenText(ti.token);
-                try fmt.push('.');
-                try fmt.pushAll(fmt.ast.env.getIdent(ti.type_ident));
+                try fmt.formatLiteralTypeSuffix(ti.type_suffix);
             },
             .typed_frac => |tf| {
                 try fmt.pushTokenText(tf.token);
-                try fmt.push('.');
-                try fmt.pushAll(fmt.ast.env.getIdent(tf.type_ident));
+                try fmt.formatLiteralTypeSuffix(tf.type_suffix);
             },
             .list => |l| {
                 try fmt.formatCollection(region, fmt.ast.store.getCollectionLayout(ei), .square, AST.Expr.Idx, fmt.ast.store.exprSlice(l.items), Formatter.formatExpr);
@@ -1974,6 +1969,14 @@ const Formatter = struct {
             },
             .unary_op => |op| {
                 try fmt.pushTokenText(op.operator);
+                // Bare line breaks after the operator normalize away, but a
+                // comment there must be kept, with the operand moved below it.
+                const operand_start = fmt.nodeRegion(@intFromEnum(op.expr)).start;
+                if (fmt.hasCommentBefore(operand_start)) {
+                    fmt.curr_indent += 1;
+                    _ = try fmt.flushCommentsBefore(operand_start);
+                    try fmt.pushIndent();
+                }
                 try fmt.formatExprDiscard(op.expr);
             },
             .bin_op => |op| {
@@ -2463,9 +2466,8 @@ const Formatter = struct {
             .single_quote => |sq| {
                 region = sq.region;
                 try fmt.formatIdent(sq.token, null);
-                if (sq.type_ident) |type_ident| {
-                    try fmt.push('.');
-                    try fmt.pushAll(fmt.ast.env.getIdent(type_ident));
+                if (sq.type_suffix) |type_suffix| {
+                    try fmt.formatLiteralTypeSuffix(type_suffix);
                 }
             },
             .int => |n| {
@@ -2479,14 +2481,12 @@ const Formatter = struct {
             .typed_int => |n| {
                 region = n.region;
                 try fmt.formatIdent(n.number_tok, null);
-                try fmt.push('.');
-                try fmt.pushAll(fmt.ast.env.getIdent(n.type_ident));
+                try fmt.formatLiteralTypeSuffix(n.type_suffix);
             },
             .typed_frac => |n| {
                 region = n.region;
                 try fmt.formatIdent(n.number_tok, null);
-                try fmt.push('.');
-                try fmt.pushAll(fmt.ast.env.getIdent(n.type_ident));
+                try fmt.formatLiteralTypeSuffix(n.type_suffix);
             },
             .record => |r| {
                 region = r.region;
@@ -3888,6 +3888,23 @@ const Formatter = struct {
         for (0..fmt.curr_indent) |_| {
             try fmt.push('\t');
         }
+    }
+
+    fn formatLiteralTypeSuffix(fmt: *Formatter, suffix: AST.LiteralTypeSuffix) error{WriteFailed}!void {
+        switch (suffix) {
+            .path => |path| {
+                for (fmt.ast.store.tokenSlice(path.qualifiers)) |qualifier| {
+                    try fmt.pushLiteralTypeSuffixSegment(fmt.ast.tokens.resolveIdentifier(@intCast(qualifier)) orelse unreachable);
+                }
+                try fmt.pushLiteralTypeSuffixSegment(fmt.ast.tokens.resolveIdentifier(path.final_token) orelse unreachable);
+            },
+            .deprecated_builtin => |type_name| try fmt.pushLiteralTypeSuffixSegment(type_name),
+        }
+    }
+
+    fn pushLiteralTypeSuffixSegment(fmt: *Formatter, segment: base.Ident.Idx) error{WriteFailed}!void {
+        try fmt.push('.');
+        try fmt.pushAll(fmt.ast.env.getIdent(segment));
     }
 
     fn pushTokenText(fmt: *Formatter, ti: Token.Idx) error{WriteFailed}!void {
@@ -6339,4 +6356,31 @@ test "where method annotations preserve whole holes parentheses and nullary arro
     const result = try moduleFmtsStable(std.testing.allocator, source, false);
     defer std.testing.allocator.free(result);
     try std.testing.expectEqualStrings(source, result);
+}
+
+test "issue 11298: comment between unary ! and its operand inside parens formats idempotently" {
+    // Repro for https://github.com/roc-lang/roc/issues/11298
+    // The comment between `!` and its operand expands the enclosing parens,
+    // so formatting must emit that comment rather than drop it; otherwise the
+    // second pass sees no comment and collapses the parens.
+    const result = try moduleFmtsStable(std.testing.allocator, "n={(!#\n0)}", false);
+    defer std.testing.allocator.free(result);
+
+    const commented = try moduleFmtsStable(std.testing.allocator, "n={(!# keep me\n0)}", false);
+    defer std.testing.allocator.free(commented);
+    try std.testing.expectEqual(@as(usize, 1), std.mem.count(u8, commented, "# keep me"));
+}
+
+test "comments after a unary operator stay above its indented operand" {
+    const result = try moduleFmtsStable(std.testing.allocator, "x = !# a\n  # b\n  !# c\n    y\n", false);
+    defer std.testing.allocator.free(result);
+
+    try std.testing.expectEqualStrings("x = ! # a\n\t# b\n\t! # c\n\t\ty\n", result);
+}
+
+test "a bare line break after a unary operator normalizes away" {
+    const result = try moduleFmtsStable(std.testing.allocator, "x = !\n    y\n", false);
+    defer std.testing.allocator.free(result);
+
+    try std.testing.expectEqualStrings("x = !y\n", result);
 }

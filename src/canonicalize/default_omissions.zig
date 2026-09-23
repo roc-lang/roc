@@ -156,6 +156,7 @@ pub fn omittedDefaults(
         .e_tag,
         .e_nominal,
         .e_nominal_external,
+        .e_deferred_import_ref,
         .e_zero_argument_tag,
         .e_closure,
         .e_lambda,

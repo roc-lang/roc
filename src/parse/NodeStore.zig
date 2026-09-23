@@ -154,7 +154,15 @@ const TargetFileNodeTag = enum {
 };
 
 fn narrowNodeTag(comptime T: type, tag: Node.Tag) ?T {
-    return std.meta.stringToEnum(T, @tagName(tag));
+    const table = comptime blk: {
+        @setEvalBranchQuota(100_000);
+        var narrowed = std.EnumArray(Node.Tag, ?T).initFill(null);
+        for (std.enums.values(Node.Tag)) |t| {
+            if (@hasField(T, @tagName(t))) narrowed.set(t, @field(T, @tagName(t)));
+        }
+        break :blk narrowed;
+    };
+    return table.get(tag);
 }
 
 /// Packed optional indices store null as 0 and non-null values as value + 1.
@@ -953,14 +961,14 @@ pub fn addPattern(store: *NodeStore, pattern: AST.Pattern) std.mem.Allocator.Err
             node.tag = .typed_int_patt;
             node.region = n.region;
             node.main_token = n.number_tok;
-            node.data.lhs = @bitCast(n.type_ident);
+            node.data.lhs = try store.addLiteralTypeSuffix(n.type_suffix);
             node.data.rhs = @intFromEnum(n.literal);
         },
         .typed_frac => |n| {
             node.tag = .typed_frac_patt;
             node.region = n.region;
             node.main_token = n.number_tok;
-            node.data.lhs = @bitCast(n.type_ident);
+            node.data.lhs = try store.addLiteralTypeSuffix(n.type_suffix);
             node.data.rhs = @intFromEnum(n.literal);
         },
         .string => |s| {
@@ -974,8 +982,8 @@ pub fn addPattern(store: *NodeStore, pattern: AST.Pattern) std.mem.Allocator.Err
             node.tag = .single_quote_patt;
             node.region = sq.region;
             node.main_token = sq.token;
-            if (sq.type_ident) |type_ident| {
-                node.data.lhs = @bitCast(type_ident);
+            if (sq.type_suffix) |type_suffix| {
+                node.data.lhs = try store.addLiteralTypeSuffix(type_suffix);
                 node.data.rhs = @intFromBool(true);
             }
         },
@@ -1054,14 +1062,14 @@ pub fn addExpr(store: *NodeStore, expr: AST.Expr) std.mem.Allocator.Error!AST.Ex
             node.tag = .typed_int;
             node.region = e.region;
             node.main_token = e.token;
-            node.data.lhs = @bitCast(e.type_ident);
+            node.data.lhs = try store.addLiteralTypeSuffix(e.type_suffix);
             node.data.rhs = @intFromEnum(e.literal);
         },
         .typed_frac => |e| {
             node.tag = .typed_frac;
             node.region = e.region;
             node.main_token = e.token;
-            node.data.lhs = @bitCast(e.type_ident);
+            node.data.lhs = try store.addLiteralTypeSuffix(e.type_suffix);
             node.data.rhs = @intFromEnum(e.literal);
         },
         .tag => |e| {
@@ -1077,8 +1085,8 @@ pub fn addExpr(store: *NodeStore, expr: AST.Expr) std.mem.Allocator.Error!AST.Ex
             node.tag = .single_quote;
             node.region = e.region;
             node.main_token = e.token;
-            if (e.type_ident) |type_ident| {
-                node.data.lhs = @bitCast(type_ident);
+            if (e.type_suffix) |type_suffix| {
+                node.data.lhs = try store.addLiteralTypeSuffix(type_suffix);
                 node.data.rhs = @intFromBool(true);
             }
         },
@@ -1105,7 +1113,7 @@ pub fn addExpr(store: *NodeStore, expr: AST.Expr) std.mem.Allocator.Error!AST.Ex
             node.tag = .typed_string;
             node.region = e.region;
             node.main_token = e.token;
-            node.data.lhs = @bitCast(e.type_ident);
+            node.data.lhs = try store.addLiteralTypeSuffix(e.type_suffix);
             const parts_data_idx = store.extra_data.items.len;
             try store.extra_data.append(store.gpa, e.parts.span.start);
             try store.extra_data.append(store.gpa, e.parts.span.len);
@@ -1115,7 +1123,7 @@ pub fn addExpr(store: *NodeStore, expr: AST.Expr) std.mem.Allocator.Error!AST.Ex
             node.tag = .typed_multiline_string;
             node.region = e.region;
             node.main_token = e.token;
-            node.data.lhs = @bitCast(e.type_ident);
+            node.data.lhs = try store.addLiteralTypeSuffix(e.type_suffix);
             const parts_data_idx = store.extra_data.items.len;
             try store.extra_data.append(store.gpa, e.parts.span.start);
             try store.extra_data.append(store.gpa, e.parts.span.len);
@@ -2192,7 +2200,7 @@ pub fn getPattern(store: *const NodeStore, pattern_idx: AST.Pattern.Idx) AST.Pat
         .single_quote_patt => {
             return .{ .single_quote = .{
                 .token = node.main_token,
-                .type_ident = if (node.data.rhs != 0) @bitCast(node.data.lhs) else null,
+                .type_suffix = if (node.data.rhs != 0) store.getLiteralTypeSuffix(node.data.lhs) else null,
                 .region = node.region,
             } };
         },
@@ -2213,7 +2221,7 @@ pub fn getPattern(store: *const NodeStore, pattern_idx: AST.Pattern.Idx) AST.Pat
         .typed_int_patt => {
             return .{ .typed_int = .{
                 .number_tok = node.main_token,
-                .type_ident = @bitCast(node.data.lhs),
+                .type_suffix = store.getLiteralTypeSuffix(node.data.lhs),
                 .literal = @enumFromInt(node.data.rhs),
                 .region = node.region,
             } };
@@ -2221,7 +2229,7 @@ pub fn getPattern(store: *const NodeStore, pattern_idx: AST.Pattern.Idx) AST.Pat
         .typed_frac_patt => {
             return .{ .typed_frac = .{
                 .number_tok = node.main_token,
-                .type_ident = @bitCast(node.data.lhs),
+                .type_suffix = store.getLiteralTypeSuffix(node.data.lhs),
                 .literal = @enumFromInt(node.data.rhs),
                 .region = node.region,
             } };
@@ -2312,7 +2320,7 @@ pub fn getExpr(store: *const NodeStore, expr_idx: AST.Expr.Idx) AST.Expr {
         .typed_int => {
             return .{ .typed_int = .{
                 .token = node.main_token,
-                .type_ident = @bitCast(node.data.lhs),
+                .type_suffix = store.getLiteralTypeSuffix(node.data.lhs),
                 .literal = @enumFromInt(node.data.rhs),
                 .region = node.region,
             } };
@@ -2320,7 +2328,7 @@ pub fn getExpr(store: *const NodeStore, expr_idx: AST.Expr.Idx) AST.Expr {
         .typed_frac => {
             return .{ .typed_frac = .{
                 .token = node.main_token,
-                .type_ident = @bitCast(node.data.lhs),
+                .type_suffix = store.getLiteralTypeSuffix(node.data.lhs),
                 .literal = @enumFromInt(node.data.rhs),
                 .region = node.region,
             } };
@@ -2328,7 +2336,7 @@ pub fn getExpr(store: *const NodeStore, expr_idx: AST.Expr.Idx) AST.Expr {
         .single_quote => {
             return .{ .single_quote = .{
                 .token = node.main_token,
-                .type_ident = if (node.data.rhs != 0) @bitCast(node.data.lhs) else null,
+                .type_suffix = if (node.data.rhs != 0) store.getLiteralTypeSuffix(node.data.lhs) else null,
                 .region = node.region,
             } };
         },
@@ -2378,7 +2386,7 @@ pub fn getExpr(store: *const NodeStore, expr_idx: AST.Expr.Idx) AST.Expr {
             const parts_data_idx = node.data.rhs;
             return .{ .typed_string = .{
                 .token = node.main_token,
-                .type_ident = @bitCast(node.data.lhs),
+                .type_suffix = store.getLiteralTypeSuffix(node.data.lhs),
                 .parts = .{ .span = .{
                     .start = store.extra_data.items[parts_data_idx],
                     .len = store.extra_data.items[parts_data_idx + 1],
@@ -2390,7 +2398,7 @@ pub fn getExpr(store: *const NodeStore, expr_idx: AST.Expr.Idx) AST.Expr {
             const parts_data_idx = node.data.rhs;
             return .{ .typed_multiline_string = .{
                 .token = node.main_token,
-                .type_ident = @bitCast(node.data.lhs),
+                .type_suffix = store.getLiteralTypeSuffix(node.data.lhs),
                 .parts = .{ .span = .{
                     .start = store.extra_data.items[parts_data_idx],
                     .len = store.extra_data.items[parts_data_idx + 1],
@@ -3309,6 +3317,38 @@ pub fn tokenSpanFrom(store: *NodeStore, start: u32) std.mem.Allocator.Error!Toke
 /// as in when parsing fails.
 pub fn clearScratchTokensFrom(store: *NodeStore, start: u32) void {
     store.scratch_tokens.clearFrom(start);
+}
+
+const LiteralTypeSuffixKind = enum(u32) { path, deprecated_builtin };
+
+/// Stores a literal type suffix in extra data, returning its extra-data index.
+fn addLiteralTypeSuffix(store: *NodeStore, suffix: AST.LiteralTypeSuffix) std.mem.Allocator.Error!u32 {
+    const extra_idx: u32 = @intCast(store.extra_data.items.len);
+    switch (suffix) {
+        .path => |path| try store.extra_data.appendSlice(store.gpa, &.{
+            @intFromEnum(LiteralTypeSuffixKind.path),
+            path.final_token,
+            path.qualifiers.span.start,
+            path.qualifiers.span.len,
+        }),
+        .deprecated_builtin => |type_name| try store.extra_data.appendSlice(store.gpa, &.{
+            @intFromEnum(LiteralTypeSuffixKind.deprecated_builtin),
+            @bitCast(type_name),
+        }),
+    }
+    return extra_idx;
+}
+
+/// Retrieves a literal type suffix stored by `addLiteralTypeSuffix`.
+pub fn getLiteralTypeSuffix(store: *const NodeStore, extra_idx: u32) AST.LiteralTypeSuffix {
+    const data = store.extra_data.items[extra_idx..];
+    return switch (@as(LiteralTypeSuffixKind, @enumFromInt(data[0]))) {
+        .path => .{ .path = .{
+            .final_token = data[1],
+            .qualifiers = .{ .span = .{ .start = data[2], .len = data[3] } },
+        } },
+        .deprecated_builtin => .{ .deprecated_builtin = @bitCast(data[1]) },
+    };
 }
 
 /// Returns a new Token slice so that the caller can iterate through

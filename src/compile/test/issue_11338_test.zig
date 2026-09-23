@@ -213,22 +213,28 @@ test "specialization discovery submits a child before an unrelated task finishes
         .solved_lir_parallel_metrics_out = &solved_lir,
     });
     try std.testing.expect(executor.discovered_while_unfinished);
-    // The controlled overlap occurs in Monotype's first session. Subsequent
-    // solved-LIR, rewrite, and ARC batches reuse this executor, but are not new specializations.
+    // The controlled overlap occurs in Monotype's first session. The root's
+    // own body is one of the queued specializations. Subsequent solved-LIR,
+    // rewrite, and ARC batches reuse this executor, but are not new specializations.
     const monotype = timing.monotype_parallel;
     const rewrites = timing.lir_pass_parallel;
     const arc = timing.arc_parallel;
+    const spec_constr = timing.spec_constr_parallel;
     try std.testing.expectEqual(@as(u64, 0), monotype.root_tasks_submitted);
-    try std.testing.expectEqual(@as(u64, 12), monotype.specialization_tasks_submitted);
+    try std.testing.expectEqual(@as(u64, 13), monotype.specialization_tasks_submitted);
     try std.testing.expectEqual(monotype.specialization_tasks_submitted, monotype.specialization_tasks_committed);
     try std.testing.expectEqual(solved_lir.tasks_submitted, solved_lir.tasks_committed);
     try std.testing.expectEqual(rewrites.tasks_submitted, rewrites.tasks_committed);
+    try std.testing.expectEqual(spec_constr.tasks_submitted, spec_constr.tasks_committed);
+    var spec_constr_tasks: u64 = 0;
+    for (spec_constr.committed_by_phase) |count| spec_constr_tasks += count;
+    try std.testing.expectEqual(spec_constr.tasks_committed, spec_constr_tasks);
     try std.testing.expectEqual(arc.source_tasks_submitted, arc.source_tasks_committed);
     try std.testing.expectEqual(arc.planning_tasks_submitted, arc.planning_tasks_committed);
     try std.testing.expectEqual(arc.emission_tasks_submitted, arc.emission_tasks_committed);
     try std.testing.expectEqual(arc.uniqueness.task_submitted, arc.uniqueness.task_committed);
     const arc_tasks = arc.source_tasks_submitted + arc.planning_tasks_submitted + arc.emission_tasks_submitted + arc.uniqueness.task_submitted;
-    try std.testing.expectEqual(monotype.specialization_tasks_submitted + solved_lir.tasks_submitted + rewrites.tasks_submitted + arc_tasks, executor.submitted);
+    try std.testing.expectEqual(monotype.specialization_tasks_submitted + spec_constr.tasks_submitted + solved_lir.tasks_submitted + rewrites.tasks_submitted + arc_tasks, executor.submitted);
     try std.testing.expect(executor.peak_outstanding <= 4);
     try std.testing.expect(!executor.open);
 }

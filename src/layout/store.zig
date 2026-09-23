@@ -116,9 +116,26 @@ pub const Store = struct {
         allocator: std.mem.Allocator,
         target_usize: target.TargetUsize,
     ) std.mem.Allocator.Error!Self {
-        var layouts = collections.SafeList(Layout){};
-        var tag_union_variants = try TagUnionVariant.SafeMultiList.initCapacity(allocator, 64);
-        var tag_union_data = try collections.SafeList(TagUnionData).initCapacity(allocator, 64);
+        var self = Self{
+            .allocator = allocator,
+            .layouts = .{},
+            .resolved_list_layouts = .empty,
+            .tuple_elems = .{},
+            .struct_fields = .{},
+            .struct_data = .{},
+            .tag_union_variants = .{},
+            .tag_union_data = .{},
+            .interned_layouts = std.StringHashMap(Idx).init(allocator),
+            .scratch_intern_key = .empty,
+            .interned_recursive_graphs = RecursiveGraphMap.init(allocator),
+            .target_usize = target_usize,
+        };
+        errdefer self.deinit();
+        self.tag_union_variants = try TagUnionVariant.SafeMultiList.initCapacity(allocator, 64);
+        self.tag_union_data = try collections.SafeList(TagUnionData).initCapacity(allocator, 64);
+        const layouts = &self.layouts;
+        const tag_union_variants = &self.tag_union_variants;
+        const tag_union_data = &self.tag_union_data;
 
         // Reserve canonical tag-union metadata index 0 for the shared two-nullary enum
         // representation. `layout.Idx.bool` is just a stable handle to this ordinary
@@ -245,20 +262,9 @@ pub const Store = struct {
 
         std.debug.assert(layouts.len() == num_primitives);
 
-        var self = Self{
-            .allocator = allocator,
-            .layouts = layouts,
-            .resolved_list_layouts = .empty,
-            .tuple_elems = try collections.SafeList(Idx).initCapacity(allocator, 512),
-            .struct_fields = try StructField.SafeMultiList.initCapacity(allocator, 512),
-            .struct_data = try collections.SafeList(StructData).initCapacity(allocator, 512),
-            .tag_union_variants = tag_union_variants,
-            .tag_union_data = tag_union_data,
-            .interned_layouts = std.StringHashMap(Idx).init(allocator),
-            .scratch_intern_key = .empty,
-            .interned_recursive_graphs = RecursiveGraphMap.init(allocator),
-            .target_usize = target_usize,
-        };
+        self.tuple_elems = try collections.SafeList(Idx).initCapacity(allocator, 512);
+        self.struct_fields = try StructField.SafeMultiList.initCapacity(allocator, 512);
+        self.struct_data = try collections.SafeList(StructData).initCapacity(allocator, 512);
 
         try self.buildExistingLayoutInternKey(Layout.boolType());
         try self.rememberScratchInternKey(.bool);
@@ -799,7 +805,7 @@ pub const Store = struct {
     /// own.
     const RecursiveGraphAnalysis = struct {
         allocator: Allocator,
-        /// Identity per node; null for acyclic and nominal nodes.
+        /// Identity per recursive node or its unrolled copy; null otherwise.
         keys: []?RecursiveKey,
 
         pub const RecursiveKey = [32]u8;
@@ -927,6 +933,8 @@ pub const Store = struct {
             edge_start: std.ArrayList(u32) = .empty,
             edge_len: std.ArrayList(u32) = .empty,
             render_buf: std.ArrayList(u8) = .empty,
+            /// Exact one-step encodings of settled recursive nodes.
+            unfoldings: std.AutoHashMapUnmanaged(RecursiveKey, RecursiveKey) = .empty,
 
             fn init(allocator: Allocator, graph: *const LayoutGraph, keys: []?RecursiveKey) Allocator.Error!Engine {
                 const node_count = graph.nodes.items.len;
@@ -959,6 +967,7 @@ pub const Store = struct {
             }
 
             fn deinit(self_engine: *Engine) void {
+                self_engine.unfoldings.deinit(self_engine.allocator);
                 self_engine.render_buf.deinit(self_engine.allocator);
                 self_engine.edge_len.deinit(self_engine.allocator);
                 self_engine.edge_start.deinit(self_engine.allocator);
@@ -1137,19 +1146,32 @@ pub const Store = struct {
                 }
 
                 if (members.len == 1 and self_engine.edges.items.len == 0) {
-                    var hasher = TypeDigestHasher.init();
-                    hasher.update(domain);
-                    hasher.update("acyclic");
-                    try encodeNode(self_engine.graph, members[0], LabelSink{
-                        .engine = self_engine,
-                        .hasher = &hasher,
-                        .component_id = component_id,
-                    });
-                    self_engine.digests[members[0]] = hasher.finalResult();
+                    const member = members[0];
+                    const unfolding = try self_engine.unfoldingKey(member);
+                    if (self_engine.unfoldings.get(unfolding)) |key| {
+                        self_engine.digests[member] = key;
+                        self_engine.keys[member] = key;
+                    } else {
+                        self_engine.digests[member] = unfolding;
+                    }
                     return;
                 }
 
                 try self_engine.resolveCyclicComponent(component_id);
+            }
+
+            /// Encode one node using the settled digests of all its children,
+            /// including children in its own already-resolved component.
+            fn unfoldingKey(self_engine: *Engine, member: u32) Allocator.Error!RecursiveKey {
+                var hasher = TypeDigestHasher.init();
+                hasher.update(domain);
+                hasher.update("acyclic");
+                try encodeNode(self_engine.graph, member, LabelSink{
+                    .engine = self_engine,
+                    .hasher = &hasher,
+                    .component_id = no_component,
+                });
+                return hasher.finalResult();
             }
 
             fn resolveCyclicComponent(self_engine: *Engine, component_id: u32) Allocator.Error!void {
@@ -1259,6 +1281,9 @@ pub const Store = struct {
                     const digest = block_digest[rank_of_member[pos]];
                     self_engine.digests[member] = digest;
                     self_engine.keys[member] = digest;
+                }
+                for (members) |member| {
+                    try self_engine.unfoldings.put(self_engine.allocator, try self_engine.unfoldingKey(member), self_engine.digests[member]);
                 }
             }
         };
@@ -3359,6 +3384,22 @@ test "commitGraph identifies recursive nodes by reduced position, not by unrolli
 
     try testing.expectEqual(tied_commit.root_idx, unrolled_commit.root_idx);
     try testing.expectEqual(tied_commit.root_idx, unrolled_commit.value_layouts[@intFromEnum(union_two)]);
+}
+
+test "commitGraph gives an unrolled recursive record the same boxed slots" {
+    const allocator = std.testing.allocator;
+    var store = try Store.init(allocator, .u64);
+    defer store.deinit();
+    var graph = LayoutGraph{};
+    defer graph.deinit(allocator);
+    const outer = try graph.reserveNode(allocator);
+    const inner = try graph.reserveNode(allocator);
+    const fields = try graph.appendFields(allocator, &.{.{ .index = 0, .child = .{ .local = inner } }});
+    graph.setNode(outer, .{ .struct_ = fields });
+    graph.setNode(inner, .{ .struct_ = fields });
+    var commit = try store.commitGraph(&graph, .{ .local = outer });
+    defer commit.deinit(allocator);
+    try std.testing.expectEqual(commit.value_layouts[@intFromEnum(inner)], commit.root_idx);
 }
 
 test "commitGraph keeps distinct-field recursive struct payloads apart" {

@@ -17,8 +17,9 @@ pub const panic = std.debug.no_panic;
 
 const stdout_fd: usize = 1;
 const stderr_fd: usize = 2;
-const page_size: usize = 4096;
-const allocation_header_words = 3;
+/// Every Roc allocation is preceded by two words: the distance back to the
+/// start of its heap block, and the heap block's length.
+const allocation_header_words = 2;
 const allocation_header_size = allocation_header_words * @sizeOf(usize);
 
 const BsdOs = enum { freebsd, netbsd };
@@ -200,20 +201,26 @@ fn defaultExit(code: u8) callconv(.c) noreturn {
 fn rocAlloc(length: usize, alignment: usize) callconv(.c) ?*anyopaque {
     const byte_alignment = normalizedAlignment(alignment);
     const prefix = alignForward(allocation_header_size, byte_alignment);
-    const total = pageAlign(prefix + length);
-    const raw = raw_pages.map(total) orelse return null;
+    const raw_len = prefix + length;
+    const raw = heapAlloc(raw_len) orelse return null;
     const user = raw + prefix;
-    storeAllocationHeader(user, prefix, total, length);
+    storeAllocationHeader(user, prefix, raw_len);
     return @ptrCast(user);
 }
 
 fn rocRealloc(ptr: *anyopaque, new_length: usize, alignment: usize) callconv(.c) ?*anyopaque {
     const old_user: [*]u8 = @ptrCast(ptr);
-    const old_len = allocationHeaderValue(old_user, 2);
+    const prefix = allocationHeaderValue(old_user, 0);
+    const old_raw_len = allocationHeaderValue(old_user, 1);
+    const new_raw_len = prefix + new_length;
+    if (heapResizeInPlace(old_raw_len, new_raw_len)) {
+        allocationHeaderPtr(old_user, 1).* = new_raw_len;
+        return ptr;
+    }
+
     const new_ptr = rocAlloc(new_length, alignment) orelse return null;
     const new_user: [*]u8 = @ptrCast(new_ptr);
-
-    const copy_len = @min(old_len, new_length);
+    const copy_len = @min(old_raw_len - prefix, new_length);
     var i: usize = 0;
     while (i < copy_len) : (i += 1) new_user[i] = old_user[i];
     rocDealloc(ptr, alignment);
@@ -223,8 +230,70 @@ fn rocRealloc(ptr: *anyopaque, new_length: usize, alignment: usize) callconv(.c)
 fn rocDealloc(ptr: *anyopaque, _: usize) callconv(.c) void {
     const user: [*]u8 = @ptrCast(ptr);
     const prefix = allocationHeaderValue(user, 0);
-    const total = allocationHeaderValue(user, 1);
-    raw_pages.unmap(user - prefix, total);
+    const raw_len = allocationHeaderValue(user, 1);
+    heapFree(user - prefix, raw_len);
+}
+
+// Heap blocks up to `max_slot_size` bytes come from power-of-two slots carved
+// out of `heap_chunk_size` chunks, and each slot size keeps a free list so a
+// freed slot is reused without a syscall. Chunks are page-aligned and every
+// slot sits at a multiple of its own size within its chunk, so a slot is
+// aligned to its size up to the page size; a block's length already covers its
+// alignment, so the slot that holds it is aligned enough. Larger blocks map
+// their own pages.
+const heap_chunk_size: usize = 64 * 1024;
+const min_slot_shift = 4;
+const max_slot_shift = 15;
+const max_slot_size: usize = 1 << max_slot_shift;
+const slot_class_count = max_slot_shift - min_slot_shift + 1;
+
+var slot_free_lists: [slot_class_count]?[*]u8 = @splat(null);
+var slot_bump_next: [slot_class_count]usize = @splat(0);
+var slot_bump_end: [slot_class_count]usize = @splat(0);
+
+fn slotClass(raw_len: usize) usize {
+    const shift = @max(min_slot_shift, std.math.log2_int_ceil(usize, raw_len));
+    return shift - min_slot_shift;
+}
+
+fn slotSize(class: usize) usize {
+    return @as(usize, 1) << @intCast(class + min_slot_shift);
+}
+
+fn slotFreeListNext(slot: [*]u8) *?[*]u8 {
+    return @ptrCast(@alignCast(slot));
+}
+
+fn heapAlloc(raw_len: usize) ?[*]u8 {
+    if (raw_len > max_slot_size) return raw_pages.map(raw_len);
+    const class = slotClass(raw_len);
+    if (slot_free_lists[class]) |slot| {
+        slot_free_lists[class] = slotFreeListNext(slot).*;
+        return slot;
+    }
+    if (slot_bump_next[class] == slot_bump_end[class]) {
+        const chunk = raw_pages.map(heap_chunk_size) orelse return null;
+        slot_bump_next[class] = @intFromPtr(chunk);
+        slot_bump_end[class] = @intFromPtr(chunk) + heap_chunk_size;
+    }
+    const slot: [*]u8 = @ptrFromInt(slot_bump_next[class]);
+    slot_bump_next[class] += slotSize(class);
+    return slot;
+}
+
+fn heapResizeInPlace(old_raw_len: usize, new_raw_len: usize) bool {
+    if (old_raw_len > max_slot_size or new_raw_len > max_slot_size) return false;
+    return slotClass(old_raw_len) == slotClass(new_raw_len);
+}
+
+fn heapFree(raw: [*]u8, raw_len: usize) void {
+    if (raw_len > max_slot_size) {
+        raw_pages.unmap(raw, raw_len);
+        return;
+    }
+    const class = slotClass(raw_len);
+    slotFreeListNext(raw).* = slot_free_lists[class];
+    slot_free_lists[class] = raw;
 }
 
 fn rawSyscall1(number: usize, arg1: usize) usize {
@@ -295,10 +364,9 @@ fn exitFailure() noreturn {
     rawExit(1);
 }
 
-fn storeAllocationHeader(user: [*]u8, prefix: usize, total: usize, length: usize) void {
+fn storeAllocationHeader(user: [*]u8, prefix: usize, raw_len: usize) void {
     allocationHeaderPtr(user, 0).* = prefix;
-    allocationHeaderPtr(user, 1).* = total;
-    allocationHeaderPtr(user, 2).* = length;
+    allocationHeaderPtr(user, 1).* = raw_len;
 }
 
 fn allocationHeaderValue(user: [*]u8, index: usize) usize {
@@ -316,10 +384,6 @@ fn normalizedAlignment(alignment: usize) usize {
 
 fn alignForward(value: usize, alignment: usize) usize {
     return (value + alignment - 1) & ~(alignment - 1);
-}
-
-fn pageAlign(value: usize) usize {
-    return alignForward(value, page_size);
 }
 
 fn defaultMemcpy(dest: [*]u8, src: [*]const u8, len: usize) callconv(.c) [*]u8 {

@@ -404,7 +404,6 @@ const Builder = struct {
             },
             .alias,
             .record,
-            .record_unbound,
             .tuple,
             .list,
             .tag_union,
@@ -673,7 +672,7 @@ const GraphBuilder = struct {
     fn nodeForRep(self: *GraphBuilder, rep_id: Plan.TypeRepId) Allocator.Error!layout.GraphNode {
         const rep = self.parent.program.representations.items[@intFromEnum(rep_id)];
         return switch (rep.kind) {
-            .record, .record_unbound => .{ .struct_ = try self.recordFields(rep) },
+            .record => .{ .struct_ = try self.recordFields(rep) },
             .tuple => .{ .struct_ = try self.tupleFields(rep) },
             .list => .{ .list = try self.inputForRep(self.parent.repQuery().requiredSingleChild(rep_id, .list_elem).rep) },
             .box => .{ .box = try self.inputForRep(self.parent.repQuery().requiredSingleChild(rep_id, .box_payload).rep) },

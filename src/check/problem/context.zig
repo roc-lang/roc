@@ -26,6 +26,8 @@ pub const Context = union(enum) {
     // Function-related contexts
     /// Function call
     fn_call_arity: FnCallArityContext,
+    /// Function call whose callee is not a function
+    fn_call_non_function: FnCallNonFunctionContext,
     /// Argument to a function call
     fn_call_arg: FnCallArgContext,
 
@@ -53,6 +55,13 @@ pub const Context = union(enum) {
     // Type annotation contexts
     /// From a type annotation
     type_annotation,
+
+    /// The post-body polarity audit: the definition produced a tag its
+    /// implicitly opened annotation row does not list (design.md "Polarity").
+    /// Carries the annotated union's region directly, because the producing
+    /// expression is unknown once unification absorbed the tag into the
+    /// opened extension.
+    tag_not_in_annotation: TagNotInAnnotationContext,
 
     /// A record-destructure pattern binding (e.g. `{ x, y } = ...`). Tracked so
     /// the report can suggest `field: _` or `..` when the pattern is too narrow.
@@ -104,6 +113,14 @@ pub const Context = union(enum) {
         /// The number of args the fn expected
         expected_args: u32,
         /// The number of args the fn given
+        actual_args: u32,
+    };
+
+    /// Context for a call whose callee is not a function
+    pub const FnCallNonFunctionContext = struct {
+        /// Name of the value being called, if known
+        fn_name: ?Ident.Idx,
+        /// The number of args the call gave
         actual_args: u32,
     };
 
@@ -311,6 +328,14 @@ pub const Context = union(enum) {
     };
 
     /// Context for method type mismatch (where clause)
+    /// Context for a tag the definition produced beyond its annotation
+    pub const TagNotInAnnotationContext = struct {
+        /// The region of the annotated tag union
+        region: base.Region,
+        /// The first tag the definition produced beyond the annotation
+        tag_name: Ident.Idx,
+    };
+
     pub const RecursiveDef = struct {
         /// The def name
         def_name: ?Ident.Idx,

@@ -52,7 +52,7 @@ TYPE MISMATCH - fuzz_crash_097.md:1:4:2:4
 			(line-break)
 			(annotation-start code-block)
 			(indent 1)
-			(text "[X(_b), ..]")
+			(text "[X(_b)]")
 			(annotation-end)
 			(line-break)
 			(line-break)

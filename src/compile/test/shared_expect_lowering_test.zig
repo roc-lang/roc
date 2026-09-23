@@ -12,11 +12,14 @@ fn runConsumer(lowered: *const lir.CheckedPipeline.LoweredProgram, expected_cras
     var host = eval.RuntimeHostEnv.init(std.testing.allocator);
     defer host.deinit();
     const program = &lowered.lir_result;
+    var static_strings = try eval.LirInterpreter.buildStaticStrings(std.testing.allocator, &program.store);
+    defer static_strings.deinit();
     var interpreter = try eval.LirInterpreter.initWithBoxyTables(
         std.testing.allocator,
         &program.store,
         &program.layouts,
         eval.LirInterpreter.BoxyTables.fromResult(program),
+        static_strings.view(),
         host.get_ops(),
     );
     defer interpreter.deinit();
@@ -47,8 +50,7 @@ fn inspectConsumers(prepared: *const lir.CheckedPipeline.PreparedMonotype, run_c
     var solved = try lir.CheckedPipeline.prepareMonotypeToSolved(try prepared.forkForConsumer(prepared.target.target_usize, .run));
     defer solved.deinit();
     for ([_]lir.CheckedPipeline.InlineExpectMode{ .run, .omit }, [_]bool{ run_crashes, omit_crashes }) |mode, expected_crash| {
-        const fork = try solved.forkForConsumer(prepared.target.target_usize, mode);
-        var lowered = try lir.CheckedPipeline.lowerPreparedSolvedToLir(fork);
+        var lowered = try lir.CheckedPipeline.lowerConsumerToLir(&solved, consumerFor(&solved, mode));
         defer lowered.deinit();
         runConsumer(&lowered, expected_crash, 7) catch |err| {
             std.log.err("shared expect consumer {s}: {s}", .{ @tagName(mode), @errorName(err) });
@@ -56,6 +58,20 @@ fn inspectConsumers(prepared: *const lir.CheckedPipeline.PreparedMonotype, run_c
         };
     }
     try std.testing.expectEqual(source_expr_count, prepared.program.view().exprs.len);
+}
+
+/// Both expect modes are consumers of one borrowed solved program: the
+/// program is never copied, and neither mode repeats any producer stage.
+fn consumerFor(
+    solved: *const lir.CheckedPipeline.PreparedSolved,
+    mode: lir.CheckedPipeline.InlineExpectMode,
+) lir.CheckedPipeline.Consumer {
+    return .{
+        .roots = .{},
+        .target_usize = solved.target.target_usize,
+        .inline_expects = mode,
+        .observers = lir.CheckedPipeline.Observers.fromTarget(solved.target),
+    };
 }
 
 fn expectConditionDiverges(prepared: *const lir.CheckedPipeline.PreparedMonotype) harness.LowerToLirHarnessError!void {
@@ -101,8 +117,7 @@ fn inspectMutation(prepared: *const lir.CheckedPipeline.PreparedMonotype) harnes
     var solved = try lir.CheckedPipeline.prepareMonotypeToSolved(try prepared.forkForConsumer(prepared.target.target_usize, .run));
     defer solved.deinit();
     for ([_]lir.CheckedPipeline.InlineExpectMode{ .run, .omit }, [_]i8{ 8, 7 }) |mode, expected_exit| {
-        const fork = try solved.forkForConsumer(prepared.target.target_usize, mode);
-        var lowered = try lir.CheckedPipeline.lowerPreparedSolvedToLir(fork);
+        var lowered = try lir.CheckedPipeline.lowerConsumerToLir(&solved, consumerFor(&solved, mode));
         defer lowered.deinit();
         runConsumer(&lowered, false, expected_exit) catch return error.TestUnexpectedResult;
     }
@@ -136,4 +151,55 @@ test "shared expect lowering merges callable identities assigned by the conditio
         \\    Err(Exit(decide({})))
         \\}
     , .{ .shared_comptime_reads = true, .prepared_inspect = inspectMutation });
+}
+
+/// A copy of the producer program, owned by `allocator`, for an entrance that
+/// consumes what it is given.
+fn preparedCopy(
+    allocator: std.mem.Allocator,
+    prepared: *const lir.CheckedPipeline.PreparedMonotype,
+) harness.LowerToLirHarnessError!lir.CheckedPipeline.PreparedMonotype {
+    var program = try prepared.program.cloneFrozen(allocator);
+    errdefer program.deinit();
+    const metadata = try allocator.dupe(lir.CheckedPipeline.RootTestPlanMetadata, prepared.test_plan_metadata);
+    return .{
+        .allocator = allocator,
+        .program = program,
+        .target = prepared.target,
+        .root_count = prepared.root_count,
+        .test_plan_metadata = metadata,
+    };
+}
+
+/// The consuming entrance owns the producer program from the call onward, so
+/// it releases it exactly once whether its continuation succeeds or fails.
+/// Every byte below is one of these allocators', so an entrance that leaked
+/// the program or freed it twice is what the totals would report.
+fn inspectConsumedOwnership(prepared: *const lir.CheckedPipeline.PreparedMonotype) harness.LowerToLirHarnessError!void {
+    var failing = std.testing.FailingAllocator.init(std.testing.allocator, .{});
+    const solved = try lir.CheckedPipeline.prepareMonotypeToSolved(try preparedCopy(failing.allocator(), prepared));
+    // Preparation is done, so the next allocation belongs to the consumer
+    // continuation that has taken ownership of the solved program.
+    failing.fail_index = failing.alloc_index;
+    if (lir.CheckedPipeline.lowerPreparedSolvedToLir(solved)) |lowered| {
+        var owned = lowered;
+        owned.deinit();
+        return error.TestUnexpectedResult;
+    } else |err| switch (err) {
+        error.OutOfMemory => {},
+        error.HostedFunctionNotBound => return error.TestUnexpectedResult,
+    }
+    try std.testing.expectEqual(failing.allocated_bytes, failing.freed_bytes);
+
+    var succeeding = std.testing.FailingAllocator.init(std.testing.allocator, .{});
+    const complete = try lir.CheckedPipeline.prepareMonotypeToSolved(try preparedCopy(succeeding.allocator(), prepared));
+    var lowered = try lir.CheckedPipeline.lowerPreparedSolvedToLir(complete);
+    lowered.deinit();
+    try std.testing.expectEqual(succeeding.allocated_bytes, succeeding.freed_bytes);
+}
+
+test "a consumed producer program is released whether its continuation succeeds or fails" {
+    try harness.expectLowersToLirWithOptions(
+        \\main! = |_args| Ok({})
+    , .{ .prepared_inspect = inspectConsumedOwnership });
 }

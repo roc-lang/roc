@@ -32,7 +32,7 @@ TYPE MISMATCH - issue_11097_wrapped_try_overlap.md:3:6:3:30
 			(line-break)
 			(annotation-start code-block)
 			(indent 1)
-			(text "[PersistFailed([Foo, ..]), ..]")
+			(text "[PersistFailed([Foo])]")
 			(annotation-end)
 			(line-break)
 			(line-break)
@@ -177,7 +177,7 @@ NO CHANGE
 						(e-empty_record))))))
 	(d-let
 		(p-assign (ident "use"))
-		(e-call (constraint-fn-var 363)
+		(e-call (constraint-fn-var 365)
 			(e-lookup-local
 				(p-assign (ident "run")))
 			(e-lambda

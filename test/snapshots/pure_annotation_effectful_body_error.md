@@ -16,22 +16,18 @@ bad_function = |msg| Stdout.line!(msg)
 main! = bad_function("This should fail")
 ~~~
 # EXPECTED
-NAME NOT IN SCOPE - pure_annotation_effectful_body_error.md:7:22:7:34
+DOES NOT EXIST - pure_annotation_effectful_body_error.md:7:22:7:34
 # PROBLEMS
 ~~~clojure
 (reports
 	(report
 		(severity runtime_error)
-		(title "Name Not In Scope")
+		(title "Does Not Exist")
 		(region (start 7 22) (end 7 34))
 		(headline
-			(reflow "Nothing is named ")
-			(annotated symbol-unqualified "line!")
-			(reflow " in this scope."))
+			(annotated symbol-unqualified "Stdout.line!")
+			(reflow " does not exist."))
 		(document
-			(reflow "Is it misspelled, or is there an import missing?")
-			(line-break)
-			(line-break)
 			(source-region (file "pure_annotation_effectful_body_error.md") (start 7 22) (end 7 34) (annotation error) (line-text "bad_function = |msg| Stdout.line!(msg)")))))
 ~~~
 # TOKENS

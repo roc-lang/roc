@@ -77,16 +77,19 @@ pub fn run(
     errdefer program.deinit();
 
     const solved_view = movedSolvedView(&owned, &program);
+    // Expressions keep their Lifted-domain IDs, but debug evaluation must not
+    // borrow descriptors from the consumed Solved program.
+    try program.comptime_value_roots.appendSlice(allocator, solved_view.lifted.comptime_value_roots);
     try program.field_access_segments.ensureUnusedCapacity(allocator, solved_view.lifted.field_access_segments.len);
     for (solved_view.lifted.field_access_segments) |segment| {
         program.field_access_segments.appendAssumeCapacity(.{ .field = segment.field });
     }
     var lowerer = try Lowerer.init(allocator, solved_view, &program, options);
+    defer lowerer.deinit();
     defer lowerer.folded_matches.deinit(allocator);
     for (folded_matches) |folded| {
         try lowerer.folded_matches.put(allocator, folded.scrutinee, folded.body);
     }
-    defer lowerer.deinit();
     try lowerer.lower();
     if (options.debug_specialization_identities) |identities| {
         if (identities.items.len != program.fnCount()) {
@@ -129,9 +132,12 @@ fn movedSolvedView(source: *const Solved.Program, moved: *const Ast.Program) Sol
             .proc_debug_names = lifted.proc_debug_names,
             .roots = lifted.roots,
             .layout_requests = lifted.layout_requests,
+            .comptime_value_reads = lifted.comptime_value_reads,
             .runtime_schema_requests = lifted.runtime_schema_requests,
             .static_data_values = moved.static_data_values.unsafeRawItemsForView(),
             .comptime_sites = lifted.comptime_sites,
+            .comptime_value_roots = lifted.comptime_value_roots,
+            .lowering_modules = lifted.lowering_modules,
             .source_files = moved.source_files.unsafeRawItemsForView(),
             .expr_locs = lifted.expr_locs,
             .expr_regions = lifted.expr_regions,
@@ -339,6 +345,7 @@ const Lowerer = struct {
             try self.program.roots.append(self.allocator, .{
                 .fn_id = try self.ensureOwnFnSpec(root.fn_id, .finite),
                 .request = root.request,
+                .owner = root.owner,
             });
         }
 
@@ -807,7 +814,7 @@ const Lowerer = struct {
         if (self.comptime_site_map[index]) |existing| return existing;
 
         const source = self.solved.lifted.comptimeSite(site);
-        const lowered = try self.program.addComptimeSite(source.kind, source.region, source.checked_site, source.branch_regions);
+        const lowered = try self.program.addComptimeSite(source.kind, source.owner, source.region, source.checked_site, source.branch_regions);
         self.comptime_site_map[index] = lowered;
         return lowered;
     }
@@ -1306,22 +1313,29 @@ const Lowerer = struct {
     fn captureRecordType(self: *Lowerer, captures: CaptureSpanId) Allocator.Error!Type.TypeId {
         if (self.capture_types.get(captures)) |existing| return existing;
 
+        // A capture may contain a callable whose lambda set refers back to
+        // this span. Reserve the record before descending into its fields.
+        const ty = try self.program.types.add(.zst);
+        try self.capture_types.put(captures, ty);
+        errdefer {
+            if (self.capture_types.get(captures) == ty) _ = self.capture_types.remove(captures);
+        }
+
         const capture_items = self.captureSpan(captures);
         const fields = try self.allocator.alloc(Type.CaptureField, capture_items.len);
         defer self.allocator.free(fields);
         for (capture_items, 0..) |capture, i| {
-            const ty = try self.lowerType(capture.ty);
+            const capture_ty = try self.lowerType(capture.ty);
             fields[i] = .{
                 .symbol = capture.symbol,
                 .binder = capture.binder,
                 .capture_id = capture.capture_id,
                 .checked_capture_id = capture.checked_capture_id,
-                .ty = ty,
-                .storage_ty = ty,
+                .ty = capture_ty,
+                .storage_ty = capture_ty,
             };
         }
-        const ty = try self.program.types.add(.{ .capture_record = try self.program.types.addCaptureFields(fields) });
-        try self.capture_types.put(captures, ty);
+        self.program.types.set(ty, .{ .capture_record = try self.program.types.addCaptureFields(fields) });
         return ty;
     }
 

@@ -177,21 +177,23 @@ table tr td {
   vertical-align: middle;
 }
 
-.entry h2,
-.entry h3,
-.entry h4,
-.entry h5,
-.entry h6 {
+/* An entry's own heading, which carries the permalink anchor. Matched as a
+   direct child so headings inside the entry's doc comment are untouched. */
+.entry > h2,
+.entry > h3,
+.entry > h4,
+.entry > h5,
+.entry > h6 {
   margin-left: var(--entry-anchor-offset);
   position: relative;
 }
 
 .entry-signature:hover .entry-anchor,
-.entry h2:hover .entry-anchor,
-.entry h3:hover .entry-anchor,
-.entry h4:hover .entry-anchor,
-.entry h5:hover .entry-anchor,
-.entry h6:hover .entry-anchor {
+.entry > h2:hover .entry-anchor,
+.entry > h3:hover .entry-anchor,
+.entry > h4:hover .entry-anchor,
+.entry > h5:hover .entry-anchor,
+.entry > h6:hover .entry-anchor {
   visibility: visible;
 }
 
@@ -228,6 +230,61 @@ table tr td {
 
 .entry-doc {
     padding-left: 20px;
+}
+
+/* Markdown block elements converted from a doc comment. These headings name a
+   subsection of one entry, so they stay below that entry's own heading in
+   size, and they are prose rather than identifiers, so they use the page font
+   instead of the monospace reserved for code. */
+.entry-doc h1,
+.entry-doc h2,
+.entry-doc h3,
+.entry-doc h4,
+.entry-doc h5,
+.entry-doc h6,
+.module-doc h1,
+.module-doc h2,
+.module-doc h3,
+.module-doc h4,
+.module-doc h5,
+.module-doc h6 {
+  font-family: var(--font-sans);
+  font-size: var(--font-base);
+  margin-top: 23px;
+  margin-bottom: 0;
+}
+
+.entry-doc h1,
+.entry-doc h2,
+.module-doc h1,
+.module-doc h2 {
+  font-size: var(--font-lg);
+}
+
+.entry-doc ul,
+.entry-doc ol,
+.module-doc ul,
+.module-doc ol {
+  margin: 12px 0;
+  padding-left: 40px;
+}
+
+.entry-doc li,
+.module-doc li {
+  margin: 4px 0;
+}
+
+.entry-doc li > ul,
+.entry-doc li > ol,
+.module-doc li > ul,
+.module-doc li > ol {
+  margin: 4px 0;
+}
+
+.entry-doc table,
+.module-doc table {
+  border-collapse: collapse;
+  margin: 16px;
 }
 
 /* Entry type vs value styling */
@@ -1381,11 +1438,11 @@ pre>code {
     /* Reduce var(--entry-anchor-offset) left margins that reserve space for .entry-anchor
        (which is hidden on mobile). Applies to entry headings, the type-def
        block aligned with them, and the children container nested below. */
-    .entry h2,
-    .entry h3,
-    .entry h4,
-    .entry h5,
-    .entry h6,
+    .entry > h2,
+    .entry > h3,
+    .entry > h4,
+    .entry > h5,
+    .entry > h6,
     .entry > .entry-type-def,
     .entry-children-container {
         margin-left: 8px;

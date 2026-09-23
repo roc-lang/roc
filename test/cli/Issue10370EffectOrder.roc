@@ -5,13 +5,13 @@ import pf.Stdout
 
 Input : { label : Str }
 
-emit! : Str => Try({}, [EmitFailed(Str), ..])
+emit! : Str => Try({}, [EmitFailed(Str)])
 emit! = |msg| {
     Stdout.line!(msg)
     Ok({})
 }
 
-begin! : Input => Try(U64, [BeginFailed(Str), ..])
+begin! : Input => Try(U64, [BeginFailed(Str)])
 begin! = |input|
     match emit!(input.label) {
         Ok({}) => Ok(1)

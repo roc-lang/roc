@@ -338,6 +338,7 @@ const Pass = struct {
                     .e_tag,
                     .e_nominal,
                     .e_nominal_external,
+                    .e_deferred_import_ref,
                     .e_zero_argument_tag,
                     .e_binop,
                     .e_unary_minus,
@@ -385,6 +386,13 @@ const Pass = struct {
                     // visible at canonicalization; the checker's residue
                     // walk owns that edge. The supplied values still walk.
                     try self.walk.append(self.gpa, nominal.backing_expr);
+                },
+                .e_deferred_import_ref => |deferred| {
+                    // The construction's type is still deferred, so its
+                    // omitted defaults belong to the checker's residue walk
+                    // exactly as for a resolved foreign construction. The
+                    // supplied values still walk.
+                    if (deferred.backing) |backing| try self.walk.append(self.gpa, backing.expr);
                 },
                 // A closure reached as a VALUE materializes only its
                 // captured values—creating the function value does not run

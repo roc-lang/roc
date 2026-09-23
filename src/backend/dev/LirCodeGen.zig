@@ -84,6 +84,7 @@ const strFromUtf8Lossy = builtins.str.fromUtf8Lossy;
 const Relocation = @import("Relocation.zig").IndexedRelocation;
 const collections = @import("collections");
 const SymbolTable = @import("SymbolTable.zig");
+const StackPlan = @import("StackPlan.zig");
 const coff = @import("object/coff.zig");
 
 const StaticStringData = @import("StaticStringData.zig");
@@ -139,6 +140,15 @@ const BitCountOp = enum(u16) {
     num_count_trailing_zero_bits = @intFromEnum(lir.LowLevel.num_count_trailing_zero_bits),
 };
 
+/// `host_drop` names a generated adapter's signature, not an operation the
+/// backend performs, so an RC statement can never carry it.
+fn hostDropInRcStatement() noreturn {
+    if (builtin.mode == .Debug) {
+        std.debug.panic("Dev/codegen invariant violated: RC statement used a host-shaped drop adapter", .{});
+    }
+    unreachable;
+}
+
 /// Identity of one compiled RC helper: the canonical layout plan plus the
 /// count-update atomicity the helper's own updates use. Atomic and
 /// single-thread helpers are compiled separately, so a helper's body never
@@ -158,6 +168,11 @@ const RcHelperVariant = struct {
         return (@as(u64, @intFromEnum(self.atomicity)) << 34) | self.key.encode();
     }
 };
+
+/// Static erased-callable pointers require the atomic helper family.
+pub fn staticDataRcHelperKey(key: RcHelperKey) u64 {
+    return (RcHelperVariant{ .key = key, .atomicity = .atomic }).encode();
+}
 
 fn boxyCaptureDropKey(capture_layout: layout.Idx, desc_field_offset: u32) u64 {
     return (@as(u64, 1) << 63) |
@@ -295,6 +310,74 @@ pub const ComptimeHooks = struct {
     failure_region: *const fn (u32, u32, u32, u32, u32, u32) callconv(.c) void,
     call_enter: *const fn (u32, u32, u32, u32, u32) callconv(.c) void,
     call_exit: *const fn () callconv(.c) void,
+};
+
+/// Compiler-private relocations; execution-image finalizers, never retained
+/// machine code, bind these names to the active compile-time host.
+pub const ComptimeHook = enum {
+    ensure_static_value,
+    branch_taken,
+    exhaustiveness_failed,
+    failure_region,
+    call_enter,
+    call_exit,
+
+    pub fn symbolName(self: ComptimeHook) []const u8 {
+        return switch (self) {
+            inline .ensure_static_value, .branch_taken, .exhaustiveness_failed, .failure_region, .call_enter, .call_exit => |hook| "roc__comptime_" ++ @tagName(hook),
+        };
+    }
+};
+
+/// Dependencies actually emitted by a fragment, not merely enabled options.
+/// Static-data and hook immediates are meaningful only in their producer LIR
+/// domain. A runtime entry also depends on who installs the Boxy runtime.
+pub const FragmentContextDependencies = struct {
+    comptime_hooks: bool = false,
+    static_data: bool = false,
+    boxy_runtime_entry: bool = false,
+    boxy_runtime: bool = false,
+    dict_seed: bool = false,
+};
+
+/// Non-LIR inputs to fragment emission. Reuse additionally requires producer
+/// domain/revision authority; the owner supplies that, not the code generator.
+/// Dependency flags permit ignoring hook/seed/Boxy-init policy differences only
+/// when the emitted artifact proves it does not depend on that policy.
+pub const FragmentContract = struct {
+    /// Platform/codegen identity; the selected instruction floor is separate.
+    target: RocTarget,
+    cpu_level: CpuLevel,
+    hot_reload: bool,
+    default_platform_runtime: bool,
+    dict_seed_mode: builtins.utils.DictSeedMode,
+    hooks_enabled: bool,
+    initialize_boxy_runtime: bool,
+    /// Execution roots retain mutable slot identity; object roots own constants.
+    static_data_readonly: bool,
+};
+
+/// Stable link targets independent of the producer's procedure index space.
+pub const SymbolicRefTarget = union(enum) {
+    proc: lir.ProcIdentity,
+    rc_helper: []const u8,
+    boxy_thunk: lir.ProcIdentity,
+};
+/// Producer-selected encoding, preserved rather than recovered from machine bytes.
+pub const SymbolicRefForm = enum { call, inline_call, addr };
+/// An unresolved code reference with placement-relative metadata.
+pub const SymbolicReference = struct {
+    site: u32,
+    form: SymbolicRefForm,
+    target: SymbolicRefTarget,
+    veneer: ?u32 = null,
+};
+
+/// One same-image pointer cell. Its zero bytes and absolute symbolic target are
+/// carried by the artifact; only an execution-image finalizer binds an address.
+pub const BindingDataCell = struct {
+    name: []const u8,
+    target_name: []const u8,
 };
 
 /// How native execution finds a hosted function's address: the in-process
@@ -906,6 +989,7 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
 
         /// Map from LIR local id to value location (register or stack slot)
         local_locations: std.AutoHashMap(u32, ValueLocation),
+        stack_alloca_slots: collections.DenseMap(LocalId, i32),
         local_location_undo: std.ArrayList(LocalLocationUndo),
 
         /// Exact reverse index for locals which currently live in vector registers.
@@ -1110,6 +1194,17 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
         /// evaluation. Normal dev backend output leaves these null.
         comptime_hooks: ?ComptimeHooks = null,
 
+        /// Independent emission borrows global LIR metadata but owns only the
+        /// requested body's machine-code state. Helpers remain coordinator work.
+        fragment_mode: bool = false,
+        fragment_source_mode: GenerationMode = .native_execution,
+        fragment_context: FragmentContextDependencies = .{},
+        borrowed_static_data_symbols: ?*const Self = null,
+        assembled_symbolic_refs: std.ArrayList(SymbolicReference) = .empty,
+        assembled_thunks: std.AutoHashMapUnmanaged(lir.ProcIdentity, usize) = .{},
+        binding_data_cells: std.ArrayList(BindingDataCell) = .empty,
+        owned_symbol_names: std.ArrayList([]u8) = .empty,
+
         /// Scratch buffer for argument locations during lambda body inlining
         scratch_arg_locs: base.Scratch(ValueLocation),
 
@@ -1230,7 +1325,7 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
             offset: usize,
         };
 
-        pub const CodeRefForm = enum { call, addr };
+        pub const CodeRefForm = SymbolicRefForm;
 
         /// One resolved reference from the code buffer into itself.
         pub const CodeRef = struct {
@@ -1254,6 +1349,9 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
             /// A procedure spliced from an object-cache entry that this
             /// program does not declare; only other spliced code reaches it.
             spliced_proc: lir.ProcIdentity,
+            /// A thunk retains its distinct ABI even when its worker is not
+            /// declared by the receiving program.
+            spliced_boxy_thunk: lir.ProcIdentity,
             /// A refcount helper spliced from an object-cache entry,
             /// registered by name in `spliced_helper_offsets`.
             spliced_helper,
@@ -1480,6 +1578,14 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
             boxy_worker_procs: []const lir.LIR.LirProcSpecId,
             cpu_level: CpuLevel,
         ) Allocator.Error!Self {
+            var scratch_arg_locs = try base.Scratch(ValueLocation).init(allocator);
+            errdefer scratch_arg_locs.deinit();
+            var scratch_arg_infos = try base.Scratch(ArgInfo).init(allocator);
+            errdefer scratch_arg_infos.deinit();
+            var scratch_pass_by_ptr = try base.Scratch(bool).init(allocator);
+            errdefer scratch_pass_by_ptr.deinit();
+            var scratch_param_num_regs = try base.Scratch(u8).init(allocator);
+            errdefer scratch_param_num_regs.deinit();
             return .{
                 .allocator = allocator,
                 .cc = CallingConvention.forTarget(target),
@@ -1499,6 +1605,7 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
                 .boxy_worker_procs = boxy_worker_procs,
                 .boxy_runtime_used = boxy_worker_procs.len != 0,
                 .local_locations = std.AutoHashMap(u32, ValueLocation).init(allocator),
+                .stack_alloca_slots = collections.DenseMap(LocalId, i32).init(allocator),
                 .local_location_undo = .empty,
                 .vector_local_by_reg = .initFill(null),
                 .vector_local_mask = 0,
@@ -1529,10 +1636,10 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
                 .loop_continue_targets = std.ArrayList(usize).empty,
                 .loop_break_patch_starts = std.ArrayList(usize).empty,
                 .loop_break_patches = std.ArrayList(usize).empty,
-                .scratch_arg_locs = try base.Scratch(ValueLocation).init(allocator),
-                .scratch_arg_infos = try base.Scratch(ArgInfo).init(allocator),
-                .scratch_pass_by_ptr = try base.Scratch(bool).init(allocator),
-                .scratch_param_num_regs = try base.Scratch(u8).init(allocator),
+                .scratch_arg_locs = scratch_arg_locs,
+                .scratch_arg_infos = scratch_arg_infos,
+                .scratch_pass_by_ptr = scratch_pass_by_ptr,
+                .scratch_param_num_regs = scratch_param_num_regs,
             };
         }
 
@@ -1558,6 +1665,13 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
             }
         }
 
+        /// Borrow only producer names. Each lane interns the subset it uses in
+        /// its own symbol table; no source symbol IDs or mutable caches escape.
+        pub fn borrowStaticDataSymbolsFrom(self: *Self, source: *const Self) void {
+            std.debug.assert(self != source);
+            self.borrowed_static_data_symbols = source;
+        }
+
         /// Clean up resources
         pub fn deinit(self: *Self) void {
             self.codegen.deinit();
@@ -1568,6 +1682,7 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
             self.boxy_symbols.deinit();
             self.hosted_symbols.deinit();
             self.local_locations.deinit();
+            self.stack_alloca_slots.deinit();
             self.local_location_undo.deinit(self.allocator);
             self.join_points.deinit();
             self.stmt_locations.deinit();
@@ -1576,6 +1691,11 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
             self.proc_registry.deinit();
             self.boxy_dict_thunks.deinit();
             self.compiled_rc_helpers.deinit();
+            self.assembled_symbolic_refs.deinit(self.allocator);
+            self.assembled_thunks.deinit(self.allocator);
+            self.binding_data_cells.deinit(self.allocator);
+            for (self.owned_symbol_names.items) |name| self.allocator.free(name);
+            self.owned_symbol_names.deinit(self.allocator);
             self.unwind_functions.deinit(self.allocator);
             self.rc_helper_worklist.deinit(self.allocator);
             self.rc_helper_scheduled.deinit();
@@ -1626,6 +1746,15 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
             self.proc_registry.clearRetainingCapacity();
             self.boxy_dict_thunks.clearRetainingCapacity();
             self.compiled_rc_helpers.clearRetainingCapacity();
+            self.line_entries.clearRetainingCapacity();
+            self.fragment_mode = false;
+            self.fragment_source_mode = .native_execution;
+            self.fragment_context = .{};
+            self.assembled_symbolic_refs.clearRetainingCapacity();
+            self.assembled_thunks.clearRetainingCapacity();
+            self.binding_data_cells.clearRetainingCapacity();
+            for (self.owned_symbol_names.items) |name| self.allocator.free(name);
+            self.owned_symbol_names.clearRetainingCapacity();
             self.unwind_functions.clearRetainingCapacity();
             self.rc_helper_worklist.clearRetainingCapacity();
             self.rc_helper_scheduled.clearRetainingCapacity();
@@ -5171,6 +5300,27 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
                         LowLevelBuiltins.floatPow(ll.ret_layout == .f32),
                     );
                 },
+                .num_atan2 => {
+                    if (args.len != 2) unreachable;
+                    const lhs_loc = try self.emitValueLocal(GuardedList.at(args, 0));
+                    const rhs_loc = try self.emitValueLocal(GuardedList.at(args, 1));
+                    if (ll.ret_layout == .dec) {
+                        const adj_lhs = if (lhs_loc == .stack) ValueLocation{ .stack_i128 = lhs_loc.stack.offset } else lhs_loc;
+                        const adj_rhs = if (rhs_loc == .stack) ValueLocation{ .stack_i128 = rhs_loc.stack.offset } else rhs_loc;
+                        return self.callDecBinaryMathBuiltin(
+                            adj_lhs,
+                            adj_rhs,
+                            LowLevelBuiltins.decBinaryArith(.num_atan2),
+                        );
+                    }
+
+                    return self.callFloatBinaryBuiltin(
+                        lhs_loc,
+                        rhs_loc,
+                        ll.ret_layout,
+                        LowLevelBuiltins.floatAtan2(ll.ret_layout == .f32),
+                    );
+                },
                 .num_sin,
                 .num_cos,
                 .num_tan,
@@ -5516,7 +5666,7 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
                     const ret_layout_data = ls.getLayout(ll.ret_layout);
                     const elem_size: u32 = ls.layoutSize(ls.getLayout(ret_layout_data.getIdx()));
 
-                    const slot = self.codegen.allocStackSlot(@max(elem_size, 1));
+                    const slot = self.stack_alloca_slots.get(ll.target) orelse unreachable;
                     if (elem_size > 0) {
                         try self.zeroStackArea(slot, elem_size);
                     }
@@ -7312,6 +7462,7 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
                 .num_negate_checked,
                 .num_plus,
                 .num_pow,
+                .num_atan2,
                 .num_rem_by,
                 .num_rem_by_checked,
                 .num_round,
@@ -8027,6 +8178,7 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
             switch (narrowEnum(HasherOp, ll.op)) {
                 .dict_pseudo_seed => {
                     if (args.len != 0) unreachable;
+                    self.fragment_context.dict_seed = true;
                     if (self.dict_seed_mode == .comptime_zero) return .{ .immediate_i64 = 0 };
                     var builder = try Builder.init(&self.codegen.emit, &self.codegen.stack_offset);
                     try self.callBuiltin(&builder, LowLevelBuiltins.hasherOp(.dict_pseudo_seed));
@@ -9785,765 +9937,353 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
             try self.poisonStackArea(stableLocationStackOffset(stable_loc), size);
         }
 
-        fn collectStmtReadLocals(
-            self: *Self,
-            root_stmt_id: CFStmtId,
-            locals: *std.AutoHashMap(u64, LocalId),
-            visited: *std.AutoHashMap(u32, void),
-        ) Allocator.Error!void {
-            var sfa = std.heap.stackFallback(64 * @sizeOf(CFStmtId), self.allocator);
-            const sa = sfa.get();
-            var stack = std.ArrayList(CFStmtId).empty;
-            defer stack.deinit(sa);
-            try stack.append(sa, root_stmt_id);
+        const StackAccessContext = struct {
+            owner: *Self,
+            plan: *StackPlan,
+            at: u32,
+            failure: ?Allocator.Error = null,
 
-            while (stack.pop()) |stmt_id| {
-                const gop = try visited.getOrPut(@intFromEnum(stmt_id));
-                if (gop.found_existing) continue;
-
-                switch (self.store.getCFStmt(stmt_id)) {
-                    .assign_ref => |assign| {
-                        try locals.put(localKey(refOpSource(assign.op)), refOpSource(assign.op));
-                        try stack.append(sa, assign.next);
-                    },
-                    .assign_literal => |assign| try stack.append(sa, assign.next),
-                    .init_uninitialized => |uninit| try stack.append(sa, uninit.next),
-                    .assign_call => |assign| {
-                        if (assign.result_desc) |result_desc| {
-                            if (result_desc.localOrNull()) |local| try locals.put(localKey(local), local);
-                        }
-                        const args = self.store.getLocalSpan(assign.args);
-                        for (0..GuardedList.borrowLen(args)) |arg_index| {
-                            const arg = GuardedList.at(args, arg_index);
-                            try locals.put(localKey(arg), arg);
-                        }
-                        try stack.append(sa, assign.next);
-                    },
-                    .assign_call_erased => |assign| {
-                        try locals.put(localKey(assign.closure), assign.closure);
-                        if (assign.result_desc) |result_desc| {
-                            if (result_desc.localOrNull()) |local| try locals.put(localKey(local), local);
-                        }
-                        if (assign.reuse_source) |reuse_source| try locals.put(localKey(reuse_source), reuse_source);
-                        const args = self.store.getLocalSpan(assign.args);
-                        for (0..GuardedList.borrowLen(args)) |arg_index| {
-                            const arg = GuardedList.at(args, arg_index);
-                            try locals.put(localKey(arg), arg);
-                        }
-                        const arg_descs = self.store.getLocalSpan(assign.arg_descs);
-                        for (0..GuardedList.borrowLen(arg_descs)) |desc_index| {
-                            const desc = GuardedList.at(arg_descs, desc_index);
-                            try locals.put(localKey(desc), desc);
-                        }
-                        try stack.append(sa, assign.next);
-                    },
-                    .assign_packed_erased_fn => |assign| {
-                        if (assign.capture) |capture| {
-                            try locals.put(localKey(capture), capture);
-                        }
-                        if (assign.reuse) |reuse| {
-                            try locals.put(localKey(reuse), reuse);
-                        }
-                        try stack.append(sa, assign.next);
-                    },
-                    .assign_boxy_desc_ref => |assign| {
-                        if (assign.desc.localOrNull()) |local| try locals.put(localKey(local), local);
-                        if (assign.tag_residual_for) |desc| if (desc.localOrNull()) |local| try locals.put(localKey(local), local);
-                        const captures = self.store.getLocalSpan(assign.captures);
-                        for (0..GuardedList.borrowLen(captures)) |capture_index| {
-                            const local = GuardedList.at(captures, capture_index);
-                            try locals.put(localKey(local), local);
-                        }
-                        try stack.append(sa, assign.next);
-                    },
-                    .assign_boxy_dict_ref => |assign| {
-                        if (assign.dict.localOrNull()) |local| try locals.put(localKey(local), local);
-                        try stack.append(sa, assign.next);
-                    },
-                    .assign_boxy_box => |assign| {
-                        try locals.put(localKey(assign.payload), assign.payload);
-                        if (assign.payload_desc) |desc| {
-                            if (desc.localOrNull()) |local| try locals.put(localKey(local), local);
-                        }
-                        try stack.append(sa, assign.next);
-                    },
-                    .assign_boxy_reuse_box => |assign| {
-                        try locals.put(localKey(assign.source), assign.source);
-                        if (assign.desc.localOrNull()) |local| try locals.put(localKey(local), local);
-                        try stack.append(sa, assign.next);
-                    },
-                    .assign_boxy_unbox => |assign| {
-                        try locals.put(localKey(assign.source), assign.source);
-                        if (assign.source_desc.localOrNull()) |local| try locals.put(localKey(local), local);
-                        if (assign.target_desc) |desc| if (desc.localOrNull()) |local| try locals.put(localKey(local), local);
-                        try stack.append(sa, assign.next);
-                    },
-                    .assign_boxy_adapt => |assign| {
-                        try locals.put(localKey(assign.source), assign.source);
-                        if (assign.source_desc) |desc| if (desc.localOrNull()) |local| try locals.put(localKey(local), local);
-                        if (assign.target_desc) |desc| if (desc.localOrNull()) |local| try locals.put(localKey(local), local);
-                        try stack.append(sa, assign.next);
-                    },
-                    .assign_boxy_inspect => |assign| {
-                        try locals.put(localKey(assign.source), assign.source);
-                        if (assign.source_desc.localOrNull()) |local| try locals.put(localKey(local), local);
-                        try stack.append(sa, assign.next);
-                    },
-                    .assign_boxy_eq => |assign| {
-                        try locals.put(localKey(assign.lhs), assign.lhs);
-                        try locals.put(localKey(assign.rhs), assign.rhs);
-                        if (assign.source_desc.localOrNull()) |local| try locals.put(localKey(local), local);
-                        try stack.append(sa, assign.next);
-                    },
-                    .assign_boxy_tag => |assign| {
-                        if (assign.target_desc.localOrNull()) |local| try locals.put(localKey(local), local);
-                        if (assign.payload) |payload| try locals.put(localKey(payload), payload);
-                        if (assign.payload_desc) |desc| {
-                            if (desc.localOrNull()) |local| try locals.put(localKey(local), local);
-                        }
-                        try stack.append(sa, assign.next);
-                    },
-                    .assign_boxy_tag_payload => |assign| {
-                        try locals.put(localKey(assign.source), assign.source);
-                        if (assign.source_desc.localOrNull()) |local| try locals.put(localKey(local), local);
-                        if (assign.target_desc) |target_desc| try locals.put(localKey(target_desc), target_desc);
-                        try stack.append(sa, assign.next);
-                    },
-                    .boxy_tag_match => |tag_match| {
-                        try locals.put(localKey(tag_match.source), tag_match.source);
-                        if (tag_match.source_desc.localOrNull()) |local| try locals.put(localKey(local), local);
-                        try stack.append(sa, tag_match.on_match);
-                        try stack.append(sa, tag_match.on_miss);
-                    },
-                    .assign_call_dict => |assign| {
-                        if (assign.dict.localOrNull()) |local| try locals.put(localKey(local), local);
-                        if (assign.result_desc) |result_desc| {
-                            if (result_desc.localOrNull()) |local| try locals.put(localKey(local), local);
-                        }
-                        const args = self.store.getLocalSpan(assign.args);
-                        for (0..GuardedList.borrowLen(args)) |arg_index| {
-                            const arg = GuardedList.at(args, arg_index);
-                            try locals.put(localKey(arg), arg);
-                        }
-                        const arg_descs = self.store.getLocalSpan(assign.arg_descs);
-                        for (0..GuardedList.borrowLen(arg_descs)) |arg_index| {
-                            const arg_desc = GuardedList.at(arg_descs, arg_index);
-                            try locals.put(localKey(arg_desc), arg_desc);
-                        }
-                        const hidden_args = self.store.getLocalSpan(assign.hidden_args);
-                        for (0..GuardedList.borrowLen(hidden_args)) |arg_index| {
-                            const arg = GuardedList.at(hidden_args, arg_index);
-                            try locals.put(localKey(arg), arg);
-                        }
-                        try stack.append(sa, assign.next);
-                    },
-                    .assign_low_level => |assign| {
-                        const args = self.store.getLocalSpan(assign.args);
-                        for (0..args.len) |arg_index| {
-                            const arg = GuardedList.at(args, arg_index);
-                            try locals.put(localKey(arg), arg);
-                        }
-                        try stack.append(sa, assign.next);
-                    },
-                    .assign_list => |assign| {
-                        const elems = self.store.getLocalSpan(assign.elems);
-                        for (0..elems.len) |elem_index| {
-                            const elem = GuardedList.at(elems, elem_index);
-                            try locals.put(localKey(elem), elem);
-                        }
-                        try stack.append(sa, assign.next);
-                    },
-                    .assign_struct => |assign| {
-                        const fields = self.store.getLocalSpan(assign.fields);
-                        for (0..fields.len) |field_index| {
-                            const field = GuardedList.at(fields, field_index);
-                            try locals.put(localKey(field), field);
-                        }
-                        try stack.append(sa, assign.next);
-                    },
-                    .assign_tag => |assign| {
-                        if (assign.payload) |payload| try locals.put(localKey(payload), payload);
-                        try stack.append(sa, assign.next);
-                    },
-                    .store_struct => |assign| {
-                        try locals.put(localKey(assign.dest), assign.dest);
-                        const fields = self.store.getLocalSpan(assign.fields);
-                        for (0..fields.len) |index| {
-                            const field = GuardedList.at(fields, index);
-                            try locals.put(localKey(field), field);
-                        }
-                        try stack.append(sa, assign.next);
-                    },
-                    .store_tag => |assign| {
-                        try locals.put(localKey(assign.dest), assign.dest);
-                        if (assign.payload) |payload| try locals.put(localKey(payload), payload);
-                        try stack.append(sa, assign.next);
-                    },
-                    .set_local => |assign| {
-                        try locals.put(localKey(assign.target), assign.target);
-                        try locals.put(localKey(assign.value), assign.value);
-                        try stack.append(sa, assign.next);
-                    },
-                    .debug => |debug_stmt| {
-                        try locals.put(localKey(debug_stmt.message), debug_stmt.message);
-                        try stack.append(sa, debug_stmt.next);
-                    },
-                    .expect_err => |expect_err_stmt| {
-                        try locals.put(localKey(expect_err_stmt.message), expect_err_stmt.message);
-                    },
-                    .expect => |expect_stmt| {
-                        try locals.put(localKey(expect_stmt.condition), expect_stmt.condition);
-                        try stack.append(sa, expect_stmt.next);
-                    },
-                    .comptime_branch_taken => |marker| try stack.append(sa, marker.next),
-                    .runtime_error, .comptime_exhaustiveness_failed => {},
-                    .incref => |inc| {
-                        try locals.put(localKey(inc.value), inc.value);
-                        try stack.append(sa, inc.next);
-                    },
-                    .decref => |dec| {
-                        try locals.put(localKey(dec.value), dec.value);
-                        try stack.append(sa, dec.next);
-                    },
-                    .decref_if_initialized => |dec| {
-                        try locals.put(localKey(dec.cond), dec.cond);
-                        try locals.put(localKey(dec.value), dec.value);
-                        try stack.append(sa, dec.next);
-                    },
-                    .free => |free_stmt| {
-                        try locals.put(localKey(free_stmt.value), free_stmt.value);
-                        try stack.append(sa, free_stmt.next);
-                    },
-                    .switch_stmt => |sw| {
-                        try locals.put(localKey(sw.cond), sw.cond);
-                        const branches = self.store.getCFSwitchBranches(sw.branches);
-                        for (0..branches.len) |branch_index| {
-                            const branch = GuardedList.at(branches, branch_index);
-                            try stack.append(sa, branch.body);
-                        }
-                        try stack.append(sa, sw.default_branch);
-                    },
-                    .switch_initialized_payload => |sw| {
-                        try locals.put(localKey(sw.cond), sw.cond);
-                        try locals.put(localKey(sw.payload), sw.payload);
-                        try stack.append(sa, sw.initialized_branch);
-                        try stack.append(sa, sw.uninitialized_branch);
-                    },
-                    .str_match => |str_match| {
-                        try locals.put(localKey(str_match.source), str_match.source);
-                        try stack.append(sa, str_match.on_match);
-                        try stack.append(sa, str_match.on_miss);
-                    },
-                    .str_match_set => |str_match_set| {
-                        try locals.put(localKey(str_match_set.source), str_match_set.source);
-                        const arms = self.store.getStrMatchArms(str_match_set.arms);
-                        for (0..arms.len) |arm_index| {
-                            const arm = GuardedList.at(arms, arm_index);
-                            try stack.append(sa, arm.on_match);
-                        }
-                        try stack.append(sa, str_match_set.on_miss);
-                    },
-                    .join => |join| {
-                        try stack.append(sa, join.body);
-                        try stack.append(sa, join.remainder);
-                    },
-                    .jump => {},
-                    .ret => |ret_stmt| try locals.put(localKey(ret_stmt.value), ret_stmt.value),
-                    .crash => |crash| if (crash.msg.localId()) |message| {
-                        try locals.put(localKey(message), message);
-                    },
-                    .loop_continue => {},
-                    .loop_break => {},
-                }
+            fn read(ctx: *@This(), local: LocalId) void {
+                if (ctx.failure != null) return;
+                ctx.plan.access(ctx.at, local, true, false) catch |err| {
+                    ctx.failure = err;
+                };
             }
+            fn write(ctx: *@This(), local: LocalId) void {
+                if (ctx.failure != null) return;
+                ctx.plan.access(ctx.at, local, false, true) catch |err| {
+                    ctx.failure = err;
+                };
+            }
+            fn descriptor(ctx: *@This(), desc: ?LIR.BoxyDescRef) void {
+                if (desc) |d| if (d.localOrNull()) |local| read(ctx, local);
+            }
+            fn outputDescriptor(ctx: *@This(), local: LocalId) void {
+                if (ctx.owner.store.getLocal(local).boxy_desc) |desc| if (desc.localOrNull()) |out| write(ctx, out);
+            }
+        };
+
+        fn lowLevelListDescRef(self: *Self, s: anytype) ?LIR.BoxyDescRef {
+            const op = s.op;
+            if (op != .list_concat and op != .list_set and op != .list_set_in_place_unsafe and
+                op != .list_swap and op != .list_drop_first and op != .list_drop_last and
+                op != .list_take_first and op != .list_take_last and op != .list_sublist and
+                op != .list_drop_at and op != .list_reverse and op != .list_sort_with and
+                op != .list_reserve and op != .list_release_excess_capacity) return null;
+            const abi = builtinInternalListAbi(self.layout_store, "dev.stack_plan.list_abi", self.localLayout(s.target));
+            if (abi.elem_size_align.size == 0) return null;
+            const args = self.store.getLocalSpan(s.args);
+            const first = GuardedList.at(args, 0);
+            const ref = if (op == .list_concat)
+                self.boxyListElementDescRef(abi, &.{ first, GuardedList.at(args, 1) }, s.target)
+            else
+                self.boxyListElementDescRef(abi, &.{first}, s.target);
+            return if (ref) |r| r.desc else null;
         }
 
-        fn collectStmtLocals(
-            self: *Self,
-            root_stmt_id: CFStmtId,
-            locals: *std.AutoHashMap(u64, LocalId),
-            visited: *std.AutoHashMap(u32, void),
-        ) Allocator.Error!void {
-            var sfa = std.heap.stackFallback(64 * @sizeOf(CFStmtId), self.allocator);
-            const sa = sfa.get();
-            var stack = std.ArrayList(CFStmtId).empty;
-            defer stack.deinit(sa);
-            try stack.append(sa, root_stmt_id);
-
-            while (stack.pop()) |stmt_id| {
-                const gop = try visited.getOrPut(@intFromEnum(stmt_id));
-                if (gop.found_existing) continue;
-
-                switch (self.store.getCFStmt(stmt_id)) {
-                    .assign_ref => |assign| {
-                        try locals.put(localKey(assign.target), assign.target);
-                        try locals.put(localKey(refOpSource(assign.op)), refOpSource(assign.op));
-                        try stack.append(sa, assign.next);
-                    },
-                    .assign_literal => |assign| {
-                        try locals.put(localKey(assign.target), assign.target);
-                        try stack.append(sa, assign.next);
-                    },
-                    .init_uninitialized => |uninit| {
-                        try locals.put(localKey(uninit.target), uninit.target);
-                        try stack.append(sa, uninit.next);
-                    },
-                    .assign_call => |assign| {
-                        try locals.put(localKey(assign.target), assign.target);
-                        if (assign.out_desc) |out_desc| try locals.put(localKey(out_desc), out_desc);
-                        if (assign.result_desc) |result_desc| {
-                            if (result_desc.localOrNull()) |local| try locals.put(localKey(local), local);
-                        }
-                        const args = self.store.getLocalSpan(assign.args);
-                        for (0..GuardedList.borrowLen(args)) |arg_index| {
-                            const arg = GuardedList.at(args, arg_index);
-                            try locals.put(localKey(arg), arg);
-                        }
-                        try stack.append(sa, assign.next);
-                    },
-                    .assign_call_erased => |assign| {
-                        try locals.put(localKey(assign.target), assign.target);
-                        if (assign.out_desc) |out_desc| try locals.put(localKey(out_desc), out_desc);
-                        try locals.put(localKey(assign.closure), assign.closure);
-                        if (assign.result_desc) |result_desc| {
-                            if (result_desc.localOrNull()) |local| try locals.put(localKey(local), local);
-                        }
-                        if (assign.reuse_source) |reuse_source| try locals.put(localKey(reuse_source), reuse_source);
-                        const args = self.store.getLocalSpan(assign.args);
-                        for (0..GuardedList.borrowLen(args)) |arg_index| {
-                            const arg = GuardedList.at(args, arg_index);
-                            try locals.put(localKey(arg), arg);
-                        }
-                        const arg_descs = self.store.getLocalSpan(assign.arg_descs);
-                        for (0..GuardedList.borrowLen(arg_descs)) |desc_index| {
-                            const desc = GuardedList.at(arg_descs, desc_index);
-                            try locals.put(localKey(desc), desc);
-                        }
-                        try stack.append(sa, assign.next);
-                    },
-                    .assign_packed_erased_fn => |assign| {
-                        try locals.put(localKey(assign.target), assign.target);
-                        if (assign.capture) |capture| try locals.put(localKey(capture), capture);
-                        if (assign.reuse) |reuse| try locals.put(localKey(reuse), reuse);
-                        try stack.append(sa, assign.next);
-                    },
-                    .assign_boxy_desc_ref => |assign| {
-                        try locals.put(localKey(assign.target), assign.target);
-                        if (assign.desc.localOrNull()) |local| try locals.put(localKey(local), local);
-                        if (assign.tag_residual_for) |desc| if (desc.localOrNull()) |local| try locals.put(localKey(local), local);
-                        const captures = self.store.getLocalSpan(assign.captures);
-                        for (0..GuardedList.borrowLen(captures)) |capture_index| {
-                            const local = GuardedList.at(captures, capture_index);
-                            try locals.put(localKey(local), local);
-                        }
-                        try stack.append(sa, assign.next);
-                    },
-                    .assign_boxy_dict_ref => |assign| {
-                        try locals.put(localKey(assign.target), assign.target);
-                        if (assign.dict.localOrNull()) |local| try locals.put(localKey(local), local);
-                        try stack.append(sa, assign.next);
-                    },
-                    .assign_boxy_box => |assign| {
-                        try locals.put(localKey(assign.target), assign.target);
-                        try locals.put(localKey(assign.payload), assign.payload);
-                        if (assign.payload_desc) |desc| {
-                            if (desc.localOrNull()) |local| try locals.put(localKey(local), local);
-                        }
-                        try stack.append(sa, assign.next);
-                    },
-                    .assign_boxy_reuse_box => |assign| {
-                        try locals.put(localKey(assign.target), assign.target);
-                        try locals.put(localKey(assign.source), assign.source);
-                        if (assign.desc.localOrNull()) |local| try locals.put(localKey(local), local);
-                        try stack.append(sa, assign.next);
-                    },
-                    .assign_boxy_unbox => |assign| {
-                        try locals.put(localKey(assign.target), assign.target);
-                        try locals.put(localKey(assign.source), assign.source);
-                        if (assign.source_desc.localOrNull()) |local| try locals.put(localKey(local), local);
-                        if (assign.target_desc) |desc| if (desc.localOrNull()) |local| try locals.put(localKey(local), local);
-                        try stack.append(sa, assign.next);
-                    },
-                    .assign_boxy_adapt => |assign| {
-                        try locals.put(localKey(assign.target), assign.target);
-                        try locals.put(localKey(assign.source), assign.source);
-                        if (assign.source_desc) |desc| if (desc.localOrNull()) |local| try locals.put(localKey(local), local);
-                        if (assign.target_desc) |desc| if (desc.localOrNull()) |local| try locals.put(localKey(local), local);
-                        try stack.append(sa, assign.next);
-                    },
-                    .assign_boxy_inspect => |assign| {
-                        try locals.put(localKey(assign.target), assign.target);
-                        try locals.put(localKey(assign.source), assign.source);
-                        if (assign.source_desc.localOrNull()) |local| try locals.put(localKey(local), local);
-                        try stack.append(sa, assign.next);
-                    },
-                    .assign_boxy_eq => |assign| {
-                        try locals.put(localKey(assign.target), assign.target);
-                        try locals.put(localKey(assign.lhs), assign.lhs);
-                        try locals.put(localKey(assign.rhs), assign.rhs);
-                        if (assign.source_desc.localOrNull()) |local| try locals.put(localKey(local), local);
-                        try stack.append(sa, assign.next);
-                    },
-                    .assign_boxy_tag => |assign| {
-                        try locals.put(localKey(assign.target), assign.target);
-                        if (assign.target_desc.localOrNull()) |local| try locals.put(localKey(local), local);
-                        if (assign.payload) |payload| try locals.put(localKey(payload), payload);
-                        if (assign.payload_desc) |desc| {
-                            if (desc.localOrNull()) |local| try locals.put(localKey(local), local);
-                        }
-                        try stack.append(sa, assign.next);
-                    },
-                    .assign_boxy_tag_payload => |assign| {
-                        try locals.put(localKey(assign.target), assign.target);
-                        if (assign.target_desc) |target_desc| try locals.put(localKey(target_desc), target_desc);
-                        try locals.put(localKey(assign.source), assign.source);
-                        if (assign.source_desc.localOrNull()) |local| try locals.put(localKey(local), local);
-                        try stack.append(sa, assign.next);
-                    },
-                    .boxy_tag_match => |tag_match| {
-                        try locals.put(localKey(tag_match.source), tag_match.source);
-                        if (tag_match.source_desc.localOrNull()) |local| try locals.put(localKey(local), local);
-                        try stack.append(sa, tag_match.on_match);
-                        try stack.append(sa, tag_match.on_miss);
-                    },
-                    .assign_call_dict => |assign| {
-                        try locals.put(localKey(assign.target), assign.target);
-                        if (assign.dict.localOrNull()) |local| try locals.put(localKey(local), local);
-                        if (assign.result_desc) |result_desc| {
-                            if (result_desc.localOrNull()) |local| try locals.put(localKey(local), local);
-                        }
-                        const args = self.store.getLocalSpan(assign.args);
-                        for (0..GuardedList.borrowLen(args)) |arg_index| {
-                            const arg = GuardedList.at(args, arg_index);
-                            try locals.put(localKey(arg), arg);
-                        }
-                        const arg_descs = self.store.getLocalSpan(assign.arg_descs);
-                        for (0..GuardedList.borrowLen(arg_descs)) |arg_index| {
-                            const arg_desc = GuardedList.at(arg_descs, arg_index);
-                            try locals.put(localKey(arg_desc), arg_desc);
-                        }
-                        const hidden_args = self.store.getLocalSpan(assign.hidden_args);
-                        for (0..GuardedList.borrowLen(hidden_args)) |arg_index| {
-                            const arg = GuardedList.at(hidden_args, arg_index);
-                            try locals.put(localKey(arg), arg);
-                        }
-                        try stack.append(sa, assign.next);
-                    },
-                    .assign_low_level => |assign| {
-                        try locals.put(localKey(assign.target), assign.target);
-                        const args = self.store.getLocalSpan(assign.args);
-                        for (0..args.len) |arg_index| {
-                            const arg = GuardedList.at(args, arg_index);
-                            try locals.put(localKey(arg), arg);
-                        }
-                        try stack.append(sa, assign.next);
-                    },
-                    .assign_list => |assign| {
-                        try locals.put(localKey(assign.target), assign.target);
-                        const elems = self.store.getLocalSpan(assign.elems);
-                        for (0..elems.len) |elem_index| {
-                            const elem = GuardedList.at(elems, elem_index);
-                            try locals.put(localKey(elem), elem);
-                        }
-                        try stack.append(sa, assign.next);
-                    },
-                    .assign_struct => |assign| {
-                        try locals.put(localKey(assign.target), assign.target);
-                        const fields = self.store.getLocalSpan(assign.fields);
-                        for (0..fields.len) |field_index| {
-                            const field = GuardedList.at(fields, field_index);
-                            try locals.put(localKey(field), field);
-                        }
-                        try stack.append(sa, assign.next);
-                    },
-                    .assign_tag => |assign| {
-                        try locals.put(localKey(assign.target), assign.target);
-                        if (assign.payload) |payload| try locals.put(localKey(payload), payload);
-                        try stack.append(sa, assign.next);
-                    },
-                    .store_struct => |assign| {
-                        try locals.put(localKey(assign.dest), assign.dest);
-                        const fields = self.store.getLocalSpan(assign.fields);
-                        for (0..fields.len) |index| {
-                            const field = GuardedList.at(fields, index);
-                            try locals.put(localKey(field), field);
-                        }
-                        try stack.append(sa, assign.next);
-                    },
-                    .store_tag => |assign| {
-                        try locals.put(localKey(assign.dest), assign.dest);
-                        if (assign.payload) |payload| try locals.put(localKey(payload), payload);
-                        try stack.append(sa, assign.next);
-                    },
-                    .set_local => |assign| {
-                        try locals.put(localKey(assign.target), assign.target);
-                        try locals.put(localKey(assign.value), assign.value);
-                        try stack.append(sa, assign.next);
-                    },
-                    .debug => |debug_stmt| {
-                        try locals.put(localKey(debug_stmt.message), debug_stmt.message);
-                        try stack.append(sa, debug_stmt.next);
-                    },
-                    .expect_err => |expect_err_stmt| {
-                        try locals.put(localKey(expect_err_stmt.message), expect_err_stmt.message);
-                    },
-                    .expect => |expect_stmt| {
-                        try locals.put(localKey(expect_stmt.condition), expect_stmt.condition);
-                        try stack.append(sa, expect_stmt.next);
-                    },
-                    .comptime_branch_taken => |marker| try stack.append(sa, marker.next),
-                    .runtime_error, .comptime_exhaustiveness_failed => {},
-                    .incref => |inc| {
-                        try locals.put(localKey(inc.value), inc.value);
-                        try stack.append(sa, inc.next);
-                    },
-                    .decref => |dec| {
-                        try locals.put(localKey(dec.value), dec.value);
-                        try stack.append(sa, dec.next);
-                    },
-                    .decref_if_initialized => |dec| {
-                        try locals.put(localKey(dec.cond), dec.cond);
-                        try locals.put(localKey(dec.value), dec.value);
-                        try stack.append(sa, dec.next);
-                    },
-                    .free => |free_stmt| {
-                        try locals.put(localKey(free_stmt.value), free_stmt.value);
-                        try stack.append(sa, free_stmt.next);
-                    },
-                    .switch_stmt => |sw| {
-                        try locals.put(localKey(sw.cond), sw.cond);
-                        const branches = self.store.getCFSwitchBranches(sw.branches);
-                        for (0..branches.len) |branch_index| {
-                            const branch = GuardedList.at(branches, branch_index);
-                            try stack.append(sa, branch.body);
-                        }
-                        try stack.append(sa, sw.default_branch);
-                    },
-                    .switch_initialized_payload => |sw| {
-                        try locals.put(localKey(sw.cond), sw.cond);
-                        try locals.put(localKey(sw.payload), sw.payload);
-                        try stack.append(sa, sw.initialized_branch);
-                        try stack.append(sa, sw.uninitialized_branch);
-                    },
-                    .str_match => |str_match| {
-                        try locals.put(localKey(str_match.source), str_match.source);
-                        const steps = self.store.getStrMatchSteps(str_match.steps);
-                        for (0..steps.len) |step_index| {
-                            const step = GuardedList.at(steps, step_index);
-                            switch (step.capture) {
-                                .discard => {},
-                                .view => |local| try locals.put(localKey(local), local),
-                            }
-                        }
-                        try stack.append(sa, str_match.on_match);
-                        try stack.append(sa, str_match.on_miss);
-                    },
-                    .str_match_set => |str_match_set| {
-                        try locals.put(localKey(str_match_set.source), str_match_set.source);
-                        const arms = self.store.getStrMatchArms(str_match_set.arms);
-                        for (0..arms.len) |arm_index| {
-                            const arm = GuardedList.at(arms, arm_index);
-                            const steps = self.store.getStrMatchSteps(arm.steps);
-                            for (0..steps.len) |step_index| {
-                                const step = GuardedList.at(steps, step_index);
-                                switch (step.capture) {
-                                    .discard => {},
-                                    .view => |local| try locals.put(localKey(local), local),
-                                }
-                            }
-                            try stack.append(sa, arm.on_match);
-                        }
-                        try stack.append(sa, str_match_set.on_miss);
-                    },
-                    .join => |join| {
-                        const params = self.store.getLocalSpan(join.params);
-                        for (0..params.len) |param_index| {
-                            const param = GuardedList.at(params, param_index);
-                            try locals.put(localKey(param), param);
-                        }
-                        try stack.append(sa, join.body);
-                        try stack.append(sa, join.remainder);
-                    },
-                    .jump => {},
-                    .ret => |ret_stmt| try locals.put(localKey(ret_stmt.value), ret_stmt.value),
-                    .crash => |crash| if (crash.msg.localId()) |message| {
-                        try locals.put(localKey(message), message);
-                    },
-                    .loop_continue => {},
-                    .loop_break => {},
-                }
-            }
+        fn stackPlanNode(self: *Self, plan: *StackPlan, nodes: *collections.DenseMap(CFStmtId, u32), work: *std.ArrayList(CFStmtId), stmt: CFStmtId) Allocator.Error!u32 {
+            if (nodes.get(stmt)) |index| return index;
+            const index = try plan.node();
+            try nodes.put(stmt, index);
+            try work.append(self.allocator, stmt);
+            return index;
         }
 
-        fn refOpSource(op: lir.RefOp) LocalId {
-            return switch (op) {
-                .local => |local| local,
-                .discriminant => |disc| disc.source,
-                .field => |field| field.source,
-                .tag_payload => |payload| payload.source,
-                .tag_payload_struct => |payload| payload.source,
-                .list_reinterpret => |list_reinterpret| list_reinterpret.backing_ref,
-                .nominal => |nominal| nominal.backing_ref,
+        fn stackPlanCaptures(self: *Self, plan: *StackPlan, at: u32, source: LocalId, steps: LIR.StrMatchStepSpan) Allocator.Error!u32 {
+            const capture_node = try plan.node();
+            try plan.edge(at, capture_node);
+            try plan.access(capture_node, source, true, false);
+            const captures = self.store.getStrMatchSteps(steps);
+            for (0..captures.len) |i| switch (GuardedList.at(captures, i).capture) {
+                .discard => {},
+                .view => |local| {
+                    try plan.access(capture_node, local, false, true);
+                    plan.values.items[try plan.local(local)].mutable = true;
+                },
             };
+            return capture_node;
         }
 
-        fn ensureStableLocationsForStmtReads(self: *Self, stmt_id: CFStmtId) Allocator.Error!void {
-            try self.spillAllVectorLocals();
-            var locals = std.AutoHashMap(u64, LocalId).init(self.allocator);
-            defer locals.deinit();
-            var visited = std.AutoHashMap(u32, void).init(self.allocator);
-            defer visited.deinit();
-
-            try self.collectStmtReadLocals(stmt_id, &locals, &visited);
-
-            var it = locals.valueIterator();
-            while (it.next()) |local| {
-                try self.ensureStableLocationForLocal(local.*);
-            }
-        }
-
-        fn ensureStableLocationsForStmtLocals(self: *Self, stmt_id: CFStmtId) Allocator.Error!void {
-            var locals = std.AutoHashMap(u64, LocalId).init(self.allocator);
-            defer locals.deinit();
-            var visited = std.AutoHashMap(u32, void).init(self.allocator);
-            defer visited.deinit();
-
-            try self.collectStmtLocals(stmt_id, &locals, &visited);
-
-            // Immutable scalar aliases may share their source's authoritative
-            // location. Prove immutability from the complete reachable
-            // definition inventory: mutable destinations, join parameters,
-            // and multiply-defined locals always retain independent slots.
-            var definition_counts = std.AutoHashMap(u32, u32).init(self.allocator);
-            defer definition_counts.deinit();
-            var alias_sources = std.AutoHashMap(u32, LocalId).init(self.allocator);
-            defer alias_sources.deinit();
-            var mutable = std.AutoHashMap(u32, void).init(self.allocator);
-            defer mutable.deinit();
-
-            var stmt_it = visited.keyIterator();
-            while (stmt_it.next()) |raw_stmt| {
-                const reachable: CFStmtId = @enumFromInt(raw_stmt.*);
-                switch (self.store.getCFStmt(reachable)) {
-                    .assign_ref => |assign| {
-                        try noteDefinition(&definition_counts, assign.target);
-                        if (assign.op == .local) try alias_sources.put(localKey(assign.target), assign.op.local);
+        fn ensureStableLocationsForStmtLocals(self: *Self, root: CFStmtId) Allocator.Error!void {
+            var plan = StackPlan.init(self.allocator);
+            defer plan.deinit();
+            var nodes = collections.DenseMap(CFStmtId, u32).init(self.allocator);
+            defer nodes.deinit();
+            var work: std.ArrayList(CFStmtId) = .empty;
+            defer work.deinit(self.allocator);
+            var successors: std.ArrayList(CFStmtId) = .empty;
+            defer successors.deinit(self.allocator);
+            var joins = collections.DenseMap(LIR.JoinPointId, CFStmtId).init(self.allocator);
+            defer joins.deinit();
+            _ = try self.stackPlanNode(&plan, &nodes, &work, root);
+            var cursor: usize = 0;
+            while (cursor < work.items.len) : (cursor += 1) {
+                const id = work.items[cursor];
+                const at = nodes.get(id).?;
+                const stmt = self.store.getCFStmt(id);
+                var ctx = StackAccessContext{ .owner = self, .plan = &plan, .at = at };
+                lir.BodyClone.forEachStmtRead(self.store, stmt, &ctx, StackAccessContext.read);
+                // Join parameters are declarations, not writes at the join's entry.
+                // Pattern captures are written on the successful edge only.
+                switch (stmt) {
+                    .join => |j| {
+                        try joins.put(j.id, j.body);
                     },
-                    .assign_literal => |assign| try noteDefinition(&definition_counts, assign.target),
-                    .assign_call => |assign| {
-                        try noteDefinition(&definition_counts, assign.target);
-                        if (assign.out_desc) |local| try mutable.put(localKey(local), {});
-                    },
-                    .assign_call_erased => |assign| {
-                        try noteDefinition(&definition_counts, assign.target);
-                        if (assign.out_desc) |local| try mutable.put(localKey(local), {});
-                    },
-                    .assign_packed_erased_fn => |assign| try noteDefinition(&definition_counts, assign.target),
-                    .assign_boxy_desc_ref => |assign| try noteDefinition(&definition_counts, assign.target),
-                    .assign_boxy_dict_ref => |assign| try noteDefinition(&definition_counts, assign.target),
-                    .assign_boxy_box => |assign| try noteDefinition(&definition_counts, assign.target),
-                    .assign_boxy_reuse_box => |assign| try noteDefinition(&definition_counts, assign.target),
-                    .assign_boxy_unbox => |assign| {
-                        try noteDefinition(&definition_counts, assign.target);
-                        if (assign.target_desc) |desc| if (desc.localOrNull()) |local| try mutable.put(localKey(local), {});
-                    },
-                    .assign_boxy_adapt => |assign| {
-                        try noteDefinition(&definition_counts, assign.target);
-                        if (assign.target_desc) |desc| if (desc.localOrNull()) |local| try mutable.put(localKey(local), {});
-                    },
-                    .assign_boxy_inspect => |assign| try noteDefinition(&definition_counts, assign.target),
-                    .assign_boxy_eq => |assign| try noteDefinition(&definition_counts, assign.target),
-                    .assign_boxy_tag => |assign| {
-                        try noteDefinition(&definition_counts, assign.target);
-                        if (assign.target_desc.localOrNull()) |local| try mutable.put(localKey(local), {});
-                    },
-                    .assign_boxy_tag_payload => |assign| {
-                        try noteDefinition(&definition_counts, assign.target);
-                        if (assign.target_desc) |local| try mutable.put(localKey(local), {});
-                    },
-                    .assign_call_dict => |assign| try noteDefinition(&definition_counts, assign.target),
-                    .assign_low_level => |assign| try noteDefinition(&definition_counts, assign.target),
-                    .assign_list => |assign| try noteDefinition(&definition_counts, assign.target),
-                    .assign_struct => |assign| try noteDefinition(&definition_counts, assign.target),
-                    .assign_tag => |assign| try noteDefinition(&definition_counts, assign.target),
-                    .init_uninitialized => |uninit| try mutable.put(localKey(uninit.target), {}),
-                    .set_local => |assign| try mutable.put(localKey(assign.target), {}),
-                    .store_struct => |assign| try mutable.put(localKey(assign.dest), {}),
-                    .store_tag => |assign| try mutable.put(localKey(assign.dest), {}),
-                    .str_match => |str_match| {
-                        const steps = self.store.getStrMatchSteps(str_match.steps);
-                        for (0..steps.len) |step_index| switch (GuardedList.at(steps, step_index).capture) {
-                            .discard => {},
-                            .view => |local| try mutable.put(localKey(local), {}),
-                        };
-                    },
-                    .str_match_set => |str_match_set| {
-                        const arms = self.store.getStrMatchArms(str_match_set.arms);
-                        for (0..arms.len) |arm_index| {
-                            const steps = self.store.getStrMatchSteps(GuardedList.at(arms, arm_index).steps);
-                            for (0..steps.len) |step_index| switch (GuardedList.at(steps, step_index).capture) {
-                                .discard => {},
-                                .view => |local| try mutable.put(localKey(local), {}),
-                            };
-                        }
-                    },
-                    .join => |join| {
-                        const params = self.store.getLocalSpan(join.params);
-                        for (0..params.len) |param_index| {
-                            try mutable.put(localKey(GuardedList.at(params, param_index)), {});
-                        }
-                    },
+                    .str_match, .str_match_set => {},
+                    .init_uninitialized,
+                    .assign_ref,
+                    .assign_literal,
+                    .assign_call,
+                    .assign_call_erased,
+                    .assign_packed_erased_fn,
+                    .assign_boxy_desc_ref,
+                    .assign_boxy_dict_ref,
+                    .assign_boxy_box,
+                    .assign_boxy_reuse_box,
+                    .assign_boxy_unbox,
+                    .assign_boxy_adapt,
+                    .assign_boxy_inspect,
+                    .assign_boxy_eq,
+                    .assign_boxy_tag,
+                    .assign_boxy_tag_payload,
                     .boxy_tag_match,
+                    .assign_call_dict,
+                    .assign_low_level,
+                    .assign_list,
+                    .assign_struct,
+                    .assign_tag,
+                    .store_struct,
+                    .store_tag,
+                    .set_local,
                     .debug,
-                    .expect_err,
                     .expect,
-                    .comptime_branch_taken,
+                    .expect_err,
                     .runtime_error,
                     .comptime_exhaustiveness_failed,
+                    .comptime_branch_taken,
                     .incref,
                     .decref,
                     .decref_if_initialized,
                     .free,
                     .switch_stmt,
                     .switch_initialized_payload,
+                    .loop_continue,
+                    .loop_break,
                     .jump,
                     .ret,
                     .crash,
+                    => lir.BodyClone.forEachStmtDef(self.store, stmt, &ctx, StackAccessContext.write),
+                }
+                // Native descriptor accesses supplement the shared LIR operand
+                // inventory; they never infer ownership or add ARC operations.
+                switch (stmt) {
+                    .assign_literal => |s| switch (s.value) {
+                        .boxy_dynamic_num_literal => |lit| {
+                            ctx.descriptor(lit.desc);
+                            ctx.outputDescriptor(s.target);
+                        },
+                        .boxy_dynamic_frac_literal => |lit| {
+                            ctx.descriptor(lit.desc);
+                            ctx.outputDescriptor(s.target);
+                        },
+                        .i64_literal, .i128_literal, .f32_literal, .f64_literal, .dec_literal, .str_literal, .bytes_literal, .null_ptr, .static_data, .proc_ref => {},
+                    },
+                    inline .assign_boxy_box, .assign_boxy_unbox, .assign_boxy_adapt => |s| ctx.outputDescriptor(s.target),
+                    .assign_call_dict => |s| ctx.outputDescriptor(s.target),
+                    inline .incref, .decref, .decref_if_initialized, .free => |s| if (s.rc == .boxy) {
+                        ctx.descriptor(s.rc.boxy);
+                    },
+                    .ret => |s| if (self.runtime_ret_desc_ptr_slot != null) {
+                        if (self.runtime_ret_desc_local) |local| ctx.read(local) else ctx.descriptor(self.store.getLocal(s.value).boxy_desc);
+                    },
+                    .set_local => |s| {
+                        plan.values.items[try plan.local(s.target)].mutable = true;
+                    },
+                    .init_uninitialized => |s| {
+                        plan.values.items[try plan.local(s.target)].mutable = true;
+                    },
+                    .assign_low_level => |s| {
+                        ctx.descriptor(self.lowLevelListDescRef(s));
+                        if (s.op == .ptr_alloca) {
+                            const ptr_layout = self.layout_store.getLayout(self.localLayout(s.target));
+                            const size = self.layout_store.layoutSize(self.layout_store.getLayout(ptr_layout.getIdx()));
+                            try self.stack_alloca_slots.put(s.target, self.codegen.allocStackSlot(@max(size, 1)));
+                        }
+                    },
+                    .assign_ref,
+                    .assign_call,
+                    .assign_call_erased,
+                    .assign_packed_erased_fn,
+                    .assign_boxy_desc_ref,
+                    .assign_boxy_dict_ref,
+                    .assign_boxy_reuse_box,
+                    .assign_boxy_inspect,
+                    .assign_boxy_eq,
+                    .assign_boxy_tag,
+                    .assign_boxy_tag_payload,
+                    .boxy_tag_match,
+                    .assign_list,
+                    .assign_struct,
+                    .assign_tag,
+                    .store_struct,
+                    .store_tag,
+                    .debug,
+                    .expect,
+                    .expect_err,
+                    .runtime_error,
+                    .comptime_exhaustiveness_failed,
+                    .comptime_branch_taken,
+                    .switch_stmt,
+                    .switch_initialized_payload,
+                    .str_match,
+                    .str_match_set,
                     .loop_continue,
                     .loop_break,
+                    .join,
+                    .jump,
+                    .crash,
                     => {},
                 }
+                if (ctx.failure) |err| return err;
+                successors.clearRetainingCapacity();
+                switch (stmt) {
+                    .join => |j| {
+                        _ = try self.stackPlanNode(&plan, &nodes, &work, j.body);
+                        try successors.append(self.allocator, j.remainder);
+                    },
+                    .switch_stmt => |s| {
+                        const branches = self.store.getCFSwitchBranches(s.branches);
+                        for (0..branches.len) |i| try successors.append(self.allocator, GuardedList.at(branches, i).body);
+                        try successors.append(self.allocator, s.default_branch);
+                    },
+                    .str_match => |s| {
+                        const capture = try self.stackPlanCaptures(&plan, at, s.source, s.steps);
+                        const next = try self.stackPlanNode(&plan, &nodes, &work, s.on_match);
+                        try plan.edge(capture, next);
+                        try successors.append(self.allocator, s.on_miss);
+                    },
+                    .str_match_set => |s| {
+                        const arms = self.store.getStrMatchArms(s.arms);
+                        for (0..arms.len) |i| {
+                            const arm = GuardedList.at(arms, i);
+                            const capture = try self.stackPlanCaptures(&plan, at, s.source, arm.steps);
+                            const next = try self.stackPlanNode(&plan, &nodes, &work, arm.on_match);
+                            try plan.edge(capture, next);
+                        }
+                        try successors.append(self.allocator, s.on_miss);
+                    },
+                    .jump => {}, // Resolved after every join has been declared.
+                    .loop_continue, .loop_break => unreachable, // No enclosing native LIR loop region.
+                    .init_uninitialized,
+                    .assign_ref,
+                    .assign_literal,
+                    .assign_call,
+                    .assign_call_erased,
+                    .assign_packed_erased_fn,
+                    .assign_boxy_desc_ref,
+                    .assign_boxy_dict_ref,
+                    .assign_boxy_box,
+                    .assign_boxy_reuse_box,
+                    .assign_boxy_unbox,
+                    .assign_boxy_adapt,
+                    .assign_boxy_inspect,
+                    .assign_boxy_eq,
+                    .assign_boxy_tag,
+                    .assign_boxy_tag_payload,
+                    .boxy_tag_match,
+                    .assign_call_dict,
+                    .assign_low_level,
+                    .assign_list,
+                    .assign_struct,
+                    .assign_tag,
+                    .store_struct,
+                    .store_tag,
+                    .set_local,
+                    .debug,
+                    .expect,
+                    .expect_err,
+                    .runtime_error,
+                    .comptime_exhaustiveness_failed,
+                    .comptime_branch_taken,
+                    .incref,
+                    .decref,
+                    .decref_if_initialized,
+                    .free,
+                    .switch_initialized_payload,
+                    .ret,
+                    .crash,
+                    => try lir.BodyClone.appendSuccessorsWithAllocator(self.store, &successors, id, self.allocator),
+                }
+                for (successors.items) |next| {
+                    const to = try self.stackPlanNode(&plan, &nodes, &work, next);
+                    try plan.edge(at, to);
+                }
             }
-
-            var alias_it = alias_sources.iterator();
-            while (alias_it.next()) |entry| {
-                const target_key = entry.key_ptr.*;
-                const source = entry.value_ptr.*;
-                const source_key = localKey(source);
-                if ((definition_counts.get(target_key) orelse 0) != 1) continue;
-                if (definition_counts.get(source_key)) |count| if (count > 1) continue;
-                if (mutable.contains(target_key) or mutable.contains(source_key)) continue;
-
-                const alias_local: LocalId = @enumFromInt(target_key);
-                const target_layout = self.localLayout(alias_local);
-                const source_layout = self.localLayout(source);
-                const target_rep = self.runtimeRepresentationLayoutIdx(target_layout);
-                if (target_rep != self.runtimeRepresentationLayoutIdx(source_layout)) continue;
-                if (target_rep == .f32 or target_rep == .f64) continue;
-                if (self.simdKindForLayout(target_rep) != null) continue;
-                _ = locals.remove(localKey(alias_local));
+            for (work.items) |id| {
+                const stmt = self.store.getCFStmt(id);
+                const at = nodes.get(id).?;
+                if (stmt == .join) {
+                    // A declaration alone needs no storage. Mark only locals
+                    // present in the completed read/write inventory as mutable.
+                    const params = self.store.getLocalSpan(stmt.join.params);
+                    for (0..params.len) |i| {
+                        if (plan.locals.get(GuardedList.at(params, i))) |index| plan.values.items[index].mutable = true;
+                    }
+                }
+                if (stmt == .jump) {
+                    try plan.edge(at, nodes.get(joins.get(stmt.jump.target).?).?);
+                }
+                if (stmt == .assign_low_level) {
+                    if (OverflowFusion.findResultConsumer(self.store, id)) |fusion| {
+                        // The producer emits the consumer's result early. Keep
+                        // those bytes live through its nominal definition site.
+                        try plan.access(at, fusion.result_target, false, true);
+                        try plan.access(nodes.get(fusion.consumer_stmt).?, fusion.result_target, true, false);
+                    }
+                }
             }
-
-            var it = locals.valueIterator();
-            while (it.next()) |local| {
-                try self.ensureStableLocationForLocal(local.*);
+            // Preserve immutable aliases as one storage identity. All other
+            // values retain independent bindings, even if their dead lifetimes
+            // subsequently permit the same physical slot.
+            for (work.items) |id| {
+                const stmt = self.store.getCFStmt(id);
+                if (stmt != .assign_ref or stmt.assign_ref.op != .local) continue;
+                const assign = stmt.assign_ref;
+                const target_index = plan.locals.get(assign.target).?;
+                const source = plan.locals.get(assign.op.local).?;
+                const t = plan.values.items[target_index];
+                const s = plan.values.items[source];
+                if (t.definitions != 1 or s.definitions > 1 or t.mutable or s.mutable) continue;
+                const rep = self.runtimeRepresentationLayoutIdx(self.localLayout(assign.target));
+                if (rep != self.runtimeRepresentationLayoutIdx(self.localLayout(assign.op.local))) continue;
+                if (rep == .f32 or rep == .f64 or self.simdKindForLayout(rep) != null) continue;
+                plan.values.items[target_index].representative = source;
             }
-        }
-
-        fn noteDefinition(counts: *std.AutoHashMap(u32, u32), local: LocalId) Allocator.Error!void {
-            const entry = try counts.getOrPut(localKey(local));
-            if (!entry.found_existing) entry.value_ptr.* = 0;
-            entry.value_ptr.* += 1;
+            for (plan.values.items, 0..) |v, i| {
+                const root_index = plan.representative(@intCast(i));
+                if (root_index != i or self.local_locations.contains(localKey(v.local))) continue;
+                const size = self.getLayoutSize(self.localLayout(v.local));
+                const alignment: u32 = if (comptime target.toCpuArch() == .aarch64) 16 else if (size > 8) 16 else 8;
+                plan.values.items[i].size = std.mem.alignForward(u32, size, alignment);
+            }
+            try plan.solve();
+            const offsets = try self.allocator.alloc(i32, plan.slots.items.len);
+            defer self.allocator.free(offsets);
+            for (plan.slots.items, offsets) |slot, *offset| offset.* = self.codegen.allocStackSlot(slot.size);
+            for (plan.values.items, 0..) |v, i| {
+                if (plan.representative(@intCast(i)) != i or self.local_locations.contains(localKey(v.local))) continue;
+                const loc = if (v.slot) |slot|
+                    self.stackLocationForLayout(self.localLayout(v.local), offsets[slot])
+                else blk: {
+                    std.debug.assert(self.getLayoutSize(self.localLayout(v.local)) == 0);
+                    break :blk ValueLocation{ .immediate_i64 = 0 };
+                };
+                try self.setLocalLocation(localKey(v.local), loc);
+            }
+            for (plan.values.items, 0..) |v, i| {
+                const rep = plan.representative(@intCast(i));
+                if (rep != i) try self.setLocalLocation(localKey(v.local), self.local_locations.get(localKey(plan.values.items[rep].local)).?);
+            }
         }
 
         fn generateRefOp(self: *Self, op: lir.RefOp, target_layout: layout.Idx) Allocator.Error!ValueLocation {
@@ -14517,17 +14257,20 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
                 .call_offset = current,
                 .target_offset = target_offset,
             });
-            try self.code_refs.append(self.allocator, .{ .site = current, .form = .call, .target = ref_target });
-
-            if (comptime target.toCpuArch() == .aarch64) {
-                try self.codegen.emitDirectCall(target_offset);
-            } else {
+            const form: CodeRefForm = if (comptime target.toCpuArch() == .aarch64)
+                switch (try self.codegen.emitDirectCall(target_offset)) {
+                    .call => .call,
+                    .inline_call => .inline_call,
+                }
+            else block: {
                 // x86_64: CALL rel32
                 // Offset is relative to instruction after the call (current + 5)
                 const rel_offset: i32 = @intCast(@as(i64, @intCast(target_offset)) - @as(i64, @intCast(current)));
                 const call_rel = rel_offset - 5;
                 try self.codegen.emit.call(@bitCast(call_rel));
-            }
+                break :block .call;
+            };
+            try self.code_refs.append(self.allocator, .{ .site = current, .form = form, .target = ref_target });
         }
 
         /// After deferred-prologue proc compilation shifts its body by prepending a prologue,
@@ -14547,10 +14290,13 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
         ) void {
             const buf = self.codegen.emit.buf.items;
             // Logged references move with the body they were emitted in.
-            for (self.code_refs.items) |*ref| {
+            for (self.code_refs.items[firstEntryAtOrAfter(@TypeOf(self.code_refs.items[0]), self.code_refs.items, "site", body_start)..]) |*ref| {
                 if (ref.site >= body_start and ref.site < body_end) ref.site += prologue_size;
             }
-            for (self.internal_call_patches.items) |*patch| {
+            for (self.line_entries.items[firstEntryAtOrAfter(@TypeOf(self.line_entries.items[0]), self.line_entries.items, "offset", body_start)..]) |*line| {
+                if (line.offset >= body_start and line.offset < body_end) line.offset += @intCast(prologue_size);
+            }
+            for (self.internal_call_patches.items[firstEntryAtOrAfter(@TypeOf(self.internal_call_patches.items[0]), self.internal_call_patches.items, "call_offset", body_start)..]) |*patch| {
                 // Only adjust patches that were within the shifted body range
                 if (patch.call_offset >= body_start and patch.call_offset < body_end) {
                     // Update the patch's recorded position (it shifted)
@@ -14583,6 +14329,20 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
         /// After deferred-prologue proc compilation shifts its body by prepending a prologue,
         /// re-patch any ADR/LEA instructions within the shifted range that
         /// compute lambda addresses targeting code outside the shifted range.
+        /// Index of the first entry whose offset is at least `body_start`.
+        /// Every offset list here is appended in emission order, so the entries
+        /// inside a body being shifted form a suffix and a binary search finds
+        /// it without scanning the whole image.
+        fn firstEntryAtOrAfter(comptime T: type, items: []const T, comptime field: []const u8, body_start: usize) usize {
+            var lo: usize = 0;
+            var hi: usize = items.len;
+            while (lo < hi) {
+                const mid = lo + (hi - lo) / 2;
+                if (@field(items[mid], field) < body_start) lo = mid + 1 else hi = mid;
+            }
+            return lo;
+        }
+
         fn repatchInternalAddrPatches(
             self: *Self,
             body_start: usize,
@@ -14590,7 +14350,7 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
             prologue_size: usize,
             current_entry_start: usize,
         ) void {
-            for (self.internal_addr_patches.items) |*patch| {
+            for (self.internal_addr_patches.items[firstEntryAtOrAfter(@TypeOf(self.internal_addr_patches.items[0]), self.internal_addr_patches.items, "instr_offset", body_start)..]) |*patch| {
                 if (patch.instr_offset >= body_start and patch.instr_offset < body_end) {
                     // Update the patch's recorded position (it shifted)
                     patch.instr_offset += prologue_size;
@@ -14618,7 +14378,7 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
             body_end: usize,
             prologue_size: usize,
         ) void {
-            for (self.pending_calls.items) |*pending| {
+            for (self.pending_calls.items[firstEntryAtOrAfter(@TypeOf(self.pending_calls.items[0]), self.pending_calls.items, "call_site", body_start)..]) |*pending| {
                 if (pending.call_site >= body_start and pending.call_site < body_end) {
                     pending.call_site += prologue_size;
                 }
@@ -14631,7 +14391,7 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
             body_end: usize,
             prologue_size: usize,
         ) void {
-            for (self.pending_proc_addrs.items) |*pending| {
+            for (self.pending_proc_addrs.items[firstEntryAtOrAfter(@TypeOf(self.pending_proc_addrs.items[0]), self.pending_proc_addrs.items, "instr_offset", body_start)..]) |*pending| {
                 if (pending.instr_offset >= body_start and pending.instr_offset < body_end) {
                     pending.instr_offset += prologue_size;
                 }
@@ -14658,7 +14418,7 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
                 }
             }
 
-            for (self.unwind_functions.items) |*function| {
+            for (self.unwind_functions.items[firstEntryAtOrAfter(@TypeOf(self.unwind_functions.items[0]), self.unwind_functions.items, "start_offset", body_start)..]) |*function| {
                 const start_offset: usize = function.start_offset;
                 if (start_offset > body_start and start_offset < body_end) {
                     function.start_offset += @intCast(prologue_size);
@@ -14757,6 +14517,10 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
 
         /// Emit a placeholder PC-relative address literal for an RC helper.
         fn emitPendingRcAddr(self: *Self, helper: RcHelperVariant, dst_reg: GeneralReg) Allocator.Error!void {
+            return self.emitPendingRcAddrKey(helper.encode(), dst_reg);
+        }
+
+        fn emitPendingRcAddrKey(self: *Self, key: u64, dst_reg: GeneralReg) Allocator.Error!void {
             if (comptime target.toCpuArch() == .aarch64) {
                 // Same 4-instruction sequence the patcher rewrites; the scratch
                 // register is allocated before the anchor offset is read because
@@ -14765,21 +14529,21 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
                 defer self.codegen.freeGeneral(scratch);
                 const current = self.codegen.currentOffset();
                 try self.codegen.emit.pcRelAddrSequence(dst_reg, scratch, 0, 0, false);
-                try self.pending_rc_addrs.append(self.allocator, .{ .instr_offset = current, .target_key = helper.encode() });
+                try self.pending_rc_addrs.append(self.allocator, .{ .instr_offset = current, .target_key = key });
                 return;
             }
             const current = self.codegen.currentOffset();
             try self.codegen.emit.leaRegRipRel(dst_reg, 0);
-            try self.pending_rc_addrs.append(self.allocator, .{ .instr_offset = current, .target_key = helper.encode() });
+            try self.pending_rc_addrs.append(self.allocator, .{ .instr_offset = current, .target_key = key });
         }
 
         /// Move pending RC refs emitted inside a body that shifted forward by a
         /// prepended prologue so they can still be patched later.
         fn shiftPendingRcRefs(self: *Self, body_start: usize, body_end: usize, prologue_size: usize) void {
-            for (self.pending_rc_calls.items) |*ref| {
+            for (self.pending_rc_calls.items[firstEntryAtOrAfter(@TypeOf(self.pending_rc_calls.items[0]), self.pending_rc_calls.items, "instr_offset", body_start)..]) |*ref| {
                 if (ref.instr_offset >= body_start and ref.instr_offset < body_end) ref.instr_offset += prologue_size;
             }
-            for (self.pending_rc_addrs.items) |*ref| {
+            for (self.pending_rc_addrs.items[firstEntryAtOrAfter(@TypeOf(self.pending_rc_addrs.items[0]), self.pending_rc_addrs.items, "instr_offset", body_start)..]) |*ref| {
                 if (ref.instr_offset >= body_start and ref.instr_offset < body_end) ref.instr_offset += prologue_size;
             }
         }
@@ -14789,7 +14553,7 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
         /// calls (from within a helper body) only schedule; the outermost call
         /// drives the drain.
         fn maybeDrainRcHelpers(self: *Self) Allocator.Error!void {
-            if (self.compiling_rc_helpers) return;
+            if (self.compiling_rc_helpers or self.fragment_mode) return;
             self.compiling_rc_helpers = true;
             defer self.compiling_rc_helpers = false;
 
@@ -14830,6 +14594,7 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
                     try self.emitLoad(.w64, arg1, frame_ptr, count_slot.?);
                 },
                 .decref, .free => {},
+                .host_drop => hostDropInRcStatement(),
             }
 
             try self.emitPendingRcCall(helper);
@@ -14864,6 +14629,7 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
                 .decref, .free => {
                     try self.emitCallRcHelperFromStackSlots(helper, ptr_slot, null);
                 },
+                .host_drop => hostDropInRcStatement(),
             }
         }
 
@@ -15661,7 +15427,9 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
                     count_slot = self.codegen.allocStackSlot(8);
                     try self.codegen.emitStoreStack(.w64, count_slot.?, count_arg_reg);
                 },
-                .decref, .free => {},
+                // A `host_drop` adapter's second argument is the published
+                // on-drop ABI's ops slot, which the generated body ignores.
+                .decref, .free, .host_drop => {},
             }
 
             const ptr_reg = try self.allocTempGeneral();
@@ -16481,6 +16249,13 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
         ) Allocator.Error!CompiledProc {
             const proc = self.store.getProcSpec(proc_id);
             if (self.proc_registry.get(@intFromEnum(proc_id))) |compiled| return compiled;
+            if (self.fragment_mode) return .{
+                .id = proc_id,
+                .code_start = unresolved_proc_code_start,
+                .code_end = 0,
+                .name = proc.name,
+                .args = proc.args,
+            };
 
             if (std.debug.runtime_safety) std.debug.panic(
                 "proc call target {d} ({d}) is missing from the compiled proc registry",
@@ -16838,7 +16613,7 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
                 const proc_addr_slot = self.codegen.allocStackSlot(8);
                 {
                     const proc_addr = try self.allocTempGeneral();
-                    const proc = self.proc_registry.get(@intFromEnum(proc_id)) orelse unreachable;
+                    const proc = try self.compiledProcForId(proc_id);
                     if (proc.code_start == unresolved_proc_code_start)
                         try self.emitPendingProcAddress(proc_id, proc_addr)
                     else
@@ -16914,7 +16689,7 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
             try self.emitLoad(.w64, heap_ptr, frame_ptr, heap_ptr_slot);
 
             const proc_addr = try self.allocTempGeneral();
-            const proc = self.proc_registry.get(@intFromEnum(proc_id)) orelse unreachable;
+            const proc = try self.compiledProcForId(proc_id);
             if (proc.code_start == unresolved_proc_code_start)
                 try self.emitPendingProcAddress(proc_id, proc_addr)
             else
@@ -17043,8 +16818,14 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
                     }
                 },
                 .boxy_capture => |drop| {
-                    const helper_offset = try self.compileSingleBoxyCaptureDropHelper(drop.capture_layout, drop.desc_field_offset);
-                    try self.emitInternalCodeAddress(.{ .rc_helper = boxyCaptureDropKey(drop.capture_layout, drop.desc_field_offset) }, helper_offset, on_drop_reg);
+                    const key = boxyCaptureDropKey(drop.capture_layout, drop.desc_field_offset);
+                    if (self.fragment_mode) {
+                        try self.rc_helper_scheduled.put(key, {});
+                        try self.emitPendingRcAddrKey(key, on_drop_reg);
+                    } else {
+                        const helper_offset = try self.compileSingleBoxyCaptureDropHelper(drop.capture_layout, drop.desc_field_offset);
+                        try self.emitInternalCodeAddress(.{ .rc_helper = key }, helper_offset, on_drop_reg);
+                    }
                 },
                 .interpreter_context_drop => {
                     if (builtin.mode == .Debug) {
@@ -17919,6 +17700,16 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
             list_locals: []const LocalId,
             target_local: ?LocalId,
         ) Allocator.Error!?BoxyListElementDesc {
+            const ref = self.boxyListElementDescRef(list_abi, list_locals, target_local) orelse return null;
+            return .{ .elem_layout = ref.elem_layout, .desc_slot = try self.boxyDescRefToSlot(ref.desc) };
+        }
+
+        fn boxyListElementDescRef(
+            self: *Self,
+            list_abi: BuiltinListAbi,
+            list_locals: []const LocalId,
+            target_local: ?LocalId,
+        ) ?struct { elem_layout: layout.Idx, desc: LIR.BoxyDescRef } {
             const elem_layout = list_abi.elem_layout_idx orelse return null;
             const elem_layout_value = self.layout_store.getLayout(elem_layout);
             const elem_is_erased_box = elem_layout_value.tag == .erased_box;
@@ -17929,7 +17720,7 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
                 if (self.store.getLocal(local).boxy_desc) |desc| {
                     return .{
                         .elem_layout = elem_layout,
-                        .desc_slot = try self.boxyDescRefToSlot(desc),
+                        .desc = desc,
                     };
                 }
             }
@@ -17938,7 +17729,7 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
                 if (self.store.getLocal(local).boxy_desc) |desc| {
                     return .{
                         .elem_layout = elem_layout,
-                        .desc_slot = try self.boxyDescRefToSlot(desc),
+                        .desc = desc,
                     };
                 }
             }
@@ -18772,12 +18563,40 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
         }
 
         fn emitStaticDataAddress(self: *Self, dst_reg: GeneralReg, id: lir.LIR.StaticDataId) Allocator.Error!void {
+            if (!self.static_data_symbols.contains(id)) {
+                if (self.borrowed_static_data_symbols) |source| {
+                    if (source.static_data_symbols.get(id)) |entry| {
+                        try self.static_data_symbols.putNoClobber(id, .{ .name = entry.name });
+                    }
+                }
+            }
             const entry = self.static_data_symbols.getPtr(id) orelse {
                 if (builtin.mode == .Debug) std.debug.panic("Dev/codegen invariant violated: static value {d} has no producer declaration", .{@intFromEnum(id)});
                 unreachable;
             };
+            if (self.fragment_mode and self.fragment_source_mode != .object_file) {
+                if (entry.symbol == null) {
+                    const name = try std.fmt.allocPrint(self.allocator, "roc__binding_{s}", .{entry.name});
+                    defer self.allocator.free(name);
+                    const owned_cell_symbol = try self.internSymbolName(name);
+                    const cell_symbol = try self.codegen.symbols.internInternal(self.allocator, self.symbolName(owned_cell_symbol));
+                    const target_symbol = try self.internSymbolName(entry.name);
+                    try self.binding_data_cells.append(self.allocator, .{
+                        .name = self.symbolName(cell_symbol),
+                        .target_name = self.symbolName(target_symbol),
+                    });
+                    entry.symbol = cell_symbol;
+                }
+                try self.codegen.emitLoadDataAddress(dst_reg, entry.symbol.?);
+                try self.emitLoad(.w64, dst_reg, dst_reg, 0);
+                return;
+            }
             if (entry.symbol == null) entry.symbol = try self.codegen.symbols.internInternal(self.allocator, entry.name);
             try self.codegen.emitLoadDataAddress(dst_reg, entry.symbol.?);
+        }
+
+        pub fn bindingDataCells(self: *const Self) []const BindingDataCell {
+            return self.binding_data_cells.items;
         }
 
         fn builtinSymbol(self: *Self, function: BuiltinFn) Allocator.Error!SymbolTable.Id {
@@ -20389,6 +20208,134 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
             }
         }
 
+        /// Emit only `proc_id`; all ABI metadata is borrowed from the immutable
+        /// store on demand. Reset the lane before its next fragment. The result
+        /// has symbolic bindings even when its consumer executes in-process.
+        pub fn emitProcFragment(self: *Self, proc_id: lir.LIR.LirProcSpecId) Allocator.Error!void {
+            self.assertImageOpen();
+            std.debug.assert(self.codegen.currentOffset() == 0);
+            const mode = self.generation_mode;
+            self.fragment_mode = true;
+            self.boxy_runtime_used = false;
+            self.fragment_source_mode = mode;
+            self.generation_mode = .shim_execution;
+            defer self.generation_mode = mode;
+            const proc = self.store.getProcSpec(proc_id);
+            std.debug.assert(!proc.external and !proc.is_static_initializer);
+            try self.compileProcSpec(proc_id, proc);
+            try self.finishFragment();
+        }
+
+        /// The serial helper coordinator uses the same owning boundary; nested
+        /// helper requests become demand, not duplicate code in this fragment.
+        pub fn emitRcHelperFragment(self: *Self, key: u64) Allocator.Error!void {
+            self.assertImageOpen();
+            std.debug.assert(self.codegen.currentOffset() == 0);
+            const mode = self.generation_mode;
+            self.fragment_mode = true;
+            self.boxy_runtime_used = false;
+            self.fragment_source_mode = mode;
+            self.generation_mode = .shim_execution;
+            defer self.generation_mode = mode;
+            if ((key >> 63) != 0) {
+                _ = try self.compileSingleBoxyCaptureDropHelper(
+                    @enumFromInt(@as(u32, @intCast((key >> 32) & 0x7fff_ffff))),
+                    @truncate(key),
+                );
+            } else {
+                _ = try self.compileSingleRcHelper(.{
+                    .key = RcHelperKey.decode(key & 0x3_ffff_ffff),
+                    .atomicity = @enumFromInt(@as(u1, @intCast((key >> 34) & 1))),
+                });
+            }
+            try self.finishFragment();
+        }
+
+        fn finishFragment(self: *Self) Allocator.Error!void {
+            try self.retainPendingFragmentRefs();
+            try self.placeMessagePool();
+            // An unresolved BL is a fragment output, not an unfinished image.
+            // In-body branch islands and their reserved veneers stay with it.
+            self.image_finished = true;
+        }
+
+        fn retainPendingFragmentRefs(self: *Self) Allocator.Error!void {
+            for (self.pending_calls.items) |pending| {
+                try self.code_refs.append(self.allocator, .{ .site = pending.call_site, .form = .call, .target = .{ .proc = pending.target_proc } });
+            }
+            for (self.pending_proc_addrs.items) |pending| {
+                try self.code_refs.append(self.allocator, .{ .site = pending.instr_offset, .form = .addr, .target = .{ .proc = pending.target_proc } });
+            }
+            for (self.pending_rc_calls.items) |pending| {
+                try self.code_refs.append(self.allocator, .{ .site = pending.instr_offset, .form = .call, .target = .{ .rc_helper = pending.target_key } });
+            }
+            for (self.pending_rc_addrs.items) |pending| {
+                try self.code_refs.append(self.allocator, .{ .site = pending.instr_offset, .form = .addr, .target = .{ .rc_helper = pending.target_key } });
+            }
+            self.pending_calls.clearRetainingCapacity();
+            self.pending_proc_addrs.clearRetainingCapacity();
+            self.pending_rc_calls.clearRetainingCapacity();
+            self.pending_rc_addrs.clearRetainingCapacity();
+        }
+
+        pub fn getFragmentContextDependencies(self: *const Self) FragmentContextDependencies {
+            var context = self.fragment_context;
+            context.boxy_runtime = self.boxy_runtime_used;
+            return context;
+        }
+
+        pub fn getFragmentContract(self: *const Self) FragmentContract {
+            const mode = if (self.fragment_mode) self.fragment_source_mode else self.generation_mode;
+            return .{
+                .target = target.defaultCpuTarget(),
+                .cpu_level = self.cpu_level,
+                .hot_reload = self.enable_hot_reload,
+                .default_platform_runtime = self.enable_default_platform_runtime,
+                .dict_seed_mode = self.dict_seed_mode,
+                .hooks_enabled = self.comptime_hooks != null,
+                .initialize_boxy_runtime = mode == .object_file,
+                .static_data_readonly = mode == .object_file,
+            };
+        }
+
+        /// Owning demand list, in ascending domain-local helper-cache key order.
+        /// The coordinator merges these lists before emitting helpers once.
+        pub fn getRequiredRcHelpers(self: *const Self, allocator: Allocator) Allocator.Error![]u64 {
+            const keys = try allocator.alloc(u64, self.rc_helper_scheduled.count());
+            var iter = self.rc_helper_scheduled.keyIterator();
+            var i: usize = 0;
+            while (iter.next()) |key| : (i += 1) keys[i] = key.*;
+            std.mem.sort(u64, keys, {}, std.sort.asc(u64));
+            return keys;
+        }
+
+        /// Emit the deterministic union of helper demands. Transitive demands
+        /// use the existing iterative helper worklist and never duplicate code.
+        pub fn compileRcHelperRequirements(self: *Self, keys: []const u64) Allocator.Error!void {
+            self.assertImageOpen();
+            std.debug.assert(!self.fragment_mode);
+            const sorted = try self.allocator.dupe(u64, keys);
+            defer self.allocator.free(sorted);
+            std.mem.sort(u64, sorted, {}, std.sort.asc(u64));
+            const mode = self.generation_mode;
+            self.generation_mode = .shim_execution;
+            defer self.generation_mode = mode;
+            for (sorted) |key| {
+                if ((key >> 63) != 0) {
+                    _ = try self.compileSingleBoxyCaptureDropHelper(
+                        @enumFromInt(@as(u32, @intCast((key >> 32) & 0x7fff_ffff))),
+                        @truncate(key),
+                    );
+                } else {
+                    try self.scheduleRcHelper(.{
+                        .key = RcHelperKey.decode(key & 0x3_ffff_ffff),
+                        .atomicity = @enumFromInt(@as(u1, @intCast((key >> 34) & 1))),
+                    });
+                }
+                try self.maybeDrainRcHelpers();
+            }
+        }
+
         /// Compile all procedures first, before generating any calls.
         /// This ensures all call targets are known before we need to patch calls.
         pub fn compileAllProcSpecs(self: *Self, proc_specs: []const LirProcSpec) Allocator.Error!void {
@@ -20476,7 +20423,7 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
         }
 
         /// Generate the exact dictionary/inspect worker thunks named by LIR.
-        fn generateBoxyDictProcThunks(self: *Self) Allocator.Error!void {
+        pub fn generateBoxyDictProcThunks(self: *Self) Allocator.Error!void {
             for (self.boxy_worker_procs) |proc_id| {
                 const proc = self.store.getProcSpec(proc_id);
                 if (proc.is_static_initializer or proc.abi == .erased_callable or proc.hosted != null or proc.body == null) {
@@ -20497,8 +20444,11 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
                     }
                     unreachable;
                 }
+                // A native pack may already supply this exact thunk ABI.
+                if (self.boxy_dict_thunks.contains(@intFromEnum(proc_id))) continue;
                 const thunk_offset = try self.generateBoxyDictProcThunk(proc_id);
                 try self.boxy_dict_thunks.put(@intFromEnum(proc_id), thunk_offset);
+                try self.registerAssembledThunk(proc.identity, thunk_offset);
             }
         }
 
@@ -20593,6 +20543,12 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
         /// Uses deferred prologue pattern: generates body first to determine which
         /// callee-saved registers are used, then prepends prologue and adjusts relocations.
         fn compileProcSpec(self: *Self, proc_id: lir.LIR.LirProcSpecId, proc: LirProcSpec) Allocator.Error!void {
+            const saved_alloca_slots = self.stack_alloca_slots;
+            self.stack_alloca_slots = collections.DenseMap(LocalId, i32).init(self.allocator);
+            defer {
+                self.stack_alloca_slots.deinit();
+                self.stack_alloca_slots = saved_alloca_slots;
+            }
             const key: u32 = @intFromEnum(proc_id);
             const stack_probe_required = proc.stack_probe == .required;
             // Save current state - procedure has its own scope that shouldn't pollute caller
@@ -20740,7 +20696,10 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
                 self.runtime_ret_desc_ptr_slot = self.codegen.allocStackSlot(8);
                 try self.saveIncomingPointerArg(self.runtime_ret_desc_ptr_slot.?, 5);
                 try self.bindErasedCallableAdapterParams(proc, proc.erased_call_args orelse unreachable);
-                if (proc.boxy_runtime_entry and self.generation_mode == .object_file) try self.emitBoxyRuntimeInit();
+                if (proc.boxy_runtime_entry) {
+                    self.fragment_context.boxy_runtime_entry = true;
+                    if (self.generation_mode == .object_file or (self.fragment_mode and self.fragment_source_mode == .object_file)) try self.emitBoxyRuntimeInit();
+                }
                 hot_reload_code_ref_slot = try self.emitHotReloadEnterForHostCallable();
             } else {
                 if (needs_ret_ptr) {
@@ -20760,7 +20719,7 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
             if (proc.hosted) |hosted| {
                 try self.generateHostedProcWrapper(hosted, proc);
             } else {
-                const body = requireProcBody(proc);
+                const body = requireProcBody(proc_id, proc);
                 try self.ensureStableLocationsForStmtLocals(body);
 
                 // Generate the body (control flow statements)
@@ -20959,32 +20918,25 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
             self.current_proc_name = saved_current_proc_name;
             self.current_proc_args = saved_current_proc_args;
             self.current_stmt_id = saved_current_stmt_id;
-            self.local_locations.deinit();
-            self.local_locations = saved_local_locations.clone() catch return error.OutOfMemory;
+            std.mem.swap(@TypeOf(self.local_locations), &self.local_locations, &saved_local_locations);
             self.vector_local_by_reg = saved_vector_local_by_reg;
             self.vector_local_mask = saved_vector_local_mask;
-            self.join_points.deinit();
-            self.join_points = saved_join_points.clone() catch return error.OutOfMemory;
-            self.stmt_locations.deinit();
-            self.stmt_locations = saved_stmt_locations.clone() catch return error.OutOfMemory;
-            self.deinitJoinPointJumpsMap(&self.join_point_jumps);
-            self.join_point_jumps = try self.cloneJoinPointJumpsMap(&saved_join_point_jumps);
-            self.join_point_params.deinit();
-            self.join_point_params = try saved_join_point_params.clone();
-            self.loop_continue_targets.deinit(self.allocator);
-            self.loop_continue_targets = try saved_loop_continue_targets.clone(self.allocator);
-            self.loop_break_patch_starts.deinit(self.allocator);
-            self.loop_break_patch_starts = try saved_loop_break_patch_starts.clone(self.allocator);
-            self.loop_break_patches.deinit(self.allocator);
-            self.loop_break_patches = try saved_loop_break_patches.clone(self.allocator);
+            std.mem.swap(@TypeOf(self.join_points), &self.join_points, &saved_join_points);
+            std.mem.swap(@TypeOf(self.stmt_locations), &self.stmt_locations, &saved_stmt_locations);
+            std.mem.swap(@TypeOf(self.join_point_jumps), &self.join_point_jumps, &saved_join_point_jumps);
+            std.mem.swap(@TypeOf(self.join_point_params), &self.join_point_params, &saved_join_point_params);
+            std.mem.swap(@TypeOf(self.loop_continue_targets), &self.loop_continue_targets, &saved_loop_continue_targets);
+            std.mem.swap(@TypeOf(self.loop_break_patch_starts), &self.loop_break_patch_starts, &saved_loop_break_patch_starts);
+            std.mem.swap(@TypeOf(self.loop_break_patches), &self.loop_break_patches, &saved_loop_break_patches);
 
+            try self.registerAssembledProc(proc.identity, self.proc_registry.get(key).?.code_start);
             try self.maybeDrainRcHelpers();
         }
 
-        fn requireProcBody(proc: LirProcSpec) lir.LIR.CFStmtId {
+        fn requireProcBody(proc_id: lir.LIR.LirProcSpecId, proc: LirProcSpec) lir.LIR.CFStmtId {
             return proc.body orelse std.debug.panic(
-                "Dev/codegen invariant violated: non-hosted proc {d} missing statement body",
-                .{proc.name.raw()},
+                "Dev/codegen invariant violated: non-hosted proc {d} (symbol {d}) missing statement body",
+                .{ @intFromEnum(proc_id), proc.name.raw() },
             );
         }
 
@@ -22449,6 +22401,28 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
             str_match_set_end: *StrMatchSetState,
         };
 
+        // Every work item finishes its native scratch accesses before another
+        // item executes. Semantic locals and ptr_alloca cells were assigned
+        // permanent frame offsets before this scope began.
+        const StmtScratch = struct {
+            base: i32,
+            end: i32,
+
+            fn finish(scratch: *@This(), owner: *Self) void {
+                scratch.end = if (comptime target.toCpuArch() == .aarch64)
+                    @max(scratch.end, owner.codegen.stack_offset)
+                else
+                    @min(scratch.end, owner.codegen.stack_offset);
+                owner.codegen.stack_offset = scratch.end;
+            }
+
+            fn begin(scratch: *@This(), owner: *Self, item: StmtWork) StmtWork {
+                scratch.finish(owner);
+                owner.codegen.stack_offset = scratch.base;
+                return item;
+            }
+        };
+
         /// Generate code for a control flow statement and everything reachable
         /// from it. Uses an explicit work stack so deeply nested control flow and
         /// long statement chains never grow the native call stack.
@@ -22464,7 +22438,9 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
             defer work.deinit(wa);
             try work.append(wa, .{ .node = root_stmt_id });
 
-            while (work.pop()) |item| switch (item) {
+            var scratch = StmtScratch{ .base = self.codegen.stack_offset, .end = self.codegen.stack_offset };
+            defer scratch.finish(self);
+            while (work.pop()) |item| switch (scratch.begin(self, item)) {
                 .node => |stmt_id| {
                     if (comptime target.toCpuArch() == .aarch64) try self.emitBranchIslandIfNeeded();
                     const stmt_key = @intFromEnum(stmt_id);
@@ -22506,16 +22482,17 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
                                 .bytes_literal => |bytes_idx| try self.generateBytesLiteral(bytes_idx),
                                 .null_ptr => .{ .immediate_i64 = 0 },
                                 .static_data => |id| blk: {
+                                    self.fragment_context.static_data = true;
                                     if (self.comptime_hooks) |hooks| {
                                         try self.spillAllVectorLocals();
                                         var builder = try Builder.init(&self.codegen.emit, &self.codegen.stack_offset);
                                         try builder.addImmArg(@intCast(@intFromEnum(id)));
-                                        try builder.call(@intFromPtr(hooks.ensure_static_value));
+                                        try self.callComptimeHook(&builder, hooks, .ensure_static_value);
                                     }
                                     break :blk try self.generateStaticDataLiteral(id, self.localLayout(assign.target));
                                 },
                                 .proc_ref => |proc_id| blk: {
-                                    const proc = self.proc_registry.get(@intFromEnum(proc_id)) orelse unreachable;
+                                    const proc = try self.compiledProcForId(proc_id);
                                     const reg = try self.allocTempGeneral();
                                     if (proc.code_start == unresolved_proc_code_start)
                                         try self.emitPendingProcAddress(proc_id, reg)
@@ -22830,11 +22807,11 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
 
                         .join => |j| {
                             const jp_key = @intFromEnum(j.id);
-                            try self.setupJoinPointParams(j.id, j.params);
+                            try self.registerJoinPointParams(j.id, j.params);
                             if (!self.join_point_jumps.contains(jp_key)) {
                                 try self.join_point_jumps.put(jp_key, std.ArrayList(JumpRecord).empty);
                             }
-                            try self.ensureStableLocationsForStmtReads(j.body);
+                            try self.spillAllVectorLocals();
                             // Emit the remainder first, then (via join_body) the join body,
                             // matching the original recursive order.
                             try work.append(wa, .{ .join_body = .{ .owner = stmt_id, .jp_key = jp_key, .body = j.body } });
@@ -23350,14 +23327,6 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
                 if (is_final_tail_capture) {
                     if (capture_offsets.items[step_i]) |capture_offset| {
                         try self.emitStoreStrCapture(capture_offset, source.bytes, source.allocation, source.is_small, capture_start_reg, source.len);
-                        switch (step.capture) {
-                            .discard => {},
-                            .view => |local| {
-                                const loc = ValueLocation{ .stack_str = capture_offset };
-                                try self.setLocalLocation(localKey(local), loc);
-                                try self.emitDebugAssertValidStrLocal(local, loc);
-                            },
-                        }
                     }
                     try self.emitMovRegReg(cursor_reg, source.len);
                     continue;
@@ -23367,14 +23336,6 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
 
                 if (capture_offsets.items[step_i]) |capture_offset| {
                     try self.emitStoreStrCapture(capture_offset, source.bytes, source.allocation, source.is_small, capture_start_reg, cursor_reg);
-                    switch (step.capture) {
-                        .discard => {},
-                        .view => |local| {
-                            const loc = ValueLocation{ .stack_str = capture_offset };
-                            try self.setLocalLocation(localKey(local), loc);
-                            try self.emitDebugAssertValidStrLocal(local, loc);
-                        },
-                    }
                 }
 
                 if (delimiter.len > 0) {
@@ -23390,6 +23351,13 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
                 .tail => {},
             }
 
+            // Captures are staged until every delimiter and the final shape
+            // check succeeds. Failed arms must not overwrite a live binding;
+            // successful arms copy out of scratch before its region ends.
+            for (0..steps.len) |i| switch (GuardedList.at(steps, i).capture) {
+                .discard => {},
+                .view => |local| try self.bindAssignedLocal(local, .{ .stack_str = capture_offsets.items[i].? }),
+            };
             return miss_patches;
         }
 
@@ -23658,20 +23626,14 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
             try self.emitStore(.w64, frame_ptr, dest_offset + 16, capture_len_reg);
         }
 
-        /// Set up storage locations for join point parameters
-        fn setupJoinPointParams(self: *Self, join_point: JoinPointId, params: LocalSpan) Allocator.Error!void {
+        /// Register join parameters; storage is assigned by the procedure plan.
+        fn registerJoinPointParams(self: *Self, join_point: JoinPointId, params: LocalSpan) Allocator.Error!void {
             const jp_key = @intFromEnum(join_point);
             if (builtin.mode == .Debug and self.join_point_params.contains(jp_key)) {
                 std.debug.panic(
                     "LIR/codegen invariant violated: duplicate join-point registration for id {d}",
                     .{jp_key},
                 );
-            }
-
-            const locals = self.store.getLocalSpan(params);
-            for (0..locals.len) |local_index| {
-                const local = GuardedList.at(locals, local_index);
-                try self.ensureStableLocationForLocal(local);
             }
 
             try self.join_point_params.put(jp_key, params);
@@ -23916,7 +23878,7 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
         /// After a deferred-prologue body shifts forward, message address
         /// sequences emitted inside it move with it.
         fn shiftPendingMessageAddrs(self: *Self, body_start: usize, body_end: usize, prologue_size: usize) void {
-            for (self.pending_message_addrs.items) |*pending| {
+            for (self.pending_message_addrs.items[firstEntryAtOrAfter(@TypeOf(self.pending_message_addrs.items[0]), self.pending_message_addrs.items, "instr_offset", body_start)..]) |*pending| {
                 if (pending.instr_offset >= body_start and pending.instr_offset < body_end) {
                     pending.instr_offset += prologue_size;
                 }
@@ -23982,6 +23944,18 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
             try self.emitRocStaticMessageCall(.roc_expect_failed, "expect failed");
         }
 
+        fn callComptimeHook(self: *Self, builder: *Builder, hooks: ComptimeHooks, hook: ComptimeHook) Allocator.Error!void {
+            self.fragment_context.comptime_hooks = true;
+            if (self.generation_mode == .native_execution) {
+                const address = switch (hook) {
+                    inline .ensure_static_value, .branch_taken, .exhaustiveness_failed, .failure_region, .call_enter, .call_exit => |which| @intFromPtr(@field(hooks, @tagName(which))),
+                };
+                try builder.call(address);
+            } else {
+                try builder.callRelocatable(try self.internSymbolName(hook.symbolName()), &self.codegen);
+            }
+        }
+
         fn emitComptimeBranchTaken(
             self: *Self,
             hooks: ComptimeHooks,
@@ -23992,7 +23966,7 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
             var builder = try Builder.init(&self.codegen.emit, &self.codegen.stack_offset);
             try builder.addImmArg(@intCast(@intFromEnum(site)));
             try builder.addImmArg(@intCast(branch_index));
-            try builder.call(@intFromPtr(hooks.branch_taken));
+            try self.callComptimeHook(&builder, hooks, .branch_taken);
         }
 
         fn emitComptimeExhaustivenessFailed(
@@ -24003,7 +23977,7 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
             try self.spillAllVectorLocals();
             var builder = try Builder.init(&self.codegen.emit, &self.codegen.stack_offset);
             try builder.addImmArg(@intCast(@intFromEnum(site)));
-            try builder.call(@intFromPtr(hooks.exhaustiveness_failed));
+            try self.callComptimeHook(&builder, hooks, .exhaustiveness_failed);
         }
 
         fn emitComptimeFailureRegion(
@@ -24021,7 +23995,7 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
             try builder.addImmArg(@intCast(loc.line));
             try builder.addImmArg(@intCast(loc.column));
             try builder.addImmArg(@intCast(@intFromEnum(stmt_id)));
-            try builder.call(@intFromPtr(hooks.failure_region));
+            try self.callComptimeHook(&builder, hooks, .failure_region);
         }
 
         fn emitComptimeCallEnter(
@@ -24039,7 +24013,7 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
             try builder.addImmArg(@intCast(loc.file));
             try builder.addImmArg(@intCast(loc.line));
             try builder.addImmArg(@intCast(loc.column));
-            try builder.call(@intFromPtr(hooks.call_enter));
+            try self.callComptimeHook(&builder, hooks, .call_enter);
             return true;
         }
 
@@ -24049,7 +24023,7 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
         ) Allocator.Error!void {
             try self.spillAllVectorLocals();
             var builder = try Builder.init(&self.codegen.emit, &self.codegen.stack_offset);
-            try builder.call(@intFromPtr(hooks.call_exit));
+            try self.callComptimeHook(&builder, hooks, .call_exit);
         }
 
         /// Emit a `roc_crashed` call with a static message.
@@ -25262,7 +25236,13 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
 
         /// Intern a symbol name for an assembled relocation.
         pub fn internSymbolName(self: *Self, name: []const u8) Allocator.Error!SymbolTable.Id {
-            return self.codegen.symbols.intern(self.allocator, name);
+            if (self.codegen.symbols.indices.get(name)) |id| return id;
+            const owned = try self.allocator.dupe(u8, name);
+            errdefer self.allocator.free(owned);
+            try self.owned_symbol_names.ensureUnusedCapacity(self.allocator, 1);
+            const id = try self.codegen.symbols.intern(self.allocator, owned);
+            self.owned_symbol_names.appendAssumeCapacity(owned);
+            return id;
         }
 
         /// Append a previously compiled region's bytes and register it exactly
@@ -25278,6 +25258,11 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
             frame: ?AssembledFrame,
         ) Allocator.Error!usize {
             self.assertImageOpen();
+            if (comptime target.toCpuArch() == .aarch64) {
+                const island_start = self.codegen.currentOffset();
+                try self.codegen.prepareForAppend(bytes.len);
+                try self.logBranchIsland(island_start);
+            }
             const start = self.codegen.currentOffset();
             try self.codegen.emit.buf.appendSlice(self.allocator, bytes);
             const end = self.codegen.currentOffset();
@@ -25300,8 +25285,8 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
                     });
                 },
                 .rc_helper => |key| try self.compiled_rc_helpers.put(key, start + entry),
-                .boxy_thunk => |proc_id| try self.boxy_dict_thunks.put(@intFromEnum(proc_id), start),
-                .entrypoint, .message_pool_run, .branch_island, .hosted_stub, .spliced_proc, .spliced_helper => {},
+                .boxy_thunk => |proc_id| try self.boxy_dict_thunks.put(@intFromEnum(proc_id), start + entry),
+                .entrypoint, .message_pool_run, .branch_island, .hosted_stub, .spliced_proc, .spliced_boxy_thunk, .spliced_helper => {},
             }
             if (frame) |frame_info| {
                 try self.recordUnwindFunction(
@@ -25317,6 +25302,90 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
             }
             try self.code_regions.append(self.allocator, .{ .start = start, .end = end, .entry = entry, .kind = kind });
             return start;
+        }
+
+        pub fn appendAssembledLineEntry(self: *Self, line: LineEntry) Allocator.Error!void {
+            try self.line_entries.append(self.allocator, line);
+        }
+
+        pub fn registerAssembledProc(self: *Self, identity: lir.ProcIdentity, entry: usize) Allocator.Error!void {
+            const gop = try self.spliced_proc_starts.getOrPut(identity);
+            if (!gop.found_existing) gop.value_ptr.* = entry;
+        }
+
+        pub fn registerAssembledThunk(self: *Self, identity: lir.ProcIdentity, entry: usize) Allocator.Error!void {
+            try self.assembled_thunks.put(self.allocator, identity, entry);
+        }
+
+        /// Thunks and workers share an identity but never a code entry or ABI.
+        pub fn assembledThunkEntry(self: *const Self, identity: lir.ProcIdentity) ?usize {
+            return self.assembled_thunks.get(identity);
+        }
+
+        /// The queue owns helper names through the generator's symbol table;
+        /// callers may destroy the source artifact immediately after append.
+        pub fn queueAssembledSymbolicRef(self: *Self, reference: anytype) Allocator.Error!void {
+            var owned = SymbolicReference{
+                .site = reference.site,
+                .form = switch (reference.form) {
+                    .call => .call,
+                    .inline_call => .inline_call,
+                    .addr => .addr,
+                },
+                .target = switch (reference.target) {
+                    .proc => |identity| .{ .proc = identity },
+                    .boxy_thunk => |identity| .{ .boxy_thunk = identity },
+                    .rc_helper => |name| .{ .rc_helper = name },
+                },
+                .veneer = reference.veneer,
+            };
+            if (reference.target == .rc_helper) {
+                const symbol = try self.internSymbolName(reference.target.rc_helper);
+                owned.target = .{ .rc_helper = self.symbolName(symbol) };
+            }
+            if (comptime target.toCpuArch() == .aarch64) {
+                if (reference.form == .call) {
+                    try self.codegen.registerAssembledCallVeneer(reference.site, if (reference.veneer) |veneer| @as(usize, veneer) else null);
+                }
+            }
+            try self.assembled_symbolic_refs.append(self.allocator, owned);
+        }
+
+        /// Resolve only after every requested procedure and shared helper has
+        /// been placed. Missing symbols are a coordinator contract violation.
+        pub fn resolveAssembledSymbolicRefs(self: *Self) Allocator.Error!void {
+            if (self.assembled_symbolic_refs.items.len == 0) return;
+            var helpers = self.compiled_rc_helpers.iterator();
+            while (helpers.next()) |helper| {
+                const name = try compiledRcHelperSymbolName(self.allocator, self.layout_store, helper.key_ptr.*);
+                defer self.allocator.free(name);
+                try self.registerSplicedHelper(name, helper.value_ptr.*);
+            }
+            for (self.assembled_symbolic_refs.items) |reference| {
+                const offset = switch (reference.target) {
+                    .proc => |identity| self.spliced_proc_starts.get(identity),
+                    .boxy_thunk => |identity| self.assembled_thunks.get(identity),
+                    .rc_helper => |name| self.spliced_helper_offsets.get(name),
+                } orelse std.debug.panic("unresolved independent machine-code fragment target", .{});
+                try self.patchAssembledRef(reference.site, switch (reference.form) {
+                    .call => .call,
+                    .inline_call => .inline_call,
+                    .addr => .addr,
+                }, .{ .offset = offset }, offset);
+            }
+            self.assembled_symbolic_refs.clearRetainingCapacity();
+        }
+
+        /// Producer-authored placement metadata; never decode it from bytes.
+        pub fn codeRefVeneer(self: *const Self, site: usize) ?usize {
+            if (comptime target.toCpuArch() == .aarch64) return self.codegen.callVeneer(site);
+            return null;
+        }
+
+        pub fn registerAssembledRefVeneer(self: *Self, site: usize, veneer: ?usize) Allocator.Error!void {
+            if (comptime target.toCpuArch() == .aarch64) {
+                try self.codegen.registerAssembledCallVeneer(site, veneer);
+            }
         }
 
         /// Emit the compile-time evaluator's stand-in for the hosted
@@ -25364,7 +25433,7 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
 
         /// Remember where the spliced procedure with `identity` starts.
         pub fn registerSplicedProc(self: *Self, identity: lir.ProcIdentity, start: usize) Allocator.Error!void {
-            try self.spliced_proc_starts.putNoClobber(identity, start);
+            try self.registerAssembledProc(identity, start);
         }
 
         /// Region start of the spliced procedure with `identity`, if one is
@@ -25397,18 +25466,14 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
         pub fn patchAssembledRef(self: *Self, site: usize, form: CodeRefForm, ref_target: CodeRefTarget, target_offset: usize) Allocator.Error!void {
             switch (form) {
                 .call => if (comptime target.toCpuArch() == .aarch64) {
-                    // A BL in assembled bytes becomes an open call site so
-                    // it can reach a far target through a veneer; the
-                    // PC-relative sequence form always reaches directly.
-                    if (self.codegen.isBlAt(site)) {
-                        try self.codegen.registerAssembledCallSite(site);
-                        try self.patchCallTarget(site, target_offset);
-                    } else {
-                        self.codegen.patchDirectCall(site, target_offset);
-                    }
+                    try self.codegen.registerAssembledCallSite(site);
+                    try self.patchCallTarget(site, target_offset);
                 } else {
                     try self.patchCallTarget(site, target_offset);
                 },
+                .inline_call => if (comptime target.toCpuArch() == .aarch64) {
+                    self.codegen.patchDirectCall(site, target_offset);
+                } else unreachable,
                 .addr => self.patchInternalCodeAddress(site, target_offset),
             }
             try self.code_refs.append(self.allocator, .{ .site = site, .form = form, .target = ref_target });
@@ -25439,10 +25504,51 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
             return self.codegen.relocations.items;
         }
 
+        /// Detached stubs belong to placement. Embedded stubs stay with their
+        /// body's branch so a large body never loses its reachable reservation.
+        pub fn artifactRelocations(self: *Self, allocator: Allocator) Allocator.Error![]Relocation {
+            const relocations = try allocator.dupe(Relocation, self.getRelocations());
+            if (comptime target.toCpuArch() == .aarch64) {
+                for (self.codegen.extern_stubs.items) |stub| {
+                    const stub_start = relocations[stub.page_relocation].linked_data.offset;
+                    if (self.artifactContainsExternStub(stub.call, stub_start)) continue;
+                    relocations[stub.original_relocation] = .{ .linked_function = .{
+                        .offset = @intCast(stub.call),
+                        .symbol = stub.symbol,
+                    } };
+                    relocations[stub.page_relocation] = .retired;
+                    relocations[stub.page_relocation + 1] = .retired;
+                }
+            }
+            return relocations;
+        }
+
+        fn artifactContainsExternStub(self: *const Self, call: usize, stub_start: u64) bool {
+            for (self.code_regions.items) |region| {
+                if (region.kind == .branch_island) continue;
+                if (call >= region.start and call < region.end and
+                    stub_start >= region.start and stub_start + 12 <= region.end) return true;
+            }
+            return false;
+        }
+
+        /// Remove placement-specific stub displacements using producer records.
+        pub fn normalizeArtifactCode(self: *const Self, start: usize, bytes: []u8) void {
+            if (comptime target.toCpuArch() == .aarch64) {
+                for (self.codegen.extern_stubs.items) |stub| {
+                    if (stub.call < start or stub.call >= start + bytes.len) continue;
+                    const stub_start = self.codegen.relocations.items[stub.page_relocation].linked_data.offset;
+                    if (stub_start >= start and stub_start + 12 <= start + bytes.len) continue;
+                    std.mem.writeInt(u32, bytes[stub.call - start ..][0..4], 0x94000000, .little);
+                }
+            }
+        }
+
         /// Call once every procedure, helper and wrapper of the image is
         /// emitted, before the code and relocations are read out.
         pub fn finishImage(self: *Self) Allocator.Error!void {
             if (self.image_finished) return;
+            try self.resolveAssembledSymbolicRefs();
             try self.placeMessagePool();
             if (comptime target.toCpuArch() == .aarch64) {
                 const island_start = self.codegen.currentOffset();
@@ -25785,6 +25891,158 @@ fn addBinaryF32LowLevelProc(store: *LirStore, op: lir.LowLevel, lhs_value: f32, 
     return try addNoArgProc(store, assign_lhs, .f32);
 }
 
+/// Build a chain whose peak live storage is independent of its length.
+fn addDeadTempChainProc(store: *LirStore, allocator: Allocator, temp_count: u32, step_value: i64) Allocator.Error!lir.LIR.LirProcSpecId {
+    const step = try addLocal(store, .u64);
+    const totals = try allocator.alloc(LocalId, temp_count + 1);
+    defer allocator.free(totals);
+    for (totals) |*total| total.* = try addLocal(store, .u64);
+    var stmt = try store.addCFStmt(.{ .ret = .{ .value = totals[temp_count] } });
+    var i: u32 = temp_count;
+    while (i > 0) : (i -= 1) {
+        stmt = try store.addCFStmt(.{ .assign_low_level = .{
+            .target = totals[i],
+            .op = .num_int_add_wrap,
+            .rc_effect = lir.LowLevel.num_int_add_wrap.rcEffect(),
+            .args = try store.addLocalSpan(&.{ totals[i - 1], step }),
+            .next = stmt,
+        } });
+    }
+    stmt = try store.addCFStmt(.{ .assign_literal = .{
+        .target = totals[0],
+        .value = .{ .i64_literal = .{ .value = 0, .layout_idx = .u64 } },
+        .next = stmt,
+    } });
+    stmt = try store.addCFStmt(.{ .assign_literal = .{
+        .target = step,
+        .value = .{ .i64_literal = .{ .value = step_value, .layout_idx = .u64 } },
+        .next = stmt,
+    } });
+    return try addNoArgProc(store, stmt, .u64);
+}
+
+fn deadTempChainFrameSize(temp_count: u32, step_value: i64) Allocator.Error!u32 {
+    const allocator = std.testing.allocator;
+    var store = LirStore.init(allocator);
+    defer store.deinit();
+    var test_state = try TestLayoutState.init(allocator);
+    defer test_state.deinit();
+    const proc = try addDeadTempChainProc(&store, allocator, temp_count, step_value);
+    var codegen = try HostLirCodeGen.init(allocator, &store, &test_state.layout_store, .{}, &.{}, .default);
+    defer codegen.deinit();
+    try codegen.compileAllProcSpecs(store.getProcSpecs());
+    return codegen.proc_registry.get(@intFromEnum(proc)).?.frame_size;
+}
+
+test "frame size tracks peak liveness, not total temporary count" {
+    if (comptime builtin.cpu.arch != .x86_64 and builtin.cpu.arch != .aarch64) return error.SkipZigTest;
+    const step_value: i64 = 3;
+    const long_temps: u32 = 512;
+    {
+        const allocator = std.testing.allocator;
+        var store = LirStore.init(allocator);
+        defer store.deinit();
+        var test_state = try TestLayoutState.init(allocator);
+        defer test_state.deinit();
+        const proc = try addDeadTempChainProc(&store, allocator, long_temps, step_value);
+        try std.testing.expectEqual(@as(u64, @intCast(step_value)) * long_temps, try runRootU64(&store, &test_state.layout_store, proc, .u64));
+    }
+    try std.testing.expectEqual(try deadTempChainFrameSize(8, step_value), try deadTempChainFrameSize(long_temps, step_value));
+}
+
+fn addSineChainProc(store: *LirStore, allocator: Allocator, count: u32) Allocator.Error!LIR.LirProcSpecId {
+    const locals = try allocator.alloc(LocalId, count + 1);
+    defer allocator.free(locals);
+    for (locals) |*local| local.* = try addLocal(store, .f64);
+    var body = try store.addCFStmt(.{ .ret = .{ .value = locals[count] } });
+    var i = count;
+    while (i > 0) : (i -= 1) {
+        body = try store.addCFStmt(.{ .assign_low_level = .{
+            .target = locals[i],
+            .op = .num_sin,
+            .rc_effect = lir.LowLevel.num_sin.rcEffect(),
+            .args = try store.addLocalSpan(&.{locals[i - 1]}),
+            .next = body,
+        } });
+    }
+    body = try store.addCFStmt(.{ .assign_literal = .{
+        .target = locals[0],
+        .value = .{ .f64_literal = 0.0 },
+        .next = body,
+    } });
+    return try addNoArgProc(store, body, .f64);
+}
+
+test "stack reuse does not allocate declaration-only join parameters" {
+    const allocator = std.testing.allocator;
+    var sizes: [2]u32 = undefined;
+    for ([_]usize{ 0, 128 }, &sizes) |count, *size| {
+        var store = LirStore.init(allocator);
+        defer store.deinit();
+        var state = try TestLayoutState.init(allocator);
+        defer state.deinit();
+        const result = try addLocal(&store, .u64);
+        const params = try allocator.alloc(LocalId, count);
+        defer allocator.free(params);
+        for (params) |*param| param.* = try addLocal(&store, .u64);
+        const body = try store.addCFStmt(.{ .ret = .{ .value = result } });
+        const remainder = try store.addCFStmt(.{ .ret = .{ .value = result } });
+        var next_join_point: u32 = 0;
+        // There is no incoming jump, so these parameters are never initialized
+        // or read. The declaration must not create a storage lifetime.
+        const join = try store.addCFStmt(.{ .join = .{
+            .id = freshTestJoinPointId(&next_join_point),
+            .params = try store.addLocalSpan(params),
+            .body = body,
+            .remainder = remainder,
+        } });
+        const entry = try store.addCFStmt(.{ .assign_literal = .{
+            .target = result,
+            .value = .{ .i64_literal = .{ .value = 42, .layout_idx = .u64 } },
+            .next = join,
+        } });
+        const proc = try addNoArgProc(&store, entry, .u64);
+        var cg = try HostLirCodeGen.init(allocator, &store, &state.layout_store, .{}, &.{}, .default);
+        defer cg.deinit();
+        try cg.compileAllProcSpecs(store.getProcSpecs());
+        size.* = cg.proc_registry.get(@intFromEnum(proc)).?.frame_size;
+        if (comptime builtin.cpu.arch == .x86_64 or builtin.cpu.arch == .aarch64) {
+            try std.testing.expectEqual(@as(u64, 42), try runRootU64(&store, &state.layout_store, proc, .u64));
+        }
+    }
+    try std.testing.expectEqual(sizes[0], sizes[1]);
+}
+
+test "stack reuse bounds locals and call scratch on both native architectures" {
+    const allocator = std.testing.allocator;
+    inline for (.{ RocTarget.x64linux, RocTarget.x64win, RocTarget.arm64mac, RocTarget.arm64win }) |target| {
+        inline for (.{ false, true }) |calls| {
+            var sizes: [2]u32 = undefined;
+            for ([_]u32{ 8, 512 }, &sizes) |count, *size| {
+                var store = LirStore.init(allocator);
+                defer store.deinit();
+                var state = try TestLayoutState.init(allocator);
+                defer state.deinit();
+                const proc = if (calls) try addSineChainProc(&store, allocator, count) else try addDeadTempChainProc(&store, allocator, count, 3);
+                var cg = try LirCodeGen(target).init(allocator, &store, &state.layout_store, .{}, &.{}, .default);
+                defer cg.deinit();
+                try cg.compileAllProcSpecs(store.getProcSpecs());
+                size.* = cg.proc_registry.get(@intFromEnum(proc)).?.frame_size;
+            }
+            try std.testing.expectEqual(sizes[0], sizes[1]);
+            try std.testing.expect(sizes[1] < 4096);
+        }
+    }
+    if (comptime builtin.cpu.arch == .x86_64 or builtin.cpu.arch == .aarch64) {
+        var store = LirStore.init(allocator);
+        defer store.deinit();
+        var state = try TestLayoutState.init(allocator);
+        defer state.deinit();
+        const proc = try addSineChainProc(&store, allocator, 512);
+        try std.testing.expectEqual(@as(u64, 0), try runRootFloatBits(&store, &state.layout_store, proc, .f64));
+    }
+}
+
 const CompiledTestRoot = struct {
     code: []const u8,
     unwind_functions: []const coff.FunctionInfo,
@@ -26029,6 +26287,99 @@ test "Boxy dictionary thunks are emitted only for producer-named workers" {
     try std.testing.expectEqual(@as(usize, 1), codegen.boxy_dict_thunks.count());
     try std.testing.expect(codegen.boxy_dict_thunks.contains(@intFromEnum(worker_proc)));
     try std.testing.expect(!codegen.boxy_dict_thunks.contains(@intFromEnum(ordinary_proc)));
+}
+
+test "Boxy thunk artifact splice preserves worker namespace in both orders and across packs" {
+    if (comptime builtin.cpu.arch != .x86_64 and builtin.cpu.arch != .aarch64) return error.SkipZigTest;
+    const artifacts = @import("ProcArtifact.zig");
+    const allocator = std.testing.allocator;
+    var store = LirStore.init(allocator);
+    defer store.deinit();
+    var test_state = try TestLayoutState.init(allocator);
+    defer test_state.deinit();
+    const worker = try addLiteralProc(&store, .{ .i64_literal = .{ .value = 42, .layout_idx = .u64 } }, .u64);
+    const identity = store.getProcSpec(worker).identity;
+    var producer = try HostLirCodeGen.initWithBoxyMetadata(
+        allocator,
+        &store,
+        &test_state.layout_store,
+        .{},
+        &.{},
+        &.{},
+        &.{worker},
+        roc_target_mod.host_cpu.level(),
+    );
+    defer producer.deinit();
+    try producer.compileAllProcSpecs(store.getProcSpecs());
+    try producer.finishImage();
+    var original = try artifacts.extract(HostLirCodeGen, allocator, &producer, store.getProcSpecs(), &test_state.layout_store, &.{}, &.{}, &.{});
+    defer original.deinit();
+    try std.testing.expectEqual(@as(usize, 2), original.artifacts.len);
+
+    for ([_]bool{ false, true }) |reverse| {
+        var set = try artifacts.combine(allocator, &.{&original});
+        defer set.deinit();
+        if (reverse) {
+            const entries = @constCast(set.artifacts);
+            std.mem.swap(artifacts.Artifact, &entries[0], &entries[1]);
+            for (entries) |*artifact| {
+                for (@constCast(artifact.refs)) |*ref| ref.target = 1 - ref.target;
+            }
+        }
+        for ([_]bool{ false, true }) |declared| {
+            var receiver = try HostLirCodeGen.initWithBoxyMetadata(
+                allocator,
+                &store,
+                &test_state.layout_store,
+                .{},
+                &.{},
+                &.{},
+                &.{worker},
+                roc_target_mod.host_cpu.level(),
+            );
+            defer receiver.deinit();
+            var procs = std.AutoHashMap(lir.ProcIdentity, lir.LIR.LirProcSpecId).init(allocator);
+            defer procs.deinit();
+            if (declared) try procs.put(identity, worker);
+            var placed = std.AutoHashMap(u32, usize).init(allocator);
+            defer placed.deinit();
+            var data = std.ArrayList(artifacts.DataItem).empty;
+            defer data.deinit(allocator);
+            // Separate calls also prove a previously placed worker cannot hide
+            // its thunk, regardless of artifact ordering.
+            try artifacts.splice(HostLirCodeGen, allocator, &receiver, &set, &.{0}, &procs, &placed, &data);
+            try artifacts.splice(HostLirCodeGen, allocator, &receiver, &set, &.{1}, &procs, &placed, &data);
+            const worker_start = receiver.splicedProcStart(identity).?;
+            const thunk_entry = receiver.assembledThunkEntry(identity).?;
+            try std.testing.expect(worker_start != thunk_entry);
+            try std.testing.expectEqual(@as(usize, 2), receiver.code_regions.items.len);
+            if (declared) try std.testing.expectEqual(thunk_entry, receiver.boxyThunkOffset(worker).?);
+            for (receiver.code_refs.items) |ref| {
+                if (declared) try std.testing.expect(ref.target == .proc);
+            }
+            const code_len = receiver.codegen.currentOffset();
+            if (declared) {
+                try receiver.compileAllProcSpecs(store.getProcSpecs());
+                try std.testing.expectEqual(code_len, receiver.codegen.currentOffset());
+            }
+            // A second pack has its own placement map, but reuses both bodies.
+            placed.clearRetainingCapacity();
+            try artifacts.splice(HostLirCodeGen, allocator, &receiver, &set, &.{ 1, 0 }, &procs, &placed, &data);
+            try std.testing.expectEqual(code_len, receiver.codegen.currentOffset());
+            for (set.artifacts, 0..) |artifact, index| {
+                try std.testing.expectEqual(switch (artifact.kind) {
+                    .proc => worker_start,
+                    .boxy_thunk => thunk_entry - artifact.entry,
+                    .rc_helper, .entrypoint, .message_pool_run, .branch_island => unreachable,
+                }, placed.get(@intCast(index)).?);
+            }
+            try receiver.finishImage();
+            var recaptured = try artifacts.extract(HostLirCodeGen, allocator, &receiver, store.getProcSpecs(), &test_state.layout_store, &.{}, &.{}, &.{});
+            defer recaptured.deinit();
+            try std.testing.expectEqual(@as(usize, 2), recaptured.artifacts.len);
+            try std.testing.expect(std.meta.activeTag(recaptured.artifacts[0].kind) != std.meta.activeTag(recaptured.artifacts[1].kind));
+        }
+    }
 }
 
 test "statement environments restore nested bindings and overwrites without allocation" {
@@ -26331,8 +26682,8 @@ test "immutable aliases share storage but aliases of mutable locals do not" {
 
     try codegen.ensureStableLocationsForStmtLocals(source_stmt);
     const source_loc = codegen.local_locations.get(@intFromEnum(source)).?;
-    try std.testing.expect(codegen.local_locations.get(@intFromEnum(alias1)) == null);
-    try std.testing.expect(codegen.local_locations.get(@intFromEnum(alias2)) == null);
+    try std.testing.expect(std.meta.eql(source_loc, codegen.local_locations.get(@intFromEnum(alias1)).?));
+    try std.testing.expect(std.meta.eql(source_loc, codegen.local_locations.get(@intFromEnum(alias2)).?));
     const mutable_source_loc = codegen.local_locations.get(@intFromEnum(mutable_source)).?;
     const mutable_alias_loc = codegen.local_locations.get(@intFromEnum(mutable_alias)).?;
     try std.testing.expect(!std.meta.eql(mutable_source_loc, mutable_alias_loc));
@@ -27711,6 +28062,317 @@ test "dev explicit procedure demand leaves runtime-only body uncompiled" {
     try std.testing.expect(codegen.compiledProcSymbol(runtime) == null);
     try std.testing.expect(codegen.compiledProcSymbol(compile_time) != null);
     try std.testing.expectEqual(@as(usize, 2), store.procSpecCount());
+}
+
+test "independent fragment emits only requested procedure with unresolved self and cross calls" {
+    const allocator = std.testing.allocator;
+    inline for (.{ RocTarget.x64linux, RocTarget.arm64linux }) |target| {
+        var store = LirStore.init(allocator);
+        defer store.deinit();
+        store.current_loc = .{ .file = 0, .line = 11, .column = 2 };
+        var layouts = try TestLayoutState.init(allocator);
+        defer layouts.deinit();
+        const other = try addLiteralProc(&store, .{ .i64_literal = .{ .value = 42, .layout_idx = .i64 } }, .i64);
+        const result = try addLocal(&store, .i64);
+        const ret = try store.addCFStmt(.{ .ret = .{ .value = result } });
+        const self_id: LIR.LirProcSpecId = @enumFromInt(store.procSpecCount());
+        const recursive = try store.addCFStmt(.{ .assign_call = .{
+            .target = result,
+            .proc = self_id,
+            .args = .empty(),
+            .next = ret,
+        } });
+        const call = try store.addCFStmt(.{ .assign_call = .{
+            .target = result,
+            .proc = other,
+            .args = .empty(),
+            .next = recursive,
+        } });
+        const proc = try store.addProcSpec(.{
+            .name = store.freshSyntheticSymbol(),
+            .identity = LIR.ProcIdentity.forTest(81),
+            .args = .empty(),
+            .body = call,
+            .ret_layout = .i64,
+        });
+        var cg = try LirCodeGen(target).init(allocator, &store, &layouts.layout_store, .{}, &.{}, .default);
+        defer cg.deinit();
+        try cg.emitProcFragment(proc);
+        try std.testing.expectEqual(@as(usize, 1), cg.proc_registry.count());
+        try std.testing.expect(cg.compiledProcSymbol(other) == null);
+        try std.testing.expectEqual(@as(usize, 2), cg.codeRefs().len);
+        try std.testing.expectEqual(other, cg.codeRefs()[0].target.proc);
+        try std.testing.expectEqual(proc, cg.codeRefs()[1].target.proc);
+        try std.testing.expect(!cg.getFragmentContextDependencies().comptime_hooks);
+        try std.testing.expectEqual(@as(usize, 1), cg.getUnwindFunctions().len);
+        try std.testing.expect(cg.getLineEntries().len > 0);
+        for (cg.getLineEntries()) |line| {
+            try std.testing.expectEqual(@as(u32, 11), line.loc.line);
+            try std.testing.expect(line.offset >= cg.getUnwindFunctions()[0].prologue_size);
+        }
+        try std.testing.expect(cg.getGeneratedCode().len > 0);
+    }
+}
+
+test "independent fragment defers shared RC helper demand" {
+    const allocator = std.testing.allocator;
+    var store = LirStore.init(allocator);
+    defer store.deinit();
+    var layouts = try TestLayoutState.init(allocator);
+    defer layouts.deinit();
+    const string = try addLocal(&store, .str);
+    const ret = try store.addCFStmt(.{ .ret = .{ .value = string } });
+    const drop = try store.addCFStmt(.{ .decref = .{
+        .value = string,
+        .rc = LIR.RcHelper.fromConcrete(.{ .op = .decref, .layout_idx = .str }),
+        .next = ret,
+    } });
+    const proc = try addProc(&store, &.{string}, drop, .str);
+    var cg = try HostLirCodeGen.init(allocator, &store, &layouts.layout_store, .{}, &.{}, .default);
+    defer cg.deinit();
+    try cg.emitProcFragment(proc);
+    try std.testing.expectEqual(@as(usize, 0), cg.compiled_rc_helpers.count());
+    const keys = try cg.getRequiredRcHelpers(allocator);
+    defer allocator.free(keys);
+    try std.testing.expectEqual(@as(usize, 1), keys.len);
+    try std.testing.expectEqual(@as(usize, 1), cg.codeRefs().len);
+    try std.testing.expectEqual(keys[0], cg.codeRefs()[0].target.rc_helper);
+    var helper_lane = try HostLirCodeGen.init(allocator, &store, &layouts.layout_store, .{}, &.{}, .default);
+    defer helper_lane.deinit();
+    try helper_lane.emitRcHelperFragment(keys[0]);
+    try std.testing.expectEqual(@as(usize, 1), helper_lane.compiled_rc_helpers.count());
+    try std.testing.expect(!helper_lane.getFragmentContextDependencies().comptime_hooks);
+    try std.testing.expect(helper_lane.getGeneratedCode().len > 0);
+    var coordinator = try HostLirCodeGen.init(allocator, &store, &layouts.layout_store, .{}, &.{}, .default);
+    defer coordinator.deinit();
+    try coordinator.compileRcHelperRequirements(keys);
+    const count = coordinator.compiled_rc_helpers.count();
+    try coordinator.compileRcHelperRequirements(keys);
+    try std.testing.expectEqual(count, coordinator.compiled_rc_helpers.count());
+    try std.testing.expect(count > 0);
+}
+
+test "independent fragment symbolic calls resolve after all procedures are placed" {
+    const allocator = std.testing.allocator;
+    inline for (.{ RocTarget.x64linux, RocTarget.arm64linux }) |target| {
+        const CG = LirCodeGen(target);
+        var store = LirStore.init(allocator);
+        defer store.deinit();
+        var layouts = try TestLayoutState.init(allocator);
+        defer layouts.deinit();
+        const callee = try addLiteralProc(&store, .{ .i64_literal = .{ .value = 42, .layout_idx = .i64 } }, .i64);
+        const result = try addLocal(&store, .i64);
+        const ret = try store.addCFStmt(.{ .ret = .{ .value = result } });
+        const call = try store.addCFStmt(.{ .assign_call = .{
+            .target = result,
+            .proc = callee,
+            .args = .empty(),
+            .next = ret,
+        } });
+        const caller = try store.addProcSpec(.{
+            .name = store.freshSyntheticSymbol(),
+            .identity = LIR.ProcIdentity.forTest(99),
+            .args = .empty(),
+            .body = call,
+            .ret_layout = .i64,
+        });
+        var image = try CG.init(allocator, &store, &layouts.layout_store, .{}, &.{}, .default);
+        defer image.deinit();
+        for ([_]LIR.LirProcSpecId{ caller, callee }) |id| {
+            var lane = try CG.init(allocator, &store, &layouts.layout_store, .{}, &.{}, .default);
+            defer lane.deinit();
+            try lane.emitProcFragment(id);
+            const identity = store.getProcSpec(id).identity;
+            const start = try image.appendAssembledRegion(lane.getGeneratedCode(), .{ .spliced_proc = identity }, 0, null);
+            try image.registerAssembledProc(identity, start);
+            for (lane.codeRefs()) |ref| {
+                try image.queueAssembledSymbolicRef(SymbolicReference{
+                    .site = @intCast(start + ref.site),
+                    .form = .call,
+                    .target = .{ .proc = store.getProcSpec(ref.target.proc).identity },
+                });
+            }
+        }
+        try image.finishImage();
+        var serial = try CG.init(allocator, &store, &layouts.layout_store, .{}, &.{}, .default);
+        defer serial.deinit();
+        serial.generation_mode = .shim_execution;
+        try serial.compileSelectedProcSpecs(&.{ caller, callee });
+        try serial.finishImage();
+        try std.testing.expectEqualSlices(u8, serial.getGeneratedCode(), image.getGeneratedCode());
+    }
+}
+
+test "AArch64 finalized artifacts preserve external calls across changed placement" {
+    const Artifact = @import("ProcArtifact.zig");
+    const allocator = std.testing.allocator;
+    const CG = LirCodeGen(.arm64linux);
+    var store = LirStore.init(allocator);
+    defer store.deinit();
+    var layouts = try TestLayoutState.init(allocator);
+    defer layouts.deinit();
+    for ([_]bool{ false, true }) |embedded| {
+        var original = try CG.init(allocator, &store, &layouts.layout_store, .{}, &.{}, .default);
+        defer original.deinit();
+        original.codegen.branch_reach_limit = 4096;
+        const symbol = try original.internSymbolName("artifact_external_target");
+        while (original.codegen.currentOffset() < 4096) try original.codegen.emit.buf.appendSlice(allocator, &.{ 0x1f, 0x20, 0x03, 0xd5 });
+        const call_offset = original.codegen.currentOffset();
+        try original.codegen.emitExternCall(symbol);
+        while (original.codegen.currentOffset() < 7600) try original.codegen.emit.buf.appendSlice(allocator, &.{ 0x1f, 0x20, 0x03, 0xd5 });
+        if (embedded) {
+            const island_start = original.codegen.currentOffset();
+            try original.codegen.prepareForAppend(6400);
+            try original.logBranchIsland(island_start);
+            try std.testing.expectEqual(@as(usize, 1), original.codegen.extern_stubs.items.len);
+            // A replacement stub at body end would be out of reach. Import
+            // must retain the producer's embedded reservation and page bindings.
+            while (original.codegen.currentOffset() < 14000) try original.codegen.emit.buf.appendSlice(allocator, &.{ 0x1f, 0x20, 0x03, 0xd5 });
+        }
+        const body_end = original.codegen.currentOffset();
+        try original.code_regions.append(allocator, .{
+            .start = 0,
+            .end = body_end,
+            .entry = 0,
+            .kind = .entrypoint,
+        });
+        try original.finishImage();
+        try std.testing.expectEqual(@as(usize, 1), original.codegen.extern_stubs.items.len);
+        var set = try Artifact.extract(CG, allocator, &original, &.{}, &layouts.layout_store, &.{}, &.{}, &.{});
+        defer set.deinit();
+        try std.testing.expectEqual(@as(usize, 1), set.artifacts.len);
+        const artifact = set.artifacts[0];
+        try std.testing.expectEqual(@as(usize, if (embedded) 2 else 1), artifact.relocations.len);
+        try std.testing.expectEqualStrings("artifact_external_target", artifact.relocations[0].name);
+        if (embedded) {
+            try std.testing.expectEqual(.page21, artifact.relocations[0].kind.data);
+            try std.testing.expectEqual(.pageoff12, artifact.relocations[1].kind.data);
+            try std.testing.expectEqualSlices(u8, original.getGeneratedCode()[call_offset..][0..4], artifact.code[call_offset..][0..4]);
+        } else {
+            try std.testing.expect(artifact.relocations[0].kind == .function);
+            try std.testing.expectEqual(@as(u32, @intCast(call_offset)), artifact.relocations[0].offset);
+            try std.testing.expectEqual(@as(u32, 0x94000000), std.mem.readInt(u32, artifact.code[call_offset..][0..4], .little));
+        }
+
+        var placed = try CG.init(allocator, &store, &layouts.layout_store, .{}, &.{}, .default);
+        defer placed.deinit();
+        placed.codegen.branch_reach_limit = 4096;
+        const prefix = [_]u8{0} ** 512;
+        _ = try placed.appendAssembledRegion(&prefix, .{ .message_pool_run = 0 }, 0, null);
+        var helpers = Artifact.HelperKeys.init(allocator);
+        defer helpers.deinit();
+        try Artifact.assemble(CG, allocator, &placed, &set, &.{}, &helpers);
+        try placed.finishImage();
+        if (embedded) {
+            try std.testing.expectEqual(@as(usize, 0), placed.codegen.extern_stubs.items.len);
+            const page = placed.getRelocations()[0].linked_data;
+            const pageoff = placed.getRelocations()[1].linked_data;
+            try std.testing.expectEqual(prefix.len + artifact.relocations[0].offset, page.offset);
+            try std.testing.expectEqual(page.offset + 4, pageoff.offset);
+            try std.testing.expectEqualStrings("artifact_external_target", placed.symbolName(page.symbol));
+            const moved_call = prefix.len + call_offset;
+            const instruction = std.mem.readInt(u32, placed.getGeneratedCode()[moved_call..][0..4], .little);
+            try std.testing.expectEqual(page.offset, moved_call + (instruction & 0x03ffffff) * 4);
+            continue;
+        }
+        try std.testing.expectEqual(@as(usize, 1), placed.codegen.extern_stubs.items.len);
+        const stub = placed.codegen.extern_stubs.items[0];
+        try std.testing.expectEqual(prefix.len + call_offset, stub.call);
+        const page = placed.getRelocations()[stub.page_relocation].linked_data;
+        const pageoff = placed.getRelocations()[stub.page_relocation + 1].linked_data;
+        try std.testing.expectEqualStrings("artifact_external_target", placed.symbolName(page.symbol));
+        try std.testing.expectEqual(page.symbol, pageoff.symbol);
+        try std.testing.expectEqual(page.offset + 4, pageoff.offset);
+        const instruction = std.mem.readInt(u32, placed.getGeneratedCode()[stub.call..][0..4], .little);
+        try std.testing.expectEqual(@as(u32, 0x94000000), instruction & 0xfc000000);
+        try std.testing.expectEqual(page.offset, stub.call + (instruction & 0x03ffffff) * 4);
+    }
+}
+
+test "independent fragment ownership survives allocation failure" {
+    const allocator = std.testing.allocator;
+    var store = LirStore.init(allocator);
+    defer store.deinit();
+    var layouts = try TestLayoutState.init(allocator);
+    defer layouts.deinit();
+    const proc = try addLiteralProc(&store, .{ .i64_literal = .{ .value = 42, .layout_idx = .i64 } }, .i64);
+    try std.testing.checkAllAllocationFailures(allocator, struct {
+        fn run(a: Allocator, s: *const LirStore, ls: *const LayoutStore, id: LIR.LirProcSpecId) Allocator.Error!void {
+            var cg = try HostLirCodeGen.init(a, s, ls, .{}, &.{}, .default);
+            defer cg.deinit();
+            try cg.emitProcFragment(id);
+            const keys = try cg.getRequiredRcHelpers(a);
+            defer a.free(keys);
+        }
+    }.run, .{ &store, &layouts.layout_store, proc });
+}
+
+test "independent fragment symbolic hooks record actual context use" {
+    const allocator = std.testing.allocator;
+    const Hooks = struct {
+        fn one(_: u32) callconv(.c) void {}
+        fn two(_: u32, _: u32) callconv(.c) void {}
+        fn five(_: u32, _: u32, _: u32, _: u32, _: u32) callconv(.c) void {}
+        fn six(_: u32, _: u32, _: u32, _: u32, _: u32, _: u32) callconv(.c) void {}
+        fn zero() callconv(.c) void {}
+    };
+    const hooks = ComptimeHooks{
+        .ensure_static_value = Hooks.one,
+        .branch_taken = Hooks.two,
+        .exhaustiveness_failed = Hooks.one,
+        .failure_region = Hooks.six,
+        .call_enter = Hooks.five,
+        .call_exit = Hooks.zero,
+    };
+    var store = LirStore.init(allocator);
+    defer store.deinit();
+    var layouts = try TestLayoutState.init(allocator);
+    defer layouts.deinit();
+    const pure = try addLiteralProc(&store, .{ .i64_literal = .{ .value = 42, .layout_idx = .i64 } }, .i64);
+    const data_id: LIR.StaticDataId = @enumFromInt(8);
+    const data_proc = try addLiteralProc(&store, .{ .static_data = data_id }, .i64);
+    var source = try HostLirCodeGen.init(allocator, &store, &layouts.layout_store, .{}, &.{}, .default);
+    defer source.deinit();
+    try source.setStaticDataSymbols(&.{.{
+        .symbol_name = "fragment_static_value",
+        .value_id = data_id,
+        .bytes = &.{},
+        .alignment = 8,
+    }});
+    var cg = try HostLirCodeGen.init(allocator, &store, &layouts.layout_store, .{}, &.{}, .default);
+    defer cg.deinit();
+    cg.setComptimeHooks(hooks);
+    cg.borrowStaticDataSymbolsFrom(&source);
+    try cg.emitProcFragment(pure);
+    try std.testing.expect(!cg.getFragmentContextDependencies().comptime_hooks);
+    cg.reset();
+    try cg.emitProcFragment(data_proc);
+    try std.testing.expect(cg.getFragmentContextDependencies().comptime_hooks);
+    try std.testing.expect(cg.getFragmentContextDependencies().static_data);
+    try std.testing.expectEqual(@as(usize, 0), source.getSymbolNames().len);
+    try std.testing.expectEqual(@as(usize, 1), cg.bindingDataCells().len);
+    try std.testing.expectEqualStrings("roc__binding_fragment_static_value", cg.bindingDataCells()[0].name);
+    try std.testing.expectEqualStrings("fragment_static_value", cg.bindingDataCells()[0].target_name);
+    var found_hook = false;
+    for (cg.getRelocations()) |reloc| {
+        switch (reloc) {
+            .linked_function => |function| {
+                if (std.mem.eql(u8, cg.symbolName(function.symbol), ComptimeHook.ensure_static_value.symbolName())) found_hook = true;
+            },
+            .local_data => return error.NativePointerInFragment,
+            .linked_data, .jmp_to_return, .retired => {},
+        }
+    }
+    try std.testing.expect(found_hook);
+    try std.testing.checkAllAllocationFailures(allocator, struct {
+        fn run(a: Allocator, owner: *const HostLirCodeGen, id: LIR.LirProcSpecId) (Allocator.Error || error{TestExpectedEqual})!void {
+            var lane = try HostLirCodeGen.init(a, owner.store, owner.layout_store, .{}, &.{}, .default);
+            defer lane.deinit();
+            lane.borrowStaticDataSymbolsFrom(owner);
+            try lane.emitProcFragment(id);
+            try std.testing.expectEqual(@as(usize, 1), lane.bindingDataCells().len);
+        }
+    }.run, .{ &source, data_proc });
 }
 
 test "branch location checkpoints restore only changed bindings in a wide procedure" {

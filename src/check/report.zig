@@ -56,6 +56,7 @@ const NonExhaustiveMatch = problem_mod.NonExhaustiveMatch;
 const NonExhaustiveDestructure = problem_mod.NonExhaustiveDestructure;
 const RedundantPattern = problem_mod.RedundantPattern;
 const UnmatchablePattern = problem_mod.UnmatchablePattern;
+const MatchAltBinderMissing = problem_mod.MatchAltBinderMissing;
 const UnreachableCode = problem_mod.UnreachableCode;
 const ComptimeUnusedBranch = problem_mod.ComptimeUnusedBranch;
 const ComptimeCondition = problem_mod.ComptimeCondition;
@@ -78,6 +79,8 @@ const PlatformAliasNotFound = problem_mod.PlatformAliasNotFound;
 const PlatformDefNotFound = problem_mod.PlatformDefNotFound;
 const PlatformHostedSection = problem_mod.PlatformHostedSection;
 const HostedUnboxedFunction = problem_mod.HostedUnboxedFunction;
+const HostedFunctionNotEffectful = problem_mod.HostedFunctionNotEffectful;
+const HostedTypeVariableNotBoxed = problem_mod.HostedTypeVariableNotBoxed;
 const HostBoundaryOpenRow = problem_mod.HostBoundaryOpenRow;
 const HostBoundaryOptionalField = problem_mod.HostBoundaryOptionalField;
 const AnnotationOnlyValue = problem_mod.AnnotationOnlyValue;
@@ -89,6 +92,7 @@ const EffectfulTopLevel = problem_mod.EffectfulTopLevel;
 const EffectfulComptimeExpression = problem_mod.EffectfulComptimeExpression;
 const EffectfulExpect = problem_mod.EffectfulExpect;
 const EffectfulFunctionName = problem_mod.EffectfulFunctionName;
+const RedundantOpenTagUnion = problem_mod.RedundantOpenTagUnion;
 
 // Comptime errors
 const ComptimeOrigin = problem_mod.ComptimeOrigin;
@@ -139,7 +143,7 @@ pub const ReportBuilder = struct {
     bytes_buf: std.array_list.Managed(u8),
     module_env: *ModuleEnv,
     can_ir: *const ModuleEnv,
-    snapshots: *const snapshot.Store,
+    snapshots: ?*const snapshot.Store,
     problems: *const Store,
     source: []const u8,
     filename: []const u8,
@@ -163,7 +167,7 @@ pub const ReportBuilder = struct {
         gpa: Allocator,
         module_env: *ModuleEnv,
         can_ir: *const ModuleEnv,
-        snapshots: *const snapshot.Store,
+        snapshots: ?*const snapshot.Store,
         problems: *const Store,
         filename: []const u8,
         other_modules: []const *const ModuleEnv,
@@ -188,6 +192,18 @@ pub const ReportBuilder = struct {
             .diff_tags = try SnapshotTagSafeList.initCapacity(gpa, 8),
             .typo_suggestions = try diff.TypoSuggestion.ArrayList.initCapacity(gpa, 16),
         };
+    }
+
+    /// Evaluation consumes checked diagnostic recipes, never solver snapshots.
+    pub fn initEvaluation(
+        gpa: Allocator,
+        module_env: *ModuleEnv,
+        problems: *const Store,
+        filename: []const u8,
+        other_modules: []const *const ModuleEnv,
+        import_mapping: *const @import("types").import_mapping.ImportMapping,
+    ) Allocator.Error!Self {
+        return init(gpa, module_env, module_env, null, problems, filename, other_modules, import_mapping, &module_env.store.regions, null);
     }
 
     /// Deinit report builder, only fields it owns
@@ -612,7 +628,7 @@ pub const ReportBuilder = struct {
 
         // Generate and print type comparison hints
         const diff_hints = try diff.compareTypes(
-            self.snapshots,
+            self.snapshots.?,
             self.module_env.getIdentStoreConst(),
             expected_snapshot,
             actual_snapshot,
@@ -913,6 +929,7 @@ pub const ReportBuilder = struct {
                     .list_entry => |ctx| self.buildListEntryReport(mismatch.types, ctx),
                     .interpolation_part => |region| self.buildGenericMismatchAtRegion(mismatch.types, .{ .direct = region }),
                     .fn_call_arity => |ctx| self.buildIncompatibleFnCallArity(mismatch.types, ctx),
+                    .fn_call_non_function => |ctx| self.buildFnCallNonFunction(mismatch.types, ctx),
                     .fn_call_arg => |ctx| self.buildIncompatibleFnCallArg(mismatch.types, ctx),
                     .binop_lhs => |ctx| self.buildBinopReport(mismatch.types, ctx, .lhs),
                     .binop_rhs => |ctx| self.buildBinopReport(mismatch.types, ctx, .rhs),
@@ -958,6 +975,19 @@ pub const ReportBuilder = struct {
                         &.{D.bytes("But the annotation says it should be:")},
                         mismatch.types.expected_snapshot,
                         &.{},
+                    ),
+                    .tag_not_in_annotation => |ctx| return try self.makeMismatchReport(
+                        ProblemRegion{ .direct = ctx.region },
+                        &.{
+                            D.bytes("This definition can produce the tag"),
+                            D.ident(ctx.tag_name).withAnnotation(.inline_code),
+                            D.bytes("but the annotated tag union does not list it."),
+                        },
+                        &.{D.bytes("It has the type:")},
+                        mismatch.types.actual_snapshot,
+                        &.{D.bytes("But the annotation says it should be:")},
+                        mismatch.types.expected_snapshot,
+                        &.{&.{D.bytes("A tag union in an output position is open for the callers of this definition, which may use the result at a wider union, but the annotation still bounds the definition itself: it may only produce the tags the annotation lists.")}},
                     ),
                     .record_destructure => return try self.buildRecordDestructureMismatch(mismatch.types),
                     .none => return try self.buildGenericMismatch(mismatch.types),
@@ -1039,6 +1069,12 @@ pub const ReportBuilder = struct {
             .hosted_unboxed_function => |data| {
                 return self.buildHostedUnboxedFunctionReport(data);
             },
+            .hosted_function_not_effectful => |data| {
+                return self.buildHostedFunctionNotEffectfulReport(data);
+            },
+            .hosted_type_variable_not_boxed => |data| {
+                return self.buildHostedTypeVariableNotBoxedReport(data);
+            },
             .host_boundary_open_row => |data| {
                 return self.buildHostBoundaryOpenRowReport(data);
             },
@@ -1073,7 +1109,9 @@ pub const ReportBuilder = struct {
             .non_exhaustive_match => |data| return self.buildNonExhaustiveMatchReport(data),
             .non_exhaustive_destructure => |data| return self.buildNonExhaustiveDestructureReport(data),
             .redundant_pattern => |data| return self.buildRedundantPatternReport(data),
+            .redundant_open_tag_union => |data| return self.buildRedundantOpenTagUnionReport(data),
             .unmatchable_pattern => |data| return self.buildUnmatchablePatternReport(data),
+            .match_alt_binder_missing => |data| return self.buildMatchAltBinderMissingReport(data),
             .unreachable_code => |data| return self.buildUnreachableCodeReport(data),
             .comptime_unused_branch => |data| return self.buildComptimeUnusedBranchReport(data),
             .comptime_condition => |data| return self.buildComptimeConditionReport(data),
@@ -1129,17 +1167,17 @@ pub const ReportBuilder = struct {
     ) Allocator.Error!bool {
         // Only a closed record pattern can be "too narrow"; an open (`..`)
         // pattern would have absorbed the extra fields rather than mismatching.
-        if (!self.snapshots.isClosedRecord(pattern_snapshot)) return false;
+        if (!self.snapshots.?.isClosedRecord(pattern_snapshot)) return false;
 
         self.diff_fields.items.clearRetainingCapacity();
 
         const pattern_range: ?SnapshotRecordFieldSafeList.Range =
-            switch (try self.snapshots.gatherRecordFields(pattern_snapshot, self.gpa, &self.diff_fields)) {
+            switch (try self.snapshots.?.gatherRecordFields(pattern_snapshot, self.gpa, &self.diff_fields)) {
                 .record => |r| r,
                 .empty_record => null,
                 .not_a_record => return false,
             };
-        const value_range = switch (try self.snapshots.gatherRecordFields(value_snapshot, self.gpa, &self.diff_fields)) {
+        const value_range = switch (try self.snapshots.?.gatherRecordFields(value_snapshot, self.gpa, &self.diff_fields)) {
             .record => |r| r,
             .empty_record, .not_a_record => return false,
         };
@@ -1243,19 +1281,28 @@ pub const ReportBuilder = struct {
     /// Build a report for if branch type mismatch
     fn buildIfBranchReport(self: *Self, types: TypePair, ctx: Context.IfBranchContext) Allocator.Error!Report {
         const branch_index = ctx.branch_index + 1;
+        // The first branch has no previous branches, so a mismatch there is
+        // against the type the whole `if` is expected to have.
+        const is_first = ctx.branch_index == 0;
         return try self.makeMismatchReport(
             .{ .simple = regionIdxFrom(types.actual_var) },
-            &.{
+            if (is_first) &.{
+                D.bytes("The first branch of this"),
+                D.bytes("if").withAnnotation(.inline_code),
+                D.bytes("does not have the type this"),
+                D.bytes("if").withAnnotation(.inline_code),
+                D.bytes("is expected to have."),
+            } else &.{
                 D.bytes("The"),
                 D.num_ord(branch_index),
                 D.bytes("branch of this"),
                 D.bytes("if").withAnnotation(.inline_code),
                 D.bytes("does not match the previous"),
-                if (ctx.num_branches > 2)
+                if (ctx.branch_index > 1)
                     D.bytes("branches")
                 else
                     D.bytes("branch"),
-                D.bytes("."),
+                D.bytes(".").withNoPrecedingSpace(),
             },
             &.{
                 D.bytes("The"),
@@ -1263,9 +1310,13 @@ pub const ReportBuilder = struct {
                 D.bytes("branch is:"),
             },
             types.actual_snapshot,
-            &.{
+            if (is_first) &.{
+                D.bytes("But the"),
+                D.bytes("if").withAnnotation(.inline_code),
+                D.bytes("is expected to have the type:"),
+            } else &.{
                 D.bytes("But the previous"),
-                if (ctx.num_branches > 2)
+                if (ctx.branch_index > 1)
                     D.bytes("branches result")
                 else
                     D.bytes("branch results"),
@@ -1309,9 +1360,7 @@ pub const ReportBuilder = struct {
                 actual_parts,
                 types.actual_snapshot,
                 &.{
-                    D.bytes("But the expression between the"),
-                    D.bytes("match").withAnnotation(.inline_code),
-                    D.bytes("parenthesis has the type:"),
+                    D.bytes("But the value being matched on has the type:"),
                 },
                 types.expected_snapshot,
                 &.{
@@ -1360,9 +1409,7 @@ pub const ReportBuilder = struct {
                 actual_parts,
                 types.actual_snapshot,
                 &.{
-                    D.bytes("But the expression between the"),
-                    D.bytes("match").withAnnotation(.inline_code),
-                    D.bytes("parenthesis has the type:"),
+                    D.bytes("But the value being matched on has the type:"),
                 },
                 types.expected_snapshot,
                 &.{
@@ -1377,19 +1424,28 @@ pub const ReportBuilder = struct {
     /// Build a report for match branch type mismatch
     fn buildMatchBranchReport(self: *Self, types: TypePair, ctx: Context.MatchBranchContext) Allocator.Error!Report {
         const branch_index = ctx.branch_index + 1;
+        // The first branch has no previous branches, so a mismatch there is
+        // against the type the whole `match` is expected to have.
+        const is_first = ctx.branch_index == 0;
         return try self.makeMismatchReport(
             .{ .simple = regionIdxFrom(types.actual_var) },
-            &.{
+            if (is_first) &.{
+                D.bytes("The first branch of this"),
+                D.bytes("match").withAnnotation(.inline_code),
+                D.bytes("does not have the type this"),
+                D.bytes("match").withAnnotation(.inline_code),
+                D.bytes("is expected to have."),
+            } else &.{
                 D.bytes("The"),
                 D.num_ord(branch_index),
                 D.bytes("branch of this"),
                 D.bytes("match").withAnnotation(.inline_code),
                 D.bytes("does not match the previous"),
-                if (ctx.num_branches > 2)
+                if (ctx.branch_index > 1)
                     D.bytes("branches")
                 else
                     D.bytes("branch"),
-                D.bytes("."),
+                D.bytes(".").withNoPrecedingSpace(),
             },
             &.{
                 D.bytes("The"),
@@ -1397,9 +1453,13 @@ pub const ReportBuilder = struct {
                 D.bytes("branch is:"),
             },
             types.actual_snapshot,
-            &.{
+            if (is_first) &.{
+                D.bytes("But the"),
+                D.bytes("match").withAnnotation(.inline_code),
+                D.bytes("is expected to have the type:"),
+            } else &.{
                 D.bytes("But the previous"),
-                if (ctx.num_branches > 2)
+                if (ctx.branch_index > 1)
                     D.bytes("branches result")
                 else
                     D.bytes("branch results"),
@@ -1414,7 +1474,7 @@ pub const ReportBuilder = struct {
                 },
                 &.{
                     D.bytes("Note:").withAnnotation(.underline),
-                    D.bytes("You can wrap branches values in a tag to make them compatible."),
+                    D.bytes("You can wrap branch values in a tag to make them compatible."),
                 },
                 &.{
                     D.bytes("To learn about tags, see"),
@@ -1741,12 +1801,12 @@ pub const ReportBuilder = struct {
     /// own type is known. Naming a bare type variable there would read as a
     /// type called `err`, so the payload is described without one.
     fn addTryErrorPayloadType(self: *Self, report: *Report, types: TypePair) Allocator.Error!bool {
-        const content = self.snapshots.getContentUnwrapAlias(types.actual_snapshot);
+        const content = self.snapshots.?.getContentUnwrapAlias(types.actual_snapshot);
         if (content != .structure or content.structure != .nominal_type) return false;
-        const snapshot_args = self.snapshots.sliceVars(content.structure.nominal_type.vars);
+        const snapshot_args = self.snapshots.?.sliceVars(content.structure.nominal_type.vars);
         if (snapshot_args.len == 0) return false;
         const err_snapshot = snapshot_args[snapshot_args.len - 1];
-        if (self.snapshots.getContent(err_snapshot) == .flex) return false;
+        if (self.snapshots.?.getContent(err_snapshot) == .flex) return false;
         const err_type = self.getFormattedString(err_snapshot);
 
         try D.renderSlice(&.{
@@ -1768,6 +1828,46 @@ pub const ReportBuilder = struct {
         try report.document.addLineBreak();
         try report.document.addLineBreak();
         return true;
+    }
+
+    /// Build a report for a call whose callee is not a function
+    fn buildFnCallNonFunction(
+        self: *Self,
+        types: TypePair,
+        ctx: Context.FnCallNonFunctionContext,
+    ) Allocator.Error!Report {
+        var report = try Report.init(self.gpa, "Not A Function", "", .runtime_error);
+        errdefer report.deinit();
+        if (ctx.fn_name) |fn_name| {
+            try D.renderSliceInto(&.{
+                D.bytes("The"),
+                D.ident(fn_name).withAnnotation(.inline_code),
+                D.bytes("value is not a function, but it was given"),
+                D.num(ctx.actual_args),
+                D.bytes(pluralize(ctx.actual_args, "argument", "arguments")),
+                D.bytes(".").withNoPrecedingSpace(),
+            }, self, &report, &report.headline);
+        } else {
+            try D.renderSliceInto(&.{
+                D.bytes("This value is not a function, but it was given"),
+                D.num(ctx.actual_args),
+                D.bytes(pluralize(ctx.actual_args, "argument", "arguments")),
+                D.bytes(".").withNoPrecedingSpace(),
+            }, self, &report, &report.headline);
+        }
+
+        try self.addSourceHighlight(&report, regionIdxFrom(types.actual_var));
+        try report.document.addLineBreak();
+
+        try D.renderSlice(&.{
+            D.bytes("It has the type:"),
+        }, self, &report);
+        try report.document.addLineBreak();
+        try report.document.addLineBreak();
+        const expected_type_str = try report.addOwnedString(self.getFormattedString(types.expected_snapshot));
+        try report.document.addCodeBlock(expected_type_str);
+
+        return report;
     }
 
     /// Build a report for function argument type mismatch
@@ -1906,17 +2006,17 @@ pub const ReportBuilder = struct {
         errdefer report.deinit();
 
         // Create actual tag str
-        const actual_content = self.snapshots.getContentUnwrapAlias(types.actual_snapshot);
+        const actual_content = self.snapshots.?.getContentUnwrapAlias(types.actual_snapshot);
         std.debug.assert(actual_content == .structure);
         std.debug.assert(actual_content.structure == .tag_union);
         std.debug.assert(actual_content.structure.tag_union.tags.len() == 1);
-        const actual_tag = self.snapshots.tags.get(actual_content.structure.tag_union.tags.start);
+        const actual_tag = self.snapshots.?.tags.get(actual_content.structure.tag_union.tags.start);
         const actual_tag_str = try report.addOwnedString(snapshot.Store.getFormattedTagString(actual_tag));
 
         // The context describes the constructor syntax the user wrote, not the
         // shape of the nominal's declared backing. In particular, tag syntax
         // can mismatch a value-, record-, tuple-, or empty-tag-backed nominal.
-        const expected_content = self.snapshots.getContentUnwrapAlias(types.expected_snapshot);
+        const expected_content = self.snapshots.?.getContentUnwrapAlias(types.expected_snapshot);
         const expected_tag_union = if (expected_content == .structure and expected_content.structure == .tag_union)
             expected_content.structure.tag_union
         else
@@ -1946,7 +2046,7 @@ pub const ReportBuilder = struct {
         // Otherwise, explain the backing shape mismatch directly.
         if (expected_tag_union) |tag_union| {
             if (tag_union.tags.len() == 1) {
-                const expected_tag = self.snapshots.tags.get(tag_union.tags.start);
+                const expected_tag = self.snapshots.?.tags.get(tag_union.tags.start);
                 const expected_tag_str = try report.addOwnedString(snapshot.Store.getFormattedTagString(expected_tag));
 
                 try report.document.addText("But the nominal type needs it to be:");
@@ -1967,7 +2067,7 @@ pub const ReportBuilder = struct {
 
             var iter = tag_union.tags.iterIndices();
             while (iter.next()) |tag_index| {
-                const cur_expected_tag = self.snapshots.tags.get(tag_index);
+                const cur_expected_tag = self.snapshots.?.tags.get(tag_index);
 
                 if (actual_tag.name.eql(cur_expected_tag.name)) {
                     const cur_expected_tag_str = try report.addOwnedString(snapshot.Store.getFormattedTagString(cur_expected_tag));
@@ -2363,6 +2463,24 @@ pub const ReportBuilder = struct {
     }
 
     /// Build a report for a where constraint whose receiver is not owned by this annotation.
+    fn buildRedundantOpenTagUnionReport(self: *Self, data: RedundantOpenTagUnion) Allocator.Error!Report {
+        var report = try Report.init(self.gpa, "Redundant Open Tag Union", "This tag union has an explicit `..`, but it is already implicitly open.", .warning);
+        errdefer report.deinit();
+
+        try self.addSourceWarningRegion(&report, data.region);
+
+        try report.document.addLineBreak();
+        try report.document.addLineBreak();
+        try D.renderSlice(&.{
+            D.bytes("Tag unions in output positions, like the return type of a function, are automatically open. Remove the"),
+            D.bytes("..").withAnnotation(.inline_code),
+            D.bytes("or bind it to a named type variable like"),
+            D.bytes("..others").withAnnotation(.inline_code),
+            D.bytes("if you want to refer to the extension elsewhere."),
+        }, self, &report);
+        return report;
+    }
+
     fn buildWhereClauseReceiverNotIntroducedReport(
         self: *Self,
         data: WhereClauseReceiverNotIntroduced,
@@ -2398,6 +2516,44 @@ pub const ReportBuilder = struct {
 
     // static dispatch //
 
+    /// Headline for a failed obligation that a use of an annotated value
+    /// created from its `where` clause: the violation is at that use.
+    fn renderOwnedObligationMissingMethodHeadline(
+        self: *Self,
+        report: *Report,
+        method_name: Ident.Idx,
+    ) Allocator.Error!void {
+        try D.renderSliceInto(&.{
+            D.bytes("A"),
+            D.bytes("where").withAnnotation(.inline_code),
+            D.bytes("clause requires the"),
+            D.ident(method_name).withAnnotation(.inline_code),
+            D.bytes("method here, but the type being used doesn't have that method."),
+        }, self, report, &report.headline);
+    }
+
+    /// Highlight where a static dispatch constraint failed: at the expression
+    /// that owns the failed obligation when there is one, and otherwise at the
+    /// constraint's own provenance.
+    fn addConstraintFailureHighlight(
+        self: *Self,
+        report: *Report,
+        owner_region: ?Region,
+        fn_var: Var,
+    ) Allocator.Error!void {
+        const region: Region = owner_region orelse
+            (self.getRegionSafe(@enumFromInt(@intFromEnum(fn_var))) orelse return).*;
+        const region_info = self.module_env.calcRegionInfo(region);
+        try report.document.addSourceRegion(
+            region_info,
+            .error_highlight,
+            self.filename,
+            self.source,
+            self.module_env.getLineStarts(),
+        );
+        try report.document.addLineBreak();
+    }
+
     /// Build a report for when a type is not nominal, but you're trying to
     /// static dispatch on it
     fn buildStaticDispatchDispatcherNotNominal(
@@ -2406,26 +2562,19 @@ pub const ReportBuilder = struct {
     ) Allocator.Error!Report {
         var report = try Report.init(self.gpa, "Missing Method", "", .runtime_error);
         errdefer report.deinit();
-        try D.renderSliceInto(&.{
-            D.bytes("This"),
-            D.ident(data.method_name).withAnnotation(.inline_code),
-            D.bytes("method is being called on a value whose type doesn't have that method."),
-        }, self, &report, &report.headline);
+        if (data.owner_region != null and data.origin == .where_clause) {
+            try self.renderOwnedObligationMissingMethodHeadline(&report, data.method_name);
+        } else {
+            try D.renderSliceInto(&.{
+                D.bytes("This"),
+                D.ident(data.method_name).withAnnotation(.inline_code),
+                D.bytes("method is being called on a value whose type doesn't have that method."),
+            }, self, &report, &report.headline);
+        }
 
         const snapshot_str = try report.addOwnedString(self.getFormattedString(data.dispatcher_snapshot));
 
-        // Add source region highlighting
-        if (self.getRegionSafe(@enumFromInt(@intFromEnum(data.fn_var)))) |region| {
-            const region_info = self.module_env.calcRegionInfo(region.*);
-            try report.document.addSourceRegion(
-                region_info,
-                .error_highlight,
-                self.filename,
-                self.source,
-                self.module_env.getLineStarts(),
-            );
-            try report.document.addLineBreak();
-        }
+        try self.addConstraintFailureHighlight(&report, data.owner_region, data.fn_var);
 
         try D.renderSlice(&.{
             D.bytes("The value's type, which does not have a method named "),
@@ -2481,6 +2630,8 @@ pub const ReportBuilder = struct {
                 D.ident(data.method_name).withAnnotation(.inline_code),
                 D.bytes("method."),
             }, self, &report, &report.headline);
+        } else if (data.owner_region != null and data.origin == .where_clause) {
+            try self.renderOwnedObligationMissingMethodHeadline(&report, data.method_name);
         } else {
             try D.renderSliceInto(&.{
                 D.bytes("This"),
@@ -2491,18 +2642,7 @@ pub const ReportBuilder = struct {
 
         const snapshot_str = try report.addOwnedString(self.getFormattedString(data.dispatcher_snapshot));
 
-        // Add source region highlighting
-        if (self.getRegionSafe(@enumFromInt(@intFromEnum(data.fn_var)))) |region| {
-            const region_info = self.module_env.calcRegionInfo(region.*);
-            try report.document.addSourceRegion(
-                region_info,
-                .error_highlight,
-                self.filename,
-                self.source,
-                self.module_env.getLineStarts(),
-            );
-            try report.document.addLineBreak();
-        }
+        try self.addConstraintFailureHighlight(&report, data.owner_region, data.fn_var);
 
         try D.renderSlice(&.{
             D.bytes("The value's type, which does not have a method named "),
@@ -2992,22 +3132,23 @@ pub const ReportBuilder = struct {
         self: *Self,
         data: TypeDoesNotSupportEquality,
     ) Allocator.Error!Report {
-        var report = try Report.init(self.gpa, "Type Does Not Support Equality", "This expression is doing an equality check on a type that doesn't support equality.", .runtime_error);
+        var report = try Report.init(self.gpa, "Type Does Not Support Equality", "", .runtime_error);
         errdefer report.deinit();
+        if (data.owner_region != null and data.origin == .where_clause) {
+            try D.renderSliceInto(&.{
+                D.bytes("A"),
+                D.bytes("where").withAnnotation(.inline_code),
+                D.bytes("clause requires equality here, but the type being used doesn't support equality."),
+            }, self, &report, &report.headline);
+        } else {
+            try D.renderSliceInto(&.{
+                D.bytes("This expression is doing an equality check on a type that doesn't support equality."),
+            }, self, &report, &report.headline);
+        }
 
         const snapshot_str = try report.addOwnedString(self.getFormattedString(data.dispatcher_snapshot));
 
-        if (self.getRegionSafe(@enumFromInt(@intFromEnum(data.fn_var)))) |region| {
-            const region_info = self.module_env.calcRegionInfo(region.*);
-            try report.document.addSourceRegion(
-                region_info,
-                .error_highlight,
-                self.filename,
-                self.source,
-                self.module_env.getLineStarts(),
-            );
-            try report.document.addLineBreak();
-        }
+        try self.addConstraintFailureHighlight(&report, data.owner_region, data.fn_var);
 
         try D.renderSlice(&.{
             D.bytes("The type is:"),
@@ -3019,7 +3160,7 @@ pub const ReportBuilder = struct {
         try report.document.addLineBreak();
 
         // Get the content and explain which parts don't support equality
-        const content = self.snapshots.getContentUnwrapAlias(data.dispatcher_snapshot);
+        const content = self.snapshots.?.getContentUnwrapAlias(data.dispatcher_snapshot);
         if (content == .structure) {
             switch (content.structure) {
                 .record => |record| {
@@ -3038,7 +3179,6 @@ pub const ReportBuilder = struct {
                     try report.document.addLineBreak();
                 },
                 .box,
-                .record_unbound,
                 .empty_record,
                 .nominal_type,
                 .empty_tag_union,
@@ -3056,17 +3196,7 @@ pub const ReportBuilder = struct {
         var report = try Report.init(self.gpa, "Type Does Not Support Map", "This type does not have an unambiguous direct tag payload for compiler-derived mapping.", .runtime_error);
         errdefer report.deinit();
 
-        if (self.getRegionSafe(@enumFromInt(@intFromEnum(data.fn_var)))) |region| {
-            const region_info = self.module_env.calcRegionInfo(region.*);
-            try report.document.addSourceRegion(
-                region_info,
-                .error_highlight,
-                self.filename,
-                self.source,
-                self.module_env.getLineStarts(),
-            );
-            try report.document.addLineBreak();
-        }
+        try self.addConstraintFailureHighlight(&report, data.owner_region, data.fn_var);
 
         const snapshot_str = try report.addOwnedString(self.getFormattedString(data.dispatcher_snapshot));
         try D.renderSlice(&.{D.bytes("The type is:")}, self, &report);
@@ -3179,9 +3309,9 @@ pub const ReportBuilder = struct {
         var report = try Report.init(self.gpa, "Type Mismatch", "", .runtime_error);
         errdefer report.deinit();
         try D.renderSliceInto(&.{
-            D.bytes("This record does not have a"),
+            D.bytes("This record does not have a field named"),
             D.ident(field_name).withAnnotation(.inline_code),
-            D.bytes("field."),
+            D.bytes(".").withNoPrecedingSpace(),
         }, self, &report, &report.headline);
 
         // Add source highlight
@@ -3246,7 +3376,7 @@ pub const ReportBuilder = struct {
     /// `renderDiffHints`).
     fn findFieldDefaultMismatch(self: *Self, types: TypePair) Allocator.Error!?diff.FieldDefaultMismatch {
         const hints = try diff.compareTypes(
-            self.snapshots,
+            self.snapshots.?,
             self.module_env.getIdentStoreConst(),
             types.expected_snapshot,
             types.actual_snapshot,
@@ -3617,7 +3747,7 @@ pub const ReportBuilder = struct {
             .record => |record| record.actual_snapshot,
             .none => types.actual_snapshot,
         };
-        const record = try self.snapshots.gatherRecordFields(actual_snapshot, self.gpa, &self.diff_fields);
+        const record = try self.snapshots.?.gatherRecordFields(actual_snapshot, self.gpa, &self.diff_fields);
 
         const region = ProblemRegion{ .simple = regionIdxFrom(types.actual_var) };
         switch (record) {
@@ -3640,9 +3770,9 @@ pub const ReportBuilder = struct {
                 return try self.makeCustomReport(
                     region,
                     &.{
-                        D.bytes("This record does not have a"),
+                        D.bytes("This record does not have a field named"),
                         D.ident(ctx.field_name).withAnnotation(.inline_code),
-                        D.bytes("field."),
+                        D.bytes(".").withNoPrecedingSpace(),
                     },
                     &.{
                         &.{D.bytes("It is actually a record with no fields.")},
@@ -3695,7 +3825,7 @@ pub const ReportBuilder = struct {
         };
 
         // Get the record data of the type we tried to  update
-        const expected_record = try self.snapshots.gatherRecordFields(expected_snapshot, self.gpa, &self.diff_fields);
+        const expected_record = try self.snapshots.?.gatherRecordFields(expected_snapshot, self.gpa, &self.diff_fields);
         switch (expected_record) {
             .not_a_record => {
                 return try self.makeBadTypeReport(
@@ -3714,13 +3844,13 @@ pub const ReportBuilder = struct {
                     if (ctx.record_name) |record_name| &.{
                         D.bytes("The"),
                         D.ident(record_name).withAnnotation(.inline_code),
-                        D.bytes("record does not have a"),
+                        D.bytes("record does not have a field named"),
                         D.ident(ctx.field_name).withAnnotation(.inline_code),
-                        D.bytes("field."),
+                        D.bytes(".").withNoPrecedingSpace(),
                     } else &.{
-                        D.bytes("This record does not have a"),
+                        D.bytes("This record does not have a field named"),
                         D.ident(ctx.field_name).withAnnotation(.inline_code),
-                        D.bytes("field."),
+                        D.bytes(".").withNoPrecedingSpace(),
                     },
                     &.{
                         &.{D.bytes("It is actually a record with no fields.")},
@@ -3734,7 +3864,7 @@ pub const ReportBuilder = struct {
                 // robust full record builder
 
                 // Get the record data of the type we tried to  update
-                const actual_record = try self.snapshots.gatherRecordFields(actual_snapshot, self.gpa, &self.diff_fields);
+                const actual_record = try self.snapshots.?.gatherRecordFields(actual_snapshot, self.gpa, &self.diff_fields);
                 const actual_field = switch (actual_record) {
                     .record => |fields| blk: {
                         const slice = self.diff_fields.sliceRange(fields);
@@ -3926,7 +4056,7 @@ pub const ReportBuilder = struct {
         report: *Report,
         record: snapshot.SnapshotRecord,
     ) Allocator.Error!void {
-        const fields = self.snapshots.sliceRecordFields(record.fields);
+        const fields = self.snapshots.?.sliceRecordFields(record.fields);
         var has_problem_fields = false;
 
         // First pass: check if any fields don't support equality
@@ -3978,7 +4108,7 @@ pub const ReportBuilder = struct {
         report: *Report,
         tuple: snapshot.SnapshotTuple,
     ) Allocator.Error!void {
-        const elems = self.snapshots.sliceVars(tuple.elems);
+        const elems = self.snapshots.?.sliceVars(tuple.elems);
         var has_problem_elems = false;
 
         // First pass: check if any elements don't support equality
@@ -4026,12 +4156,12 @@ pub const ReportBuilder = struct {
         report: *Report,
         tag_union: snapshot.SnapshotTagUnion,
     ) Allocator.Error!void {
-        const tags = self.snapshots.sliceTags(tag_union.tags);
+        const tags = self.snapshots.?.sliceTags(tag_union.tags);
         var has_problem_tags = false;
 
         // First pass: check if any tag payloads don't support equality
         for (tags.items(.args)) |tag_args| {
-            const args = self.snapshots.sliceVars(tag_args);
+            const args = self.snapshots.?.sliceVars(tag_args);
             for (args) |arg_content_idx| {
                 if (!self.snapshotSupportsEquality(arg_content_idx)) {
                     has_problem_tags = true;
@@ -4051,7 +4181,7 @@ pub const ReportBuilder = struct {
             const tag_names = tags.items(.name);
             const tag_args_list = tags.items(.args);
             for (tag_names, tag_args_list) |name, tag_args| {
-                const args = self.snapshots.sliceVars(tag_args);
+                const args = self.snapshots.?.sliceVars(tag_args);
                 var tag_has_problem = false;
                 for (args) |arg_content_idx| {
                     if (!self.snapshotSupportsEquality(arg_content_idx)) {
@@ -4099,7 +4229,7 @@ pub const ReportBuilder = struct {
 
     /// Check if a snapshotted type supports equality
     fn snapshotSupportsEquality(self: *Self, content_idx: snapshot.SnapshotContentIdx) bool {
-        const content = self.snapshots.getContentUnwrapAlias(content_idx);
+        const content = self.snapshots.?.getContentUnwrapAlias(content_idx);
         return switch (content) {
             .structure => |s| switch (s) {
                 // Functions never support equality
@@ -4108,7 +4238,7 @@ pub const ReportBuilder = struct {
                 .empty_record, .empty_tag_union => true,
                 // Records: all fields must support equality
                 .record => |record| {
-                    const fields = self.snapshots.sliceRecordFields(record.fields);
+                    const fields = self.snapshots.?.sliceRecordFields(record.fields);
                     for (fields.items(.content)) |field_content| {
                         if (!self.snapshotSupportsEquality(field_content)) return false;
                     }
@@ -4116,7 +4246,7 @@ pub const ReportBuilder = struct {
                 },
                 // Tuples: all elements must support equality
                 .tuple => |tuple| {
-                    const elems = self.snapshots.sliceVars(tuple.elems);
+                    const elems = self.snapshots.?.sliceVars(tuple.elems);
                     for (elems) |elem_content| {
                         if (!self.snapshotSupportsEquality(elem_content)) return false;
                     }
@@ -4124,9 +4254,9 @@ pub const ReportBuilder = struct {
                 },
                 // Tag unions: all payloads must support equality
                 .tag_union => |tag_union| {
-                    const tags_slice = self.snapshots.sliceTags(tag_union.tags);
+                    const tags_slice = self.snapshots.?.sliceTags(tag_union.tags);
                     for (tags_slice.items(.args)) |tag_args| {
-                        const args = self.snapshots.sliceVars(tag_args);
+                        const args = self.snapshots.?.sliceVars(tag_args);
                         for (args) |arg_content| {
                             if (!self.snapshotSupportsEquality(arg_content)) return false;
                         }
@@ -4135,7 +4265,7 @@ pub const ReportBuilder = struct {
                 },
                 // Nominal types: check the backing type (first element in vars)
                 .nominal_type => |nominal| {
-                    const vars = self.snapshots.sliceVars(nominal.vars);
+                    const vars = self.snapshots.?.sliceVars(nominal.vars);
                     if (vars.len > 0) {
                         // First var is the backing type
                         return self.snapshotSupportsEquality(vars[0]);
@@ -4143,7 +4273,7 @@ pub const ReportBuilder = struct {
                     return true;
                 },
                 // Other types (box, etc.) assumed to support equality
-                .box, .record_unbound => true,
+                .box => true,
             },
             // Aliases: check the underlying type
             .alias => |alias| self.snapshotSupportsEquality(alias.backing),
@@ -4155,7 +4285,7 @@ pub const ReportBuilder = struct {
     /// Explain why a type doesn't support equality, adding the explanation to the report.
     /// Returns true if an explanation was added.
     fn explainWhyNoEquality(self: *Self, report: *Report, content_idx: snapshot.SnapshotContentIdx, indent: []const u8) Allocator.Error!bool {
-        const content = self.snapshots.getContentUnwrapAlias(content_idx);
+        const content = self.snapshots.?.getContentUnwrapAlias(content_idx);
         switch (content) {
             .structure => |s| switch (s) {
                 .fn_pure, .fn_effectful, .fn_unbound => {
@@ -4165,7 +4295,7 @@ pub const ReportBuilder = struct {
                     return true;
                 },
                 .record => |record| {
-                    const fields = self.snapshots.sliceRecordFields(record.fields);
+                    const fields = self.snapshots.?.sliceRecordFields(record.fields);
                     const field_names = fields.items(.name);
                     const field_contents = fields.items(.content);
                     for (field_names, field_contents) |name, field_content| {
@@ -4186,7 +4316,7 @@ pub const ReportBuilder = struct {
                     return false;
                 },
                 .tuple => |tuple| {
-                    const elems = self.snapshots.sliceVars(tuple.elems);
+                    const elems = self.snapshots.?.sliceVars(tuple.elems);
                     for (elems, 0..) |elem_content, i| {
                         if (!self.snapshotSupportsEquality(elem_content)) {
                             try report.document.addText(indent);
@@ -4204,11 +4334,11 @@ pub const ReportBuilder = struct {
                     return false;
                 },
                 .tag_union => |tag_union| {
-                    const tags_slice = self.snapshots.sliceTags(tag_union.tags);
+                    const tags_slice = self.snapshots.?.sliceTags(tag_union.tags);
                     const tag_names = tags_slice.items(.name);
                     const tag_args_list = tags_slice.items(.args);
                     for (tag_names, tag_args_list) |name, tag_args| {
-                        const args = self.snapshots.sliceVars(tag_args);
+                        const args = self.snapshots.?.sliceVars(tag_args);
                         for (args, 0..) |arg_content, i| {
                             if (!self.snapshotSupportsEquality(arg_content)) {
                                 const tag_name = self.can_ir.getIdentText(name);
@@ -4233,7 +4363,7 @@ pub const ReportBuilder = struct {
                     return false;
                 },
                 .nominal_type => |nominal| {
-                    const vars = self.snapshots.sliceVars(nominal.vars);
+                    const vars = self.snapshots.?.sliceVars(nominal.vars);
                     if (vars.len > 0) {
                         const backing = vars[0];
                         if (!self.snapshotSupportsEquality(backing)) {
@@ -4252,7 +4382,7 @@ pub const ReportBuilder = struct {
                     }
                     return false;
                 },
-                .box, .record_unbound, .empty_record, .empty_tag_union => return false,
+                .box, .empty_record, .empty_tag_union => return false,
             },
             .alias => |alias| {
                 if (!self.snapshotSupportsEquality(alias.backing)) {
@@ -4614,6 +4744,40 @@ pub const ReportBuilder = struct {
             D.bytes("Wrap function types in"),
             D.bytes("Box").withAnnotation(.inline_code),
             D.bytes("when crossing the host boundary."),
+        }, self, &report);
+        return report;
+    }
+
+    fn buildHostedFunctionNotEffectfulReport(self: *Self, data: HostedFunctionNotEffectful) Allocator.Error!Report {
+        var report = try Report.init(self.gpa, "Hosted Function Must Be Effectful", "Every function the host provides is effectful.", .runtime_error);
+        errdefer report.deinit();
+
+        try self.addSourceHighlightRegion(&report, data.region);
+
+        try report.document.addLineBreak();
+        try report.document.addLineBreak();
+        try D.renderSlice(&.{
+            D.bytes("Every use of it crashes at runtime until it is declared with"),
+            D.bytes("=>").withAnnotation(.inline_code),
+            D.bytes("instead of"),
+            D.bytes("->").withAnnotation(.inline_code),
+            D.bytes("like every other hosted function."),
+        }, self, &report);
+        return report;
+    }
+
+    fn buildHostedTypeVariableNotBoxedReport(self: *Self, data: HostedTypeVariableNotBoxed) Allocator.Error!Report {
+        var report = try Report.init(self.gpa, "Hosted Type Variable Must Be Boxed", "A hosted function's type variables can only appear inside a Box.", .runtime_error);
+        errdefer report.deinit();
+
+        try self.addSourceHighlightRegion(&report, data.region);
+
+        try report.document.addLineBreak();
+        try report.document.addLineBreak();
+        try D.renderSlice(&.{
+            D.bytes("The host has one C signature for every use of this function, so it can only receive or return a value of an unknown type through a pointer. Wrap each type variable in"),
+            D.bytes("Box").withAnnotation(.inline_code),
+            D.bytes("so the host only ever sees that pointer."),
         }, self, &report);
         return report;
     }
@@ -5042,7 +5206,7 @@ pub const ReportBuilder = struct {
             try report.document.addLineBreak();
         }
 
-        const condition_type = self.getFormattedString(data.condition_snapshot);
+        const condition_type = self.problems.getExtraString(data.condition_type);
         try D.renderSlice(&.{
             D.bytes("The value being matched on has type:"),
         }, self, &report);
@@ -5090,7 +5254,7 @@ pub const ReportBuilder = struct {
         try self.addSourceHighlight(&report, regionIdxFrom(data.pattern));
         try report.document.addLineBreak();
 
-        const value_type = self.getFormattedString(data.value_snapshot);
+        const value_type = self.problems.getExtraString(data.value_type);
         try D.renderSlice(&.{
             D.bytes("The value being destructured has type:"),
         }, self, &report);
@@ -5163,6 +5327,35 @@ pub const ReportBuilder = struct {
 
         try D.renderSlice(&.{
             D.bytes("This pattern matches a type that has no possible values (an uninhabited type), so no value can ever match it."),
+        }, self, &report);
+
+        return report;
+    }
+
+    fn buildMatchAltBinderMissingReport(self: *Self, data: MatchAltBinderMissing) Allocator.Error!Report {
+        var report = try Report.init(self.gpa, "Name Not Bound In Every Alternative", "", .runtime_error);
+        errdefer report.deinit();
+        try D.renderSliceInto(&.{
+            D.bytes("The"),
+            D.num_ord(data.bound_pattern_index + 1),
+            D.bytes("pattern in the"),
+            D.num_ord(data.branch_index + 1),
+            D.bytes("branch of this"),
+            D.bytes("match").withAnnotation(.inline_code),
+            D.bytes("gives a value the name"),
+            D.ident(data.binder_ident).withAnnotation(.inline_code),
+            D.bytes(", but the").withNoPrecedingSpace(),
+            D.num_ord(data.missing_pattern_index + 1),
+            D.bytes("pattern does not."),
+        }, self, &report, &report.headline);
+
+        try self.addSourceHighlight(&report, regionIdxFrom(data.missing_pattern));
+        try report.document.addLineBreak();
+
+        try D.renderSlice(&.{
+            D.bytes("Every pattern separated by"),
+            D.bytes("|").withAnnotation(.inline_code),
+            D.bytes("in a branch must give values the same names, so the branch can use those names no matter which pattern matched."),
         }, self, &report);
 
         return report;
@@ -5324,7 +5517,7 @@ pub const ReportBuilder = struct {
     /// Returns a placeholder if the formatted string is missing, allowing error reporting
     /// to continue gracefully even if snapshots are incomplete.
     fn getFormattedString(self: *const Self, idx: SnapshotContentIdx) []const u8 {
-        return self.snapshots.getFormattedString(idx) orelse "<unknown type>";
+        return self.snapshots.?.getFormattedString(idx) orelse "<unknown type>";
     }
 
     /// Returns the operator symbol for a given method ident, or null if not an operator method.

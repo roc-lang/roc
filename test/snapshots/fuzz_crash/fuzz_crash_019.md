@@ -136,9 +136,6 @@ MISSING MATCH ARROW - fuzz_crash_019.md:62:5:62:5
 MISSING MATCH ARROW - fuzz_crash_019.md:63:7:63:7
 MISSING MATCH ARROW - fuzz_crash_019.md:66:12:66:12
 EXPECTED RECORD ACCESSOR - fuzz_crash_019.md:83:2:83:5
-MOD NOT FOUND - fuzz_crash_019.md:6:1:8:6
-MOD NOT FOUND - fuzz_crash_019.md:10:1:10:19
-MOD NOT FOUND - fuzz_crash_019.md:11:1:12:4
 UNDECLARED TYPE - fuzz_crash_019.md:13:13:13:16
 UNDECLARED TYPE VARIABLE - fuzz_crash_019.md:13:19:13:21
 UNDECLARED TYPE VARIABLE - fuzz_crash_019.md:19:4:19:6
@@ -163,7 +160,6 @@ UNRECOGNIZED SYNTAX - fuzz_crash_019.md:83:2:83:5
 NAME NOT IN SCOPE - fuzz_crash_019.md:86:9:86:11
 NAME NOT IN SCOPE - fuzz_crash_019.md:87:11:87:12
 NAME NOT IN SCOPE - fuzz_crash_019.md:92:11:92:15
-NAME NOT IN SCOPE - fuzz_crash_019.md:93:2:93:7
 NAME NOT IN SCOPE - fuzz_crash_019.md:94:3:94:6
 NAME NOT IN SCOPE - fuzz_crash_019.md:96:34:96:37
 NAME NOT IN SCOPE - fuzz_crash_019.md:96:47:96:52
@@ -190,6 +186,10 @@ NAME NOT IN SCOPE - fuzz_crash_019.md:119:2:119:5
 NAME NOT IN SCOPE - fuzz_crash_019.md:120:1:120:2
 NAME NOT IN SCOPE - fuzz_crash_019.md:120:6:120:9
 EXPOSED BUT NOT DEFINED - fuzz_crash_019.md:2:6:2:11
+MOD NOT FOUND - fuzz_crash_019.md:6:1:8:6
+MOD NOT FOUND - fuzz_crash_019.md:10:1:10:19
+MOD NOT FOUND - fuzz_crash_019.md:11:1:12:4
+DOES NOT EXIST - fuzz_crash_019.md:93:2:93:7
 TOO FEW ARGS - fuzz_crash_019.md:17:3:18:4
 DECLARATION HAS NO VALUE - fuzz_crash_019.md:22:1:23:2
 DECLARATION HAS NO VALUE - fuzz_crash_019.md:37:1:37:9
@@ -414,36 +414,6 @@ MISSING METHOD - fuzz_crash_019.md:105:55:105:72
 			(line-break)
 			(line-break)
 			(source-region (file "fuzz_crash_019.md") (start 83 2) (end 83 5) (annotation error) (line-text "\t..."))))
-	(report
-		(severity runtime_error)
-		(title "Mod Not Found")
-		(region (start 6 1) (end 8 6))
-		(headline
-			(text "The mod ")
-			(annotated code "Stdot")
-			(reflow " was not found in this Roc project."))
-		(document
-			(source-region (file "fuzz_crash_019.md") (start 6 1) (end 8 6) (annotation error) (line-text "import Stdot\n\t\texposing [ #tem\nCust]"))))
-	(report
-		(severity runtime_error)
-		(title "Mod Not Found")
-		(region (start 10 1) (end 10 19))
-		(headline
-			(text "The mod ")
-			(annotated code "Bae")
-			(reflow " was not found in this Roc project."))
-		(document
-			(source-region (file "fuzz_crash_019.md") (start 10 1) (end 10 19) (annotation error) (line-text "import Bae as Gooe"))))
-	(report
-		(severity runtime_error)
-		(title "Mod Not Found")
-		(region (start 11 1) (end 12 4))
-		(headline
-			(text "The mod ")
-			(annotated code "Ba")
-			(reflow " was not found in this Roc project."))
-		(document
-			(source-region (file "fuzz_crash_019.md") (start 11 1) (end 12 4) (annotation error) (line-text "import\n\tBa"))))
 	(report
 		(severity runtime_error)
 		(title "Undeclared Type")
@@ -752,19 +722,6 @@ MISSING METHOD - fuzz_crash_019.md:105:55:105:72
 			(line-break)
 			(line-break)
 			(source-region (file "fuzz_crash_019.md") (start 92 11) (end 92 15) (annotation error) (line-text "\tfor n in list {"))))
-	(report
-		(severity runtime_error)
-		(title "Name Not In Scope")
-		(region (start 93 2) (end 93 7))
-		(headline
-			(reflow "Nothing is named ")
-			(annotated symbol-unqualified "line!")
-			(reflow " in this scope."))
-		(document
-			(reflow "Is it misspelled, or is there an import missing?")
-			(line-break)
-			(line-break)
-			(source-region (file "fuzz_crash_019.md") (start 93 2) (end 93 7) (annotation error) (line-text "\tline!(\"Ag ${n} to ${er}\")"))))
 	(report
 		(severity runtime_error)
 		(title "Name Not In Scope")
@@ -1114,6 +1071,45 @@ MISSING METHOD - fuzz_crash_019.md:105:55:105:72
 			(reflow " in this mod, or by removing it from the list of exposed values.")))
 	(report
 		(severity runtime_error)
+		(title "Mod Not Found")
+		(region (start 6 1) (end 8 6))
+		(headline
+			(text "The mod ")
+			(annotated code "Stdot")
+			(reflow " was not found in this Roc project."))
+		(document
+			(source-region (file "fuzz_crash_019.md") (start 6 1) (end 8 6) (annotation error) (line-text "import Stdot\n\t\texposing [ #tem\nCust]"))))
+	(report
+		(severity runtime_error)
+		(title "Mod Not Found")
+		(region (start 10 1) (end 10 19))
+		(headline
+			(text "The mod ")
+			(annotated code "Bae")
+			(reflow " was not found in this Roc project."))
+		(document
+			(source-region (file "fuzz_crash_019.md") (start 10 1) (end 10 19) (annotation error) (line-text "import Bae as Gooe"))))
+	(report
+		(severity runtime_error)
+		(title "Mod Not Found")
+		(region (start 11 1) (end 12 4))
+		(headline
+			(text "The mod ")
+			(annotated code "Ba")
+			(reflow " was not found in this Roc project."))
+		(document
+			(source-region (file "fuzz_crash_019.md") (start 11 1) (end 12 4) (annotation error) (line-text "import\n\tBa"))))
+	(report
+		(severity runtime_error)
+		(title "Does Not Exist")
+		(region (start 93 2) (end 93 7))
+		(headline
+			(annotated symbol-unqualified "line!")
+			(reflow " does not exist."))
+		(document
+			(source-region (file "fuzz_crash_019.md") (start 93 2) (end 93 7) (annotation error) (line-text "\tline!(\"Ag ${n} to ${er}\")"))))
+	(report
+		(severity runtime_error)
 		(title "Too Few Args")
 		(region (start 17 3) (end 18 4))
 		(headline
@@ -1202,7 +1198,7 @@ MISSING METHOD - fuzz_crash_019.md:105:55:105:72
 			(line-break)
 			(annotation-start code-block)
 			(indent 1)
-			(text "[Blue, ..]")
+			(text "[Blue]")
 			(annotation-end)))
 	(report
 		(severity runtime_error)
@@ -1248,16 +1244,12 @@ MISSING METHOD - fuzz_crash_019.md:105:55:105:72
 			(annotation-end)
 			(line-break)
 			(line-break)
-			(reflow "But the expression between the")
-			(reflow " ")
-			(annotated code "match")
-			(reflow " ")
-			(reflow "parenthesis has the type:")
+			(reflow "But the value being matched on has the type:")
 			(line-break)
 			(line-break)
 			(annotation-start code-block)
 			(indent 1)
-			(text "[Blue, ..]")
+			(text "[Blue]")
 			(annotation-end)
 			(line-break)
 			(line-break)
@@ -1369,7 +1361,7 @@ MISSING METHOD - fuzz_crash_019.md:105:55:105:72
 			(line-break)
 			(annotation-start code-block)
 			(indent 1)
-			(text "(f, j, Error, [O, ..], (Error, Error), List(l))")
+			(text "(f, j, Error, [O], (Error, Error), List(l))")
 			(line-break)
 			(indent 1)
 			(text "  where [")

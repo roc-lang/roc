@@ -14,8 +14,8 @@ platform "pf"
 # EXPECTED
 EXPOSED BUT NOT DEFINED - platform.md:5:13:5:39
 EXPOSED BUT NOT DEFINED - platform.md:5:41:5:67
-EXPOSED BUT NOT DEFINED - platform.md:3:11:3:13
 EXPOSED BUT NOT DEFINED - platform.md:3:15:3:17
+EXPOSED BUT NOT DEFINED - platform.md:3:11:3:13
 INVALID HOSTED SECTION - :0:0:0:0
 # PROBLEMS
 ~~~clojure
@@ -49,19 +49,6 @@ INVALID HOSTED SECTION - :0:0:0:0
 	(report
 		(severity runtime_error)
 		(title "Exposed But Not Defined")
-		(region (start 3 11) (end 3 13))
-		(headline
-			(reflow "The mod header says that ")
-			(annotated symbol-unqualified "E1")
-			(reflow " is exposed, but it is not defined anywhere in this mod."))
-		(document
-			(source-region (file "platform.md") (start 3 11) (end 3 13) (annotation error) (line-text "\texposes [E1, E2,]"))
-			(reflow "You can fix this by either defining ")
-			(annotated symbol-unqualified "E1")
-			(reflow " in this mod, or by removing it from the list of exposed values.")))
-	(report
-		(severity runtime_error)
-		(title "Exposed But Not Defined")
 		(region (start 3 15) (end 3 17))
 		(headline
 			(reflow "The mod header says that ")
@@ -71,6 +58,19 @@ INVALID HOSTED SECTION - :0:0:0:0
 			(source-region (file "platform.md") (start 3 15) (end 3 17) (annotation error) (line-text "\texposes [E1, E2,]"))
 			(reflow "You can fix this by either defining ")
 			(annotated symbol-unqualified "E2")
+			(reflow " in this mod, or by removing it from the list of exposed values.")))
+	(report
+		(severity runtime_error)
+		(title "Exposed But Not Defined")
+		(region (start 3 11) (end 3 13))
+		(headline
+			(reflow "The mod header says that ")
+			(annotated symbol-unqualified "E1")
+			(reflow " is exposed, but it is not defined anywhere in this mod."))
+		(document
+			(source-region (file "platform.md") (start 3 11) (end 3 13) (annotation error) (line-text "\texposes [E1, E2,]"))
+			(reflow "You can fix this by either defining ")
+			(annotated symbol-unqualified "E1")
 			(reflow " in this mod, or by removing it from the list of exposed values.")))
 	(report
 		(severity runtime_error)

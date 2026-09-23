@@ -72,6 +72,7 @@ pub fn initCapacity(gpa: std.mem.Allocator, capacity: usize) std.mem.Allocator.E
 
     // Properly initialize the bytes array to ensure clean state
     self.bytes = try collections.SafeList(u8).initCapacity(gpa, capacity * bytes_per_string);
+    errdefer self.bytes.deinit(gpa);
 
     // Start with at least one byte to ensure Idx.unused (0) never points to valid data
     {

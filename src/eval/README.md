@@ -121,6 +121,29 @@ zig build -Dtrace-eval=true
 When enabled, the interpreter outputs detailed information about evaluation
 steps. Both tracing flags default to `false`.
 
+### Allocation-Failure Injection
+
+Bugs on the out-of-memory path (double frees, cleanup of never-initialized
+state, leaks) never run while allocation succeeds. The eval test runner can
+make them run on demand; each test executes in a forked child, and these
+options act inside that child:
+
+```bash
+# Fail a random allocation in every child; each child logs the index it drew.
+zig build run-test-eval -- --fail-alloc random --child-log-dir /tmp/child-logs --debug-allocator
+# Reproduce one finding exactly.
+zig build run-test-eval -- --fail-alloc 78 --filter "the test's name" --debug-allocator
+```
+
+`--debug-allocator` runs the child on a `DebugAllocator` (arenas pass every
+allocation through it), so double and invalid frees are reported; build with
+`-Ddebug-gpa-traces=true` to get allocation traces. Leaks are not reported
+here, because the child exits without tearing its allocator down; the
+`checkAllAllocationFailures` unit tests cover those. The allocation
+count a child reaches depends on this choice, so reproduce with the same flags
+that found the bug. `--freeze-on-crash` keeps a segfaulting child alive and
+ptrace-able so `gdb -p <pid>` can inspect the crashed state (Linux only).
+
 ### Refcount Tracing
 
 For debugging memory management issues, use the `-Dtrace-refcount` flag:

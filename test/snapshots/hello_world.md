@@ -12,22 +12,18 @@ import pf.Stdout
 main! = |_| Stdout.line!("Hello, world!")
 ~~~
 # EXPECTED
-NAME NOT IN SCOPE - hello_world.md:5:13:5:25
+DOES NOT EXIST - hello_world.md:5:13:5:25
 # PROBLEMS
 ~~~clojure
 (reports
 	(report
 		(severity runtime_error)
-		(title "Name Not In Scope")
+		(title "Does Not Exist")
 		(region (start 5 13) (end 5 25))
 		(headline
-			(reflow "Nothing is named ")
-			(annotated symbol-unqualified "line!")
-			(reflow " in this scope."))
+			(annotated symbol-unqualified "Stdout.line!")
+			(reflow " does not exist."))
 		(document
-			(reflow "Is it misspelled, or is there an import missing?")
-			(line-break)
-			(line-break)
 			(source-region (file "hello_world.md") (start 5 13) (end 5 25) (annotation error) (line-text "main! = |_| Stdout.line!(\"Hello, world!\")")))))
 ~~~
 # TOKENS

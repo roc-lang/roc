@@ -13,24 +13,20 @@
 //! later transcoding matches slots, so the lowerer emits the literal
 //! directly and creates no slot, failure record, or guard for it.
 //!
-//! Two list shapes get the same treatment, because static data is the wrong
-//! home for them: a value's constructor is cheaper than its bytes. An empty
-//! list lowers to the `with_capacity` it was evaluated with, so the request
-//! survives the freeze (a frozen descriptor cannot carry capacity) and the
-//! first append goes in place. A list of copies of one scalar, which is
-//! what `List.repeat` and every constant fill loop produce, lowers to that
-//! repeat loop again: a table of zeros is a few instructions at runtime and
-//! would otherwise be that many bytes of zeros in the binary, and a static
-//! list can never be born unique, which loses the in-place writes of every
-//! loop the table is carried through. Other aggregate roots keep their
-//! slots and fold in the backend; failed roots keep the guard that crashes
-//! with the original failure.
+//! One list shape gets the same treatment: an empty list lowers to the
+//! `with_capacity` it was evaluated with, so the request survives the freeze
+//! (a frozen descriptor cannot carry capacity) and the first append goes in
+//! place. A list with elements keeps its slot however uniform its contents:
+//! lowering it to a construction would allocate at every read, while a
+//! consumer that mutates what it read already receives a fresh unique list
+//! from the runtime's copy-on-first-mutation, at the one allocation that
+//! construction would have spent anyway. Other aggregate roots keep their slots and fold in the backend;
+//! failed roots keep the guard that crashes with the original failure.
 //!
 //! A build that restores its compile-time values from a checked module's
 //! const store, rather than from a completed host program, reaches the
 //! same constructions through the restored expressions; the lowerer's
-//! static-data candidate path decides those, and shares this decoder for
-//! the elements of a packed list.
+//! static-data candidate path decides those.
 const std = @import("std");
 const check = @import("check");
 const core = @import("lir_core");
@@ -41,7 +37,14 @@ const Program = core.Program;
 const Allocator = std.mem.Allocator;
 
 /// How a completed value, or a part of one, lowers in place of its slot:
-/// a scalar's literal, or the constructor of an empty or uniform value.
+/// a scalar's literal, or the constructor of an empty list, record, or tag.
+///
+/// A construction is the value's shape and leaves alone. It names no list,
+/// field or payload layout: the program that decoded it and the program that
+/// emits it intern layouts in their own order, so an index from one is not a
+/// name in the other. The reading site's own layout supplies every layout
+/// the emitted code needs, and a scalar literal's layout is a fixed index
+/// that every store shares.
 pub const Construction = union(enum) {
     literal: LIR.LiteralValue,
     zst,
@@ -49,12 +52,6 @@ pub const Construction = union(enum) {
     empty_str,
     /// An empty list, rebuilt with the capacity it was evaluated with.
     empty_list: u64,
-    /// `count` copies of one element, rebuilt by the repeat loop.
-    uniform_list: struct {
-        element: *const Construction,
-        element_layout: layout.Idx,
-        count: u64,
-    },
     /// A record, one construction per field in original order.
     record: []const Construction,
     /// A tag with its payload, when it has one.
@@ -77,11 +74,6 @@ pub const CompletedScalarValues = struct {
         root: checked.ComptimeRootId,
     };
 
-    const Entry = struct {
-        layout_idx: layout.Idx,
-        construction: Construction,
-    };
-
     const Context = struct {
         pub fn hash(_: Context, key: Key) u64 {
             var hasher = std.hash.Wyhash.init(0);
@@ -95,7 +87,7 @@ pub const CompletedScalarValues = struct {
         }
     };
 
-    const Map = std.HashMapUnmanaged(Key, Entry, Context, std.hash_map.default_max_load_percentage);
+    const Map = std.HashMapUnmanaged(Key, Construction, Context, std.hash_map.default_max_load_percentage);
 
     /// Collects every completed successful root of `program` whose frozen
     /// image decodes to a construction.
@@ -110,7 +102,7 @@ pub const CompletedScalarValues = struct {
             if (!slotSucceeded(program, frozen, slot)) continue;
             const data_export = exportOf(frozen, slot) orelse continue;
             const construction = try decoder.decode(data_export, data_export.bytes[data_export.symbol_offset..], data_export.symbol_offset, root.role.value.plan, entry.layout_idx) orelse continue;
-            try values.entries.put(allocator, .{ .module = root.module, .root = root.root }, .{ .layout_idx = entry.layout_idx, .construction = construction });
+            try values.entries.put(allocator, .{ .module = root.module, .root = root.root }, construction);
         }
         return values;
     }
@@ -121,11 +113,16 @@ pub const CompletedScalarValues = struct {
     }
 
     /// The construction for a root read at `layout_idx`, when the root
-    /// completed successfully in a shape that lowers without a slot.
+    /// completed successfully in a shape that lowers without a slot. A
+    /// scalar is checked against the read's layout here; an aggregate is
+    /// checked against it shape by shape as `emit` builds it.
     pub fn constructionFor(self: *const CompletedScalarValues, module: checked.ModuleId, root: checked.ComptimeRootId, layout_idx: layout.Idx) ?Construction {
-        const entry = self.entries.get(.{ .module = module, .root = root }) orelse return null;
-        if (entry.layout_idx != layout_idx) return null;
-        return entry.construction;
+        const construction = self.entries.get(.{ .module = module, .root = root }) orelse return null;
+        switch (construction) {
+            .literal => |literal| if (!literalFitsLayout(literal, layout_idx)) return null,
+            .zst, .empty_str, .empty_list, .record, .tag => {},
+        }
+        return construction;
     }
 
     /// The literal for a root read at `layout_idx`, when the root completed
@@ -134,21 +131,31 @@ pub const CompletedScalarValues = struct {
         const construction = self.constructionFor(module, root, layout_idx) orelse return null;
         return switch (construction) {
             .literal => |literal| literal,
-            .zst, .empty_str, .empty_list, .uniform_list, .record, .tag => null,
+            .zst, .empty_str, .empty_list, .record, .tag => null,
         };
     }
 };
 
+/// Whether a decoded scalar literal is a value of `layout_idx`: the literal
+/// carries the scalar layout it was decoded at, and scalar layouts are fixed
+/// indices shared by every store.
+fn literalFitsLayout(literal: LIR.LiteralValue, layout_idx: layout.Idx) bool {
+    return switch (literal) {
+        .i64_literal => |int| int.layout_idx == layout_idx,
+        .i128_literal => |int| int.layout_idx == layout_idx,
+        .f32_literal => layout_idx == .f32,
+        .f64_literal => layout_idx == .f64,
+        .dec_literal => layout_idx == .dec,
+        .str_literal, .boxy_dynamic_num_literal, .boxy_dynamic_frac_literal, .static_data, .bytes_literal, .null_ptr, .proc_ref => false,
+    };
+}
+
 /// Emits `target = construction` into `store`, continuing at `next`, and
 /// returns the entry statement; null when the construction does not fit
-/// the target's layout. `ctx` supplies locals and join-point ids:
-/// `addLocal(layout.Idx) Allocator.Error!LIR.LocalId` and
-/// `freshJoinPointId() LIR.JoinPointId`, and
-/// `addJoin(LIR.JoinPoint, LIR.CFStmtId) Allocator.Error!LIR.CFStmtId`.
-/// The context owns final join metadata when emitting after ARC. Every value the emitted code
-/// builds is fresh and consumed exactly once, so the code is complete
-/// without a reference-counting pass: a repeat loop builds its element
-/// anew on each iteration rather than sharing one across appends.
+/// the target's layout. `ctx` supplies locals:
+/// `addLocal(layout.Idx) Allocator.Error!LIR.LocalId`. Every value the
+/// emitted code builds is fresh and consumed exactly once, so the code is
+/// complete without a reference-counting pass.
 pub fn emit(ctx: anytype, store: *core.LirStore, layouts: *const layout.Store, target: LIR.LocalId, construction: Construction, next: LIR.CFStmtId) Allocator.Error!?LIR.CFStmtId {
     switch (construction) {
         .literal => |literal| return try store.addCFStmt(.{ .assign_literal = .{ .target = target, .value = literal, .next = next } }),
@@ -161,10 +168,6 @@ pub fn emit(ctx: anytype, store: *core.LirStore, layouts: *const layout.Store, t
         .empty_list => |capacity| {
             if (capacity > std.math.maxInt(i64)) return null;
             return try emitWithCapacity(ctx, store, target, @intCast(capacity), next);
-        },
-        .uniform_list => |uniform| {
-            if (uniform.count > std.math.maxInt(i64)) return null;
-            return try emitRepeat(ctx, store, layouts, target, uniform.element.*, uniform.element_layout, @intCast(uniform.count), next);
         },
         .record => |fields| {
             const layout_idx = store.getLocal(target).layout_idx;
@@ -231,85 +234,10 @@ fn emitWithCapacity(ctx: anytype, store: *core.LirStore, target: LIR.LocalId, ca
     } });
 }
 
-/// The repeat loop a completed uniform list came from: reserve `count`
-/// elements, then build the element and append it `count` times unchecked.
-/// The later passes treat it as they do any source loop.
-fn emitRepeat(ctx: anytype, store: *core.LirStore, layouts: *const layout.Store, target: LIR.LocalId, element: Construction, element_layout: layout.Idx, count: i64, next: LIR.CFStmtId) Allocator.Error!?LIR.CFStmtId {
-    const list_layout = store.getLocal(target).layout_idx;
-    const count_local = try ctx.addLocal(.u64);
-    const reserved = try ctx.addLocal(list_layout);
-    const zero = try ctx.addLocal(.u64);
-    const list_param = try ctx.addLocal(list_layout);
-    const index_param = try ctx.addLocal(.u64);
-    const more = try ctx.addLocal(.bool);
-    const element_local = try ctx.addLocal(element_layout);
-    const appended = try ctx.addLocal(list_layout);
-    const one = try ctx.addLocal(.u64);
-    const next_index = try ctx.addLocal(.u64);
-    const join_id = ctx.freshJoinPointId();
-
-    // Exit: the carried list is the result.
-    const exit = try store.addCFStmt(.{ .assign_ref = .{ .target = target, .op = .{ .local = list_param }, .next = next } });
-    // Step: build the element, append it, and go round again.
-    const back_jump = try store.addCFStmt(.{ .jump = .{ .target = join_id } });
-    const set_index = try store.addCFStmt(.{ .set_local = .{ .target = index_param, .value = next_index, .mode = .initialize_join_param, .next = back_jump } });
-    const set_list = try store.addCFStmt(.{ .set_local = .{ .target = list_param, .value = appended, .mode = .initialize_join_param, .next = set_index } });
-    const bump = try store.addCFStmt(.{ .assign_low_level = .{
-        .target = next_index,
-        .op = .num_int_add_wrap,
-        .rc_effect = LIR.LowLevel.num_int_add_wrap.rcEffect(),
-        .args = try store.addLocalSpan(&[_]LIR.LocalId{ index_param, one }),
-        .next = set_list,
-    } });
-    const one_literal = try store.addCFStmt(.{ .assign_literal = .{ .target = one, .value = .{ .i64_literal = .{ .value = 1, .layout_idx = .u64 } }, .next = bump } });
-    const append = try store.addCFStmt(.{ .assign_low_level = .{
-        .target = appended,
-        .op = .list_append_unsafe,
-        .rc_effect = LIR.LowLevel.list_append_unsafe.rcEffect(),
-        .args = try store.addLocalSpan(&[_]LIR.LocalId{ list_param, element_local }),
-        .next = one_literal,
-    } });
-    const build_element = try emit(ctx, store, layouts, element_local, element, append) orelse return null;
-    const dispatch = try store.addCFStmt(.{ .switch_stmt = .{
-        .cond = more,
-        .branches = try store.addCFSwitchBranches(&.{.{ .value = 1, .body = build_element }}),
-        .default_branch = exit,
-        .default_is_cold = false,
-        .continuation = null,
-    } });
-    const body = try store.addCFStmt(.{ .assign_low_level = .{
-        .target = more,
-        .op = .num_is_lt,
-        .rc_effect = LIR.LowLevel.num_is_lt.rcEffect(),
-        .args = try store.addLocalSpan(&[_]LIR.LocalId{ index_param, count_local }),
-        .next = dispatch,
-    } });
-    // Entry: the count, the reserved list, and index zero.
-    const entry_jump = try store.addCFStmt(.{ .jump = .{ .target = join_id } });
-    const init_index = try store.addCFStmt(.{ .set_local = .{ .target = index_param, .value = zero, .mode = .initialize_join_param, .next = entry_jump } });
-    const init_list = try store.addCFStmt(.{ .set_local = .{ .target = list_param, .value = reserved, .mode = .initialize_join_param, .next = init_index } });
-    const zero_literal = try store.addCFStmt(.{ .assign_literal = .{ .target = zero, .value = .{ .i64_literal = .{ .value = 0, .layout_idx = .u64 } }, .next = init_list } });
-    const reserve = try store.addCFStmt(.{ .assign_low_level = .{
-        .target = reserved,
-        .op = .list_with_capacity,
-        .rc_effect = LIR.LowLevel.list_with_capacity.rcEffect(),
-        .args = try store.addLocalSpan(&[_]LIR.LocalId{count_local}),
-        .next = zero_literal,
-    } });
-    const count_literal = try store.addCFStmt(.{ .assign_literal = .{ .target = count_local, .value = .{ .i64_literal = .{ .value = count, .layout_idx = .u64 } }, .next = reserve } });
-    return try ctx.addJoin(.{
-        .id = join_id,
-        .params = try store.addLocalSpan(&[_]LIR.LocalId{ list_param, index_param }),
-        .body = body,
-    }, count_literal);
-}
-
 /// Decodes a completed value into its construction by walking the same
 /// const plan the freezer walked, at the same byte offsets. Any part that
-/// is not a scalar, the empty string, an empty or uniform list, a record,
-/// or a tag leaves the whole value undecoded. A decoder over plain memory
-/// bytes has no frozen image; lists in such bytes stay undecoded, since
-/// their elements live behind a relocation the bytes cannot follow.
+/// is not a scalar, the empty string, an empty list, a record, or a tag
+/// leaves the whole value undecoded.
 pub const Decoder = struct {
     program: *const Program.Result,
     frozen: ?*const Program.FrozenStaticData,
@@ -324,7 +252,7 @@ pub const Decoder = struct {
             .zst => .zst,
             .scalar => if (decodeScalar(layout_idx, bytes)) |literal| .{ .literal = literal } else null,
             .str => if (self.stringIsEmpty(bytes)) .empty_str else null,
-            .list => |element_plan| try self.decodeList(data_export, bytes, offset, element_plan, value_layout),
+            .list => self.decodeList(data_export, bytes, offset, value_layout),
             .named => |named| try self.decode(data_export, bytes, offset, named.backing, layout_idx),
             .tuple, .record => |child_plans| try self.decodeRecord(data_export, bytes, offset, child_plans, value_layout),
             .tag_union => |variants| try self.decodeTag(data_export, bytes, offset, variants, layout_idx),
@@ -363,41 +291,19 @@ pub const Decoder = struct {
         return len == 0;
     }
 
-    fn decodeList(self: *Decoder, data_export: ?*const Program.StaticDataExport, bytes: []const u8, offset: usize, element_plan: Program.ConstPlanId, value_layout: layout.Layout) Allocator.Error!?Construction {
+    /// A list decodes only when empty, so its `with_capacity` request can
+    /// survive the freeze; a list with elements keeps its slot, because
+    /// rebuilding it would allocate at every read.
+    fn decodeList(self: *Decoder, data_export: ?*const Program.StaticDataExport, bytes: []const u8, offset: usize, value_layout: layout.Layout) ?Construction {
         if (value_layout.tag != .list) return null;
-        const len = self.readWord(bytes, 1) orelse return null;
-        if (len == 0) {
-            var capacity: u64 = 0;
-            if (data_export) |exported| {
-                for (exported.empty_list_capacities) |item| {
-                    if (item.offset == offset) capacity = item.capacity;
-                }
+        if ((self.readWord(bytes, 1) orelse return null) != 0) return null;
+        var capacity: u64 = 0;
+        if (data_export) |exported| {
+            for (exported.empty_list_capacities) |item| {
+                if (item.offset == offset) capacity = item.capacity;
             }
-            return .{ .empty_list = capacity };
         }
-        const exported = data_export orelse return null;
-        const frozen = self.frozen orelse return null;
-        const relocation = relocationAt(exported, offset) orelse return null;
-        const backing = exportNamed(frozen, relocation.target_symbol_name) orelse return null;
-        const element_layout = value_layout.getIdx();
-        const element_size = self.program.layouts.layoutSize(self.program.layouts.getLayout(element_layout));
-        if (element_size == 0) return null;
-        // The elements follow the backing's allocation header; the
-        // relocation's addend is that header's size.
-        if (relocation.addend < 0) return null;
-        const start = backing.symbol_offset + @as(usize, @intCast(relocation.addend));
-        if (start > backing.bytes.len) return null;
-        const elements = backing.bytes[start..];
-        if (elements.len < len * element_size) return null;
-        const first = elements[0..element_size];
-        var index: usize = 1;
-        while (index < len) : (index += 1) {
-            if (!std.mem.eql(u8, first, elements[index * element_size ..][0..element_size])) return null;
-        }
-        const element = try self.decode(backing, elements, start, element_plan, element_layout) orelse return null;
-        const stored = try self.arena.create(Construction);
-        stored.* = element;
-        return .{ .uniform_list = .{ .element = stored, .element_layout = element_layout, .count = len } };
+        return .{ .empty_list = capacity };
     }
 
     fn decodeRecord(self: *Decoder, data_export: ?*const Program.StaticDataExport, bytes: []const u8, offset: usize, child_plans: []const Program.ConstPlanId, value_layout: layout.Layout) Allocator.Error!?Construction {
@@ -445,20 +351,6 @@ pub const Decoder = struct {
         return null;
     }
 };
-
-fn relocationAt(data_export: *const Program.StaticDataExport, offset: usize) ?Program.StaticDataRelocation {
-    for (data_export.relocations) |relocation| {
-        if (relocation.offset == offset) return relocation;
-    }
-    return null;
-}
-
-fn exportNamed(frozen: *const Program.FrozenStaticData, name: []const u8) ?*const Program.StaticDataExport {
-    for (frozen.exports) |*item| {
-        if (std.mem.eql(u8, item.symbol_name, name)) return item;
-    }
-    return null;
-}
 
 /// Whether the completed value in `slot` is a successful root: its failure
 /// record's `failed` byte is zero in the frozen image.
@@ -596,7 +488,7 @@ test "completed successful scalar roots decode to literals; failed and aggregate
     try std.testing.expect(values.literalFor(.{}, @enumFromInt(6), .str) == null);
 }
 
-test "completed empty and uniform list roots decode to their constructions" {
+test "completed empty list roots decode to their constructions; lists with elements keep their slots" {
     const allocator = std.testing.allocator;
     var program = try Program.Result.init(allocator, .u64);
     defer program.deinit();
@@ -634,9 +526,8 @@ test "completed empty and uniform list roots decode to their constructions" {
     var varied_descriptor = [_]u8{0} ** 24;
     std.mem.writeInt(u64, varied_descriptor[8..16], 3, .little);
     // A backing starts with a word-sized allocation header that the
-    // relocation's addend skips; the varied list's header and first
-    // elements are zeros, so reading from the node start would mistake it
-    // for a uniform list of zeros.
+    // relocation's addend skips; the uniform backing carries three copies
+    // of 7, so a decoder that rebuilt uniform lists would follow it.
     const uniform_relocation = [_]Program.StaticDataRelocation{.{ .offset = 0, .target_symbol_name = "uniform_backing", .addend = 8 }};
     const varied_relocation = [_]Program.StaticDataRelocation{.{ .offset = 0, .target_symbol_name = "varied_backing", .addend = 8 }};
     var exports = [_]Program.StaticDataExport{
@@ -656,12 +547,38 @@ test "completed empty and uniform list roots decode to their constructions" {
 
     const empty = values.constructionFor(.{}, @enumFromInt(1), list_layout) orelse return error.TestUnexpectedResult;
     try std.testing.expectEqual(@as(u64, 16), empty.empty_list);
-    const uniform = values.constructionFor(.{}, @enumFromInt(2), list_layout) orelse return error.TestUnexpectedResult;
-    try std.testing.expectEqual(@as(u64, 3), uniform.uniform_list.count);
-    try std.testing.expectEqual(layout.Idx.u32, uniform.uniform_list.element_layout);
-    try std.testing.expectEqual(@as(i128, 7), uniform.uniform_list.element.literal.i128_literal.value);
-    try std.testing.expectEqual(@as(?LIR.LiteralValue, null), values.literalFor(.{}, @enumFromInt(2), list_layout));
+    // A uniform list and a varied list alike keep their slots: rebuilding
+    // either would allocate at every read.
+    try std.testing.expectEqual(@as(?Construction, null), values.constructionFor(.{}, @enumFromInt(2), list_layout));
     try std.testing.expectEqual(@as(?Construction, null), values.constructionFor(.{}, @enumFromInt(3), list_layout));
+
+    // A consumer that lowers its own roots interns layouts in its own order,
+    // so the list layout it reads the root at is a different index from the
+    // decoding program's. The construction still names the root's value and
+    // emits under the reader's layouts.
+    var reader = try Program.Result.init(allocator, .u64);
+    defer reader.deinit();
+    _ = try reader.layouts.insertList(.u8);
+    _ = try reader.layouts.insertList(.u16);
+    const reader_list_layout = try reader.layouts.insertList(.u32);
+    try std.testing.expect(reader_list_layout != list_layout);
+    const TestEmitContext = struct {
+        store: *core.LirStore,
+        locals: *std.ArrayList(LIR.LocalId),
+
+        pub fn addLocal(self: @This(), layout_idx: layout.Idx) Allocator.Error!LIR.LocalId {
+            const local = try self.store.addLocal(.{ .layout_idx = layout_idx });
+            try self.locals.append(self.store.allocator, local);
+            return local;
+        }
+    };
+    var locals: std.ArrayList(LIR.LocalId) = .empty;
+    defer locals.deinit(allocator);
+    const ctx = TestEmitContext{ .store = &reader.store, .locals = &locals };
+    const empty_target = try ctx.addLocal(reader_list_layout);
+    const empty_ret = try reader.store.addCFStmt(.{ .ret = .{ .value = empty_target } });
+    const reserved = try emit(ctx, &reader.store, &reader.layouts, empty_target, values.constructionFor(.{}, @enumFromInt(1), reader_list_layout).?, empty_ret) orelse return error.TestUnexpectedResult;
+    try std.testing.expectEqual(@as(i64, 16), reader.store.getCFStmt(reserved).assign_literal.value.i64_literal.value);
 }
 
 test "an empty string root and a record of an empty list and a scalar decode to constructions" {

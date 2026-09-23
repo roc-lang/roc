@@ -11,11 +11,22 @@ red : Color.RGB
 red = Color.RGB.Red
 ~~~
 # EXPECTED
+MOD NOT FOUND - nominal_import_type.md:1:1:1:13
 MOD NOT FOUND - nominal_import_type.md:3:12:3:16
 MOD NOT FOUND - nominal_import_type.md:4:12:4:16
 # PROBLEMS
 ~~~clojure
 (reports
+	(report
+		(severity runtime_error)
+		(title "Mod Not Found")
+		(region (start 1 1) (end 1 13))
+		(headline
+			(text "The mod ")
+			(annotated code "Color")
+			(reflow " was not found in this Roc project."))
+		(document
+			(source-region (file "nominal_import_type.md") (start 1 1) (end 1 13) (annotation error) (line-text "import Color"))))
 	(report
 		(severity runtime_error)
 		(title "Mod Not Found")

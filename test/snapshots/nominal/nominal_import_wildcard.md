@@ -18,9 +18,10 @@ green = Green
 ~~~
 # EXPECTED
 UNEXPECTED STATEMENT - nominal_import_wildcard.md:1:13:1:15
-UNDECLARED TYPE - nominal_import_wildcard.md:3:7:3:12
-UNDECLARED TYPE - nominal_import_wildcard.md:6:8:6:13
-UNDECLARED TYPE - nominal_import_wildcard.md:9:9:9:14
+MOD NOT FOUND - nominal_import_wildcard.md:1:1:1:13
+MOD NOT FOUND - nominal_import_wildcard.md:3:7:3:12
+MOD NOT FOUND - nominal_import_wildcard.md:6:8:6:13
+MOD NOT FOUND - nominal_import_wildcard.md:9:9:9:14
 # PROBLEMS
 ~~~clojure
 (reports
@@ -50,32 +51,48 @@ UNDECLARED TYPE - nominal_import_wildcard.md:9:9:9:14
 			(source-region (file "nominal_import_wildcard.md") (start 1 13) (end 1 15) (annotation error) (line-text "import Color.*"))))
 	(report
 		(severity runtime_error)
-		(title "Undeclared Type")
+		(title "Mod Not Found")
+		(region (start 1 1) (end 1 13))
+		(headline
+			(text "The mod ")
+			(annotated code "Color")
+			(reflow " was not found in this Roc project."))
+		(document
+			(source-region (file "nominal_import_wildcard.md") (start 1 1) (end 1 13) (annotation error) (line-text "import Color.*"))))
+	(report
+		(severity runtime_error)
+		(title "Mod Not Found")
 		(region (start 3 7) (end 3 12))
 		(headline
-			(reflow "The type ")
+			(text "This ")
 			(annotated code "Color")
-			(reflow " is not declared in this scope."))
+			(reflow " type is declared to be in ")
+			(annotated code "Color")
+			(reflow ", which does not exist."))
 		(document
 			(source-region (file "nominal_import_wildcard.md") (start 3 7) (end 3 12) (annotation error) (line-text "red : Color"))))
 	(report
 		(severity runtime_error)
-		(title "Undeclared Type")
+		(title "Mod Not Found")
 		(region (start 6 8) (end 6 13))
 		(headline
-			(reflow "The type ")
+			(text "This ")
 			(annotated code "Color")
-			(reflow " is not declared in this scope."))
+			(reflow " type is declared to be in ")
+			(annotated code "Color")
+			(reflow ", which does not exist."))
 		(document
 			(source-region (file "nominal_import_wildcard.md") (start 6 8) (end 6 13) (annotation error) (line-text "blue : Color"))))
 	(report
 		(severity runtime_error)
-		(title "Undeclared Type")
+		(title "Mod Not Found")
 		(region (start 9 9) (end 9 14))
 		(headline
-			(reflow "The type ")
+			(text "This ")
 			(annotated code "Color")
-			(reflow " is not declared in this scope."))
+			(reflow " type is declared to be in ")
+			(annotated code "Color")
+			(reflow ", which does not exist."))
 		(document
 			(source-region (file "nominal_import_wildcard.md") (start 9 9) (end 9 14) (annotation error) (line-text "green : Color")))))
 ~~~

@@ -63,9 +63,28 @@ pub const ProcIdentity = struct {
         return std.fmt.bytesToHex(self.bytes[0..16].*, .lower);
     }
 
+    /// Bytes that every procedure symbol name begins with.
+    pub const symbol_name_prefix = "roc__proc_";
+
+    /// Length of a procedure symbol name. The identity encoding fixes it: the
+    /// prefix plus the hex of the leading 128 bits.
+    pub const symbol_name_len = symbol_name_prefix.len + 32;
+
+    /// Write this procedure's object symbol into caller-owned storage.
+    ///
+    /// Naming a procedure is on the path that registers every procedure with a
+    /// backend, so it does no formatting work: the length is known, and the
+    /// two pieces are copied into place.
+    pub fn writeSymbolName(self: ProcIdentity, buffer: *[symbol_name_len]u8) []u8 {
+        @memcpy(buffer[0..symbol_name_prefix.len], symbol_name_prefix);
+        buffer[symbol_name_prefix.len..].* = self.symbolHex();
+        return buffer;
+    }
+
     /// The object symbol that names this procedure in every program.
     pub fn symbolName(self: ProcIdentity, allocator: std.mem.Allocator) std.mem.Allocator.Error![]u8 {
-        return std.fmt.allocPrint(allocator, "roc__proc_{s}", .{&self.symbolHex()});
+        const name = try allocator.alloc(u8, symbol_name_len);
+        return self.writeSymbolName(name[0..symbol_name_len]);
     }
 
     /// Identity of a procedure a pass derives from this one: the same role
@@ -98,6 +117,8 @@ pub const ProcIdentity = struct {
 
 /// Identifier of a lowered LIR proc specification.
 pub const LirProcSpecId = enum(u32) {
+    /// The first procedure specification a store holds.
+    first = 0,
     _,
 };
 
@@ -205,6 +226,29 @@ pub const ExpectSite = struct {
 
 pub const CheckedExhaustivenessSiteId = check.CheckedModule.CheckedExhaustivenessSiteId;
 
+/// Dense id of one checked module inside a single lowering's module set.
+///
+/// `check.CheckedModule.ModuleId` is a large structural key, and the
+/// module-local checked ids a post-check IR retains (compile-time roots,
+/// exhaustiveness sites) name nothing without their owner. Monotype lowering
+/// therefore publishes the lowering's checked modules once, as the
+/// program-local `lowering_modules` table carried through to
+/// `Program.Result`, and every row that keeps a module-local checked id
+/// carries this dense id beside it. Consumers resolve an owner by indexing
+/// that table. Row order, source location, and procedure membership are not
+/// owners, and reading one as an owner is wrong as soon as a program contains
+/// more than one module's code.
+///
+/// This domain is separate from a program's source-file table even though
+/// both enumerate the same modules: source-file ordinals are remapped when
+/// LIR images from different programs are packed together, while a lowering
+/// module id is valid only inside its own program and never outlives it.
+pub const LoweringModuleId = enum(u32) {
+    /// The first row of a lowering's module table.
+    first = 0,
+    _,
+};
+
 /// Source control-flow construct observed during compile-time finalization.
 pub const ComptimeSiteKind = enum {
     match,
@@ -215,6 +259,11 @@ pub const ComptimeSiteKind = enum {
 /// Metadata for one compile-time-observed control-flow site.
 pub const ComptimeSite = struct {
     kind: ComptimeSiteKind,
+    /// Checked module whose `checked_site` id and source regions this site
+    /// names. One lowered program contains procedures from several checked
+    /// modules, so the site's owner is neither the program's root module nor
+    /// the module of whichever compile-time root happens to execute it.
+    owner: LoweringModuleId,
     region: base.Region,
     checked_site: ?CheckedExhaustivenessSiteId = null,
     proc: LirProcSpecId,
@@ -1176,12 +1225,62 @@ pub fn erasedCallReuseFieldsMatch(assign: anytype) bool {
     return assign.reuse_closure == (assign.reuse_source != null);
 }
 
+/// What a procedure body contains, recorded by whoever emitted its statements.
+///
+/// Every later pass that rewrites one shape selects its procedures by these
+/// shapes instead of opening every body to look for the shape. A shape flag is a
+/// superset: it may be set for a body the pass then finds nothing to rewrite
+/// in, but a body the pass would rewrite always carries the shape flag. The LIR
+/// store sets the statement-level shapes as statements are appended, the
+/// lowering sets the layout-dependent ones at its call sites, and a pass that
+/// introduces a shape into a body it rewrites sets that shape's flag itself.
+/// Debug builds verify the superset property by also running each pass on
+/// the procedures its shapes excluded.
+pub const ProcShapes = packed struct(u16) {
+    /// A direct call to the procedure itself, in any position.
+    self_call: bool = false,
+    /// A loop: a join reached again by a back edge, whether lowered from a
+    /// source loop or built by a tail-recursion rewrite.
+    loop: bool = false,
+    /// A direct call whose result has an interned layout, which is the only
+    /// kind of layout a by-memory aggregate can have.
+    interned_call_result: bool = false,
+    /// A direct call whose result is a string.
+    str_call: bool = false,
+    /// A local assigned static data or a packed byte literal.
+    static_literal: bool = false,
+    /// A box allocation.
+    box_box: bool = false,
+    /// An arithmetic op from the checked behavior families.
+    checked_arithmetic: bool = false,
+    /// A switch statement.
+    switch_stmt: bool = false,
+    /// A join point with at least one parameter.
+    join_param: bool = false,
+    /// A join point with a parameter of interned or zero-sized layout, the
+    /// only layouts a struct, tag union or unit parameter can have.
+    join_aggregate_param: bool = false,
+    /// A struct construction.
+    struct_build: bool = false,
+    /// A tag construction.
+    tag_build: bool = false,
+    _padding: u4 = 0,
+
+    pub fn merged(self: ProcShapes, other: ProcShapes) ProcShapes {
+        return @bitCast(@as(u16, @bitCast(self)) | @as(u16, @bitCast(other)));
+    }
+};
+
 /// Lowered proc specification rooted either at a statement body or at explicit
 /// hosted-proc metadata.
 pub const LirProcSpec = struct {
     name: Symbol,
     /// Content identity; every symbol emitted for this procedure derives from it.
     identity: ProcIdentity,
+    /// Session-local code-generation provenance, not semantic identity.
+    /// Compare only inside the same LIR producer domain, with matching target
+    /// and emission policy; equal revisions across separate lowers prove nothing.
+    native_code_revision: u64 = 0,
     args: LocalSpan,
     /// Producer-authored provenance for a function normalized from an
     /// iterator pipeline. Dev-only structural fusion consumes this bit; it
@@ -1239,6 +1338,8 @@ pub const LirProcSpec = struct {
     tail_calls: ?TailCalls = null,
     /// Tail-recursion rewrite applied by the TRMC pass, if any.
     tail_transform: TailTransform = .none,
+    /// What the body contains, for pass admission.
+    shapes: ProcShapes = .{},
     /// Explicit native-stack probing requirement for this proc.
     stack_probe: StackProbe = .default,
     /// Final ARC ownership signature persisted for indirect runtime dispatch.

@@ -234,7 +234,7 @@ main! = |_args| {
 										(capture (ident "b")))
 									(e-lambda
 										(args)
-										(e-dispatch-call (method "plus") (constraint-fn-var 355)
+										(e-dispatch-call (method "plus") (constraint-fn-var 365)
 											(receiver
 												(e-lookup-local
 													(p-assign (ident "a"))))
@@ -250,8 +250,8 @@ main! = |_args| {
 (inferred-types
 	(defs
 		(patt (type "Str => {}"))
-		(patt (type "_arg -> [Ok({}), ..]")))
+		(patt (type "_arg -> [Ok({})]")))
 	(expressions
 		(expr (type "Str => {}"))
-		(expr (type "_arg -> [Ok({}), ..]"))))
+		(expr (type "_arg -> [Ok({})]"))))
 ~~~

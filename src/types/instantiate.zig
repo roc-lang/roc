@@ -26,7 +26,32 @@ const Tag = types_mod.Tag;
 const NominalType = types_mod.NominalType;
 const Tuple = types_mod.Tuple;
 const Rank = types_mod.Rank;
+const Polarity = types_mod.Polarity;
 const Ident = base.Ident;
+
+/// Type-argument index of `Builtin.Try`'s error row. The Monotype widening
+/// relation (`lower.zig`'s `try_error_type_arg_index`) opens the same cell, and
+/// `Check.annoApplyIsBuiltinTry`'s caller passes the adapter's reach to the
+/// same index for a `Try` written inline.
+const try_error_type_arg_index: u32 = 1;
+
+/// Where a position sits relative to the result row the Monotype result-row
+/// widening adapter can re-tag (design.md "Result-Row Widening Adapter"). The
+/// checker's annotation walk makes this decision for rows written inline in a
+/// signature; this axis makes the same decision for rows a referenced type
+/// declaration contributes, so the set of positions a use may WIDEN stays equal
+/// to the set lowering can ADAPT no matter how the row was spelled.
+pub const AdapterReachPosition = enum {
+    /// The instantiation root's own row: the position the referencing
+    /// annotation put this declaration in, when that is the signature's direct
+    /// result.
+    result,
+    /// The ERROR argument of a `Try` standing in that direct result.
+    try_row,
+    /// Every other position: inside a `List`, a record field, a tuple, a tag
+    /// payload, a function, or a non-`Try` nominal.
+    nested,
+};
 
 /// The explicit declaration-backed opening operation (issue #9983): make a
 /// fresh copy of `decl`'s backing template with the application's actual
@@ -144,7 +169,6 @@ const Frame = union(enum) {
     nominal: NominalFrame,
     func: FuncFrame,
     record: RecordFrame,
-    record_unbound: RecordUnboundFrame,
     tag_union: TagUnionFrame,
 };
 
@@ -191,6 +215,9 @@ const AliasFrame = struct {
     args_count: u32,
     /// Base of this frame's child results in `Scratch.value_stack`.
     vars_base: u32,
+    /// The adapter reach surrounding this alias. An alias is transparent, so
+    /// its backing keeps the reach; its type arguments are nested positions.
+    saved_reach: AdapterReachPosition,
 };
 
 const TupleFrame = struct {
@@ -206,6 +233,12 @@ const NominalFrame = struct {
     args_start: u32,
     args_count: u32,
     vars_base: u32,
+    /// The adapter reach surrounding this nominal application. A `Try` written
+    /// as the direct result passes it to the ERROR argument; every other
+    /// argument of every nominal is a nested position.
+    saved_reach: AdapterReachPosition,
+    /// Whether this application is the builtin `Try(ok, err)`.
+    is_try: bool,
 };
 
 const FuncFrame = struct {
@@ -213,6 +246,10 @@ const FuncFrame = struct {
     func: Func,
     kind: enum { pure, effectful, unbound },
     vars_base: u32,
+    /// The polarity surrounding this function. Argument positions negate it;
+    /// the return (and effect-dep) positions restore it. Re-asserted before
+    /// every child request so suspension cannot leave a stale value.
+    saved_polarity: Polarity,
 };
 
 /// Source runs are held as whole ranges, never as an unpacked start index:
@@ -229,14 +266,6 @@ const RecordFrame = struct {
     stage: enum { fields, await_ext } = .fields,
 };
 
-const RecordUnboundFrame = struct {
-    common: FillCommon,
-    source_fields: RecordField.SafeMultiList.Range,
-    vars_base: u32,
-    field_idx: u32 = 0,
-    field_axis: enum { type_var, presence_var } = .type_var,
-};
-
 const TagUnionFrame = struct {
     common: FillCommon,
     source_tags: Tag.SafeMultiList.Range,
@@ -248,6 +277,10 @@ const TagUnionFrame = struct {
     tags_base: u32,
     tags_range: Tag.SafeMultiList.Range = undefined,
     stage: enum { tags, await_ext } = .tags,
+    /// The adapter reach surrounding this union. Its EXT is the position a
+    /// polarity marker occupies, so the ext keeps the reach; tag payloads are
+    /// nested positions.
+    saved_reach: AdapterReachPosition,
 };
 
 /// Type to manage instantiation.
@@ -282,6 +315,65 @@ pub const Instantiator = struct {
     /// is not quantified, so each use must see the same node, including a
     /// function node's effect kind and effect dependencies.
     copy_scheme_structure: bool = false,
+    /// Share every leaf (flex, rigid, field presence, error) whatever its
+    /// rank, copying only structure and resolving polarity markers. This is
+    /// the shape of a where-method signature's per-use instantiation: the
+    /// signature's other variables belong to the enclosing scheme (live
+    /// during the body check, generalized at a later requirement re-check)
+    /// and must stay the same variables; only the deferred rows are fresh.
+    share_leaves: bool = false,
+
+    /// The `Ident.Idx` of `types.polarity_var_text` in `idents`, when the
+    /// caller wants polarity-deferred tag union extensions recognized. Rigids
+    /// with this name never reach `rigid_behavior`; they are resolved per
+    /// `polarity_var_behavior`. When null, polarity vars are treated as
+    /// ordinary rigids (only sound for stores that cannot contain them).
+    polarity_var_ident: ?Ident.Idx = null,
+    /// The `Ident.Idx` of the anonymous open extension rigid (`#others`, what
+    /// a written `..` produces in an input position). Exempt from
+    /// `.substitute_rigids`' unknown-rigid assertion: an anonymous extension
+    /// is never a declaration parameter, so it is never in a substitution map
+    /// and copies as a fresh rigid there.
+    anonymous_ext_ident: ?Ident.Idx = null,
+    /// When set, every polarity var this instantiation resolves OPEN (a fresh
+    /// flex ext) is appended here, so the caller can record it for the
+    /// post-body audit of implicitly opened rows (`Check.auditImplicitOpenExts`).
+    /// An entry learns the tags of the union it extends when that union's
+    /// copy is finished (`OpenedMarkerExt.listed_tags`).
+    opened_marker_exts: ?*std.ArrayListUnmanaged(OpenedMarkerExt) = null,
+    /// How to resolve polarity vars (see `PolarityVarBehavior`). `.close`
+    /// reproduces the written (closed) row and is the safe default.
+    polarity_var_behavior: PolarityVarBehavior = .close,
+    /// The polarity of the position currently being instantiated. Starts at
+    /// the polarity of the instantiation root (callers using
+    /// `.resolve_by_polarity` set it) and is negated for function argument
+    /// positions as the walk descends—each func frame saves the
+    /// surrounding polarity and re-asserts the stage-appropriate value
+    /// before every child it requests.
+    current_polarity: Polarity = .pos,
+    /// Where the position currently being instantiated sits relative to the
+    /// row the Monotype result-row widening adapter can re-tag. Starts at the
+    /// reach of the instantiation ROOT (callers using `.defer_open` set it) and
+    /// demotes to `.nested` under every constructor except the two the adapter
+    /// reaches through. Only consulted by `.defer_open`.
+    current_reach: AdapterReachPosition = .nested,
+    /// Identity of the builtin `Try(ok, err)` nominal. When null, no nominal is
+    /// treated as a `Try`, so a `Try` error row reached through a declaration
+    /// reference is a nested position like any other nominal argument.
+    try_nominal: ?TryNominalIdent = null,
+
+    /// How to recognize the builtin `Try(ok, err)` nominal while walking. Both
+    /// spellings are needed for the same reason `builtinNominalDeclForIdentInEnv`
+    /// accepts both: a `Try` written through its module interns the qualified
+    /// name. Builtin origin is required on top of the name, so a user nominal
+    /// that shadows `Try` is not mistaken for it.
+    pub const TryNominalIdent = struct {
+        short: Ident.Idx,
+        qualified: Ident.Idx,
+    };
+
+    /// Re-exported so callers name one enum: `Instantiator.AdapterReach`.
+    pub const AdapterReach = AdapterReachPosition;
 
     /// Expected shape is structural context, not another use of a constrained
     /// value. Its source keeps every dispatch obligation; the shape copy must
@@ -318,10 +410,75 @@ pub const Instantiator = struct {
         substitute_rigids_fresh: *std.AutoHashMapUnmanaged(Ident.Idx, Var),
     };
 
+    /// How to instantiate polarity vars: the marker rigids (named
+    /// `types.polarity_var_text`) that alias declarations store as the ext of
+    /// extensionless tag unions to defer the open-vs-closed decision to the
+    /// use site (see the doc comment on `types.polarity_var_text`).
+    pub const PolarityVarBehavior = enum {
+        /// Resolve every polarity var to a closed (`[]`) extension: the
+        /// written meaning of an extensionless tag union, and the behavior
+        /// for positions with no meaningful polarity (eg nominal declaration
+        /// bodies, numeric suffix targets).
+        close,
+        /// Copy each polarity var as a fresh rigid with the same name, keeping
+        /// the decision deferred. Used when the copy is itself a declaration
+        /// template (eg an orphan scheme copy), where the use-site polarity is
+        /// still unknown.
+        preserve,
+        /// Resolve each polarity var by the polarity of the position it
+        /// occupies: open (a fresh unnamed flex, exactly what an implicitly
+        /// opened output-position union gets) in positive/output positions,
+        /// closed (`[]`) in negative/input positions. The walk starts at
+        /// `current_polarity` and negates through function argument
+        /// positions, so polarity composes correctly through functions
+        /// embedded in alias bodies.
+        resolve_by_polarity,
+        /// Like `resolve_by_polarity` for negative positions (closed), but a
+        /// marker in a positive position that the result-row widening adapter
+        /// could re-tag is copied as a fresh marker: the copy is itself a
+        /// deferred signature whose own uses decide (a where-alias
+        /// declaration's method signature copied into a referencing
+        /// annotation, or an alias body embedded in one).
+        ///
+        /// A marker reached under any other constructor closes. Deferring it
+        /// would reopen, per use, a row Monotype cannot adapt—an alias
+        /// declaration mints a marker for every extensionless tag union at any
+        /// depth, so `Statuses : List([Ok(Str), Err(Str)])` as a where-method
+        /// result would otherwise let a use widen the row inside the `List`.
+        /// The set of positions a use may WIDEN is kept equal to the set
+        /// lowering can ADAPT (design.md "Result-Row Widening Adapter").
+        defer_open,
+    };
+
+    /// A polarity marker this instantiation resolved open: the fresh flex
+    /// ext it became, and the tags the copied union lists next to it. The
+    /// tags are attached when the union's copy is finished, the one point
+    /// where the ext and the union's tags meet; a marker is always a union's
+    /// ext, so `listed_tags` is null only for a copy that never reached one.
+    pub const OpenedMarkerExt = struct {
+        ext: Var,
+        listed_tags: ?Tag.SafeMultiList.Range = null,
+        /// The copied union this marker became the extension of. Unification
+        /// can leave `ext` referenced by nothing once the row is solved, so a
+        /// consumer that needs to find the solved row again has to hold the
+        /// union rather than its extension.
+        union_var: ?Var = null,
+    };
+
     const Self = @This();
 
     fn getIdentText(self: *const Self, idx: Ident.Idx) []const u8 {
         return self.idents.getText(idx);
+    }
+
+    /// Whether this nominal application is the builtin `Try(ok, err)`. Builtin
+    /// origin is required alongside the name, so a user nominal that shadows
+    /// `Try` keeps every one of its type arguments a nested position.
+    fn nominalIsBuiltinTry(self: *const Self, nominal: NominalType) bool {
+        const try_nominal = self.try_nominal orelse return false;
+        if (!nominal.originIsBuiltin()) return false;
+        const name = nominal.ident.ident_idx;
+        return name.eql(try_nominal.short) or name.eql(try_nominal.qualified);
     }
 
     fn scratch(self: *Self) *Scratch {
@@ -406,7 +563,6 @@ pub const Instantiator = struct {
                         try self.visitReachFields(parent, record.fields);
                         try self.visitReachChild(parent, record.ext);
                     },
-                    .record_unbound => |fields| try self.visitReachFields(parent, fields),
                     .tag_union => |tag_union| {
                         var i: u32 = 0;
                         while (i < tag_union.tags.count) : (i += 1) {
@@ -531,7 +687,6 @@ pub const Instantiator = struct {
                     .nominal => |*frame| try self.stepNominal(frame),
                     .func => |*frame| try self.stepFunc(frame),
                     .record => |*frame| try self.stepRecord(frame),
-                    .record_unbound => |*frame| try self.stepRecordUnbound(frame),
                     .tag_union => |*frame| try self.stepTagUnion(frame),
                 };
                 if (finished) {
@@ -562,13 +717,27 @@ pub const Instantiator = struct {
         // explicitly classified as a scheme instead copies the non-generalized
         // structural nodes from which a generalized leaf is reachable, so
         // generalized leaves at arbitrary depth remain reachable while every
-        // monomorphic node and leaf keeps its identity.
+        // monomorphic node and leaf keeps its identity. A polarity marker is
+        // never shared: it stands for "decided by this instantiation" whatever
+        // its rank (a where-method signature is instantiated per body use
+        // before the enclosing scheme generalizes).
+        const is_polarity_marker = self.polarity_var_ident != null and
+            resolved.desc.content == .rigid and
+            resolved.desc.content.rigid.name.eql(self.polarity_var_ident.?);
+        const is_leaf = switch (resolved.desc.content) {
+            .alias, .structure => false,
+            .flex, .rigid, .field_presence, .err => true,
+        };
+        if (!force_root_copy and self.share_leaves and is_leaf and !is_polarity_marker) {
+            try machine.value_stack.append(self.store.gpa, resolved_var);
+            return true;
+        }
         if (!force_root_copy and self.rank_behavior == .respect_rank and resolved.desc.rank != .generalized) {
             const copy_structure = self.copy_scheme_structure and switch (resolved.desc.content) {
                 .alias, .structure => machine.reach_state.get(resolved_var) orelse false,
                 .flex, .rigid, .field_presence, .err => false,
             };
-            if (!copy_structure) {
+            if (!copy_structure and !is_polarity_marker) {
                 try machine.value_stack.append(self.store.gpa, resolved_var);
                 return true;
             }
@@ -585,6 +754,39 @@ pub const Instantiator = struct {
         const empty_tag_union_is_default = resolved.desc.flags.empty_tag_union_is_default;
         switch (resolved.desc.content) {
             .rigid => |rigid| {
+                // Polarity vars (the deferred open-vs-closed tag union
+                // extensions of alias declaration bodies) are resolved before
+                // any rigid behavior applies: they are compiler-internal and
+                // must never be substituted, flexed, or kept rigid by the
+                // caller's rigid policy.
+                if (self.polarity_var_ident) |polarity_ident| {
+                    if (rigid.name.eql(polarity_ident)) {
+                        const opened = self.polarity_var_behavior == .resolve_by_polarity and self.current_polarity == .pos;
+                        const marker_content: Content = switch (self.polarity_var_behavior) {
+                            .close => .{ .structure = .empty_tag_union },
+                            .preserve => .{ .rigid = Rigid.init(rigid.name) },
+                            .resolve_by_polarity => switch (self.current_polarity) {
+                                .pos => .{ .flex = Flex.init() },
+                                .neg => .{ .structure = .empty_tag_union },
+                            },
+                            .defer_open => switch (self.current_polarity) {
+                                .pos => switch (self.current_reach) {
+                                    .result, .try_row => Content{ .rigid = Rigid.init(rigid.name) },
+                                    .nested => Content{ .structure = .empty_tag_union },
+                                },
+                                .neg => .{ .structure = .empty_tag_union },
+                            },
+                        };
+                        const marker_var = try self.store.freshFromContentWithRank(marker_content, self.current_rank);
+                        if (opened) {
+                            if (self.opened_marker_exts) |sink| try sink.append(self.store.gpa, .{ .ext = marker_var });
+                        }
+                        try self.var_map.put(resolved_var, marker_var);
+                        try machine.value_stack.append(self.store.gpa, marker_var);
+                        return true;
+                    }
+                }
+
                 // If this var is rigid, then create a new var depending on the
                 // provided behavior
                 const fresh_type: enum { flex, rigid } = blk: {
@@ -596,6 +798,14 @@ pub const Instantiator = struct {
                             break :blk .flex;
                         },
                         .substitute_rigids => |rigid_subs| {
+                            // An anonymous open extension (`..`, written or
+                            // implicit) is never a declaration parameter, so
+                            // it is never in the substitution map: copy it as
+                            // a fresh rigid, like `.substitute_rigids_fresh`.
+                            if (self.anonymous_ext_ident) |ext_ident| {
+                                if (rigid.name.eql(ext_ident)) break :blk .rigid;
+                            }
+
                             // If this is a var that we're substituting, then we
                             // we just return it.
 
@@ -700,6 +910,7 @@ pub const Instantiator = struct {
                     .args_start = @intFromEnum(arg_span.start),
                     .args_count = arg_span.count,
                     .vars_base = @intCast(machine.value_stack.items.len),
+                    .saved_reach = self.current_reach,
                 } });
                 return false;
             },
@@ -756,6 +967,8 @@ pub const Instantiator = struct {
                             .args_start = @intFromEnum(arg_span.start),
                             .args_count = arg_span.count,
                             .vars_base = @intCast(machine.value_stack.items.len),
+                            .saved_reach = self.current_reach,
+                            .is_try = self.nominalIsBuiltinTry(nominal),
                         } });
                         return false;
                     },
@@ -768,6 +981,7 @@ pub const Instantiator = struct {
                             .func = func,
                             .kind = .pure,
                             .vars_base = @intCast(machine.value_stack.items.len),
+                            .saved_polarity = self.current_polarity,
                         } });
                         return false;
                     },
@@ -780,6 +994,7 @@ pub const Instantiator = struct {
                             .func = func,
                             .kind = .effectful,
                             .vars_base = @intCast(machine.value_stack.items.len),
+                            .saved_polarity = self.current_polarity,
                         } });
                         return false;
                     },
@@ -792,6 +1007,7 @@ pub const Instantiator = struct {
                             .func = func,
                             .kind = .unbound,
                             .vars_base = @intCast(machine.value_stack.items.len),
+                            .saved_polarity = self.current_polarity,
                         } });
                         return false;
                     },
@@ -807,17 +1023,6 @@ pub const Instantiator = struct {
                         } });
                         return false;
                     },
-                    .record_unbound => |fields| {
-                        try machine.frames.append(self.store.gpa, .{ .record_unbound = .{
-                            .common = .{
-                                .fresh_var = fresh_var,
-                                .empty_tag_union_is_default = empty_tag_union_is_default,
-                            },
-                            .source_fields = fields,
-                            .vars_base = @intCast(machine.value_stack.items.len),
-                        } });
-                        return false;
-                    },
                     .tag_union => |tag_union| {
                         try machine.frames.append(self.store.gpa, .{ .tag_union = .{
                             .common = .{
@@ -828,6 +1033,7 @@ pub const Instantiator = struct {
                             .ext = tag_union.ext,
                             .vars_base = @intCast(machine.value_stack.items.len),
                             .tags_base = @intCast(machine.pending_tags.items.len),
+                            .saved_reach = self.current_reach,
                         } });
                         return false;
                     },
@@ -896,6 +1102,7 @@ pub const Instantiator = struct {
                     }
                     const constraint = self.store.static_dispatch_constraints.items.items[frame.cons_start + frame.cons_idx];
                     frame.stage = .await_fn;
+                    self.current_reach = .nested;
                     if (!try self.requestVar(constraint.fn_var, false)) return false;
                 },
                 .await_fn => {
@@ -916,6 +1123,7 @@ pub const Instantiator = struct {
                 .dispatch_part_or_item => {
                     const constraint = self.store.static_dispatch_constraints.items.items[frame.cons_start + frame.cons_idx];
                     const metadata = constraint.interpolation;
+                    self.current_reach = .nested;
                     if (frame.part_idx == metadata.interpolated_parts.len()) {
                         frame.stage = .await_item;
                         if (!try self.requestVar(metadata.item_var, false)) return false;
@@ -964,11 +1172,15 @@ pub const Instantiator = struct {
             const arrived: u32 = @intCast(machine.value_stack.items.len - frame.vars_base);
             if (arrived < frame.args_count) {
                 const arg_var = self.store.vars.items.items[frame.args_start + arrived];
+                self.current_reach = .nested;
                 if (!try self.requestVar(arg_var, false)) return false;
                 continue;
             }
             if (arrived == frame.args_count) {
                 const backing_var = self.store.getAliasBackingVar(frame.alias);
+                // An alias is transparent: its backing occupies the same
+                // position the alias reference does.
+                self.current_reach = frame.saved_reach;
                 if (!try self.requestVar(backing_var, false)) return false;
                 continue;
             }
@@ -995,6 +1207,7 @@ pub const Instantiator = struct {
             const arrived: u32 = @intCast(machine.value_stack.items.len - frame.vars_base);
             if (arrived < frame.elems_count) {
                 const elem_var = self.store.vars.items.items[frame.elems_start + arrived];
+                self.current_reach = .nested;
                 if (!try self.requestVar(elem_var, false)) return false;
                 continue;
             }
@@ -1013,6 +1226,25 @@ pub const Instantiator = struct {
             const arrived: u32 = @intCast(machine.value_stack.items.len - frame.vars_base);
             if (arrived < frame.args_count) {
                 const arg_var = self.store.vars.items.items[frame.args_start + arrived];
+                // A `Try` written as the direct result passes the adapter's
+                // reach to its ERROR row. The ok row is deliberately NOT
+                // reachable: the adapter asserts the ok type is unchanged.
+                const try_error_row_reachable = frame.is_try and
+                    arrived == try_error_type_arg_index and
+                    switch (frame.saved_reach) {
+                        // The signature's direct result: the adapter re-tags
+                        // this `Try`'s error row.
+                        .result => true,
+                        // A `Try` standing IN another `Try`'s error row. The
+                        // relation re-tags that row and relates everything
+                        // below it EXACTLY (`resultRowWideningOrNull`,
+                        // src/postcheck/monotype/lower.zig:1806-1812), so a
+                        // second descent would open a row lowering will not
+                        // adapt.
+                        .try_row => false,
+                        .nested => false,
+                    };
+                self.current_reach = if (try_error_row_reachable) .try_row else .nested;
                 if (!try self.requestVar(arg_var, false)) return false;
                 continue;
             }
@@ -1038,15 +1270,26 @@ pub const Instantiator = struct {
             const arrived: u32 = @intCast(machine.value_stack.items.len - frame.vars_base);
             if (arrived < args_count) {
                 const arg_var = self.store.vars.items.items[@intFromEnum(frame.func.args.start) + arrived];
+                // Argument positions negate the surrounding polarity. No
+                // position inside a function is adapter-reachable: the adapter
+                // re-tags the result it is generated for, never a row inside a
+                // function that result contains.
+                self.current_polarity = frame.saved_polarity.flip();
+                self.current_reach = .nested;
                 if (!try self.requestVar(arg_var, false)) return false;
                 continue;
             }
             if (arrived == args_count) {
+                // The return position preserves the surrounding polarity.
+                self.current_polarity = frame.saved_polarity;
+                self.current_reach = .nested;
                 if (!try self.requestVar(frame.func.ret, false)) return false;
                 continue;
             }
             if (arrived < args_count + 1 + deps_count) {
                 const dep_var = self.store.vars.items.items[@intFromEnum(frame.func.effect_deps.start) + (arrived - args_count - 1)];
+                self.current_polarity = frame.saved_polarity;
+                self.current_reach = .nested;
                 if (!try self.requestVar(dep_var, false)) return false;
                 continue;
             }
@@ -1097,12 +1340,14 @@ pub const Instantiator = struct {
                                 break :blk field.presence.presenceVar().?;
                             },
                         };
+                        self.current_reach = .nested;
                         if (!try self.requestVar(child_var, false)) return false;
                         continue;
                     }
                     frame.fields_range = try self.appendFreshRecordFields(frame.source_fields, frame.vars_base);
                     machine.value_stack.items.len = frame.vars_base;
                     frame.stage = .await_ext;
+                    self.current_reach = .nested;
                     if (!try self.requestVar(frame.ext, false)) return false;
                 },
                 .await_ext => {
@@ -1114,38 +1359,6 @@ pub const Instantiator = struct {
                     return true;
                 },
             }
-        }
-    }
-
-    fn stepRecordUnbound(self: *Self, frame: *RecordUnboundFrame) std.mem.Allocator.Error!bool {
-        const machine = self.scratch();
-        while (true) {
-            if (frame.field_idx < frame.source_fields.count) {
-                // Indexing through the run's start only happens when the
-                // record has fields; start may be undefined when count is 0.
-                const field = self.store.record_fields.get(@enumFromInt(@intFromEnum(frame.source_fields.start) + frame.field_idx));
-                const child_var = switch (frame.field_axis) {
-                    .type_var => blk: {
-                        if (field.presence.presenceVar() != null) {
-                            frame.field_axis = .presence_var;
-                        } else {
-                            frame.field_idx += 1;
-                        }
-                        break :blk field.presence.typeVar();
-                    },
-                    .presence_var => blk: {
-                        frame.field_idx += 1;
-                        frame.field_axis = .type_var;
-                        break :blk field.presence.presenceVar().?;
-                    },
-                };
-                if (!try self.requestVar(child_var, false)) return false;
-                continue;
-            }
-            const fresh_fields_range = try self.appendFreshRecordFields(frame.source_fields, frame.vars_base);
-            machine.value_stack.items.len = frame.vars_base;
-            try self.finishFrame(frame.common, Content{ .structure = FlatType{ .record_unbound = fresh_fields_range } });
-            return true;
         }
     }
 
@@ -1196,6 +1409,9 @@ pub const Instantiator = struct {
                         frame.tags_range = try self.store.appendTags(machine.pending_tags.items[frame.tags_base..]);
                         machine.pending_tags.items.len = frame.tags_base;
                         frame.stage = .await_ext;
+                        // The ext is the position a polarity marker occupies,
+                        // so it keeps this union's own reach.
+                        self.current_reach = frame.saved_reach;
                         if (!try self.requestVar(frame.ext, false)) return false;
                         continue;
                     }
@@ -1207,6 +1423,7 @@ pub const Instantiator = struct {
                         // Indexing through tag.args.start only happens when the
                         // tag has payloads; start may be undefined when count is 0.
                         const arg_var = self.store.vars.items.items[@intFromEnum(tag.args.start) + arrived];
+                        self.current_reach = .nested;
                         if (!try self.requestVar(arg_var, false)) return false;
                         continue;
                     }
@@ -1222,6 +1439,20 @@ pub const Instantiator = struct {
                 },
                 .await_ext => {
                     const fresh_ext = machine.value_stack.pop().?;
+                    // A marker resolved open is this union's ext: hand the
+                    // post-body audit the tags it sits next to, so its report
+                    // can suggest a listed tag for an unlisted near-miss, and
+                    // the union itself, which is the only handle on this row
+                    // that survives solving.
+                    if (self.opened_marker_exts) |sink| {
+                        for (sink.items) |*opened| {
+                            if (opened.ext == fresh_ext and opened.listed_tags == null) {
+                                opened.listed_tags = frame.tags_range;
+                                opened.union_var = frame.common.fresh_var;
+                                break;
+                            }
+                        }
+                    }
                     try self.finishFrame(frame.common, Content{ .structure = FlatType{ .tag_union = TagUnion{
                         .tags = frame.tags_range,
                         .ext = fresh_ext,

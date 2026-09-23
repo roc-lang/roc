@@ -788,15 +788,20 @@ pub const Store = struct {
     /// or add a member (and the design.md declaration it cites) in the same
     /// change. "It makes a test pass" is not a rule.
     pub const RedirectRule = enum {
-        /// (i) Diagnostic recovery: the target var belongs to an expression
-        /// whose error has already been reported, and the redirect only lets
-        /// checking continue past it.
-        diagnostic_recovery_reported_error,
         /// (ii) design.md "Hosted Try Question Widening": `?` on a direct call
         /// of a hosted function widens the condition's closed error row to the
         /// enclosing annotated return's error row when every visible error is
         /// included, keeping the hosted callee's declared closed row intact.
         hosted_try_question_widening,
+        /// (ii) design.md "Polarity" / Rewrite Inventory
+        /// `closeTagRowsForDerivation`: a polarity marker rigid in tag-ext
+        /// position (the alias-declaration-body deferral, which stands for
+        /// exactly "flex or `[]`, per use site") reaches a derivation through
+        /// a directly-used local alias declaration, where no instantiation
+        /// ever resolves it. The derivation determines the row exactly, so
+        /// the marker closes: it redirects to the empty tag union, the same
+        /// outcome instantiation's `.close` behavior produces.
+        derivation_marker_ext_closure,
     };
 
     /// Set a type variable to redirect to the provided variables.
@@ -1441,7 +1446,6 @@ pub const Store = struct {
                 .structure => |flat| return switch (flat) {
                     .fn_pure, .fn_effectful, .fn_unbound => true,
                     .record,
-                    .record_unbound,
                     .tuple,
                     .nominal_type,
                     .empty_record,
@@ -2097,7 +2101,7 @@ test "declared redirects preserve destination checked identity and structural ba
     try store.union_(a, b, .{ .content = .err, .rank = Rank.outermost });
 
     const destination = try store.freshFromContent(.{ .structure = .empty_record });
-    try store.dangerousSetVarRedirect(.diagnostic_recovery_reported_error, b, destination);
+    try store.dangerousSetVarRedirect(.hosted_try_question_widening, b, destination);
 
     const storage = store.resolveStorageRoot(a);
     try std.testing.expectEqual(@as(u8, 1), store.getUnionRank(storage.storage_var));

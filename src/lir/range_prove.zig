@@ -88,7 +88,9 @@ const query_visit_cap: usize = 64;
 
 /// Prove and rewrite qualifying checks in every proc.
 pub fn run(store: *LirStore, layouts: *const layout_mod.Store) ResourceError!void {
-    var pass = Pass.init(store, layouts, store.allocator);
+    var analysis = BodyClone.AnalysisScratch.init(store.allocator);
+    defer analysis.deinit();
+    var pass = Pass.init(store, layouts, store.allocator, &analysis);
     defer pass.deinit();
 
     const proc_count = store.procSpecCount();
@@ -100,7 +102,14 @@ pub fn run(store: *LirStore, layouts: *const layout_mod.Store) ResourceError!voi
 
 /// Prove one procedure with task-local scratch; rewritten LIR stays in the store.
 pub fn runProc(store: *LirStore, layouts: *const layout_mod.Store, proc_id: LIR.LirProcSpecId, scratch_allocator: Allocator) ResourceError!void {
-    var pass = Pass.init(store, layouts, scratch_allocator);
+    var analysis = BodyClone.AnalysisScratch.init(scratch_allocator);
+    defer analysis.deinit();
+    try runProcWithScratch(store, layouts, proc_id, scratch_allocator, &analysis);
+}
+
+/// Retain counting and traversal capacity across procedures and proof rounds.
+pub fn runProcWithScratch(store: *LirStore, layouts: *const layout_mod.Store, proc_id: LIR.LirProcSpecId, scratch_allocator: Allocator, analysis: *BodyClone.AnalysisScratch) ResourceError!void {
+    var pass = Pass.init(store, layouts, scratch_allocator, analysis);
     defer pass.deinit();
     try pass.transformProc(proc_id);
 }
@@ -523,8 +532,9 @@ const Pass = struct {
     proof_facts: std.ArrayList(Fact),
     last_claim: ?ProofClaim,
     read_counts: ?BodyClone.ReadCounts,
+    analysis: *BodyClone.AnalysisScratch,
 
-    fn init(store: *LirStore, layouts: *const layout_mod.Store, allocator: Allocator) Pass {
+    fn init(store: *LirStore, layouts: *const layout_mod.Store, allocator: Allocator, analysis: *BodyClone.AnalysisScratch) Pass {
         return .{
             .store = store,
             .layouts = layouts,
@@ -571,6 +581,7 @@ const Pass = struct {
             .proof_facts = .empty,
             .last_claim = null,
             .read_counts = null,
+            .analysis = analysis,
         };
     }
 
@@ -962,7 +973,7 @@ const Pass = struct {
     fn prescanProc(self: *Pass, proc: LIR.LirProcSpec) ResourceError!void {
         if (self.read_counts) |*counts| counts.deinit();
         self.read_counts = null;
-        self.read_counts = if (proc.body) |body| try BodyClone.countReachableReadsWithAllocator(self.store, body, self.allocator) else null;
+        self.read_counts = if (proc.body) |body| try BodyClone.countReachableReadsWithScratch(self.store, body, self.analysis) else null;
         const args = self.store.getLocalSpan(proc.args);
         for (0..GuardedList.borrowLen(args)) |i| {
             try self.bumpAssign(GuardedList.at(args, i));
@@ -3196,6 +3207,7 @@ const Pass = struct {
             .num_negate_checked,
             .num_abs_checked,
             .num_pow,
+            .num_atan2,
             .num_sqrt,
             .num_sin,
             .num_cos,

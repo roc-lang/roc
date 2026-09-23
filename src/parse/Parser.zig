@@ -790,17 +790,34 @@ fn firstQualifierOrFinal(store: *const NodeStore, qualifiers: AST.Token.Span, fi
     return if (qualifier_tokens.len > 0) @intCast(qualifier_tokens[0]) else final_token;
 }
 
-fn typeIdentFromDeprecatedSuffix(self: *Parser, suffix: NumericLiteral.DeprecatedSuffix) std.mem.Allocator.Error!?base.Ident.Idx {
+fn typeSuffixFromDeprecatedSuffix(self: *Parser, suffix: NumericLiteral.DeprecatedSuffix) std.mem.Allocator.Error!?AST.LiteralTypeSuffix {
     const type_name = suffix.newTypeName() orelse return null;
-    return try self.tok_buf.env.insertIdent(self.gpa, base.Ident.for_text(type_name));
+    return .{ .deprecated_builtin = try self.tok_buf.env.insertIdent(self.gpa, base.Ident.for_text(type_name)) };
 }
 
-inline fn consumeSingleQuoteTypeSuffix(self: *Parser) ?base.Ident.Idx {
-    if (self.peek() != .NoSpaceDotUpperIdent) return null;
-
-    const type_token = self.pos;
+/// Parses the type suffix following a literal: its first `.Upper` segment,
+/// which the caller has already checked for, and every adjacent `.Upper`
+/// segment after it, as in `0x05080a.Gui.Color`.
+fn parseLiteralTypeSuffix(self: *Parser) std.mem.Allocator.Error!AST.LiteralTypeSuffix {
+    const scratch_top = self.store.scratchTokenTop();
+    var final_token = self.pos;
     self.advance();
-    return self.tok_buf.resolveIdentifier(type_token) orelse unreachable;
+
+    while (self.peek() == .NoSpaceDotUpperIdent) {
+        try self.store.addScratchToken(final_token);
+        final_token = self.pos;
+        self.advance();
+    }
+
+    return .{ .path = .{
+        .qualifiers = try self.store.tokenSpanFrom(scratch_top),
+        .final_token = final_token,
+    } };
+}
+
+fn parseOptionalLiteralTypeSuffix(self: *Parser) std.mem.Allocator.Error!?AST.LiteralTypeSuffix {
+    if (self.peek() != .NoSpaceDotUpperIdent) return null;
+    return try self.parseLiteralTypeSuffix();
 }
 
 fn pushDeprecatedNumberSuffixDiagnostic(self: *Parser, suffix: NumericLiteral.DeprecatedSuffix, region: AST.TokenizedRegion) std.mem.Allocator.Error!void {
@@ -3403,31 +3420,26 @@ fn runExprStatementKernel(
                         continue :expr_kernel .suffix;
                     }
 
-                    const expr = if (try self.typeIdentFromDeprecatedSuffix(deprecated.deprecated_suffix)) |type_ident|
+                    const expr = if (try self.typeSuffixFromDeprecatedSuffix(deprecated.deprecated_suffix)) |type_suffix|
                         try self.store.addExpr(.{ .typed_int = .{
                             .token = start,
-                            .type_ident = type_ident,
+                            .type_suffix = type_suffix,
                             .literal = literal,
                             .region = deprecated_region,
                         } })
-                    else if (self.peek() == .NoSpaceDotUpperIdent) blk: {
-                        const type_token = self.pos;
-                        self.advance();
-                        const type_ident = self.tok_buf.resolveIdentifier(type_token) orelse {
-                            const malformed = try self.pushMalformed(AST.Expr.Idx, .expr_unexpected_token, type_token);
-                            break :blk malformed;
-                        };
-                        break :blk try self.store.addExpr(.{ .typed_int = .{
+                    else if (try self.parseOptionalLiteralTypeSuffix()) |type_suffix|
+                        try self.store.addExpr(.{ .typed_int = .{
                             .token = start,
-                            .type_ident = type_ident,
+                            .type_suffix = type_suffix,
                             .literal = literal,
                             .region = .{ .start = start, .end = self.pos },
+                        } })
+                    else
+                        try self.store.addExpr(.{ .int = .{
+                            .token = start,
+                            .literal = literal,
+                            .region = deprecated_region,
                         } });
-                    } else try self.store.addExpr(.{ .int = .{
-                        .token = start,
-                        .literal = literal,
-                        .region = deprecated_region,
-                    } });
                     expr_finish_state = .{ .start = start, .min_bp = expr_state.min_bp, .expr = expr };
                     continue :expr_kernel .suffix;
                 }
@@ -3439,31 +3451,26 @@ fn runExprStatementKernel(
                     const deprecated_region = AST.TokenizedRegion{ .start = start, .end = self.pos };
                     try self.pushDeprecatedNumberSuffixDiagnostic(deprecated.deprecated_suffix, deprecated_region);
 
-                    const expr = if (try self.typeIdentFromDeprecatedSuffix(deprecated.deprecated_suffix)) |type_ident|
+                    const expr = if (try self.typeSuffixFromDeprecatedSuffix(deprecated.deprecated_suffix)) |type_suffix|
                         try self.store.addExpr(.{ .typed_frac = .{
                             .token = start,
-                            .type_ident = type_ident,
+                            .type_suffix = type_suffix,
                             .literal = literal,
                             .region = deprecated_region,
                         } })
-                    else if (self.peek() == .NoSpaceDotUpperIdent) blk: {
-                        const type_token = self.pos;
-                        self.advance();
-                        const type_ident = self.tok_buf.resolveIdentifier(type_token) orelse {
-                            const malformed = try self.pushMalformed(AST.Expr.Idx, .expr_unexpected_token, type_token);
-                            break :blk malformed;
-                        };
-                        break :blk try self.store.addExpr(.{ .typed_frac = .{
+                    else if (try self.parseOptionalLiteralTypeSuffix()) |type_suffix|
+                        try self.store.addExpr(.{ .typed_frac = .{
                             .token = start,
-                            .type_ident = type_ident,
+                            .type_suffix = type_suffix,
                             .literal = literal,
                             .region = .{ .start = start, .end = self.pos },
+                        } })
+                    else
+                        try self.store.addExpr(.{ .frac = .{
+                            .token = start,
+                            .literal = literal,
+                            .region = deprecated_region,
                         } });
-                    } else try self.store.addExpr(.{ .frac = .{
-                        .token = start,
-                        .literal = literal,
-                        .region = deprecated_region,
-                    } });
                     expr_finish_state = .{ .start = start, .min_bp = expr_state.min_bp, .expr = expr };
                     continue :expr_kernel .suffix;
                 }
@@ -3482,10 +3489,10 @@ fn runExprStatementKernel(
                 if (tok == .SingleQuote) {
                     const start = self.pos;
                     self.advance();
-                    const type_ident = self.consumeSingleQuoteTypeSuffix();
+                    const type_suffix = try self.parseOptionalLiteralTypeSuffix();
                     const expr = try self.store.addExpr(.{ .single_quote = .{
                         .token = start,
-                        .type_ident = type_ident,
+                        .type_suffix = type_suffix,
                         .region = .{ .start = start, .end = self.pos },
                     } });
                     expr_finish_state = .{ .start = start, .min_bp = expr_state.min_bp, .expr = expr };
@@ -4136,8 +4143,13 @@ fn runExprStatementKernel(
                         open_syntax.popExprMarker(.expr_collection_item);
                         last_expr = null;
                         try self.store.addScratchExpr(completed);
-                        if (self.peek() == .Comma) {
+                        const after_item = self.peek();
+                        if (after_item == .Comma) {
                             self.advance();
+                        } else if (after_item != .CloseRound and after_item != .CloseSquare and after_item != .EndOfFile) {
+                            // Another item follows without a separating comma. Closing
+                            // tokens and end of file are handled by `.collection_next`.
+                            try self.pushDiagnostic(expr_collections.active().close_error, .{ .start = self.pos, .end = self.pos + 1 });
                         }
                         continue :expr_kernel .collection_next;
                     },
@@ -4751,23 +4763,19 @@ fn runExprStatementKernel(
                 }
                 self.advance();
                 const parts = try self.store.exprSpanFrom(expr_string_state.scratch_top);
-                const expr = if (self.peek() == .NoSpaceDotUpperIdent) blk: {
-                    const type_token = self.pos;
-                    self.advance();
-                    const type_ident = self.tok_buf.resolveIdentifier(type_token) orelse {
-                        break :blk try self.pushMalformed(AST.Expr.Idx, .expr_unexpected_token, type_token);
-                    };
-                    break :blk try self.store.addExpr(.{ .typed_string = .{
+                const expr = if (try self.parseOptionalLiteralTypeSuffix()) |type_suffix|
+                    try self.store.addExpr(.{ .typed_string = .{
                         .token = expr_string_state.start,
-                        .type_ident = type_ident,
+                        .type_suffix = type_suffix,
+                        .parts = parts,
+                        .region = .{ .start = expr_string_state.start, .end = self.pos },
+                    } })
+                else
+                    try self.store.addExpr(.{ .string = .{
+                        .token = expr_string_state.start,
                         .parts = parts,
                         .region = .{ .start = expr_string_state.start, .end = self.pos },
                     } });
-                } else try self.store.addExpr(.{ .string = .{
-                    .token = expr_string_state.start,
-                    .parts = parts,
-                    .region = .{ .start = expr_string_state.start, .end = self.pos },
-                } });
                 if (expr_string_state.min_bp) |bp| {
                     expr_finish_state = .{ .start = expr_string_state.start, .min_bp = bp, .expr = expr };
                     continue :expr_kernel .suffix;
@@ -4818,14 +4826,10 @@ fn runExprStatementKernel(
                 }
                 const parts = try self.store.exprSpanFrom(expr_string_state.scratch_top);
                 const expr = if (self.peek() == .DotUpperIdent or self.peek() == .NoSpaceDotUpperIdent) blk: {
-                    const type_token = self.pos;
-                    self.advance();
-                    const type_ident = self.tok_buf.resolveIdentifier(type_token) orelse {
-                        break :blk try self.pushMalformed(AST.Expr.Idx, .expr_unexpected_token, type_token);
-                    };
+                    const type_suffix = try self.parseLiteralTypeSuffix();
                     break :blk try self.store.addExpr(.{ .typed_multiline_string = .{
                         .token = expr_string_state.start,
-                        .type_ident = type_ident,
+                        .type_suffix = type_suffix,
                         .parts = parts,
                         .region = .{ .start = expr_string_state.start, .end = self.pos },
                     } });
@@ -6410,24 +6414,18 @@ fn runExprStatementKernel(
                     const literal = try self.store.addNumericLiteral(self.tokenText(start), .frac);
                     const deprecated_region = AST.TokenizedRegion{ .start = start, .end = self.pos };
                     try self.pushDeprecatedNumberSuffixDiagnostic(deprecated.deprecated_suffix, deprecated_region);
-                    if (try self.typeIdentFromDeprecatedSuffix(deprecated.deprecated_suffix)) |type_ident| {
+                    if (try self.typeSuffixFromDeprecatedSuffix(deprecated.deprecated_suffix)) |type_suffix| {
                         last_pattern = try self.store.addPattern(.{ .typed_frac = .{
                             .region = deprecated_region,
                             .number_tok = start,
-                            .type_ident = type_ident,
+                            .type_suffix = type_suffix,
                             .literal = literal,
                         } });
-                    } else if (self.peek() == .NoSpaceDotUpperIdent) {
-                        const type_token = self.pos;
-                        self.advance();
-                        const type_ident = self.tok_buf.resolveIdentifier(type_token) orelse {
-                            last_pattern = try self.pushMalformed(AST.Pattern.Idx, .pattern_unexpected_token, type_token);
-                            continue :expr_kernel .pattern_complete;
-                        };
+                    } else if (try self.parseOptionalLiteralTypeSuffix()) |type_suffix| {
                         last_pattern = try self.store.addPattern(.{ .typed_frac = .{
                             .region = .{ .start = start, .end = self.pos },
                             .number_tok = start,
-                            .type_ident = type_ident,
+                            .type_suffix = type_suffix,
                             .literal = literal,
                         } });
                     } else {
@@ -6446,10 +6444,10 @@ fn runExprStatementKernel(
                 if (tok == .SingleQuote) {
                     const start = self.pos;
                     self.advance();
-                    const type_ident = self.consumeSingleQuoteTypeSuffix();
+                    const type_suffix = try self.parseOptionalLiteralTypeSuffix();
                     last_pattern = try self.store.addPattern(.{ .single_quote = .{
                         .token = start,
-                        .type_ident = type_ident,
+                        .type_suffix = type_suffix,
                         .region = .{ .start = start, .end = self.pos },
                     } });
                     continue :expr_kernel .pattern_complete;
@@ -6461,24 +6459,18 @@ fn runExprStatementKernel(
                     const literal = try self.store.addNumericLiteral(self.tokenText(start), .int);
                     const deprecated_region = AST.TokenizedRegion{ .start = start, .end = self.pos };
                     try self.pushDeprecatedNumberSuffixDiagnostic(deprecated.deprecated_suffix, deprecated_region);
-                    if (try self.typeIdentFromDeprecatedSuffix(deprecated.deprecated_suffix)) |type_ident| {
+                    if (try self.typeSuffixFromDeprecatedSuffix(deprecated.deprecated_suffix)) |type_suffix| {
                         last_pattern = try self.store.addPattern(.{ .typed_int = .{
                             .region = deprecated_region,
                             .number_tok = start,
-                            .type_ident = type_ident,
+                            .type_suffix = type_suffix,
                             .literal = literal,
                         } });
-                    } else if (self.peek() == .NoSpaceDotUpperIdent) {
-                        const type_token = self.pos;
-                        self.advance();
-                        const type_ident = self.tok_buf.resolveIdentifier(type_token) orelse {
-                            last_pattern = try self.pushMalformed(AST.Pattern.Idx, .pattern_unexpected_token, type_token);
-                            continue :expr_kernel .pattern_complete;
-                        };
+                    } else if (try self.parseOptionalLiteralTypeSuffix()) |type_suffix| {
                         last_pattern = try self.store.addPattern(.{ .typed_int = .{
                             .region = .{ .start = start, .end = self.pos },
                             .number_tok = start,
-                            .type_ident = type_ident,
+                            .type_suffix = type_suffix,
                             .literal = literal,
                         } });
                     } else {

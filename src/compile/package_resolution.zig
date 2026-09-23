@@ -74,11 +74,64 @@ pub const Config = struct {
     /// Maximum combined content size attributable to a direct platform
     /// dependency of the root, in bytes. Null means unlimited.
     max_platform_transitive_expanded_bytes: ?u64 = default_max_platform_transitive_expanded_bytes,
+    /// Invocation-scoped `--replace-dep OLD NEW` requests, exactly as given
+    /// on the command line. The resolver validates and canonicalizes them.
+    replace_deps: ReplaceDeps = .{},
 
     pub const default_max_package_expanded_bytes: u64 = 10 * 1024 * 1024;
     pub const default_max_transitive_expanded_bytes: u64 = 100 * 1024 * 1024;
     pub const default_max_platform_transitive_expanded_bytes: u64 = 512 * 1024 * 1024;
 };
+
+/// One `--replace-dep OLD NEW` request, as written on the command line.
+pub const ReplaceDepArg = struct {
+    old: []const u8,
+    new: []const u8,
+};
+
+/// A bounded, by-value list of replacement requests, so a `Config` can be
+/// copied freely without owning an allocation.
+pub const ReplaceDeps = struct {
+    items: [max]ReplaceDepArg = undefined,
+    len: usize = 0,
+
+    pub const max: usize = 32;
+
+    pub fn append(self: *ReplaceDeps, arg: ReplaceDepArg) error{TooManyReplacements}!void {
+        if (self.len == max) return error.TooManyReplacements;
+        self.items[self.len] = arg;
+        self.len += 1;
+    }
+
+    pub fn slice(self: *const ReplaceDeps) []const ReplaceDepArg {
+        return self.items[0..self.len];
+    }
+};
+
+/// How a `--replace-dep` argument names a source.
+pub const ReplaceDepSource = enum {
+    /// A complete package URL.
+    url,
+    /// An explicit relative or absolute path to a root `.roc` file.
+    local_path,
+    /// The reserved `roc` compiler dependency, which is never replaceable.
+    compiler,
+    /// Anything else, such as a dependency alias or a directory.
+    invalid,
+};
+
+/// Classify a `--replace-dep` argument from its text alone. Aliases are never
+/// accepted: a local source must be spelled as an explicit path to a root
+/// `.roc` file, so `json` and `json/` are both invalid.
+pub fn classifyReplaceDepSource(arg: []const u8) ReplaceDepSource {
+    if (std.mem.eql(u8, arg, "roc")) return .compiler;
+    if (specIsUrlLike(arg)) return .url;
+    if (!std.mem.endsWith(u8, arg, ".roc")) return .invalid;
+    if (std.fs.path.isAbsolute(arg)) return .local_path;
+    if (std.mem.startsWith(u8, arg, "./") or std.mem.startsWith(u8, arg, "../")) return .local_path;
+    if (std.mem.startsWith(u8, arg, ".\\") or std.mem.startsWith(u8, arg, "..\\")) return .local_path;
+    return .invalid;
+}
 
 /// The kind of module header a package's root file has.
 pub const HeaderKind = enum {
@@ -151,7 +204,15 @@ pub const Fetcher = struct {
     loadLocalFn: *const fn (ctx: ?*anyopaque, allocator: Allocator, root_file_abs: []const u8) FetchError!FetchedPackage,
     /// Materialize and scan a compiler-owned platform.
     loadCompilerOwnedPlatformFn: *const fn (ctx: ?*anyopaque, allocator: Allocator, platform: CompilerOwnedPlatform) FetchError!FetchedPackage,
+    /// Resolve a local root-file path (relative paths are relative to the
+    /// invocation's working directory) to its canonical absolute path,
+    /// following symlinks. Only consulted when dependency replacements are
+    /// requested. Null means paths are only resolved lexically.
+    canonicalizeFn: ?*const fn (ctx: ?*anyopaque, allocator: Allocator, path: []const u8) CanonicalizeError![]const u8 = null,
 };
+
+/// Errors canonicalizing a local root-file path.
+pub const CanonicalizeError = error{ OutOfMemory, CannotCanonicalize };
 
 /// One rendered resolution problem. Messages are owned by the resolver and
 /// live until the resolver is deinitialized.
@@ -190,6 +251,14 @@ pub const Resolved = struct {
         /// when it differs from what solving could pick. Compare with the
         /// target package's resolved version to detect bumps.
         declared_version: ?Version = null,
+        /// The source exactly as the declaring header spells it. Relative
+        /// paths are relative to the declaring package.
+        declared_spec: []const u8 = "",
+        /// Present iff a `--replace-dep` flag redirected this declaration:
+        /// the replacement source (a complete URL or a canonical absolute
+        /// root-file path). Downstream stages read replacement decisions
+        /// from here rather than reconstructing them from aliases or paths.
+        replaced_by: ?[]const u8 = null,
     };
 
     pub const Package = struct {
@@ -296,6 +365,32 @@ pub const Sidecar = struct {
     pub const current_format: u32 = 3;
 };
 
+/// One validated `--replace-dep` request.
+const Replacement = struct {
+    /// `OLD` and `NEW` as written on the command line, for diagnostics.
+    old_arg: []const u8,
+    new_arg: []const u8,
+    /// The exact source this replaces: a complete URL, or a canonical
+    /// absolute root-file path.
+    old_key: []const u8,
+    /// The exact source to load instead, in the same form.
+    new_spec: []const u8,
+};
+
+/// The source a declaration actually loads, after replacement.
+const EffectiveSource = union(enum) {
+    /// The source to load: the declaration itself, or the replacement's
+    /// `new_spec` when a flag redirected it.
+    source: struct {
+        spec: []const u8,
+        replacement: ?usize,
+    },
+    /// A local declaration whose root file has no canonical path, so it has
+    /// no identity to match against replacements. Holds the lexical absolute
+    /// path for the diagnostic.
+    unresolvable_local: []const u8,
+};
+
 const GroupChoice = struct {
     version: Version,
     url: []const u8,
@@ -316,6 +411,9 @@ const Edge = struct {
     spec: []const u8,
     is_platform: bool,
     target: Target,
+    /// Index into `Resolver.replacements` when a flag redirected this edge.
+    /// `spec` stays the declared source; `target` is the effective one.
+    replacement: ?usize = null,
 
     const Target = union(enum) {
         url: UrlTarget,
@@ -330,6 +428,7 @@ const Edge = struct {
         insecure_url,
         reserved_version,
         ambiguous_version,
+        unresolvable_local,
     };
 };
 
@@ -389,6 +488,11 @@ pub const Resolver = struct {
     seen_group_locals: std.StringHashMapUnmanaged([]const u8),
 
     diagnostics: std.ArrayListUnmanaged(Diagnostic),
+
+    /// Validated `--replace-dep` requests, and an index over their exact
+    /// `OLD` source keys. Both are empty unless the config asks for any.
+    replacements: []Replacement = &.{},
+    replacement_index: std.StringHashMapUnmanaged(usize) = .{},
 
     /// The bundle URL the root itself came from, when the build was launched
     /// from a URL or installed source rather than an ordinary local path. The
@@ -463,6 +567,9 @@ pub const Resolver = struct {
         root_path: []const u8,
         root_node: FetchedPackage,
     ) error{ OutOfMemory, ResolutionFailed }!Resolved {
+        try self.prepareReplacements();
+        if (self.diagnostics.items.len > 0) return error.ResolutionFailed;
+
         try self.local_nodes.put(self.arena(), root_path, root_node);
 
         var chosen: std.StringHashMapUnmanaged(GroupChoice) = .{};
@@ -619,8 +726,26 @@ pub const Resolver = struct {
                             try result.missing_compiler_owned.append(self.arena(), platform);
                         }
                     }
-                } else if (specIsUrlLike(dep.spec)) {
-                    if (!base.url.isSafeUrl(dep.spec)) {
+                    continue;
+                }
+
+                const effective = switch (try self.effectiveSource(item.node.root_dir, dep.spec)) {
+                    .source => |source| source,
+                    .unresolvable_local => |lexical| {
+                        try result.edges.append(self.arena(), .{
+                            .parent = item.group,
+                            .alias = dep.alias,
+                            .spec = lexical,
+                            .is_platform = dep.is_platform,
+                            .target = .{ .invalid = .unresolvable_local },
+                        });
+                        continue;
+                    },
+                };
+                const spec = effective.spec;
+
+                if (specIsUrlLike(spec)) {
+                    if (!base.url.isSafeUrl(spec)) {
                         try result.edges.append(self.arena(), .{
                             .parent = item.group,
                             .alias = dep.alias,
@@ -630,7 +755,7 @@ pub const Resolver = struct {
                         });
                         continue;
                     }
-                    const parsed = base.url.parseUrlPath(dep.spec) catch |err| {
+                    const parsed = base.url.parseUrlPath(spec) catch |err| {
                         try result.edges.append(self.arena(), .{
                             .parent = item.group,
                             .alias = dep.alias,
@@ -649,12 +774,12 @@ pub const Resolver = struct {
                         continue;
                     };
 
-                    const group = try self.urlGroupKey(parsed, dep.spec);
+                    const group = try self.urlGroupKey(parsed, spec);
 
                     const target = UrlTarget{
                         .group = group,
                         .version = parsed.version,
-                        .url = dep.spec,
+                        .url = spec,
                         .hash = parsed.hash,
                     };
 
@@ -664,19 +789,20 @@ pub const Resolver = struct {
                         .spec = dep.spec,
                         .is_platform = dep.is_platform,
                         .target = .{ .url = target },
+                        .replacement = effective.replacement,
                     });
 
-                    try self.recordSeenUrlEdge(group, parsed.version, dep.spec, parsed.hash);
+                    try self.recordSeenUrlEdge(group, parsed.version, spec, parsed.hash);
                     if (self.diagnostics.items.len > 0) continue;
 
                     // Update this group's candidate to the max version seen.
                     const gop = try result.candidates.getOrPut(self.arena(), group);
                     if (!gop.found_existing) {
-                        gop.value_ptr.* = .{ .version = parsed.version, .url = dep.spec, .hash = parsed.hash };
+                        gop.value_ptr.* = .{ .version = parsed.version, .url = spec, .hash = parsed.hash };
                     } else if (parsed.version.isPresent() and
                         gop.value_ptr.version.orderWithinMajor(parsed.version) == .lt)
                     {
-                        gop.value_ptr.* = .{ .version = parsed.version, .url = dep.spec, .hash = parsed.hash };
+                        gop.value_ptr.* = .{ .version = parsed.version, .url = spec, .hash = parsed.hash };
                     }
 
                     // Follow only the currently-chosen version of this group.
@@ -707,7 +833,7 @@ pub const Resolver = struct {
                         }
                     }
                 } else {
-                    const abs = try self.resolveLocalPath(item.node.root_dir, dep.spec);
+                    const abs = try self.resolveLocalPath(item.node.root_dir, spec);
                     const group = try std.fmt.allocPrint(self.arena(), "l@{s}", .{abs});
 
                     try result.edges.append(self.arena(), .{
@@ -716,6 +842,7 @@ pub const Resolver = struct {
                         .spec = dep.spec,
                         .is_platform = dep.is_platform,
                         .target = .{ .local = group },
+                        .replacement = effective.replacement,
                     });
 
                     try self.seen_group_locals.put(self.arena(), group, abs);
@@ -783,6 +910,182 @@ pub const Resolver = struct {
             if (std.mem.eql(u8, existing, hash)) return;
         }
         try hashes_gop.value_ptr.append(self.arena(), hash);
+    }
+
+    /// Validate the requested replacements and index them by exact `OLD`
+    /// source. Every problem is reported; none of them depend on flag order.
+    fn prepareReplacements(self: *Resolver) Allocator.Error!void {
+        const requested = self.config.replace_deps.slice();
+        if (requested.len == 0) return;
+
+        var list = std.ArrayListUnmanaged(Replacement).empty;
+        for (requested) |arg| {
+            const old_key = (try self.replacementSource("OLD", arg.old)) orelse continue;
+            const new_spec = (try self.replacementSource("NEW", arg.new)) orelse continue;
+
+            const gop = try self.replacement_index.getOrPut(self.arena(), old_key);
+            if (gop.found_existing) {
+                try self.addDiagnostic(
+                    "Duplicate Dependency Replacement",
+                    "More than one --replace-dep flag replaces this source:\n\n    {s}\n\n" ++
+                        "Each source can be replaced only once per invocation.",
+                    .{old_key},
+                );
+                continue;
+            }
+            gop.value_ptr.* = list.items.len;
+            try list.append(self.arena(), .{
+                .old_arg = arg.old,
+                .new_arg = arg.new,
+                .old_key = old_key,
+                .new_spec = new_spec,
+            });
+        }
+        self.replacements = list.items;
+
+        // A destination that is itself replaced would make the requested
+        // destination inexact, so chains and cycles are rejected outright.
+        for (self.replacements) |replacement| {
+            if (std.mem.eql(u8, replacement.old_key, replacement.new_spec)) {
+                try self.addDiagnostic(
+                    "Dependency Replacement Cycle",
+                    "This --replace-dep flag replaces a source with itself:\n\n    {s}\n\nA replacement must name a different source.",
+                    .{replacement.old_key},
+                );
+                continue;
+            }
+            const next_index = self.replacement_index.get(replacement.new_spec) orelse continue;
+            const next = self.replacements[next_index];
+            try self.addDiagnostic(
+                "Dependency Replacement Chain",
+                "These --replace-dep flags form a chain:\n\n    {s}\n    is replaced by {s}\n    which is replaced by {s}\n\n" ++
+                    "A replacement is exact, so its destination cannot itself be replaced. " ++
+                    "Replace each original source with its final destination instead.",
+                .{ replacement.old_key, replacement.new_spec, next.new_spec },
+            );
+        }
+    }
+
+    /// Validate one `--replace-dep` argument and return its exact source
+    /// form, or null after reporting why it is unusable.
+    fn replacementSource(self: *Resolver, comptime position: []const u8, arg: []const u8) Allocator.Error!?[]const u8 {
+        switch (classifyReplaceDepSource(arg)) {
+            .compiler => {
+                try self.addDiagnostic(
+                    "Compiler Cannot Be Replaced",
+                    "--replace-dep was given `roc` as its " ++ position ++ " source, but the `roc` compiler dependency is not a package. " ++
+                        "Select a compiler by running that compiler's executable.",
+                    .{},
+                );
+                return null;
+            },
+            .invalid => {
+                try self.addDiagnostic(
+                    "Invalid Dependency Replacement",
+                    "--replace-dep was given this " ++ position ++ " source:\n\n    {s}\n\n" ++
+                        "Both arguments must be a complete package URL or an explicit path to a root .roc file, " ++
+                        "such as ./json/main.roc. Dependency aliases and directories are not accepted.",
+                    .{arg},
+                );
+                return null;
+            },
+            .url => {
+                const valid = base.url.isSafeUrl(arg) and if (base.url.parseUrlPath(arg)) |_| true else |_| false;
+                if (!valid) {
+                    try self.addDiagnostic(
+                        "Invalid Dependency Replacement",
+                        "--replace-dep was given this " ++ position ++ " source, which is not a complete, valid package URL:\n\n    {s}\n\n" ++
+                            "A package URL must use https and end with its content hash.",
+                        .{arg},
+                    );
+                    return null;
+                }
+                return try self.arena().dupe(u8, arg);
+            },
+            .local_path => {
+                return self.canonicalizeLocal(arg) catch |err| switch (err) {
+                    error.OutOfMemory => return error.OutOfMemory,
+                    error.CannotCanonicalize => {
+                        try self.addDiagnostic(
+                            "Invalid Dependency Replacement",
+                            "--replace-dep was given this " ++ position ++ " path, which could not be resolved to an existing file:\n\n    {s}\n\nCheck that the path is spelled correctly, relative to the current directory.",
+                            .{arg},
+                        );
+                        return null;
+                    },
+                };
+            },
+        }
+    }
+
+    fn canonicalizeLocal(self: *Resolver, path: []const u8) CanonicalizeError![]const u8 {
+        if (self.fetcher.canonicalizeFn) |canonicalize| {
+            return canonicalize(self.fetcher.ctx, self.arena(), path);
+        }
+        return std.fs.path.resolve(self.arena(), &.{path});
+    }
+
+    /// Apply replacements to one declared source. Matching happens on the
+    /// declaration alone, before version selection and before anything is
+    /// fetched. Without replacements this is the identity.
+    fn effectiveSource(self: *Resolver, parent_dir: []const u8, declared: []const u8) Allocator.Error!EffectiveSource {
+        if (self.replacements.len == 0) return .{ .source = .{ .spec = declared, .replacement = null } };
+
+        if (specIsUrlLike(declared)) {
+            const index = self.replacement_index.get(declared) orelse return .{ .source = .{ .spec = declared, .replacement = null } };
+            return .{ .source = .{ .spec = self.replacements[index].new_spec, .replacement = index } };
+        }
+
+        // Local sources compare by canonical root-file path, so every spelling
+        // of one file is one source and shares one package instance. A path
+        // with no canonical form has no identity to match, so it is reported
+        // as such rather than compared by its spelling.
+        const lexical = try self.resolveLocalPath(parent_dir, declared);
+        const canonical = self.canonicalizeLocal(lexical) catch |err| switch (err) {
+            error.OutOfMemory => return error.OutOfMemory,
+            error.CannotCanonicalize => return .{ .unresolvable_local = lexical },
+        };
+        const index = self.replacement_index.get(canonical) orelse return .{ .source = .{ .spec = canonical, .replacement = null } };
+        return .{ .source = .{ .spec = self.replacements[index].new_spec, .replacement = index } };
+    }
+
+    /// Replacements are exact and every flag must take effect. Checked over
+    /// the final graph only, so declarations inside discarded originals
+    /// neither count as uses nor constrain anything.
+    fn checkReplacements(self: *Resolver, walk_result: *const WalkResult) Allocator.Error!void {
+        if (self.replacements.len == 0) return;
+
+        const used = try self.arena().alloc(bool, self.replacements.len);
+        @memset(used, false);
+        var reported: std.StringHashMapUnmanaged(void) = .{};
+
+        for (walk_result.edges.items) |edge| {
+            const index = edge.replacement orelse continue;
+            used[index] = true;
+            if (edge.target != .url) continue;
+            const target = edge.target.url;
+            const choice = walk_result.candidates.get(target.group).?;
+            if (std.mem.eql(u8, choice.url, target.url)) continue;
+            if ((try reported.getOrPut(self.arena(), target.url)).found_existing) continue;
+            try self.addDiagnostic(
+                "Dependency Replacement Conflict",
+                "--replace-dep selected exactly this package:\n\n    {s}\n\n" ++
+                    "but version solving needs a different release of it:\n\n    {s}\n\n" ++
+                    "A replacement is exact, so it is never swapped for another release. " ++
+                    "Add a --replace-dep flag for the other declaration as well, or remove the dependency that needs it.",
+                .{ target.url, choice.url },
+            );
+        }
+
+        for (self.replacements, used) |replacement, was_used| {
+            if (was_used) continue;
+            try self.addDiagnostic(
+                "Unused Dependency Replacement",
+                "--replace-dep was asked to replace this source, but nothing in the resolved dependency graph declares it:\n\n    {s}\n\n" ++
+                    "Sources match exactly, including version and hash. Run `roc deps` to see the declared sources.",
+                .{replacement.old_key},
+            );
+        }
     }
 
     fn resolveLocalPath(self: *Resolver, parent_dir: []const u8, spec: []const u8) Allocator.Error![]const u8 {
@@ -1015,7 +1318,10 @@ pub const Resolver = struct {
             return compiler_platforms.groupKey(platform);
         }
 
-        const spec = dep.spec;
+        const spec = switch (try self.effectiveSource(parent_dir, dep.spec)) {
+            .source => |source| source.spec,
+            .unresolvable_local => return null,
+        };
         if (specIsUrlLike(spec)) {
             if (!base.url.isSafeUrl(spec)) return null;
             const parsed = base.url.parseUrlPath(spec) catch return null;
@@ -1059,6 +1365,12 @@ pub const Resolver = struct {
                         .unparsable_url => try self.addDiagnostic(
                             "Invalid Package URL",
                             "{s} depends on this URL, which could not be parsed as a package URL:\n\n    {s}.",
+                            .{ owner, edge.spec },
+                        ),
+                        .unresolvable_local => try self.addDiagnostic(
+                            "Invalid Package Dependency",
+                            "{s} depends on this local path, which could not be resolved to an existing file:\n\n    {s}\n\n" ++
+                                "--replace-dep matches local dependencies by their resolved file, so every local dependency in the graph must exist.",
                             .{ owner, edge.spec },
                         ),
                     }
@@ -1144,6 +1456,9 @@ pub const Resolver = struct {
         }
 
         try self.checkCycles(walk_result);
+        if (self.diagnostics.items.len > 0) return error.ResolutionFailed;
+
+        try self.checkReplacements(walk_result);
         if (self.diagnostics.items.len > 0) return error.ResolutionFailed;
 
         // Build the Resolved structure with its own arena so it can outlive
@@ -1262,10 +1577,14 @@ pub const Resolver = struct {
                 .alias = try out.dupe(u8, edge.alias),
                 .target = target_index,
                 .is_platform = edge.is_platform,
-                .declared_version = if (edge.target == .url and edge.target.url.version.isPresent())
+                // A replaced declaration has no declared version of its
+                // effective package, so solving cannot have "bumped" it.
+                .declared_version = if (edge.replacement == null and edge.target == .url and edge.target.url.version.isPresent())
                     edge.target.url.version
                 else
                     null,
+                .declared_spec = try out.dupe(u8, edge.spec),
+                .replaced_by = if (edge.replacement) |index| try out.dupe(u8, self.replacements[index].new_spec) else null,
             });
         }
 
@@ -1325,7 +1644,7 @@ pub const Resolver = struct {
                 "{s} selects this platform:\n\n    {s}\n\n" ++
                     "but {s} selects a different platform:\n\n    {s}\n\n" ++
                     "Every app and package in one build must declare the identical platform version and content hash.",
-                .{ expected_owner, expected.spec, actual_owner, edge.spec },
+                .{ expected_owner, try self.describeEdgeSource(expected), actual_owner, try self.describeEdgeSource(edge) },
             );
         }
         return expected;
@@ -1343,7 +1662,16 @@ pub const Resolver = struct {
         };
     }
 
-    fn checkEdgeKind(self: *Resolver, walk_result: *const WalkResult, edge: Edge, target_kind: HeaderKind) Allocator.Error!void {
+    /// A declaration's source for diagnostics: the declared spelling, plus
+    /// the effective source when a flag redirected it.
+    fn describeEdgeSource(self: *Resolver, edge: Edge) Allocator.Error![]const u8 {
+        const index = edge.replacement orelse return edge.spec;
+        return try std.fmt.allocPrint(self.arena(), "{s} (replaced by {s})", .{ edge.spec, self.replacements[index].new_spec });
+    }
+
+    fn checkEdgeKind(self: *Resolver, walk_result: *const WalkResult, declared_edge: Edge, target_kind: HeaderKind) Allocator.Error!void {
+        var edge = declared_edge;
+        edge.spec = try self.describeEdgeSource(declared_edge);
         const owner = try self.describeOwner(walk_result, edge.parent);
         if (target_kind == .app) {
             try self.addDiagnostic(
@@ -1760,6 +2088,18 @@ pub const CtxFetcher = struct {
             .fetchUrlFn = fetchUrlImpl,
             .loadLocalFn = loadLocalImpl,
             .loadCompilerOwnedPlatformFn = loadCompilerOwnedPlatformImpl,
+            .canonicalizeFn = canonicalizeImpl,
+        };
+    }
+
+    fn canonicalizeImpl(ctx: ?*anyopaque, allocator: Allocator, path: []const u8) CanonicalizeError![]const u8 {
+        const self: *CtxFetcher = @ptrCast(@alignCast(ctx.?));
+        return self.fs.canonicalize(path, allocator) catch |err| switch (err) {
+            error.OutOfMemory => error.OutOfMemory,
+            error.FileNotFound,
+            error.AccessDenied,
+            error.IoError,
+            => error.CannotCanonicalize,
         };
     }
 
@@ -2175,6 +2515,9 @@ const TestRegistry = struct {
     /// registry keys (for URLs) or registry local keys (for paths).
     urls: std.StringHashMap(TestPackage),
     locals: std.StringHashMap(TestPackage),
+    /// path -> canonical path, standing in for symlinks and for relative
+    /// command-line paths. Paths of registered locals are already canonical.
+    symlinks: std.StringHashMap([]const u8),
 
     const TestPackage = struct {
         kind: HeaderKind = .package,
@@ -2186,12 +2529,23 @@ const TestRegistry = struct {
         return .{
             .urls = std.StringHashMap(TestPackage).init(gpa),
             .locals = std.StringHashMap(TestPackage).init(gpa),
+            .symlinks = std.StringHashMap([]const u8).init(gpa),
         };
     }
 
     fn deinit(self: *TestRegistry) void {
         self.urls.deinit();
         self.locals.deinit();
+        self.symlinks.deinit();
+    }
+
+    fn canonicalizeImpl(ctx: ?*anyopaque, allocator: Allocator, path: []const u8) CanonicalizeError![]const u8 {
+        const self: *TestRegistry = @ptrCast(@alignCast(ctx.?));
+        var key_buf: [512]u8 = undefined;
+        const key = normalizedLookupKey(&key_buf, path);
+        if (self.symlinks.get(key)) |target| return allocator.dupe(u8, target);
+        if (self.locals.contains(key)) return allocator.dupe(u8, key);
+        return error.CannotCanonicalize;
     }
 
     fn fetcher(self: *TestRegistry) Fetcher {
@@ -2200,6 +2554,7 @@ const TestRegistry = struct {
             .fetchUrlFn = fetchUrlImpl,
             .loadLocalFn = loadLocalImpl,
             .loadCompilerOwnedPlatformFn = loadCompilerOwnedPlatformImpl,
+            .canonicalizeFn = canonicalizeImpl,
         };
     }
 
@@ -3429,6 +3784,499 @@ test "the reserved 0.0.0 version is rejected" {
 /// The knobs are globals because `fetchUrl` is a bare function pointer in the
 /// `CoreCtx` vtable, with nowhere to hang per-test state. The tests using them
 /// run in one thread, one after another.
+fn testReplaceConfig(args: []const ReplaceDepArg) Config {
+    var config = Config{};
+    for (args) |arg| config.replace_deps.append(arg) catch unreachable;
+    return config;
+}
+
+fn testExpectDiagnostic(resolver: *const Resolver, title: []const u8) error{TestExpectedDiagnostic}!void {
+    for (resolver.diagnostics.items) |diagnostic| {
+        if (std.mem.eql(u8, diagnostic.title, title)) return;
+    }
+    for (resolver.diagnostics.items) |diagnostic| {
+        std.debug.print("unexpected diagnostic: {s}: {s}\n", .{ diagnostic.title, diagnostic.message });
+    }
+    return error.TestExpectedDiagnostic;
+}
+
+fn testExpectResolutionFails(registry: *TestRegistry, root: []const u8, config: Config, title: []const u8) (Allocator.Error || error{ TestExpectedDiagnostic, TestExpectedError, TestUnexpectedError })!void {
+    var resolver = Resolver.init(std.testing.allocator, registry.fetcher(), config);
+    defer resolver.deinit();
+    try std.testing.expectError(error.ResolutionFailed, resolver.resolve(root));
+    try testExpectDiagnostic(&resolver, title);
+}
+
+const test_ascii_url = "https://example.com/ascii/0.5.0/hashAsciiz5z.tar.zst";
+const test_ascii_other_url = "https://example.com/ascii/0.6.0/hashAsciiz6z.tar.zst";
+const test_ansi_url = "https://example.com/ansi/0.13.0/hashAnsiz13z.tar.zst";
+const test_platform_url = "https://example.com/cli/0.23.0/hashCmiz23z.tar.zst";
+
+/// The proposal's worked example: an app depending on ASCII and ANSI, where
+/// ANSI depends on ASCII under a different alias.
+fn testRegisterAsciiAnsi(registry: *TestRegistry, ansi_ascii_url: []const u8) Allocator.Error!void {
+    try registry.locals.put("/app/main.roc", .{
+        .kind = .app,
+        .deps = &.{
+            .{ .alias = "cli", .spec = test_platform_url, .is_platform = true },
+            .{ .alias = "ascii", .spec = test_ascii_url, .is_platform = false },
+            .{ .alias = "ansi", .spec = test_ansi_url, .is_platform = false },
+        },
+    });
+    try registry.urls.put(test_platform_url, .{ .kind = .platform });
+    try registry.urls.put(test_ascii_url, .{});
+    try registry.urls.put(test_ascii_other_url, .{});
+    const ansi_deps = try registry.urls.allocator.alloc(ScannedDep, 1);
+    ansi_deps[0] = .{ .alias = "characters", .spec = ansi_ascii_url, .is_platform = false };
+    try registry.urls.put(test_ansi_url, .{ .deps = ansi_deps });
+    try registry.locals.put("/work/roc-ascii/main.roc", .{});
+}
+
+fn testFreeAsciiAnsi(registry: *TestRegistry) void {
+    registry.urls.allocator.free(registry.urls.get(test_ansi_url).?.deps);
+}
+
+test "replace-dep: a local replacement covers direct and transitive declarations under any alias" {
+    const gpa = std.testing.allocator;
+    var registry = TestRegistry.init(gpa);
+    defer registry.deinit();
+    try testRegisterAsciiAnsi(&registry, test_ascii_url);
+    defer testFreeAsciiAnsi(&registry);
+
+    var resolver = Resolver.init(gpa, registry.fetcher(), testReplaceConfig(&.{
+        .{ .old = test_ascii_url, .new = "/work/roc-ascii/main.roc" },
+    }));
+    defer resolver.deinit();
+    var resolved = try resolver.resolve("/app/main.roc");
+    defer resolved.deinit();
+
+    // The original ASCII release is absent; one local instance is shared.
+    try std.testing.expect(testFindPackage(&resolved, test_ascii_url) == null);
+    const local = testFindPackage(&resolved, "/work/roc-ascii/main.roc").?;
+    try std.testing.expect(local.url == null);
+
+    const root = resolved.packages[Resolved.root_index];
+    const ansi = testFindPackage(&resolved, test_ansi_url).?;
+    const from_root = root.deps[1];
+    const from_ansi = ansi.deps[0];
+    try std.testing.expectEqualStrings("ascii", from_root.alias);
+    try std.testing.expectEqualStrings("characters", from_ansi.alias);
+    try std.testing.expectEqual(from_root.target, from_ansi.target);
+    try std.testing.expectEqualStrings(test_ascii_url, from_root.declared_spec);
+    try std.testing.expect(from_root.replaced_by != null);
+    try std.testing.expect(from_ansi.replaced_by != null);
+    try std.testing.expect(from_root.declared_version == null);
+    // Unselected declarations carry no replacement provenance.
+    try std.testing.expect(root.deps[0].replaced_by == null);
+    try std.testing.expect(root.deps[2].replaced_by == null);
+}
+
+test "replace-dep: separate release URLs require separate flags" {
+    const gpa = std.testing.allocator;
+    var registry = TestRegistry.init(gpa);
+    defer registry.deinit();
+    try testRegisterAsciiAnsi(&registry, test_ascii_other_url);
+    defer testFreeAsciiAnsi(&registry);
+
+    // One flag leaves ANSI's other release untouched.
+    {
+        var resolver = Resolver.init(gpa, registry.fetcher(), testReplaceConfig(&.{
+            .{ .old = test_ascii_url, .new = "/work/roc-ascii/main.roc" },
+        }));
+        defer resolver.deinit();
+        var resolved = try resolver.resolve("/app/main.roc");
+        defer resolved.deinit();
+        try std.testing.expect(testFindPackage(&resolved, test_ascii_other_url) != null);
+        try std.testing.expect(testFindPackage(&resolved, "/work/roc-ascii/main.roc") != null);
+    }
+
+    // Two flags map both releases to one shared instance, in either order.
+    const orders = [_][2]ReplaceDepArg{
+        .{ .{ .old = test_ascii_url, .new = "/work/roc-ascii/main.roc" }, .{ .old = test_ascii_other_url, .new = "/work/roc-ascii/main.roc" } },
+        .{ .{ .old = test_ascii_other_url, .new = "/work/roc-ascii/main.roc" }, .{ .old = test_ascii_url, .new = "/work/roc-ascii/main.roc" } },
+    };
+    for (orders) |order| {
+        var resolver = Resolver.init(gpa, registry.fetcher(), testReplaceConfig(&order));
+        defer resolver.deinit();
+        var resolved = try resolver.resolve("/app/main.roc");
+        defer resolved.deinit();
+        try std.testing.expectEqual(@as(usize, 4), resolved.packages.len);
+        const root = resolved.packages[Resolved.root_index];
+        const ansi = testFindPackage(&resolved, test_ansi_url).?;
+        try std.testing.expectEqual(root.deps[1].target, ansi.deps[0].target);
+    }
+}
+
+test "replace-dep: the replacement's header supplies dependencies, at every depth" {
+    const gpa = std.testing.allocator;
+    var registry = TestRegistry.init(gpa);
+    defer registry.deinit();
+    try testRegisterAsciiAnsi(&registry, test_ascii_url);
+    defer testFreeAsciiAnsi(&registry);
+
+    const extra_url = "https://example.com/extra/1.0.0/hashExtra1zz.tar.zst";
+    try registry.urls.put(extra_url, .{});
+    // The local ANSI drops ASCII, adds `extra`, and reaches ASCII's exact
+    // URL through a relative local package instead.
+    try registry.locals.put("/work/roc-ansi/main.roc", .{ .deps = &.{
+        .{ .alias = "extra", .spec = extra_url, .is_platform = false },
+        .{ .alias = "helper", .spec = "helper/main.roc", .is_platform = false },
+    } });
+    try registry.locals.put("/work/roc-ansi/helper/main.roc", .{ .deps = &.{
+        .{ .alias = "chars", .spec = test_ascii_url, .is_platform = false },
+    } });
+
+    var resolver = Resolver.init(gpa, registry.fetcher(), testReplaceConfig(&.{
+        .{ .old = test_ansi_url, .new = "/work/roc-ansi/main.roc" },
+        .{ .old = test_ascii_url, .new = "/work/roc-ascii/main.roc" },
+    }));
+    defer resolver.deinit();
+    var resolved = try resolver.resolve("/app/main.roc");
+    defer resolved.deinit();
+
+    try std.testing.expect(testFindPackage(&resolved, test_ansi_url) == null);
+    try std.testing.expect(testFindPackage(&resolved, extra_url) != null);
+    const helper = testFindPackage(&resolved, "/work/roc-ansi/helper/main.roc").?;
+    const root = resolved.packages[Resolved.root_index];
+    try std.testing.expectEqual(root.deps[1].target, helper.deps[0].target);
+}
+
+test "replace-dep: declarations only inside a discarded original do not count as uses" {
+    const gpa = std.testing.allocator;
+    var registry = TestRegistry.init(gpa);
+    defer registry.deinit();
+    try testRegisterAsciiAnsi(&registry, test_ascii_other_url);
+    defer testFreeAsciiAnsi(&registry);
+    try registry.locals.put("/work/roc-ansi/main.roc", .{});
+
+    try testExpectResolutionFails(&registry, "/app/main.roc", testReplaceConfig(&.{
+        .{ .old = test_ansi_url, .new = "/work/roc-ansi/main.roc" },
+        .{ .old = test_ascii_other_url, .new = "/work/roc-ascii/main.roc" },
+    }), "Unused Dependency Replacement");
+}
+
+test "replace-dep: an unused flag is an error" {
+    const gpa = std.testing.allocator;
+    var registry = TestRegistry.init(gpa);
+    defer registry.deinit();
+    try testRegisterAsciiAnsi(&registry, test_ascii_url);
+    defer testFreeAsciiAnsi(&registry);
+
+    // A near-miss URL (different hash) matches nothing.
+    try testExpectResolutionFails(&registry, "/app/main.roc", testReplaceConfig(&.{
+        .{ .old = "https://example.com/ascii/0.5.0/hashTypo.tar.zst", .new = "/work/roc-ascii/main.roc" },
+    }), "Unused Dependency Replacement");
+}
+
+test "replace-dep: aliases, directories, and the compiler are rejected for OLD and NEW" {
+    const gpa = std.testing.allocator;
+    var registry = TestRegistry.init(gpa);
+    defer registry.deinit();
+    try testRegisterAsciiAnsi(&registry, test_ascii_url);
+    defer testFreeAsciiAnsi(&registry);
+
+    try std.testing.expectEqual(ReplaceDepSource.invalid, classifyReplaceDepSource("ascii"));
+    try std.testing.expectEqual(ReplaceDepSource.invalid, classifyReplaceDepSource("../roc-ascii"));
+    try std.testing.expectEqual(ReplaceDepSource.invalid, classifyReplaceDepSource("main.roc"));
+    try std.testing.expectEqual(ReplaceDepSource.local_path, classifyReplaceDepSource("./main.roc"));
+    try std.testing.expectEqual(ReplaceDepSource.local_path, classifyReplaceDepSource("../roc-ascii/main.roc"));
+    try std.testing.expectEqual(ReplaceDepSource.url, classifyReplaceDepSource(test_ascii_url));
+    try std.testing.expectEqual(ReplaceDepSource.compiler, classifyReplaceDepSource("roc"));
+
+    try testExpectResolutionFails(&registry, "/app/main.roc", testReplaceConfig(&.{
+        .{ .old = "ascii", .new = "/work/roc-ascii/main.roc" },
+    }), "Invalid Dependency Replacement");
+    try testExpectResolutionFails(&registry, "/app/main.roc", testReplaceConfig(&.{
+        .{ .old = test_ascii_url, .new = "ascii" },
+    }), "Invalid Dependency Replacement");
+    try testExpectResolutionFails(&registry, "/app/main.roc", testReplaceConfig(&.{
+        .{ .old = test_ascii_url, .new = "/work/roc-ascii" },
+    }), "Invalid Dependency Replacement");
+    try testExpectResolutionFails(&registry, "/app/main.roc", testReplaceConfig(&.{
+        .{ .old = "roc", .new = "/work/roc-ascii/main.roc" },
+    }), "Compiler Cannot Be Replaced");
+    // Malformed URLs and paths that do not exist are rejected too.
+    try testExpectResolutionFails(&registry, "/app/main.roc", testReplaceConfig(&.{
+        .{ .old = test_ascii_url, .new = "http://example.com/ascii/0.5.0/hashAscii.tar.zst" },
+    }), "Invalid Dependency Replacement");
+    try testExpectResolutionFails(&registry, "/app/main.roc", testReplaceConfig(&.{
+        .{ .old = test_ascii_url, .new = "/work/missing/main.roc" },
+    }), "Invalid Dependency Replacement");
+}
+
+test "replace-dep: duplicate sources, chains, and cycles are rejected" {
+    const gpa = std.testing.allocator;
+    var registry = TestRegistry.init(gpa);
+    defer registry.deinit();
+    try testRegisterAsciiAnsi(&registry, test_ascii_url);
+    defer testFreeAsciiAnsi(&registry);
+    try registry.symlinks.put("/work/link/main.roc", "/work/roc-ascii/main.roc");
+    try registry.locals.put("/work/other/main.roc", .{});
+
+    try testExpectResolutionFails(&registry, "/app/main.roc", testReplaceConfig(&.{
+        .{ .old = test_ascii_url, .new = "/work/roc-ascii/main.roc" },
+        .{ .old = test_ascii_url, .new = "/work/other/main.roc" },
+    }), "Duplicate Dependency Replacement");
+    // Two spellings of one root file are one source.
+    try testExpectResolutionFails(&registry, "/app/main.roc", testReplaceConfig(&.{
+        .{ .old = "/work/roc-ascii/main.roc", .new = test_ascii_url },
+        .{ .old = "/work/link/main.roc", .new = test_ascii_other_url },
+    }), "Duplicate Dependency Replacement");
+    try testExpectResolutionFails(&registry, "/app/main.roc", testReplaceConfig(&.{
+        .{ .old = test_ascii_url, .new = test_ascii_other_url },
+        .{ .old = test_ascii_other_url, .new = "/work/roc-ascii/main.roc" },
+    }), "Dependency Replacement Chain");
+    try testExpectResolutionFails(&registry, "/app/main.roc", testReplaceConfig(&.{
+        .{ .old = test_ascii_url, .new = test_ascii_other_url },
+        .{ .old = test_ascii_other_url, .new = test_ascii_url },
+    }), "Dependency Replacement Chain");
+    try testExpectResolutionFails(&registry, "/app/main.roc", testReplaceConfig(&.{
+        .{ .old = test_ascii_url, .new = test_ascii_url },
+    }), "Dependency Replacement Cycle");
+}
+
+test "replace-dep: replacing a package and a dependency declared inside it is not a chain" {
+    const gpa = std.testing.allocator;
+    var registry = TestRegistry.init(gpa);
+    defer registry.deinit();
+    try testRegisterAsciiAnsi(&registry, test_ascii_url);
+    defer testFreeAsciiAnsi(&registry);
+    try registry.locals.put("/work/roc-ansi/main.roc", .{ .deps = &.{
+        .{ .alias = "ascii", .spec = test_ascii_url, .is_platform = false },
+    } });
+
+    var resolver = Resolver.init(gpa, registry.fetcher(), testReplaceConfig(&.{
+        .{ .old = test_ansi_url, .new = "/work/roc-ansi/main.roc" },
+        .{ .old = test_ascii_url, .new = "/work/roc-ascii/main.roc" },
+    }));
+    defer resolver.deinit();
+    var resolved = try resolver.resolve("/app/main.roc");
+    defer resolved.deinit();
+    try std.testing.expectEqual(@as(usize, 4), resolved.packages.len);
+}
+
+test "replace-dep: a published replacement is exact and never version-solved away" {
+    const gpa = std.testing.allocator;
+    var registry = TestRegistry.init(gpa);
+    defer registry.deinit();
+    try testRegisterAsciiAnsi(&registry, test_ascii_url);
+    defer testFreeAsciiAnsi(&registry);
+
+    const fork_url = "https://example.com/fork/ascii/0.5.1/hashForkz51.tar.zst";
+    const fork_newer_url = "https://example.com/fork/ascii/0.5.2/hashForkz52.tar.zst";
+    try registry.urls.put(fork_url, .{});
+    try registry.urls.put(fork_newer_url, .{});
+
+    // A -> B replaces every A, and the app root accepts the new release.
+    {
+        var resolver = Resolver.init(gpa, registry.fetcher(), testReplaceConfig(&.{
+            .{ .old = test_ascii_url, .new = fork_url },
+        }));
+        defer resolver.deinit();
+        var resolved = try resolver.resolve("/app/main.roc");
+        defer resolved.deinit();
+        try std.testing.expect(testFindPackage(&resolved, fork_url) != null);
+        try std.testing.expect(testFindPackage(&resolved, test_ascii_url) == null);
+    }
+
+    // An independent declaration of a newer compatible fork release would
+    // win ordinary solving; the exact replacement reports a conflict instead.
+    try registry.locals.put("/pkg/main.roc", .{ .kind = .package, .deps = &.{
+        .{ .alias = "ascii", .spec = test_ascii_url, .is_platform = false },
+        .{ .alias = "newer", .spec = fork_newer_url, .is_platform = false },
+    } });
+    try testExpectResolutionFails(&registry, "/pkg/main.roc", testReplaceConfig(&.{
+        .{ .old = test_ascii_url, .new = fork_url },
+    }), "Dependency Replacement Conflict");
+
+    // A lower compatible release shares the exact replacement.
+    try registry.locals.put("/pkg2/main.roc", .{ .kind = .package, .deps = &.{
+        .{ .alias = "ascii", .spec = test_ascii_url, .is_platform = false },
+        .{ .alias = "older", .spec = fork_url, .is_platform = false },
+    } });
+    var resolver = Resolver.init(gpa, registry.fetcher(), testReplaceConfig(&.{
+        .{ .old = test_ascii_url, .new = fork_newer_url },
+    }));
+    defer resolver.deinit();
+    var resolved = try resolver.resolve("/pkg2/main.roc");
+    defer resolved.deinit();
+    const root = resolved.packages[Resolved.root_index];
+    try std.testing.expectEqual(root.deps[0].target, root.deps[1].target);
+    try std.testing.expect(root.deps[0].replaced_by != null);
+    try std.testing.expect(root.deps[1].replaced_by == null);
+    try std.testing.expectEqualStrings(fork_newer_url, resolved.packages[root.deps[0].target].identity);
+}
+
+test "replace-dep: a failed replacement download never uses the original" {
+    const gpa = std.testing.allocator;
+    var registry = TestRegistry.init(gpa);
+    defer registry.deinit();
+    try testRegisterAsciiAnsi(&registry, test_ascii_url);
+    defer testFreeAsciiAnsi(&registry);
+
+    try testExpectResolutionFails(&registry, "/app/main.roc", testReplaceConfig(&.{
+        .{ .old = test_ascii_url, .new = "https://example.com/gone/ascii/0.5.0/hashGone.tar.zst" },
+    }), "Package Download Failed");
+}
+
+test "replace-dep: platforms are replaceable and must stay platforms" {
+    const gpa = std.testing.allocator;
+    var registry = TestRegistry.init(gpa);
+    defer registry.deinit();
+    try testRegisterAsciiAnsi(&registry, test_ascii_url);
+    defer testFreeAsciiAnsi(&registry);
+    try registry.locals.put("/work/basic-cli/platform/main.roc", .{ .kind = .platform });
+
+    {
+        var resolver = Resolver.init(gpa, registry.fetcher(), testReplaceConfig(&.{
+            .{ .old = test_platform_url, .new = "/work/basic-cli/platform/main.roc" },
+        }));
+        defer resolver.deinit();
+        var resolved = try resolver.resolve("/app/main.roc");
+        defer resolved.deinit();
+        const selected = resolved.packages[resolved.selected_platform_index.?];
+        try std.testing.expect(selected.url == null);
+        try std.testing.expectEqual(HeaderKind.platform, selected.kind);
+    }
+
+    try testExpectResolutionFails(&registry, "/app/main.roc", testReplaceConfig(&.{
+        .{ .old = test_platform_url, .new = "/work/roc-ascii/main.roc" },
+    }), "Invalid Platform");
+    try testExpectResolutionFails(&registry, "/app/main.roc", testReplaceConfig(&.{
+        .{ .old = test_ascii_url, .new = "/work/basic-cli/platform/main.roc" },
+    }), "Invalid Package Dependency");
+}
+
+test "replace-dep: platform consistency is validated against effective sources" {
+    const gpa = std.testing.allocator;
+    var registry = TestRegistry.init(gpa);
+    defer registry.deinit();
+
+    const other_platform_url = "https://example.com/cli/0.24.0/hashCmiz24z.tar.zst";
+    try registry.urls.put(test_platform_url, .{ .kind = .platform });
+    try registry.urls.put(other_platform_url, .{ .kind = .platform });
+    try registry.locals.put("/work/platform/main.roc", .{ .kind = .platform });
+    try registry.locals.put("/app/main.roc", .{ .kind = .app, .deps = &.{
+        .{ .alias = "cli", .spec = test_platform_url, .is_platform = true },
+        .{ .alias = "wrapper", .spec = "wrapper/main.roc", .is_platform = false },
+    } });
+    try registry.locals.put("/app/wrapper/main.roc", .{ .deps = &.{
+        .{ .alias = "pf", .spec = other_platform_url, .is_platform = true },
+    } });
+
+    // Replacing only one of two differing declarations is a mismatch...
+    try testExpectResolutionFails(&registry, "/app/main.roc", testReplaceConfig(&.{
+        .{ .old = test_platform_url, .new = "/work/platform/main.roc" },
+    }), "Platform Dependency Mismatch");
+
+    // ...and mapping both onto one source makes the graph consistent.
+    var resolver = Resolver.init(gpa, registry.fetcher(), testReplaceConfig(&.{
+        .{ .old = test_platform_url, .new = "/work/platform/main.roc" },
+        .{ .old = other_platform_url, .new = "/work/platform/main.roc" },
+    }));
+    defer resolver.deinit();
+    var resolved = try resolver.resolve("/app/main.roc");
+    defer resolved.deinit();
+    try std.testing.expectEqual(@as(usize, 3), resolved.packages.len);
+}
+
+test "replace-dep: local and versionless sources match by canonical path and exact URL" {
+    const gpa = std.testing.allocator;
+    var registry = TestRegistry.init(gpa);
+    defer registry.deinit();
+
+    const versionless_url = "https://example.com/tools/hashTooms.tar.zst";
+    try registry.urls.put(versionless_url, .{});
+    try registry.locals.put("/repo/main.roc", .{ .kind = .package, .deps = &.{
+        .{ .alias = "json", .spec = "vendor/json/main.roc", .is_platform = false },
+        .{ .alias = "mid", .spec = "mid/main.roc", .is_platform = false },
+    } });
+    // `mid` reaches the same json root file through a symlinked directory,
+    // and also declares a versionless URL.
+    try registry.locals.put("/repo/mid/main.roc", .{ .deps = &.{
+        .{ .alias = "decoder", .spec = "../link/json/main.roc", .is_platform = false },
+        .{ .alias = "tools", .spec = versionless_url, .is_platform = false },
+    } });
+    try registry.locals.put("/repo/vendor/json/main.roc", .{});
+    try registry.symlinks.put("/repo/link/json/main.roc", "/repo/vendor/json/main.roc");
+    try registry.locals.put("/work/json/main.roc", .{});
+    try registry.locals.put("/work/tools/main.roc", .{});
+    // The command-line selector is relative to the working directory.
+    try registry.symlinks.put("./vendor/json/main.roc", "/repo/vendor/json/main.roc");
+
+    var resolver = Resolver.init(gpa, registry.fetcher(), testReplaceConfig(&.{
+        .{ .old = "./vendor/json/main.roc", .new = "/work/json/main.roc" },
+        .{ .old = versionless_url, .new = "/work/tools/main.roc" },
+    }));
+    defer resolver.deinit();
+    var resolved = try resolver.resolve("/repo/main.roc");
+    defer resolved.deinit();
+
+    try std.testing.expect(testFindPackage(&resolved, "/repo/vendor/json/main.roc") == null);
+    try std.testing.expect(testFindPackage(&resolved, versionless_url) == null);
+    const root = resolved.packages[Resolved.root_index];
+    const mid = testFindPackage(&resolved, "/repo/mid/main.roc").?;
+    try std.testing.expectEqual(root.deps[0].target, mid.deps[0].target);
+    try std.testing.expectEqualStrings("../link/json/main.roc", mid.deps[0].declared_spec);
+}
+
+test "replace-dep: a local declaration with no canonical path is an error, not a lexical match" {
+    const gpa = std.testing.allocator;
+    var registry = TestRegistry.init(gpa);
+    defer registry.deinit();
+
+    try registry.locals.put("/repo/main.roc", .{ .kind = .package, .deps = &.{
+        .{ .alias = "json", .spec = "vendor/json/main.roc", .is_platform = false },
+        .{ .alias = "ghost", .spec = "missing/main.roc", .is_platform = false },
+    } });
+    try registry.locals.put("/repo/vendor/json/main.roc", .{});
+    try registry.locals.put("/work/json/main.roc", .{});
+    try registry.symlinks.put("./vendor/json/main.roc", "/repo/vendor/json/main.roc");
+
+    // `/repo/missing/main.roc` is not registered, so it cannot be
+    // canonicalized. Resolution must report that edge explicitly instead of
+    // continuing with its spelling.
+    var resolver = Resolver.init(gpa, registry.fetcher(), testReplaceConfig(&.{
+        .{ .old = "./vendor/json/main.roc", .new = "/work/json/main.roc" },
+    }));
+    defer resolver.deinit();
+    try std.testing.expectError(error.ResolutionFailed, resolver.resolve("/repo/main.roc"));
+    try testExpectDiagnostic(&resolver, "Invalid Package Dependency");
+    for (resolver.diagnostics.items) |diagnostic| {
+        // The path is joined with the host separator, so Windows reports `\repo\missing\main.roc`.
+        const expected = if (@import("builtin").os.tag == .windows) "\\repo\\missing\\main.roc" else "/repo/missing/main.roc";
+        try std.testing.expect(std.mem.find(u8, diagnostic.message, expected) != null);
+    }
+}
+
+test "replace-dep: identical aliases for unrelated sources are not conflated" {
+    const gpa = std.testing.allocator;
+    var registry = TestRegistry.init(gpa);
+    defer registry.deinit();
+
+    const unrelated_url = "https://example.com/unrelated/ascii/2.0.0/hashUnremated.tar.zst";
+    try registry.urls.put(test_ascii_url, .{});
+    try registry.urls.put(unrelated_url, .{});
+    try registry.locals.put("/work/roc-ascii/main.roc", .{});
+    try registry.locals.put("/pf/main.roc", .{ .kind = .platform, .deps = &.{
+        .{ .alias = "ascii", .spec = test_ascii_url, .is_platform = false },
+        .{ .alias = "inner", .spec = "inner/main.roc", .is_platform = false },
+    } });
+    try registry.locals.put("/pf/inner/main.roc", .{ .deps = &.{
+        .{ .alias = "ascii", .spec = unrelated_url, .is_platform = false },
+    } });
+
+    // A platform root works like any other root.
+    var resolver = Resolver.init(gpa, registry.fetcher(), testReplaceConfig(&.{
+        .{ .old = test_ascii_url, .new = "/work/roc-ascii/main.roc" },
+    }));
+    defer resolver.deinit();
+    var resolved = try resolver.resolve("/pf/main.roc");
+    defer resolved.deinit();
+    try std.testing.expect(testFindPackage(&resolved, unrelated_url) != null);
+    try std.testing.expect(testFindPackage(&resolved, test_ascii_url) == null);
+}
+
 const StubDownload = struct {
     const main_roc = "package [Thing] {}\n";
 

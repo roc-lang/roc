@@ -49,6 +49,7 @@ pub const Store = struct {
         mode: PendingStaticExhaustivenessMode,
         source: ExhaustivenessSiteSource,
         site: ?CheckedExhaustivenessSiteId = null,
+        reported: bool = false,
         region: base.Region,
         problem: Problem,
     };
@@ -60,6 +61,14 @@ pub const Store = struct {
     extra_strings_backing: ByteList,
     /// Backing storage for missing patterns index arrays
     missing_patterns_backing: std.array_list.Managed(ExtraStringIdx),
+
+    /// Allocation-free empty store, including after ownership transfer.
+    pub fn initEmpty(gpa: Allocator) Self {
+        return .{
+            .extra_strings_backing = ByteList.init(gpa),
+            .missing_patterns_backing = std.array_list.Managed(ExtraStringIdx).init(gpa),
+        };
+    }
 
     pub fn init(gpa: Allocator) std.mem.Allocator.Error!Self {
         return .{
@@ -196,6 +205,17 @@ pub const Store = struct {
         gpa: Allocator,
         site: CheckedExhaustivenessSiteId,
     ) std.mem.Allocator.Error!bool {
+        return self.appendEmpiricalExhaustivenessFailureRetaining(gpa, site, false);
+    }
+
+    /// Generic platform evaluation can share a diagnostic site with roots that
+    /// require app bindings. Retain its recipe while reporting it only once.
+    pub fn appendEmpiricalExhaustivenessFailureRetaining(
+        self: *Self,
+        gpa: Allocator,
+        site: CheckedExhaustivenessSiteId,
+        retain: bool,
+    ) std.mem.Allocator.Error!bool {
         var index: usize = 0;
         while (index < self.pending_static_exhaustiveness.items.len) {
             const pending = self.pending_static_exhaustiveness.items[index];
@@ -231,6 +251,8 @@ pub const Store = struct {
                     .annotation_only_value_use,
                     .unsupported_generated_method,
                     .hosted_unboxed_function,
+                    .hosted_function_not_effectful,
+                    .hosted_type_variable_not_boxed,
                     .host_boundary_open_row,
                     .host_boundary_optional_field,
                     .platform_def_not_found,
@@ -254,15 +276,21 @@ pub const Store = struct {
                     .literal_defaulted,
                     .redundant_pattern,
                     .unmatchable_pattern,
+                    .match_alt_binder_missing,
                     .unreachable_code,
                     .comptime_unused_branch,
                     .comptime_condition,
                     .associated_item_not_found,
+                    .redundant_open_tag_union,
                     => unreachable,
                 }
             }
-            _ = try self.appendProblem(gpa, problem);
-            _ = self.pending_static_exhaustiveness.swapRemove(index);
+            if (!pending.reported) _ = try self.appendProblem(gpa, problem);
+            if (retain) {
+                self.pending_static_exhaustiveness.items[index].reported = true;
+            } else {
+                _ = self.pending_static_exhaustiveness.swapRemove(index);
+            }
             return true;
         }
         return false;
@@ -271,7 +299,7 @@ pub const Store = struct {
     pub fn flushPendingStaticExhaustiveness(self: *Self, gpa: Allocator) std.mem.Allocator.Error!usize {
         var count: usize = 0;
         for (self.pending_static_exhaustiveness.items) |pending| {
-            if (pending.mode != .static) continue;
+            if (pending.mode != .static or pending.reported) continue;
             _ = try self.appendProblem(gpa, pending.problem);
             count += 1;
         }
@@ -280,9 +308,11 @@ pub const Store = struct {
     }
 
     pub fn flushAllPendingStaticExhaustiveness(self: *Self, gpa: Allocator) std.mem.Allocator.Error!usize {
-        const count = self.pending_static_exhaustiveness.items.len;
+        var count: usize = 0;
         for (self.pending_static_exhaustiveness.items) |pending| {
+            if (pending.reported) continue;
             _ = try self.appendProblem(gpa, pending.problem);
+            count += 1;
         }
         self.pending_static_exhaustiveness.clearRetainingCapacity();
         return count;

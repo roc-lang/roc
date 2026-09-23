@@ -37,6 +37,7 @@ comptime {
     exportDecFn(dec.addSaturatedC, "add_saturated");
     exportDecFn(dec.asinC, "asin");
     exportDecFn(dec.atanC, "atan");
+    exportDecFn(dec.atan2C, "atan2");
     exportDecFn(dec.cosC, "cos");
     exportDecFn(dec.divC, "div");
     exportDecFn(dec.eqC, "eq");
@@ -179,6 +180,7 @@ comptime {
         num.exportAsin(T, ROC_BUILTINS ++ "." ++ NUM ++ ".asin.");
         num.exportAcos(T, ROC_BUILTINS ++ "." ++ NUM ++ ".acos.");
         num.exportAtan(T, ROC_BUILTINS ++ "." ++ NUM ++ ".atan.");
+        num.exportAtan2(T, ROC_BUILTINS ++ "." ++ NUM ++ ".atan2.");
 
         num.exportSin(T, ROC_BUILTINS ++ "." ++ NUM ++ ".sin.");
         num.exportCos(T, ROC_BUILTINS ++ "." ++ NUM ++ ".cos.");

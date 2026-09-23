@@ -3,11 +3,16 @@
 //!
 //! A constrained scheme used at a value or dispatch-target edge leaves a
 //! record. Instantiated uses carry scheme-var-to-fresh-var pairs; shared uses
-//! carry the exact monomorphic root and no pairs. Publication resolves those
-//! records after checking settles.
+//! carry the exact monomorphic root and no pairs. Checked-artifact construction
+//! resolves those records after checking settles.
 
 const std = @import("std");
-const ModuleEnv = @import("can").ModuleEnv;
+const can = @import("can");
+const collections = @import("collections");
+const compiled_builtins = @import("compiled_builtins");
+const checked_artifact = @import("../checked_artifact.zig");
+const types = @import("types");
+const ModuleEnv = can.ModuleEnv;
 const TestEnv = @import("./TestEnv.zig");
 
 const Slot = ModuleEnv.SchemeUseRecord.Slot;
@@ -122,6 +127,98 @@ test "concrete recursive dispatch records a shared method instance without copyi
     }
 }
 
+fn assertBuiltinIterExtremum(
+    artifact: *const checked_artifact.CheckedModuleArtifact,
+    method_name: []const u8,
+) error{ NoSpaceLeft, TestUnexpectedResult }!void {
+    const env = artifact.moduleEnvConst();
+    const source = env.getSourceAll();
+    var needle_buffer: [64]u8 = undefined;
+    const needle = try std.fmt.bufPrint(&needle_buffer, "best_so_far.{s}(item)", .{method_name});
+    const wanted_offset = std.mem.find(u8, source, needle) orelse return error.TestUnexpectedResult;
+    var found_plan = false;
+
+    for (artifact.static_dispatch_plans.by_expr) |entry| {
+        const expr_idx: can.CIR.Expr.Idx = @enumFromInt(entry.key);
+        const expr = env.store.getExpr(expr_idx);
+        if (expr != .e_dispatch_call) continue;
+        if (!std.mem.eql(u8, env.getIdent(expr.e_dispatch_call.method_name), method_name)) continue;
+
+        const receiver_region = env.store.getExprRegion(expr.e_dispatch_call.receiver);
+        const receiver_snippet = source[receiver_region.start.offset..receiver_region.end.offset];
+        if (!std.mem.eql(u8, receiver_snippet, "best_so_far")) continue;
+        if (receiver_region.start.offset != wanted_offset) continue;
+
+        try std.testing.expect(!found_plan);
+        found_plan = true;
+        const plan_root = env.types.resolveVar(expr.e_dispatch_call.constraint_fn_var).var_;
+
+        var body_use_count: usize = 0;
+        for (env.scheme_uses.items.items) |record| {
+            if (record.slot_kind != @intFromEnum(Slot.where_method_use)) continue;
+            const pairs = env.scheme_use_pairs.items.items[record.pairs_start .. record.pairs_start + record.pairs_len];
+            var reaches_plan_class = false;
+            for (pairs) |pair| {
+                if (env.types.resolveVar(@as(types.Var, @enumFromInt(pair.fresh_var))).var_ == plan_root) {
+                    reaches_plan_class = true;
+                    break;
+                }
+            }
+            if (reaches_plan_class) body_use_count += 1;
+        }
+        // Per-use instantiation copies the signature at EVERY body use, so a
+        // method used twice in one body leaves two records reaching the plan's
+        // class. `>= 1` would pass even if per-use copying silently collapsed
+        // to sharing, which is the property this whole branch exists to
+        // establish.
+        try std.testing.expect(body_use_count >= 2);
+
+        const plan = artifact.static_dispatch_plans.plans[entry.val];
+        switch (plan.resolution) {
+            .evidence_dependent => |resolution| {
+                try std.testing.expect(resolution.independent_callable);
+                try std.testing.expect(resolution.reuse_slot_nested_evidence);
+            },
+            .direct_pending,
+            .direct_closed,
+            .direct_parametric,
+            .structural,
+            .checked_error,
+            .@"unreachable",
+            => return error.TestUnexpectedResult,
+        }
+    }
+    try std.testing.expect(found_plan);
+}
+
+test "scheme use evidence resolves Builtin Iter min and max through exact raw where-use proofs" {
+    const gpa = std.testing.allocator;
+    var builtin_module = try can.BuiltinStatic.moduleView(
+        gpa,
+        compiled_builtins.builtin_bin[0..],
+        "Builtin",
+        compiled_builtins.builtin_source,
+    );
+    var artifact_owns_module = false;
+    errdefer if (!artifact_owns_module) builtin_module.deinit();
+
+    const blob = compiled_builtins.builtin_artifact_bin[0..];
+    const serialized_bytes = try checked_artifact.CheckedModuleArtifact.splitVersionTrailer(blob);
+    const backing: []align(collections.CompactWriter.SERIALIZATION_ALIGNMENT.toByteUnits()) u8 =
+        @alignCast(blob[0..serialized_bytes.len]);
+    const serialized: *const checked_artifact.CheckedModuleArtifact.Serialized = @ptrCast(@alignCast(backing.ptr));
+    try serialized.validate(backing.len);
+    var artifact = serialized.deserializeStatic(
+        backing,
+        gpa,
+        .{ .static_builtin = builtin_module.env },
+    );
+    artifact_owns_module = true;
+    defer artifact.deinit(gpa);
+
+    try assertBuiltinIterExtremum(&artifact, "min");
+    try assertBuiltinIterExtremum(&artifact, "max");
+}
 test "value use of a where-clause generic records instantiation evidence" {
     const source =
         \\Thing := [Val(Str)].{
@@ -198,6 +295,58 @@ test "source-forward annotated recursive use records the complete body scheme" {
         found_complete_forward_use = true;
     }
     try std.testing.expect(found_complete_forward_use);
+}
+
+test "annotated recursive self use whose body closes the annotation row records the body scheme" {
+    // Issue #11526: `walk`'s predeclared annotation opens its result row (a
+    // quantified identity variable), but the body returns the closed input
+    // parameter, so the completed scheme has no quantified variables. The
+    // in-flight self-use must name the body's scheme, not the standalone
+    // annotation, so artifact construction gives it an empty substitution.
+    const source =
+        \\walk : [Open, Close] -> [Open, Close]
+        \\walk = |token|
+        \\    match token {
+        \\        Open => walk(Close)
+        \\        Close => token
+        \\    }
+        \\main = walk(Open)
+    ;
+    var test_env = try TestEnv.init("Test", source);
+    defer test_env.deinit();
+    try test_env.assertNoErrors();
+
+    const env = test_env.module_env;
+    const idents = env.getIdentStoreConst();
+    var walk_expr_var: ?u32 = null;
+    for (env.store.sliceDefs(env.all_defs)) |def_idx| {
+        const def = env.store.getDef(def_idx);
+        const pattern = env.store.getPattern(def.pattern);
+        if (pattern != .assign) continue;
+        if (std.mem.eql(u8, idents.getText(pattern.assign.ident), "walk")) {
+            walk_expr_var = @intFromEnum(ModuleEnv.varFrom(def.expr));
+            break;
+        }
+    }
+    try std.testing.expect(walk_expr_var != null);
+
+    const self_use_offset = std.mem.find(u8, source, "walk(Close)") orelse unreachable;
+    var walk_self_use_records: usize = 0;
+    for (env.scheme_uses.items.items) |record| {
+        if (record.slot_kind != @intFromEnum(Slot.value_use)) continue;
+        const region = env.store.getNodeRegion(@enumFromInt(record.node_idx));
+        if (region.start.offset != self_use_offset) continue;
+        try std.testing.expectEqual(walk_expr_var.?, record.scheme_root);
+        const scheme_info = try @import("../canonical_type_keys.zig").fromVarInfo(
+            std.testing.allocator,
+            &env.types,
+            env,
+            @enumFromInt(record.scheme_root),
+        );
+        try std.testing.expect(!scheme_info.contains_identity_variables);
+        walk_self_use_records += 1;
+    }
+    try std.testing.expectEqual(@as(usize, 1), walk_self_use_records);
 }
 
 test "recursive reference provenance marks the annotated self use but not an external call" {

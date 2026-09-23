@@ -1735,7 +1735,7 @@ pub fn parseCheckModule(
     available_imports: []const AvailableImport,
     roc_ctx: ?CoreCtx,
 ) Error!CheckedModule {
-    const owned_source = try makeModuleSource(allocator, source_kind, source, inspect_wrap);
+    const owned_source = try makeModuleSource(allocator, source_kind, source, inspect_wrap, available_imports);
     errdefer allocator.free(owned_source);
 
     const module_env = try allocator.create(ModuleEnv);
@@ -1788,7 +1788,6 @@ pub fn parseCheckModule(
             .builtin_indices = builtin_indices,
         },
         .is_entry_module = true,
-        .imported_modules = if (available_imports.len == 0) null else &imported_modules,
     });
     errdefer czer.deinit();
 
@@ -1821,7 +1820,11 @@ pub fn parseCheckModule(
             imported_envs[i + 2] = available.env;
         }
     }
+    try can.resolveDeferredFileImports(module_env, .{ .read = .{ .ctx = canon_ctx } });
     resolveImportsConst(module_env, imported_envs);
+    try can.resolveDeferredImports(module_env, .{
+        .imports = .{ .resolved_store = imported_envs },
+    });
 
     const checker = try allocator.create(Check);
     errdefer allocator.destroy(checker);
@@ -2084,6 +2087,7 @@ fn zeroArgRootBody(module_env: *const ModuleEnv, def_idx: CIR.Def.Idx) ZeroArgRo
         .e_hosted_lambda,
         .e_run_low_level,
         => zeroArgRootInvariant("compile-time REPL root was not a lambda"),
+        .e_deferred_import_ref => std.debug.panic("compiler invariant violated: deferred import reference reached a stage that runs after import resolution", .{}),
     };
     const lambda = switch (module_env.store.getExpr(lambda_idx)) {
         .e_lambda => |lambda| lambda,
@@ -2145,6 +2149,7 @@ fn zeroArgRootBody(module_env: *const ModuleEnv, def_idx: CIR.Def.Idx) ZeroArgRo
         .e_hosted_lambda,
         .e_run_low_level,
         => zeroArgRootInvariant("compile-time REPL closure did not contain a lambda"),
+        .e_deferred_import_ref => std.debug.panic("compiler invariant violated: deferred import reference reached a stage that runs after import resolution", .{}),
     };
     if (lambda.args.span.len != 0) {
         if (@import("builtin").mode == .Debug) {
@@ -2521,17 +2526,33 @@ fn makeModuleSource(
     source_kind: SourceKind,
     source: []const u8,
     inspect_wrap: bool,
+    available_imports: []const AvailableImport,
 ) Error![]u8 {
-    return switch (source_kind) {
+    const body = switch (source_kind) {
         .expr => if (inspect_wrap)
-            std.fmt.allocPrint(allocator, "main = || Str.inspect(({s}))", .{source})
+            try std.fmt.allocPrint(allocator, "main = || Str.inspect(({s}))", .{source})
         else
-            std.fmt.allocPrint(allocator, "main = || ({s})", .{source}),
+            try std.fmt.allocPrint(allocator, "main = || ({s})", .{source}),
         .module => if (inspect_wrap)
-            std.fmt.allocPrint(allocator, "{s}\n\ncodex_test_inspect_main = || Str.inspect(({{ roc_eval_main: main }}).roc_eval_main)\n", .{source})
+            try std.fmt.allocPrint(allocator, "{s}\n\ncodex_test_inspect_main = || Str.inspect(({{ roc_eval_main: main }}).roc_eval_main)\n", .{source})
         else
-            allocator.dupe(u8, source),
+            try allocator.dupe(u8, source),
     };
+    // An expression test writes no header, so the modules the test supplies
+    // reach it through `import` statements this wrapper writes for it.
+    if (source_kind != .expr or available_imports.len == 0) return body;
+    defer allocator.free(body);
+
+    var wrapped = std.ArrayList(u8).empty;
+    errdefer wrapped.deinit(allocator);
+    for (available_imports) |available| {
+        try wrapped.appendSlice(allocator, "import ");
+        try wrapped.appendSlice(allocator, available.name);
+        try wrapped.append(allocator, '\n');
+    }
+    try wrapped.append(allocator, '\n');
+    try wrapped.appendSlice(allocator, body);
+    return wrapped.toOwnedSlice(allocator);
 }
 
 fn resolveImportsByModuleIndex(module_envs: []const *ModuleEnv) void {
@@ -3704,12 +3725,15 @@ pub fn lirInterpreterTranscript(allocator: Allocator, lowered: *const LoweredPro
 
     var static_data = try @import("interpreter_static_data.zig").InterpreterStaticData.init(allocator, lowered.view.static_data, lowered.view.static_data_value_count);
     defer static_data.deinit();
+    var static_strings = try Interpreter.buildStaticStrings(allocator, &lowered.view.store);
+    defer static_strings.deinit();
 
     var interp = try Interpreter.initWithBoxyTables(
         allocator,
         &lowered.view.store,
         &lowered.view.layouts,
         boxy_runtime.BoxyTables.fromImageView(&lowered.view),
+        static_strings.view(),
         runtime_env.get_ops(),
     );
     defer interp.deinit();

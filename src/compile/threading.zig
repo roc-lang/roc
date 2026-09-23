@@ -5,6 +5,7 @@
 //! Mutex/Condition compiles but operates single-threaded.
 
 const std = @import("std");
+const base = @import("base");
 const builtin = @import("builtin");
 /// Whether the target OS is freestanding (e.g. WASM). Used throughout
 /// the compile module to gate threading and native OS functionality.
@@ -33,5 +34,5 @@ pub const Condition = if (!is_freestanding) std.Io.Condition else struct {
 /// Returns the number of available CPU cores, falling back to 1 on error or freestanding targets.
 pub fn getCpuCount() usize {
     if (comptime is_freestanding) return 1;
-    return std.Thread.getCpuCount() catch 1;
+    return base.cpu_count.workerCount();
 }

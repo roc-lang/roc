@@ -38,10 +38,13 @@ pub const ResourceError = std.mem.Allocator.Error;
 
 /// Debug-only count of join-summary solver work items, for scaling tests
 /// and profiling. Not updated in release builds.
-pub var solver_iterations: u64 = 0;
+pub var solver_iterations: @import("arc_state.zig").WorkCounter = .{};
 
 /// Debug-only count of locals examined by borrow-group liveness queries.
-pub var group_liveness_member_visits: u64 = 0;
+pub var group_liveness_member_visits: @import("arc_state.zig").WorkCounter = .{};
+
+/// Debug-only count of resources examined by join keep-set liveness queries.
+pub var keep_set_liveness_visits: @import("arc_state.zig").WorkCounter = .{};
 
 /// Options for ARC insertion.
 pub const InsertOptions = struct {
@@ -60,6 +63,12 @@ pub const InsertOptions = struct {
     post_check_executor: ?*const TaskExecutor.Executor = null,
     /// Reset once on entry, then records accepted work and successful commits.
     metrics_out: ?*ParallelMetrics = null,
+    /// Base procedures planned and emitted per wave. A storage bound
+    /// independent of worker count: identity reservation and commit order do
+    /// not depend on it, since every base procedure is planned before any
+    /// queued variant. Each wave costs three coordinator synchronizations, so
+    /// production keeps it wide; wave-structure tests narrow it.
+    emission_wave_size: usize = default_emission_wave_size,
 };
 
 /// Exact work and worker callbacks for signature-dependent uniqueness solving.
@@ -142,7 +151,6 @@ const ProcArcDomain = struct {
     /// Full committed field-place domain for dismantlable aggregate
     /// resources; zero for ordinary whole-value resources.
     resource_full_masks: []u64,
-    refcounted_locals: []const LIR.LocalId,
     group_bit_index: []const u32,
     group_leaders: []const LIR.LocalId,
     value_use_bit_index: []const u32,
@@ -164,7 +172,6 @@ const ProcArcDomain = struct {
         const resource_bit_index = try allocator.alloc(u32, frame_len);
         @memset(resource_bit_index, no_arc_bit);
         const resource_locals_buffer = try allocator.alloc(LIR.LocalId, frame_len);
-        const refcounted_locals_buffer = try allocator.alloc(LIR.LocalId, frame_len);
         const group_bit_index = try allocator.alloc(u32, frame_len);
         @memset(group_bit_index, no_arc_bit);
         const group_leaders_buffer = try allocator.alloc(LIR.LocalId, frame_len);
@@ -191,13 +198,10 @@ const ProcArcDomain = struct {
             mapped_len += 1;
         }
 
-        var refcounted_count: usize = 0;
         for (frame_locals) |local| {
             const local_index = @intFromEnum(local);
             if (local_index >= local_contains_refcounted.len) arcInvariant("ARC refcounted-local table did not cover frame local");
             if (!local_contains_refcounted[local_index]) continue;
-            refcounted_locals_buffer[refcounted_count] = local;
-            refcounted_count += 1;
 
             const resource_locals = [_]LIR.LocalId{
                 local,
@@ -256,7 +260,6 @@ const ProcArcDomain = struct {
             .resource_bit_index = resource_bit_index,
             .resource_locals = resource_locals_buffer[0..resource_count],
             .resource_full_masks = resource_full_masks,
-            .refcounted_locals = refcounted_locals_buffer[0..refcounted_count],
             .group_bit_index = group_bit_index,
             .group_leaders = group_leaders_buffer[0..group_count],
             .value_use_bit_index = value_use_bit_index,
@@ -378,15 +381,36 @@ const GroupLivenessIndex = struct {
     /// containing only non-resource locals have empty ranges.
     ranges: []const Range = &.{},
 
-    fn init(allocator: Allocator, domain: *const ProcArcDomain, solution: *const arc_solve.Solution) ResourceError!GroupLivenessIndex {
+    /// Join seeding inverts only singleton raw bits and group bits. The
+    /// singleton prefix maps raw bits to resource indices (or no_arc_bit for
+    /// solver-only anchors); each group range contains only concrete RC units.
+    /// Absent for procedures without joins and for identity-numbered frames.
+    seed_resources: []const u32 = &.{},
+    seed_ranges: []const Range = &.{},
+
+    fn init(
+        allocator: Allocator,
+        domain: *const ProcArcDomain,
+        solution: *const arc_solve.Solution,
+        seed_refcounted: ?[]const bool,
+    ) ResourceError!GroupLivenessIndex {
         if (domain.group_leaders.len == 0) return .{};
         const raw_bits = try allocator.alloc(u32, domain.resource_locals.len);
         const ranges = try allocator.alloc(Range, domain.group_leaders.len);
         @memset(ranges, .{});
+        const seed_ranges: []Range = if (seed_refcounted != null)
+            try allocator.alloc(Range, ranges.len)
+        else
+            &.{};
+        @memset(seed_ranges, .{});
         var singletons: u32 = 0;
         for (domain.resource_locals) |local| {
             if (domain.groupBitOf(solution.leaderOf(local))) |bit| {
-                ranges[bit - raw_bits.len].end += 1;
+                const group = bit - raw_bits.len;
+                ranges[group].end += 1;
+                if (seed_refcounted) |rc| {
+                    if (rc[@intFromEnum(local)]) seed_ranges[group].end += 1;
+                }
             } else {
                 singletons += 1;
             }
@@ -398,18 +422,66 @@ const GroupLivenessIndex = struct {
             offset += count;
         }
         std.debug.assert(offset == raw_bits.len);
+        var seed_offset = singletons;
+        for (seed_ranges) |*range| {
+            const count = range.end;
+            range.* = .{ .start = seed_offset, .end = seed_offset };
+            seed_offset += count;
+        }
+        const seed_resources: []u32 = if (seed_refcounted != null)
+            try allocator.alloc(u32, seed_offset)
+        else
+            &.{};
         var singleton_bit: u32 = 0;
-        for (domain.resource_locals, raw_bits) |local, *raw_bit| {
+        for (domain.resource_locals, raw_bits, 0..) |local, *raw_bit, resource| {
             if (domain.groupBitOf(solution.leaderOf(local))) |bit| {
-                const range = &ranges[bit - raw_bits.len];
+                const group = bit - raw_bits.len;
+                const range = &ranges[group];
                 raw_bit.* = range.end;
                 range.end += 1;
+                if (seed_refcounted) |rc| {
+                    if (rc[@intFromEnum(local)]) {
+                        const seed_range = &seed_ranges[group];
+                        seed_resources[seed_range.end] = @intCast(resource);
+                        seed_range.end += 1;
+                    }
+                }
             } else {
                 raw_bit.* = singleton_bit;
+                if (seed_refcounted) |rc| {
+                    seed_resources[singleton_bit] = if (rc[@intFromEnum(local)]) @intCast(resource) else no_arc_bit;
+                }
                 singleton_bit += 1;
             }
         }
-        return .{ .raw_bits = raw_bits, .ranges = ranges };
+        return .{ .raw_bits = raw_bits, .ranges = ranges, .seed_resources = seed_resources, .seed_ranges = seed_ranges };
+    }
+
+    /// Exact inverse of groupUsedFromTable over concrete refcounted locals.
+    /// Raw bits for group members and borrowed-result bits do not select units.
+    fn seedKeep(self: *const GroupLivenessIndex, reads: *const ExactBitSet, refcounted: []const bool, keep: *OwnedSet) ResourceError!void {
+        const resources = keep.domain.resource_locals;
+        if (resources.len == 0) return;
+        std.debug.assert(self.seed_ranges.len == self.ranges.len);
+        const singleton_end = if (self.ranges.len == 0) resources.len else self.ranges[0].start;
+        var singletons = reads.iteratorRange(0, singleton_end);
+        while (singletons.next()) |bit| {
+            const resource = if (self.ranges.len == 0) blk: {
+                if (!refcounted[@intFromEnum(resources[bit])]) continue;
+                break :blk @as(u32, @intCast(bit));
+            } else self.seed_resources[bit];
+            if (resource == no_arc_bit) continue;
+            if (builtin.mode == .Debug) keep_set_liveness_visits.increment();
+            try keep.setResource(resource);
+        }
+        var groups = reads.iteratorRange(resources.len, resources.len + self.seed_ranges.len);
+        while (groups.next()) |bit| {
+            const range = self.seed_ranges[bit - resources.len];
+            for (self.seed_resources[range.start..range.end]) |resource| {
+                if (builtin.mode == .Debug) keep_set_liveness_visits.increment();
+                try keep.setResource(resource);
+            }
+        }
     }
 
     fn rawBitOf(self: *const GroupLivenessIndex, domain: *const ProcArcDomain, local: LIR.LocalId) ?usize {
@@ -423,7 +495,7 @@ const GroupLivenessIndex = struct {
         else {
             if (leader == except) return false;
             const bit = self.rawBitOf(domain, leader) orelse return false;
-            if (builtin.mode == .Debug) _ = @atomicRmw(u64, &group_liveness_member_visits, .Add, 1, .monotonic);
+            if (builtin.mode == .Debug) group_liveness_member_visits.increment();
             return reads.isSet(bit);
         };
         if (self.rawBitOf(domain, except)) |bit| {
@@ -512,7 +584,7 @@ pub fn insert(store: *LirStore, layouts: *const layout_mod.Store, options: Inser
     const source_prefix = store.captureBodyPrefix();
     var source_start: usize = 0;
     while (source_start < sources.len) {
-        const end = @min(source_start + emission_wave_size, sources.len);
+        const end = @min(source_start + options.emission_wave_size, sources.len);
         try runArcTasks(SourceCache, sources[source_start..end], .source, store.allocator, options);
         source_start = end;
     }
@@ -535,7 +607,7 @@ pub fn insert(store: *LirStore, layouts: *const layout_mod.Store, options: Inser
     // The wave width is a storage bound independent of worker count. Identity
     // reservation and commit order are identical for inline and pooled runs.
     while (base_index < base_proc_count or variant_index < variants.queue.items.len) {
-        const owners = try store.allocator.alloc(EmissionOwner, emission_wave_size);
+        const owners = try store.allocator.alloc(EmissionOwner, options.emission_wave_size);
         defer store.allocator.free(owners);
         var count: usize = 0;
         defer for (owners[0..count]) |*owner| owner.deinit();
@@ -612,7 +684,7 @@ pub fn insert(store: *LirStore, layouts: *const layout_mod.Store, options: Inser
     }
 }
 
-const emission_wave_size = 32;
+const default_emission_wave_size = 128;
 const ArcTaskPhase = enum { source, planning, emission };
 
 /// Submission failures stop admission, not draining. Owners remain live until
@@ -967,52 +1039,13 @@ fn computeEmissionContainsRefcounted(
         if (stmt == .assign_low_level and stmt.assign_low_level.op == .erased_capture_load) {
             const target = stmt.assign_low_level.target;
             const target_layout = store.getLocal(target).layout_idx;
-            if (try layoutMayContainBoxyDynamic(allocator, layouts, target_layout, &visited, &stack)) {
+            if (try arc_dismantle.layoutMayContainBoxyDynamic(allocator, layouts, target_layout, &visited, &stack)) {
                 try contains.exclude(allocator, target);
             }
         }
     }
 
     return contains;
-}
-
-/// Cycle-safe check for whether a layout may hold descriptor-driven dynamic
-/// (`erased_box`) content. Recursive tag unions reference themselves through
-/// their layout indices, so the walk tracks visited indices; `visited` and
-/// `stack` are caller-owned scratch reused across queries.
-fn layoutMayContainBoxyDynamic(
-    allocator: Allocator,
-    layouts: *const layout_mod.Store,
-    layout_idx: layout_mod.Idx,
-    visited: *std.AutoHashMap(layout_mod.Idx, void),
-    stack: *std.ArrayList(layout_mod.Idx),
-) ResourceError!bool {
-    visited.clearRetainingCapacity();
-    stack.clearRetainingCapacity();
-    try stack.append(allocator, layout_idx);
-    while (stack.pop()) |idx| {
-        if ((try visited.getOrPut(idx)).found_existing) continue;
-        const layout_val = layouts.getLayout(idx);
-        switch (layout_val.tag) {
-            .erased_box => return true,
-            .box, .list => try stack.append(allocator, layout_val.getIdx()),
-            .list_of_zst, .box_of_zst, .zst, .scalar, .erased_callable, .ptr => {},
-            .struct_ => {
-                const info = layouts.getStructInfo(layout_val);
-                for (0..info.fields.len) |index| {
-                    try stack.append(allocator, info.fields.get(@intCast(index)).layout);
-                }
-            },
-            .tag_union => {
-                const info = layouts.getTagUnionInfo(layout_val);
-                for (0..info.variants.len) |index| {
-                    try stack.append(allocator, info.variants.get(@intCast(index)).payload_layout);
-                }
-            },
-            .closure => try stack.append(allocator, layout_val.getClosure().captures_layout_idx),
-        }
-    }
-    return false;
 }
 
 const VariantSelector = struct {
@@ -1207,6 +1240,13 @@ const ExactBitSet = struct {
         _ = try self.words.meetWith(&other.words, {}, intersectWord);
     }
 
+    /// Whether any bit is set. The snapshot answers from its structure, so
+    /// this costs the tree depth rather than the domain's width.
+    fn isEmpty(self: *const ExactBitSet) bool {
+        const word_len = std.math.divCeil(usize, self.bit_len, 64) catch unreachable;
+        return !self.words.hasNonEmptyInRange(0, word_len);
+    }
+
     fn count(self: *const ExactBitSet) usize {
         var total: usize = 0;
         const word_len = std.math.divCeil(usize, self.bit_len, 64) catch unreachable;
@@ -1214,56 +1254,35 @@ const ExactBitSet = struct {
         return total;
     }
 
-    fn Iterator(comptime options: std.bit_set.IteratorOptions) type {
-        if (options.kind != .set) @compileError("ARC exact sets iterate only set bits");
-        return struct {
-            set: *const ExactBitSet,
-            word_cursor: usize,
-            word_base: usize = 0,
-            pending: u64 = 0,
+    const RangeIterator = struct {
+        words: ArcSnapshot(u64, 0).RangeIterator,
+        start: usize,
+        end: usize,
+        word_base: usize = 0,
+        pending: u64 = 0,
 
-            fn next(self: *@This()) ?usize {
-                return switch (options.direction) {
-                    .forward => {
-                        const word_len = std.math.divCeil(usize, self.set.bit_len, 64) catch unreachable;
-                        while (true) {
-                            if (self.pending != 0) {
-                                const word_bit: usize = @intCast(@ctz(self.pending));
-                                self.pending &= self.pending - 1;
-                                return self.word_base + word_bit;
-                            }
-                            if (self.word_cursor >= word_len) return null;
-                            self.word_base = self.word_cursor * 64;
-                            self.pending = self.set.words.get(@intCast(self.word_cursor));
-                            self.word_cursor += 1;
-                        }
-                    },
-                    .reverse => {
-                        while (true) {
-                            if (self.pending != 0) {
-                                const word_bit: usize = @intCast(63 - @clz(self.pending));
-                                self.pending &= ~(@as(u64, 1) << @intCast(word_bit));
-                                const bit = self.word_base + word_bit;
-                                if (bit < self.set.bit_len) return bit;
-                            }
-                            if (self.word_cursor == 0) return null;
-                            self.word_cursor -= 1;
-                            self.word_base = self.word_cursor * 64;
-                            self.pending = self.set.words.get(@intCast(self.word_cursor));
-                        }
-                    },
-                };
+        fn next(self: *RangeIterator) ?usize {
+            while (self.pending == 0) {
+                const word = self.words.next() orelse return null;
+                self.word_base = @as(usize, word.index) * 64;
+                self.pending = word.value;
+                if (self.start > self.word_base) self.pending &= @as(u64, std.math.maxInt(u64)) << @as(u6, @intCast(self.start - self.word_base));
+                if (self.end - self.word_base < 64) self.pending &= @as(u64, std.math.maxInt(u64)) >> @as(u6, @intCast(64 - (self.end - self.word_base)));
             }
-        };
-    }
+            const bit = self.word_base + @ctz(self.pending);
+            self.pending &= self.pending - 1;
+            return bit;
+        }
+    };
 
-    fn iterator(self: *const ExactBitSet, comptime options: std.bit_set.IteratorOptions) Iterator(options) {
+    /// Enumerate set bits in a half-open range, skipping absent and excluded
+    /// word subtrees rather than looking up every word in the domain.
+    fn iteratorRange(self: *const ExactBitSet, start: usize, end: usize) RangeIterator {
+        std.debug.assert(start <= end and end <= self.bit_len);
         return .{
-            .set = self,
-            .word_cursor = switch (options.direction) {
-                .forward => 0,
-                .reverse => std.math.divCeil(usize, self.bit_len, 64) catch unreachable,
-            },
+            .words = self.words.iteratorRange(@intCast(start / 64), if (start == end) start / 64 else @as(u64, @intCast(end / 64)) + @intFromBool(end % 64 != 0)),
+            .start = start,
+            .end = end,
         };
     }
 
@@ -2508,7 +2527,7 @@ const Inserter = struct {
         try self.pushSolveSegment(&tasks, body, entry_owned, .{}, root_plan);
         while (true) {
             while (tasks.pop()) |task| {
-                if (builtin.mode == .Debug) _ = @atomicRmw(u64, &solver_iterations, .Add, 1, .monotonic);
+                if (builtin.mode == .Debug) solver_iterations.increment();
                 switch (task) {
                     .segment => |segment| try self.processSolveSegment(&tasks, segment),
                     .join_process => |join_index| try self.processSolveJoin(&tasks, join_index),
@@ -3928,6 +3947,7 @@ const Inserter = struct {
         reads: *const ExactBitSet,
         local: LIR.LocalId,
     ) bool {
+        if (builtin.mode == .Debug) keep_set_liveness_visits.increment();
         if (self.groupBitOf(local)) |bit| return reads.isSet(bit);
         const bit = self.rawLivenessBitOf(local) orelse return false;
         return reads.isSet(bit);
@@ -3938,9 +3958,7 @@ const Inserter = struct {
     /// the final keep, so the fixpoint descends monotonically.
     fn seedSolveBodyKeep(self: *Inserter, summary: *JoinSummary) ResourceError!void {
         const reads = try self.computeReadsBeforeRebind(summary.body, null, 0);
-        for (self.domain().refcounted_locals) |local| {
-            if (self.groupUsedFromTable(reads, local)) try summary.body_keep.set(local);
-        }
+        try self.groupLivenessIndex().seedKeep(reads, self.local_contains_refcounted, &summary.body_keep);
         try self.placeJoinRetainedInto(summary, null, &summary.body_keep);
         try self.placeSolveJoinParamsInto(summary, &summary.body_keep);
     }
@@ -6064,10 +6082,10 @@ const Inserter = struct {
         /// Compact node bits whose forward paths can reach a loop boundary.
         reaches_loop_edge: std.bit_set.DynamicBitSetUnmanaged = .{},
 
-        fn init(allocator: Allocator, proc_domain: *const ProcArcDomain, solution: *const arc_solve.Solution) ResourceError!ReadBeforeRebindGraph {
+        fn init(allocator: Allocator, proc_domain: *const ProcArcDomain, solution: *const arc_solve.Solution, seed_refcounted: ?[]const bool) ResourceError!ReadBeforeRebindGraph {
             return .{
                 .allocator = allocator,
-                .group_liveness = try GroupLivenessIndex.init(allocator, proc_domain, solution),
+                .group_liveness = try GroupLivenessIndex.init(allocator, proc_domain, solution, seed_refcounted),
                 .nodes = .empty,
                 .successors = .empty,
             };
@@ -6273,7 +6291,7 @@ const Inserter = struct {
         const graph_slot = &self.source_liveness.graph;
         if (graph_slot.* != null) return;
         if (self.source_liveness.frozen) arcInvariant("ARC frozen source liveness lacked its prepared graph");
-        graph_slot.* = try ReadBeforeRebindGraph.init(self.source_liveness.allocator, self.domain(), self.solution);
+        graph_slot.* = try ReadBeforeRebindGraph.init(self.source_liveness.allocator, self.domain(), self.solution, if (self.join_bodies.len == 0 or self.domain().resource_locals.len == 0) null else self.local_contains_refcounted);
         errdefer {
             graph_slot.* = null;
             self.source_liveness.stmt_node_indices.clearRetainingCapacity();
@@ -6821,7 +6839,7 @@ const Inserter = struct {
 
         var keep_reads = try ExactBitSet.initEmpty(allocator, self.domain().livenessBitLen());
         try self.noteLivenessLoopKeep(&keep_reads, keep.set);
-        cache.consumed_keep_bits = keep_reads.count() != 0;
+        cache.consumed_keep_bits = !keep_reads.isEmpty();
 
         const rows = try allocator.alloc(?ExactBitSet, node_count);
         @memset(rows, null);
@@ -6917,13 +6935,13 @@ const Inserter = struct {
         const allocator = self.emission_allocator;
         var new_keep_reads = try ExactBitSet.initEmpty(allocator, self.domain().livenessBitLen());
         try self.noteLivenessLoopKeep(&new_keep_reads, keep.set);
-        var new_iter = new_keep_reads.iterator(.{});
+        var new_iter = new_keep_reads.iteratorRange(0, new_keep_reads.bit_len);
         while (new_iter.next()) |bit| {
             if (!old_keep_reads.isSet(bit)) arcInvariant("ARC loop boundary facts grew after their monotone keep-set shrank");
         }
         if (old_keep_reads.eql(new_keep_reads)) {
             cache.dirty = false;
-            cache.consumed_keep_bits = new_keep_reads.count() != 0;
+            cache.consumed_keep_bits = !new_keep_reads.isEmpty();
             if (builtin.mode == .Debug) try self.certifyLoopReadsBeforeRebind(cache);
             return;
         }
@@ -6991,7 +7009,7 @@ const Inserter = struct {
 
         old_keep_reads.unsetAll();
         try old_keep_reads.setUnion(new_keep_reads);
-        cache.consumed_keep_bits = new_keep_reads.count() != 0;
+        cache.consumed_keep_bits = !new_keep_reads.isEmpty();
         cache.dirty = false;
         if (builtin.mode == .Debug) try self.certifyLoopReadsBeforeRebind(cache);
     }
@@ -7438,6 +7456,7 @@ const Inserter = struct {
         return switch (op) {
             .incref => .incref,
             .decref, .free => .decref,
+            .host_drop => arcInvariant("ARC RC statement carried a host-shaped drop adapter"),
         };
     }
 
@@ -7487,8 +7506,11 @@ const OwnedSet = struct {
     fn deinit(_: *OwnedSet) void {}
 
     fn set(self: *OwnedSet, local: LIR.LocalId) ResourceError!void {
-        const bit = self.domain.requiredResourceBitOf(local);
-        try self.putEntry(@intCast(bit), .{
+        try self.setResource(@intCast(self.domain.requiredResourceBitOf(local)));
+    }
+
+    fn setResource(self: *OwnedSet, bit: u32) ResourceError!void {
+        try self.putEntry(bit, .{
             .present = true,
             .residual_mask = self.domain.fullResidualMaskAt(bit),
         });
@@ -7689,7 +7711,9 @@ test "exact ARC sets preserve operations across persistent forks" {
 
         var cloned = try left.clone(arena.allocator());
         try testing.expect(cloned.eql(left));
-        var iter = cloned.iterator(.{ .direction = .reverse });
+        // A domain whose width is not a whole number of words must not
+        // enumerate the padding bits above it.
+        var iter = cloned.iteratorRange(0, cloned.bit_len);
         try testing.expectEqual(bit_len - 1, iter.next().?);
         try testing.expectEqual(@as(?usize, null), iter.next());
     }
@@ -9433,9 +9457,17 @@ test "ARC proc domain excludes scalar and other-proc locals" {
         defer domain.clearGlobalIndices();
         try testing.expectEqual(@as(usize, 2), domain.frame_locals.len);
         try testing.expectEqual(@as(usize, 1), domain.resource_locals.len);
-        try testing.expectEqual(@as(usize, 1), domain.refcounted_locals.len);
         try testing.expectEqual(@as(usize, 1), domain.livenessBitLen());
         try testing.expectEqual(resource, domain.resourceLocalAt(0));
+        var failing = testing.FailingAllocator.init(testing.allocator, .{ .fail_index = 0 });
+        const seed_index = try GroupLivenessIndex.init(failing.allocator(), &domain, &solution, &local_contains_refcounted);
+        try testing.expectEqual(@as(usize, 0), seed_index.seed_resources.len);
+        var reads = try ExactBitSet.initEmpty(arena.allocator(), domain.livenessBitLen());
+        try reads.set(0);
+        var seed = try OwnedSet.init(arena.allocator(), &domain);
+        try seed_index.seedKeep(&reads, &local_contains_refcounted, &seed);
+        try testing.expect(seed.contains(resource));
+        try testing.expect(!seed.contains(scalar));
 
         var owned = try OwnedSet.init(arena.allocator(), &domain);
         defer owned.deinit();
@@ -9562,7 +9594,6 @@ test "ARC lender-death query sees a live solver-only borrow anchor" {
     );
     defer domain.clearGlobalIndices();
     try testing.expectEqual(@as(usize, 2), domain.resource_locals.len);
-    try testing.expectEqual(@as(usize, 1), domain.refcounted_locals.len);
 
     var liveness_arena = std.heap.ArenaAllocator.init(testing.allocator);
     defer liveness_arena.deinit();
@@ -9584,7 +9615,7 @@ test "ARC lender-death query sees a live solver-only borrow anchor" {
     };
 
     // Excluding the concrete projection leaves only the live solver anchor.
-    // Scanning `refcounted_locals` here incorrectly reports the lender dead;
+    // Scanning only concrete refcounted locals incorrectly reports the lender dead;
     // scanning the exact `resource_locals` domain reports it live.
     try testing.expect(try inserter.groupUsedInPathExcept(use_anchor, concrete, concrete, null));
 }
@@ -9673,6 +9704,83 @@ test "ARC proc domain sparse high global IDs retain only a tiny frame" {
     try testing.expectEqual(@as(usize, 0), indices.count());
 }
 
+test "ARC sparse join seeds agree with exhaustive group predicates and emission masks" {
+    var f = try ArcTest.init(testing.allocator);
+    defer f.deinit();
+    var locals: [10]LIR.LocalId = undefined;
+    for (&locals, 0..) |*local, i| local.* = try f.local(switch (i) {
+        3, 4 => f.pair_str,
+        5, 6, 9 => .i64,
+        else => .str,
+    });
+    var body = try f.ret(locals[9]);
+    body = try f.assignI64(locals[9], 0, body);
+    var i: usize = 9;
+    while (i > 0) {
+        i -= 1;
+        body = try f.expectStmt(locals[i], body);
+        body = switch (i) {
+            2 => try f.assignRefLocal(locals[i], locals[0], body),
+            4 => try f.assignRefLocal(locals[i], locals[3], body),
+            6 => try f.assignRefLocal(locals[i], locals[5], body),
+            8 => try f.assignRefLocal(locals[i], locals[7], body),
+            3 => try f.assignStruct(locals[i], &.{ locals[0], locals[1] }, body),
+            5 => try f.assignI64(locals[i], 1, body),
+            else => try f.assignStr(locals[i], "seed", body),
+        };
+    }
+    const proc = try f.addProc(&.{}, body, .i64);
+    const solver_rc = [_]bool{ true, true, true, true, true, false, false, true, true, false };
+    var solution = try arc_solve.solve(testing.allocator, &f.store, &f.layouts, &solver_rc, &.{}, &.{}, true);
+    defer solution.deinit();
+    try testing.expectEqual(locals[0], solution.leaderOf(locals[2]));
+    try testing.expectEqual(locals[3], solution.leaderOf(locals[4]));
+    try testing.expectEqual(locals[7], solution.leaderOf(locals[8]));
+    // A scalar-only group and a solver-only RC anchor must not create units.
+    solution.leader[@intFromEnum(locals[6])] = @intFromEnum(locals[5]);
+    var concrete_rc = solver_rc;
+    concrete_rc[7] = false;
+    var indices = collections.DenseMap(LIR.LocalId, u32).init(testing.allocator);
+    defer indices.deinit();
+    var arena = std.heap.ArenaAllocator.init(testing.allocator);
+    defer arena.deinit();
+    var domain = try ProcArcDomain.init(arena.allocator(), &f.store, &solution, &concrete_rc, &indices, f.store.getProcSpec(proc).frame_locals);
+    defer domain.clearGlobalIndices();
+    const grouped = try GroupLivenessIndex.init(arena.allocator(), &domain, &solution, &concrete_rc);
+    const no_joins = try GroupLivenessIndex.init(arena.allocator(), &domain, &solution, null);
+    try testing.expectEqual(@as(usize, 0), no_joins.seed_resources.len);
+    try testing.expectEqual(@as(usize, 0), no_joins.seed_ranges.len);
+    try testing.expectEqualSlices(u32, grouped.raw_bits, no_joins.raw_bits);
+    try testing.expect(grouped.rawBitOf(&domain, locals[1]).? != domain.requiredResourceBitOf(locals[1]));
+    // Extra suffix bits model borrowed-result liveness, which never seeds units.
+    var reads = try ExactBitSet.initEmpty(arena.allocator(), domain.livenessBitLen() + 65);
+    var expected = try OwnedSet.init(arena.allocator(), &domain);
+    var actual = try OwnedSet.init(arena.allocator(), &domain);
+    var prng = std.Random.DefaultPrng.init(11323);
+    const random = prng.random();
+    for (0..100) |round| {
+        reads.unsetAll();
+        expected.clear();
+        actual.clear();
+        // Exercise individual bits (especially raw members without group
+        // bits), empty/dense rows, and independently populated mixed rows.
+        for (0..reads.bit_len) |bit| {
+            const live = if (round == 0) false else if (round == 1) true else if (round < reads.bit_len + 2) bit == round - 2 else random.boolean();
+            if (live) try reads.set(bit);
+        }
+        // The immutable index must consume this emission's committed masks.
+        domain.resource_full_masks[domain.requiredResourceBitOf(locals[3])] = if (round % 2 == 0) 0 else 3;
+        domain.resource_full_masks[domain.requiredResourceBitOf(locals[4])] = if (round % 2 == 0) 3 else 0;
+        for (domain.resource_locals) |local| {
+            if (!concrete_rc[@intFromEnum(local)]) continue;
+            const bit = domain.groupBitOf(solution.leaderOf(local)) orelse grouped.rawBitOf(&domain, local).?;
+            if (reads.isSet(bit)) try expected.set(local);
+        }
+        try grouped.seedKeep(&reads, &concrete_rc, &actual);
+        try testing.expect(expected.eql(&actual));
+    }
+}
+
 test "ARC grouped raw liveness agrees with exhaustive resource queries" {
     var f = try ArcTest.init(testing.allocator);
     defer f.deinit();
@@ -9702,7 +9810,7 @@ test "ARC grouped raw liveness agrees with exhaustive resource queries" {
     defer arena.deinit();
     var domain = try ProcArcDomain.init(arena.allocator(), &f.store, &solution, &rc, &indices, f.store.getProcSpec(proc).frame_locals);
     defer domain.clearGlobalIndices();
-    const grouped = try GroupLivenessIndex.init(arena.allocator(), &domain, &solution);
+    const grouped = try GroupLivenessIndex.init(arena.allocator(), &domain, &solution, null);
     var reads = try ExactBitSet.initEmpty(arena.allocator(), domain.livenessBitLen());
     var expected = [_]bool{false} ** locals.len;
     var prng = std.Random.DefaultPrng.init(11127);
@@ -9747,11 +9855,16 @@ test "ARC raw-liveness ranges exclude boundary bits without scanning wide empty 
                 if (start <= bit and bit < end) expected = true;
             }
             try testing.expectEqual(expected, reads.anySetInRange(start, end));
+            var iter = reads.iteratorRange(start, end);
+            for ([_]usize{ 0, 63, 64, 511, 512, 999999, 1000000 }) |bit| {
+                if (start <= bit and bit < end) try testing.expectEqual(bit, iter.next().?);
+            }
+            try testing.expectEqual(null, iter.next());
         }
     }
-    const before = @import("arc_state.zig").range_query_node_visits;
+    const before = @import("arc_state.zig").range_query_node_visits.read();
     try testing.expect(!reads.anySetInRange(513, 999999));
-    if (builtin.mode == .Debug) try testing.expect(@import("arc_state.zig").range_query_node_visits - before <= 2 * 8 * 11);
+    if (builtin.mode == .Debug) try testing.expect(@import("arc_state.zig").range_query_node_visits.read() - before <= 2 * 8 * 11);
 }
 
 test "RC pass-through: non-refcounted i64 block unchanged" {
@@ -11285,9 +11398,9 @@ fn chainedJoinSolveWork(join_count: usize) Allocator.Error!u64 {
     // The delta over the process-global counter is meaningful because the
     // test runner executes tests in one thread; nothing else runs `insert`
     // between the two reads.
-    const before = solver_iterations;
+    const before = solver_iterations.read();
     try f.run();
-    return solver_iterations - before;
+    return solver_iterations.read() - before;
 }
 
 test "RC join summary solver work grows linearly with chained joins" {
@@ -11328,9 +11441,9 @@ fn strConcatChainGroupLivenessWork(chain_len: usize) Allocator.Error!u64 {
     }
     const body = try f.assignStr(seed, "seed", current);
     _ = try f.addProc(&.{}, body, .str);
-    const before = group_liveness_member_visits;
+    const before = group_liveness_member_visits.read();
     try f.run();
-    return group_liveness_member_visits - before;
+    return group_liveness_member_visits.read() - before;
 }
 
 test "RC borrow-group liveness work grows linearly with chained string concats" {
@@ -11343,6 +11456,49 @@ test "RC borrow-group liveness work grows linearly with chained string concats" 
             .{ small, large },
         );
     }
+    try testing.expect(large <= small * 3);
+}
+
+/// One join and one refcounted local per step, as in a wide inlined dispatch
+/// tree. Each join keeps only the single value returned at the end.
+fn chainedJoinKeepSetLivenessWork(step_count: usize) Allocator.Error!u64 {
+    var f = try ArcTest.init(testing.allocator);
+    defer f.deinit();
+    const carried = try f.local(.str);
+    const literals = try testing.allocator.alloc(LIR.LocalId, step_count);
+    defer testing.allocator.free(literals);
+    for (literals) |*literal| literal.* = try f.local(.str);
+
+    var current = try f.ret(carried);
+    for (literals) |literal| {
+        const id = f.freshJoinPointId();
+        const jump = try f.store.addCFStmt(.{ .jump = .{ .target = id } });
+        current = try f.store.addCFStmt(.{ .join = .{
+            .id = id,
+            .params = LIR.LocalSpan.empty(),
+            .body = current,
+            .remainder = jump,
+        } });
+        current = try f.assignStr(literal, "x", current);
+    }
+    const body = try f.assignStr(carried, "seed", current);
+    _ = try f.addProc(&.{}, body, .str);
+    const before = keep_set_liveness_visits.read();
+    try f.run();
+    return keep_set_liveness_visits.read() - before;
+}
+
+test "RC join keep-set liveness work grows linearly with a proc's refcounted locals" {
+    if (builtin.mode != .Debug) return;
+    const small = try chainedJoinKeepSetLivenessWork(32);
+    const large = try chainedJoinKeepSetLivenessWork(64);
+    if (large > small * 3) {
+        std.debug.print(
+            "keep-set liveness work grew nonlinearly: {d} local visits at 32 joins, {d} at 64\n",
+            .{ small, large },
+        );
+    }
+    try testing.expect(small > 0);
     try testing.expect(large <= small * 3);
 }
 
@@ -16161,7 +16317,6 @@ test "ARC ownership iteration skips absent resources and preserves release order
         .resource_bit_index = indices,
         .resource_locals = locals,
         .resource_full_masks = masks,
-        .refcounted_locals = locals,
         .group_bit_index = absent,
         .group_leaders = &.{},
         .value_use_bit_index = absent,
@@ -16170,11 +16325,11 @@ test "ARC ownership iteration skips absent resources and preserves release order
     var owned = try OwnedSet.init(allocator, &domain);
     const keys = [_]usize{ 7, 512, width - 1 };
     for (keys) |key| try owned.set(locals[key]);
-    const before = @import("arc_state.zig").iterator_node_visits;
+    const before = @import("arc_state.zig").iterator_node_visits.read();
     var reverse = owned.iterator(.{ .direction = .reverse });
     for (0..keys.len) |index| try testing.expectEqual(keys[keys.len - 1 - index], reverse.next().?);
     try testing.expectEqual(null, reverse.next());
-    if (builtin.mode == .Debug) try testing.expect(@import("arc_state.zig").iterator_node_visits - before <= keys.len * 11);
+    if (builtin.mode == .Debug) try testing.expect(@import("arc_state.zig").iterator_node_visits.read() - before <= keys.len * 11);
     // The solver filters a persistent fork by removing each visited resource.
     var filtered = try cloneOwnedSetWith(allocator, &owned);
     var forward = filtered.iterator(.{});

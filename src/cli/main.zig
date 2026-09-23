@@ -147,7 +147,7 @@ const TimingInfo = compile.package.TimingInfo;
 /// the single- vs multi-threaded compilation mode from it. Returned as a
 /// `{ thread_count, mode }` tuple for destructuring at the call site.
 fn resolveThreadDefaults(max_threads: ?usize) struct { usize, Mode } {
-    const thread_count: usize = max_threads orelse (std.Thread.getCpuCount() catch 1);
+    const thread_count: usize = max_threads orelse base.cpu_count.workerCount();
     return .{ thread_count, if (thread_count <= 1) .single_threaded else .multi_threaded };
 }
 
@@ -336,6 +336,7 @@ const CliMainError =
         ComptimeExhaustiveness,
         Crash,
         DivisionByZero,
+        DepsFailed,
         DocsFailed,
         EmptyArchive,
         EntrypointNotFound,
@@ -1401,7 +1402,7 @@ pub fn main(init: std.process.Init) Allocator.Error!void {
 
 fn parsedArgsStartBackgroundCleanup(args: cli_args.CliArgs) bool {
     return switch (args) {
-        .run, .build, .check, .test_cmd, .docs, .bump, .glue, .install, .experimental_lsp => true,
+        .run, .build, .check, .test_cmd, .docs, .deps, .bump, .glue, .install, .experimental_lsp => true,
         .fmt, .bundle, .unbundle, .repl, .version, .help, .licenses, .problem => false,
     };
 }
@@ -1470,7 +1471,7 @@ fn mainArgs(gpa: Allocator, arena: Allocator, args: []const []const u8, std_io: 
         .unbundle => .unbundle,
         .bump => .bump,
         .install => .install,
-        .docs, .glue, .experimental_lsp, .repl, .version, .help, .licenses, .problem => .unknown,
+        .docs, .deps, .glue, .experimental_lsp, .repl, .version, .help, .licenses, .problem => .unknown,
     };
 
     // Create CLI context at the top level - this is passed to all command handlers
@@ -1534,6 +1535,7 @@ fn mainArgs(gpa: Allocator, arena: Allocator, args: []const []const u8, std_io: 
         .glue => |glue_args| rocGlue(&ctx, glue_args),
         .version => ctx.io.stdout().print("Roc compiler version {s}\n", .{build_options.compiler_version}),
         .docs => |docs_args| rocDocs(&ctx, docs_args),
+        .deps => |deps_args| rocDeps(&ctx, deps_args),
         .bump => |bump_args| rocBump(&ctx, bump_args),
         .install => |install_args| rocInstall(&ctx, install_args),
         .experimental_lsp => |lsp_args| try lsp.runWithStdIo(gpa, std_io, .{
@@ -4609,6 +4611,7 @@ fn buildHotReloadChildArgv(
     if (args.no_cache) try appendOwnedArg(ctx.gpa, &argv, &owned, "--no-cache={}", .{@as(u8, 1)});
     try appendOwnedArg(ctx.gpa, &argv, &owned, "--no-color={}", .{if (ctx.no_color) @as(u8, 1) else @as(u8, 0)});
     try appendResolveLimitArgs(ctx.gpa, &argv, &owned, args.resolve_limits);
+    try appendHotReloadReplaceDepArgs(ctx.gpa, &argv, &owned, &args.resolve_limits.replace_deps);
 
     return .{
         .argv = try argv.toOwnedSlice(ctx.gpa),
@@ -5399,6 +5402,64 @@ test "hot reload worker args require append offset" {
     try std.testing.expectEqual(true, parsed.preserve_descriptor_refs);
     try std.testing.expectEqual(base.SpecializationStrategy.lss, parsed.specialization_strategy);
     try std.testing.expect(parsed.no_color);
+    try std.testing.expectEqual(@as(usize, 0), parsed.resolve_limits.replace_deps.len);
+
+    // Replacements arrive as old/new pairs, in order.
+    const with_replacements = try parseHotReloadDevWorkerArgs(&.{
+        "--path=app.roc",
+        "--target=x64linux",
+        "--generation=2",
+        "--descriptor-offset=7680",
+        "--image-limit=7680",
+        "--region-start=1024",
+        "--region-end=3072",
+        "--append-offset=4096",
+        "--preserve-descriptor-refs=1",
+        "--shm-handle=3",
+        "--shm-size=8192",
+        "--expected-host=" ++ zero_host,
+        "--watch-inputs-file=watch-inputs",
+        "--specialization-strategy=lss",
+        "--replace-dep-old=https://example.com/pkg/1.2.3/abc.tar.zst?x=y",
+        "--replace-dep-new=../pkg/main.roc",
+        "--replace-dep-old=./b/main.roc",
+        "--replace-dep-new=https://example.com/pkg/1.2.3/abc.tar.zst",
+    });
+    const replacements = with_replacements.resolve_limits.replace_deps.slice();
+    try std.testing.expectEqual(@as(usize, 2), replacements.len);
+    try std.testing.expectEqualStrings("https://example.com/pkg/1.2.3/abc.tar.zst?x=y", replacements[0].old);
+    try std.testing.expectEqualStrings("../pkg/main.roc", replacements[0].new);
+    try std.testing.expectEqualStrings("./b/main.roc", replacements[1].old);
+    try std.testing.expectEqualStrings("https://example.com/pkg/1.2.3/abc.tar.zst", replacements[1].new);
+
+    // A dangling old, a new without its old, and two olds in a row are all rejected.
+    for ([_][]const []const u8{
+        &.{"--replace-dep-old=./a/main.roc"},
+        &.{"--replace-dep-new=./a/main.roc"},
+        &.{ "--replace-dep-old=./a/main.roc", "--replace-dep-old=./b/main.roc", "--replace-dep-new=./c/main.roc" },
+    }) |extra| {
+        var argv = std.ArrayList([]const u8).empty;
+        defer argv.deinit(std.testing.allocator);
+        try argv.appendSlice(std.testing.allocator, &.{
+            "--path=app.roc",
+            "--target=x64linux",
+            "--generation=2",
+            "--descriptor-offset=7680",
+            "--image-limit=7680",
+            "--region-start=1024",
+            "--region-end=3072",
+            "--append-offset=4096",
+            "--preserve-descriptor-refs=1",
+            "--shm-handle=3",
+            "--shm-size=8192",
+            "--expected-host=" ++ zero_host,
+            "--watch-inputs-file=watch-inputs",
+            "--specialization-strategy=lss",
+        });
+        try argv.appendSlice(std.testing.allocator, extra);
+        try std.testing.expectError(error.InvalidArguments, parseHotReloadDevWorkerArgs(argv.items));
+    }
+
     try std.testing.expectError(error.InvalidArguments, parseHotReloadDevWorkerArgs(&.{
         "--path=app.roc",
         "--target=x64linux",
@@ -6175,6 +6236,8 @@ fn parseHotReloadDevWorkerArgs(args: []const []const u8) error{InvalidArguments}
     var no_cache: bool = false;
     var no_color: bool = false;
     var resolve_limits = cli_args.ResolveLimitArgs{};
+    // `--replace-dep-old` must be followed by its `--replace-dep-new`.
+    var pending_replace_old: ?[]const u8 = null;
 
     for (args) |arg| {
         if (hotReloadFlagValue(arg, "--path")) |value| {
@@ -6221,10 +6284,20 @@ fn parseHotReloadDevWorkerArgs(args: []const []const u8) error{InvalidArguments}
             resolve_limits.max_package_mb = std.fmt.parseInt(u32, value, 10) catch return error.InvalidArguments;
         } else if (hotReloadFlagValue(arg, "--max-transitive-mb")) |value| {
             resolve_limits.max_transitive_mb = std.fmt.parseInt(u32, value, 10) catch return error.InvalidArguments;
+        } else if (hotReloadFlagValue(arg, "--replace-dep-old")) |value| {
+            if (pending_replace_old != null) return error.InvalidArguments;
+            pending_replace_old = value;
+        } else if (hotReloadFlagValue(arg, "--replace-dep-new")) |value| {
+            const old = pending_replace_old orelse return error.InvalidArguments;
+            if (resolve_limits.replace_deps.len == cli_args.ReplaceDepArgs.max) return error.InvalidArguments;
+            resolve_limits.replace_deps.items[resolve_limits.replace_deps.len] = .{ .old = old, .new = value };
+            resolve_limits.replace_deps.len += 1;
+            pending_replace_old = null;
         } else {
             return error.InvalidArguments;
         }
     }
+    if (pending_replace_old != null) return error.InvalidArguments;
 
     return .{
         .path = path orelse return error.InvalidArguments,
@@ -6676,12 +6749,15 @@ fn evaluateLirImageEntrypoint(
 ) Allocator.Error!void {
     var static_data = try eval.InterpreterStaticData.init(allocator, view.static_data, view.static_data_value_count);
     defer static_data.deinit();
+    var static_strings = try eval.LirInterpreter.buildStaticStrings(allocator, &view.store);
+    defer static_strings.deinit();
 
     var interpreter = try eval.LirInterpreter.initWithBoxyTables(
         allocator,
         &view.store,
         &view.layouts,
         eval.LirInterpreter.BoxyTables.fromImageView(view),
+        static_strings.view(),
         ops,
     );
     defer interpreter.deinit();
@@ -7154,6 +7230,10 @@ fn resolutionConfigFromLimits(limits: cli_args.ResolveLimitArgs) compile.package
         const max_bytes = if (mb == 0) null else @as(u64, mb) * 1024 * 1024;
         config.max_transitive_expanded_bytes = max_bytes;
         config.max_platform_transitive_expanded_bytes = max_bytes;
+    }
+    for (limits.replace_deps.slice()) |arg| {
+        // The parser caps occurrences at the same bound, so this cannot overflow.
+        config.replace_deps.append(.{ .old = arg.old, .new = arg.new }) catch unreachable;
     }
     return config;
 }
@@ -8573,6 +8653,7 @@ fn compileModulePack(
     errdefer compile.static_data_exports.deinitStaticData(ctx.gpa, static_data_exports);
 
     var object_compiler = backend.ObjectFileCompiler.initForPack(ctx.gpa);
+    object_compiler.post_check_executor = build_env.postCheckExecutor();
     const compiled = object_compiler.compileToObjectFile(
         &lowered.lir_result.store,
         &lowered.lir_result.layouts,
@@ -8609,10 +8690,10 @@ fn writePacksToStore(
 ) CliMainError!void {
     if (app_artifacts) |set| {
         if (build_env.packPlacementForArtifactKey(root_artifact.key)) |placement| {
-            if (!try store.has(placement.origin, placement.identity, root_artifact.key.bytes)) {
+            if (!try store.has(placement.origin, placement.identity, root_artifact.codeGenerationKey().bytes)) {
                 const bytes = try packFileBytes(ctx.gpa, set, app_lowered);
                 defer ctx.gpa.free(bytes);
-                store.write(placement.origin, placement.identity, root_artifact.key.bytes, bytes) catch |err| {
+                store.write(placement.origin, placement.identity, root_artifact.codeGenerationKey().bytes, bytes) catch |err| {
                     std.log.warn("object cache could not store the program's pack: {}", .{err});
                 };
             }
@@ -8624,7 +8705,7 @@ fn writePacksToStore(
         const placement = build_env.packPlacementForArtifactKey(artifact.key) orelse continue;
         const origin = placement.origin;
         const identity = placement.identity;
-        if (try store.has(origin, identity, artifact.key.bytes)) continue;
+        if (try store.has(origin, identity, artifact.codeGenerationKey().bytes)) continue;
         const roots = try lir.PackProgram.closedExportRoots(ctx.gpa, artifact);
         defer ctx.gpa.free(roots);
         if (roots.len == 0) continue;
@@ -8633,7 +8714,7 @@ fn writePacksToStore(
         const set = &(pack.compiled.artifacts orelse continue);
         const bytes = try packFileBytes(ctx.gpa, set, &pack.lowered);
         defer ctx.gpa.free(bytes);
-        store.write(origin, identity, artifact.key.bytes, bytes) catch |err| {
+        store.write(origin, identity, artifact.codeGenerationKey().bytes, bytes) catch |err| {
             std.log.warn("object cache could not store a module's pack: {}", .{err});
         };
     }
@@ -9708,6 +9789,35 @@ fn devBackendBreakdown(timing: backend.ObjectFileCompiler.TimingSnapshot) [8]pro
     };
 }
 
+fn nativeEmissionCounters(metrics: backend.dev.NativeProcCompiler.Metrics) [12]progress.Counter {
+    return .{
+        .{ .name = "Tasks submitted", .count = metrics.tasks_submitted },
+        .{ .name = "Tasks committed", .count = metrics.tasks_committed },
+        .{ .name = "Procedures emitted", .count = metrics.procedures_emitted },
+        .{ .name = "Procedures reused", .count = metrics.procedures_reused },
+        .{ .name = "Helpers emitted", .count = metrics.helpers_emitted },
+        .{ .name = "Helpers reused", .count = metrics.helpers_reused },
+        .{ .name = "Code bytes emitted", .count = metrics.code_bytes_emitted },
+        .{ .name = "Code bytes reused", .count = metrics.code_bytes_reused },
+        .{ .name = "Rejected revision", .count = metrics.rejected_revision },
+        .{ .name = "Rejected context", .count = metrics.rejected_context },
+        .{ .name = "Rejected target", .count = metrics.rejected_target },
+        .{ .name = "Peak inflight fragments", .count = metrics.peak_inflight_fragments },
+    };
+}
+
+test "native artifact counters preserve every measured field" {
+    var metrics: backend.dev.NativeProcCompiler.Metrics = .{};
+    inline for (std.meta.fields(@TypeOf(metrics)), 1..) |field, value| {
+        @field(metrics, field.name) = value;
+    }
+    const counters = nativeEmissionCounters(metrics);
+    try std.testing.expectEqual(std.meta.fields(@TypeOf(metrics)).len, counters.len);
+    for (counters, 1..) |counter, value| {
+        try std.testing.expectEqual(@as(u64, @intCast(value)), counter.count);
+    }
+}
+
 test "dev backend timing labels name the backend and emitted instruction format" {
     try std.testing.expectEqualStrings("x64 Backend", devBackendPhaseName(.x86_64));
     try std.testing.expectEqualStrings("arm64 Backend", devBackendPhaseName(.aarch64));
@@ -10689,6 +10799,11 @@ fn rocBuildNative(ctx: *CliCtx, args: cli_args.BuildArgs) CliMainError!BuildResu
     var object_compiler = backend.ObjectFileCompiler.init(ctx.gpa);
     var backend_timing = backend.ObjectFileCompiler.Timing.init(ctx.io.std_io);
     object_compiler.timing = &backend_timing;
+    object_compiler.post_check_executor = build_env.postCheckExecutor();
+    object_compiler.reuse_same_program = if (build_env.runtimeProgramSession()) |session|
+        session.runtimeNativeArtifacts()
+    else
+        null;
     if (loaded_packs) |*packs| object_compiler.splice_source = packs.spliceSource();
     object_compiler.capture_artifacts = object_cache_enabled;
     defer if (object_compiler.captured_artifacts) |*set| set.deinit();
@@ -10721,6 +10836,7 @@ fn rocBuildNative(ctx: *CliCtx, args: cli_args.BuildArgs) CliMainError!BuildResu
         return error.NativeCompilationFailed;
     };
     reporter.endWithBreakdown(&devBackendBreakdown(backend_timing.snapshot()));
+    reporter.recordCounters("Native artifact emission", &nativeEmissionCounters(backend_timing.snapshot().native_emission));
     try writePackObjects(ctx, &build_env, root_artifact, imported_artifacts, relation_artifacts, &lowered, args, target, final_output_path);
     if (object_store) |*store| {
         try writePacksToStore(ctx, &build_env, store, root_artifact, imported_artifacts, relation_artifacts, &lowered, if (object_compiler.captured_artifacts) |*set| set else null, args, target);
@@ -11198,9 +11314,16 @@ const CliTestSourceModuleMap = std.StringHashMapUnmanaged(BuildEnv.CompiledModul
 const CliTestRunSummary = struct {
     passed: u32 = 0,
     failed: u32 = 0,
+    /// Tests that could not compile, rather than the number of diagnostics.
     compiler_errors: u32 = 0,
+    /// Checking diagnostics can occur outside tests or affect several tests.
+    diagnostic_errors: usize = 0,
     modules_with_tests: u32 = 0,
     cached_modules: u32 = 0,
+
+    fn allPassed(self: CliTestRunSummary) bool {
+        return self.failed == 0 and self.compiler_errors == 0 and self.diagnostic_errors == 0;
+    }
 };
 
 fn writeCliTestRunSummary(
@@ -11210,7 +11333,7 @@ fn writeCliTestRunSummary(
     fully_cached: bool,
     use_color: bool,
 ) std.Io.Writer.Error!void {
-    const all_passed = summary.failed == 0 and summary.compiler_errors == 0;
+    const all_passed = summary.allPassed();
     if (all_passed) {
         try writer.print("All ({}) tests passed", .{summary.passed});
     } else {
@@ -11243,6 +11366,12 @@ fn writeCliTestRunSummary(
         summary.compiler_errors,
         reset,
     });
+    if (summary.diagnostic_errors != 0) {
+        try writer.print("Compilation failed with {} error{s}.\n", .{
+            summary.diagnostic_errors,
+            if (summary.diagnostic_errors == 1) "" else "s",
+        });
+    }
 }
 
 test "issue 10624: roc test summaries share duration and cache formatting" {
@@ -11273,6 +11402,16 @@ test "issue 10624: roc test summaries share duration and cache formatting" {
             .summary = .{ .passed = 1, .failed = 1, .compiler_errors = 1 },
             .fully_cached = true,
             .expected = "Ran 3 tests in 1.2 ms. (cached):\n    1 passed\n    1 failed\n    1 compiler errors\n",
+        },
+        .{
+            .summary = .{ .passed = 2, .compiler_errors = 1, .diagnostic_errors = 2 },
+            .fully_cached = false,
+            .expected = "Ran 3 tests in 1.2 ms.:\n    2 passed\n    0 failed\n    1 compiler errors\nCompilation failed with 2 errors.\n",
+        },
+        .{
+            .summary = .{ .passed = 1, .diagnostic_errors = 1 },
+            .fully_cached = false,
+            .expected = "Ran 1 tests in 1.2 ms.:\n    1 passed\n    0 failed\n    0 compiler errors\nCompilation failed with 1 error.\n",
         },
     };
 
@@ -11314,6 +11453,9 @@ const CliTestPlanModule = struct {
 };
 
 const CliTestPlan = struct {
+    /// Includes modules whose tests were all rejected during checking.
+    modules_with_tests: u32,
+    /// Only modules with executable test requests need runtime planning.
     modules: []CliTestPlanModule,
     entries: []CliTestPlanEntry,
 
@@ -11692,7 +11834,7 @@ fn loadCachedCliTestResults(
         const has_message = readU8(data, &offset) orelse return null;
 
         const region = base.Region.from_raw_offsets(region_start, region_end);
-        if (!inline_expect and !region.eq(testRootRegion(module.semantic.env, test_roots[root_index - 1]))) return null;
+        if (!inline_expect and !region.eq(testRootRegion(module.semantic.env, test_roots[root_index - 1].source))) return null;
 
         var visibility: CliTestFailureDetailVisibility = .always;
         const message = if (has_message == 0) null else blk: {
@@ -11760,9 +11902,11 @@ fn collectTestRootRequests(
 fn buildCliTestPlan(
     ctx: *CliCtx,
     modules: []const BuildEnv.CompiledModuleInfo,
+    module_results: *std.ArrayList(CliModuleTestResult),
 ) Allocator.Error!CliTestPlan {
     var planned_modules = std.ArrayList(CliTestPlanModule).empty;
     var entries = std.ArrayList(CliTestPlanEntry).empty;
+    var modules_with_tests: u32 = 0;
     errdefer {
         for (planned_modules.items) |*module| {
             ctx.gpa.free(module.test_roots);
@@ -11790,6 +11934,37 @@ fn buildCliTestPlan(
         const artifact = module.semantic.checked_artifact orelse continue;
         const test_roots = try collectTestRootRequests(ctx.gpa, artifact);
         errdefer ctx.gpa.free(test_roots);
+
+        // Root requests deliberately exclude erroneous bodies. The checked
+        // roots still retain their identities and the checker's diagnostic
+        // facts, so rejected tests can participate in result aggregation
+        // without being lowered, executed, or stored in the execution cache.
+        var checking_results = std.ArrayList(CliTestResultItem).empty;
+        defer checking_results.deinit(ctx.gpa);
+        for (artifact.compile_time_roots.roots) |root| {
+            if (root.kind != .expect) continue;
+            if (!artifact.checked_bodies.exprContainsDiagnosticError(root.expr)) continue;
+            std.debug.assert(root.request_eligibility == .ineligible);
+            try checking_results.append(ctx.gpa, .{
+                .result = .compiler_error,
+                .order = @intFromEnum(root.id),
+                .region = testRootRegion(module.semantic.env, root.source),
+                // Checking renders the original diagnostic once. A second
+                // generic test failure would only duplicate that report.
+                .failure_detail = null,
+            });
+        }
+        if (test_roots.len != 0 or checking_results.items.len != 0) modules_with_tests += 1;
+        if (checking_results.items.len != 0) {
+            const results = try checking_results.toOwnedSlice(ctx.gpa);
+            errdefer ctx.gpa.free(results);
+            try module_results.append(ctx.gpa, .{
+                .env = module.semantic.env,
+                .path = module.path,
+                .results = results,
+                .cached = false,
+            });
+        }
         if (test_roots.len == 0) {
             ctx.gpa.free(test_roots);
             continue;
@@ -11804,7 +11979,7 @@ fn buildCliTestPlan(
                 .root_index = @intCast(root_index),
                 .root_order = root.order,
                 .result_index = result_index,
-                .region = testRootRegion(module.semantic.env, root),
+                .region = testRootRegion(module.semantic.env, root.source),
                 .symbol_name = symbol_name,
             }) catch |err| {
                 ctx.gpa.free(symbol_name);
@@ -11835,6 +12010,7 @@ fn buildCliTestPlan(
     errdefer deinitCliTestPlanEntries(ctx.gpa, owned_entries);
 
     return .{
+        .modules_with_tests = modules_with_tests,
         .modules = owned_modules,
         .entries = owned_entries,
     };
@@ -11842,9 +12018,9 @@ fn buildCliTestPlan(
 
 fn testRootRegion(
     env: *const ModuleEnv,
-    root: check.CheckedArtifact.RootRequest,
+    source: check.CheckedArtifact.RootSource,
 ) base.Region {
-    return switch (root.source) {
+    return switch (source) {
         .statement => |statement| env.store.getStatementRegion(statement),
         .def, .expr, .required_binding, .hoisted => {
             if (builtin.mode == .Debug) {
@@ -12033,6 +12209,7 @@ fn collectExpectBindingPatterns(
             .e_break,
             .e_hosted_lambda,
             => {},
+            .e_deferred_import_ref => std.debug.panic("compiler invariant violated: deferred import reference reached a stage that runs after import resolution", .{}),
         }
     }
 
@@ -12183,6 +12360,16 @@ fn tagReachabilityForOpt(opt: cli_args.OptLevel) bool {
     };
 }
 
+/// Whether the LIR rewrites that only speed up the produced program run.
+/// Dev builds exist to compile fast; `--opt=speed` and `--opt=size` are where
+/// the program's own speed is bought.
+fn optimizeLirForOpt(opt: cli_args.OptLevel) bool {
+    return switch (opt) {
+        .size, .speed => true,
+        .dev, .interpreter => false,
+    };
+}
+
 fn proveRangesForOpt(opt: cli_args.OptLevel) bool {
     return switch (opt) {
         .size, .speed => true,
@@ -12264,6 +12451,9 @@ fn checkedRuntimeLoweringConfig(
             .list_in_place_map = listInPlaceMapForOpt(opt),
             .tag_reachability = tagReachabilityForOpt(opt),
             .prove_ranges = proveRangesForOpt(opt),
+            .fuse_tag_cases = optimizeLirForOpt(opt),
+            .scalarize_joins = optimizeLirForOpt(opt),
+            .reuse_boxes = optimizeLirForOpt(opt),
             .proc_debug_names = proc_debug_names,
         },
     };
@@ -12424,7 +12614,7 @@ fn collectCliTestRootRuns(
             .path = planned.module.path,
             .result_index = plan_entry.result_index,
             .root_proc = root_proc,
-            .region = testRootRegion(planned.module.semantic.env, root),
+            .region = testRootRegion(planned.module.semantic.env, root.source),
             .arg_layouts = arg_layouts,
             .ret_layout = proc.ret_layout,
             .symbol_name = plan_entry.symbol_name,
@@ -12680,11 +12870,14 @@ fn runInterpreterTestRoots(
         lowered.lir_result.static_data_values.items.len,
     );
     defer static_values.deinit();
+    var static_strings = try eval.LirInterpreter.buildStaticStrings(ctx.gpa, &lowered.lir_result.store);
+    defer static_strings.deinit();
     var interpreter = try eval.LirInterpreter.initWithBoxyTables(
         ctx.gpa,
         &lowered.lir_result.store,
         &lowered.lir_result.layouts,
         eval.LirInterpreter.BoxyTables.fromResult(&lowered.lir_result),
+        static_strings.view(),
         &roc_ops,
     );
     defer interpreter.deinit();
@@ -14518,6 +14711,34 @@ fn appendResolveLimitArgs(
     }
 }
 
+/// Forward every `--replace-dep OLD NEW` to a watch child, which parses the
+/// public command line and so takes the flag in its public three-argument form.
+fn appendReplaceDepArgs(
+    gpa: Allocator,
+    argv: *std.ArrayList([]const u8),
+    replace_deps: *const cli_args.ReplaceDepArgs,
+) Allocator.Error!void {
+    for (replace_deps.slice()) |replacement| {
+        try argv.append(gpa, "--replace-dep");
+        try argv.append(gpa, replacement.old);
+        try argv.append(gpa, replacement.new);
+    }
+}
+
+/// Forward every `--replace-dep OLD NEW` to the hot-reload worker, whose
+/// internal argument syntax is strictly `--flag=value`, as an old/new pair.
+fn appendHotReloadReplaceDepArgs(
+    gpa: Allocator,
+    argv: *std.ArrayList([]const u8),
+    owned: *std.ArrayList([]const u8),
+    replace_deps: *const cli_args.ReplaceDepArgs,
+) Allocator.Error!void {
+    for (replace_deps.slice()) |replacement| {
+        try appendOwnedArg(gpa, argv, owned, "--replace-dep-old={s}", .{replacement.old});
+        try appendOwnedArg(gpa, argv, owned, "--replace-dep-new={s}", .{replacement.new});
+    }
+}
+
 fn buildWatchChildArgv(ctx: *CliCtx, arg0: []const u8, command: WatchCommand, inputs_path: []const u8) Allocator.Error!WatchChildArgv {
     var argv = std.ArrayList([]const u8).empty;
     errdefer argv.deinit(ctx.gpa);
@@ -14540,6 +14761,7 @@ fn buildWatchChildArgv(ctx: *CliCtx, arg0: []const u8, command: WatchCommand, in
             if (args.verbose) try argv.append(ctx.gpa, "--verbose");
             if (args.max_threads) |jobs| try appendOwnedArg(ctx.gpa, &argv, &owned, "--jobs={}", .{jobs});
             try appendResolveLimitArgs(ctx.gpa, &argv, &owned, args.resolve_limits);
+            try appendReplaceDepArgs(ctx.gpa, &argv, &args.resolve_limits.replace_deps);
             try appendOwnedArg(ctx.gpa, &argv, &owned, "--watch-inputs-file={s}", .{inputs_path});
             try argv.append(ctx.gpa, args.path);
         },
@@ -14552,6 +14774,7 @@ fn buildWatchChildArgv(ctx: *CliCtx, arg0: []const u8, command: WatchCommand, in
             if (args.verbose) try argv.append(ctx.gpa, "--verbose");
             if (args.max_threads) |jobs| try appendOwnedArg(ctx.gpa, &argv, &owned, "--jobs={}", .{jobs});
             try appendResolveLimitArgs(ctx.gpa, &argv, &owned, args.resolve_limits);
+            try appendReplaceDepArgs(ctx.gpa, &argv, &args.resolve_limits.replace_deps);
             try appendOwnedArg(ctx.gpa, &argv, &owned, "--watch-inputs-file={s}", .{inputs_path});
             try argv.append(ctx.gpa, args.path);
         },
@@ -14569,6 +14792,7 @@ fn buildWatchChildArgv(ctx: *CliCtx, arg0: []const u8, command: WatchCommand, in
             if (args.wasm_memory) |bytes| try appendOwnedArg(ctx.gpa, &argv, &owned, "--wasm-memory={}", .{bytes});
             if (args.wasm_stack_size) |bytes| try appendOwnedArg(ctx.gpa, &argv, &owned, "--wasm-stack-size={}", .{bytes});
             try appendResolveLimitArgs(ctx.gpa, &argv, &owned, args.resolve_limits);
+            try appendReplaceDepArgs(ctx.gpa, &argv, &args.resolve_limits.replace_deps);
             try appendOwnedArg(ctx.gpa, &argv, &owned, "--watch-inputs-file={s}", .{inputs_path});
             try argv.append(ctx.gpa, args.path);
         },
@@ -14578,6 +14802,43 @@ fn buildWatchChildArgv(ctx: *CliCtx, arg0: []const u8, command: WatchCommand, in
         .argv = try argv.toOwnedSlice(ctx.gpa),
         .owned = try owned.toOwnedSlice(ctx.gpa),
     };
+}
+
+test "watch child argv forwards every dependency replacement" {
+    var io = Io.create(std.testing.io);
+    var ctx = CliCtx.init(std.testing.allocator, std.testing.allocator, &io, .check);
+    ctx.initIo();
+    defer ctx.deinit();
+
+    const url = "https://example.com/pkg/1.2.3/abc.tar.zst";
+    var replace_deps = cli_args.ReplaceDepArgs{};
+    replace_deps.items[0] = .{ .old = url, .new = "../pkg/main.roc" };
+    replace_deps.items[1] = .{ .old = "./b/main.roc", .new = url };
+    replace_deps.len = 2;
+
+    const commands = [_]WatchCommand{
+        .{ .check = .{ .path = "app.roc", .main = null, .resolve_limits = .{ .replace_deps = replace_deps } } },
+        .{ .build = .{ .path = "app.roc", .opt = .dev, .resolve_limits = .{ .replace_deps = replace_deps } } },
+        .{ .test_cmd = .{ .path = "app.roc", .opt = .dev, .main = null, .resolve_limits = .{ .replace_deps = replace_deps } } },
+    };
+    for (commands) |command| {
+        var child_argv = try buildWatchChildArgv(&ctx, "roc", command, "watch-inputs");
+        defer child_argv.deinit(std.testing.allocator);
+
+        // Re-parse the child command line exactly as the child will.
+        const parsed = try cli_args.parse(std.testing.allocator, std.testing.io, child_argv.argv[1..]);
+        const limits = switch (parsed) {
+            .check => |args| args.resolve_limits,
+            .build => |args| args.resolve_limits,
+            .test_cmd => |args| args.resolve_limits,
+            .run, .docs, .deps, .help, .problem, .fmt, .bundle, .unbundle, .repl, .glue, .version, .bump, .install, .experimental_lsp, .licenses => return error.TestUnexpectedResult,
+        };
+        try std.testing.expectEqual(@as(usize, 2), limits.replace_deps.len);
+        try std.testing.expectEqualStrings(url, limits.replace_deps.slice()[0].old);
+        try std.testing.expectEqualStrings("../pkg/main.roc", limits.replace_deps.slice()[0].new);
+        try std.testing.expectEqualStrings("./b/main.roc", limits.replace_deps.slice()[1].old);
+        try std.testing.expectEqualStrings(url, limits.replace_deps.slice()[1].new);
+    }
 }
 
 test "watch child argv propagates no-color" {
@@ -14836,7 +15097,7 @@ fn rocTest(ctx: *CliCtx, args_in: cli_args.TestArgs, arg0: []const u8) RocTestEr
         module_results.deinit(ctx.gpa);
     }
 
-    var test_plan = try buildCliTestPlan(ctx, modules);
+    var test_plan = try buildCliTestPlan(ctx, modules, &module_results);
     defer test_plan.deinit(ctx.gpa);
 
     const specialization_strategy = currentRuntimeSpecializationStrategy(args.specialization_strategy);
@@ -15035,6 +15296,8 @@ fn rocTest(ctx: *CliCtx, args_in: cli_args.TestArgs, arg0: []const u8) RocTestEr
         },
     };
     try coalesceInlineExpectResults(ctx.gpa, module_results.items, &total);
+    total.modules_with_tests = test_plan.modules_with_tests;
+    total.diagnostic_errors = diag.errors;
     reporter.end();
     recordPostCheckLowering(&reporter, &spec_timing, specialization_strategy);
     if (test_mode == .dev) recordDevTestExecution(&reporter, &dev_timing);
@@ -15043,7 +15306,8 @@ fn rocTest(ctx: *CliCtx, args_in: cli_args.TestArgs, arg0: []const u8) RocTestEr
     // Calculate elapsed time
     const end_time = std.Io.Timestamp.now(ctx.io.std_io, .real).nanoseconds;
     const elapsed_ns = @as(u64, @intCast(end_time - start_time));
-    const fully_cached = total.modules_with_tests > 0 and total.cached_modules == total.modules_with_tests;
+    const fully_cached = total.compiler_errors == 0 and total.diagnostic_errors == 0 and
+        total.modules_with_tests > 0 and total.cached_modules == total.modules_with_tests;
 
     // Render the per-module bodies once into in-memory buffers so we can
     // print them after the summary line.
@@ -15076,11 +15340,8 @@ fn rocTest(ctx: *CliCtx, args_in: cli_args.TestArgs, arg0: []const u8) RocTestEr
     try stderr.writeAll(stderr_body.written());
 
     // Report results
-    if (total.failed == 0 and total.compiler_errors == 0) {
+    if (total.allPassed()) {
         try writeCliTestRunSummary(stdout, total, elapsed_ns, fully_cached, report_config.shouldUseColors());
-        // Diagnostics determine the command status only after every independent
-        // test root has run; they never gate checked-artifact execution.
-        if (diag.errors > 0) return error.CompilationFailed;
         // Same warning exit policy as check/build/run: passing tests with
         // compile warnings exit 2.
         exitOnWarnings(ctx, diag.warnings);
@@ -15089,6 +15350,9 @@ fn rocTest(ctx: *CliCtx, args_in: cli_args.TestArgs, arg0: []const u8) RocTestEr
 
     try writeCliTestRunSummary(stderr, total, elapsed_ns, fully_cached, report_config.shouldUseColors());
 
+    // Diagnostics determine the command status only after every independent
+    // test root has run; they never gate checked-artifact execution.
+    if (diag.errors > 0) return error.CompilationFailed;
     return error.TestsFailed;
 }
 
@@ -15825,6 +16089,9 @@ fn renderCliTestResultEntry(
             );
         },
         .compiler_error => {
+            // A checking error already has its original diagnostic. Backend
+            // errors carry their own detail and still need a test report.
+            if (entry.result.failure_detail == null) return;
             const region_info = source_env.calcRegionInfo(entry.result.region);
             try printTestProblem(
                 allocator,
@@ -16426,6 +16693,7 @@ fn recordLoweringCounters(
         reporter.recordCounters(prefix ++ "Monotype type graph", &monotypeGraphCounters(snapshot.monotype_diagnostics));
         reporter.recordCounters(prefix ++ "Monotype body + dispatch", &monotypeBodyCounters(snapshot.monotype_diagnostics));
         reporter.recordCounters(prefix ++ "Monotype parallel execution", &monotypeParallelCounters(snapshot.monotype_parallel));
+        reporter.recordCounters(prefix ++ "SpecConstr parallel execution", &specConstrParallelCounters(snapshot.spec_constr_parallel));
         reporter.recordCounters(prefix ++ "Solved-LIR parallel execution", &solvedLirParallelCounters(snapshot.solved_lir_parallel));
     }
     reporter.recordCounters(prefix ++ "LIR pass parallel execution", &lirPassParallelCounters(snapshot.lir_pass_parallel));
@@ -16496,7 +16764,7 @@ fn recordDevTestExecution(reporter: *progress.Reporter, timing: *const eval.test
     );
 }
 
-fn monotypeSpecializationCounters(diagnostics: postcheck.Monotype.Lower.Diagnostics) [23]progress.Counter {
+fn monotypeSpecializationCounters(diagnostics: postcheck.Monotype.Lower.Diagnostics) [25]progress.Counter {
     const counters = diagnostics.specialization;
     return .{
         .{ .name = "Template requests", .count = counters.template_requests },
@@ -16517,6 +16785,8 @@ fn monotypeSpecializationCounters(diagnostics: postcheck.Monotype.Lower.Diagnost
         .{ .name = "Commit digest node misses", .count = counters.commit_digest_node_misses },
         .{ .name = "Interface replay digest root requests", .count = counters.interface_replay_digest_root_requests },
         .{ .name = "Interface replay digest node misses", .count = counters.interface_replay_digest_node_misses },
+        .{ .name = "Interface relation requests", .count = counters.interface_relation_requests },
+        .{ .name = "Interface replay hits", .count = counters.interface_replay_hits },
         .{ .name = "Exact type checks", .count = counters.exact_type_checks },
         .{ .name = "Nominal backing reuses", .count = counters.nominal_backing_reuses },
         .{ .name = "Nominal backing instantiations", .count = counters.nominal_backing_instantiations },
@@ -16608,6 +16878,56 @@ fn solvedLirParallelCounters(parallel: lir.CheckedPipeline.SolvedLirParallelMetr
         .{ .name = "Worker literal tasks committed", .count = parallel.worker_literal_tasks_committed },
         .{ .name = "Worker loop tasks committed", .count = parallel.worker_loop_tasks_committed },
     };
+}
+
+const spec_constr_counter_count = 7 + 2 * std.meta.fields(lir.CheckedPipeline.SpecConstrPhase).len;
+
+fn specConstrParallelCounters(parallel: lir.CheckedPipeline.SpecConstrParallelMetrics) [spec_constr_counter_count]progress.Counter {
+    var rows: [spec_constr_counter_count]progress.Counter = undefined;
+    rows[0..7].* = .{
+        .{ .name = "Tasks submitted", .count = parallel.tasks_submitted },
+        .{ .name = "Tasks committed", .count = parallel.tasks_committed },
+        .{ .name = "Patterns recorded", .count = parallel.patterns_recorded },
+        .{ .name = "Patterns admitted", .count = parallel.patterns_admitted },
+        .{ .name = "Bodies committed", .count = parallel.bodies_committed },
+        .{ .name = "Expressions committed", .count = parallel.expressions_committed },
+        .{ .name = "Peak retained body shards", .count = parallel.peak_retained_shards },
+    };
+    inline for (comptime std.meta.tags(lir.CheckedPipeline.SpecConstrPhase), 0..) |phase, index| {
+        const name = comptime switch (phase) {
+            .discovery => "Pattern discovery",
+            .unused_loop_results => "Loop-result projection",
+            .iterator_fusion => "Iterator fusion",
+        };
+        rows[7 + 2 * index] = .{ .name = name ++ " tasks", .count = parallel.committed_by_phase[index] };
+        rows[8 + 2 * index] = .{ .name = name ++ " changes", .count = parallel.changed_by_phase[index] };
+    }
+    return rows;
+}
+
+test "post-check diagnostics preserve labeled SpecConstr counts" {
+    const rows = specConstrParallelCounters(.{
+        .tasks_submitted = 1,
+        .tasks_committed = 2,
+        .patterns_recorded = 3,
+        .patterns_admitted = 4,
+        .bodies_committed = 5,
+        .expressions_committed = 6,
+        .peak_retained_shards = 7,
+        .committed_by_phase = .{ 8, 10, 12 },
+        .changed_by_phase = .{ 9, 11, 13 },
+    });
+    const names = [_][]const u8{
+        "Tasks submitted",           "Tasks committed",              "Patterns recorded",              "Patterns admitted",
+        "Bodies committed",          "Expressions committed",        "Peak retained body shards",      "Pattern discovery tasks",
+        "Pattern discovery changes", "Loop-result projection tasks", "Loop-result projection changes", "Iterator fusion tasks",
+        "Iterator fusion changes",
+    };
+    for (rows, names, 1..) |row, name, count| {
+        try std.testing.expectEqualStrings(name, row.name);
+        try std.testing.expectEqual(@as(u64, count), row.count);
+    }
+    for (specConstrParallelCounters(.{})) |row| try std.testing.expectEqual(@as(u64, 0), row.count);
 }
 
 fn arcParallelCounters(parallel: lir.CheckedPipeline.ArcParallelMetrics) [17]progress.Counter {
@@ -16967,7 +17287,9 @@ test "timings display every Monotype graph counter" {
 fn finishFrontEndPhase(reporter: *progress.Reporter, timing: anytype) void {
     reporter.endWithBreakdown(&frontEndBreakdown(timing));
     const compile_time = timing.compile_time_evaluation;
-    if (compile_time.total_ns == 0 and std.meta.eql(compile_time.lowering, lir.CheckedPipeline.TimingSnapshot{})) return;
+    if (compile_time.total_ns == 0 and
+        std.meta.eql(compile_time.lowering, lir.CheckedPipeline.TimingSnapshot{}) and
+        std.meta.eql(compile_time.native_emission, backend.dev.NativeProcCompiler.Metrics{})) return;
     reporter.recordCompletedWithBreakdown(
         "Shared Lowering and Compile-Time Evaluation",
         compile_time.total_ns,
@@ -16976,6 +17298,9 @@ fn finishFrontEndPhase(reporter: *progress.Reporter, timing: anytype) void {
     );
     if (!std.meta.eql(compile_time.lowering, lir.CheckedPipeline.TimingSnapshot{})) {
         recordLoweringCounters(reporter, compile_time.lowering, .lss, "Shared ");
+    }
+    if (!std.meta.eql(compile_time.native_emission, backend.dev.NativeProcCompiler.Metrics{})) {
+        reporter.recordCounters("Shared native artifact emission", &nativeEmissionCounters(compile_time.native_emission));
     }
 }
 
@@ -16992,6 +17317,7 @@ test "shared lowering reporting preserves counters for runtime reuse and continu
             .lir_passes_ns = 7,
             .arc_ns = 8,
             .solved_lir_parallel = .{ .tasks_submitted = 61, .tasks_committed = 61 },
+            .spec_constr_parallel = .{ .tasks_submitted = 63, .tasks_committed = 63 },
             .lir_pass_parallel = .{ .tasks_submitted = 67, .tasks_committed = 67 },
             .arc_parallel = .{ .planning_tasks_submitted = 71, .planning_tasks_committed = 71 },
         },
@@ -16999,6 +17325,7 @@ test "shared lowering reporting preserves counters for runtime reuse and continu
         .code_generation_ns = 10,
         .execution_ns = 11,
         .store_results_ns = 12,
+        .native_emission = .{ .procedures_emitted = 83 },
     };
     const rows = compileTimeEvaluationBreakdown(shared);
     for (rows, 1..) |row, index| try std.testing.expectEqual(@as(u64, @intCast(index)), row.ns);
@@ -17051,6 +17378,8 @@ test "shared lowering reporting preserves counters for runtime reuse and continu
         });
         reporter.begin("Specializing");
         finishPostCheckLowering(&reporter, &runtime, .lss);
+        reporter.recordCounters("Native artifact emission", &nativeEmissionCounters(.{ .procedures_reused = 89 }));
+        reporter.recordCounters("Test result cache", &.{.{ .name = "Hits", .count = 79 }});
         reporter.finish();
         const output = buf.written();
         for ([_][]const u8{
@@ -17058,10 +17387,14 @@ test "shared lowering reporting preserves counters for runtime reuse and continu
             "Shared Monotype type graph",
             "Shared Monotype body + dispatch",
             "Shared Monotype parallel execution",
+            "Shared SpecConstr parallel execution",
             "Shared Solved-LIR parallel execution",
             "Shared LIR pass parallel execution",
             "Shared ARC parallel execution",
+            "Shared native artifact emission",
+            "Native artifact emission",
         }) |label| try std.testing.expectEqual(@as(usize, 1), std.mem.count(u8, output, label));
+        try std.testing.expectEqual(@as(usize, 1), std.mem.count(u8, output, "Test result cache"));
         try std.testing.expect(std.mem.find(u8, output, "71") != null);
         try std.testing.expectEqual(
             @as(usize, if (case.runtime_continuation) 1 else 0),
@@ -17105,6 +17438,11 @@ fn printBuildSuccess(
             cache_stats.modules_compiled,
         });
         try stdout.print("    Cache Hit: {}%\n", .{cache_percent});
+        try stdout.print("    Canonicalized: {} cached, {} canonicalized, {} stored\n", .{
+            cache_stats.canonicalized_cache_hits,
+            cache_stats.canonicalized_cache_misses,
+            cache_stats.canonicalized_cache_stores,
+        });
     }
 }
 
@@ -17271,6 +17609,12 @@ const CheckResult = struct {
     modules_total: u32 = 0,
     cache_hits: u32 = 0,
     cache_misses: u32 = 0,
+    /// Modules loaded from the canonicalized-module cache.
+    canonicalized_cache_hits: u32 = 0,
+    /// Modules this build parsed and canonicalized.
+    canonicalized_cache_misses: u32 = 0,
+    /// Canonicalized-module cache entries this build wrote.
+    canonicalized_cache_stores: u32 = 0,
     modules_compiled: u32 = 0,
     /// Module compile time tracking (in nanoseconds)
     module_time_min_ns: u64 = 0,
@@ -17633,6 +17977,9 @@ fn checkFileWithBuildEnvPreserved(
                 .modules_total = cache_stats.modules_total,
                 .cache_hits = cache_stats.cache_hits,
                 .cache_misses = cache_stats.cache_misses,
+                .canonicalized_cache_hits = cache_stats.canonicalized_cache_hits,
+                .canonicalized_cache_misses = cache_stats.canonicalized_cache_misses,
+                .canonicalized_cache_stores = cache_stats.canonicalized_cache_stores,
                 .modules_compiled = cache_stats.modules_compiled,
                 .module_time_min_ns = cache_stats.module_time_min_ns,
                 .module_time_max_ns = cache_stats.module_time_max_ns,
@@ -17686,6 +18033,9 @@ fn checkFileWithBuildEnvPreserved(
         .modules_total = cache_stats.modules_total,
         .cache_hits = cache_stats.cache_hits,
         .cache_misses = cache_stats.cache_misses,
+        .canonicalized_cache_hits = cache_stats.canonicalized_cache_hits,
+        .canonicalized_cache_misses = cache_stats.canonicalized_cache_misses,
+        .canonicalized_cache_stores = cache_stats.canonicalized_cache_stores,
         .modules_compiled = cache_stats.modules_compiled,
         .module_time_min_ns = cache_stats.module_time_min_ns,
         .module_time_max_ns = cache_stats.module_time_max_ns,
@@ -17766,6 +18116,9 @@ fn checkFileWithBuildEnv(
             .modules_total = cache_stats.modules_total,
             .cache_hits = cache_stats.cache_hits,
             .cache_misses = cache_stats.cache_misses,
+            .canonicalized_cache_hits = cache_stats.canonicalized_cache_hits,
+            .canonicalized_cache_misses = cache_stats.canonicalized_cache_misses,
+            .canonicalized_cache_stores = cache_stats.canonicalized_cache_stores,
             .modules_compiled = cache_stats.modules_compiled,
             .module_time_min_ns = cache_stats.module_time_min_ns,
             .module_time_max_ns = cache_stats.module_time_max_ns,
@@ -17809,6 +18162,9 @@ fn checkFileWithBuildEnv(
         .modules_total = cache_stats.modules_total,
         .cache_hits = cache_stats.cache_hits,
         .cache_misses = cache_stats.cache_misses,
+        .canonicalized_cache_hits = cache_stats.canonicalized_cache_hits,
+        .canonicalized_cache_misses = cache_stats.canonicalized_cache_misses,
+        .canonicalized_cache_stores = cache_stats.canonicalized_cache_stores,
         .modules_compiled = cache_stats.modules_compiled,
         .module_time_min_ns = cache_stats.module_time_min_ns,
         .module_time_max_ns = cache_stats.module_time_max_ns,
@@ -18165,6 +18521,7 @@ fn printTimingBreakdown(writer: anytype, timing: ?CheckTimingInfo) void {
 /// Format:
 ///     Modules: 6 total, 4 cached, 2 built
 ///     Cache Hit: 67%
+///     Canonicalized: 5 cached, 1 canonicalized, 1 stored
 ///     Build: 8ms / 14ms / 25ms (min / avg / max)
 fn printVerboseStats(writer: anytype, result: *const CheckResult) void {
     const total = result.modules_total;
@@ -18181,6 +18538,14 @@ fn printVerboseStats(writer: anytype, result: *const CheckResult) void {
 
     // Print cache hit percentage
     writer.print("    Cache Hit: {}%\n", .{cache_percent}) catch {};
+
+    // The canonicalized-module cache is reported separately: it is keyed on one
+    // module's own source, so it hits where the checked cache misses.
+    writer.print("    Canonicalized: {} cached, {} canonicalized, {} stored\n", .{
+        result.canonicalized_cache_hits,
+        result.canonicalized_cache_misses,
+        result.canonicalized_cache_stores,
+    }) catch {};
 
     // Print build time breakdown (only if we have compiled modules)
     if (result.modules_compiled > 0) {
@@ -18789,6 +19154,195 @@ fn bumpExtractApi(ctx: *CliCtx, build_env: *compile.BuildEnv, side: []const u8) 
             return ctx.fail(.{ .bump_failed = .{ .title = "Cannot Extract Public API", .message = message } });
         },
     };
+}
+
+/// `roc deps`: resolve the root's dependency graph and print it as a tree
+/// on stdout. Nothing is compiled or run, and no source file is edited;
+/// resolution may download uncached bundles to read their headers.
+fn rocDeps(ctx: *CliCtx, args: cli_args.DepsArgs) CliMainError!void {
+    const trace = tracy.trace(@src());
+    defer trace.end();
+
+    const resolved_source = try resolveSourceArg(ctx, args.path, false);
+    const stdout = ctx.io.stdout();
+    const stderr = ctx.io.stderr();
+    const report_config = ctx.reportConfig(.stderr);
+
+    var build_env = try initCliBuildEnv(ctx, .{
+        .resolution_config = resolutionConfigFromLimits(args.resolve_limits),
+        .root_source_url = resolved_source.url,
+    });
+    defer build_env.deinit();
+
+    var resolved = build_env.resolveDependencyGraph(resolved_source.path) catch |err| {
+        const drained = build_env.drainReports() catch &[_]BuildEnv.DrainedModuleReports{};
+        defer build_env.freeDrainedReports(drained);
+        var rendered_any = false;
+        for (drained) |module| {
+            for (module.reports) |*report| {
+                rendered_any = true;
+                reporting.renderReportToTerminal(report, stderr, reporting.ColorUtils.getPaletteForConfig(report_config), report_config) catch {
+                    stderr.print("  {s}\n", .{report.title}) catch {};
+                };
+            }
+        }
+        if (rendered_any) return error.DepsFailed;
+        return handleProcessFileError(err, stderr, args.path);
+    };
+    defer resolved.deinit();
+
+    var out = std.ArrayList(u8).empty;
+    defer out.deinit(ctx.gpa);
+    try renderDependencyTree(ctx.gpa, &resolved, resolved_source.path, &out);
+    try stdout.writeAll(out.items);
+}
+
+/// Render a resolved dependency graph as a tree. Every edge is shown with its
+/// complete declared source (never its alias) so the text can be copied into
+/// `--replace-dep`; when the effective source differs, the tree says whether a
+/// replacement or ordinary version selection caused that. Each shared
+/// package's subtree is expanded once, at its first occurrence in print
+/// order, and later occurrences are marked `[shared]`.
+fn renderDependencyTree(
+    gpa: Allocator,
+    resolved: *const compile.package_resolution.Resolved,
+    root_display: []const u8,
+    out: *std.ArrayList(u8),
+) Allocator.Error!void {
+    const Resolved = compile.package_resolution.Resolved;
+    const packages = resolved.packages;
+    const root = packages[Resolved.root_index];
+
+    try out.print(gpa, "{s}", .{if (root.url) |url| url.url else root_display});
+    if (root.url == null and !std.mem.eql(u8, root_display, root.root_file)) {
+        try out.print(gpa, " ({s})", .{root.root_file});
+    }
+    try out.print(gpa, " [{s}]\n", .{@tagName(root.kind)});
+
+    const expanded = try gpa.alloc(bool, packages.len);
+    defer gpa.free(expanded);
+    @memset(expanded, false);
+    expanded[Resolved.root_index] = true;
+
+    var prefix = std.ArrayList(u8).empty;
+    defer prefix.deinit(gpa);
+    var shared_any = false;
+    var replaced_any = false;
+    var selected_any = false;
+    try renderDependencySubtree(gpa, resolved, Resolved.root_index, expanded, &prefix, &shared_any, &replaced_any, &selected_any, out);
+
+    if (shared_any or replaced_any or selected_any) try out.appendSlice(gpa, "\n");
+    if (replaced_any) try out.appendSlice(gpa, "[replaced by ...]  a --replace-dep flag loads that source in place of the declared one\n");
+    if (selected_any) try out.appendSlice(gpa, "[resolved to ...]  version selection chose that compatible release for the whole build\n");
+    if (shared_any) try out.appendSlice(gpa, "[shared]           this package was already shown above, where its dependencies are listed\n");
+}
+
+fn renderDependencySubtree(
+    gpa: Allocator,
+    resolved: *const compile.package_resolution.Resolved,
+    index: u32,
+    expanded: []bool,
+    prefix: *std.ArrayList(u8),
+    shared_any: *bool,
+    replaced_any: *bool,
+    selected_any: *bool,
+    out: *std.ArrayList(u8),
+) Allocator.Error!void {
+    const package = resolved.packages[index];
+    for (package.deps, 0..) |dep, i| {
+        const target = resolved.packages[dep.target];
+        const is_last = i + 1 == package.deps.len;
+
+        try out.appendSlice(gpa, prefix.items);
+        try out.appendSlice(gpa, if (is_last) "└── " else "├── ");
+        try out.appendSlice(gpa, dep.declared_spec);
+
+        const declared_is_url = std.mem.find(u8, dep.declared_spec, "://") != null;
+        if (dep.replaced_by) |replacement| {
+            replaced_any.* = true;
+            try out.print(gpa, " [replaced by {s}]", .{replacement});
+        } else if (target.url) |url| {
+            if (!std.mem.eql(u8, url.url, dep.declared_spec)) {
+                selected_any.* = true;
+                try out.print(gpa, " [resolved to {s}]", .{url.url});
+            }
+        } else if (!declared_is_url and target.compiler_owned_platform == null and !std.mem.eql(u8, dep.declared_spec, target.root_file)) {
+            // A relative local path is relative to its declaring package;
+            // show the canonical file so it can be used from anywhere.
+            try out.print(gpa, " ({s})", .{target.root_file});
+        }
+        if (dep.is_platform) try out.appendSlice(gpa, " [platform]");
+
+        const expand_here = !expanded[dep.target];
+        expanded[dep.target] = true;
+        if (!expand_here) {
+            shared_any.* = true;
+            try out.appendSlice(gpa, " [shared]");
+        }
+        try out.appendSlice(gpa, "\n");
+
+        if (expand_here) {
+            const saved_len = prefix.items.len;
+            try prefix.appendSlice(gpa, if (is_last) "    " else "│   ");
+            try renderDependencySubtree(gpa, resolved, dep.target, expanded, prefix, shared_any, replaced_any, selected_any, out);
+            prefix.items.len = saved_len;
+        }
+    }
+}
+
+test "renderDependencyTree shows declared sources, provenance, and shared subtrees once" {
+    const Resolved = compile.package_resolution.Resolved;
+    const ascii_a = "https://example.com/ascii/0.5.0/hashAsciiA.tar.zst";
+    const ascii_b = "https://example.com/ascii/0.5.1/hashAsciiB.tar.zst";
+    const ansi = "https://example.com/ansi/0.13.0/hashAnsi.tar.zst";
+    const pf = "https://example.com/cli/0.23.0/hashCli.tar.zst";
+    const local_ascii = "/work/roc-ascii/main.roc";
+
+    var root_deps = [_]Resolved.Dep{
+        .{ .alias = "cli", .target = 1, .is_platform = true, .declared_spec = pf },
+        .{ .alias = "ascii", .target = 2, .is_platform = false, .declared_spec = ascii_a, .replaced_by = local_ascii },
+        .{ .alias = "ansi", .target = 3, .is_platform = false, .declared_spec = ansi },
+        .{ .alias = "util", .target = 4, .is_platform = false, .declared_spec = "../util/main.roc" },
+    };
+    var ansi_deps = [_]Resolved.Dep{
+        .{ .alias = "characters", .target = 2, .is_platform = false, .declared_spec = ascii_a, .replaced_by = local_ascii },
+        .{ .alias = "util", .target = 4, .is_platform = false, .declared_spec = "../util/main.roc" },
+    };
+    var util_deps = [_]Resolved.Dep{
+        .{ .alias = "ascii", .target = 5, .is_platform = false, .declared_spec = ascii_a },
+    };
+    var no_deps = [_]Resolved.Dep{};
+    var packages = [_]Resolved.Package{
+        .{ .kind = .app, .identity = "/app/main.roc", .root_file = "/app/main.roc", .root_dir = "/app", .root_source_hash = undefined, .url = null, .deps = &root_deps },
+        .{ .kind = .platform, .identity = pf, .root_file = "/cache/pf/main.roc", .root_dir = "/cache/pf", .root_source_hash = undefined, .url = .{ .url = pf, .url_id = undefined, .version = undefined, .hash = "hashCli" }, .deps = &no_deps },
+        .{ .kind = .package, .identity = local_ascii, .root_file = local_ascii, .root_dir = "/work/roc-ascii", .root_source_hash = undefined, .url = null, .deps = &no_deps },
+        .{ .kind = .package, .identity = ansi, .root_file = "/cache/ansi/main.roc", .root_dir = "/cache/ansi", .root_source_hash = undefined, .url = .{ .url = ansi, .url_id = undefined, .version = undefined, .hash = "hashAnsi" }, .deps = &ansi_deps },
+        .{ .kind = .package, .identity = "/util/main.roc", .root_file = "/util/main.roc", .root_dir = "/util", .root_source_hash = undefined, .url = null, .deps = &util_deps },
+        .{ .kind = .package, .identity = ascii_b, .root_file = "/cache/asciiB/main.roc", .root_dir = "/cache/asciiB", .root_source_hash = undefined, .url = .{ .url = ascii_b, .url_id = undefined, .version = undefined, .hash = "hashAsciiB" }, .deps = &no_deps },
+    };
+    const resolved = Resolved{ .arena = undefined, .packages = &packages, .selected_platform_index = 1 };
+
+    var out = std.ArrayList(u8).empty;
+    defer out.deinit(std.testing.allocator);
+    try renderDependencyTree(std.testing.allocator, &resolved, "main.roc", &out);
+
+    try std.testing.expectEqualStrings(
+        \\main.roc (/app/main.roc) [app]
+        \\├── https://example.com/cli/0.23.0/hashCli.tar.zst [platform]
+        \\├── https://example.com/ascii/0.5.0/hashAsciiA.tar.zst [replaced by /work/roc-ascii/main.roc]
+        \\├── https://example.com/ansi/0.13.0/hashAnsi.tar.zst
+        \\│   ├── https://example.com/ascii/0.5.0/hashAsciiA.tar.zst [replaced by /work/roc-ascii/main.roc] [shared]
+        \\│   └── ../util/main.roc (/util/main.roc)
+        \\│       └── https://example.com/ascii/0.5.0/hashAsciiA.tar.zst [resolved to https://example.com/ascii/0.5.1/hashAsciiB.tar.zst]
+        \\└── ../util/main.roc (/util/main.roc) [shared]
+        \\
+        \\[replaced by ...]  a --replace-dep flag loads that source in place of the declared one
+        \\[resolved to ...]  version selection chose that compatible release for the whole build
+        \\[shared]           this package was already shown above, where its dependencies are listed
+        \\
+    , out.items);
+    // Aliases never appear in the output.
+    try std.testing.expect(std.mem.find(u8, out.items, "characters") == null);
 }
 
 fn rocDocs(ctx: *CliCtx, args_in: cli_args.DocsArgs) CliMainError!void {

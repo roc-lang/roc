@@ -275,8 +275,20 @@ pub const CallableIdentity = union(enum(u8)) {
     generated: GeneratedId,
 };
 
-/// Full specialization identity: callable plus source function type and the
-/// closed monomorphic function type the reserving call site REQUESTED.
+/// Full specialization identity: the checked callable, the scope and context
+/// its body resolves dispatch in, and the closed monomorphic function type
+/// the reserving call site REQUESTED.
+///
+/// The checked source function type a call site instantiated the callable
+/// from is deliberately absent. The callable says which checked body to
+/// lower; that type is the requesting graph's instantiation context, which
+/// the graph may memoize by. Two call sites reaching the same callable at the
+/// same closed Monotype type, evidence, codec context, and method scope name
+/// ONE specialization even when their checked source types differ—as they do
+/// when one is annotated with a transparent alias of the other's type
+/// (`design.md`). No identity derived from the record may reintroduce that
+/// provenance either: the record keeps whichever requester reserved it, so a
+/// derived identity that read it would disagree between programs.
 ///
 /// The identity is immutable: it is written once when the record is reserved
 /// and never rewritten. Body evidence that refines the requested type is data
@@ -285,30 +297,31 @@ pub const CallableIdentity = union(enum(u8)) {
 pub const SpecIdentity = struct {
     callable: CallableIdentity,
     method_scope: names.CheckedModuleDigest,
-    source_fn_ty_digest: names.TypeDigest,
     evidence_digest: EvidenceDigest,
     /// Exact lowering-only context required by generated codec method bodies.
     /// Zero for ordinary specializations.
     codec_contract_digest: names.TypeDigest,
     /// Exact collision authority for `codec_contract_digest`.
     codec_contract: ?CodecContractIdentity,
+    /// Cached typeEql digest; checked provenance stays on request_fn_ty.
     request_fn_ty_digest: names.TypeDigest,
     request_fn_ty: Type.TypeId,
 };
 
 /// Content key of a specialization identity: the callable rendered by tag
-/// and content plus every digest field except the requesting method scope
-/// and the request type's identity digest. The scope only decides how
+/// and content plus every digest field except the requesting method scope.
+/// The scope only decides how
 /// dispatch evidence was derived, and the evidence digest already names the
 /// result, so two modules requesting the same specialization get one key.
-/// The request type enters as `request_equality`, its equality digest,
-/// because the identity digest names a nominal type by the checked type id
-/// of whichever module's store lowered it, and the same type lowered from
-/// two modules would otherwise get two keys. Identical for the same request
-/// in every program, and computable the moment the request is reserved.
-pub fn specIdentityKey(identity: SpecIdentity, request_equality: names.TypeDigest) names.TypeDigest {
+/// The request type uses the same cached equality digest as local reservation,
+/// so checked type ids and alias provenance do not change the key. Identical
+/// for the same request in every program, and computable at reservation.
+/// Because the identity carries no caller provenance, neither does this key:
+/// a call site that reaches this specialization through a transparent alias
+/// computes the same key as one that names the backing type.
+pub fn specIdentityKey(identity: SpecIdentity) names.TypeDigest {
     var hasher = TypeDigestHasher.init();
-    hasher.update("roc.monotype.spec-key.v2");
+    hasher.update("roc.monotype.spec-key.v3");
     switch (identity.callable) {
         .proc_template => |template| {
             hasher.update("proc_template");
@@ -339,10 +352,9 @@ pub fn specIdentityKey(identity: SpecIdentity, request_equality: names.TypeDiges
             writeU32(&hasher, @intFromEnum(generated));
         },
     }
-    hasher.update(&identity.source_fn_ty_digest.bytes);
     hasher.update(&identity.evidence_digest.bytes);
     hasher.update(&identity.codec_contract_digest.bytes);
-    hasher.update(&request_equality.bytes);
+    hasher.update(&identity.request_fn_ty_digest.bytes);
     return .{ .bytes = hasher.finalResult() };
 }
 
@@ -371,20 +383,67 @@ pub const SpecRecord = struct {
     status: SpecStatus,
 };
 
-/// Compare the fields that make two function templates identical for Monotype.
+/// The body key `source_fn_key` holds for a compiler-generated callable, or
+/// null when `fn_def` already names the body.
+///
+/// The slot has two readings, decided by callable kind (`design.md`). For a
+/// checked template, nested function, or hosted procedure it is the checked
+/// type the REQUESTER instantiated the callable from: caller provenance, which
+/// identity must drop, since a record keeps whichever requester reserved it.
+/// For a generated body—an interpolation or field-names step, a parser or
+/// encoder runtime, a generated encoder callback—the producer has no checked
+/// declaration to name and writes the body's own identity there instead;
+/// several such bodies share one `fn_def`, evidence, and Monotype type, so
+/// identity must keep it.
+///
+/// `checked_generated` also covers an unavailable-hosted crash stub and a
+/// result-row widening adapter, whose slot is provenance. Keying that kind
+/// here keeps those two conservatively distinct per requester: it costs reuse
+/// and cannot lose a distinction, and neither is an object-cache entry, so no
+/// key can disagree with their identity.
+pub fn generatedBodyKey(template: FnTemplate) ?names.TypeDigest {
+    return switch (template.fn_def) {
+        .checked_generated,
+        .parser_runtime,
+        .encoder_for_runtime,
+        => template.source_fn_key,
+        .local_template,
+        .imported_template,
+        .nested,
+        .local_hosted,
+        .imported_hosted,
+        => null,
+    };
+}
+
+/// Compare the fields that make two function templates identical for Monotype:
+/// the checked callable, the generated-body key when the callable has one, its
+/// dispatch evidence, and the Monotype type it was requested at. Caller
+/// provenance is deliberately absent (see `generatedBodyKey`).
 pub fn fnTemplateIdentityEql(lhs: FnTemplate, rhs: FnTemplate) bool {
-    return std.meta.eql(lhs.fn_def, rhs.fn_def) and
-        std.mem.eql(u8, lhs.source_fn_key.bytes[0..], rhs.source_fn_key.bytes[0..]) and
-        std.mem.eql(u8, lhs.evidence_digest.bytes[0..], rhs.evidence_digest.bytes[0..]) and
+    if (!std.meta.eql(lhs.fn_def, rhs.fn_def)) return false;
+    const lhs_body = generatedBodyKey(lhs);
+    const rhs_body = generatedBodyKey(rhs);
+    if ((lhs_body == null) != (rhs_body == null)) return false;
+    if (lhs_body) |lhs_key| {
+        if (!std.mem.eql(u8, lhs_key.bytes[0..], rhs_body.?.bytes[0..])) return false;
+    }
+    return std.mem.eql(u8, lhs.evidence_digest.bytes[0..], rhs.evidence_digest.bytes[0..]) and
         lhs.mono_fn_ty == rhs.mono_fn_ty;
 }
 
-/// Compute a digest for a Monotype function template. Takes the type store
-/// mutable because type digests are computed through the store's cache.
+/// Compute a digest for a Monotype function template, over exactly the fields
+/// `fnTemplateIdentityEql` compares. Takes the type store mutable because type
+/// digests are computed through the store's cache.
 pub fn fnTemplateDigest(template: FnTemplate, types: *Type.Store, name_store: *const names.NameStore) names.TypeDigest {
     var hasher = TypeDigestHasher.init();
     writeFnDef(&hasher, name_store, template.fn_def);
-    writeBytes(&hasher, &template.source_fn_key.bytes);
+    if (generatedBodyKey(template)) |body_key| {
+        writeBytes(&hasher, "generated_body");
+        writeBytes(&hasher, &body_key.bytes);
+    } else {
+        writeBytes(&hasher, "no_generated_body");
+    }
     writeBytes(&hasher, &template.evidence_digest.bytes);
     const mono_digest = types.specializationDigest(name_store, template.mono_fn_ty);
     writeBytes(&hasher, &mono_digest.bytes);
@@ -962,6 +1021,11 @@ pub const ComptimeSiteKind = enum(u8) {
 /// Metadata for one compile-time-observed control-flow site.
 pub const ComptimeSite = struct {
     kind: ComptimeSiteKind,
+    /// Checked module whose exhaustiveness-site ids and source regions this
+    /// site names. A specialization may lower an imported body, so the site's
+    /// owner is not the program's root module and cannot be recovered from
+    /// the procedure the site ends up in.
+    owner: Common.LoweringModuleId,
     region: base.Region,
     checked_site: ?checked.CheckedExhaustivenessSiteId = null,
     branch_regions: []const base.Region = &.{},
@@ -983,7 +1047,7 @@ pub const Expr = struct {
 /// An immutable root-slot read. The initializer supplies representation and
 /// lambda-set evidence; it is never evaluated by the read itself.
 pub const ComptimeValue = struct {
-    root: Common.ComptimeValueRoot,
+    root: Common.ComptimeValueRootId,
     initializer: ExprId,
 };
 
@@ -1299,6 +1363,10 @@ fn procDebugNameInSlice(entries: []const ProcDebugName, symbol: Common.Symbol) ?
 pub const Root = struct {
     def: DefId,
     request: checked.RootRequest,
+    /// Checked module that owns this request's compile-time root id and
+    /// checked types. A lowering unions several modules' root requests, so
+    /// concatenation position is not an owner.
+    owner: Common.LoweringModuleId,
 };
 
 /// Runtime layout requested for a checked data value.
@@ -1375,9 +1443,16 @@ pub const ProgramView = struct {
     proc_debug_names: []const ProcDebugName,
     roots: []const Root,
     layout_requests: []const LayoutRequest,
+    /// Evaluated roots this program reads a completed value of, recorded once
+    /// each. Whoever materializes those values consumes this instead of
+    /// rediscovering the reads.
+    comptime_value_reads: []const Common.ComptimeValueRoot,
     runtime_schema_requests: []const RuntimeSchemaRequest,
     static_data_values: []const StaticDataValue,
+    comptime_value_roots: []const Common.ComptimeValueRoot,
     comptime_sites: []const ComptimeSite,
+    /// See `ProgramBuilder.lowering_modules`.
+    lowering_modules: []const checked.ModuleId,
     source_files: []const base.SourceFileEntry,
     expr_locs: []const base.SourceLoc,
     expr_regions: []const base.Region,
@@ -1385,6 +1460,10 @@ pub const ProgramView = struct {
     stmt_regions: []const base.Region,
     local_names: []const []const u8,
     next_symbol: u32,
+
+    pub fn getComptimeValueRoot(self: ProgramView, id: Common.ComptimeValueRootId) Common.ComptimeValueRoot {
+        return self.comptime_value_roots[@intFromEnum(id)];
+    }
 
     pub fn fnSource(self: ProgramView, id: FnId) FnTemplate {
         const raw = @intFromEnum(id);
@@ -1552,9 +1631,18 @@ pub const ProgramBuilder = struct {
     proc_debug_names: ProcDebugNameMap,
     roots: ProgramList(Root, "roots"),
     layout_requests: ProgramList(LayoutRequest, "layout_requests"),
+    /// See `ProgramView.comptime_value_reads`.
+    comptime_value_reads: ProgramList(Common.ComptimeValueRoot, "comptime_value_reads"),
     runtime_schema_requests: ProgramList(RuntimeSchemaRequest, "runtime_schema_requests"),
     static_data_values: ProgramList(StaticDataValue, "static_data_values"),
+    /// Immutable descriptors live outside hot expression rows.
+    comptime_value_roots: ProgramList(Common.ComptimeValueRoot, "comptime_value_roots") = .empty,
     comptime_sites: ProgramList(ComptimeSite, "comptime_sites"),
+    /// Every checked module of this lowering's input, in one canonical order,
+    /// addressed by `Common.LoweringModuleId`. Seeded once before any body is
+    /// lowered and never appended to afterwards, so the rows that carry a
+    /// module-local checked id name their owner explicitly.
+    lowering_modules: ProgramList(checked.ModuleId, "lowering_modules") = .empty,
     /// Source file table for `SourceLoc.file` indices (module display and
     /// package-qualified names, owned by this program).
     source_files: ProgramList(base.SourceFileEntry, "source_files"),
@@ -1608,9 +1696,11 @@ pub const ProgramBuilder = struct {
             .proc_debug_names = ProcDebugNameMap.init(allocator),
             .roots = .empty,
             .layout_requests = .empty,
+            .comptime_value_reads = .empty,
             .runtime_schema_requests = .empty,
             .static_data_values = .empty,
             .comptime_sites = .empty,
+            .lowering_modules = .empty,
             .source_files = .empty,
             .expr_locs = .empty,
             .expr_regions = .empty,
@@ -1630,7 +1720,8 @@ pub const ProgramBuilder = struct {
         errdefer result.deinit();
         result.names = try self.names.clone(allocator);
         result.types = try self.types.cloneFrozen(allocator);
-        inline for (.{ "specs", "fns", "const_fn_evidence", "const_fn_evidence_frames", "defs", "nested_defs", "exprs", "pats", "stmts", "locals", "expr_ids", "pat_ids", "typed_locals", "stmt_ids", "field_exprs", "field_access_segments", "fn_def_captures", "capture_operands", "record_destructs", "str_pattern_steps", "branches", "if_branches", "roots", "layout_requests", "runtime_schema_requests", "static_data_values", "expr_locs", "expr_regions", "stmt_locs", "stmt_regions" }) |field| {
+        try result.comptime_value_roots.appendSlice(allocator, self.comptime_value_roots.unsafeRawItemsForView());
+        inline for (.{ "specs", "fns", "const_fn_evidence", "const_fn_evidence_frames", "defs", "nested_defs", "exprs", "pats", "stmts", "locals", "expr_ids", "pat_ids", "typed_locals", "stmt_ids", "field_exprs", "field_access_segments", "fn_def_captures", "capture_operands", "record_destructs", "str_pattern_steps", "branches", "if_branches", "roots", "layout_requests", "comptime_value_reads", "runtime_schema_requests", "static_data_values", "lowering_modules", "expr_locs", "expr_regions", "stmt_locs", "stmt_regions" }) |field| {
             try @field(result, field).appendSlice(allocator, @field(self, field).unsafeRawItemsForView());
         }
         try result.proc_debug_names.items.appendSlice(allocator, self.proc_debug_names.view());
@@ -1694,8 +1785,11 @@ pub const ProgramBuilder = struct {
             self.allocator.free(site.branch_regions);
         }
         self.comptime_sites.deinit(self.allocator);
+        self.lowering_modules.deinit(self.allocator);
+        self.comptime_value_roots.deinit(self.allocator);
         self.static_data_values.deinit(self.allocator);
         self.runtime_schema_requests.deinit(self.allocator);
+        self.comptime_value_reads.deinit(self.allocator);
         self.layout_requests.deinit(self.allocator);
         self.roots.deinit(self.allocator);
         self.proc_debug_names.deinit();
@@ -1880,9 +1974,12 @@ pub const ProgramBuilder = struct {
             .proc_debug_names = self.proc_debug_names.view(),
             .roots = self.roots.unsafeRawItemsForView(),
             .layout_requests = self.layout_requests.unsafeRawItemsForView(),
+            .comptime_value_reads = self.comptime_value_reads.unsafeRawItemsForView(),
             .runtime_schema_requests = self.runtime_schema_requests.unsafeRawItemsForView(),
             .static_data_values = self.static_data_values.unsafeRawItemsForView(),
+            .comptime_value_roots = self.comptime_value_roots.unsafeRawItemsForView(),
             .comptime_sites = self.comptime_sites.unsafeRawItemsForView(),
+            .lowering_modules = self.lowering_modules.unsafeRawItemsForView(),
             .source_files = self.source_files.unsafeRawItemsForView(),
             .expr_locs = self.expr_locs.unsafeRawItemsForView(),
             .expr_regions = self.expr_regions.unsafeRawItemsForView(),
@@ -1891,6 +1988,16 @@ pub const ProgramBuilder = struct {
             .local_names = self.local_names.unsafeRawItemsForView(),
             .next_symbol = self.next_symbol,
         };
+    }
+
+    pub fn getComptimeValueRoot(self: *const ProgramBuilder, id: Common.ComptimeValueRootId) Common.ComptimeValueRoot {
+        return self.comptime_value_roots.get(@intFromEnum(id));
+    }
+
+    pub fn addComptimeValueRoot(self: *ProgramBuilder, root: Common.ComptimeValueRoot) std.mem.Allocator.Error!Common.ComptimeValueRootId {
+        const id: Common.ComptimeValueRootId = @enumFromInt(@as(u32, @intCast(self.comptime_value_roots.len())));
+        try self.comptime_value_roots.append(self.allocator, root);
+        return id;
     }
 
     pub fn addExpr(self: *ProgramBuilder, expr: Expr) std.mem.Allocator.Error!ExprId {
@@ -1977,6 +2084,14 @@ pub const ProgramBuilder = struct {
         return id;
     }
 
+    /// Publish one checked module of this lowering's input and return its
+    /// dense id. Seeding deduplicates; this always appends.
+    pub fn addLoweringModule(self: *ProgramBuilder, key: checked.ModuleId) std.mem.Allocator.Error!Common.LoweringModuleId {
+        const id: Common.LoweringModuleId = @enumFromInt(@as(u32, @intCast(self.lowering_modules.len())));
+        try self.lowering_modules.append(self.allocator, key);
+        return id;
+    }
+
     /// Source location of an expression.
     pub fn exprLoc(self: *const ProgramBuilder, id: ExprId) base.SourceLoc {
         return self.expr_locs.unsafeRawItemsForView()[@intFromEnum(id)];
@@ -2014,6 +2129,7 @@ pub const ProgramBuilder = struct {
     pub fn addComptimeSite(
         self: *ProgramBuilder,
         kind: ComptimeSiteKind,
+        owner: Common.LoweringModuleId,
         region: base.Region,
         checked_site: ?checked.CheckedExhaustivenessSiteId,
         branch_regions: []const base.Region,
@@ -2023,6 +2139,7 @@ pub const ProgramBuilder = struct {
         const id: ComptimeSiteId = @enumFromInt(@as(u32, @intCast(self.comptime_sites.len())));
         try self.comptime_sites.append(self.allocator, .{
             .kind = kind,
+            .owner = owner,
             .region = region,
             .checked_site = checked_site,
             .branch_regions = owned_branch_regions,
@@ -2174,6 +2291,17 @@ pub const ProgramBuilder = struct {
 
     pub fn addLayoutRequest(self: *ProgramBuilder, request: LayoutRequest) std.mem.Allocator.Error!void {
         try self.layout_requests.append(self.allocator, request);
+    }
+
+    pub fn comptimeValueReadsView(self: *const ProgramBuilder) []const Common.ComptimeValueRoot {
+        return self.comptime_value_reads.unsafeRawItemsForView();
+    }
+
+    /// Record that this program reads one evaluated root's completed value.
+    /// One root is recorded once however many reads it has, which the caller
+    /// owns deciding.
+    pub fn addComptimeValueRead(self: *ProgramBuilder, root: Common.ComptimeValueRoot) std.mem.Allocator.Error!void {
+        try self.comptime_value_reads.append(self.allocator, root);
     }
 
     pub fn runtimeSchemaRequestCount(self: *const ProgramBuilder) usize {
@@ -2488,7 +2616,6 @@ test "monotype program view exposes read-only side arrays" {
         .identity = .{
             .callable = .{ .proc_template = .{ .module = .{}, .proc_base = 0, .template = 0 } },
             .method_scope = .{},
-            .source_fn_ty_digest = .{},
             .evidence_digest = fnEvidenceDigest(&.{}, &.{}, null),
             .codec_contract_digest = .{},
             .codec_contract = null,
@@ -2731,6 +2858,116 @@ fn testFnSource(mono_fn_ty: Type.TypeId) FnTemplate {
     };
 }
 
+fn testProcTemplate(name_store: *names.NameStore, template_id: u32) std.mem.Allocator.Error!names.ProcTemplate {
+    return .{
+        .artifact = .{},
+        .proc_base = try name_store.internProcBase(.{
+            .module_name = try name_store.internModuleName("SourceDigest"),
+            .export_name = null,
+            .kind = .checked_source,
+            .ordinal = 0,
+        }),
+        .template = @enumFromInt(template_id),
+    };
+}
+
+fn testTemplateDigestKey(comptime byte: u8) names.TypeDigest {
+    var digest: names.TypeDigest = .{};
+    digest.bytes[0] = byte;
+    return digest;
+}
+
+test "function template identity ignores the requester's checked source type" {
+    var name_store = names.NameStore.init(std.testing.allocator);
+    defer name_store.deinit();
+    var types = Type.Store.init(std.testing.allocator);
+    defer types.deinit();
+
+    // Two call sites reserved the same checked template at the same closed
+    // type with the same evidence; only the checked type each instantiated it
+    // from differs, which is caller provenance and not identity.
+    const mono_fn_ty = try types.add(.zst);
+    const first: FnTemplate = .{
+        .fn_def = .{ .local_template = try testProcTemplate(&name_store, 1) },
+        .source_fn_ty = @enumFromInt(7),
+        .source_fn_key = testTemplateDigestKey(1),
+        .mono_fn_ty = mono_fn_ty,
+    };
+    var second = first;
+    second.source_fn_ty = @enumFromInt(9);
+    second.source_fn_key = testTemplateDigestKey(2);
+
+    try std.testing.expect(fnTemplateIdentityEql(first, second));
+    try std.testing.expectEqual(
+        fnTemplateDigest(first, &types, &name_store),
+        fnTemplateDigest(second, &types, &name_store),
+    );
+
+    // The identity still separates a different callable and a different type.
+    var other_callable = first;
+    other_callable.fn_def = .{ .local_template = try testProcTemplate(&name_store, 2) };
+    try std.testing.expect(!fnTemplateIdentityEql(first, other_callable));
+    var other_type = first;
+    other_type.mono_fn_ty = try types.add(.{ .primitive = .str });
+    try std.testing.expect(!fnTemplateIdentityEql(first, other_type));
+    var other_evidence = first;
+    other_evidence.evidence_digest = .{ .bytes = testTemplateDigestKey(5).bytes };
+    try std.testing.expect(!fnTemplateIdentityEql(first, other_evidence));
+}
+
+test "function template identity keeps generated bodies of one owner apart" {
+    var name_store = names.NameStore.init(std.testing.allocator);
+    defer name_store.deinit();
+    var types = Type.Store.init(std.testing.allocator);
+    defer types.deinit();
+
+    // Every interpolation step of one expression, and every callback of one
+    // generated encoder, shares its owner, its (empty) evidence, and its
+    // Monotype type. The producer's generated-body key is the only thing that
+    // says they are different code, so identity must carry it.
+    const mono_fn_ty = try types.add(.zst);
+    const first_step: FnTemplate = .{
+        .fn_def = .{ .checked_generated = try testProcTemplate(&name_store, 1) },
+        .source_fn_ty = @enumFromInt(7),
+        .source_fn_key = testTemplateDigestKey(1),
+        .mono_fn_ty = mono_fn_ty,
+    };
+    var second_step = first_step;
+    second_step.source_fn_key = testTemplateDigestKey(2);
+
+    try std.testing.expect(!fnTemplateIdentityEql(first_step, second_step));
+    try std.testing.expect(!std.meta.eql(
+        fnTemplateDigest(first_step, &types, &name_store),
+        fnTemplateDigest(second_step, &types, &name_store),
+    ));
+
+    // The same generated body reached twice is one callable.
+    const repeated_step = first_step;
+    try std.testing.expect(fnTemplateIdentityEql(first_step, repeated_step));
+    try std.testing.expectEqual(
+        fnTemplateDigest(first_step, &types, &name_store),
+        fnTemplateDigest(repeated_step, &types, &name_store),
+    );
+
+    // Generated runtime callables carry the key the same way.
+    const first_callback: FnTemplate = .{
+        .fn_def = .{ .encoder_for_runtime = .{
+            .owner = try testProcTemplate(&name_store, 1),
+            .expr = @enumFromInt(3),
+        } },
+        .source_fn_ty = @enumFromInt(7),
+        .source_fn_key = testTemplateDigestKey(1),
+        .mono_fn_ty = mono_fn_ty,
+    };
+    var second_callback = first_callback;
+    second_callback.source_fn_key = testTemplateDigestKey(2);
+    try std.testing.expect(!fnTemplateIdentityEql(first_callback, second_callback));
+    try std.testing.expect(!std.meta.eql(
+        fnTemplateDigest(first_callback, &types, &name_store),
+        fnTemplateDigest(second_callback, &types, &name_store),
+    ));
+}
+
 test "codec function evidence identity excludes per-use replay addresses" {
     const allocator = std.testing.allocator;
     var types = checked.CheckedTypeStore{};
@@ -2799,6 +3036,13 @@ fn cloneFrozenForAllocationTest(allocator: std.mem.Allocator, source: *const Pro
     defer copy.deinit();
 }
 
+test "compile-time descriptors stay outside compact expression rows" {
+    comptime {
+        std.debug.assert(@sizeOf(Expr) <= 64);
+        std.debug.assert(@sizeOf(ExprData) <= 64);
+    }
+}
+
 test "frozen Monotype forks retain identities and own literal and diagnostic storage" {
     const allocator = std.testing.allocator;
     var source = Program.init(allocator);
@@ -2810,22 +3054,48 @@ test "frozen Monotype forks retain identities and own literal and diagnostic sto
     const local = try source.addLocal(@enumFromInt(1), ty);
     try source.setLocalName(local, "value");
     const file = try source.addSourceFile(.{ .name = "App.roc", .qualified_name = "app/App.roc" });
-    const site = try source.addComptimeSite(.if_, .zero(), null, &.{.zero()});
+    var owner_key = std.mem.zeroes(check.CheckedModule.ModuleId);
+    owner_key.bytes[0] = 9;
+    const owner = try source.addLoweringModule(owner_key);
+    const site = try source.addComptimeSite(.if_, owner, .zero(), null, &.{.zero()});
     const name = try source.names.internExportName("entry");
     try source.proc_debug_names.put(@enumFromInt(1), name);
+    const root_a: Common.ComptimeValueRoot = .{
+        .module = std.mem.zeroes(check.CheckedModule.ModuleId),
+        .root = @enumFromInt(7),
+        .const_locator = null,
+    };
+    var root_b = root_a;
+    root_b.module.bytes[0] = 1;
+    root_b.const_locator = .{
+        .artifact = root_b.module,
+        .owner = .{ .hoisted_expr = .{ .module_idx = 1, .expr = @enumFromInt(2) } },
+        .template = @enumFromInt(3),
+        .source_scheme = std.mem.zeroes(@FieldType(check.CheckedModule.ConstLocator, "source_scheme")),
+    };
+    const root_a_id = try source.addComptimeValueRoot(root_a);
+    const root_b_id = try source.addComptimeValueRoot(root_b);
+    try std.testing.expect(root_a_id != root_b_id);
+    try std.testing.expectEqualDeep(root_a, source.view().getComptimeValueRoot(root_a_id));
+    try std.testing.expectEqualDeep(root_b, source.getComptimeValueRoot(root_b_id));
     source.freeze();
     try std.testing.checkAllAllocationFailures(allocator, cloneFrozenForAllocationTest, .{&source});
     var copy = try source.cloneFrozen(allocator);
     defer copy.deinit();
+    try std.testing.expect(source.view().comptime_value_roots.ptr != copy.view().comptime_value_roots.ptr);
     try std.testing.expect(source.stringLiteral(literal).backing.ptr != copy.stringLiteral(literal).backing.ptr);
     source.deinit();
     source_owned = false;
+    try std.testing.expectEqualDeep(root_a, copy.getComptimeValueRoot(root_a_id));
+    try std.testing.expectEqualDeep(root_b, copy.view().getComptimeValueRoot(root_b_id));
     try std.testing.expectEqual(ty, copy.getExpr(expr).ty);
     try std.testing.expectEqual(literal, copy.getExpr(expr).data.str_lit);
     try std.testing.expectEqualStrings("value", copy.stringLiteralText(literal));
     try std.testing.expectEqualStrings("value", copy.localName(local));
     try std.testing.expectEqualStrings("app/App.roc", copy.view().source_files[file].qualified_name);
     try std.testing.expectEqual(@as(usize, 1), copy.comptimeSite(site).branch_regions.len);
+    try std.testing.expectEqual(owner, copy.comptimeSite(site).owner);
+    try std.testing.expectEqualDeep(owner_key, copy.view().lowering_modules[@intFromEnum(owner)]);
     try std.testing.expectEqual(name, copy.proc_debug_names.get(@enumFromInt(1)).?);
     try std.testing.expectEqual(name, try copy.names.internExportName("entry"));
     try std.testing.expect(copy.types.isFrozen());

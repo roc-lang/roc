@@ -15,13 +15,13 @@ Signal(a) := { expr : Box(Node.SignalExpr), cap : Capability(a) }.{
         token = Node.new_token({})
         output_cap = Capability.new({})
 
-        wrapped : HostValue -> HostValue
-        wrapped = |input_hv| {
+        wrapped! : HostValue => HostValue
+        wrapped! = |input_hv| {
             typed_input : a
-            typed_input = Box.unbox(Capability.get(input_hv, signal.cap))
+            typed_input = Box.unbox(Capability.get!(input_hv, signal.cap))
             typed_output : b
             typed_output = f(typed_input)
-            Capability.store(Box.box(typed_output), output_cap)
+            Capability.store!(Box.box(typed_output), output_cap)
         }
 
         {
@@ -29,7 +29,7 @@ Signal(a) := { expr : Box(Node.SignalExpr), cap : Capability(a) }.{
                 Node.SignalExpr.Map(
                     token,
                     signal.expr,
-                    Box.box(wrapped),
+                    Box.box(wrapped!),
                     Capability.handle(output_cap),
                 ),
             ),

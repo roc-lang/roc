@@ -15,21 +15,12 @@ main =
     expectsPerson("not a person")
 ~~~
 # EXPECTED
-UNDECLARED TYPE - nominal_type_origin_mismatch.md:3:17:3:23
 UNUSED VARIABLE - nominal_type_origin_mismatch.md:4:18:4:19
+MOD NOT FOUND - nominal_type_origin_mismatch.md:1:1:1:30
+MOD NOT FOUND - nominal_type_origin_mismatch.md:3:17:3:23
 # PROBLEMS
 ~~~clojure
 (reports
-	(report
-		(severity runtime_error)
-		(title "Undeclared Type")
-		(region (start 3 17) (end 3 23))
-		(headline
-			(reflow "The type ")
-			(annotated code "Person")
-			(reflow " is not declared in this scope."))
-		(document
-			(source-region (file "nominal_type_origin_mismatch.md") (start 3 17) (end 3 23) (annotation error) (line-text "expectsPerson : Person -> Str"))))
 	(report
 		(severity warning)
 		(title "Unused Variable")
@@ -43,7 +34,29 @@ UNUSED VARIABLE - nominal_type_origin_mismatch.md:4:18:4:19
 			(annotated symbol-unqualified "_p")
 			(reflow " to suppress this warning.")
 			(line-break)
-			(source-region (file "nominal_type_origin_mismatch.md") (start 4 18) (end 4 19) (annotation error) (line-text "expectsPerson = |p| \"Got a person\"")))))
+			(source-region (file "nominal_type_origin_mismatch.md") (start 4 18) (end 4 19) (annotation error) (line-text "expectsPerson = |p| \"Got a person\""))))
+	(report
+		(severity runtime_error)
+		(title "Mod Not Found")
+		(region (start 1 1) (end 1 30))
+		(headline
+			(text "The mod ")
+			(annotated code "Data")
+			(reflow " was not found in this Roc project."))
+		(document
+			(source-region (file "nominal_type_origin_mismatch.md") (start 1 1) (end 1 30) (annotation error) (line-text "import Data exposing [Person]"))))
+	(report
+		(severity runtime_error)
+		(title "Mod Not Found")
+		(region (start 3 17) (end 3 23))
+		(headline
+			(text "This ")
+			(annotated code "Person")
+			(reflow " type is declared to be in ")
+			(annotated code "Data")
+			(reflow ", which does not exist."))
+		(document
+			(source-region (file "nominal_type_origin_mismatch.md") (start 3 17) (end 3 23) (annotation error) (line-text "expectsPerson : Person -> Str")))))
 ~~~
 # TOKENS
 ~~~zig
@@ -103,7 +116,7 @@ main =
 				(ty-lookup (name "Str") (builtin)))))
 	(d-let
 		(p-assign (ident "main"))
-		(e-call (constraint-fn-var 248)
+		(e-call (constraint-fn-var 249)
 			(e-runtime-error (tag "erroneous_value_expr"))
 			(e-string
 				(e-literal (string "not a person")))))

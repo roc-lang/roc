@@ -4,14 +4,56 @@ const std = @import("std");
 
 const Allocator = std.mem.Allocator;
 
+/// Debug metrics count work, not addresses. Keep 64-bit counts even on hosts
+/// whose native atomics cannot update 64 bits; all reads share the same lock.
+pub const WorkCounter = WorkCounterFor(@sizeOf(usize) >= @sizeOf(u64));
+
+fn WorkCounterFor(comptime native_atomic: bool) type {
+    return struct {
+        const Self = @This();
+        value: u64 = 0,
+        mutex: std.atomic.Mutex = .unlocked,
+
+        pub fn increment(self: *Self) void {
+            if (native_atomic) {
+                _ = @atomicRmw(u64, &self.value, .Add, 1, .monotonic);
+            } else {
+                while (!self.mutex.tryLock()) std.atomic.spinLoopHint();
+                defer self.mutex.unlock();
+                self.value +%= 1;
+            }
+        }
+
+        pub fn read(self: *Self) u64 {
+            if (native_atomic) {
+                return @atomicLoad(u64, &self.value, .monotonic);
+            } else {
+                while (!self.mutex.tryLock()) std.atomic.spinLoopHint();
+                defer self.mutex.unlock();
+                return self.value;
+            }
+        }
+    };
+}
+
+test "work counters preserve wide counts and wrap consistently" {
+    inline for (.{ WorkCounter, WorkCounterFor(false) }) |Counter| {
+        for ([_]u64{ std.math.maxInt(u32), std.math.maxInt(u64) }) |initial| {
+            var counter: Counter = .{ .value = initial };
+            counter.increment();
+            try std.testing.expectEqual(initial +% 1, counter.read());
+        }
+    }
+}
+
 /// Debug-only work counter for exact sparse range queries.
-pub var range_query_node_visits: u64 = 0;
+pub var range_query_node_visits: WorkCounter = .{};
 
 /// Debug-only work counter for sparse enumeration, independent of ID width.
-pub var iterator_node_visits: u64 = 0;
+pub var iterator_node_visits: WorkCounter = .{};
 
 /// Debug-only count of non-shared, nonempty nodes examined by structural difference.
-pub var difference_node_visits: u64 = 0;
+pub var difference_node_visits: WorkCounter = .{};
 
 /// A bounded-depth radix tree whose absent entries have one caller-declared
 /// value. Copying a snapshot shares its root; changing one entry allocates
@@ -90,6 +132,32 @@ pub fn Snapshot(comptime T: type, comptime empty: T) type {
             return result;
         }
 
+        /// Enumerates occupied entries in a half-open range. Subtrees outside
+        /// the range are skipped even when densely populated.
+        pub fn iteratorRange(self: *const Self, start: u32, end: u64) RangeIterator {
+            std.debug.assert(start <= end and end <= @as(u64, 1) << 32);
+            var result = RangeIterator{
+                .inner = .{ .depth = self.depth, .reverse = false },
+                .start = start,
+                .end = end,
+            };
+            if (start < end) if (self.root) |root| result.inner.push(root, 0);
+            return result;
+        }
+
+        /// A bounded sparse traversal without adding range fields or checks
+        /// to ordinary whole-snapshot iterators.
+        pub const RangeIterator = struct {
+            inner: Iterator,
+            start: u32,
+            end: u64,
+
+            /// Returns the next occupied entry inside the requested range.
+            pub fn next(self: *RangeIterator) ?Iterator.Entry {
+                return self.inner.nextInRange(true, self.start, self.end);
+            }
+        };
+
         /// Bounded-stack traversal of the borrowed immutable root.
         pub const Iterator = struct {
             /// A non-default entry and its exact snapshot index.
@@ -102,13 +170,17 @@ pub fn Snapshot(comptime T: type, comptime empty: T) type {
             reverse: bool,
 
             fn push(self: *Iterator, node: *const anyopaque, base: u32) void {
-                if (@import("builtin").mode == .Debug) _ = @atomicRmw(u64, &iterator_node_visits, .Add, 1, .monotonic);
+                if (@import("builtin").mode == .Debug) iterator_node_visits.increment();
                 self.frames[self.len] = .{ .node = node, .base = base };
                 self.len += 1;
             }
 
             /// Returns the next occupied entry, skipping absent subtrees.
             pub fn next(self: *Iterator) ?Entry {
+                return self.nextInRange(false, 0, 0);
+            }
+
+            inline fn nextInRange(self: *Iterator, comptime bounded: bool, start: u32, end: u64) ?Entry {
                 while (self.len != 0) {
                     const frame = &self.frames[self.len - 1];
                     if (frame.slot == radix) {
@@ -119,6 +191,7 @@ pub fn Snapshot(comptime T: type, comptime empty: T) type {
                     frame.slot += 1;
                     const remaining_depth = self.depth + 1 - self.len;
                     if (remaining_depth == 0) {
+                        if (bounded and (frame.base + slot < start or @as(u64, frame.base) + slot >= end)) continue;
                         const leaf: *const Leaf = @ptrCast(@alignCast(frame.node));
                         const value = leaf.values[slot];
                         if (!std.meta.eql(value, empty)) return .{ .index = frame.base + slot, .value = value };
@@ -126,7 +199,9 @@ pub fn Snapshot(comptime T: type, comptime empty: T) type {
                         const branch: *const Branch = @ptrCast(@alignCast(frame.node));
                         if (branch.children[slot]) |child| {
                             const shift: u5 = @intCast(leaf_bits + (remaining_depth - 1) * radix_bits);
-                            self.push(child, frame.base | (@as(u32, slot) << shift));
+                            const base = frame.base | (@as(u32, slot) << shift);
+                            if (bounded and (@as(u64, base) >= end or @as(u64, base) + (@as(u64, 1) << shift) <= start)) continue;
+                            self.push(child, base);
                         }
                     }
                 }
@@ -145,7 +220,7 @@ pub fn Snapshot(comptime T: type, comptime empty: T) type {
         }
 
         fn rangeHasValue(maybe_node: ?*const anyopaque, depth: u8, base: u64, start: u64, end: u64) bool {
-            if (@import("builtin").mode == .Debug) _ = @atomicRmw(u64, &range_query_node_visits, .Add, 1, .monotonic);
+            if (@import("builtin").mode == .Debug) range_query_node_visits.increment();
             const node = maybe_node orelse return false;
             const width = @as(u64, 1) << @as(u6, @intCast(leaf_bits + @as(usize, depth) * radix_bits));
             if (end <= base or start >= base + width) return false;
@@ -229,7 +304,7 @@ pub fn Snapshot(comptime T: type, comptime empty: T) type {
             comptime emitFn: fn (@TypeOf(context), u32, T, T) Allocator.Error!void,
         ) Allocator.Error!void {
             if (lhs == rhs or lhs == null) return;
-            if (@import("builtin").mode == .Debug) _ = @atomicRmw(u64, &difference_node_visits, .Add, 1, .monotonic);
+            if (@import("builtin").mode == .Debug) difference_node_visits.increment();
             if (depth == 0) {
                 const left: *const Leaf = @ptrCast(@alignCast(lhs.?));
                 const right: ?*const Leaf = @ptrCast(@alignCast(rhs));
@@ -536,10 +611,10 @@ test "sparse range queries are exact across tree boundaries and shared updates" 
         }
     }
     // A nearly full u32 range containing no entries must not scan its width.
-    const before = range_query_node_visits;
+    const before = range_query_node_visits.read();
     try std.testing.expect(!original.hasNonEmptyInRange(100000, std.math.maxInt(u32)));
     if (@import("builtin").mode == .Debug) {
-        try std.testing.expect(range_query_node_visits - before <= 2 * 8 * 11);
+        try std.testing.expect(range_query_node_visits.read() - before <= 2 * 8 * 11);
     }
     for (keys) |key| try changed.put(key, 0);
     try std.testing.expect(!changed.hasNonEmptyInRange(0, @as(u64, 1) << 32));
@@ -567,11 +642,11 @@ test "sparse iteration preserves forks and skips absent history" {
     }
     try std.testing.expectEqual(null, original_iter.next());
 
-    const before = iterator_node_visits;
+    const before = iterator_node_visits.read();
     var changed_iter = changed.iterator();
     try std.testing.expectEqual(Sparse.Iterator.Entry{ .index = 99999, .value = -1 }, changed_iter.next().?);
     try std.testing.expectEqual(null, changed_iter.next());
-    if (@import("builtin").mode == .Debug) try std.testing.expect(iterator_node_visits - before <= 11);
+    if (@import("builtin").mode == .Debug) try std.testing.expect(iterator_node_visits.read() - before <= 11);
 }
 
 test "sparse structural difference skips shared subtrees and preserves exact values" {
@@ -595,7 +670,7 @@ test "sparse structural difference skips shared subtrees and preserves exact val
     };
     var difference: Difference = .{};
     defer difference.entries.deinit(std.testing.allocator);
-    const before = difference_node_visits;
+    const before = difference_node_visits.read();
     try owned.differenceWith(&keep, &difference, Difference.emit);
     try std.testing.expectEqualSlices(Difference.Entry, &.{
         .{ .index = 3, .lhs = 15, .rhs = 5 },
@@ -604,7 +679,7 @@ test "sparse structural difference skips shared subtrees and preserves exact val
     // Only the changed leaf and its two ancestors are visited. All other
     // leaves share pointers, so even their callbacks are skipped.
     try std.testing.expectEqual(@as(usize, 8), difference.calls);
-    if (@import("builtin").mode == .Debug) try std.testing.expectEqual(@as(u64, 3), difference_node_visits - before);
+    if (@import("builtin").mode == .Debug) try std.testing.expectEqual(@as(u64, 3), difference_node_visits.read() - before);
 
     difference.entries.clearRetainingCapacity();
     difference.calls = 0;
@@ -644,4 +719,36 @@ test "sparse reverse iteration carries values across radix boundaries" {
     state.clear();
     var empty_iter = state.iteratorDirection(.reverse);
     try std.testing.expectEqual(null, empty_iter.next());
+}
+
+test "sparse range iteration excludes populated subtrees and preserves exact boundaries" {
+    var arena = std.heap.ArenaAllocator.init(std.testing.allocator);
+    defer arena.deinit();
+    const Sparse = Snapshot(u32, 0);
+    var snapshot = Sparse.init(arena.allocator(), 0);
+    const keys = [_]u32{ 0, 7, 8, 63, 64, 511, 512, 99999, std.math.maxInt(u32) };
+    for (keys, 0..) |key, i| try snapshot.putUnique(key, @intCast(i + 1));
+    const boundaries = [_]u64{ 0, 1, 7, 8, 63, 64, 65, 511, 512, 513, 99999, 100000, std.math.maxInt(u32), @as(u64, 1) << 32 };
+    for (boundaries[0 .. boundaries.len - 1]) |start| {
+        for (boundaries) |end| {
+            if (end < start) continue;
+            var iter = snapshot.iteratorRange(@intCast(start), end);
+            for (keys, 0..) |key, i| {
+                if (start <= key and key < end) {
+                    try std.testing.expectEqual(Sparse.Iterator.Entry{ .index = key, .value = @intCast(i + 1) }, iter.next().?);
+                }
+            }
+            try std.testing.expectEqual(null, iter.next());
+        }
+    }
+    var retained = snapshot.iteratorRange(99999, 100000);
+    try snapshot.put(99999, 0);
+    try std.testing.expectEqual(@as(u32, 99999), retained.next().?.index);
+    try std.testing.expectEqual(null, retained.next());
+
+    for (0..4096) |key| try snapshot.put(@intCast(key), 1);
+    const before = iterator_node_visits.read();
+    var empty = snapshot.iteratorRange(8192, 65536);
+    try std.testing.expectEqual(null, empty.next());
+    if (@import("builtin").mode == .Debug) try std.testing.expect(iterator_node_visits.read() - before <= 2 * 11);
 }
