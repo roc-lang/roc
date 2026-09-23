@@ -6825,7 +6825,7 @@ const Builder = struct {
     /// uninstantiated only through that scope's own binders, so a worker may
     /// supply one only when the scope is its own or lexically encloses it.
     const WorkerScopeChains = struct {
-        owner: std.AutoHashMap(TypeRepId, ScopeKey),
+        owner: collections.DenseMap(TypeRepId, ScopeKey),
         chains: []std.AutoHashMap(ScopeKey, void),
 
         fn allows(self: *const WorkerScopeChains, worker: WorkerPlanId, leaf: TypeRepId) bool {
@@ -6844,7 +6844,7 @@ const Builder = struct {
     /// lists it. A scope's list names the enclosing variables its scheme
     /// mentions as well as its own; the variable belongs to the outermost of
     /// them, and a variable a template's own scheme lists belongs to no local.
-    fn indexScopeVariables(self: *Builder, view: ModuleView, owner: *std.AutoHashMap(TypeRepId, ScopeKey)) Allocator.Error!void {
+    fn indexScopeVariables(self: *Builder, view: ModuleView, owner: *collections.DenseMap(TypeRepId, ScopeKey)) Allocator.Error!void {
         const templates = view.checked_procedure_templates;
         var root_owned = collections.DenseMap(TypeRepId, void).init(self.allocator);
         defer root_owned.deinit();
@@ -6854,7 +6854,7 @@ const Builder = struct {
                 try root_owned.put(rep, {});
             }
         }
-        var depths = std.AutoHashMap(TypeRepId, u32).init(self.allocator);
+        var depths = collections.DenseMap(TypeRepId, u32).init(self.allocator);
         defer depths.deinit();
         for (templates.dispatch_scopes, 0..) |*scope, scope_index| {
             var depth: u32 = 0;
@@ -6872,7 +6872,7 @@ const Builder = struct {
     }
 
     fn computeWorkerScopeChains(self: *Builder, edges: []const WorkerEdge) Allocator.Error!WorkerScopeChains {
-        var owner = std.AutoHashMap(TypeRepId, ScopeKey).init(self.allocator);
+        var owner = collections.DenseMap(TypeRepId, ScopeKey).init(self.allocator);
         errdefer owner.deinit();
         try self.indexScopeVariables(self.root_view, &owner);
         for (self.extra_module_views) |view| try self.indexScopeVariables(view, &owner);
@@ -8874,8 +8874,10 @@ const Builder = struct {
             // backing.
             switch (path_step.stepKind()) {
                 .alias_arg, .alias_backing => {},
-                else => while (self.plan.representations.items[@intFromEnum(current)].kind == .alias) {
-                    current = self.repQuery().requiredSingleChild(current, .alias_backing).rep;
+                .fn_arg, .fn_ret, .nominal_arg, .nominal_backing, .tuple_elem, .record_field, .tag_payload_tag, .tag_payload_index => {
+                    while (self.plan.representations.items[@intFromEnum(current)].kind == .alias) {
+                        current = self.repQuery().requiredSingleChild(current, .alias_backing).rep;
+                    }
                 },
             }
             const current_rep = self.plan.representations.items[@intFromEnum(current)];
@@ -11635,10 +11637,8 @@ const Builder = struct {
         const expr = bodies.expr(expr_id);
         if (expr.data == .runtime_error) return;
         const expr_rep = try self.analyzeType(view, expr.ty);
-        switch (expr.data) {
-            .lambda, .closure => {},
-            else => try self.recordWorkerBodyType(worker, expr_rep),
-        }
+        // A nested callable's own type belongs to that callable's worker.
+        if (expr.data != .lambda and expr.data != .closure) try self.recordWorkerBodyType(worker, expr_rep);
 
         switch (expr.data) {
             .pending => boxyPlanInvariant("pending checked expression reached boxy body type planning"),
