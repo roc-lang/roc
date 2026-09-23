@@ -9905,8 +9905,12 @@ Interface summaries are immutable constraints over explicit input roots. They
 preserve unresolved variables and their defaults, row tails, variable and
 field-presence sharing, recursive topology, and producer-owned representation
 authority. Private backing producers mark their representation witness roots;
-those identities stay request-local even when the backing is empty. Imported
-finished-type witnesses remain finished after replay, preserving the prohibition
+those identities stay request-local even when the backing is empty.
+Named-instance groups retain both their backing relation and their declaration
+identity. Shared backing witnesses can connect distinct declarations in the live
+graph; capture partitions those groups by the declaration checks used by nominal
+identity queries so replay never asserts equality between distinct declarations.
+Imported finished-type witnesses remain finished after replay, preserving the prohibition
 on rewriting a finalized representation. Settled
 structure without mutable field-presence or representation evidence is interned
 directly as Monotype content, without retaining intermediate active snapshots.

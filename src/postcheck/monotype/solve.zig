@@ -290,7 +290,7 @@ pub const InterfaceConstraints = struct {
             .kind_ids = collections.DenseMap(FieldKindId, FieldKindId).init(graph.allocator),
             .shareable = collections.DenseMap(NodeId, bool).init(graph.allocator),
             .share_seen = collections.DenseMap(NodeId, void).init(graph.allocator),
-            .related_ids = collections.DenseMap(NodeId, u32).init(graph.allocator),
+            .related_ids = std.AutoHashMap(Capture.RelatedKey, u32).init(graph.allocator),
         };
         defer builder.node_ids.deinit();
         defer builder.kind_ids.deinit();
@@ -480,10 +480,23 @@ pub const InterfaceConstraints = struct {
         kind_ids: collections.DenseMap(FieldKindId, FieldKindId),
         shareable: collections.DenseMap(NodeId, bool),
         share_seen: collections.DenseMap(NodeId, void),
-        related_ids: collections.DenseMap(NodeId, u32),
+        related_ids: std.AutoHashMap(RelatedKey, u32),
+
         nodes: std.ArrayList(Node) = .empty,
         open_nodes: std.ArrayList(OpenNode) = .empty,
         kinds: std.ArrayList(Kind) = .empty,
+
+        // Backing groups can span declarations. Cache groups encode the full
+        // identity predicate used by sameRelatedNamedInstance, including the
+        // declaration checks required by relateNamedInstances during replay.
+        const RelatedKey = struct {
+            root: NodeId,
+            module: names.ModuleIdentityId,
+            type_name: names.TypeNameId,
+            kind: Type.NamedKind,
+            builtin_owner: ?static_dispatch.BuiltinOwner,
+            arg_count: usize,
+        };
 
         fn node(self: *Capture, raw: NodeId) Allocator.Error!NodeId {
             const root = self.graph.find(raw);
@@ -521,10 +534,17 @@ pub const InterfaceConstraints = struct {
                     }
                 }
             }
-            if (self.graph.related_named_instances.contains(root)) {
-                const related = self.graph.relatedNamedInstanceRoot(root);
+            if (self.graph.content(root) == .named and self.graph.related_named_instances.contains(root)) {
+                const named = self.graph.content(root).named;
                 const next_group: u32 = @intCast(self.related_ids.count());
-                const group = try self.related_ids.getOrPut(related);
+                const group = try self.related_ids.getOrPut(.{
+                    .root = self.graph.relatedNamedInstanceRoot(root),
+                    .module = named.def.module,
+                    .type_name = named.def.type_name,
+                    .kind = named.kind,
+                    .builtin_owner = named.builtin_owner,
+                    .arg_count = named.args.len,
+                });
                 if (!group.found_existing) group.value_ptr.* = next_group;
                 captured.related_group = group.value_ptr.*;
             }
@@ -11606,4 +11626,41 @@ test "interface constraints keep cycles open when a later edge reaches a variabl
     try std.testing.expect(!graph.sameClass(first[2], second[2]));
     try graph.unify(first[2], try graph.newNode(.{ .primitive = .str }));
     try std.testing.expect(graph.content(second[2]) == .unresolved);
+}
+
+test "interface constraints separate declarations sharing a related backing group" {
+    const allocator = std.testing.allocator;
+    var types = Type.Store.init(allocator);
+    defer types.deinit();
+    var name_store = names.NameStore.init(allocator);
+    defer name_store.deinit();
+    const graph = try InstGraph.create(allocator, &types, &name_store);
+    defer graph.destroy();
+    const module = try name_store.internModuleIdentity(&([_]u8{0xD2} ** 32));
+    const shared_backing = try graph.newNode(.empty_record);
+    var roots: [4]NodeId = undefined;
+    for ([_][]const u8{ "First", "Second" }, 0..) |name, i| {
+        const def: Type.TypeDef = .{ .module = module, .type_name = try name_store.internTypeName(name) };
+        for (0..2) |j| {
+            roots[i * 2 + j] = try graph.newNode(.{ .named = .{
+                .named_type = .{ .module = .{}, .ty = testCheckedTypeId(1) },
+                .def = def,
+                .kind = .nominal,
+                .builtin_owner = null,
+                .args = &.{},
+                .backing = .{ .node = if (j == 0) shared_backing else try graph.newNode(.empty_record), .use = .inspectable, .authority = .generated_private },
+            } });
+        }
+        try graph.relateNamedInstances(roots[i * 2], roots[i * 2 + 1]);
+    }
+    try std.testing.expectEqual(graph.relatedNamedInstanceRoot(roots[0]), graph.relatedNamedInstanceRoot(roots[2]));
+    const constraints = try InterfaceConstraints.capture(graph, graph.arena(), &roots);
+    const first = try constraints.instantiate(graph);
+    const second = try constraints.instantiate(graph);
+    for (roots, 0..) |left, i| {
+        for (roots, 0..) |right, j| {
+            try std.testing.expectEqual(graph.sameRelatedNamedInstance(left, right), graph.sameRelatedNamedInstance(first[i], first[j]));
+        }
+        try std.testing.expect(!graph.sameRelatedNamedInstance(first[i], second[i]));
+    }
 }
