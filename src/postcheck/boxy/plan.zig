@@ -8657,6 +8657,7 @@ const Builder = struct {
             ret_type,
             evidence_view,
             evidence,
+            substitutions.entries.items[0..substitutions.scheme_entries_len],
             &pending,
         );
         if (pending.items.len != params.len) {
@@ -8680,6 +8681,7 @@ const Builder = struct {
         ret_type: CheckedTypeIdentity,
         maybe_view: ?ModuleView,
         maybe_evidence: ?[]const static_dispatch.CheckedEvidence,
+        scheme_substitution: []const CallDescriptorRepSubstitution,
         pending: *std.ArrayList(DirectCallHiddenDescriptorArg),
     ) Allocator.Error!void {
         const mappings = self.plan.workerEvidenceDescriptorParamSlice(worker.evidence_descs);
@@ -8693,6 +8695,9 @@ const Builder = struct {
             if (mapping.hidden_desc_index >= params.len) {
                 boxyPlanInvariant("worker literal-evidence descriptor mapping exceeded its checked vectors");
             }
+            // The checked call-site substitution names the evidence variable's
+            // instantiation exactly.
+            if (self.schemeSubstitutedRep(scheme_substitution, params[mapping.hidden_desc_index].rep) != null) continue;
             const source = try self.workerEvidenceDescriptorCallSource(
                 worker,
                 mapping.evidence_index,
@@ -8719,7 +8724,13 @@ const Builder = struct {
             var source_arg_index: ?u32 = null;
             var source_value_rep: ?TypeRepId = null;
             var whole_operand = false;
+            const substituted = self.schemeSubstitutedRep(scheme_substitution, params[hidden_index].rep);
+            if (substituted) |rep| {
+                source_type = self.plan.representations.items[@intFromEnum(rep)].source_type;
+                source_rep = rep;
+            }
             for (mappings) |mapping| {
+                if (substituted != null) break;
                 if (mapping.hidden_desc_index != hidden_index) continue;
                 const source = try self.workerEvidenceDescriptorCallSource(
                     worker,
@@ -9667,6 +9678,20 @@ const Builder = struct {
             path.items.len -= 1;
         }
         return false;
+    }
+
+    /// The call representation the checked call-site substitution names for
+    /// one worker scheme variable.
+    fn schemeSubstitutedRep(
+        self: *Builder,
+        scheme_substitution: []const CallDescriptorRepSubstitution,
+        worker_rep: TypeRepId,
+    ) ?TypeRepId {
+        const identity = self.repQuery().descriptorArgumentIdentityRep(worker_rep);
+        for (scheme_substitution) |entry| {
+            if (self.repQuery().descriptorArgumentIdentityRep(entry.worker_rep) == identity) return entry.call_rep;
+        }
+        return null;
     }
 
     const CallDescriptorRepSubstitution = struct {
