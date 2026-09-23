@@ -19538,9 +19538,19 @@ const ProcBodyBuilder = struct {
         const desc = info.desc orelse return null;
         const candidate: DescriptorMaterialization = switch (desc) {
             .static => DescriptorMaterialization{ .desc = desc },
-            .local, .runtime, .dict_method_arg, .dict_method_hidden => info.template orelse if (info.materialize) |materialize| .{
-                .desc = materialize.materialize orelse return null,
-                .captures = materialize.captures,
+            .local, .runtime, .dict_method_arg, .dict_method_hidden => info.template orelse if (info.materialize) |materialize| materialized: {
+                // Only a whole-descriptor materialization is this value's
+                // template. Nested, path, and tag-extension reads name the
+                // enclosing descriptor they read from.
+                if (materialize.nested_index != null or materialize.read_path.len != 0 or
+                    materialize.tag_ext or materialize.tag_residual_for != null)
+                {
+                    return null;
+                }
+                break :materialized .{
+                    .desc = materialize.materialize orelse return null,
+                    .captures = materialize.captures,
+                };
             } else return null,
         };
         return switch (candidate.desc) {
