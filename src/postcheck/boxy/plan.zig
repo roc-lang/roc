@@ -15509,6 +15509,103 @@ test "evidence representation paths use exact nominal backing substitutions" {
     );
 }
 
+test "call wrappers of a structural worker position resolve to their backing under the use's formals" {
+    const gpa = std.testing.allocator;
+    var builder = Builder.init(gpa, .{});
+    defer builder.deinit();
+
+    const call_alias: TypeRepId = @enumFromInt(0);
+    const call_nominal: TypeRepId = @enumFromInt(1);
+    const backing: TypeRepId = @enumFromInt(2);
+    const formal: TypeRepId = @enumFromInt(3);
+    const actual: TypeRepId = @enumFromInt(4);
+    const worker_list: TypeRepId = @enumFromInt(5);
+    const worker_elem: TypeRepId = @enumFromInt(6);
+    const worker_alias: TypeRepId = @enumFromInt(7);
+    const unbacked_nominal: TypeRepId = @enumFromInt(8);
+
+    try builder.plan.children.appendSlice(gpa, &.{
+        .{ .role = .alias_backing, .source_type = rootTypeRef(@enumFromInt(1)), .rep = call_nominal },
+        .{ .role = .nominal_backing, .source_type = rootTypeRef(@enumFromInt(2)), .rep = backing },
+        .{ .role = .{ .nominal_arg = 0 }, .source_type = rootTypeRef(@enumFromInt(4)), .rep = actual },
+        .{ .role = .list_elem, .source_type = rootTypeRef(@enumFromInt(3)), .rep = formal },
+        .{ .role = .list_elem, .source_type = rootTypeRef(@enumFromInt(6)), .rep = worker_elem },
+        .{ .role = .alias_backing, .source_type = rootTypeRef(@enumFromInt(5)), .rep = worker_list },
+    });
+    const call_substitutions = try testNominalSubstitution(&builder.plan, formal, actual);
+    try builder.plan.representations.appendSlice(gpa, &.{
+        .{ .source_type = rootTypeRef(@enumFromInt(0)), .kind = .alias, .children = .{ .start = 0, .len = 1 } },
+        .{ .source_type = rootTypeRef(@enumFromInt(1)), .kind = .{ .nominal = .builtin_other }, .children = .{ .start = 1, .len = 2 }, .nominal_backing_arg_substitutions = call_substitutions },
+        .{ .source_type = rootTypeRef(@enumFromInt(2)), .kind = .list, .children = .{ .start = 3, .len = 1 } },
+        .{ .source_type = rootTypeRef(@enumFromInt(3)), .kind = .{ .dynamic = .rigid }, .contains_dynamic = true },
+        .{ .source_type = rootTypeRef(@enumFromInt(4)), .kind = .{ .primitive = .str } },
+        .{ .source_type = rootTypeRef(@enumFromInt(5)), .kind = .list, .children = .{ .start = 4, .len = 1 } },
+        .{ .source_type = rootTypeRef(@enumFromInt(6)), .kind = .{ .dynamic = .flex }, .contains_dynamic = true },
+        .{ .source_type = rootTypeRef(@enumFromInt(7)), .kind = .alias, .children = .{ .start = 5, .len = 1 } },
+        .{ .source_type = rootTypeRef(@enumFromInt(8)), .kind = .{ .nominal = .opaque_nominal } },
+    });
+
+    // A structural worker position sees through the alias and the nominal to
+    // the backing, and the backing's formal resolves to this use's actual.
+    var bindings: CallWrapperBindings = .{};
+    defer bindings.deinit(gpa);
+    const structure = try builder.repQuery().bindCallWrappedStructure(gpa, worker_list, call_alias, &bindings);
+    try std.testing.expectEqual(backing, structure);
+    try std.testing.expectEqual(actual, structureChildCallRep(&bindings, true, formal));
+    try std.testing.expectEqual(formal, structureChildCallRep(&bindings, false, formal));
+
+    // A wrapper worker position aligns with the call's wrapper itself.
+    var wrapper_bindings: CallWrapperBindings = .{};
+    defer wrapper_bindings.deinit(gpa);
+    try std.testing.expectEqual(call_alias, try builder.repQuery().bindCallWrappedStructure(gpa, worker_alias, call_alias, &wrapper_bindings));
+    try std.testing.expectEqual(@as(usize, 0), wrapper_bindings.entries.items.len);
+
+    // A nominal without a backing stands for no structure.
+    try std.testing.expectEqual(null, builder.repQuery().structureBackingRep(unbacked_nominal));
+}
+
+test "evidence representation paths apply structural steps through a call-side nominal backing" {
+    const gpa = std.testing.allocator;
+    var builder = Builder.init(gpa, .{});
+    defer builder.deinit();
+
+    const call_nominal: TypeRepId = @enumFromInt(1);
+    const backing: TypeRepId = @enumFromInt(2);
+    const formal: TypeRepId = @enumFromInt(3);
+    const actual: TypeRepId = @enumFromInt(4);
+
+    try builder.plan.children.appendSlice(gpa, &.{
+        .{ .role = .nominal_backing, .source_type = rootTypeRef(@enumFromInt(2)), .rep = backing },
+        .{ .role = .{ .nominal_arg = 0 }, .source_type = rootTypeRef(@enumFromInt(4)), .rep = actual },
+        .{ .role = .{ .tuple_elem = 0 }, .source_type = rootTypeRef(@enumFromInt(3)), .rep = formal },
+    });
+    const call_substitutions = try testNominalSubstitution(&builder.plan, formal, actual);
+    try builder.plan.representations.appendSlice(gpa, &.{
+        .{ .source_type = rootTypeRef(@enumFromInt(fixtureTableIndex(0))), .kind = .{ .erased_callable = .pure } },
+        .{ .source_type = rootTypeRef(@enumFromInt(1)), .kind = .{ .nominal = .transparent }, .children = .{ .start = 0, .len = 2 }, .nominal_backing_arg_substitutions = call_substitutions },
+        .{ .source_type = rootTypeRef(@enumFromInt(2)), .kind = .tuple, .children = .{ .start = 2, .len = 1 } },
+        .{ .source_type = rootTypeRef(@enumFromInt(3)), .kind = .{ .dynamic = .rigid }, .contains_dynamic = true },
+        .{ .source_type = rootTypeRef(@enumFromInt(4)), .kind = .{ .primitive = .str } },
+    });
+
+    // The callee's path names element 0 of its tuple parameter; the call
+    // passes a nominal whose backing is that tuple over its formal.
+    const path = [_]static_dispatch.EvidencePathStep{
+        .{ .kind = @intFromEnum(static_dispatch.EvidencePathStep.Kind.fn_arg), .data = 0 },
+        .{ .kind = @intFromEnum(static_dispatch.EvidencePathStep.Kind.tuple_elem), .data = 0 },
+    };
+    try std.testing.expectEqual(
+        actual,
+        try builder.evidenceCallRepAtPath(
+            builder.root_view,
+            &path,
+            rootTypeRef(@enumFromInt(fixtureTableIndex(0))),
+            &.{call_nominal},
+            rootTypeRef(@enumFromInt(fixtureTableIndex(0))),
+        ),
+    );
+}
+
 test "dictionary method hidden descriptors preserve exact implementation substitutions" {
     const gpa = std.testing.allocator;
     var builder = Builder.init(gpa, .{});

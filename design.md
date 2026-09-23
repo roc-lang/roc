@@ -12154,8 +12154,11 @@ nominal layer binds its use's formals for that descent, so a backing child
 resolves to the use's exact actual, never to the shared template. Evidence
 paths are written against the callee's type in the same way: a structural
 step that reaches a call-side wrapper applies to its backing under that use's
-formal bindings. Hidden descriptor and dictionary parameters use this one
-relation.
+formal bindings. Hidden descriptor and dictionary parameters, dictionary-call
+descriptors, erased captures, static dictionary descriptor sources, and
+callable adapters all use this one relation; an adapter relates its two
+callables in both directions, so it applies the relation with the wrapper on
+either side.
 
 A callable parameter's descriptor source survives traversal from the arguments
 into the result. A result nominal's declaration formal resolves through its
