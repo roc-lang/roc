@@ -466,7 +466,22 @@ pub const InterfaceConstraints = struct {
                 },
                 .bool => try self.raw(&.{if (value) 1 else 0}),
                 .void => {},
-                else => @compileError("unsupported interface identity scalar " ++ @typeName(T)),
+                .noreturn,
+                .float,
+                .comptime_float,
+                .comptime_int,
+                .undefined,
+                .null,
+                .error_union,
+                .error_set,
+                .@"fn",
+                .@"opaque",
+                .frame,
+                .@"anyframe",
+                .vector,
+                .enum_literal,
+                .type,
+                => @compileError("unsupported interface identity scalar " ++ @typeName(T)),
             }
         }
     };
@@ -599,7 +614,19 @@ pub const InterfaceConstraints = struct {
                             return false;
                         };
                     },
-                    else => {},
+                    .redirect,
+                    .primitive,
+                    .list,
+                    .box,
+                    .tuple,
+                    .func,
+                    .tag_union,
+                    .record,
+                    .empty_tag_union,
+                    .empty_record,
+                    .erased,
+                    .zst,
+                    => {},
                 }
                 return self.value(InstNode, content);
             }
@@ -629,7 +656,26 @@ pub const InterfaceConstraints = struct {
                     .array => |info| for (item) |child| {
                         if (!try self.value(info.child, child)) return false;
                     },
-                    else => {},
+                    .type,
+                    .void,
+                    .bool,
+                    .noreturn,
+                    .int,
+                    .float,
+                    .comptime_float,
+                    .comptime_int,
+                    .undefined,
+                    .null,
+                    .error_union,
+                    .error_set,
+                    .@"enum",
+                    .@"fn",
+                    .@"opaque",
+                    .frame,
+                    .@"anyframe",
+                    .vector,
+                    .enum_literal,
+                    => {},
                 }
                 return true;
             }
@@ -716,7 +762,26 @@ pub const InterfaceConstraints = struct {
                 for (value, &result) |item, *out| out.* = try mapValue(context, info.child, item);
                 break :blk result;
             },
-            else => try context.scalar(T, value),
+            .type,
+            .void,
+            .bool,
+            .noreturn,
+            .int,
+            .float,
+            .comptime_float,
+            .comptime_int,
+            .undefined,
+            .null,
+            .error_union,
+            .error_set,
+            .@"enum",
+            .@"fn",
+            .@"opaque",
+            .frame,
+            .@"anyframe",
+            .vector,
+            .enum_literal,
+            => try context.scalar(T, value),
         };
     }
 };
