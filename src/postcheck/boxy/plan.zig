@@ -833,6 +833,14 @@ pub const InspectMethodPlan = struct {
     worker: WorkerPlanId,
     method_module: checked.ModuleId,
     method: MethodNameId,
+    /// The planned representation of the override worker's receiver argument:
+    /// the owning nominal applied to the method's own type variables. Every
+    /// hidden descriptor of the worker resolves through this receiver's
+    /// subtree paired with `source_rep`'s instantiation (design.md "Boxy
+    /// Call-Site Substitution And Boundaries": align a nominal by its type
+    /// arguments, pairing each worker `nominal_arg` with the exact
+    /// `actual_rep` of the call's nominal use).
+    receiver_rep: TypeRepId,
 };
 
 /// Which protocol operation an iterator call performs.
@@ -7752,12 +7760,27 @@ const Builder = struct {
                     const source_fn_type = CheckedTypeIdentity{ .module = lookup.view.key, .ty = lookup.target.callable_ty };
                     _ = try self.analyzeType(lookup.view, lookup.target.callable_ty);
                     const worker = try self.ensureWorker(source, source_fn_type, null);
+                    // An eligible inspect override has type `T -> Str` where `T`
+                    // is the owning nominal (design.md "Inspect Overrides"), so
+                    // the worker's receiver is its only argument, analyzed in
+                    // the override's declaring view.
+                    const source_fn_rep = self.plan.repForSourceType(source_fn_type) orelse
+                        boxyPlanInvariant("planned boxy inspect override callable type was not analyzed");
+                    const source_function = self.repQuery().functionChildren(source_fn_rep) orelse
+                        boxyPlanInvariant("planned boxy inspect override callable type was not callable");
+                    if (source_function.arg_count != 1) {
+                        boxyPlanInvariant("planned boxy inspect override callable had unexpected receiver arity");
+                    }
+                    const receiver_children = self.plan.childSlice(
+                        self.plan.representations.items[@intFromEnum(source_function.rep)].children,
+                    );
                     try self.plan.inspect_methods.append(self.allocator, .{
                         .source_rep = rep_id,
                         .worker = worker,
                         .method_module = lookup.view.key,
                         .method = lookup.method orelse
                             boxyPlanInvariant("planned boxy inspect target had no checked method identity"),
+                        .receiver_rep = receiver_children[source_function.args_start].rep,
                     });
                 }
             }
@@ -10113,7 +10136,12 @@ const Builder = struct {
                 => null,
             };
             var call_source: ?u32 = null;
-            if (argument_source == null) {
+            // A call descriptor describes the requirement's storage. It serves
+            // the worker only when the actual needs runtime instantiation; a
+            // concrete actual gets a static descriptor of the worker's own
+            // storage, which can differ (a concrete `List(U64)` key reaching a
+            // `List(item)` worker stores its items boxed).
+            if (argument_source == null and try self.repQuery().repSubtreeHasDescriptor(worker_arg.rep)) {
                 const requirement_source_identity = self.repQuery().descriptorArgumentIdentityRep(worker_arg.rep);
                 for (requirement_args, 0..) |requirement_arg, call_index| {
                     const requirement_call_identity = self.repQuery().descriptorArgumentIdentityRep(requirement_arg.rep);

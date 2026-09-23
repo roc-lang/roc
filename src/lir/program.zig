@@ -321,6 +321,12 @@ pub const BoxyTypeDesc = struct {
     structural_eq: ?LIR.LirProcSpecId = null,
     structural_hash: ?LIR.LirProcSpecId = null,
     inspect_method: ?BoxyMethodSlotId = null,
+    /// Descriptor of `inspect_method`'s adapted receiver argument, and the
+    /// worker's hidden descriptors in parameter order. They describe this
+    /// descriptor's instantiation of the owning nominal, so they are resolved
+    /// with its captures; the slot is shared by every instantiation.
+    inspect_arg_descs: BoxySpan = .{},
+    inspect_hidden_descs: BoxySpan = .{},
     debug_checked_type: ?checked.CheckedTypeId = null,
 };
 
@@ -342,6 +348,8 @@ pub const BoxyMethodAdapter = struct {
 
 /// Origin of a hidden descriptor argument passed to a dictionary method.
 pub const BoxyMethodHiddenDescSource = union(enum) {
+    /// Index into the slot's `hidden_descs`; for a descriptor-carried inspect
+    /// method, into the inspected descriptor's `inspect_hidden_descs`.
     slot: u32,
     call: u32,
     argument: u32,

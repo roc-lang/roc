@@ -868,9 +868,16 @@ const StaticDictCacheEntry = struct {
     dict: LIR.BoxyDictId,
 };
 
-const StaticInspectMethodCacheEntry = struct {
-    source_rep: Plan.TypeRepId,
+const InspectMethodSlotCacheEntry = struct {
+    worker: Plan.WorkerPlanId,
     slot: LirProgram.BoxyMethodSlotId,
+};
+
+/// Descriptors of one descriptor's inspect call; see
+/// `BoxyTypeDesc.inspect_arg_descs`.
+const InspectCallDescs = struct {
+    arg_descs: LIR.BoxySpan = .{},
+    hidden_descs: LIR.BoxySpan = .{},
 };
 
 const StaticDescriptorSourceMapEntry = struct {
@@ -1213,7 +1220,7 @@ const ProcedureBuilder = struct {
     type_desc_ids: []?LIR.BoxyTypeDescId,
     generated_evidence_desc_ids: [4]?LIR.BoxyTypeDescId,
     static_dict_cache: std.ArrayList(StaticDictCacheEntry),
-    static_inspect_method_cache: std.ArrayList(StaticInspectMethodCacheEntry),
+    inspect_method_slot_cache: std.ArrayList(InspectMethodSlotCacheEntry),
     callable_adapter_cache: std.ArrayList(CallableAdapterCacheEntry),
     pending_direct_call_descriptor_abis: std.ArrayList(PendingDirectCallDescriptorAbi),
     descriptor_read_steps: std.ArrayList(DescriptorReadStep),
@@ -1284,7 +1291,7 @@ const ProcedureBuilder = struct {
             .type_desc_ids = &.{},
             .generated_evidence_desc_ids = .{ null, null, null, null },
             .static_dict_cache = .empty,
-            .static_inspect_method_cache = .empty,
+            .inspect_method_slot_cache = .empty,
             .callable_adapter_cache = .empty,
             .pending_direct_call_descriptor_abis = .empty,
             .descriptor_read_steps = .empty,
@@ -1303,7 +1310,7 @@ const ProcedureBuilder = struct {
         self.descriptor_read_steps.deinit(self.allocator);
         self.pending_direct_call_descriptor_abis.deinit(self.allocator);
         self.callable_adapter_cache.deinit(self.allocator);
-        self.static_inspect_method_cache.deinit(self.allocator);
+        self.inspect_method_slot_cache.deinit(self.allocator);
         self.static_dict_cache.deinit(self.allocator);
         self.allocator.free(self.hosted_catalog);
         self.allocator.free(self.type_desc_ids);
@@ -1596,13 +1603,17 @@ const ProcedureBuilder = struct {
         }
     }
 
-    fn staticInspectMethodForRep(
+    /// The descriptor-carried inspect slot of `rep_id`'s planned override. It
+    /// holds only what every instantiation of the owning nominal shares; each
+    /// descriptor supplies its own instantiation's receiver and hidden
+    /// descriptors, which the slot's `.slot` sources index.
+    fn inspectMethodSlotForRep(
         self: *ProcedureBuilder,
         rep_id: Plan.TypeRepId,
     ) Allocator.Error!?LirProgram.BoxyMethodSlotId {
         const inspect = self.plan.inspectMethodForRep(rep_id) orelse return null;
-        for (self.static_inspect_method_cache.items) |entry| {
-            if (entry.source_rep == rep_id) return entry.slot;
+        for (self.inspect_method_slot_cache.items) |entry| {
+            if (entry.worker == inspect.worker) return entry.slot;
         }
 
         const worker = self.plan.workers.items[@intFromEnum(inspect.worker)];
@@ -1610,55 +1621,130 @@ const ProcedureBuilder = struct {
         if (!std.mem.eql(u8, method_view.canonical_names.methodNameText(inspect.method), "to_inspect")) {
             boxyLowerInvariant("planned boxy inspect method had an unexpected checked method identity");
         }
-        const method = inspect.method;
 
         const slot_id: LirProgram.BoxyMethodSlotId = @enumFromInt(@as(u32, @intCast(self.result.boxy_method_slots.items.len)));
-        try self.static_inspect_method_cache.append(self.allocator, .{
-            .source_rep = rep_id,
+        try self.inspect_method_slot_cache.append(self.allocator, .{
+            .worker = inspect.worker,
             .slot = slot_id,
         });
         try self.result.boxy_method_slots.append(self.allocator, .{
-            .method = method,
+            .method = inspect.method,
             .proc = undefined,
         });
 
-        var descriptor_sources = StaticDescriptorSourceMap{};
-        defer descriptor_sources.deinit(self.allocator);
-        try self.collectStaticDictionaryDescriptorSources(
-            inspect.worker,
-            rep_id,
-            self.plan.representations.items[@intFromEnum(rep_id)].source_type,
-            worker.checked_type,
-            &descriptor_sources,
-        );
-        var desc_context = StaticDescInstantiationContext{};
-        defer desc_context.deinit(self.allocator);
-        var hidden_desc_refs = std.ArrayList(LIR.BoxyDescRef).empty;
-        defer hidden_desc_refs.deinit(self.allocator);
         var nested_dict_refs = std.ArrayList(LIR.BoxyDictRef).empty;
         defer nested_dict_refs.deinit(self.allocator);
-        try self.collectStaticHiddenDescRefsForWorker(inspect.worker, &descriptor_sources, &desc_context, &hidden_desc_refs);
         try self.collectStaticHiddenDictRefsForWorker(inspect.worker, &nested_dict_refs);
 
+        const arg_layouts_start: u32 = @intCast(self.result.boxy_method_arg_layouts.items.len);
+        try self.result.boxy_method_arg_layouts.append(
+            self.allocator,
+            self.layout_plan.rep_layouts[@intFromEnum(inspect.receiver_rep)].worker.layoutIdx(),
+        );
+        const hidden_count = worker.hidden_descs.len;
+        const sources_start: u32 = @intCast(self.result.boxy_method_hidden_desc_sources.items.len);
+        for (0..hidden_count) |index| {
+            try self.result.boxy_method_hidden_desc_sources.append(self.allocator, .{ .slot = @intCast(index) });
+        }
+
         const slot = LirProgram.BoxyMethodSlot{
-            .method = method,
+            .method = inspect.method,
             .proc = try self.emitWorker(inspect.worker),
-            .hidden_descs = try self.appendStaticHiddenDescRefs(hidden_desc_refs.items),
             .nested_dicts = try self.appendStaticHiddenDictRefs(nested_dict_refs.items),
-            .adapter = try self.staticMethodAdapterForWorker(
-                inspect.worker,
-                worker.checked_type,
-                &descriptor_sources,
-                &desc_context,
-                null,
-                null,
-                null,
-                null,
-                null,
-            ),
+            .adapter = .{
+                .arg_layouts = .{ .start = arg_layouts_start, .len = 1 },
+                .hidden_desc_sources = .{ .start = sources_start, .len = @intCast(hidden_count) },
+            },
         };
         self.result.boxy_method_slots.items[@intFromEnum(slot_id)] = slot;
         return slot_id;
+    }
+
+    /// The inspect call descriptors of the value `worker_rep_id` describes with
+    /// `source_rep_id`, in the enclosing instantiation context. An override's
+    /// receiver is its owning nominal applied to the method's own type
+    /// variables (design.md "Inspect Overrides"), so each variable is bound to
+    /// the described nominal's type argument at the same position.
+    fn staticInspectCallDescsForWorkerRep(
+        self: *ProcedureBuilder,
+        worker_rep_id: Plan.TypeRepId,
+        source_rep_id: ?Plan.TypeRepId,
+        descriptor_sources: *const StaticDescriptorSourceMap,
+        context: *StaticDescInstantiationContext,
+    ) Allocator.Error!InspectCallDescs {
+        const inspect = self.plan.inspectMethodForRep(source_rep_id orelse worker_rep_id) orelse return .{};
+        const outer_env = context.env;
+        defer context.env = outer_env;
+
+        var bindings = std.ArrayList(StaticDescInstantiationContext.Binding).empty;
+        defer bindings.deinit(self.allocator);
+        for (self.plan.childSlice(self.plan.representations.items[@intFromEnum(inspect.receiver_rep)].children)) |receiver_child| {
+            const arg_index = switch (receiver_child.role) {
+                .nominal_arg => |index| index,
+                else => continue,
+            };
+            const actual = self.nominalArgRep(worker_rep_id, arg_index) orelse
+                boxyLowerInvariant("inspected boxy representation lacked a type argument of its inspect override receiver");
+            const actual_source = if (source_rep_id) |source|
+                self.nominalArgRep(source, arg_index) orelse
+                    boxyLowerInvariant("inspected boxy source representation lacked a type argument of its inspect override receiver")
+            else
+                null;
+            try bindings.append(self.allocator, self.forwardStaticDescBinding(.{
+                .formal = receiver_child.rep,
+                .actual = actual,
+                .source = actual_source,
+                .env = outer_env,
+            }, context));
+        }
+        for (bindings.items) |binding| try context.bind(self.allocator, binding);
+
+        const receiver_desc = try self.staticDescRefForWorkerRepWithSourceMap(
+            inspect.receiver_rep,
+            source_rep_id,
+            descriptor_sources,
+            context,
+        );
+        const worker = self.plan.workers.items[@intFromEnum(inspect.worker)];
+        var hidden_descs = std.ArrayList(LIR.BoxyDescRef).empty;
+        defer hidden_descs.deinit(self.allocator);
+        for (self.plan.hiddenDescriptorParamSlice(worker.hidden_descs)) |param| {
+            try hidden_descs.append(self.allocator, if (param.rep == inspect.receiver_rep)
+                receiver_desc
+            else if (self.nominalArgIndex(inspect.receiver_rep, param.rep) != null)
+                try self.staticDescRefForWorkerRepWithSourceMap(param.rep, null, descriptor_sources, context)
+            else
+                boxyLowerInvariant("inspect override worker descriptor was neither its receiver nor a receiver type argument"));
+        }
+
+        const arg_descs_start: u32 = @intCast(self.result.boxy_desc_refs.items.len);
+        try self.result.boxy_desc_refs.append(self.allocator, receiver_desc);
+        const hidden_descs_start: u32 = @intCast(self.result.boxy_desc_refs.items.len);
+        try self.result.boxy_desc_refs.appendSlice(self.allocator, hidden_descs.items);
+        return .{
+            .arg_descs = .{ .start = arg_descs_start, .len = 1 },
+            .hidden_descs = .{ .start = hidden_descs_start, .len = @intCast(hidden_descs.items.len) },
+        };
+    }
+
+    fn nominalArgIndex(self: *const ProcedureBuilder, rep_id: Plan.TypeRepId, arg_rep: Plan.TypeRepId) ?u32 {
+        for (self.plan.childSlice(self.plan.representations.items[@intFromEnum(rep_id)].children)) |child| {
+            switch (child.role) {
+                .nominal_arg => |index| if (child.rep == arg_rep) return index,
+                else => {},
+            }
+        }
+        return null;
+    }
+
+    fn nominalArgRep(self: *const ProcedureBuilder, rep_id: Plan.TypeRepId, arg_index: u32) ?Plan.TypeRepId {
+        for (self.plan.childSlice(self.plan.representations.items[@intFromEnum(rep_id)].children)) |child| {
+            switch (child.role) {
+                .nominal_arg => |index| if (index == arg_index) return child.rep,
+                else => {},
+            }
+        }
+        return null;
     }
 
     fn collectStaticHiddenDescRefsForWorker(
@@ -2897,40 +2983,16 @@ const ProcedureBuilder = struct {
 
         const outer_env = context.env;
         defer context.env = outer_env;
-        var substitutions = self.plan.nominalBackingSubstitutions(worker_rep.nominal_backing_arg_substitutions);
-        if (worker_rep.nominal_backing_arg_substitutions.len != 0) {
-            var bindings = std.ArrayList(StaticDescInstantiationContext.Binding).empty;
-            defer bindings.deinit(self.allocator);
-            while (substitutions.next()) |substitution| {
-                const formal_rep = substitution.formal_rep orelse continue;
-                const formal = self.plan.representations.items[@intFromEnum(formal_rep)];
-                if (formal.descriptor == null) continue;
-                const actual_source = if (identity_source) |source| blk: {
-                    const source_rep = self.plan.representations.items[@intFromEnum(source)];
-                    break :blk self.plan.nominalBackingActual(source_rep.nominal_backing_arg_substitutions, substitution.arg_index);
-                } else null;
-                if (formal_rep == substitution.actual_rep and
-                    (actual_source == null or actual_source == formal_rep)) continue;
-                var binding = StaticDescInstantiationContext.Binding{
-                    .formal = formal_rep,
-                    .actual = substitution.actual_rep,
-                    .source = actual_source,
-                    .env = outer_env,
-                };
-                // A formal forwarded from an enclosing nominal retains that
-                // nominal's environment, rather than referring to this new scope.
-                while (context.bound(binding.actual)) |forwarded| {
-                    binding.actual = forwarded.actual;
-                    binding.source = forwarded.source;
-                    binding.env = forwarded.env;
-                    context.env = forwarded.env;
-                }
-                context.env = outer_env;
-                if (!self.plan.representations.items[@intFromEnum(binding.actual)].contains_dynamic) binding.env = 0;
-                try bindings.append(self.allocator, binding);
-            }
-            for (bindings.items) |binding| try context.bind(self.allocator, binding);
-        }
+        // Nested descriptors are read through the whole backing chain (a
+        // nominal backed by another nominal), so every link's formals are
+        // bound here, each in the environment of the links enclosing it.
+        var link_worker = identity_worker;
+        var link_source = identity_source;
+        for (0..self.plan.representations.items.len) |_| {
+            try self.bindStaticNominalBackingSubstitutions(link_worker, link_source, context);
+            link_worker = self.descriptorBackingShapeRep(link_worker) orelse break;
+            if (link_source) |source| link_source = self.descriptorBackingShapeRep(source) orelse source;
+        } else boxyLowerInvariant("cyclic static descriptor storage wrapper");
 
         if (context.get(identity_worker, identity_source)) |existing| return existing;
 
@@ -2963,6 +3025,15 @@ const ProcedureBuilder = struct {
             descriptor_sources,
             context,
         );
+        // The described nominal's type arguments belong to its enclosing
+        // scope, not to the backing scope bound above.
+        context.env = outer_env;
+        const inspect_descs = try self.staticInspectCallDescsForWorkerRep(
+            identity_worker,
+            identity_source,
+            descriptor_sources,
+            context,
+        );
 
         // Inspect adapter emission can append more descriptors, so finish the
         // value before taking the reserved ArrayList element's address.
@@ -2974,12 +3045,68 @@ const ProcedureBuilder = struct {
             .tag_ext_desc = tag_ext_desc,
             .field_names = try self.staticFieldNamesForRep(identity_worker),
             .inspect_opaque = self.repInspectsOpaque(identity_worker),
-            .inspect_method = try self.staticInspectMethodForRep(identity_source orelse identity_worker),
+            .inspect_method = try self.inspectMethodSlotForRep(identity_source orelse identity_worker),
+            .inspect_arg_descs = inspect_descs.arg_descs,
+            .inspect_hidden_descs = inspect_descs.hidden_descs,
             .presence_slot_present_discriminant = worker_rep.presence_slot_present_discriminant,
             .debug_checked_type = worker_rep.source_type.ty,
         };
         self.result.boxy_type_descs.items[@intFromEnum(desc_id)] = completed_desc;
         return desc_id;
+    }
+
+    fn bindStaticNominalBackingSubstitutions(
+        self: *ProcedureBuilder,
+        worker_rep_id: Plan.TypeRepId,
+        source_rep_id: ?Plan.TypeRepId,
+        context: *StaticDescInstantiationContext,
+    ) Allocator.Error!void {
+        const worker_rep = self.plan.representations.items[@intFromEnum(worker_rep_id)];
+        if (worker_rep.nominal_backing_arg_substitutions.len == 0) return;
+        const link_env = context.env;
+        var bindings = std.ArrayList(StaticDescInstantiationContext.Binding).empty;
+        defer bindings.deinit(self.allocator);
+        var substitutions = self.plan.nominalBackingSubstitutions(worker_rep.nominal_backing_arg_substitutions);
+        while (substitutions.next()) |substitution| {
+            const formal_rep = substitution.formal_rep orelse continue;
+            const formal = self.plan.representations.items[@intFromEnum(formal_rep)];
+            if (formal.descriptor == null) continue;
+            const actual_source = if (source_rep_id) |source| blk: {
+                const source_rep = self.plan.representations.items[@intFromEnum(source)];
+                break :blk self.plan.nominalBackingActual(source_rep.nominal_backing_arg_substitutions, substitution.arg_index);
+            } else null;
+            if (formal_rep == substitution.actual_rep and
+                (actual_source == null or actual_source == formal_rep)) continue;
+            try bindings.append(self.allocator, self.forwardStaticDescBinding(.{
+                .formal = formal_rep,
+                .actual = substitution.actual_rep,
+                .source = actual_source,
+                .env = link_env,
+            }, context));
+        }
+        for (bindings.items) |binding| try context.bind(self.allocator, binding);
+    }
+
+    /// Resolve `binding.actual` through the bindings visible from
+    /// `binding.env`. A formal forwarded from an enclosing nominal retains that
+    /// nominal's environment, rather than referring to the new scope.
+    fn forwardStaticDescBinding(
+        self: *const ProcedureBuilder,
+        initial: StaticDescInstantiationContext.Binding,
+        context: *StaticDescInstantiationContext,
+    ) StaticDescInstantiationContext.Binding {
+        const current_env = context.env;
+        defer context.env = current_env;
+        var binding = initial;
+        context.env = binding.env;
+        while (context.bound(binding.actual)) |forwarded| {
+            binding.actual = forwarded.actual;
+            binding.source = forwarded.source;
+            binding.env = forwarded.env;
+            context.env = forwarded.env;
+        }
+        if (!self.plan.representations.items[@intFromEnum(binding.actual)].contains_dynamic) binding.env = 0;
+        return binding;
     }
 
     fn effectiveStaticDescriptorSource(
@@ -3840,6 +3967,11 @@ const ProcedureBuilder = struct {
         const nested_descs = try self.staticNestedDescRefsForRep(rep_id);
         const tag_variants = try self.staticTagVariantsForRep(rep_id, payload_layout);
         const tag_ext_desc = try self.staticTagExtDescForRep(rep_id);
+        var inspect_sources = StaticDescriptorSourceMap{};
+        defer inspect_sources.deinit(self.allocator);
+        var inspect_context = StaticDescInstantiationContext{};
+        defer inspect_context.deinit(self.allocator);
+        const inspect_descs = try self.staticInspectCallDescsForWorkerRep(rep_id, rep_id, &inspect_sources, &inspect_context);
 
         // Inspect adapter emission can append more descriptors, so finish the
         // value before taking the reserved ArrayList element's address.
@@ -3851,7 +3983,9 @@ const ProcedureBuilder = struct {
             .tag_ext_desc = tag_ext_desc,
             .field_names = try self.staticFieldNamesForRep(rep_id),
             .inspect_opaque = self.repInspectsOpaque(rep_id),
-            .inspect_method = try self.staticInspectMethodForRep(rep_id),
+            .inspect_method = try self.inspectMethodSlotForRep(rep_id),
+            .inspect_arg_descs = inspect_descs.arg_descs,
+            .inspect_hidden_descs = inspect_descs.hidden_descs,
             .presence_slot_present_discriminant = rep.presence_slot_present_discriminant,
             .debug_checked_type = rep.source_type.ty,
         };
@@ -4198,22 +4332,42 @@ const ProcedureBuilder = struct {
         storage_layout: layout.Idx,
         force: bool,
     ) ?Plan.TypeRepId {
+        return switch (self.tagPayloadStorageDescRepMatch(rep_id, storage_layout, force)) {
+            .not_needed => null,
+            .rep => |rep| rep,
+            .layout_mismatch => boxyLowerInvariant("boxy descriptor payload field layout disagreed with selected nested descriptor representation"),
+        };
+    }
+
+    const TagPayloadStorageDescRepMatch = union(enum) {
+        not_needed,
+        rep: Plan.TypeRepId,
+        layout_mismatch,
+    };
+
+    /// The representation of `rep_id` whose descriptor describes a payload
+    /// stored in `storage_layout`.
+    fn tagPayloadStorageDescRepMatch(
+        self: *const ProcedureBuilder,
+        rep_id: Plan.TypeRepId,
+        storage_layout: layout.Idx,
+        force: bool,
+    ) TagPayloadStorageDescRepMatch {
         const initial = if (force)
             self.tagPayloadStorageDescRep(rep_id)
         else
-            self.tagPayloadStorageDescRepIfNeeded(rep_id) orelse return null;
+            self.tagPayloadStorageDescRepIfNeeded(rep_id) orelse return .not_needed;
 
-        if (self.layoutIsBoxStorage(storage_layout)) return initial;
-        if (self.descriptorPayloadLayoutForRep(initial) == storage_layout) return initial;
+        if (self.layoutIsBoxStorage(storage_layout)) return .{ .rep = initial };
+        if (self.descriptorPayloadLayoutForRep(initial) == storage_layout) return .{ .rep = initial };
 
         const identity = self.descriptorIdentityRep(rep_id);
         if ((force or self.repNeedsTagPayloadDesc(identity)) and
             self.descriptorPayloadLayoutForRep(identity) == storage_layout)
         {
-            return identity;
+            return .{ .rep = identity };
         }
-
-        boxyLowerInvariant("boxy descriptor payload field layout disagreed with selected nested descriptor representation");
+        return .layout_mismatch;
     }
 
     fn tagVariantPayloadFieldLayout(
@@ -19643,13 +19797,39 @@ const ProcBodyBuilder = struct {
         };
     }
 
-    fn resultDescriptorTemplate(info: ResultDescriptorSource) ?DescriptorMaterialization {
+    fn descriptorTemplateOf(self: *const ProcBodyBuilder, info: ResultDescriptorSource) ?DescriptorMaterialization {
+        return resultDescriptorTemplate(info, self.parent.result.boxy_type_descs.items, self.parent.result.boxy_desc_refs.items);
+    }
+
+    /// The static template `info`'s descriptor instantiates, if any. A
+    /// materialization that reads a nested descriptor instantiates the static
+    /// nested descriptor of its parent's template; other projections have no
+    /// static template.
+    fn resultDescriptorTemplate(
+        info: ResultDescriptorSource,
+        type_descs: []const LirProgram.BoxyTypeDesc,
+        desc_refs: []const LIR.BoxyDescRef,
+    ) ?DescriptorMaterialization {
         const desc = info.desc orelse return null;
         const candidate: DescriptorMaterialization = switch (desc) {
             .static => DescriptorMaterialization{ .desc = desc },
-            .local, .runtime, .dict_method_arg, .dict_method_hidden => info.template orelse if (info.materialize) |materialize| .{
-                .desc = materialize.materialize orelse return null,
-                .captures = materialize.captures,
+            .local, .runtime, .dict_method_arg, .dict_method_hidden => info.template orelse if (info.materialize) |materialize| blk: {
+                const parent = materialize.materialize orelse return null;
+                if (materialize.read_path.len != 0 or materialize.tag_ext or materialize.tag_residual_for != null) return null;
+                const nested_index = materialize.nested_index orelse
+                    break :blk .{ .desc = parent, .captures = materialize.captures };
+                const parent_id = switch (parent) {
+                    .static => |id| id,
+                    .local, .runtime, .dict_method_arg, .dict_method_hidden => return null,
+                };
+                const parent_desc = type_descs[@intFromEnum(parent_id)];
+                if (nested_index >= parent_desc.nested_descs.len) {
+                    boxyLowerInvariant("boxy nested descriptor read exceeded its template's nested descriptors");
+                }
+                break :blk .{
+                    .desc = desc_refs[parent_desc.nested_descs.start + nested_index],
+                    .captures = materialize.captures,
+                };
             } else return null,
         };
         return switch (candidate.desc) {
@@ -19705,7 +19885,7 @@ const ProcBodyBuilder = struct {
 
         const source_desc = source_desc_info.desc orelse
             boxyLowerInvariant("boxy call adapter tag source had no descriptor");
-        const source_materialization = resultDescriptorTemplate(source_desc_info);
+        const source_materialization = self.descriptorTemplateOf(source_desc_info);
 
         // A fully concrete source has exactly one descriptor, so its static
         // descriptor describes a source whose descriptor was read at runtime.
@@ -19996,7 +20176,7 @@ const ProcBodyBuilder = struct {
 
         const source_desc = source_desc_info.desc orelse
             boxyLowerInvariant("boxy record adapter source had no descriptor");
-        const source_materialization = resultDescriptorTemplate(source_desc_info);
+        const source_materialization = self.descriptorTemplateOf(source_desc_info);
         const source_template: ?LirProgram.BoxyTypeDesc = if (source_materialization) |materialization| blk: {
             const source_template_id = switch (materialization.desc) {
                 .static => |desc_id| desc_id,
@@ -20145,7 +20325,7 @@ const ProcBodyBuilder = struct {
 
         const source_desc = source_desc_info.desc orelse
             boxyLowerInvariant("boxy tuple adapter source had no descriptor");
-        const source_materialization = resultDescriptorTemplate(source_desc_info);
+        const source_materialization = self.descriptorTemplateOf(source_desc_info);
         const source_template: ?LirProgram.BoxyTypeDesc = if (source_materialization) |materialization| blk: {
             const source_template_id = switch (materialization.desc) {
                 .static => |desc_id| desc_id,
@@ -20301,7 +20481,7 @@ const ProcBodyBuilder = struct {
 
         const source_desc = source_desc_info.desc orelse
             boxyLowerInvariant("boxy declared aggregate adapter source had no descriptor");
-        const source_materialization = resultDescriptorTemplate(source_desc_info);
+        const source_materialization = self.descriptorTemplateOf(source_desc_info);
         const source_template: ?LirProgram.BoxyTypeDesc = if (source_materialization) |materialization| blk: {
             const source_template_id = switch (materialization.desc) {
                 .static => |desc_id| desc_id,
@@ -20582,7 +20762,7 @@ const ProcBodyBuilder = struct {
             return known;
         }
 
-        const source_template = resultDescriptorTemplate(source_desc_info);
+        const source_template = self.descriptorTemplateOf(source_desc_info);
         const source_template_ref = if (source_template) |materialization| materialization.desc else null;
         const source_elem_desc_info: ResultDescriptorSource = if (source_template_ref) |template_ref| template_elem: {
             const source_desc_id = switch (template_ref) {
@@ -27774,15 +27954,10 @@ const ProcBodyBuilder = struct {
         for (fields) |field| {
             const field_layout = self.parent.result.store.getLocal(field.local).layout_idx;
             const target_desc_rep = self.parent.tagPayloadStorageDescRepIfNeeded(field.target_rep) orelse continue;
-            // The source identity describes the specialized bytes in the field;
-            // the target identity names the generic descriptor requirement those
-            // bytes satisfy. Only the source descriptor must match the committed
-            // field layout.
-            // The field local contains the result of adaptation. A concrete
-            // target has its own exact descriptor; the pre-conversion erased
-            // source descriptor describes different storage.
-            const storage_rep = if (self.repIsFullyConcrete(field.target_rep)) field.target_rep else field.source_rep;
-            const source_desc_rep = self.parent.tagPayloadStorageDescRepForLayout(storage_rep, field_layout, true) orelse
+            // The storage identity describes the bytes in the field; the target
+            // identity names the generic descriptor requirement those bytes
+            // satisfy.
+            const source_desc_rep = self.constructedFieldStorageDescRep(field, field_layout, true) orelse
                 boxyLowerInvariant("constructed aggregate source field had no storage descriptor representation");
             const desc_local = try self.prepareConstructedFieldDescriptorLocal(field.local, source_desc_rep, &field_initializers);
             try self.bindDescriptorIdentityLocalForRep(target_desc_rep, desc_local, false);
@@ -27837,11 +28012,7 @@ const ProcBodyBuilder = struct {
         for (fields) |field| {
             const field_layout = self.parent.result.store.getLocal(field.local).layout_idx;
             const target_desc_rep = self.parent.tagPayloadStorageDescRepIfNeeded(field.target_rep) orelse continue;
-            // The field local contains the result of adaptation. A concrete
-            // target has its own exact descriptor; the pre-conversion erased
-            // source descriptor describes different storage.
-            const storage_rep = if (self.repIsFullyConcrete(field.target_rep)) field.target_rep else field.source_rep;
-            const source_desc_rep = self.parent.tagPayloadStorageDescRepForLayout(storage_rep, field_layout, true) orelse
+            const source_desc_rep = self.constructedFieldStorageDescRep(field, field_layout, true) orelse
                 boxyLowerInvariant("constructed tag source payload had no storage descriptor representation");
             const desc_local = try self.prepareConstructedFieldDescriptorLocal(field.local, source_desc_rep, &field_initializers);
             try self.bindDescriptorIdentityLocalForRep(target_desc_rep, desc_local, false);
@@ -27885,8 +28056,7 @@ const ProcBodyBuilder = struct {
             const field_layout = self.parent.result.store.getLocal(field.local).layout_idx;
             const force_field = self.parent.layoutIsBoxStorage(field_layout);
             if (!force_field and !self.parent.layoutNeedsNestedBoxyDesc(field_layout)) continue;
-            const storage_rep = if (self.repIsFullyConcrete(field.target_rep)) field.target_rep else field.source_rep;
-            const desc_rep = self.parent.tagPayloadStorageDescRepForLayout(storage_rep, field_layout, force_field) orelse continue;
+            const desc_rep = self.constructedFieldStorageDescRep(field, field_layout, force_field) orelse continue;
             const desc_local = try self.prepareConstructedFieldDescriptorLocal(field.local, desc_rep, &field_initializers);
             try refs.append(self.parent.allocator, .{ .local = desc_local });
             try appendUniqueLocal(self.parent.allocator, &captures, desc_local);
@@ -27936,6 +28106,27 @@ const ProcBodyBuilder = struct {
             .field_initializers = initializers,
             .materialize = target_desc_info.materialize,
         };
+    }
+
+    /// The representation whose descriptor describes `field.local`, which
+    /// holds the field adapted into target storage. A concrete target has its
+    /// own exact descriptor. Otherwise the source's descriptor is the exact
+    /// description when adaptation kept the source's storage; when adaptation
+    /// changed it, only the target describes the adapted bytes.
+    fn constructedFieldStorageDescRep(
+        self: *const ProcBodyBuilder,
+        field: AggregateDescriptorField,
+        field_layout: layout.Idx,
+        force: bool,
+    ) ?Plan.TypeRepId {
+        if (!self.repIsFullyConcrete(field.target_rep)) {
+            switch (self.parent.tagPayloadStorageDescRepMatch(field.source_rep, field_layout, force)) {
+                .not_needed => return null,
+                .rep => |rep| return rep,
+                .layout_mismatch => {},
+            }
+        }
+        return self.parent.tagPayloadStorageDescRepForLayout(field.target_rep, field_layout, force);
     }
 
     fn prepareConstructedFieldDescriptorLocal(
@@ -28302,22 +28493,90 @@ const ProcBodyBuilder = struct {
                     .actual = actual,
                 });
             }
-            for (context.bindings.items[bindings_start..]) |binding| {
-                context.exact_reps[@intFromEnum(binding.formal)] = binding.actual;
-                const key = DescriptorTemplateEnvKey{
-                    .parent = context.env,
-                    .formal = binding.formal,
-                    .actual = binding.actual,
-                };
-                const entry = try context.env_ids.getOrPut(key);
-                if (!entry.found_existing) {
-                    entry.value_ptr.* = @enumFromInt(@as(u32, @intCast(context.env_ids.count())));
-                }
-                context.env = entry.value_ptr.*;
-            }
+            try activateDescriptorTemplateBindings(context, bindings_start);
             current = self.parent.descriptorBackingShapeRep(current) orelse return scope;
         }
         boxyLowerInvariant("cyclic exact descriptor storage wrapper");
+    }
+
+    /// Bind the formals of `context.bindings[bindings_start..]`, extending the
+    /// environment by each binding.
+    fn activateDescriptorTemplateBindings(
+        context: *DescriptorTemplateContext,
+        bindings_start: usize,
+    ) Allocator.Error!void {
+        for (context.bindings.items[bindings_start..]) |binding| {
+            context.exact_reps[@intFromEnum(binding.formal)] = binding.actual;
+            const key = DescriptorTemplateEnvKey{
+                .parent = context.env,
+                .formal = binding.formal,
+                .actual = binding.actual,
+            };
+            const entry = try context.env_ids.getOrPut(key);
+            if (!entry.found_existing) {
+                entry.value_ptr.* = @enumFromInt(@as(u32, @intCast(context.env_ids.count())));
+            }
+            context.env = entry.value_ptr.*;
+        }
+    }
+
+    /// The inspect call descriptors of `rep_id` in this template. Each type
+    /// variable of the override's receiver is bound to `rep_id`'s type argument
+    /// at the same position (design.md "Inspect Overrides"), so descriptors the
+    /// template captures reach the override worker.
+    fn templateInspectCallDescsForRep(
+        self: *ProcBodyBuilder,
+        rep_id: Plan.TypeRepId,
+        captures: *std.ArrayList(LIR.LocalId),
+        context: *DescriptorTemplateContext,
+    ) Allocator.Error!InspectCallDescs {
+        const plan = self.parent.plan;
+        const inspect = plan.inspectMethodForRep(rep_id) orelse return .{};
+        const scope = DescriptorTemplateScope{
+            .bindings_start = context.bindings.items.len,
+            .env = context.env,
+        };
+        defer popDescriptorTemplateExactReps(context, scope);
+        for (plan.childSlice(plan.representations.items[@intFromEnum(inspect.receiver_rep)].children)) |receiver_child| {
+            const arg_index = switch (receiver_child.role) {
+                .nominal_arg => |index| index,
+                else => continue,
+            };
+            const actual_arg = self.parent.nominalArgRep(rep_id, arg_index) orelse
+                boxyLowerInvariant("inspected boxy representation lacked a type argument of its inspect override receiver");
+            const actual = self.descriptorTemplateExactRep(actual_arg, context);
+            const outer = context.exact_reps[@intFromEnum(receiver_child.rep)];
+            if (receiver_child.rep == actual or outer == actual) continue;
+            try context.bindings.append(self.parent.allocator, .{
+                .formal = receiver_child.rep,
+                .outer = outer,
+                .actual = actual,
+            });
+        }
+        try activateDescriptorTemplateBindings(context, scope.bindings_start);
+
+        const receiver_desc = try self.descriptorTemplateRefForRep(inspect.receiver_rep, null, captures, context);
+        const worker = plan.workers.items[@intFromEnum(inspect.worker)];
+        var hidden_descs = std.ArrayList(LIR.BoxyDescRef).empty;
+        defer hidden_descs.deinit(self.parent.allocator);
+        for (plan.hiddenDescriptorParamSlice(worker.hidden_descs)) |param| {
+            try hidden_descs.append(self.parent.allocator, if (param.rep == inspect.receiver_rep)
+                receiver_desc
+            else if (self.parent.nominalArgIndex(inspect.receiver_rep, param.rep) != null)
+                try self.descriptorTemplateRefForRep(param.rep, null, captures, context)
+            else
+                boxyLowerInvariant("inspect override worker descriptor was neither its receiver nor a receiver type argument"));
+        }
+
+        const result = self.parent.result;
+        const arg_descs_start: u32 = @intCast(result.boxy_desc_refs.items.len);
+        try result.boxy_desc_refs.append(self.parent.allocator, receiver_desc);
+        const hidden_descs_start: u32 = @intCast(result.boxy_desc_refs.items.len);
+        try result.boxy_desc_refs.appendSlice(self.parent.allocator, hidden_descs.items);
+        return .{
+            .arg_descs = .{ .start = arg_descs_start, .len = 1 },
+            .hidden_descs = .{ .start = hidden_descs_start, .len = @intCast(hidden_descs.items.len) },
+        };
     }
 
     /// Restore the bindings and environment a descent replaced.
@@ -28401,6 +28660,7 @@ const ProcBodyBuilder = struct {
         const nested_descs = try self.templateNestedDescRefsForRep(rep_id, current_desc, captures, context);
         const tag_variants = try self.templateTagVariantsForRep(rep_id, payload_layout, current_desc, captures, context);
         const tag_ext_desc = try self.templateTagExtDescForRep(rep_id, current_desc, captures, context);
+        const inspect_descs = try self.templateInspectCallDescsForRep(rep_id, captures, context);
 
         // Inspect adapter emission can append more descriptors, so finish the
         // value before taking the reserved ArrayList element's address.
@@ -28412,7 +28672,9 @@ const ProcBodyBuilder = struct {
             .tag_ext_desc = tag_ext_desc,
             .field_names = try self.parent.staticFieldNamesForRep(rep_id),
             .inspect_opaque = self.parent.repInspectsOpaque(rep_id),
-            .inspect_method = try self.parent.staticInspectMethodForRep(rep_id),
+            .inspect_method = try self.parent.inspectMethodSlotForRep(rep_id),
+            .inspect_arg_descs = inspect_descs.arg_descs,
+            .inspect_hidden_descs = inspect_descs.hidden_descs,
             .presence_slot_present_discriminant = rep.presence_slot_present_discriminant,
             .debug_checked_type = rep.source_type.ty,
         };
@@ -34510,6 +34772,10 @@ const ProcBodyBuilder = struct {
         if (source_has_excluded_variant and target_has_added_variant) {
             boxyLowerInvariant("boxy concrete tag boundary rows overlapped without a subset relationship");
         }
+        // The target's payloads are written against the formals of the nominal
+        // wrappers `tagVariantRepForBoundary` passed through.
+        const scope = try self.enterNominalWrapperFormalScopes(target_rep);
+        defer self.dropNominalBackingFormalScope(scope);
         const unreachable_source_variant = try self.parent.result.store.addCFStmt(.runtime_error);
         const branches = try self.parent.allocator.alloc(LIR.CFSwitchBranch, source_variants.len);
         defer self.parent.allocator.free(branches);
@@ -34563,7 +34829,7 @@ const ProcBodyBuilder = struct {
             .op = .{ .discriminant = .{ .source = source } },
             .next = switch_stmt,
         } });
-        return read_discriminant;
+        return try self.leaveNominalBackingFormalScope(scope, read_discriminant);
     }
 
     /// Adapt a concrete tag union into a target whose every payload is
@@ -38815,12 +39081,12 @@ test "boxy call adapters distinguish static templates from runtime descriptors" 
     const static_id: LIR.BoxyTypeDescId = @enumFromInt(fixtureTableIndex(0));
     try std.testing.expectEqual(
         ProcBodyBuilder.DescriptorMaterialization{ .desc = .{ .static = static_id } },
-        ProcBodyBuilder.resultDescriptorTemplate(.{ .desc = .{ .static = static_id } }).?,
+        ProcBodyBuilder.resultDescriptorTemplate(.{ .desc = .{ .static = static_id } }, &.{}, &.{}).?,
     );
     try std.testing.expect(ProcBodyBuilder.resultDescriptorTemplate(.{
         .desc = .{ .local = @enumFromInt(fixtureTableIndex(0)) },
         .template = .{ .desc = .{ .runtime = 0 } },
-    }) == null);
+    }, &.{}, &.{}) == null);
 }
 
 test "descriptor materialization captures close over recursive template graphs" {

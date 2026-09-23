@@ -1708,6 +1708,8 @@ pub const BoxyRuntime = struct {
         target.structural_eq = source.structural_eq;
         target.structural_hash = source.structural_hash;
         target.inspect_method = source.inspect_method;
+        target.inspect_arg_descs = try self.copyBoxyDescRefSpanToRuntime(hooks, source.inspect_arg_descs, copied, allow_global_reuse);
+        target.inspect_hidden_descs = try self.copyBoxyDescRefSpanToRuntime(hooks, source.inspect_hidden_descs, copied, allow_global_reuse);
         // Field names are immutable static-pool data; runtime copies keep the
         // static span.
         target.field_names = source.field_names;
@@ -7424,27 +7426,24 @@ pub const BoxyRuntime = struct {
             );
         }
 
-        const dict = LirProgram.BoxyDict{ .method_slots = .{
-            .start = @intFromEnum(slot_id),
-            .len = 1,
-        } };
-        const prepared = try self.prepareDictCall(
+        const source_desc = source.source_desc orelse {
+            return self.invariantFailedError(
+                "LIR/interpreter invariant violated: inspect method call had no inspected descriptor",
+                .{},
+            );
+        };
+        // The slot is shared by every instantiation of the owning nominal; the
+        // inspected descriptor supplies its instantiation's descriptors.
+        return try self.prepareMethodSlotCall(
             hooks,
             alloc,
-            &dict,
-            0,
-            @intFromEnum(slot.method),
+            slot.*,
+            source_desc.inspect_arg_descs,
+            source_desc.inspect_hidden_descs,
             &.{source},
             &.{},
             .borrow,
         );
-        return switch (prepared) {
-            .call => |call| call,
-            .structural_eq => self.invariantFailedError(
-                "LIR/interpreter invariant violated: inspect method prepared as structural equality",
-                .{},
-            ),
-        };
     }
 
     fn dictionaryMethodSlot(
@@ -7630,6 +7629,38 @@ pub const BoxyRuntime = struct {
             const operand_desc = try hooks.resolveDescRef(eq_slot_descs[0]);
             return .{ .structural_eq = operand_desc };
         }
+        return .{ .call = try self.prepareMethodSlotCall(
+            hooks,
+            alloc,
+            method_slot,
+            method_slot.adapter.arg_descs,
+            method_slot.hidden_descs,
+            args,
+            hidden_args,
+            argument_mode,
+        ) };
+    }
+
+    /// Prepare a worker call through `method_slot`, adapting explicit
+    /// arguments to `adapter_arg_descs` and reading `.slot` hidden descriptor
+    /// sources from `slot_hidden_descs`.
+    fn prepareMethodSlotCall(
+        self: *const BoxyRuntime,
+        hooks: anytype,
+        alloc: Allocator,
+        method_slot: LirProgram.BoxyMethodSlot,
+        adapter_arg_descs: LIR.BoxySpan,
+        slot_hidden_descs: LIR.BoxySpan,
+        args: []const DictCallArg,
+        hidden_args: []const Value,
+        argument_mode: CallArgumentMode,
+    ) Error!PreparedWorkerCall {
+        if (method_slot.structural_eq) {
+            return self.invariantFailedError(
+                "LIR/interpreter invariant violated: worker call prepared through a structural equality slot",
+                .{},
+            );
+        }
         if (method_slot.adapter.ret_layout != null or
             method_slot.adapter.ret_desc != null or
             method_slot.adapter.nested_dicts.len != 0)
@@ -7641,7 +7672,6 @@ pub const BoxyRuntime = struct {
         }
 
         const adapter_arg_layouts = self.requireBoxyMethodArgLayouts(method_slot.adapter.arg_layouts);
-        const adapter_arg_descs = method_slot.adapter.arg_descs;
         if (adapter_arg_layouts.len != 0 and adapter_arg_layouts.len != args.len) {
             return self.invariantFailedError(
                 "LIR/interpreter invariant violated: dictionary method adapter had {d} arg layouts for {d} explicit args",
@@ -7654,7 +7684,6 @@ pub const BoxyRuntime = struct {
                 .{ adapter_arg_descs.len, adapter_arg_layouts.len },
             );
         }
-        const slot_hidden_descs = method_slot.hidden_descs;
         const slot_nested_dicts = self.requireBoxyDictRefs(method_slot.nested_dicts);
         const adapter_hidden_desc_sources = self.requireBoxyMethodHiddenDescSources(method_slot.adapter.hidden_desc_sources);
         if (adapter_hidden_desc_sources.len == 0 and slot_hidden_descs.len != 0) {
@@ -7763,13 +7792,13 @@ pub const BoxyRuntime = struct {
                 .{ call_arg_index, call_arg_count },
             );
         }
-        return .{ .call = .{
+        return .{
             .proc = method_slot.proc,
             .arg_values = arg_values,
             .arg_layouts = arg_layouts,
             .arg_descs = arg_descs,
             .borrowed_args = borrowed_args,
-        } };
+        };
     }
 };
 
