@@ -178,7 +178,17 @@ jobs:
         with:
           arch: x64
 
-      # Dep fetching and compilation happen here, where network flakes surface
+      # The eval runner and eval unit tests each link the embedded LLVM libraries.
+      # Building the runner first keeps their large Windows link processes from
+      # overlapping in build-ci, which exhausted the hosted runner's memory.
+      - name: Build eval runner first (Windows)
+        if: runner.os == 'Windows'
+        uses: ./.github/actions/flaky-retry
+        with:
+          command: zig build build-test-eval-runner
+          retry_count: 3
+
+      # The remaining compilation happens here, where network flakes surface
       # on stdout for flaky-retry to match. The minici shards below then consume
       # the build artifact and go straight to the run steps, so their failures
       # are genuine and never retried.
