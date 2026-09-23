@@ -977,6 +977,17 @@ through a slot the evaluation filled, whose frozen bytes are the value's
 definition there. Whether one program or two, no consumer lowers code only
 another consumer runs.
 
+For a separate runtime consumer, completed values are transcoded while that
+consumer still owns its complete, uncompacted LIR representation tables. The
+resulting frozen graph participates in the consumer's one reachability pass:
+its explicit function relocations retain exactly the callable procedures that
+the completed values contain, and those procedures join the ordinary runtime
+roots supplied to ARC. Successful evaluation evidence removes its value guards
+after guard construction; failed values keep their ordinary runtime failure
+paths. Attaching completed data after ARC and then repeating reachability is
+forbidden, because it would make ARC run over a different procedure graph from
+the one emitted to the backend.
+
 Monotype lowering records the evaluated roots whose completed values the
 program reads, once per root. A root-slot read is that stage's own explicit
 statement of the demand, so later stages consume the record instead of

@@ -263,8 +263,8 @@ pub const ProgramSession = struct {
         const source = if (self.host) |*host| host else finalizationInvariant("target consumer omitted its completed host program");
         const host_frozen = if (source.frozen_static_data) |*frozen| frozen else finalizationInvariant("host program omitted its completed frozen values");
         // The host program has completed, so its scalar roots lower as
-        // literals here; the completed image itself is attached after
-        // the LIR passes, which compact the slot table.
+        // literals here. The completed image is transcoded after target LIR
+        // generation and before reachability compacts the target tables.
         var scalar_values = try lir.CheckedPipeline.CompletedScalarValues.init(allocator, &source.lir_result, host_frozen);
         defer scalar_values.deinit(allocator);
         const manifest = try allocator.alloc(u32, self.runtime_requests.len);
@@ -272,19 +272,25 @@ pub const ProgramSession = struct {
         // Compile-time requests are published first, so the runtime requests
         // are the positions after them, in their declared order.
         for (manifest, 0..) |*position, ordinal| position.* = @intCast(self.compile_time_root_count + ordinal);
+        var frozen_context = RuntimeFrozenMaterializer{ .source = source };
+        defer frozen_context.successful_roots.deinit(allocator);
         owned_live = false;
         var lowered = try lir.CheckedPipeline.lowerFinalConsumerToLir(owned, .{
             .roots = .{ .roots = manifest },
             .target_usize = target.target_usize,
             .inline_expects = target.inline_expects,
             .completed_scalar_values = &scalar_values,
+            .frozen_materializer = .{
+                .context = &frozen_context,
+                .materialize = RuntimeFrozenMaterializer.materialize,
+                .complete_guards = RuntimeFrozenMaterializer.completeGuards,
+            },
             .observers = lir.CheckedPipeline.Observers.fromTarget(target),
         });
         errdefer lowered.deinit();
         if (lowered.lir_result.root_procs.items.len != manifest.len)
             finalizationInvariant("runtime consumer lowering changed the requested root count");
-        lowered.frozen_static_data = try transcodeCompletedSlots(allocator, source, &lowered);
-        try lir.CheckedPipeline.adoptCompletedComptimeValues(&lowered);
+        try lir.CheckedPipeline.adoptReachableCompletedComptimeValues(&lowered);
         // The host's procedures have no reader left: the runtime program has
         // its own, and only the host's completed values and their
         // representation metadata are still consulted.
@@ -293,12 +299,44 @@ pub const ProgramSession = struct {
     }
 };
 
+const RuntimeFrozenMaterializer = struct {
+    const SuccessfulRoot = struct {
+        module: checked.ModuleId,
+        root: checked.ComptimeRootId,
+    };
+
+    source: *const lir.CheckedPipeline.LoweredProgram,
+    successful_roots: std.ArrayList(SuccessfulRoot) = .empty,
+
+    fn materialize(
+        allocator: Allocator,
+        context: *anyopaque,
+        target: *LirProgram.Result,
+    ) Allocator.Error!LirProgram.FrozenStaticData {
+        const self: *RuntimeFrozenMaterializer = @ptrCast(@alignCast(context));
+        return transcodeCompletedSlots(allocator, self.source, target, &self.successful_roots);
+    }
+
+    fn completeGuards(context: *anyopaque, target: *LirProgram.Result) void {
+        const self: *RuntimeFrozenMaterializer = @ptrCast(@alignCast(context));
+        for (self.successful_roots.items) |successful| {
+            for (target.static_data_values.items, 0..) |value, index| {
+                const root = value.compile_time_root orelse continue;
+                if (root.role != .value or !std.meta.eql(root.module, successful.module) or root.root != successful.root) continue;
+                lir.ComptimeValueGuards.completeSuccessfulSlot(target, @enumFromInt(index));
+                break;
+            } else finalizationInvariant("successful completed root was removed before guard completion");
+        }
+    }
+};
+
 /// Match completed values by their checked owner and root identity. Target
 /// representation comes exclusively from the paired slot plans.
 fn transcodeCompletedSlots(
     allocator: Allocator,
     source: *const lir.CheckedPipeline.LoweredProgram,
-    target: *lir.CheckedPipeline.LoweredProgram,
+    target: *LirProgram.Result,
+    successful_roots: *std.ArrayList(RuntimeFrozenMaterializer.SuccessfulRoot),
 ) Allocator.Error!LirProgram.FrozenStaticData {
     const frozen = source.frozen_static_data orelse finalizationInvariant("host program omitted its completed frozen values");
     var exports = std.ArrayList(static_data_exports.StaticDataExport).empty;
@@ -325,7 +363,7 @@ fn transcodeCompletedSlots(
         if (entry.found_existing) finalizationInvariant("checked root has ambiguous source value slots");
         entry.value_ptr.* = ordinal;
     }
-    for (target.lir_result.static_data_values.items, 0..) |target_entry, index| {
+    for (target.static_data_values.items, 0..) |target_entry, index| {
         const target_root = target_entry.compile_time_root orelse continue;
         const target_slot: lir.LIR.StaticDataId = @enumFromInt(index);
         const ordinal = source_slots.get(.{ .module = target_root.module, .root = target_root.root, .role = std.meta.activeTag(target_root.role) }) orelse
@@ -341,17 +379,20 @@ fn transcodeCompletedSlots(
             break :block failure_export.bytes[failure_export.symbol_offset + offset] != 0;
         } else false;
         const converted = if (target_root.role == .failure_message)
-            try FrozenRootTranscode.transcodeFailure(allocator, &source.lir_result, source_entry, frozen.exports, source_symbol, &target.lir_result, target_slot)
+            try FrozenRootTranscode.transcodeFailure(allocator, &source.lir_result, source_entry, frozen.exports, source_symbol, target, target_slot)
         else if (failed)
-            try uninitializedFailedSlot(allocator, &target.lir_result, target_slot)
+            try uninitializedFailedSlot(allocator, target, target_slot)
         else
-            try FrozenRootTranscode.transcodeValueSlot(allocator, &source.lir_result, source_entry, frozen.exports, source_symbol, &target.lir_result, target_slot);
+            try FrozenRootTranscode.transcodeValueSlot(allocator, &source.lir_result, source_entry, frozen.exports, source_symbol, target, target_slot);
         appendFrozenGraph(allocator, &exports, converted) catch |err| {
             static_data_exports.deinitStaticData(allocator, converted);
             return err;
         };
         allocator.free(converted);
-        if (target_root.role == .value and !failed) lir.ComptimeValueGuards.completeSuccessfulSlot(&target.lir_result, target_slot);
+        if (target_root.role == .value and !failed) try successful_roots.append(allocator, .{
+            .module = target_root.module,
+            .root = target_root.root,
+        });
     }
     return .{ .allocator = allocator, .exports = try exports.toOwnedSlice(allocator) };
 }
