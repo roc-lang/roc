@@ -9021,8 +9021,8 @@ equality placeholder Check leaves on an undetermined variable inside values
 compared with structural equality is not such a constraint: it discharges by
 comparing structurally with no owner (the same carve-out Check's ambiguity
 judgment applies), so planning seals the variable exactly like an unconstrained
-one and records no dictionary for it. A quantified variable's `is_eq` obligation
-is owned instead—the scheme forwards it as compiler-derived structural
+one and records no dictionary for it. A quantified variable's `is_eq` erased
+requirement is owned instead—the scheme forwards it as compiler-derived structural
 evidence—so it keeps its dictionary requirement.
 
 `erased_box` is distinct from the `box_of_zst` layout used for `Box({})`. `Box({})` is
