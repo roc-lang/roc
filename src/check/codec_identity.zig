@@ -30,7 +30,6 @@ pub fn intern(allocator: Allocator, types: checked.CheckedTypeStoreView, table: 
         for (derivation.callsSlice(table)) |call| {
             std.hash.autoHash(&hash, call.method);
             std.hash.autoHash(&hash, call.method_role);
-            std.hash.autoHash(&hash, call.conditional);
             std.hash.autoHash(&hash, std.meta.activeTag(call.resolution));
             hash.update(&types.rootKey(call.dispatcher_ty).bytes);
             hash.update(&types.rootKey(call.callable_ty).bytes);
@@ -126,7 +125,7 @@ const Comparer = struct {
                         try self.typesPair(@field(a, field), @field(b, field));
                     }
                     for (a.callsSlice(self.table), b.callsSlice(self.table)) |ac, bc| {
-                        if (ac.method != bc.method or ac.method_role != bc.method_role or ac.conditional != bc.conditional or std.meta.activeTag(ac.resolution) != std.meta.activeTag(bc.resolution)) return false;
+                        if (ac.method != bc.method or ac.method_role != bc.method_role or std.meta.activeTag(ac.resolution) != std.meta.activeTag(bc.resolution)) return false;
                         try self.typesPair(ac.dispatcher_ty, bc.dispatcher_ty);
                         try self.typesPair(ac.callable_ty, bc.callable_ty);
                         if (!try self.optionalTypes(ac.subject_ty, bc.subject_ty)) return false;
@@ -164,7 +163,7 @@ const Comparer = struct {
     }
 };
 
-test "codec identity preserves cross-root sharing, conditional calls, and recursive selections" {
+test "codec identity preserves cross-root sharing, method roles, and recursive selections" {
     const gpa = std.testing.allocator;
     var types = checked.CheckedTypeStore{};
     defer types.deinit(gpa);
@@ -208,7 +207,7 @@ test "codec identity preserves cross-root sharing, conditional calls, and recurs
         };
     }
     derivations[2].source_shape_ty = variables[2];
-    calls[3].conditional = true;
+    calls[3].method_role = 1;
     calls[4].resolution = .checked_error;
     var table = dispatch.StaticDispatchPlanTable{
         .generated_codec_derivations = &derivations,

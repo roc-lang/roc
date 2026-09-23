@@ -26,6 +26,7 @@ pub const CliArgs = union(enum) {
     glue: GlueArgs,
     version,
     docs: DocsArgs,
+    deps: DepsArgs,
     bump: BumpArgs,
     install: InstallArgs,
     experimental_lsp: ExperimentalLspArgs,
@@ -103,7 +104,85 @@ pub const default_build_opt: OptLevel = .speed;
 pub const ResolveLimitArgs = struct {
     max_package_mb: ?u32 = null, // per-package decompressed size limit (default 10)
     max_transitive_mb: ?u32 = null, // overrides both transitive limits (defaults: packages 100, platforms 512)
+    replace_deps: ReplaceDepArgs = .{}, // `--replace-dep OLD NEW` occurrences, in command-line order
 };
+
+/// One `--replace-dep OLD NEW` occurrence, exactly as written.
+pub const ReplaceDepArg = struct {
+    old: []const u8,
+    new: []const u8,
+};
+
+/// The `--replace-dep` occurrences of one invocation. Held by value so
+/// argument structs stay copyable without owning an allocation.
+pub const ReplaceDepArgs = struct {
+    items: [max]ReplaceDepArg = [_]ReplaceDepArg{.{ .old = "", .new = "" }} ** max,
+    len: usize = 0,
+
+    pub const max: usize = 32;
+
+    pub fn slice(self: *const ReplaceDepArgs) []const ReplaceDepArg {
+        return self.items[0..self.len];
+    }
+};
+
+const replace_dep_flag = "--replace-dep";
+
+const ReplaceDepExtraction = struct {
+    /// The arguments with every `--replace-dep OLD NEW` triple removed.
+    /// Owned by the caller; the strings themselves are borrowed.
+    args: []const []const u8,
+    replace_deps: ReplaceDepArgs,
+    problem: ?ArgProblem,
+};
+
+/// Pull every `--replace-dep OLD NEW` out of `args`. The flag takes two
+/// separate arguments so URLs and paths need no escaping rules. Arguments
+/// after `--` belong to the app being run and are left alone.
+fn extractReplaceDeps(alloc: mem.Allocator, args: []const []const u8) mem.Allocator.Error!ReplaceDepExtraction {
+    var rest = try std.array_list.Managed([]const u8).initCapacity(alloc, args.len);
+    errdefer rest.deinit();
+    var replace_deps: ReplaceDepArgs = .{};
+    var problem: ?ArgProblem = null;
+
+    var i: usize = 0;
+    while (i < args.len) : (i += 1) {
+        const arg = args[i];
+        if (mem.eql(u8, arg, "--")) {
+            rest.appendSliceAssumeCapacity(args[i..]);
+            break;
+        }
+        if (!mem.eql(u8, arg, replace_dep_flag)) {
+            if (mem.startsWith(u8, arg, replace_dep_flag ++ "=") and problem == null) {
+                problem = .{ .invalid_flag_value = .{
+                    .flag = replace_dep_flag,
+                    .value = arg[replace_dep_flag.len + 1 ..],
+                    .valid_options = "two separate arguments: --replace-dep OLD NEW",
+                } };
+                continue;
+            }
+            rest.appendAssumeCapacity(arg);
+            continue;
+        }
+        if (i + 2 >= args.len or mem.eql(u8, args[i + 1], "--") or mem.eql(u8, args[i + 2], "--")) {
+            if (problem == null) problem = .{ .missing_flag_value = .{ .flag = replace_dep_flag ++ " OLD NEW" } };
+            break;
+        }
+        if (replace_deps.len == ReplaceDepArgs.max) {
+            if (problem == null) problem = .{ .invalid_flag_value = .{
+                .flag = replace_dep_flag,
+                .value = args[i + 1],
+                .valid_options = "at most 32 replacements per invocation",
+            } };
+        } else {
+            replace_deps.items[replace_deps.len] = .{ .old = args[i + 1], .new = args[i + 2] };
+            replace_deps.len += 1;
+        }
+        i += 2;
+    }
+
+    return .{ .args = try rest.toOwnedSlice(), .replace_deps = replace_deps, .problem = problem };
+}
 
 const ResolveLimitParse = union(enum) {
     not_matched,
@@ -160,7 +239,18 @@ fn parseResolveLimitProblem(arg: []const u8, limits: *ResolveLimitArgs) ?ArgProb
     return null;
 }
 
-const resolve_limit_help =
+const replace_dep_help =
+    \\      --replace-dep OLD NEW    Load NEW wherever a dependency declares exactly OLD, for this invocation only.
+    \\                               Each is a complete package URL or a path to a root .roc file; repeatable.
+    \\                               Run `roc deps` to see the declared sources
+;
+
+const resolve_limit_help = replace_dep_help ++ "\n" ++ resolve_limit_core_help;
+
+/// For commands that resolve dependencies but do not accept replacements.
+const install_resolve_limit_help = resolve_limit_core_help;
+
+const resolve_limit_core_help =
     \\      --max-package-mb=<N>     Per-package decompressed size limit in MB (default: 10, 0 for unlimited)
     \\      --max-transitive-mb=<N>  Combined size limit in MB for each direct dependency's transitive packages
     \\                               (defaults: packages 100, platforms 512; 0 for unlimited)
@@ -292,6 +382,13 @@ pub const DocsArgs = struct {
 };
 
 /// Arguments for `roc bump`
+/// Arguments for `roc deps`
+pub const DepsArgs = struct {
+    path: []const u8, // the root .roc file whose dependency graph to print
+    resolve_limits: ResolveLimitArgs = .{}, // package download size limits and dependency replacements
+};
+
+/// Arguments for `roc bump`
 pub const BumpArgs = struct {
     path: []const u8, // the new package's main .roc file
     old: []const u8, // the old package: URL, .tar.zst bundle, directory, or .roc file (REQUIRED)
@@ -360,7 +457,51 @@ pub fn parseWithGlobalOptions(alloc: mem.Allocator, std_io: std.Io, args: []cons
     };
 }
 
-fn parseCommand(alloc: mem.Allocator, std_io: std.Io, args: []const []const u8) ParseError!CliArgs {
+/// Subcommands that never load a dependency graph, so `--replace-dep` is an
+/// unexpected argument for them however the rest of the line parses.
+const commands_without_dependency_graph = [_][]const u8{
+    "install", "bundle", "unbundle", "fmt", "repl", "glue", "version", "bump", "experimental-lsp", "help", "licenses",
+};
+
+fn parseCommand(alloc: mem.Allocator, std_io: std.Io, all_args: []const []const u8) ParseError!CliArgs {
+    const extraction = try extractReplaceDeps(alloc, all_args);
+    defer alloc.free(extraction.args);
+    if (extraction.problem) |problem| return CliArgs{ .problem = problem };
+
+    // Reject the flag by command name before command-specific parsing, so a
+    // `--help` or a missing-argument problem in that command cannot hide it.
+    if (extraction.replace_deps.len > 0 and extraction.args.len > 0) {
+        for (commands_without_dependency_graph) |cmd| {
+            if (mem.eql(u8, extraction.args[0], cmd)) {
+                return CliArgs{ .problem = .{ .unexpected_argument = .{ .cmd = cmd, .arg = replace_dep_flag } } };
+            }
+        }
+    }
+
+    var parsed = try parseCommandWithoutReplaceDeps(alloc, std_io, extraction.args);
+    if (extraction.replace_deps.len == 0) return parsed;
+
+    // Only commands that load a dependency graph acquire replacement
+    // behavior. The name check above already rejected everything else, so
+    // the remaining arms only keep this switch exhaustive.
+    switch (parsed) {
+        .run => |*run| run.resolve_limits.replace_deps = extraction.replace_deps,
+        .check => |*check| check.resolve_limits.replace_deps = extraction.replace_deps,
+        .build => |*build| build.resolve_limits.replace_deps = extraction.replace_deps,
+        .test_cmd => |*test_cmd| test_cmd.resolve_limits.replace_deps = extraction.replace_deps,
+        .docs => |*docs| docs.resolve_limits.replace_deps = extraction.replace_deps,
+        .deps => |*deps| deps.resolve_limits.replace_deps = extraction.replace_deps,
+        .help, .problem => {},
+        .fmt, .bundle, .unbundle, .repl, .glue, .version, .bump, .install, .experimental_lsp, .licenses => {
+            const cmd = all_args[0];
+            parsed.deinit(alloc);
+            return CliArgs{ .problem = .{ .unexpected_argument = .{ .cmd = cmd, .arg = replace_dep_flag } } };
+        },
+    }
+    return parsed;
+}
+
+fn parseCommandWithoutReplaceDeps(alloc: mem.Allocator, std_io: std.Io, args: []const []const u8) ParseError!CliArgs {
     if (args.len == 0) return try parseRun(alloc, args, .default);
 
     // `roc run` accepts everything the default run accepts, plus installed
@@ -378,6 +519,7 @@ fn parseCommand(alloc: mem.Allocator, std_io: std.Io, args: []const []const u8) 
     if (mem.eql(u8, args[0], "glue")) return parseGlue(args[1..]);
     if (mem.eql(u8, args[0], "version")) return parseVersion(args[1..]);
     if (mem.eql(u8, args[0], "docs")) return parseDocs(args[1..]);
+    if (mem.eql(u8, args[0], "deps")) return parseDeps(args[1..]);
     if (mem.eql(u8, args[0], "bump")) return parseBump(args[1..]);
     if (mem.eql(u8, args[0], "experimental-lsp")) return parseExperimentalLsp(args[1..]);
     if (mem.eql(u8, args[0], "help")) return CliArgs{ .help = main_help };
@@ -406,6 +548,7 @@ const main_help =
     \\  version          Print the Roc compiler's version
     \\  check            Check the code for problems, but don't build or run it
     \\  docs             Generate documentation for a Roc package or platform
+    \\  deps             Print the dependency tree of a Roc app, package, or platform
     \\  bump             Compare a package's public API against a previous version and report the required semver bump
     \\  experimental-lsp Start the experimental language server (LSP) implementation
     \\  help             Print this message
@@ -464,7 +607,7 @@ const install_help =
     \\  -j, --jobs=<N>                 Max worker threads for the install-time build
 ;
 
-const install_help_with_limits = install_help ++ "\n" ++ resolve_limit_help ++ "\n";
+const install_help_with_limits = install_help ++ "\n" ++ install_resolve_limit_help ++ "\n";
 
 fn parseCheck(args: []const []const u8) CliArgs {
     var path: ?[]const u8 = null;
@@ -1230,6 +1373,44 @@ fn parseDocs(args: []const []const u8) CliArgs {
     return CliArgs{ .docs = DocsArgs{ .path = path orelse "main.roc", .main = main, .output = output orelse "generated-docs", .time = time, .no_cache = no_cache, .verbose = verbose, .serve = serve, .with_lang_ref = with_lang_ref, .resolve_limits = resolve_limits } };
 }
 
+fn parseDeps(args: []const []const u8) CliArgs {
+    var path: ?[]const u8 = null;
+    var resolve_limits: ResolveLimitArgs = .{};
+
+    for (args) |arg| {
+        if (isHelpFlag(arg)) {
+            return CliArgs{ .help =
+            \\Print the dependency tree of a Roc app, package, or platform
+            \\
+            \\Resolves the dependency graph and prints every declared source in full,
+            \\ready to copy into --replace-dep. Nothing is compiled or run. Packages
+            \\that are not cached yet are downloaded so their headers can be read.
+            \\
+            \\Usage: roc deps [OPTIONS] [ROC_FILE]
+            \\
+            \\Arguments:
+            \\  [ROC_FILE]  The root .roc file of the app, package, or platform [default: main.roc]
+            \\
+            \\Options:
+            ++ "\n" ++ resolve_limit_help ++ "\n" ++
+                \\  -h, --help                   Print help
+                \\
+            };
+        } else if (mem.startsWith(u8, arg, "--max-package-mb") or mem.startsWith(u8, arg, "--max-transitive-mb")) {
+            if (parseResolveLimitProblem(arg, &resolve_limits)) |problem| return CliArgs{ .problem = problem };
+        } else if (mem.startsWith(u8, arg, "-")) {
+            return CliArgs{ .problem = ArgProblem{ .unexpected_argument = .{ .cmd = "deps", .arg = arg } } };
+        } else {
+            if (path != null) {
+                return CliArgs{ .problem = ArgProblem{ .unexpected_argument = .{ .cmd = "deps", .arg = arg } } };
+            }
+            path = arg;
+        }
+    }
+
+    return CliArgs{ .deps = DepsArgs{ .path = path orelse "main.roc", .resolve_limits = resolve_limits } };
+}
+
 fn parseBump(args: []const []const u8) CliArgs {
     var path: ?[]const u8 = null;
     var old: ?[]const u8 = null;
@@ -1311,7 +1492,7 @@ const bump_help =
     \\                             as the API diff requires (for release CI)
     \\      --no-cache             Disable caching
     \\      --verbose              Enable verbose output
-++ "\n" ++ resolve_limit_help ++ "\n" ++
+++ "\n" ++ install_resolve_limit_help ++ "\n" ++
     \\  -h, --help                 Print help
     \\
     \\Both the old and new package must compile with this compiler. Only the
@@ -2571,5 +2752,124 @@ test "bare shorthand requires the run subcommand" {
         const result = try parse(gpa, testing.io, &[_][]const u8{"app.roc"});
         defer result.deinit(gpa);
         try testing.expectEqualStrings("app.roc", result.run.path);
+    }
+}
+
+test "roc deps" {
+    const gpa = testing.allocator;
+    {
+        const result = try parse(gpa, testing.io, &[_][]const u8{"deps"});
+        try testing.expectEqualStrings("main.roc", result.deps.path);
+        try testing.expectEqual(@as(usize, 0), result.deps.resolve_limits.replace_deps.len);
+    }
+    {
+        const result = try parse(gpa, testing.io, &[_][]const u8{ "deps", "pkg/main.roc", "--max-package-mb=5" });
+        try testing.expectEqualStrings("pkg/main.roc", result.deps.path);
+        try testing.expectEqual(@as(?u32, 5), result.deps.resolve_limits.max_package_mb);
+    }
+    {
+        const result = try parse(gpa, testing.io, &[_][]const u8{ "deps", "a.roc", "b.roc" });
+        try testing.expectEqualStrings("b.roc", result.problem.unexpected_argument.arg);
+    }
+    {
+        const result = try parse(gpa, testing.io, &[_][]const u8{ "deps", "--help" });
+        try testing.expect(std.mem.find(u8, result.help, "--replace-dep OLD NEW") != null);
+    }
+}
+
+test "--replace-dep takes two arguments, repeats, and is position-independent" {
+    const gpa = testing.allocator;
+    const url = "https://example.com/pkg/1.2.3/abc.tar.zst";
+    {
+        const result = try parse(gpa, testing.io, &[_][]const u8{ "check", "--replace-dep", url, "../pkg/main.roc", "app.roc" });
+        const deps = result.check.resolve_limits.replace_deps.slice();
+        try testing.expectEqualStrings("app.roc", result.check.path);
+        try testing.expectEqual(@as(usize, 1), deps.len);
+        try testing.expectEqualStrings(url, deps[0].old);
+        try testing.expectEqualStrings("../pkg/main.roc", deps[0].new);
+    }
+    {
+        const result = try parse(gpa, testing.io, &[_][]const u8{ "test", "app.roc", "--replace-dep", url, "../a/main.roc", "--replace-dep", "./b/main.roc", url });
+        const deps = result.test_cmd.resolve_limits.replace_deps.slice();
+        try testing.expectEqual(@as(usize, 2), deps.len);
+        try testing.expectEqualStrings("./b/main.roc", deps[1].old);
+        try testing.expectEqualStrings(url, deps[1].new);
+    }
+    {
+        const result = try parse(gpa, testing.io, &[_][]const u8{ "build", "--replace-dep", url, "../pkg/main.roc", "app.roc" });
+        try testing.expectEqual(@as(usize, 1), result.build.resolve_limits.replace_deps.len);
+    }
+    {
+        const result = try parse(gpa, testing.io, &[_][]const u8{ "docs", "--replace-dep", url, "../pkg/main.roc", "main.roc" });
+        try testing.expectEqual(@as(usize, 1), result.docs.resolve_limits.replace_deps.len);
+    }
+    {
+        const result = try parse(gpa, testing.io, &[_][]const u8{ "deps", "--replace-dep", url, "../pkg/main.roc" });
+        try testing.expectEqual(@as(usize, 1), result.deps.resolve_limits.replace_deps.len);
+        try testing.expectEqualStrings("main.roc", result.deps.path);
+    }
+    // Implicit and explicit run both accept it; app args after `--` are untouched.
+    {
+        const result = try parse(gpa, testing.io, &[_][]const u8{ "app.roc", "--replace-dep", url, "../pkg/main.roc", "--", "--replace-dep", "x", "y" });
+        defer result.deinit(gpa);
+        try testing.expectEqual(@as(usize, 1), result.run.resolve_limits.replace_deps.len);
+        try testing.expectEqual(@as(usize, 3), result.run.app_args.len);
+        try testing.expectEqualStrings("--replace-dep", result.run.app_args[0]);
+    }
+    {
+        const result = try parse(gpa, testing.io, &[_][]const u8{ "run", "--replace-dep", url, "../pkg/main.roc", "app.roc" });
+        defer result.deinit(gpa);
+        try testing.expectEqual(@as(usize, 1), result.run.resolve_limits.replace_deps.len);
+        try testing.expectEqualStrings("app.roc", result.run.path);
+    }
+}
+
+test "--replace-dep rejects missing values, the = form, and non-resolving commands" {
+    const gpa = testing.allocator;
+    const url = "https://example.com/pkg/1.2.3/abc.tar.zst";
+    {
+        const result = try parse(gpa, testing.io, &[_][]const u8{ "check", "app.roc", "--replace-dep", url });
+        try testing.expectEqualStrings("--replace-dep OLD NEW", result.problem.missing_flag_value.flag);
+    }
+    {
+        const result = try parse(gpa, testing.io, &[_][]const u8{ "check", "--replace-dep", url, "--", "x" });
+        try testing.expectEqualStrings("--replace-dep OLD NEW", result.problem.missing_flag_value.flag);
+    }
+    {
+        const result = try parse(gpa, testing.io, &[_][]const u8{ "check", "--replace-dep=a=b", "app.roc" });
+        try testing.expectEqualStrings("--replace-dep", result.problem.invalid_flag_value.flag);
+    }
+    {
+        const result = try parse(gpa, testing.io, &[_][]const u8{ "fmt", "--replace-dep", url, "../pkg/main.roc", "app.roc" });
+        try testing.expectEqualStrings("fmt", result.problem.unexpected_argument.cmd);
+        try testing.expectEqualStrings("--replace-dep", result.problem.unexpected_argument.arg);
+    }
+    {
+        const result = try parse(gpa, testing.io, &[_][]const u8{ "bundle", "--replace-dep", url, "../pkg/main.roc", "main.roc" });
+        try testing.expectEqualStrings("bundle", result.problem.unexpected_argument.cmd);
+    }
+    {
+        const result = try parse(gpa, testing.io, &[_][]const u8{ "install", "--replace-dep", url, "../pkg/main.roc", "tool", url });
+        try testing.expectEqualStrings("install", result.problem.unexpected_argument.cmd);
+    }
+    // Neither `--help` nor a missing-argument problem in the command hides the rejection.
+    {
+        const result = try parse(gpa, testing.io, &[_][]const u8{ "fmt", "--replace-dep", url, "../pkg/main.roc", "--help" });
+        try testing.expectEqualStrings("fmt", result.problem.unexpected_argument.cmd);
+        try testing.expectEqualStrings("--replace-dep", result.problem.unexpected_argument.arg);
+    }
+    {
+        const result = try parse(gpa, testing.io, &[_][]const u8{ "glue", "--replace-dep", url, "../pkg/main.roc" });
+        try testing.expectEqualStrings("glue", result.problem.unexpected_argument.cmd);
+        try testing.expectEqualStrings("--replace-dep", result.problem.unexpected_argument.arg);
+    }
+    {
+        const result = try parse(gpa, testing.io, &[_][]const u8{ "help", "--replace-dep", url, "../pkg/main.roc" });
+        try testing.expectEqualStrings("help", result.problem.unexpected_argument.cmd);
+    }
+    // Resolving commands still get their own help and problems.
+    {
+        const result = try parse(gpa, testing.io, &[_][]const u8{ "check", "--replace-dep", url, "../pkg/main.roc", "--help" });
+        try testing.expect(std.mem.find(u8, result.help, "--replace-dep OLD NEW") != null);
     }
 }

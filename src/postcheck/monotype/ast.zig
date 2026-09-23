@@ -1021,6 +1021,11 @@ pub const ComptimeSiteKind = enum(u8) {
 /// Metadata for one compile-time-observed control-flow site.
 pub const ComptimeSite = struct {
     kind: ComptimeSiteKind,
+    /// Checked module whose exhaustiveness-site ids and source regions this
+    /// site names. A specialization may lower an imported body, so the site's
+    /// owner is not the program's root module and cannot be recovered from
+    /// the procedure the site ends up in.
+    owner: Common.LoweringModuleId,
     region: base.Region,
     checked_site: ?checked.CheckedExhaustivenessSiteId = null,
     branch_regions: []const base.Region = &.{},
@@ -1358,6 +1363,10 @@ fn procDebugNameInSlice(entries: []const ProcDebugName, symbol: Common.Symbol) ?
 pub const Root = struct {
     def: DefId,
     request: checked.RootRequest,
+    /// Checked module that owns this request's compile-time root id and
+    /// checked types. A lowering unions several modules' root requests, so
+    /// concatenation position is not an owner.
+    owner: Common.LoweringModuleId,
 };
 
 /// Runtime layout requested for a checked data value.
@@ -1442,6 +1451,8 @@ pub const ProgramView = struct {
     static_data_values: []const StaticDataValue,
     comptime_value_roots: []const Common.ComptimeValueRoot,
     comptime_sites: []const ComptimeSite,
+    /// See `ProgramBuilder.lowering_modules`.
+    lowering_modules: []const checked.ModuleId,
     source_files: []const base.SourceFileEntry,
     expr_locs: []const base.SourceLoc,
     expr_regions: []const base.Region,
@@ -1627,6 +1638,11 @@ pub const ProgramBuilder = struct {
     /// Immutable descriptors live outside hot expression rows.
     comptime_value_roots: ProgramList(Common.ComptimeValueRoot, "comptime_value_roots") = .empty,
     comptime_sites: ProgramList(ComptimeSite, "comptime_sites"),
+    /// Every checked module of this lowering's input, in one canonical order,
+    /// addressed by `Common.LoweringModuleId`. Seeded once before any body is
+    /// lowered and never appended to afterwards, so the rows that carry a
+    /// module-local checked id name their owner explicitly.
+    lowering_modules: ProgramList(checked.ModuleId, "lowering_modules") = .empty,
     /// Source file table for `SourceLoc.file` indices (module display and
     /// package-qualified names, owned by this program).
     source_files: ProgramList(base.SourceFileEntry, "source_files"),
@@ -1684,6 +1700,7 @@ pub const ProgramBuilder = struct {
             .runtime_schema_requests = .empty,
             .static_data_values = .empty,
             .comptime_sites = .empty,
+            .lowering_modules = .empty,
             .source_files = .empty,
             .expr_locs = .empty,
             .expr_regions = .empty,
@@ -1704,7 +1721,7 @@ pub const ProgramBuilder = struct {
         result.names = try self.names.clone(allocator);
         result.types = try self.types.cloneFrozen(allocator);
         try result.comptime_value_roots.appendSlice(allocator, self.comptime_value_roots.unsafeRawItemsForView());
-        inline for (.{ "specs", "fns", "const_fn_evidence", "const_fn_evidence_frames", "defs", "nested_defs", "exprs", "pats", "stmts", "locals", "expr_ids", "pat_ids", "typed_locals", "stmt_ids", "field_exprs", "field_access_segments", "fn_def_captures", "capture_operands", "record_destructs", "str_pattern_steps", "branches", "if_branches", "roots", "layout_requests", "comptime_value_reads", "runtime_schema_requests", "static_data_values", "expr_locs", "expr_regions", "stmt_locs", "stmt_regions" }) |field| {
+        inline for (.{ "specs", "fns", "const_fn_evidence", "const_fn_evidence_frames", "defs", "nested_defs", "exprs", "pats", "stmts", "locals", "expr_ids", "pat_ids", "typed_locals", "stmt_ids", "field_exprs", "field_access_segments", "fn_def_captures", "capture_operands", "record_destructs", "str_pattern_steps", "branches", "if_branches", "roots", "layout_requests", "comptime_value_reads", "runtime_schema_requests", "static_data_values", "lowering_modules", "expr_locs", "expr_regions", "stmt_locs", "stmt_regions" }) |field| {
             try @field(result, field).appendSlice(allocator, @field(self, field).unsafeRawItemsForView());
         }
         try result.proc_debug_names.items.appendSlice(allocator, self.proc_debug_names.view());
@@ -1768,6 +1785,7 @@ pub const ProgramBuilder = struct {
             self.allocator.free(site.branch_regions);
         }
         self.comptime_sites.deinit(self.allocator);
+        self.lowering_modules.deinit(self.allocator);
         self.comptime_value_roots.deinit(self.allocator);
         self.static_data_values.deinit(self.allocator);
         self.runtime_schema_requests.deinit(self.allocator);
@@ -1961,6 +1979,7 @@ pub const ProgramBuilder = struct {
             .static_data_values = self.static_data_values.unsafeRawItemsForView(),
             .comptime_value_roots = self.comptime_value_roots.unsafeRawItemsForView(),
             .comptime_sites = self.comptime_sites.unsafeRawItemsForView(),
+            .lowering_modules = self.lowering_modules.unsafeRawItemsForView(),
             .source_files = self.source_files.unsafeRawItemsForView(),
             .expr_locs = self.expr_locs.unsafeRawItemsForView(),
             .expr_regions = self.expr_regions.unsafeRawItemsForView(),
@@ -2065,6 +2084,14 @@ pub const ProgramBuilder = struct {
         return id;
     }
 
+    /// Publish one checked module of this lowering's input and return its
+    /// dense id. Seeding deduplicates; this always appends.
+    pub fn addLoweringModule(self: *ProgramBuilder, key: checked.ModuleId) std.mem.Allocator.Error!Common.LoweringModuleId {
+        const id: Common.LoweringModuleId = @enumFromInt(@as(u32, @intCast(self.lowering_modules.len())));
+        try self.lowering_modules.append(self.allocator, key);
+        return id;
+    }
+
     /// Source location of an expression.
     pub fn exprLoc(self: *const ProgramBuilder, id: ExprId) base.SourceLoc {
         return self.expr_locs.unsafeRawItemsForView()[@intFromEnum(id)];
@@ -2102,6 +2129,7 @@ pub const ProgramBuilder = struct {
     pub fn addComptimeSite(
         self: *ProgramBuilder,
         kind: ComptimeSiteKind,
+        owner: Common.LoweringModuleId,
         region: base.Region,
         checked_site: ?checked.CheckedExhaustivenessSiteId,
         branch_regions: []const base.Region,
@@ -2111,6 +2139,7 @@ pub const ProgramBuilder = struct {
         const id: ComptimeSiteId = @enumFromInt(@as(u32, @intCast(self.comptime_sites.len())));
         try self.comptime_sites.append(self.allocator, .{
             .kind = kind,
+            .owner = owner,
             .region = region,
             .checked_site = checked_site,
             .branch_regions = owned_branch_regions,
@@ -3025,7 +3054,10 @@ test "frozen Monotype forks retain identities and own literal and diagnostic sto
     const local = try source.addLocal(@enumFromInt(1), ty);
     try source.setLocalName(local, "value");
     const file = try source.addSourceFile(.{ .name = "App.roc", .qualified_name = "app/App.roc" });
-    const site = try source.addComptimeSite(.if_, .zero(), null, &.{.zero()});
+    var owner_key = std.mem.zeroes(check.CheckedModule.ModuleId);
+    owner_key.bytes[0] = 9;
+    const owner = try source.addLoweringModule(owner_key);
+    const site = try source.addComptimeSite(.if_, owner, .zero(), null, &.{.zero()});
     const name = try source.names.internExportName("entry");
     try source.proc_debug_names.put(@enumFromInt(1), name);
     const root_a: Common.ComptimeValueRoot = .{
@@ -3062,6 +3094,8 @@ test "frozen Monotype forks retain identities and own literal and diagnostic sto
     try std.testing.expectEqualStrings("value", copy.localName(local));
     try std.testing.expectEqualStrings("app/App.roc", copy.view().source_files[file].qualified_name);
     try std.testing.expectEqual(@as(usize, 1), copy.comptimeSite(site).branch_regions.len);
+    try std.testing.expectEqual(owner, copy.comptimeSite(site).owner);
+    try std.testing.expectEqualDeep(owner_key, copy.view().lowering_modules[@intFromEnum(owner)]);
     try std.testing.expectEqual(name, copy.proc_debug_names.get(@enumFromInt(1)).?);
     try std.testing.expectEqual(name, try copy.names.internExportName("entry"));
     try std.testing.expect(copy.types.isFrozen());

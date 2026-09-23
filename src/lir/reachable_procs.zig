@@ -35,6 +35,15 @@ pub fn runKeepingSpecializations(result: *LirProgram.Result) Allocator.Error!voi
     try pass.run();
 }
 
+/// Compact with both keyed specialization procedures and completed frozen
+/// data as explicit roots.
+pub fn runKeepingSpecializationsWithFrozen(result: *LirProgram.Result, frozen: *LirProgram.FrozenStaticData) Allocator.Error!void {
+    var pass = try Pass.init(result, frozen);
+    defer pass.deinit();
+    for (result.spec_procs.items) |spec_proc| try pass.markProc(spec_proc.proc);
+    try pass.run();
+}
+
 /// Compact a completed runtime program together with the explicit frozen
 /// procedure and data-symbol references retained from compile-time execution.
 pub fn runWithFrozen(result: *LirProgram.Result, frozen: *LirProgram.FrozenStaticData) Allocator.Error!void {

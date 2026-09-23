@@ -320,6 +320,11 @@ Animal := [Dog(Str), Cat(Str)].{
 	}
 }
 
+# Use `...` for something that is not yet implemented.
+# This gets translated under the hood to `crash "not implemented"`.
+make_animal_noise : Animal -> Str
+make_animal_noise = |_animal| ...
+
 early_return = |arg| {
 	first =
 		if !arg {

@@ -8539,8 +8539,15 @@ test "canonicalized module cache shares one entry between identical modules in d
 
     const shared_module =
         \\Shared := [].{
+        \\    result : Try(I64, Str)
+        \\    result = Ok(7)
         \\    value : I64
-        \\    value = 7
+        \\    value = match result {
+        \\        Ok(n) => n
+        \\    }
+        \\    numbers : List(I64)
+        \\    numbers = [value, value + 1]
+        \\    expect numbers == [7, 8]
         \\}
     ;
 
@@ -10043,8 +10050,21 @@ test "shared CTFE and runtime requests specialize once across workers and target
             }
             var slot_reads: usize = 0;
             var literal_answers: usize = 0;
-            for (0..runtime.lir_result.store.cfStmtCount()) |index| {
-                const stmt = runtime.lir_result.store.getCFStmt(@enumFromInt(@as(u32, @intCast(index))));
+            // Separate consumers compact before ARC, which can leave replaced
+            // statements in the store. Count only the emitted procedure bodies.
+            const store = &runtime.lir_result.store;
+            var work: std.ArrayList(lir.LIR.CFStmtId) = .empty;
+            defer work.deinit(allocator);
+            var visited = collections.DenseMap(lir.LIR.CFStmtId, void).init(allocator);
+            defer visited.deinit();
+            for (0..store.procSpecCount()) |proc_index| {
+                const proc = store.getProcSpec(@enumFromInt(proc_index));
+                if (proc.body) |body| try work.append(allocator, body);
+            }
+            while (work.pop()) |stmt_id| {
+                if ((try visited.getOrPut(stmt_id)).found_existing) continue;
+                try lir.BodyClone.appendSuccessors(store, &work, stmt_id);
+                const stmt = store.getCFStmt(stmt_id);
                 if (stmt != .assign_literal) continue;
                 switch (stmt.assign_literal.value) {
                     .static_data => slot_reads += 1,

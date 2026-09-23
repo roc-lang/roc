@@ -977,6 +977,17 @@ through a slot the evaluation filled, whose frozen bytes are the value's
 definition there. Whether one program or two, no consumer lowers code only
 another consumer runs.
 
+For a separate runtime consumer, completed values are transcoded while that
+consumer still owns its complete, uncompacted LIR representation tables. The
+resulting frozen graph participates in the consumer's one reachability pass:
+its explicit function relocations retain exactly the callable procedures that
+the completed values contain, and those procedures join the ordinary runtime
+roots supplied to ARC. Successful evaluation evidence removes its value guards
+after guard construction; failed values keep their ordinary runtime failure
+paths. Attaching completed data after ARC and then repeating reachability is
+forbidden, because it would make ARC run over a different procedure graph from
+the one emitted to the backend.
+
 Monotype lowering records the evaluated roots whose completed values the
 program reads, once per root. A root-slot read is that stage's own explicit
 statement of the demand, so later stages consume the record instead of
@@ -2952,10 +2963,24 @@ enclosing frame is generalization-safe in every nested frame, and re-recording
 it there would check the target's topological prefix inside the nested frame,
 where a prefix group can name that frame's still in-flight def and merge with
 it monomorphically instead of instantiating its finished scheme. The outermost
-active frame owns every remaining waiting constraint. A group checked from inside
-another definition's boundary also runs with no active scheme owner, exactly
-like a driver-initiated check, so a def's recorded scheme contents never
-depend on which definition's boundary caused it to be checked.
+active frame owns every remaining waiting constraint.
+
+The same nesting discipline governs a waiting constraint whose target is in
+flight. A constraint owned by frame F may merge monomorphically with a
+not-yet-generalized target (an in-flight def, or a checked member of a
+recursive group whose shared boundary has not run) only when the frame that
+will generalize the target is F itself (self-dispatch, an in-group member) or
+encloses F (a nested group's back-edge into a suspended ancestor's live vars).
+When the target's frame is nested inside F—F's own boundary is checking the
+target's group to resolve this constraint—the constraint keeps waiting and
+resolves against the target's finished scheme once that frame pops. Merging
+there would pull F's call-site types into the target's definition before it
+generalizes, so the target's own annotation would no longer match its body.
+
+A group checked from inside another definition's boundary also runs with no
+active scheme owner, exactly like a driver-initiated check, so a def's
+recorded scheme contents never depend on which definition's boundary caused it
+to be checked.
 
 Group suspension and merge need no dedicated machinery: a suspended group's
 members are `.processed` with still-live, not-yet-generalized vars, so a
@@ -2994,6 +3019,12 @@ Checked CIR is the last source-level representation. It owns:
 Checked CIR may contain source-level forms such as static-dispatch calls,
 method equality, type-dispatch calls, and source `for` loops because those are
 part of the checked source module.
+
+Equality against a payload-free tag carries an explicit checked discriminant
+decision: the checked operation records the value operand and exact tag
+identity. Runtime lowering consumes that plan directly. It does not rediscover
+the decision from checked-expression shape, lowered expression shape, or the
+runtime representation of the union.
 
 Those forms do not survive runtime lowering. The `.lss` strategy removes them
 while producing Monotype IR. The `.boxy` strategy removes them while producing
@@ -4542,9 +4573,9 @@ encoding and state types for exactly the methods needed by that shape:
 `StaticDispatchPlanTable.generated_codec_derivations` stores each parser/encoder
 derivation as an explicit generated-codec contract. It records every generated
 call's method, concrete dispatcher and callable types, optional subject role,
-whether the edge is unconditional or a checker-validated conditional
-capability, and exact resolution to either checked callable evidence or another
-generated-codec contract. A
+and exact resolution to either checked callable evidence or another
+generated-codec contract. Every recorded call is an unconditional edge of the
+generated body. A
 structural dispatch plan and any stored generated runtime name that contract by
 identity. Boxy and Monotype consume the identity directly; they must not find a
 derivation by comparing runtime types or resolve one of its calls by looking up
@@ -4595,8 +4626,8 @@ explicit root classification.
 
 Completed generated codec proof graphs also carry a producer-proven identity
 for specialization reuse. Type-role keys and call metadata select candidates; equality
-compares all source and frozen roles, every method selection and conditional
-edge, and nested evidence and substitutions. One alpha-equivalence bijection
+compares all source and frozen roles, every method selection, and nested
+evidence and substitutions. One alpha-equivalence bijection
 covers all type roots, including cross-root sharing. Cycles are compared as
 finite proof graphs. Source contracts remain intact for replay; specialization
 equality uses the shared identity rather than the per-use derivation index.
@@ -4823,9 +4854,9 @@ that entry down and an uncounted record calls `parse_record_after_field`, whose
 
 If the generated finisher sees that a required field was never filled, the
 generated parser itself reports the failure, as described in "Derived Parser
-Required-Field Error Composition": `MissingRequiredField(field_name)` when the
-parser's error row retains that tag, otherwise the format's checked
-`invalid_value` capability. Formats implement no missing-field callback. A field
+Required-Field Error Composition": `MissingRequiredField(field_name)`, a tag
+every such parser's error row carries. Formats implement no missing-field
+callback. A field
 whose key may be absent says so through its kind or type: an absent
 `Try(Str, [Missing])` field is `Err(Missing)`, an absent `?:` field is in its
 missing state, and an absent `??` field holds its default. A field annotated as
@@ -6289,42 +6320,32 @@ wrote—marking that extension erroneous (diagnostic recovery, like every
 other reported problem).
 
 That pass is a single READ of a mutable variable, and a definition can still
-widen its own row afterwards when the widening comes from a constraint the
-definition DEFERRED: a generated codec's error row reaches the annotated row
-only once `finalizeGeneratedCodecConstraintsToQuiescence` resolves it, which is
-after every audit in the module has run. The audit is therefore replayed once.
-Every extension the post-body pass cleared is carried forward; just before
-`finalizeTypes` the list is narrowed to those still carrying no tags
-(`Check.dropSettledLateImplicitOpenExtAudits`), because one that gained a tag
-while the rest of the module was checked was widened by a CALLER, which is
-exactly what an output-position row is open for. The narrowing is applied a
-second time inside `finalizeTypes`, immediately after `checkPendingDefaults`:
-that is the one finalize pass that still runs `checkExpr` over user source, and
-a defaulted record field's default expression is a use site like any other, so
-a row it widens was widened by a caller too. What survives is
-re-examined after finalize by `Check.runLateImplicitOpenExtAudit`, before
-`closeWeakValueImplicitOpenExts` grounds the leftovers to `[]` (a grounded
-extension carries no tags, so the audit would skip it). The rejected-parent-row
-case of issue #11246 is what this replay catches.
+widen its own row afterwards through a generated codec its body introduced: a
+derived parser or encoder is often validated only once
+`finalizeGeneratedCodecConstraintsToQuiescence` resolves it, after every audit
+in the module has run, and its validation adds error tags to the codec's error
+row (Derived Parser Required-Field Error Composition). Every extension the
+post-body pass cleared is therefore kept, stamped with the source region of its
+binding's right-hand side (`Check.LateImplicitOpenExtAudit.owner_rhs`). Each
+codec validation records, with the region of the expression that introduced
+the codec relation, exactly which tags it requires in which error row
+(`Check.codec_row_demands`): `MissingRequiredField(Str)`, a nested custom
+parser's error tags, and any tag the validation added to the row by relating it
+to a format method. After finalize, `Check.runLateImplicitOpenExtAudit` reports
+every demanded tag that lies in the extension of a binding whose right-hand side
+contains the demanding expression and whose row the demand shares (the two rows
+end in the same extension variable), before `closeWeakValueImplicitOpenExts`
+grounds the leftovers to `[]`. The rejected-parent-row case of issue #11246 is
+one such report.
 
-Timing alone does not identify WHO widened a row in that final window, so the
-replay does not rely on it. The deferred relation it exists to catch is
-resolved by `finalizeGeneratedCodecConstraintsToQuiescence`, and a CALLER's use
-of a generated parser is resolved by the very same mechanism on the very same
-pass—the two arrive together and no narrowing can order them apart. The replay
-therefore asks about provenance instead. Each surviving entry is stamped, at
-the audit, with the source region of its binding's right-hand side
-(`Check.LateImplicitOpenExtAudit.owner_rhs`); each relation punted to the final
-type boundary records the region of the expression that introduced it
-(`Check.late_self_widening_writers`). The replay reports only when some
-recorded region lies INSIDE the binding's right-hand side, which is the
-definition widening its own row. Containment rather than equality: the
-deferring expression is routinely a nested local binding inside the annotated
-definition's body, and that is still the definition's own widening. Both
-unknowns—a binding with no region for its right-hand side, an empty set of
-recorded regions—answer "not the definition", because a binding is blamed on
-evidence or not at all. The clause is a conjunction with the tag test above it,
-so it can only withhold a report, never create one.
+Provenance is exact, so neither timing nor type-graph reachability decides who
+widened a row. A caller that widens the same row with other tags is not
+blamed, and a caller that happens to add a demanded tag first does not excuse
+the definition: the derived body still produces that tag on the definition's
+behalf, and the annotation bounds what the definition produces. Containment
+rather than equality: the demanding expression is routinely a nested local
+binding inside the annotated definition's body, and that is still the
+definition's own codec.
 
 A closed value flowing into an implicitly open output row WIDENS into it: the
 row recorded at that position is the one the annotation declares, whatever
@@ -7089,10 +7110,19 @@ implementation, owns the failure produced when a required field is absent.
 When a parsed record contains at least one field whose type is not the
 recognized optional-field shape `Try(_, [Missing, ..])`, the checker requires
 the parser's shared error row to contain `MissingRequiredField(Str)`. It does so
-by unifying that row with an open row containing the tag. Records whose fields
-are all optional do not add this error, and non-record shapes do not add it.
-Nested derived shapes contribute the error whenever any reachable derived
-record has a required field.
+by unifying that row with an open row containing the tag, unconditionally: the
+generated body always reports an absent required field as
+`MissingRequiredField(field_name)`. Records whose fields are all optional do
+not add this error, and non-record shapes do not add it. Nested derived shapes
+contribute the error whenever any reachable derived record has a required
+field.
+
+An open row simply gains the tag, so a program that never mentions it still
+sees `MissingRequiredField(field_name)`. A row the program closed without the
+tag rejects it: a closed row reports an ordinary type mismatch at the
+unification, and an annotated output row, whose extension is implicitly open,
+reports that the definition can produce a tag its annotation does not list
+(Polarity). The failure is never mapped onto a format error.
 
 A custom nominal parser nested inside a derived shape keeps its own minimal
 error row. During checking, `constrainDerivedParserErrorRowIncludes` closes an
@@ -7120,44 +7150,34 @@ test/cli/JsonNestedNominalContract.roc (both reads at one row, at a row wider
 than the shape demands, and at two different rows).
 
 Input formats contribute only errors that arise from reading their syntax and
-values. They do not implement a missing-required-field callback. After source
-types settle, checking finalizes the generated parser contract for every body
-that owns a required-field path. If the format has an `invalid_value` method
-compatible with the exact encoding, state, and parser error types, one
-commit-probe records that fully checked call as a CONDITIONAL contract
-capability. Failure of that optional probe is rolled back completely: a parser
-whose error row retains `MissingRequiredField(Str)` never calls the method, so
-an absent or incompatible declaration is irrelevant. If the precise tag is not
-available at the source boundary, the same method is mandatory and ordinary
-static-dispatch checking reports its absence or incompatible type.
-
-Monotype specialization repeats only the checker-declared error relation when
-a parser constraint was generalized before its concrete dispatcher was known:
-it constrains an open instantiated callable error extension to include
-`MissingRequiredField(Str)`. A specialization boundary that is already closed
-without the tag selects the contract's conditional `invalid_value` slot and
-maps the generated missing-field path through that exact checked callable.
-There is no method lookup, recovery, or unchecked call after the checked
-boundary. An open-row parser directly constructs
-`MissingRequiredField(field_name)`; a closed-row parser emits one direct call
-to the selected `invalid_value` specialization. This remains correct when an
-enclosing generic function consumes and maps every parse error.
+values. They do not implement a missing-required-field callback, and a derived
+record parser never calls a format's `invalid_value` for an absent field.
+Every type and every error-row tag is settled by checking: Monotype and Boxy
+construct `MissingRequiredField(field_name)` at the checked contract error row
+and treat a derived record parser whose checked row lacks the tag as a compiler
+invariant violation. No post-check stage widens a row or chooses a failure
+representation.
 
 Both sides are pinned by tests: accepted—
 test/cli/ParserRequiredFieldError.roc (a non-JSON derived parser reports the
-generic error with the missing field name and the precise-tag path ignores an
+generic error with the missing field name and never constrains an
 incompatible, unused `invalid_value` declaration),
 test/cli/JsonParseErrorComposition.roc (JSON scalar parsing has only
 `InvalidJson(Str)`, while a required-record parser composes in
 `MissingRequiredField(Str)`),
+test/cli/ParserMissingFieldOpenRow.roc (an unannotated or `_` row gains the tag
+although nothing in the program names it),
 test/cli/JsonParseGenericWrapperErrors.roc (a generalized wrapper may consume
-the parser errors and a closed specialization consumes the checked conditional
-mapping capability),
+the parser errors),
 and test/cli/ParserCustomNominalField.roc (a custom nominal parser's narrower
 error row injects into its containing record row); rejected—
-test/cli/ParserMissingRequiredFieldError.roc (a required-record parser cannot
-use a closed format error row that omits `MissingRequiredField(Str)` when the
-format supplies no checked `invalid_value` capability).
+test/cli/ParserMissingRequiredFieldError.roc (a closed format error row that
+omits `MissingRequiredField(Str)`),
+test/cli/Issue11561ClosedErrorRow.roc (annotated value and function rows that
+omit it), test/cli/Issue11561ClosedRowPattern.roc (a use that names the tag
+does not excuse the annotation), and
+test/cli/ParserChildErrorOutsideAnnotation.roc (a nested custom parser's error
+tag outside the annotated row, including when a caller also widens the row).
 
 ### Builtin Str Interpolation Part Compatibility
 
@@ -8678,14 +8698,6 @@ Other solved-graph mutations:
   Required-Field Error Composition (above). A structural probe of derived
   record fields gates ordinary unification of the parser's shared error row
   with `[MissingRequiredField(Str), ..]`.
-- `tryValidateOptionalInvalidValueMethod`—policy: Derived Parser
-  Required-Field Error Composition (above). Once source types settle, one
-  commit-probe instantiates and relates the format's optional `invalid_value`
-  capability at the exact parser boundary. Full success records the checked
-  conditional call; absence or mismatch rolls back every type, evidence, and
-  worklist mutation. `JsonParseGenericWrapperErrors.roc` pins the committed
-  side, while `ParserRequiredFieldError.roc` pins rollback by declaring an
-  incompatible unused method and still reporting the precise generated tag.
 - `constrainDerivedParserFormatError` /
   `constrainDerivedParserErrorRowIncludes`—policy: Derived Parser
   Required-Field Error Composition (above). A format or custom parser method's
@@ -9023,10 +9035,17 @@ numeric default phase, otherwise its row default (`{}` or `[]`), otherwise the
 empty tag union. Planning records that sealed representation as explicit
 `sealed_default` data on the flex representation, so lowering reads it rather
 than re-deriving a default from the checked type. A flex variable carrying
-non-numeric static-dispatch constraints has no sealed default, because its
-dispatch needs a dictionary that only a quantifying scheme can supply; reaching
-it without a bound descriptor, like reaching an unbound rigid variable, is a
-lowering invariant violation.
+static-dispatch constraints that a quantifying scheme would have to own has no
+sealed default, because each of those needs a dictionary only a quantifying
+scheme can supply; reaching it without a bound descriptor, like reaching an
+unbound rigid variable, is a lowering invariant violation. The derived `is_eq`
+equality placeholder Check leaves on an undetermined variable inside values
+compared with structural equality is not such a constraint: it discharges by
+comparing structurally with no owner (the same carve-out Check's ambiguity
+judgment applies), so planning seals the variable exactly like an unconstrained
+one and records no dictionary for it. A quantified variable's `is_eq` erased
+requirement is owned instead—the scheme forwards it as compiler-derived structural
+evidence—so it keeps its dictionary requirement.
 
 `erased_box` is distinct from the `box_of_zst` layout used for `Box({})`. `Box({})` is
 represented by a null pointer, owns no allocation, and is not refcounted. An
@@ -9359,6 +9378,62 @@ every collection whose growth can expose additional workers, substitutions,
 inspect methods, descriptors, or dictionaries. This prevents reallocation from
 invalidating the current traversal and makes discovery order irrelevant to the
 planned collection contents.
+
+### Checked Module Provenance
+
+One lowering unions several checked modules: it lowers the root module's
+procedures and every imported procedure those reach, and its root request
+stream is the concatenation of several modules' compile-time requests. Checked
+ids other than a checked module's own identity are store-local to the module
+that produced them, so a post-check row that retains one—a compile-time root
+id, a checked exhaustiveness-site id—names nothing until its owner is known.
+
+Monotype lowering therefore seeds that module set once, before any body is
+lowered, as the program-local `lowering_modules` table, and assigns each module
+a dense `LoweringModuleId`. The table is never appended to afterwards, so
+parallel specialization workers borrow it and mint the same ids the coordinator
+does. Lifting, SpecConstr, lambda solving, and LIR lowering carry the table and
+the ids through unchanged, and the ids reach `Program.Result`, where checking
+finalization resolves an owner by indexing the table directly.
+
+Every row that keeps a module-local checked id carries that module's dense id
+beside it. A compile-time site records the checked module whose site ids and
+source regions it names, which is the module whose body the specialization was
+lowered from rather than the program's root module or the module of whichever
+compile-time root later executes the site. A root plan records the checked
+module that owns its compile-time root id. No consumer may recover an owner
+from a row's position in a concatenated request stream, from a source location,
+from a procedure's membership, or from any other incidental id: those are all
+wrong as soon as one program contains more than one module's code, and they
+fail silently rather than loudly.
+
+Consequently finalization selects the CheckedModule data, `ConstStore`, problem
+store, and completion state of a row's declared owner. A compile-time root's
+evaluation reaches sites belonging to several modules; each site's pending
+static exhaustiveness diagnostic is resolved or discarded in its own owner's
+problem store, and a site whose validation was delegated to a specific root is
+resolved only by that root, which only its own module's roots can name. Branch
+coverage stays with the running root's own module: one caller reaching an
+imported body is no account of that module's branches.
+
+Content-identical modules in different packages may share a checked identity
+while retaining separate checked modules and diagnostic stores. Repeated root
+plans for that identity must agree in all execution and representation data.
+Finalization completes each checked module's own constant store and coverage,
+writes shared slots and debug observations once per identity, and applies
+checked-site observations to every checked module with that site's declared
+owner.
+
+The dense id exists so this provenance costs a `u32` per row. A checked module
+identity is a large structural key; attaching one to every root and site row,
+or hashing one per evaluated event, would pay for the provenance many times
+over. The table is also distinct from the program's source-file table even
+though both enumerate the same modules, because source-file ordinals are
+remapped when LIR images from different programs are packed together while a
+lowering module id is valid only inside its own program. Identities that must
+survive between two independently lowered programs—an evaluated root's
+completed value slot, for instance—keep the structural key, because no single
+program's table spans both.
 
 ## Monotype IR
 

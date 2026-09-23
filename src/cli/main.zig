@@ -336,6 +336,7 @@ const CliMainError =
         ComptimeExhaustiveness,
         Crash,
         DivisionByZero,
+        DepsFailed,
         DocsFailed,
         EmptyArchive,
         EntrypointNotFound,
@@ -1401,7 +1402,7 @@ pub fn main(init: std.process.Init) Allocator.Error!void {
 
 fn parsedArgsStartBackgroundCleanup(args: cli_args.CliArgs) bool {
     return switch (args) {
-        .run, .build, .check, .test_cmd, .docs, .bump, .glue, .install, .experimental_lsp => true,
+        .run, .build, .check, .test_cmd, .docs, .deps, .bump, .glue, .install, .experimental_lsp => true,
         .fmt, .bundle, .unbundle, .repl, .version, .help, .licenses, .problem => false,
     };
 }
@@ -1470,7 +1471,7 @@ fn mainArgs(gpa: Allocator, arena: Allocator, args: []const []const u8, std_io: 
         .unbundle => .unbundle,
         .bump => .bump,
         .install => .install,
-        .docs, .glue, .experimental_lsp, .repl, .version, .help, .licenses, .problem => .unknown,
+        .docs, .deps, .glue, .experimental_lsp, .repl, .version, .help, .licenses, .problem => .unknown,
     };
 
     // Create CLI context at the top level - this is passed to all command handlers
@@ -1534,6 +1535,7 @@ fn mainArgs(gpa: Allocator, arena: Allocator, args: []const []const u8, std_io: 
         .glue => |glue_args| rocGlue(&ctx, glue_args),
         .version => ctx.io.stdout().print("Roc compiler version {s}\n", .{build_options.compiler_version}),
         .docs => |docs_args| rocDocs(&ctx, docs_args),
+        .deps => |deps_args| rocDeps(&ctx, deps_args),
         .bump => |bump_args| rocBump(&ctx, bump_args),
         .install => |install_args| rocInstall(&ctx, install_args),
         .experimental_lsp => |lsp_args| try lsp.runWithStdIo(gpa, std_io, .{
@@ -4609,6 +4611,7 @@ fn buildHotReloadChildArgv(
     if (args.no_cache) try appendOwnedArg(ctx.gpa, &argv, &owned, "--no-cache={}", .{@as(u8, 1)});
     try appendOwnedArg(ctx.gpa, &argv, &owned, "--no-color={}", .{if (ctx.no_color) @as(u8, 1) else @as(u8, 0)});
     try appendResolveLimitArgs(ctx.gpa, &argv, &owned, args.resolve_limits);
+    try appendHotReloadReplaceDepArgs(ctx.gpa, &argv, &owned, &args.resolve_limits.replace_deps);
 
     return .{
         .argv = try argv.toOwnedSlice(ctx.gpa),
@@ -5399,6 +5402,64 @@ test "hot reload worker args require append offset" {
     try std.testing.expectEqual(true, parsed.preserve_descriptor_refs);
     try std.testing.expectEqual(base.SpecializationStrategy.lss, parsed.specialization_strategy);
     try std.testing.expect(parsed.no_color);
+    try std.testing.expectEqual(@as(usize, 0), parsed.resolve_limits.replace_deps.len);
+
+    // Replacements arrive as old/new pairs, in order.
+    const with_replacements = try parseHotReloadDevWorkerArgs(&.{
+        "--path=app.roc",
+        "--target=x64linux",
+        "--generation=2",
+        "--descriptor-offset=7680",
+        "--image-limit=7680",
+        "--region-start=1024",
+        "--region-end=3072",
+        "--append-offset=4096",
+        "--preserve-descriptor-refs=1",
+        "--shm-handle=3",
+        "--shm-size=8192",
+        "--expected-host=" ++ zero_host,
+        "--watch-inputs-file=watch-inputs",
+        "--specialization-strategy=lss",
+        "--replace-dep-old=https://example.com/pkg/1.2.3/abc.tar.zst?x=y",
+        "--replace-dep-new=../pkg/main.roc",
+        "--replace-dep-old=./b/main.roc",
+        "--replace-dep-new=https://example.com/pkg/1.2.3/abc.tar.zst",
+    });
+    const replacements = with_replacements.resolve_limits.replace_deps.slice();
+    try std.testing.expectEqual(@as(usize, 2), replacements.len);
+    try std.testing.expectEqualStrings("https://example.com/pkg/1.2.3/abc.tar.zst?x=y", replacements[0].old);
+    try std.testing.expectEqualStrings("../pkg/main.roc", replacements[0].new);
+    try std.testing.expectEqualStrings("./b/main.roc", replacements[1].old);
+    try std.testing.expectEqualStrings("https://example.com/pkg/1.2.3/abc.tar.zst", replacements[1].new);
+
+    // A dangling old, a new without its old, and two olds in a row are all rejected.
+    for ([_][]const []const u8{
+        &.{"--replace-dep-old=./a/main.roc"},
+        &.{"--replace-dep-new=./a/main.roc"},
+        &.{ "--replace-dep-old=./a/main.roc", "--replace-dep-old=./b/main.roc", "--replace-dep-new=./c/main.roc" },
+    }) |extra| {
+        var argv = std.ArrayList([]const u8).empty;
+        defer argv.deinit(std.testing.allocator);
+        try argv.appendSlice(std.testing.allocator, &.{
+            "--path=app.roc",
+            "--target=x64linux",
+            "--generation=2",
+            "--descriptor-offset=7680",
+            "--image-limit=7680",
+            "--region-start=1024",
+            "--region-end=3072",
+            "--append-offset=4096",
+            "--preserve-descriptor-refs=1",
+            "--shm-handle=3",
+            "--shm-size=8192",
+            "--expected-host=" ++ zero_host,
+            "--watch-inputs-file=watch-inputs",
+            "--specialization-strategy=lss",
+        });
+        try argv.appendSlice(std.testing.allocator, extra);
+        try std.testing.expectError(error.InvalidArguments, parseHotReloadDevWorkerArgs(argv.items));
+    }
+
     try std.testing.expectError(error.InvalidArguments, parseHotReloadDevWorkerArgs(&.{
         "--path=app.roc",
         "--target=x64linux",
@@ -6175,6 +6236,8 @@ fn parseHotReloadDevWorkerArgs(args: []const []const u8) error{InvalidArguments}
     var no_cache: bool = false;
     var no_color: bool = false;
     var resolve_limits = cli_args.ResolveLimitArgs{};
+    // `--replace-dep-old` must be followed by its `--replace-dep-new`.
+    var pending_replace_old: ?[]const u8 = null;
 
     for (args) |arg| {
         if (hotReloadFlagValue(arg, "--path")) |value| {
@@ -6221,10 +6284,20 @@ fn parseHotReloadDevWorkerArgs(args: []const []const u8) error{InvalidArguments}
             resolve_limits.max_package_mb = std.fmt.parseInt(u32, value, 10) catch return error.InvalidArguments;
         } else if (hotReloadFlagValue(arg, "--max-transitive-mb")) |value| {
             resolve_limits.max_transitive_mb = std.fmt.parseInt(u32, value, 10) catch return error.InvalidArguments;
+        } else if (hotReloadFlagValue(arg, "--replace-dep-old")) |value| {
+            if (pending_replace_old != null) return error.InvalidArguments;
+            pending_replace_old = value;
+        } else if (hotReloadFlagValue(arg, "--replace-dep-new")) |value| {
+            const old = pending_replace_old orelse return error.InvalidArguments;
+            if (resolve_limits.replace_deps.len == cli_args.ReplaceDepArgs.max) return error.InvalidArguments;
+            resolve_limits.replace_deps.items[resolve_limits.replace_deps.len] = .{ .old = old, .new = value };
+            resolve_limits.replace_deps.len += 1;
+            pending_replace_old = null;
         } else {
             return error.InvalidArguments;
         }
     }
+    if (pending_replace_old != null) return error.InvalidArguments;
 
     return .{
         .path = path orelse return error.InvalidArguments,
@@ -7157,6 +7230,10 @@ fn resolutionConfigFromLimits(limits: cli_args.ResolveLimitArgs) compile.package
         const max_bytes = if (mb == 0) null else @as(u64, mb) * 1024 * 1024;
         config.max_transitive_expanded_bytes = max_bytes;
         config.max_platform_transitive_expanded_bytes = max_bytes;
+    }
+    for (limits.replace_deps.slice()) |arg| {
+        // The parser caps occurrences at the same bound, so this cannot overflow.
+        config.replace_deps.append(.{ .old = arg.old, .new = arg.new }) catch unreachable;
     }
     return config;
 }
@@ -14620,6 +14697,34 @@ fn appendResolveLimitArgs(
     }
 }
 
+/// Forward every `--replace-dep OLD NEW` to a watch child, which parses the
+/// public command line and so takes the flag in its public three-argument form.
+fn appendReplaceDepArgs(
+    gpa: Allocator,
+    argv: *std.ArrayList([]const u8),
+    replace_deps: *const cli_args.ReplaceDepArgs,
+) Allocator.Error!void {
+    for (replace_deps.slice()) |replacement| {
+        try argv.append(gpa, "--replace-dep");
+        try argv.append(gpa, replacement.old);
+        try argv.append(gpa, replacement.new);
+    }
+}
+
+/// Forward every `--replace-dep OLD NEW` to the hot-reload worker, whose
+/// internal argument syntax is strictly `--flag=value`, as an old/new pair.
+fn appendHotReloadReplaceDepArgs(
+    gpa: Allocator,
+    argv: *std.ArrayList([]const u8),
+    owned: *std.ArrayList([]const u8),
+    replace_deps: *const cli_args.ReplaceDepArgs,
+) Allocator.Error!void {
+    for (replace_deps.slice()) |replacement| {
+        try appendOwnedArg(gpa, argv, owned, "--replace-dep-old={s}", .{replacement.old});
+        try appendOwnedArg(gpa, argv, owned, "--replace-dep-new={s}", .{replacement.new});
+    }
+}
+
 fn buildWatchChildArgv(ctx: *CliCtx, arg0: []const u8, command: WatchCommand, inputs_path: []const u8) Allocator.Error!WatchChildArgv {
     var argv = std.ArrayList([]const u8).empty;
     errdefer argv.deinit(ctx.gpa);
@@ -14642,6 +14747,7 @@ fn buildWatchChildArgv(ctx: *CliCtx, arg0: []const u8, command: WatchCommand, in
             if (args.verbose) try argv.append(ctx.gpa, "--verbose");
             if (args.max_threads) |jobs| try appendOwnedArg(ctx.gpa, &argv, &owned, "--jobs={}", .{jobs});
             try appendResolveLimitArgs(ctx.gpa, &argv, &owned, args.resolve_limits);
+            try appendReplaceDepArgs(ctx.gpa, &argv, &args.resolve_limits.replace_deps);
             try appendOwnedArg(ctx.gpa, &argv, &owned, "--watch-inputs-file={s}", .{inputs_path});
             try argv.append(ctx.gpa, args.path);
         },
@@ -14654,6 +14760,7 @@ fn buildWatchChildArgv(ctx: *CliCtx, arg0: []const u8, command: WatchCommand, in
             if (args.verbose) try argv.append(ctx.gpa, "--verbose");
             if (args.max_threads) |jobs| try appendOwnedArg(ctx.gpa, &argv, &owned, "--jobs={}", .{jobs});
             try appendResolveLimitArgs(ctx.gpa, &argv, &owned, args.resolve_limits);
+            try appendReplaceDepArgs(ctx.gpa, &argv, &args.resolve_limits.replace_deps);
             try appendOwnedArg(ctx.gpa, &argv, &owned, "--watch-inputs-file={s}", .{inputs_path});
             try argv.append(ctx.gpa, args.path);
         },
@@ -14671,6 +14778,7 @@ fn buildWatchChildArgv(ctx: *CliCtx, arg0: []const u8, command: WatchCommand, in
             if (args.wasm_memory) |bytes| try appendOwnedArg(ctx.gpa, &argv, &owned, "--wasm-memory={}", .{bytes});
             if (args.wasm_stack_size) |bytes| try appendOwnedArg(ctx.gpa, &argv, &owned, "--wasm-stack-size={}", .{bytes});
             try appendResolveLimitArgs(ctx.gpa, &argv, &owned, args.resolve_limits);
+            try appendReplaceDepArgs(ctx.gpa, &argv, &args.resolve_limits.replace_deps);
             try appendOwnedArg(ctx.gpa, &argv, &owned, "--watch-inputs-file={s}", .{inputs_path});
             try argv.append(ctx.gpa, args.path);
         },
@@ -14680,6 +14788,43 @@ fn buildWatchChildArgv(ctx: *CliCtx, arg0: []const u8, command: WatchCommand, in
         .argv = try argv.toOwnedSlice(ctx.gpa),
         .owned = try owned.toOwnedSlice(ctx.gpa),
     };
+}
+
+test "watch child argv forwards every dependency replacement" {
+    var io = Io.create(std.testing.io);
+    var ctx = CliCtx.init(std.testing.allocator, std.testing.allocator, &io, .check);
+    ctx.initIo();
+    defer ctx.deinit();
+
+    const url = "https://example.com/pkg/1.2.3/abc.tar.zst";
+    var replace_deps = cli_args.ReplaceDepArgs{};
+    replace_deps.items[0] = .{ .old = url, .new = "../pkg/main.roc" };
+    replace_deps.items[1] = .{ .old = "./b/main.roc", .new = url };
+    replace_deps.len = 2;
+
+    const commands = [_]WatchCommand{
+        .{ .check = .{ .path = "app.roc", .main = null, .resolve_limits = .{ .replace_deps = replace_deps } } },
+        .{ .build = .{ .path = "app.roc", .opt = .dev, .resolve_limits = .{ .replace_deps = replace_deps } } },
+        .{ .test_cmd = .{ .path = "app.roc", .opt = .dev, .main = null, .resolve_limits = .{ .replace_deps = replace_deps } } },
+    };
+    for (commands) |command| {
+        var child_argv = try buildWatchChildArgv(&ctx, "roc", command, "watch-inputs");
+        defer child_argv.deinit(std.testing.allocator);
+
+        // Re-parse the child command line exactly as the child will.
+        const parsed = try cli_args.parse(std.testing.allocator, std.testing.io, child_argv.argv[1..]);
+        const limits = switch (parsed) {
+            .check => |args| args.resolve_limits,
+            .build => |args| args.resolve_limits,
+            .test_cmd => |args| args.resolve_limits,
+            .run, .docs, .deps, .help, .problem, .fmt, .bundle, .unbundle, .repl, .glue, .version, .bump, .install, .experimental_lsp, .licenses => return error.TestUnexpectedResult,
+        };
+        try std.testing.expectEqual(@as(usize, 2), limits.replace_deps.len);
+        try std.testing.expectEqualStrings(url, limits.replace_deps.slice()[0].old);
+        try std.testing.expectEqualStrings("../pkg/main.roc", limits.replace_deps.slice()[0].new);
+        try std.testing.expectEqualStrings("./b/main.roc", limits.replace_deps.slice()[1].old);
+        try std.testing.expectEqualStrings(url, limits.replace_deps.slice()[1].new);
+    }
 }
 
 test "watch child argv propagates no-color" {
@@ -18995,6 +19140,195 @@ fn bumpExtractApi(ctx: *CliCtx, build_env: *compile.BuildEnv, side: []const u8) 
             return ctx.fail(.{ .bump_failed = .{ .title = "Cannot Extract Public API", .message = message } });
         },
     };
+}
+
+/// `roc deps`: resolve the root's dependency graph and print it as a tree
+/// on stdout. Nothing is compiled or run, and no source file is edited;
+/// resolution may download uncached bundles to read their headers.
+fn rocDeps(ctx: *CliCtx, args: cli_args.DepsArgs) CliMainError!void {
+    const trace = tracy.trace(@src());
+    defer trace.end();
+
+    const resolved_source = try resolveSourceArg(ctx, args.path, false);
+    const stdout = ctx.io.stdout();
+    const stderr = ctx.io.stderr();
+    const report_config = ctx.reportConfig(.stderr);
+
+    var build_env = try initCliBuildEnv(ctx, .{
+        .resolution_config = resolutionConfigFromLimits(args.resolve_limits),
+        .root_source_url = resolved_source.url,
+    });
+    defer build_env.deinit();
+
+    var resolved = build_env.resolveDependencyGraph(resolved_source.path) catch |err| {
+        const drained = build_env.drainReports() catch &[_]BuildEnv.DrainedModuleReports{};
+        defer build_env.freeDrainedReports(drained);
+        var rendered_any = false;
+        for (drained) |module| {
+            for (module.reports) |*report| {
+                rendered_any = true;
+                reporting.renderReportToTerminal(report, stderr, reporting.ColorUtils.getPaletteForConfig(report_config), report_config) catch {
+                    stderr.print("  {s}\n", .{report.title}) catch {};
+                };
+            }
+        }
+        if (rendered_any) return error.DepsFailed;
+        return handleProcessFileError(err, stderr, args.path);
+    };
+    defer resolved.deinit();
+
+    var out = std.ArrayList(u8).empty;
+    defer out.deinit(ctx.gpa);
+    try renderDependencyTree(ctx.gpa, &resolved, resolved_source.path, &out);
+    try stdout.writeAll(out.items);
+}
+
+/// Render a resolved dependency graph as a tree. Every edge is shown with its
+/// complete declared source (never its alias) so the text can be copied into
+/// `--replace-dep`; when the effective source differs, the tree says whether a
+/// replacement or ordinary version selection caused that. Each shared
+/// package's subtree is expanded once, at its first occurrence in print
+/// order, and later occurrences are marked `[shared]`.
+fn renderDependencyTree(
+    gpa: Allocator,
+    resolved: *const compile.package_resolution.Resolved,
+    root_display: []const u8,
+    out: *std.ArrayList(u8),
+) Allocator.Error!void {
+    const Resolved = compile.package_resolution.Resolved;
+    const packages = resolved.packages;
+    const root = packages[Resolved.root_index];
+
+    try out.print(gpa, "{s}", .{if (root.url) |url| url.url else root_display});
+    if (root.url == null and !std.mem.eql(u8, root_display, root.root_file)) {
+        try out.print(gpa, " ({s})", .{root.root_file});
+    }
+    try out.print(gpa, " [{s}]\n", .{@tagName(root.kind)});
+
+    const expanded = try gpa.alloc(bool, packages.len);
+    defer gpa.free(expanded);
+    @memset(expanded, false);
+    expanded[Resolved.root_index] = true;
+
+    var prefix = std.ArrayList(u8).empty;
+    defer prefix.deinit(gpa);
+    var shared_any = false;
+    var replaced_any = false;
+    var selected_any = false;
+    try renderDependencySubtree(gpa, resolved, Resolved.root_index, expanded, &prefix, &shared_any, &replaced_any, &selected_any, out);
+
+    if (shared_any or replaced_any or selected_any) try out.appendSlice(gpa, "\n");
+    if (replaced_any) try out.appendSlice(gpa, "[replaced by ...]  a --replace-dep flag loads that source in place of the declared one\n");
+    if (selected_any) try out.appendSlice(gpa, "[resolved to ...]  version selection chose that compatible release for the whole build\n");
+    if (shared_any) try out.appendSlice(gpa, "[shared]           this package was already shown above, where its dependencies are listed\n");
+}
+
+fn renderDependencySubtree(
+    gpa: Allocator,
+    resolved: *const compile.package_resolution.Resolved,
+    index: u32,
+    expanded: []bool,
+    prefix: *std.ArrayList(u8),
+    shared_any: *bool,
+    replaced_any: *bool,
+    selected_any: *bool,
+    out: *std.ArrayList(u8),
+) Allocator.Error!void {
+    const package = resolved.packages[index];
+    for (package.deps, 0..) |dep, i| {
+        const target = resolved.packages[dep.target];
+        const is_last = i + 1 == package.deps.len;
+
+        try out.appendSlice(gpa, prefix.items);
+        try out.appendSlice(gpa, if (is_last) "└── " else "├── ");
+        try out.appendSlice(gpa, dep.declared_spec);
+
+        const declared_is_url = std.mem.find(u8, dep.declared_spec, "://") != null;
+        if (dep.replaced_by) |replacement| {
+            replaced_any.* = true;
+            try out.print(gpa, " [replaced by {s}]", .{replacement});
+        } else if (target.url) |url| {
+            if (!std.mem.eql(u8, url.url, dep.declared_spec)) {
+                selected_any.* = true;
+                try out.print(gpa, " [resolved to {s}]", .{url.url});
+            }
+        } else if (!declared_is_url and target.compiler_owned_platform == null and !std.mem.eql(u8, dep.declared_spec, target.root_file)) {
+            // A relative local path is relative to its declaring package;
+            // show the canonical file so it can be used from anywhere.
+            try out.print(gpa, " ({s})", .{target.root_file});
+        }
+        if (dep.is_platform) try out.appendSlice(gpa, " [platform]");
+
+        const expand_here = !expanded[dep.target];
+        expanded[dep.target] = true;
+        if (!expand_here) {
+            shared_any.* = true;
+            try out.appendSlice(gpa, " [shared]");
+        }
+        try out.appendSlice(gpa, "\n");
+
+        if (expand_here) {
+            const saved_len = prefix.items.len;
+            try prefix.appendSlice(gpa, if (is_last) "    " else "│   ");
+            try renderDependencySubtree(gpa, resolved, dep.target, expanded, prefix, shared_any, replaced_any, selected_any, out);
+            prefix.items.len = saved_len;
+        }
+    }
+}
+
+test "renderDependencyTree shows declared sources, provenance, and shared subtrees once" {
+    const Resolved = compile.package_resolution.Resolved;
+    const ascii_a = "https://example.com/ascii/0.5.0/hashAsciiA.tar.zst";
+    const ascii_b = "https://example.com/ascii/0.5.1/hashAsciiB.tar.zst";
+    const ansi = "https://example.com/ansi/0.13.0/hashAnsi.tar.zst";
+    const pf = "https://example.com/cli/0.23.0/hashCli.tar.zst";
+    const local_ascii = "/work/roc-ascii/main.roc";
+
+    var root_deps = [_]Resolved.Dep{
+        .{ .alias = "cli", .target = 1, .is_platform = true, .declared_spec = pf },
+        .{ .alias = "ascii", .target = 2, .is_platform = false, .declared_spec = ascii_a, .replaced_by = local_ascii },
+        .{ .alias = "ansi", .target = 3, .is_platform = false, .declared_spec = ansi },
+        .{ .alias = "util", .target = 4, .is_platform = false, .declared_spec = "../util/main.roc" },
+    };
+    var ansi_deps = [_]Resolved.Dep{
+        .{ .alias = "characters", .target = 2, .is_platform = false, .declared_spec = ascii_a, .replaced_by = local_ascii },
+        .{ .alias = "util", .target = 4, .is_platform = false, .declared_spec = "../util/main.roc" },
+    };
+    var util_deps = [_]Resolved.Dep{
+        .{ .alias = "ascii", .target = 5, .is_platform = false, .declared_spec = ascii_a },
+    };
+    var no_deps = [_]Resolved.Dep{};
+    var packages = [_]Resolved.Package{
+        .{ .kind = .app, .identity = "/app/main.roc", .root_file = "/app/main.roc", .root_dir = "/app", .root_source_hash = undefined, .url = null, .deps = &root_deps },
+        .{ .kind = .platform, .identity = pf, .root_file = "/cache/pf/main.roc", .root_dir = "/cache/pf", .root_source_hash = undefined, .url = .{ .url = pf, .url_id = undefined, .version = undefined, .hash = "hashCli" }, .deps = &no_deps },
+        .{ .kind = .package, .identity = local_ascii, .root_file = local_ascii, .root_dir = "/work/roc-ascii", .root_source_hash = undefined, .url = null, .deps = &no_deps },
+        .{ .kind = .package, .identity = ansi, .root_file = "/cache/ansi/main.roc", .root_dir = "/cache/ansi", .root_source_hash = undefined, .url = .{ .url = ansi, .url_id = undefined, .version = undefined, .hash = "hashAnsi" }, .deps = &ansi_deps },
+        .{ .kind = .package, .identity = "/util/main.roc", .root_file = "/util/main.roc", .root_dir = "/util", .root_source_hash = undefined, .url = null, .deps = &util_deps },
+        .{ .kind = .package, .identity = ascii_b, .root_file = "/cache/asciiB/main.roc", .root_dir = "/cache/asciiB", .root_source_hash = undefined, .url = .{ .url = ascii_b, .url_id = undefined, .version = undefined, .hash = "hashAsciiB" }, .deps = &no_deps },
+    };
+    const resolved = Resolved{ .arena = undefined, .packages = &packages, .selected_platform_index = 1 };
+
+    var out = std.ArrayList(u8).empty;
+    defer out.deinit(std.testing.allocator);
+    try renderDependencyTree(std.testing.allocator, &resolved, "main.roc", &out);
+
+    try std.testing.expectEqualStrings(
+        \\main.roc (/app/main.roc) [app]
+        \\├── https://example.com/cli/0.23.0/hashCli.tar.zst [platform]
+        \\├── https://example.com/ascii/0.5.0/hashAsciiA.tar.zst [replaced by /work/roc-ascii/main.roc]
+        \\├── https://example.com/ansi/0.13.0/hashAnsi.tar.zst
+        \\│   ├── https://example.com/ascii/0.5.0/hashAsciiA.tar.zst [replaced by /work/roc-ascii/main.roc] [shared]
+        \\│   └── ../util/main.roc (/util/main.roc)
+        \\│       └── https://example.com/ascii/0.5.0/hashAsciiA.tar.zst [resolved to https://example.com/ascii/0.5.1/hashAsciiB.tar.zst]
+        \\└── ../util/main.roc (/util/main.roc) [shared]
+        \\
+        \\[replaced by ...]  a --replace-dep flag loads that source in place of the declared one
+        \\[resolved to ...]  version selection chose that compatible release for the whole build
+        \\[shared]           this package was already shown above, where its dependencies are listed
+        \\
+    , out.items);
+    // Aliases never appear in the output.
+    try std.testing.expect(std.mem.find(u8, out.items, "characters") == null);
 }
 
 fn rocDocs(ctx: *CliCtx, args_in: cli_args.DocsArgs) CliMainError!void {

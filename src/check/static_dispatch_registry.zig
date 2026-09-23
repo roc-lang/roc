@@ -1235,6 +1235,12 @@ pub const StaticDispatchResultMode = union(enum) {
     equality: struct {
         structural_allowed: bool,
         negated: bool,
+        /// Checker-selected discriminant-only comparison. The named operand is
+        /// the value being tested; the other operand is the payload-free tag.
+        discriminant: ?struct {
+            value_operand: u32,
+            tag: canonical.TagLabelId,
+        } = null,
     },
     /// A `to_hash : self, Hasher -> Hasher` dispatch whose receiver is an
     /// anonymous structural type. When `structural_allowed` is set, lowering
@@ -1661,9 +1667,6 @@ pub const GeneratedCodecCallResolution = union(enum(u8)) {
 /// One exact method edge inside a compiler-generated parser or encoder.
 pub const GeneratedCodecCall = struct {
     method: canonical.MethodNameId,
-    /// This checked edge is consumed only by a specialization whose boundary
-    /// selects the corresponding generated-code path.
-    conditional: bool = false,
     /// Dense producer role among distinct subject obligations for `method`.
     /// This is the post-check selection key; subject types remain validation
     /// metadata and are never rediscovered from a Monotype graph.
@@ -2043,6 +2046,12 @@ pub const StaticDispatchPlanTable = struct {
                         .result_mode = .{ .equality = .{
                             .structural_allowed = true,
                             .negated = eq.negated,
+                            .discriminant = if (zeroPayloadTagIdent(module, eq.rhs)) |tag_ident|
+                                .{ .value_operand = 0, .tag = try names.internTagIdent(idents, tag_ident) }
+                            else if (zeroPayloadTagIdent(module, eq.lhs)) |tag_ident|
+                                .{ .value_operand = 1, .tag = try names.internTagIdent(idents, tag_ident) }
+                            else
+                                null,
                         } },
                     });
                     try plan_sources.append(allocator, .{
@@ -2121,7 +2130,6 @@ pub const StaticDispatchPlanTable = struct {
                 }
                 try generated_codec_calls.append(allocator, .{
                     .method = method,
-                    .conditional = call.conditional != 0,
                     .method_role = method_role.?,
                     .dispatcher_ty = dispatcher_ty,
                     .callable_ty = callable_ty,
@@ -2974,6 +2982,13 @@ fn staticDispatchOperandsForSlice(
         out[i] = .{ .checked_expr = checkedExprIdForSource(checked_bodies, expr) };
     }
     return out;
+}
+
+fn zeroPayloadTagIdent(module: TypedCIR.Module, expr_idx: CIR.Expr.Idx) ?Ident.Idx {
+    const data = module.expr(expr_idx).data;
+    if (data == .e_zero_argument_tag) return data.e_zero_argument_tag.name;
+    if (data == .e_tag and data.e_tag.args.span.len == 0) return data.e_tag.name;
+    return null;
 }
 
 fn checkedExprIdForSource(checked_bodies: anytype, expr: CIR.Expr.Idx) CheckedExprId {

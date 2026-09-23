@@ -1859,7 +1859,10 @@ fn parserDeclIsDefiningAssocAlias(self: *const Self, decl_idx: AST.DeclIndex.Dec
 }
 
 fn parserTypeDeclCanPrepare(self: *const Self, decl: AST.DeclIndex.Decl) bool {
-    if (declIndexTypeKind(decl.kind) == null) return false;
+    // Where aliases are preparable too: a where clause may name one before its
+    // declaration, and the placeholder arm in ensureParserTypeDeclBinding fills
+    // it in when the real declaration is canonicalized.
+    if (declIndexTypeKind(decl.kind) == null and decl.kind != .where_alias) return false;
 
     const ast_stmt_idx: AST.Statement.Idx = @enumFromInt(decl.statement);
     const ast_stmt = self.parse_ir.store.getStatement(ast_stmt_idx);
@@ -3231,7 +3234,10 @@ fn ensureParserTypeDeclBinding(
     if (!self.parserTypeDeclCanPrepare(decl)) return null;
     if (!self.parserTypeDeclIsSelected(decl_idx)) return null;
     if (!try self.parserScopeCanSupplyForwardTypeDecl(decl.scope)) return null;
-    const kind = declIndexTypeKind(decl.kind) orelse return null;
+    const kind = declIndexTypeKind(decl.kind) orelse if (decl.kind == .where_alias)
+        AST.TypeDeclKind.where_alias
+    else
+        return null;
     const name_ident = decl.name_ident orelse return null;
     const ast_stmt_idx: AST.Statement.Idx = @enumFromInt(decl.statement);
     const region = self.parserDeclRegion(decl);
@@ -4528,7 +4534,8 @@ pub fn canonicalizeFile(
             // Extract required type signatures for type checking using the new for-clause syntax
             // This stores the types in env.requires_types without creating local definitions
             // Also introduces type aliases (like Model) into the platform's top-level scope
-            try self.processRequiresEntries(h.requires_entries);
+            // Requires annotations can refer to modules imported in the body.
+            // Canonicalize them after those imports enter scope below.
         },
         .hosted => |h| {
             self.env.module_kind = .hosted;
@@ -4612,6 +4619,16 @@ pub fn canonicalizeFile(
     try self.declScopeEnter(file.scope);
     defer self.declScopeExit();
 
+    if (header == .platform) {
+        for (self.parse_ir.store.statementSlice(file.statements)) |stmt_id| {
+            const stmt = self.parse_ir.store.getStatement(stmt_id);
+            if (stmt == .import) {
+                _ = try self.canonicalizeImportStatement(stmt.import);
+            }
+        }
+        try self.processRequiresEntries(header.platform.requires_entries);
+    }
+
     // Walk every top-level statement in source order. Names defined later in the
     // file—recursive values, recursive or mutually-recursive types, associated
     // items that reference siblings, types appearing before their declaration—
@@ -4625,7 +4642,9 @@ pub fn canonicalizeFile(
         const stmt = self.parse_ir.store.getStatement(stmt_id);
         switch (stmt) {
             .import => |import_stmt| {
-                _ = try self.canonicalizeImportStatement(import_stmt);
+                if (header != .platform) {
+                    _ = try self.canonicalizeImportStatement(import_stmt);
+                }
             },
             .decl => |decl| {
                 _ = try self.canonicalizeStmtDecl(stmt_id, decl, null);
