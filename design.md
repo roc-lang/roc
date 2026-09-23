@@ -9395,12 +9395,12 @@ coverage stays with the running root's own module: one caller reaching an
 imported body is no account of that module's branches.
 
 Content-identical modules in different packages may share a checked identity
-while retaining separate artifacts and diagnostic stores. Repeated root plans
-for that identity must agree in all execution and representation data.
-Finalization completes every artifact's own constant store and coverage,
-publishes shared slots and debug observations
-once per identity, and applies checked-site observations to every artifact
-with that site's declared owner.
+while retaining separate checked modules and diagnostic stores. Repeated root
+plans for that identity must agree in all execution and representation data.
+Finalization completes each checked module's own constant store and coverage,
+writes shared slots and debug observations once per identity, and applies
+checked-site observations to every checked module with that site's declared
+owner.
 
 The dense id exists so this provenance costs a `u32` per row. A checked module
 identity is a large structural key; attaching one to every root and site row,
