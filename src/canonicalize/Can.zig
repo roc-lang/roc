@@ -4615,9 +4615,9 @@ pub fn canonicalizeFile(
 
     if (header == .platform) {
         for (self.parse_ir.store.statementSlice(file.statements)) |stmt_id| {
-            switch (self.parse_ir.store.getStatement(stmt_id)) {
-                .import => |import_stmt| _ = try self.canonicalizeImportStatement(import_stmt),
-                else => {},
+            const stmt = self.parse_ir.store.getStatement(stmt_id);
+            if (stmt == .import) {
+                _ = try self.canonicalizeImportStatement(stmt.import);
             }
         }
         try self.processRequiresEntries(header.platform.requires_entries);

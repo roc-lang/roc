@@ -1121,7 +1121,9 @@ test "future field uses resolve joins in their procedure" {
     defer store.deinit();
     const container = try store.addLocal(.{ .layout_idx = .str });
     const field = try store.addLocal(.{ .layout_idx = .str });
-    const join_id: LIR.JoinPointId = @enumFromInt(0);
+    var join_ids = body_clone.JoinParamIndex.init(gpa);
+    defer join_ids.deinit();
+    const join_id = join_ids.freshJoinPoint();
     const exit = try store.addCFStmt(.{ .ret = .{ .value = field } });
     const back_edge = try store.addCFStmt(.{ .jump = .{ .target = join_id } });
     const read = try store.addCFStmt(.{ .assign_ref = .{
@@ -2239,26 +2241,29 @@ pub fn compute(
     var join_scan_stack = std.ArrayList(LIR.CFStmtId).empty;
     defer join_scan_stack.deinit(gpa);
     var join_scan_epoch: u32 = 0;
-    // Join identities belong to a procedure. Frame inventories identify the
-    // owning procedure of a candidate even when its definition is nested in
-    // a join body. A local shared by multiple specifications has no single
-    // join namespace, so it cannot use this field-take optimization.
-    const candidate_proc = try gpa.alloc(u32, store.localCount());
-    defer gpa.free(candidate_proc);
-    @memset(candidate_proc, no_index);
+    // Join identities belong to a procedure. The candidate's defining CFG
+    // statement identifies that procedure explicitly, including dismantle
+    // temporaries that are deliberately absent from a specialization frame.
+    const stmt_proc = try gpa.alloc(u32, store.cfStmtCount());
+    defer gpa.free(stmt_proc);
+    @memset(stmt_proc, no_index);
     const ambiguous_proc = no_index - 1;
     for (0..store.procSpecCount()) |proc_index| {
         const proc = store.getProcSpec(@enumFromInt(@as(u32, @intCast(proc_index))));
         if (proc.body == null) continue;
-        const frame = store.getLocalSpan(proc.frame_locals);
-        for (0..GuardedList.borrowLen(frame)) |index| {
-            const local_index = @intFromEnum(GuardedList.at(frame, index));
-            const owner = &candidate_proc[local_index];
+        join_scan_epoch += 1;
+        try join_scan_stack.append(gpa, proc.body.?);
+        while (join_scan_stack.pop()) |stmt_id| {
+            const stmt_index = @intFromEnum(stmt_id);
+            if (join_scan_epochs[stmt_index] == join_scan_epoch) continue;
+            join_scan_epochs[stmt_index] = join_scan_epoch;
+            const owner = &stmt_proc[stmt_index];
             if (owner.* == no_index) {
                 owner.* = @intCast(proc_index);
             } else if (owner.* != @as(u32, @intCast(proc_index))) {
                 owner.* = ambiguous_proc;
             }
+            try body_clone.appendSuccessorsWithAllocator(store, &join_scan_stack, stmt_id, gpa);
         }
     }
     var future_fields = FutureFields.init(gpa);
@@ -2541,7 +2546,8 @@ pub fn compute(
         candidate_mask &= rc_mask;
         if (candidate_mask == 0) continue;
 
-        const owner = candidate_proc[candidate_index];
+        if (candidate.reads.items.len == 0) dismantleInvariant("field-take candidate had no field projection");
+        const owner = stmt_proc[@intFromEnum(candidate.reads.items[0].stmt)];
         if (owner == no_index or owner == ambiguous_proc) continue;
         if (!joins_ready[owner]) {
             joins_ready[owner] = true;
