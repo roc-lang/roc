@@ -7034,7 +7034,7 @@ Alias polarity markers retain their existing explicit closure rule.
 without closing unfinished inferred rows. Parser and encoder eligibility both
 report inferred flexible tag tails as unresolved.
 
-An obligation waiting for inferred tag-row settlement joins the existing
+An erased requirement waiting for inferred tag-row settlement joins the existing
 `final_codec_dispatch_constraints` queue, deduplicated by its callable variable.
 It is not retried after unrelated expressions: its next legal settlement event
 is the final codec boundary. Scheme capture continues to own relations escaping
