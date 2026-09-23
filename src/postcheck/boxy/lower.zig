@@ -27785,14 +27785,11 @@ const ProcBodyBuilder = struct {
         for (fields) |field| {
             const field_layout = self.parent.result.store.getLocal(field.local).layout_idx;
             const target_desc_rep = self.parent.tagPayloadStorageDescRepIfNeeded(field.target_rep) orelse continue;
-            // The source identity describes the specialized bytes in the field;
-            // the target identity names the generic descriptor requirement those
-            // bytes satisfy. Only the source descriptor must match the committed
-            // field layout.
-            // The field local contains the result of adaptation. A concrete
-            // target has its own exact descriptor; the pre-conversion erased
-            // source descriptor describes different storage.
-            const storage_rep = if (self.repIsFullyConcrete(field.target_rep)) field.target_rep else field.source_rep;
+            // The field local holds the adapted value, stored as the target
+            // representation lays it out. A bare type parameter has no storage
+            // shape of its own, so there the value keeps the descriptor of the
+            // payload that was boxed into it.
+            const storage_rep = self.constructedFieldStorageRep(field);
             const source_desc_rep = self.parent.tagPayloadStorageDescRepForLayout(storage_rep, field_layout, true) orelse
                 boxyLowerInvariant("constructed aggregate source field had no storage descriptor representation");
             const desc_local = try self.prepareConstructedFieldDescriptorLocal(field.local, source_desc_rep, &field_initializers);
@@ -27848,10 +27845,11 @@ const ProcBodyBuilder = struct {
         for (fields) |field| {
             const field_layout = self.parent.result.store.getLocal(field.local).layout_idx;
             const target_desc_rep = self.parent.tagPayloadStorageDescRepIfNeeded(field.target_rep) orelse continue;
-            // The field local contains the result of adaptation. A concrete
-            // target has its own exact descriptor; the pre-conversion erased
-            // source descriptor describes different storage.
-            const storage_rep = if (self.repIsFullyConcrete(field.target_rep)) field.target_rep else field.source_rep;
+            // The field local holds the adapted value, stored as the target
+            // representation lays it out. A bare type parameter has no storage
+            // shape of its own, so there the value keeps the descriptor of the
+            // payload that was boxed into it.
+            const storage_rep = self.constructedFieldStorageRep(field);
             const source_desc_rep = self.parent.tagPayloadStorageDescRepForLayout(storage_rep, field_layout, true) orelse
                 boxyLowerInvariant("constructed tag source payload had no storage descriptor representation");
             const desc_local = try self.prepareConstructedFieldDescriptorLocal(field.local, source_desc_rep, &field_initializers);
@@ -27896,7 +27894,7 @@ const ProcBodyBuilder = struct {
             const field_layout = self.parent.result.store.getLocal(field.local).layout_idx;
             const force_field = self.parent.layoutIsBoxStorage(field_layout);
             if (!force_field and !self.parent.layoutNeedsNestedBoxyDesc(field_layout)) continue;
-            const storage_rep = if (self.repIsFullyConcrete(field.target_rep)) field.target_rep else field.source_rep;
+            const storage_rep = self.constructedFieldStorageRep(field);
             const desc_rep = self.parent.tagPayloadStorageDescRepForLayout(storage_rep, field_layout, force_field) orelse continue;
             const desc_local = try self.prepareConstructedFieldDescriptorLocal(field.local, desc_rep, &field_initializers);
             try refs.append(self.parent.allocator, .{ .local = desc_local });
@@ -33414,6 +33412,13 @@ const ProcBodyBuilder = struct {
         return planTypeRefEql(a_rep.source_type, b_rep.source_type);
     }
 
+    /// The representation that describes a constructed aggregate field's
+    /// stored bytes: the target's, except at a bare type parameter, whose
+    /// erased box holds the supplying payload as the source describes it.
+    fn constructedFieldStorageRep(self: *const ProcBodyBuilder, field: AggregateDescriptorField) Plan.TypeRepId {
+        return if (self.repIsBareDynamic(field.target_rep)) field.source_rep else field.target_rep;
+    }
+
     /// A bare dynamic representation carries no structural payload shape of
     /// its own. When a concrete value is boxed into it, the source descriptor is
     /// the only explicit description of the allocation that was actually made.
@@ -33623,6 +33628,39 @@ const ProcBodyBuilder = struct {
             }
         }
 
+        // Adapting structure reaches into a nominal's shared backing template;
+        // the target's formals describe that storage by the actuals this use
+        // supplies, so the adapter runs inside the target's formal scopes.
+        const scope = try self.enterNominalWrapperFormalScopes(target_rep);
+        errdefer self.dropNominalBackingFormalScope(scope);
+        const body = try self.assignStructuralRepresentationBoundary(
+            target,
+            source,
+            target_rep,
+            source_rep,
+            identity_target_rep,
+            identity_source_rep,
+            target_layout,
+            source_layout,
+            dynamic_box_source_mode,
+            next,
+        );
+        return try self.leaveNominalBackingFormalScope(scope, body);
+    }
+
+    fn assignStructuralRepresentationBoundary(
+        self: *ProcBodyBuilder,
+        target: LIR.LocalId,
+        source: LIR.LocalId,
+        target_rep: Plan.TypeRepId,
+        source_rep: Plan.TypeRepId,
+        identity_target_rep: Plan.TypeRepId,
+        identity_source_rep: Plan.TypeRepId,
+        target_layout: layout.Idx,
+        source_layout: layout.Idx,
+        dynamic_box_source_mode: LIR.BoxyTransferMode,
+        next: LIR.CFStmtId,
+    ) Allocator.Error!LIR.CFStmtId {
         return switch (self.workerRuntimeLayoutForRep(identity_target_rep)) {
             .dynamic_box => switch (self.workerRuntimeLayoutForRep(identity_source_rep)) {
                 .dynamic_box => if (try self.assignDynamicTagUnionToDynamicBoundary(target, source, identity_target_rep, identity_source_rep, next)) |adapted|
