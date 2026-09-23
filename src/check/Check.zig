@@ -35810,6 +35810,7 @@ fn varDeriveComponentObligations(
             .nominal_type => |nominal| {
                 const method_lookup = self.nominalEqHashMethod(nominal, derivation) orelse return;
                 if (!staticDispatchBindingIsDerivedMarker(method_lookup)) {
+                    if (admit_rigids) return;
                     // The nominal's own method is the component comparison:
                     // dispatch it exactly like a direct comparison would.
                     try self.mkDerivedComponentConstraint(resolved.var_, derivation, parent_constraint, env);
@@ -35817,10 +35818,13 @@ fn varDeriveComponentObligations(
                 }
                 if (self.nominalIsBoxType(nominal)) return;
                 for (self.types.sliceNominalArgs(nominal)) |arg_var| {
-                    try self.varDeriveComponentObligations(arg_var, derivation, visited, env, parent_constraint, false);
+                    try self.varDeriveComponentObligations(arg_var, derivation, visited, env, parent_constraint, admit_rigids);
                 }
                 const template = self.nominalDeclBackingTemplate(nominal) orelse return;
-                // Formals in the template stand for the args checked above.
+                // Formals in the template stand for the args checked above; a
+                // method nominal inside a template compares formal-typed values,
+                // whose contracts belong to the derived method's own design, so
+                // the whole template is admitted rather than dispatched.
                 try self.varDeriveComponentObligations(template, derivation, visited, env, parent_constraint, true);
             },
         },
@@ -35888,6 +35892,7 @@ fn mkDerivedComponentConstraint(
         .origin = parent_constraint.origin,
         .provenance = parent_constraint.provenance,
     };
+    try self.recordCurrentExpectDispatchWatcher(constraint_fn_var);
     const constraint_range = try self.types.appendStaticDispatchConstraints(&.{constraint});
 
     const constrained_var = try self.freshFromContent(
