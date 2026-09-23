@@ -912,6 +912,8 @@ pub const Consumer = struct {
     observers: Observers = .{},
 };
 
+/// Materializes completed values into a program's frozen static data and
+/// applies evaluation outcomes to the guards inserted around them.
 pub const FrozenMaterializer = struct {
     context: *anyopaque,
     materialize: *const fn (Allocator, *anyopaque, *LirProgram.Result) Allocator.Error!LirProgram.FrozenStaticData,
