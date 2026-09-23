@@ -135,7 +135,7 @@ pub fn process(
             workerThread(T, ctx);
         } else {
             const thread_count = @min(
-                if (options.max_threads == 0) Thread.getCpuCount() catch 1 else options.max_threads,
+                if (options.max_threads == 0) @import("cpu_count.zig").workerCount() else options.max_threads,
                 work_item_count,
             );
 

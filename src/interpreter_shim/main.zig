@@ -47,6 +47,63 @@ const RuntimeState = struct {
     shm: ?SharedMemoryAllocator,
     view: lir.LirImage.ProgramView,
     static_data: eval.InterpreterStaticData,
+    /// Literal backings live as long as the image, because values returned to
+    /// the host point into them after the entrypoint's interpreter is gone.
+    static_strings: eval.LirInterpreter.StaticStrings.Table,
+    entrypoints: EntrypointTable,
+};
+
+/// What each platform entrypoint call needs from the image, resolved once so
+/// a call does no work proportional to the program before evaluating.
+const EntrypointTable = struct {
+    entries: []const Entrypoint,
+    /// Backing for every entry's `arg_layouts`.
+    arg_layouts: []const layout.Idx,
+
+    const Entrypoint = struct {
+        ordinal: u32,
+        root_proc: lir.LirProcSpecId,
+        arg_layouts: []const layout.Idx,
+        ret_layout: layout.Idx,
+    };
+
+    fn build(gpa: Allocator, view: *const lir.LirImage.ProgramView) Allocator.Error!EntrypointTable {
+        const store = &view.store;
+        var arg_count: usize = 0;
+        for (view.platform_entrypoints) |entrypoint| {
+            arg_count += store.getLocalSpan(store.getProcSpec(entrypoint.root_proc).args).len;
+        }
+
+        const arg_layouts = try gpa.alloc(layout.Idx, arg_count);
+        errdefer gpa.free(arg_layouts);
+        const entries = try gpa.alloc(Entrypoint, view.platform_entrypoints.len);
+
+        var next_arg: usize = 0;
+        for (view.platform_entrypoints, entries) |entrypoint, *entry| {
+            const proc = store.getProcSpec(entrypoint.root_proc);
+            const arg_ids = store.getLocalSpan(proc.args);
+            const proc_arg_layouts = arg_layouts[next_arg..][0..arg_ids.len];
+            for (proc_arg_layouts, 0..) |*arg_layout, i| {
+                arg_layout.* = store.getLocal(GuardedList.at(arg_ids, i)).layout_idx;
+            }
+            next_arg += arg_ids.len;
+            entry.* = .{
+                .ordinal = entrypoint.ordinal,
+                .root_proc = entrypoint.root_proc,
+                .arg_layouts = proc_arg_layouts,
+                .ret_layout = proc.ret_layout,
+            };
+        }
+
+        return .{ .entries = entries, .arg_layouts = arg_layouts };
+    }
+
+    fn forOrdinal(self: *const EntrypointTable, ordinal: u32) ?*const Entrypoint {
+        for (self.entries) |*entry| {
+            if (entry.ordinal == ordinal) return entry;
+        }
+        return null;
+    }
 };
 
 const ShimError = error{
@@ -55,7 +112,7 @@ const ShimError = error{
     OutOfMemory,
 };
 
-const RuntimeStateError = ipc.CoordinationError || ipc.platform.SharedMemoryError || lir.LirImage.ImageError;
+const RuntimeStateError = ipc.CoordinationError || ipc.platform.SharedMemoryError || lir.LirImage.ImageError || Allocator.Error;
 
 var runtime_state_initialized: std.atomic.Value(bool) = .init(false);
 var runtime_state: RuntimeState = undefined;
@@ -84,13 +141,19 @@ fn openRuntimeState(gpa: Allocator) RuntimeStateError!RuntimeState {
     // the width-independent image for the native pointer width.
     var view = try lir.LirImage.viewMappedImageWithAllocator(header, shm.base_ptr, shm.total_size, TargetUsize.native, gpa);
     errdefer view.deinit();
-    const static_data = try eval.InterpreterStaticData.init(gpa, view.static_data, view.static_data_value_count);
+    var static_data = try eval.InterpreterStaticData.init(gpa, view.static_data, view.static_data_value_count);
+    errdefer static_data.deinit();
+    var static_strings = try eval.LirInterpreter.buildStaticStrings(gpa, &view.store);
+    errdefer static_strings.deinit();
+    const entrypoints = try EntrypointTable.build(gpa, &view);
 
     return .{
         .source = .coordination,
         .shm = shm,
         .view = view,
         .static_data = static_data,
+        .static_strings = static_strings,
+        .entrypoints = entrypoints,
     };
 }
 
@@ -118,31 +181,6 @@ fn ensureRuntimeState(ops: *RocOps) ShimError!*RuntimeState {
     };
     runtime_state_initialized.store(true, .release);
     return &runtime_state;
-}
-
-fn entrypointForOrdinal(view: *const lir.LirImage.ProgramView, ordinal: u32) ?lir.LirImage.PlatformEntrypoint {
-    for (view.platform_entrypoints) |entrypoint| {
-        if (entrypoint.ordinal == ordinal) return entrypoint;
-    }
-    return null;
-}
-
-fn argLayoutsForProc(
-    gpa: Allocator,
-    store: *const lir.LirStore,
-    proc_id: lir.LirProcSpecId,
-) Allocator.Error![]layout.Idx {
-    const proc = store.getProcSpec(proc_id);
-    const arg_ids = store.getLocalSpan(proc.args);
-    const arg_layouts = try gpa.alloc(layout.Idx, arg_ids.len);
-    errdefer gpa.free(arg_layouts);
-
-    for (0..arg_ids.len) |i| {
-        const local_id = GuardedList.at(arg_ids, i);
-        arg_layouts[i] = store.getLocal(local_id).layout_idx;
-    }
-
-    return arg_layouts;
 }
 
 fn reportEvalError(ops: *RocOps, interpreter: *const eval.LirInterpreter, err: eval.LirInterpreter.Error) void {
@@ -178,25 +216,19 @@ fn evaluateEntrypointInState(
     arg_ptr: ?*anyopaque,
 ) ShimError!void {
     const view = &state.view;
-    const entrypoint = entrypointForOrdinal(view, entry_idx) orelse {
+    const entrypoint = state.entrypoints.forOrdinal(entry_idx) orelse {
         if (builtin.mode == .Debug) {
             std.debug.panic("LIR shim invariant violated: missing platform entrypoint ordinal {d}", .{entry_idx});
         }
         unreachable;
     };
 
-    const gpa = allocator();
-    const arg_layouts = argLayoutsForProc(gpa, &view.store, entrypoint.root_proc) catch {
-        ops.crash("LIR shim could not allocate entrypoint argument layouts");
-        return error.OutOfMemory;
-    };
-    defer gpa.free(arg_layouts);
-
     const retained = eval.LirInterpreter.Retained.createWithBoxyTables(
-        gpa,
+        allocator(),
         &view.store,
         &view.layouts,
         eval.LirInterpreter.BoxyTables.fromImageView(view),
+        state.static_strings.view(),
         ops,
         shimIo(),
     ) catch {
@@ -210,11 +242,10 @@ fn evaluateEntrypointInState(
     // RuntimeState owns this image for every retained callback lifetime.
     state.static_data.install(interpreter);
 
-    const proc = view.store.getProcSpec(entrypoint.root_proc);
     _ = interpreter.eval(.{
         .proc_id = entrypoint.root_proc,
-        .arg_layouts = arg_layouts,
-        .ret_layout = proc.ret_layout,
+        .arg_layouts = entrypoint.arg_layouts,
+        .ret_layout = entrypoint.ret_layout,
         .arg_ptr = arg_ptr,
         .ret_ptr = ret_ptr,
     }) catch |err| {
@@ -267,8 +298,18 @@ fn ensureEmbeddedRuntimeState(image_base: *anyopaque, image_len: usize, ops: *Ro
 
     var view = viewEmbeddedLirImage(image_base, image_len, ops) catch return error.ImageUnavailable;
     errdefer view.deinit();
-    const static_data = eval.InterpreterStaticData.init(allocator(), view.static_data, view.static_data_value_count) catch {
+    var static_data = eval.InterpreterStaticData.init(allocator(), view.static_data, view.static_data_value_count) catch {
         ops.crash("LIR shim could not allocate the immutable value image");
+        return error.OutOfMemory;
+    };
+    errdefer static_data.deinit();
+    var static_strings = eval.LirInterpreter.buildStaticStrings(allocator(), &view.store) catch {
+        ops.crash("LIR shim could not allocate the string literal image");
+        return error.OutOfMemory;
+    };
+    errdefer static_strings.deinit();
+    const entrypoints = EntrypointTable.build(allocator(), &view) catch {
+        ops.crash("LIR shim could not allocate the entrypoint table");
         return error.OutOfMemory;
     };
     runtime_state = .{
@@ -276,6 +317,8 @@ fn ensureEmbeddedRuntimeState(image_base: *anyopaque, image_len: usize, ops: *Ro
         .shm = null,
         .view = view,
         .static_data = static_data,
+        .static_strings = static_strings,
+        .entrypoints = entrypoints,
     };
     runtime_state_initialized.store(true, .release);
     return &runtime_state;

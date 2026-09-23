@@ -2030,6 +2030,16 @@ pub fn roc_builtins_dec_pow(out_low: *u64, out_high: *u64, a_low: u64, a_high: u
     out_high.* = i128h.hi64(@as(u128, @bitCast(result)));
 }
 
+/// Two-coordinate arctangent (y, x).
+pub fn roc_builtins_dec_atan2(out_low: *u64, out_high: *u64, a_low: u64, a_high: u64, b_low: u64, b_high: u64) callconv(.c) void {
+    const roc_ops = in_process_host.ops();
+    const a: i128 = @bitCast(i128h.from_u64_pair(a_low, a_high));
+    const b: i128 = @bitCast(i128h.from_u64_pair(b_low, b_high));
+    const result = dec.atan2C(dec.RocDec{ .num = a }, dec.RocDec{ .num = b }, roc_ops);
+    out_low.* = @truncate(@as(u128, @bitCast(result)));
+    out_high.* = i128h.hi64(@as(u128, @bitCast(result)));
+}
+
 fn writeDecUnaryResult(out_low: *u64, out_high: *u64, result: i128) void {
     out_low.* = @truncate(@as(u128, @bitCast(result)));
     out_high.* = i128h.hi64(@as(u128, @bitCast(result)));
@@ -2320,9 +2330,19 @@ pub fn roc_builtins_float_pow_f32(base: f32, exponent: f32) callconv(.c) f32 {
     return float_math_f32.pow(base, exponent);
 }
 
+/// Two-coordinate arctangent (y, x).
+pub fn roc_builtins_float_atan2_f32(y: f32, x: f32) callconv(.c) f32 {
+    return float_math_f32.atan2(y, x);
+}
+
 /// Raise an F64 base to an F64 exponent.
 pub fn roc_builtins_float_pow(base: f64, exponent: f64) callconv(.c) f64 {
     return float_math_f64.pow(base, exponent);
+}
+
+/// Two-coordinate arctangent (y, x).
+pub fn roc_builtins_float_atan2(y: f64, x: f64) callconv(.c) f64 {
+    return float_math_f64.atan2(y, x);
 }
 
 const FloatUnaryMathOp = enum {

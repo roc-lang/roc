@@ -147,7 +147,7 @@ const TimingInfo = compile.package.TimingInfo;
 /// the single- vs multi-threaded compilation mode from it. Returned as a
 /// `{ thread_count, mode }` tuple for destructuring at the call site.
 fn resolveThreadDefaults(max_threads: ?usize) struct { usize, Mode } {
-    const thread_count: usize = max_threads orelse (std.Thread.getCpuCount() catch 1);
+    const thread_count: usize = max_threads orelse base.cpu_count.workerCount();
     return .{ thread_count, if (thread_count <= 1) .single_threaded else .multi_threaded };
 }
 
@@ -6676,12 +6676,15 @@ fn evaluateLirImageEntrypoint(
 ) Allocator.Error!void {
     var static_data = try eval.InterpreterStaticData.init(allocator, view.static_data, view.static_data_value_count);
     defer static_data.deinit();
+    var static_strings = try eval.LirInterpreter.buildStaticStrings(allocator, &view.store);
+    defer static_strings.deinit();
 
     var interpreter = try eval.LirInterpreter.initWithBoxyTables(
         allocator,
         &view.store,
         &view.layouts,
         eval.LirInterpreter.BoxyTables.fromImageView(view),
+        static_strings.view(),
         ops,
     );
     defer interpreter.deinit();
@@ -8610,10 +8613,10 @@ fn writePacksToStore(
 ) CliMainError!void {
     if (app_artifacts) |set| {
         if (build_env.packPlacementForArtifactKey(root_artifact.key)) |placement| {
-            if (!try store.has(placement.origin, placement.identity, root_artifact.key.bytes)) {
+            if (!try store.has(placement.origin, placement.identity, root_artifact.codeGenerationKey().bytes)) {
                 const bytes = try packFileBytes(ctx.gpa, set, app_lowered);
                 defer ctx.gpa.free(bytes);
-                store.write(placement.origin, placement.identity, root_artifact.key.bytes, bytes) catch |err| {
+                store.write(placement.origin, placement.identity, root_artifact.codeGenerationKey().bytes, bytes) catch |err| {
                     std.log.warn("object cache could not store the program's pack: {}", .{err});
                 };
             }
@@ -8625,7 +8628,7 @@ fn writePacksToStore(
         const placement = build_env.packPlacementForArtifactKey(artifact.key) orelse continue;
         const origin = placement.origin;
         const identity = placement.identity;
-        if (try store.has(origin, identity, artifact.key.bytes)) continue;
+        if (try store.has(origin, identity, artifact.codeGenerationKey().bytes)) continue;
         const roots = try lir.PackProgram.closedExportRoots(ctx.gpa, artifact);
         defer ctx.gpa.free(roots);
         if (roots.len == 0) continue;
@@ -8634,7 +8637,7 @@ fn writePacksToStore(
         const set = &(pack.compiled.artifacts orelse continue);
         const bytes = try packFileBytes(ctx.gpa, set, &pack.lowered);
         defer ctx.gpa.free(bytes);
-        store.write(origin, identity, artifact.key.bytes, bytes) catch |err| {
+        store.write(origin, identity, artifact.codeGenerationKey().bytes, bytes) catch |err| {
             std.log.warn("object cache could not store a module's pack: {}", .{err});
         };
     }
@@ -12115,6 +12118,7 @@ fn collectExpectBindingPatterns(
             .e_break,
             .e_hosted_lambda,
             => {},
+            .e_deferred_import_ref => std.debug.panic("compiler invariant violated: deferred import reference reached a stage that runs after import resolution", .{}),
         }
     }
 
@@ -12265,6 +12269,16 @@ fn tagReachabilityForOpt(opt: cli_args.OptLevel) bool {
     };
 }
 
+/// Whether the LIR rewrites that only speed up the produced program run.
+/// Dev builds exist to compile fast; `--opt=speed` and `--opt=size` are where
+/// the program's own speed is bought.
+fn optimizeLirForOpt(opt: cli_args.OptLevel) bool {
+    return switch (opt) {
+        .size, .speed => true,
+        .dev, .interpreter => false,
+    };
+}
+
 fn proveRangesForOpt(opt: cli_args.OptLevel) bool {
     return switch (opt) {
         .size, .speed => true,
@@ -12346,6 +12360,9 @@ fn checkedRuntimeLoweringConfig(
             .list_in_place_map = listInPlaceMapForOpt(opt),
             .tag_reachability = tagReachabilityForOpt(opt),
             .prove_ranges = proveRangesForOpt(opt),
+            .fuse_tag_cases = optimizeLirForOpt(opt),
+            .scalarize_joins = optimizeLirForOpt(opt),
+            .reuse_boxes = optimizeLirForOpt(opt),
             .proc_debug_names = proc_debug_names,
         },
     };
@@ -12762,11 +12779,14 @@ fn runInterpreterTestRoots(
         lowered.lir_result.static_data_values.items.len,
     );
     defer static_values.deinit();
+    var static_strings = try eval.LirInterpreter.buildStaticStrings(ctx.gpa, &lowered.lir_result.store);
+    defer static_strings.deinit();
     var interpreter = try eval.LirInterpreter.initWithBoxyTables(
         ctx.gpa,
         &lowered.lir_result.store,
         &lowered.lir_result.layouts,
         eval.LirInterpreter.BoxyTables.fromResult(&lowered.lir_result),
+        static_strings.view(),
         &roc_ops,
     );
     defer interpreter.deinit();
@@ -16585,7 +16605,7 @@ fn recordDevTestExecution(reporter: *progress.Reporter, timing: *const eval.test
     );
 }
 
-fn monotypeSpecializationCounters(diagnostics: postcheck.Monotype.Lower.Diagnostics) [23]progress.Counter {
+fn monotypeSpecializationCounters(diagnostics: postcheck.Monotype.Lower.Diagnostics) [25]progress.Counter {
     const counters = diagnostics.specialization;
     return .{
         .{ .name = "Template requests", .count = counters.template_requests },
@@ -16606,6 +16626,8 @@ fn monotypeSpecializationCounters(diagnostics: postcheck.Monotype.Lower.Diagnost
         .{ .name = "Commit digest node misses", .count = counters.commit_digest_node_misses },
         .{ .name = "Interface replay digest root requests", .count = counters.interface_replay_digest_root_requests },
         .{ .name = "Interface replay digest node misses", .count = counters.interface_replay_digest_node_misses },
+        .{ .name = "Interface relation requests", .count = counters.interface_relation_requests },
+        .{ .name = "Interface replay hits", .count = counters.interface_replay_hits },
         .{ .name = "Exact type checks", .count = counters.exact_type_checks },
         .{ .name = "Nominal backing reuses", .count = counters.nominal_backing_reuses },
         .{ .name = "Nominal backing instantiations", .count = counters.nominal_backing_instantiations },
@@ -17257,6 +17279,11 @@ fn printBuildSuccess(
             cache_stats.modules_compiled,
         });
         try stdout.print("    Cache Hit: {}%\n", .{cache_percent});
+        try stdout.print("    Canonicalized: {} cached, {} canonicalized, {} stored\n", .{
+            cache_stats.canonicalized_cache_hits,
+            cache_stats.canonicalized_cache_misses,
+            cache_stats.canonicalized_cache_stores,
+        });
     }
 }
 
@@ -17423,6 +17450,12 @@ const CheckResult = struct {
     modules_total: u32 = 0,
     cache_hits: u32 = 0,
     cache_misses: u32 = 0,
+    /// Modules loaded from the canonicalized-module cache.
+    canonicalized_cache_hits: u32 = 0,
+    /// Modules this build parsed and canonicalized.
+    canonicalized_cache_misses: u32 = 0,
+    /// Canonicalized-module cache entries this build wrote.
+    canonicalized_cache_stores: u32 = 0,
     modules_compiled: u32 = 0,
     /// Module compile time tracking (in nanoseconds)
     module_time_min_ns: u64 = 0,
@@ -17785,6 +17818,9 @@ fn checkFileWithBuildEnvPreserved(
                 .modules_total = cache_stats.modules_total,
                 .cache_hits = cache_stats.cache_hits,
                 .cache_misses = cache_stats.cache_misses,
+                .canonicalized_cache_hits = cache_stats.canonicalized_cache_hits,
+                .canonicalized_cache_misses = cache_stats.canonicalized_cache_misses,
+                .canonicalized_cache_stores = cache_stats.canonicalized_cache_stores,
                 .modules_compiled = cache_stats.modules_compiled,
                 .module_time_min_ns = cache_stats.module_time_min_ns,
                 .module_time_max_ns = cache_stats.module_time_max_ns,
@@ -17838,6 +17874,9 @@ fn checkFileWithBuildEnvPreserved(
         .modules_total = cache_stats.modules_total,
         .cache_hits = cache_stats.cache_hits,
         .cache_misses = cache_stats.cache_misses,
+        .canonicalized_cache_hits = cache_stats.canonicalized_cache_hits,
+        .canonicalized_cache_misses = cache_stats.canonicalized_cache_misses,
+        .canonicalized_cache_stores = cache_stats.canonicalized_cache_stores,
         .modules_compiled = cache_stats.modules_compiled,
         .module_time_min_ns = cache_stats.module_time_min_ns,
         .module_time_max_ns = cache_stats.module_time_max_ns,
@@ -17918,6 +17957,9 @@ fn checkFileWithBuildEnv(
             .modules_total = cache_stats.modules_total,
             .cache_hits = cache_stats.cache_hits,
             .cache_misses = cache_stats.cache_misses,
+            .canonicalized_cache_hits = cache_stats.canonicalized_cache_hits,
+            .canonicalized_cache_misses = cache_stats.canonicalized_cache_misses,
+            .canonicalized_cache_stores = cache_stats.canonicalized_cache_stores,
             .modules_compiled = cache_stats.modules_compiled,
             .module_time_min_ns = cache_stats.module_time_min_ns,
             .module_time_max_ns = cache_stats.module_time_max_ns,
@@ -17961,6 +18003,9 @@ fn checkFileWithBuildEnv(
         .modules_total = cache_stats.modules_total,
         .cache_hits = cache_stats.cache_hits,
         .cache_misses = cache_stats.cache_misses,
+        .canonicalized_cache_hits = cache_stats.canonicalized_cache_hits,
+        .canonicalized_cache_misses = cache_stats.canonicalized_cache_misses,
+        .canonicalized_cache_stores = cache_stats.canonicalized_cache_stores,
         .modules_compiled = cache_stats.modules_compiled,
         .module_time_min_ns = cache_stats.module_time_min_ns,
         .module_time_max_ns = cache_stats.module_time_max_ns,
@@ -18317,6 +18362,7 @@ fn printTimingBreakdown(writer: anytype, timing: ?CheckTimingInfo) void {
 /// Format:
 ///     Modules: 6 total, 4 cached, 2 built
 ///     Cache Hit: 67%
+///     Canonicalized: 5 cached, 1 canonicalized, 1 stored
 ///     Build: 8ms / 14ms / 25ms (min / avg / max)
 fn printVerboseStats(writer: anytype, result: *const CheckResult) void {
     const total = result.modules_total;
@@ -18333,6 +18379,14 @@ fn printVerboseStats(writer: anytype, result: *const CheckResult) void {
 
     // Print cache hit percentage
     writer.print("    Cache Hit: {}%\n", .{cache_percent}) catch {};
+
+    // The canonicalized-module cache is reported separately: it is keyed on one
+    // module's own source, so it hits where the checked cache misses.
+    writer.print("    Canonicalized: {} cached, {} canonicalized, {} stored\n", .{
+        result.canonicalized_cache_hits,
+        result.canonicalized_cache_misses,
+        result.canonicalized_cache_stores,
+    }) catch {};
 
     // Print build time breakdown (only if we have compiled modules)
     if (result.modules_compiled > 0) {

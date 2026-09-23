@@ -12,18 +12,31 @@ decodeThings : List(List(U8)) -> List(a)
 decodeThings = ...
 ~~~
 # EXPECTED
-UNDECLARED TYPE - where_clauses_4.md:4:10:4:17
+MOD NOT FOUND - where_clauses_4.md:1:1:1:32
+MOD NOT FOUND - where_clauses_4.md:4:10:4:17
 # PROBLEMS
 ~~~clojure
 (reports
 	(report
 		(severity runtime_error)
-		(title "Undeclared Type")
+		(title "Mod Not Found")
+		(region (start 1 1) (end 1 32))
+		(headline
+			(text "The mod ")
+			(annotated code "Decode")
+			(reflow " was not found in this Roc project."))
+		(document
+			(source-region (file "where_clauses_4.md") (start 1 1) (end 1 32) (annotation error) (line-text "import Decode exposing [Decode]"))))
+	(report
+		(severity runtime_error)
+		(title "Mod Not Found")
 		(region (start 4 10) (end 4 17))
 		(headline
-			(reflow "The type ")
+			(text "This ")
 			(annotated code "Decode")
-			(reflow " is not declared in this scope."))
+			(reflow " type is declared to be in ")
+			(annotated code "Decode")
+			(reflow ", which does not exist."))
 		(document
 			(source-region (file "where_clauses_4.md") (start 4 10) (end 4 17) (annotation error) (line-text "\twhere [a.Decode]")))))
 ~~~

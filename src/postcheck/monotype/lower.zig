@@ -128,6 +128,46 @@ const CommittedGraphTypes = struct {
         };
     }
 
+    /// Commit several types through one import: types already relocated are
+    /// answered from the relocation map and the rest share one closure walk
+    /// and one interning transaction. The result is owned by the caller.
+    fn commitTypes(self: *CommittedGraphTypes, allocator: Allocator, tys: []const Type.TypeId) Allocator.Error![]Type.TypeId {
+        const committed = try allocator.alloc(Type.TypeId, tys.len);
+        errdefer allocator.free(committed);
+        const destination = self.destination orelse {
+            @memcpy(committed, tys);
+            return committed;
+        };
+        var pending = std.ArrayList(Type.TypeId).empty;
+        defer pending.deinit(allocator);
+        var pending_slots = std.ArrayList(usize).empty;
+        defer pending_slots.deinit(allocator);
+        for (tys, 0..) |ty, index| {
+            if (self.graph) |graph| try graph.assertTypeHasNoActiveSnapshots(ty);
+            if (@intFromEnum(ty) >= self.source_store.epochBoundary().types) {
+                Common.compilerBug("sealed body type does not belong to its immutable store epoch");
+            }
+            if (destination.relocation.get(self.source_store, ty)) |mapped| {
+                committed[index] = mapped;
+            } else {
+                try pending.append(allocator, ty);
+                try pending_slots.append(allocator, index);
+            }
+        }
+        if (pending.items.len != 0) {
+            var imported = try destination.store.importTypes(
+                destination.names,
+                self.source_store,
+                self.source_names,
+                destination.relocation,
+                pending.items,
+            );
+            defer imported.deinit();
+            for (pending_slots.items, imported.roots) |slot, root| committed[slot] = root;
+        }
+        return committed;
+    }
+
     fn commitType(self: *CommittedGraphTypes, ty: Type.TypeId) Allocator.Error!Type.TypeId {
         if (self.graph) |graph| try graph.assertTypeHasNoActiveSnapshots(ty);
         const destination = self.destination orelse return ty;
@@ -754,7 +794,14 @@ fn verifyMonotypeSpecsReady(program: *const Ast.Program) void {
     }
 }
 
+const ModuleIndexSlot = union(enum) {
+    root,
+    import: u32,
+    relation: u32,
+};
+
 const ModuleView = struct {
+    code_generation_key: ?checked.ModuleId = null,
     key: checked.ModuleId,
     module_env: *const can.ModuleEnv,
     module_identity: checked.ModuleIdentity,
@@ -1773,8 +1820,8 @@ const ResultRowWidening = struct {
 
 /// Type-argument index of `Builtin.Try`'s error row. `closedResultRowOrNull`
 /// names `args[1]` as the closed row and the checker's
-/// `hostedTryAdapterCapabilityForRoot` records the same index, so this relation
-/// and the adapter open one and the same cell.
+/// `hostedTryAdapterCapabilityForCheckedRoot` records the same index, so this
+/// relation and the adapter open one and the same cell.
 const try_error_type_arg_index: usize = 1;
 
 /// Whether a node is directly function-shaped.
@@ -2368,30 +2415,20 @@ fn optionalTypeDigestEql(left: ?names.TypeDigest, right: ?names.TypeDigest) bool
     return right == null;
 }
 
-fn optionalCodecContractAnchorEql(
-    left: ?CheckedCodecContractAnchor,
-    right: ?CheckedCodecContractAnchor,
-) bool {
-    if ((left == null) != (right == null)) return false;
-    if (left == null) return true;
-    return moduleBytesEqual(left.?.view.key.bytes, right.?.view.key.bytes) and
-        left.?.derivation == right.?.derivation and
-        left.?.kind == right.?.kind;
-}
-
-fn optionalDraftCodecContractContextEql(
-    graph: *InstGraph,
+/// Draft specialization identity of a codec-anchored request. The anchored
+/// contract supplies the body's checker-proven codec edges, and static
+/// dispatch for one request type has exactly one resolution, so every contract
+/// that prepared a call at an equal request type supplies equal edges. The
+/// request type, evidence, and lexical context therefore identify the
+/// specialization; which contract or derivation boundary supplied the edges
+/// does not, and only codec kind separates anchored requests.
+fn draftCodecContractSpecializationEql(
     left: ?DraftCodecContractContext,
     right: ?DraftCodecContractContext,
 ) bool {
     if ((left == null) != (right == null)) return false;
     if (left == null) return true;
-    return optionalCodecContractAnchorEql(left.?.anchor, right.?.anchor) and
-        graph.sameClass(left.?.shape_node, right.?.shape_node) and
-        graph.sameFunctionInterface(
-            left.?.constructor_node,
-            right.?.constructor_node,
-        );
+    return left.?.anchor.kind == right.?.anchor.kind;
 }
 
 fn evidenceChainRequiresLocalContext(evidence: EvidenceChain) bool {
@@ -3364,60 +3401,6 @@ const DraftGeneratedHelperDefEntry = union(enum) {
     }
 };
 
-fn templateSpecIdentity(
-    template_ref: names.ProcTemplate,
-    method_scope: checked.ModuleId,
-    evidence_digest: Ast.EvidenceDigest,
-    codec_contract: ?Ast.CodecContractIdentity,
-    request_fn_ty: Type.TypeId,
-    request_fn_ty_digest: names.TypeDigest,
-) Ast.SpecIdentity {
-    return .{
-        .callable = .{ .proc_template = .{
-            .module = names.procTemplateModuleDigest(template_ref),
-            .proc_base = @intFromEnum(template_ref.proc_base),
-            .template = @intFromEnum(template_ref.template),
-        } },
-        .method_scope = moduleDigestFromId(method_scope),
-        .evidence_digest = evidence_digest,
-        .codec_contract_digest = codecContractIdentityDigest(codec_contract),
-        .codec_contract = codec_contract,
-        .request_fn_ty_digest = request_fn_ty_digest,
-        .request_fn_ty = request_fn_ty,
-    };
-}
-
-fn nestedSpecIdentity(
-    nested: Ast.NestedFn,
-    method_scope: checked.ModuleId,
-    evidence_digest: Ast.EvidenceDigest,
-    capture_abi_digest: names.TypeDigest,
-    codec_contract: ?Ast.CodecContractIdentity,
-    request_fn_ty: Type.TypeId,
-    request_fn_ty_digest: names.TypeDigest,
-) Ast.SpecIdentity {
-    var context_hasher = TypeDigestHasher.init();
-    context_hasher.update("roc.monotype.nested_capture_abi");
-    context_hasher.update(&nested.context_fn_key.bytes);
-    context_hasher.update(&capture_abi_digest.bytes);
-    return .{
-        .callable = .{ .nested_site = .{
-            .module = names.procTemplateModuleDigest(nested.owner),
-            .owner_proc_base = @intFromEnum(nested.owner.proc_base),
-            .owner_template = @intFromEnum(nested.owner.template),
-            .owner_fn_digest = .{ .bytes = context_hasher.finalResult() },
-            .site = @intFromEnum(nested.site),
-            .default_root_module = nested.default_root,
-        } },
-        .method_scope = moduleDigestFromId(method_scope),
-        .evidence_digest = evidence_digest,
-        .codec_contract_digest = codecContractIdentityDigest(codec_contract),
-        .codec_contract = codec_contract,
-        .request_fn_ty_digest = request_fn_ty_digest,
-        .request_fn_ty = request_fn_ty,
-    };
-}
-
 fn codecContractIdentityDigest(contract: ?Ast.CodecContractIdentity) names.TypeDigest {
     const actual = contract orelse return .{};
     var hasher = TypeDigestHasher.init();
@@ -3502,6 +3485,9 @@ const Builder = struct {
     spec_job_run_id: SpecJobRunId,
     modules: Common.CheckedModules,
     root_view: checked.ImportedModuleView,
+    /// Checked module key -> position in the lowering input; built lazily on
+    /// first lookup (see `buildModuleIndex`).
+    module_index: std.AutoHashMap([32]u8, ModuleIndexSlot),
     /// Program source-file id of every checked module in the lowering input,
     /// keyed by checked module identity. The coordinator seeds this table
     /// before lowering any body; workers borrow it for this lowering run.
@@ -3563,6 +3549,11 @@ const Builder = struct {
     interface_summary_checks: u32 = 0,
     spec_store: specialize.SpecBuilder,
     lowered_templates: collections.DenseMap(Ast.FnId, LoweredTemplate),
+    /// Resolved copies of symbolic callable evidence vectors, by callee
+    /// template. Repeated requests over the same open leaves resolve every
+    /// slot identically, so they read an equal copy back instead of
+    /// allocating another identical vector.
+    resolved_callable_vectors: std.AutoHashMap(u64, std.ArrayList([]const SpecEvidence)),
     /// Nested-fn specialization records keyed by function id; the durable
     /// identity and status live on the `Ast.SpecRecord`.
     lowered_nested_by_fn: collections.DenseMap(Ast.FnId, Ast.SpecId),
@@ -3589,6 +3580,10 @@ const Builder = struct {
     /// scope; this memo only accelerates repeated exact lookups during the
     /// build and never changes the checked outcome.
     scoped_method_targets: std.AutoHashMapUnmanaged(ScopedMethodDispatch, ScopedMethodResolution) = .{},
+    /// Scoped inspect-override resolutions, memoized like
+    /// `scoped_method_targets`. `missing` means inspection renders the
+    /// owner's default form.
+    scoped_inspect_overrides: std.AutoHashMapUnmanaged(ScopedMethodDispatch, ScopedMethodResolution) = .{},
     /// Exact checked identity of the compiler-provided `Try` nominal. `Try`
     /// deliberately retains nominal static-dispatch ownership, so it cannot use
     /// `builtin_owner`; structural parser lowering still needs its producer
@@ -3715,6 +3710,7 @@ const Builder = struct {
             .spec_job_run_id = @enumFromInt(raw_spec_job_run_id),
             .modules = modules,
             .root_view = checked.importedView(modules.root.module),
+            .module_index = std.AutoHashMap([32]u8, ModuleIndexSlot).init(allocator),
             .source_file_ids = SourceFileIds.init(allocator),
             .lowering_module_ids = LoweringModuleIds.init(allocator),
             .program = program,
@@ -3735,6 +3731,7 @@ const Builder = struct {
             .interface_summaries = InterfaceSummaryCache.init(allocator),
             .spec_store = spec_store,
             .lowered_templates = collections.DenseMap(Ast.FnId, LoweredTemplate).init(allocator),
+            .resolved_callable_vectors = std.AutoHashMap(u64, std.ArrayList([]const SpecEvidence)).init(allocator),
             .lowered_nested_by_fn = collections.DenseMap(Ast.FnId, Ast.SpecId).init(allocator),
             .nested_site_cache = std.AutoHashMap(NestedSiteAddress, names.ProcSiteId).init(allocator),
             .const_expr_cache = std.AutoHashMap(ConstExprAddress, Ast.ExprId).init(allocator),
@@ -3935,10 +3932,12 @@ const Builder = struct {
         self.source_file_ids.deinit();
         self.lowering_module_ids.deinit();
         self.declared_comptime_root_functions.deinit();
+        self.module_index.deinit();
         self.spec_job_task_buffers.deinit(self.allocator);
         if (self.spec_job_commit_domain) |*domain| domain.deinit();
         if (self.spec_job_worker) |*worker| worker.deinit();
         self.scoped_method_targets.deinit(self.allocator);
+        self.scoped_inspect_overrides.deinit(self.allocator);
         self.allocator.free(self.hosted_catalog);
         self.hash_defs.deinit();
         self.equality_defs.deinit();
@@ -3950,6 +3949,9 @@ const Builder = struct {
         self.nested_site_cache.deinit();
         self.lowered_nested_by_fn.deinit();
         self.lowered_templates.deinit();
+        var resolved_vectors = self.resolved_callable_vectors.valueIterator();
+        while (resolved_vectors.next()) |vectors| vectors.deinit(self.allocator);
+        self.resolved_callable_vectors.deinit();
         if (self.shared_summaries) |*summaries| summaries.deinit();
         self.worker_inputs.deinit(self.allocator);
         self.interface_summaries.deinit();
@@ -4084,14 +4086,23 @@ const Builder = struct {
     }
 
     fn commitInterfaceSummaries(self: *Builder, entries: []const InterfaceSummaryEntry, committed_types: *CommittedGraphTypes) Allocator.Error!void {
-        for (entries) |entry| {
-            const provisional_ty = try committed_types.commitType(entry.provisional_ty);
-            const summary_ty = try committed_types.commitType(entry.summary_ty);
+        if (entries.len == 0) return;
+        // One import for every summary of the shard: the closure walk and the
+        // interning transaction are paid once instead of once per type.
+        const roots = try self.allocator.alloc(Type.TypeId, entries.len * 2);
+        defer self.allocator.free(roots);
+        for (entries, 0..) |entry, index| {
+            roots[index * 2] = entry.provisional_ty;
+            roots[index * 2 + 1] = entry.summary_ty;
+        }
+        const committed = try committed_types.commitTypes(self.allocator, roots);
+        defer self.allocator.free(committed);
+        for (entries, 0..) |entry, index| {
             try self.interface_summaries.insert(&self.program.types, &self.program.names, .{
                 .address = entry.address,
                 .evidence = entry.evidence,
-                .provisional_ty = provisional_ty,
-                .summary_ty = summary_ty,
+                .provisional_ty = committed[index * 2],
+                .summary_ty = committed[index * 2 + 1],
             });
         }
     }
@@ -5302,7 +5313,7 @@ const Builder = struct {
             .count,
             null,
             null,
-            if (self.comptime_value_reads) .queued else .immediate,
+            .queued,
             null,
             false,
         );
@@ -5482,7 +5493,7 @@ const Builder = struct {
         const evidence_digest = Ast.fnEvidenceDigest(identity_evidence.nodes, identity_evidence.frames, identity_evidence.head);
         const stored_source_topology = if (source_topology != null) identity_evidence else null;
         const request_digest = precomputed_request_digest orelse self.specializationTypeDigest(fn_ty);
-        const spec_identity = templateSpecIdentity(
+        const spec_identity = self.templateSpecIdentity(
             template_ref,
             method_scope.key,
             evidence_digest,
@@ -7040,8 +7051,7 @@ const Builder = struct {
             if (active_root.graph == source_ctx.graph and
                 active_root.family.sameRecursiveCallable(family) and
                 specEvidenceVectorEql(active_root.evidence, evidence) and
-                optionalDraftCodecContractContextEql(
-                    source_ctx.graph,
+                draftCodecContractSpecializationEql(
                     active_root.codec_contract,
                     codec_contract,
                 ))
@@ -7120,7 +7130,7 @@ const Builder = struct {
                     const spec = &source_ctx.draft.template_specs.items[raw_spec];
                     if (!specEvidenceVectorEql(spec.evidence, evidence)) continue;
                     if (!optionalTypeDigestEql(spec.lexical_context_key, lexical_context_key)) continue;
-                    if (!optionalDraftCodecContractContextEql(source_ctx.graph, spec.codec_contract, codec_contract)) continue;
+                    if (!draftCodecContractSpecializationEql(spec.codec_contract, codec_contract)) continue;
                     const spec_fn_ty = (try source_ctx.specializationLookupTypeForNode(draftTemplateSpecLookupRequestNode(spec))) orelse continue;
                     if (!try source_ctx.typeStore().typeEql(source_ctx.nameStore(), spec_fn_ty, resolved_request_ty.?)) continue;
                     if (!selection.add(raw_spec, true)) unreachable;
@@ -7150,7 +7160,7 @@ const Builder = struct {
                     const spec = &source_ctx.draft.template_specs.items[raw_spec];
                     if (!specEvidenceVectorEql(spec.evidence, evidence)) continue;
                     if (!optionalTypeDigestEql(spec.lexical_context_key, lexical_context_key)) continue;
-                    if (!optionalDraftCodecContractContextEql(source_ctx.graph, spec.codec_contract, codec_contract)) continue;
+                    if (!draftCodecContractSpecializationEql(spec.codec_contract, codec_contract)) continue;
                     const exact_interface = source_ctx.graph.sameFunctionInterface(
                         draftTemplateSpecLookupRequestNode(spec),
                         request_fn_node,
@@ -7191,7 +7201,7 @@ const Builder = struct {
                     // that they refer to the same active specialization.
                     if (!specEvidenceVectorEql(spec.evidence, evidence)) continue;
                     if (!optionalTypeDigestEql(spec.lexical_context_key, lexical_context_key)) continue;
-                    if (!optionalDraftCodecContractContextEql(source_ctx.graph, spec.codec_contract, codec_contract)) continue;
+                    if (!draftCodecContractSpecializationEql(spec.codec_contract, codec_contract)) continue;
                     const spec_fn_ty = (try source_ctx.specializationLookupTypeForNode(draftTemplateSpecLookupRequestNode(spec))) orelse continue;
                     if (!try source_ctx.typeStore().typeEql(source_ctx.nameStore(), spec_fn_ty, request_fn_ty)) continue;
                     if (!selection.add(raw_spec, true)) unreachable;
@@ -7689,7 +7699,7 @@ const Builder = struct {
     ) Allocator.Error!Ast.SpecId {
         const evidence_digest = Ast.fnEvidenceDigest(evidence.nodes, evidence.frames, evidence.head);
         return try self.addSpecRecord(
-            templateSpecIdentity(
+            self.templateSpecIdentity(
                 template_ref,
                 method_scope,
                 evidence_digest,
@@ -7716,7 +7726,7 @@ const Builder = struct {
     ) Allocator.Error!Ast.SpecId {
         const evidence_digest = Ast.fnEvidenceDigest(evidence.nodes, evidence.frames, evidence.head);
         return try self.addSpecRecord(
-            nestedSpecIdentity(nested, method_scope, evidence_digest, capture_abi_digest, codec_contract, request_fn_ty, request_fn_ty_digest),
+            self.nestedSpecIdentity(nested, method_scope, evidence_digest, capture_abi_digest, codec_contract, request_fn_ty, request_fn_ty_digest),
             evidence,
             fn_id,
             .lowering,
@@ -8436,14 +8446,36 @@ const Builder = struct {
     }
 
     fn moduleForDigest(self: *Builder, module_digest: names.CheckedModuleDigest) ModuleView {
-        if (moduleBytesEqual(module_digest.bytes, self.root_view.key.bytes)) return moduleView(self.root_view);
-        for (self.modules.imports) |imported| {
-            if (moduleBytesEqual(module_digest.bytes, imported.key.bytes)) return moduleView(imported);
+        return self.moduleForKeyBytes(module_digest.bytes) orelse
+            Common.invariant("procedure template referenced a checked module that is not in the lowering input");
+    }
+
+    /// Resolve a module by its checked key. The index is built once from the
+    /// lowering input, which never changes for the builder's lifetime.
+    fn moduleForKeyBytes(self: *Builder, key: [32]u8) ?ModuleView {
+        if (self.module_index.count() == 0) self.buildModuleIndex();
+        const slot = self.module_index.get(key) orelse return null;
+        return switch (slot) {
+            .root => moduleView(self.root_view),
+            .import => |index| moduleView(self.modules.imports[index]),
+            .relation => |index| moduleView(self.modules.root.relation_modules[index]),
+        };
+    }
+
+    fn buildModuleIndex(self: *Builder) void {
+        // Lookups happen on the coordinator before any worker borrows the
+        // builder, so the index is complete before it is shared.
+        self.module_index.ensureTotalCapacity(@intCast(1 + self.modules.imports.len + self.modules.root.relation_modules.len)) catch
+            Common.compilerBug("module index allocation failed");
+        // Later entries never override earlier ones so the search order of the
+        // lowering input (root, imports, relations) is preserved exactly.
+        for (self.modules.root.relation_modules, 0..) |relation, index| {
+            self.module_index.putAssumeCapacity(relation.key.bytes, .{ .relation = @intCast(index) });
         }
-        for (self.modules.root.relation_modules) |relation| {
-            if (moduleBytesEqual(module_digest.bytes, relation.key.bytes)) return moduleView(relation);
+        for (self.modules.imports, 0..) |imported, index| {
+            self.module_index.putAssumeCapacity(imported.key.bytes, .{ .import = @intCast(index) });
         }
-        Common.invariant("procedure template referenced a checked module that is not in the lowering input");
+        self.module_index.putAssumeCapacity(self.root_view.key.bytes, .root);
     }
 
     /// The module view whose content identity matches `origin_hash`, or null
@@ -8463,15 +8495,67 @@ const Builder = struct {
         return null;
     }
 
+    fn templateSpecIdentity(
+        self: *Builder,
+        template_ref: names.ProcTemplate,
+        method_scope: checked.ModuleId,
+        evidence_digest: Ast.EvidenceDigest,
+        codec_contract: ?Ast.CodecContractIdentity,
+        request_fn_ty: Type.TypeId,
+        request_fn_ty_digest: names.TypeDigest,
+    ) Ast.SpecIdentity {
+        const view = self.moduleForDigest(names.procTemplateModuleDigest(template_ref));
+        return .{
+            .callable = .{ .proc_template = .{
+                .module = moduleDigestFromId(view.code_generation_key orelse view.key),
+                .proc_base = @intFromEnum(template_ref.proc_base),
+                .template = @intFromEnum(template_ref.template),
+            } },
+            .method_scope = moduleDigestFromId(self.moduleForId(method_scope).code_generation_key orelse method_scope),
+            .evidence_digest = evidence_digest,
+            .codec_contract_digest = codecContractIdentityDigest(codec_contract),
+            .codec_contract = codec_contract,
+            .request_fn_ty_digest = request_fn_ty_digest,
+            .request_fn_ty = request_fn_ty,
+        };
+    }
+
+    fn nestedSpecIdentity(
+        self: *Builder,
+        nested: Ast.NestedFn,
+        method_scope: checked.ModuleId,
+        evidence_digest: Ast.EvidenceDigest,
+        capture_abi_digest: names.TypeDigest,
+        codec_contract: ?Ast.CodecContractIdentity,
+        request_fn_ty: Type.TypeId,
+        request_fn_ty_digest: names.TypeDigest,
+    ) Ast.SpecIdentity {
+        const view = self.moduleForDigest(names.procTemplateModuleDigest(nested.owner));
+        var context_hasher = TypeDigestHasher.init();
+        context_hasher.update("roc.monotype.nested_capture_abi");
+        context_hasher.update(&nested.context_fn_key.bytes);
+        context_hasher.update(&capture_abi_digest.bytes);
+        return .{
+            .callable = .{ .nested_site = .{
+                .module = moduleDigestFromId(view.code_generation_key orelse view.key),
+                .owner_proc_base = @intFromEnum(nested.owner.proc_base),
+                .owner_template = @intFromEnum(nested.owner.template),
+                .owner_fn_digest = .{ .bytes = context_hasher.finalResult() },
+                .site = @intFromEnum(nested.site),
+                .default_root_module = nested.default_root,
+            } },
+            .method_scope = moduleDigestFromId(self.moduleForId(method_scope).code_generation_key orelse method_scope),
+            .evidence_digest = evidence_digest,
+            .codec_contract_digest = codecContractIdentityDigest(codec_contract),
+            .codec_contract = codec_contract,
+            .request_fn_ty_digest = request_fn_ty_digest,
+            .request_fn_ty = request_fn_ty,
+        };
+    }
+
     fn moduleForId(self: *Builder, module_id: checked.ModuleId) ModuleView {
-        if (moduleBytesEqual(module_id.bytes, self.root_view.key.bytes)) return moduleView(self.root_view);
-        for (self.modules.imports) |imported| {
-            if (moduleBytesEqual(module_id.bytes, imported.key.bytes)) return moduleView(imported);
-        }
-        for (self.modules.root.relation_modules) |relation| {
-            if (moduleBytesEqual(module_id.bytes, relation.key.bytes)) return moduleView(relation);
-        }
-        Common.invariant("procedure binding referenced a checked module that is not in the lowering input");
+        return self.moduleForKeyBytes(module_id.bytes) orelse
+            Common.invariant("procedure binding referenced a checked module that is not in the lowering input");
     }
 
     const NominalDeclLookup = struct {
@@ -8784,6 +8868,70 @@ const Builder = struct {
         };
     }
 
+    /// The checked `to_inspect` override that inspection calls for `owner`,
+    /// or null when inspection renders the owner's default form.
+    fn lookupInspectOverride(
+        self: *Builder,
+        scope: ModuleView,
+        owner: static_dispatch.MethodOwner,
+    ) Allocator.Error!?MethodLookup {
+        const method = try self.activeNameStore().internMethodName("to_inspect");
+        const address = ScopedMethodDispatch.init(scope.key, owner, method);
+        if (self.scoped_inspect_overrides.get(address)) |resolution| {
+            return switch (resolution) {
+                .missing => null,
+                .target => |target| target,
+            };
+        }
+
+        const resolution: ScopedMethodResolution = if (self.findInspectOverrideFromStore(scope, &self.program.names, owner)) |target|
+            .{ .target = target }
+        else
+            .missing;
+
+        try self.scoped_inspect_overrides.put(self.allocator, address, resolution);
+        return switch (resolution) {
+            .missing => null,
+            .target => |target| target,
+        };
+    }
+
+    /// Selects the view that declares `owner.to_inspect` exactly as method
+    /// dispatch does; that declaration's checked eligibility is the answer.
+    fn findInspectOverrideFromStore(
+        self: *Builder,
+        scope: ModuleView,
+        owner_names: *const names.NameStore,
+        owner: static_dispatch.MethodOwner,
+    ) ?MethodLookup {
+        if (inspectOverrideInViewFromStore(scope, owner_names, owner, true)) |decision| return decision.target;
+        for (scope.method_lookup_scope) |module_id| {
+            const candidate = self.moduleForId(module_id);
+            if (inspectOverrideInViewFromStore(candidate, owner_names, owner, false)) |decision| return decision.target;
+        }
+        return null;
+    }
+
+    const InspectOverrideDecision = struct {
+        target: ?MethodLookup,
+    };
+
+    fn inspectOverrideInViewFromStore(
+        view: ModuleView,
+        owner_names: *const names.NameStore,
+        owner: static_dispatch.MethodOwner,
+        allow_local_proc: bool,
+    ) ?InspectOverrideDecision {
+        const view_owner = static_dispatch.methodOwnerInImportedStore(owner_names, view.names, owner) orelse return null;
+        const view_method = view.names.lookupMethodName("to_inspect") orelse return null;
+        const key: static_dispatch.MethodKey = .{ .owner = view_owner, .method = view_method };
+        const found = view.method_registry.lookup(key) orelse return null;
+        const target = found.requireTarget("Monotype inspect lowering");
+        if (!allow_local_proc and target.kind == .local_proc) return null;
+        const override = view.method_registry.lookupInspectOverride(key) orelse return .{ .target = null };
+        return .{ .target = .{ .view = view, .target = override } };
+    }
+
     fn findMethodTargetByName(
         self: *Builder,
         scope: ModuleView,
@@ -9048,7 +9196,7 @@ const Builder = struct {
             .count,
             null,
             null,
-            .immediate,
+            .queued,
             null,
             false,
         );
@@ -9322,7 +9470,7 @@ const Builder = struct {
                         continue;
                     }
                     if (!evidenceChainEql(spec.evidence, requested_evidence)) continue;
-                    if (!optionalDraftCodecContractContextEql(source_ctx.graph, spec.codec_contract, codec_contract)) continue;
+                    if (!draftCodecContractSpecializationEql(spec.codec_contract, codec_contract)) continue;
                     if (!draftCaptureEntryGuardsMatch(source_ctx.graph, spec.capture_entry_guards, capture_entry_guards)) continue;
                     if (!std.meta.eql(spec.lexical_owner, source_ctx.draft.current_owner)) continue;
                     const spec_request = try draftNestedSpecRequestNode(source_ctx.draft, source_ctx.graph, spec);
@@ -9343,7 +9491,7 @@ const Builder = struct {
                         if (spec.state != .lowered) continue;
                         if (spec.request_fn_ty != null) continue;
                         if (!evidenceChainEql(spec.evidence, requested_evidence)) continue;
-                        if (!optionalDraftCodecContractContextEql(source_ctx.graph, spec.codec_contract, codec_contract)) continue;
+                        if (!draftCodecContractSpecializationEql(spec.codec_contract, codec_contract)) continue;
                         if (!draftCaptureEntryGuardsMatch(source_ctx.graph, spec.capture_entry_guards, capture_entry_guards)) continue;
                         if (!std.meta.eql(spec.lexical_owner, source_ctx.draft.current_owner)) continue;
                         if (signature_relation == .exact_graph and
@@ -9380,7 +9528,7 @@ const Builder = struct {
                             const spec = &source_ctx.draft.nested_specs.items[raw_spec];
                             if (spec.request_fn_ty != null) continue;
                             if (!evidenceChainEql(spec.evidence, requested_evidence)) continue;
-                            if (!optionalDraftCodecContractContextEql(source_ctx.graph, spec.codec_contract, codec_contract)) continue;
+                            if (!draftCodecContractSpecializationEql(spec.codec_contract, codec_contract)) continue;
                             if (!draftCaptureEntryGuardsMatch(source_ctx.graph, spec.capture_entry_guards, capture_entry_guards)) continue;
                             if (!std.meta.eql(spec.lexical_owner, source_ctx.draft.current_owner)) continue;
                             if (signature_relation == .exact_graph and
@@ -9428,7 +9576,7 @@ const Builder = struct {
                 if (!evidenceChainEql(spec.evidence, requested_evidence)) continue;
                 if (!substitutionsShareClasses(source_ctx.graph, spec.evidence.subst, requested_evidence.subst)) continue;
                 if (!draftCaptureEntryGuardsMatch(source_ctx.graph, spec.capture_entry_guards, capture_entry_guards)) continue;
-                if (!optionalDraftCodecContractContextEql(source_ctx.graph, spec.codec_contract, codec_contract)) continue;
+                if (!draftCodecContractSpecializationEql(spec.codec_contract, codec_contract)) continue;
                 if (!source_ctx.draft.ownerDescendsFromDraftFn(request_owner, spec.fn_id)) continue;
                 const raw_spec: u32 = @intCast(raw_spec_usize);
                 if (!selection.add(raw_spec, false)) {
@@ -10651,7 +10799,7 @@ const Builder = struct {
             .head = draft_fn.source.const_evidence_frame_head,
         };
         const request_digest = self.specializationTypeDigest(coordinator_fn_ty);
-        const identity = templateSpecIdentity(
+        const identity = self.templateSpecIdentity(
             spec.template_ref,
             spec.method_scope,
             draft_fn.source.evidence_digest,
@@ -10890,7 +11038,7 @@ const Builder = struct {
                     const request_fn_ty = spec.committed_request_fn_ty orelse
                         Common.compilerBug("template specialization request type was not committed");
                     const request_digest = self.specializationTypeDigest(request_fn_ty);
-                    identity = templateSpecIdentity(
+                    identity = self.templateSpecIdentity(
                         spec.template_ref,
                         spec.method_scope,
                         sealed_template.evidence_digest,
@@ -10906,7 +11054,7 @@ const Builder = struct {
                 if (nested_by_fn.get(draft_id)) |spec| {
                     if (!spec.local_context_dependent) {
                         const solved_digest = self.specializationTypeDigest(fn_ty);
-                        identity = nestedSpecIdentity(
+                        identity = self.nestedSpecIdentity(
                             spec.nested,
                             spec.method_scope,
                             sealed_template.evidence_digest,
@@ -11470,7 +11618,7 @@ const Builder = struct {
                 Common.compilerBug("eager template request type was not committed");
             const request_digest = self.specializationTypeDigest(request_fn_ty);
             const evidence = programViewFnEvidence(self.program.view(), fn_template);
-            const identity = templateSpecIdentity(
+            const identity = self.templateSpecIdentity(
                 spec.template_ref,
                 spec.method_scope,
                 fn_template.evidence_digest,
@@ -11530,7 +11678,7 @@ const Builder = struct {
             const evidence = programViewFnEvidence(self.program.view(), fn_template);
             const capture_abi_digest = spec.capture_abi_digest;
             if (try self.spec_store.findLocal(
-                nestedSpecIdentity(spec.nested, spec.method_scope, fn_template.evidence_digest, capture_abi_digest, spec.sealed_codec_contract, fn_ty, digest),
+                self.nestedSpecIdentity(spec.nested, spec.method_scope, fn_template.evidence_digest, capture_abi_digest, spec.sealed_codec_contract, fn_ty, digest),
                 specializationEvidenceView(evidence),
             )) |_| continue;
             const spec_id = try self.addNestedSpecRecord(
@@ -14710,9 +14858,10 @@ const CodecKind = enum {
     encoder,
 };
 
-/// Whether a callee actually depends on compiler-generated codec callbacks.
-/// Ordinary calls inherit their lexical contract; first-order format methods
-/// are self-contained and specialize only by their own interface and evidence.
+/// Whether a callee needs the enclosing generated-codec contract to lower
+/// intrinsics such as `ParseTagUnionSpec.parse`. Ordinary calls inherit their
+/// lexical contract; format methods using ordinary values and writer arguments
+/// specialize only by their own interface and evidence.
 const CodecContractSelection = union(enum) {
     inherit,
     independent,
@@ -15571,6 +15720,9 @@ const BodyDraftStore = struct {
     current_owner: DraftOwner,
     owner_starts: DraftCoreLengths,
     owner_runs: std.ArrayList(DraftOwnerRun),
+    /// Owner scopes currently entered. Each one holds a reserved `owner_runs`
+    /// slot so that leaving the scope never allocates.
+    pending_owner_leaves: usize = 0,
     /// Exact static-data requests are shared by child lowering contexts only
     /// within the body that owns their explicit runtime expression.
     static_data_candidate_exprs: std.AutoHashMap(StaticDataCandidateAddress, DraftExprId),
@@ -15911,6 +16063,9 @@ const BodyDraftStore = struct {
         previous: DraftOwner,
 
         fn leave(self: OwnerScope) void {
+            // `enterOwner` reserved this scope's run slot, so the switch back
+            // cannot need to grow `owner_runs`.
+            self.draft.pending_owner_leaves -= 1;
             self.draft.switchOwner(self.previous) catch |err| switch (err) {
                 error.OutOfMemory => Common.invariant("restoring body draft owner could not record its completed ownership run"),
             };
@@ -15919,6 +16074,11 @@ const BodyDraftStore = struct {
 
     fn enterOwner(self: *BodyDraftStore, owner: DraftOwner) Allocator.Error!OwnerScope {
         const previous = self.current_owner;
+        self.pending_owner_leaves += 1;
+        errdefer self.pending_owner_leaves -= 1;
+        // Reserve this scope's exit slot now, even when the owner is already
+        // current and no run gets recorded here.
+        try self.owner_runs.ensureUnusedCapacity(self.allocator, self.pending_owner_leaves + 1);
         try self.switchOwner(owner);
         return .{ .draft = self, .previous = previous };
     }
@@ -15938,7 +16098,9 @@ const BodyDraftStore = struct {
     fn closeOwnerRun(self: *BodyDraftStore) Allocator.Error!void {
         const ends = self.coreLengths();
         if (std.mem.eql(u32, self.owner_starts[0..], ends[0..])) return;
-        try self.owner_runs.append(self.allocator, .{
+        // Keep one spare slot per entered owner scope beyond this run.
+        try self.owner_runs.ensureUnusedCapacity(self.allocator, 1 + self.pending_owner_leaves);
+        self.owner_runs.appendAssumeCapacity(.{
             .owner = self.current_owner,
             .starts = self.owner_starts,
             .ends = ends,
@@ -18467,6 +18629,18 @@ const BodyContext = struct {
         );
     }
 
+    /// Method owners derived from graph types remain qualified by the graph's
+    /// name store, exactly as in `lookupMethodTargetByName`.
+    fn lookupInspectOverride(
+        self: *BodyContext,
+        owner: static_dispatch.MethodOwner,
+    ) Allocator.Error!?MethodLookup {
+        if (self.nameStore() == &self.builder.program.names) {
+            return try self.builder.lookupInspectOverride(self.method_scope, owner);
+        }
+        return self.builder.findInspectOverrideFromStore(self.method_scope, self.nameStore(), owner);
+    }
+
     fn lookupMethodTarget(
         self: *BodyContext,
         owner: static_dispatch.MethodOwner,
@@ -19055,6 +19229,7 @@ const BodyContext = struct {
         materialized_args: struct {
             args: []const MaterializedArg,
             index: usize,
+            lambda: checked.CheckedExprId,
             body: checked.CheckedExprId,
         },
         iterator_body: struct {
@@ -20286,10 +20461,7 @@ const BodyContext = struct {
 
     fn toInspectCall(self: *BodyContext, value: DraftExprId, value_ty: Type.TypeId, str_ty: Type.TypeId) Allocator.Error!?DraftExprId {
         const owner = methodOwnerFromType(self.typeStore(), value_ty) orelse return null;
-        const lookup = try self.withLocalProcContext((try self.lookupMethodTargetByName(owner, "to_inspect")) orelse return null);
-        if (lookup.view.types.payload(lookup.target.callable_ty) == .err) {
-            return try self.runtimeCrashExpr(str_ty, "runtime error");
-        }
+        const lookup = try self.withLocalProcContext((try self.lookupInspectOverride(owner)) orelse return null);
         const callee = if (self.frozen_inspect_method_calls) |prepared|
             prepared.get(value_ty) orelse
                 Common.invariant("deferred inspect method was not reserved before relation freeze")
@@ -20365,7 +20537,7 @@ const BodyContext = struct {
         }
     }
 
-    /// Null means the owner has no custom method; false means it was already
+    /// Null means the owner has no inspect override; false means it was already
     /// prepared. Both immediate and deferred inspection use the checked target.
     fn prepareToInspectMethodAtNode(
         self: *BodyContext,
@@ -20373,7 +20545,7 @@ const BodyContext = struct {
         str_ty: Type.TypeId,
         owner: static_dispatch.MethodOwner,
     ) Allocator.Error!?bool {
-        const raw_lookup = (try self.lookupMethodTargetByName(owner, "to_inspect")) orelse return null;
+        const raw_lookup = (try self.lookupInspectOverride(owner)) orelse return null;
         const lookup = try self.withLocalProcContext(raw_lookup);
         for (self.draft.prepared_inspect_methods.items) |prepared| {
             if (self.graph.sameClass(prepared.value_node, node)) return false;
@@ -22633,16 +22805,23 @@ const BodyContext = struct {
         return try self.instNode(scheme_root);
     }
 
-    fn interfaceSummaryCache(self: *BodyContext) *InterfaceSummaryCache {
-        if (self.typeStore() == &self.builder.program.types) return &self.builder.interface_summaries;
+    const InterfaceSummaryCacheBinding = struct {
+        cache: *InterfaceSummaryCache,
+        types_are_durable: bool,
+    };
+
+    fn interfaceSummaryCache(self: *BodyContext) InterfaceSummaryCacheBinding {
+        if (self.typeStore() == &self.builder.program.types) {
+            return .{ .cache = &self.builder.interface_summaries, .types_are_durable = true };
+        }
         const workspace = self.draft.spec_job_workspace orelse
             Common.compilerBug("interface summary graph has no owning workspace");
         std.debug.assert(self.typeStore() == &workspace.types);
-        return &workspace.interface_summaries;
+        return .{ .cache = &workspace.interface_summaries, .types_are_durable = false };
     }
 
     fn findInterfaceSummary(self: *BodyContext, address: InterfaceReplayAddress, evidence: StoredConstFnEvidence, provisional_ty: Type.TypeId) Allocator.Error!?struct { ty: Type.TypeId, coordinator: bool } {
-        const local = self.interfaceSummaryCache();
+        const local = self.interfaceSummaryCache().cache;
         if (local.buckets.get(address)) |candidates| for (candidates.items) |index| {
             const entry = local.entries.items[index];
             if (storedConstFnEvidenceEql(entry.evidence, evidence) and
@@ -22693,6 +22872,7 @@ const BodyContext = struct {
         provisional_ty: Type.TypeId,
         replay_state: *InterfaceReplayState,
     ) Allocator.Error!void {
+        self.builder.count("interface_relation_requests");
         const record = self.view.resolved_refs.records[@intFromEnum(target)];
         const procedure, const root_evidence = switch (record.ref) {
             .top_level_proc,
@@ -22761,6 +22941,7 @@ const BodyContext = struct {
             {
                 continue;
             }
+            self.builder.count("interface_replay_hits");
             switch (entry.status) {
                 .expanding => try relateFunctionRequestInterface(
                     self.graph,
@@ -22874,17 +23055,31 @@ const BodyContext = struct {
             }
         }
         if (saved_use_summaries) {
-            var sealer = GraphTypeFinals.initRetainedTypeView(self.graph);
-            defer sealer.deinit();
-            const durable_request = try sealer.sealType(provisional_ty);
-            const durable_summary = try sealer.sealType(summary_ty);
-            const cache = self.interfaceSummaryCache();
-            try cache.insert(self.typeStore(), self.nameStore(), .{
-                .address = address,
-                .evidence = stored_evidence,
-                .provisional_ty = durable_request,
-                .summary_ty = durable_summary,
-            });
+            const cache_binding = self.interfaceSummaryCache();
+            const cache = cache_binding.cache;
+            if (cache_binding.types_are_durable) {
+                // On the coordinator both views were materialized outside any
+                // transaction, so they are already permanent program types.
+                // Interning canonical copies would only re-digest them and
+                // the cache compares its entries structurally.
+                try cache.insert(self.typeStore(), self.nameStore(), .{
+                    .address = address,
+                    .evidence = stored_evidence,
+                    .provisional_ty = provisional_ty,
+                    .summary_ty = summary_ty,
+                });
+            } else {
+                var sealer = GraphTypeFinals.initRetainedTypeView(self.graph);
+                defer sealer.deinit();
+                const durable_request = try sealer.sealType(provisional_ty);
+                const durable_summary = try sealer.sealType(summary_ty);
+                try cache.insert(self.typeStore(), self.nameStore(), .{
+                    .address = address,
+                    .evidence = stored_evidence,
+                    .provisional_ty = durable_request,
+                    .summary_ty = durable_summary,
+                });
+            }
         }
     }
 
@@ -23814,6 +24009,38 @@ const BodyContext = struct {
         };
     }
 
+    /// Lower a lambda body at its function's return cell.
+    ///
+    /// A divergent body uses the function's return cell without requesting
+    /// its checked value type. Otherwise, a body whose checked type is not the
+    /// function's checked result is a composed `?` result
+    /// (design.md "Try Return-Row Composition"):
+    /// the function's error row includes the body's rather than equalling it.
+    /// Such a body is lowered at its own type and crosses the explicit return
+    /// boundary to the return cell exactly as a `?` return does, so the
+    /// composed row is never forced onto the value's producer.
+    fn lowerLambdaBodyAtCell(
+        self: *BodyContext,
+        lambda_id: checked.CheckedExprId,
+        checked_body: checked.CheckedExprId,
+        ret_cell: DraftTypeCell,
+    ) Allocator.Error!DraftExprId {
+        if (self.checkedExprDivergesInLoweredRuntime(checked_body)) {
+            return try self.lowerExprAtTypeCell(checked_body, ret_cell);
+        }
+        const body_ty = self.view.bodies.expr(checked_body).ty;
+        const fn_ret_ty = self.checkedFunctionType(self.view.bodies.expr(lambda_id).ty).ret;
+        if (resolvedPayload(self.view, body_ty).root == resolvedPayload(self.view, fn_ret_ty).root) {
+            return try self.lowerExprAtTypeCell(checked_body, ret_cell);
+        }
+        // The body's residual error extension is shared with the return row
+        // and settles when the return settles, so the body is lowered at its
+        // own type's cell rather than at a type demanded up front.
+        const body_cell = DraftTypeCell.fromGraphNode(try self.lowerTypeNode(body_ty));
+        const value = try self.lowerExprAtTypeCell(checked_body, body_cell);
+        return try self.addExprWithTypeCell(ret_cell, .{ .return_ = .{ .value = value, .target = ret_cell } });
+    }
+
     fn lowerLambdaArgsAndBodyAtCell(
         self: *BodyContext,
         lambda_id: checked.CheckedExprId,
@@ -23923,11 +24150,12 @@ const BodyContext = struct {
             ret_cell;
         self.current_return_target = .{ .lambda = lambda_id, .cell = body_ret_cell };
         var body = if (materialized_args.items.len == 0)
-            try self.lowerExprAtTypeCell(checked_body, body_ret_cell)
+            try self.lowerLambdaBodyAtCell(lambda_id, checked_body, body_ret_cell)
         else
             try self.lowerBindingContinuation(.{ .materialized_args = .{
                 .args = materialized_args.items,
                 .index = 0,
+                .lambda = lambda_id,
                 .body = checked_body,
             } }, body_ret_cell);
         if (arg_literal_guards.items.len != 0) {
@@ -35439,8 +35667,7 @@ const BodyContext = struct {
             if (active_root.graph == self.graph and
                 active_root.family.sameRecursiveCallable(family) and
                 specEvidenceVectorEql(active_root.evidence, spec.evidence) and
-                optionalDraftCodecContractContextEql(
-                    self.graph,
+                draftCodecContractSpecializationEql(
                     active_root.codec_contract,
                     spec.codec_contract,
                 ))
@@ -42721,7 +42948,9 @@ const BodyContext = struct {
         if (evidence.len != params.len) {
             Common.invariant("callable-derived evidence length differed from its checked template");
         }
-        var resolved: ?[]SpecEvidence = null;
+        const Replacement = struct { index: usize, entry: SpecEvidence };
+        var replacements = std.ArrayList(Replacement).empty;
+        defer replacements.deinit(self.allocator);
         var has_symbolic = false;
         for (evidence, 0..) |entry, index| switch (entry) {
             .from_callable => {
@@ -42735,28 +42964,52 @@ const BodyContext = struct {
                     Common.invariant("callable-derived evidence path did not match its function request");
                 const resolvable = self.methodOwnerFromNode(component_node) != null or
                     param.structural != null or
-                    try self.nodeIsProvenUninhabited(component_node);
+                    try self.nodeIsProvenUninhabited(component_node) or
+                    self.nodeFinalizesAsUninhabitedLeaf(component_node);
                 if (resolvable) {
-                    const replacement = try self.synthesizeComponentEvidenceAtNodeForPurpose(
-                        view,
-                        param.method,
-                        param.structural,
-                        component_node,
-                        purpose,
-                    );
-                    // Evidence can be shared with another request or lexical
-                    // frame. Copy once, only when this request resolves an entry.
-                    if (resolved == null) {
-                        resolved = try self.builder.evidence_arena.allocator().dupe(SpecEvidence, evidence);
-                        self.builder.countBodyDiagnostic("callable_evidence_vector_copies");
-                    }
-                    resolved.?[index] = replacement;
+                    try replacements.append(self.allocator, .{
+                        .index = index,
+                        .entry = try self.synthesizeComponentEvidenceAtNodeForPurpose(
+                            view,
+                            param.method,
+                            param.structural,
+                            component_node,
+                            purpose,
+                        ),
+                    });
                 }
             },
             .target, .structural, .from_scheme, .unreachable_value, .checked_error => {},
         };
         if (has_symbolic) self.builder.countBodyDiagnostic("callable_evidence_symbolic_requests");
-        return resolved orelse evidence;
+        if (replacements.items.len == 0) return evidence;
+        // Evidence can be shared with another request or lexical frame, so it
+        // is never written in place. A request that resolves every slot the
+        // way the previous request over this vector did reads that copy back.
+        // The callee template is identified by its module and its evidence
+        // parameter row, which every request over it shares.
+        var key_hasher = std.hash.Wyhash.init(0);
+        key_hasher.update(&view.key.bytes);
+        key_hasher.update(std.mem.asBytes(&@intFromPtr(params.ptr)));
+        const key = key_hasher.final();
+        const cached = try self.builder.resolved_callable_vectors.getOrPut(key);
+        if (!cached.found_existing) cached.value_ptr.* = .empty;
+        for (cached.value_ptr.items) |candidate| reuse: {
+            if (candidate.len != evidence.len) break :reuse;
+            var next_replacement: usize = 0;
+            for (candidate, evidence, 0..) |cached_entry, source_entry, index| {
+                if (next_replacement < replacements.items.len and replacements.items[next_replacement].index == index) {
+                    if (!specEvidenceEql(cached_entry, replacements.items[next_replacement].entry)) break :reuse;
+                    next_replacement += 1;
+                } else if (!specEvidenceEql(cached_entry, source_entry)) break :reuse;
+            }
+            return candidate;
+        }
+        const resolved = try self.builder.evidence_arena.allocator().dupe(SpecEvidence, evidence);
+        self.builder.countBodyDiagnostic("callable_evidence_vector_copies");
+        for (replacements.items) |replacement| resolved[replacement.index] = replacement.entry;
+        try cached.value_ptr.append(self.allocator, resolved);
+        return resolved;
     }
 
     /// The substitution and evidence the scheme instantiated at `expr` (a
@@ -43519,11 +43772,12 @@ const BodyContext = struct {
         return null;
     }
 
-    /// Select the nested-evidence half of an evidence-slot reuse. Ordinary
-    /// independent rank-1 callables must derive nested evidence from their own
-    /// callable relation. A recorded where-method use may keep the slot's
-    /// resolved vector: its checker instantiation copied only signature
-    /// structure, sharing every evidence-bearing non-marker leaf.
+    /// Select the nested-evidence half of an evidence-slot reuse. Independent
+    /// rank-1 callables derive callable-owned evidence from their own relation,
+    /// but keep evidence owned entirely by the selected target. A recorded
+    /// where-method use may also keep the slot's resolved vector: its checker
+    /// instantiation copied only signature structure, sharing every
+    /// evidence-bearing non-marker leaf.
     fn targetProcedureEvidenceSchema(
         self: *BodyContext,
         target: *const SpecEvidenceTarget,
@@ -43553,8 +43807,11 @@ const BodyContext = struct {
             Common.invariant("checked dispatch requested slot nested evidence without an independent callable");
         }
         if (dependent.independent_callable and !dependent.reuse_slot_nested_evidence) {
-            if (schema == .requires_record) return error.RequiresRecordSynthesis;
-            return .synthesize;
+            return switch (schema) {
+                .from_target => nested,
+                .requires_record => error.RequiresRecordSynthesis,
+                .none, .from_callable => .synthesize,
+            };
         }
         return nested;
     }
@@ -44170,7 +44427,30 @@ const BodyContext = struct {
         }
         if (structural) |kind| return .{ .structural = .{ .derivation = structuralDerivationWithoutMap(kind) } };
         if (try self.nodeIsProvenUninhabited(component_node)) return .unreachable_value;
+        if (self.nodeFinalizesAsUninhabitedLeaf(component_node)) return .unreachable_value;
         Common.invariant("compiler-generated ownerless graph component had no checked structural or uninhabited evidence");
+    }
+
+    /// Whether an open leaf can only ever finalize as uninhabited. A checked
+    /// variable the checker left unconstrained is bound by nothing but a
+    /// specialization request, and requests are seeded before a body is
+    /// lowered, so inside a body such a leaf's final content is its recorded
+    /// default. Reading that default here keeps dispatch evidence independent
+    /// of which callee interfaces have already been related on this path: an
+    /// interface replay may close the same cell to that default at any time,
+    /// and evidence read before and after it must agree.
+    fn nodeFinalizesAsUninhabitedLeaf(self: *BodyContext, node: NodeId) bool {
+        return switch (self.graph.content(node)) {
+            .unresolved => |variable| blk: {
+                if (variable.numeric_default_phase != null) break :blk false;
+                if (variable.row_default) |row_default| break :blk row_default == .empty_tag_union;
+                break :blk switch (variable.origin) {
+                    .checked_variable => true,
+                    .row_extension, .placeholder => false,
+                };
+            },
+            .redirect, .primitive, .list, .box, .tuple, .func, .tag_union, .record, .empty_tag_union, .empty_record, .named, .erased, .zst => false,
+        };
     }
 
     /// Static-dispatch owner identity available directly from a live graph
@@ -44413,8 +44693,10 @@ const BodyContext = struct {
         );
     }
 
-    /// First-order format methods have no generated payload-parser callbacks.
-    /// Their checked callable and evidence fully determine specialization.
+    /// Format methods with ordinary values and callable arguments need no
+    /// enclosing codec contract. Generated writer arguments retain their own
+    /// prepared calls; the method's checked callable and evidence fully
+    /// determine its specialization.
     fn methodTargetCalleeAtNodeForFormat(
         self: *BodyContext,
         lookup: MethodLookup,
@@ -48648,12 +48930,7 @@ const BodyContext = struct {
         try relateRequestComponent(self.graph, target.args[1], str_node);
         try relateRequestComponent(self.graph, target.ret, str_node);
 
-        const callee = try self.methodTargetCalleeAtNodeForCodec(
-            lookup,
-            target_node,
-            exact.contract,
-            exact.anchor,
-        );
+        const callee = try self.methodTargetCalleeAtNodeForFormat(lookup, target_node, exact.contract);
         try self.draft.prepared_codec_calls.append(self.allocator, .{
             .boundary_expr = boundary_expr,
             .kind = kind,
@@ -48693,12 +48970,7 @@ const BodyContext = struct {
         try relateRequestComponent(self.graph, target.args[0], state_node);
         try relateRequestComponent(self.graph, target.ret, runtime.ret);
 
-        const callee = try self.methodTargetCalleeAtNodeForCodec(
-            lookup,
-            target_node,
-            exact.contract,
-            exact.anchor,
-        );
+        const callee = try self.methodTargetCalleeAtNodeForFormat(lookup, target_node, exact.contract);
         try self.draft.prepared_codec_calls.append(self.allocator, .{
             .boundary_expr = boundary_expr,
             .kind = .encoder,
@@ -49429,7 +49701,7 @@ const BodyContext = struct {
         try relateRequestComponent(self.graph, target.args[1], state_node);
         try relateRequestComponent(self.graph, target.ret, outer_result.err);
 
-        const callee = try self.methodTargetCalleeAtNodeForCodec(lookup, target_node, exact.contract, exact.anchor);
+        const callee = try self.methodTargetCalleeAtNodeForFormat(lookup, target_node, exact.contract);
         try self.draft.prepared_codec_calls.append(self.allocator, .{
             .boundary_expr = boundary_expr,
             .kind = .parser,
@@ -49467,7 +49739,7 @@ const BodyContext = struct {
         try relateRequestComponent(self.graph, target.args[0], state_node);
         try relateRequestComponent(self.graph, target.ret, runtime.ret);
 
-        const callee = try self.methodTargetCalleeAtNodeForCodec(lookup, target_node, exact.contract, exact.anchor);
+        const callee = try self.methodTargetCalleeAtNodeForFormat(lookup, target_node, exact.contract);
         try self.draft.prepared_codec_calls.append(self.allocator, .{
             .boundary_expr = boundary_expr,
             .kind = .encoder,
@@ -49557,7 +49829,7 @@ const BodyContext = struct {
         try relateRequestComponent(self.graph, target.args[1], state_node);
         try relateRequestComponent(self.graph, target.ret, runtime.ret);
 
-        const callee = try self.methodTargetCalleeAtNodeForCodec(lookup, target_node, exact.contract, exact.anchor);
+        const callee = try self.methodTargetCalleeAtNodeForFormat(lookup, target_node, exact.contract);
         try self.draft.prepared_codec_calls.append(self.allocator, .{
             .boundary_expr = boundary_expr,
             .kind = .encoder,
@@ -49809,7 +50081,7 @@ const BodyContext = struct {
         try relateRequestComponent(self.graph, target_try.ok, state_node);
         try relateRequestComponent(self.graph, target_try.err, outer_try.err);
 
-        const callee = try self.methodTargetCalleeAtNodeForCodec(lookup, target_node, exact.contract, exact.anchor);
+        const callee = try self.methodTargetCalleeAtNodeForFormat(lookup, target_node, exact.contract);
         try self.draft.prepared_codec_calls.append(self.allocator, .{
             .boundary_expr = boundary_expr,
             .kind = .encoder,
@@ -49849,7 +50121,7 @@ const BodyContext = struct {
         try relateRequestComponent(self.graph, target.args[1], state_node);
         try relateRequestComponent(self.graph, target.ret, runtime.ret);
 
-        const callee = try self.methodTargetCalleeAtNodeForCodec(lookup, target_node, exact.contract, exact.anchor);
+        const callee = try self.methodTargetCalleeAtNodeForFormat(lookup, target_node, exact.contract);
         try self.draft.prepared_codec_calls.append(self.allocator, .{
             .boundary_expr = boundary_expr,
             .kind = .encoder,
@@ -49888,7 +50160,7 @@ const BodyContext = struct {
         }
         try relateRequestComponent(self.graph, target.ret, ret_node);
 
-        const callee = try self.methodTargetCalleeAtNodeForCodec(lookup, target_node, exact.contract, exact.anchor);
+        const callee = try self.methodTargetCalleeAtNodeForFormat(lookup, target_node, exact.contract);
         try self.draft.prepared_codec_calls.append(self.allocator, .{
             .boundary_expr = boundary_expr,
             .kind = kind,
@@ -52306,7 +52578,7 @@ const BodyContext = struct {
             .expr => |expr| expr,
             .checked_expr => |expr| try self.lowerExprAtTypeCell(expr, result_cell),
             .materialized_args => |args| blk: {
-                if (args.index >= args.args.len) break :blk try self.lowerExprAtTypeCell(args.body, result_cell);
+                if (args.index >= args.args.len) break :blk try self.lowerLambdaBodyAtCell(args.lambda, args.body, result_cell);
                 const arg = args.args[args.index];
                 const miss = try self.addExprWithTypeCell(result_cell, .{ .crash = try self.addStringLiteral("pattern match failed") });
                 break :blk try self.lowerMaterializedPatternThen(
@@ -52317,6 +52589,7 @@ const BodyContext = struct {
                     .{ .materialized_args = .{
                         .args = args.args,
                         .index = args.index + 1,
+                        .lambda = args.lambda,
                         .body = args.body,
                     } },
                     miss,
@@ -57798,7 +58071,7 @@ test "materialized evidence normalization copies once and preserves unconsumed n
     try std.testing.expect((try normalizeMaterializedEvidence(allocator, normalized)).ptr == normalized.ptr);
 }
 
-test "independent callable reuse preserves requires-record nested evidence and synthesis rejects it" {
+test "independent callable keeps target-owned evidence and rejects per-use record synthesis" {
     const resolved_entries = [_]SpecEvidence{.unreachable_value};
     const nested = NestedSpecEvidence{ .resolved = &resolved_entries };
     const reuse = static_dispatch.ConstraintEvidenceRef{
@@ -57824,6 +58097,15 @@ test "independent callable reuse preserves requires-record nested evidence and s
         .independent_callable = true,
         .reuse_slot_nested_evidence = false,
     };
+    const target_owned = try BodyContext.dependentCallableNestedEvidenceForSchema(
+        synthesize,
+        nested,
+        .from_target,
+    );
+    switch (target_owned) {
+        .resolved => |resolved| try std.testing.expect(resolved.ptr == resolved_entries[0..].ptr),
+        .synthesize => return error.TestUnexpectedResult,
+    }
     try std.testing.expectError(
         error.RequiresRecordSynthesis,
         BodyContext.dependentCallableNestedEvidenceForSchema(
@@ -59280,6 +59562,7 @@ fn bindLocalName(
 
 fn moduleView(view: checked.ImportedModuleView) ModuleView {
     return .{
+        .code_generation_key = view.code_generation_key,
         .key = view.key,
         .module_env = view.module_env,
         .module_identity = view.module_identity,
@@ -62019,6 +62302,39 @@ test "body draft ownership runs restore the parent across nested lowering" {
         try std.testing.expectEqual(@as(u32, @intCast(index)), owner_run.starts[kind]);
         try std.testing.expectEqual(@as(u32, @intCast(index + 1)), owner_run.ends[kind]);
     }
+}
+
+test "body draft owner scopes leave without allocating under allocation failure" {
+    const Scenario = struct {
+        fn run(allocator: std.mem.Allocator) Allocator.Error!void {
+            const outer_fn: DraftFnId = @enumFromInt(10);
+            const inner_fn: DraftFnId = @enumFromInt(11);
+            var draft = BodyDraftStore.init(allocator);
+            defer draft.deinit();
+
+            try draft.expr_ids.append(allocator, @enumFromInt(20));
+            {
+                const outer = try draft.enterOwner(.{ .draft_fn = outer_fn });
+                defer outer.leave();
+                try draft.expr_ids.append(allocator, @enumFromInt(1));
+                {
+                    // Re-entering the current owner records no run on entry,
+                    // yet its exit still needs a reserved slot.
+                    const same = try draft.enterOwner(.{ .draft_fn = outer_fn });
+                    defer same.leave();
+                    try draft.expr_ids.append(allocator, @enumFromInt(2));
+                    {
+                        const inner = try draft.enterOwner(.{ .draft_fn = inner_fn });
+                        defer inner.leave();
+                        try draft.expr_ids.append(allocator, @enumFromInt(3));
+                    }
+                }
+                try draft.expr_ids.append(allocator, @enumFromInt(4));
+            }
+            try draft.finishOwnerRuns();
+        }
+    };
+    try std.testing.checkAllAllocationFailures(std.testing.allocator, Scenario.run, .{});
 }
 
 test "body draft core ownership distinguishes sibling materializations" {

@@ -1225,6 +1225,52 @@ pub fn erasedCallReuseFieldsMatch(assign: anytype) bool {
     return assign.reuse_closure == (assign.reuse_source != null);
 }
 
+/// What a procedure body contains, recorded by whoever emitted its statements.
+///
+/// Every later pass that rewrites one shape selects its procedures by these
+/// shapes instead of opening every body to look for the shape. A shape flag is a
+/// superset: it may be set for a body the pass then finds nothing to rewrite
+/// in, but a body the pass would rewrite always carries the shape flag. The LIR
+/// store sets the statement-level shapes as statements are appended, the
+/// lowering sets the layout-dependent ones at its call sites, and a pass that
+/// introduces a shape into a body it rewrites sets that shape's flag itself.
+/// Debug builds verify the superset property by also running each pass on
+/// the procedures its shapes excluded.
+pub const ProcShapes = packed struct(u16) {
+    /// A direct call to the procedure itself, in any position.
+    self_call: bool = false,
+    /// A loop: a join reached again by a back edge, whether lowered from a
+    /// source loop or built by a tail-recursion rewrite.
+    loop: bool = false,
+    /// A direct call whose result has an interned layout, which is the only
+    /// kind of layout a by-memory aggregate can have.
+    interned_call_result: bool = false,
+    /// A direct call whose result is a string.
+    str_call: bool = false,
+    /// A local assigned static data or a packed byte literal.
+    static_literal: bool = false,
+    /// A box allocation.
+    box_box: bool = false,
+    /// An arithmetic op from the checked behavior families.
+    checked_arithmetic: bool = false,
+    /// A switch statement.
+    switch_stmt: bool = false,
+    /// A join point with at least one parameter.
+    join_param: bool = false,
+    /// A join point with a parameter of interned or zero-sized layout, the
+    /// only layouts a struct, tag union or unit parameter can have.
+    join_aggregate_param: bool = false,
+    /// A struct construction.
+    struct_build: bool = false,
+    /// A tag construction.
+    tag_build: bool = false,
+    _padding: u4 = 0,
+
+    pub fn merged(self: ProcShapes, other: ProcShapes) ProcShapes {
+        return @bitCast(@as(u16, @bitCast(self)) | @as(u16, @bitCast(other)));
+    }
+};
+
 /// Lowered proc specification rooted either at a statement body or at explicit
 /// hosted-proc metadata.
 pub const LirProcSpec = struct {
@@ -1292,6 +1338,8 @@ pub const LirProcSpec = struct {
     tail_calls: ?TailCalls = null,
     /// Tail-recursion rewrite applied by the TRMC pass, if any.
     tail_transform: TailTransform = .none,
+    /// What the body contains, for pass admission.
+    shapes: ProcShapes = .{},
     /// Explicit native-stack probing requirement for this proc.
     stack_probe: StackProbe = .default,
     /// Final ARC ownership signature persisted for indirect runtime dispatch.

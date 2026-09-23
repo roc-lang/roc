@@ -88,6 +88,14 @@ const fx_open_tests = [_]SimpleTestSpec{
         .description = "Regression test: hosted Try unwrapped with ? widens the closed error row at the use site (issue 9963)",
     },
     .{
+        .roc_file = "test/fx-open/issue_11097_bare_and_wrapped_try_runtime.roc",
+        .description = "Regression test: a bare and a tag-wrapped ? on one callee cross the return boundary into the composed row (issue 11097)",
+    },
+    .{
+        .roc_file = "test/fx-open/issue_11469_higher_order_try_error_row.roc",
+        .description = "Regression test: a callback's narrower Try crosses a ?-composed return boundary into the wider row (issue 11469)",
+    },
+    .{
         .roc_file = "test/fx-open/issue_10270_named_map_err_closure.roc",
         .description = "Regression test: named closure using map_err compiles when its result is propagated with ? (issue 10270)",
     },

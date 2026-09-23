@@ -15,7 +15,7 @@ main = {
 ~~~
 # EXPECTED
 DUPLICATE DEFINITION - can_import_aliased_conflicts.md:2:1:2:28
-NAME NOT IN SCOPE - can_import_aliased_conflicts.md:5:9:5:20
+DOES NOT EXIST - can_import_aliased_conflicts.md:5:9:5:20
 # PROBLEMS
 ~~~clojure
 (reports
@@ -39,19 +39,15 @@ NAME NOT IN SCOPE - can_import_aliased_conflicts.md:5:9:5:20
 				(column 1))
 			(reflow ":")
 			(line-break)
-			(source-region (file "can_import_aliased_conflicts.md") (start 1 1) (end 1 1) (annotation dim) (line-text "import json.Json as MyMod"))))
+			(source-region (file "can_import_aliased_conflicts.md") (start 1 1) (end 1 26) (annotation dim) (line-text "import json.Json as MyMod"))))
 	(report
 		(severity runtime_error)
-		(title "Name Not In Scope")
+		(title "Does Not Exist")
 		(region (start 5 9) (end 5 20))
 		(headline
-			(reflow "Nothing is named ")
-			(annotated symbol-unqualified "parse")
-			(reflow " in this scope."))
+			(annotated symbol-unqualified "MyMod.parse")
+			(reflow " does not exist."))
 		(document
-			(reflow "Is it misspelled, or is there an import missing?")
-			(line-break)
-			(line-break)
 			(source-region (file "can_import_aliased_conflicts.md") (start 5 9) (end 5 20) (annotation error) (line-text "    x = MyMod.parse")))))
 ~~~
 # TOKENS

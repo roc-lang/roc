@@ -11,7 +11,7 @@ main = Json.utf8
 ~~~
 # EXPECTED
 DUPLICATE DEFINITION - can_import_json.md:1:1:1:17
-NAME NOT IN SCOPE - can_import_json.md:3:8:3:17
+DOES NOT EXIST - can_import_json.md:3:8:3:17
 # PROBLEMS
 ~~~clojure
 (reports
@@ -38,16 +38,12 @@ NAME NOT IN SCOPE - can_import_json.md:3:8:3:17
 			(source-region (file "can_import_json.md") (start 1 1) (end 1 1) (annotation dim) (line-text "import json.Json"))))
 	(report
 		(severity runtime_error)
-		(title "Name Not In Scope")
+		(title "Does Not Exist")
 		(region (start 3 8) (end 3 17))
 		(headline
-			(reflow "Nothing is named ")
-			(annotated symbol-unqualified "utf8")
-			(reflow " in this scope."))
+			(annotated symbol-unqualified "Json.utf8")
+			(reflow " does not exist."))
 		(document
-			(reflow "Is it misspelled, or is there an import missing?")
-			(line-break)
-			(line-break)
 			(source-region (file "can_import_json.md") (start 3 8) (end 3 17) (annotation error) (line-text "main = Json.utf8")))))
 ~~~
 # TOKENS
@@ -75,7 +71,7 @@ NO CHANGE
 (can-ir
 	(d-let
 		(p-assign (ident "main"))
-		(e-runtime-error (tag "ident_not_in_scope")))
+		(e-runtime-error (tag "qualified_ident_does_not_exist")))
 	(s-import (mod "json.Json")
 		(exposes)))
 ~~~

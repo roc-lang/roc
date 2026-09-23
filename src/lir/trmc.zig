@@ -85,7 +85,9 @@ pub const Report = struct {
 pub fn prepareLayouts(store: *const LirStore, layouts: *layout_mod.Store) ResourceError!void {
     for (0..store.procSpecCount()) |index| {
         const proc = store.getProcSpec(@enumFromInt(index));
-        if (proc.body != null and proc.hosted == null and proc.abi == .roc and
+        // Only a procedure that calls itself can be rewritten to thread a
+        // pointer to its result.
+        if (proc.body != null and proc.hosted == null and proc.abi == .roc and proc.shapes.self_call and
             layouts.getLayout(proc.ret_layout).tag == .tag_union)
         {
             _ = try layouts.insertPtr(proc.ret_layout);
@@ -1058,6 +1060,7 @@ const Transform = struct {
     }
 
     fn applyTrmc(self: *Transform) ResourceError!void {
+        self.store.shapes.loop = true;
         const proc = self.store.getProcSpec(self.proc_id);
         const ret_layout = proc.ret_layout;
         try self.copyArgs(proc.args);
@@ -1088,6 +1091,7 @@ const Transform = struct {
     }
 
     fn applyTce(self: *Transform) ResourceError!void {
+        self.store.shapes.loop = true;
         const proc = self.store.getProcSpec(self.proc_id);
         try self.copyArgs(proc.args);
         try self.initLoopMoves(null);

@@ -62,4 +62,4 @@ jobs:
           to: "contributing"
           type: "stream"
           topic: "Main branch CI failures"
-          content: 'Nightly Gate failed on main @ ${{ github.sha }}—the nightly branch was not advanced: https://github.com/${{ github.repository }}/actions/runs/${{ github.run_id }}'
+          content: 'Extended test suite failed on main @ ${{ github.sha }}: https://github.com/${{ github.repository }}/actions/runs/${{ github.run_id }}'
