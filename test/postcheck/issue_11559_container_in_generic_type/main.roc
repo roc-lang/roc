@@ -88,3 +88,16 @@ above_three : U32 -> Bool
 above_three = |x| x > 3
 
 expect above_three(380.Px.n)
+
+# An inspect override's receiver is boxed where the inspected value is stored
+# concretely, so inspection converts the borrowed value into it.
+Wrap(a) := [W(a)].{
+	to_inspect : Wrap(a) -> Str
+	to_inspect = |Wrap.W(value)| "Wrap(${Str.inspect(value)})"
+}
+
+expect {
+	w : Wrap(Str)
+	w = W("x")
+	Str.inspect({ w: w, l: [w, w] }) == "{ l: [Wrap(\"x\"), Wrap(\"x\")], w: Wrap(\"x\") }"
+}
