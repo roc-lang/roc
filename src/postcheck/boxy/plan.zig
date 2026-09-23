@@ -366,6 +366,9 @@ pub const DirectCallHiddenDescriptorArg = struct {
     rep: TypeRepId,
     source_arg_index: ?u32 = null,
     source_value_rep: ?TypeRepId = null,
+    /// The hidden representation is the entire call argument at
+    /// `source_arg_index`, so the operand's own descriptor supplies it.
+    whole_operand: bool = false,
     /// Row tails retain the descriptor of the original argument storage.
     argument_source: enum { adapted, original } = .adapted,
     /// Index in this call's hidden descriptor arguments of an earlier operand
@@ -8613,6 +8616,15 @@ const Builder = struct {
             );
         }
         try self.collectCallHiddenDescriptorArgs(worker_function.ret, ret_rep, ret_rep, ret_rep, null, ordinary_params, &next_param, &pending, &seen_reps, &seen_descriptor_reps, &substitutions, false);
+        // A descriptor for a worker argument's own type describes that whole
+        // operand.
+        const final_worker_children = self.plan.childSlice(self.plan.representations.items[@intFromEnum(worker_function.rep)].children);
+        for (pending.items) |*arg| {
+            const index = arg.source_arg_index orelse continue;
+            const worker_arg = final_worker_children[worker_function.args_start + index];
+            arg.whole_operand = self.repQuery().descriptorArgumentIdentityRep(arg.worker_rep) ==
+                self.repQuery().descriptorArgumentIdentityRep(worker_arg.rep);
+        }
 
         if (next_param != ordinary_params.len or pending.items.len != ordinary_params.len) {
             boxyPlanInvariant("boxy worker call hidden descriptor mapping did not cover every ordinary worker descriptor param");
@@ -8700,6 +8712,7 @@ const Builder = struct {
             var source_rep: ?TypeRepId = null;
             var source_arg_index: ?u32 = null;
             var source_value_rep: ?TypeRepId = null;
+            var whole_operand = false;
             for (mappings) |mapping| {
                 if (mapping.hidden_desc_index != hidden_index) continue;
                 const source = try self.workerEvidenceDescriptorCallSource(
@@ -8720,6 +8733,7 @@ const Builder = struct {
                     source_rep = source.rep;
                     source_arg_index = source.source_arg_index;
                     source_value_rep = source.source_value_rep;
+                    whole_operand = source.whole_operand;
                 }
             }
             const param = params[hidden_index];
@@ -8731,6 +8745,7 @@ const Builder = struct {
                 .rep = source_rep.?,
                 .source_arg_index = source_arg_index,
                 .source_value_rep = source_value_rep,
+                .whole_operand = whole_operand,
             });
         }
     }
@@ -8740,6 +8755,7 @@ const Builder = struct {
         rep: TypeRepId,
         source_arg_index: ?u32,
         source_value_rep: ?TypeRepId,
+        whole_operand: bool,
     };
 
     fn workerEvidenceDescriptorCallSource(
@@ -8788,6 +8804,8 @@ const Builder = struct {
             .rep = rep,
             .source_arg_index = source_arg_index,
             .source_value_rep = if (source_arg_index) |index| call_arg_reps[index] else null,
+            .whole_operand = source_arg_index != null and
+                call_path[call_path.len - 1].stepKind() == .fn_arg,
         };
     }
 

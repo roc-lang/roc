@@ -26580,7 +26580,8 @@ const ProcBodyBuilder = struct {
         // The operand and the call's instantiated parameter are one checked
         // type, so either names the whole operand.
         const hidden_identity = self.descriptorStorageRep(hidden_arg.rep);
-        const whole_operand = self.descriptorStorageRep(source_rep) == hidden_identity or
+        const whole_operand = hidden_arg.whole_operand or
+            self.descriptorStorageRep(source_rep) == hidden_identity or
             self.descriptorStorageRep(call_arg_reps[index]) == hidden_identity;
         if (!whole_operand) {
             return try self.sourceNestedDescriptorLocalForHiddenArg(source, source_rep, hidden_arg.rep);
