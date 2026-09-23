@@ -8,10 +8,37 @@ type=file
 d=(0||())
 ~~~
 # EXPECTED
+EXPECTED TUPLE SEPARATOR - fuzz_crash_093.md:1:5:1:6
 EMPTY TUPLE NOT ALLOWED - fuzz_crash_093.md:1:7:1:9
 # PROBLEMS
 ~~~clojure
 (reports
+	(report
+		(severity runtime_error)
+		(title "Expected Tuple Separator")
+		(region (start 1 5) (end 1 6))
+		(headline
+			(reflow "I was parsing a parenthesized expression or tuple, and I expected `,` or `)`."))
+		(document
+			(reflow "Separate tuple elements with commas and close the tuple or parenthesized expression with ")
+			(annotated code ")")
+			(reflow ".")
+			(line-break)
+			(line-break)
+			(text "For example:")
+			(line-break)
+			(annotation-start code-block)
+			(indent 1)
+			(text "(x, y)")
+			(annotation-end)
+			(line-break)
+			(line-break)
+			(text "I found ")
+			(annotated code "|")
+			(text " here.")
+			(line-break)
+			(line-break)
+			(source-region (file "fuzz_crash_093.md") (start 1 5) (end 1 6) (annotation error) (line-text "d=(0||())"))))
 	(report
 		(severity runtime_error)
 		(title "Empty Tuple Not Allowed")

@@ -1174,6 +1174,16 @@ substitute a target libm call or LLVM intrinsic for that implementation. The
 implementation must keep F32 operations binary32 and F64 operations binary64,
 and exact-bit backend tests pin representative finite results.
 
+`Dec.atan2`, `F32.atan2`, and `F64.atan2` take a record `{ x, y }` and
+explicitly lower to the binary `num_atan2(y, x)` operation. The float kernels
+use width-specific musl quadrant reduction and Roc's own `atan` kernels;
+finite values are approximations, while signed-zero, infinity, and NaN results
+follow IEEE 754 conventions. In particular, the sign of `y` determines the
+result's sign, including zero; negative `x` with zero `y` yields signed pi.
+Dec uses integer vectoring CORDIC on jointly normalized coordinate magnitudes,
+without division or conversion to float. Its origin is zero and its negative
+x-axis is positive pi, since Dec has no signed zero.
+
 Static initializer execution uses target-width symbolic memory rather than host
 pointers. Every allocation records its committed target layout, alignment,
 reference-count metadata, and relocations. Materialization freezes the graph

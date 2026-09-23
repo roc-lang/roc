@@ -39377,14 +39377,18 @@ const BodyContext = struct {
         return true;
     }
 
-    /// Materialize a checked field-default identity at `field_ty`.
-    fn defaultedFieldValueFromDefault(
+    /// Materialize a checked field-default identity at `field_cell`.
+    fn defaultedFieldValueFromDefaultAtCell(
         self: *BodyContext,
         default: checked.CheckedFieldDefault,
-        field_ty: Type.TypeId,
+        field_cell: DraftTypeCell,
     ) Allocator.Error!?DraftExprId {
         const origin_module = default.origin() orelse return null;
-        return try self.defaultedFieldValueAt(self.view.names.moduleIdentityBytes(origin_module), default.expr_node, field_ty);
+        return try self.defaultedFieldValueAtCell(
+            self.view.names.moduleIdentityBytes(origin_module),
+            default.expr_node,
+            field_cell,
+        );
     }
 
     /// Materialize a Monotype field-default identity at `field_ty`.
@@ -39393,28 +39397,30 @@ const BodyContext = struct {
         default: Type.FieldDefault,
         field_ty: Type.TypeId,
     ) Allocator.Error!?DraftExprId {
-        return try self.defaultedFieldValueAt(self.nameStore().moduleIdentityBytes(default.module), default.expr_node, field_ty);
+        return try self.defaultedFieldValueFromMonoDefaultAtCell(default, .{ .sealed = field_ty });
+    }
+
+    fn defaultedFieldValueFromMonoDefaultAtCell(
+        self: *BodyContext,
+        default: Type.FieldDefault,
+        field_cell: DraftTypeCell,
+    ) Allocator.Error!?DraftExprId {
+        return try self.defaultedFieldValueAtCell(
+            self.nameStore().moduleIdentityBytes(default.module),
+            default.expr_node,
+            field_cell,
+        );
     }
 
     /// Materialize a default by lowering its declaring module's archived
-    /// checked expression at the construction site's field monotype—
+    /// checked expression at the construction site's field cell—
     /// per-specialization materialization (design.md "Defaulted Fields").
-    /// There is no archived VALUE and no cross-root ordering: the inlined
-    /// expression evaluates as part of whatever body consumes it (a comptime
-    /// root's evaluation, or a runtime body). A foreign default lowers under
-    /// a scoped view swap, mirroring `lowerDraftLocalProcAtNode`.
-    fn defaultedFieldValueAt(
-        self: *BodyContext,
-        origin_hash: *const [32]u8,
-        expr_node: u32,
-        field_ty: Type.TypeId,
-    ) Allocator.Error!?DraftExprId {
-        return try self.defaultedFieldValueAtCell(origin_hash, expr_node, .{ .sealed = field_ty });
-    }
-
-    /// Cell-typed core of `defaultedFieldValueAt`: Phase-A codec preparation
-    /// materializes a default at a live graph-node cell, while construction
-    /// sites materialize at a sealed field monotype.
+    /// Relation-producing callers pass live graph-node cells, while frozen
+    /// consumers pass sealed field monotypes. There is no archived VALUE and
+    /// no cross-root ordering: the inlined expression evaluates as part of
+    /// whatever body consumes it (a comptime root's evaluation, or a runtime
+    /// body). A foreign default lowers under a scoped view swap, mirroring
+    /// `lowerDraftLocalProcAtNode`.
     fn defaultedFieldValueAtCell(
         self: *BodyContext,
         origin_hash: *const [32]u8,
@@ -40489,16 +40495,20 @@ const BodyContext = struct {
                 produced_fields[index] = field;
                 if (self.omittedRecordFieldDefault(checked_expr, field.name)) |default| {
                     const value_node = field.value_ty orelse field.ty;
-                    const value_ty = try self.resolvedTypeViewForNode(value_node);
-                    break :omitted (try self.defaultedFieldValueFromDefault(default, value_ty)) orelse
+                    break :omitted (try self.defaultedFieldValueFromDefaultAtCell(
+                        default,
+                        DraftTypeCell.fromGraphNode(value_node),
+                    )) orelse
                         Common.invariant("checker-selected omitted default had no archived default value");
                 }
                 const field_kind = try self.graph.recordOmittedFieldKind(record_node, field.name);
                 break :omitted switch (field_kind) {
                     .defaulted => |default| blk: {
                         const value_node = field.value_ty orelse field.ty;
-                        const value_ty = try self.resolvedTypeViewForNode(value_node);
-                        break :blk (try self.defaultedFieldValueFromMonoDefault(default, value_ty)) orelse
+                        break :blk (try self.defaultedFieldValueFromMonoDefaultAtCell(
+                            default,
+                            DraftTypeCell.fromGraphNode(value_node),
+                        )) orelse
                             Common.invariant("resolved defaulted field had no archived default value");
                     },
                     .optional => try self.optionalSlotMissingExprAtNode(field.ty),

@@ -122,7 +122,7 @@ test "issue 11057: a missing nominal record field remains a field diagnostic" {
 
     try test_env.assertOneTypeErrorMsg(
         \\**Type Mismatch**
-        \\This record does not have a `hllo` field.
+        \\This record does not have a field named `hllo`.
         \\```roc
         \\config2 = { ..config, hllo: "goodbye" }
         \\```
@@ -157,7 +157,7 @@ test "issue 11057: nominal record access uses structural evidence" {
 
     try test_env.assertOneTypeErrorMsg(
         \\**Type Mismatch**
-        \\This record does not have a `hllo` field.
+        \\This record does not have a field named `hllo`.
         \\```roc
         \\value = config.hllo
         \\```
@@ -190,7 +190,7 @@ test "issue 11057: an empty nominal backing remains an empty-record diagnostic" 
 
     try test_env.assertOneTypeErrorMsg(
         \\**Type Mismatch**
-        \\The `config` record does not have a `hello` field.
+        \\The `config` record does not have a field named `hello`.
         \\```roc
         \\config2 = { ..config, hello: "world" }
         \\```

@@ -82,6 +82,7 @@ pub const Problem = union(enum) {
     non_exhaustive_destructure: NonExhaustiveDestructure,
     redundant_pattern: RedundantPattern,
     unmatchable_pattern: UnmatchablePattern,
+    match_alt_binder_missing: MatchAltBinderMissing,
     unreachable_code: UnreachableCode,
     comptime_unused_branch: ComptimeUnusedBranch,
     comptime_condition: ComptimeCondition,
@@ -549,6 +550,20 @@ pub const UnmatchablePattern = struct {
     match_expr: CIR.Expr.Idx,
     num_branches: u32,
     problem_branch_index: u32,
+};
+
+/// A name bound by one `|` alternative of a match branch but not by another,
+/// so the branch body could not know its value when the other alternative matched.
+pub const MatchAltBinderMissing = struct {
+    match_expr: CIR.Expr.Idx,
+    binder_ident: Ident.Idx,
+    /// The alternative that does not bind the name.
+    missing_pattern: CIR.Pattern.Idx,
+    branch_index: u32,
+    /// Zero-based index of an alternative that binds the name.
+    bound_pattern_index: u32,
+    /// Zero-based index of the alternative that does not bind the name.
+    missing_pattern_index: u32,
 };
 
 /// Code that appears after an expression or statement that never returns.
